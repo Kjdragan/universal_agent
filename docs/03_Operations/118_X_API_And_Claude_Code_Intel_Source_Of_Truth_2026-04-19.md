@@ -37,6 +37,7 @@ Live validation status on 2026-04-19:
 - Kevin completed OAuth2 authorization successfully. `X_OAUTH2_ACCESS_TOKEN` and `X_OAUTH2_REFRESH_TOKEN` were stored in Infisical `development`, `production`, and `local`.
 - After OAuth2 success, direct endpoint diagnostics still returned `403`. X's detailed response said: `When authenticating requests to the Twitter API v2 endpoints, you must use keys and tokens from a Twitter developer App that is attached to a Project.` This means the current remaining blocker is X Developer Portal project/app attachment or API product entitlement, not Universal Agent code or missing tokens.
 - On 2026-04-20, Kevin moved the app into the Pay Per Use package in the X Developer Console. The next packet-only smoke test succeeded: `GET /2/users/by/username/ClaudeDevs` returned `200`, `GET /2/users/2024518793679294464/tweets` returned `200`, and the lane wrote a successful packet with 5 new posts and 5 actions at `<UA_ARTIFACTS_DIR>/proactive/claude_code_intel/packets/2026-04-20/050815__ClaudeDevs/`.
+- On 2026-04-22, the historical cleanup utility was applied on the production `cron_claude_code_intel_sync` workspace. Heartbeat-specific artifacts were archived into timestamped cleanup directories, while mixed transcript/trace/log files were intentionally preserved for forensic integrity.
 
 Code-verified implementation points:
 
@@ -47,6 +48,7 @@ Code-verified implementation points:
 - Tier 3 and Tier 4 items are queued into Task Hub; Tier 1 and Tier 2 remain packet/artifact/KB inventory only. See `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/claude_code_intel.py#L376`.
 - Post classification is now LLM-assisted with deterministic fallback. Generic community/event posts are explicitly downshifted by fallback heuristics and may also be downshifted further by the LLM classifier when they lack concrete engineering implications.
 - The replay/post-processing slice now exists in `src/universal_agent/services/claude_code_intel_replay.py`; it writes `linked_sources.json`, `implementation_opportunities.md`, packet candidate ledgers, preserves raw packet snapshots in the external vault, and ingests post/work-product text into `knowledge-vaults/claude-code-intelligence/`.
+- The replay pipeline now classifies direct linked sources into types such as GitHub repo/file/tree, docs page, vendor docs, event page, X page, non-HTML source, and generic web, then writes source-type-aware metadata and analysis.
 - The local attachment mail path now records task-scoped outbound delivery evidence during `todo_execution`, so attachment-heavy Claude Code tasks can satisfy Task Hub final-delivery verification instead of being forced into `completion_claim_missing_email_delivery` when a real AgentMail send occurred.
 - Cron-created Claude Code Intel sessions are now explicitly tagged `session_role=cron`, `run_kind=cron`, and `skip_heartbeat=true`, which prevents autonomous heartbeat wake coupling from reusing the cron packet workspace as a heartbeat work surface.
 - Packet candidate ledgers are now hydrated per post with deterministic task identity, current Task Hub row state, assignment ids/states/result summaries, assignment workspaces, outbound-delivery markers, email evidence ids discovered from assignment workspaces, and per-post wiki page paths.
@@ -111,14 +113,14 @@ flowchart TD
     Tasks -->|Tier 1/2| Inventory["Digest + KB inventory"]
 ```
 
-The first delivery slice now writes `linked_sources.json`, `implementation_opportunities.md`, and packet candidate ledgers. For every linked source that can be fully reached, the packet should eventually include:
+The implemented replay slice now writes `linked_sources.json`, `implementation_opportunities.md`, and packet candidate ledgers. For every linked source that can be fully reached, the packet includes:
 
 | File | Purpose |
 | --- | --- |
 | `linked_sources.json` | Structured URL/media/repo/package references extracted from X and later fetches |
 | `linked_sources/<hash>/source.md` | Clean markdown/content extraction for the source |
 | `linked_sources/<hash>/metadata.json` | URL, fetch status, content type, title, final URL, retrieved time |
-| `linked_sources/<hash>/analysis.md` | Agent analysis: what changed, why it matters, implementation implications, risks |
+| `linked_sources/<hash>/analysis.md` | Source-type-aware analysis: what changed, why it matters, implementation implications, risks |
 | `implementation_opportunities.md` | Cross-source list of demos/repos/experiments worth building |
 
 This matters because the strategic value is usually behind the post: release notes, docs pages, code examples, package changes, GitHub repositories, event pages, and media. A future agent must follow the evidence chain before creating durable Claude Code knowledge.
@@ -150,7 +152,7 @@ The vault should follow the canonical LLM Wiki external structure:
 
 Agents implementing Claude Code features should query this vault before relying on model-cutoff knowledge.
 
-Status update (2026-04-21): replay/backfill and first-pass vault population are implemented. The current slice ingests packet post summaries and optional work-product text into the external vault, and preserves raw packet snapshots under `raw/packets/`. Automatic fetching and analysis of linked external documents and repositories is still pending.
+Status update (2026-04-22): replay/backfill, first-pass vault population, bounded direct-link fetching, source-type-aware analysis, and candidate-ledger hydration are implemented. The current slice ingests packet post summaries, fetched linked-source snapshots, and optional work-product text into the external vault, and preserves raw packet snapshots under `raw/packets/`.
 
 ## X API Reference Map
 
@@ -282,7 +284,7 @@ Status update (2026-04-22): tiering is no longer purely heuristic. The lane now 
 1. deterministic fallback classification
 2. optional LLM-assisted override
 
-The fallback specifically downshifts community/event announcements (for example hackathon/application posts) out of `demo_task` unless there is stronger technical evidence. The LLM-assisted classifier can further refine this using post text plus link context.
+The fallback specifically downshifts community/event announcements (for example hackathon/application posts) out of `demo_task` unless there is stronger technical evidence. The LLM-assisted classifier can further refine this using post text plus fetched-source summaries and source-type context.
 
 ## Replay And Backfill Contract
 
@@ -300,8 +302,8 @@ Current replay responsibilities:
 
 Still pending in replay:
 
-- fetch/analyze linked sources when possible
-- reconcile full per-post task/assignment/email/wiki lineage
+- deeper repo/docs-aware extraction beyond the current typed guidance and summary excerpts
+- reconcile full per-post task/assignment/email/wiki lineage across every historical path
 
 ## Safety Boundary
 
@@ -313,9 +315,9 @@ When implementing future posting or interaction features, require a separate des
 
 - OAuth2 refresh-token support exists in `x_oauth2_bootstrap.py`, but the cron lane does not yet auto-refresh expired OAuth2 access tokens before polling.
 - Media download or image/video understanding is not implemented yet.
-- Linked source ingestion is partially implemented: `linked_sources.json`, packet candidate ledgers, post-source vault pages, and bounded direct-link fetch snapshots are written. The replay pipeline now classifies linked sources into types such as GitHub repo/file, docs page, vendor docs, event page, X page, and generic web, and writes source-type-aware `analysis.md` guidance. Deeper repo/docs-specific extraction is still limited.
+- Linked source ingestion is materially implemented: `linked_sources.json`, packet candidate ledgers, post-source vault pages, bounded direct-link fetch snapshots, source-type metadata, and source-type-aware `analysis.md` guidance are written. Deeper repo/docs-specific extraction is still limited.
 - The local KB index is a lightweight source index, not a full NotebookLM-backed external knowledge base yet.
 - The first tiering model is keyword-based. A future pass should add an LLM classifier once enough real packets exist.
-- The classifier is now LLM-assisted with deterministic fallback, but its input is still limited to the post text and direct link list. A future pass should incorporate richer linked-source content summaries into the classifier input.
+- The classifier is now LLM-assisted with deterministic fallback and uses linked-source summaries plus source-type context. A future pass should use richer extracted linked-source analyses, not just summary excerpts.
 - Packet candidate ledgers now hydrate task ids, assignment ids, assignment workspaces, outbound-delivery markers, email evidence ids from assignment workspaces, and per-post wiki page paths. Full lineage reconciliation across every historical task/artifact/email path is still evolving.
-- Existing production cron workspaces that were already polluted by earlier heartbeat follow-up can now be cleaned with the dedicated cleanup utility. Mixed transcript/trace files are intentionally left in place and must still be interpreted as historically noisy.
+- Existing production cron workspaces that were already polluted by earlier heartbeat follow-up can now be cleaned with the dedicated cleanup utility. The original production `cron_claude_code_intel_sync` workspace has already been cleaned once; mixed transcript/trace files were intentionally left in place and must still be interpreted as historically noisy.

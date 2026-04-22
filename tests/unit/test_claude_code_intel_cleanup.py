@@ -10,6 +10,7 @@ def _seed_workspace(root: Path) -> Path:
     workspace = root / "cron_claude_code_intel_sync"
     (workspace / "work_products").mkdir(parents=True, exist_ok=True)
     (workspace / "heartbeat_state.json").write_text("{}", encoding="utf-8")
+    (workspace / "work_products" / "heartbeat_state.json").write_text("{}", encoding="utf-8")
     (workspace / "work_products" / "heartbeat_findings_latest.json").write_text("{}", encoding="utf-8")
     (workspace / "work_products" / "system_health_latest.md").write_text("# health\n", encoding="utf-8")
     (workspace / "transcript.md").write_text("mixed transcript\n", encoding="utf-8")
@@ -25,6 +26,7 @@ def test_cleanup_workspace_dry_run_reports_pollution(tmp_path: Path) -> None:
     assert sorted(result.archived_paths) == sorted(
         [
             "heartbeat_state.json",
+            "work_products/heartbeat_state.json",
             "work_products/heartbeat_findings_latest.json",
             "work_products/system_health_latest.md",
         ]
@@ -42,10 +44,12 @@ def test_cleanup_workspace_apply_moves_heartbeat_artifacts_and_keeps_transcript(
     cleanup_dir = Path(result.cleanup_dir)
     assert result.polluted is True
     assert not (workspace / "heartbeat_state.json").exists()
+    assert not (workspace / "work_products" / "heartbeat_state.json").exists()
     assert not (workspace / "work_products" / "heartbeat_findings_latest.json").exists()
     assert not (workspace / "work_products" / "system_health_latest.md").exists()
     assert (workspace / "transcript.md").exists()
     assert (cleanup_dir / "heartbeat_state.json").exists()
+    assert (cleanup_dir / "work_products" / "heartbeat_state.json").exists()
     assert (cleanup_dir / "work_products" / "heartbeat_findings_latest.json").exists()
     assert (cleanup_dir / "work_products" / "system_health_latest.md").exists()
     manifest = json.loads((cleanup_dir / "cleanup_manifest.json").read_text(encoding="utf-8"))

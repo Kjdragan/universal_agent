@@ -7,6 +7,7 @@ from pathlib import Path
 import httpx
 
 from universal_agent import task_hub
+from universal_agent.services import proactive_artifacts
 from universal_agent.services.claude_code_intel import ClaudeCodeIntelConfig, run_sync
 from universal_agent.services.claude_code_intel_replay import (
     ClaudeCodeIntelReplayConfig,
@@ -364,7 +365,17 @@ def test_replay_hydrates_email_evidence_from_task_and_assignment_workspace(monke
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     task_hub.ensure_schema(conn)
+    proactive_artifacts.ensure_schema(conn)
     task_id = intended_task_identity(post_id="801", tier=4)["task_id"]
+    proactive_artifacts.upsert_artifact(
+        conn,
+        artifact_id="pa_task_801",
+        artifact_type="claude_code_follow_up_task",
+        source_kind="claude_code_kb_update",
+        source_ref="801",
+        title="Analyze strategic Claude Code update from @ClaudeDevs",
+        summary="candidate",
+    )
     workspace_dir = tmp_path / "run_801"
     verification_dir = workspace_dir / "work_products" / "email_verification"
     verification_dir.mkdir(parents=True, exist_ok=True)
@@ -385,6 +396,33 @@ def test_replay_hydrates_email_evidence_from_task_and_assignment_workspace(monke
             "Analyze strategic Claude Code update from @ClaudeDevs",
             json.dumps({"dispatch": {"outbound_delivery": {"channel": "agentmail", "message_id": "msg-801", "sent_at": "2026-04-20T00:01:00+00:00"}}}),
         ),
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS email_task_mappings (
+            thread_id TEXT PRIMARY KEY,
+            task_id TEXT,
+            ack_message_id TEXT DEFAULT '',
+            ack_draft_id TEXT DEFAULT '',
+            final_message_id TEXT DEFAULT '',
+            final_draft_id TEXT DEFAULT ''
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO email_task_mappings (thread_id, task_id, final_message_id)
+        VALUES (?, ?, ?)
+        """,
+        ("thread_801", task_id, "msg-email-map-801"),
+    )
+    proactive_artifacts.record_email_delivery(
+        conn,
+        artifact_id="pa_task_801",
+        message_id="msg-artifact-801",
+        thread_id="thread-artifact-801",
+        subject="Claude Code Intel",
+        recipient="kevin@example.com",
     )
     conn.execute(
         """
@@ -450,9 +488,11 @@ def test_replay_hydrates_email_evidence_from_task_and_assignment_workspace(monke
 
     ledger = json.loads((packet_dir / "candidate_ledger.json").read_text(encoding="utf-8"))
     assert result["ok"] is True
-    assert ledger[0]["candidate_artifact_id"] == ""
+    assert ledger[0]["candidate_artifact_id"] == "pa_task_801"
     assert ledger[0]["assignment_ids"] == ["asg_kb_801"]
     assert ledger[0]["assignment_workspaces"] == [str(workspace_dir)]
     assert "msg-801" in ledger[0]["email_evidence_ids"]
     assert "email_send_task_801.json" in ledger[0]["email_evidence_ids"]
+    assert "msg-email-map-801" in ledger[0]["email_evidence_ids"]
+    assert "msg-artifact-801" in ledger[0]["email_evidence_ids"]
     assert ledger[0]["task_outbound_delivery"]["message_id"] == "msg-801"

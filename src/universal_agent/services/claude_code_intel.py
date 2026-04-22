@@ -365,16 +365,17 @@ def normalize_posts(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
-def classify_post(post: dict[str, Any], *, handle: str = DEFAULT_HANDLE) -> dict[str, Any]:
+def classify_post(post: dict[str, Any], *, handle: str = DEFAULT_HANDLE, linked_context: str = "") -> dict[str, Any]:
     post_id = str(post.get("id") or "").strip()
     text = str(post.get("text") or "").strip()
     lowered = text.lower()
     links = extract_links(post)
-    heuristic = _heuristic_classification(text=text, lowered=lowered, links=links)
+    heuristic = _heuristic_classification(text=text, lowered=lowered, links=links, linked_context=linked_context)
     llm_result = _llm_assisted_classification(
         text=text,
         links=links,
         heuristic=heuristic,
+        linked_context=linked_context,
     )
     tier = int(llm_result.get("tier") or heuristic["tier"])
     action_type = str(llm_result.get("action_type") or heuristic["action_type"] or "digest").strip()
@@ -401,11 +402,12 @@ def classify_post(post: dict[str, Any], *, handle: str = DEFAULT_HANDLE) -> dict
     }
 
 
-def _heuristic_classification(*, text: str, lowered: str, links: list[str]) -> dict[str, Any]:
+def _heuristic_classification(*, text: str, lowered: str, links: list[str], linked_context: str = "") -> dict[str, Any]:
     matched_terms = sorted({term for term in _TIER2_TERMS | _TIER3_TERMS | _TIER4_TERMS if term in lowered})
     tier = 1
     reasons = ["informational Claude Code update"]
     content_kind = "generic_update"
+    linked_lower = str(linked_context or "").lower()
     if links or _VERSION_RE.search(text) or any(term in lowered for term in _TIER2_TERMS):
         tier = 2
         reasons.append("reference material or version/update signal")
@@ -425,6 +427,13 @@ def _heuristic_classification(*, text: str, lowered: str, links: list[str]) -> d
         if tier == 3:
             tier = 2
             reasons.append("community/event announcement downshifted by deterministic fallback")
+    if "source_type=event_page" in linked_lower and content_kind == "community_event" and tier > 1:
+        tier = min(tier, 2)
+        reasons.append("linked event-page context kept the post below demo_task")
+    if any(token in linked_lower for token in ("source_type=github_repo", "source_type=github_file", "source_type=docs_page", "source_type=vendor_docs")) and tier < 3:
+        tier = 3
+        content_kind = "product_capability"
+        reasons.append("linked source contains code/docs material that may justify implementation work")
     action_type = {
         1: "digest",
         2: "kb_update",
@@ -441,7 +450,7 @@ def _heuristic_classification(*, text: str, lowered: str, links: list[str]) -> d
     }
 
 
-def _llm_assisted_classification(*, text: str, links: list[str], heuristic: dict[str, Any]) -> dict[str, Any]:
+def _llm_assisted_classification(*, text: str, links: list[str], heuristic: dict[str, Any], linked_context: str = "") -> dict[str, Any]:
     if str(os.getenv("UA_CLAUDE_CODE_INTEL_LLM_CLASSIFIER_ENABLED", "1")).strip().lower() not in _TRUTHY:
         return {"method": "heuristic"}
     if not _has_llm_key():
@@ -450,6 +459,7 @@ def _llm_assisted_classification(*, text: str, links: list[str], heuristic: dict
         "Classify this Claude Code intelligence post.\n\n"
         f"Post text:\n{text[:4000]}\n\n"
         f"Links:\n{json.dumps(links[:10], ensure_ascii=True)}\n\n"
+        f"Linked source context:\n{linked_context[:4000] or '(none)'}\n\n"
         f"Heuristic suggestion:\n{json.dumps({k: heuristic[k] for k in ('tier', 'action_type', 'content_kind')}, ensure_ascii=True)}"
     )
     try:
