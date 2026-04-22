@@ -1,6 +1,6 @@
 # Documentation Status
 
-**Last updated:** 2026-04-22 (Docs 96, 119 updated for paper-to-podcast-tf pipeline stabilization)
+**Last updated:** 2026-04-22 (ClaudeDevs docs updated for operator skill, report artifact, and skill-driven Chron helper)
 
 ## Development (development/)
 
@@ -30,7 +30,7 @@ This file and `docs/README.md` serve as the **authoritative indexes** for all pr
 | URW_Orchestration.md | Multi-phase tasks |
 | LLM_Wiki_System.md | **Canonical source of truth** — shared wiki engine, external knowledge vault, derived internal memory vault, runtime surfaces, provenance, and integrity/query workflows |
 | Discord_Intelligence_System.md | **Canonical source of truth** — architecture for the Discord intelligence and command-and-control operations |
-| ClaudeDevs_X_Intelligence_System.md | **Canonical subsystem reference** — official X API ClaudeDevs lane, packet generation, replay/backfill, linked-source expansion, external Claude Code vault population, candidate ledgering, delivery verification, and historical cron cleanup |
+| ClaudeDevs_X_Intelligence_System.md | **Canonical subsystem reference** — official X API ClaudeDevs lane, packet generation, replay/backfill, linked-source expansion, external Claude Code vault population, candidate ledgering, delivery verification, historical cron cleanup, and the operator skill/report surface |
 
 ## Architecture (01_Architecture/)
 
@@ -93,11 +93,11 @@ These are the authoritative references for each subsystem. When any other docume
 | 115 | Proactive Automation Current State Audit — code-verified current-state report for proactive generation, signal curation, reflection, cron registration, tutorial builds, artifact surfacing, and impediments preventing 24/7 proactive throughput |
 | 116 | CSI Convergence Proactivity Repair Handoff — shareable implementation context for the CSI convergence repair pass, including fixed blockers, runtime contract, verification evidence, and live-validation next steps |
 | 117 | ClaudeDevs X Intelligence Lane Design Handoff — historical design note for a dedicated Claude Code intelligence lane monitoring `@ClaudeDevs`, including source-access findings, tiering, KB/wiki expectations, mirror fallback, and resume checklist |
-| 118 | X API And Claude Code Intel Source Of Truth — canonical implementation reference for X API development, `@ClaudeDevs` polling, Infisical keys, packet outputs, local Claude Code intelligence KB index, Task Hub tiering, and cron registration |
+| 118 | X API And Claude Code Intel Source Of Truth — canonical implementation reference for X API development, `@ClaudeDevs` polling, Infisical keys, packet outputs, operator report artifact generation, skill invocation shape, and cron registration |
 | 119 | Task Forge: Autonomous Skill Generation Pipeline — **canonical source of truth** for the meta-skill that converts human intent into structured, reusable task-skills; 7-phase pipeline (intent → scaffold → execute → quality gate → archive/promote), skill maturity model (v0→v3), dispatch integration, hook hardening, skill-creator cooperative relationship, recursive learning loop philosophy, paper-to-podcast case study (cross-skill orchestration, sub-agent delegation anti-pattern, CLI audio fallback) |
 | 120 | ClaudeDevs X Intel VPS Runtime Audit — read-only production audit of the first 19-post `@ClaudeDevs` cron packet, downstream Simone work products, Task Hub/artifact state, email verification, tier-count discrepancy, and recommendations for the Claude Code intelligence wiki pipeline |
 | 121 | Test Strategy and Regression Prevention — **canonical source of truth** for test suite layout (1211 unit tests), mandatory pre-ship commands, ContextVar isolation architecture, common failure patterns, CI/CD test gap analysis, maintenance checklist, and the April 20 stabilization history |
-| 122 | ClaudeDevs X Intel Implementation Plan — code-verified phased implementation plan for replay/backfill, external vault creation, linked-source expansion, packet candidate ledgering, Task Hub completion evidence mapping, cron/heartbeat workspace separation, and eventual LLM-assisted tiering |
+| 122 | ClaudeDevs X Intel Implementation Plan — code-verified phased implementation plan for replay/backfill, external vault creation, linked-source expansion, packet candidate ledgering, Task Hub completion evidence mapping, cron/heartbeat workspace separation, operator skill/report surface, and LLM-assisted tiering |
 
 ## CSI Subsystem (04_CSI/)
 

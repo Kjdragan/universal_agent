@@ -30,6 +30,8 @@ The system can now:
 12. Keep new ClaudeDevs cron sessions heartbeat-exempt to avoid reusing the packet workspace as a heartbeat workspace.
 13. Clean up historically polluted ClaudeDevs cron workspaces with a dedicated archive utility.
 14. Use an LLM-assisted classifier with deterministic fallback and fetched-source summary context.
+15. Expose an operator skill surface (`$claudedevs-x-intel`) backed by a deterministic report script that writes `operator_report.md` / `operator_report.json` into each packet and can email artifact links.
+16. Route the built-in production ClaudeDevs cron through the report entry point so actionable polling runs automatically send a professional artifact email.
 
 ## Canonical Paths
 
@@ -41,6 +43,8 @@ The system can now:
 | OAuth state | `UA_ARTIFACTS_DIR/proactive/claude_code_intel/oauth2/` |
 | Lightweight source index | `UA_ARTIFACTS_DIR/knowledge-bases/claude-code-intelligence/source_index.md` |
 | External vault | `UA_ARTIFACTS_DIR/knowledge-vaults/claude-code-intelligence/` |
+| Operator skill | `.claude/skills/claudedevs-x-intel/` |
+| Operator report script | `src/universal_agent/scripts/claude_code_intel_run_report.py` |
 
 ## Runtime Flow
 
@@ -179,6 +183,46 @@ The cleanup is conservative. It archives only clearly heartbeat-specific artifac
 
 Status update (2026-04-22): the production `cron_claude_code_intel_sync` workspace has already been cleaned once with this utility. Archived cleanup manifests live under the workspace `archive/claude_code_intel_cleanup_*` directories on the VPS.
 
+## Operator Skill And Report Surface
+
+The operator-facing entry point is:
+
+```bash
+PYTHONPATH=src uv run python -m universal_agent.scripts.claude_code_intel_run_report \
+  --profile vps \
+  --email-to kevinjdragan@gmail.com
+```
+
+That command still uses the same underlying sync + replay pipeline, but it additionally writes:
+
+```text
+operator_report.md
+operator_report.json
+```
+
+into the newest packet and can send an email containing HTTPS links to the key packet artifacts.
+
+The built-in production cron now uses the same report entry point instead of the bare sync script. Default behavior:
+
+- if `action_count == 0`, no automatic email is sent
+- if `action_count > 0`, the report email is sent automatically
+- recipient resolution:
+  - `UA_CLAUDE_CODE_INTEL_REPORT_EMAIL_TO` if set
+  - otherwise `kevinjdragan@gmail.com` on `UA_DEPLOYMENT_PROFILE=vps`
+  - otherwise no automatic email target
+
+## Manual Operator Surface
+
+The new skill is intentionally a manual/on-demand operator surface, not a second autonomous scheduler.
+
+Recommended manual invocation:
+
+```text
+$claudedevs-x-intel Run the production ClaudeDevs X intelligence sync, write the operator report summary, and email the results to kevinjdragan@gmail.com.
+```
+
+The canonical autonomous scheduler remains the built-in system job `claude_code_intel_sync`.
+
 ## Key Files
 
 | File | Role |
@@ -187,6 +231,7 @@ Status update (2026-04-22): the production `cron_claude_code_intel_sync` workspa
 | [`claude_code_intel_replay.py`](../../src/universal_agent/services/claude_code_intel_replay.py) | Replay, source expansion, ledger writing, vault population |
 | [`claude_code_intel_sync.py`](../../src/universal_agent/scripts/claude_code_intel_sync.py) | Cron/script entry point |
 | [`claude_code_intel_replay_packet.py`](../../src/universal_agent/scripts/claude_code_intel_replay_packet.py) | Replay/backfill entry point |
+| [`claude_code_intel_run_report.py`](../../src/universal_agent/scripts/claude_code_intel_run_report.py) | Operator run + summary + email entry point |
 | [`x_oauth2_bootstrap.py`](../../src/universal_agent/scripts/x_oauth2_bootstrap.py) | OAuth2 bootstrap and token refresh |
 | [`claude_code_intel_cleanup_workspace.py`](../../src/universal_agent/scripts/claude_code_intel_cleanup_workspace.py) | Historical workspace cleanup utility |
 
