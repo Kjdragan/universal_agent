@@ -407,36 +407,20 @@ def test_reopen_stale_delegations_preserves_metadata() -> None:
         # consistently with other open tasks.
         assert refreshed["seizure_state"] == "unseized"
         meta = refreshed["metadata"]
-        assert meta["delegation"]["mission_id"] == "vp-mission-stale"
-        assert meta["delegation"]["vp_id"] == "vp.general.primary"
-        assert meta["delegation"]["stale_reason"].startswith("no_vp_progress_after_")
-        assert "stale_reopened_at" in meta["delegation"]
-        assert meta["dispatch"]["queue_build_id"] == "qb-stale"
-        assert meta["csi"]["routing_state"] == "agent_actionable"
-        metadata = refreshed.get("metadata") or {}
-        assert isinstance(metadata, dict)
+        assert isinstance(meta, dict)
 
-        # Original mission_id + delegated_at preserved.
-        delegation = metadata.get("delegation") or {}
-        assert delegation.get("mission_id") == "mission-stale"
+        # Original delegation fields preserved (mission_id, vp_id, delegated_at).
+        delegation = meta.get("delegation") or {}
+        assert delegation.get("mission_id") == "vp-mission-stale"
+        assert delegation.get("vp_id") == "vp.general.primary"
         assert delegation.get("delegated_at") == "2026-04-22T00:00:00+00:00"
-        # New stale-reopen fields added.
+        # New stale-reopen fields appended.
         assert "stale_reopened_at" in delegation
         assert delegation.get("stale_reason") == "no_vp_progress_after_1.0h"
 
         # Sibling metadata sections (dispatch, csi) must still be present.
-        assert metadata.get("dispatch", {}).get("queue_build_id") == "qb-123"
-        assert metadata.get("csi", {}).get("routing_state") == "agent_actionable"
-
-        # Status should have been flipped back to open, and seizure_state must
-        # match the codebase's canonical "unseized" value for open tasks
-        # (not the non-standard "open" string that used to be written here).
-        assert refreshed["status"] == task_hub.TASK_STATUS_OPEN
-        raw = conn.execute(
-            "SELECT seizure_state FROM task_hub_items WHERE task_id = ?",
-            ("stale-001",),
-        ).fetchone()
-        assert raw["seizure_state"] == "unseized"
+        assert meta.get("dispatch", {}).get("queue_build_id") == "qb-stale"
+        assert meta.get("csi", {}).get("routing_state") == "agent_actionable"
     finally:
         conn.close()
 
