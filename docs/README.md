@@ -53,6 +53,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[URW Orchestration](02_Subsystems/URW_Orchestration.md)**: Multi-phase tasks.
 - **[LLM Wiki System](02_Subsystems/LLM_Wiki_System.md)**: Canonical subsystem reference for the external knowledge vault and derived internal memory vault — architecture, vault contracts, runtime surfaces, provenance, and query/lint behavior.
 - **[Discord Intelligence System](02_Subsystems/Discord_Intelligence_System.md)**: Canonical architecture for the Discord intelligence and command-and-control operations.
+- **[ClaudeDevs X Intelligence System](02_Subsystems/ClaudeDevs_X_Intelligence_System.md)**: Canonical subsystem reference for the `@ClaudeDevs` X intelligence lane — official X API polling, packet creation, replay/backfill, linked-source expansion, external Claude Code vault population, candidate ledgers, delivery verification, and historical cron cleanup.
 
 ### 3. [Flows](02_Flows)
 

@@ -28,6 +28,7 @@ from universal_agent.services.claude_code_intel import (
     LANE_SLUG,
     SOURCE_KIND_DEMO_TASK,
     SOURCE_KIND_KB_UPDATE,
+    classify_post,
     queue_follow_up_tasks,
     register_packet_artifact,
 )
@@ -91,6 +92,11 @@ def replay_packet(
         packet_dir=packet_dir,
         actions=actions,
         enabled=config.expand_sources,
+    )
+    actions = refine_actions_with_linked_sources(
+        packet_dir=packet_dir,
+        actions=actions,
+        linked_source_entries=linked_source_entries,
     )
     implementation_opportunities_path = write_implementation_opportunities(packet_dir=packet_dir, actions=actions)
     vault_result = ingest_packet_into_external_vault(
@@ -191,6 +197,58 @@ def write_linked_sources(*, packet_dir: Path, actions: list[dict[str, Any]]) -> 
     path = packet_dir / "linked_sources.json"
     path.write_text(json.dumps(entries, indent=2, ensure_ascii=True, sort_keys=True) + "\n", encoding="utf-8")
     return path
+
+
+def refine_actions_with_linked_sources(
+    *,
+    packet_dir: Path,
+    actions: list[dict[str, Any]],
+    linked_source_entries: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not actions:
+        return actions
+    if not linked_source_entries:
+        return actions
+    original_path = packet_dir / "actions_original.json"
+    refined_path = packet_dir / "actions_refined.json"
+    if not original_path.exists():
+        original_path.write_text(json.dumps(actions, indent=2, ensure_ascii=True, sort_keys=True) + "\n", encoding="utf-8")
+
+    summaries_by_post: dict[str, list[str]] = {}
+    for entry in linked_source_entries:
+        post_id = str(entry.get("post_id") or "").strip()
+        if not post_id:
+            continue
+        metadata_path = Path(str(entry.get("metadata_path") or ""))
+        metadata = _load_json(metadata_path) if metadata_path.exists() else {}
+        summary_parts = [
+            f"source_type={metadata.get('source_type') or ''}",
+            f"domain={metadata.get('domain') or ''}",
+            f"title={metadata.get('title') or entry.get('title') or ''}",
+            f"summary={metadata.get('summary_excerpt') or ''}",
+            f"github_repo={metadata.get('github_repo') or ''}",
+        ]
+        summaries_by_post.setdefault(post_id, []).append(" | ".join(part for part in summary_parts if part and not part.endswith("=")))
+
+    refined_actions: list[dict[str, Any]] = []
+    for action in actions:
+        post_id = str(action.get("post_id") or "").strip()
+        linked_context = "\n".join(summaries_by_post.get(post_id, []))
+        post = {
+            "id": post_id,
+            "text": str(action.get("text") or ""),
+            "created_at": str(action.get("created_at") or ""),
+            "entities": {"urls": [{"expanded_url": link} for link in action.get("links") or []]},
+        }
+        refined = classify_post(post, handle=str(action.get("url") or "").split("/")[3] if str(action.get("url") or "").startswith("https://x.com/") else "ClaudeDevs", linked_context=linked_context)
+        # Preserve existing fetched links and timestamps from the packet action.
+        refined["links"] = list(action.get("links") or [])
+        refined["created_at"] = str(action.get("created_at") or refined.get("created_at") or "")
+        refined_actions.append(refined)
+
+    (packet_dir / "actions.json").write_text(json.dumps(refined_actions, indent=2, ensure_ascii=True, sort_keys=True) + "\n", encoding="utf-8")
+    refined_path.write_text(json.dumps(refined_actions, indent=2, ensure_ascii=True, sort_keys=True) + "\n", encoding="utf-8")
+    return refined_actions
 
 
 def expand_linked_sources(*, packet_dir: Path, actions: list[dict[str, Any]], enabled: bool) -> list[dict[str, Any]]:
@@ -407,10 +465,20 @@ def build_candidate_ledger(
             source_kind=task_identity["source_kind"],
             source_ref=post_id,
         ) if conn and task_identity["source_kind"] and post_id else ""
+        email_task_mapping_evidence = _collect_email_task_mapping_evidence(conn, task_identity["task_id"]) if conn and task_identity["task_id"] else []
+        proactive_artifact_email_evidence = _collect_proactive_artifact_email_evidence(
+            conn,
+            artifact_ids=[packet_artifact_id, candidate_artifact_id],
+        ) if conn else []
         email_evidence_ids = sorted(
             {
                 *packet_email_evidence_ids,
                 *workspace_email_evidence_ids,
+                *[
+                    record["evidence_id"]
+                    for record in email_task_mapping_evidence + proactive_artifact_email_evidence
+                    if str(record.get("evidence_id") or "").strip()
+                ],
                 *[
                     str(outbound_delivery.get(key) or "").strip()
                     for key in ("message_id", "draft_id")
@@ -436,6 +504,7 @@ def build_candidate_ledger(
             "assignment_result_summaries": [str(item.get("result_summary") or "") for item in task_assignments if str(item.get("result_summary") or "")],
             "assignment_workspaces": assignment_workspaces,
             "task_outbound_delivery": outbound_delivery,
+            "email_evidence_records": email_task_mapping_evidence + proactive_artifact_email_evidence,
             "post_source_pages": post_pages_by_post_id.get(post_id, []),
             "linked_source_pages": linked_pages_by_post_id.get(post_id, []),
             "work_product_pages": work_product_pages,
@@ -546,6 +615,84 @@ def _collect_assignment_workspace_email_evidence_ids(assignments: list[dict[str,
     return sorted(ids)
 
 
+def _collect_email_task_mapping_evidence(conn: sqlite3.Connection | None, task_id: str) -> list[dict[str, str]]:
+    if conn is None or not task_id:
+        return []
+    try:
+        row = conn.execute(
+            """
+            SELECT thread_id, ack_message_id, ack_draft_id, final_message_id, final_draft_id
+            FROM email_task_mappings
+            WHERE task_id = ?
+            LIMIT 1
+            """,
+            (task_id,),
+        ).fetchone()
+    except Exception:
+        return []
+    if not row:
+        return []
+    records: list[dict[str, str]] = []
+    thread_id = str(row["thread_id"] or "").strip()
+    for field, evidence_type in (
+        ("ack_message_id", "ack_message"),
+        ("ack_draft_id", "ack_draft"),
+        ("final_message_id", "final_message"),
+        ("final_draft_id", "final_draft"),
+    ):
+        value = str(row[field] or "").strip()
+        if not value:
+            continue
+        records.append(
+            {
+                "source": "email_task_mapping",
+                "thread_id": thread_id,
+                "message_id": value if "message" in evidence_type else "",
+                "draft_id": value if "draft" in evidence_type else "",
+                "evidence_id": value,
+                "evidence_type": evidence_type,
+            }
+        )
+    return records
+
+
+def _collect_proactive_artifact_email_evidence(conn: sqlite3.Connection | None, *, artifact_ids: list[str]) -> list[dict[str, str]]:
+    clean_ids = [str(a or "").strip() for a in artifact_ids if str(a or "").strip()]
+    if conn is None or not clean_ids:
+        return []
+    placeholders = ",".join("?" for _ in clean_ids)
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT artifact_id, message_id, thread_id, delivery_state
+            FROM proactive_artifact_emails
+            WHERE artifact_id IN ({placeholders})
+            ORDER BY sent_at DESC
+            """,
+            clean_ids,
+        ).fetchall()
+    except Exception:
+        return []
+    records: list[dict[str, str]] = []
+    for row in rows:
+        message_id = str(row["message_id"] or "").strip()
+        thread_id = str(row["thread_id"] or "").strip()
+        if not message_id and not thread_id:
+            continue
+        records.append(
+            {
+                "source": "proactive_artifact_emails",
+                "artifact_id": str(row["artifact_id"] or "").strip(),
+                "thread_id": thread_id,
+                "message_id": message_id,
+                "draft_id": "",
+                "evidence_id": message_id or thread_id,
+                "evidence_type": str(row["delivery_state"] or "").strip() or "emailed",
+            }
+        )
+    return records
+
+
 def _post_source_markdown(*, handle: str, post: dict[str, Any], action: dict[str, Any]) -> str:
     post_id = str(post.get("id") or "").strip()
     lines = [
@@ -617,12 +764,24 @@ def _fetch_linked_source(*, client: httpx.Client, url: str, entry: dict[str, Any
             entry["error"] = f"HTTP {resp.status_code}"
         else:
             body = resp.text
-            content = _normalize_web_content(body=body, content_type=metadata["content_type"], url=str(resp.url))
+            github_raw = _maybe_fetch_github_raw(client=client, metadata=metadata)
+            if github_raw:
+                body = github_raw
+                metadata["content_type"] = "text/plain"
+            content = _normalize_web_content(
+                body=body,
+                content_type=metadata["content_type"],
+                url=str(resp.url),
+                source_type=str(metadata.get("source_type") or ""),
+                metadata=metadata,
+            )
             title = _extract_title(body) or _title_from_url(str(resp.url))
             entry["fetch_status"] = "fetched"
             entry["title"] = title
             metadata["title"] = title
             metadata["summary_excerpt"] = _summary_excerpt(content)
+            metadata["commands"] = _extract_commands(content)
+            metadata["version_matches"] = _extract_versions(content)
             analysis = _linked_source_analysis(entry=entry, content=content, metadata=metadata)
     except Exception as exc:
         entry["fetch_status"] = "error"
@@ -661,7 +820,7 @@ def _write_linked_source_files(
         (source_dir / "analysis.md").write_text(analysis.rstrip() + "\n", encoding="utf-8")
 
 
-def _normalize_web_content(*, body: str, content_type: str, url: str) -> str:
+def _normalize_web_content(*, body: str, content_type: str, url: str, source_type: str = "", metadata: dict[str, Any] | None = None) -> str:
     lowered = str(content_type or "").lower()
     if "application/json" in lowered:
         try:
@@ -671,17 +830,74 @@ def _normalize_web_content(*, body: str, content_type: str, url: str) -> str:
             pass
     if "text/plain" in lowered or url.lower().endswith(".md"):
         return body.strip() + "\n"
-    text = body
-    text = re.sub(r"(?is)<script.*?>.*?</script>", " ", text)
-    text = re.sub(r"(?is)<style.*?>.*?</style>", " ", text)
-    text = re.sub(r"(?i)<br\\s*/?>", "\n", text)
-    text = re.sub(r"(?i)</p>", "\n\n", text)
-    text = re.sub(r"(?is)<[^>]+>", " ", text)
-    text = html.unescape(text)
-    text = re.sub(r"\r\n?", "\n", text)
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    text = text.strip()
+    html_features = _extract_html_features(body)
+    if source_type in {"docs_page", "vendor_docs"}:
+        lines = ["# Linked Source", ""]
+        if html_features["title"]:
+            lines.extend([f"## Title", "", html_features["title"], ""])
+        if html_features["headings"]:
+            lines.extend(["## Headings", ""])
+            for heading in html_features["headings"][:12]:
+                lines.append(f"- {heading}")
+            lines.append("")
+        if html_features["code_blocks"]:
+            lines.extend(["## Code Blocks", ""])
+            for block in html_features["code_blocks"][:6]:
+                lines.extend(["```text", block, "```", ""])
+        if html_features["list_items"]:
+            lines.extend(["## Key Items", ""])
+            for item in html_features["list_items"][:12]:
+                lines.append(f"- {item}")
+            lines.append("")
+        if html_features["text"]:
+            lines.extend(["## Excerpt", "", html_features["text"], ""])
+        return "\n".join(lines).rstrip() + "\n"
+    if source_type.startswith("github"):
+        lines = ["# Linked Source", ""]
+        if metadata:
+            if metadata.get("github_repo"):
+                lines.append(f"- Repo: `{metadata['github_repo']}`")
+            if metadata.get("github_owner"):
+                lines.append(f"- Owner: `{metadata['github_owner']}`")
+            if metadata.get("github_path"):
+                lines.append(f"- Path: `{metadata['github_path']}`")
+            if metadata.get("github_ref"):
+                lines.append(f"- Ref: `{metadata['github_ref']}`")
+            if metadata.get("raw_url"):
+                lines.append(f"- Raw URL: {metadata['raw_url']}")
+            lines.append("")
+        if "text/plain" in lowered:
+            lines.extend(["## Raw Content", "", body.strip(), ""])
+        else:
+            if html_features["title"]:
+                lines.extend(["## Title", "", html_features["title"], ""])
+            if html_features["list_items"]:
+                lines.extend(["## Key Items", ""])
+                for item in html_features["list_items"][:12]:
+                    lines.append(f"- {item}")
+                lines.append("")
+            if html_features["text"]:
+                lines.extend(["## Excerpt", "", html_features["text"], ""])
+        return "\n".join(lines).rstrip() + "\n"
+    if source_type == "event_page":
+        lines = ["# Linked Source", ""]
+        if html_features["title"]:
+            lines.extend(["## Event Title", "", html_features["title"], ""])
+        if html_features["headings"]:
+            lines.extend(["## Event Sections", ""])
+            for heading in html_features["headings"][:10]:
+                lines.append(f"- {heading}")
+            lines.append("")
+        if html_features["list_items"]:
+            lines.extend(["## Event Details", ""])
+            for item in html_features["list_items"][:10]:
+                lines.append(f"- {item}")
+            lines.append("")
+        if html_features["text"]:
+            lines.extend(["## Excerpt", "", html_features["text"], ""])
+        return "\n".join(lines).rstrip() + "\n"
+
+    text = html_features["text"]
     return f"# Linked Source\n\n{text}\n" if text else "# Linked Source\n\n[No readable text extracted]\n"
 
 
@@ -763,6 +979,8 @@ def _classify_linked_source(*, url: str, content_type: str) -> dict[str, Any]:
     source_type = "generic_web"
     github_owner = ""
     github_repo = ""
+    github_path = ""
+    github_ref = ""
     if domain in {"github.com", "www.github.com"}:
         parts = [part for part in path.split("/") if part]
         if len(parts) >= 2:
@@ -771,6 +989,8 @@ def _classify_linked_source(*, url: str, content_type: str) -> dict[str, Any]:
             if len(parts) == 2:
                 source_type = "github_repo"
             elif len(parts) >= 4 and parts[2] in {"blob", "tree"}:
+                github_ref = parts[3]
+                github_path = "/".join(parts[4:])
                 source_type = "github_file" if parts[2] == "blob" else "github_tree"
             else:
                 source_type = "github_page"
@@ -789,6 +1009,8 @@ def _classify_linked_source(*, url: str, content_type: str) -> dict[str, Any]:
         "source_type": source_type,
         "github_owner": github_owner,
         "github_repo": github_repo,
+        "github_ref": github_ref,
+        "github_path": github_path,
     }
 
 
@@ -836,6 +1058,95 @@ def _source_type_guidance(*, source_type: str, domain: str, repo_slug: str) -> l
 def _summary_excerpt(content: str, *, max_chars: int = 240) -> str:
     text = " ".join(line.strip() for line in content.splitlines() if line.strip())
     return text[:max_chars].strip()
+
+
+def _extract_html_features(body: str) -> dict[str, Any]:
+    cleaned = re.sub(r"(?is)<script.*?>.*?</script>", " ", body)
+    cleaned = re.sub(r"(?is)<style.*?>.*?</style>", " ", cleaned)
+    title = _extract_title(cleaned)
+    headings = [
+        html.unescape(match).strip()
+        for match in re.findall(r"(?is)<h[1-3][^>]*>(.*?)</h[1-3]>", cleaned)
+        if html.unescape(match).strip()
+    ]
+    code_blocks = [
+        html.unescape(re.sub(r"(?is)<[^>]+>", "", match)).strip()
+        for match in re.findall(r"(?is)<pre[^>]*>(.*?)</pre>", cleaned)
+        if html.unescape(re.sub(r"(?is)<[^>]+>", "", match)).strip()
+    ]
+    list_items = [
+        html.unescape(re.sub(r"(?is)<[^>]+>", "", match)).strip()
+        for match in re.findall(r"(?is)<li[^>]*>(.*?)</li>", cleaned)
+        if html.unescape(re.sub(r"(?is)<[^>]+>", "", match)).strip()
+    ]
+    text = cleaned
+    text = re.sub(r"(?i)<br\\s*/?>", "\n", text)
+    text = re.sub(r"(?i)</p>", "\n\n", text)
+    text = re.sub(r"(?is)<[^>]+>", " ", text)
+    text = html.unescape(text)
+    text = re.sub(r"\r\n?", "\n", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = text.strip()
+    text = text[:4000]
+    return {
+        "title": title,
+        "headings": headings,
+        "code_blocks": code_blocks,
+        "list_items": list_items,
+        "text": text,
+    }
+
+
+def _maybe_fetch_github_raw(*, client: httpx.Client, metadata: dict[str, Any]) -> str:
+    source_type = str(metadata.get("source_type") or "").strip()
+    if source_type != "github_file":
+        return ""
+    owner = str(metadata.get("github_owner") or "").strip()
+    repo = str(metadata.get("github_repo") or "").strip().split("/", 1)[-1]
+    ref = str(metadata.get("github_ref") or "").strip()
+    path = str(metadata.get("github_path") or "").strip()
+    if not all((owner, repo, ref, path)):
+        return ""
+    raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{ref}/{path}"
+    metadata["raw_url"] = raw_url
+    try:
+        resp = client.get(raw_url)
+    except Exception as exc:
+        metadata["raw_fetch_error"] = f"{type(exc).__name__}: {exc}"
+        return ""
+    metadata["raw_http_status"] = resp.status_code
+    if resp.status_code >= 400:
+        return ""
+    return resp.text
+
+
+def _extract_commands(content: str) -> list[str]:
+    commands: list[str] = []
+    seen: set[str] = set()
+    for line in content.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith(("$ ", "# ")) and len(stripped) > 2:
+            candidate = stripped[2:].strip()
+        else:
+            candidate = stripped
+        if re.match(r"^(npm|pnpm|yarn|pip|python|uv|claude|git|curl|bash|node)\b", candidate):
+            if candidate not in seen:
+                seen.add(candidate)
+                commands.append(candidate[:240])
+    return commands[:12]
+
+
+def _extract_versions(content: str) -> list[str]:
+    seen: set[str] = set()
+    versions: list[str] = []
+    for match in re.findall(r"\bv?\d+\.\d+(?:\.\d+)?(?:[-+][A-Za-z0-9_.-]+)?\b", content):
+        if match not in seen:
+            seen.add(match)
+            versions.append(match)
+    return versions[:12]
 
 
 def _safe_env_int(name: str, default: int) -> int:

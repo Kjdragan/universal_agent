@@ -30,6 +30,7 @@ This file and `docs/README.md` serve as the **authoritative indexes** for all pr
 | URW_Orchestration.md | Multi-phase tasks |
 | LLM_Wiki_System.md | **Canonical source of truth** — shared wiki engine, external knowledge vault, derived internal memory vault, runtime surfaces, provenance, and integrity/query workflows |
 | Discord_Intelligence_System.md | **Canonical source of truth** — architecture for the Discord intelligence and command-and-control operations |
+| ClaudeDevs_X_Intelligence_System.md | **Canonical subsystem reference** — official X API ClaudeDevs lane, packet generation, replay/backfill, linked-source expansion, external Claude Code vault population, candidate ledgering, delivery verification, and historical cron cleanup |
 
 ## Architecture (01_Architecture/)
 

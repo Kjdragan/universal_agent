@@ -12,6 +12,7 @@ from typing import Any
 
 _HEARTBEAT_ARTIFACT_REL_PATHS = (
     "heartbeat_state.json",
+    "work_products/heartbeat_state.json",
     "work_products/heartbeat_findings_latest.json",
     "work_products/system_health_latest.md",
 )
