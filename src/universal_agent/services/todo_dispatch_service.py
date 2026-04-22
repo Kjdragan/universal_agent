@@ -356,27 +356,60 @@ You are NOT just producing a result (a table, a report, an analysis). You are pr
 **reusable skill** that produces that result. Both the skill AND the result are the deliverables.
 Think of it like: you're building a factory, not hand-crafting a single product.
 
+**DOMAIN KNOWLEDGE RESEARCH (before scaffolding):**
+If the task references technologies, APIs, models, or frameworks you don't have reliable
+current knowledge of — especially those that may be post-training or recently released —
+you MUST fetch and study reference docs BEFORE scaffolding. This is not optional.
+- If the task includes reference URLs (like `https://docs.cloud.google.com/...`), treat
+  them as **learning materials to study**, not input sources to process/narrate.
+- Use `WebFetch` or `read_url_content` to fetch the docs and extract the API surface:
+  SDK name, import paths, model names, auth method, code examples.
+- Save key findings to `references/<technology>.md` as part of scaffolding.
+- This research is SEPARATE from the 10-minute codebase scan cap. Reading official docs
+  for an unfamiliar API is essential preparation, not a rabbit hole.
+
 Specifically:
 1. Phase 3 (Scaffold) is MANDATORY — you must create:
    - `task-skills/<task-name>-tf/SKILL.md` — the task-skill with goal, success criteria, constraints, and context
    - `task-skills/<task-name>-tf/scripts/` — only if deterministic utilities are genuinely needed
    - `task-skills/<task-name>-tf/references/` — only if domain docs would help future runs
-2. Phase 4 (Execute) — execute BY FOLLOWING the skill you just created, not by ignoring it
-3. The work product goes to `work_products/` as usual, but the task-skill itself is ALSO a deliverable
-4. Phase 5b (Skill Quality Gate) is MANDATORY and MUST produce a traceable artifact:
-   a. Read `.claude/skills/skill-creator/SKILL.md` — this is the standard you're auditing against
-   b. Evaluate the task-skill against 6 structural checks (structure, not-a-wrapper, composable,
-      generalizable, progressive disclosure, functional-accuracy)
-   c. Write the results to `task-skills/<task-name>-tf/quality_gate.md` using the template in the
+   - **NEVER scaffold inside `.claude/skills/`** — that directory is write-protected during runs.
+     Write to `task-skills/` first; Phase 6 copies to `.claude/skills/` via `cp -r`.
+2. Phase 4 (Execute) — execute BY FOLLOWING the skill you just created, not by ignoring it.
+   After execution, perform MANDATORY reconciliation:
+   - Update the SKILL.md to reflect what was actually discovered (correct SDK, model, credentials).
+   - Create `references/` docs for any API patterns, model names, or configs discovered.
+   - Add anti-patterns for approaches that failed.
+3. **CRITICAL COMPONENT FAILURE PROTOCOL:** If a technology explicitly named in the task
+   description fails (e.g., the user says "use Google Cloud TTS" and TTS can't be made to work),
+   you MUST HALT and report the failure — do NOT silently substitute a fundamentally different
+   technology. Triangulating within the same technology (trying different SDKs for the same service)
+   is fine. Switching to a completely different technology stack is a contract violation.
+4. **INPUT SOURCE COVERAGE:** If the task says "from any source (URLs, text, files)", the skill
+   MUST handle ALL listed input types. URLs require a fetch+extract step. A skill that claims to
+   handle URLs but doesn't fetch their content is structurally incomplete.
+5. The work product goes to `work_products/` as usual, but the task-skill itself is ALSO a deliverable.
+6. Phase 5b (Skill Quality Gate) is MANDATORY and MUST produce a traceable artifact:
+   a. Read `.claude/skills/skill-creator/SKILL.md` using the `Read` tool — this is the standard
+      you're auditing against. Confirm in quality_gate.md that you read it.
+   b. Evaluate the task-skill against ALL 6 structural checks (structure, not-a-wrapper, composable,
+      generalizable, progressive disclosure, functional-accuracy). Write a 1-line justification
+      for each check. Do NOT skip any checks.
+   c. Verify SKILL.md/implementation alignment — the SKILL.md must reflect the actual working
+      approach, not the initial scaffold. If they diverge, fix the SKILL.md.
+   d. Verify input source coverage — if the task specifies multiple input types, confirm the
+      skill handles ALL of them.
+   e. Write the results to `task-skills/<task-name>-tf/quality_gate.md` using the template in the
       Task Forge skill. This file IS the proof the audit happened — do NOT skip it.
       The template includes a Meta-Improvements section — fill it with any observations that
       would improve Task Forge ITSELF for all future runs (not just this skill).
-   d. If you identified pipeline-level improvements, ALSO append them to
+   f. If you identified pipeline-level improvements, ALSO append them to
       `task-skills/_meta/improvement_log.md` (create the file if it doesn't exist, using
       the seed template from `.claude/skills/task-forge/templates/improvement_log_seed.md`).
-   e. If any check fails, fix the skill's structure before completing the task.
-   You CANNOT just claim "passed quality gate" — you must produce the artifact.
-5. Phase 5c (Skill Improvement) is OPTIONAL — only if the user's task description includes
+   g. If any check fails, fix the skill's structure before completing the task.
+   You CANNOT just claim "passed quality gate" — you must produce the artifact with all 6 checks.
+   Self-certification without evidence is an automatic quality gate failure.
+7. Phase 5c (Skill Improvement) is OPTIONAL — only if the user's task description includes
    phrases like "and evaluate", "polish", "improve", or "production-quality". When triggered:
    a. Re-read skill-creator/SKILL.md for polish standards
    b. Apply the universal improvement patterns from the Task Forge SKILL.md:
@@ -385,7 +418,7 @@ Specifically:
    c. Make concrete edits to the task-skill's SKILL.md
    d. Append a "Phase 5c" section to quality_gate.md with before/after and version label
    Skip entirely if not requested.
-6. Phase 6 (Auto-Promote) is MANDATORY — after quality gate passes, copy the skill
+8. Phase 6 (Auto-Promote) is MANDATORY — after quality gate passes, copy the skill
    to the permanent skills directory so it's immediately discoverable for future runs:
    `cp -r task-skills/<task-name>-tf/ .claude/skills/<task-name>-tf/`
    The `-tf` suffix marks it as Task Forge generated. Do NOT skip this step.
@@ -394,10 +427,13 @@ What makes a good task-skill vs. a bad one:
 - BAD: A bare Python script. Scripts are not skills. They're inflexible, opaque to agents, and
   can't be composed, iterated, or evolved. A Python script is just one possible *tool* inside a skill.
 - BAD: Skipping Phase 3 and running inline code. This produces a result with no reusable artifact.
+- BAD: A SKILL.md that says "use SDK X" but the actual script uses "SDK Y" — the skill is stale.
+- BAD: A skill that claims to handle URLs as input but has no URL fetching logic.
 - GOOD: A SKILL.md that describes the goal, approach, and success criteria, with scripts in scripts/
   only for the deterministic/fragile parts. The .md is what drives the agent; scripts assist it.
 - GOOD: A skill that could be handed to a different agent in a different session and still produce
   a useful result, because the intent and approach are captured in the SKILL.md.
+- GOOD: A skill whose SKILL.md was reconciled post-execution to match the actual working approach.
 
 The maturity model: task-skills start as v0 (intent only). They earn scripts and references through
 observed use — you don't pre-engineer optimization. But the SKILL.md skeleton is always required.

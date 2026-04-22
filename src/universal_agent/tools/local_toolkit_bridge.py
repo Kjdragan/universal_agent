@@ -48,6 +48,26 @@ from universal_agent.hooks import StdoutToEventStream
 from universal_agent.utils.task_guardrails import resolve_best_task_match
 
 
+def _normalize_agentmail_inbox_id(raw: str) -> str:
+    """Normalize any inboxId format to the API path form (e.g. 'oddcity216@agentmail.to').
+
+    Accepted inputs:
+      - 'oddcity216@agentmail.to'  -> 'oddcity216@agentmail.to'
+      - 'inbox_oddcity216'         -> 'oddcity216@agentmail.to'
+      - 'oddcity216'               -> 'oddcity216@agentmail.to'
+    """
+    cleaned = raw.strip()
+    if not cleaned:
+        return cleaned
+    # Already in email format — return as-is
+    if "@agentmail.to" in cleaned:
+        return cleaned
+    # Strip legacy 'inbox_' prefix
+    if cleaned.startswith("inbox_"):
+        cleaned = cleaned[len("inbox_"):]
+    return f"{cleaned}@agentmail.to"
+
+
 @tool(
     name="upload_to_composio",
     description=(
@@ -247,7 +267,7 @@ async def agentmail_send_with_local_attachments_wrapper(args: dict[str, Any]) ->
 
 
 async def _agentmail_send_with_local_attachments_impl(args: dict[str, Any]) -> dict[str, Any]:
-    inboxId = str(args.get("inboxId") or "").strip()
+    inboxId = _normalize_agentmail_inbox_id(str(args.get("inboxId") or ""))
     to = args.get("to") or []
     if isinstance(to, str):
         to = [to]
@@ -409,7 +429,7 @@ def _record_agentmail_delivery_from_runtime(*, message_id: str = "", draft_id: s
     }
 )
 async def agentmail_reply_with_local_attachments_wrapper(args: dict[str, Any]) -> dict[str, Any]:
-    inboxId = str(args.get("inboxId") or "").strip()
+    inboxId = _normalize_agentmail_inbox_id(str(args.get("inboxId") or ""))
     messageId = str(args.get("messageId") or "").strip()
     
     if not inboxId or not messageId:
