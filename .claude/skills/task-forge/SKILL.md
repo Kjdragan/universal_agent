@@ -58,6 +58,35 @@ Extract from the user — or infer from context — these four things:
 3. **Hard Constraints** — What must NOT happen? (data loss, breaking production, cost limits)
 4. **Context Pointers** — Relevant files, systems, or dependencies (if known).
 
+#### Task Atomization (MANDATORY — do this before moving on)
+
+After capturing intent, decompose the task into its **atomic requirements** — the discrete
+capabilities the skill must have, regardless of how they're implemented. This is NOT a plan
+or a presupposed solution path. It's an inventory of what the solution must cover.
+
+For each task, enumerate:
+- **Input sources** — What formats/channels does the skill need to accept? (URLs, text blocks,
+  files, API responses, etc.) Each input type is a separate atomic requirement.
+- **Processing steps** — What transformations are needed? (content extraction, format conversion,
+  analysis, generation, etc.) List each one.
+- **Output targets** — What does the skill produce? (files, emails, API calls, etc.)
+- **Delivery mechanisms** — How does the result reach the user? (email, chat, file system, etc.)
+
+**Example:** "Narrate any text source as audio and email it"
+- Inputs: URLs (→ need fetch + extract), .txt files (→ need file read), .md files (→ need file read),
+  raw text blocks (→ accept directly)
+- Processing: text cleaning (strip headers/nav), TTS audio generation, audio assembly
+- Output: audio file (MP3/WAV)
+- Delivery: email with attachment
+
+This decomposition gives the agent full situational awareness before it starts building.
+It does NOT constrain which tools, SDKs, or approaches the agent uses — it only ensures
+the agent knows ALL the requirements the solution must satisfy. Without this step, agents
+commonly miss input types, skip content extraction, or forget delivery steps.
+
+> **Key principle:** The atomization describes *what* must be covered, not *how* to cover it.
+> The agent still has full freedom to discover the best implementation path.
+
 If the user is vague, that's OK. Ask **at most 2-3 clarifying questions**. You can discover
 context during execution. Don't interview them to death — the whole point is speed.
 
@@ -74,8 +103,49 @@ Before scaffolding, do a fast reconnaissance — not deep research:
 
 You're looking for things that would cause the executing agent to fail. Don't go deep.
 
-> **Anti-pattern: The Research Rabbit Hole.** If your context scan takes more than 10 minutes,
-> you're doing too much. Ship the v0 and let the executing agent discover what it needs.
+#### Domain Knowledge Gap Research (MANDATORY when applicable)
+
+Review the task description and the atomic requirements from Phase 1. For each technology,
+API, framework, or model referenced in the task:
+
+1. **Assess your familiarity.** Do you have reliable, current knowledge of this technology?
+   If the task references a specific API version, model name, SDK, or feature that may be
+   post-training or recently released, the answer is NO.
+
+2. **If unfamiliar, RESEARCH BEFORE SCAFFOLDING.** You MUST fetch and study the reference
+   documentation before writing any SKILL.md or scripts. This is not optional — scaffolding
+   with stale training knowledge produces skills that fail on first execution.
+
+3. **If the task includes reference URLs**, treat them as **learning materials**, not input
+   sources to process. A URL like `https://docs.cloud.google.com/text-to-speech/docs/gemini-tts`
+   in the task description is telling you WHERE to learn, not WHAT to narrate.
+
+**How to research:**
+- Use `WebFetch` / `read_url_content` to fetch the reference docs
+- Extract the critical API surface: SDK name, import paths, model identifiers,
+  authentication method, request/response patterns, code examples
+- Save key findings to `references/<technology>.md` as part of Phase 3 scaffolding
+- If the reference URL is inaccessible, check for existing skills or codebase patterns
+  that cover the same technology
+
+**Example of what goes wrong without this step:**
+> Task: "Use the new Google Gemini TTS model described here: [docs URL] to produce audio."
+> Without research: Agent scaffolds with stale `google-cloud-texttospeech` SDK patterns
+> from training data. The script fails because the API surface has changed. Agent pivots
+> to `google-genai` SDK through trial-and-error, wasting 10+ tool calls on discovery
+> that could have been avoided by reading the provided docs.
+> With research: Agent fetches the docs URL, finds the correct SDK (`google-cloud-texttospeech`
+> v2.29.0+ with `SynthesisInput(text=..., prompt=...)` and `model_name="gemini-3.1-flash-tts-preview"`),
+> scaffolds correctly the first time, and saves the API surface to `references/`.
+
+> **Key principle:** The 10-minute time cap for Phase 2 applies to CODEBASE reconnaissance.
+> Domain knowledge research for unfamiliar technologies is a SEPARATE, mandatory step that
+> does not count against this cap. It's better to spend 5 extra minutes reading docs than
+> to spend 15 minutes during execution discovering the API surface through trial-and-error.
+
+> **Anti-pattern: The Research Rabbit Hole.** Codebase scans that take more than 10 minutes
+> are too deep. But technology research when you don't know the API is NOT a rabbit hole —
+> it's essential preparation. Don't confuse the two.
 
 ### Phase 3: Scaffold the Task-Skill
 
@@ -101,9 +171,11 @@ task-skills/<task-name>-tf/
 > promoted to `.claude/skills/`, it keeps its `-tf` suffix.
 
 **Where to create task-skills:**
-- Default: `task-skills/` directory at the project root
+- **Primary:** `task-skills/` directory at the project root (always writable)
 - If the user specifies a workspace or session directory, use that instead
 - For UA system tasks: within the relevant session workspace
+- **NEVER** scaffold directly inside `.claude/skills/` — that directory is write-protected
+  during agent runs. Scaffold in `task-skills/` first, then Phase 6 auto-promotes via `cp -r`.
 
 #### Writing the SKILL.md
 
@@ -166,11 +238,18 @@ Add a `scripts/` directory only when:
 Scripts should be **self-contained and runnable**. Include usage instructions in the SKILL.md.
 The script is a tool inside the skill, not a replacement for the skill.
 
-#### When to add references/
+#### When to add references/ (ACTIVELY ASSESS)
 
-Add a `references/` directory only when:
+> [!IMPORTANT]
+> After execution completes, you MUST assess whether reference docs should be created.
+> Any discovery that would help a future agent re-run this skill — API surfaces, model names,
+> credential requirements, working SDK patterns, endpoint URLs — belongs in `references/`.
+> This is NOT optional. The assessment is mandatory; creating the files is conditional on findings.
+
+Add a `references/` directory when:
 - There's domain knowledge the executing agent genuinely wouldn't know
 - You found API docs, schema definitions, or architecture notes during your context scan
+- You discovered working API patterns, model names, or credential configs during execution
 - The reference is **short** (<300 lines) — otherwise link to the source instead
 
 ### Phase 4: Execute or Dispatch
@@ -189,6 +268,75 @@ When dispatching to a VP, include the skill path in the mission objective:
 Read and execute the task-skill at task-skills/<task-name>/SKILL.md
 ```
 
+#### Critical Component Failure Protocol (MANDATORY)
+
+> [!CAUTION]
+> **If a critical component specified in the task description fails, you MUST HALT — not substitute.**
+>
+> A "critical component" is any technology, API, service, or approach that is explicitly named
+> in the user's task as the thing to use. Examples: "use Google Cloud Text-to-Speech",
+> "use the Stripe API", "build it with React Native".
+>
+> When a critical component fails (wrong SDK, missing credentials, API errors, model not found):
+> 1. **STOP execution immediately.** Do not silently switch to an alternative.
+> 2. **Document the failure** — what you tried, the exact error, why it failed.
+> 3. **Report to the user** with a clear error summary and suggested next steps
+>    (e.g., "credentials needed", "SDK version mismatch", "model not available").
+> 4. **Disposition the task as `blocked`** with the failure reason.
+>
+> **Why this matters:** There is a critical difference between *triangulating* toward the best
+> implementation (encouraged — try different approaches within the same technology) and
+> *fundamentally changing the skill* by substituting a completely different technology stack.
+> The former is exploration; the latter is a silent contract violation that produces a skill
+> that doesn't match what was requested.
+>
+> **Example of acceptable exploration:** Trying `google-cloud-texttospeech` SDK, discovering
+> it needs ADC credentials, then trying `google-genai` SDK with the same TTS model endpoint.
+> Both approaches use the same underlying Google TTS service — the agent is finding the right SDK.
+>
+> **Example of a critical component failure that MUST halt:** The user asks to use Google Cloud
+> Text-to-Speech, but the agent can't make it work, so it silently switches to a generic LLM
+> text generation endpoint that doesn't use TTS at all. The output "works" but violates the
+> task specification. This MUST produce an error, not a fake success.
+
+#### Input Source Coverage (MANDATORY for skills that process input)
+
+When the task description specifies multiple input source types (e.g., "from URLs, text blocks,
+.txt files, .md files"), the skill MUST handle ALL of them or explicitly document which ones
+are not yet supported. Specifically:
+
+- **URLs** require a content extraction step (fetch, parse, extract readable text).
+  The skill must include this capability if URLs are listed as an accepted input.
+- **File types** (.txt, .md, .pdf, etc.) require file reading logic.
+- **Text blocks** require accepting raw text input.
+
+If the skill scaffolds support for "any source" but the implementation only handles one type,
+the quality gate MUST flag this as a failure. A skill that claims to handle URLs but doesn't
+fetch and extract their content is structurally incomplete.
+
+#### Post-Execution SKILL.md Reconciliation (MANDATORY)
+
+After execution completes (whether success or failure), you MUST update the task-skill's
+SKILL.md to reflect what was actually discovered during execution:
+
+1. **API surface corrections** — If the working approach used different SDK imports, model
+   names, or credential configs than what was scaffolded, update the SKILL.md.
+2. **Dependency documentation** — Add any discovered dependencies (packages, env vars,
+   system tools like `ffmpeg`) to the Context or Constraints section.
+3. **Reference docs creation** — If you discovered API patterns, model names, or configs
+   during execution, create `references/<topic>.md` with those findings.
+4. **Anti-pattern documentation** — If approaches failed during execution, add them to
+   the Anti-Patterns section so future runs avoid repeating them.
+
+> [!IMPORTANT]
+> The reconciliation step ensures the SKILL.md is a faithful description of the working
+> implementation, not a stale scaffold from before execution. A future agent reading the
+> SKILL.md should be able to reproduce the result without re-discovering the approach.
+>
+> This step is NOT an excuse to mask Critical Component Failures. If a critical component
+> was substituted (see above), reconciliation doesn't fix the contract violation — the task
+> should have been halted and reported as blocked.
+
 ### Phase 5: Evaluate and Iterate (Optional)
 
 After execution, check the result against the success criteria from the SKILL.md.
@@ -204,38 +352,56 @@ After execution, check the result against the success criteria from the SKILL.md
 > **The key insight:** Each failure makes the skill smarter. You're not just retrying —
 > you're encoding knowledge into the skill so the next attempt is structurally better.
 
-### Phase 5b: Skill Quality Gate
+### Phase 5b: Skill Quality Gate (MANDATORY — NOT SKIPPABLE)
 
 After the result passes Phase 5, evaluate **the skill itself** — not its output.
 The result might be correct, but the skill that produced it might be garbage (a thin .md
 wrapper around a hardcoded script). A good result from a bad skill is a one-time win;
 a good result from a good skill is a reusable capability.
 
-> [!IMPORTANT]
+> [!CAUTION]
 > **The quality gate must produce a traceable artifact.** You cannot just claim "passed
 > quality gate" in your completion note. You must actually perform the audit and write the
-> results to `task-skills/<task-name>/quality_gate.md`. This file IS the proof.
+> results to `task-skills/<task-name>-tf/quality_gate.md`. This file IS the proof.
+> **Self-certification without evidence is an automatic quality gate failure.**
 
-#### Step 1: Read the skill-creator writing guide
+#### Step 1: Read the skill-creator writing guide (MANDATORY — USE THE `Read` TOOL)
 
-You MUST `Read` the file `.claude/skills/skill-creator/SKILL.md` and review the "Skill Writing
-Guide" section. This is not optional — it's the standard you're auditing against. Without reading
-it, you're guessing at quality, not measuring it.
+You MUST call the `Read` tool on `.claude/skills/skill-creator/SKILL.md` and review the
+"Skill Writing Guide" section. This is not optional — it's the standard you're auditing against.
+Without reading it, you're guessing at quality, not measuring it.
 
-#### Step 2: Evaluate each check
+**Verification:** Your quality_gate.md artifact must include a line confirming you read this file
+and citing the version/date. If you cannot read it (file not found), note the failure and
+audit against the 6 checks below using your best judgment — but flag the gap.
 
-| Check | What to look for | Fail if... |
-|-------|-----------------|------------|
-| **Structure** | SKILL.md has frontmatter (name, description), Goal, Success Criteria, Context | Missing any of these core sections |
-| **Not a script wrapper** | The SKILL.md describes *what* and *why*, not just "run this script" | The entire SKILL.md is basically "run scripts/do_thing.py" |
-| **Composable** | References existing skills where relevant, uses context pointers | Reinvents capabilities that exist as skills |
-| **Generalizable** | Could a different agent in a different session follow this and succeed? | Only works because of hardcoded paths or session-specific knowledge |
-| **Progressive disclosure** | SKILL.md is lean (<100 lines); heavy content in references/ | Everything crammed into one massive file |
-| **Functional accuracy** | If the skill has a scanner/script, run it and verify results against known-good data | Scanner passes structural checks but produces false positives/negatives |
+#### Step 2: Evaluate EVERY check (all 6 are mandatory)
+
+You MUST evaluate ALL 6 checks below. Do not skip any. For each check, write a 1-line
+justification in the quality_gate.md artifact explaining WHY it passes or fails.
+
+| # | Check | What to look for | Fail if... |
+|---|-------|-----------------|------------|
+| 1 | **Structure** | SKILL.md has frontmatter (name, description), Goal, Success Criteria, Context | Missing any of these core sections |
+| 2 | **Not a script wrapper** | The SKILL.md describes *what* and *why*, not just "run this script" | The entire SKILL.md is basically "run scripts/do_thing.py" |
+| 3 | **Composable** | References existing skills where relevant, uses context pointers | Reinvents capabilities that exist as skills |
+| 4 | **Generalizable** | Could a different agent in a different session follow this and succeed? | Only works because of hardcoded paths or session-specific knowledge |
+| 5 | **Progressive disclosure** | SKILL.md is lean (<100 lines); heavy content in references/ | Everything crammed into one massive file |
+| 6 | **Functional accuracy** | SKILL.md reflects what actually works (post-reconciliation); input types covered | SKILL.md describes a different approach than what was implemented; claims to handle input types it doesn't |
+
+**Additional mandatory check — Input Source Coverage:**
+If the task specifies multiple input types (URLs, files, text), verify the skill handles ALL of them.
+A skill that claims to accept URLs but has no URL fetching/extraction logic is a functional accuracy failure.
+
+**Additional mandatory check — SKILL.md/Implementation Alignment:**
+Compare the SKILL.md's stated approach, SDK, model, and credentials against the actual working
+implementation in `scripts/`. If they diverge (e.g., SKILL.md says `google-cloud-texttospeech`
+but the script uses `google-genai`), this is a functional accuracy failure. The post-execution
+reconciliation step (Phase 4) should have caught this — if it didn't, fix it now.
 
 #### Step 3: Write the quality gate artifact
 
-Use the `Write` tool to save `task-skills/<task-name>/quality_gate.md` with this format:
+Use the `Write` tool to save `task-skills/<task-name>-tf/quality_gate.md` with this format:
 
 ```markdown
 # Quality Gate: <task-name>

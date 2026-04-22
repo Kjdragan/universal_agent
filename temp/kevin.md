@@ -65,3 +65,7 @@ use the phrase red/green TDD as a part of the prompt for code generation
 If you have a starting template for each project, it will improve the development. For example, just having a template that you start with that has a one plus one test will encourage the agents to build tests. So we should start to develop a starting template on our projects.
 
 NextResearch for a just anounced X API skill via openclaw.  We may be able to copy it to access X.com data like the "@ClaudeDevs" account"
+
+Task Forge:  use the new Google text to speech model described here:<https://docs.cloud.google.com/text-to-speech/docs/gemini-tts> to produce a high-quality audio file of the text from any source supplied (urls, text block, .tx or .md files, etc) that will read the article or text source, ignoring headers, etc, in a in an appealing narration so that it serves for people who don't want to read the article but would prefer to have someone read it to them aloud. email the file as an attachment, with the email body being just the link to the original source material. Make sure you use the agentmail_send_with_local_attachments tool to send the email. And make sure that the email is sent to <kevinjdragan@gmail.com> Here is the text source: <https://x.com/garrytan/status/2042925773300908103>  It is an x post so use our X API skill to extract the full text of the post in this case
+
+##
