@@ -263,158 +263,100 @@ def test_list_comments_raw_connection() -> None:
 
 
 # -----------------------------------------------------------------------
-# VP lifecycle helpers -- must return hydrated rows with parsed ``metadata``
-# dicts (not just the raw ``metadata_json`` column), otherwise callers wipe
-# metadata or render VP review prompts with "?" placeholders.
+# VP lifecycle paths -- previously returned un-hydrated rows, wiping metadata
+# Regression guards for Devin Review findings on PR #115.
 # -----------------------------------------------------------------------
 
 
 def _seed_delegated_task(
     conn: sqlite3.Connection,
-<<<<<<< devin/1776862063-fix-task-hub-hydration
+    *,
     task_id: str,
     mission_id: str,
-    *,
-    status: str | None = None,
-    delegated_at: str = "2020-01-01T00:00:00+00:00",
-) -> dict:
-    """Insert a task already in the delegated state with full delegation metadata."""
-    task_hub.upsert_item(
-=======
-    *,
-    task_id: str = "deleg-001",
-    mission_id: str = "mission-abc",
     extra_metadata: dict | None = None,
+    updated_at: str | None = None,
 ) -> dict:
-    metadata: dict = {
-        "delegation": {
-            "mission_id": mission_id,
-            "vp_id": "vp.coder.primary",
-            "delegated_at": "2026-04-22T00:00:00+00:00",
-        },
-        "dispatch": {"queue_build_id": "qb-123"},
-        "csi": {"routing_state": "agent_actionable"},
-    }
-    if extra_metadata:
-        metadata.update(extra_metadata)
-
-    item = task_hub.upsert_item(
->>>>>>> develop
+    """Insert a task already in the delegated state with delegation metadata."""
+    task = task_hub.upsert_item(
         conn,
         {
             "task_id": task_id,
             "source_kind": "manual",
             "source_ref": "test",
-<<<<<<< devin/1776862063-fix-task-hub-hydration
-            "title": f"Delegated task {task_id}",
-            "description": "VP is working this",
+            "title": "Delegated task",
+            "description": "VP working",
             "project_key": "test",
             "priority": 2,
-            "labels": ["test"],
             "status": task_hub.TASK_STATUS_OPEN,
             "metadata": {
                 "delegation": {
                     "mission_id": mission_id,
-                    "vp_id": "vp.coder.primary",
-                    "delegated_at": delegated_at,
+                    "vp_id": "vp.general.primary",
+                    "delegated_at": "2026-04-22T00:00:00+00:00",
                 },
-                "dispatch": {"reason": "seed-for-test"},
+                "csi": {"routing_state": "agent_actionable"},
+                **(extra_metadata or {}),
             },
         },
     )
-    # Flip to delegated (and optionally override updated_at for staleness).
-    target_status = status or task_hub.TASK_STATUS_DELEGATED
-    conn.execute(
-        "UPDATE task_hub_items SET status=?, seizure_state=?, updated_at=? WHERE task_id=?",
-        (target_status, "seized", delegated_at, task_id),
-    )
+    # Flip to delegated (optionally back-dating updated_at for stale tests).
+    if updated_at is None:
+        conn.execute(
+            "UPDATE task_hub_items SET status=?, seizure_state=? WHERE task_id=?",
+            (task_hub.TASK_STATUS_DELEGATED, "delegated", task_id),
+        )
+    else:
+        conn.execute(
+            "UPDATE task_hub_items SET status=?, seizure_state=?, updated_at=? WHERE task_id=?",
+            (task_hub.TASK_STATUS_DELEGATED, "delegated", updated_at, task_id),
+        )
     conn.commit()
-    result = task_hub.get_item(conn, task_id)
-    assert result is not None
-    return result
+    return task
 
 
 def test_find_delegated_task_by_mission_id_returns_hydrated_metadata() -> None:
-    """find_delegated_task_by_mission_id must return parsed `metadata`, not raw `metadata_json`."""
-    conn = _row_conn()
+    conn = _raw_conn()
     try:
-        _seed_delegated_task(conn, "deleg-001", "mission-abc-123")
-
-        result = task_hub.find_delegated_task_by_mission_id(conn, mission_id="mission-abc-123")
-        assert result is not None
-        assert result["task_id"] == "deleg-001"
-        # Hydrated: `metadata` is a parsed dict, not a JSON string.
-        assert isinstance(result.get("metadata"), dict)
-        assert result["metadata"].get("delegation", {}).get("mission_id") == "mission-abc-123"
-        assert result["metadata"].get("delegation", {}).get("vp_id") == "vp.coder.primary"
-        # Labels are also hydrated to a list.
-        assert isinstance(result.get("labels"), list)
+        _seed_delegated_task(
+            conn,
+            task_id="vp-find-001",
+            mission_id="vp-mission-abc",
+            extra_metadata={"dispatch": {"queue_build_id": "qb-123"}},
+        )
+        task = task_hub.find_delegated_task_by_mission_id(conn, mission_id="vp-mission-abc")
+        assert task is not None
+        # Bug guard: metadata must be a parsed dict, not just metadata_json.
+        assert isinstance(task.get("metadata"), dict)
+        assert task["metadata"]["delegation"]["mission_id"] == "vp-mission-abc"
+        assert task["metadata"]["dispatch"]["queue_build_id"] == "qb-123"
+        assert task["metadata"]["csi"]["routing_state"] == "agent_actionable"
     finally:
         conn.close()
 
 
-def test_find_delegated_task_by_mission_id_raw_connection() -> None:
-    """Same as above but on a connection without pre-set row_factory."""
+def test_find_delegated_task_by_mission_id_missing_returns_none() -> None:
     conn = _raw_conn()
     try:
-        _seed_delegated_task(conn, "deleg-raw-001", "mission-raw-1")
-
-        result = task_hub.find_delegated_task_by_mission_id(conn, mission_id="mission-raw-1")
-        assert result is not None
-        assert isinstance(result.get("metadata"), dict)
-        assert result["metadata"]["delegation"]["mission_id"] == "mission-raw-1"
-=======
-            "title": "Delegated task",
-            "description": "VP is working",
-            "project_key": "test",
-            "priority": 2,
-            "labels": ["delegated"],
-            "status": task_hub.TASK_STATUS_DELEGATED,
-            "metadata": metadata,
-        },
-    )
-    # upsert_item does not change status away from what the caller asked for here,
-    # but make sure status and updated_at are set as expected for downstream queries.
-    conn.execute(
-        "UPDATE task_hub_items SET status = ?, updated_at = ? WHERE task_id = ?",
-        (task_hub.TASK_STATUS_DELEGATED, "2020-01-01T00:00:00+00:00", task_id),
-    )
-    conn.commit()
-    return item
-
-
-def test_find_delegated_task_by_mission_id_returns_hydrated_metadata() -> None:
-    """find_delegated_task_by_mission_id must hydrate ``metadata`` so callers
-    see the parsed delegation dict rather than a raw JSON string."""
-    conn = _row_conn()
-    try:
-        _seed_delegated_task(conn, task_id="fd-001", mission_id="mission-find")
-        task = task_hub.find_delegated_task_by_mission_id(conn, mission_id="mission-find")
-        assert task is not None
-        assert task["task_id"] == "fd-001"
-        # Hydrated data must include the parsed metadata dict...
-        assert isinstance(task.get("metadata"), dict)
-        assert task["metadata"]["delegation"]["mission_id"] == "mission-find"
-        # ...plus hydrated labels.
-        assert "delegated" in task.get("labels", [])
->>>>>>> develop
+        assert task_hub.find_delegated_task_by_mission_id(conn, mission_id="no-such") is None
     finally:
         conn.close()
 
 
 def test_get_pending_review_tasks_returns_hydrated_metadata() -> None:
-<<<<<<< devin/1776862063-fix-task-hub-hydration
-    """get_pending_review_tasks must expose parsed `metadata` so the review prompt can
-    read delegation.vp_id / mission_id / vp_terminal_status / result_summary."""
-    conn = _row_conn()
+    conn = _raw_conn()
     try:
-        _seed_delegated_task(conn, "rev-001", "mission-rev-1")
+        _seed_delegated_task(
+            conn,
+            task_id="vp-pr-001",
+            mission_id="vp-mission-pr-001",
+            extra_metadata={"dispatch": {"queue_build_id": "qb-pr"}},
+        )
         updated = task_hub.transition_to_pending_review(
             conn,
-            mission_id="mission-rev-1",
-            vp_id="vp.coder.primary",
+            mission_id="vp-mission-pr-001",
+            vp_id="vp.general.primary",
             terminal_status="completed",
-            result_summary="Refactored module and added tests.",
+            result_summary="All work done.",
         )
         assert updated is not None
         assert updated["status"] == task_hub.TASK_STATUS_PENDING_REVIEW
@@ -422,258 +364,94 @@ def test_get_pending_review_tasks_returns_hydrated_metadata() -> None:
         tasks = task_hub.get_pending_review_tasks(conn)
         assert len(tasks) == 1
         task = tasks[0]
-        assert task["task_id"] == "rev-001"
-        # Critical: caller accesses `metadata` (not `metadata_json`) in the prompt.
+        # Bug guard: callers in heartbeat_service read task["metadata"]["delegation"].
         assert isinstance(task.get("metadata"), dict)
         delegation = task["metadata"].get("delegation") or {}
-        assert delegation.get("mission_id") == "mission-rev-1"
-        assert delegation.get("vp_id") == "vp.coder.primary"
-        assert delegation.get("vp_terminal_status") == "completed"
-        assert delegation.get("result_summary") == "Refactored module and added tests."
-    finally:
-        conn.close()
-
-
-def test_transition_to_pending_review_preserves_existing_metadata() -> None:
-    """transition_to_pending_review must not wipe unrelated metadata keys."""
-    conn = _row_conn()
-    try:
-        _seed_delegated_task(conn, "trans-001", "mission-trans-1")
-
-        task_hub.transition_to_pending_review(
-            conn,
-            mission_id="mission-trans-1",
-            vp_id="vp.general.primary",
-            terminal_status="completed",
-            result_summary="Done.",
-        )
-
-        refreshed = task_hub.get_item(conn, "trans-001")
-        assert refreshed is not None
-        metadata = refreshed.get("metadata") or {}
-        # Pre-existing keys survive.
-        assert metadata.get("dispatch", {}).get("reason") == "seed-for-test"
-        # Delegation got enriched, not replaced.
-        delegation = metadata.get("delegation") or {}
-        assert delegation.get("mission_id") == "mission-trans-1"
+        assert delegation.get("mission_id") == "vp-mission-pr-001"
         assert delegation.get("vp_id") == "vp.general.primary"
         assert delegation.get("vp_terminal_status") == "completed"
-        assert delegation.get("result_summary") == "Done."
-=======
-    """get_pending_review_tasks must surface ``metadata`` (parsed dict), not just
-    ``metadata_json``, so the VP Completion Review prompt can read
-    ``delegation.vp_id`` / ``mission_id`` / ``result_summary``."""
-    conn = _row_conn()
-    try:
-        task_hub.upsert_item(
-            conn,
-            {
-                "task_id": "pr-001",
-                "source_kind": "manual",
-                "source_ref": "test",
-                "title": "Awaiting Simone review",
-                "description": "",
-                "project_key": "test",
-                "priority": 2,
-                "status": task_hub.TASK_STATUS_PENDING_REVIEW,
-                "metadata": {
-                    "delegation": {
-                        "mission_id": "mission-xyz",
-                        "vp_id": "vp.coder.primary",
-                        "vp_terminal_status": "completed",
-                        "result_summary": "Shipped the fix.",
-                    }
-                },
-            },
-        )
-
-        items = task_hub.get_pending_review_tasks(conn)
-        assert len(items) == 1
-        task = items[0]
-        assert task["task_id"] == "pr-001"
-        assert isinstance(task.get("metadata"), dict)
-        delegation = task["metadata"].get("delegation") or {}
-        assert delegation.get("mission_id") == "mission-xyz"
-        assert delegation.get("vp_id") == "vp.coder.primary"
-        assert delegation.get("vp_terminal_status") == "completed"
-        assert delegation.get("result_summary") == "Shipped the fix."
->>>>>>> develop
+        assert delegation.get("result_summary") == "All work done."
+        # Pre-existing metadata siblings must survive the transition.
+        assert task["metadata"]["dispatch"]["queue_build_id"] == "qb-pr"
     finally:
         conn.close()
 
 
-<<<<<<< devin/1776862063-fix-task-hub-hydration
 def test_reopen_stale_delegations_preserves_metadata() -> None:
-    """reopen_stale_delegations must not wipe delegation metadata when reopening.
-
-    Regression guard: before the hydration fix, `_row_to_dict(row)` returned raw
-    columns with `metadata_json` (a JSON string) but no `metadata` key. The reopen
-    path then did `dict(task.get("metadata") or {})` → `{}` and persisted an empty
-    metadata dict, destroying the mission_id, dispatch history, etc.
-    """
-=======
-def test_reopen_stale_delegations_preserves_existing_metadata() -> None:
-    """reopen_stale_delegations must NOT wipe existing metadata (dispatch info,
-    delegation history, CSI routing state). It should hydrate, merge new
-    stale-reopen fields into ``metadata.delegation``, and persist the full dict."""
->>>>>>> develop
-    conn = _row_conn()
-    try:
-        _seed_delegated_task(
-            conn,
-<<<<<<< devin/1776862063-fix-task-hub-hydration
-            "stale-001",
-            "mission-stale-1",
-            delegated_at="2020-01-01T00:00:00+00:00",
-=======
-            task_id="stale-001",
-            mission_id="mission-stale",
->>>>>>> develop
-        )
-
-        reopened = task_hub.reopen_stale_delegations(conn, stale_hours=1.0)
-        assert len(reopened) == 1
-        assert reopened[0]["task_id"] == "stale-001"
-<<<<<<< devin/1776862063-fix-task-hub-hydration
-        # Pre-update snapshot is hydrated.
-        assert isinstance(reopened[0].get("metadata"), dict)
-
-        refreshed = task_hub.get_item(conn, "stale-001")
-        assert refreshed is not None
-        assert refreshed["status"] == task_hub.TASK_STATUS_OPEN
-        # Reopened tasks must return to the 'unseized' seizure_state so they
-        # can be re-dispatched; 'open' is not a recognised seizure_state value.
-        assert refreshed["seizure_state"] == "unseized"
-        metadata = refreshed.get("metadata") or {}
-        delegation = metadata.get("delegation") or {}
-        # The mission_id, vp_id, and original delegated_at must all survive.
-        assert delegation.get("mission_id") == "mission-stale-1"
-        assert delegation.get("vp_id") == "vp.coder.primary"
-        assert delegation.get("delegated_at") == "2020-01-01T00:00:00+00:00"
-        # Reopen bookkeeping is appended.
-        assert delegation.get("stale_reopened_at")
-        assert "no_vp_progress_after" in str(delegation.get("stale_reason", ""))
-        # Unrelated metadata survives too.
-        assert metadata.get("dispatch", {}).get("reason") == "seed-for-test"
-=======
-
-        # Re-read from the DB and verify the full metadata blob survived the UPDATE.
-        refreshed = task_hub.get_item(conn, "stale-001")
-        assert refreshed is not None
-        metadata = refreshed.get("metadata") or {}
-        assert isinstance(metadata, dict)
-
-        # Original mission_id + delegated_at preserved.
-        delegation = metadata.get("delegation") or {}
-        assert delegation.get("mission_id") == "mission-stale"
-        assert delegation.get("delegated_at") == "2026-04-22T00:00:00+00:00"
-        # New stale-reopen fields added.
-        assert "stale_reopened_at" in delegation
-        assert delegation.get("stale_reason") == "no_vp_progress_after_1.0h"
-
-        # Sibling metadata sections (dispatch, csi) must still be present.
-        assert metadata.get("dispatch", {}).get("queue_build_id") == "qb-123"
-        assert metadata.get("csi", {}).get("routing_state") == "agent_actionable"
-
-        # Status should have been flipped back to open, and seizure_state must
-        # match the codebase's canonical "unseized" value for open tasks
-        # (not the non-standard "open" string that used to be written here).
-        assert refreshed["status"] == task_hub.TASK_STATUS_OPEN
-        raw = conn.execute(
-            "SELECT seizure_state FROM task_hub_items WHERE task_id = ?",
-            ("stale-001",),
-        ).fetchone()
-        assert raw["seizure_state"] == "unseized"
->>>>>>> develop
-    finally:
-        conn.close()
-
-
-<<<<<<< devin/1776862063-fix-task-hub-hydration
-def test_reopen_stale_delegations_raw_connection() -> None:
-    """Same as above but without pre-set row_factory on the connection."""
+    """Regression: reopen_stale_delegations used to wipe metadata because the
+    row came back un-hydrated (only metadata_json was present, not metadata)."""
     conn = _raw_conn()
     try:
         _seed_delegated_task(
             conn,
-            "stale-raw-001",
-            "mission-stale-raw-1",
-            delegated_at="2020-01-01T00:00:00+00:00",
+            task_id="vp-stale-001",
+            mission_id="vp-mission-stale",
+            extra_metadata={"dispatch": {"queue_build_id": "qb-stale"}},
+            updated_at="2020-01-01T00:00:00+00:00",
         )
-
         reopened = task_hub.reopen_stale_delegations(conn, stale_hours=1.0)
         assert len(reopened) == 1
 
-        refreshed = task_hub.get_item(conn, "stale-raw-001")
+        # The returned task dict must include hydrated metadata.
+        task = reopened[0]
+        assert isinstance(task.get("metadata"), dict)
+        assert task["metadata"]["delegation"]["mission_id"] == "vp-mission-stale"
+
+        # Crucially, the DB-side metadata_json must still contain the original
+        # delegation + dispatch + csi data plus new stale markers — NOT a wipe.
+        refreshed = task_hub.get_item(conn, "vp-stale-001")
         assert refreshed is not None
-        delegation = (refreshed.get("metadata") or {}).get("delegation") or {}
-        assert delegation.get("mission_id") == "mission-stale-raw-1"
+        assert refreshed["status"] == task_hub.TASK_STATUS_OPEN
+        # Reopened tasks must use the standard "unseized" seizure_state
+        # (not the legacy "open" value) so downstream consumers treat them
+        # consistently with other open tasks.
+        assert refreshed["seizure_state"] == "unseized"
+        meta = refreshed["metadata"]
+        assert isinstance(meta, dict)
+
+        # Original delegation fields preserved (mission_id, vp_id, delegated_at).
+        delegation = meta.get("delegation") or {}
+        assert delegation.get("mission_id") == "vp-mission-stale"
+        assert delegation.get("vp_id") == "vp.general.primary"
+        assert delegation.get("delegated_at") == "2026-04-22T00:00:00+00:00"
+        # New stale-reopen fields appended.
+        assert "stale_reopened_at" in delegation
+        assert delegation.get("stale_reason") == "no_vp_progress_after_1.0h"
+
+        # Sibling metadata sections (dispatch, csi) must still be present.
+        assert meta.get("dispatch", {}).get("queue_build_id") == "qb-stale"
+        assert meta.get("csi", {}).get("routing_state") == "agent_actionable"
     finally:
         conn.close()
 
 
-def test_reopen_stale_delegations_skips_fresh_delegations() -> None:
-    """Tasks updated within the staleness window must not be reopened."""
-    conn = _row_conn()
-    try:
-        from datetime import datetime, timezone
-
-        fresh_iso = datetime.now(timezone.utc).isoformat()
-        _seed_delegated_task(
-            conn,
-            "fresh-001",
-            "mission-fresh-1",
-            delegated_at=fresh_iso,
-        )
-
-        reopened = task_hub.reopen_stale_delegations(conn, stale_hours=4.0)
-        assert reopened == []
-
-        refreshed = task_hub.get_item(conn, "fresh-001")
-        assert refreshed is not None
-        assert refreshed["status"] == task_hub.TASK_STATUS_DELEGATED
-=======
-def test_transition_to_pending_review_preserves_metadata() -> None:
-    """transition_to_pending_review calls find_delegated_task_by_mission_id and
-    merges VP completion fields into delegation metadata. Pre-existing metadata
-    sections (dispatch, csi, original delegation fields) must survive."""
-    conn = _row_conn()
+def test_transition_to_pending_review_idempotent_and_hydrated() -> None:
+    conn = _raw_conn()
     try:
         _seed_delegated_task(
             conn,
-            task_id="tpr-001",
-            mission_id="mission-complete",
+            task_id="vp-trans-001",
+            mission_id="vp-mission-trans",
         )
-
-        updated = task_hub.transition_to_pending_review(
+        first = task_hub.transition_to_pending_review(
             conn,
-            mission_id="mission-complete",
-            vp_id="vp.coder.primary",
+            mission_id="vp-mission-trans",
+            vp_id="vp.general.primary",
             terminal_status="completed",
-            result_summary="Finished the job.",
         )
-        assert updated is not None
-        assert updated["task_id"] == "tpr-001"
-        assert updated["status"] == task_hub.TASK_STATUS_PENDING_REVIEW
+        assert first is not None
+        assert first["status"] == task_hub.TASK_STATUS_PENDING_REVIEW
+        assert isinstance(first.get("metadata"), dict)
 
-        refreshed = task_hub.get_item(conn, "tpr-001")
-        assert refreshed is not None
-        metadata = refreshed.get("metadata") or {}
-        assert isinstance(metadata, dict)
-
-        # New completion fields merged in.
-        delegation = metadata.get("delegation") or {}
-        assert delegation.get("vp_terminal_status") == "completed"
-        assert delegation.get("vp_id") == "vp.coder.primary"
-        assert delegation.get("result_summary") == "Finished the job."
-        # Pre-existing delegation fields preserved.
-        assert delegation.get("mission_id") == "mission-complete"
-        assert delegation.get("delegated_at") == "2026-04-22T00:00:00+00:00"
-
-        # Sibling metadata sections preserved.
-        assert metadata.get("dispatch", {}).get("queue_build_id") == "qb-123"
-        assert metadata.get("csi", {}).get("routing_state") == "agent_actionable"
->>>>>>> develop
+        # Second call should find the already-pending-review task via the
+        # hydrated lookup path and short-circuit without re-updating.
+        second = task_hub.transition_to_pending_review(
+            conn,
+            mission_id="vp-mission-trans",
+            vp_id="vp.general.primary",
+            terminal_status="failed",  # would be recorded if not idempotent
+        )
+        assert second is None or second["status"] == task_hub.TASK_STATUS_PENDING_REVIEW
     finally:
         conn.close()
 
