@@ -70,6 +70,53 @@ def test_classify_post_escalates_code_release_with_links() -> None:
     assert action["url"] == "https://x.com/ClaudeDevs/status/999"
 
 
+def test_classify_post_downshifts_generic_hackathon_announcement(monkeypatch) -> None:
+    monkeypatch.setenv("UA_CLAUDE_CODE_INTEL_LLM_CLASSIFIER_ENABLED", "0")
+    action = classify_post(
+        {
+            "id": "998",
+            "text": "Our virtual hackathon is back! Applications are open through Sunday, with build week starting Tuesday.",
+            "entities": {"urls": [{"expanded_url": "https://cerebralvalley.ai/e/built-with-4-7-hackathon"}]},
+        },
+        handle="ClaudeDevs",
+    )
+
+    assert action["tier"] == 2
+    assert action["action_type"] == "kb_update"
+    assert action["classifier"]["content_kind"] == "community_event"
+
+
+def test_classify_post_uses_llm_override_when_available(monkeypatch) -> None:
+    monkeypatch.setenv("UA_CLAUDE_CODE_INTEL_LLM_CLASSIFIER_ENABLED", "1")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+    monkeypatch.setattr(
+        "universal_agent.services.claude_code_intel._call_sync_llm",
+        lambda **kwargs: json.dumps(
+            {
+                "tier": 1,
+                "action_type": "digest",
+                "content_kind": "community_event",
+                "confidence": "high",
+                "reasoning": "Community update with low direct implementation value.",
+            }
+        ),
+    )
+
+    action = classify_post(
+        {
+            "id": "997",
+            "text": "Applications are open through Sunday, with build week starting Tuesday!",
+            "entities": {"urls": [{"expanded_url": "https://cerebralvalley.ai/e/built-with-4-7-hackathon"}]},
+        },
+        handle="ClaudeDevs",
+    )
+
+    assert action["tier"] == 1
+    assert action["action_type"] == "digest"
+    assert action["classifier"]["method"] == "llm"
+    assert action["classifier"]["confidence"] == "high"
+
+
 def test_run_sync_writes_packet_and_state_without_task_for_tier_two(tmp_path: Path) -> None:
     client = _client_for_posts(
         [

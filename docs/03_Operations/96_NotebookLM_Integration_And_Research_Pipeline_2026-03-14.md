@@ -210,6 +210,29 @@ When the nightly wiki agent dispatched a VP mission to build knowledge bases, th
 
 Generic tools (`generate_image`, LLM markdown) should only be used when NLM is explicitly unavailable.
 
+### 11. Audio Download Fails via MCP — CLI Fallback Required (2026-04-22)
+
+The MCP `download_artifact` tool consistently fails for audio downloads. The root cause is **cookie scope mismatch**: the MCP server authenticates via cookies scoped to `notebooklm.google.com`, but audio files are served from `lh3.googleusercontent.com`. The httpx client follows the redirect, but the cookies don't carry to the CDN domain, resulting in a Google sign-in page redirect.
+
+**Detection:** `_download_url` in `notebooklm_tools/core/download.py` catches this at line ~161:
+```
+content_type: text/html → first_chunk contains "<!doctype html>" or "sign in" → AuthenticationError
+```
+
+**Workaround:** The `nlm` CLI downloads audio reliably because it uses a different auth path that properly scopes cookies for the CDN domain:
+```bash
+/home/ua/.local/bin/nlm download audio <notebook_id> -o <output_path> --no-progress
+# Successfully downloads 40-50MB MPEG-4 audio files
+```
+
+**Impact:** Any skill or pipeline that generates audio overviews MUST include the CLI fallback. The MCP `download_artifact` works correctly for quiz, flashcards, reports, and other text-based artifacts — only audio (and potentially video) downloads to the CDN endpoint are affected.
+
+**Solution:** Always attempt MCP download first, then fall back to CLI:
+1. Try `download_artifact(artifact_type="audio", ...)`
+2. If error, run `nlm download audio <notebook_id> -o <path> --no-progress` via Bash
+
+This is documented in the `paper-to-podcast-tf` skill as a mandatory pattern.
+
 ## Configuration
 
 ### Environment Variables

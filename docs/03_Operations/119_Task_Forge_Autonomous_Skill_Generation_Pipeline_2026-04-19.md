@@ -1,6 +1,6 @@
 # Task Forge: Autonomous Skill Generation Pipeline
 
-**Canonical Source of Truth** — Last updated: 2026-04-20
+**Canonical Source of Truth** — Last updated: 2026-04-22
 
 > Task Forge is the system that converts raw human intent into structured, reusable skills
 > that agents can execute. **The skill IS the output, not just the result.**
@@ -476,6 +476,119 @@ factory that builds all future skills.
 
 ---
 
+## 8.6. Case Study: Paper-to-Podcast Pipeline (2026-04-22)
+
+This case study documents how Task Forge was used to build a **cross-skill orchestration pipeline**
+that chains ArXiv paper search with NotebookLM content generation. It reveals systemic lessons
+about sub-agent delegation, MCP download auth scoping, and budget management.
+
+### The Task
+
+> "Task forge a skill called 'paper-to-podcast-tf' that turns academic research into digestible
+> content. Given a topic string, search ArXiv for the 5 most relevant recent papers, extract key
+> findings, create a NotebookLM notebook with all papers as sources, generate an audio overview
+> podcast, generate a quiz and flashcard set, and save all outputs to work_products/."
+
+This was a **Level 3 Task Forge prompt** — requiring multi-tool orchestration across two MCP
+services (ArXiv and NotebookLM) with complex artifact download and packaging.
+
+### The Progression
+
+| Run | What Happened | Outcome |
+|-----|--------------|---------|
+| **#1-3** (pre-stabilization) | Various prompt/session routing issues; skill not yet created | Blocked by infrastructure |
+| **#4** (first pipeline run) | Skill scaffolded with sub-agent delegation pattern; ArXiv search worked; NotebookLM delegation to operator worked but consumed 42K tokens; audio download failed; budget exceeded | Partial: quiz ✅ flashcards ✅ audio ❌ |
+| **Post-#4 repair** | Audio recovered via `nlm` CLI; skill rewritten for direct MCP; quality gate created manually | All artifacts recovered |
+| **#5** (golden run) | New topic "agent harnesses 2026"; using fixed skill with direct MCP + CLI fallback | Dispatched; validating autonomous operation |
+
+### Key Discoveries
+
+#### 1. Sub-Agent Delegation is a Token Tax
+
+The scaffolded skill initially said "delegate all NotebookLM operations to notebooklm-operator
+via `Task(subagent_type='notebooklm-operator', ...)`". This was the correct pattern per the
+existing `notebooklm-orchestration` skill — but it caused two problems:
+
+- **42K tokens + 61 tool calls** consumed just by the sub-agent, leaving no budget for quality gate
+- The sub-agent hit the **same** audio download failure, with no fallback path
+
+**Fix:** When MCP tools are directly accessible to the primary agent, call them directly.
+Sub-agent delegation adds value only when tools are NOT mounted on the primary agent or when
+the sub-agent has specialized domain knowledge the primary agent lacks.
+
+```
+# Anti-pattern: delegate MCP tools the agent already has
+Task(subagent_type='notebooklm-operator', prompt='Create notebook...')
+
+# Correct: call MCP tools directly
+mcp__notebooklm-mcp__notebook_create(title='...')
+mcp__notebooklm-mcp__source_add(...)
+mcp__notebooklm-mcp__studio_create(...)
+```
+
+#### 2. Audio Download Requires CLI Fallback
+
+The MCP `download_artifact` tool consistently fails for audio downloads:
+
+```
+MCP download_artifact → httpx GET to Google CDN → 302 redirect → Google sign-in page
+                        (cookies scope to notebooklm.google.com, not lh3.googleusercontent.com)
+```
+
+But the `nlm` CLI downloads the same audio file successfully:
+
+```bash
+/home/ua/.local/bin/nlm download audio <notebook_id> -o <output_path> --no-progress
+# Result: 42MB MPEG-4 audio file ✅
+```
+
+The CLI uses a different auth path that properly scopes cookies for the CDN domain.
+This is now documented as a **mandatory fallback pattern** in the skill.
+
+#### 3. Sequential Downloads Prevent Cancellation Cascade
+
+Parallel artifact downloads (`download_artifact` called simultaneously for audio, quiz,
+flashcards) caused cascading failures. When one download fails, the Claude runtime cancels
+pending parallel tool calls. This is a known behavior of the `Task` parallelism model.
+
+**Fix:** Download artifacts one at a time: quiz → flashcards → audio (audio last because
+it's most likely to need CLI fallback).
+
+#### 4. Paper Content Curation Matters
+
+Passing raw ArXiv HTML (80-100KB per paper) as NotebookLM text sources wastes tokens and
+confuses the NLM indexer. The successful pattern curates each paper to ~3KB:
+
+- Title + Authors
+- Abstract (verbatim)
+- Key Findings (3-5 bullet points, extracted by the agent)
+- Methodology highlights
+- Results/Conclusions
+
+### The Resulting Skill
+
+The promoted skill at `.agents/skills/paper-to-podcast-tf/SKILL.md` is a **v1 task-skill**
+that codifies all four discoveries. It is ~100 lines and instructs the agent to:
+
+1. Search ArXiv directly via MCP tools (no sub-agent)
+2. Curate paper content before adding to NotebookLM
+3. Generate all three artifact types sequentially
+4. Download quiz and flashcards via MCP, audio via CLI fallback
+5. Write a manifest.json as proof of completion
+
+### Implications for Task Forge
+
+- **Sub-agent delegation should be an anti-pattern for v0 skills** unless the agent lacks
+  direct tool access. The Task Forge SKILL.md should warn against it.
+- **CLI fallback patterns need a registry** — the audio download fallback was discovered
+  through failure, rediscovered in a second run, and only became institutional knowledge
+  after being encoded in the skill. A central "known fallbacks" reference would accelerate
+  future skill development.
+- **Budget estimation** for cross-skill pipelines: skills that chain 2+ MCP services
+  should estimate token budget and ensure it fits within the session guardrail.
+
+---
+
 ## 9. Anti-Patterns
 
 | Anti-Pattern | Why It's Wrong | What to Do Instead |
@@ -494,13 +607,15 @@ factory that builds all future skills.
 
 ### Run History
 
-| Run | Date | Duration | Skills Found | Phase 3 | Phase 5b | Work Product | Notes |
-|-----|------|----------|-------------|---------|----------|--------------|-------|
-| #1 | 2026-04-19 | 160 min | ~40 (partial) | ❌ Skipped | N/A | ❌ Chat-only | Pre-hardening baseline |
-| #2 | 2026-04-20 | 6 min | 87 (complete) | ✅ Created | ⚠️ Self-certified | ✅ Persisted | Post-hardening; quality gate claimed but no artifact |
-| #3 | 2026-04-20 | 2.7 min | N/A | ❌ Skipped | ❌ Skipped | ❌ None | Read instructions, shortcut anyway — proved need for hook enforcement |
-| #4 | 2026-04-20 | 5.4 min | 82 (complete) | ✅ Created | ✅ Artifact produced | ✅ Persisted | Full pipeline success: SKILL.md + quality_gate.md + work product + task hub disposition |
-| #5 | 2026-04-20 | 5.4 min | 61 (top-level) | ✅ Created | ✅ Artifact + 5c | ✅ 15KB | First Phase 5c success: description 5→9 triggers, added Approach section, quality thresholds, v0→v1 documented |
+| Run | Date | Duration | Task Type | Phase 3 | Phase 5b | Work Product | Notes |
+|-----|------|----------|-----------|---------|----------|--------------|-------|
+| #1 | 2026-04-19 | 160 min | Skill audit | ❌ Skipped | N/A | ❌ Chat-only | Pre-hardening baseline |
+| #2 | 2026-04-20 | 6 min | Skill audit | ✅ Created | ⚠️ Self-certified | ✅ Persisted | Post-hardening; quality gate claimed but no artifact |
+| #3 | 2026-04-20 | 2.7 min | Skill audit | ❌ Skipped | ❌ Skipped | ❌ None | Read instructions, shortcut anyway — proved need for hook enforcement |
+| #4 | 2026-04-20 | 5.4 min | Skill audit | ✅ Created | ✅ Artifact produced | ✅ Persisted | Full pipeline success: SKILL.md + quality_gate.md + work product + task hub disposition |
+| #5 | 2026-04-20 | 5.4 min | Skill audit | ✅ Created | ✅ Artifact + 5c | ✅ 15KB | First Phase 5c success: description 5→9 triggers, added Approach section, quality thresholds, v0→v1 documented |
+| #6-8 | 2026-04-22 | ~15 min | Paper-to-podcast | ✅ Created | ⚠️ Budget exhausted | ✅ 42MB+14KB+11KB | Cross-skill orchestration (ArXiv + NLM); audio download failure discovered; sub-agent delegation anti-pattern identified |
+| #9 | 2026-04-22 | (repair) | Paper-to-podcast | ✅ Fixed | ✅ Created manually | ✅ All recovered | Skill rewritten: direct MCP + CLI fallback; quality gate + promotion completed |
 
 ### Universal Improvement Patterns (Phase 5c)
 
@@ -524,6 +639,8 @@ checklist that applies to ALL forged skills:
 
 ### Known Gaps
 - Completion gate hook not yet battle-tested (Runs #4-5 passed organically without triggering the hook)
-- Phase 5c universal patterns not yet verified in a non-inventory task (Tier 2/3 prompts)
+- ~~Phase 5c universal patterns not yet verified in a non-inventory task (Tier 2/3 prompts)~~ **PARTIALLY RESOLVED (2026-04-22):** paper-to-podcast-tf was a Level 3 multi-service orchestration prompt that validated the pipeline end-to-end
 - No automated regression test for Phase 5c checklist completeness
+- MCP audio download fallback to CLI is a workaround, not a root fix — the NLM MCP server's `download_artifact` should handle CDN auth scoping internally
+- Sub-agent delegation anti-pattern needs a systematic detector — currently relies on skill authors knowing which MCP tools are directly accessible
 

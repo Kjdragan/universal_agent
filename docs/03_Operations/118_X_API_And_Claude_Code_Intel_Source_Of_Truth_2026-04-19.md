@@ -45,10 +45,12 @@ Code-verified implementation points:
 - The poller uses auth fallback order: app-only bearer, OAuth2 user access token, OAuth1 user context. See `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/claude_code_intel.py#L633`.
 - Every run writes the packet files `raw_user.json`, `raw_posts.json`, `new_posts.json`, `source_links.md`, `triage.md`, `actions.json`, `digest.md`, and `manifest.json`. See `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/claude_code_intel.py#L514`.
 - Tier 3 and Tier 4 items are queued into Task Hub; Tier 1 and Tier 2 remain packet/artifact/KB inventory only. See `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/claude_code_intel.py#L376`.
+- Post classification is now LLM-assisted with deterministic fallback. Generic community/event posts are explicitly downshifted by fallback heuristics and may also be downshifted further by the LLM classifier when they lack concrete engineering implications.
 - The replay/post-processing slice now exists in `src/universal_agent/services/claude_code_intel_replay.py`; it writes `linked_sources.json`, `implementation_opportunities.md`, packet candidate ledgers, preserves raw packet snapshots in the external vault, and ingests post/work-product text into `knowledge-vaults/claude-code-intelligence/`.
 - The local attachment mail path now records task-scoped outbound delivery evidence during `todo_execution`, so attachment-heavy Claude Code tasks can satisfy Task Hub final-delivery verification instead of being forced into `completion_claim_missing_email_delivery` when a real AgentMail send occurred.
 - Cron-created Claude Code Intel sessions are now explicitly tagged `session_role=cron`, `run_kind=cron`, and `skip_heartbeat=true`, which prevents autonomous heartbeat wake coupling from reusing the cron packet workspace as a heartbeat work surface.
 - Packet candidate ledgers are now hydrated per post with deterministic task identity, current Task Hub row state, assignment ids/states/result summaries, assignment workspaces, outbound-delivery markers, email evidence ids discovered from assignment workspaces, and per-post wiki page paths.
+- A historical cleanup utility now exists for already polluted Claude Code Intel cron workspaces. It archives only clearly heartbeat-specific artifacts (`heartbeat_state.json`, `work_products/heartbeat_findings_latest.json`, `work_products/system_health_latest.md`) into a timestamped `archive/claude_code_intel_cleanup_*` directory and leaves mixed `transcript.md` / `trace.json` / `run.log` untouched for forensic integrity.
 - The cron entry point is `python -m universal_agent.scripts.claude_code_intel_sync`. See `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/scripts/claude_code_intel_sync.py#L18`.
 - The replay/backfill entry point is `python -m universal_agent.scripts.claude_code_intel_replay_packet`. See `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/scripts/claude_code_intel_replay_packet.py#L1`.
 - The OAuth2 bootstrap entry point is `python -m universal_agent.scripts.x_oauth2_bootstrap`. See `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/scripts/x_oauth2_bootstrap.py#L18`.
@@ -248,6 +250,21 @@ PYTHONPATH=src uv run python -m universal_agent.scripts.claude_code_intel_replay
   --packet-dir <UA_ARTIFACTS_DIR>/proactive/claude_code_intel/packets/YYYY-MM-DD/HHMMSS__ClaudeDevs
 ```
 
+Historical cleanup for polluted cron workspaces:
+
+```bash
+PYTHONPATH=src uv run python -m universal_agent.scripts.claude_code_intel_cleanup_workspace \
+  --workspace-dir <AGENT_RUN_WORKSPACES>/cron_claude_code_intel_sync
+```
+
+Apply mode:
+
+```bash
+PYTHONPATH=src uv run python -m universal_agent.scripts.claude_code_intel_cleanup_workspace \
+  --workspace-dir <AGENT_RUN_WORKSPACES>/cron_claude_code_intel_sync \
+  --apply
+```
+
 ## Tiering Contract
 
 | Tier | Meaning | System action |
@@ -259,6 +276,13 @@ PYTHONPATH=src uv run python -m universal_agent.scripts.claude_code_intel_replay
 | 4 | Strategic, breaking, migration, or safety issue | Queue `claude_code_kb_update` |
 
 Tiering is heuristic in the first implementation. It is intentionally conservative about Task Hub pressure: only Tier 3 and Tier 4 items become executable tasks.
+
+Status update (2026-04-22): tiering is no longer purely heuristic. The lane now uses:
+
+1. deterministic fallback classification
+2. optional LLM-assisted override
+
+The fallback specifically downshifts community/event announcements (for example hackathon/application posts) out of `demo_task` unless there is stronger technical evidence. The LLM-assisted classifier can further refine this using post text plus link context.
 
 ## Replay And Backfill Contract
 
@@ -292,5 +316,6 @@ When implementing future posting or interaction features, require a separate des
 - Linked source ingestion is partially implemented: `linked_sources.json`, packet candidate ledgers, post-source vault pages, and bounded direct-link fetch snapshots are written. The replay pipeline now classifies linked sources into types such as GitHub repo/file, docs page, vendor docs, event page, X page, and generic web, and writes source-type-aware `analysis.md` guidance. Deeper repo/docs-specific extraction is still limited.
 - The local KB index is a lightweight source index, not a full NotebookLM-backed external knowledge base yet.
 - The first tiering model is keyword-based. A future pass should add an LLM classifier once enough real packets exist.
+- The classifier is now LLM-assisted with deterministic fallback, but its input is still limited to the post text and direct link list. A future pass should incorporate richer linked-source content summaries into the classifier input.
 - Packet candidate ledgers now hydrate task ids, assignment ids, assignment workspaces, outbound-delivery markers, email evidence ids from assignment workspaces, and per-post wiki page paths. Full lineage reconciliation across every historical task/artifact/email path is still evolving.
-- Existing production cron workspaces that were already polluted by earlier heartbeat follow-up remain historically noisy; the new cron-role tagging prevents new contamination but does not rewrite old run workspaces.
+- Existing production cron workspaces that were already polluted by earlier heartbeat follow-up can now be cleaned with the dedicated cleanup utility. Mixed transcript/trace files are intentionally left in place and must still be interpreted as historically noisy.

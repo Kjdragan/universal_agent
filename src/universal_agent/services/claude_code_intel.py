@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -24,6 +25,7 @@ import httpx
 
 from universal_agent import task_hub
 from universal_agent.artifacts import resolve_artifacts_dir
+from universal_agent.utils.model_resolution import resolve_sonnet
 from universal_agent.services.proactive_artifacts import (
     ARTIFACT_STATUS_CANDIDATE,
     ARTIFACT_STATUS_PRODUCED,
@@ -84,6 +86,41 @@ _TIER2_TERMS = {
     "learn",
     "skill",
 }
+_COMMUNITY_EVENT_TERMS = {
+    "hackathon",
+    "applications are open",
+    "build week",
+    "join us",
+    "prize pool",
+    "alongside developers",
+    "virtual hackathon",
+}
+
+logger = logging.getLogger(__name__)
+
+_TIER_CLASSIFIER_SYSTEM = """\
+You are classifying a Claude Code intelligence post for a proactive engineering system.
+
+Choose exactly one action type and tier:
+- tier 1 / digest: informational or community chatter with low direct implementation value
+- tier 2 / kb_update: docs, reference material, usage hints, release notes, or important but non-actionable product updates
+- tier 3 / demo_task: concrete implementation opportunity, code-worthy feature, repo/example/API capability, or a thing worth building/testing
+- tier 4 / strategic_follow_up: migration risk, breaking change, bug, remediation, safety/quality issue, or strategic operational consequence
+
+Important:
+- Do NOT classify generic event/community posts as demo_task unless they clearly imply a concrete engineering build opportunity beyond attendance/announcement.
+- If the post is about applications, hackathons, or community announcements, prefer digest or kb_update unless there is a direct technical implementation implication.
+- If a bug, migration issue, stale prompt, safety problem, or operational warning is described, prefer strategic_follow_up.
+
+Return ONLY JSON:
+{
+  "tier": 1 | 2 | 3 | 4,
+  "action_type": "digest" | "kb_update" | "demo_task" | "strategic_follow_up",
+  "content_kind": "community_event" | "docs_reference" | "product_capability" | "migration_risk" | "code_example" | "usage_tip" | "generic_update",
+  "confidence": "high" | "medium" | "low",
+  "reasoning": "short explanation"
+}
+"""
 
 
 @dataclass(frozen=True)
@@ -333,24 +370,16 @@ def classify_post(post: dict[str, Any], *, handle: str = DEFAULT_HANDLE) -> dict
     text = str(post.get("text") or "").strip()
     lowered = text.lower()
     links = extract_links(post)
-    matched_terms = sorted({term for term in _TIER2_TERMS | _TIER3_TERMS | _TIER4_TERMS if term in lowered})
-    tier = 1
-    reasons = ["informational Claude Code update"]
-    if links or _VERSION_RE.search(text) or any(term in lowered for term in _TIER2_TERMS):
-        tier = 2
-        reasons.append("reference material or version/update signal")
-    if any(term in lowered for term in _TIER3_TERMS):
-        tier = max(tier, 3)
-        reasons.append("implementation or demo opportunity")
-    if any(term in lowered for term in _TIER4_TERMS):
-        tier = max(tier, 4)
-        reasons.append("migration, safety, or breakage risk")
-    action_type = {
-        1: "digest",
-        2: "kb_update",
-        3: "demo_task",
-        4: "strategic_follow_up",
-    }.get(tier, "digest")
+    heuristic = _heuristic_classification(text=text, lowered=lowered, links=links)
+    llm_result = _llm_assisted_classification(
+        text=text,
+        links=links,
+        heuristic=heuristic,
+    )
+    tier = int(llm_result.get("tier") or heuristic["tier"])
+    action_type = str(llm_result.get("action_type") or heuristic["action_type"] or "digest").strip()
+    if action_type not in {"digest", "kb_update", "demo_task", "strategic_follow_up"}:
+        action_type = heuristic["action_type"]
     return {
         "post_id": post_id,
         "url": f"https://x.com/{handle.strip().lstrip('@') or DEFAULT_HANDLE}/status/{post_id}" if post_id else "",
@@ -359,9 +388,90 @@ def classify_post(post: dict[str, Any], *, handle: str = DEFAULT_HANDLE) -> dict
         "tier": tier,
         "action_type": action_type,
         "links": links,
+        "matched_terms": list(heuristic["matched_terms"]),
+        "reasons": list(heuristic["reasons"]),
+        "classifier": {
+            "method": str(llm_result.get("method") or "heuristic"),
+            "content_kind": str(llm_result.get("content_kind") or heuristic.get("content_kind") or "generic_update"),
+            "confidence": str(llm_result.get("confidence") or heuristic.get("confidence") or "medium"),
+            "reasoning": str(llm_result.get("reasoning") or ""),
+            "heuristic_tier": int(heuristic["tier"]),
+            "heuristic_action_type": str(heuristic["action_type"]),
+        },
+    }
+
+
+def _heuristic_classification(*, text: str, lowered: str, links: list[str]) -> dict[str, Any]:
+    matched_terms = sorted({term for term in _TIER2_TERMS | _TIER3_TERMS | _TIER4_TERMS if term in lowered})
+    tier = 1
+    reasons = ["informational Claude Code update"]
+    content_kind = "generic_update"
+    if links or _VERSION_RE.search(text) or any(term in lowered for term in _TIER2_TERMS):
+        tier = 2
+        reasons.append("reference material or version/update signal")
+        content_kind = "docs_reference"
+    if any(term in lowered for term in _TIER3_TERMS):
+        tier = max(tier, 3)
+        reasons.append("implementation or demo opportunity")
+        content_kind = "product_capability"
+    if any(term in lowered for term in _TIER4_TERMS):
+        tier = max(tier, 4)
+        reasons.append("migration, safety, or breakage risk")
+        content_kind = "migration_risk"
+    if any(term in lowered for term in _COMMUNITY_EVENT_TERMS):
+        # Community/event posts are easy to over-rate; keep them reference-level
+        # unless a stronger strategic signal is present.
+        content_kind = "community_event"
+        if tier == 3:
+            tier = 2
+            reasons.append("community/event announcement downshifted by deterministic fallback")
+    action_type = {
+        1: "digest",
+        2: "kb_update",
+        3: "demo_task",
+        4: "strategic_follow_up",
+    }.get(tier, "digest")
+    return {
+        "tier": tier,
+        "action_type": action_type,
         "matched_terms": matched_terms,
         "reasons": reasons,
+        "content_kind": content_kind,
+        "confidence": "medium",
     }
+
+
+def _llm_assisted_classification(*, text: str, links: list[str], heuristic: dict[str, Any]) -> dict[str, Any]:
+    if str(os.getenv("UA_CLAUDE_CODE_INTEL_LLM_CLASSIFIER_ENABLED", "1")).strip().lower() not in _TRUTHY:
+        return {"method": "heuristic"}
+    if not _has_llm_key():
+        return {"method": "heuristic"}
+    user = (
+        "Classify this Claude Code intelligence post.\n\n"
+        f"Post text:\n{text[:4000]}\n\n"
+        f"Links:\n{json.dumps(links[:10], ensure_ascii=True)}\n\n"
+        f"Heuristic suggestion:\n{json.dumps({k: heuristic[k] for k in ('tier', 'action_type', 'content_kind')}, ensure_ascii=True)}"
+    )
+    try:
+        raw = _call_sync_llm(system=_TIER_CLASSIFIER_SYSTEM, user=user, max_tokens=300)
+        parsed = _parse_json_object(raw)
+        tier = int(parsed.get("tier") or 0)
+        action_type = str(parsed.get("action_type") or "").strip()
+        if tier not in {1, 2, 3, 4}:
+            return {"method": "heuristic"}
+        if action_type not in {"digest", "kb_update", "demo_task", "strategic_follow_up"}:
+            return {"method": "heuristic"}
+        return {
+            "method": "llm",
+            "tier": tier,
+            "action_type": action_type,
+            "content_kind": str(parsed.get("content_kind") or "").strip(),
+            "confidence": str(parsed.get("confidence") or "medium").strip().lower(),
+            "reasoning": str(parsed.get("reasoning") or "").strip(),
+        }
+    except Exception as exc:
+        logger.warning("Claude Code Intel LLM classification failed; using heuristic fallback: %s", exc)
+        return {"method": "heuristic", "reasoning": f"fallback: {type(exc).__name__}"}
 
 
 def extract_links(post: dict[str, Any]) -> list[str]:
@@ -656,6 +766,54 @@ def _triage_markdown(*, actions: list[dict[str, Any]], error: str) -> str:
 
 def _auth_headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}", "User-Agent": "universal-agent-claude-code-intel/1.0"}
+
+
+def _has_llm_key() -> bool:
+    return bool(
+        str(
+            os.getenv("ANTHROPIC_API_KEY")
+            or os.getenv("ANTHROPIC_AUTH_TOKEN")
+            or os.getenv("ZAI_API_KEY")
+            or ""
+        ).strip()
+    )
+
+
+def _call_sync_llm(*, system: str, user: str, max_tokens: int = 300) -> str:
+    from anthropic import Anthropic
+
+    api_key = (
+        os.getenv("ANTHROPIC_API_KEY")
+        or os.getenv("ANTHROPIC_AUTH_TOKEN")
+        or os.getenv("ZAI_API_KEY")
+    )
+    if not api_key:
+        raise RuntimeError("No Anthropic-compatible API key available")
+    client_kwargs: dict[str, Any] = {"api_key": api_key}
+    base_url = os.getenv("ANTHROPIC_BASE_URL")
+    if base_url:
+        client_kwargs["base_url"] = base_url
+    client = Anthropic(**client_kwargs)
+    response = client.messages.create(
+        model=resolve_sonnet(),
+        max_tokens=max_tokens,
+        system=system,
+        messages=[{"role": "user", "content": user}],
+    )
+    chunks: list[str] = []
+    for block in response.content:
+        if hasattr(block, "text"):
+            chunks.append(block.text)
+    return "".join(chunks).strip()
+
+
+def _parse_json_object(raw: str) -> dict[str, Any]:
+    cleaned = raw.strip()
+    if cleaned.startswith("```"):
+        lines = [line for line in cleaned.splitlines() if not line.strip().startswith("```")]
+        cleaned = "\n".join(lines).strip()
+    parsed = json.loads(cleaned)
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _get_json_with_auth_fallbacks(

@@ -1,6 +1,6 @@
 # Documentation Status
 
-**Last updated:** 2026-04-20 (Test Strategy doc #121 added)
+**Last updated:** 2026-04-22 (Docs 96, 119 updated for paper-to-podcast-tf pipeline stabilization)
 
 ## Development (development/)
 
@@ -72,7 +72,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 89 | Runtime Bootstrap, Deployment Profiles & Factory Role |
 | 90 | Artifacts, Workspaces & Remote Sync |
 | 91 | Telegram |
-| 96 | NotebookLM Integration & Research Pipeline |
+| 96 | NotebookLM Integration & Research Pipeline — now includes lesson #11 (audio download CDN auth scoping, CLI fallback pattern) |
 | 97 | Infisical CLI Reference & Lessons Learned |
 | 98 | Agent Skills Directory (`.agents/skills/`) |
 | 99 | Documentation Drift Maintenance Pipeline — two-stage nightly audit (heuristic drift detection → VP remediation dispatch), PR persistence, issue batching, verify-before-fix rules |
@@ -93,7 +93,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 116 | CSI Convergence Proactivity Repair Handoff — shareable implementation context for the CSI convergence repair pass, including fixed blockers, runtime contract, verification evidence, and live-validation next steps |
 | 117 | ClaudeDevs X Intelligence Lane Design Handoff — historical design note for a dedicated Claude Code intelligence lane monitoring `@ClaudeDevs`, including source-access findings, tiering, KB/wiki expectations, mirror fallback, and resume checklist |
 | 118 | X API And Claude Code Intel Source Of Truth — canonical implementation reference for X API development, `@ClaudeDevs` polling, Infisical keys, packet outputs, local Claude Code intelligence KB index, Task Hub tiering, and cron registration |
-| 119 | Task Forge: Autonomous Skill Generation Pipeline — **canonical source of truth** for the meta-skill that converts human intent into structured, reusable task-skills; 7-phase pipeline (intent → scaffold → execute → quality gate → archive/promote), skill maturity model (v0→v3), dispatch integration, hook hardening, skill-creator cooperative relationship, recursive learning loop philosophy |
+| 119 | Task Forge: Autonomous Skill Generation Pipeline — **canonical source of truth** for the meta-skill that converts human intent into structured, reusable task-skills; 7-phase pipeline (intent → scaffold → execute → quality gate → archive/promote), skill maturity model (v0→v3), dispatch integration, hook hardening, skill-creator cooperative relationship, recursive learning loop philosophy, paper-to-podcast case study (cross-skill orchestration, sub-agent delegation anti-pattern, CLI audio fallback) |
 | 120 | ClaudeDevs X Intel VPS Runtime Audit — read-only production audit of the first 19-post `@ClaudeDevs` cron packet, downstream Simone work products, Task Hub/artifact state, email verification, tier-count discrepancy, and recommendations for the Claude Code intelligence wiki pipeline |
 | 121 | Test Strategy and Regression Prevention — **canonical source of truth** for test suite layout (1211 unit tests), mandatory pre-ship commands, ContextVar isolation architecture, common failure patterns, CI/CD test gap analysis, maintenance checklist, and the April 20 stabilization history |
 | 122 | ClaudeDevs X Intel Implementation Plan — code-verified phased implementation plan for replay/backfill, external vault creation, linked-source expansion, packet candidate ledgering, Task Hub completion evidence mapping, cron/heartbeat workspace separation, and eventual LLM-assisted tiering |

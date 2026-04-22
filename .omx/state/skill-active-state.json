@@ -1,15 +1,15 @@
 {
   "version": 1,
   "active": true,
-  "skill": "analyze",
-  "keyword": "investigate",
+  "skill": "cancel",
+  "keyword": "stop",
   "phase": "planning",
-  "activated_at": "2026-04-20T15:49:56.993Z",
-  "updated_at": "2026-04-20T15:49:56.993Z",
+  "activated_at": "2026-04-22T05:18:21.763Z",
+  "updated_at": "2026-04-22T05:18:21.763Z",
   "source": "keyword-detector",
   "session_id": "",
   "thread_id": "019da161-38a1-7d02-b2e5-bb9b4957f158",
-  "turn_id": "019dab8e-41e3-7082-88c6-70477099a8b9",
+  "turn_id": "019db39c-0e00-7ca2-afd6-85de90f68f6a",
   "input_lock": {
     "active": false,
     "scope": "deep-interview-auto-approval",
@@ -25,9 +25,9 @@
       "next i should"
     ],
     "message": "Deep interview is active; auto-approval shortcuts are blocked until the interview finishes.",
-    "released_at": "2026-04-20T15:49:56.993Z",
+    "released_at": "2026-04-22T05:18:21.763Z",
     "exit_reason": "handoff"
   },
-  "iteration": 9,
-  "last_turn_at": "2026-04-22T02:29:54.783Z"
+  "iteration": 1,
+  "last_turn_at": "2026-04-22T05:19:05.706Z"
 }
