@@ -37,6 +37,7 @@ def test_role_filters_match_canonical_runtime_split():
     heartbeat_session = _session("daemon_simone_heartbeat", "heartbeat")
     todo_session = _session("daemon_simone_todo", "todo_execution")
     triage_session = _session("session_hook_agentmail_1", "email_triage")
+    cron_session = _session("cron_claude_code_intel_sync", "cron")
 
     assert gateway_server._should_register_with_heartbeat(heartbeat_session) is True
     assert gateway_server._should_register_with_todo_dispatch(heartbeat_session) is False
@@ -46,6 +47,9 @@ def test_role_filters_match_canonical_runtime_split():
 
     assert gateway_server._should_register_with_heartbeat(triage_session) is False
     assert gateway_server._should_register_with_todo_dispatch(triage_session) is False
+
+    assert gateway_server._should_register_with_heartbeat(cron_session) is False
+    assert gateway_server._should_register_with_todo_dispatch(cron_session) is False
 
 
 def test_heartbeat_registration_honors_explicit_skip_flag():

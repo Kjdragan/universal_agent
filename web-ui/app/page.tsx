@@ -909,7 +909,7 @@ function FileExplorer() {
         )}
       </div>
       {!isCollapsed && (
-        <div className="flex-1 overflow-y-auto scrollbar-thin p-1">
+        <div className="flex-1 min-h-0 overflow-y-scroll scrollbar-thin p-1">
           {mode === "session" && !currentSession ? (
             <div className="text-xs text-muted-foreground/60 text-center py-4 font-mono">NO ACTIVE SESSION</div>
           ) : loading ? (
@@ -2887,7 +2887,7 @@ export default function HomePage() {
           {/* PANEL 3: FILE EXPLORER */}
           <div
             className={`
-              min-w-0 bg-background/30 relative transition-all duration-300 flex-col
+              min-w-0 bg-background/30 relative transition-all duration-300 flex-col overflow-hidden
               ${activeMobileTab === 'files' ? 'flex w-full' : 'hidden md:flex'}
               ${filesCollapsed ? 'w-10 shrink-0' : 'md:basis-1/3 md:flex-1'}
             `}
@@ -2917,7 +2917,7 @@ export default function HomePage() {
                     ▶
                   </button>
                 </div>
-                <div className="flex-1 overflow-hidden">
+                <div className="flex-1 flex flex-col overflow-hidden">
                   <FileExplorer />
                 </div>
               </div>

@@ -132,7 +132,17 @@ def test_run_sync_queues_task_hub_for_tier_three(tmp_path: Path) -> None:
     assert "claude-code-intel" in item["labels"]
 
 
-def test_run_sync_writes_failure_packet_when_token_missing(tmp_path: Path) -> None:
+def test_run_sync_writes_failure_packet_when_token_missing(monkeypatch, tmp_path: Path) -> None:
+    for key in (
+        "X_BEARER_TOKEN",
+        "BEARER_TOKEN",
+        "X_OAUTH2_ACCESS_TOKEN",
+        "X_OAUTH_CONSUMER_KEY",
+        "X_OAUTH_CONSUMER_SECRET",
+        "X_OAUTH_ACCESS_TOKEN",
+        "X_OAUTH_ACCESS_TOKEN_SECRET",
+    ):
+        monkeypatch.delenv(key, raising=False)
     result = run_sync(config=_config(tmp_path), bearer_token="", conn=None, client=_client_for_posts([]))
 
     assert result.ok is False

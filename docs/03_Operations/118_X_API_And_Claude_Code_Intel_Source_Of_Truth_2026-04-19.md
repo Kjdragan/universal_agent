@@ -17,7 +17,9 @@ The lane exists because Claude Code changes faster than model training cutoffs. 
 | Default schedule | `0 8,16 * * *` in `America/Chicago` |
 | Packet root | `<UA_ARTIFACTS_DIR>/proactive/claude_code_intel/packets/` |
 | State file | `<UA_ARTIFACTS_DIR>/proactive/claude_code_intel/state.json` |
+| Candidate ledger root | `<UA_ARTIFACTS_DIR>/proactive/claude_code_intel/ledger/` |
 | Local KB index | `<UA_ARTIFACTS_DIR>/knowledge-bases/claude-code-intelligence/source_index.md` |
+| External vault root | `<UA_ARTIFACTS_DIR>/knowledge-vaults/claude-code-intelligence/` |
 | Task Hub source kinds | `claude_code_update`, `claude_code_demo_task`, `claude_code_kb_update` |
 
 Live validation status on 2026-04-19:
@@ -43,7 +45,12 @@ Code-verified implementation points:
 - The poller uses auth fallback order: app-only bearer, OAuth2 user access token, OAuth1 user context. See `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/claude_code_intel.py#L633`.
 - Every run writes the packet files `raw_user.json`, `raw_posts.json`, `new_posts.json`, `source_links.md`, `triage.md`, `actions.json`, `digest.md`, and `manifest.json`. See `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/claude_code_intel.py#L514`.
 - Tier 3 and Tier 4 items are queued into Task Hub; Tier 1 and Tier 2 remain packet/artifact/KB inventory only. See `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/claude_code_intel.py#L376`.
+- The replay/post-processing slice now exists in `src/universal_agent/services/claude_code_intel_replay.py`; it writes `linked_sources.json`, `implementation_opportunities.md`, packet candidate ledgers, preserves raw packet snapshots in the external vault, and ingests post/work-product text into `knowledge-vaults/claude-code-intelligence/`.
+- The local attachment mail path now records task-scoped outbound delivery evidence during `todo_execution`, so attachment-heavy Claude Code tasks can satisfy Task Hub final-delivery verification instead of being forced into `completion_claim_missing_email_delivery` when a real AgentMail send occurred.
+- Cron-created Claude Code Intel sessions are now explicitly tagged `session_role=cron`, `run_kind=cron`, and `skip_heartbeat=true`, which prevents autonomous heartbeat wake coupling from reusing the cron packet workspace as a heartbeat work surface.
+- Packet candidate ledgers are now hydrated per post with deterministic task identity, current Task Hub row state, assignment ids/states/result summaries, assignment workspaces, outbound-delivery markers, email evidence ids discovered from assignment workspaces, and per-post wiki page paths.
 - The cron entry point is `python -m universal_agent.scripts.claude_code_intel_sync`. See `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/scripts/claude_code_intel_sync.py#L18`.
+- The replay/backfill entry point is `python -m universal_agent.scripts.claude_code_intel_replay_packet`. See `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/scripts/claude_code_intel_replay_packet.py#L1`.
 - The OAuth2 bootstrap entry point is `python -m universal_agent.scripts.x_oauth2_bootstrap`. See `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/scripts/x_oauth2_bootstrap.py#L18`.
 - Gateway startup auto-registers `claude_code_intel_sync` when Chron is enabled. See `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/gateway_server.py#L13641` and `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/gateway_server.py#L16592`.
 
@@ -64,7 +71,8 @@ sequenceDiagram
     Service->>X: GET /2/users/by/username/ClaudeDevs
     Service->>X: GET /2/users/:id/tweets
     Service->>Artifacts: write packet files
-    Service->>Artifacts: update knowledge-bases/claude-code-intelligence/source_index.md
+    Service->>Artifacts: update lightweight source index
+    Service->>Artifacts: post-process packet into ledger + external vault
     Service->>Hub: queue Tier 3/4 follow-up tasks
     Service-->>Script: JSON result summary
 ```
@@ -101,7 +109,7 @@ flowchart TD
     Tasks -->|Tier 1/2| Inventory["Digest + KB inventory"]
 ```
 
-For every linked source that can be reached, the packet should eventually include:
+The first delivery slice now writes `linked_sources.json`, `implementation_opportunities.md`, and packet candidate ledgers. For every linked source that can be fully reached, the packet should eventually include:
 
 | File | Purpose |
 | --- | --- |
@@ -139,6 +147,8 @@ The vault should follow the canonical LLM Wiki external structure:
 | `assets/` | Downloaded or referenced media metadata and safe copied assets |
 
 Agents implementing Claude Code features should query this vault before relying on model-cutoff knowledge.
+
+Status update (2026-04-21): replay/backfill and first-pass vault population are implemented. The current slice ingests packet post summaries and optional work-product text into the external vault, and preserves raw packet snapshots under `raw/packets/`. Automatic fetching and analysis of linked external documents and repositories is still pending.
 
 ## X API Reference Map
 
@@ -231,6 +241,13 @@ PYTHONPATH=src uv run python -m universal_agent.scripts.x_oauth2_bootstrap excha
 
 The exchange stores `X_OAUTH2_ACCESS_TOKEN`, `X_OAUTH2_REFRESH_TOKEN`, `X_OAUTH2_EXPIRES_AT`, `X_OAUTH2_SCOPE`, and `X_OAUTH2_TOKEN_TYPE` to Infisical `development`, `production`, and `local` by default.
 
+Replay / backfill:
+
+```bash
+PYTHONPATH=src uv run python -m universal_agent.scripts.claude_code_intel_replay_packet \
+  --packet-dir <UA_ARTIFACTS_DIR>/proactive/claude_code_intel/packets/YYYY-MM-DD/HHMMSS__ClaudeDevs
+```
+
 ## Tiering Contract
 
 | Tier | Meaning | System action |
@@ -245,21 +262,22 @@ Tiering is heuristic in the first implementation. It is intentionally conservati
 
 ## Replay And Backfill Contract
 
-The first successful packet was run with `--no-task-hub`, so its five posts were marked seen but not queued into Task Hub. Do not delete state to force replay. Instead, the next build should add an idempotent replay command:
+The first successful packet was run with `--no-task-hub`, so its five posts were marked seen but not queued into Task Hub. Replay/backfill is now implemented for the first delivery slice.
 
-```bash
-PYTHONPATH=src uv run python -m universal_agent.scripts.claude_code_intel_replay_packet \
-  --packet-dir <UA_ARTIFACTS_DIR>/proactive/claude_code_intel/packets/YYYY-MM-DD/HHMMSS__ClaudeDevs
-```
+Current replay responsibilities:
 
-Replay responsibilities:
+- read `actions.json`, `raw_posts.json`, `new_posts.json`, and `manifest.json`
+- register/reconcile the packet artifact
+- optionally queue Tier 3/4 Task Hub tasks idempotently by post ID
+- write `linked_sources.json`
+- write `implementation_opportunities.md`
+- write packet-level and lane-level candidate ledger files
+- populate the external vault with post sources and optional work-product text files
 
-- read `actions.json` and `raw_posts.json`
-- populate the external wiki vault
+Still pending in replay:
+
 - fetch/analyze linked sources when possible
-- queue Tier 3/4 Task Hub tasks idempotently by post ID
-- register proactive artifacts for packet, source analyses, and queued tasks
-- never create duplicate tasks for the same post ID/source kind
+- reconcile full per-post task/assignment/email/wiki lineage
 
 ## Safety Boundary
 
@@ -271,6 +289,8 @@ When implementing future posting or interaction features, require a separate des
 
 - OAuth2 refresh-token support exists in `x_oauth2_bootstrap.py`, but the cron lane does not yet auto-refresh expired OAuth2 access tokens before polling.
 - Media download or image/video understanding is not implemented yet.
-- Linked source ingestion is not yet automated; links are collected into `source_links.md` and Task Hub follow-up descriptions.
+- Linked source ingestion is partially implemented: `linked_sources.json`, packet candidate ledgers, post-source vault pages, and bounded direct-link fetch snapshots are written. The replay pipeline now classifies linked sources into types such as GitHub repo/file, docs page, vendor docs, event page, X page, and generic web, and writes source-type-aware `analysis.md` guidance. Deeper repo/docs-specific extraction is still limited.
 - The local KB index is a lightweight source index, not a full NotebookLM-backed external knowledge base yet.
 - The first tiering model is keyword-based. A future pass should add an LLM classifier once enough real packets exist.
+- Packet candidate ledgers now hydrate task ids, assignment ids, assignment workspaces, outbound-delivery markers, email evidence ids from assignment workspaces, and per-post wiki page paths. Full lineage reconciliation across every historical task/artifact/email path is still evolving.
+- Existing production cron workspaces that were already polluted by earlier heartbeat follow-up remain historically noisy; the new cron-role tagging prevents new contamination but does not rewrite old run workspaces.

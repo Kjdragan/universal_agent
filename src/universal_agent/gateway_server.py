@@ -7637,7 +7637,7 @@ def _should_register_with_heartbeat(session: Any) -> bool:
     if _session_skip_heartbeat(session):
         return False
     role = _session_role(session)
-    return role not in {"todo_execution", "todo", "email_triage", "hook"}
+    return role not in {"todo_execution", "todo", "email_triage", "hook", "cron"}
 
 
 def _should_register_with_todo_dispatch(session: Any) -> bool:

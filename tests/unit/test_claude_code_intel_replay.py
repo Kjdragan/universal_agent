@@ -10,6 +10,7 @@ from universal_agent import task_hub
 from universal_agent.services.claude_code_intel import ClaudeCodeIntelConfig, run_sync
 from universal_agent.services.claude_code_intel_replay import (
     ClaudeCodeIntelReplayConfig,
+    intended_task_identity,
     replay_packet,
 )
 
@@ -96,12 +97,122 @@ def test_replay_writes_candidate_ledger_and_external_vault(monkeypatch, tmp_path
     ledger = json.loads((Path(sync.packet_dir) / "candidate_ledger.json").read_text(encoding="utf-8"))
     assert len(ledger) == 2
     assert ledger[0]["packet_artifact_id"]
+    assert ledger[0]["post_source_pages"]
+    assert ledger[0]["work_product_pages"]
     assert any(entry["task_row_present"] for entry in ledger)
     assert (tmp_path / "proactive" / "claude_code_intel" / "ledger").exists()
     assert (tmp_path / "knowledge-vaults" / "claude-code-intelligence" / "raw" / "packets" / Path(sync.packet_dir).name / "manifest.json").exists()
     assert (Path(sync.packet_dir) / "implementation_opportunities.md").exists()
     assert result["email_evidence_ids"] == ["email_send_1.json"]
     assert len(calls) >= 3  # two posts + one work product
+
+
+def test_replay_fetches_linked_sources_and_writes_metadata(monkeypatch, tmp_path: Path) -> None:
+    def fake_ingest(*, vault_slug: str, source_title: str, source_content: str, source_id: str | None = None, root_override: str | None = None):
+        vault_root = Path(root_override or tmp_path / "knowledge-vaults" / vault_slug)
+        path = vault_root / "sources" / f"{source_id or 'source'}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(source_content, encoding="utf-8")
+        return {"status": "success", "path": str(path.relative_to(vault_root))}
+
+    class FakeResponse:
+        def __init__(self, url: str):
+            self.status_code = 200
+            self.text = "<html><head><title>Demo Repo</title></head><body><h1>Demo Repo</h1><p>Install and build the package.</p></body></html>"
+            self.headers = {"content-type": "text/html"}
+            self.url = url
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url: str):
+            return FakeResponse(url)
+
+    monkeypatch.setattr(
+        "universal_agent.services.claude_code_intel_replay.wiki_ingest_external_source",
+        fake_ingest,
+    )
+    monkeypatch.setattr(
+        "universal_agent.services.claude_code_intel_replay.httpx.Client",
+        FakeClient,
+    )
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    packet_dir = tmp_path / "packet_fetch"
+    packet_dir.mkdir()
+    (packet_dir / "manifest.json").write_text(
+        json.dumps({"handle": "ClaudeDevs", "ok": True, "new_post_count": 1, "action_count": 1}),
+        encoding="utf-8",
+    )
+    (packet_dir / "raw_posts.json").write_text(json.dumps({}), encoding="utf-8")
+    (packet_dir / "new_posts.json").write_text(
+        json.dumps(
+            [
+                {
+                    "id": "551",
+                    "text": "Claude Code SDK feature with demo repo and migration guide",
+                    "created_at": "2026-04-19T12:00:00.000Z",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (packet_dir / "actions.json").write_text(
+        json.dumps(
+            [
+                {
+                    "post_id": "551",
+                    "tier": 3,
+                    "action_type": "demo_task",
+                    "url": "https://x.com/ClaudeDevs/status/551",
+                    "text": "Claude Code SDK feature with demo repo and migration guide",
+                    "links": ["https://github.com/example/demo"],
+                    "matched_terms": ["demo", "repo"],
+                    "reasons": ["implementation opportunity"],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = replay_packet(
+        config=ClaudeCodeIntelReplayConfig(
+            packet_dir=packet_dir,
+            queue_task_hub=False,
+            write_vault=True,
+            expand_sources=True,
+            artifacts_root=tmp_path,
+        ),
+        conn=conn,
+    )
+
+    linked = json.loads((packet_dir / "linked_sources.json").read_text(encoding="utf-8"))
+    assert result["linked_source_count"] == 1
+    assert result["linked_source_fetched_count"] == 1
+    assert linked[0]["fetch_status"] == "fetched"
+    source_path = Path(linked[0]["source_path"])
+    analysis_path = Path(linked[0]["analysis_path"])
+    metadata_path = Path(linked[0]["metadata_path"])
+    assert source_path.exists()
+    assert analysis_path.exists()
+    assert metadata_path.exists()
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert metadata["title"] == "Demo Repo"
+    assert metadata["http_status"] == 200
+    assert metadata["source_type"] == "github_repo"
+    assert metadata["github_repo"] == "example/demo"
+    assert "Install and build the package." in source_path.read_text(encoding="utf-8")
+    analysis_text = analysis_path.read_text(encoding="utf-8")
+    assert linked[0]["analysis_path"].endswith("analysis.md")
+    assert "GitHub repository page" in analysis_text
 
 
 def test_replay_is_idempotent_for_task_hub_rows(monkeypatch, tmp_path: Path) -> None:
@@ -140,6 +251,7 @@ def test_replay_is_idempotent_for_task_hub_rows(monkeypatch, tmp_path: Path) -> 
     ledger = json.loads((Path(sync.packet_dir) / "candidate_ledger.json").read_text(encoding="utf-8"))
     assert len(ledger) == 1
     assert second["queued_task_count"] == 1
+    assert ledger[0]["candidate_artifact_id"]
 
 
 def test_replay_links_ledger_to_assignments(monkeypatch, tmp_path: Path) -> None:
@@ -154,6 +266,7 @@ def test_replay_links_ledger_to_assignments(monkeypatch, tmp_path: Path) -> None
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     task_hub.ensure_schema(conn)
+    task_id = intended_task_identity(post_id="701", tier=3)["task_id"]
     conn.execute(
         """
         INSERT INTO task_hub_items (
@@ -164,7 +277,7 @@ def test_replay_links_ledger_to_assignments(monkeypatch, tmp_path: Path) -> None
         ) VALUES (?, ?, ?, ?, '', 'proactive', 3, NULL, '[]', 'needs_review', 0, NULL, NULL, NULL, NULL, 1, 0.0, 0.0, 'fresh', 'needs_review', 'internal', 'heartbeat_poll', '{}', '2026-04-20T00:00:00+00:00', '2026-04-20T00:00:00+00:00')
         """,
         (
-            "claude_code_demo_task:deadbeefdeadbeef",
+            task_id,
             "claude_code_demo_task",
             "701",
             "Build Claude Code demo from @ClaudeDevs update",
@@ -179,7 +292,7 @@ def test_replay_links_ledger_to_assignments(monkeypatch, tmp_path: Path) -> None
         """,
         (
             "asg_demo_1",
-            "claude_code_demo_task:deadbeefdeadbeef",
+            task_id,
             "todo:daemon_simone_todo",
             "run_123",
             None,
@@ -234,5 +347,112 @@ def test_replay_links_ledger_to_assignments(monkeypatch, tmp_path: Path) -> None
 
     ledger = json.loads((packet_dir / "candidate_ledger.json").read_text(encoding="utf-8"))
     assert result["ok"] is True
-    assert ledger[0]["task_row_present"] is False  # deterministic intended task id differs from inserted historical row
-    assert ledger[0]["assignment_ids"] == []
+    assert ledger[0]["task_row_present"] is True
+    assert ledger[0]["task_id"] == task_id
+    assert ledger[0]["assignment_ids"] == ["asg_demo_1"]
+
+
+def test_replay_hydrates_email_evidence_from_task_and_assignment_workspace(monkeypatch, tmp_path: Path) -> None:
+    def fake_ingest(**kwargs):
+        return {"status": "success", "path": f"sources/{kwargs.get('source_id')}.md"}
+
+    monkeypatch.setattr(
+        "universal_agent.services.claude_code_intel_replay.wiki_ingest_external_source",
+        fake_ingest,
+    )
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    task_hub.ensure_schema(conn)
+    task_id = intended_task_identity(post_id="801", tier=4)["task_id"]
+    workspace_dir = tmp_path / "run_801"
+    verification_dir = workspace_dir / "work_products" / "email_verification"
+    verification_dir.mkdir(parents=True, exist_ok=True)
+    (verification_dir / "email_send_task_801.json").write_text("{}", encoding="utf-8")
+    conn.execute(
+        """
+        INSERT INTO task_hub_items (
+            task_id, source_kind, source_ref, title, description, project_key, priority, due_at,
+            labels_json, status, must_complete, incident_key, workstream_id, subtask_role,
+            parent_task_id, agent_ready, score, score_confidence, stale_state, seizure_state,
+            mirror_status, trigger_type, metadata_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, '', 'proactive', 4, NULL, '[]', 'completed', 0, NULL, NULL, NULL, NULL, 1, 0.0, 0.0, 'fresh', 'completed', 'internal', 'heartbeat_poll', ?, '2026-04-20T00:00:00+00:00', '2026-04-20T00:00:00+00:00')
+        """,
+        (
+            task_id,
+            "claude_code_kb_update",
+            "801",
+            "Analyze strategic Claude Code update from @ClaudeDevs",
+            json.dumps({"dispatch": {"outbound_delivery": {"channel": "agentmail", "message_id": "msg-801", "sent_at": "2026-04-20T00:01:00+00:00"}}}),
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO task_hub_assignments (
+            assignment_id, task_id, agent_id, workflow_run_id, workflow_attempt_id,
+            provider_session_id, state, started_at, ended_at, result_summary, workspace_dir
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "asg_kb_801",
+            task_id,
+            "todo:daemon_simone_todo",
+            "run_801",
+            None,
+            "daemon_simone_todo",
+            "completed",
+            "2026-04-20T00:00:00+00:00",
+            "2026-04-20T00:05:00+00:00",
+            "sent_email",
+            str(workspace_dir),
+        ),
+    )
+    conn.commit()
+
+    packet_dir = tmp_path / "packet_801"
+    packet_dir.mkdir()
+    (packet_dir / "manifest.json").write_text(
+        json.dumps({"handle": "ClaudeDevs", "ok": True, "new_post_count": 1, "action_count": 1}),
+        encoding="utf-8",
+    )
+    (packet_dir / "raw_posts.json").write_text(json.dumps({}), encoding="utf-8")
+    (packet_dir / "new_posts.json").write_text(
+        json.dumps([{"id": "801", "text": "strategic update", "created_at": "2026-04-19T12:00:00.000Z"}]),
+        encoding="utf-8",
+    )
+    (packet_dir / "actions.json").write_text(
+        json.dumps(
+            [
+                {
+                    "post_id": "801",
+                    "tier": 4,
+                    "action_type": "strategic_follow_up",
+                    "url": "https://x.com/ClaudeDevs/status/801",
+                    "text": "strategic update",
+                    "links": [],
+                    "matched_terms": ["update"],
+                    "reasons": ["strategic"],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = replay_packet(
+        config=ClaudeCodeIntelReplayConfig(
+            packet_dir=packet_dir,
+            queue_task_hub=False,
+            write_vault=True,
+            artifacts_root=tmp_path,
+        ),
+        conn=conn,
+    )
+
+    ledger = json.loads((packet_dir / "candidate_ledger.json").read_text(encoding="utf-8"))
+    assert result["ok"] is True
+    assert ledger[0]["candidate_artifact_id"] == ""
+    assert ledger[0]["assignment_ids"] == ["asg_kb_801"]
+    assert ledger[0]["assignment_workspaces"] == [str(workspace_dir)]
+    assert "msg-801" in ledger[0]["email_evidence_ids"]
+    assert "email_send_task_801.json" in ledger[0]["email_evidence_ids"]
+    assert ledger[0]["task_outbound_delivery"]["message_id"] == "msg-801"

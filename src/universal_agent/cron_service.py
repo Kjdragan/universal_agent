@@ -987,6 +987,9 @@ class CronService:
                             if isinstance(session_metadata, dict):
                                 session_metadata.setdefault("source", "cron")
                                 session_metadata.setdefault("job_id", job.job_id)
+                                session_metadata.setdefault("session_role", "cron")
+                                session_metadata.setdefault("run_kind", "cron")
+                                session_metadata.setdefault("skip_heartbeat", True)
                             # Build request metadata with optional model override
                             request_metadata: dict[str, Any] = {
                                 "source": "cron",

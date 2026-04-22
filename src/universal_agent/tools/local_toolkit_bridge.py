@@ -243,6 +243,10 @@ async def prepare_agentmail_attachment_wrapper(args: dict[str, Any]) -> dict[str
     }
 )
 async def agentmail_send_with_local_attachments_wrapper(args: dict[str, Any]) -> dict[str, Any]:
+    return await _agentmail_send_with_local_attachments_impl(args)
+
+
+async def _agentmail_send_with_local_attachments_impl(args: dict[str, Any]) -> dict[str, Any]:
     inboxId = str(args.get("inboxId") or "").strip()
     to = args.get("to") or []
     if isinstance(to, str):
@@ -334,11 +338,59 @@ async def agentmail_send_with_local_attachments_wrapper(args: dict[str, Any]) ->
         data = json.dumps(payload).encode("utf-8")
         with urllib.request.urlopen(req, data=data, timeout=60.0) as resp:
             resp_body = resp.read().decode("utf-8")
+            try:
+                result_payload = json.loads(resp_body)
+            except Exception:
+                result_payload = {}
+            _record_agentmail_delivery_from_runtime(
+                message_id=str(result_payload.get("messageId") or result_payload.get("message_id") or "").strip(),
+                draft_id=str(result_payload.get("draftId") or result_payload.get("draft_id") or "").strip(),
+            )
             return {"content": [{"type": "text", "text": f"Email successfully sent.\n{resp_body}"}]}
     except urllib.error.HTTPError as e:
         return {"content": [{"type": "text", "text": f"error: {e.code} API Error - {e.read().decode('utf-8')}"}]}
     except Exception as e:
         return {"content": [{"type": "text", "text": f"error: {str(e)}"}]}
+
+
+def _record_agentmail_delivery_from_runtime(*, message_id: str = "", draft_id: str = "") -> None:
+    try:
+        from universal_agent.agentmail_official import resolve_email_tracking_from_runtime
+        from universal_agent import task_hub
+    except Exception:
+        return
+
+    runtime = None
+    bridge = None
+    mapping = None
+    run_kind = ""
+    claimed_task_ids: list[str] = []
+    conn = None
+    try:
+        runtime, bridge, mapping, run_kind, claimed_task_ids, conn = resolve_email_tracking_from_runtime()
+        if conn is None:
+            return
+        if mapping and run_kind == "todo_execution":
+            thread_id = str(mapping.get("thread_id") or "").strip()
+            if thread_id and bridge is not None:
+                bridge.record_final_outbound(thread_id, message_id=message_id, draft_id=draft_id)
+        if run_kind == "todo_execution":
+            for task_id in claimed_task_ids:
+                task_hub.record_task_outbound_delivery(
+                    conn,
+                    task_id=task_id,
+                    channel="agentmail",
+                    message_id=message_id,
+                    draft_id=draft_id,
+                )
+    except Exception:
+        return
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 @tool(

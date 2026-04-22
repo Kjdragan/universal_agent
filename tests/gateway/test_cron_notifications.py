@@ -655,6 +655,70 @@ def test_autonomous_cron_heartbeat_wake_dedupes_via_workflow_admission(monkeypat
     assert heartbeat_stub.calls[0] == ("session_1", "cron_autonomous_run:job-1")
 
 
+def test_autonomous_cron_wake_ignores_cron_role_sessions(monkeypatch, tmp_path: Path):
+    class _HeartbeatStub:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        def request_heartbeat_next(self, session_id: str, reason: str = "wake"):
+            self.calls.append((session_id, reason))
+
+        def register_session(self, session) -> None:
+            return
+
+    class _Admission:
+        action = "start_new_run"
+        run_id = "run-1"
+        attempt_id = "attempt-1"
+
+    class _AdmissionStub:
+        def admit(self, *args, **kwargs):
+            return _Admission()
+
+        def mark_completed(self, *args, **kwargs):
+            return None
+
+        def mark_failed(self, *args, **kwargs):
+            return None
+
+    heartbeat_stub = _HeartbeatStub()
+    monkeypatch.setattr(gateway_server, "_heartbeat_service", heartbeat_stub)
+    monkeypatch.setattr(gateway_server, "_workflow_admission_service", lambda: _AdmissionStub())
+    monkeypatch.setattr(gateway_server, "_task_hub_has_dispatch_eligible_items", lambda: True)
+    monkeypatch.setenv("UA_CRON_WAKE_HEARTBEAT_ON_AUTONOMOUS_RUN", "1")
+    monkeypatch.setattr(
+        gateway_server,
+        "_sessions",
+        {
+            "cron_claude_code_intel_sync": GatewaySession(
+                session_id="cron_claude_code_intel_sync",
+                user_id="system",
+                workspace_dir=str(tmp_path / "cron"),
+                metadata={"session_role": "cron", "run_kind": "cron", "skip_heartbeat": True},
+            ),
+            "daemon_simone_heartbeat": GatewaySession(
+                session_id="daemon_simone_heartbeat",
+                user_id="daemon",
+                workspace_dir=str(tmp_path / "heartbeat"),
+                metadata={"session_role": "heartbeat", "run_kind": "heartbeat"},
+            ),
+        },
+    )
+    monkeypatch.setattr(
+        gateway_server,
+        "get_gateway",
+        lambda: SimpleNamespace(list_live_sessions=lambda: []),
+    )
+
+    gateway_server._maybe_wake_heartbeat_after_autonomous_cron(
+        run_status="success",
+        is_autonomous=True,
+        reason="cron_autonomous_run:job-claude",
+    )
+
+    assert heartbeat_stub.calls == [("daemon_simone_heartbeat", "cron_autonomous_run:job-claude")]
+
+
 def test_process_heartbeat_investigation_notification_includes_origin_findings_href(monkeypatch):
     captured: dict = {}
 

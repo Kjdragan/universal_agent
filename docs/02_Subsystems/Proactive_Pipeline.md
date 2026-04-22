@@ -285,6 +285,8 @@ Important invariants:
 - Automation-owned prompts must not trigger inferred VP routing just because the prompt text mentions a VP slug; only real user intent can do that.
 - `standard_report` and `enhanced_report` send one final email with executive summary in the body and the full artifact attached when available.
 - Completion claims for email/report work are verified against the AgentMail/outbound-delivery ledger. If an agent claims `complete` but no final email/draft marker exists, Task Hub routes the item to `review` with `completion_unverified=true` and records `completion_claim_missing_email_delivery`.
+- The local attachment-delivery path (`agentmail_send_with_local_attachments`) now records task-scoped outbound delivery markers during `todo_execution`, aligning attachment-based sends with the same verification path used by the standard AgentMail bridge.
+- Cron-created Claude Code Intel packet sessions are now explicitly heartbeat-exempt (`session_role=cron`, `skip_heartbeat=true`) so autonomous heartbeat wake does not reuse the packet workspace for follow-up health analysis.
 
 ### 3.9 Tracked Chat Canonical Flow
 
@@ -863,6 +865,7 @@ is advisory, never blocks heartbeat execution.
 | [`task_hub_bridge.py`](../../src/universal_agent/tools/task_hub_bridge.py) | Agent-facing MCP tools: `task_hub_task_action` (lifecycle), `task_hub_decompose` (split into subtasks) |
 | [`feature_flags.py`](../../src/universal_agent/feature_flags.py) | `heartbeat_enabled()`, `cron_enabled()` — master switches |
 | [`services/claude_code_intel.py`](../../src/universal_agent/services/claude_code_intel.py) | Dedicated X API `@ClaudeDevs` producer — writes Claude Code Intel packets, updates the local KB source index, and queues Tier 3/4 Task Hub follow-up |
+| [`services/claude_code_intel_replay.py`](../../src/universal_agent/services/claude_code_intel_replay.py) | Packet replay/backfill, candidate ledger generation, first-pass external vault population, and replay-safe Task Hub reconciliation for Claude Code Intel packets |
 
 ### Memory Files
 
@@ -880,6 +883,7 @@ is advisory, never blocks heartbeat execution.
 | [`nightly_wiki_agent.py`](../../src/universal_agent/scripts/nightly_wiki_agent.py) | Nightly proactive wiki creation — selects pending signal cards, dispatches VP missions to build NLM-backed knowledge bases (cron: 03:15 CST) |
 | [`briefings_agent.py`](../../src/universal_agent/scripts/briefings_agent.py) | Morning autonomous briefing — fetches telemetry and nightly wiki output, generates daily briefing report (cron: 06:30 CST) |
 | [`claude_code_intel_sync.py`](../../src/universal_agent/scripts/claude_code_intel_sync.py) | Twice-daily Claude Code X intelligence poller — runs through Chron, uses `X_BEARER_TOKEN`, and produces durable packets under `<UA_ARTIFACTS_DIR>/proactive/claude_code_intel/` |
+| [`claude_code_intel_replay_packet.py`](../../src/universal_agent/scripts/claude_code_intel_replay_packet.py) | Replay/backfill entry point — reprocesses an existing Claude Code Intel packet into the external vault, candidate ledger, and optional Task Hub reconciliation |
 | [`schedule_nightly_wiki.py`](../../src/universal_agent/scripts/schedule_nightly_wiki.py) | One-time setup script that registers the nightly wiki and morning briefing cron jobs via CronService |
 
 ### Dashboard / API Files

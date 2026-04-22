@@ -10,6 +10,7 @@ from universal_agent import task_hub
 from universal_agent.request_runtime import RequestRuntimeContext, reset_request_runtime, set_request_runtime
 from universal_agent.services.email_task_bridge import EmailTaskBridge, reconcile_terminal_email_task_mappings
 from universal_agent.tools.agentmail_bridge import _send_agentmail_impl
+from universal_agent.tools.local_toolkit_bridge import _agentmail_send_with_local_attachments_impl
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -30,6 +31,20 @@ class _DummyMailService:
     async def send_email(self, **kwargs):
         self.calls.append({k: str(v) for k, v in kwargs.items()})
         return dict(self._result)
+
+
+class _FakeHTTPResponse:
+    def __init__(self, payload: dict[str, str]) -> None:
+        self._payload = json.dumps(payload).encode("utf-8")
+
+    def read(self) -> bytes:
+        return self._payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
 
 
 def _seed_email_task(db_path: Path, *, session_key: str) -> dict[str, str]:
@@ -149,6 +164,108 @@ def test_target_agent_labels_use_exact_map(tmp_path):
     assert "agent-atlas" in (general_item or {}).get("labels", [])
     assert "agent-atlas" in (unknown_item or {}).get("labels", [])
     assert "agent-codie" not in (unknown_item or {}).get("labels", [])
+
+
+def _seed_report_task(db_path: Path, *, task_id: str) -> None:
+    with _connect(db_path) as conn:
+        task_hub.ensure_schema(conn)
+        task_hub.upsert_item(
+            conn,
+            {
+                "task_id": task_id,
+                "source_kind": "claude_code_demo_task",
+                "source_ref": "post-1",
+                "title": "Send report",
+                "description": "Generate and email a report with attachments.",
+                "project_key": "proactive",
+                "priority": 3,
+                "labels": ["agent-ready"],
+                "status": task_hub.TASK_STATUS_OPEN,
+                "agent_ready": True,
+                "metadata": {
+                    "workflow_manifest": {
+                        "workflow_kind": "research_report_email",
+                        "delivery_mode": "standard_report",
+                        "final_channel": "email",
+                    }
+                },
+            },
+        )
+        task_hub.claim_next_dispatch_tasks(
+            conn,
+            limit=1,
+            agent_id="todo:daemon_simone_todo",
+            workflow_run_id="run-attachment-email",
+            provider_session_id="daemon_simone_todo",
+        )
+
+
+@pytest.mark.asyncio
+async def test_local_attachment_wrapper_records_delivery_for_claimed_task(monkeypatch, tmp_path):
+    db_path = tmp_path / "activity_state.db"
+    _seed_report_task(db_path, task_id="task:attachment-email")
+    attachment = tmp_path / "report.md"
+    attachment.write_text("# report\n", encoding="utf-8")
+
+    monkeypatch.setenv("AGENTMAIL_API_KEY", "test-key")
+    monkeypatch.setattr("universal_agent.durable.db.get_activity_db_path", lambda: str(db_path))
+    monkeypatch.setattr("universal_agent.durable.db.connect_runtime_db", lambda *_a, **_k: _connect(db_path))
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda req, data=None, timeout=0: _FakeHTTPResponse({"messageId": "msg-attach", "threadId": "thread-attach"}),
+    )
+
+    token = set_request_runtime(
+        RequestRuntimeContext(
+            session_id="daemon_simone_todo",
+            workspace_dir=str(tmp_path),
+            source="todo_dispatcher",
+            run_kind="todo_execution",
+            metadata={"claimed_task_ids": ["task:attachment-email"]},
+        )
+    )
+    try:
+        result = await _agentmail_send_with_local_attachments_impl(
+            {
+                "inboxId": "oddcity216@agentmail.to",
+                "to": ["kevin@example.com"],
+                "subject": "Attached report",
+                "text": "See attached.",
+                "attachment_paths": [str(attachment)],
+            }
+        )
+    finally:
+        reset_request_runtime(token)
+
+    assert "Email successfully sent" in _extract_text(result)
+    with _connect(db_path) as conn:
+        item = task_hub.get_item(conn, "task:attachment-email")
+        outbound = (((item or {}).get("metadata") or {}).get("dispatch") or {}).get("outbound_delivery") or {}
+        assert outbound["message_id"] == "msg-attach"
+        assert outbound["channel"] == "agentmail"
+
+
+def test_attachment_delivery_allows_complete_instead_of_review(tmp_path):
+    db_path = tmp_path / "activity_state.db"
+    _seed_report_task(db_path, task_id="task:attachment-complete")
+    with _connect(db_path) as conn:
+        task_hub.record_task_outbound_delivery(
+            conn,
+            task_id="task:attachment-complete",
+            channel="agentmail",
+            message_id="msg-attach-complete",
+        )
+        updated = task_hub.perform_task_action(
+            conn,
+            task_id="task:attachment-complete",
+            action="complete",
+            reason="Sent the report with attachments via AgentMail",
+            agent_id="todo:daemon_simone_todo",
+        )
+
+    assert updated["status"] == task_hub.TASK_STATUS_COMPLETED
+    dispatch = ((updated.get("metadata") or {}).get("dispatch") or {})
+    assert dispatch["completion_unverified"] is False
 
 
 def test_reconcile_terminal_email_task_mappings_backfills_completed_rows(tmp_path):
