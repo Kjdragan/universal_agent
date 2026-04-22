@@ -431,6 +431,9 @@ def test_reopen_stale_delegations_preserves_metadata() -> None:
         refreshed = task_hub.get_item(conn, "stale-001")
         assert refreshed is not None
         assert refreshed["status"] == task_hub.TASK_STATUS_OPEN
+        # Reopened tasks must return to the 'unseized' seizure_state so they
+        # can be re-dispatched; 'open' is not a recognised seizure_state value.
+        assert refreshed["seizure_state"] == "unseized"
         metadata = refreshed.get("metadata") or {}
         delegation = metadata.get("delegation") or {}
         # The mission_id, vp_id, and original delegated_at must all survive.
