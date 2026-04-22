@@ -3257,7 +3257,7 @@ def reopen_stale_delegations(
 
         conn.execute(
             "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
-            (TASK_STATUS_OPEN, "open", _json_dumps(metadata), _now_iso(), task_id),
+            (TASK_STATUS_OPEN, "unseized", _json_dumps(metadata), _now_iso(), task_id),
         )
         logger.warning(
             "📋⏰ Stale delegation reopened: task=%s delegated at %s (>%.1fh)",
