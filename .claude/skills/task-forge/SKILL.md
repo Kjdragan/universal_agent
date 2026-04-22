@@ -177,6 +177,18 @@ task-skills/<task-name>-tf/
 - **NEVER** scaffold directly inside `.claude/skills/` — that directory is write-protected
   during agent runs. Scaffold in `task-skills/` first, then Phase 6 auto-promotes via `cp -r`.
 
+> [!CAUTION]
+> **Getting "Permission denied" on `.claude/skills/`?** This is EXPECTED during agent runs.
+> The `.claude/skills/` directory is write-protected by design. If you get a permission
+> error, you are writing to the WRONG location. Write to `task-skills/<name>-tf/` instead.
+> Phase 6 (Auto-Promote) handles the copy to `.claude/skills/` after the quality gate.
+> **Do NOT retry writes to `.claude/skills/`** — each retry wastes tool calls for the same error.
+
+**Path resolution for scaffold:**
+1. If `CURRENT_RUN_WORKSPACE` is set → write to `{CURRENT_RUN_WORKSPACE}/task-skills/<name>-tf/`
+2. If running in a session workspace → write to `{workspace}/task-skills/<name>-tf/`
+3. Fallback → write to `task-skills/<name>-tf/` relative to project root
+
 #### Writing the SKILL.md
 
 Use the template in `templates/v0.md` as your starting point. The key sections:
@@ -511,15 +523,15 @@ completing the loop: observations → proposals → codified improvements → be
 > The audit artifact itself becomes part of the skill's DNA — future developers and agents
 > can read it to understand what worked, what didn't, and what to watch for.
 
-### Phase 5c: Skill Improvement Pass (OPTIONAL — user-requested only)
+### Phase 5c: Skill Improvement Pass (MANDATORY — runs after 5b)
 
-> [!NOTE]
-> This phase is **not automatic**. It runs only when the user's task description includes
-> phrases like "and evaluate", "polish the skill", "improve it", "run skill-creator eval",
-> or "make it production-quality". If not requested, skip to Phase 6.
+> [!IMPORTANT]
+> This phase is **always required**. The quality gate (5b) audits structure; this phase
+> IMPROVES the skill using the skill-creator's eval/iterate standards. Every Task Forge
+> skill must ship as v1, not v0. This is what transforms a raw task-skill into a reusable
+> institutional asset.
 
-When triggered, apply the skill-creator's quality standards for a single improvement pass.
-This is the bridge between a v0 task-skill and a polished v1+.
+Apply the skill-creator's quality standards to refine the skill from v0 to v1.
 
 #### Step 1: Re-read the standard
 
@@ -562,10 +574,6 @@ Append a `## Phase 5c: Improvement Pass` section to `quality_gate.md`:
 - Before/after of any description or structural changes
 - Version label (v0 → v1)
 - Whether the skill is now ready for promotion to `.claude/skills/`
-
-> **When to skip:** If the task is clearly one-off and the user didn't ask for polish,
-> skip this phase entirely. Task Forge's default is "ship the v0, iterate if it matters."
-> This phase exists for when the user explicitly wants to invest in quality upfront.
 
 > [!NOTE]
 > **Hook-denial workaround:** During Phase 5c, edit-protection hooks will block direct writes

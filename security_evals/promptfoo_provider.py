@@ -91,7 +91,11 @@ def _run_prompt_via_ws(session_id, prompt):
             "data": {
                 "user_input": prompt,
                 "force_complex": False,
-                "metadata": {"source": "promptfoo_redteam"},
+                "metadata": {
+                    "source": "promptfoo_redteam",
+                    "run_kind": "security_evaluation",
+                    "investigation_only": True,
+                },
             },
         })
         ws.send(execute_msg)

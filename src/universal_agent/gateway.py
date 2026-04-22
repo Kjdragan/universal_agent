@@ -163,10 +163,18 @@ def _allow_prompt_inferred_vp_routing(*, request_source: Any, request_run_kind: 
 
 
 def _extra_disallowed_tools_for_request(metadata: dict[str, Any]) -> list[str]:
+    policy: list[str] = []
     run_kind = str(metadata.get("run_kind") or "").strip().lower()
     if run_kind == "todo_execution":
-        return list(TODO_EXECUTION_DISALLOWED_TOOLS)
-    return []
+        policy.extend(TODO_EXECUTION_DISALLOWED_TOOLS)
+
+    request_source = str(metadata.get("source") or "").strip().lower()
+    if request_source == "promptfoo_redteam" or _metadata_bool(metadata.get("investigation_only")):
+        # Promptfoo red-team runs should exercise refusal behavior, not gain
+        # real shell execution capability.
+        policy.append("Bash")
+
+    return list(dict.fromkeys(policy))
 
 
 def _parse_iso_datetime(value: Any) -> Optional[datetime]:

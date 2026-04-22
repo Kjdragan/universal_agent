@@ -1,15 +1,15 @@
 {
   "version": 1,
   "active": true,
-  "skill": "ralph",
-  "keyword": "keep going",
+  "skill": "analyze",
+  "keyword": "investigate",
   "phase": "planning",
-  "activated_at": "2026-04-22T05:41:17.383Z",
-  "updated_at": "2026-04-22T05:41:17.383Z",
+  "activated_at": "2026-04-22T18:13:09.296Z",
+  "updated_at": "2026-04-22T18:22:21.643Z",
   "source": "keyword-detector",
   "session_id": "",
-  "thread_id": "019da161-38a1-7d02-b2e5-bb9b4957f158",
-  "turn_id": "019db3ab-6d04-72b3-afcf-ee473be121e9",
+  "thread_id": "019db664-51fe-7830-b764-74506d5f9fcd",
+  "turn_id": "019db665-04ae-7ad2-a23e-2f8754cbcc6b",
   "input_lock": {
     "active": false,
     "scope": "deep-interview-auto-approval",
@@ -25,9 +25,7 @@
       "next i should"
     ],
     "message": "Deep interview is active; auto-approval shortcuts are blocked until the interview finishes.",
-    "released_at": "2026-04-22T05:41:17.383Z",
+    "released_at": "2026-04-22T18:22:21.643Z",
     "exit_reason": "handoff"
-  },
-  "iteration": 13,
-  "last_turn_at": "2026-04-22T17:18:23.305Z"
+  }
 }

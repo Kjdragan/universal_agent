@@ -380,6 +380,15 @@ Specifically:
    - Update the SKILL.md to reflect what was actually discovered (correct SDK, model, credentials).
    - Create `references/` docs for any API patterns, model names, or configs discovered.
    - Add anti-patterns for approaches that failed.
+   **POST-EXECUTION RECONCILIATION VERIFICATION (MANDATORY before Quality Gate):**
+   After execution finishes, you MUST diff the SKILL.md against the actual working implementation.
+   Specifically verify these four alignment points:
+   a. SDK/import paths in SKILL.md match what the script actually uses
+   b. Model name in SKILL.md matches what was actually called in the API
+   c. Auth mechanism in SKILL.md matches what actually worked (env var name, credential type)
+   d. Dependencies listed in SKILL.md match what was actually required (packages, system tools)
+   If ANY of these diverge, update the SKILL.md NOW before proceeding to Phase 5b.
+   A stale SKILL.md is an AUTOMATIC quality gate failure.
 3. **CRITICAL COMPONENT FAILURE PROTOCOL:** If a technology explicitly named in the task
    description fails (e.g., the user says "use Google Cloud TTS" and TTS can't be made to work),
    you MUST HALT and report the failure — do NOT silently substitute a fundamentally different
@@ -389,12 +398,19 @@ Specifically:
    MUST handle ALL listed input types. URLs require a fetch+extract step. A skill that claims to
    handle URLs but doesn't fetch their content is structurally incomplete.
 5. The work product goes to `work_products/` as usual, but the task-skill itself is ALSO a deliverable.
-6. Phase 5b (Skill Quality Gate) is MANDATORY and MUST produce a traceable artifact:
-   a. Read `.claude/skills/skill-creator/SKILL.md` using the `Read` tool — this is the standard
-      you're auditing against. Confirm in quality_gate.md that you read it.
-   b. Evaluate the task-skill against ALL 6 structural checks (structure, not-a-wrapper, composable,
-      generalizable, progressive disclosure, functional-accuracy). Write a 1-line justification
-      for each check. Do NOT skip any checks.
+6. Phase 5b (Skill Quality Gate) is MANDATORY and MUST produce a traceable artifact.
+   **Mandatory tool calls — you MUST perform these in order:**
+   a. Call `Read` on `.claude/skills/skill-creator/SKILL.md` — do NOT skip this tool call.
+      This is the standard you're auditing against. Your quality_gate.md MUST cite that you read it.
+   b. Evaluate the task-skill against ALL 6 structural checks. You must evaluate EVERY check
+      and write a 1-line justification for each in quality_gate.md:
+      (1) Structure — has frontmatter, Goal, Success Criteria, Context
+      (2) Not-a-wrapper — describes *what* and *why*, not just "run this script"
+      (3) Composable — references existing skills where relevant
+      (4) Generalizable — works in any session, no hardcoded paths
+      (5) Progressive disclosure — SKILL.md <100 lines, heavy content in references/
+      (6) Functional accuracy — SKILL.md matches actual implementation (SDK, model, auth)
+      Using your own custom checklist instead of these 6 checks is INVALID.
    c. Verify SKILL.md/implementation alignment — the SKILL.md must reflect the actual working
       approach, not the initial scaffold. If they diverge, fix the SKILL.md.
    d. Verify input source coverage — if the task specifies multiple input types, confirm the
@@ -409,15 +425,24 @@ Specifically:
    g. If any check fails, fix the skill's structure before completing the task.
    You CANNOT just claim "passed quality gate" — you must produce the artifact with all 6 checks.
    Self-certification without evidence is an automatic quality gate failure.
-7. Phase 5c (Skill Improvement) is OPTIONAL — only if the user's task description includes
-   phrases like "and evaluate", "polish", "improve", or "production-quality". When triggered:
-   a. Re-read skill-creator/SKILL.md for polish standards
-   b. Apply the universal improvement patterns from the Task Forge SKILL.md:
+   A quality gate that uses custom criteria instead of the 6 prescribed checks is INVALID.
+7. Phase 5c (Skill Improvement) is MANDATORY — run AFTER Phase 5b passes.
+   The quality gate (5b) audits structure. This phase (5c) IMPROVES the skill using the
+   skill-creator's standards to refine it from v0 to v1. Steps:
+   a. Re-read skill-creator/SKILL.md — specifically the "Skill Writing Guide" and
+      "Writing Patterns" sections. These are the polish standards you're measuring against.
+   b. Self-evaluate: Is the description "pushy" enough? Does it follow progressive disclosure?
+      Are there hardcoded values? Could it benefit from references/?
+   c. Apply the universal improvement patterns from the Task Forge SKILL.md:
       preserve ephemeral code to scripts/, specify reproducible methodology,
       tighten scope definitions, track maturity versioning, externalize domain knowledge
-   c. Make concrete edits to the task-skill's SKILL.md
-   d. Append a "Phase 5c" section to quality_gate.md with before/after and version label
-   Skip entirely if not requested.
+   d. Make concrete edits to the task-skill's SKILL.md — sharpen description, save reusable
+      scripts, add references/, tighten scope definitions and methodology
+   e. Append a "Phase 5c: Improvement Pass" section to quality_gate.md with:
+      - What was improved and why (cite which universal pattern applied)
+      - Before/after of description or structural changes
+      - Version label (v0 → v1)
+   This phase is what transforms a raw task-skill into a reusable institutional asset.
 8. Phase 6 (Auto-Promote) is MANDATORY — after quality gate passes, copy the skill
    to the permanent skills directory so it's immediately discoverable for future runs:
    `cp -r task-skills/<task-name>-tf/ .claude/skills/<task-name>-tf/`
@@ -535,6 +560,18 @@ def build_todo_execution_prompt(
         desc = str(item.get("description") or "").strip()
         lines.append(f"Work Item {idx}: [{t_id}] {title}")
         lines.append(f"Description: {desc}")
+        # ── Component 1: Extract and surface URLs for LLM attention ──
+        # URLs buried at the end of long descriptions get lost due to
+        # LLM attention degradation at prompt boundaries. Surface them
+        # prominently so the agent doesn't miss critical input sources.
+        _urls_in_desc = re.findall(r'https?://\S+', desc)
+        if _urls_in_desc:
+            lines.append("")
+            lines.append("== CRITICAL INPUT SOURCES (extracted from description — DO NOT IGNORE) ==")
+            for _url in _urls_in_desc:
+                lines.append(f"  → {_url}")
+            lines.append("These URLs are part of the task specification. You MUST fetch and extract their text content for processing (e.g., as TTS input, analysis source, etc.).")
+            lines.append("")
         metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
         delivery_mode = str(metadata.get("delivery_mode") or "standard_report").strip()
         manifest = resolve_execution_manifest(
@@ -585,6 +622,7 @@ class ToDoDispatchService:
         self.active_sessions: Dict[str, GatewaySession] = {}
         self.busy_sessions: set[str] = set()
         self.wake_sessions = set()
+        self.executing_sessions: set[str] = set()  # Sessions with active dispatch execution in flight
         self.execution_callback = execution_callback
         self.event_callback = event_callback
 
@@ -857,6 +895,7 @@ class ToDoDispatchService:
             )
             
             if self.execution_callback:
+                self.executing_sessions.add(session.session_id)
                 dispatch_result = await self.execution_callback(session.session_id, req)
                 decision = str((dispatch_result or {}).get("decision") or "accepted").strip().lower()
                 if self.event_callback:

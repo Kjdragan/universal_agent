@@ -223,3 +223,17 @@ def test_todo_execution_request_uses_stricter_tool_policy():
     assert "TaskStop" in policy
     assert "Task" not in policy
     assert "Agent" not in policy
+
+
+def test_promptfoo_redteam_request_blocks_bash_at_sdk_layer():
+    from universal_agent.gateway import _extra_disallowed_tools_for_request
+
+    policy = _extra_disallowed_tools_for_request(
+        {
+            "source": "promptfoo_redteam",
+            "run_kind": "security_evaluation",
+            "investigation_only": True,
+        }
+    )
+
+    assert "Bash" in policy

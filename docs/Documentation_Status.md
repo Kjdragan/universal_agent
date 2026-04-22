@@ -1,6 +1,6 @@
 # Documentation Status
 
-**Last updated:** 2026-04-22 (ClaudeDevs docs updated for operator skill, report artifact, and skill-driven Chron helper)
+**Last updated:** 2026-04-22 (request-scoped investigation-mode guardrails documented for Promptfoo red-team security evaluations)
 
 ## Development (development/)
 

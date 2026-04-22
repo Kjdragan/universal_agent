@@ -445,12 +445,40 @@ def _maybe_abs_path(path_value: str, workspace_dir: str | None) -> str:
         return path_value
 
 
-def _is_heartbeat_investigation_mode() -> bool:
-    run_source = str(os.getenv("UA_RUN_SOURCE") or "").strip().lower()
-    if run_source != "heartbeat":
-        return False
-    raw = str(os.getenv("UA_HEARTBEAT_INVESTIGATION_ONLY", "0") or "0").strip().lower()
-    return raw not in {"0", "false", "no", "off", ""}
+def _is_truthy_flag(value: Any) -> bool:
+    return str(value or "").strip().lower() not in {"0", "false", "no", "off", ""}
+
+
+def _request_source_label(source: str) -> str:
+    normalized = str(source or "").strip().lower()
+    if normalized == "heartbeat":
+        return "Heartbeat"
+    if normalized == "promptfoo_redteam":
+        return "Red-team evaluation"
+    return "This request"
+
+
+def _active_request_source() -> str:
+    runtime = get_request_runtime()
+    if runtime and str(runtime.source or "").strip():
+        return str(runtime.source or "").strip().lower()
+    return str(os.getenv("UA_RUN_SOURCE") or "").strip().lower()
+
+
+def _is_request_investigation_mode() -> bool:
+    runtime = get_request_runtime()
+    if runtime and isinstance(runtime.metadata, dict):
+        raw = runtime.metadata.get("investigation_only")
+        if raw is not None:
+            return _is_truthy_flag(raw)
+        if str(runtime.source or "").strip().lower() == "promptfoo_redteam":
+            return True
+
+    run_source = _active_request_source()
+    if run_source == "heartbeat":
+        raw = os.getenv("UA_HEARTBEAT_INVESTIGATION_ONLY", "0")
+        return _is_truthy_flag(raw)
+    return run_source == "promptfoo_redteam"
 
 
 def _looks_like_explicit_vp_intent(text: Any) -> bool:
@@ -1799,19 +1827,20 @@ class AgentHookSet:
                     },
                 }
 
-        if _is_heartbeat_investigation_mode():
+        if _is_request_investigation_mode():
             upper_name = tool_name.upper()
+            mode_label = _request_source_label(_active_request_source())
             if upper_name in {"BASH"} or upper_name.endswith("__COMPOSIO_MULTI_EXECUTE_TOOL"):
                 return {
                     "systemMessage": (
-                        "⚠️ BLOCKED: Heartbeat is running in investigation-only mode. "
+                        f"⚠️ BLOCKED: {mode_label} is running in investigation-only mode. "
                         "Mutating shell commands and generic Composio execute calls are disabled."
                     ),
                     "decision": "block",
                     "hookSpecificOutput": {
                         "hookEventName": "PreToolUse",
                         "permissionDecision": "deny",
-                        "permissionDecisionReason": "Heartbeat investigation-only mode blocks mutating execution tools.",
+                        "permissionDecisionReason": f"{mode_label} investigation-only mode blocks mutating execution tools.",
                     },
                 }
 
@@ -1825,14 +1854,14 @@ class AgentHookSet:
                 if not _is_allowed_heartbeat_write_path(target_path, self.workspace_dir):
                     return {
                         "systemMessage": (
-                            "⚠️ BLOCKED: Heartbeat investigation-only mode allows writes only to draft-safe "
+                            f"⚠️ BLOCKED: {mode_label} investigation-only mode allows writes only to draft-safe "
                             "locations (work_products/, UA_ARTIFACTS_DIR, or memory/)."
                         ),
                         "decision": "block",
                         "hookSpecificOutput": {
                             "hookEventName": "PreToolUse",
                             "permissionDecision": "deny",
-                            "permissionDecisionReason": "Write/edit path is outside heartbeat draft-safe locations.",
+                            "permissionDecisionReason": f"Write/edit path is outside {mode_label.lower()} draft-safe locations.",
                         },
                     }
 

@@ -3,7 +3,7 @@
 > **Source of truth** for Claude Agent SDK (Python) and Claude Code CLI behavior
 > regarding tool permissions, hook lifecycle, and subagent context detection.
 >
-> Last verified against: `claude-agent-sdk-python` + `claude-code` (Feb 2026)
+> Last verified against: `claude-agent-sdk-python` + `claude-code` (Apr 2026)
 
 ---
 
@@ -107,6 +107,46 @@ Important current rules:
 - hook/path guards still block arbitrary absolute paths outside the run workspace, artifacts root, and approved codebase roots
 - the research-first hook heuristic checks coding signals before research/report signals so pasted implementation specs do not get misrouted to `research-specialist`
 - Bash receives `CURRENT_CODEBASE_ROOT` and `CURRENT_ALLOWED_CODEBASE_ROOTS` when repo-backed coding is active, but `CURRENT_RUN_WORKSPACE` stays the default artifact/log root
+
+## 3B. Request-Scoped Investigation Lanes
+
+Some gateway request sources intentionally run in a stricter, non-executing lane.
+
+Current example:
+
+- `promptfoo_redteam` security-evaluation requests
+
+The contract is:
+
+- the provider marks the request with `metadata.source="promptfoo_redteam"`
+- the provider also sets `metadata.investigation_only=true`
+- gateway request policy adds `Bash` to `extra_disallowed_tools` for that run
+- hook-level backstops still block mutating shell / generic execute tools and restrict writes to draft-safe roots
+
+This is deliberately stronger than prompt-only "please refuse" guidance. Red-team
+turns should measure whether the agent refuses unsafe instructions, not grant the
+red-team prompt a real shell.
+
+Illustrative shape:
+
+```python
+def _extra_disallowed_tools_for_request(metadata: dict[str, Any]) -> list[str]:
+    policy: list[str] = []
+    if metadata.get("run_kind") == "todo_execution":
+        policy.extend(TODO_EXECUTION_DISALLOWED_TOOLS)
+    if metadata.get("source") == "promptfoo_redteam" or metadata.get("investigation_only"):
+        policy.append("Bash")
+    return list(dict.fromkeys(policy))
+```
+
+Hook backstop behavior for investigation-only lanes:
+
+- block `Bash`
+- block `mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL`
+- allow writes only to `work_products/`, artifacts, or `memory/`
+
+This pattern is the preferred way to harden evaluation, watchdog, or other
+untrusted automation lanes without degrading normal interactive sessions.
 
 ## 4. PreToolUse Hook Input Schema
 

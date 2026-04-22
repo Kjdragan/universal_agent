@@ -4221,6 +4221,10 @@ def _register_execution_task(session_id: str, task: asyncio.Task[Any]) -> None:
         current = _session_execution_tasks.get(session_id)
         if current is done_task:
             _session_execution_tasks.pop(session_id, None)
+        # Clear ToDo dispatch executing_sessions so idle dispatch loop
+        # knows this session is free for new work.
+        if _todo_dispatch_service is not None:
+            _todo_dispatch_service.executing_sessions.discard(session_id)
 
     task.add_done_callback(_cleanup)
 

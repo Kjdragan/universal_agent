@@ -152,6 +152,13 @@ async def idle_dispatch_loop(
                 if todo_dispatch_service
                 else (heartbeat_service.busy_sessions or set())
             )
+            # Also consider sessions with active execution tasks as busy.
+            # The ToDo dispatch _process_session returns immediately after
+            # queueing work, but the actual execution runs asynchronously.
+            if todo_dispatch_service:
+                executing = getattr(todo_dispatch_service, "executing_sessions", set()) or set()
+                if executing:
+                    busy = busy | executing
             idle_sessions = [
                 sid for sid in sessions.keys()
                 if sid not in busy

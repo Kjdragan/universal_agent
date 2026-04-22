@@ -5,6 +5,7 @@ import React, { useEffect, useState } from "react";
 export function SecurityDashboardTab() {
   const [report, setReport] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [loadedAtMs, setLoadedAtMs] = useState<number | null>(null);
 
   useEffect(() => {
     fetch("/security_report.json")
@@ -24,7 +25,10 @@ export function SecurityDashboardTab() {
         console.error("Failed to fetch security report:", err);
         setReport({ error: "No nightly security report found. Run the cron job manually to generate one." });
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        setLoadedAtMs(Date.now());
+        setLoading(false);
+      });
   }, []);
 
   if (loading) {
@@ -50,6 +54,15 @@ export function SecurityDashboardTab() {
   const stats = report?.stats || { successes: 0, failures: 0 };
   const totalTests = stats.successes + stats.failures || results.length;
   const passRate = totalTests > 0 ? Math.round((stats.successes / totalTests) * 100) : 0;
+  const reportTimestamp =
+    typeof report?.timestamp === "string" ? new Date(report.timestamp) : null;
+  const reportTimestampValid =
+    reportTimestamp instanceof Date && !Number.isNaN(reportTimestamp.getTime());
+  const reportAgeDays =
+    reportTimestampValid && loadedAtMs !== null
+      ? Math.floor((loadedAtMs - reportTimestamp.getTime()) / (1000 * 60 * 60 * 24))
+      : null;
+  const isStaleReport = reportAgeDays !== null && reportAgeDays > 2;
 
   return (
     <div className="flex flex-col h-full bg-background text-foreground/80 p-6 overflow-y-auto">
@@ -74,6 +87,12 @@ export function SecurityDashboardTab() {
             <p className="text-[10px] text-muted-foreground uppercase tracking-widest mb-1">Total Tests</p>
             <p className="text-2xl font-mono text-primary">{totalTests}</p>
           </div>
+          <div className="bg-background border border-border rounded-lg p-3 text-center min-w-[180px]">
+            <p className="text-[10px] text-muted-foreground uppercase tracking-widest mb-1">Report Timestamp</p>
+            <p className={`text-xs font-mono ${isStaleReport ? "text-amber-400" : "text-foreground/80"}`}>
+              {reportTimestampValid ? reportTimestamp.toLocaleString() : "Unknown"}
+            </p>
+          </div>
         </div>
       </div>
 
@@ -82,6 +101,11 @@ export function SecurityDashboardTab() {
           <div className="bg-card/50 p-3 border-b border-border">
             <h2 className="text-sm font-bold uppercase tracking-widest text-foreground/80">Detailed Findings</h2>
           </div>
+          {isStaleReport && (
+            <div className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+              This report is {reportAgeDays} days old. Rerun the nightly red-team evaluation before treating these findings as current.
+            </div>
+          )}
           <div className="divide-y divide-slate-800/50">
             {results.map((res: any, idx: number) => {
               const isVuln = res.success === false || (res.gradingResult && !res.gradingResult.pass);

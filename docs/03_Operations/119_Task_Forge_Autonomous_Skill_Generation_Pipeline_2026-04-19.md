@@ -1,6 +1,6 @@
 # Task Forge: Autonomous Skill Generation Pipeline
 
-**Canonical Source of Truth** — Last updated: 2026-04-22
+**Canonical Source of Truth** — Last updated: 2026-04-22 (pipeline hardening pass)
 
 > Task Forge is the system that converts raw human intent into structured, reusable skills
 > that agents can execute. **The skill IS the output, not just the result.**
@@ -161,9 +161,11 @@ flowchart TB
 
 | File | What Changed |
 |------|-------------|
-| [`todo_dispatch_service.py`](file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/todo_dispatch_service.py) | `TODO_DISPATCH_PROMPT` — Task Forge Workflow section, Work Product Persistence section |
+| [`todo_dispatch_service.py`](file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/todo_dispatch_service.py) | `TODO_DISPATCH_PROMPT` — Task Forge Workflow section, Work Product Persistence section; `build_todo_execution_prompt` — URL extraction for LLM attention; `executing_sessions` tracking |
+| [`idle_dispatch_loop.py`](file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/idle_dispatch_loop.py) | Busy set merges `executing_sessions` from ToDo dispatch to prevent re-dispatch during execution |
+| [`gateway_server.py`](file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/gateway_server.py) | `_register_execution_task` — clears `executing_sessions` on task completion |
 | [`hooks.py`](file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/hooks.py) | `_strip_heredoc_bodies()` — heredoc regex handles `<<MARKER | cmd` pattern; `python -c` inline code stripping; `on_pre_bash_inject_workspace_env` — `python` → `python3` rewrite |
-| [`.claude/skills/task-forge/SKILL.md`](file:///home/kjdragan/lrepos/universal_agent/.claude/skills/task-forge/SKILL.md) | Full skill definition with all 7 phases |
+| [`.claude/skills/task-forge/SKILL.md`](file:///home/kjdragan/lrepos/universal_agent/.claude/skills/task-forge/SKILL.md) | Full skill definition with all 7 phases; scaffold path clarity + permission error guidance |
 
 ---
 
@@ -374,6 +376,23 @@ The `quality_gate.md` serves as both **proof of audit** and **institutional memo
 from this run feed into future runs, starting the recursive learning loop.
 
 **If any check fails:** Fix the skill's structure, then update quality_gate.md.
+
+### Phase 5c: Skill Improvement Pass (MANDATORY — added 2026-04-22)
+
+After the quality gate passes, apply the skill-creator's eval/iterate standards to refine
+the skill from v0 to v1. This phase is **always required** — every Task Forge skill must
+ship as v1, not v0.
+
+**Steps:**
+1. **Re-read** `.claude/skills/skill-creator/SKILL.md` — "Skill Writing Guide" and "Writing Patterns"
+2. **Self-evaluate** against skill-creator standards (description pushiness, progressive disclosure, parameterization, references/)
+3. **Apply universal improvement patterns** (preserve ephemeral code, specify reproducible methodology, tighten scope, track maturity, externalize domain knowledge)
+4. **Make concrete improvements** to the SKILL.md (sharpen description, save scripts, add references/)
+5. **Document** the improvement in quality_gate.md (before/after, version label v0→v1)
+
+> This is what transforms a raw task-skill into a reusable institutional asset. The quality
+> gate (5b) verifies structure; this phase (5c) improves the skill using the skill-creator's
+> proven eval/iterate methodology.
 
 ### Phase 6: Archive or Promote
 
@@ -754,6 +773,7 @@ that codifies all four discoveries. It is ~100 lines and instructs the agent to:
 | #6-8 | 2026-04-22 | ~15 min | Paper-to-podcast | ✅ Created | ⚠️ Budget exhausted | ✅ 42MB+14KB+11KB | Cross-skill orchestration (ArXiv + NLM); audio download failure discovered; sub-agent delegation anti-pattern identified |
 | #9 | 2026-04-22 | (repair) | Paper-to-podcast | ✅ Fixed | ✅ Created manually | ✅ All recovered | Skill rewritten: direct MCP + CLI fallback; quality gate + promotion completed |
 | #10 | 2026-04-22 | ~20 min | Gemini TTS Narrator | ✅ Created | ⚠️ Quality gate weak | ✅ MP3 delivered | Skill worked (audio generated + emailed) but: (1) X.com URL content not extracted — agent narrated wrong source, (2) SKILL.md stale — didn't reflect actual working approach, (3) quality gate self-certified without all 6 checks. Led to pipeline hardening: task atomization, critical component failure protocol, input source coverage, SKILL.md reconciliation |
+| #11 | 2026-04-22 | (hardening) | Pipeline fixes | N/A | N/A | N/A | 5-component hardening: URL extraction in execution prompt, reconciliation enforcement, quality gate enforcement, scaffold path clarity, heartbeat session guard |
 
 ### Universal Improvement Patterns (Phase 5c)
 
@@ -782,4 +802,9 @@ checklist that applies to ALL forged skills:
 - MCP audio download fallback to CLI is a workaround, not a root fix — the NLM MCP server's `download_artifact` should handle CDN auth scoping internally
 - Sub-agent delegation anti-pattern needs a systematic detector — currently relies on skill authors knowing which MCP tools are directly accessible
 - ~~Quality gate only had 5 checks~~ **RESOLVED (2026-04-22):** Updated to 6 checks including functional accuracy (SKILL.md/implementation alignment + input source coverage)
+- ~~Task description truncation (Systemic Issue 1)~~ **INVESTIGATED (2026-04-22):** No code truncation exists. The `description TEXT` column in SQLite is unlimited. URLs were lost due to LLM attention degradation at prompt boundaries, not code truncation. Fix: URL extraction block surfaces URLs in a prominent `CRITICAL INPUT SOURCES` section.
+- ~~SKILL.md drift after execution~~ **ADDRESSED (2026-04-22):** Reconciliation enforcement added to dispatch prompt with explicit 4-point verification checklist (SDK, model, auth, deps).
+- ~~Quality gate uses custom criteria~~ **ADDRESSED (2026-04-22):** Quality gate instructions now enumerate all 6 checks by number, require specific tool calls, and explicitly invalidate custom checklists.
+- ~~Scaffold permission errors waste tool calls~~ **ADDRESSED (2026-04-22):** CAUTION callout + path resolution guidance added to Task Forge SKILL.md.
+- ~~Heartbeat intrusion during dispatch execution~~ **ADDRESSED (2026-04-22):** `executing_sessions` set tracks sessions with active dispatch tasks; idle loop merges this into busy set; completion callback clears the set.
 
