@@ -407,8 +407,15 @@ def test_reopen_stale_delegations_preserves_existing_metadata() -> None:
         assert metadata.get("dispatch", {}).get("queue_build_id") == "qb-123"
         assert metadata.get("csi", {}).get("routing_state") == "agent_actionable"
 
-        # Status should have been flipped back to open.
+        # Status should have been flipped back to open, and seizure_state must
+        # match the codebase's canonical "unseized" value for open tasks
+        # (not the non-standard "open" string that used to be written here).
         assert refreshed["status"] == task_hub.TASK_STATUS_OPEN
+        raw = conn.execute(
+            "SELECT seizure_state FROM task_hub_items WHERE task_id = ?",
+            ("stale-001",),
+        ).fetchone()
+        assert raw["seizure_state"] == "unseized"
     finally:
         conn.close()
 
