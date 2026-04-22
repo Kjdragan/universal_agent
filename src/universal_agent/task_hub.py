@@ -355,6 +355,10 @@ def _set_setting(conn: sqlite3.Connection, key: str, value: dict[str, Any]) -> N
     conn.commit()
 
 
+<<<<<<< devin/1776862063-fix-task-hub-hydration
+=======
+
+>>>>>>> develop
 def hydrate_item(row: dict[str, Any]) -> dict[str, Any]:
     item = dict(row)
     item["labels"] = [str(v) for v in _json_loads_list(item.get("labels_json")) if str(v)]

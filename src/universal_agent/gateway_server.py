@@ -7346,6 +7346,18 @@ async def _run_gateway_session_request(
             _heartbeat_service.busy_sessions.discard(session_id)
         if _todo_dispatch_service and request_run_kind == "todo_execution":
             _todo_dispatch_service.busy_sessions.discard(session_id)
+        # Prevent heartbeat intrusion: after user-facing or todo-dispatch
+        # runs complete, unregister the session from the heartbeat scheduler.
+        # Without this, the heartbeat will fire in the now-idle session and
+        # pollute its context window with system-health noise, confusing the
+        # user who expects to see only their task output.
+        if _heartbeat_service and request_run_kind in {
+            "todo_execution",
+            "user",
+            "chat_panel",
+            "interactive_chat",
+        }:
+            _heartbeat_service.unregister_session(session_id)
 
 
 async def _dispatch_gateway_request_to_session(
