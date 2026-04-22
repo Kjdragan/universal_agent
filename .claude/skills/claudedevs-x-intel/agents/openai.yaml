@@ -1,0 +1,4 @@
+interface:
+  display_name: "ClaudeDevs X Intel"
+  short_description: "Run ClaudeDevs X sync, report, and email"
+  default_prompt: "Use $claudedevs-x-intel to run the production ClaudeDevs X intelligence sync, write the operator report, and email me the artifact links."

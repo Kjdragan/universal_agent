@@ -53,8 +53,10 @@ Code-verified implementation points:
 - Cron-created Claude Code Intel sessions are now explicitly tagged `session_role=cron`, `run_kind=cron`, and `skip_heartbeat=true`, which prevents autonomous heartbeat wake coupling from reusing the cron packet workspace as a heartbeat work surface.
 - Packet candidate ledgers are now hydrated per post with deterministic task identity, current Task Hub row state, assignment ids/states/result summaries, assignment workspaces, outbound-delivery markers, email evidence ids discovered from assignment workspaces, and per-post wiki page paths.
 - A historical cleanup utility now exists for already polluted Claude Code Intel cron workspaces. It archives only clearly heartbeat-specific artifacts (`heartbeat_state.json`, `work_products/heartbeat_findings_latest.json`, `work_products/system_health_latest.md`) into a timestamped `archive/claude_code_intel_cleanup_*` directory and leaves mixed `transcript.md` / `trace.json` / `run.log` untouched for forensic integrity.
-- The cron entry point is `python -m universal_agent.scripts.claude_code_intel_sync`. See `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/scripts/claude_code_intel_sync.py#L18`.
+- The core sync entry point remains `python -m universal_agent.scripts.claude_code_intel_sync`. See `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/scripts/claude_code_intel_sync.py#L18`.
 - The replay/backfill entry point is `python -m universal_agent.scripts.claude_code_intel_replay_packet`. See `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/scripts/claude_code_intel_replay_packet.py#L1`.
+- The operator/skill entry point is `python -m universal_agent.scripts.claude_code_intel_run_report`. It runs the same lane, writes `operator_report.md` / `operator_report.json` into the packet, and can send an operator email with artifact links.
+- The built-in production Chron job now runs the report entry point so actionable polling runs automatically send the operator email.
 - The OAuth2 bootstrap entry point is `python -m universal_agent.scripts.x_oauth2_bootstrap`. See `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/scripts/x_oauth2_bootstrap.py#L18`.
 - Gateway startup auto-registers `claude_code_intel_sync` when Chron is enabled. See `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/gateway_server.py#L13641` and `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/gateway_server.py#L16592`.
 
@@ -230,6 +232,40 @@ Packet-only manual run:
 ```bash
 PYTHONPATH=src uv run python -m universal_agent.scripts.claude_code_intel_sync --no-task-hub
 ```
+
+Operator report run:
+
+```bash
+PYTHONPATH=src uv run python -m universal_agent.scripts.claude_code_intel_run_report --profile vps --email-to kevinjdragan@gmail.com
+```
+
+Skill invocation shape:
+
+```text
+$claudedevs-x-intel Run the production ClaudeDevs X intelligence sync, write the operator report summary, and email the results to kevinjdragan@gmail.com.
+```
+
+The operator summary artifact lives alongside each packet:
+
+```text
+operator_report.md
+operator_report.json
+```
+
+and includes direct links to:
+- `digest.md`
+- `candidate_ledger.json`
+- `linked_sources.json`
+- `implementation_opportunities.md`
+- the Claude Code external vault index
+
+Automatic email behavior for the built-in production cron:
+
+- no email when `action_count == 0`
+- send the operator email when `action_count > 0`
+- recipient:
+  - `UA_CLAUDE_CODE_INTEL_REPORT_EMAIL_TO` if configured
+  - otherwise `kevinjdragan@gmail.com` when `UA_DEPLOYMENT_PROFILE=vps`
 
 OAuth2 bootstrap:
 

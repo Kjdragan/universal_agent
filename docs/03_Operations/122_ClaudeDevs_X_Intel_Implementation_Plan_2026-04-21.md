@@ -15,7 +15,7 @@ Goal: move the `claude_code_intel` lane from "working X packet producer with ad 
 
 This is a planning document only. It does not propose immediate runtime edits outside the scoped future phases below.
 
-> Status update (2026-04-22): the core implementation slices through replay/backfill, first-pass external vault population, linked-source expansion, packet candidate ledger hydration, attachment-email delivery proof mapping, cron/heartbeat future isolation, historical workspace cleanup utility, and LLM-assisted classification are now implemented. The remaining work in this plan is refinement-oriented.
+> Status update (2026-04-22): the core implementation slices through replay/backfill, first-pass external vault population, linked-source expansion, packet candidate ledger hydration, attachment-email delivery proof mapping, cron/heartbeat future isolation, historical workspace cleanup utility, LLM-assisted classification, and the new operator skill/report surface are now implemented. The remaining work in this plan is refinement-oriented.
 
 ## Current Baseline
 

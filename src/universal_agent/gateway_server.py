@@ -16677,7 +16677,7 @@ def _ensure_claude_code_intel_cron_job() -> None:
     if not _cron_service or not _claude_code_intel_cron_enabled():
         return
     job_id = "claude_code_intel_sync"
-    command = "!script universal_agent.scripts.claude_code_intel_sync"
+    command = "!script universal_agent.scripts.claude_code_intel_run_report"
     cron_expr = os.getenv("UA_CLAUDE_CODE_INTEL_CRON_EXPR", "0 8,16 * * *").strip() or "0 8,16 * * *"
     timezone_name = os.getenv("UA_CLAUDE_CODE_INTEL_CRON_TIMEZONE", "America/Chicago").strip() or "America/Chicago"
     workspace_dir = str(WORKSPACES_DIR / "cron_claude_code_intel_sync")
@@ -16692,7 +16692,7 @@ def _ensure_claude_code_intel_cron_job() -> None:
         "user_id": "system",
         "workspace_dir": workspace_dir,
         "command": command,
-        "description": "Poll @ClaudeDevs through the X API and queue Claude Code intelligence follow-up work.",
+        "description": "Poll @ClaudeDevs through the X API, queue Claude Code intelligence follow-up work, and email the operator report when the poll yields actionable output.",
         "cron_expr": cron_expr,
         "timezone": timezone_name,
         "timeout_seconds": int(os.getenv("UA_CLAUDE_CODE_INTEL_CRON_TIMEOUT_SECONDS", "900") or 900),
