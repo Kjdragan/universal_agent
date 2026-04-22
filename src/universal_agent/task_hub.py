@@ -3212,7 +3212,7 @@ def find_delegated_task_by_mission_id(
             (TASK_STATUS_DELEGATED, mission_id),
         ).fetchone()
         if row:
-            return _row_to_dict(row)
+            return hydrate_item(dict(row))
     except Exception:
         pass
 
@@ -3229,7 +3229,7 @@ def find_delegated_task_by_mission_id(
             (TASK_STATUS_DELEGATED, f"%{mission_id}%"),
         ).fetchone()
         if row:
-            return _row_to_dict(row)
+            return hydrate_item(dict(row))
     except Exception:
         pass
 
@@ -3243,7 +3243,7 @@ def get_pending_review_tasks(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         "SELECT * FROM task_hub_items WHERE status IN (?, ?) ORDER BY updated_at DESC",
         (TASK_STATUS_PENDING_REVIEW, TASK_STATUS_REVIEW),
     ).fetchall()
-    return [_row_to_dict(r) for r in rows]
+    return [hydrate_item(dict(r)) for r in rows]
 
 
 def reopen_stale_delegations(
@@ -3269,7 +3269,7 @@ def reopen_stale_delegations(
 
     reopened = []
     for row in rows:
-        task = _row_to_dict(row)
+        task = hydrate_item(dict(row))
         task_id = str(task["task_id"])
         metadata = dict(task.get("metadata") or {})
         delegation = dict(metadata.get("delegation") or {})
@@ -3279,7 +3279,7 @@ def reopen_stale_delegations(
 
         conn.execute(
             "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
-            (TASK_STATUS_OPEN, "open", _json_dumps(metadata), _now_iso(), task_id),
+            (TASK_STATUS_OPEN, "unseized", _json_dumps(metadata), _now_iso(), task_id),
         )
         logger.warning(
             "📋⏰ Stale delegation reopened: task=%s delegated at %s (>%.1fh)",

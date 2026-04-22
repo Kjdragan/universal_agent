@@ -6,6 +6,7 @@ import argparse
 import json
 import logging
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
@@ -73,13 +74,16 @@ def main() -> int:
 
     with connect_runtime_db(get_activity_db_path()) as conn:
         conn.row_factory = sqlite3.Row
-        result = run_sync(config=cfg, conn=conn)
+        result_cfg = cfg
+        if not args.no_post_process and cfg.queue_task_hub:
+            result_cfg = replace(cfg, queue_task_hub=False)
+        result = run_sync(config=result_cfg, conn=conn)
         post_process = {}
         if result.ok and not args.no_post_process:
             post_process = replay_packet(
                 config=ClaudeCodeIntelReplayConfig(
                     packet_dir=Path(result.packet_dir),
-                    queue_task_hub=False,
+                    queue_task_hub=cfg.queue_task_hub,
                     write_vault=True,
                 ),
                 conn=conn,
@@ -94,7 +98,7 @@ def main() -> int:
         "new_post_count": result.new_post_count,
         "seen_post_count": result.seen_post_count,
         "action_count": result.action_count,
-        "queued_task_count": result.queued_task_count,
+        "queued_task_count": int(post_process.get("queued_task_count") or result.queued_task_count),
         "artifact_id": result.artifact_id,
         "error": result.error,
         "post_process": post_process,

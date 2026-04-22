@@ -33,6 +33,11 @@ mcp__agentmail__send_message({
 })
 ```
 
+**inboxId format:** Always use the full email format: `oddcity216@agentmail.to`.
+The tools will also accept `oddcity216` or `inbox_oddcity216` and auto-normalize,
+but the canonical format is `<name>@agentmail.to`. Never use bare `inbox_` prefix format
+as the primary format — it's a legacy fallback only.
+
 Notes:
 - Prefer providing both `text` and `html` for readable email.
 - Use Simone's AgentMail inbox for Simone-authored delivery.
