@@ -5,10 +5,12 @@
 | **Agent Core** | The primary logic block (`UniversalAgent`) that handles LLM interactions and tool orchestration. |
 | **Artifact** | A persistent file produced by the agent (e.g., a PDF, image, or research report) stored in `UA_ARTIFACTS_DIR` or referenced from a durable run workspace. |
 | **ATLAS** | The VP General Agent identity (`vp.general.primary`). Handles deep research, analysis, content generation, and reporting tasks. Works as overflow capacity when Simone delegates broad-scope work. See also: CODIE, VP Worker. |
+| **Claude Code Intel** | The X/Twitter intelligence lane that monitors `@ClaudeDevs` for Claude Code ecosystem signals. Covers polling via X API, Infisical key management, packet outputs, local KB index, Task Hub tiering, and cron registration. Canonical doc: `03_Operations/118_X_API_And_Claude_Code_Intel_Source_Of_Truth_2026-04-19.md`. |
 | **Attempt** | One execution try of a run. Retries create additional attempts under the same run. |
 | **Brain Transplant** | The process of injecting global memory files into a new session's workspace at startup. |
 | **Checkpoint** | A serialized snapshot of the agent's state (history, variables, plan) saved to the durable database. |
 | **CODIE** | The VP Coder Agent identity (`vp.coder.primary`). Handles code implementation, refactoring, documentation maintenance, and standalone project builds. See also: ATLAS, VP Worker. |
+| **Task Forge** | The meta-skill that converts human intent into structured, reusable task-skills through a 7-phase pipeline (intent → scaffold → execute → quality gate → archive/promote). Includes a skill maturity model (v0→v3), dispatch integration, hook hardening, and a cooperative relationship with the `skill-creator` skill. Canonical doc: `03_Operations/119_Task_Forge_Autonomous_Skill_Generation_Pipeline_2026-04-19.md`. See also: Skill. |
 | **CSI (Creator Signal Intelligence)** | The ingestion subsystem that monitors, fetches, and processes creator signals from external sources (YouTube RSS, Reddit, X/Twitter trends) for trend analysis and opportunity detection. |
 | **Durable Execution** | The system's ability to survive restarts and crashes by persisting state and resuming from checkpoints. |
 | **Execution Session** | The temporary live provider/runtime process attached to an active attempt. This is the correct place to use the word `session` for runtime execution. |

@@ -1,6 +1,6 @@
 # Agent Skills Directory (`.agents/skills/`)
 
-Last updated: 2026-04-09
+Last updated: 2026-04-22
 
 ## Purpose
 
@@ -54,16 +54,20 @@ The `.agents/skills/` directory contains reusable agent skills that are separate
     │   ├── SKILL.md          # Native YouTube audio/video download via PoT bypass
     │   └── scripts/
     │       └── fetch_youtube_media.py
+    ├── paper-to-podcast-tf/
+    │   └── SKILL.md          # Turn academic papers into podcast, quiz, flashcards via ArXiv + NLM
+    ├── task-forge/
+    │   └── SKILL.md          # Meta-skill: convert intent into structured, reusable task-skills
     └── vp-orchestration/
         ├── SKILL.md          # External VP agent mission control
         └── references/
             └── tool_reference.md
-    └── ... (50+ additional skills)
+    └── ... (40+ additional skills)
 ```
 
 ## Available Skills
 
-The directory contains 50+ skills spanning categories:
+The directory contains 65 skills spanning categories:
 
 | Category | Example Skills |
 |----------|---------------|
@@ -86,6 +90,8 @@ The directory contains 50+ skills spanning categories:
 | `skill-judge` | Evaluate agent skill quality against official specifications and best practices |
 | `systematic-debugging` | Systematic debugging methodology - always find root cause before proposing fixes |
 | `vp-orchestration` | Operate external primary VP agents through tool-first mission control |
+| `task-forge` | Meta-skill that converts human intent into structured, reusable task-skills — 7-phase pipeline from intent to promoted skill |
+| `paper-to-podcast-tf` | Turn academic research papers into a multi-format learning package (podcast, quiz, flashcards) via ArXiv + NotebookLM |
 | `image-generation` | AI-powered image generation and editing using Gemini |
 | `residential-proxy` | One-off rotating residential proxy via Webshare — bypass datacenter IP blocks on target sites |
 | `captcha-solver` | Automated CAPTCHA bypass using NopeCHA browser extension — supports Cloudflare Turnstile, reCAPTCHA, hCaptcha |
