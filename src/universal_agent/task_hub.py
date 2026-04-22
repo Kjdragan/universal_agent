@@ -355,29 +355,6 @@ def _set_setting(conn: sqlite3.Connection, key: str, value: dict[str, Any]) -> N
     conn.commit()
 
 
-
-
-
-
-
-def _row_to_dict(row: sqlite3.Row | tuple, cursor: sqlite3.Cursor | None = None) -> dict[str, Any]:
-    """Convert a sqlite3.Row *or* plain tuple to a dict.
-
-    When *row_factory* is not set, SQLite returns plain tuples; ``dict(tuple)``
-    crashes because Python tries to interpret each element as a key-value pair.
-    This helper detects the situation and builds the mapping from
-    ``cursor.description`` when necessary.
-    """
-    # sqlite3.Row supports dict() directly
-    if isinstance(row, sqlite3.Row):
-        return dict(row)
-    # Fallback: build mapping from cursor.description column names
-    if cursor is not None and cursor.description is not None:
-        col_names = [desc[0] for desc in cursor.description]
-        return dict(zip(col_names, row))
-    # Last resort (should not happen in practice)
-    return dict(row)  # type: ignore[arg-type]
-
 def hydrate_item(row: dict[str, Any]) -> dict[str, Any]:
     item = dict(row)
     item["labels"] = [str(v) for v in _json_loads_list(item.get("labels_json")) if str(v)]
@@ -3212,7 +3189,7 @@ def find_delegated_task_by_mission_id(
             (TASK_STATUS_DELEGATED, mission_id),
         ).fetchone()
         if row:
-            return _row_to_dict(row)
+            return hydrate_item(dict(row))
     except Exception:
         pass
 
@@ -3229,7 +3206,7 @@ def find_delegated_task_by_mission_id(
             (TASK_STATUS_DELEGATED, f"%{mission_id}%"),
         ).fetchone()
         if row:
-            return _row_to_dict(row)
+            return hydrate_item(dict(row))
     except Exception:
         pass
 
@@ -3243,7 +3220,7 @@ def get_pending_review_tasks(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         "SELECT * FROM task_hub_items WHERE status IN (?, ?) ORDER BY updated_at DESC",
         (TASK_STATUS_PENDING_REVIEW, TASK_STATUS_REVIEW),
     ).fetchall()
-    return [_row_to_dict(r) for r in rows]
+    return [hydrate_item(dict(r)) for r in rows]
 
 
 def reopen_stale_delegations(
@@ -3269,7 +3246,7 @@ def reopen_stale_delegations(
 
     reopened = []
     for row in rows:
-        task = _row_to_dict(row)
+        task = hydrate_item(dict(row))
         task_id = str(task["task_id"])
         metadata = dict(task.get("metadata") or {})
         delegation = dict(metadata.get("delegation") or {})
