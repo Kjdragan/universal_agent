@@ -34,6 +34,76 @@ the same result PLUS a reusable artifact that:
 
 ---
 
+## 1.5. Design Philosophy: Why Task Forge Matters
+
+Task Forge represents a **paradigm shift** in how we approach agent-driven work. Understanding
+this philosophy is essential for maintaining the system's integrity as it evolves.
+
+### The Core Insight: Agents Should Discover Their Own Process
+
+Traditional automation presupposes a process: humans define step-by-step instructions, and agents
+follow them. Task Forge inverts this. The human defines the *outcome* and *constraints*, and the
+agent discovers the *process* by leveraging its own capabilities — access to tools, APIs, code
+execution, and contextual reasoning.
+
+This is not laziness or abdication. It's a recognition that:
+
+1. **Agents see things humans don't.** The agent can inspect the codebase, probe APIs, check
+   environment variables, and test tool availability in real-time. A human writing a step-by-step
+   plan is guessing at these things from memory.
+
+2. **Process discovery IS the valuable output.** When the agent discovers that `google-genai` SDK
+   works better than `google-cloud-texttospeech` for a particular TTS task, that discovery is
+   institutional knowledge worth capturing — not just an implementation detail.
+
+3. **Presupposed processes are fragile.** An agent following rigid steps will break when an API
+   changes, a dependency is missing, or a better approach exists. An agent given intent + constraints
+   will adapt and find a working path.
+
+### What Task Forge Is NOT
+
+- **Not just another skill.** It's a meta-system — a skill that produces skills. Its quality
+  directly determines the quality of every skill it generates.
+- **Not unstructured.** "Let the agent figure it out" does NOT mean "give the agent no guidance."
+  Task Atomization (Phase 1) ensures the agent has full situational awareness of all requirements.
+  The SKILL.md structure provides guardrails without presupposing the solution path.
+- **Not a shortcut.** Task Forge runs take 15-30 minutes, not 2 minutes. The investment is in
+  producing a *reusable artifact*, not just a one-time result.
+
+### The Velocity Argument
+
+Task Forge's velocity comes from compounding:
+
+| Time Horizon | Without Task Forge | With Task Forge |
+|---|---|---|
+| First run | ~10 min (ad hoc script) | ~25 min (skill + result) |
+| Second run (same task) | ~10 min (rewrite from scratch) | ~5 min (reuse skill) |
+| Third run (variant) | ~15 min (modify script) | ~5 min (compose skills) |
+| Tenth run | ~10 min × 10 = 100 min total | ~25 + 9×5 = 70 min total |
+| Knowledge capture | 0 artifacts | 10 skills, anti-patterns, references |
+
+The break-even point is the **second use**. After that, every reuse is pure velocity gain.
+But even one-off tasks benefit: the agent's discoveries (which SDK works, what credentials
+are needed, what anti-patterns to avoid) are captured in the skill for the next person
+who encounters a similar task.
+
+### Preserving the Philosophy During Evolution
+
+As we improve Task Forge, these principles must remain inviolate:
+
+1. **The agent discovers, not follows.** Don't add rigid step-by-step scripts to SKILL.md.
+   Add constraints, success criteria, and context pointers. Let the agent triangulate.
+2. **Atomize requirements, not solutions.** Task Atomization lists what the skill must cover
+   (input types, output targets), not how to cover them.
+3. **Failures are feedback, not bugs.** When a run fails, the right response is to encode
+   the anti-pattern in the skill, not to add more rigid process steps.
+4. **Quality gates measure, not constrain.** Phase 5b checks structural quality, not
+   implementation correctness. The agent can use any approach that passes the gate.
+5. **Maturity is earned, not engineered.** Don't pre-optimize v0 skills. Let them earn
+   complexity through observed use (v0 → v1 → v2 → v3).
+
+---
+
 ## 2. Architecture
 
 ### Component Map
@@ -138,6 +208,28 @@ Extract four things:
 3. **Hard Constraints** — What must NOT happen
 4. **Context Pointers** — Relevant files, systems, dependencies
 
+#### Task Atomization (added 2026-04-22)
+
+After capturing intent, decompose the task into its **atomic requirements** — the discrete
+capabilities the skill must have, regardless of how they're implemented:
+
+- **Input sources** — What formats/channels? (URLs, text, files, API responses)
+- **Processing steps** — What transformations? (extraction, conversion, generation)
+- **Output targets** — What does it produce? (files, emails, API calls)
+- **Delivery mechanisms** — How does the result reach the user?
+
+This is NOT a plan or presupposed solution path — it's an inventory of what the solution
+must cover. It ensures the agent has full situational awareness before building.
+
+> **Example:** "Narrate any text source as audio and email it"
+> - Inputs: URLs (→ fetch + extract), .txt files (→ read), .md files (→ read), raw text (→ accept)
+> - Processing: text cleaning, TTS audio generation, audio assembly
+> - Output: audio file (MP3/WAV)
+> - Delivery: email with attachment
+
+Without atomization, agents commonly miss input types, skip content extraction, or forget
+delivery steps — because they start building before understanding the full picture.
+
 Ask at most 2-3 clarifying questions. Anti-pattern: over-interviewing.
 
 ### Phase 2: Quick Context Scan (10 min max)
@@ -147,7 +239,20 @@ Fast reconnaissance, not deep research:
 - Check existing skills for composability
 - Scan relevant docs for domain knowledge
 
-Anti-pattern: research rabbit holes.
+#### Domain Knowledge Gap Research (added 2026-04-22)
+
+When the task references technologies, APIs, or frameworks the agent may not have current
+knowledge of (especially post-training releases), the agent MUST fetch and study reference
+docs BEFORE scaffolding. Key rules:
+
+- **Reference URLs in the task description are learning materials**, not input sources.
+  A URL like `https://docs.cloud.google.com/text-to-speech/docs/gemini-tts` is telling
+  the agent WHERE to learn, not WHAT to process.
+- Research should extract: SDK name, import paths, model identifiers, auth method, code examples
+- Findings go to `references/<technology>.md` during Phase 3 scaffolding
+- This research is SEPARATE from the 10-minute codebase scan cap
+
+Anti-pattern: confusing technology research (essential) with codebase rabbit holes (wasteful).
 
 ### Phase 3: Scaffold the Task-Skill (MANDATORY)
 
@@ -206,42 +311,69 @@ description: <one-line description>
 | Research/analysis task | Dispatch to Atlas VP or handle directly |
 | User wants to run it themselves | Report skill location |
 
+#### Critical Component Failure Protocol (added 2026-04-22)
+
+If a technology explicitly named in the task description fails, the agent MUST HALT — not
+silently substitute a fundamentally different technology. Triangulating within the same
+technology (e.g., trying different SDKs for the same Google TTS service) is fine. Switching
+to a completely different technology stack is a contract violation.
+
+#### Input Source Coverage (added 2026-04-22)
+
+When the task specifies multiple input types (URLs, text, files), the skill MUST handle ALL
+of them. URLs require a fetch + extract step. A skill that claims to handle URLs but doesn't
+fetch their content is structurally incomplete.
+
+#### Post-Execution SKILL.md Reconciliation (added 2026-04-22)
+
+After execution, the agent MUST update the SKILL.md to reflect what was actually discovered:
+- Correct SDK imports, model names, credential configs
+- Add discovered dependencies to Context/Constraints
+- Create `references/` docs for discovered API patterns
+- Add anti-patterns for approaches that failed
+
+This ensures the SKILL.md is a faithful description of the working implementation, not a
+stale scaffold from before execution.
+
 ### Phase 5: Evaluate Result
 
 Check result against success criteria from the SKILL.md:
 - **All criteria met** → Proceed to Phase 5b
 - **Some failed** → Add anti-pattern to SKILL.md → Re-execute (max 3x)
 
-### Phase 5b: Skill Quality Gate (Updated 2026-04-20)
+### Phase 5b: Skill Quality Gate (strengthened 2026-04-22)
 
 After the result passes, audit **the skill itself** using the skill-creator's writing guide
 (`.claude/skills/skill-creator/SKILL.md`, "Skill Writing Guide" section).
 
 > **Quality gate must produce a traceable artifact.** The agent cannot just claim "passed quality
-> gate" — it must write the audit results to `task-skills/<task-name>/quality_gate.md`.
+> gate" — it must write the audit results to `task-skills/<task-name>-tf/quality_gate.md`.
+> **Self-certification without evidence is an automatic quality gate failure.**
 
-**Three required steps:**
+**Four required steps:**
 
-1. **Read** `.claude/skills/skill-creator/SKILL.md` (mandatory tool call)
-2. **Evaluate** 5 structural checks:
+1. **Read** `.claude/skills/skill-creator/SKILL.md` (mandatory `Read` tool call, cite version/date)
+2. **Evaluate** ALL 6 structural checks with a 1-line justification per check:
 
-| Check | What to look for | Fail if... |
-|-------|-----------------|------------|
-| **Structure** | Frontmatter, Goal, Success Criteria, Context | Missing core sections |
-| **Not a script wrapper** | SKILL.md describes what/why | Just says "run this script" |
-| **Composable** | References existing skills | Reinvents existing capabilities |
-| **Generalizable** | Another agent could follow it | Hardcoded paths/session-specific |
-| **Progressive disclosure** | Lean SKILL.md (<100 lines) | Everything in one file |
+| # | Check | What to look for | Fail if... |
+|---|-------|-----------------|------------|
+| 1 | **Structure** | Frontmatter, Goal, Success Criteria, Context | Missing core sections |
+| 2 | **Not a script wrapper** | SKILL.md describes what/why | Just says "run this script" |
+| 3 | **Composable** | References existing skills | Reinvents existing capabilities |
+| 4 | **Generalizable** | Another agent could follow it | Hardcoded paths/session-specific |
+| 5 | **Progressive disclosure** | Lean SKILL.md (<100 lines) | Everything in one file |
+| 6 | **Functional accuracy** | SKILL.md matches actual implementation; all input types covered | Stale scaffold; claims to handle URLs without fetch logic |
 
-3. **Write** results to `task-skills/<task-name>/quality_gate.md` including:
-   - Checklist with pass/fail per check and 1-line justification
+3. **Verify alignment** — SKILL.md/implementation alignment + input source coverage
+4. **Write** results to `task-skills/<task-name>-tf/quality_gate.md` including:
+   - Numbered checklist with pass/fail and justification per check
    - Improvements made (if any checks failed)
-   - Observations for future runs (anti-patterns, v1 suggestions)
+   - Meta-Improvements section with pipeline-level observations
 
 The `quality_gate.md` serves as both **proof of audit** and **institutional memory** — observations
 from this run feed into future runs, starting the recursive learning loop.
 
-**If any check fails:** One improvement pass to fix structure, then update quality_gate.md.
+**If any check fails:** Fix the skill's structure, then update quality_gate.md.
 
 ### Phase 6: Archive or Promote
 
@@ -600,6 +732,11 @@ that codifies all four discoveries. It is ~100 lines and instructs the agent to:
 | Pre-engineering scripts for v0 | Guessing what the agent needs | Let agent discover, extract in v1+ |
 | >3 retries without human input | Problem is task definition, not execution | Escalate to user |
 | Script-with-.md-wrapper | Looks like a skill but isn't composable | SKILL.md must describe what/why, not just "run X" |
+| Silent tech substitution | Violates task contract; user asked for X, got Y | HALT and report critical component failure |
+| Stale SKILL.md after execution | Future agent can't reproduce result | Mandatory post-execution reconciliation |
+| Missing input type coverage | Claims "any source" but only handles text blocks | Verify all input types from task description |
+| Self-certified quality gate | No proof the audit happened | Must produce quality_gate.md with all 6 checks |
+| Skipping task atomization | Misses required capabilities (e.g., URL extraction) | Decompose into inputs/processing/outputs/delivery first |
 
 ---
 
@@ -616,6 +753,7 @@ that codifies all four discoveries. It is ~100 lines and instructs the agent to:
 | #5 | 2026-04-20 | 5.4 min | Skill audit | ✅ Created | ✅ Artifact + 5c | ✅ 15KB | First Phase 5c success: description 5→9 triggers, added Approach section, quality thresholds, v0→v1 documented |
 | #6-8 | 2026-04-22 | ~15 min | Paper-to-podcast | ✅ Created | ⚠️ Budget exhausted | ✅ 42MB+14KB+11KB | Cross-skill orchestration (ArXiv + NLM); audio download failure discovered; sub-agent delegation anti-pattern identified |
 | #9 | 2026-04-22 | (repair) | Paper-to-podcast | ✅ Fixed | ✅ Created manually | ✅ All recovered | Skill rewritten: direct MCP + CLI fallback; quality gate + promotion completed |
+| #10 | 2026-04-22 | ~20 min | Gemini TTS Narrator | ✅ Created | ⚠️ Quality gate weak | ✅ MP3 delivered | Skill worked (audio generated + emailed) but: (1) X.com URL content not extracted — agent narrated wrong source, (2) SKILL.md stale — didn't reflect actual working approach, (3) quality gate self-certified without all 6 checks. Led to pipeline hardening: task atomization, critical component failure protocol, input source coverage, SKILL.md reconciliation |
 
 ### Universal Improvement Patterns (Phase 5c)
 
@@ -643,4 +781,5 @@ checklist that applies to ALL forged skills:
 - No automated regression test for Phase 5c checklist completeness
 - MCP audio download fallback to CLI is a workaround, not a root fix — the NLM MCP server's `download_artifact` should handle CDN auth scoping internally
 - Sub-agent delegation anti-pattern needs a systematic detector — currently relies on skill authors knowing which MCP tools are directly accessible
+- ~~Quality gate only had 5 checks~~ **RESOLVED (2026-04-22):** Updated to 6 checks including functional accuracy (SKILL.md/implementation alignment + input source coverage)
 

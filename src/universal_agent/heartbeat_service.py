@@ -1673,6 +1673,13 @@ class HeartbeatService:
         runtime = session.metadata.get("runtime", {})
         if not isinstance(runtime, dict):
             runtime = {}
+        # Block heartbeat if ANY run (foreground, background, or another
+        # heartbeat) is already active on this session.  This is the primary
+        # guard against heartbeat intrusion: even if the run source is
+        # "heartbeat", a second heartbeat must not layer on top.
+        active_runs = int(_coerce_int(runtime.get("active_runs"), 0) or 0)
+        if active_runs > 0:
+            return "run_active"
         active_foreground_runs = int(_coerce_int(runtime.get("active_foreground_runs"), 0) or 0)
         if active_foreground_runs > 0:
             return "foreground_run_active"

@@ -355,6 +355,29 @@ def _set_setting(conn: sqlite3.Connection, key: str, value: dict[str, Any]) -> N
     conn.commit()
 
 
+
+
+
+
+
+def _row_to_dict(row: sqlite3.Row | tuple, cursor: sqlite3.Cursor | None = None) -> dict[str, Any]:
+    """Convert a sqlite3.Row *or* plain tuple to a dict.
+
+    When *row_factory* is not set, SQLite returns plain tuples; ``dict(tuple)``
+    crashes because Python tries to interpret each element as a key-value pair.
+    This helper detects the situation and builds the mapping from
+    ``cursor.description`` when necessary.
+    """
+    # sqlite3.Row supports dict() directly
+    if isinstance(row, sqlite3.Row):
+        return dict(row)
+    # Fallback: build mapping from cursor.description column names
+    if cursor is not None and cursor.description is not None:
+        col_names = [desc[0] for desc in cursor.description]
+        return dict(zip(col_names, row))
+    # Last resort (should not happen in practice)
+    return dict(row)  # type: ignore[arg-type]
+
 def hydrate_item(row: dict[str, Any]) -> dict[str, Any]:
     item = dict(row)
     item["labels"] = [str(v) for v in _json_loads_list(item.get("labels_json")) if str(v)]
