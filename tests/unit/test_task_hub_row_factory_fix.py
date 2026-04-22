@@ -402,6 +402,10 @@ def test_reopen_stale_delegations_preserves_metadata() -> None:
         refreshed = task_hub.get_item(conn, "vp-stale-001")
         assert refreshed is not None
         assert refreshed["status"] == task_hub.TASK_STATUS_OPEN
+        # Reopened tasks must use the standard "unseized" seizure_state
+        # (not the legacy "open" value) so downstream consumers treat them
+        # consistently with other open tasks.
+        assert refreshed["seizure_state"] == "unseized"
         meta = refreshed["metadata"]
         assert meta["delegation"]["mission_id"] == "vp-mission-stale"
         assert meta["delegation"]["vp_id"] == "vp.general.primary"
