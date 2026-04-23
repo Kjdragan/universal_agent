@@ -16751,6 +16751,189 @@ def _register_tutorial_bootstrap_proactive_artifact(job: dict[str, Any]) -> None
         logger.debug("Failed registering tutorial bootstrap proactive artifact: %s", exc)
 
 
+def _claude_code_intel_packet_root() -> Path:
+    return ARTIFACTS_DIR / "proactive" / "claude_code_intel" / "packets"
+
+
+def _claude_code_intel_vault_root() -> Path:
+    return ARTIFACTS_DIR / "knowledge-vaults" / "claude-code-intelligence"
+
+
+def _safe_read_json_file(path: Path, default: Any) -> Any:
+    try:
+        if not path.exists() or not path.is_file():
+            return default
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default
+    return parsed if isinstance(parsed, type(default)) else default
+
+
+def _artifact_link_payload(path: Path) -> dict[str, str]:
+    rel = _artifact_rel_path(path)
+    return {
+        "path": str(path),
+        "rel_path": rel,
+        "api_url": _artifact_api_file_url(rel) if rel else "",
+        "storage_href": _storage_explorer_href(scope="artifacts", path=rel, preview=rel) if rel else "",
+    }
+
+
+def _claude_code_intel_packet_payload(packet_dir: Path) -> dict[str, Any]:
+    manifest = _safe_read_json_file(packet_dir / "manifest.json", {})
+    operator_report = _safe_read_json_file(packet_dir / "operator_report.json", {})
+    replay_summary = _safe_read_json_file(packet_dir / "replay_summary.json", {})
+    generated_at = str(operator_report.get("generated_at") or manifest.get("generated_at") or "")
+    packet_rel = _artifact_rel_path(packet_dir)
+    report_path = packet_dir / "operator_report.md"
+    digest_path = packet_dir / "digest.md"
+    candidate_ledger_path = packet_dir / "candidate_ledger.json"
+    linked_sources_path = packet_dir / "linked_sources.json"
+    opportunities_path = packet_dir / "implementation_opportunities.md"
+    lane_ledger_path = Path(str(replay_summary.get("lane_ledger_path") or ""))
+    packet_name = packet_dir.name
+    date_slug = packet_dir.parent.name
+    return {
+        "packet_name": packet_name,
+        "date_slug": date_slug,
+        "generated_at": generated_at,
+        "handle": str(operator_report.get("handle") or manifest.get("handle") or "ClaudeDevs"),
+        "status": "ok" if bool(operator_report.get("ok", manifest.get("ok", True))) else "error",
+        "new_post_count": int(operator_report.get("new_post_count") or manifest.get("new_post_count") or 0),
+        "action_count": int(operator_report.get("action_count") or manifest.get("action_count") or 0),
+        "queued_task_count": int(operator_report.get("queued_task_count") or replay_summary.get("queued_task_count") or 0),
+        "linked_source_count": int(operator_report.get("linked_source_count") or replay_summary.get("linked_source_count") or 0),
+        "linked_source_fetched_count": int(
+            operator_report.get("linked_source_fetched_count") or replay_summary.get("linked_source_fetched_count") or 0
+        ),
+        "tier_counts": dict(operator_report.get("tier_counts") or {}),
+        "action_type_counts": dict(operator_report.get("action_type_counts") or {}),
+        "top_rows": list(operator_report.get("top_rows") or [])[:6],
+        "packet_dir": str(packet_dir),
+        "packet_rel_path": packet_rel,
+        "packet_storage_href": _storage_explorer_href(scope="artifacts", path=packet_rel) if packet_rel else "",
+        "report_markdown": _artifact_link_payload(report_path),
+        "digest": _artifact_link_payload(digest_path),
+        "candidate_ledger": _artifact_link_payload(candidate_ledger_path),
+        "linked_sources": _artifact_link_payload(linked_sources_path),
+        "implementation_opportunities": _artifact_link_payload(opportunities_path),
+        "lane_ledger": _artifact_link_payload(lane_ledger_path) if lane_ledger_path.exists() else {"path": "", "rel_path": "", "api_url": "", "storage_href": ""},
+    }
+
+
+def _claude_code_intel_packets(limit: int = 40) -> list[dict[str, Any]]:
+    root = _claude_code_intel_packet_root()
+    if not root.exists():
+        return []
+    packet_dirs = [
+        candidate
+        for date_dir in root.iterdir()
+        if date_dir.is_dir()
+        for candidate in date_dir.iterdir()
+        if candidate.is_dir()
+    ]
+    packet_dirs.sort(key=lambda path: (path.parent.name, path.name), reverse=True)
+    packets = [_claude_code_intel_packet_payload(packet_dir) for packet_dir in packet_dirs[: max(1, min(limit, 200))]]
+    packets.sort(key=lambda item: (str(item.get("generated_at") or ""), str(item.get("packet_name") or "")), reverse=True)
+    return packets
+
+
+def _claude_code_intel_knowledge_pages(limit: int = 200) -> list[dict[str, Any]]:
+    vault_root = _claude_code_intel_vault_root()
+    if not vault_root.exists():
+        return []
+    from universal_agent.wiki.core import _frontmatter_and_body, _scan_page_records
+
+    records = []
+    for record in _scan_page_records(vault_root):
+        if str(record.get("category") or "") != "sources":
+            continue
+        rel_path = str(record.get("path") or "").strip()
+        if not rel_path:
+            continue
+        page_path = vault_root / rel_path
+        meta, _ = _frontmatter_and_body(page_path)
+        link_payload = _artifact_link_payload(page_path)
+        records.append(
+            {
+                "path": rel_path,
+                "title": str(record.get("title") or page_path.stem),
+                "summary": str(record.get("summary") or ""),
+                "tags": [str(tag) for tag in (meta.get("tags") or []) if str(tag).strip()],
+                "updated_at": str(meta.get("updated_at") or ""),
+                "api_url": link_payload["api_url"],
+                "storage_href": link_payload["storage_href"],
+            }
+        )
+    records.sort(key=lambda item: (str(item.get("updated_at") or ""), str(item.get("title") or "")), reverse=True)
+    return records[: max(1, min(limit, 500))]
+
+
+def _claude_code_intel_rolling_payload() -> dict[str, Any]:
+    root = ARTIFACTS_DIR / "proactive" / "claude_code_intel" / "rolling" / "current"
+    json_path = root / "rolling_14_day_report.json"
+    markdown_path = root / "rolling_14_day_report.md"
+    payload = _safe_read_json_file(json_path, {})
+    if not payload:
+        return {
+            "title": "",
+            "window_days": 14,
+            "generated_at": "",
+            "bundle_count": 0,
+            "narrative_markdown": "",
+            "report": {"path": "", "rel_path": "", "api_url": "", "storage_href": ""},
+            "bundles": [],
+            "repo_outputs": {},
+        }
+    out = dict(payload)
+    out["report"] = _artifact_link_payload(markdown_path) if markdown_path.exists() else {"path": "", "rel_path": "", "api_url": "", "storage_href": ""}
+    bundles = []
+    for bundle in list(payload.get("bundles") or []):
+        if not isinstance(bundle, dict):
+            continue
+        bundle_id = str(bundle.get("bundle_id") or "").strip()
+        bundle_dir = root / "bundles" / bundle_id if bundle_id else None
+        bundle_markdown = bundle_dir / "bundle.md" if bundle_dir else None
+        bundle_json = bundle_dir / "bundle.json" if bundle_dir else None
+        bundle_copy = dict(bundle)
+        bundle_copy["artifact_markdown"] = _artifact_link_payload(bundle_markdown) if bundle_markdown and bundle_markdown.exists() else {"path": "", "rel_path": "", "api_url": "", "storage_href": ""}
+        bundle_copy["artifact_json"] = _artifact_link_payload(bundle_json) if bundle_json and bundle_json.exists() else {"path": "", "rel_path": "", "api_url": "", "storage_href": ""}
+        bundles.append(bundle_copy)
+    out["bundles"] = bundles
+    return out
+
+
+@app.get("/api/v1/dashboard/claude-code-intel")
+async def dashboard_claude_code_intel(
+    request: Request,
+    limit: int = 40,
+):
+    _require_ops_auth(request)
+    packets = _claude_code_intel_packets(limit=limit)
+    state = _safe_read_json_file(ARTIFACTS_DIR / "proactive" / "claude_code_intel" / "state.json", {})
+    vault_root = _claude_code_intel_vault_root()
+    vault_index = vault_root / "index.md"
+    vault_overview = vault_root / "overview.md"
+    return {
+        "status": "ok",
+        "state": {
+            "handle": str(state.get("handle") or "ClaudeDevs"),
+            "last_seen_post_id": str(state.get("last_seen_post_id") or ""),
+            "last_success_at": str(state.get("last_success_at") or ""),
+            "seen_post_count": len(list(state.get("seen_post_ids") or [])),
+        },
+        "latest_packet": packets[0] if packets else None,
+        "packets": packets,
+        "rolling": _claude_code_intel_rolling_payload(),
+        "vault": {
+            "root": str(vault_root),
+            "index": _artifact_link_payload(vault_index) if vault_index.exists() else {"path": "", "rel_path": "", "api_url": "", "storage_href": ""},
+            "overview": _artifact_link_payload(vault_overview) if vault_overview.exists() else {"path": "", "rel_path": "", "api_url": "", "storage_href": ""},
+            "knowledge_pages": _claude_code_intel_knowledge_pages(limit=200),
+        },
+    }
+
+
 @app.get("/api/v1/dashboard/proactive-artifacts")
 async def dashboard_proactive_artifacts(
     request: Request,

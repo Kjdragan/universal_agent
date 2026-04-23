@@ -1,0 +1,47 @@
+{
+  "bundles": [
+    {
+      "bundle_dir": "/home/kjdragan/lrepos/universal_agent/agent_capability_library/claude_code_intel/current/bundles/new-in-claude-code-ultrareview-research-preview-runs-a-fleet-of-bug",
+      "bundle_id": "new-in-claude-code-ultrareview-research-preview-runs-a-fleet-of-bug",
+      "recommended_variant": "ua-adaptation",
+      "summary": "New in Claude Code: /ultrareview (research preview) runs a fleet of bug-hunting agents in the cloud.\n\nFindings land in the CLI or Desktop automatically. Run it before merging critical changes\u2014auth, data migrations, etc. \n\nPro and Max users get 3 free reviews t",
+      "title": "New in Claude Code: /ultrareview (research preview) runs a fleet of bug-"
+    },
+    {
+      "bundle_dir": "/home/kjdragan/lrepos/universal_agent/agent_capability_library/claude_code_intel/current/bundles/building-agents-that-reach-production-systems-with-mcp-claude",
+      "bundle_id": "building-agents-that-reach-production-systems-with-mcp-claude",
+      "recommended_variant": "ua-adaptation",
+      "summary": "New blog: Building agents that reach production systems with MCP.\n\nWhen should agents use direct APIs vs CLIs vs MCP? Plus patterns for building MCP servers, context-efficient clients and pairing MCP with skills.\n\nhttps://t.co/JEogw5vWly",
+      "title": "Building agents that reach production systems with MCP | Claude"
+    },
+    {
+      "bundle_dir": "/home/kjdragan/lrepos/universal_agent/agent_capability_library/claude_code_intel/current/bundles/find-bugs-with-ultrareview-claude-code-docs",
+      "bundle_id": "find-bugs-with-ultrareview-claude-code-docs",
+      "recommended_variant": "ua-adaptation",
+      "summary": "Run `claude update` to try it out. Learn more in the docs: https://t.co/NhIw6ayYXZ",
+      "title": "Find bugs with ultrareview - Claude Code Docs"
+    },
+    {
+      "bundle_dir": "/home/kjdragan/lrepos/universal_agent/agent_capability_library/claude_code_intel/current/bundles/learn-tips-on-how-to-maximize-your-prompt-cache-hit-rate-in-trq212-s-po",
+      "bundle_id": "learn-tips-on-how-to-maximize-your-prompt-cache-hit-rate-in-trq212-s-po",
+      "recommended_variant": "ua-adaptation",
+      "summary": "Learn tips on how to maximize your prompt cache hit rate in @trq212's post: https://t.co/3n7z1rLwbk",
+      "title": "Learn tips on how to maximize your prompt cache hit rate in @trq212's po"
+    },
+    {
+      "bundle_dir": "/home/kjdragan/lrepos/universal_agent/agent_capability_library/claude_code_intel/current/bundles/what-is-prompt-caching-learn-more-in-rlancemartin-s-article-on-prompt",
+      "bundle_id": "what-is-prompt-caching-learn-more-in-rlancemartin-s-article-on-prompt",
+      "recommended_variant": "ua-adaptation",
+      "summary": "What is prompt caching? Learn more in @RLanceMartin's article on prompt caching in the Claude API:  https://t.co/GW9D0wEDnI",
+      "title": "What is prompt caching? Learn more in @RLanceMartin's article on prompt "
+    },
+    {
+      "bundle_dir": "/home/kjdragan/lrepos/universal_agent/agent_capability_library/claude_code_intel/current/bundles/caching-claude-platform",
+      "bundle_id": "caching-claude-platform",
+      "recommended_variant": "ua-adaptation",
+      "summary": "Caching is critical for customers to lower both costs and TTFT.\n\nWe\u2019re launching a new dashboard in Claude Developer Console to increase visibility and help customers optimize their usage.\n\nCheck it out here: https://t.co/zgBJ4dHXyI https://t.co/Uwje2iPbLT",
+      "title": "Caching | Claude Platform"
+    }
+  ],
+  "generated_at": "20260423T175510Z"
+}

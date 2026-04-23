@@ -221,6 +221,7 @@ These endpoints expose the durable run catalog. They are the canonical browsing 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/v1/dashboard/proactive-artifacts` | GET | List durable proactive work-product artifacts; optionally sync proactive signal cards first |
+| `/api/v1/dashboard/claude-code-intel` | GET | Read latest ClaudeDevs packet summary, recent packet history, checkpoint state, and Claude Code knowledge-vault pages for the dedicated dashboard review surface |
 | `/api/v1/dashboard/proactive-artifacts/digest/preview` | GET | Preview the proactive review digest email; supports `include_calendar=true` |
 | `/api/v1/dashboard/proactive-artifacts/digest/send` | POST | Send the proactive review digest through the initialized AgentMail service |
 | `/api/v1/dashboard/proactive-artifacts/preferences/weekly/preview` | GET | Preview the weekly preference model report |

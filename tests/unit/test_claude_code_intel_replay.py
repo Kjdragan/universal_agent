@@ -216,6 +216,110 @@ def test_replay_fetches_linked_sources_and_writes_metadata(monkeypatch, tmp_path
     assert "GitHub repository page" in analysis_text
 
 
+def test_replay_skips_tco_redirects_into_browser_gated_x_pages(monkeypatch, tmp_path: Path) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def fake_ingest(*, vault_slug: str, source_title: str, source_content: str, source_id: str | None = None, root_override: str | None = None):
+        calls.append((source_title, source_id or ""))
+        vault_root = Path(root_override or tmp_path / "knowledge-vaults" / vault_slug)
+        path = vault_root / "sources" / f"{source_id or 'source'}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(source_content, encoding="utf-8")
+        return {"status": "success", "path": str(path.relative_to(vault_root))}
+
+    class FakeResponse:
+        def __init__(self, original_url: str):
+            self.status_code = 200
+            self.text = (
+                "<html><head><title>X</title></head><body>"
+                "<p>JavaScript is not available.</p>"
+                "<p>We've detected that JavaScript is disabled in this browser.</p>"
+                "<p>Please enable JavaScript or switch to a supported browser to continue using x.com.</p>"
+                "</body></html>"
+            )
+            self.headers = {"content-type": "text/html"}
+            self.url = "https://x.com/ClaudeDevs/status/801/video/1"
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url: str):
+            return FakeResponse(url)
+
+    monkeypatch.setattr(
+        "universal_agent.services.claude_code_intel_replay.wiki_ingest_external_source",
+        fake_ingest,
+    )
+    monkeypatch.setattr(
+        "universal_agent.services.claude_code_intel_replay.httpx.Client",
+        FakeClient,
+    )
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    packet_dir = tmp_path / "packet_x_shell"
+    packet_dir.mkdir()
+    (packet_dir / "manifest.json").write_text(
+        json.dumps({"handle": "ClaudeDevs", "ok": True, "new_post_count": 1, "action_count": 1}),
+        encoding="utf-8",
+    )
+    (packet_dir / "raw_posts.json").write_text(json.dumps({}), encoding="utf-8")
+    (packet_dir / "new_posts.json").write_text(
+        json.dumps(
+            [
+                {
+                    "id": "801",
+                    "text": "Linked demo points at a t.co redirect that lands on x.com video chrome",
+                    "created_at": "2026-04-19T12:00:00.000Z",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (packet_dir / "actions.json").write_text(
+        json.dumps(
+            [
+                {
+                    "post_id": "801",
+                    "tier": 2,
+                    "action_type": "kb_update",
+                    "url": "https://x.com/ClaudeDevs/status/801",
+                    "text": "Linked demo points at a t.co redirect that lands on x.com video chrome",
+                    "links": ["https://t.co/OEzhNHcZdE"],
+                    "matched_terms": ["docs"],
+                    "reasons": ["reference material"],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = replay_packet(
+        config=ClaudeCodeIntelReplayConfig(
+            packet_dir=packet_dir,
+            queue_task_hub=False,
+            write_vault=True,
+            expand_sources=True,
+            artifacts_root=tmp_path,
+        ),
+        conn=conn,
+    )
+
+    linked = json.loads((packet_dir / "linked_sources.json").read_text(encoding="utf-8"))
+    assert result["linked_source_count"] == 1
+    assert result["linked_source_fetched_count"] == 0
+    assert linked[0]["fetch_status"] == "skipped"
+    assert linked[0]["skip_reason"] == "browser_gated_x_page"
+    assert not any(source_id.startswith("linked_source_") for _, source_id in calls)
+
+
 def test_replay_is_idempotent_for_task_hub_rows(monkeypatch, tmp_path: Path) -> None:
     def fake_ingest(**kwargs):
         return {"status": "success", "path": f"sources/{kwargs.get('source_id')}.md"}

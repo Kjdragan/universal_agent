@@ -21,6 +21,7 @@ import {
   Bell,
   Lightbulb,
   Radio,
+  Bot,
   GraduationCap,
   Clock,
   Settings,
@@ -79,6 +80,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/dashboard/events", label: "Events", icon: Bell },
       { href: "/dashboard/proactive-signals", label: "Proactive Signals", icon: Lightbulb },
+      { href: "/dashboard/claude-code-intel", label: "Claude Code Intel", icon: Bot },
       { href: "/dashboard/discord", label: "Discord Intel", icon: Radio },
       { href: "/dashboard/csi", label: "CSI Feed", icon: Radio },
       { href: "/dashboard/csi/rss", label: "CSI Watchlist · YT", icon: ListTodo },

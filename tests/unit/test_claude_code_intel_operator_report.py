@@ -8,7 +8,11 @@ from universal_agent.services.claude_code_intel_operator_report import (
     build_operator_email,
     build_operator_report,
 )
-from universal_agent.scripts.claude_code_intel_run_report import _should_send_email
+from universal_agent.scripts.claude_code_intel_run_report import (
+    _resolved_email_policy,
+    _resolved_email_target,
+    _should_send_email,
+)
 
 
 def test_artifact_file_url_builds_api_path(tmp_path: Path) -> None:
@@ -131,3 +135,24 @@ def test_should_send_email_policies() -> None:
     assert _should_send_email(policy="when_actions", payload=payload) is True
     assert _should_send_email(policy="when_tasks", payload=payload) is False
     assert _should_send_email(policy="never", payload=payload) is False
+
+
+def test_resolved_email_target_prefers_env_then_vps_default(monkeypatch) -> None:
+    args = type("Args", (), {"email_to": "", "email_policy": ""})()
+
+    monkeypatch.setenv("UA_CLAUDE_CODE_INTEL_REPORT_EMAIL_TO", "ops@example.com")
+    monkeypatch.delenv("UA_DEPLOYMENT_PROFILE", raising=False)
+    assert _resolved_email_target(args) == "ops@example.com"
+
+    monkeypatch.delenv("UA_CLAUDE_CODE_INTEL_REPORT_EMAIL_TO", raising=False)
+    monkeypatch.setenv("UA_DEPLOYMENT_PROFILE", "vps")
+    assert _resolved_email_target(args) == "kevinjdragan@gmail.com"
+
+
+def test_resolved_email_policy_prefers_explicit_then_env(monkeypatch) -> None:
+    explicit_args = type("Args", (), {"email_to": "", "email_policy": "when_tasks"})()
+    assert _resolved_email_policy(explicit_args) == "when_tasks"
+
+    env_args = type("Args", (), {"email_to": "", "email_policy": ""})()
+    monkeypatch.setenv("UA_CLAUDE_CODE_INTEL_REPORT_EMAIL_POLICY", "when_new_posts")
+    assert _resolved_email_policy(env_args) == "when_new_posts"

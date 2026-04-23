@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import sqlite3
 from dataclasses import replace
 from pathlib import Path
@@ -19,6 +20,7 @@ from universal_agent.services.claude_code_intel_operator_report import (
     build_operator_email,
     build_operator_report,
 )
+from universal_agent.services.claude_code_intel_rollup import build_rolling_assets
 from universal_agent.services.claude_code_intel_replay import (
     ClaudeCodeIntelReplayConfig,
     replay_packet,
@@ -220,6 +222,9 @@ async def main() -> int:
             "post_process": post_process,
         }
         summary = build_operator_report(sync_payload=payload, artifacts_root=cfg.artifacts_root)
+        rolling: dict[str, Any] = {}
+        if result.ok:
+            rolling = build_rolling_assets(artifacts_root=cfg.artifacts_root)
         email_result: dict[str, Any] = {}
         email_to = _resolved_email_target(args)
         email_policy = _resolved_email_policy(args)
@@ -238,6 +243,7 @@ async def main() -> int:
                     "json_path": summary.get("report_json_path"),
                     "markdown_url": summary.get("report_markdown_url"),
                 },
+                "rolling": rolling,
                 "email_result": email_result,
             },
             indent=2,

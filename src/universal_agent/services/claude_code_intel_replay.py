@@ -759,11 +759,18 @@ def _fetch_linked_source(*, client: httpx.Client, url: str, entry: dict[str, Any
         metadata["final_url"] = str(resp.url)
         metadata["content_type"] = resp.headers.get("content-type", "")
         metadata.update(_classify_linked_source(url=str(resp.url), content_type=metadata["content_type"]))
+        body = resp.text
+        title = _extract_title(body) or _title_from_url(str(resp.url))
+        metadata["title"] = title
+        entry["title"] = title
         if resp.status_code >= 400:
             entry["fetch_status"] = "error"
             entry["error"] = f"HTTP {resp.status_code}"
+        elif skip_reason := _detect_unusable_link_capture(url=str(resp.url), body=body, metadata=metadata):
+            entry["fetch_status"] = "skipped"
+            entry["skip_reason"] = skip_reason
+            analysis = _linked_source_analysis(entry=entry, content="", metadata=metadata)
         else:
-            body = resp.text
             github_raw = _maybe_fetch_github_raw(client=client, metadata=metadata)
             if github_raw:
                 body = github_raw
@@ -775,10 +782,7 @@ def _fetch_linked_source(*, client: httpx.Client, url: str, entry: dict[str, Any
                 source_type=str(metadata.get("source_type") or ""),
                 metadata=metadata,
             )
-            title = _extract_title(body) or _title_from_url(str(resp.url))
             entry["fetch_status"] = "fetched"
-            entry["title"] = title
-            metadata["title"] = title
             metadata["summary_excerpt"] = _summary_excerpt(content)
             metadata["commands"] = _extract_commands(content)
             metadata["version_matches"] = _extract_versions(content)
@@ -961,6 +965,28 @@ def _linked_source_analysis(*, entry: dict[str, Any], content: str, metadata: di
         ]
     )
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _detect_unusable_link_capture(*, url: str, body: str, metadata: dict[str, Any] | None = None) -> str:
+    metadata = dict(metadata or {})
+    source_type = str(metadata.get("source_type") or "").strip()
+    if source_type == "x_page":
+        return "browser_gated_x_page"
+
+    text = _extract_html_features(body).get("text") or ""
+    normalized = " ".join(str(text).split()).lower()
+    blocker_fragments = (
+        "javascript is not available",
+        "we've detected that javascript is disabled",
+        "we’ve detected that javascript is disabled",
+        "please enable javascript or switch to a supported browser",
+        "privacy related extensions may cause issues on x.com",
+        "something went wrong, but don't fret",
+        "something went wrong, but don’t fret",
+    )
+    if any(fragment in normalized for fragment in blocker_fragments):
+        return "browser_gated_page"
+    return ""
 
 
 def _should_skip_link_fetch(url: str) -> bool:
