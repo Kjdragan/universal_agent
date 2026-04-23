@@ -32,6 +32,9 @@ The system can now:
 14. Use an LLM-assisted classifier with deterministic fallback and fetched-source summary context.
 15. Expose an operator skill surface (`$claudedevs-x-intel`) backed by a deterministic report script that writes `operator_report.md` / `operator_report.json` into each packet and can email artifact links.
 16. Route the built-in production ClaudeDevs cron through the report entry point so actionable polling runs automatically send a professional artifact email.
+17. Reject browser-gated social shells during linked-source expansion so `t.co -> x.com/twitter.com` redirects do not poison the Claude Code knowledge vault with JavaScript error pages.
+18. Expose a dedicated dashboard review surface at `/dashboard/claude-code-intel` backed by a read-only dashboard endpoint for packet history, report links, and vault-page search.
+19. Regenerate a rolling 14-day builder brief plus first-class capability bundles after successful runs, then materialize reusable derivatives into a versioned repo library.
 
 ## Canonical Paths
 
@@ -43,8 +46,13 @@ The system can now:
 | OAuth state | `UA_ARTIFACTS_DIR/proactive/claude_code_intel/oauth2/` |
 | Lightweight source index | `UA_ARTIFACTS_DIR/knowledge-bases/claude-code-intelligence/source_index.md` |
 | External vault | `UA_ARTIFACTS_DIR/knowledge-vaults/claude-code-intelligence/` |
+| Rolling current artifacts | `UA_ARTIFACTS_DIR/proactive/claude_code_intel/rolling/current/` |
+| Rolling history | `UA_ARTIFACTS_DIR/proactive/claude_code_intel/rolling/history/` |
+| Repo capability library | `agent_capability_library/claude_code_intel/current/` |
 | Operator skill | `.claude/skills/claudedevs-x-intel/` |
 | Operator report script | `src/universal_agent/scripts/claude_code_intel_run_report.py` |
+| Dashboard route | `web-ui/app/dashboard/claude-code-intel/page.tsx` |
+| Dashboard API | `GET /api/v1/dashboard/claude-code-intel` |
 
 ## Runtime Flow
 
@@ -118,6 +126,12 @@ For each direct linked source, the replay path now:
 - stores a normalized source snapshot
 - writes a first-pass analysis
 - ingests the fetched content into the external vault
+
+Guardrail:
+
+- direct `x.com` / `twitter.com` links are skipped up front
+- redirects that land on browser-gated `x.com` / `twitter.com` shells are also skipped after fetch classification
+- JavaScript-blocked social shells are preserved only as fetch metadata / analysis, not ingested as knowledge pages
 
 Recognized source types include:
 
@@ -222,6 +236,63 @@ $claudedevs-x-intel Run the production ClaudeDevs X intelligence sync, write the
 ```
 
 The canonical autonomous scheduler remains the built-in system job `claude_code_intel_sync`.
+
+## Dashboard Review Surface
+
+The dashboard now includes a dedicated Claude Code intelligence page instead of forcing operators to browse raw artifact folders manually.
+
+Current page goals:
+
+- show the latest operator report in a readable panel
+- keep recent packet history visible in one place
+- expose direct links to packet sub-artifacts
+- make the external Claude Code vault searchable by title, summary, and tags
+
+Current route:
+
+```text
+/dashboard/claude-code-intel
+```
+
+Current read endpoint:
+
+```text
+GET /api/v1/dashboard/claude-code-intel
+```
+
+That endpoint returns:
+
+- current ClaudeDevs lane checkpoint state
+- latest packet summary
+- recent packet history
+- rolling 14-day narrative brief
+- synthesized capability bundles and variants
+- vault index/overview links
+- knowledge-page records for the external Claude Code vault
+
+## Rolling Builder Brief And Capability Bundles
+
+Successful report runs now also synthesize a rolling 14-day builder brief and capability bundles.
+
+The rolling brief serves two audiences in one artifact:
+
+- `For Kevin` — explanatory teaching layer
+- `For UA` — dense adoption package for agent reuse
+
+Capability bundles are generated from recent packet history and linked canonical sources, then materialized into:
+
+- current artifact snapshots under `artifacts/proactive/claude_code_intel/rolling/current/`
+- historical snapshots under `artifacts/proactive/claude_code_intel/rolling/history/`
+- a versioned repo library under `agent_capability_library/claude_code_intel/current/`
+
+Each bundle preserves:
+
+- bundle-level summary and “why now”
+- canonical linked sources
+- Kevin-facing explanation
+- UA-facing adoption package
+- multiple variants when the implementation path is uncertain
+- machine-usable primitives such as workflow recipes, prompt patterns, adaptation patterns, and other low-risk derivative assets
 
 ## Key Files
 

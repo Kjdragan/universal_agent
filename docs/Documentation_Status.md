@@ -1,6 +1,6 @@
 # Documentation Status
 
-**Last updated:** 2026-04-22 (request-scoped investigation-mode guardrails documented for Promptfoo red-team security evaluations)
+**Last updated:** 2026-04-23 (ClaudeDevs linked-source expansion now rejects browser-gated X/Twitter shells after redirects; the dashboard exposes a dedicated Claude Code intel review surface; and successful runs now synthesize a rolling 14-day builder brief plus capability bundles into a versioned repo library)
 
 ## Development (development/)
 

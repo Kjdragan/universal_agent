@@ -1,0 +1,65 @@
+{
+  "bundle_id": "learn-tips-on-how-to-maximize-your-prompt-cache-hit-rate-in-trq212-s-po",
+  "canonical_sources": [],
+  "discovery_posts": [
+    "2046710819904524348"
+  ],
+  "for_kevin_markdown": "## What changed\n\nLearn tips on how to maximize your prompt cache hit rate in @trq212's post: https://t.co/3n7z1rLwbk\n\n## Why it matters\n\nThis is most valuable if we can turn it into reusable building blocks quickly, before the underlying capability disappears into stale model knowledge.\n",
+  "for_ua_markdown": "## UA Adoption Package\n\n- Use the linked official source as the canonical reference.\n- Materialize multiple implementation primitives, not just a narrative summary.\n- Keep the output reusable for UA and standalone Agent SDK projects.\n",
+  "likely_agent_system_value": "Likely transferable into standalone agent-system projects.",
+  "likely_ua_value": "Likely useful for extending UA workflows and agent building blocks.",
+  "recommended_variant": "ua-adaptation",
+  "summary": "Learn tips on how to maximize your prompt cache hit rate in @trq212's post: https://t.co/3n7z1rLwbk",
+  "title": "Learn tips on how to maximize your prompt cache hit rate in @trq212's po",
+  "variants": [
+    {
+      "applicability": [
+        "UA",
+        "Shared"
+      ],
+      "confidence": "medium",
+      "intent": "Translate the capability into reusable UA building blocks.",
+      "key": "ua-adaptation",
+      "label": "UA Adaptation",
+      "primitives": [
+        {
+          "content_markdown": "## UA Adaptation Pattern\n\n- Anchor on the canonical source(s): linked technical references.\n- Distill the feature into reusable prompt/workflow/code assets before wiring it into runtime behavior.\n- Prefer adding this as a reusable building block for Simone/Cody and future client-system builds.\n",
+          "kind": "ua_adaptation_pattern",
+          "rationale": "Turn the capability into a repeatable UA integration pattern.",
+          "title": "UA adaptation pattern"
+        },
+        {
+          "content_markdown": "## Workflow Recipe\n\n1. Read the canonical linked source.\n2. Extract the behavior contract.\n3. Generate prompt/code/workflow primitives.\n4. Validate the most promising path in UA.\n",
+          "kind": "workflow_recipe",
+          "rationale": "Capture the control flow needed to use the capability repeatedly.",
+          "title": "Workflow recipe"
+        }
+      ]
+    },
+    {
+      "applicability": [
+        "Agent SDK",
+        "Shared"
+      ],
+      "confidence": "medium",
+      "intent": "Translate the capability into standalone agent-system primitives.",
+      "key": "agent-sdk-transfer",
+      "label": "Agent SDK Transfer",
+      "primitives": [
+        {
+          "content_markdown": "## Agent SDK Adaptation Pattern\n\n- Translate the capability into standalone agent-system patterns, not just IDE assistance.\n- Capture the control flow, prompt shape, and code surface required to reproduce the feature in a new project.\n- Preserve source provenance so future coding agents can rebuild from official references.\n",
+          "kind": "agent_sdk_adaptation_pattern",
+          "rationale": "Frame the capability for standalone agent systems.",
+          "title": "Agent SDK adaptation pattern"
+        },
+        {
+          "content_markdown": "## Prompt Pattern\n\n```text\nGiven the official feature docs and any linked demo material, synthesize:\n1. the minimal agent behavior contract,\n2. the reusable prompt skeleton,\n3. the workflow boundaries,\n4. the failure modes we should guard against.\n```\n",
+          "kind": "prompt_pattern",
+          "rationale": "Capture the reusable instruction shape behind the capability.",
+          "title": "Prompt pattern"
+        }
+      ]
+    }
+  ],
+  "why_now": "Recent ClaudeDevs updates suggest this capability is new enough that model cutoffs may miss it, so we should materialize it now."
+}
