@@ -15,6 +15,13 @@ EnvironmentFile=-__APP_ROOT__/.env
 ExecStart=__APP_ROOT__/.venv/bin/python -m universal_agent.gateway_server
 Restart=always
 RestartSec=5
+# Resource limits — prevent process explosion from consuming all VPS memory.
+# MemoryMax: hard cgroup limit (systemd kills cgroup if exceeded).
+# MemoryHigh: soft limit (triggers kernel memory reclaim/swap pressure).
+# TasksMax: caps total process count within the cgroup.
+MemoryMax=6G
+MemoryHigh=5G
+TasksMax=150
 
 [Install]
 WantedBy=multi-user.target

@@ -184,6 +184,23 @@ async def idle_dispatch_loop(
             if now - last_dispatch_time < cooldown:
                 continue
 
+            # 4. System load guard — block dispatch when VPS is overloaded.
+            #    This prevents the process explosion cascade where dispatching
+            #    more work on an already-saturated system only makes things worse.
+            try:
+                from universal_agent.services.system_load_guard import is_system_healthy
+                system_status = is_system_healthy()
+                if not system_status.healthy:
+                    logger.warning(
+                        "🔄 Idle dispatch BLOCKED by system guard: %s (procs=%d, swap=%.1f%%)",
+                        system_status.reason,
+                        system_status.process_count,
+                        system_status.swap_pct,
+                    )
+                    continue
+            except Exception as guard_err:
+                logger.debug("System load guard check failed (non-fatal): %s", guard_err)
+
             # Wake ONE idle session (round-robin would add complexity
             # for minimal benefit — the heartbeat handles multi-session)
             target_sid = sorted(idle_sessions)[0]

@@ -93,7 +93,12 @@ def _utc_now() -> datetime:
 
 
 def check_stale_runs() -> list[HeartbeatFinding]:
-    """Check runtime_state.db for runs stuck in running/queued > threshold."""
+    """Check runtime_state.db for runs stuck in running/queued > threshold.
+
+    Since v2: also auto-reaps runs with no recent progress via the
+    stuck_run_reaper, preventing the dispatch cascade that caused
+    the VPS resource exhaustion incident.
+    """
     findings: list[HeartbeatFinding] = []
     conn = _safe_connect(_db_path("runtime_state.db"))
     if not conn:
@@ -127,6 +132,36 @@ def check_stale_runs() -> list[HeartbeatFinding]:
                 recommendation="Check gateway logs for stuck sessions. May need manual finalization.",
                 runbook_command="journalctl -u universal-agent-gateway --since '2 hours ago' | grep -i 'stuck\\|timeout'",
             ))
+
+        # ── Auto-reap stuck runs (progress-based TTL) ────────────────────
+        # Runs with no heartbeat/update within TTL are transitioned to
+        # timed_out.  This prevents the dispatch cascade where orphaned
+        # "running" DB entries cause infinite process spawning.
+        try:
+            from universal_agent.services.stuck_run_reaper import reap_stale_runs
+            reaped = reap_stale_runs(conn)
+            if reaped:
+                reaped_summary = ", ".join(
+                    f"{r.run_id}({r.stale_minutes:.0f}m stale)" for r in reaped[:5]
+                )
+                if len(reaped) > 5:
+                    reaped_summary += f" ... and {len(reaped) - 5} more"
+                findings.append(HeartbeatFinding(
+                    finding_id="stuck_runs_reaped",
+                    category="gateway",
+                    severity="warn",
+                    metric_key="runtime.reaped_runs",
+                    observed_value=len(reaped),
+                    threshold_text="auto-reaped by progress-based TTL",
+                    known_rule_match=True,
+                    confidence="high",
+                    title=f"🪦 Reaper: auto-reaped {len(reaped)} stuck run(s): {reaped_summary}",
+                    recommendation="Investigate why these runs stopped making progress. Check for OOM, process crashes, or MCP server failures.",
+                    runbook_command="sqlite3 /opt/universal_agent/AGENT_RUN_WORKSPACES/runtime_state.db \"SELECT run_id, run_kind, terminal_reason FROM runs WHERE terminal_reason LIKE 'reaper:%' ORDER BY updated_at DESC LIMIT 10;\"",
+                ))
+        except Exception as reaper_err:
+            logger.debug("stuck_run_reaper failed (non-fatal): %s", reaper_err)
+
     except Exception as exc:
         logger.debug("check_stale_runs failed: %s", exc)
     finally:
