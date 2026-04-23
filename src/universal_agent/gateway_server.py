@@ -16947,6 +16947,47 @@ async def dashboard_claude_code_intel(
     }
 
 
+_CLAUDE_CODE_INTEL_VALID_ACTIONS = {"full_pipeline", "rollup_only", "sync_only"}
+
+
+@app.post("/api/v1/dashboard/claude-code-intel/trigger")
+async def dashboard_claude_code_intel_trigger(
+    request: Request,
+    action: str = "full_pipeline",
+):
+    """Trigger a background pipeline run from the operator dashboard."""
+    _require_ops_auth(request)
+    action = str(action or "").strip()
+    if action not in _CLAUDE_CODE_INTEL_VALID_ACTIONS:
+        return {"status": "error", "detail": f"Unsupported action: {action!r}. Valid: {sorted(_CLAUDE_CODE_INTEL_VALID_ACTIONS)}"}
+
+    import asyncio
+    import sys
+
+    script = "universal_agent.scripts.claude_code_intel_run_report"
+    cmd_args = [sys.executable, "-m", script]
+    if action == "rollup_only":
+        cmd_args.extend(["--no-post-process"])
+    elif action == "sync_only":
+        cmd_args.extend(["--no-email"])
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd_args,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        return {
+            "status": "accepted",
+            "action": action,
+            "pid": proc.pid,
+            "command": " ".join(cmd_args),
+        }
+    except Exception as exc:
+        return {"status": "error", "detail": f"Failed to launch pipeline: {type(exc).__name__}: {exc}"}
+
+
+
 @app.get("/api/v1/dashboard/proactive-artifacts")
 async def dashboard_proactive_artifacts(
     request: Request,

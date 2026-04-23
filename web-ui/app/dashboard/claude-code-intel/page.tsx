@@ -9,11 +9,14 @@ import {
   BookOpen,
   FileText,
   Layers3,
+  Loader2,
   PanelRightClose,
   PanelRightOpen,
+  Play,
   RefreshCcw,
   Search,
   Sparkles,
+  Zap,
 } from "lucide-react";
 import { formatDateTimeTz } from "@/lib/timezone";
 
@@ -116,6 +119,7 @@ type Rolling = {
   generated_at?: string;
   bundle_count?: number;
   narrative_markdown?: string;
+  synthesis_method?: string;
   report?: FileLink;
   bundles?: Bundle[];
 };
@@ -180,6 +184,8 @@ export default function DashboardClaudeCodeIntelPage() {
   const [knowledgeQuery, setKnowledgeQuery] = useState("");
   const [showKnowledgeDrawer, setShowKnowledgeDrawer] = useState(false);
   const deferredKnowledgeQuery = useDeferredValue(knowledgeQuery);
+  const [triggerStatus, setTriggerStatus] = useState<"idle" | "pending" | "accepted" | "error">("idle");
+  const [triggerMessage, setTriggerMessage] = useState("");
 
   const packets = useMemo(() => payload?.packets ?? [], [payload?.packets]);
   const rolling = payload?.rolling || null;
@@ -333,6 +339,64 @@ export default function DashboardClaudeCodeIntelPage() {
               </button>
               <button
                 type="button"
+                disabled={triggerStatus === "pending"}
+                onClick={async () => {
+                  setTriggerStatus("pending");
+                  setTriggerMessage("");
+                  try {
+                    const res = await fetch(`${API_BASE}/api/v1/dashboard/claude-code-intel/trigger?action=full_pipeline`, { method: "POST", cache: "no-store" });
+                    const data = await res.json();
+                    if (data.status === "accepted") {
+                      setTriggerStatus("accepted");
+                      setTriggerMessage(`Pipeline launched (PID ${data.pid})`);
+                      setTimeout(() => setTriggerStatus("idle"), 8000);
+                    } else {
+                      setTriggerStatus("error");
+                      setTriggerMessage(data.detail || "Unknown error");
+                      setTimeout(() => setTriggerStatus("idle"), 6000);
+                    }
+                  } catch (err) {
+                    setTriggerStatus("error");
+                    setTriggerMessage(err instanceof Error ? err.message : String(err));
+                    setTimeout(() => setTriggerStatus("idle"), 6000);
+                  }
+                }}
+                className="inline-flex items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-100 transition hover:bg-emerald-500/20 disabled:opacity-40"
+              >
+                {triggerStatus === "pending" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                {triggerStatus === "accepted" ? "Launched" : "Run Pipeline"}
+              </button>
+              <button
+                type="button"
+                disabled={triggerStatus === "pending"}
+                onClick={async () => {
+                  setTriggerStatus("pending");
+                  setTriggerMessage("");
+                  try {
+                    const res = await fetch(`${API_BASE}/api/v1/dashboard/claude-code-intel/trigger?action=rollup_only`, { method: "POST", cache: "no-store" });
+                    const data = await res.json();
+                    if (data.status === "accepted") {
+                      setTriggerStatus("accepted");
+                      setTriggerMessage(`Rollup launched (PID ${data.pid})`);
+                      setTimeout(() => setTriggerStatus("idle"), 8000);
+                    } else {
+                      setTriggerStatus("error");
+                      setTriggerMessage(data.detail || "Unknown error");
+                      setTimeout(() => setTriggerStatus("idle"), 6000);
+                    }
+                  } catch (err) {
+                    setTriggerStatus("error");
+                    setTriggerMessage(err instanceof Error ? err.message : String(err));
+                    setTimeout(() => setTriggerStatus("idle"), 6000);
+                  }
+                }}
+                className="inline-flex items-center gap-2 rounded-full border border-violet-400/30 bg-violet-500/10 px-4 py-2 text-sm font-medium text-violet-100 transition hover:bg-violet-500/20 disabled:opacity-40"
+              >
+                {triggerStatus === "pending" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
+                Rollup Only
+              </button>
+              <button
+                type="button"
                 onClick={() => window.location.reload()}
                 className="inline-flex items-center gap-2 rounded-full border border-white/12 bg-white/5 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/10"
               >
@@ -340,6 +404,11 @@ export default function DashboardClaudeCodeIntelPage() {
                 Refresh
               </button>
             </div>
+            {triggerMessage ? (
+              <div className={`mt-2 text-xs ${triggerStatus === "error" ? "text-red-300" : "text-emerald-300"}`}>
+                {triggerMessage}
+              </div>
+            ) : null}
           </div>
 
           <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -353,7 +422,7 @@ export default function DashboardClaudeCodeIntelPage() {
               label="Rolling Brief"
               value={asText(rolling?.generated_at) ? formatDateTimeTz(asText(rolling?.generated_at), { placeholder: "--" }) : "--"}
               accent="text-amber-200"
-              hint="Current rolling 14-day synthesis"
+              hint={`${rolling?.synthesis_method === "llm" ? "✦ LLM synthesis" : rolling?.synthesis_method === "fallback" ? "⚠ Fallback templates" : "Current rolling 14-day synthesis"}`}
             />
             <MetricCard
               label="Actions / Tasks"

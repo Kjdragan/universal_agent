@@ -35,6 +35,10 @@ The system can now:
 17. Reject browser-gated social shells during linked-source expansion so `t.co -> x.com/twitter.com` redirects do not poison the Claude Code knowledge vault with JavaScript error pages.
 18. Expose a dedicated dashboard review surface at `/dashboard/claude-code-intel` backed by a read-only dashboard endpoint for packet history, report links, and vault-page search.
 19. Regenerate a rolling 14-day builder brief plus first-class capability bundles after successful runs, then materialize reusable derivatives into a versioned repo library.
+20. Track `synthesis_method` (`llm` | `fallback`) in rolling JSON output and display it on the dashboard so operators can see bundle quality at a glance.
+21. Log warnings when LLM synthesis fails or is unavailable, instead of silently falling back.
+22. Enrich fallback bundles with linked source titles, URLs, and excerpts instead of generic placeholder text.
+23. Provide operator trigger controls (`Run Pipeline`, `Rollup Only`) on the dashboard via `POST /api/v1/dashboard/claude-code-intel/trigger`.
 
 ## Canonical Paths
 
@@ -52,7 +56,8 @@ The system can now:
 | Operator skill | `.claude/skills/claudedevs-x-intel/` |
 | Operator report script | `src/universal_agent/scripts/claude_code_intel_run_report.py` |
 | Dashboard route | `web-ui/app/dashboard/claude-code-intel/page.tsx` |
-| Dashboard API | `GET /api/v1/dashboard/claude-code-intel` |
+| Dashboard API (read) | `GET /api/v1/dashboard/claude-code-intel` |
+| Dashboard API (trigger) | `POST /api/v1/dashboard/claude-code-intel/trigger` |
 
 ## Runtime Flow
 

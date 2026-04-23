@@ -145,3 +145,59 @@ async def test_claude_code_intel_dashboard_endpoint_returns_latest_packet_and_va
     assert knowledge_pages[0]["title"] == "Demo Source"
     assert knowledge_pages[0]["api_url"].endswith("/sources/demo.md")
     assert payload["rolling"]["window_days"] == 14
+
+
+@pytest.mark.asyncio
+async def test_claude_code_intel_trigger_returns_accepted(monkeypatch, tmp_path: Path):
+    """POST /api/v1/dashboard/claude-code-intel/trigger should accept a pipeline run request."""
+    monkeypatch.setattr(gateway_server, "_require_ops_auth", lambda _request: None)
+    monkeypatch.setattr(gateway_server, "ARTIFACTS_DIR", tmp_path)
+
+    # Create the state file so the endpoint can read it
+    state_dir = tmp_path / "proactive" / "claude_code_intel"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "state.json").write_text(
+        json.dumps({"handle": "ClaudeDevs", "last_seen_post_id": "123"}),
+        encoding="utf-8",
+    )
+
+    # Mock the subprocess call so it doesn't actually run
+    launched_commands: list[str] = []
+
+    async def _mock_subprocess(*args, **kwargs):
+        launched_commands.append(str(args))
+
+        class _FakeProc:
+            pid = 12345
+        return _FakeProc()
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", _mock_subprocess)
+
+    payload = await gateway_server.dashboard_claude_code_intel_trigger(
+        request=object(),
+        action="full_pipeline",
+    )
+    assert payload["status"] == "accepted"
+    assert payload["action"] == "full_pipeline"
+    assert "pid" in payload
+
+
+@pytest.mark.asyncio
+async def test_claude_code_intel_trigger_rejects_invalid_action(monkeypatch, tmp_path: Path):
+    """POST with an invalid action should return an error."""
+    monkeypatch.setattr(gateway_server, "_require_ops_auth", lambda _request: None)
+    monkeypatch.setattr(gateway_server, "ARTIFACTS_DIR", tmp_path)
+
+    state_dir = tmp_path / "proactive" / "claude_code_intel"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "state.json").write_text(
+        json.dumps({"handle": "ClaudeDevs"}),
+        encoding="utf-8",
+    )
+
+    payload = await gateway_server.dashboard_claude_code_intel_trigger(
+        request=object(),
+        action="invalid_action",
+    )
+    assert payload["status"] == "error"
+    assert "invalid" in payload.get("detail", "").lower() or "unsupported" in payload.get("detail", "").lower()

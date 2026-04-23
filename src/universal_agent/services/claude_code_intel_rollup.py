@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 from urllib.parse import urlparse
 
 from universal_agent.services.claude_code_intel import (
@@ -333,6 +336,38 @@ def _fallback_bundle(context: dict[str, Any]) -> dict[str, Any]:
         "4. the failure modes we should guard against.\n"
         "```\n"
     )
+    # Build enriched for_kevin with linked source context
+    kevin_sections = ["## What changed\n"]
+    kevin_sections.append(context.get("text") or "A new capability or workflow detail was surfaced.")
+    if sources:
+        kevin_sections.append("\n## Canonical Sources\n")
+        for source in sources[:3]:
+            s_title = str(source.get("title") or source.get("url") or "Source")
+            s_url = str(source.get("url") or "")
+            s_excerpt = str(source.get("summary_excerpt") or "").strip()
+            kevin_sections.append(f"- [{s_title}]({s_url})")
+            if s_excerpt:
+                kevin_sections.append(f"  - {s_excerpt[:200]}")
+    kevin_sections.append("\n## Why it matters\n")
+    kevin_sections.append(
+        "This is most valuable if we can turn it into reusable building blocks quickly, "
+        "before the underlying capability disappears into stale model knowledge."
+    )
+    for_kevin = "\n".join(kevin_sections) + "\n"
+    # Build enriched for_ua with linked source context
+    ua_lines = [
+        "## UA Adoption Package\n",
+    ]
+    if sources:
+        for source in sources[:3]:
+            s_title = str(source.get("title") or source.get("url") or "Source")
+            s_url = str(source.get("url") or "")
+            ua_lines.append(f"- Canonical source: [{s_title}]({s_url})")
+    ua_lines.extend([
+        "- Materialize multiple implementation primitives, not just a narrative summary.",
+        "- Keep the output reusable for UA and standalone Agent SDK projects.",
+    ])
+    for_ua = "\n".join(ua_lines) + "\n"
     return {
         "bundle_id": bundle_id,
         "title": title_seed or f"Capability bundle {context.get('post_id')}",
@@ -340,18 +375,8 @@ def _fallback_bundle(context: dict[str, Any]) -> dict[str, Any]:
         "why_now": "Recent ClaudeDevs updates suggest this capability is new enough that model cutoffs may miss it, so we should materialize it now.",
         "likely_ua_value": "Likely useful for extending UA workflows and agent building blocks.",
         "likely_agent_system_value": "Likely transferable into standalone agent-system projects.",
-        "for_kevin_markdown": (
-            "## What changed\n\n"
-            f"{context.get('text') or 'A new capability or workflow detail was surfaced.'}\n\n"
-            "## Why it matters\n\n"
-            "This is most valuable if we can turn it into reusable building blocks quickly, before the underlying capability disappears into stale model knowledge.\n"
-        ),
-        "for_ua_markdown": (
-            "## UA Adoption Package\n\n"
-            "- Use the linked official source as the canonical reference.\n"
-            "- Materialize multiple implementation primitives, not just a narrative summary.\n"
-            "- Keep the output reusable for UA and standalone Agent SDK projects.\n"
-        ),
+        "for_kevin_markdown": for_kevin,
+        "for_ua_markdown": for_ua,
         "recommended_variant": "ua-adaptation",
         "canonical_sources": sources,
         "discovery_posts": [str(context.get("post_id") or "")],
@@ -414,11 +439,14 @@ def _fallback_synthesis(contexts: list[dict[str, Any]], *, window_days: int) -> 
         "title": f"Rolling {window_days}-Day Claude Code Builder Brief",
         "narrative_markdown": _fallback_narrative(contexts, window_days=window_days),
         "bundles": bundles,
+        "synthesis_method": "fallback",
     }
 
 
 def _llm_synthesis(contexts: list[dict[str, Any]], *, window_days: int) -> dict[str, Any]:
     if not contexts or not _has_llm_key():
+        if not _has_llm_key() and contexts:
+            logger.warning("Rolling synthesis using fallback: no LLM API key available")
         return _fallback_synthesis(contexts, window_days=window_days)
 
     prompt_payload = []
@@ -464,8 +492,10 @@ def _llm_synthesis(contexts: list[dict[str, Any]], *, window_days: int) -> dict[
             "title": str(parsed.get("title") or f"Rolling {window_days}-Day Claude Code Builder Brief"),
             "narrative_markdown": str(parsed.get("narrative_markdown") or "").strip() or _fallback_narrative(contexts, window_days=window_days),
             "bundles": bundles,
+            "synthesis_method": "llm",
         }
-    except Exception:
+    except Exception as exc:
+        logger.warning("Rolling LLM synthesis failed; using fallback: %s: %s", type(exc).__name__, exc)
         return _fallback_synthesis(contexts, window_days=window_days)
 
 
@@ -592,6 +622,7 @@ def _write_current_and_history(*, synthesis: dict[str, Any], artifacts_root: Pat
         "narrative_markdown": str(synthesis.get("narrative_markdown") or ""),
         "bundle_count": len(bundle_index),
         "bundles": synthesis.get("bundles") or [],
+        "synthesis_method": str(synthesis.get("synthesis_method") or "unknown"),
     }
     narrative_md_path.write_text(str(synthesis.get("narrative_markdown") or "").rstrip() + "\n", encoding="utf-8")
     narrative_json_path.write_text(json.dumps(narrative_payload, indent=2, ensure_ascii=True, sort_keys=True) + "\n", encoding="utf-8")
