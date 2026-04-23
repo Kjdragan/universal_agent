@@ -16705,7 +16705,7 @@ def _ensure_claude_code_intel_cron_job() -> None:
         "user_id": "system",
         "workspace_dir": workspace_dir,
         "command": command,
-        "description": "Poll @ClaudeDevs through the X API, queue Claude Code intelligence follow-up work, and email the operator report when the poll yields actionable output.",
+        "description": "Poll Claude Code intelligence handles (@ClaudeDevs, @bcherny) through the X API, queue follow-up work, synthesize a combined rolling brief, and email the operator report.",
         "cron_expr": cron_expr,
         "timezone": timezone_name,
         "timeout_seconds": int(os.getenv("UA_CLAUDE_CODE_INTEL_CRON_TIMEOUT_SECONDS", "900") or 900),
@@ -16923,18 +16923,49 @@ async def dashboard_claude_code_intel(
 ):
     _require_ops_auth(request)
     packets = _claude_code_intel_packets(limit=limit)
-    state = _safe_read_json_file(ARTIFACTS_DIR / "proactive" / "claude_code_intel" / "state.json", {})
+    # Read all per-handle state files
+    intel_root = ARTIFACTS_DIR / "proactive" / "claude_code_intel"
+    handle_states = []
+    combined_seen_count = 0
+    primary_state: dict = {}
+    if intel_root.exists():
+        for state_file in sorted(intel_root.glob("state__*.json")):
+            hs = _safe_read_json_file(state_file, {})
+            if hs:
+                handle_states.append({
+                    "handle": str(hs.get("handle") or state_file.stem.replace("state__", "")),
+                    "last_seen_post_id": str(hs.get("last_seen_post_id") or ""),
+                    "last_success_at": str(hs.get("last_success_at") or ""),
+                    "seen_post_count": len(list(hs.get("seen_post_ids") or [])),
+                })
+                combined_seen_count += len(list(hs.get("seen_post_ids") or []))
+                if not primary_state:
+                    primary_state = hs
+        # Legacy fallback
+        if not handle_states:
+            legacy = _safe_read_json_file(intel_root / "state.json", {})
+            if legacy:
+                primary_state = legacy
+                handle_states.append({
+                    "handle": str(legacy.get("handle") or "ClaudeDevs"),
+                    "last_seen_post_id": str(legacy.get("last_seen_post_id") or ""),
+                    "last_success_at": str(legacy.get("last_success_at") or ""),
+                    "seen_post_count": len(list(legacy.get("seen_post_ids") or [])),
+                })
+                combined_seen_count = len(list(legacy.get("seen_post_ids") or []))
+    state = {
+        "handle": str(primary_state.get("handle") or "ClaudeDevs"),
+        "last_seen_post_id": str(primary_state.get("last_seen_post_id") or ""),
+        "last_success_at": str(primary_state.get("last_success_at") or ""),
+        "seen_post_count": combined_seen_count,
+        "handles": handle_states,
+    }
     vault_root = _claude_code_intel_vault_root()
     vault_index = vault_root / "index.md"
     vault_overview = vault_root / "overview.md"
     return {
         "status": "ok",
-        "state": {
-            "handle": str(state.get("handle") or "ClaudeDevs"),
-            "last_seen_post_id": str(state.get("last_seen_post_id") or ""),
-            "last_success_at": str(state.get("last_success_at") or ""),
-            "seen_post_count": len(list(state.get("seen_post_ids") or [])),
-        },
+        "state": state,
         "latest_packet": packets[0] if packets else None,
         "packets": packets,
         "rolling": _claude_code_intel_rolling_payload(),

@@ -188,3 +188,123 @@ def test_fallback_bundle_includes_linked_source_context(monkeypatch, tmp_path: P
     kevin = str(bundle.get("for_kevin_markdown") or "")
     assert "MCP" in kevin or "docs.anthropic.com" in kevin, \
         f"for_kevin_markdown should reference the specific linked source content, got: {kevin[:200]}"
+
+
+def _make_packet_with_actions(
+    artifacts_root: Path,
+    *,
+    handle: str = "ClaudeDevs",
+    date: str = "2026-04-23",
+    stamp: str = "161449",
+    actions: list[dict],
+) -> Path:
+    """Create a packet with arbitrary action tiers and handles."""
+    packet_dir = artifacts_root / "proactive" / "claude_code_intel" / "packets" / date / f"{stamp}__{handle}"
+    packet_dir.mkdir(parents=True, exist_ok=True)
+    (packet_dir / "manifest.json").write_text(
+        json.dumps({
+            "generated_at": f"{date}T16:14:49.256307+00:00",
+            "handle": handle,
+            "new_post_count": len(actions),
+            "action_count": len(actions),
+            "ok": True,
+        }),
+        encoding="utf-8",
+    )
+    (packet_dir / "actions.json").write_text(json.dumps(actions), encoding="utf-8")
+    (packet_dir / "linked_sources.json").write_text("[]", encoding="utf-8")
+    return packet_dir
+
+
+def test_rollup_excludes_tier1_from_synthesis(monkeypatch, tmp_path: Path) -> None:
+    """Tier 1 digest posts should stay in packets but never appear as capability bundles."""
+    artifacts_root = tmp_path / "artifacts"
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("universal_agent.services.claude_code_intel_rollup._repo_root", lambda: repo_root)
+    monkeypatch.setattr("universal_agent.services.claude_code_intel_rollup._has_llm_key", lambda: False)
+
+    _make_packet_with_actions(
+        artifacts_root,
+        handle="bcherny",
+        date="2026-04-23",
+        stamp="100000",
+        actions=[
+            {
+                "post_id": "tier1_personal",
+                "tier": 1,
+                "action_type": "digest",
+                "url": "https://x.com/bcherny/status/tier1_personal",
+                "text": "Great dinner with the team!",
+                "links": [],
+                "classifier": {"reasoning": "Personal tweet, no technical content."},
+            },
+        ],
+    )
+    _make_packet_with_actions(
+        artifacts_root,
+        handle="ClaudeDevs",
+        date="2026-04-23",
+        stamp="100001",
+        actions=[
+            {
+                "post_id": "tier3_feature",
+                "tier": 3,
+                "action_type": "demo_task",
+                "url": "https://x.com/ClaudeDevs/status/tier3_feature",
+                "text": "New MCP integration available for Claude Code.",
+                "links": ["https://docs.anthropic.com/mcp"],
+                "classifier": {"reasoning": "Concrete feature with official docs link."},
+            },
+        ],
+    )
+
+    payload = build_rolling_assets(artifacts_root=artifacts_root)
+
+    bundles = payload.get("bundles") or []
+    bundle_post_ids = set()
+    for bundle in bundles:
+        for post_id in bundle.get("discovery_posts") or []:
+            bundle_post_ids.add(post_id)
+
+    # Tier 3 should be present
+    assert "tier3_feature" in bundle_post_ids, "Tier 3 post should produce a bundle"
+    # Tier 1 should NOT be present
+    assert "tier1_personal" not in bundle_post_ids, "Tier 1 digest should NOT produce a bundle"
+
+
+def test_rollup_includes_tier2_from_any_handle(monkeypatch, tmp_path: Path) -> None:
+    """Tier 2+ posts from any handle should flow into synthesis."""
+    artifacts_root = tmp_path / "artifacts"
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("universal_agent.services.claude_code_intel_rollup._repo_root", lambda: repo_root)
+    monkeypatch.setattr("universal_agent.services.claude_code_intel_rollup._has_llm_key", lambda: False)
+
+    _make_packet_with_actions(
+        artifacts_root,
+        handle="bcherny",
+        date="2026-04-23",
+        stamp="100010",
+        actions=[
+            {
+                "post_id": "boris_tier2_docs",
+                "tier": 2,
+                "action_type": "kb_update",
+                "url": "https://x.com/bcherny/status/boris_tier2_docs",
+                "text": "Updated docs on how Claude Code handles prompt caching.",
+                "links": ["https://docs.anthropic.com/prompt-caching"],
+                "classifier": {"reasoning": "Docs reference from Claude Code creator."},
+            },
+        ],
+    )
+
+    payload = build_rolling_assets(artifacts_root=artifacts_root)
+
+    bundles = payload.get("bundles") or []
+    assert bundles, "Tier 2 post from bcherny should produce a bundle"
+    bundle_post_ids = set()
+    for bundle in bundles:
+        for post_id in bundle.get("discovery_posts") or []:
+            bundle_post_ids.add(post_id)
+    assert "boris_tier2_docs" in bundle_post_ids, "Tier 2 from bcherny should be in synthesis"

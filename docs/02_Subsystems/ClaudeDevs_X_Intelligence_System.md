@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This subsystem turns the `@ClaudeDevs` X account into a durable Claude Code intelligence lane for Universal Agent.
+This subsystem turns multiple Claude Code–related X accounts (currently `@ClaudeDevs` and `@bcherny`) into a durable intelligence lane for Universal Agent.
 
 It exists to keep the project current on Claude Code changes that are newer than model training cutoffs, then convert those changes into:
 
@@ -16,7 +16,7 @@ It exists to keep the project current on Claude Code changes that are newer than
 
 The system can now:
 
-1. Poll `@ClaudeDevs` via the official X API.
+1. Poll multiple configured X handles (`@ClaudeDevs`, `@bcherny`) via the official X API, with per-handle state tracking.
 2. Write durable packets under `artifacts/proactive/claude_code_intel/packets/`.
 3. Deduplicate by stable X post ID.
 4. Classify posts into `digest`, `kb_update`, `demo_task`, or `strategic_follow_up`.
@@ -39,13 +39,15 @@ The system can now:
 21. Log warnings when LLM synthesis fails or is unavailable, instead of silently falling back.
 22. Enrich fallback bundles with linked source titles, URLs, and excerpts instead of generic placeholder text.
 23. Provide operator trigger controls (`Run Pipeline`, `Rollup Only`) on the dashboard via `POST /api/v1/dashboard/claude-code-intel/trigger`.
+24. Support multiple intelligence handles via `UA_CLAUDE_CODE_INTEL_X_HANDLES` env var (default: `ClaudeDevs,bcherny`), with per-handle state files (`state__{handle}.json`) and automatic migration from legacy single `state.json`.
+25. Filter Tier 1 digest posts from rolling synthesis (`MIN_SYNTHESIS_TIER = 2`) so personal/community chatter never becomes capability bundles while remaining in packet history.
 
 ## Canonical Paths
 
 | Surface | Path |
 | --- | --- |
 | Packet root | `UA_ARTIFACTS_DIR/proactive/claude_code_intel/packets/` |
-| State file | `UA_ARTIFACTS_DIR/proactive/claude_code_intel/state.json` |
+| State files (per-handle) | `UA_ARTIFACTS_DIR/proactive/claude_code_intel/state__{handle}.json` |
 | Lane ledger root | `UA_ARTIFACTS_DIR/proactive/claude_code_intel/ledger/` |
 | OAuth state | `UA_ARTIFACTS_DIR/proactive/claude_code_intel/oauth2/` |
 | Lightweight source index | `UA_ARTIFACTS_DIR/knowledge-bases/claude-code-intelligence/source_index.md` |

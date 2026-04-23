@@ -35,6 +35,7 @@ from universal_agent.services.proactive_artifacts import (
 
 
 DEFAULT_HANDLE = "ClaudeDevs"
+DEFAULT_HANDLES = ["ClaudeDevs", "bcherny"]
 DEFAULT_MAX_RESULTS = 25
 SOURCE_KIND_UPDATE = "claude_code_update"
 SOURCE_KIND_DEMO_TASK = "claude_code_demo_task"
@@ -140,6 +141,15 @@ class ClaudeCodeIntelConfig:
             request_timeout_seconds=float(os.getenv("UA_CLAUDE_CODE_INTEL_TIMEOUT_SECONDS", "20") or 20),
         )
 
+    @classmethod
+    def all_handles_from_env(cls) -> list[str]:
+        """Return all configured handles from env or default list."""
+        env_val = str(os.getenv("UA_CLAUDE_CODE_INTEL_X_HANDLES") or "").strip()
+        if env_val:
+            handles = [h.strip().lstrip("@") for h in env_val.split(",") if h.strip()]
+            return handles or list(DEFAULT_HANDLES)
+        return list(DEFAULT_HANDLES)
+
 
 @dataclass
 class ClaudeCodeIntelRun:
@@ -189,7 +199,7 @@ def run_sync(
     packet_dir.mkdir(parents=True, exist_ok=True)
     if conn is not None and conn.row_factory is None:
         conn.row_factory = sqlite3.Row
-    state_path = lane_root / "state.json"
+    state_path = resolve_state_path(lane_root, handle=cfg.handle)
     state = _load_state(state_path)
     token = bearer_token if bearer_token is not None else get_x_bearer_token()
     run = ClaudeCodeIntelRun(ok=False, generated_at=generated_at, handle=cfg.handle, packet_dir=str(packet_dir))
@@ -947,6 +957,27 @@ def _new_packet_dir(root: Path, *, handle: str, generated_at: str) -> Path:
     stamp = dt.strftime("%H%M%S")
     safe_handle = re.sub(r"[^A-Za-z0-9_.-]+", "-", handle.strip().lstrip("@")) or DEFAULT_HANDLE
     return root / "packets" / date / f"{stamp}__{safe_handle}"
+
+
+def resolve_state_path(lane_root: Path, handle: str) -> Path:
+    """Per-handle state file. Falls back to legacy state.json for migration."""
+    safe_handle = str(handle or DEFAULT_HANDLE).strip().lstrip("@").lower() or DEFAULT_HANDLE.lower()
+    per_handle = lane_root / f"state__{safe_handle}.json"
+    if per_handle.exists():
+        return per_handle
+    # Migrate from legacy state.json if it matches this handle
+    legacy = lane_root / "state.json"
+    if legacy.exists():
+        try:
+            legacy_state = json.loads(legacy.read_text(encoding="utf-8"))
+        except Exception:
+            legacy_state = {}
+        legacy_handle = str(legacy_state.get("handle") or "").strip().lstrip("@").lower()
+        if legacy_handle == safe_handle or not legacy_handle:
+            # Copy legacy state into per-handle file on first access
+            _save_state(per_handle, legacy_state)
+            return per_handle
+    return per_handle
 
 
 def _load_state(path: Path) -> dict[str, Any]:

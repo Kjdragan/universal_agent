@@ -190,52 +190,87 @@ async def main() -> int:
     initialize_runtime_secrets(profile=args.profile or None)
     cfg = _config_from_args(args)
 
+    # Determine handles: explicit --handle flag → single handle, else all configured handles
+    if args.handle.strip():
+        handles = [args.handle.strip().lstrip("@")]
+    else:
+        handles = ClaudeCodeIntelConfig.all_handles_from_env()
+
     with connect_runtime_db(get_activity_db_path()) as conn:
         conn.row_factory = sqlite3.Row
-        result_cfg = cfg
-        if not args.no_post_process and cfg.queue_task_hub:
-            result_cfg = replace(cfg, queue_task_hub=False)
-        result = run_sync(config=result_cfg, conn=conn)
-        post_process: dict[str, Any] = {}
-        if result.ok and not args.no_post_process:
-            post_process = replay_packet(
-                config=ClaudeCodeIntelReplayConfig(
-                    packet_dir=Path(result.packet_dir),
-                    queue_task_hub=cfg.queue_task_hub,
-                    write_vault=True,
-                ),
-                conn=conn,
+
+        all_results: list[dict[str, Any]] = []
+        any_ok = False
+
+        for handle in handles:
+            handle_cfg = replace(cfg, handle=handle)
+            result_cfg = handle_cfg
+            if not args.no_post_process and handle_cfg.queue_task_hub:
+                result_cfg = replace(handle_cfg, queue_task_hub=False)
+
+            logger.info("Syncing handle: @%s", handle)
+            result = run_sync(config=result_cfg, conn=conn)
+
+            post_process: dict[str, Any] = {}
+            if result.ok and not args.no_post_process:
+                post_process = replay_packet(
+                    config=ClaudeCodeIntelReplayConfig(
+                        packet_dir=Path(result.packet_dir),
+                        queue_task_hub=handle_cfg.queue_task_hub,
+                        write_vault=True,
+                    ),
+                    conn=conn,
+                )
+
+            handle_payload = {
+                "ok": result.ok,
+                "generated_at": result.generated_at,
+                "handle": result.handle,
+                "user_id": result.user_id,
+                "packet_dir": result.packet_dir,
+                "new_post_count": result.new_post_count,
+                "seen_post_count": result.seen_post_count,
+                "action_count": result.action_count,
+                "queued_task_count": int(post_process.get("queued_task_count") or result.queued_task_count),
+                "artifact_id": result.artifact_id,
+                "error": result.error,
+                "post_process": post_process,
+            }
+            all_results.append(handle_payload)
+            if result.ok:
+                any_ok = True
+            logger.info(
+                "Handle @%s: ok=%s, new_posts=%d, actions=%d",
+                handle, result.ok, result.new_post_count, result.action_count,
             )
 
-        payload = {
-            "ok": result.ok,
-            "generated_at": result.generated_at,
-            "handle": result.handle,
-            "user_id": result.user_id,
-            "packet_dir": result.packet_dir,
-            "new_post_count": result.new_post_count,
-            "seen_post_count": result.seen_post_count,
-            "action_count": result.action_count,
-            "queued_task_count": int(post_process.get("queued_task_count") or result.queued_task_count),
-            "artifact_id": result.artifact_id,
-            "error": result.error,
-            "post_process": post_process,
-        }
-        summary = build_operator_report(sync_payload=payload, artifacts_root=cfg.artifacts_root)
+        # Use the first successful result for operator report; aggregate stats
+        primary_payload = next((r for r in all_results if r["ok"]), all_results[0] if all_results else {})
+        combined_payload = dict(primary_payload)
+        combined_payload["handles_synced"] = [r["handle"] for r in all_results]
+        combined_payload["handle_results"] = all_results
+        combined_payload["new_post_count"] = sum(r.get("new_post_count", 0) for r in all_results)
+        combined_payload["action_count"] = sum(r.get("action_count", 0) for r in all_results)
+        combined_payload["queued_task_count"] = sum(r.get("queued_task_count", 0) for r in all_results)
+
+        summary = build_operator_report(sync_payload=combined_payload, artifacts_root=cfg.artifacts_root)
+
+        # Rollup runs once — it scans ALL packet dirs across all handles
         rolling: dict[str, Any] = {}
-        if result.ok:
+        if any_ok:
             rolling = build_rolling_assets(artifacts_root=cfg.artifacts_root)
+
         email_result: dict[str, Any] = {}
         email_to = _resolved_email_target(args)
         email_policy = _resolved_email_policy(args)
-        should_email = bool(email_to) and not args.no_email and _should_send_email(policy=email_policy, payload=payload)
+        should_email = bool(email_to) and not args.no_email and _should_send_email(policy=email_policy, payload=combined_payload)
         if should_email:
             email_result = await _maybe_send_email(recipient=email_to, summary=summary, conn=conn)
 
     print(
         json.dumps(
             {
-                **payload,
+                **combined_payload,
                 "email_policy": email_policy,
                 "email_to": email_to,
                 "operator_report": {
@@ -251,7 +286,7 @@ async def main() -> int:
             sort_keys=True,
         )
     )
-    return 0 if result.ok else 1
+    return 0 if any_ok else 1
 
 
 if __name__ == "__main__":

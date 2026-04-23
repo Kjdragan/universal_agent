@@ -139,7 +139,7 @@ def test_run_sync_writes_packet_and_state_without_task_for_tier_two(tmp_path: Pa
     assert (packet / "manifest.json").exists()
     assert (packet / "raw_posts.json").exists()
     assert json.loads((packet / "new_posts.json").read_text(encoding="utf-8"))[0]["id"] == "101"
-    state = json.loads((tmp_path / "proactive" / "claude_code_intel" / "state.json").read_text(encoding="utf-8"))
+    state = json.loads((tmp_path / "proactive" / "claude_code_intel" / "state__claudedevs.json").read_text(encoding="utf-8"))
     assert state["last_seen_post_id"] == "101"
 
 
@@ -236,3 +236,94 @@ def test_oauth1_header_is_constructed_when_credentials_exist(monkeypatch) -> Non
     assert "oauth_token=\"access-token\"" in headers["Authorization"]
     assert "consumer-secret" not in headers["Authorization"]
     assert "access-secret" not in headers["Authorization"]
+
+
+def _client_for_handle(handle: str, *, user_id: str, posts: list[dict]) -> httpx.Client:
+    """Create a mock client that responds for any handle."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        if f"/2/users/by/username/{handle}" in str(request.url):
+            return httpx.Response(200, json={"data": {"id": user_id, "username": handle, "name": handle}})
+        if f"/2/users/{user_id}/tweets" in str(request.url):
+            return httpx.Response(200, json={"data": posts, "meta": {"result_count": len(posts)}})
+        return httpx.Response(404, json={"title": "not found"})
+    return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def test_run_sync_uses_per_handle_state(tmp_path: Path) -> None:
+    """Each handle should get its own state file (state__{handle}.json)."""
+    conn = sqlite3.connect(":memory:")
+    config_devs = ClaudeCodeIntelConfig(handle="ClaudeDevs", max_results=10, queue_task_hub=False, artifacts_root=tmp_path)
+    client_devs = _client_for_handle("ClaudeDevs", user_id="12345", posts=[
+        {"id": "501", "text": "ClaudeDevs post", "created_at": "2026-04-23T12:00:00.000Z"},
+    ])
+
+    result = run_sync(config=config_devs, bearer_token="token", conn=conn, client=client_devs)
+    assert result.ok is True
+
+    lane_root = tmp_path / "proactive" / "claude_code_intel"
+    per_handle_state = lane_root / "state__claudedevs.json"
+    assert per_handle_state.exists(), f"Expected per-handle state file at {per_handle_state}"
+
+    state = json.loads(per_handle_state.read_text(encoding="utf-8"))
+    assert state["handle"] == "ClaudeDevs"
+    assert state["last_seen_post_id"] == "501"
+
+
+def test_run_sync_migrates_legacy_state(tmp_path: Path) -> None:
+    """If a legacy state.json exists for a handle, run_sync should read from it and write to per-handle file."""
+    lane_root = tmp_path / "proactive" / "claude_code_intel"
+    lane_root.mkdir(parents=True, exist_ok=True)
+
+    # Write legacy state with seen_post_ids
+    legacy_state = {"handle": "ClaudeDevs", "last_seen_post_id": "400", "seen_post_ids": ["400"]}
+    (lane_root / "state.json").write_text(json.dumps(legacy_state), encoding="utf-8")
+
+    conn = sqlite3.connect(":memory:")
+    config = ClaudeCodeIntelConfig(handle="ClaudeDevs", max_results=10, queue_task_hub=False, artifacts_root=tmp_path)
+    client = _client_for_handle("ClaudeDevs", user_id="12345", posts=[
+        {"id": "401", "text": "New post", "created_at": "2026-04-23T12:00:00.000Z"},
+    ])
+
+    result = run_sync(config=config, bearer_token="token", conn=conn, client=client)
+    assert result.ok is True
+    assert result.new_post_count == 1  # should see 401 as new, 400 as seen
+
+    per_handle = lane_root / "state__claudedevs.json"
+    assert per_handle.exists(), "Should have written per-handle state file"
+    state = json.loads(per_handle.read_text(encoding="utf-8"))
+    assert "401" in state["seen_post_ids"]
+    assert "400" in state["seen_post_ids"]
+
+
+def test_two_handles_maintain_separate_state(tmp_path: Path) -> None:
+    """Two handles should not share state — each tracks its own seen_post_ids."""
+    conn = sqlite3.connect(":memory:")
+
+    # Run ClaudeDevs
+    config_devs = ClaudeCodeIntelConfig(handle="ClaudeDevs", max_results=10, queue_task_hub=False, artifacts_root=tmp_path)
+    client_devs = _client_for_handle("ClaudeDevs", user_id="12345", posts=[
+        {"id": "601", "text": "ClaudeDevs post", "created_at": "2026-04-23T12:00:00.000Z"},
+    ])
+    result_devs = run_sync(config=config_devs, bearer_token="token", conn=conn, client=client_devs)
+    assert result_devs.ok is True
+    assert result_devs.new_post_count == 1
+
+    # Run bcherny
+    config_boris = ClaudeCodeIntelConfig(handle="bcherny", max_results=10, queue_task_hub=False, artifacts_root=tmp_path)
+    client_boris = _client_for_handle("bcherny", user_id="67890", posts=[
+        {"id": "602", "text": "Boris post about Claude Code", "created_at": "2026-04-23T12:00:00.000Z"},
+    ])
+    result_boris = run_sync(config=config_boris, bearer_token="token", conn=conn, client=client_boris)
+    assert result_boris.ok is True
+    assert result_boris.new_post_count == 1
+
+    lane_root = tmp_path / "proactive" / "claude_code_intel"
+    devs_state = json.loads((lane_root / "state__claudedevs.json").read_text(encoding="utf-8"))
+    boris_state = json.loads((lane_root / "state__bcherny.json").read_text(encoding="utf-8"))
+
+    assert devs_state["handle"] == "ClaudeDevs"
+    assert boris_state["handle"] == "bcherny"
+    assert "601" in devs_state["seen_post_ids"]
+    assert "601" not in boris_state["seen_post_ids"]
+    assert "602" in boris_state["seen_post_ids"]
+    assert "602" not in devs_state["seen_post_ids"]

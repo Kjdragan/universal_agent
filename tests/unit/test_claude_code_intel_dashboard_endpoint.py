@@ -15,7 +15,7 @@ async def test_claude_code_intel_dashboard_endpoint_returns_latest_packet_and_va
 
     packet_dir = tmp_path / "proactive" / "claude_code_intel" / "packets" / "2026-04-23" / "161449__ClaudeDevs"
     packet_dir.mkdir(parents=True, exist_ok=True)
-    (tmp_path / "proactive" / "claude_code_intel" / "state.json").write_text(
+    (tmp_path / "proactive" / "claude_code_intel" / "state__claudedevs.json").write_text(
         json.dumps(
             {
                 "handle": "ClaudeDevs",
@@ -201,3 +201,35 @@ async def test_claude_code_intel_trigger_rejects_invalid_action(monkeypatch, tmp
     )
     assert payload["status"] == "error"
     assert "invalid" in payload.get("detail", "").lower() or "unsupported" in payload.get("detail", "").lower()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_returns_multi_handle_state(monkeypatch, tmp_path: Path):
+    """Dashboard should return aggregated state from multiple per-handle state files."""
+    monkeypatch.setattr(gateway_server, "_require_ops_auth", lambda _request: None)
+    monkeypatch.setattr(gateway_server, "ARTIFACTS_DIR", tmp_path)
+
+    intel_root = tmp_path / "proactive" / "claude_code_intel"
+    intel_root.mkdir(parents=True, exist_ok=True)
+
+    (intel_root / "state__claudedevs.json").write_text(
+        json.dumps({"handle": "ClaudeDevs", "last_seen_post_id": "100", "seen_post_ids": ["100", "99"]}),
+        encoding="utf-8",
+    )
+    (intel_root / "state__bcherny.json").write_text(
+        json.dumps({"handle": "bcherny", "last_seen_post_id": "200", "seen_post_ids": ["200"]}),
+        encoding="utf-8",
+    )
+
+    # Create minimal vault so the endpoint doesn't blow up
+    vault = tmp_path / "knowledge-vaults" / "claude-code-intelligence"
+    vault.mkdir(parents=True, exist_ok=True)
+
+    payload = await gateway_server.dashboard_claude_code_intel(request=object(), limit=10)
+
+    state = payload["state"]
+    assert state["seen_post_count"] == 3  # 2 from ClaudeDevs + 1 from bcherny
+    assert len(state["handles"]) == 2
+    handle_names = [h["handle"] for h in state["handles"]]
+    assert "bcherny" in handle_names
+    assert "ClaudeDevs" in handle_names

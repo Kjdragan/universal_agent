@@ -22,6 +22,7 @@ from universal_agent.services.claude_code_intel import (
 
 ROLLING_WINDOW_DAYS = 14
 MAX_ACTION_CONTEXTS = 18
+MIN_SYNTHESIS_TIER = 2  # Tier 1 digests stay in packets but never become bundles
 
 _ROLLUP_SYSTEM = """\
 You are synthesizing the newest Claude Code / Claude Agent SDK developments into a builder-focused rolling intelligence brief.
@@ -239,6 +240,9 @@ def _load_recent_action_contexts(*, artifacts_root: Path | None = None, window_d
             post_id = str(action.get("post_id") or "").strip()
             if not post_id or post_id in seen_posts:
                 continue
+            tier = int(action.get("tier") or 0)
+            if tier < MIN_SYNTHESIS_TIER:
+                continue  # Tier 1 digests stay in packets but never become bundles
             seen_posts.add(post_id)
             canonical_sources = sorted(
                 linked_by_post.get(post_id, []),
