@@ -117,6 +117,20 @@ async def test_claude_code_intel_dashboard_endpoint_returns_latest_packet_and_va
         "# Demo\n",
         encoding="utf-8",
     )
+    (vault_root / "sources" / "bad-x-shell.md").write_text(
+        "---\n"
+        "title: Bad X Shell\n"
+        "kind: source\n"
+        "updated_at: '2026-04-23T16:15:00+00:00'\n"
+        "tags:\n"
+        "- external\n"
+        "- x.com\n"
+        "- JavaScript\n"
+        "summary: JavaScript is not available. Please enable JavaScript or switch to a supported browser to continue using x.com.\n"
+        "---\n\n"
+        "# Bad\n",
+        encoding="utf-8",
+    )
 
     payload = await gateway_server.dashboard_claude_code_intel(request=object(), limit=20)
 

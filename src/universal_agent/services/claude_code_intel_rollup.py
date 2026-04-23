@@ -554,6 +554,7 @@ def _write_current_and_history(*, synthesis: dict[str, Any], artifacts_root: Pat
     history_dir = _rolling_history_dir(artifacts_root)
     current_bundles_dir = current_dir / "bundles"
     history_stamp = _timestamp_slug()
+    generated_at_iso = datetime.now(timezone.utc).isoformat()
     history_item_dir = history_dir / history_stamp
 
     for path in (current_dir, current_bundles_dir, history_item_dir):
@@ -585,7 +586,7 @@ def _write_current_and_history(*, synthesis: dict[str, Any], artifacts_root: Pat
         )
 
     narrative_payload = {
-        "generated_at": history_stamp,
+        "generated_at": generated_at_iso,
         "window_days": ROLLING_WINDOW_DAYS,
         "title": str(synthesis.get("title") or f"Rolling {ROLLING_WINDOW_DAYS}-Day Claude Code Builder Brief"),
         "narrative_markdown": str(synthesis.get("narrative_markdown") or ""),
@@ -646,7 +647,7 @@ def _materialize_repo_library(*, synthesis: dict[str, Any]) -> dict[str, Any]:
         )
 
     (current_root / "index.json").write_text(
-        json.dumps({"generated_at": _timestamp_slug(), "bundles": bundle_index}, indent=2, ensure_ascii=True, sort_keys=True) + "\n",
+        json.dumps({"generated_at": datetime.now(timezone.utc).isoformat(), "bundles": bundle_index}, indent=2, ensure_ascii=True, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     return {"root": str(library_root), "current_root": str(current_root), "bundle_count": len(bundle_index)}

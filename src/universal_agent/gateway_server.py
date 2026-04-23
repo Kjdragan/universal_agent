@@ -16853,13 +16853,26 @@ def _claude_code_intel_knowledge_pages(limit: int = 200) -> list[dict[str, Any]]
             continue
         page_path = vault_root / rel_path
         meta, _ = _frontmatter_and_body(page_path)
+        summary_text = str(record.get("summary") or "")
+        lowered_summary = summary_text.lower()
+        tags = [str(tag) for tag in (meta.get("tags") or []) if str(tag).strip()]
+        lowered_tags = {tag.lower() for tag in tags}
+        if (
+            "javascript is not available" in lowered_summary
+            or "please enable javascript or switch to a supported browser" in lowered_summary
+            or (
+                {"x.com", "twitter.com", "javascript"}.intersection(lowered_tags)
+                and "supported browser" in lowered_summary
+            )
+        ):
+            continue
         link_payload = _artifact_link_payload(page_path)
         records.append(
             {
                 "path": rel_path,
                 "title": str(record.get("title") or page_path.stem),
-                "summary": str(record.get("summary") or ""),
-                "tags": [str(tag) for tag in (meta.get("tags") or []) if str(tag).strip()],
+                "summary": summary_text,
+                "tags": tags,
                 "updated_at": str(meta.get("updated_at") or ""),
                 "api_url": link_payload["api_url"],
                 "storage_href": link_payload["storage_href"],
