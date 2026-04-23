@@ -13243,8 +13243,14 @@ def _require_session_api_auth(request: Request) -> None:
     if not SESSION_API_TOKEN:
         raise HTTPException(status_code=503, detail="Session API token is not configured.")
     token = _extract_auth_token_from_headers(request.headers)
-    if token != SESSION_API_TOKEN:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    if token == SESSION_API_TOKEN:
+        return
+    # Also accept OPS_TOKEN as a valid alternative — the dashboard proxy sends
+    # UA_OPS_TOKEN, while SESSION_API_TOKEN may resolve to a separate
+    # UA_INTERNAL_API_TOKEN from Infisical.  Both are legitimate credentials.
+    if OPS_TOKEN and token == OPS_TOKEN:
+        return
+    raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 def _require_youtube_ingest_auth(request: Request) -> None:
@@ -13264,10 +13270,13 @@ async def _require_session_ws_auth(websocket: WebSocket) -> bool:
         await websocket.close(code=1011, reason="Session API token is not configured.")
         return False
     token = _extract_auth_token_from_headers(websocket.headers)
-    if token != SESSION_API_TOKEN:
-        await websocket.close(code=4401, reason="Unauthorized")
-        return False
-    return True
+    if token == SESSION_API_TOKEN:
+        return True
+    # Accept OPS_TOKEN as valid alternative (see _require_session_api_auth)
+    if OPS_TOKEN and token == OPS_TOKEN:
+        return True
+    await websocket.close(code=4401, reason="Unauthorized")
+    return False
 
 
 # =============================================================================
