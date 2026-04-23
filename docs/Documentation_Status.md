@@ -98,6 +98,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 120 | ClaudeDevs X Intel VPS Runtime Audit — read-only production audit of the first 19-post `@ClaudeDevs` cron packet, downstream Simone work products, Task Hub/artifact state, email verification, tier-count discrepancy, and recommendations for the Claude Code intelligence wiki pipeline |
 | 121 | Test Strategy and Regression Prevention — **canonical source of truth** for test suite layout (1211 unit tests), mandatory pre-ship commands, ContextVar isolation architecture, common failure patterns, CI/CD test gap analysis, maintenance checklist, and the April 20 stabilization history |
 | 122 | ClaudeDevs X Intel Implementation Plan — code-verified phased implementation plan for replay/backfill, external vault creation, linked-source expansion, packet candidate ledgering, Task Hub completion evidence mapping, cron/heartbeat workspace separation, operator skill/report surface, and LLM-assisted tiering |
+| 123 | Gemini TTS Source of Truth — **canonical source of truth** for Gemini Text-to-Speech: API architecture (Cloud TTS vs Vertex AI vs AI Studio), model registry, auth patterns (service account + ADC), production code samples, voice inventory, markup tags, chunking strategy, region requirements, and lessons learned |
 
 ## CSI Subsystem (04_CSI/)
 

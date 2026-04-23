@@ -27,5 +27,7 @@
     "message": "Deep interview is active; auto-approval shortcuts are blocked until the interview finishes.",
     "released_at": "2026-04-22T18:22:21.643Z",
     "exit_reason": "handoff"
-  }
+  },
+  "iteration": 1,
+  "last_turn_at": "2026-04-23T01:42:49.426Z"
 }
