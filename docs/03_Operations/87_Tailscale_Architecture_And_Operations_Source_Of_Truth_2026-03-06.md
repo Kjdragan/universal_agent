@@ -283,6 +283,22 @@ This is one of the main operational benefits of the current Tailscale setup.
 - sync can be gated by remote ready markers
 - sync is intentionally for mirror/debug workflows, not as proof of runtime parity
 
+## 5. Cross-Machine File Resolution via SSHFS (Added 2026-04-23)
+
+Primary implementations:
+- VPS systemd mount unit / fstab entry (`kjdragan@<tailscale-ip>:/home/kjdragan /home/kjdragan`)
+- `openssh-server` on the operator workstation
+
+Purpose:
+- Enable the Universal Agent running on the VPS to transparently read files referenced by local desktop paths (e.g. `/home/kjdragan/lrepos/...`).
+- By mounting the workstation's `/home/kjdragan` directory into the VPS at the exact same path using SSHFS over Tailscale, path resolution for local files "just works" without requiring custom SDK file-fetching tools.
+
+### Current Tailnet-Specific Behavior
+
+- The operator workstation (`tag:operator-workstation`) must run `sshd` and accept connections from the VPS.
+- The VPS `root` (or `ua`) user connects via `id_ed25519` key to the workstation over its Tailscale IP.
+- This creates a seamless bidirectional file-referencing environment.
+
 ## Operational Workflow Today
 
 ## Primary Current Workflow
