@@ -1979,6 +1979,70 @@ class SearchResultFile(BaseModel):
 # CRAWL4AI TOOLS & HELPERS
 # =============================================================================
 
+# ── Crawl Engine Selection ──────────────────────────────────────────────────
+# Controls which backend _crawl_core uses for URL content extraction.
+#   "jina"    — Use Jina Reader (r.jina.ai). Free, no API key, bypasses bot protection.
+#   "crawl4ai" — Use Crawl4AI Cloud SDK (requires CRAWL4AI_API_KEY).
+#   "auto"    — Try Crawl4AI first, fall back to Jina on failure/rate-limit.
+# Set via env var CRAWL_ENGINE. Default: "jina" (active while Crawl4AI is rate-limited).
+_CRAWL_ENGINE = os.environ.get("CRAWL_ENGINE", "jina").strip().lower()
+
+
+async def _crawl_single_url_jina(url: str, semaphore) -> dict:
+    """Crawl a single URL using Jina Reader (r.jina.ai) for clean markdown extraction.
+
+    Jina Reader renders JavaScript, bypasses Cloudflare/bot protection,
+    and returns clean markdown — the same format expected by the downstream
+    post-processing pipeline.
+    """
+    import asyncio
+    import ssl
+    import certifi
+
+    jina_url = f"https://r.jina.ai/{url}"
+    ctx = ssl.create_default_context(cafile=certifi.where())
+
+    async with semaphore:
+        try:
+            req = urllib.request.Request(jina_url, headers={
+                "User-Agent": "UA-Research/1.0",
+                "Accept": "text/plain",
+            })
+            loop = asyncio.get_event_loop()
+            resp_data = await loop.run_in_executor(
+                None,
+                lambda: urllib.request.urlopen(req, timeout=60, context=ctx).read()
+            )
+            content = resp_data.decode("utf-8", errors="replace")
+
+            if len(content.strip()) < 100:
+                return {"url": url, "success": False, "error": "Jina returned too little content"}
+
+            # Post-process: Strip markdown links, keep just the text (same as Crawl4AI path)
+            import re as _re
+            content = _re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", content)
+            content = _re.sub(r"^https?://[^\s]+\s*$", "", content, flags=_re.MULTILINE)
+            content = _re.sub(r"!\[[^\]]*\]\([^)]+\)", "", content)
+            content = _re.sub(r"\n{3,}", "\n\n", content)
+
+            return {
+                "url": url,
+                "success": True,
+                "content": content,
+                "raw_content": resp_data.decode("utf-8", errors="replace"),  # Keep for date extraction
+                "metadata": {},
+            }
+        except Exception as e:
+            return {"url": url, "success": False, "error": f"Jina Reader error: {str(e)}"}
+
+
+async def _crawl_urls_via_jina(urls: list[str], concurrency: int = 8) -> list[dict]:
+    """Crawl multiple URLs in parallel using Jina Reader."""
+    import asyncio
+    semaphore = asyncio.Semaphore(concurrency)
+    tasks = [_crawl_single_url_jina(url, semaphore) for url in urls]
+    return await asyncio.gather(*tasks, return_exceptions=True)
+
 
 async def _crawl_core(urls: list[str], session_dir: str, output_dir: str | None = None) -> str:
     """
@@ -2002,31 +2066,152 @@ async def _crawl_core(urls: list[str], session_dir: str, output_dir: str | None 
     if not urls:
         return json.dumps({"error": "No URLs provided to crawl"}, indent=2)
 
-    # Ensure Infisical is loaded if key is missing (happens when mcp_server is spawned in worker scope)
-    crawl4ai_api_key = os.environ.get("CRAWL4AI_API_KEY")
-    if not crawl4ai_api_key:
-        try:
-            from universal_agent.infisical_loader import initialize_runtime_secrets
-            initialize_runtime_secrets()
-            crawl4ai_api_key = os.environ.get("CRAWL4AI_API_KEY")
-        except Exception as e:
-            mcp_log(f"Failed to hot-load Infisical secrets in _crawl_core: {e}", level="WARNING")
+    # ── Engine Selection ────────────────────────────────────────────────────
+    engine = _CRAWL_ENGINE  # "jina", "crawl4ai", or "auto"
+    use_jina = False
 
-    crawl4ai_api_url = os.environ.get("CRAWL4AI_API_URL")  # For Docker fallback
+    if engine == "jina":
+        use_jina = True
+        mcp_log(f"🌐 [Jina Reader] Starting crawl of {len(urls)} URLs (CRAWL_ENGINE=jina)...", level="INFO", prefix="")
+    else:
+        # For "crawl4ai" or "auto", try to resolve the Crawl4AI API key
+        # Ensure Infisical is loaded if key is missing (happens when mcp_server is spawned in worker scope)
+        crawl4ai_api_key = os.environ.get("CRAWL4AI_API_KEY")
+        if not crawl4ai_api_key:
+            try:
+                from universal_agent.infisical_loader import initialize_runtime_secrets
+                initialize_runtime_secrets()
+                crawl4ai_api_key = os.environ.get("CRAWL4AI_API_KEY")
+            except Exception as e:
+                mcp_log(f"Failed to hot-load Infisical secrets in _crawl_core: {e}", level="WARNING")
 
-    if not crawl4ai_api_key:
-        error_msg = "CRAWL4AI_API_KEY is missing from environment. Cloud API is required for crawling."
-        mcp_log(f"❌ {error_msg}", level="ERROR")
-        return json.dumps({
-            "error": error_msg,
-            "total": len(urls),
-            "successful": 0,
-            "failed": len(urls),
-            "saved_files": [],
-            "errors": [error_msg],
-        }, indent=2)
+        crawl4ai_api_url = os.environ.get("CRAWL4AI_API_URL")  # For Docker fallback
 
-    if crawl4ai_api_key:
+        if not crawl4ai_api_key:
+            if engine == "auto":
+                mcp_log("⚠️ CRAWL4AI_API_KEY missing — auto-falling back to Jina Reader", level="WARNING")
+                use_jina = True
+            else:
+                error_msg = "CRAWL4AI_API_KEY is missing from environment. Cloud API is required for crawling."
+                mcp_log(f"❌ {error_msg}", level="ERROR")
+                return json.dumps({
+                    "error": error_msg,
+                    "total": len(urls),
+                    "successful": 0,
+                    "failed": len(urls),
+                    "saved_files": [],
+                    "errors": [error_msg],
+                }, indent=2)
+
+    # ── Jina Reader Path ────────────────────────────────────────────────────
+    if use_jina:
+        import asyncio
+        mcp_log(f"🌐 [Jina Reader] Crawling {len(urls)} URLs in parallel...", level="INFO", prefix="")
+        if logfire:
+            logfire.info("jina_crawl_started", url_count=len(urls), mode="jina")
+
+        JINA_CONCURRENCY = int(os.environ.get("JINA_CONCURRENCY", "6"))
+        crawl_results = await _crawl_urls_via_jina(urls, concurrency=JINA_CONCURRENCY)
+
+        success_count = sum(1 for r in crawl_results if isinstance(r, dict) and r.get("success"))
+        mcp_log(f"✅ Jina crawl complete: {success_count}/{len(urls)} successful", level="INFO", prefix="   ")
+        if logfire:
+            logfire.info(
+                "jina_crawl_complete",
+                total_urls=len(urls),
+                success_count=success_count,
+                failed_count=len(urls) - success_count,
+            )
+
+        # Process results — reuse the same post-processing as Crawl4AI path
+        for result in crawl_results:
+            if isinstance(result, Exception):
+                try:
+                    logfire.info("crawl_failure", url="unknown", reason="exception", error=str(result), phase="jina_reader")
+                except Exception:
+                    pass
+                results_summary["failed"] += 1
+                results_summary["errors"].append({"url": "unknown", "error": str(result)})
+                continue
+
+            url = result.get("url", "unknown")
+
+            if result.get("success"):
+                content = result.get("content", "")
+                metadata = result.get("metadata", {})
+
+                if content:
+                    # Detect Cloudflare/captcha blocks
+                    is_cloudflare_blocked = len(content) < 2000 and (
+                        "cloudflare" in content.lower()
+                        or "verifying you are human" in content.lower()
+                        or "security of your connection" in content.lower()
+                    )
+                    if is_cloudflare_blocked:
+                        logger.warning(f"Cloudflare blocked: {url}")
+                        results_summary["failed"] += 1
+                        results_summary["errors"].append({"url": url, "error": "Cloudflare blocked"})
+                        continue
+
+                    # Save to file with YAML frontmatter metadata
+                    url_hash = hashlib.md5(url.encode()).hexdigest()[:12]
+                    filename = f"crawl_{url_hash}.md"
+                    filepath = os.path.join(search_results_dir, filename)
+
+                    title = metadata.get("title") or metadata.get("og:title") or "Untitled"
+                    description = metadata.get("description") or metadata.get("og:description") or ""
+
+                    # Extract article date
+                    article_date = None
+                    date_match = re.search(r"/(\d{4})/(\d{1,2})/(\d{1,2})/", url)
+                    if date_match:
+                        article_date = f"{date_match.group(1)}-{date_match.group(2).zfill(2)}-{date_match.group(3).zfill(2)}"
+                    else:
+                        date_match = re.search(r"/(\d{4})-(\d{1,2})-(\d{1,2})/", url)
+                        if date_match:
+                            article_date = f"{date_match.group(1)}-{date_match.group(2).zfill(2)}-{date_match.group(3).zfill(2)}"
+
+                    if not article_date:
+                        raw_content = result.get("raw_content", content)
+                        months = "January|February|March|April|May|June|July|August|September|October|November|December"
+                        match = re.search(rf"({months})\s+(\d{{1,2}}),?\s+(\d{{4}})", raw_content, re.I)
+                        if match:
+                            month_map = {"january": "01", "february": "02", "march": "03", "april": "04", "may": "05", "june": "06", "july": "07", "august": "08", "september": "09", "october": "10", "november": "11", "december": "12"}
+                            article_date = f"{match.group(3)}-{month_map[match.group(1).lower()]}-{match.group(2).zfill(2)}"
+                        else:
+                            match = re.search(r"(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})", raw_content, re.I)
+                            if match:
+                                month_map = {"jan": "01", "feb": "02", "mar": "03", "apr": "04", "may": "05", "jun": "06", "jul": "07", "aug": "08", "sep": "09", "oct": "10", "nov": "11", "dec": "12"}
+                                article_date = f"{match.group(3)}-{month_map[match.group(2).lower()]}-{match.group(1).zfill(2)}"
+
+                    date_line = f"date: {article_date}" if article_date else "date: unknown"
+                    frontmatter = f"""---
+title: "{title.replace('"', "'")}"
+source: {url}
+{date_line}
+description: "{description[:200].replace('"', "'") if description else ""}"
+word_count: {len(content.split())}
+crawl_engine: jina_reader
+---
+
+"""
+                    final_content = frontmatter + content
+                    with open(filepath, "w", encoding="utf-8") as f:
+                        f.write(final_content)
+
+                    logger.info(f"Jina Reader: Saved {len(content)} bytes for {url[:50]}")
+                    results_summary["successful"] += 1
+                    results_summary["saved_files"].append({"url": url, "file": filename, "path": filepath})
+                else:
+                    results_summary["failed"] += 1
+                    results_summary["errors"].append({"url": url, "error": "Empty markdown"})
+            else:
+                error_msg = result.get("error", "Crawl failed")
+                results_summary["failed"] += 1
+                results_summary["errors"].append({"url": url, "error": error_msg})
+
+    # ── Crawl4AI Path (existing code, untouched) ───────────────────────────
+    elif crawl4ai_api_key:
         # Cloud API mode: Use crawl4ai-cloud.com synchronous /query endpoint
         cloud_endpoint = "https://www.crawl4ai-cloud.com/query"
         mcp_log(f"🌐 [Crawl4AI] Starting cloud crawl of {len(urls)} URLs...", level="INFO", prefix="")
@@ -2327,7 +2512,35 @@ word_count: {len(content.split())}
         except Exception as e:
             error_msg = f"Crawl4AI Cloud API error: {str(e)}"
             mcp_log(f"❌ {error_msg}", level="ERROR")
-            return json.dumps({"error": error_msg})
+            # Auto-fallback: if engine is "auto" and Crawl4AI failed, retry with Jina
+            if engine == "auto":
+                mcp_log("⚠️ [Auto-Fallback] Crawl4AI failed, retrying all URLs with Jina Reader...", level="WARNING")
+                JINA_CONCURRENCY = int(os.environ.get("JINA_CONCURRENCY", "6"))
+                crawl_results = await _crawl_urls_via_jina(urls, concurrency=JINA_CONCURRENCY)
+                success_count = sum(1 for r in crawl_results if isinstance(r, dict) and r.get("success"))
+                mcp_log(f"✅ Jina fallback crawl: {success_count}/{len(urls)} successful", level="INFO", prefix="   ")
+                # Process with same post-processing as above
+                for result in crawl_results:
+                    if isinstance(result, Exception):
+                        results_summary["failed"] += 1
+                        results_summary["errors"].append({"url": "unknown", "error": str(result)})
+                        continue
+                    r_url = result.get("url", "unknown")
+                    if result.get("success") and result.get("content"):
+                        content = result["content"]
+                        url_hash = hashlib.md5(r_url.encode()).hexdigest()[:12]
+                        filename = f"crawl_{url_hash}.md"
+                        filepath = os.path.join(search_results_dir, filename)
+                        frontmatter = f"""---\ntitle: "Untitled"\nsource: {r_url}\ndate: unknown\ndescription: ""\nword_count: {len(content.split())}\ncrawl_engine: jina_reader_fallback\n---\n\n"""
+                        with open(filepath, "w", encoding="utf-8") as f:
+                            f.write(frontmatter + content)
+                        results_summary["successful"] += 1
+                        results_summary["saved_files"].append({"url": r_url, "file": filename, "path": filepath})
+                    else:
+                        results_summary["failed"] += 1
+                        results_summary["errors"].append({"url": r_url, "error": result.get("error", "Jina fallback failed")})
+            else:
+                return json.dumps({"error": error_msg})
 
         # Generate research_overview.md - combined context-efficient file with size tiers
         if results_summary["saved_files"]:
