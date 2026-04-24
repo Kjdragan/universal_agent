@@ -75,6 +75,26 @@ _ALL_TIERS: list[tuple[list[_Rule], str]] = [
 ]
 
 
+def _check_rule(rule: _Rule, lowered_query: str) -> bool:
+    """Evaluate a single rule against a lowered query string."""
+    if rule.env_signals:
+        run_source = os.getenv("UA_RUN_SOURCE", "").strip().lower()
+        if run_source in rule.env_signals:
+            return True
+        if not rule.keywords and not rule.and_keywords:
+            return False
+
+    if rule.requires_and_match:
+        if any(kw in lowered_query for kw in rule.and_keywords) and any(kw in lowered_query for kw in rule.keywords):
+            return True
+        return False
+
+    if any(kw in lowered_query for kw in rule.keywords):
+        return True
+
+    return False
+
+
 def classify_heuristic(query: str) -> tuple[str, str, str]:
     """Return ``(route, matched_label, tier)`` using the declarative rule table.
 
@@ -84,18 +104,7 @@ def classify_heuristic(query: str) -> tuple[str, str, str]:
 
     for rules, tier_name in _ALL_TIERS:
         for rule in rules:
-            if rule.env_signals:
-                run_source = os.getenv("UA_RUN_SOURCE", "").strip().lower()
-                if run_source in rule.env_signals:
-                    return rule.route, f"heuristic_{rule.label}", tier_name
-                continue
-
-            if rule.requires_and_match:
-                if any(kw in lowered for kw in rule.and_keywords) and any(kw in lowered for kw in rule.keywords):
-                    return rule.route, f"heuristic_{rule.label}", tier_name
-                continue
-
-            if any(kw in lowered for kw in rule.keywords):
+            if _check_rule(rule, lowered):
                 return rule.route, f"heuristic_{rule.label}", tier_name
 
     return "", "", ""
@@ -103,20 +112,20 @@ def classify_heuristic(query: str) -> tuple[str, str, str]:
 
 # Backward-compatible thin wrappers
 def is_system_intent(query: str) -> bool:
-    route, _, tier = classify_heuristic(query)
-    return tier == "system"
+    lowered = query.lower()
+    return any(_check_rule(rule, lowered) for rule in _SYSTEM_RULES)
 
 
 def is_tool_required_intent(query: str) -> bool:
-    route, _, tier = classify_heuristic(query)
-    return tier == "tool_required"
+    lowered = query.lower()
+    return any(_check_rule(rule, lowered) for rule in _TOOL_REQUIRED_RULES)
 
 
 def is_memory_intent(query: str) -> bool:
-    route, _, tier = classify_heuristic(query)
-    return tier == "memory"
+    lowered = query.lower()
+    return any(_check_rule(rule, lowered) for rule in _MEMORY_RULES)
 
 
 def is_context_only_intent(query: str) -> bool:
-    route, _, tier = classify_heuristic(query)
-    return tier == "context_only"
+    lowered = query.lower()
+    return any(_check_rule(rule, lowered) for rule in _CONTEXT_ONLY_RULES)

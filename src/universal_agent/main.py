@@ -903,14 +903,13 @@ from universal_agent.identity import (
 )
 from universal_agent.harness import ask_user_questions, present_plan_summary
 from universal_agent.routing import (
-    classify_heuristic,
     is_system_intent as _is_system_intent_new,
     is_tool_required_intent as _is_tool_required_intent_new,
     is_memory_intent as _is_memory_intent_new,
     is_context_only_intent as _is_context_only_intent_new,
-    ROUTE_SIMPLE as _ROUTE_SIMPLE_NEW,
-    ROUTE_STANDARD as _ROUTE_STANDARD_NEW,
-    ROUTE_SYSTEM as _ROUTE_SYSTEM_NEW,
+    ROUTE_SIMPLE,
+    ROUTE_STANDARD,
+    ROUTE_SYSTEM,
 )
 
 # Global Memory Manager is not needed here as it is used locally for prompt injection

@@ -37,6 +37,19 @@ from .state import Artifact, ArtifactType, Task as StateTask
 from universal_agent.execution_context import bind_workspace_env
 import uuid
 
+_PHASE_HINT_RULES = [
+    (
+        ("report", "html", "summary", "document", "write"),
+        "💡 **Collaboration Hint**: This phase appears to involve report generation. "
+        "Remember to delegate to the `report-writer` sub-agent for drafting and refined HTML output.",
+    ),
+    (
+        ("research", "investigate", "find", "search", "gather"),
+        "💡 **Collaboration Hint**: This phase appears to involve research. "
+        "Delegate deep searches to the `research-specialist` sub-agent.",
+    ),
+]
+
 # Gateway imports for Stage 5
 try:
     from universal_agent.gateway import Gateway, InProcessGateway, ExternalGateway, GatewayRequest
@@ -565,18 +578,6 @@ PLEASE FIX THESE ISSUES AND RE-SUBMIT ARTIFACTS.
         
         # --- Declarative Context Injection ---
         # Data-driven specialist hints replace scattered keyword checks.
-        _PHASE_HINT_RULES = [
-            (
-                ("report", "html", "summary", "document", "write"),
-                "💡 **Collaboration Hint**: This phase appears to involve report generation. "
-                "Remember to delegate to the `report-writer` sub-agent for drafting and refined HTML output.",
-            ),
-            (
-                ("research", "investigate", "find", "search", "gather"),
-                "💡 **Collaboration Hint**: This phase appears to involve research. "
-                "Delegate deep searches to the `research-specialist` sub-agent.",
-            ),
-        ]
         context_hints = []
         phase_text = (phase.name + " " + " ".join([t.description or "" for t in phase.tasks])).lower()
         for keywords, hint_msg in _PHASE_HINT_RULES:
