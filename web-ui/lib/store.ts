@@ -760,11 +760,45 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 // Helper Functions for WebSocket Integration
 // =============================================================================
 
+const eventDeduplicationCache = new Map<string, number>();
+
+function getEventDedupeKey(event: WebSocketEvent): string | null {
+  const data = event.data as Record<string, unknown>;
+  switch (event.type) {
+    case "text":
+      return `text_${data.time_offset}_${data.text}`;
+    case "thinking":
+      return `thinking_${data.thinking}`;
+    case "tool_call":
+      return `tool_call_${data.id}`;
+    case "tool_result":
+      return `tool_result_${data.tool_use_id}`;
+    default:
+      return null;
+  }
+}
+
 /**
  * Process a WebSocket event and update the store accordingly.
  */
 export function processWebSocketEvent(event: WebSocketEvent): void {
   const store = useAgentStore.getState();
+
+  const dedupeKey = getEventDedupeKey(event);
+  if (dedupeKey) {
+    const now = Date.now();
+    const lastSeen = eventDeduplicationCache.get(dedupeKey);
+    if (lastSeen && now - lastSeen < 500) {
+      return; // Drop duplicate event
+    }
+    eventDeduplicationCache.set(dedupeKey, now);
+
+    // Prevent memory leak from unbounded cache growth
+    if (eventDeduplicationCache.size > 2000) {
+      eventDeduplicationCache.clear();
+      eventDeduplicationCache.set(dedupeKey, now);
+    }
+  }
 
   switch (event.type) {
     case "connected": {
