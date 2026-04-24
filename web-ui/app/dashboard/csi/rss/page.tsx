@@ -248,7 +248,7 @@ export default function CsiWatchlistPage() {
             </p>
           </div>
           <button
-            onClick={loadWatchlist}
+            onClick={() => loadWatchlist()}
             disabled={loading}
             className="flex items-center gap-2 rounded-lg bg-card/60 px-3 py-1.5 text-sm text-foreground border border-border/40 hover:bg-card hover:border-border transition disabled:opacity-50"
           >
