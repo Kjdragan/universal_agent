@@ -2919,36 +2919,21 @@ async def finalize_research(
         filtered_urls = [u for u in url_list if not _url_is_blacklisted(u)]
         dropped_urls = [u for u in url_list if _url_is_blacklisted(u)]
 
-        # 2. Archive Processed Files (Move to processed_json)
-        import shutil
-
-        archived_files: list[Path] = []
-        for src_path in processed_files_list:
-            src = src_path.resolve()
-            dst = processed_dir_path / src.name
-            # Handle potential collision in archive
-            if dst.exists():
-                base, ext = os.path.splitext(src.name)
-                timestamp = datetime.now().strftime("%H%M%S")
-                dst = processed_dir_path / f"{base}_{timestamp}{ext}"
-
-            if src != dst:
-                shutil.move(str(src), str(dst))
-            archived_files.append(dst)
-            logger.info(f"Archived verified search input: {src.name} -> {dst}")
-
+        # 2. Collect topic terms from JSONs IN-PLACE (before archiving)
+        # We read the search texts from the original files so that if the crawl
+        # crashes, the JSONs remain in the inbox for retry.
         search_texts: list[str] = []
-        for archived_path in archived_files:
-            if not archived_path.exists():
+        for src_path in processed_files_list:
+            if not src_path.exists():
                 continue
             try:
-                with open(archived_path, "r", encoding="utf-8") as f:
+                with open(src_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 tool_name = data.get("tool", "")
                 config = SEARCH_TOOL_CONFIG.get(tool_name)
                 search_texts.extend(_collect_search_texts(data, config))
             except Exception as e:
-                logger.warning(f"Error reading archived {archived_path.name}: {e}")
+                logger.warning(f"Error reading {src_path.name} for topic terms: {e}")
 
         topic_terms_raw = _build_topic_terms(search_texts, topic_keywords)
         compiled_topic_terms = _compile_topic_terms(topic_terms_raw)
@@ -2985,6 +2970,22 @@ async def finalize_research(
             logger.error(error_msg, exc_info=True)
             sys.stderr.write(f"[finalize] ❌ {error_msg}\n")
             return json.dumps({"error": error_msg})
+
+        # 4. Archive Processed Files AFTER successful crawl
+        # This ensures JSONs remain in the inbox if the crawl crashes,
+        # making the pipeline properly retryable.
+        import shutil
+
+        for src_path in processed_files_list:
+            src = src_path.resolve()
+            dst = processed_dir_path / src.name
+            if dst.exists():
+                base, ext = os.path.splitext(src.name)
+                timestamp = datetime.now().strftime("%H%M%S")
+                dst = processed_dir_path / f"{base}_{timestamp}{ext}"
+            if src != dst:
+                shutil.move(str(src), str(dst))
+            logger.info(f"Archived verified search input: {src.name} -> {dst}")
         
         sys.stderr.write(
             f"[finalize] ✅ Crawl complete. Successful: {crawl_result.get('successful', 0)}, Failed: {crawl_result.get('failed', 0)}. Processing filtering...\n"
