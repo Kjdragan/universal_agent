@@ -91,24 +91,18 @@ RAW PENDING CARDS:
 """
     
     logger.info(f"Dispatching nightly wiki mission to vp.general.primary for {wiki_count} wiki(s)...")
-    
-    from universal_agent.tools.vp_orchestration import _vp_dispatch_mission_impl
-    
-    result = await _vp_dispatch_mission_impl({
-        "vp_id": "vp.general.primary",
-        "objective": objective,
-        "mission_type": "proactive_wiki",
-        "idempotency_key": f"nightly-wiki-{today}",
-        "execution_mode": "sdk",
-    })
-    
-    if result.get("content", [{}])[0].get("text"):
-        res_data = json.loads(result["content"][0]["text"])
-        if res_data.get("ok"):
-            logger.info(f"Successfully dispatched nightly wiki mission: {res_data.get('mission_id')}")
-        else:
-            logger.error(f"Failed to dispatch mission: {res_data}")
-            sys.exit(1)
+
+    from universal_agent.tools.vp_orchestration import dispatch_vp_mission
+
+    try:
+        await dispatch_vp_mission(
+            objective=objective,
+            mission_type="proactive_wiki",
+            idempotency_key=f"nightly-wiki-{today}",
+        )
+    except RuntimeError as exc:
+        logger.error(f"Dispatch failed: {exc}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     asyncio.run(main())
