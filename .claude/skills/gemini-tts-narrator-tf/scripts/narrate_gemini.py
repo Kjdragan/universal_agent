@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["google-cloud-texttospeech>=2.29.0"]
+# dependencies = ["google-cloud-texttospeech>=2.29.0", "certifi"]
 # ///
 """Narrate a text file into an MP3 audiobook using Google Cloud Text-to-Speech API.
 
@@ -24,6 +24,13 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+import ssl
+import certifi
+
+
+def get_ssl_context():
+    """Create an SSL context using certifi's CA bundle for reliable verification."""
+    return ssl.create_default_context(cafile=certifi.where())
 
 
 # ── Defaults ────────────────────────────────────────────────────────────────
@@ -137,9 +144,11 @@ def resolve_source(source: str) -> str:
     """
     # URL detection
     if source.startswith(("http://", "https://")):
-        print(f"Fetching URL: {source}")
-        req = urllib.request.Request(source, headers={"User-Agent": "UA-TTS-Narrator/1.0"})
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        print(f"Fetching URL via Jina Reader: {source}")
+        # Use Jina Reader to extract clean markdown and bypass bot protection
+        jina_url = f"https://r.jina.ai/{source}"
+        req = urllib.request.Request(jina_url, headers={"User-Agent": "UA-TTS-Narrator/1.0"})
+        with urllib.request.urlopen(req, timeout=60, context=get_ssl_context()) as resp:
             return resp.read().decode("utf-8", errors="replace")
 
     # File path resolution
@@ -210,7 +219,7 @@ def synthesize_chunk(
         method="POST",
     )
 
-    with urllib.request.urlopen(req, timeout=120) as resp:
+    with urllib.request.urlopen(req, timeout=120, context=get_ssl_context()) as resp:
         result = json.loads(resp.read().decode("utf-8"))
 
     audio_content = result.get("audioContent")
