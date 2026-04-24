@@ -2542,67 +2542,68 @@ word_count: {len(content.split())}
             else:
                 return json.dumps({"error": error_msg})
 
-        # Generate research_overview.md - combined context-efficient file with size tiers
-        if results_summary["saved_files"]:
-            try:
-                total_words = 0
-                file_metadata = []  # Store metadata for tiered categorization
+    # ── Post-Crawl: Generate Overview & Return (ALL engines) ──────────────
+    # This block runs regardless of which engine (Jina or Crawl4AI) was used.
+    if results_summary["saved_files"]:
+        try:
+            total_words = 0
+            file_metadata = []  # Store metadata for tiered categorization
 
-                for i, file_info in enumerate(results_summary["saved_files"], 1):
-                    with open(file_info["path"], "r", encoding="utf-8") as f:
-                        full_content = f.read()
+            for i, file_info in enumerate(results_summary["saved_files"], 1):
+                with open(file_info["path"], "r", encoding="utf-8") as f:
+                    full_content = f.read()
 
-                    # Parse frontmatter metadata
-                    import yaml
+                # Parse frontmatter metadata
+                import yaml
 
-                    if full_content.startswith("---"):
-                        fm_end = full_content.find("---", 4)
-                        if fm_end != -1:
-                            fm_text = full_content[4:fm_end].strip()
-                            try:
-                                metadata = yaml.safe_load(fm_text)
-                            except Exception:
-                                metadata = {}
-                            body = full_content[fm_end + 4 :].strip()
-                        else:
+                if full_content.startswith("---"):
+                    fm_end = full_content.find("---", 4)
+                    if fm_end != -1:
+                        fm_text = full_content[4:fm_end].strip()
+                        try:
+                            metadata = yaml.safe_load(fm_text)
+                        except Exception:
                             metadata = {}
-                            body = full_content
+                        body = full_content[fm_end + 4 :].strip()
                     else:
                         metadata = {}
                         body = full_content
+                else:
+                    metadata = {}
+                    body = full_content
 
-                    # Count words in full file
-                    word_count = len(body.split())
-                    total_words += word_count
+                # Count words in full file
+                word_count = len(body.split())
+                total_words += word_count
 
-                    # Store metadata for categorization
-                    file_metadata.append(
-                        {
-                            "index": i,
-                            "file": file_info["file"],
-                            "path": file_info["path"],
-                            "url": file_info["url"],
-                            "title": metadata.get("title", "Untitled"),
-                            "date": metadata.get("date", "unknown"),
-                            "word_count": word_count,
-                        }
-                    )
+                # Store metadata for categorization
+                file_metadata.append(
+                    {
+                        "index": i,
+                        "file": file_info["file"],
+                        "path": file_info["path"],
+                        "url": file_info["url"],
+                        "title": metadata.get("title", "Untitled"),
+                        "date": metadata.get("date", "unknown"),
+                        "word_count": word_count,
+                    }
+                )
 
-                # Categorize files by size
-                batch_safe_files = [
-                    f for f in file_metadata if f["word_count"] <= BATCH_SAFE_THRESHOLD
-                ]
-                large_files = [
-                    f for f in file_metadata if f["word_count"] > LARGE_FILE_THRESHOLD
-                ]
-                medium_files = [
-                    f
-                    for f in file_metadata
-                    if BATCH_SAFE_THRESHOLD < f["word_count"] <= LARGE_FILE_THRESHOLD
-                ]
+            # Categorize files by size
+            batch_safe_files = [
+                f for f in file_metadata if f["word_count"] <= BATCH_SAFE_THRESHOLD
+            ]
+            large_files = [
+                f for f in file_metadata if f["word_count"] > LARGE_FILE_THRESHOLD
+            ]
+            medium_files = [
+                f
+                for f in file_metadata
+                if BATCH_SAFE_THRESHOLD < f["word_count"] <= LARGE_FILE_THRESHOLD
+            ]
 
-                # Build tiered overview
-                overview_header = f"""# Research Sources Overview
+            # Build tiered overview
+            overview_header = f"""# Research Sources Overview
 **Generated:** {datetime.utcnow().isoformat()}Z
 **Total Sources:** {len(results_summary["saved_files"])} articles
 **Total Words Available:** {total_words:,} words across all sources
@@ -2624,68 +2625,51 @@ If you need large files, read them individually with `read_local_file`.
 | # | File | Words | Title |
 |---|------|-------|-------|
 """
-                for f in batch_safe_files:
+            for f in batch_safe_files:
+                overview_header += f"| {f['index']} | `{f['file']}` | {f['word_count']:,} | {f['title'][:50]}... |\n"
+
+            if medium_files:
+                overview_header += "\n## Medium Files (Included in batch if space)\n\n| # | File | Words | Title |\n|---|------|-------|----- -|\n"
+                for f in medium_files:
                     overview_header += f"| {f['index']} | `{f['file']}` | {f['word_count']:,} | {f['title'][:50]}... |\n"
 
-                if medium_files:
-                    overview_header += "\n## Medium Files (Included in batch if space)\n\n| # | File | Words | Title |\n|---|------|-------|-------|\n"
-                    for f in medium_files:
-                        overview_header += f"| {f['index']} | `{f['file']}` | {f['word_count']:,} | {f['title'][:50]}... |\n"
+            if large_files:
+                overview_header += "\n## ⚠️ Large Files (Read Individually)\n\n| # | File | Words | Title | Command |\n|---|------|-------|-------|--------|\n"
+                for f in large_files:
+                    overview_header += f'| {f["index"]} | `{f["file"]}` | {f["word_count"]:,} | {f["title"][:40]}... | `read_local_file(path="{f["path"]}")` |\n'
 
-                if large_files:
-                    overview_header += "\n## ⚠️ Large Files (Read Individually)\n\n| # | File | Words | Title | Command |\n|---|------|-------|-------|--------|\n"
-                    for f in large_files:
-                        overview_header += f'| {f["index"]} | `{f["file"]}` | {f["word_count"]:,} | {f["title"][:40]}... | `read_local_file(path="{f["path"]}")` |\n'
-
-                overview_header += """
+            overview_header += """
 ---
 
 ## All Sources Detail
 
 """
-                # Add brief metadata for each source (no excerpts to save space)
-                for f in file_metadata:
-                    overview_header += f"""### Source {f["index"]}: {f["title"][:60]}
+            # Add brief metadata for each source (no excerpts to save space)
+            for f in file_metadata:
+                overview_header += f"""### Source {f["index"]}: {f["title"][:60]}
 - **File:** `{f["file"]}` ({f["word_count"]:,} words)
 - **URL:** {f["url"]}
 - **Date:** {f["date"]}
 
 """
 
-                overview_path = os.path.join(search_results_dir, "research_overview.md")
+            overview_path = os.path.join(search_results_dir, "research_overview.md")
 
-                with open(overview_path, "w", encoding="utf-8") as f:
-                    f.write(overview_header)
+            with open(overview_path, "w", encoding="utf-8") as f:
+                f.write(overview_header)
 
-                results_summary["overview_file"] = overview_path
-                results_summary["total_words_available"] = total_words
-                results_summary["batch_safe_count"] = len(batch_safe_files)
-                results_summary["large_file_count"] = len(large_files)
-                logger.info(
-                    f"Created research_overview.md with {len(results_summary['saved_files'])} sources, {total_words:,} total words"
-                )
-
-            except Exception as e:
-                logger.warning(f"Failed to create research overview: {e}")
-
-        return json.dumps(results_summary, indent=2)
-
-    # Fallback to Local/Docker mode (unchanged from original)
-    else:
-        if crawl4ai_api_url:
-            # Docker API mode (legacy): Use crawl4ai Docker container
-            mcp_log(
-                f"Using Docker API at {crawl4ai_api_url} for {len(urls)} URLs",
-                level="DEBUG",
-                prefix="[crawl_core]"
-            )
-            return json.dumps(
-                {
-                    "error": "Docker API mode deprecated. Set CRAWL4AI_API_KEY for Cloud API or remove CRAWL4AI_API_URL for local mode."
-                }
+            results_summary["overview_file"] = overview_path
+            results_summary["total_words_available"] = total_words
+            results_summary["batch_safe_count"] = len(batch_safe_files)
+            results_summary["large_file_count"] = len(large_files)
+            logger.info(
+                f"Created research_overview.md with {len(results_summary['saved_files'])} sources, {total_words:,} total words"
             )
 
-        return json.dumps(results_summary, indent=2)
+        except Exception as e:
+            logger.warning(f"Failed to create research overview: {e}")
+
+    return json.dumps(results_summary, indent=2)
 
 
 # LEGACY - Hidden from MCP server to favor in-process tool
