@@ -2020,11 +2020,10 @@ async def _crawl_single_url_jina(url: str, semaphore) -> dict:
                 return {"url": url, "success": False, "error": "Jina returned too little content"}
 
             # Post-process: Strip markdown links, keep just the text (same as Crawl4AI path)
-            import re as _re
-            content = _re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", content)
-            content = _re.sub(r"^https?://[^\s]+\s*$", "", content, flags=_re.MULTILINE)
-            content = _re.sub(r"!\[[^\]]*\]\([^)]+\)", "", content)
-            content = _re.sub(r"\n{3,}", "\n\n", content)
+            content = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", content)
+            content = re.sub(r"^https?://[^\s]+\s*$", "", content, flags=re.MULTILINE)
+            content = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", content)
+            content = re.sub(r"\n{3,}", "\n\n", content)
 
             return {
                 "url": url,
@@ -3972,7 +3971,6 @@ def _parse_json_lenient(text: str) -> dict:
     Parse JSON from an LLM response that *should* be JSON.
     Conservative fallback: try whole-string, else extract first {...} block.
     """
-    import re
 
     t = (text or "").strip()
     if not t:
