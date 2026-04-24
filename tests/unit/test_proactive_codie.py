@@ -44,7 +44,7 @@ def test_queue_cleanup_task_creates_agent_ready_review_gated_task(tmp_path):
     assert task["source_kind"] == "proactive_codie"
     assert task["agent_ready"] is True
     assert task["trigger_type"] == "heartbeat_poll"
-    assert "draft pull request" in task["description"].lower()
+    assert "pull request targeting develop" in task["description"].lower()
     assert "do not merge" in task["description"].lower()
     assert "Preference context:" in task["description"]
     assert task["metadata"]["workflow_manifest"]["workflow_kind"] == "code_change"
@@ -77,9 +77,9 @@ def test_register_pr_artifact_from_text_detects_github_pr_url(tmp_path):
     with _connect(db_path) as conn:
         artifact = register_pr_artifact_from_text(
             conn,
-            text="Opened draft PR: https://github.com/Kjdragan/universal_agent/pull/456",
+            text="Opened PR: https://github.com/Kjdragan/universal_agent/pull/456",
             title="CODIE cleanup PR",
-            summary="Draft PR ready for review.",
+            summary="PR ready for review.",
             theme="cleanup",
         )
 

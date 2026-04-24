@@ -56,9 +56,9 @@ def queue_cleanup_task(
             "metadata": {
                 "source": "proactive_codie",
                 "theme": chosen_theme,
-                "review_gate": "draft_pr_to_develop",
+                "review_gate": "pr_to_develop",
                 "external_effect_policy": {
-                    "allow_draft_pr": True,
+                    "allow_pr": True,
                     "allow_merge": False,
                     "allow_main_push": False,
                     "allow_deploy": False,
@@ -100,7 +100,7 @@ def register_pr_artifact(
     tests: str = "",
     risk: str = "",
 ) -> dict[str, Any]:
-    """Register a CODIE draft PR as a proactive review artifact."""
+    """Register a CODIE PR as a proactive review artifact."""
     clean_url = str(pr_url or "").strip()
     if not clean_url:
         raise ValueError("pr_url is required")
@@ -124,7 +124,7 @@ def register_pr_artifact(
         source_kind="codie_pr",
         source_ref=clean_url,
         title=str(title or "").strip() or "CODIE proactive PR",
-        summary=str(summary or "").strip() or "CODIE opened a proactive draft PR for review.",
+        summary=str(summary or "").strip() or "CODIE opened a proactive PR for review.",
         status=ARTIFACT_STATUS_CANDIDATE,
         priority=4,
         artifact_uri=clean_url,
@@ -151,7 +151,7 @@ def register_pr_artifact_from_text(
         conn,
         pr_url=pr_url,
         title=title or "CODIE proactive PR",
-        summary=summary or "CODIE surfaced a draft PR for review.",
+        summary=summary or "CODIE surfaced a PR for review.",
         theme=theme,
     )
 
@@ -167,7 +167,7 @@ def _cleanup_task_description(*, chosen_theme: str, note: str = "", preference_c
         "2. This is cleanup work only. Do NOT make any breaking code changes.",
         "3. Implement the change on a feature branch targeting develop.",
         "4. Add or update focused tests for the behavior touched.",
-        "5. Open a draft pull request for Kevin review.",
+        "5. Open a pull request targeting develop for Kevin review (do not open as draft).",
         "6. Do not merge, push to main, deploy, delete production data, or make public releases.",
         "7. In the PR body, include rationale, changed files, tests run, risks, and rollback notes.",
         "8. After creating the PR, use the AgentMail tools from the shared VP mailbox (vp.agents@agentmail.to) to send an email to kevin.dragan@outlook.com.",
