@@ -15,22 +15,13 @@ See: docs/03_Operations/123_Gemini_TTS_Source_Of_Truth_2026-04-22.md
 """
 
 import argparse
-import base64
 import io
-import json
 import os
 import re
-import subprocess
 import sys
 import tempfile
-import urllib.request
-import ssl
-import certifi
 
-
-def get_ssl_context():
-    """Create an SSL context using certifi's CA bundle for reliable verification."""
-    return ssl.create_default_context(cafile=certifi.where())
+from google.cloud import texttospeech
 
 
 # ── Defaults ────────────────────────────────────────────────────────────────
@@ -47,44 +38,11 @@ MAX_TEXT_BYTES = 3800  # leave margin for markup tags
 
 # ── Auth ────────────────────────────────────────────────────────────────────
 
-def get_access_token() -> str:
-    """Get an access token for Cloud TTS API using service account or ADC."""
-    # 1. Try GOOGLE_APPLICATION_CREDENTIALS (service account key file)
+def ensure_credentials():
+    """Ensure GOOGLE_APPLICATION_CREDENTIALS is set if the key exists."""
     sa_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", SA_KEY_PATH)
     if os.path.exists(sa_path):
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = sa_path
-        result = subprocess.run(
-            ["gcloud", "auth", "application-default", "print-access-token"],
-            capture_output=True, text=True, timeout=15
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-
-        # Fallback: activate and use gcloud auth
-        subprocess.run(
-            ["gcloud", "auth", "activate-service-account",
-             f"--key-file={sa_path}"],
-            capture_output=True, text=True, timeout=15
-        )
-        result = subprocess.run(
-            ["gcloud", "auth", "print-access-token"],
-            capture_output=True, text=True, timeout=15
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-
-    # 2. Try gcloud user auth (fallback for local desktop)
-    result = subprocess.run(
-        ["gcloud", "auth", "print-access-token"],
-        capture_output=True, text=True, timeout=15
-    )
-    if result.returncode == 0 and result.stdout.strip():
-        return result.stdout.strip()
-
-    raise RuntimeError(
-        "No valid auth found. Set GOOGLE_APPLICATION_CREDENTIALS or run "
-        "'gcloud auth application-default login'"
-    )
 
 
 # ── Text Processing ────────────────────────────────────────────────────────
@@ -145,10 +103,11 @@ def resolve_source(source: str) -> str:
     # URL detection
     if source.startswith(("http://", "https://")):
         print(f"Fetching URL via Jina Reader: {source}")
+        import urllib.request
         # Use Jina Reader to extract clean markdown and bypass bot protection
         jina_url = f"https://r.jina.ai/{source}"
         req = urllib.request.Request(jina_url, headers={"User-Agent": "UA-TTS-Narrator/1.0"})
-        with urllib.request.urlopen(req, timeout=60, context=get_ssl_context()) as resp:
+        with urllib.request.urlopen(req, timeout=60) as resp:
             return resp.read().decode("utf-8", errors="replace")
 
     # File path resolution
@@ -181,55 +140,35 @@ def resolve_source(source: str) -> str:
 # ── Cloud TTS API ──────────────────────────────────────────────────────────
 
 def synthesize_chunk(
-    access_token: str,
     text: str,
     prompt: str,
     voice: str = DEFAULT_VOICE,
     model: str = DEFAULT_MODEL,
     language: str = DEFAULT_LANGUAGE,
 ) -> bytes:
-    """Synthesize a single chunk using Cloud Text-to-Speech REST API.
+    """Synthesize a single chunk using Cloud Text-to-Speech API.
 
     Returns MP3 bytes directly — no conversion needed.
     """
-    payload = {
-        "input": {
-            "text": text,
-            "prompt": prompt,
-        },
-        "voice": {
-            "languageCode": language,
-            "name": voice,
-            "model_name": model,
-        },
-        "audioConfig": {
-            "audioEncoding": "MP3",
-        },
-    }
+    client = texttospeech.TextToSpeechClient()
 
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        "https://texttospeech.googleapis.com/v1/text:synthesize",
-        data=data,
-        headers={
-            "Authorization": f"Bearer {access_token}",
-            "x-goog-user-project": GCP_PROJECT_ID,
-            "Content-Type": "application/json",
-        },
-        method="POST",
+    synthesis_input = texttospeech.SynthesisInput(text=text, prompt=prompt)
+
+    voice_params = texttospeech.VoiceSelectionParams(
+        language_code=language,
+        name=voice,
+        model_name=model
     )
 
-    with urllib.request.urlopen(req, timeout=120, context=get_ssl_context()) as resp:
-        result = json.loads(resp.read().decode("utf-8"))
+    audio_config = texttospeech.AudioConfig(
+        audio_encoding=texttospeech.AudioEncoding.MP3
+    )
 
-    audio_content = result.get("audioContent")
-    if not audio_content:
-        error = result.get("error", {})
-        raise RuntimeError(
-            f"TTS API error: {error.get('message', 'No audio in response')}"
-        )
+    response = client.synthesize_speech(
+        input=synthesis_input, voice=voice_params, audio_config=audio_config
+    )
 
-    return base64.b64decode(audio_content)
+    return response.audio_content
 
 
 def narrate(
@@ -248,7 +187,7 @@ def narrate(
     )
 
     print(f"Authenticating with Cloud TTS API...")
-    access_token = get_access_token()
+    ensure_credentials()
 
     chunks = chunk_text(text)
     total_bytes = len(text.encode("utf-8"))
@@ -260,7 +199,7 @@ def narrate(
         chunk_bytes = len(chunk.encode("utf-8"))
         print(f"  Chunk {i+1}/{len(chunks)} ({chunk_bytes:,} bytes)...", end=" ", flush=True)
         mp3_data = synthesize_chunk(
-            access_token, chunk, narrate_prompt, voice, model, language
+            chunk, narrate_prompt, voice, model, language
         )
         mp3_parts.append(mp3_data)
         print(f"✓ {len(mp3_data):,} bytes MP3")
