@@ -2273,7 +2273,6 @@ crawl_engine: jina_reader
                         raw_content = result.markdown or ""
                         
                         # Post-process: Strip markdown links, keep just the text
-                        import re
                         content = raw_content
                         content = re.sub(
                             r"\[([^\]]+)\]\([^)]+\)", r"\1", content
@@ -2406,8 +2405,6 @@ crawl_engine: jina_reader
                         )
 
                         # Extract article date from URL pattern (e.g., /2025/12/28/)
-                        import re
-
                         article_date = None
 
                         # Try URL pattern first (most reliable)
@@ -3266,7 +3263,6 @@ async def finalize_research(
 
 def _extract_quotes(text: str) -> list[str]:
     """Extract quoted text from content."""
-    import re
 
     # Match "quoted text" or 'quoted text' or "smart quotes"
     patterns = [
@@ -3284,7 +3280,6 @@ def _extract_quotes(text: str) -> list[str]:
 
 def _extract_numbers(text: str) -> list[dict]:
     """Extract significant numbers with context."""
-    import re
 
     numbers = []
 
@@ -3323,7 +3318,6 @@ def _extract_numbers(text: str) -> list[dict]:
 
 def _extract_dates(text: str) -> list[str]:
     """Extract date references."""
-    import re
 
     dates = []
 
@@ -3350,7 +3344,6 @@ def _extract_dates(text: str) -> list[str]:
 
 def _extract_key_claims(text: str, title: str = "") -> list[str]:
     """Extract likely key claims using heuristics."""
-    import re
 
     claims = []
 
@@ -4627,11 +4620,24 @@ async def _run_research_phase_legacy(
         filtered_info = res_json.get("filtered_corpus", {})
         kept_files = filtered_info.get("kept_files", 0)
         urls_after_blacklist = res_json.get("urls_after_blacklist", 0)
+        crawl_summary = res_json.get("crawl_summary", {})
+        crawl_successful = crawl_summary.get("successful", 0)
+        crawl_failed = crawl_summary.get("failed", 0)
         
         if urls_after_blacklist == 0:
             error_msg = "Research Phase failed to find any usable URLs after blacklist filtering."
+        elif crawl_successful == 0:
+            error_msg = (
+                f"Research Phase failed during crawling: {crawl_failed} URL(s) could not be fetched "
+                f"(0 successful out of {urls_after_blacklist} attempted). "
+                "Check crawl engine logs for connection errors, Cloudflare blocks, or timeouts."
+            )
         elif kept_files == 0:
-            error_msg = "Research Phase completed crawling, but ALL files were filtered out (likely due to strict topic filters). Try searching with different keywords to find more relevant content."
+            error_msg = (
+                f"Research Phase crawled {crawl_successful} URL(s) successfully, but ALL crawled files "
+                "were filtered out by the topic relevance filter. Try broadening search keywords "
+                "or disabling the topic filter with enable_topic_filter=false."
+            )
         else:
             error_msg = "Research Phase completed, but failed to generate the refined_corpus.md file internally."
             

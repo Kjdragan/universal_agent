@@ -43,16 +43,24 @@ async def write_section(limiter: ZAIRateLimiter, client, section, corpus_text, o
     heading_line = f"## {title}"
     format_rules = "Start with the heading line exactly as shown. Use '###' for subheads as needed."
 
-    prompt = f"""You are a professional report writer.
+    prompt = f"""You are a professional report writer. You MUST write ONLY from the provided RESEARCH CORPUS below.
 
     REQUIRED HEADING (first line):
     {heading_line}
 
     SECTION TITLE: {title}
-    CONTEXT:
+    SECTION DESCRIPTION: {section.get('description', '')}
+
+    RESEARCH CORPUS (your ONLY source of facts):
     {corpus_text[:20000]}
 
-    INSTRUCTION: Write a detailed, fact-based section for this report. Use markdown only (no code fences). {format_rules} Focus on this section's topic and avoid repeating statistics central to other sections unless needed for context."""
+    CRITICAL RULES:
+    1. Write EXCLUSIVELY from facts, data points, quotes, and events found in the RESEARCH CORPUS above.
+    2. Do NOT invent statistics, dates, names, or events not present in the corpus.
+    3. If the corpus lacks sufficient detail for this section, write what you can and note "Limited source data available" rather than fabricating content.
+    4. Reference specific sources when citing data points (e.g., "According to [source title]...").
+    5. Use markdown only (no code fences). {format_rules}
+    6. Focus on this section's topic. Avoid repeating statistics covered in other sections unless needed for context."""
 
     MAX_RETRIES = 5
     last_error = None

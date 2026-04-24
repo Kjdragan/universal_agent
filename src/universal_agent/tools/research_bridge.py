@@ -277,13 +277,24 @@ async def run_report_generation_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     task_name = _resolve_task_name(args, workspace_hint)
 
     if isinstance(corpus_data, str) and corpus_data.strip():
-        candidate = Path(corpus_data.strip())
+        stripped = corpus_data.strip()
+        # Case 1: It's a path to refined_corpus.md — file already exists on disk.
+        # Set corpus_data to None so _run_report_generation_legacy reads the existing file.
+        candidate = Path(stripped)
         if not candidate.is_absolute():
             workspace = _ctx_get_workspace()
             if workspace:
                 candidate = Path(workspace) / candidate
         if candidate.exists() and candidate.name == "refined_corpus.md":
             corpus_data = None
+        # Case 2: Short string that is NOT real content (e.g., a label, slug, or param name).
+        # Real corpus content is always >500 chars and multi-line.
+        elif len(stripped) < 500 and "\n" not in stripped:
+            logger.warning(
+                "run_report_generation: corpus_data rejected as non-content short string: %r",
+                stripped[:100],
+            )
+            corpus_data = None  # Fall through to use existing refined_corpus.md on disk
     
     with StdoutToEventStream(prefix="[Local Toolkit]"):
         result_str = await report_gen_core(

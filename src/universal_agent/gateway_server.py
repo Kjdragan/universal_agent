@@ -6894,6 +6894,26 @@ async def _run_gateway_session_request(
                 )
                 if isinstance(event.data.get("tool_calls"), int):
                     tool_call_count = int(event.data["tool_calls"])
+
+            # ── Run.log persistence (BEFORE final dedup) ──
+            # Write text events to run.log regardless of final flag so that
+            # session rehydration can reconstruct the assistant response.
+            rl_ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+            if event.type == EventType.TEXT and isinstance(event.data, dict):
+                rl_text = (event.data.get("text") or "").rstrip()
+                if rl_text:
+                    _rl_write(f"[{rl_ts}] 🤖 ASSISTANT: {rl_text}")
+            elif event.type == EventType.TOOL_CALL and isinstance(event.data, dict):
+                tool_name = event.data.get("name") or "unknown"
+                _rl_write(f"[{rl_ts}] 🔧 TOOL CALL: {tool_name}")
+            elif event.type == EventType.TOOL_RESULT and isinstance(event.data, dict):
+                tool_size = event.data.get("content_size") or 0
+                _rl_write(f"[{rl_ts}] 📦 TOOL RESULT ({tool_size} bytes)")
+            elif event.type == EventType.ERROR and isinstance(event.data, dict):
+                err = event.data.get("message") or event.data.get("error") or "unknown"
+                _rl_write(f"[{rl_ts}] ERROR: {err}")
+
+            # ── Final dedup: skip WS broadcast of redundant final text ──
             if (
                 event.type == EventType.TEXT
                 and isinstance(event.data, dict)
@@ -6925,21 +6945,6 @@ async def _run_gateway_session_request(
                     event.data,
                 )
             await manager.broadcast(session_id, agent_event_to_wire(event))
-
-            rl_ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
-            if event.type == EventType.TEXT and isinstance(event.data, dict):
-                rl_text = (event.data.get("text") or "").rstrip()
-                if rl_text and event.data.get("final") is True:
-                    _rl_write(f"[{rl_ts}] 🤖 ASSISTANT: {rl_text}")
-            elif event.type == EventType.TOOL_CALL and isinstance(event.data, dict):
-                tool_name = event.data.get("name") or "unknown"
-                _rl_write(f"[{rl_ts}] 🔧 TOOL CALL: {tool_name}")
-            elif event.type == EventType.TOOL_RESULT and isinstance(event.data, dict):
-                tool_size = event.data.get("content_size") or 0
-                _rl_write(f"[{rl_ts}] 📦 TOOL RESULT ({tool_size} bytes)")
-            elif event.type == EventType.ERROR and isinstance(event.data, dict):
-                err = event.data.get("message") or event.data.get("error") or "unknown"
-                _rl_write(f"[{rl_ts}] ERROR: {err}")
 
         if run_log_handle:
             try:

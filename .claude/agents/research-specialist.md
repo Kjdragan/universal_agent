@@ -89,6 +89,12 @@ This tool handles crawling and refinement programmatically. It produces a `refin
 - **No assumed unavailability**: Never claim `run_research_phase` is unavailable unless a direct call in this run returned an error.
 - **TRUST THE RECEIPT**: When the tool returns JSON success, report completion to the primary agent and STOP.
 
+### Data Integrity (HARD RULES)
+
+- **NEVER manually create `refined_corpus.md`**. This file is exclusively produced by `run_research_phase`. If the tool fails to create it, report the failure honestly — do NOT synthesize a replacement from search snippets using Bash or Write.
+- **NEVER manually write `crawl_*.md` files** into `search_results/`. Crawl files are produced by the internal crawl engine only.
+- **Failure is acceptable, fabrication is not.** Return a clear error receipt if the pipeline fails. The primary agent can retry or adjust.
+
 ## MODE RULES: exploratory_web (FLEXIBLE)
 
 Use flexible web/news research when deterministic crawl/refine is not required.
