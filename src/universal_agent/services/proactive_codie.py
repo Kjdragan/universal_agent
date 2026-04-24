@@ -14,6 +14,7 @@ from universal_agent.services.proactive_artifacts import (
     make_artifact_id,
     upsert_artifact,
 )
+from universal_agent.services.proactive_task_builder import queue_proactive_task
 
 DEFAULT_CLEANUP_THEMES = (
     "reduce brittle routing heuristics",
@@ -39,38 +40,32 @@ def queue_cleanup_task(
     task_id = _cleanup_task_id(chosen_theme)
     preference_context = _preference_context(conn, task_type="codie_cleanup_task", topic_tags=["codie", "cleanup", chosen_theme])
     description = _cleanup_task_description(chosen_theme=chosen_theme, note=note, preference_context=preference_context)
-    item = task_hub.upsert_item(
+    item = queue_proactive_task(
         conn,
-        {
-            "task_id": task_id,
-            "source_kind": "proactive_codie",
-            "source_ref": _slug(chosen_theme),
-            "title": f"CODIE proactive cleanup: {chosen_theme}",
-            "description": description,
-            "project_key": "proactive",
-            "priority": max(1, min(int(priority or 2), 4)),
-            "labels": ["agent-ready", "proactive-codie", "codie-cleanup", "code"],
-            "status": task_hub.TASK_STATUS_OPEN,
-            "agent_ready": True,
-            "trigger_type": "heartbeat_poll",
-            "metadata": {
-                "source": "proactive_codie",
-                "theme": chosen_theme,
-                "review_gate": "pr_to_develop",
-                "external_effect_policy": {
-                    "allow_pr": True,
-                    "allow_merge": False,
-                    "allow_main_push": False,
-                    "allow_deploy": False,
-                },
-                "workflow_manifest": {
-                    "workflow_kind": "code_change",
-                    "delivery_mode": "interactive_chat",
-                    "requires_pdf": False,
-                    "final_channel": "chat",
-                    "canonical_executor": "simone_first",
-                    "repo_mutation_allowed": True,
-                },
+        task_id=task_id,
+        source_kind="proactive_codie",
+        source_ref=_slug(chosen_theme),
+        title=f"CODIE proactive cleanup: {chosen_theme}",
+        description=description,
+        priority=priority,
+        labels=["agent-ready", "proactive-codie", "codie-cleanup", "code"],
+        metadata={
+            "source": "proactive_codie",
+            "theme": chosen_theme,
+            "review_gate": "pr_to_develop",
+            "external_effect_policy": {
+                "allow_pr": True,
+                "allow_merge": False,
+                "allow_main_push": False,
+                "allow_deploy": False,
+            },
+            "workflow_manifest": {
+                "workflow_kind": "code_change",
+                "delivery_mode": "interactive_chat",
+                "requires_pdf": False,
+                "final_channel": "chat",
+                "canonical_executor": "simone_first",
+                "repo_mutation_allowed": True,
             },
         },
     )

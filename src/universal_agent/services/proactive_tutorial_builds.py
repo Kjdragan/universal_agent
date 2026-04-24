@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from universal_agent import task_hub
+from universal_agent.services.proactive_task_builder import queue_proactive_task
 from universal_agent.services.proactive_artifacts import ARTIFACT_STATUS_CANDIDATE, make_artifact_id, upsert_artifact
 
 
@@ -39,37 +40,31 @@ def queue_tutorial_build_task(
         extraction_plan=plan,
         preference_context=preference_context,
     )
-    task = task_hub.upsert_item(
+    task = queue_proactive_task(
         conn,
-        {
-            "task_id": task_id,
-            "source_kind": "tutorial_build",
-            "source_ref": clean_video_id,
-            "title": f"Build private tutorial repo: {clean_title}",
-            "description": description,
-            "project_key": "proactive",
-            "priority": max(1, min(int(priority or 3), 4)),
-            "labels": ["agent-ready", "tutorial-build", "codie", "code"],
-            "status": task_hub.TASK_STATUS_OPEN,
-            "agent_ready": True,
-            "trigger_type": "heartbeat_poll",
-            "metadata": {
-                "source": source,
-                "video_id": clean_video_id,
-                "video_title": clean_title,
-                "video_url": str(video_url or "").strip(),
-                "channel_name": str(channel_name or "").strip(),
-                "extraction_plan": plan,
-                "repo_visibility": "private",
-                "public_publication_allowed": False,
-                "workflow_manifest": {
-                    "workflow_kind": "code_change",
-                    "delivery_mode": "interactive_chat",
-                    "requires_pdf": False,
-                    "final_channel": "chat",
-                    "canonical_executor": "simone_first",
-                    "repo_mutation_allowed": True,
-                },
+        task_id=task_id,
+        source_kind="tutorial_build",
+        source_ref=clean_video_id,
+        title=f"Build private tutorial repo: {clean_title}",
+        description=description,
+        priority=priority or 3,
+        labels=["agent-ready", "tutorial-build", "codie", "code"],
+        metadata={
+            "source": source,
+            "video_id": clean_video_id,
+            "video_title": clean_title,
+            "video_url": str(video_url or "").strip(),
+            "channel_name": str(channel_name or "").strip(),
+            "extraction_plan": plan,
+            "repo_visibility": "private",
+            "public_publication_allowed": False,
+            "workflow_manifest": {
+                "workflow_kind": "code_change",
+                "delivery_mode": "interactive_chat",
+                "requires_pdf": False,
+                "final_channel": "chat",
+                "canonical_executor": "simone_first",
+                "repo_mutation_allowed": True,
             },
         },
     )

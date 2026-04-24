@@ -256,6 +256,47 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
         conn.close()
 
 
+
+async def dispatch_vp_mission(
+    *,
+    objective: str,
+    mission_type: str,
+    idempotency_key: str,
+    vp_id: str = "vp.general.primary",
+    execution_mode: str = "sdk",
+    source_session_id: str = "",
+    **extra_args,
+) -> dict[str, Any]:
+    """Convenience wrapper that dispatches a VP mission and unwraps the result.
+
+    Returns the inner payload dict (e.g. ``{"ok": True, "mission_id": ...}``).
+    Raises ``RuntimeError`` on dispatch failure or unexpected result shape.
+    """
+    import logging
+
+    logger = logging.getLogger(__name__)
+    args: dict[str, Any] = {
+        "vp_id": vp_id,
+        "objective": objective,
+        "mission_type": mission_type,
+        "idempotency_key": idempotency_key,
+        "execution_mode": execution_mode,
+    }
+    if source_session_id:
+        args["source_session_id"] = source_session_id
+    args.update(extra_args)
+
+    result = await _vp_dispatch_mission_impl(args)
+    text = result.get("content", [{}])[0].get("text")
+    if not text:
+        raise RuntimeError(f"Unexpected VP dispatch result format: {result}")
+    payload = json.loads(text)
+    if not payload.get("ok"):
+        raise RuntimeError(f"VP dispatch failed: {payload}")
+    logger.info(f"Dispatched {mission_type} mission: {payload.get('mission_id')}")
+    return payload
+
+
 def _with_preference_context(
     *,
     vp_id: str,
