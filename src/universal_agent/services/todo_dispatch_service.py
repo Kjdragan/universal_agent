@@ -448,6 +448,7 @@ class ToDoDispatchService:
         self.active_sessions: Dict[str, GatewaySession] = {}
         self.busy_sessions: set[str] = set()
         self.wake_sessions = set()
+        self.executing_sessions: set[str] = set()  # Sessions with active dispatch execution in flight
         self.execution_callback = execution_callback
         self.event_callback = event_callback
 
@@ -720,6 +721,7 @@ class ToDoDispatchService:
             )
             
             if self.execution_callback:
+                self.executing_sessions.add(session.session_id)
                 dispatch_result = await self.execution_callback(session.session_id, req)
                 decision = str((dispatch_result or {}).get("decision") or "accepted").strip().lower()
                 if self.event_callback:
@@ -789,6 +791,12 @@ class ToDoDispatchService:
                     logger.exception("Failed to roll back claimed ToDo assignments for %s", session.session_id)
             
         finally:
+            # Always clean up executing_sessions to prevent dispatch blockage.
+            # The gateway_server callback (L4227) also discards — the double-
+            # discard is intentional and safe (set.discard is idempotent).
+            # Without this, a crashed/OOM'd task leaves the session permanently
+            # in executing_sessions, blocking all future dispatch for it.
+            self.executing_sessions.discard(session.session_id)
             if self.event_callback:
                 self.event_callback({
                     "type": "agent_state_changed",
