@@ -43,7 +43,7 @@ Convert text into a high-quality narrated MP3 audio file using Google Cloud Text
    ```bash
    uv run scripts/narrate_gemini.py <input> -o <output.mp3> -m gemini-2.5-flash-tts
    ```
-5. **Deliver**: Email via agentmail or save to work_products as needed.
+5. **Deliver**: You MUST deliver the resulting `.mp3` file to Kevin via email. Use `mcp__internal__agentmail_send_with_local_attachments` to email it to `kevinjdragan@gmail.com` using his contact info from `USER.md`.
 
 ## Script Options (narrate_gemini.py)
 ```

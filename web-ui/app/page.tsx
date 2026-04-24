@@ -475,6 +475,7 @@ function FileViewer() {
   const isPdf = viewingFile?.name.endsWith(".pdf") ?? false;
   const isImage = viewingFile?.name.match(/\.(png|jpg|jpeg|gif|webp)$/i) ?? false;
   const isMarkdown = viewingFile?.name.match(/\.md$/i) ?? false;
+  const isAudio = viewingFile?.name.match(/\.(mp3|wav|ogg|m4a)$/i) ?? false;
 
   const fileUrl = viewingFile
     ? viewingFile.type === "artifact"
@@ -489,7 +490,7 @@ function FileViewer() {
     : "";
 
   useEffect(() => {
-    if (!viewingFile || !fileUrl || isHtml || isPdf || isImage || viewingFile.content) return;
+    if (!viewingFile || !fileUrl || isHtml || isPdf || isImage || isAudio || viewingFile.content) return;
     const controller = new AbortController();
     fetch(fileUrl, { signal: controller.signal })
       .then(res => res.text())
@@ -558,6 +559,12 @@ function FileViewer() {
               alt={viewingFile.name}
               className="max-w-full max-h-full object-contain shadow-2xl"
             />
+          </div>
+        ) : isAudio ? (
+          <div className="w-full h-full flex flex-col items-center justify-center p-4">
+            <div className="text-6xl mb-6">🎵</div>
+            <h3 className="text-xl font-semibold mb-8 text-foreground truncate max-w-full px-4">{viewingFile.name}</h3>
+            <audio controls autoPlay src={fileUrl} className="w-full max-w-md" />
           </div>
         ) : (isHtml || isPdf) ? (
           <iframe

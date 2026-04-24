@@ -24,6 +24,16 @@ When answering questions about how this system works — architecture, data flow
 
 **Why this matters:** A confident but incorrect architectural explanation is worse than saying "let me check." The user relies on accurate descriptions of their own system to make decisions. Wrong answers about agent pipelines, email flows, or session lifecycle can lead to flawed design decisions downstream.
 
+## Cross-Machine File Resolution (SSHFS)
+
+The Universal Agent infrastructure includes a seamless, transparent file resolution bridge via SSHFS over Tailscale. 
+
+When executing on the VPS (`uaonvps`), agents have direct, native filesystem access to the local desktop environment at the exact same path. 
+
+- **The Path Guarantee**: The local desktop path `/home/kjdragan/...` is mounted onto the VPS at `/home/kjdragan/...`.
+- **Capability Implication**: **Never** build custom "file fetcher" tools or syncing scripts to move files from the desktop to the VPS for agent tasks. Instead, simply refer to the absolute `/home/kjdragan/...` path directly. Standard OS operations (`cat`, Python `open()`, etc.) will seamlessly resolve over the SSHFS mount.
+- **Architectural Tenet**: This demonstrates the core design philosophy of "expanding system capabilities at the OS level" rather than building complex, brittle agent workarounds.
+
 ## Deployment Contract
 
 This repository has exactly one supported application deployment path. Production is branch-driven and automated; **do not recommend or use ad hoc `ssh`, `rsync`, `git pull`, or manual VPS deployment flows**.
