@@ -1123,6 +1123,7 @@ class AgentHookSet:
                     hooks=[
                         self.on_pre_bash_inject_workspace_env,
                         self.on_pre_bash_warn_dependency_installs,
+                        self.on_pre_bash_block_large_heredocs,
                         self.on_pre_bash_block_composio_sdk,
                         self.on_pre_bash_block_playwright_non_html,
                         self.on_pre_bash_redirect_pdf_conversion,
@@ -2481,6 +2482,27 @@ class AgentHookSet:
                 sequence_length=len(self._current_turn_history)
             )
             
+        return {}
+
+    async def on_pre_bash_block_large_heredocs(
+        self, input_data: dict, tool_use_id: object, context: dict
+    ) -> dict:
+        """
+        Block massive bash heredocs to prevent token explosion and brittle file generation.
+        """
+        cmd = str(input_data.get("command") or input_data.get("cmd") or "")
+        
+        # If the command is extremely long and contains heredoc or cat/echo markers
+        if len(cmd) > 2000 and ("<<" in cmd or "cat >" in cmd or "echo " in cmd):
+            return {
+                "override_input": input_data,
+                "decision": "block",
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "Blocked massive Bash heredoc pattern. Do NOT use Bash to manually write large files or synthesize data. Use programmatic file writing tools (e.g. Write) or the designated pipeline tools.",
+                },
+            }
         return {}
 
     async def on_pre_bash_inject_workspace_env(

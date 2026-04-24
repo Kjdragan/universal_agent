@@ -4381,6 +4381,28 @@ def batch_tool_execute(tool_calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]
                 # Bridge check inside the thread? Better to get client once outside.
                 resp = client.action(action_name).execute(args)
                 
+                # Auto-save search results to the inbox directory so the agent doesn't have to bash it.
+                if "SEARCH" in action_name.upper():
+                    try:
+                        import time
+                        workspace = _resolve_workspace()
+                        if workspace:
+                            search_dir = os.path.join(workspace, "search_results")
+                            os.makedirs(search_dir, exist_ok=True)
+                            
+                            safe_query = str(args.get("query", "search"))[:30]
+                            safe_query = "".join([c if c.isalnum() else "_" for c in safe_query]).strip("_")
+                            timestamp = int(time.time())
+                            file_path = os.path.join(search_dir, f"{action_name}_{safe_query}_{timestamp}.json")
+                            
+                            # Composio returns a dict or similar, we dump it to the inbox
+                            with open(file_path, "w", encoding="utf-8") as f:
+                                json.dump(resp, f, indent=2, ensure_ascii=False)
+                                
+                            sys.stderr.write(f"[Composio Plumbing] Auto-saved {action_name} results to {file_path}\n")
+                    except Exception as dump_err:
+                        sys.stderr.write(f"[Composio Plumbing] Failed to auto-save search results: {dump_err}\n")
+                
             # 2. Local Tools (Self-Call)
             elif "mcp__local_toolkit__" in name:
                 local_name = name.split("mcp__local_toolkit__")[1]
