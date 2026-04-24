@@ -27,6 +27,7 @@ export default function CsiWatchlistPage() {
   const [inputMode, setInputMode] = useState<'search' | 'channel' | 'category'>('search');
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
+  const [successMsg, setSuccessMsg] = useState<React.ReactNode | null>(null);
 
   // Category expansion
   const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({});
@@ -45,9 +46,10 @@ export default function CsiWatchlistPage() {
   // Visual Drag State (optional glow effect)
   const [dragOverCategory, setDragOverCategory] = useState<string | null>(null);
 
-  const loadWatchlist = async () => {
+  const loadWatchlist = async (clearSuccess = true) => {
     setLoading(true);
     setErrorMsg("");
+    if (clearSuccess) setSuccessMsg(null);
     try {
       const resp = await fetch("/api/v1/csi/watchlist");
       if (!resp.ok) {
@@ -74,6 +76,7 @@ export default function CsiWatchlistPage() {
 
     setSubmitting(true);
     setErrorMsg("");
+    setSuccessMsg(null);
     try {
       if (inputMode === 'category') {
         const resp = await fetch("/api/v1/csi/watchlist/categories", {
@@ -85,6 +88,7 @@ export default function CsiWatchlistPage() {
           const body = await resp.json().catch(() => ({}));
           throw new Error(body.detail || "Failed to create category");
         }
+        setSuccessMsg(`Category "${inputVal.trim()}" created successfully.`);
       } else {
         const resp = await fetch("/api/v1/csi/watchlist/add", {
           method: "POST",
@@ -95,9 +99,23 @@ export default function CsiWatchlistPage() {
           const body = await resp.json().catch(() => ({}));
           throw new Error(body.detail || `Failed to add channel`);
         }
+        const data = await resp.json();
+        if (data.channel) {
+          const ch = data.channel;
+          setSuccessMsg(
+            <div className="flex flex-col gap-1">
+              <span className="font-semibold text-green-400">Successfully added channel!</span>
+              <span className="text-sm">Name: <span className="text-white">{ch.channel_name}</span></span>
+              <span className="text-sm">Category: <span className="text-white">{ch.domain}</span></span>
+              <span className="text-sm text-muted-foreground">{data.message}</span>
+            </div>
+          );
+        } else {
+          setSuccessMsg("Channel added successfully.");
+        }
       }
       setInputVal("");
-      await loadWatchlist();
+      await loadWatchlist(false);
     } catch (err: any) {
       setErrorMsg(err.message || "Error processing request");
     } finally {
@@ -288,6 +306,11 @@ export default function CsiWatchlistPage() {
           {errorMsg && (
             <div className="mt-3 text-sm text-red-200 bg-red-950/40 px-3 py-2 rounded-lg border border-red-500/20 flex items-center">
               {errorMsg}
+            </div>
+          )}
+          {successMsg && !errorMsg && (
+            <div className="mt-3 text-sm text-green-200 bg-green-950/40 px-3 py-2 rounded-lg border border-green-500/20 flex items-start">
+              {successMsg}
             </div>
           )}
         </div>
