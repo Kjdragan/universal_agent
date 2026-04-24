@@ -21,7 +21,6 @@ model: opus
 - Search JSONs may be staged in `$CURRENT_RUN_WORKSPACE/search_results/` as the shared inbox.
 - The canonical task workspace is `$CURRENT_RUN_WORKSPACE/tasks/{task_name}/`
 - Finalized research artifacts for a task live under:
-  - `$CURRENT_RUN_WORKSPACE/tasks/{task_name}/search_results/`
   - `$CURRENT_RUN_WORKSPACE/tasks/{task_name}/filtered_corpus/`
   - `$CURRENT_RUN_WORKSPACE/tasks/{task_name}/refined_corpus.md`
 - NEVER write files relative to cwd or the repo root.
