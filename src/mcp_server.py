@@ -1998,6 +1998,7 @@ async def _crawl_single_url_jina(url: str, semaphore) -> dict:
     import asyncio
     import ssl
     import certifi
+    import urllib.request
 
     jina_url = f"https://r.jina.ai/{url}"
     ctx = ssl.create_default_context(cafile=certifi.where())
