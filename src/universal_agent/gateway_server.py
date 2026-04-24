@@ -5120,64 +5120,24 @@ _CSI_RECOMMENDATION_TEXT_KEYS = (
     "text",
     "name",
 )
-_CSI_CODE_SUBTASK_KEYWORDS = ("install", "fix", "patch", "signature", "hook", "code", "pydantic", "env")
-_CSI_RESEARCH_SUBTASK_KEYWORDS = ("analyze", "investigate", "review", "assess")
-_CSI_WRITER_SUBTASK_KEYWORDS = ("write", "draft", "publish", "message")
+from universal_agent.services.routing_markers import (
+    CSI_CODE_RE, CSI_RESEARCH_RE, CSI_WRITER_RE,
+    CSI_AGENT_HINTS_RE, CSI_HUMAN_HINTS_RE,
+    CSI_AGENT_RECOMMENDATION_HINTS, CSI_HUMAN_RECOMMENDATION_HINTS,
+)
 
 
 def _classify_subtask_role(lowered_text: str) -> str:
-    """Classify CSI recommendation subtask role from lowered text via keyword lookup."""
-    if any(token in lowered_text for token in _CSI_CODE_SUBTASK_KEYWORDS):
+    """Classify CSI recommendation subtask role via word-boundary regex matching."""
+    if CSI_CODE_RE.search(lowered_text):
         return "code"
-    if any(token in lowered_text for token in _CSI_RESEARCH_SUBTASK_KEYWORDS):
+    if CSI_RESEARCH_RE.search(lowered_text):
         return "research"
-    if any(token in lowered_text for token in _CSI_WRITER_SUBTASK_KEYWORDS):
+    if CSI_WRITER_RE.search(lowered_text):
         return "writer"
     return "general"
 
 
-_CSI_AGENT_RECOMMENDATION_HINTS = {
-    "install",
-    "pip",
-    "fix",
-    "add",
-    "update",
-    "create",
-    "implement",
-    "patch",
-    "refactor",
-    "detect",
-    "signature",
-    "hook",
-    "retry",
-    "timeout",
-    "script",
-    "runbook",
-    "automation",
-    "cron",
-    "pydantic",
-    "env",
-    "python",
-    "code",
-    "adapter",
-}
-_CSI_HUMAN_RECOMMENDATION_HINTS = {
-    "manual",
-    "human",
-    "approval",
-    "approve",
-    "legal",
-    "compliance",
-    "budget",
-    "meeting",
-    "call",
-    "email",
-    "stakeholder",
-    "sign-off",
-    "sign off",
-    "exec review",
-    "kevin",
-}
 
 
 def _normalize_csi_recommendation_text(raw: Any) -> str:
@@ -5325,8 +5285,8 @@ def _classify_csi_recommendation_owner(
         "human_approval_required",
     )
 
-    has_agent_hint = any(token in lowered for token in _CSI_AGENT_RECOMMENDATION_HINTS)
-    has_human_hint = any(token in lowered for token in _CSI_HUMAN_RECOMMENDATION_HINTS)
+    has_agent_hint = bool(CSI_AGENT_HINTS_RE.search(lowered))
+    has_human_hint = bool(CSI_HUMAN_HINTS_RE.search(lowered))
     owner_lane = "agent"
     reason = "default_agent"
     confidence = 0.65

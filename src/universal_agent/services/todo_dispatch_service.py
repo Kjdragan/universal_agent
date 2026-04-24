@@ -2,13 +2,13 @@ import asyncio
 import json
 import logging
 import os
-import re
 import time
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, Callable, Awaitable
 
 from universal_agent.gateway import GatewaySession, GatewayRequest
 from universal_agent.codebase_policy import approved_codebase_roots_from_env
+from universal_agent.services.routing_markers import CODE_WORKFLOW_RE, RESEARCH_WORKFLOW_RE
 
 logger = logging.getLogger(__name__)
 
@@ -21,37 +21,6 @@ TODO_DISPATCH_MAX_PER_SWEEP = max(
 def _event_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
-
-_CODE_WORKFLOW_MARKERS = (
-    re.compile(r"\bfix\b"),
-    re.compile(r"\bdebug\b"),
-    re.compile(r"\brefactor\b"),
-    re.compile(r"\bimplement\b"),
-    re.compile(r"\bcode change\b"),
-    re.compile(r"\bupdate the code\b"),
-    re.compile(r"\bupdate code\b"),
-    re.compile(r"\bwrite code\b"),
-    re.compile(r"\brepository\b"),
-    re.compile(r"\btypescript\b"),
-    re.compile(r"\bjavascript\b"),
-    re.compile(r"\bpython\b"),
-    re.compile(r"\bunit test\b"),
-    re.compile(r"\btest failure\b"),
-    re.compile(r"\bapi route\b"),
-)
-
-_RESEARCH_WORKFLOW_MARKERS = (
-    re.compile(r"\bsearch for\b"),
-    re.compile(r"\blatest information\b"),
-    re.compile(r"\blatest developments\b"),
-    re.compile(r"\bresearch\b"),
-    re.compile(r"\bresearch report\b"),
-    re.compile(r"\breport generation\b"),
-    re.compile(r"\banalysis\b"),
-    re.compile(r"\blook up\b"),
-    re.compile(r"\bwhat happened\b"),
-    re.compile(r"\bpdf\b"),
-)
 
 
 def _coerce_labels(value: Any) -> list[str]:
@@ -136,7 +105,7 @@ def _non_coder_workflow_kind(
         return "interactive_answer_email"
     if mode in {"standard_report", "enhanced_report"}:
         return f"research_report_{suffix}"
-    if any(pattern.search(text) for pattern in _RESEARCH_WORKFLOW_MARKERS):
+    if RESEARCH_WORKFLOW_RE.search(text):
         return f"research_report_{suffix}"
     if mode == "interactive_chat":
         return "interactive_answer"
@@ -231,14 +200,14 @@ def infer_workflow_kind(
     mode = str(delivery_mode or "").strip().lower()
     channel = str(final_channel or "").strip().lower() or "chat"
 
-    if any(pattern.search(text) for pattern in _CODE_WORKFLOW_MARKERS):
+    if CODE_WORKFLOW_RE.search(text):
         return "code_change"
     if mode == "interactive_email":
         return "interactive_answer_email"
     if mode in {"standard_report", "enhanced_report"}:
         suffix = "chat" if channel == "chat" else "email"
         return f"research_report_{suffix}"
-    if any(pattern.search(text) for pattern in _RESEARCH_WORKFLOW_MARKERS):
+    if RESEARCH_WORKFLOW_RE.search(text):
         suffix = "chat" if channel == "chat" else "email"
         return f"research_report_{suffix}"
     if mode == "interactive_chat":
@@ -262,7 +231,7 @@ def build_execution_manifest(
     )
     text = str(user_input or "").strip().lower()
     mode = str(delivery_mode or "").strip().lower() or "standard_report"
-    requires_pdf = mode in {"standard_report", "enhanced_report"} or any(p.search(text) for p in [re.compile(r"\bpdf\b")])
+    requires_pdf = mode in {"standard_report", "enhanced_report"} or "pdf" in text
     approved_roots = approved_codebase_roots_from_env()
     resolved_codebase_root = ""
     if workflow_kind == "code_change":
@@ -328,140 +297,9 @@ Your only goal is to execute the assigned work items, deliver results, then disp
 If a dependency or downstream execution path is unavailable, recover only with tools that are actually available in this run.
 Do not invent fallback tools, do not assume Bash access, and do not force a delegation lane that the current task did not request.
 If you believe a work item still needs a claim step, treat that as already satisfied and continue execution.
-If the work item genuinely cannot proceed, use Task Hub as the exit hatch instead of pretending it succeeded:
-- use `review` when the work is partially done, ambiguous, low-confidence, or needs human judgment
-- use `block` when a concrete dependency is missing (credentials, source data, API access, repo state, external service)
-- use `park` when the task should be deferred without retrying now
-Always include the concrete failure reason, missing dependency, or next step in the note.
-
-### Work Product Persistence (CRITICAL):
-For any non-trivial deliverable (tables, reports, inventories, analyses, generated content), you MUST:
-1. Save the deliverable as a markdown file in the session workspace's `work_products/` directory
-   (e.g., `work_products/skill_inventory.md`, `work_products/analysis_report.md`).
-2. Use the `Write` tool to persist the file BEFORE delivering it in the chat stream.
-3. Always save the final, polished version — not intermediate drafts.
-Chat-stream delivery alone is NOT sufficient. Work products must be durable and inspectable after the session ends.
+If the work item genuinely cannot proceed, disposition it via `task_hub_task_action` with `review` or `block` and include the concrete missing dependency or system mismatch in the note.
 
 After finishing work, ALWAYS disposition every claimed work item via `task_hub_task_action` (`complete`, `review`, `block`, or `park`).
-Only use `complete` when the requested deliverable and required final delivery side effects actually happened.
-
-### Task Forge Workflow (CRITICAL):
-When a task description begins with "Task Forge:" or contains trigger phrases like "forge a skill",
-"build me a skill", or "task forge this", you MUST follow the Task Forge skill protocol.
-Read the full instructions at `.claude/skills/task-forge/SKILL.md` and follow its phases IN ORDER.
-
-The cardinal rule of Task Forge: **the skill IS the output.**
-
-You are NOT just producing a result (a table, a report, an analysis). You are producing a
-**reusable skill** that produces that result. Both the skill AND the result are the deliverables.
-Think of it like: you're building a factory, not hand-crafting a single product.
-
-**DOMAIN KNOWLEDGE RESEARCH (before scaffolding):**
-If the task references technologies, APIs, models, or frameworks you don't have reliable
-current knowledge of — especially those that may be post-training or recently released —
-you MUST fetch and study reference docs BEFORE scaffolding. This is not optional.
-- If the task includes reference URLs (like `https://docs.cloud.google.com/...`), treat
-  them as **learning materials to study**, not input sources to process/narrate.
-- Use `WebFetch` or `read_url_content` to fetch the docs and extract the API surface:
-  SDK name, import paths, model names, auth method, code examples.
-- Save key findings to `references/<technology>.md` as part of scaffolding.
-- This research is SEPARATE from the 10-minute codebase scan cap. Reading official docs
-  for an unfamiliar API is essential preparation, not a rabbit hole.
-
-Specifically:
-1. Phase 3 (Scaffold) is MANDATORY — you must create:
-   - `task-skills/<task-name>-tf/SKILL.md` — the task-skill with goal, success criteria, constraints, and context
-   - `task-skills/<task-name>-tf/scripts/` — only if deterministic utilities are genuinely needed
-   - `task-skills/<task-name>-tf/references/` — only if domain docs would help future runs
-   - **NEVER scaffold inside `.claude/skills/`** — that directory is write-protected during runs.
-     Write to `task-skills/` first; Phase 6 copies to `.claude/skills/` via `cp -r`.
-2. Phase 4 (Execute) — execute BY FOLLOWING the skill you just created, not by ignoring it.
-   After execution, perform MANDATORY reconciliation:
-   - Update the SKILL.md to reflect what was actually discovered (correct SDK, model, credentials).
-   - Create `references/` docs for any API patterns, model names, or configs discovered.
-   - Add anti-patterns for approaches that failed.
-   **POST-EXECUTION RECONCILIATION VERIFICATION (MANDATORY before Quality Gate):**
-   After execution finishes, you MUST diff the SKILL.md against the actual working implementation.
-   Specifically verify these four alignment points:
-   a. SDK/import paths in SKILL.md match what the script actually uses
-   b. Model name in SKILL.md matches what was actually called in the API
-   c. Auth mechanism in SKILL.md matches what actually worked (env var name, credential type)
-   d. Dependencies listed in SKILL.md match what was actually required (packages, system tools)
-   If ANY of these diverge, update the SKILL.md NOW before proceeding to Phase 5b.
-   A stale SKILL.md is an AUTOMATIC quality gate failure.
-3. **CRITICAL COMPONENT FAILURE PROTOCOL:** If a technology explicitly named in the task
-   description fails (e.g., the user says "use Google Cloud TTS" and TTS can't be made to work),
-   you MUST HALT and report the failure — do NOT silently substitute a fundamentally different
-   technology. Triangulating within the same technology (trying different SDKs for the same service)
-   is fine. Switching to a completely different technology stack is a contract violation.
-4. **INPUT SOURCE COVERAGE:** If the task says "from any source (URLs, text, files)", the skill
-   MUST handle ALL listed input types. URLs require a fetch+extract step. A skill that claims to
-   handle URLs but doesn't fetch their content is structurally incomplete.
-5. The work product goes to `work_products/` as usual, but the task-skill itself is ALSO a deliverable.
-6. Phase 5b (Skill Quality Gate) is MANDATORY and MUST produce a traceable artifact.
-   **Mandatory tool calls — you MUST perform these in order:**
-   a. Call `Read` on `.claude/skills/skill-creator/SKILL.md` — do NOT skip this tool call.
-      This is the standard you're auditing against. Your quality_gate.md MUST cite that you read it.
-   b. Evaluate the task-skill against ALL 6 structural checks. You must evaluate EVERY check
-      and write a 1-line justification for each in quality_gate.md:
-      (1) Structure — has frontmatter, Goal, Success Criteria, Context
-      (2) Not-a-wrapper — describes *what* and *why*, not just "run this script"
-      (3) Composable — references existing skills where relevant
-      (4) Generalizable — works in any session, no hardcoded paths
-      (5) Progressive disclosure — SKILL.md <100 lines, heavy content in references/
-      (6) Functional accuracy — SKILL.md matches actual implementation (SDK, model, auth)
-      Using your own custom checklist instead of these 6 checks is INVALID.
-   c. Verify SKILL.md/implementation alignment — the SKILL.md must reflect the actual working
-      approach, not the initial scaffold. If they diverge, fix the SKILL.md.
-   d. Verify input source coverage — if the task specifies multiple input types, confirm the
-      skill handles ALL of them.
-   e. Write the results to `task-skills/<task-name>-tf/quality_gate.md` using the template in the
-      Task Forge skill. This file IS the proof the audit happened — do NOT skip it.
-      The template includes a Meta-Improvements section — fill it with any observations that
-      would improve Task Forge ITSELF for all future runs (not just this skill).
-   f. If you identified pipeline-level improvements, ALSO append them to
-      `task-skills/_meta/improvement_log.md` (create the file if it doesn't exist, using
-      the seed template from `.claude/skills/task-forge/templates/improvement_log_seed.md`).
-   g. If any check fails, fix the skill's structure before completing the task.
-   You CANNOT just claim "passed quality gate" — you must produce the artifact with all 6 checks.
-   Self-certification without evidence is an automatic quality gate failure.
-   A quality gate that uses custom criteria instead of the 6 prescribed checks is INVALID.
-7. Phase 5c (Skill Improvement) is MANDATORY — run AFTER Phase 5b passes.
-   The quality gate (5b) audits structure. This phase (5c) IMPROVES the skill using the
-   skill-creator's standards to refine it from v0 to v1. Steps:
-   a. Re-read skill-creator/SKILL.md — specifically the "Skill Writing Guide" and
-      "Writing Patterns" sections. These are the polish standards you're measuring against.
-   b. Self-evaluate: Is the description "pushy" enough? Does it follow progressive disclosure?
-      Are there hardcoded values? Could it benefit from references/?
-   c. Apply the universal improvement patterns from the Task Forge SKILL.md:
-      preserve ephemeral code to scripts/, specify reproducible methodology,
-      tighten scope definitions, track maturity versioning, externalize domain knowledge
-   d. Make concrete edits to the task-skill's SKILL.md — sharpen description, save reusable
-      scripts, add references/, tighten scope definitions and methodology
-   e. Append a "Phase 5c: Improvement Pass" section to quality_gate.md with:
-      - What was improved and why (cite which universal pattern applied)
-      - Before/after of description or structural changes
-      - Version label (v0 → v1)
-   This phase is what transforms a raw task-skill into a reusable institutional asset.
-8. Phase 6 (Auto-Promote) is MANDATORY — after quality gate passes, copy the skill
-   to the permanent skills directory so it's immediately discoverable for future runs:
-   `cp -r task-skills/<task-name>-tf/ .claude/skills/<task-name>-tf/`
-   The `-tf` suffix marks it as Task Forge generated. Do NOT skip this step.
-
-What makes a good task-skill vs. a bad one:
-- BAD: A bare Python script. Scripts are not skills. They're inflexible, opaque to agents, and
-  can't be composed, iterated, or evolved. A Python script is just one possible *tool* inside a skill.
-- BAD: Skipping Phase 3 and running inline code. This produces a result with no reusable artifact.
-- BAD: A SKILL.md that says "use SDK X" but the actual script uses "SDK Y" — the skill is stale.
-- BAD: A skill that claims to handle URLs as input but has no URL fetching logic.
-- GOOD: A SKILL.md that describes the goal, approach, and success criteria, with scripts in scripts/
-  only for the deterministic/fragile parts. The .md is what drives the agent; scripts assist it.
-- GOOD: A skill that could be handed to a different agent in a different session and still produce
-  a useful result, because the intent and approach are captured in the SKILL.md.
-- GOOD: A skill whose SKILL.md was reconciled post-execution to match the actual working approach.
-
-The maturity model: task-skills start as v0 (intent only). They earn scripts and references through
-observed use — you don't pre-engineer optimization. But the SKILL.md skeleton is always required.
 
 ### VP-Targeted Email Tasks:
 - When a task has `target_agent` in its workflow manifest metadata (e.g., "vp.coder.primary" or "vp.general.primary"),
@@ -560,18 +398,6 @@ def build_todo_execution_prompt(
         desc = str(item.get("description") or "").strip()
         lines.append(f"Work Item {idx}: [{t_id}] {title}")
         lines.append(f"Description: {desc}")
-        # ── Component 1: Extract and surface URLs for LLM attention ──
-        # URLs buried at the end of long descriptions get lost due to
-        # LLM attention degradation at prompt boundaries. Surface them
-        # prominently so the agent doesn't miss critical input sources.
-        _urls_in_desc = re.findall(r'https?://\S+', desc)
-        if _urls_in_desc:
-            lines.append("")
-            lines.append("== CRITICAL INPUT SOURCES (extracted from description — DO NOT IGNORE) ==")
-            for _url in _urls_in_desc:
-                lines.append(f"  → {_url}")
-            lines.append("These URLs are part of the task specification. You MUST fetch and extract their text content for processing (e.g., as TTS input, analysis source, etc.).")
-            lines.append("")
         metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
         delivery_mode = str(metadata.get("delivery_mode") or "standard_report").strip()
         manifest = resolve_execution_manifest(
@@ -622,7 +448,6 @@ class ToDoDispatchService:
         self.active_sessions: Dict[str, GatewaySession] = {}
         self.busy_sessions: set[str] = set()
         self.wake_sessions = set()
-        self.executing_sessions: set[str] = set()  # Sessions with active dispatch execution in flight
         self.execution_callback = execution_callback
         self.event_callback = event_callback
 
@@ -895,7 +720,6 @@ class ToDoDispatchService:
             )
             
             if self.execution_callback:
-                self.executing_sessions.add(session.session_id)
                 dispatch_result = await self.execution_callback(session.session_id, req)
                 decision = str((dispatch_result or {}).get("decision") or "accepted").strip().lower()
                 if self.event_callback:
@@ -965,12 +789,6 @@ class ToDoDispatchService:
                     logger.exception("Failed to roll back claimed ToDo assignments for %s", session.session_id)
             
         finally:
-            # Always clean up executing_sessions to prevent dispatch blockage.
-            # The gateway_server callback (L4227) also discards — the double-
-            # discard is intentional and safe (set.discard is idempotent).
-            # Without this, a crashed/OOM'd task leaves the session permanently
-            # in executing_sessions, blocking all future dispatch for it.
-            self.executing_sessions.discard(session.session_id)
             if self.event_callback:
                 self.event_callback({
                     "type": "agent_state_changed",
