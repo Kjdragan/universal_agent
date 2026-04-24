@@ -3044,8 +3044,8 @@ async def finalize_research(
 
         # 5. Build Scoped Overview from task-scoped archived JSONs.
         search_items = []
-        for archived_path in archived_files:
-            if not archived_path.exists():
+        for archived_path in sorted(processed_dir_path.iterdir()):
+            if archived_path.suffix != ".json":
                 continue
 
             try:
@@ -3211,7 +3211,7 @@ async def finalize_research(
             {
                 "status": "Research Corpus Finalized (Inbox Processed)",
                 "task_scope": task_name,
-                "processed_input_files": len(archived_files),
+                "processed_input_files": len(processed_files_list),
                 "archive_location": os.path.relpath(str(processed_dir_path), session_dir),
                 "task_workspace": os.path.relpath(task_dir, session_dir),
                 "task_search_results": os.path.relpath(

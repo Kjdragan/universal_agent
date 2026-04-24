@@ -147,7 +147,6 @@ async def test_finalize_research_fails_loudly_on_crawl_error(tmp_path, monkeypat
     
     payload = json.loads(result)
     
-    # Verify that the crash was caught and logged in the errors
-    failed_urls = payload.get("failed_urls", [])
-    assert len(failed_urls) > 0
-    assert "CRAWL CORE FATAL ERROR: Simulated crawl core crash" in failed_urls[0]
+    # Verify that the crash was caught and returned as an error
+    assert "error" in payload
+    assert "Simulated crawl core crash" in payload["error"]

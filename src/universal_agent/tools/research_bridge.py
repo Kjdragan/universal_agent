@@ -3,6 +3,9 @@ from pathlib import Path
 from claude_agent_sdk import tool
 import sys
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 from universal_agent.execution_context import get_current_workspace as _ctx_get_workspace
 from universal_agent.utils.session_workspace import resolve_current_run_workspace

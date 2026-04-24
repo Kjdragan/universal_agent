@@ -289,6 +289,36 @@ async def cleanup_report_async(workspace_path: Path) -> str:
             final_sections[filename] = cleaned
             all_warnings.setdefault(filename, []).append("Removed leftover pending synthesis marker.")
 
+    # Fallback: if executive summary is still effectively empty after cleanup,
+    # generate one from the first ~2 sentences of each other section.
+    for filename, content in list(final_sections.items()):
+        if "executive_summary" not in filename:
+            continue
+        body = re.sub(r"^#.*$", "", content, flags=re.MULTILINE).strip()
+        if len(body) < 50:
+            summary_parts = []
+            for other_name, other_content in sorted(final_sections.items()):
+                if "executive_summary" in other_name:
+                    continue
+                lines = other_content.strip().splitlines()
+                heading = ""
+                text_lines = []
+                for line in lines:
+                    if line.startswith("#"):
+                        heading = line.lstrip("#").strip()
+                    elif line.strip():
+                        text_lines.append(line.strip())
+                        if len(text_lines) >= 2:
+                            break
+                if heading and text_lines:
+                    summary_parts.append(f"**{heading}:** {' '.join(text_lines)}")
+            if summary_parts:
+                fallback = "# Executive Summary\n\n" + "\n\n".join(summary_parts) + "\n"
+                final_sections[filename] = fallback
+                all_warnings.setdefault(filename, []).append(
+                    "Executive summary was empty after cleanup; generated fallback from section leads."
+                )
+
     normalized_updates, _ = write_updates(
         sections_dir, original_sections, final_sections
     )
