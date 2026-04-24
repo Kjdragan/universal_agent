@@ -203,6 +203,8 @@ Every deploy pulls code, syncs dependencies, rebuilds the web UI, and then **res
 | Web UI | `universal-agent-webui` |
 | Docs | `universal-agent-docs` |
 | Telegram | `universal-agent-telegram` |
+| Discord CC Bot | `ua-discord-cc-bot` |
+| Discord Intelligence | `ua-discord-intelligence` |
 | VP Worker (coder) | `universal-agent-vp-worker@vp.coder.primary` |
 | VP Worker (general) | `universal-agent-vp-worker@vp.general.primary` |
 
