@@ -563,23 +563,25 @@ PLEASE FIX THESE ISSUES AND RE-SUBMIT ARTIFACTS.
             else:
                 self._log("⚠️ Could not clear history: agent/client history not available")
         
-        # --- Heuristic Context Injection ---
-        # "Prod" the agent to use specialists if the task description matches known capabilities.
-        # This complements the dynamic registry in agent_core.py.
+        # --- Declarative Context Injection ---
+        # Data-driven specialist hints replace scattered keyword checks.
+        _PHASE_HINT_RULES = [
+            (
+                ("report", "html", "summary", "document", "write"),
+                "💡 **Collaboration Hint**: This phase appears to involve report generation. "
+                "Remember to delegate to the `report-writer` sub-agent for drafting and refined HTML output.",
+            ),
+            (
+                ("research", "investigate", "find", "search", "gather"),
+                "💡 **Collaboration Hint**: This phase appears to involve research. "
+                "Delegate deep searches to the `research-specialist` sub-agent.",
+            ),
+        ]
         context_hints = []
         phase_text = (phase.name + " " + " ".join([t.description or "" for t in phase.tasks])).lower()
-        
-        if any(kw in phase_text for kw in ["report", "html", "summary", "document", "write"]):
-            context_hints.append(
-                "💡 **Collaboration Hint**: This phase appears to involve report generation. "
-                "Remember to delegate to the `report-writer` sub-agent for drafting and refined HTML output."
-            )
-        
-        if any(kw in phase_text for kw in ["research", "investigate", "find", "search", "gather"]):
-            context_hints.append(
-                "💡 **Collaboration Hint**: This phase appears to involve research. "
-                "Delegate deep searches to the `research-specialist` sub-agent."
-            )
+        for keywords, hint_msg in _PHASE_HINT_RULES:
+            if any(kw in phase_text for kw in keywords):
+                context_hints.append(hint_msg)
             
         hint_block = ""
         if context_hints:

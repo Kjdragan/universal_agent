@@ -902,6 +902,16 @@ from universal_agent.identity import (
     resolve_user_id,
 )
 from universal_agent.harness import ask_user_questions, present_plan_summary
+from universal_agent.routing import (
+    classify_heuristic,
+    is_system_intent as _is_system_intent_new,
+    is_tool_required_intent as _is_tool_required_intent_new,
+    is_memory_intent as _is_memory_intent_new,
+    is_context_only_intent as _is_context_only_intent_new,
+    ROUTE_SIMPLE as _ROUTE_SIMPLE_NEW,
+    ROUTE_STANDARD as _ROUTE_STANDARD_NEW,
+    ROUTE_SYSTEM as _ROUTE_SYSTEM_NEW,
+)
 
 # Global Memory Manager is not needed here as it is used locally for prompt injection
 # MEMORY_MANAGER = None
@@ -7687,123 +7697,27 @@ async def run_conversation(
         return needs_user_input, auth_link, final_text
 
 
-# ---------------------------------------------------------------------------
-# Query route types — 3-tier routing
-# ---------------------------------------------------------------------------
-ROUTE_SIMPLE = "SIMPLE"  # LLM answers from its own knowledge, no tools
-ROUTE_STANDARD = "STANDARD"  # Normal user query → Simone's full tool loop (skills, agents, capabilities)
-ROUTE_SYSTEM = "SYSTEM"  # Specialized utility (cron, heartbeat) → system routing (stub: tool loop for now)
+# Route constants now imported from universal_agent.routing
 
 
 def _is_system_intent(query: str) -> bool:
-    """Detect cron/heartbeat/system-utility queries that bypass normal user routing."""
-    lowered = query.lower()
-    # Heartbeat/watchdog markers
-    if "read heartbeat" in lowered or "heartbeat_ok" in lowered:
-        return True
-    # Explicit cron / scheduled-task markers
-    if any(
-        kw in lowered
-        for kw in [
-            "cron job",
-            "scheduled task",
-            "system task",
-            "run cron",
-            "cron check",
-        ]
-    ):
-        return True
-    # UA run-source env signal (set by execution engine for non-user-initiated runs)
-    run_source = os.getenv("UA_RUN_SOURCE", "").strip().lower()
-    if run_source in {"heartbeat", "cron", "system"}:
-        return True
-    return False
+    """Detect cron/heartbeat/system-utility queries — delegates to routing module."""
+    return _is_system_intent_new(query)
 
 
 def _is_memory_intent(query: str) -> bool:
-    lowered = query.lower()
-    memory_phrases = [
-        "please remember",
-        "remember this",
-        "my favorite",
-        "my favourite",
-        "my preferences",
-        "my preference",
-        "what are my",
-        "what's my",
-        "whats my",
-        "when do i like",
-        "do i like to",
-        "my coding preferences",
-        "my work environment",
-        "my name is",
-    ]
-    return any(phrase in lowered for phrase in memory_phrases)
+    """Detect memory-related queries — delegates to routing module."""
+    return _is_memory_intent_new(query)
 
 
 def _is_context_only_intent(query: str) -> bool:
-    lowered = query.lower()
-    # Short context-referential questions that should be answered from chat history
-    if "filename" in lowered or "file name" in lowered:
-        return True
-    return False
+    """Detect context-only queries — delegates to routing module."""
+    return _is_context_only_intent_new(query)
 
 
 def _is_tool_required_intent(query: str) -> bool:
-    """Detect STANDARD queries that obviously need tools — skip LLM classification.
-    Note: heartbeat/cron queries are handled by _is_system_intent, not here.
-    """
-    lowered = query.lower()
-    # Attached files always need tools (image analysis, file processing, etc.)
-    if (
-        "[attached image:" in lowered
-        or "[attached " in lowered
-        or "--- attached:" in lowered
-    ):
-        return True
-    # Explicit tool/action verbs
-    if any(
-        kw in lowered
-        for kw in [
-            "search for",
-            "send email",
-            "email it",
-            "email me",
-            "email this",
-            "run ",
-            "execute ",
-            "create a report",
-        ]
-    ):
-        return True
-    # YouTube/media URL fetching always needs external tools
-    if any(
-        kw in lowered
-        for kw in [
-            "youtu.be",
-            "youtube.com",
-            "transcript",
-            "get the transcript",
-            "fetch transcript",
-        ]
-    ):
-        return True
-    # Any URL fetch/scrape intent needs tools
-    if any(kw in lowered for kw in ["http://", "https://"]) and any(
-        kw in lowered
-        for kw in [
-            "get",
-            "fetch",
-            "scrape",
-            "read",
-            "summarize",
-            "transcript",
-            "content",
-            "extract",
-        ]
-    ):
-        return True
-    return False
+    """Detect tool-required queries — delegates to routing module."""
+    return _is_tool_required_intent_new(query)
 
 
 async def classify_query(client: ClaudeSDKClient, query: str) -> str:
