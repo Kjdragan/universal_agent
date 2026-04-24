@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from universal_agent import task_hub
+from universal_agent.services.proactive_task_builder import queue_proactive_task
 from universal_agent.services.proactive_artifacts import ARTIFACT_STATUS_CANDIDATE, make_artifact_id, upsert_artifact
 
 SignatureMatcher = Callable[[dict[str, Any], list[dict[str, Any]]], list[dict[str, Any]]]
@@ -527,27 +528,21 @@ def create_convergence_brief_task(
         signatures=signatures,
         preference_context=preference_context,
     )
-    task = task_hub.upsert_item(
+    task = queue_proactive_task(
         conn,
-        {
-            "task_id": task_id,
-            "source_kind": "convergence_detection",
-            "source_ref": event_id,
-            "title": f"ATLAS convergence brief: {primary_topic}",
-            "description": description,
-            "project_key": "proactive",
-            "priority": 3,
-            "labels": ["agent-ready", "convergence", "atlas", "research"],
-            "status": task_hub.TASK_STATUS_OPEN,
-            "agent_ready": True,
-            "trigger_type": "heartbeat_poll",
-            "metadata": {
-                "source": "convergence_detection",
-                "event_id": event_id,
-                "primary_topic": primary_topic,
-                "video_ids": video_ids,
-                "preferred_vp": "vp.general.primary",
-            },
+        task_id=task_id,
+        source_kind="convergence_detection",
+        source_ref=event_id,
+        title=f"ATLAS convergence brief: {primary_topic}",
+        description=description,
+        priority=3,
+        labels=["agent-ready", "convergence", "atlas", "research"],
+        metadata={
+            "source": "convergence_detection",
+            "event_id": event_id,
+            "primary_topic": primary_topic,
+            "video_ids": video_ids,
+            "preferred_vp": "vp.general.primary",
         },
     )
     artifact = upsert_artifact(
@@ -616,27 +611,21 @@ def create_insight_brief_task(
         lines.extend(["", "Preference context:", preference_context])
     description = "\n".join(lines)
 
-    task = task_hub.upsert_item(
+    task = queue_proactive_task(
         conn,
-        {
-            "task_id": task_id,
-            "source_kind": "insight_detection",
-            "source_ref": event_id,
-            "title": f"ATLAS insight brief: {primary_topic}",
-            "description": description,
-            "project_key": "proactive",
-            "priority": 3,
-            "labels": ["agent-ready", "insight", "atlas", "research"],
-            "status": task_hub.TASK_STATUS_OPEN,
-            "agent_ready": True,
-            "trigger_type": "heartbeat_poll",
-            "metadata": {
-                "source": "insight_detection",
-                "event_id": event_id,
-                "primary_topic": primary_topic,
-                "video_ids": video_ids,
-                "preferred_vp": "vp.general.primary",
-            },
+        task_id=task_id,
+        source_kind="insight_detection",
+        source_ref=event_id,
+        title=f"ATLAS insight brief: {primary_topic}",
+        description=description,
+        priority=3,
+        labels=["agent-ready", "insight", "atlas", "research"],
+        metadata={
+            "source": "insight_detection",
+            "event_id": event_id,
+            "primary_topic": primary_topic,
+            "video_ids": video_ids,
+            "preferred_vp": "vp.general.primary",
         },
     )
     artifact = upsert_artifact(

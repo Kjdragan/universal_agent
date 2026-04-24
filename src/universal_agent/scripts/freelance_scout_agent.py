@@ -134,27 +134,17 @@ Use the AgentMail service to send the email. If AgentMail is not available or fa
 
     logger.info("Dispatching freelance scout mission to vp.general.primary...")
 
-    # Import inside to avoid circular imports and ensure paths are set up
-    from universal_agent.tools.vp_orchestration import _vp_dispatch_mission_impl
+    from universal_agent.tools.vp_orchestration import dispatch_vp_mission
 
-    result = await _vp_dispatch_mission_impl({
-        "vp_id": "vp.general.primary",
-        "objective": objective,
-        "mission_type": "freelance_scout",
-        "idempotency_key": f"freelance-scout-{today}-{datetime.now(timezone.utc).strftime('%H')}",
-        "execution_mode": "sdk",
-        "source_session_id": "cron_freelance_scout",
-    })
-
-    if result.get("content", [{}])[0].get("text"):
-        res_data = json.loads(result["content"][0]["text"])
-        if res_data.get("ok"):
-            logger.info(f"Successfully dispatched freelance scout mission: {res_data.get('mission_id')}")
-        else:
-            logger.error(f"Failed to dispatch mission: {res_data}")
-            sys.exit(1)
-    else:
-        logger.error(f"Unexpected result format: {result}")
+    try:
+        await dispatch_vp_mission(
+            objective=objective,
+            mission_type="freelance_scout",
+            idempotency_key=f"freelance-scout-{today}-{datetime.now(timezone.utc).strftime('%H')}",
+            source_session_id="cron_freelance_scout",
+        )
+    except RuntimeError as exc:
+        logger.error(f"Dispatch failed: {exc}")
         sys.exit(1)
 
 
