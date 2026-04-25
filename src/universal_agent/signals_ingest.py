@@ -12,8 +12,6 @@ from typing import Any
 from pydantic import BaseModel, Field, ValidationError
 
 from universal_agent.youtube_mode_utils import (
-    MODE_EXPLAINER_ONLY,
-    MODE_EXPLAINER_PLUS_CODE,
     infer_youtube_mode as _infer_youtube_learning_mode,
 )
 

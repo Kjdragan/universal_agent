@@ -33,8 +33,6 @@ from xml.etree import ElementTree as ET
 import httpx
 from universal_agent.artifacts import resolve_artifacts_dir
 from universal_agent.youtube_mode_utils import (
-    MODE_EXPLAINER_ONLY,
-    MODE_EXPLAINER_PLUS_CODE,
     infer_youtube_mode,
 )
 

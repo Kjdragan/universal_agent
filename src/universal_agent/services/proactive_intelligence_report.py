@@ -23,7 +23,7 @@ import os
 import sqlite3
 import uuid
 from datetime import datetime, timezone, timedelta
-from typing import Any, Optional
+from typing import Any
 
 from universal_agent import task_hub
 from universal_agent import proactive_signals

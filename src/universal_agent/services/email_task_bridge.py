@@ -15,7 +15,6 @@ Key design decisions:
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import os
 import re

@@ -8,7 +8,6 @@ it into actionable, noise-free directives for Simone using standard `litellm` ca
 
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any, Dict
 

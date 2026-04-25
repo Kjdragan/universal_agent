@@ -24,7 +24,6 @@ from universal_agent import task_hub
 from universal_agent import proactive_signals
 from universal_agent.services.proactive_budget import (
     has_daily_budget,
-    get_budget_remaining,
     increment_daily_proactive_count,
 )
 

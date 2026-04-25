@@ -67,7 +67,6 @@ from universal_agent.gateway import (
     InProcessGateway,
     GatewaySession,
     GatewayRequest,
-    GatewaySessionSummary,
 )
 from universal_agent.agent_core import AgentEvent, EventType
 from universal_agent.feature_flags import (
@@ -5163,7 +5162,6 @@ _CSI_RECOMMENDATION_TEXT_KEYS = (
 from universal_agent.services.routing_markers import (
     CSI_CODE_RE, CSI_RESEARCH_RE, CSI_WRITER_RE,
     CSI_AGENT_HINTS_RE, CSI_HUMAN_HINTS_RE,
-    CSI_AGENT_RECOMMENDATION_HINTS, CSI_HUMAN_RECOMMENDATION_HINTS,
 )
 
 
@@ -11059,7 +11057,7 @@ def _add_notification(
                 # Check age: only upsert within the upsert window
                 ex_created = str(existing.get("created_at") or "").strip()
                 try:
-                    from datetime import datetime as _dt, timezone as _tz
+                    from datetime import datetime as _dt
                     ex_ts = _dt.fromisoformat(ex_created.replace("Z", "+00:00")).timestamp()
                 except Exception:
                     ex_ts = 0.0

@@ -11,7 +11,6 @@ Unmarked content (before the first marker, or between markers) defaults to "all"
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 _SCOPE_MARKER_RE = re.compile(
     r"^\s*<!--\s*scope:(hq|local|all)\s*-->\s*$",

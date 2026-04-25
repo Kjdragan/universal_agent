@@ -6,7 +6,7 @@ import html
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 from universal_agent.services import proactive_artifacts
 from universal_agent.services.proactive_preferences import build_weekly_preference_report, score_artifact_for_review
