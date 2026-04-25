@@ -16627,6 +16627,7 @@ def _ensure_autonomous_daily_briefing_job() -> Optional[dict[str, Any]]:
         cron_expr=cron_expr,
         timezone=timezone_name,
         enabled=True,
+        catch_up_on_restart=True,
         metadata=metadata,
     )
     return job.to_dict() if hasattr(job, "to_dict") else {"job_id": str(getattr(job, "job_id", ""))}
@@ -16703,6 +16704,7 @@ def _ensure_paper_to_podcast_cron_job() -> Optional[dict[str, Any]]:
         cron_expr=cron_expr,
         timezone=timezone_name,
         enabled=True,
+        catch_up_on_restart=True,
         metadata=metadata,
     )
     return job.to_dict() if hasattr(job, "to_dict") else {"job_id": str(getattr(job, "job_id", ""))}

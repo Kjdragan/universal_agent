@@ -593,6 +593,7 @@ class CronService:
         model: Optional[str] = None,
         timeout_seconds: Optional[int] = None,
         enabled: bool = True,
+        catch_up_on_restart: bool = False,
         metadata: Optional[dict[str, Any]] = None,
     ) -> CronJob:
         every_seconds = _parse_duration_seconds(every_raw, 0) if every_raw else 0
@@ -633,6 +634,7 @@ class CronService:
             model=model,
             timeout_seconds=_normalize_timeout_seconds(timeout_seconds),
             enabled=enabled,
+            catch_up_on_restart=catch_up_on_restart,
             metadata=metadata,
         )
         job.schedule_next(time.time())
