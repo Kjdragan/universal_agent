@@ -87,19 +87,13 @@ logger = logging.getLogger(__name__)
 _EXPLICIT_GENERAL_VP_PATTERNS = (
     re.compile(r"\bgeneral(?:ist)?\s+vp\b", re.IGNORECASE),
     re.compile(r"\bvp\s+general(?:ist)?\b", re.IGNORECASE),
-    re.compile(r"\bvp\s+general(?:ist)?\s+agent\b", re.IGNORECASE),
     re.compile(r"\bvp\.general\.primary\b", re.IGNORECASE),
-    re.compile(r"\buse\s+(?:the\s+)?general(?:ist)?\s+vp\b", re.IGNORECASE),
-    re.compile(r"\buse\s+(?:the\s+)?vp\s+general(?:ist)?\b", re.IGNORECASE),
 )
 _EXPLICIT_CODER_VP_PATTERNS = (
     re.compile(r"\bcoder\s+vp\b", re.IGNORECASE),
     re.compile(r"\bvp\s+coder\b", re.IGNORECASE),
-    re.compile(r"\bvp\s+coder\s+agent\b", re.IGNORECASE),
     re.compile(r"\bcodie\b", re.IGNORECASE),
     re.compile(r"\bvp\.coder\.primary\b", re.IGNORECASE),
-    re.compile(r"\buse\s+(?:the\s+)?coder\s+vp\b", re.IGNORECASE),
-    re.compile(r"\buse\s+(?:the\s+)?vp\s+coder\b", re.IGNORECASE),
 )
 
 _PROMPT_INFERRED_VP_BLOCKED_SOURCES = {
@@ -112,9 +106,8 @@ _PROMPT_INFERRED_VP_BLOCKED_SOURCES = {
     "todo_dispatcher",
 }
 _PROMPT_INFERRED_VP_BLOCKED_RUN_KINDS = {
-    "heartbeat",
-    "heartbeat_email_wake",
-    "heartbeat_cron_wake",
+    # heartbeat* variants are caught by the prefix check in _allow_prompt_inferred_vp_routing,
+    # so only non-heartbeat run kinds need explicit entries here.
     "todo_execution",
     "email_triage",
     "hook",
@@ -924,7 +917,7 @@ class InProcessGateway(Gateway):
                         strict_external_vp = vp_explicit_intent_require_external(default=True)
                         request_metadata["require_external_vp"] = strict_external_vp
 
-            if requested_vp_id and request_source not in {"cron", "webhook", "heartbeat", "heartbeat_synthetic", "task_run", "email_hook"}:
+            if requested_vp_id and request_source not in _PROMPT_INFERRED_VP_BLOCKED_SOURCES:
                 # Explicit VP language should default to external dispatch unless
                 # operators explicitly disable it via UA_VP_EXTERNAL_DISPATCH_ENABLED=0.
                 dispatch_default = bool(inferred_explicit_vp and strict_external_vp)
