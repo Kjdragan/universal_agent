@@ -8594,18 +8594,22 @@ _SOURCE_DOMAIN_ROUTES: list[tuple[str, str]] = [
 def _activity_source_domain(kind: str, metadata: Optional[dict[str, Any]] = None) -> str:
     lowered = str(kind or "").strip().lower()
     metadata = metadata if isinstance(metadata, dict) else {}
-    # Metadata-based overrides take precedence
+    # Metadata source=heartbeat is a strong signal — check first
     if str(metadata.get("source") or "").strip().lower() == "heartbeat":
         return "heartbeat"
-    if str(metadata.get("pipeline") or "").strip().startswith("csi_"):
-        return "csi"
     # "tutorial" substring match (not just prefix)
     if "tutorial" in lowered:
         return "tutorial"
-    # Prefix-based table lookup
+    # Prefix-based table lookup (primary routing)
     for prefix, domain in _SOURCE_DOMAIN_ROUTES:
         if lowered.startswith(prefix):
             return domain
+    # Last-resort fallback: metadata pipeline hint for events whose kind
+    # has no prefix match.  This must stay AFTER prefix-based checks so
+    # that e.g. agentmail_incoming with pipeline=csi_daily still routes
+    # to "simone", not "csi".
+    if str(metadata.get("pipeline") or "").strip().startswith("csi_"):
+        return "csi"
     return "system"
 
 

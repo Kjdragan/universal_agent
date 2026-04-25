@@ -206,6 +206,22 @@ def _build_batched_objectives(report: dict) -> list[dict]:
                 "",
                 "Do NOT assume a flagged file needs changes. Assess the likelihood that recent changes were already adequately covered.",
                 "",
+                "### Source Code Modification PROHIBITED (CRITICAL)",
+                "You are a DOCUMENTATION maintenance agent. You may ONLY modify:",
+                "- Files under `docs/` (markdown documentation)",
+                "- `AGENTS.md` (root-level agent rules)",
+                "- `.md` and `.yml` files under `.agent/`, `.agents/`, or `.claude/` (workflow/skill definitions)",
+                "",
+                "You MUST NOT modify ANY of the following, under any circumstances:",
+                "- Python files (`.py`) under `src/`, `tests/`, `scripts/`, or any package directory",
+                "- TypeScript/JavaScript files (`.ts`, `.js`, `.tsx`, `.jsx`) under `web-ui/` or `src/`",
+                "- Configuration files (`pyproject.toml`, `package.json`, `*.yml` under `.github/`)",
+                "- Any file that is not documentation",
+                "",
+                "If a drift issue suggests code needs refactoring, your job is to UPDATE THE DOCS to match",
+                "the current code — NEVER refactor the code to match the docs. Code refactoring is a separate,",
+                "human-reviewed process. Violating this rule causes production regressions.",
+                "",
                 "### General",
                 "- All documentation MUST reside within `docs/`",
                 "- Update BOTH `docs/README.md` AND `docs/Documentation_Status.md` when adding entries",
@@ -281,7 +297,14 @@ def _dispatch_via_gateway(
             "### Commit Discipline\n"
             "- Create a `docs/` branch for your changes.\n"
             "- Make atomic commits per file or logical change.\n"
-            "- Do NOT push — the build system handles push/PR/merge automatically.\n"
+            "- Do NOT push — the build system handles push/PR/merge automatically.\n\n"
+            "### Source Code Firewall (MANDATORY — NEVER VIOLATE)\n"
+            "You may ONLY edit files under `docs/`, `AGENTS.md`, and `.md`/`.yml` skill/workflow files.\n"
+            "You MUST NOT touch `.py`, `.ts`, `.js`, `.tsx`, `.jsx`, `pyproject.toml`, `package.json`, "
+            "or `.github/workflows/*.yml` files under any circumstances.\n"
+            "If a drift issue flags code-doc divergence, update the DOCUMENTATION to match the code. "
+            "Never refactor source code — doing so caused a production outage on 2026-04-24 when "
+            "executing_sessions was accidentally deleted from todo_dispatch_service.py.\n"
         ),
     }).encode("utf-8")
 

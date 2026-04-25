@@ -76,7 +76,7 @@ class TestSubstringTutorialMatch:
 
 
 class TestMetadataOverrides:
-    """Metadata-based checks take precedence over prefix matching."""
+    """Metadata-based routing: source=heartbeat overrides all; pipeline=csi_ is a fallback."""
 
     def test_metadata_source_heartbeat(self):
         """metadata source=heartbeat overrides any kind."""
@@ -99,9 +99,20 @@ class TestMetadataOverrides:
     def test_metadata_pipeline_csi_with_prefix(self):
         assert _activity_source_domain("random_kind", {"pipeline": "csi_ingest_hourly"}) == "csi"
 
-    def test_metadata_pipeline_csi_overrides_kind(self):
-        """pipeline csi_ should override a kind with no prefix match."""
-        assert _activity_source_domain("random_kind", {"pipeline": "csi_report"}) == "csi" 
+    def test_metadata_pipeline_csi_fallback_for_unmatched_kind(self):
+        """pipeline csi_ is a fallback when kind has no prefix match."""
+        assert _activity_source_domain("random_kind", {"pipeline": "csi_report"}) == "csi"
+
+    def test_kind_prefix_takes_precedence_over_pipeline(self):
+        """When kind matches a prefix, it wins over pipeline metadata.
+
+        This preserves original fallback-only semantics: pipeline=csi_ only
+        fires when no kind prefix matched.  Without this, agentmail events
+        with pipeline=csi_daily would be misrouted to 'csi' instead of 'simone'.
+        """
+        assert _activity_source_domain("agentmail_incoming", {"pipeline": "csi_daily"}) == "simone"
+        assert _activity_source_domain("autonomous_research", {"pipeline": "csi_daily"}) == "cron"
+        assert _activity_source_domain("system_check", {"pipeline": "csi_report"}) == "system"
 
     def test_metadata_source_takes_precedence_over_pipeline(self):
         """source=heartbeat should be checked before pipeline=csi_."""
