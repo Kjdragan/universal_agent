@@ -44,7 +44,7 @@ export const BUBBLE_GAP = 6
 export const BUBBLE_MAX_LINES = 8
 
 /** Tool card width (px) for overlap detection */
-export const TOOL_CARD_W = 170
+export const TOOL_CARD_W = 280
 /** Tool card height (px) for overlap detection */
 export const TOOL_CARD_H = 36
 
@@ -125,11 +125,11 @@ export const FORCE = {
 
 export const TOOL_SLOT = {
   maxRings: 5,
-  baseDistance: 100,
-  ringIncrement: 35,
+  baseDistance: 140,
+  ringIncrement: 40,
   baseSteps: 5,
   stepsPerRing: 2,
-  fallbackDistance: 90,
+  fallbackDistance: 130,
 } as const
 
 // ─── Discovery card dimension helpers ───────────────────────────────────────
@@ -156,7 +156,7 @@ export function getDiscoveryCardDimensions(label: string, contentLines: string[]
 
 // ─── Tool card dimension constant ───────────────────────────────────────────
 
-export const TOOL_MAX_CARD_W = 160
+export const TOOL_MAX_CARD_W = 280
 
 /** Blended $/M-token rate for Sonnet-class models */
 export const COST_RATE = 6
