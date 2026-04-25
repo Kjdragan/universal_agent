@@ -917,7 +917,11 @@ class InProcessGateway(Gateway):
                         strict_external_vp = vp_explicit_intent_require_external(default=True)
                         request_metadata["require_external_vp"] = strict_external_vp
 
-            if requested_vp_id and request_source not in _PROMPT_INFERRED_VP_BLOCKED_SOURCES:
+            # VP dispatch gate — this set deliberately EXCLUDES "todo_dispatcher"
+            # (which IS in _PROMPT_INFERRED_VP_BLOCKED_SOURCES) because the todo
+            # dispatcher may legitimately carry an explicit delegate_vp_id from
+            # LLM routing.  Do NOT replace with the shared constant.
+            if requested_vp_id and request_source not in {"cron", "webhook", "heartbeat", "heartbeat_synthetic", "task_run", "email_hook"}:
                 # Explicit VP language should default to external dispatch unless
                 # operators explicitly disable it via UA_VP_EXTERNAL_DISPATCH_ENABLED=0.
                 dispatch_default = bool(inferred_explicit_vp and strict_external_vp)

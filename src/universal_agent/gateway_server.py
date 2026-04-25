@@ -7367,6 +7367,41 @@ async def _run_gateway_session_request(
             "interactive_chat",
         }:
             _heartbeat_service.unregister_session(session_id)
+        # ── Close the durable execution run record so the reaper doesn't
+        #    falsely flag completed todo runs as timed-out. ──
+        if request_run_kind == "todo_execution" and isinstance(request_metadata, dict):
+            _fin_run_id = str(request_metadata.get("workflow_run_id") or "").strip()
+            if _fin_run_id:
+                try:
+                    from universal_agent.services.execution_run_service import finalize_execution_run
+
+                    _TERMINAL_TO_STATUS = {
+                        "completed": "completed",
+                        "goal_unsatisfied": "failed",
+                        "cancelled": "cancelled",
+                        "failed": "failed",
+                    }
+                    # Stage statuses like "triaged", "delegated", "in_progress"
+                    # represent non-terminal intermediate outcomes — treat as completed
+                    # since the gateway execution loop finished normally.
+                    _fin_status = _TERMINAL_TO_STATUS.get(
+                        terminal_reason or "",
+                        "completed" if terminal_reason else "failed",
+                    )
+                    finalize_execution_run(
+                        run_id=_fin_run_id,
+                        attempt_id=f"{_fin_run_id}:attempt:1",
+                        status=_fin_status,
+                        terminal_reason=terminal_reason or "unknown",
+                        tool_call_count=tool_call_count,
+                        duration_seconds=execution_duration_seconds,
+                    )
+                except Exception as _fin_exc:
+                    logger.warning(
+                        "Failed to finalize todo execution run %s: %s",
+                        _fin_run_id,
+                        _fin_exc,
+                    )
 
 
 async def _dispatch_gateway_request_to_session(
@@ -8577,7 +8612,10 @@ def _compact_csi_notification_message(text: str, *, max_chars: int = 1800) -> st
     return f"{trimmed[: max_chars - 3]}..."
 
 
-# Module-level routing table for _activity_source_domain (order matters: first match wins)
+# Module-level routing table for _activity_source_domain (order matters: first match wins).
+# CRITICAL ORDERING: longer prefixes MUST appear before shorter ones that share the
+# same prefix.  e.g. "autonomous_heartbeat" → heartbeat MUST come before "autonomous" → cron,
+# because startswith("autonomous") would match "autonomous_heartbeat*" and misroute to cron.
 _SOURCE_DOMAIN_ROUTES: list[tuple[str, str]] = [
     ("autonomous_heartbeat", "heartbeat"),
     ("csi", "csi"),
@@ -8597,13 +8635,15 @@ def _activity_source_domain(kind: str, metadata: Optional[dict[str, Any]] = None
     # Metadata source=heartbeat is a strong signal — check first
     if str(metadata.get("source") or "").strip().lower() == "heartbeat":
         return "heartbeat"
-    # "tutorial" substring match (not just prefix)
-    if "tutorial" in lowered:
-        return "tutorial"
-    # Prefix-based table lookup (primary routing)
+    # Prefix-based table lookup (primary routing — must run before
+    # substring checks so that e.g. csi_tutorial_report → "csi", not "tutorial")
     for prefix, domain in _SOURCE_DOMAIN_ROUTES:
         if lowered.startswith(prefix):
             return domain
+    # "tutorial" substring match — fallback for kinds like "video_tutorial"
+    # that don't start with a known prefix but contain "tutorial" mid-string.
+    if "tutorial" in lowered:
+        return "tutorial"
     # Last-resort fallback: metadata pipeline hint for events whose kind
     # has no prefix match.  This must stay AFTER prefix-based checks so
     # that e.g. agentmail_incoming with pipeline=csi_daily still routes

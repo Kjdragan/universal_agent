@@ -168,6 +168,63 @@ def allocate_execution_run(
     return ctx
 
 
+# ── Lifecycle Finalization ──────────────────────────────────────────────────
+
+def finalize_execution_run(
+    *,
+    run_id: str,
+    attempt_id: str,
+    status: str,
+    terminal_reason: str = "",
+    tool_call_count: int = 0,
+    duration_seconds: float = 0.0,
+) -> None:
+    """Mark a previously allocated execution run as terminal.
+
+    Must be called after the gateway execution loop for todo_execution
+    runs completes (success, failure, or cancel).  This closes the
+    lifecycle opened by ``allocate_execution_run`` so the stuck-run
+    reaper does not falsely flag completed runs as timed-out.
+
+    Safe to call multiple times (idempotent status update).
+    """
+    from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
+    from universal_agent.durable.state import update_run_status, update_run_attempt
+
+    db_path = get_runtime_db_path()
+    conn = connect_runtime_db(db_path)
+    try:
+        update_run_status(conn, run_id, status)
+        try:
+            update_run_attempt(
+                conn,
+                attempt_id,
+                status=status,
+                ended_at=_now_iso(),
+                terminal_reason=terminal_reason or status,
+                summary={
+                    "tool_calls": tool_call_count,
+                    "duration_seconds": duration_seconds,
+                },
+            )
+        except (ValueError, KeyError):
+            # Attempt row may not exist if allocation was partial; the run
+            # status update above is the critical one.
+            logger.debug("Attempt %s not found during finalization — run status already updated", attempt_id)
+    except Exception as exc:
+        logger.warning("Failed to finalize execution run %s: %s", run_id, exc)
+    finally:
+        conn.close()
+
+    logger.info(
+        "✅ Finalized execution run: run_id=%s status=%s tools=%d duration=%.1fs",
+        run_id,
+        status,
+        tool_call_count,
+        duration_seconds,
+    )
+
+
 # ── Canonical Resolvers ─────────────────────────────────────────────────────
 
 def resolve_active_execution_workspace(

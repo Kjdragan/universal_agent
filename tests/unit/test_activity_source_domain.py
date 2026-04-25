@@ -60,7 +60,7 @@ class TestPrefixRouting:
 
 
 class TestSubstringTutorialMatch:
-    """The word tutorial anywhere in the kind string yields tutorial."""
+    """Tutorial substring match is a fallback for kinds with no prefix match."""
 
     def test_video_tutorial(self):
         assert _activity_source_domain("video_tutorial") == "tutorial"
@@ -73,6 +73,15 @@ class TestSubstringTutorialMatch:
 
     def test_tutorial_midstring(self):
         assert _activity_source_domain("some_tutorial_thing") == "tutorial"
+
+    def test_prefix_wins_over_tutorial_substring(self):
+        """A kind starting with a known prefix must not be hijacked by 'tutorial' substring.
+
+        e.g. csi_tutorial_report must return 'csi', not 'tutorial'.
+        """
+        assert _activity_source_domain("csi_tutorial_report") == "csi"
+        assert _activity_source_domain("autonomous_tutorial_run") == "cron"
+        assert _activity_source_domain("system_tutorial_check") == "system"
 
 
 class TestMetadataOverrides:
@@ -113,6 +122,7 @@ class TestMetadataOverrides:
         assert _activity_source_domain("agentmail_incoming", {"pipeline": "csi_daily"}) == "simone"
         assert _activity_source_domain("autonomous_research", {"pipeline": "csi_daily"}) == "cron"
         assert _activity_source_domain("system_check", {"pipeline": "csi_report"}) == "system"
+        assert _activity_source_domain("heartbeat_check", {"pipeline": "csi_daily"}) == "heartbeat"
 
     def test_metadata_source_takes_precedence_over_pipeline(self):
         """source=heartbeat should be checked before pipeline=csi_."""
