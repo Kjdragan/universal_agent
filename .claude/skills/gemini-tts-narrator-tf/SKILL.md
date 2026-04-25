@@ -56,18 +56,21 @@ narrate_gemini.py <input> [-o OUTPUT] [-v VOICE] [-m MODEL] [--prompt PROMPT] [-
   --language     Language code (default: en-US)
 ```
 
-## ⏳ Background Execution Pattern (CRITICAL)
+## ⏳ Long-Running Execution (CRITICAL)
 The TTS script takes **30-90 seconds PER CHUNK**. A typical article produces 5-10 chunks, meaning **5-10 minutes total**.
 
-**You MUST follow this pattern:**
-1. Launch the script with `run_in_background: true` (or via the SDK background task mechanism)
-2. Set up a **single** `Monitor` that watches for `"Saved"` or `"Error"` or `"Traceback"` in the output
-3. **STOP issuing bash commands and WAIT for the Monitor callback** — do NOT manually poll with `cat`, `tail`, or any other command
-4. When the Monitor fires, check the final output and deliver the MP3
+**You MUST run this command SYNCHRONOUSLY with a long timeout:**
+```bash
+GOOGLE_APPLICATION_CREDENTIALS=/opt/universal_agent/.gcp-tts-sa-key.json \
+uv run .claude/skills/gemini-tts-narrator-tf/scripts/narrate_gemini.py <input> -o <output.mp3> -v Aoede 2>&1
+```
+Set `timeout: 600000` (10 minutes) on the Bash tool call. The command will block until all chunks are rendered and the final MP3 is assembled.
 
-**🚫 DO NOT** repeatedly `cat` or `tail` the output file in a loop. This wastes tool calls and will trigger the circuit breaker, killing the session before narration completes.
+**🚫 DO NOT use `run_in_background: true`** — the session will end before the script finishes and the result will never be delivered.
 
-The script prints progress lines (`Chunk N/M ... ✓`) and a final `Saved: <path>` line. The Monitor will catch the completion automatically.
+**🚫 DO NOT** repeatedly `cat` or `tail` an output file in a polling loop. This wastes tool calls and triggers the circuit breaker.
+
+The script prints progress lines (`Chunk N/M ... ✓`) and a final `Saved: <path>` line. Wait for the command to complete, then deliver the MP3.
 
 ## Available Models
 | Model | Type | Best For |
