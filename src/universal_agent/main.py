@@ -411,6 +411,16 @@ def _maybe_trip_tool_loop_circuit_breaker(
             "UA_CIRCUIT_BREAKER_MAX_CONSECUTIVE_POLLING", 30
         )
 
+    # Bash commands that monitor background task output files (cat/tail/head on
+    # temp paths) are a legitimate polling pattern — give them the same elevated
+    # threshold so TTS narration and other long-running scripts aren't killed.
+    if tool_name == "Bash" and isinstance(tool_input, dict):
+        _cmd = str(tool_input.get("command") or tool_input.get("cmd") or "")
+        if _cmd and any(p in _cmd for p in ("cat /tmp/", "tail /tmp/", "head /tmp/", "cat /opt/", "tail /opt/")):
+            max_consecutive_same_sig = _get_env_int(
+                "UA_CIRCUIT_BREAKER_MAX_CONSECUTIVE_POLLING", 30
+            )
+
     state = trace.setdefault(
         "_tool_loop_circuit",
         {

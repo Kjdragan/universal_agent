@@ -211,7 +211,8 @@ def narrate(
         f.write(all_mp3)
 
     size = os.path.getsize(output_path)
-    print(f"\nOutput: {output_path} ({size:,} bytes)")
+    print(f"\nSaved: {output_path} ({size:,} bytes)")
+    print("DONE")
     return output_path
 
 

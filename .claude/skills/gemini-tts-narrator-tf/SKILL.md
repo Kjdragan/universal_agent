@@ -37,11 +37,11 @@ Convert text into a high-quality narrated MP3 audio file using Google Cloud Text
 3. **Run narrate_gemini.py**:
    ```bash
    GOOGLE_APPLICATION_CREDENTIALS=/opt/universal_agent/.gcp-tts-sa-key.json \
-   uv run scripts/narrate_gemini.py <input> -o <output.mp3> -v Aoede
+   uv run .claude/skills/gemini-tts-narrator-tf/scripts/narrate_gemini.py <input> -o <output.mp3> -v Aoede
    ```
 4. **Fallback**: If Cloud TTS fails, try with `gemini-2.5-flash-tts` model:
    ```bash
-   uv run scripts/narrate_gemini.py <input> -o <output.mp3> -m gemini-2.5-flash-tts
+   uv run .claude/skills/gemini-tts-narrator-tf/scripts/narrate_gemini.py <input> -o <output.mp3> -m gemini-2.5-flash-tts
    ```
 5. **Deliver**: You MUST deliver the resulting `.mp3` file to Kevin via email. Use `mcp__internal__agentmail_send_with_local_attachments` to email it to `kevinjdragan@gmail.com` using his contact info from `USER.md`.
 
@@ -55,6 +55,19 @@ narrate_gemini.py <input> [-o OUTPUT] [-v VOICE] [-m MODEL] [--prompt PROMPT] [-
   --prompt       Custom narration style prompt
   --language     Language code (default: en-US)
 ```
+
+## ⏳ Background Execution Pattern (CRITICAL)
+The TTS script takes **30-90 seconds PER CHUNK**. A typical article produces 5-10 chunks, meaning **5-10 minutes total**.
+
+**You MUST follow this pattern:**
+1. Launch the script with `run_in_background: true` (or via the SDK background task mechanism)
+2. Set up a **single** `Monitor` that watches for `"Saved"` or `"Error"` or `"Traceback"` in the output
+3. **STOP issuing bash commands and WAIT for the Monitor callback** — do NOT manually poll with `cat`, `tail`, or any other command
+4. When the Monitor fires, check the final output and deliver the MP3
+
+**🚫 DO NOT** repeatedly `cat` or `tail` the output file in a loop. This wastes tool calls and will trigger the circuit breaker, killing the session before narration completes.
+
+The script prints progress lines (`Chunk N/M ... ✓`) and a final `Saved: <path>` line. The Monitor will catch the completion automatically.
 
 ## Available Models
 | Model | Type | Best For |
