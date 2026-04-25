@@ -359,26 +359,15 @@ def build_system_prompt(
         "Always use ZAI Vision MCP tools for image understanding."
     )
 
-    # ── 8. SHOWCASE / OPEN-ENDED GUIDANCE ─────────────────────────────
+    # ── 8. URL CONTENT EXTRACTION (JINA-FIRST) ─────────────────────────
     sections.append(
-        "## WHEN ASKED TO 'DO SOMETHING AMAZING' OR 'SHOWCASE CAPABILITIES'\n"
-        "Do NOT just search + report + email. That's boring. Instead, combine MULTIPLE domains:\n"
-        "- Pull live data via YouTube API (`mcp__composio__YOUTUBE_*`) or GitHub API (`mcp__composio__GITHUB_*`)\n"
-        "- Check what's trending on X via `x_trends_posts` (xAI `x_search` evidence fetch) or Reddit via `reddit_top_posts`\n"
-        "- Get current conditions or a short-term forecast via the `openweather` skill\n"
-        "- Get directions or find places via Google Maps (`mcp__composio__GOOGLEMAPS_*`)\n"
-        "- Post to Discord channels (`mcp__composio__DISCORD_*`)\n"
-        "- Run statistical analysis locally (Bash + Python); use CodeInterpreter only if you need isolation\n"
-        "- Create a calendar event for a follow-up (via `google_calendar` skill)\n"
-        "- Post a Slack summary (`mcp__composio__SLACK_SENDS_A_MESSAGE_TO_A_SLACK_CHANNEL`)\n"
-        "- Search Google Drive for related docs (via native CLI)\n"
-        "- Create a Notion knowledge base page (`mcp__composio__NOTION_*`)\n"
-        "- Fetch Google Sheets data and analyze it (via native CLI)\n"
-        "- Execute and validate real browser workflows via `agent-browser` (not just scrape snippets)\n"
-        "- Generate video content, not just images\n"
-        "- Discover NEW integrations on-the-fly with `mcp__composio__COMPOSIO_SEARCH_TOOLS`\n"
-        "- Set up a recurring monitoring cron job via `system-configuration-agent`\n"
-        "The goal: show BREADTH of integration, not just depth of research."
+        "## 🔗 URL CONTENT EXTRACTION\n"
+        "When you need to read a URL's content, use this fallback chain (in order):\n"
+        "1. **Jina Reader** (primary): Prefix URL with `https://r.jina.ai/` — free, no API key, bypasses bot protection, returns clean markdown\n"
+        "2. `gemini-url-context-scraper` skill (Gemini URL Context)\n"
+        "3. `defuddle` skill (Defuddle CLI)\n"
+        "4. `agent-browser` skill (browser-based extraction)\n"
+        "**DO NOT** use inline `requests.get` + BeautifulSoup + heredoc file writes. This pattern is blocked by guardrails."
     )
 
     # ── 9. SEARCH HYGIENE ─────────────────────────────────────────────
@@ -413,14 +402,9 @@ def build_system_prompt(
     # ── 11. WORKBENCH RESTRICTIONS ────────────────────────────────────
     sections.append(
         "## 🖥️ REMOTE WORKBENCH RESTRICTIONS\n"
-        "Use the Remote Workbench ONLY for:\n"
-        "- External Action execution (APIs, Browsing).\n"
-        "- Untrusted code execution.\n\n"
-        "DO NOT use Remote Workbench for:\n"
-        "- PDF creation, image processing, or document generation — do that LOCALLY with native Bash/Python.\n"
-        "- Text editing or file buffer for small data — do that LOCALLY.\n"
-        "- 🚫 NEVER use REMOTE_WORKBENCH to save search results. The Observer already saves them automatically.\n"
-        "- 🚫 NEVER try to access local files from REMOTE_WORKBENCH — local paths don't exist there!"
+        "Remote Workbench is ONLY for external API execution and untrusted code. "
+        "Do all PDF/image/doc generation LOCALLY. Never save search results to workbench (Observer auto-saves). "
+        "Local file paths do not exist on the workbench."
     )
 
     # ── 12. ARTIFACT OUTPUT POLICY ────────────────────────────────────
@@ -549,29 +533,9 @@ def build_system_prompt(
         "or delivery beyond a report, use appropriate Composio tools and subagents for those phases too."
     )
 
-    # ── 15b. KNOWLEDGE BASE ARTIFACT GENERATION (NLM-FIRST) ───────────
-    sections.append(
-        "## 📚 KNOWLEDGE BASE ARTIFACT GENERATION (NLM-FIRST RULE)\n"
-        "When generating artifacts from research or knowledge base content, **ALWAYS prefer NotebookLM** over generic tools.\n\n"
-        "### Mandatory Tool Routing\n"
-        "| Artifact | USE THIS | NOT THIS |\n"
-        "|---|---|---|\n"
-        "| Research corpus | NLM `research_start` + `research_import` | Generic web scraping |\n"
-        "| Reports / Briefings | NLM `studio_create(type=\"report\")` | LLM-generated markdown |\n"
-        "| Infographics | NLM `studio_create(type=\"infographic\")` | `generate_image` |\n"
-        "| Audio overviews | NLM `studio_create(type=\"audio\")` | N/A |\n"
-        "| Slide decks | NLM `studio_create(type=\"slides\")` | N/A |\n"
-        "| Downloads | NLM `download_artifact` | N/A |\n\n"
-        "### Why This Matters\n"
-        "- NLM artifacts are multi-source synthesized with citations — far higher quality than single-LLM generation.\n"
-        "- `generate_image` uses a different API key tier (`GEMINI_IMAGE_API_KEY`) that may have availability constraints.\n"
-        "- NLM infographics render from the actual research corpus; `generate_image` only gets a text prompt.\n\n"
-        "### Fallback Rule\n"
-        "Use generic tools (`generate_image`, LLM markdown reports) ONLY when:\n"
-        "- The NLM MCP tools or `nlm` CLI are explicitly unavailable\n"
-        "- The task is a one-off image generation unrelated to a knowledge base\n"
-        "- The user explicitly requests a specific non-NLM tool"
-    )
+    # ── 15b. NLM-FIRST — moved to notebooklm-orchestration skill ──────
+    # (Removed from base prompt to reduce token overhead. The NLM-first routing
+    #  directive is now in the notebooklm-orchestration SKILL.md where it belongs.)
 
     # ── 16. SYSTEM CONFIGURATION DELEGATION ───────────────────────────
     sections.append(

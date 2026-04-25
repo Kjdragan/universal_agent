@@ -2489,18 +2489,21 @@ class AgentHookSet:
     ) -> dict:
         """
         Block massive bash heredocs to prevent token explosion and brittle file generation.
+
+        Uses the canonical _extract_bash_command() helper so it works with both
+        direct and SDK-dispatched (tool_input.command) bash payloads.
         """
-        cmd = str(input_data.get("command") or input_data.get("cmd") or "")
-        
-        # If the command is extremely long and contains heredoc or cat/echo markers
-        if len(cmd) > 2000 and ("<<" in cmd or "cat >" in cmd or "echo " in cmd):
+        command, _, _ = _extract_bash_command(input_data)
+
+        # If the command is extremely long and contains heredoc, cat/echo/tee, or redirect markers
+        if len(command) > 2000 and ("<<" in command or "cat >" in command or "echo " in command or "tee " in command or " > " in command):
             return {
                 "override_input": input_data,
                 "decision": "block",
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "deny",
-                    "permissionDecisionReason": "Blocked massive Bash heredoc pattern. Do NOT use Bash to manually write large files or synthesize data. Use programmatic file writing tools (e.g. Write) or the designated pipeline tools.",
+                    "permissionDecisionReason": "Blocked massive Bash heredoc/redirect pattern. Do NOT use Bash to manually write large files or synthesize data. Use programmatic file writing tools (e.g. Write) or the designated pipeline tools.",
                 },
             }
         return {}
