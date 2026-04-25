@@ -18,11 +18,12 @@ TASK_STATUS_BLOCKED = "blocked"
 TASK_STATUS_REVIEW = "needs_review"
 TASK_STATUS_COMPLETED = "completed"
 TASK_STATUS_PARKED = "parked"
+TASK_STATUS_CANCELLED = "cancelled"
 TASK_STATUS_DELEGATED = "delegated"           # VP is actively working this
 TASK_STATUS_PENDING_REVIEW = "pending_review"  # VP done, Simone sign-off needed
 TASK_STATUS_SCHEDULED = "scheduled"            # Time-bound: cron trigger will execute at due_at
 
-TERMINAL_STATUSES = {TASK_STATUS_COMPLETED, TASK_STATUS_PARKED}
+TERMINAL_STATUSES = {TASK_STATUS_COMPLETED, TASK_STATUS_PARKED, TASK_STATUS_CANCELLED}
 ACTIVE_STATUSES = {
     TASK_STATUS_OPEN, TASK_STATUS_IN_PROGRESS, TASK_STATUS_BLOCKED,
     TASK_STATUS_REVIEW, TASK_STATUS_DELEGATED, TASK_STATUS_PENDING_REVIEW,
@@ -809,9 +810,10 @@ def rebuild_dispatch_queue(conn: sqlite3.Connection) -> dict[str, Any]:
     ensure_schema(conn)
     policy = current_policy()
 
+    terminal_placeholders = ",".join("?" * len(TERMINAL_STATUSES))
     rows = conn.execute(
-        "SELECT * FROM task_hub_items WHERE status NOT IN (?, ?)",
-        (TASK_STATUS_COMPLETED, TASK_STATUS_PARKED),
+        f"SELECT * FROM task_hub_items WHERE status NOT IN ({terminal_placeholders})",
+        tuple(TERMINAL_STATUSES),
     ).fetchall()
     items = [hydrate_item(dict(row)) for row in rows]
 

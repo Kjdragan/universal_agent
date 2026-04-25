@@ -23,9 +23,11 @@ type AgentQueueItem = {
   must_complete?: boolean;
   incident_key?: string | null;
   score?: number;
+  created_at?: string;
   updated_at?: string;
   due_at?: string | null;
   source_kind?: string;
+  stale_state?: string;
   links?: {
     workspace_name?: string | null;
     session_id?: string | null;
@@ -273,6 +275,17 @@ function ActiveTasksPanel() {
                 {item.project_key && (
                   <span className="rounded bg-card/50 px-1.5 py-0.5 text-xs text-muted-foreground">
                     {item.project_key}
+                  </span>
+                )}
+                {(item.created_at || item.updated_at) && (
+                  <span
+                    className="text-xs text-muted-foreground/70"
+                    title={`Created: ${item.created_at || "—"} · Updated: ${item.updated_at || "—"}`}
+                  >
+                    🕐 {formatTs(item.created_at || item.updated_at)}
+                    {item.updated_at && item.created_at && item.updated_at !== item.created_at
+                      ? ` · updated ${formatTs(item.updated_at)}`
+                      : ""}
                   </span>
                 )}
               </div>
