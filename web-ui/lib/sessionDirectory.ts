@@ -16,6 +16,7 @@ export type SessionDirectoryItem = {
   description?: string;
   workspace_dir?: string;
   last_activity?: string;
+  created_at?: string;
   active_connections?: number;
   active_runs?: number;
   last_run_source?: string;
@@ -57,6 +58,7 @@ function normalizeSessionDirectoryItem(item: SessionDirectoryItem): SessionDirec
     description: asOptionalText(item.description),
     workspace_dir: asOptionalText(item.workspace_dir),
     last_activity: asOptionalText(item.last_activity),
+    created_at: asOptionalText(item.created_at),
     active_connections: Number(item.active_connections || 0),
     active_runs: Number(item.active_runs || 0),
     last_run_source: asOptionalText(item.last_run_source),
@@ -159,6 +161,7 @@ export async function fetchSessionDirectory(limit = 200): Promise<SessionDirecto
           description: row.description ? String(row.description) : undefined,
           workspace_dir: row.workspace_dir ? String(row.workspace_dir) : undefined,
           last_activity: row.last_activity ? String(row.last_activity) : undefined,
+          created_at: row.created_at ? String(row.created_at) : undefined,
           active_connections: Number(row.active_connections || 0),
           active_runs: Number(row.active_runs || 0),
           last_run_source: row.last_run_source ? String(row.last_run_source) : undefined,

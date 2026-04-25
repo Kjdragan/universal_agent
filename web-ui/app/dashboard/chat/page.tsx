@@ -8,6 +8,36 @@ import {
   SessionDirectoryItem,
 } from "@/lib/sessionDirectory";
 
+function formatSessionTime(isoString?: string): { relative: string; absolute: string } | null {
+  if (!isoString) return null;
+  const date = new Date(isoString);
+  if (isNaN(date.getTime())) return null;
+
+  const now = Date.now();
+  const diffMs = now - date.getTime();
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHr = Math.floor(diffMin / 60);
+  const diffDays = Math.floor(diffHr / 24);
+
+  let relative: string;
+  if (diffSec < 60) relative = "just now";
+  else if (diffMin < 60) relative = `${diffMin}m ago`;
+  else if (diffHr < 24) relative = `${diffHr}h ago`;
+  else if (diffDays < 7) relative = `${diffDays}d ago`;
+  else relative = date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+
+  const absolute = date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+
+  return { relative, absolute };
+}
+
 export default function DashboardChatPage() {
   const [sessions, setSessions] = useState<SessionDirectoryItem[]>([]);
   const [selectedSession, setSelectedSession] = useState<string>("");
@@ -150,6 +180,8 @@ export default function DashboardChatPage() {
           {sortedSessions.map((session) => {
             const active = selectedSession === session.session_id;
             const deleting = deletingSessionId === session.session_id;
+            const createdTime = formatSessionTime(session.created_at);
+            const activityTime = formatSessionTime(session.last_activity);
             return (
               <article
                 key={session.session_id}
@@ -198,8 +230,16 @@ export default function DashboardChatPage() {
                     {deleting ? "Deleting..." : "Delete"}
                   </button>
                 </div>
-                <div className="mt-1 text-[11px] text-muted-foreground truncate">
-                  owner: {session.owner || "unknown"} · memory: {session.memory_mode || "direct_only"}
+                <div className="mt-1 flex items-center gap-3 text-[11px] text-muted-foreground truncate">
+                  <span>owner: {session.owner || "unknown"} · memory: {session.memory_mode || "direct_only"}</span>
+                  {createdTime && (
+                    <span
+                      className="shrink-0 text-[10px] text-muted-foreground/70"
+                      title={`Started: ${createdTime.absolute}${activityTime ? ` · Last active: ${activityTime.absolute}` : ""}`}
+                    >
+                      🕐 {createdTime.relative}{activityTime ? ` · active ${activityTime.relative}` : ""}
+                    </span>
+                  )}
                 </div>
                 <div className="mt-1 text-[11px] text-muted truncate">
                   {session.workspace_dir || "workspace: n/a"}
