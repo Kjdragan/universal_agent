@@ -59,10 +59,21 @@ class CSIService:
             batch_interval,
             self._run_batch_brief,
         )
+
+        # ── Dedupe key maintenance (hourly) ───────────────────────────
+        self.scheduler.add_job(
+            "dedupe_cleanup",
+            3600.0,  # once per hour
+            self._run_dedupe_cleanup,
+        )
+        # Run one immediate cleanup on startup to clear any backlog
+        startup_purged = dedupe_store.purge_expired(self.conn)
+
         logger.info(
-            "CSI service started adapters=%s batch_interval=%ds",
+            "CSI service started adapters=%s batch_interval=%ds dedupe_startup_purged=%d",
             ",".join(sorted(self.adapters.keys())),
             int(batch_interval),
+            startup_purged,
         )
 
     async def stop(self) -> None:
@@ -237,7 +248,7 @@ class CSIService:
                 self.metrics.inc("csi.events.deduped")
                 deduped_count += 1
                 continue
-            dedupe_store.upsert_key(self.conn, event.dedupe_key, ttl_days=90)
+            dedupe_store.upsert_key(self.conn, event.dedupe_key)
             event_store.insert_event(self.conn, event)
             self.metrics.inc("csi.events.stored")
             stored_count += 1
@@ -283,6 +294,25 @@ class CSIService:
         except Exception as exc:
             logger.warning("Batch brief cycle failed: %s", exc)
             self.metrics.inc("csi.batch_brief.errors")
+
+    # ── Dedupe key maintenance ────────────────────────────────────────
+
+    async def _run_dedupe_cleanup(self) -> None:
+        """Purge expired dedupe keys to prevent unbounded table growth."""
+        try:
+            purged = dedupe_store.purge_expired(self.conn)
+            remaining = dedupe_store.count_keys(self.conn)
+            if purged > 0:
+                logger.info(
+                    "Dedupe cleanup: purged=%d remaining=%d",
+                    purged, remaining,
+                )
+            else:
+                logger.debug("Dedupe cleanup: nothing to purge (total=%d)", remaining)
+            self.metrics.inc("csi.dedupe_cleanup.cycles")
+        except Exception as exc:
+            logger.warning("Dedupe cleanup failed: %s", exc)
+            self.metrics.inc("csi.dedupe_cleanup.errors")
 
 
 def _iso_now() -> str:

@@ -480,7 +480,7 @@ def check_csi_dedupe_bloat() -> list[HeartbeatFinding]:
                 known_rule_match=False,
                 confidence="medium",
                 title=f"CSI dedupe table has {count:,} entries — consider cleanup",
-                recommendation="Expired dedupe keys should be purged. Check TTL expiry cron.",
+                recommendation="Expired dedupe keys are auto-purged hourly by the CSI Ingester. If count stays high, verify the ingester service is running with latest code.",
             ))
     except Exception as exc:
         logger.debug("check_csi_dedupe_bloat failed: %s", exc)
