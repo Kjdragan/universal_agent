@@ -8577,27 +8577,35 @@ def _compact_csi_notification_message(text: str, *, max_chars: int = 1800) -> st
     return f"{trimmed[: max_chars - 3]}..."
 
 
+# Module-level routing table for _activity_source_domain (order matters: first match wins)
+_SOURCE_DOMAIN_ROUTES: list[tuple[str, str]] = [
+    ("autonomous_heartbeat", "heartbeat"),
+    ("csi", "csi"),
+    ("youtube", "tutorial"),
+    ("autonomous", "cron"),
+    ("cron", "cron"),
+    ("heartbeat", "heartbeat"),
+    ("continuity", "continuity"),
+    ("system", "system"),
+    ("agentmail", "simone"),
+]
+
+
 def _activity_source_domain(kind: str, metadata: Optional[dict[str, Any]] = None) -> str:
     lowered = str(kind or "").strip().lower()
     metadata = metadata if isinstance(metadata, dict) else {}
-    if lowered.startswith("autonomous_heartbeat") or str(metadata.get("source") or "").strip().lower() == "heartbeat":
+    # Metadata-based overrides take precedence
+    if str(metadata.get("source") or "").strip().lower() == "heartbeat":
         return "heartbeat"
-    if lowered.startswith("csi"):
-        return "csi"
-    if lowered.startswith("youtube") or "tutorial" in lowered:
-        return "tutorial"
-    if lowered.startswith("autonomous") or lowered.startswith("cron"):
-        return "cron"
-    if lowered.startswith("heartbeat"):
-        return "heartbeat"
-    if lowered.startswith("continuity"):
-        return "continuity"
-    if lowered.startswith("system"):
-        return "system"
-    if lowered.startswith("agentmail"):
-        return "simone"
     if str(metadata.get("pipeline") or "").strip().startswith("csi_"):
         return "csi"
+    # "tutorial" substring match (not just prefix)
+    if "tutorial" in lowered:
+        return "tutorial"
+    # Prefix-based table lookup
+    for prefix, domain in _SOURCE_DOMAIN_ROUTES:
+        if lowered.startswith(prefix):
+            return domain
     return "system"
 
 
