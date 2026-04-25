@@ -187,7 +187,12 @@ export default function DashboardClaudeCodeIntelPage() {
   const [triggerStatus, setTriggerStatus] = useState<"idle" | "pending" | "accepted" | "error">("idle");
   const [triggerMessage, setTriggerMessage] = useState("");
 
-  const packets = useMemo(() => payload?.packets ?? [], [payload?.packets]);
+  const packets = useMemo(
+    () => (payload?.packets ?? []).filter(
+      (p) => asNumber(p.new_post_count) > 0 || p.status === "error",
+    ),
+    [payload?.packets],
+  );
   const rolling = payload?.rolling || null;
   const bundles = useMemo(() => rolling?.bundles ?? [], [rolling?.bundles]);
   const knowledgePages = useMemo(() => payload?.vault?.knowledge_pages ?? [], [payload?.vault?.knowledge_pages]);

@@ -61,6 +61,7 @@ type AgentQueueItem = {
     completion_unverified?: boolean;
   };
   metadata?: {
+    sender_email?: string;
     dispatch?: {
       last_assignment_state?: string | null;
       last_assignment_ended_at?: string | null;
@@ -868,6 +869,12 @@ export default function ToDoListDashboardPage() {
     const isAwaitingReview = boardLane === "needs_review" && !isAgentStaging && !isHumanReview; // Fallback
     const isOrphaned = Boolean(item.reconciliation?.orphaned_in_progress);
     const lastDispatch = item.metadata?.dispatch;
+
+    // Security-specific flags
+    const itemLabels = item.labels || [];
+    const isSecurityAlert = itemLabels.includes("external-untriaged") || itemLabels.includes("security-untriaged");
+    const isQuarantined = itemLabels.includes("quarantined");
+    const senderEmail = String(item.metadata?.sender_email || "");
     const wasReopenedAfterFailure =
       boardLane === "not_assigned" && String(lastDispatch?.last_assignment_state || "").toLowerCase() === "failed";
       
@@ -883,10 +890,26 @@ export default function ToDoListDashboardPage() {
           "group relative rounded-none p-3 transition-all duration-200 bg-[#0b1326]/70 backdrop-blur-md border border-white/10 hover:border-white/20 hover:-translate-y-[1px] cursor-pointer",
           item.must_complete ? "border-l-2 border-l-kcd-red" : "",
           isProcessing ? "processing-bar border-l-2 border-l-kcd-green" : "",
-          (isHumanReview || isAwaitingReview) ? "border-l-2 border-l-kcd-amber" : "",
+          (isSecurityAlert || isQuarantined) ? "border-l-2 border-l-red-500 border-red-500/30 bg-red-950/20" : "",
+          (!isSecurityAlert && !isQuarantined && (isHumanReview || isAwaitingReview)) ? "border-l-2 border-l-kcd-amber" : "",
           isAgentStaging ? "border-l-2 border-l-indigo-400" : "",
         ].filter(Boolean).join(" ")}
       >
+        {/* ── Security Alert Badge (external/quarantined) ── */}
+        {(isSecurityAlert || isQuarantined) && (
+          <div className="flex items-center gap-2 mb-2 px-2 py-1.5 bg-red-500/[0.12] border border-red-500/30 rounded-sm">
+            <span className="inline-block w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+            <span className="material-symbols-outlined text-xs text-red-400">shield</span>
+            <span className="font-mono text-[9px] font-bold tracking-[0.1em] text-red-400 uppercase">
+              {isQuarantined ? "⛔ Quarantined" : "⚠ External Sender — Security Review Required"}
+            </span>
+            {senderEmail && (
+              <span className="font-mono text-[9px] text-red-300/80 ml-auto">
+                from: {senderEmail}
+              </span>
+            )}
+          </div>
+        )}
         {/* Processing / Review Status Badge */}
         {isProcessing && (
           <div className="flex items-center gap-1.5 mb-2 px-2 py-1 bg-kcd-green/[0.08] border border-kcd-green/20 rounded-sm">

@@ -91,9 +91,12 @@ def classify_email_priority(
     """
     text = f"{subject} {body_snippet}"
 
-    # ── Untrusted sender → background ────────────────────────────────────
+    # ── Untrusted sender → urgent user review ──────────────────────────────
+    # This is NOT a low-priority background item.  External/unsolicited
+    # emails require active human triage — the operator must decide
+    # whether to engage, ignore, or block.
     if not sender_trusted:
-        return _decision(TaskPriority.P3_BACKGROUND, "untrusted_sender")
+        return _decision(TaskPriority.P1_SOON, "untrusted_sender_security_review")
 
     # ── Explicit deferral keywords override everything ───────────────────
     if _DEFERRAL_KEYWORDS.search(text):

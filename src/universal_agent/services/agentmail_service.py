@@ -2345,6 +2345,8 @@ class AgentMailService:
             return
 
         note = str(triage.get("subject_summary") or triage.get("raw_text") or "").strip()
+        sender_email = str(payload.get("sender_email") or "").strip().lower()
+
         if str(triage.get("routing_decision") or "") == "quarantine":
             bridge.mark_quarantined(
                 thread_id,
@@ -2353,13 +2355,38 @@ class AgentMailService:
             )
             self._emit_notification(
                 kind="agentmail_quarantined",
-                title="Inbound Email Quarantined",
-                message=note or f"Suspicious inbound email from {payload.get('sender_email') or 'unknown sender'}.",
+                title="⛔ Inbound Email Quarantined",
+                message=note or f"Suspicious inbound email from {sender_email or 'unknown sender'}.",
                 severity="warning",
                 metadata={
                     "thread_id": thread_id,
-                    "sender_email": str(payload.get("sender_email") or ""),
+                    "sender_email": sender_email,
                     "session_key": str(payload.get("session_key") or ""),
+                },
+            )
+            return
+
+        # ── Auto-quarantine unknown @agentmail.to senders ────────────────
+        # Agent-to-agent email from external agents we don't control is a
+        # higher-risk vector (potential prompt injection from another AI).
+        if sender_email.endswith("@agentmail.to") and sender_email not in {
+            addr.lower() for addr in self._trusted_senders
+        }:
+            bridge.mark_quarantined(
+                thread_id,
+                note=note or f"Auto-quarantined: unknown agent-to-agent sender {sender_email}",
+                sender_trusted=False,
+            )
+            self._emit_notification(
+                kind="agentmail_quarantined",
+                title="⛔ Unknown Agent Email Auto-Quarantined",
+                message=f"External @agentmail.to sender '{sender_email}' auto-quarantined. Agent-to-agent email from unknown sources requires explicit human authorization.",
+                severity="warning",
+                metadata={
+                    "thread_id": thread_id,
+                    "sender_email": sender_email,
+                    "session_key": str(payload.get("session_key") or ""),
+                    "auto_quarantine_reason": "unknown_agentmail_sender",
                 },
             )
             return
@@ -2371,12 +2398,12 @@ class AgentMailService:
         )
         self._emit_notification(
             kind="agentmail_review_required",
-            title="Inbound Email Awaiting Review",
-            message=note or f"External inbound email from {payload.get('sender_email') or 'unknown sender'} is waiting for Simone review.",
-            severity="info",
+            title="🔶 External Email — Human Triage Required",
+            message=note or f"External inbound email from {sender_email or 'unknown sender'} requires security review.",
+            severity="warning",
             metadata={
                 "thread_id": thread_id,
-                "sender_email": str(payload.get("sender_email") or ""),
+                "sender_email": sender_email,
                 "session_key": str(payload.get("session_key") or ""),
             },
         )

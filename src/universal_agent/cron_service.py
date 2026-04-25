@@ -293,6 +293,7 @@ class CronJob:
     model: Optional[str] = None  # Model override for this job
     timeout_seconds: Optional[int] = None  # Per-job execution timeout
     enabled: bool = True
+    catch_up_on_restart: bool = False  # If True, fire a backfill run for missed windows on service restart
     created_at: float = field(default_factory=lambda: time.time())
     last_run_at: Optional[float] = None
     next_run_at: Optional[float] = None
@@ -313,6 +314,7 @@ class CronJob:
             "model": self.model,
             "timeout_seconds": self.timeout_seconds,
             "enabled": self.enabled,
+            "catch_up_on_restart": self.catch_up_on_restart,
             "created_at": self.created_at,
             "last_run_at": self.last_run_at,
             "next_run_at": self.next_run_at,
@@ -339,6 +341,7 @@ class CronJob:
                 else data.get("metadata", {}).get("timeout_seconds")
             ),
             enabled=bool(data.get("enabled", True)),
+            catch_up_on_restart=bool(data.get("catch_up_on_restart", False)),
             created_at=float(data.get("created_at", time.time())),
             last_run_at=data.get("last_run_at"),
             next_run_at=data.get("next_run_at"),
@@ -497,12 +500,13 @@ class CronService:
         self.jobs: Dict[str, CronJob] = {}
         self.running_jobs: set[str] = set()
         self.running_job_scheduled_at: dict[str, float] = {}
-        self.max_concurrency = int(os.getenv("UA_CRON_MAX_CONCURRENCY", "1"))
+        self.max_concurrency = int(os.getenv("UA_CRON_MAX_CONCURRENCY", "2"))
         self._semaphore = asyncio.Semaphore(self.max_concurrency)
         self.event_sink = event_sink
         self.wake_callback = wake_callback
         self.system_event_callback = system_event_callback
         self.agent_event_sink = agent_event_sink
+        self._backfill_queue: list[tuple[str, float]] = []  # (job_id, missed_at) pairs
 
         jobs_path = workspaces_dir / "cron_jobs.json"
         runs_path = workspaces_dir / "cron_runs.jsonl"
@@ -510,12 +514,28 @@ class CronService:
         self.jobs = self.store.load_jobs()
         _now_ts = time.time()
         _needs_save = False
+        _backfill_max_age = 86400  # Only backfill missed windows within the last 24 hours
         for job in self.jobs.values():
             if job.next_run_at is None or job.next_run_at < _now_ts:
+                missed_at = job.next_run_at  # Preserve what was missed before rescheduling
                 # Recalculate from now to prevent stale/wrong timestamps from
                 # causing immediate catch-up fires on restart (fix #5: timezone double-fire).
                 job.schedule_next(_now_ts)
                 _needs_save = True
+                # Queue backfill for catch-up-enabled jobs with a recent missed window
+                if (
+                    job.catch_up_on_restart
+                    and job.enabled
+                    and missed_at is not None
+                    and (_now_ts - missed_at) < _backfill_max_age
+                ):
+                    self._backfill_queue.append((job.job_id, missed_at))
+                    logger.info(
+                        "🔄 Queued backfill for job %s (missed at %s, age %.0fs)",
+                        job.job_id,
+                        datetime.fromtimestamp(missed_at).isoformat(),
+                        _now_ts - missed_at,
+                    )
         if _needs_save:
             self.store.save_jobs(self.jobs.values())
 
@@ -525,6 +545,21 @@ class CronService:
         self.running = True
         self.task = asyncio.create_task(self._scheduler_loop())
         logger.info("⏱️ Chron service started (%d jobs)", len(self.jobs))
+        # Fire queued backfill runs for jobs that missed their window during restart
+        for job_id, missed_at in self._backfill_queue:
+            job = self.jobs.get(job_id)
+            if job and job.enabled and job.job_id not in self.running_jobs:
+                logger.info(
+                    "🔄 Dispatching backfill run for job %s (originally scheduled %s)",
+                    job_id,
+                    datetime.fromtimestamp(missed_at).isoformat(),
+                )
+                self.running_jobs.add(job.job_id)
+                dispatch_key = self._dispatch_key_for_job(job, reason="backfill", scheduled_at=missed_at)
+                asyncio.create_task(
+                    self._run_job(job, scheduled_at=missed_at, reason="backfill", dispatch_key=dispatch_key)
+                )
+        self._backfill_queue.clear()
 
     async def stop(self) -> None:
         if not self.running:
@@ -644,6 +679,8 @@ class CronService:
             job.workspace_dir = updates["workspace_dir"]
         if "user_id" in updates:
             job.user_id = updates["user_id"]
+        if "catch_up_on_restart" in updates:
+            job.catch_up_on_restart = bool(updates["catch_up_on_restart"])
         if "metadata" in updates and isinstance(updates["metadata"], dict):
             job.metadata.update(updates["metadata"])
         job.schedule_next(time.time())

@@ -212,7 +212,7 @@ async def main() -> int:
             result = run_sync(config=result_cfg, conn=conn)
 
             post_process: dict[str, Any] = {}
-            if result.ok and not args.no_post_process:
+            if result.ok and result.packet_dir and not args.no_post_process:
                 post_process = replay_packet(
                     config=ClaudeCodeIntelReplayConfig(
                         packet_dir=Path(result.packet_dir),
@@ -239,28 +239,33 @@ async def main() -> int:
             all_results.append(handle_payload)
             if result.ok:
                 any_ok = True
-                # Write a per-handle operator report so the dashboard can show
-                # accurate metrics for every handle, not just the primary one.
-                try:
-                    handle_report = build_operator_report(
-                        sync_payload=handle_payload,
-                        artifacts_root=cfg.artifacts_root,
-                    )
-                    handle_report_path = Path(result.packet_dir) / "operator_report.json"
-                    handle_report_path.write_text(
-                        json.dumps(handle_report, indent=2, ensure_ascii=True, sort_keys=True) + "\n",
-                        encoding="utf-8",
-                    )
-                    logger.info("Wrote per-handle operator report: %s", handle_report_path)
-                except Exception:
-                    logger.warning("Failed to write per-handle operator report for @%s", handle, exc_info=True)
+                # Write a per-handle operator report only when there are actual
+                # new posts — empty polls don't need operator reports.
+                if result.packet_dir and result.new_post_count > 0:
+                    try:
+                        handle_report = build_operator_report(
+                            sync_payload=handle_payload,
+                            artifacts_root=cfg.artifacts_root,
+                        )
+                        handle_report_path = Path(result.packet_dir) / "operator_report.json"
+                        handle_report_path.write_text(
+                            json.dumps(handle_report, indent=2, ensure_ascii=True, sort_keys=True) + "\n",
+                            encoding="utf-8",
+                        )
+                        logger.info("Wrote per-handle operator report: %s", handle_report_path)
+                    except Exception:
+                        logger.warning("Failed to write per-handle operator report for @%s", handle, exc_info=True)
             logger.info(
                 "Handle @%s: ok=%s, new_posts=%d, actions=%d",
                 handle, result.ok, result.new_post_count, result.action_count,
             )
 
-        # Use the first successful result for operator report; aggregate stats
-        primary_payload = next((r for r in all_results if r["ok"]), all_results[0] if all_results else {})
+        # Use the first successful result with actual content for operator report;
+        # aggregate stats across all handles.
+        primary_payload = next(
+            (r for r in all_results if r["ok"] and r.get("packet_dir")),
+            next((r for r in all_results if r["ok"]), all_results[0] if all_results else {}),
+        )
         combined_payload = dict(primary_payload)
         combined_payload["handles_synced"] = [r["handle"] for r in all_results]
         combined_payload["handle_results"] = all_results
@@ -268,11 +273,19 @@ async def main() -> int:
         combined_payload["action_count"] = sum(r.get("action_count", 0) for r in all_results)
         combined_payload["queued_task_count"] = sum(r.get("queued_task_count", 0) for r in all_results)
 
-        summary = build_operator_report(sync_payload=combined_payload, artifacts_root=cfg.artifacts_root)
+        total_new = combined_payload["new_post_count"]
+        summary: dict[str, Any] = {}
+        if total_new > 0 and combined_payload.get("packet_dir"):
+            summary = build_operator_report(sync_payload=combined_payload, artifacts_root=cfg.artifacts_root)
+        else:
+            logger.info(
+                "📡 CSI combined: %d new posts across %d handles — skipping operator report.",
+                total_new, len(handles),
+            )
 
         # Rollup runs once — it scans ALL packet dirs across all handles
         rolling: dict[str, Any] = {}
-        if any_ok:
+        if any_ok and total_new > 0:
             rolling = build_rolling_assets(artifacts_root=cfg.artifacts_root)
 
         email_result: dict[str, Any] = {}

@@ -1020,6 +1020,23 @@ class EmailTaskBridge:
                 "canonical_execution_owner": "todo_dispatcher",
                 "workflow_manifest": _build_email_execution_manifest(subject=subject, body=reply_text),
             }
+
+            # ── Security: neutralize manifest for untrusted senders ──────────
+            # External/untriaged emails must NEVER carry a manifest that
+            # permits code mutation, even if the content *looks* like an
+            # instruction.  This is a defense-in-depth measure.
+            _is_untrusted = "external-untriaged" in (labels or [])
+            if _is_untrusted:
+                metadata["workflow_manifest"] = {
+                    "workflow_kind": "data_only",
+                    "delivery_mode": "fast_summary",
+                    "requires_pdf": False,
+                    "final_channel": "email",
+                    "canonical_executor": "simone_first",
+                    "codebase_root": "",
+                    "repo_mutation_allowed": False,
+                }
+
             # Inject target_agent into the workflow manifest so the ToDo
             # dispatcher can route this task directly to the named VP.
             if target_agent and target_agent not in ("simone", "simone_first"):

@@ -239,6 +239,36 @@ def run_sync(
         actions = [classify_post(post, handle=cfg.handle) for post in new_posts]
         queued = 0
         artifact_id = ""
+
+        # ── Short-circuit: no new posts → update state only, skip packet noise ──
+        if not new_posts:
+            # Still update state (tracks last_success_at, seen_post_ids) but
+            # don't create a full packet dir — empty polls are pure noise.
+            import shutil
+            _save_state(
+                state_path,
+                _next_state(state=state, handle=cfg.handle, user_id=str((user_payload.get("data") or {}).get("id") or ""), posts=posts, generated_at=generated_at),
+            )
+            # Remove the pre-created empty packet dir
+            try:
+                if packet_dir.exists() and not any(packet_dir.iterdir()):
+                    shutil.rmtree(packet_dir, ignore_errors=True)
+            except Exception:
+                pass
+            run.ok = True
+            run.user_id = str((user_payload.get("data") or {}).get("id") or "")
+            run.auth_mode = auth_mode
+            run.new_post_count = 0
+            run.seen_post_count = len(posts)
+            run.action_count = 0
+            run.queued_task_count = 0
+            run.packet_dir = ""
+            logger.info(
+                "📡 CSI poll @%s: no new posts (seen=%d). Skipping packet creation.",
+                cfg.handle, len(posts),
+            )
+            return run
+
         write_reference_kb_update(
             packet_dir=packet_dir,
             handle=cfg.handle,

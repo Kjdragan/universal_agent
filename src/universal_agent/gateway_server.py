@@ -401,6 +401,46 @@ AUTONOMOUS_DAILY_BRIEFING_DEFAULT_TIMEZONE = (
     or "UTC"
 )
 
+PAPER_TO_PODCAST_JOB_KEY = "paper_to_podcast_daily"
+PAPER_TO_PODCAST_DEFAULT_CRON = "0 21 * * *"  # 9 PM daily
+PAPER_TO_PODCAST_DEFAULT_TIMEZONE = (
+    (os.getenv("UA_PAPER_TO_PODCAST_TIMEZONE") or "").strip()
+    or (os.getenv("UA_DEFAULT_TIMEZONE") or "").strip()
+    or "America/Chicago"
+)
+PAPER_TO_PODCAST_TOPICS = [
+    "Agentic AI architectures and multi-agent systems",
+    "Large language model reasoning and chain-of-thought",
+    "Retrieval-augmented generation (RAG) advances",
+    "AI code generation and software engineering agents",
+    "Reinforcement learning from human feedback (RLHF)",
+    "Multimodal foundation models (vision-language)",
+    "AI safety alignment and interpretability",
+    "Diffusion models and generative AI",
+    "Transformer architecture innovations and efficiency",
+    "AI for scientific discovery and drug design",
+    "Autonomous AI agents and tool use",
+    "Knowledge graphs and neurosymbolic AI",
+    "Federated learning and privacy-preserving AI",
+    "Prompt engineering and in-context learning",
+    "Edge AI and model compression techniques",
+    "AI robotics and embodied intelligence",
+    "Natural language understanding and semantic parsing",
+    "AI governance frameworks and responsible AI",
+    "Mixture of experts and sparse model architectures",
+    "Synthetic data generation for AI training",
+    "AI-powered cybersecurity and threat detection",
+    "Speech and audio foundation models",
+    "Graph neural networks and relational reasoning",
+    "Continual learning and catastrophic forgetting",
+    "AI planning and world models",
+    "Causal inference and causal machine learning",
+    "AI for healthcare and medical imaging",
+    "Long-context language models and memory",
+    "Model merging and ensemble techniques",
+    "Open-source AI models and democratization",
+]
+
 
 def _deployment_profile_defaults() -> dict:
     if _DEPLOYMENT_PROFILE == "standalone_node":
@@ -13689,6 +13729,7 @@ async def lifespan(app: FastAPI):
             _ensure_autonomous_daily_briefing_job()
             _ensure_csi_convergence_cron_job()
             _ensure_claude_code_intel_cron_job()
+            _ensure_paper_to_podcast_cron_job()
         except Exception as exc:
             logger.warning("Failed ensuring autonomous cron jobs: %s", exc)
     else:
@@ -16572,6 +16613,7 @@ def _ensure_autonomous_daily_briefing_job() -> Optional[dict[str, Any]]:
         "cron_expr": cron_expr,
         "timezone": timezone_name,
         "enabled": True,
+        "catch_up_on_restart": True,
         "metadata": metadata,
     }
     existing = _find_cron_job_by_system_job(AUTONOMOUS_DAILY_BRIEFING_JOB_KEY)
@@ -16582,6 +16624,82 @@ def _ensure_autonomous_daily_briefing_job() -> Optional[dict[str, Any]]:
         user_id="cron_system",
         workspace_dir=workspace_dir,
         command=_autonomous_daily_briefing_command(),
+        cron_expr=cron_expr,
+        timezone=timezone_name,
+        enabled=True,
+        metadata=metadata,
+    )
+    return job.to_dict() if hasattr(job, "to_dict") else {"job_id": str(getattr(job, "job_id", ""))}
+
+
+def _paper_to_podcast_enabled() -> bool:
+    return os.getenv("UA_PAPER_TO_PODCAST_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _paper_to_podcast_command() -> str:
+    from datetime import datetime as _dt
+    day_index = _dt.now().timetuple().tm_yday % len(PAPER_TO_PODCAST_TOPICS)
+    topic = PAPER_TO_PODCAST_TOPICS[day_index]
+    return "\n".join(
+        [
+            f'Run the paper-to-podcast skill for the topic: "{topic}".',
+            "Search ArXiv for the top 5 most relevant recent papers on this topic.",
+            "Create a NotebookLM notebook, add all papers as sources, and generate:",
+            "- An audio overview podcast (deep dive format)",
+            "- A quiz (10 questions, medium difficulty)",
+            "- Flashcards (medium difficulty)",
+            "Download all artifacts to work_products/paper_to_podcast/.",
+            "Write a manifest.json listing all outputs.",
+            "Then compose a summary email with:",
+            "- The topic and papers analyzed (title, authors, key finding)",
+            "- A link to the interactive NotebookLM notebook",
+            "- Mention of generated artifacts (podcast, quiz, flashcards)",
+            "Send the email to kevinjdragan@gmail.com with subject:",
+            f'  \"{topic}: Top 5 Papers + Podcast + Quiz\"',
+            "Attach the HTML report and PDF if generated.",
+        ]
+    )
+
+
+def _ensure_paper_to_podcast_cron_job() -> Optional[dict[str, Any]]:
+    if not _cron_service or not _paper_to_podcast_enabled():
+        return None
+    cron_expr = (
+        os.getenv("UA_PAPER_TO_PODCAST_CRON", PAPER_TO_PODCAST_DEFAULT_CRON).strip()
+        or PAPER_TO_PODCAST_DEFAULT_CRON
+    )
+    timezone_name = (
+        os.getenv("UA_PAPER_TO_PODCAST_TIMEZONE", PAPER_TO_PODCAST_DEFAULT_TIMEZONE).strip()
+        or PAPER_TO_PODCAST_DEFAULT_TIMEZONE
+    )
+    workspace_dir = str(WORKSPACES_DIR / "cron_paper_to_podcast")
+    metadata = {
+        "system_job": PAPER_TO_PODCAST_JOB_KEY,
+        "autonomous": True,
+        "source": "system",
+        "session_id": "cron_paper_to_podcast",
+        "skill": "paper-to-podcast-tf",
+    }
+    updates = {
+        "user_id": "cron_system",
+        "workspace_dir": workspace_dir,
+        "command": _paper_to_podcast_command(),
+        "description": "Daily paper-to-podcast: search ArXiv for a rotating AI topic, generate podcast/quiz/flashcards via NotebookLM, and email results.",
+        "cron_expr": cron_expr,
+        "timezone": timezone_name,
+        "enabled": True,
+        "catch_up_on_restart": True,
+        "metadata": metadata,
+    }
+    existing = _find_cron_job_by_system_job(PAPER_TO_PODCAST_JOB_KEY)
+    if existing is not None:
+        updated = _cron_service.update_job(str(getattr(existing, "job_id", "")), updates)
+        return updated.to_dict() if hasattr(updated, "to_dict") else {"job_id": str(getattr(updated, "job_id", ""))}
+    job = _cron_service.add_job(
+        user_id="cron_system",
+        workspace_dir=workspace_dir,
+        command=_paper_to_podcast_command(),
+        description="Daily paper-to-podcast: search ArXiv for a rotating AI topic, generate podcast/quiz/flashcards via NotebookLM, and email results.",
         cron_expr=cron_expr,
         timezone=timezone_name,
         enabled=True,
@@ -16808,7 +16926,7 @@ def _handle_from_packet_name(name: str) -> str:
     return parts[1] if len(parts) == 2 else ""
 
 
-def _claude_code_intel_packets(limit: int = 40) -> list[dict[str, Any]]:
+def _claude_code_intel_packets(limit: int = 40, *, include_empty: bool = False) -> list[dict[str, Any]]:
     root = _claude_code_intel_packet_root()
     if not root.exists():
         return []
@@ -16820,9 +16938,19 @@ def _claude_code_intel_packets(limit: int = 40) -> list[dict[str, Any]]:
         if candidate.is_dir()
     ]
     packet_dirs.sort(key=lambda path: (path.parent.name, path.name), reverse=True)
-    packets = [_claude_code_intel_packet_payload(packet_dir) for packet_dir in packet_dirs[: max(1, min(limit, 200))]]
+    # Build more packets than requested so we have headroom after filtering
+    raw_limit = max(1, min(limit, 200))
+    packets = [_claude_code_intel_packet_payload(packet_dir) for packet_dir in packet_dirs[: raw_limit * 3]]
     packets.sort(key=lambda item: (str(item.get("generated_at") or ""), str(item.get("packet_name") or "")), reverse=True)
-    return packets
+    if not include_empty:
+        # Drop zero-result polls — they're pure noise.  The packet dirs
+        # remain on disk for auditing but don't clutter the dashboard.
+        packets = [
+            p for p in packets
+            if int(p.get("new_post_count") or 0) > 0
+            or p.get("status") == "error"
+        ]
+    return packets[:raw_limit]
 
 
 def _claude_code_intel_knowledge_pages(limit: int = 200) -> list[dict[str, Any]]:
