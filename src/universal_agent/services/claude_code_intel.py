@@ -511,6 +511,11 @@ def extract_links(post: dict[str, Any]) -> list[str]:
     seen: set[str] = set()
     for link in links:
         clean = link.rstrip(".,)")
+        # t.co shortlinks are redundant — the X API already provides expanded URLs
+        # via entities.urls[].expanded_url / unwound_url.  Keeping them would cause
+        # duplicate fetch attempts that 403 because t.co blocks non-browser UAs.
+        if clean.startswith("https://t.co/") or clean.startswith("http://t.co/"):
+            continue
         if clean and clean not in seen:
             seen.add(clean)
             deduped.append(clean)

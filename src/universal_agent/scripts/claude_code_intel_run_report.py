@@ -239,6 +239,21 @@ async def main() -> int:
             all_results.append(handle_payload)
             if result.ok:
                 any_ok = True
+                # Write a per-handle operator report so the dashboard can show
+                # accurate metrics for every handle, not just the primary one.
+                try:
+                    handle_report = build_operator_report(
+                        sync_payload=handle_payload,
+                        artifacts_root=cfg.artifacts_root,
+                    )
+                    handle_report_path = Path(result.packet_dir) / "operator_report.json"
+                    handle_report_path.write_text(
+                        json.dumps(handle_report, indent=2, ensure_ascii=True, sort_keys=True) + "\n",
+                        encoding="utf-8",
+                    )
+                    logger.info("Wrote per-handle operator report: %s", handle_report_path)
+                except Exception:
+                    logger.warning("Failed to write per-handle operator report for @%s", handle, exc_info=True)
             logger.info(
                 "Handle @%s: ok=%s, new_posts=%d, actions=%d",
                 handle, result.ok, result.new_post_count, result.action_count,

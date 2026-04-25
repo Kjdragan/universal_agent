@@ -16762,10 +16762,26 @@ def _claude_code_intel_packet_payload(packet_dir: Path) -> dict[str, Any]:
         "packet_name": packet_name,
         "date_slug": date_slug,
         "generated_at": generated_at,
-        "handle": str(operator_report.get("handle") or manifest.get("handle") or "ClaudeDevs"),
+        "handle": str(
+            operator_report.get("handle")
+            or replay_summary.get("handle")
+            or manifest.get("handle")
+            or _handle_from_packet_name(packet_name)
+            or "ClaudeDevs"
+        ),
         "status": "ok" if bool(operator_report.get("ok", manifest.get("ok", True))) else "error",
-        "new_post_count": int(operator_report.get("new_post_count") or manifest.get("new_post_count") or 0),
-        "action_count": int(operator_report.get("action_count") or manifest.get("action_count") or 0),
+        "new_post_count": int(
+            operator_report.get("new_post_count")
+            or replay_summary.get("new_post_count")
+            or manifest.get("new_post_count")
+            or 0
+        ),
+        "action_count": int(
+            operator_report.get("action_count")
+            or replay_summary.get("action_count")
+            or manifest.get("action_count")
+            or 0
+        ),
         "queued_task_count": int(operator_report.get("queued_task_count") or replay_summary.get("queued_task_count") or 0),
         "linked_source_count": int(operator_report.get("linked_source_count") or replay_summary.get("linked_source_count") or 0),
         "linked_source_fetched_count": int(
@@ -16784,6 +16800,12 @@ def _claude_code_intel_packet_payload(packet_dir: Path) -> dict[str, Any]:
         "implementation_opportunities": _artifact_link_payload(opportunities_path),
         "lane_ledger": _artifact_link_payload(lane_ledger_path) if lane_ledger_path.exists() else {"path": "", "rel_path": "", "api_url": "", "storage_href": ""},
     }
+
+
+def _handle_from_packet_name(name: str) -> str:
+    """Extract handle from packet dir name like '130300__bcherny'."""
+    parts = name.split("__", 1)
+    return parts[1] if len(parts) == 2 else ""
 
 
 def _claude_code_intel_packets(limit: int = 40) -> list[dict[str, Any]]:

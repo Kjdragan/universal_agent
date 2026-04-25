@@ -265,7 +265,14 @@ def expand_linked_sources(*, packet_dir: Path, actions: list[dict[str, Any]], en
     linked_root.mkdir(parents=True, exist_ok=True)
 
     fetched = 0
-    with httpx.Client(timeout=fetch_timeout, follow_redirects=True, headers={"User-Agent": "universal-agent-claude-code-intel/1.0"}) as client:
+    with httpx.Client(timeout=fetch_timeout, follow_redirects=True, headers={
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+    }) as client:
         for entry in entries:
             if fetched >= max_fetch:
                 break
@@ -994,6 +1001,9 @@ def _should_skip_link_fetch(url: str) -> bool:
     if lowered.startswith("https://x.com/") or lowered.startswith("http://x.com/"):
         return True
     if lowered.startswith("https://twitter.com/") or lowered.startswith("http://twitter.com/"):
+        return True
+    # claude.ai is the product app, not a content source for intelligence
+    if "claude.ai" in lowered:
         return True
     return False
 
