@@ -40,6 +40,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[Regression Control and Golden Runs](003_REGRESSION_CONTROL_AND_GOLDEN_RUNS.md)**: Testing stability, golden run preservation.
 - **[Database Architecture](01_Architecture/Database_Architecture.md)**: Absolute source of truth for database paradigms, schema structure, segregation boundaries, and lifecycle pruning logic.
 - **[Model Choice and Resolution](01_Architecture/10_Model_Choice_And_Resolution.md)**: Anthropic Z.AI proxy emulation, model resolution mapping, and inference health governance.
+- **[Archon Comparison & Integration Strategy](01_Architecture/11_Archon_Comparison_And_Integration_Strategy_2026-04-25.md)**: Critical architectural review comparing Archon to UA, evaluating Git Worktree isolation emulation and asynchronous YAML-driven coding service integration.
 
 ### 2. [Subsystems](02_Subsystems)
 
@@ -108,6 +109,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[Test Strategy and Regression Prevention (2026-04-20)](03_Operations/121_Test_Strategy_And_Regression_Prevention_2026-04-20.md)**: Canonical source of truth for test suite layout, pre-ship commands, ContextVar isolation architecture, common failure patterns, CI/CD test gap analysis, and the April 20 stabilization that brought unit tests from 21 failures to 0 (1211 passing).
 - **[ClaudeDevs X Intel Implementation Plan (2026-04-21)](03_Operations/122_ClaudeDevs_X_Intel_Implementation_Plan_2026-04-21.md)**: Code-verified phased implementation plan for replay/backfill, external vault creation, linked-source expansion, packet candidate ledgering, Task Hub completion evidence mapping, cron/heartbeat workspace separation, and eventual LLM-assisted tiering.
 - **[Gemini TTS Source of Truth (2026-04-22)](03_Operations/123_Gemini_TTS_Source_Of_Truth_2026-04-22.md)**: Canonical source of truth for Gemini Text-to-Speech integration — API architecture (Cloud TTS vs Vertex AI vs AI Studio), model registry (4 models with confirmed test results), authentication patterns (service account + ADC), production code samples, 30-voice inventory, markup tags, chunking strategy, region requirements, and lessons learned from the AI Studio misconfiguration incident.
+- **[Archon Integration and Operations Guide (2026-04-25)](03_Operations/124_Archon_Integration_And_Operations_Guide_2026-04-25.md)**: Canonical operations guide for the Archon AI workflow engine integration, covering repository isolation, Infisical wrapping, Claude Code Z.ai endpoint emulation, and VPS deployment architecture.
 
 ### 4A. [Deployment and Environments](06_Deployment_And_Environments)
 

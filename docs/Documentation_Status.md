@@ -46,6 +46,7 @@ Written from source code review — these describe the system as it actually exi
 | 06 | Comparison: Background Workers vs Simone Orchestration — Deep-dive evaluation of pull-based agent workers vs the event-driven Simone-First orchestration model |
 | 07 | Database Architecture — absolute source of truth for database paradigms, schema structure, segregation boundaries, and lifecycle pruning logic |
 | 10 | Model Choice and Resolution — Anthropic proxy emulation map, inference fallbacks, and the Capacity Governor loud-failure hook |
+| 11 | Archon Comparison & Integration Strategy — critical architectural review comparing Archon to UA, including emulation recommendations for Git Worktree Isolation and integration paths for YAML-driven coding DAGs |
 
 ## Root Architecture Docs
 
@@ -99,6 +100,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 121 | Test Strategy and Regression Prevention — **canonical source of truth** for test suite layout (1211 unit tests), mandatory pre-ship commands, ContextVar isolation architecture, common failure patterns, CI/CD test gap analysis, maintenance checklist, and the April 20 stabilization history |
 | 122 | ClaudeDevs X Intel Implementation Plan — code-verified phased implementation plan for replay/backfill, external vault creation, linked-source expansion, packet candidate ledgering, Task Hub completion evidence mapping, cron/heartbeat workspace separation, operator skill/report surface, and LLM-assisted tiering |
 | 123 | Gemini TTS Source of Truth — **canonical source of truth** for Gemini Text-to-Speech: API architecture (Cloud TTS vs Vertex AI vs AI Studio), model registry, auth patterns (service account + ADC), production code samples, voice inventory, markup tags, chunking strategy, region requirements, and lessons learned |
+| 124 | Archon Integration and Operations Guide — canonical operations guide for the Archon AI workflow engine integration, covering repository isolation, Infisical wrapping, Claude Code Z.ai endpoint emulation, and VPS deployment architecture |
 
 ## CSI Subsystem (04_CSI/)
 
