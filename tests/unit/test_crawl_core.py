@@ -14,6 +14,13 @@ async def test_crawl_core_missing_api_key_fails_loudly(monkeypatch):
     monkeypatch.delenv("CRAWL4AI_API_KEY", raising=False)
     monkeypatch.delenv("CRAWL4AI_API_URL", raising=False)
 
+    # Force the Crawl4AI engine — the default is now "jina" which doesn't
+    # need an API key, so without this the test would take the Jina path
+    # and succeed even when the key is missing.
+    monkeypatch.setenv("CRAWL_ENGINE", "crawl4ai")
+    import src.mcp_server as _mcp_mod
+    monkeypatch.setattr(_mcp_mod, "_CRAWL_ENGINE", "crawl4ai")
+
     # 2. Mock infisical loader to do nothing (simulating the key is truly unretrievable)
     def fake_initialize(*args, **kwargs):
         pass

@@ -113,6 +113,7 @@ filterwarnings = [
 markers = [
     "llm: requires live LLM connectivity",
 ]
+addopts = "-m 'not llm'"
 
 [tool.uv.sources]
 crawl4ai-cloud-sdk = { git = "https://github.com/unclecode/crawl4ai-cloud-sdk.git", subdirectory = "python" }

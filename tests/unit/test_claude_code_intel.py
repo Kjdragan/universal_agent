@@ -52,7 +52,9 @@ def test_extract_links_prefers_expanded_urls() -> None:
         "entities": {"urls": [{"url": "https://t.co/short", "expanded_url": "https://docs.x.com/x-api/overview"}]},
     }
 
-    assert extract_links(post) == ["https://docs.x.com/x-api/overview", "https://t.co/short"]
+    # t.co shortlinks are now filtered out because the X API already provides
+    # the expanded URL via entities — keeping both causes duplicate 403 fetches.
+    assert extract_links(post) == ["https://docs.x.com/x-api/overview"]
 
 
 def test_classify_post_escalates_code_release_with_links() -> None:

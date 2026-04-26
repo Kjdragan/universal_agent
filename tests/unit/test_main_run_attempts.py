@@ -166,7 +166,12 @@ def test_default_urw_workspace_path_uses_run_prefix():
     assert path.parent.name == "urw_sessions"
 
 
-def test_ensure_current_run_attempt_bootstraps_missing_parent_run():
+def test_ensure_current_run_attempt_returns_none_for_orphaned_run_id():
+    """Orphaned run IDs (no parent row in runs table) should NOT be auto-bootstrapped.
+
+    This prevents zombie 'recovered_run_attempt' rows from accumulating
+    when daemon sessions carry a run_id that was never persisted.
+    """
     conn = _conn()
 
     token = set_ctx(
@@ -182,11 +187,7 @@ def test_ensure_current_run_attempt_bootstraps_missing_parent_run():
     finally:
         reset_ctx(token)
 
-    assert attempt_id is not None
+    # Should return None — no phantom row created
+    assert attempt_id is None
     run_row = get_run(conn, "run-missing-main")
-    assert run_row is not None
-    assert run_row["status"] == "running"
-    assert run_row["workspace_dir"] == "/tmp/missing-parent-run"
-    attempt_row = get_run_attempt(conn, attempt_id)
-    assert attempt_row is not None
-    assert attempt_row["run_id"] == "run-missing-main"
+    assert run_row is None  # Parent row was NOT auto-created
