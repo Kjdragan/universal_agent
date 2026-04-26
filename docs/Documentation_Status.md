@@ -148,6 +148,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 05 | Self-Improving Agent Notes (2026-02-13) |
 | 06 | Final Integration Sprint Review (2026-02-14) |
 | 07 | Happy Path Review and Markdown Remediation (2026-02-19) |
+| 08 | Gemini Interactions Playground Post-Mortem (2026-04-26) — CODIE VP silent failure, constraint key mismatch, ephemeral workspace output; 9 classified errors, 7 prioritized recommendations |
 
 
 
