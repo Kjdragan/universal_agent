@@ -110,10 +110,10 @@ export default function DiscordIntelPage() {
     return [...groups.entries()].map(([label, rows]) => {
       // Determine dominant tier for the group (highest priority channel in the group)
       const bestTier = rows.reduce((best, ch) => {
-        const t = (ch.tier || "C").toUpperCase();
-        const p = TIER_PRIORITY[t] ?? 2;
+        const t = (ch.tier || "MUTED").toUpperCase();
+        const p = TIER_PRIORITY[t] ?? 4;
         return p < best.priority ? { tier: t, priority: p } : best;
-      }, { tier: "C", priority: 2 });
+      }, { tier: "MUTED", priority: Infinity });
       return {
         label,
         tier: bestTier.tier,
