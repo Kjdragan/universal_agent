@@ -5,7 +5,7 @@ import { PipelineStatsPanel } from "@/components/dashboard/PipelineStatsPanel";
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Activity, BarChart3, Bell, Briefcase, CheckCircle, Clock, DollarSign, Download, Heart, Loader2, RefreshCw, Timer, TrendingUp, Cpu, XCircle, Zap } from "lucide-react";
+import { Activity, BarChart3, Bell, Briefcase, CheckCircle, Clock, DollarSign, Download, Heart, Loader2, RefreshCw, Timer, Trash2, TrendingUp, Cpu, XCircle, Zap } from "lucide-react";
 import { formatDistanceToNow, parseISO } from "date-fns";
 
 const API_BASE = "/api/dashboard/gateway";
@@ -114,6 +114,30 @@ function ActiveTasksPanel() {
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<AgentQueuePayload | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [dismissingId, setDismissingId] = useState<string | null>(null);
+
+  const dismissTask = useCallback(async (taskId: string) => {
+    setDismissingId(taskId);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/dashboard/todolist/dismiss/${encodeURIComponent(taskId)}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(`Dismiss failed: ${res.status}`);
+      // Remove from local state immediately for responsiveness
+      setData((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          items: prev.items.filter((item) => item.task_id !== taskId),
+          pagination: { ...prev.pagination, total: Math.max(0, prev.pagination.total - 1) },
+        };
+      });
+    } catch (e) {
+      console.error("Failed to dismiss task:", e);
+    } finally {
+      setDismissingId(null);
+    }
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -253,7 +277,7 @@ function ActiveTasksPanel() {
             <Link
               key={item.task_id}
               href={`/dashboard/todolist?mode=agent&focus=${item.task_id}`}
-              className="block rounded-lg border border-border/50 bg-card/30 p-3 transition-colors hover:border-border hover:bg-card/50"
+              className="group block rounded-lg border border-border/50 bg-card/30 p-3 transition-colors hover:border-border hover:bg-card/50"
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0 flex-1">
@@ -262,6 +286,22 @@ function ActiveTasksPanel() {
                     <p className="mt-0.5 text-xs text-muted-foreground leading-snug line-clamp-2">{item.description}</p>
                   )}
                 </div>
+                <button
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    void dismissTask(item.task_id);
+                  }}
+                  disabled={dismissingId === item.task_id}
+                  title="Dismiss this work item"
+                  className="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 rounded p-1 text-muted-foreground hover:text-red-400 hover:bg-red-500/10"
+                >
+                  {dismissingId === item.task_id ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-3.5 w-3.5" />
+                  )}
+                </button>
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 {item.status && (

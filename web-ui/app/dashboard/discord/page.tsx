@@ -99,6 +99,7 @@ export default function DiscordIntelPage() {
   }, [load]);
 
   const groupedChannels = useMemo(() => {
+    const TIER_PRIORITY: Record<string, number> = { A: 0, B: 1, C: 2, D: 3, MUTED: 4 };
     const groups = new Map<string, DiscordChannel[]>();
     for (const channel of channels) {
       const key = `${channel.server_name || "Unknown Server"} / ${channel.category || "Uncategorized"}`;
@@ -106,13 +107,27 @@ export default function DiscordIntelPage() {
       rows.push(channel);
       groups.set(key, rows);
     }
-    return [...groups.entries()].map(([label, rows]) => ({
-      label,
-      rows: rows.sort((a, b) => asNumber(b.messages_total) - asNumber(a.messages_total)),
-      messages: rows.reduce((sum, row) => sum + asNumber(row.messages_total), 0),
-      signals: rows.reduce((sum, row) => sum + asNumber(row.signals_total), 0),
-      unprocessed: rows.reduce((sum, row) => sum + asNumber(row.unprocessed_total), 0),
-    })).sort((a, b) => b.messages - a.messages);
+    return [...groups.entries()].map(([label, rows]) => {
+      // Determine dominant tier for the group (highest priority channel in the group)
+      const bestTier = rows.reduce((best, ch) => {
+        const t = (ch.tier || "C").toUpperCase();
+        const p = TIER_PRIORITY[t] ?? 2;
+        return p < best.priority ? { tier: t, priority: p } : best;
+      }, { tier: "C", priority: 2 });
+      return {
+        label,
+        tier: bestTier.tier,
+        tierPriority: bestTier.priority,
+        rows: rows.sort((a, b) => asNumber(b.messages_total) - asNumber(a.messages_total)),
+        messages: rows.reduce((sum, row) => sum + asNumber(row.messages_total), 0),
+        signals: rows.reduce((sum, row) => sum + asNumber(row.signals_total), 0),
+        unprocessed: rows.reduce((sum, row) => sum + asNumber(row.unprocessed_total), 0),
+      };
+    }).sort((a, b) => {
+      // Sort by tier priority first, then alphabetically by label
+      if (a.tierPriority !== b.tierPriority) return a.tierPriority - b.tierPriority;
+      return a.label.localeCompare(b.label);
+    });
   }, [channels]);
 
   const updateChannel = useCallback(async (channelId: string, patch: Record<string, unknown>) => {
@@ -283,10 +298,23 @@ export default function DiscordIntelPage() {
       <section className="space-y-3">
         <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-primary">Channel Tuning</h2>
         <div className="space-y-2">
-          {groupedChannels.map((group) => (
+          {groupedChannels.map((group) => {
+            const tierColors: Record<string, string> = {
+              A: "bg-emerald-500/20 text-emerald-300 border-emerald-500/30",
+              B: "bg-sky-500/20 text-sky-300 border-sky-500/30",
+              C: "bg-zinc-500/20 text-zinc-300 border-zinc-500/30",
+              D: "bg-zinc-700/20 text-zinc-500 border-zinc-700/30",
+              MUTED: "bg-zinc-800/20 text-zinc-600 border-zinc-800/30",
+            };
+            return (
             <details key={group.label} className="border border-border bg-card/20">
-              <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-foreground">
-                {group.label} · {group.rows.length} channels · {group.messages} msgs · {group.signals} signals · {group.unprocessed} unprocessed
+              <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-foreground flex items-center gap-2">
+                <span className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${tierColors[group.tier] || tierColors.C}`}>
+                  {group.tier}
+                </span>
+                <span className="flex-1">
+                  {group.label} · {group.rows.length} channels · {group.messages} msgs · {group.signals} signals · {group.unprocessed} unprocessed
+                </span>
               </summary>
               <div className="divide-y divide-border">
                 {group.rows.map((channel) => (
@@ -317,7 +345,8 @@ export default function DiscordIntelPage() {
                 ))}
               </div>
             </details>
-          ))}
+            );
+          })}
         </div>
       </section>
     </div>

@@ -7,7 +7,7 @@ const API_BASE = "/api/dashboard/gateway";
 const PRESET_CACHE_KEY = "ua.dashboard.events.presets.v1";
 const FILTER_PREFS_KEY = "ua.dashboard.events.filterPrefs.v1";
 
-const DEFAULT_CHECKED_SOURCES = ["csi", "tutorial", "cron", "continuity"];
+const DEFAULT_CHECKED_SOURCES = ["csi", "tutorial", "continuity"];
 
 type ActivityAction = {
   id?: string;

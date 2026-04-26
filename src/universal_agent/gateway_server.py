@@ -16488,6 +16488,23 @@ async def dashboard_discord_clear_all_messages(request: Request):
     return {"status": "ok", "deleted": deleted}
 
 
+@app.delete("/api/v1/dashboard/discord/signals")
+async def dashboard_discord_clear_all_signals(request: Request):
+    """Delete ALL stored Discord signals across all servers."""
+    _require_ops_auth(request)
+    conn = _discord_connect()
+    try:
+        cur = conn.execute("DELETE FROM signals")
+        conn.commit()
+        deleted = cur.rowcount
+    except Exception as exc:
+        logger.exception("Failed clearing all Discord signals")
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        conn.close()
+    return {"status": "ok", "deleted": deleted}
+
+
 @app.get("/api/v1/dashboard/proactive-signals")
 async def dashboard_proactive_signals(
     request: Request,
@@ -21239,6 +21256,39 @@ async def dashboard_todolist_delete_all_completed():
         finally:
             conn.close()
     return {"status": "ok", "hidden_count": count, "new_status": task_hub.TASK_STATUS_PARKED}
+
+
+@app.delete("/api/v1/dashboard/todolist/dismiss/{task_id}")
+async def dashboard_todolist_dismiss_task(task_id: str):
+    """Dismiss any active work item by moving it to cancelled status.
+
+    Unlike the completed-only delete endpoint, this allows the operator to
+    remove stale/stuck items from the Mission Control Active Work Items panel
+    regardless of their current status.
+    """
+    tid = str(task_id or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="task_id is required")
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            row = conn.execute(
+                "SELECT status FROM task_hub_items WHERE task_id = ? LIMIT 1",
+                (tid,),
+            ).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Task not found")
+            current_status = str(row["status"] or "").strip().lower()
+            if current_status in task_hub.TERMINAL_STATUSES:
+                return {"status": "ok", "task_id": tid, "new_status": current_status, "detail": "already terminal"}
+            conn.execute(
+                "UPDATE task_hub_items SET status=?, stale_state=?, seizure_state=?, updated_at=? WHERE task_id=?",
+                (task_hub.TASK_STATUS_CANCELLED, "dashboard_dismissed", "unseized", _utc_now_iso(), tid),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    return {"status": "ok", "task_id": tid, "new_status": task_hub.TASK_STATUS_CANCELLED}
 
 
 @app.get("/api/v1/dashboard/todolist/email-tasks")

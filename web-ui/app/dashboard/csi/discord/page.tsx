@@ -478,6 +478,16 @@ export default function CsiDiscordWatchlistPage() {
   const [showAll, setShowAll] = useState(false);
   const [totalAllMessages, setTotalAllMessages] = useState(0);
 
+  /* Collapsible categories */
+  const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
+  const toggleCategory = (domain: string) => {
+    setCollapsedCategories(prev => {
+      const next = new Set(prev);
+      next.has(domain) ? next.delete(domain) : next.add(domain);
+      return next;
+    });
+  };
+
   /* ── Load watchlist ───────────────────────────────────────────────── */
   const loadWatchlist = useCallback(async () => {
     setLoadingList(true);
@@ -716,7 +726,10 @@ export default function CsiDiscordWatchlistPage() {
               return (
                 <div key={domain} className="space-y-1">
                   {/* Category header */}
-                  <div className="flex items-center gap-1.5 px-1 group/hdr">
+                  <div
+                    className="flex items-center gap-1.5 px-1 group/hdr cursor-pointer select-none"
+                    onClick={() => { if (editingCategory !== domain) toggleCategory(domain); }}
+                  >
                     {editingCategory === domain ? (
                       <input autoFocus
                         className="flex-1 bg-background border border-border/50 rounded px-1.5 py-0.5 text-[11px] font-semibold outline-none focus:ring-1 focus:ring-indigo-500/40"
@@ -724,19 +737,22 @@ export default function CsiDiscordWatchlistPage() {
                         onChange={e => setEditCategoryVal(e.target.value)}
                         onBlur={() => void renameCategory(domain)}
                         onKeyDown={e => e.key === "Enter" && void renameCategory(domain)}
+                        onClick={e => e.stopPropagation()}
                       />
                     ) : (
                       <>
-                        <ChevronRight className="h-3 w-3 text-muted-foreground/40" />
+                        <ChevronDown
+                          className={`h-3 w-3 text-muted-foreground/40 transition-transform duration-150 ${collapsedCategories.has(domain) ? "-rotate-90" : ""}`}
+                        />
                         <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 flex-1 truncate">
                           {displayTitle}
                         </span>
                         <span className="text-[10px] text-muted-foreground/40">{domainServers.length}</span>
-                        <button onClick={() => { setEditingCategory(domain); setEditCategoryVal(domain); }}
+                        <button onClick={(e) => { e.stopPropagation(); setEditingCategory(domain); setEditCategoryVal(domain); }}
                           className="opacity-0 group-hover/hdr:opacity-100 p-0.5 rounded hover:text-white text-muted-foreground transition-all">
                           <Edit2 className="h-3 w-3" />
                         </button>
-                        <button onClick={() => void deleteCategory(domain)}
+                        <button onClick={(e) => { e.stopPropagation(); void deleteCategory(domain); }}
                           className="opacity-0 group-hover/hdr:opacity-100 p-0.5 rounded hover:text-red-400 text-muted-foreground transition-all">
                           <Trash2 className="h-3 w-3" />
                         </button>
@@ -744,8 +760,8 @@ export default function CsiDiscordWatchlistPage() {
                     )}
                   </div>
 
-                  {/* Server cards */}
-                  {domainServers.map(srv => {
+                  {/* Server cards (collapsible) */}
+                  {!collapsedCategories.has(domain) && domainServers.map(srv => {
                     const watchedCount = srv.channels.filter(c => c.is_watched).length;
                     const isActive = activeServerId === srv.server_id;
                     return (
