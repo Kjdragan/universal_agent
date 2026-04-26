@@ -15,7 +15,7 @@ import platform
 import socket
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 import httpx
 

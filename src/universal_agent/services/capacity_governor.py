@@ -35,7 +35,7 @@ import os
 import random
 import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)

@@ -23,10 +23,7 @@ import logging
 import os
 import re
 import signal
-import sys
 import urllib.parse
-from pathlib import Path
-from typing import Optional
 
 from universal_agent.delegation.redis_bus import (
     MISSION_CONSUMER_GROUP,
