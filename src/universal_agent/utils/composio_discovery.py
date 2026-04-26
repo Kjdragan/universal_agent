@@ -194,29 +194,3 @@ def discover_connected_toolkits_with_meta(composio_client: Any, user_id: str) ->
         results.append(fetch_toolkit_meta(composio_client, slug))
         
     return results
-
-def discover_composio_apps(composio_client: Any) -> List[str]:
-    """
-    DEPRECATED: Use discover_connected_toolkits(session) instead.
-    Connect to Composio and discover all active toolkits (apps) via client.
-    """
-    if not composio_client:
-        return []
-        
-    discovered_apps = []
-    try:
-        connections_response = composio_client.connected_accounts.list()
-        
-        if hasattr(connections_response, 'items'):
-            for item in connections_response.items:
-                 if hasattr(item, 'toolkit') and item.toolkit and hasattr(item.toolkit, 'slug'):
-                     discovered_apps.append(item.toolkit.slug)
-        
-        discovered_apps = list(set(discovered_apps))
-        discovered_apps.sort()
-        
-    except Exception as e:
-        print(f"⚠️ [Discovery] Failed to fetch active Composio apps: {e}")
-        return []
-        
-    return discovered_apps

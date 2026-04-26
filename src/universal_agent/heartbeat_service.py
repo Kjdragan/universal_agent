@@ -2110,10 +2110,12 @@ class HeartbeatService:
             _reflection_ctx_text = ""
             if _is_reflection_mode:
                 try:
+                    from universal_agent.services.proactive_budget import (
+                        has_daily_budget as has_nightly_budget,
+                        increment_daily_proactive_count as _increment_nightly_task_count,
+                    )
                     from universal_agent.services.reflection_engine import (
                         build_reflection_context,
-                        has_nightly_budget,
-                        _increment_nightly_task_count,
                     )
                     ref_conn = connect_runtime_db(get_activity_db_path())
                     ref_conn.row_factory = sqlite3.Row  # type: ignore[name-defined]

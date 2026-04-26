@@ -420,7 +420,7 @@ class TestReflectionBudgetRename:
     """Tests for the nightly→daily budget rename in reflection_engine."""
 
     def test_daily_budget_key_exists(self):
-        """Module should expose _DAILY_BUDGET_KEY, not _NIGHTLY_TASK_COUNTER_KEY."""
+        """Module should expose _DAILY_BUDGET_KEY."""
         from universal_agent.services import proactive_budget
         assert hasattr(proactive_budget, "_DAILY_BUDGET_KEY")
 
