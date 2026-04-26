@@ -1,0 +1,17 @@
+{
+  "skill_name": "deep-research",
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "Research the history of Google TPUs.",
+      "expected_output": "A detailed timeline and technological evolution of Google Tensor Processing Units, including hardware comparisons.",
+      "assertions": []
+    },
+    {
+      "id": 1,
+      "prompt": "Conduct deep research on the competitive landscape of EV batteries, focusing on solid-state vs lithium-ion developments by major manufacturers like CATL, Panasonic, and QuantumScape.",
+      "expected_output": "A comprehensive competitive landscape analysis with manufacturer comparisons, technological tradeoffs, and market readiness timelines.",
+      "assertions": []
+    }
+  ]
+}
