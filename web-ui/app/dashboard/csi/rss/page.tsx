@@ -12,10 +12,29 @@ type Channel = {
   domain: string;
 };
 
+type RecentVideo = {
+  video_id: string;
+  title: string;
+  channel_name: string;
+  channel_id: string;
+  published_at: string;
+  ingested_at: string;
+};
+
 type WatchlistResponse = {
   channels: Channel[];
   categories: string[];
 };
+
+function compactDate(iso: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const h = d.getHours(), m = d.getMinutes();
+  const ampm = h >= 12 ? "p" : "a";
+  return `${months[d.getMonth()]} ${d.getDate()} ${h % 12 || 12}:${m < 10 ? "0" + m : m}${ampm}`;
+}
 
 export default function CsiWatchlistPage() {
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -38,6 +57,11 @@ export default function CsiWatchlistPage() {
 
   // Preview
   const [previewChannel, setPreviewChannel] = useState<Channel | null>(null);
+  const [previewVideoId, setPreviewVideoId] = useState<string | null>(null);
+
+  // Recently ingested videos
+  const [recentVideos, setRecentVideos] = useState<RecentVideo[]>([]);
+  const [recentLoading, setRecentLoading] = useState(false);
 
   // Renaming Categories
   const [editingCategory, setEditingCategory] = useState<string | null>(null);
@@ -65,8 +89,21 @@ export default function CsiWatchlistPage() {
     }
   };
 
+  const loadRecentVideos = async () => {
+    setRecentLoading(true);
+    try {
+      const resp = await fetch("/api/v1/csi/watchlist/recent-videos?limit=60");
+      if (resp.ok) {
+        const data = await resp.json();
+        setRecentVideos(data.videos || []);
+      }
+    } catch { /* silent */ }
+    finally { setRecentLoading(false); }
+  };
+
   useEffect(() => {
     loadWatchlist();
+    loadRecentVideos();
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -325,7 +362,7 @@ export default function CsiWatchlistPage() {
           
           {/* Kanban Columns */}
           <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
-            <div className="columns-1 lg:columns-2 xl:columns-3 gap-6 space-y-6">
+            <div className="columns-1 lg:columns-2 gap-5 space-y-5">
               {allDomains.map((domain) => {
                 const categoryChannels = filteredChannels.filter(c => (c.domain || "uncategorized") === domain)
                   .sort((a,b) => a.channel_name.localeCompare(b.channel_name));
@@ -414,7 +451,7 @@ export default function CsiWatchlistPage() {
                            }`}
                         >
                           <button 
-                            onClick={() => setPreviewChannel(ch)}
+                            onClick={() => { setPreviewChannel(ch); setPreviewVideoId(null); }}
                             className="flex-1 truncate font-medium text-sm text-slate-300 text-left hover:text-cyan-400 transition-colors flex items-center gap-2"
                           >
                             <span className="truncate">{ch.channel_name}</span>
@@ -453,13 +490,71 @@ export default function CsiWatchlistPage() {
             </div>
           </div>
 
-          {/* Persistent Channel Preview Viewer Panel */}
-          <div className="hidden md:flex w-[500px] lg:w-[600px] xl:w-[800px] shrink-0 border border-border/40 bg-card/20 rounded-xl flex-col shadow-inner overflow-hidden">
-             {previewChannel ? (
+          {/* Recently Ingested Videos Column */}
+          <div className="hidden lg:flex w-[260px] xl:w-[300px] shrink-0 border border-border/40 bg-card/20 rounded-xl flex-col overflow-hidden">
+            <div className="bg-background/80 border-b border-border/40 px-4 py-3 shrink-0 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ListVideo className="w-4 h-4 text-red-400" />
+                <h3 className="font-bold text-foreground text-sm">Recently Ingested</h3>
+              </div>
+              <button onClick={loadRecentVideos} disabled={recentLoading} className="text-xs text-muted-foreground hover:text-foreground transition">
+                <RefreshCw className={`w-3.5 h-3.5 ${recentLoading ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto custom-scrollbar">
+              {recentVideos.length === 0 && !recentLoading && (
+                <div className="text-xs text-muted-foreground/50 text-center py-8">No recent videos</div>
+              )}
+              {recentVideos.map((v) => (
+                <button
+                  key={`${v.video_id}-${v.ingested_at}`}
+                  onClick={() => { setPreviewVideoId(v.video_id); setPreviewChannel(null); }}
+                  className={`w-full text-left px-3 py-2.5 border-b border-border/20 hover:bg-primary/5 transition-colors ${
+                    previewVideoId === v.video_id ? 'bg-primary/10 border-l-2 border-l-primary' : ''
+                  }`}
+                >
+                  <p className="text-[13px] font-medium text-foreground/90 leading-snug line-clamp-2">{v.title || 'Untitled'}</p>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-[11px] text-cyan-400/80 truncate max-w-[140px]">{v.channel_name}</span>
+                    <span className="text-[10px] text-muted-foreground/60 ml-auto whitespace-nowrap">{compactDate(v.ingested_at)}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Persistent Preview Viewer Panel */}
+          <div className="hidden md:flex w-[440px] lg:w-[500px] xl:w-[600px] shrink-0 border border-border/40 bg-card/20 rounded-xl flex-col shadow-inner overflow-hidden">
+             {previewVideoId ? (
                 <>
                    <div className="bg-background/80 border-b border-border/40 p-4 shrink-0 flex items-center justify-between">
                       <div>
-                         <h3 className="font-bold text-foreground text-sm truncate w-[300px]">{previewChannel.channel_name}</h3>
+                         <h3 className="font-bold text-foreground text-sm truncate w-[280px]">
+                           {recentVideos.find(v => v.video_id === previewVideoId)?.title || 'Video'}
+                         </h3>
+                         <p className="text-xs text-muted-foreground mt-0.5">
+                           {recentVideos.find(v => v.video_id === previewVideoId)?.channel_name || ''}
+                         </p>
+                      </div>
+                      <a href={`https://www.youtube.com/watch?v=${previewVideoId}`} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-xs bg-red-500/10 text-red-400 hover:bg-red-500/20 px-2 py-1 rounded transition-colors font-medium">
+                         <Youtube className="w-3.5 h-3.5" /> Open
+                      </a>
+                   </div>
+                   <div className="flex-1 w-full bg-black">
+                       <iframe
+                          className="w-full h-full border-0"
+                          src={`https://www.youtube.com/embed/${previewVideoId}?autoplay=1&playsinline=1`}
+                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+                          sandbox="allow-same-origin allow-scripts allow-presentation"
+                          title="Video Preview"
+                       />
+                   </div>
+                </>
+             ) : previewChannel ? (
+                <>
+                   <div className="bg-background/80 border-b border-border/40 p-4 shrink-0 flex items-center justify-between">
+                      <div>
+                         <h3 className="font-bold text-foreground text-sm truncate w-[280px]">{previewChannel.channel_name}</h3>
                          <p className="text-xs text-muted-foreground mt-0.5">Latest Uploads Viewer</p>
                       </div>
                       <a href={previewChannel.youtube_url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-xs bg-red-500/10 text-red-400 hover:bg-red-500/20 px-2 py-1 rounded transition-colors font-medium">
@@ -467,10 +562,10 @@ export default function CsiWatchlistPage() {
                       </a>
                    </div>
                    <div className="flex-1 w-full bg-black">
-                       <iframe 
+                       <iframe
                           className="w-full h-full border-0"
                           src={`https://www.youtube.com/embed/videoseries?list=UU${previewChannel.channel_id.replace(/^UC/, '')}&playsinline=1&fs=0`}
-                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                           sandbox="allow-same-origin allow-scripts allow-presentation"
                           title="Channel Uploads Playlist Viewer"
                        />
@@ -479,7 +574,7 @@ export default function CsiWatchlistPage() {
              ) : (
                 <div className="flex-1 flex flex-col items-center justify-center text-center p-8 text-muted-foreground/60 space-y-4">
                     <PlaySquare className="w-12 h-12 text-border" />
-                    <p className="text-sm">Click any channel in the Kanban board to preview their latest video uploads natively.</p>
+                    <p className="text-sm">Click a recent video or channel to preview.</p>
                 </div>
              )}
           </div>

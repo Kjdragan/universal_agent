@@ -539,3 +539,53 @@ async def reclassify_channel(request: ReclassifyRequest):
         logger.error(f"Error reclassifying channel: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@router.get("/recent-videos")
+async def get_recent_videos(limit: int = 50):
+    """Return the most recently ingested YouTube videos from the CSI events table."""
+    import sqlite3
+
+    db_path = Path(os.getenv("CSI_DB_PATH", "/var/lib/universal-agent/csi/csi.db")).expanduser()
+    if not db_path.exists():
+        return {"videos": []}
+
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT event_id, subject_json, created_at
+            FROM events
+            WHERE source = 'youtube_channel_rss'
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (min(limit, 200),),
+        ).fetchall()
+        conn.close()
+
+        videos = []
+        for row in rows:
+            try:
+                subject = json.loads(row["subject_json"])
+            except Exception:
+                continue
+
+            # Extract YouTube video ID from event_id like "yt:rss:<video_id>:<ts>"
+            eid = row["event_id"] or ""
+            parts = eid.split(":")
+            video_id = parts[2] if len(parts) >= 3 else ""
+
+            videos.append({
+                "video_id": video_id,
+                "title": subject.get("title") or subject.get("description", "")[:80] or "Untitled",
+                "channel_name": subject.get("channel_name") or subject.get("author_name") or "Unknown",
+                "channel_id": subject.get("channel_id") or "",
+                "published_at": subject.get("published_at") or subject.get("occurred_at") or "",
+                "ingested_at": row["created_at"] or "",
+            })
+
+        return {"videos": videos}
+    except Exception as e:
+        logger.error("Error fetching recent videos: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
