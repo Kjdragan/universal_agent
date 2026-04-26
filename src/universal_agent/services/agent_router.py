@@ -17,10 +17,8 @@ Design principles:
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
-logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Agent identifiers (kept for downstream compatibility)
@@ -57,31 +55,3 @@ def route_all_to_simone(
         }
     return {AGENT_SIMONE: list(claimed_tasks)}
 
-
-# ---------------------------------------------------------------------------
-# Backward-compatible aliases
-# ---------------------------------------------------------------------------
-
-def route_claimed_tasks(
-    claimed_tasks: list[dict[str, Any]],
-    **_kwargs: Any,
-) -> dict[str, list[dict[str, Any]]]:
-    """Backward-compatible wrapper — delegates to ``route_all_to_simone``.
-
-    Accepts and ignores legacy kwargs (available_agents, etc.) for
-    call-site compatibility.
-    """
-    return route_all_to_simone(claimed_tasks)
-
-
-async def route_claimed_tasks_llm(
-    claimed_tasks: list[dict[str, Any]],
-    **_kwargs: Any,
-) -> dict[str, list[dict[str, Any]]]:
-    """Backward-compatible async wrapper — delegates to ``route_all_to_simone``.
-
-    The LLM-powered routing is no longer needed; Simone herself is the
-    intelligent router. This async shim remains so existing callers
-    don't break.
-    """
-    return route_all_to_simone(claimed_tasks)

@@ -913,10 +913,10 @@ from universal_agent.identity import (
 )
 from universal_agent.harness import ask_user_questions, present_plan_summary
 from universal_agent.routing import (
-    is_system_intent as _is_system_intent_new,
-    is_tool_required_intent as _is_tool_required_intent_new,
-    is_memory_intent as _is_memory_intent_new,
-    is_context_only_intent as _is_context_only_intent_new,
+    is_system_intent,
+    is_tool_required_intent,
+    is_memory_intent,
+    is_context_only_intent,
     ROUTE_SIMPLE,
     ROUTE_STANDARD,
     ROUTE_SYSTEM,
@@ -7707,27 +7707,11 @@ async def run_conversation(
 
 
 # Route constants now imported from universal_agent.routing
-
-
-def _is_system_intent(query: str) -> bool:
-    """Detect cron/heartbeat/system-utility queries — delegates to routing module."""
-    return _is_system_intent_new(query)
-
-
-def _is_memory_intent(query: str) -> bool:
-    """Detect memory-related queries — delegates to routing module."""
-    return _is_memory_intent_new(query)
-
-
-def _is_context_only_intent(query: str) -> bool:
-    """Detect context-only queries — delegates to routing module."""
-    return _is_context_only_intent_new(query)
-
-
-def _is_tool_required_intent(query: str) -> bool:
-    """Detect tool-required queries — delegates to routing module."""
-    return _is_tool_required_intent_new(query)
-
+# Direct aliases — routing functions imported above (removed redundant wrapper layer)
+_is_system_intent = is_system_intent
+_is_memory_intent = is_memory_intent
+_is_context_only_intent = is_context_only_intent
+_is_tool_required_intent = is_tool_required_intent
 
 async def classify_query(client: ClaudeSDKClient, query: str) -> str:
     """Classify a query into one of three routes: SIMPLE, STANDARD, or SYSTEM.
