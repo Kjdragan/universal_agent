@@ -1,17 +1,20 @@
-"""Reddit discovery adapter scaffold (disabled by default)."""
+"""Reddit discovery adapter — polls subreddit feeds via OAuth2 API."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 import json
 import logging
 import sqlite3
 from pathlib import Path
 from typing import Any
 
+import os
+
 import httpx
 
 from csi_ingester.adapters.base import RawEvent, SourceAdapter
+from csi_ingester.adapters.reddit_oauth import RedditOAuthManager
 from csi_ingester.contract import CreatorSignalEvent
 from csi_ingester.store.source_manager import (
     get_active_reddit_sources,
@@ -22,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 class RedditDiscoveryAdapter(SourceAdapter):
-    """Poll subreddit JSON feeds and normalize new-post signals."""
+    """Poll subreddit feeds via Reddit OAuth2 API."""
 
     def __init__(self, config: dict[str, Any]):
         self.config = config
@@ -38,6 +41,30 @@ class RedditDiscoveryAdapter(SourceAdapter):
         self._db_seeded: bool = False
         self._load_state_fn = lambda source_key: None
         self._save_state_fn = lambda source_key, state: None
+
+        # ── OAuth2 token manager ──
+        user_agent = str(config.get("user_agent") or "CSIIngester/1.0 (by u/csi_ingester)").strip()
+        self._oauth = RedditOAuthManager(
+            client_id=str(config.get("client_id") or os.getenv("REDDIT_CLIENT_ID", "")).strip(),
+            client_secret=str(config.get("client_secret") or os.getenv("REDDIT_CLIENT_SECRET", "")).strip(),
+            username=str(config.get("reddit_username") or os.getenv("REDDIT_USERNAME", "")).strip(),
+            password=str(config.get("reddit_password") or os.getenv("REDDIT_PASSWORD", "")).strip(),
+            user_agent=user_agent,
+        )
+        if self._oauth.is_configured:
+            logger.info("Reddit OAuth configured — will use oauth.reddit.com")
+        else:
+            logger.warning("Reddit OAuth NOT configured — will fall back to unauthenticated endpoints (likely blocked)")
+
+        # ── Proxy bandwidth metering ──
+        # Default 100 MB/day budget.  Set CSI_REDDIT_DAILY_BANDWIDTH_MB to override.
+        self._bw_daily_limit_bytes: int = int(
+            float(config.get("daily_bandwidth_mb") or os.getenv("CSI_REDDIT_DAILY_BANDWIDTH_MB", "100"))
+            * 1024 * 1024
+        )
+        self._bw_today: date = date.today()
+        self._bw_bytes_today: int = 0
+        self._bw_budget_exhausted: bool = False
 
     def set_state_backend(self, load_state_fn, save_state_fn) -> None:
         self._load_state_fn = load_state_fn
@@ -195,24 +222,99 @@ class RedditDiscoveryAdapter(SourceAdapter):
         logger.info("Reddit watchlist loaded path=%s subreddits=%d", path, len(subreddits))
         return self._watchlist_file_subreddits
 
+    def _reset_bandwidth_if_new_day(self) -> None:
+        """Reset daily bandwidth counter at midnight."""
+        today = date.today()
+        if today != self._bw_today:
+            if self._bw_bytes_today > 0:
+                logger.info(
+                    "Reddit proxy bandwidth day rollover: yesterday=%s used=%.2f MB / %.2f MB limit",
+                    self._bw_today, self._bw_bytes_today / (1024 * 1024),
+                    self._bw_daily_limit_bytes / (1024 * 1024),
+                )
+            self._bw_today = today
+            self._bw_bytes_today = 0
+            self._bw_budget_exhausted = False
+
+    def _record_bytes(self, num_bytes: int) -> None:
+        """Track bandwidth usage and emit warnings at thresholds."""
+        self._bw_bytes_today += num_bytes
+        used_mb = self._bw_bytes_today / (1024 * 1024)
+        limit_mb = self._bw_daily_limit_bytes / (1024 * 1024)
+        pct = (self._bw_bytes_today / self._bw_daily_limit_bytes * 100) if self._bw_daily_limit_bytes > 0 else 0
+
+        if pct >= 100 and not self._bw_budget_exhausted:
+            self._bw_budget_exhausted = True
+            logger.critical(
+                "🛑 REDDIT PROXY BANDWIDTH EXHAUSTED: %.2f MB / %.2f MB (%.0f%%). "
+                "Disabling proxy-based Reddit fetching for the rest of today. "
+                "Set CSI_REDDIT_DAILY_BANDWIDTH_MB to increase the limit.",
+                used_mb, limit_mb, pct,
+            )
+        elif pct >= 90:
+            logger.error(
+                "⚠️ Reddit proxy bandwidth CRITICAL: %.2f MB / %.2f MB (%.0f%%)",
+                used_mb, limit_mb, pct,
+            )
+        elif pct >= 75:
+            logger.warning(
+                "Reddit proxy bandwidth HIGH: %.2f MB / %.2f MB (%.0f%%)",
+                used_mb, limit_mb, pct,
+            )
+
     async def fetch_events(self) -> list[RawEvent]:
         subreddits = self._subreddits()
         timeout_seconds = max(5, int(self.config.get("timeout_seconds", 20)))
         per_subreddit_limit = max(5, min(100, int(self.config.get("limit", 50))))
         user_agent = str(self.config.get("user_agent") or "CSIIngester/1.0 (by u/csi_ingester)").strip()
 
+        # ── Bandwidth gate ──
+        self._reset_bandwidth_if_new_day()
+        if self._bw_budget_exhausted:
+            logger.warning(
+                "Reddit fetch SKIPPED — daily proxy bandwidth budget exhausted (%.2f MB used)",
+                self._bw_bytes_today / (1024 * 1024),
+            )
+            return []
+
         events: list[RawEvent] = []
-        async with httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=True) as client:
+        failed_subreddits = 0
+        total_subreddits = len(subreddits)
+        cycle_bytes = 0
+
+        # Route through residential proxy when configured to bypass VPS IP blocks.
+        # Checks CSI_REDDIT_PROXY_URL first, then CSI_RSS_PROXY_URL as shared fallback.
+        proxy_url: str | None = (
+            str(
+                self.config.get("proxy_url")
+                or os.getenv("CSI_REDDIT_PROXY_URL")
+                or os.getenv("CSI_RSS_PROXY_URL")
+                or ""
+            ).strip() or None
+        )
+        client_kwargs: dict[str, Any] = {"timeout": timeout_seconds, "follow_redirects": True}
+        if proxy_url:
+            client_kwargs["proxy"] = proxy_url
+
+        async with httpx.AsyncClient(**client_kwargs) as client:
             for subreddit in subreddits:
                 self._hydrate_subreddit_state(subreddit)
+                # Check budget mid-cycle — stop early if exhausted
+                if self._bw_budget_exhausted:
+                    logger.warning("Reddit fetch stopping mid-cycle — bandwidth budget exhausted")
+                    break
+
                 try:
-                    children = await self._fetch_subreddit_children(
+                    children, resp_bytes = await self._fetch_subreddit_children(
                         client,
                         subreddit=subreddit,
                         per_subreddit_limit=per_subreddit_limit,
                         user_agent=user_agent,
                     )
+                    cycle_bytes += resp_bytes
+                    self._record_bytes(resp_bytes)
                 except Exception as exc:
+                    failed_subreddits += 1
                     logger.warning("Reddit fetch failed subreddit=%s error=%s", subreddit, exc)
                     self._persist_subreddit_state(subreddit)
                     continue
@@ -270,6 +372,24 @@ class RedditDiscoveryAdapter(SourceAdapter):
                 self._seen_by_subreddit[subreddit] = set(post_ids[: self._max_seen_cache])
                 self._persist_subreddit_state(subreddit)
 
+        # ── Observability: flag total poll failure ──
+        if total_subreddits > 0 and failed_subreddits == total_subreddits:
+            raise RuntimeError(
+                f"All {total_subreddits} subreddits failed to fetch — "
+                f"likely IP-blocked or OAuth misconfigured"
+            )
+
+        # ── Log cycle bandwidth summary ──
+        if cycle_bytes > 0:
+            logger.info(
+                "Reddit poll cycle: %d subreddits, %d events, %.2f KB this cycle, "
+                "%.2f MB today / %.2f MB limit (%.0f%%)",
+                total_subreddits, len(events), cycle_bytes / 1024,
+                self._bw_bytes_today / (1024 * 1024),
+                self._bw_daily_limit_bytes / (1024 * 1024),
+                (self._bw_bytes_today / self._bw_daily_limit_bytes * 100) if self._bw_daily_limit_bytes > 0 else 0,
+            )
+
         return events
 
     async def _fetch_subreddit_children(
@@ -279,7 +399,81 @@ class RedditDiscoveryAdapter(SourceAdapter):
         subreddit: str,
         per_subreddit_limit: int,
         user_agent: str,
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Returns (children, response_bytes)."""
+        params: dict[str, Any] = {"limit": per_subreddit_limit, "raw_json": 1}
+
+        # ── Primary path: OAuth API ──
+        if self._oauth.is_configured:
+            result, resp_bytes = await self._fetch_oauth(
+                client, subreddit=subreddit, params=params, user_agent=user_agent,
+            )
+            if result is not None:
+                return result, resp_bytes
+            # OAuth failed — fall through to unauthenticated as last resort
+            logger.warning(
+                "Reddit OAuth fetch failed for r/%s, trying unauthenticated fallback",
+                subreddit,
+            )
+
+        # ── Fallback: unauthenticated endpoints ──
+        return await self._fetch_unauthenticated(
+            client, subreddit=subreddit, params=params, user_agent=user_agent,
+        )
+
+    async def _fetch_oauth(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        subreddit: str,
+        params: dict[str, Any],
+        user_agent: str,
+    ) -> tuple[list[dict[str, Any]] | None, int]:
+        """Fetch subreddit posts via oauth.reddit.com with bearer token.
+
+        Returns (children | None, response_bytes).
+        """
+        try:
+            token = await self._oauth.get_token()
+        except Exception as exc:
+            logger.warning("Reddit OAuth token acquisition failed: %s", exc)
+            return None, 0
+
+        url = f"https://oauth.reddit.com/r/{subreddit}/new"
+        headers = {
+            "User-Agent": user_agent,
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+        }
+        try:
+            resp = await client.get(url, params=params, headers=headers)
+        except Exception as exc:
+            logger.warning("Reddit OAuth request failed subreddit=%s error=%s", subreddit, exc)
+            return None, 0
+
+        resp_bytes = len(resp.content) if resp.content else 0
+
+        if resp.status_code >= 400:
+            logger.warning(
+                "Reddit OAuth error subreddit=%s status=%s body=%s",
+                subreddit, resp.status_code, resp.text[:200],
+            )
+            return None, resp_bytes
+
+        return self._parse_listing_response(resp, subreddit=subreddit), resp_bytes
+
+    async def _fetch_unauthenticated(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        subreddit: str,
+        params: dict[str, Any],
+        user_agent: str,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Fetch subreddit posts via public JSON endpoints (legacy fallback).
+
+        Returns (children, response_bytes).
+        """
         endpoints = list(self.config.get("endpoints") or [])
         if not endpoints:
             endpoints = [
@@ -291,8 +485,8 @@ class RedditDiscoveryAdapter(SourceAdapter):
             "Accept": "application/json",
             "Cache-Control": "no-cache",
         }
-        params = {"limit": per_subreddit_limit, "raw_json": 1}
         last_error = ""
+        total_bytes = 0
         for template in endpoints:
             url = str(template or "").strip().format(subreddit=subreddit)
             if not url:
@@ -303,6 +497,7 @@ class RedditDiscoveryAdapter(SourceAdapter):
                 last_error = f"request:{type(exc).__name__}:{exc}"
                 logger.warning("Reddit endpoint request failed subreddit=%s url=%s error=%s", subreddit, url, exc)
                 continue
+            total_bytes += len(resp.content) if resp.content else 0
             if resp.status_code >= 400:
                 last_error = f"http_{resp.status_code}"
                 logger.warning(
@@ -312,20 +507,30 @@ class RedditDiscoveryAdapter(SourceAdapter):
                     resp.status_code,
                 )
                 continue
-            try:
-                payload = resp.json() if resp.content else {}
-            except Exception as exc:
-                last_error = f"json:{type(exc).__name__}:{exc}"
-                logger.warning("Reddit endpoint JSON parse failed subreddit=%s url=%s error=%s", subreddit, url, exc)
-                continue
-            data = payload.get("data") if isinstance(payload, dict) else {}
-            children = data.get("children") if isinstance(data, dict) else []
-            if isinstance(children, list):
-                return children
+            result = self._parse_listing_response(resp, subreddit=subreddit)
+            if result is not None:
+                return result, total_bytes
             last_error = "invalid_payload_shape"
         if last_error:
             raise RuntimeError(last_error)
-        return []
+        return [], total_bytes
+
+    def _parse_listing_response(
+        self, resp: httpx.Response, *, subreddit: str
+    ) -> list[dict[str, Any]] | None:
+        """Parse a Reddit listing response into a list of children."""
+        try:
+            payload = resp.json() if resp.content else {}
+        except Exception as exc:
+            logger.warning(
+                "Reddit JSON parse failed subreddit=%s error=%s", subreddit, exc
+            )
+            return None
+        data = payload.get("data") if isinstance(payload, dict) else {}
+        children = data.get("children") if isinstance(data, dict) else []
+        if isinstance(children, list):
+            return children
+        return None
 
     def normalize(self, raw: RawEvent) -> CreatorSignalEvent:
         now = _iso_now()

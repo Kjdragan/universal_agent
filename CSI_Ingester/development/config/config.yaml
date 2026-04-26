@@ -18,8 +18,11 @@ sources:
     watchlist: []
   reddit_discovery:
     enabled: true
-    poll_interval_seconds: 300
-    limit: 30
+    # Poll 3x/day aligned with digest windows (7 AM, 1 PM, 7 PM CT).
+    # Data arrives ~2h before each digest for fresh intelligence.
+    # Uses residential proxy — budget: ~7.5 MB/day (34 subs × 50 posts × 3 polls).
+    poll_interval_seconds: 28800  # 8 hours = 3x/day
+    limit: 50  # fetch more per poll since we poll less often
     user_agent: "CSIIngester/1.0 (by u/csi_ingester)"
     watchlist_file: "reddit_watchlist.json"
     seed_on_first_run: true
@@ -123,7 +126,7 @@ delivery:
 # Quality assessment runs once daily in the evening.
 #
 # Collection cadence:
-#   Reddit enrichment:    every 3h  (fast-moving signals)
+#   Reddit enrichment:    every 8h  (3x/day, proxy-metered)
 #   Threads enrichment:   every 4h  (keyword search, less urgent)
 #   YouTube enrichment:   every 4h  (videos don't go stale)
 #   DLQ replay:           every 4h  (retries aren't urgent)
@@ -162,7 +165,7 @@ batch_schedule:
       utc_hour: 0
       purpose: "End-of-day synthesis, trend summaries"
   collection_cadence:
-    reddit_enrich_hours: 3
+    reddit_enrich_hours: 8  # matches 3x/day poll_interval_seconds: 28800
     threads_enrich_hours: 4
     youtube_enrich_hours: 4
     dlq_replay_hours: 4

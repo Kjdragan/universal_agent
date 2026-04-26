@@ -102,6 +102,8 @@ class CSIService:
         if isinstance(threads_broad_cfg, dict) and threads_broad_cfg.get("enabled", False):
             self.adapters["threads_trends_broad"] = ThreadsBroadTrendsAdapter(threads_broad_cfg)
         for adapter in self.adapters.values():
+            if hasattr(adapter, "set_db_connection"):
+                adapter.set_db_connection(self.conn)
             if hasattr(adapter, "set_state_backend"):
                 adapter.set_state_backend(
                     lambda source_key, conn=self.conn: source_state_store.get_state(conn, source_key),
