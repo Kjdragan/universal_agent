@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 const API_BASE = "/api/dashboard/gateway";
+const FILTER_PREFS_KEY = "ua.dashboard.proactiveSignals.filterPrefs.v1";
 const SOURCE_FILTERS = ["all", "youtube", "discord"] as const;
 const STATUS_FILTERS = ["pending", "tracking", "actioned", "rejected", "all"] as const;
 const FEEDBACK_CHIPS = [
@@ -77,14 +78,42 @@ function compactDateTime(iso: string | undefined | null): string {
 
 export default function ProactiveSignalsPage() {
   const [cards, setCards] = useState<SignalCard[]>([]);
-  const [source, setSource] = useState<(typeof SOURCE_FILTERS)[number]>("all");
-  const [status, setStatus] = useState<(typeof STATUS_FILTERS)[number]>("pending");
+  const [source, setSource] = useState<(typeof SOURCE_FILTERS)[number]>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const cached = JSON.parse(window.localStorage.getItem(FILTER_PREFS_KEY) || "{}");
+        const s = String(cached.source || "");
+        if ((SOURCE_FILTERS as readonly string[]).includes(s)) return s as (typeof SOURCE_FILTERS)[number];
+      } catch { /* ignore */ }
+    }
+    return "all";
+  });
+  const [status, setStatus] = useState<(typeof STATUS_FILTERS)[number]>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const cached = JSON.parse(window.localStorage.getItem(FILTER_PREFS_KEY) || "{}");
+        const s = String(cached.status || "");
+        if ((STATUS_FILTERS as readonly string[]).includes(s)) return s as (typeof STATUS_FILTERS)[number];
+      } catch { /* ignore */ }
+    }
+    return "all";
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState("");
   const [feedbackOpenId, setFeedbackOpenId] = useState("");
   const [feedbackText, setFeedbackText] = useState("");
   const [feedbackTags, setFeedbackTags] = useState<string[]>([]);
+
+  const saveFilterPrefs = useCallback((overrides?: { source?: string; status?: string }) => {
+    const prefs = {
+      source: overrides?.source ?? source,
+      status: overrides?.status ?? status,
+    };
+    try {
+      window.localStorage.setItem(FILTER_PREFS_KEY, JSON.stringify(prefs));
+    } catch { /* ignore */ }
+  }, [source, status]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -242,7 +271,7 @@ export default function ProactiveSignalsPage() {
           <button
             key={item}
             type="button"
-            onClick={() => setSource(item)}
+            onClick={() => { setSource(item); saveFilterPrefs({ source: item }); }}
             className={`rounded-md border px-3 py-1.5 capitalize ${source === item ? "border-primary/40 bg-primary/15 text-primary" : "border-border bg-card/40 text-muted-foreground hover:text-foreground"}`}
           >
             {item}
@@ -253,7 +282,7 @@ export default function ProactiveSignalsPage() {
           <button
             key={item}
             type="button"
-            onClick={() => setStatus(item)}
+            onClick={() => { setStatus(item); saveFilterPrefs({ status: item }); }}
             className={`rounded-md border px-3 py-1.5 capitalize ${status === item ? "border-primary/40 bg-primary/15 text-primary" : "border-border bg-card/40 text-muted-foreground hover:text-foreground"}`}
           >
             {item}
