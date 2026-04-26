@@ -7,7 +7,7 @@ import {
   MessageSquare, Plus, Loader2, RefreshCw, Edit2, Trash2,
   Settings2, X, Hash, Bot, Paperclip, AlertTriangle,
   ChevronRight, Server, FolderPlus, Check, Inbox,
-  CalendarDays, MapPin, Radio, Clock, ChevronDown,
+  CalendarDays, MapPin, Radio, Clock, ChevronDown, Filter,
 } from "lucide-react";
 
 /* ─── Types ──────────────────────────────────────────────────────────── */
@@ -474,6 +474,10 @@ export default function CsiDiscordWatchlistPage() {
   /* Clearing messages */
   const [clearing, setClearing] = useState(false);
 
+  /* Relevance filter toggle */
+  const [showAll, setShowAll] = useState(false);
+  const [totalAllMessages, setTotalAllMessages] = useState(0);
+
   /* ── Load watchlist ───────────────────────────────────────────────── */
   const loadWatchlist = useCallback(async () => {
     setLoadingList(true);
@@ -494,25 +498,27 @@ export default function CsiDiscordWatchlistPage() {
   useEffect(() => { void loadWatchlist(); }, [loadWatchlist]);
 
   /* ── Load messages for selected server ───────────────────────────── */
-  const loadMessages = useCallback(async (serverId: string) => {
+  const loadMessages = useCallback(async (serverId: string, showAllOverride?: boolean) => {
     setLoadingMsgs(true);
     setMsgError("");
     setMessages([]);
     try {
+      const showAllParam = showAllOverride !== undefined ? showAllOverride : showAll;
       const r = await fetch(
-        `${GATEWAY}/api/v1/dashboard/discord/servers/${encodeURIComponent(serverId)}/messages?limit=150`,
+        `${GATEWAY}/api/v1/dashboard/discord/servers/${encodeURIComponent(serverId)}/messages?limit=150&show_all=${showAllParam}`,
         { cache: "no-store" }
       );
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const d = await r.json();
       setMessages((d.messages ?? []).reverse()); // oldest first for chat feel
       setTotalMessages(d.total ?? 0);
+      setTotalAllMessages(d.total_all ?? d.total ?? 0);
     } catch (e: any) {
       setMsgError(e.message ?? "Failed to load messages");
     } finally {
       setLoadingMsgs(false);
     }
-  }, []);
+  }, [showAll]);
 
   const selectServer = useCallback((id: string) => {
     setActiveServerId(id);
@@ -833,11 +839,30 @@ export default function CsiDiscordWatchlistPage() {
                   <div className="flex-1 min-w-0">
                     <p className="font-semibold text-white text-sm truncate">{activeServer.server_name}</p>
                     <p className="text-[10px] text-[#949ba4]">
-                      {totalMessages.toLocaleString()} message{totalMessages !== 1 ? "s" : ""} stored
+                      {showAll
+                        ? `${totalMessages.toLocaleString()} message${totalMessages !== 1 ? "s" : ""} stored`
+                        : `${totalMessages.toLocaleString()} signal${totalMessages !== 1 ? "s" : ""} of ${totalAllMessages.toLocaleString()} total`}
                       {messages.length < totalMessages && ` · showing ${messages.length}`}
                     </p>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
+                    {/* Signal filter toggle */}
+                    <button
+                      onClick={() => {
+                        const next = !showAll;
+                        setShowAll(next);
+                        if (activeServerId) void loadMessages(activeServerId, next);
+                      }}
+                      title={showAll ? "Showing all messages — click to filter signals only" : "Showing signals only — click to show all"}
+                      className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-medium transition ${
+                        showAll
+                          ? "border-border/30 bg-background/30 text-muted-foreground hover:text-foreground hover:bg-background/60"
+                          : "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                      }`}
+                    >
+                      <Filter className="h-3.5 w-3.5" />
+                      {showAll ? "Show All" : "Signals"}
+                    </button>
                     <button
                       onClick={() => void clearServerMessages()}
                       disabled={clearing || messages.length === 0}

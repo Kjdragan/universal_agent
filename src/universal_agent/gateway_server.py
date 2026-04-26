@@ -16388,8 +16388,13 @@ async def dashboard_discord_server_messages(
     limit: int = 150,
     offset: int = 0,
     watched_only: bool = False,
+    show_all: bool = False,
 ):
-    """Fetch recent messages aggregated across all channels for a server."""
+    """Fetch recent messages aggregated across all channels for a server.
+    
+    By default, only messages classified as meaningful (or pending classification)
+    are returned. Pass show_all=true to include noise messages.
+    """
     _require_ops_auth(request)
     conn = _discord_connect()
     try:
@@ -16397,23 +16402,35 @@ async def dashboard_discord_server_messages(
         if watched_only:
             watched_clause = "AND c.tier IN ('A','B')"
 
+        # Relevance filter: hide noise unless show_all is requested
+        relevance_clause = ""
+        if not show_all:
+            relevance_clause = "AND (m.is_meaningful IS NULL OR m.is_meaningful = 1)"
+
         rows = conn.execute(
             f"""
             SELECT m.id, m.channel_id, c.name AS channel_name,
                    m.author_name, m.content, m.timestamp,
                    m.is_bot, m.has_attachments, m.processed_by_triage,
+                   m.is_meaningful,
                    GROUP_CONCAT(s.rule_matched || ':' || s.severity, '|') AS signals
             FROM messages m
             LEFT JOIN channels c ON c.id = m.channel_id
             LEFT JOIN signals s ON s.message_id = m.id
-            WHERE m.server_id = ? {watched_clause}
+            WHERE m.server_id = ? {watched_clause} {relevance_clause}
             GROUP BY m.id
             ORDER BY m.timestamp DESC
             LIMIT ? OFFSET ?
             """,
             (server_id, max(1, min(int(limit), 500)), max(0, int(offset))),
         ).fetchall()
-        total = conn.execute(
+        # Total count respects the same filter
+        total_filtered = conn.execute(
+            f"SELECT COUNT(*) FROM messages WHERE server_id = ? {relevance_clause.replace('m.is_meaningful', 'is_meaningful')}",
+            (server_id,)
+        ).fetchone()[0]
+        # Always return the unfiltered total for badge display
+        total_all = conn.execute(
             "SELECT COUNT(*) FROM messages WHERE server_id = ?", (server_id,)
         ).fetchone()[0]
     except Exception as exc:
@@ -16434,7 +16451,7 @@ async def dashboard_discord_server_messages(
         d["signals"] = sigs
         messages.append(d)
 
-    return {"status": "ok", "server_id": server_id, "total": total, "messages": messages}
+    return {"status": "ok", "server_id": server_id, "total": total_filtered, "total_all": total_all, "messages": messages}
 
 
 @app.delete("/api/v1/dashboard/discord/servers/{server_id}/messages")

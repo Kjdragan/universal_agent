@@ -4,6 +4,7 @@ database:
 models:
   triage: "glm-4.5-air"       # ZAI proxy cheap model (Haiku emulation)
   insight: "glm-5-turbo"      # Expensive model for deep extraction if needed (Sonnet emulation)
+  relevance: "glm-4.5-air"    # Binary signal-vs-noise classifier (cheap, fast)
 
 keywords:
   - "claude code"
@@ -19,4 +20,5 @@ keywords:
 scheduling:
   triage_interval_minutes: 60
   event_poll_interval_minutes: 30
+  relevance_sweep_interval_minutes: 5
   briefing_time: "08:00"

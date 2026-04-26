@@ -153,6 +153,8 @@ class DiscordIntelligenceDB:
             self._migrate_add_column(conn, 'scheduled_events', 'calendar_last_attempt_at', 'TIMESTAMP')
             self._migrate_add_column(conn, 'scheduled_events', 'calendar_sync_error', 'TEXT')
             self._migrate_add_column(conn, 'scheduled_events', 'discord_event_url', 'TEXT')
+            # Relevance filter column: NULL = unfiltered/pending, 1 = meaningful, 0 = noise
+            self._migrate_add_column(conn, 'messages', 'is_meaningful', 'BOOLEAN')
 
     @staticmethod
     def _migrate_add_column(conn, table: str, column: str, typedef: str):
@@ -222,6 +224,45 @@ class DiscordIntelligenceDB:
                 ORDER BY timestamp ASC LIMIT ?
             ''', (channel_id, limit))
             return [dict(row) for row in cur.fetchall()]
+
+    # ── Relevance Filter Methods ─────────────────────────────────────────
+
+    def get_unfiltered_messages(self, limit: int = 100) -> list[dict]:
+        """Get messages that haven't been classified by the relevance filter yet.
+        
+        Returns messages where is_meaningful IS NULL (pending classification),
+        ordered oldest-first so we process the backlog chronologically.
+        Includes server and channel names for LLM context.
+        """
+        with self._get_conn() as conn:
+            cur = conn.execute('''
+                SELECT m.id, m.channel_id, m.server_id, m.author_name,
+                       m.content, m.timestamp, m.is_bot,
+                       m.has_attachments, m.reply_to_id,
+                       c.name AS channel_name, srv.name AS server_name
+                FROM messages m
+                LEFT JOIN channels c ON c.id = m.channel_id
+                LEFT JOIN servers srv ON srv.id = m.server_id
+                WHERE m.is_meaningful IS NULL
+                ORDER BY m.timestamp ASC
+                LIMIT ?
+            ''', (max(1, int(limit)),))
+            return [dict(row) for row in cur.fetchall()]
+
+    def mark_messages_meaningful(self, updates: list[tuple[str, bool]]):
+        """Batch-update the is_meaningful flag for classified messages.
+        
+        Args:
+            updates: list of (message_id, is_meaningful) tuples
+        """
+        if not updates:
+            return
+        with self._get_conn() as conn:
+            conn.executemany(
+                'UPDATE messages SET is_meaningful = ? WHERE id = ?',
+                [(1 if meaningful else 0, msg_id) for msg_id, meaningful in updates]
+            )
+            conn.commit()
 
     def mark_messages_processed(self, message_ids: list):
         if not message_ids:

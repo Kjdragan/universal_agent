@@ -1,6 +1,6 @@
 # Documentation Status
 
-**Last updated:** 2026-04-23 (ClaudeDevs linked-source expansion now rejects browser-gated X/Twitter shells after redirects; the dashboard exposes a dedicated Claude Code intel review surface; and successful runs now synthesize a rolling 14-day builder brief plus capability bundles into a versioned repo library)
+**Last updated:** 2026-04-25 (Discord Intelligence Phase 5: LLM relevance filter with store-but-hide architecture, cross-channel batching, concurrent Haiku-class workers, gateway API filtering, and dashboard signal toggle)
 
 ## Development (development/)
 
@@ -29,7 +29,7 @@ This file and `docs/README.md` serve as the **authoritative indexes** for all pr
 | Durable_Execution.md | Resilience features |
 | URW_Orchestration.md | Multi-phase tasks |
 | LLM_Wiki_System.md | **Canonical source of truth** — shared wiki engine, external knowledge vault, derived internal memory vault, runtime surfaces, provenance, and integrity/query workflows |
-| Discord_Intelligence_System.md | **Canonical source of truth** — architecture for the Discord intelligence and command-and-control operations |
+| Discord_Intelligence_System.md | **Canonical source of truth** — architecture for the Discord intelligence and C&C operations, dual-token architecture, 4-stage message processing pipeline (ingestion → signal detection → LLM relevance filter → triage), Phase 5 store-but-hide relevance filter with cross-channel batching and concurrent Haiku-class workers, dashboard signal toggle, configuration reference, and operational runbook |
 | ClaudeDevs_X_Intelligence_System.md | **Canonical subsystem reference** — official X API ClaudeDevs lane, packet generation, replay/backfill, linked-source expansion, external Claude Code vault population, candidate ledgering, delivery verification, historical cron cleanup, and the operator skill/report surface |
 
 ## Architecture (01_Architecture/)

@@ -53,7 +53,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[Durable Execution](02_Subsystems/Durable_Execution.md)**: Resilience features.
 - **[URW Orchestration](02_Subsystems/URW_Orchestration.md)**: Multi-phase tasks.
 - **[LLM Wiki System](02_Subsystems/LLM_Wiki_System.md)**: Canonical subsystem reference for the external knowledge vault and derived internal memory vault — architecture, vault contracts, runtime surfaces, provenance, and query/lint behavior.
-- **[Discord Intelligence System](02_Subsystems/Discord_Intelligence_System.md)**: Canonical architecture for the Discord intelligence and command-and-control operations.
+- **[Discord Intelligence System](02_Subsystems/Discord_Intelligence_System.md)**: Canonical architecture for the Discord intelligence and command-and-control operations — dual-token architecture, 4-stage message processing pipeline (ingestion → signal detection → LLM relevance filter → triage), Phase 5 store-but-hide relevance filter with cross-channel batching and concurrent Haiku-class workers, dashboard signal toggle, and operational runbook.
 - **[ClaudeDevs X Intelligence System](02_Subsystems/ClaudeDevs_X_Intelligence_System.md)**: Canonical subsystem reference for the `@ClaudeDevs` X intelligence lane — official X API polling, packet creation, replay/backfill, linked-source expansion, external Claude Code vault population, candidate ledgers, delivery verification, and historical cron cleanup.
 
 ### 3. [Flows](02_Flows)

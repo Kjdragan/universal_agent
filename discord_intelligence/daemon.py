@@ -14,6 +14,7 @@ from .integration.task_hub import create_task_hub_mission
 from .audio_recorder import AudioRecorder
 from .transcriber import Transcriber
 from .audio_cleanup import AudioCleanup
+from .relevance_filter import run_relevance_sweep
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("discord_daemon")
@@ -52,7 +53,8 @@ class DiscordIntelligenceClient(discord.Client):
         self.run_triage_jobs.start()
         self.run_audio_maintenance.start()
         self.poll_guild_events.start()
-        logger.info("Started built-in triage, audio maintenance, and event polling loop tasks.")
+        self.run_relevance_sweep_loop.start()
+        logger.info("Started built-in triage, audio maintenance, event polling, and relevance sweep loop tasks.")
 
     @tasks.loop(minutes=CONFIG.get("scheduling", {}).get("triage_interval_minutes", 60))
     async def run_triage_jobs(self):
@@ -65,6 +67,28 @@ class DiscordIntelligenceClient(discord.Client):
                 await run_triage_batch(self.db, ch["id"], limit=TRIAGE_BATCH_LIMIT)
             except Exception as e:
                 logger.error(f"Failed triage for {ch['name']}: {e}")
+
+    @tasks.loop(minutes=CONFIG.get("scheduling", {}).get("relevance_sweep_interval_minutes", 5))
+    async def run_relevance_sweep_loop(self):
+        """Periodic sweep: classify unfiltered messages as signal vs noise."""
+        logger.info("Running relevance filter sweep...")
+        try:
+            result = await run_relevance_sweep(
+                self.db,
+                max_batch_size=50,
+                max_workers=2,
+            )
+            if result["processed"] > 0:
+                logger.info(
+                    "Relevance sweep: %d processed (%d meaningful, %d noise)",
+                    result["processed"], result["meaningful"], result["noise"]
+                )
+        except Exception as e:
+            logger.error("Relevance sweep failed: %s", e)
+
+    @run_relevance_sweep_loop.before_loop
+    async def before_relevance_sweep(self):
+        await self.wait_until_ready()
 
     @tasks.loop(hours=6)
     async def run_audio_maintenance(self):
