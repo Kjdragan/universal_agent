@@ -5,6 +5,9 @@ import { formatDateTimeTz, toEpochMs } from "@/lib/timezone";
 
 const API_BASE = "/api/dashboard/gateway";
 const PRESET_CACHE_KEY = "ua.dashboard.events.presets.v1";
+const FILTER_PREFS_KEY = "ua.dashboard.events.filterPrefs.v1";
+
+const DEFAULT_CHECKED_SOURCES = ["csi", "tutorial", "cron", "continuity"];
 
 type ActivityAction = {
   id?: string;
@@ -255,15 +258,64 @@ export default function DashboardEventsPage() {
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
-  const [checkedSources, setCheckedSources] = useState<Set<string>>(new Set());
+  const [checkedSources, setCheckedSources] = useState<Set<string>>(() => {
+    // Instant restore from localStorage while we wait for backend prefs
+    if (typeof window !== "undefined") {
+      try {
+        const cached = window.localStorage.getItem(FILTER_PREFS_KEY);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed.events_checked_sources) && parsed.events_checked_sources.length > 0) {
+            return new Set(parsed.events_checked_sources as string[]);
+          }
+        }
+      } catch { /* ignore */ }
+    }
+    return new Set(DEFAULT_CHECKED_SOURCES);
+  });
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
-  const [severityFilter, setSeverityFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
-  const [kindFilter, setKindFilter] = useState("");
-  const [timeWindow, setTimeWindow] = useState("7d");
-  const [actionableOnly, setActionableOnly] = useState(false);
-  const [pinnedOnly, setPinnedOnly] = useState(false);
-  const [hideTransient, setHideTransient] = useState(false);
+  const [severityFilter, setSeverityFilter] = useState(() => {
+    if (typeof window !== "undefined") {
+      try { const c = JSON.parse(window.localStorage.getItem(FILTER_PREFS_KEY) || "{}"); return String(c.events_severity_filter || ""); } catch { /* */ }
+    }
+    return "";
+  });
+  const [statusFilter, setStatusFilter] = useState(() => {
+    if (typeof window !== "undefined") {
+      try { const c = JSON.parse(window.localStorage.getItem(FILTER_PREFS_KEY) || "{}"); return String(c.events_status_filter || ""); } catch { /* */ }
+    }
+    return "";
+  });
+  const [kindFilter, setKindFilter] = useState(() => {
+    if (typeof window !== "undefined") {
+      try { const c = JSON.parse(window.localStorage.getItem(FILTER_PREFS_KEY) || "{}"); return String(c.events_kind_filter || ""); } catch { /* */ }
+    }
+    return "";
+  });
+  const [timeWindow, setTimeWindow] = useState(() => {
+    if (typeof window !== "undefined") {
+      try { const c = JSON.parse(window.localStorage.getItem(FILTER_PREFS_KEY) || "{}"); const tw = String(c.events_time_window || ""); if (tw) return tw; } catch { /* */ }
+    }
+    return "7d";
+  });
+  const [actionableOnly, setActionableOnly] = useState(() => {
+    if (typeof window !== "undefined") {
+      try { const c = JSON.parse(window.localStorage.getItem(FILTER_PREFS_KEY) || "{}"); return Boolean(c.events_actionable_only); } catch { /* */ }
+    }
+    return false;
+  });
+  const [pinnedOnly, setPinnedOnly] = useState(() => {
+    if (typeof window !== "undefined") {
+      try { const c = JSON.parse(window.localStorage.getItem(FILTER_PREFS_KEY) || "{}"); return Boolean(c.events_pinned_only); } catch { /* */ }
+    }
+    return false;
+  });
+  const [hideTransient, setHideTransient] = useState(() => {
+    if (typeof window !== "undefined") {
+      try { const c = JSON.parse(window.localStorage.getItem(FILTER_PREFS_KEY) || "{}"); return Boolean(c.events_hide_transient); } catch { /* */ }
+    }
+    return false;
+  });
   const [handoffOpen, setHandoffOpen] = useState(false);
   const [handoffInstruction, setHandoffInstruction] = useState("");
   const [handoffBusy, setHandoffBusy] = useState(false);
@@ -562,16 +614,65 @@ export default function DashboardEventsPage() {
     }
   }, []);
 
+  // Save the full filter state to both localStorage (instant) and backend (durable)
+  const saveAllFilterPreferences = useCallback((overrides?: {
+    sources?: string[];
+    severity?: string;
+    status?: string;
+    kind?: string;
+    timeWindow?: string;
+    actionableOnly?: boolean;
+    pinnedOnly?: boolean;
+    hideTransient?: boolean;
+  }) => {
+    const prefs: Record<string, unknown> = {
+      events_checked_sources: overrides?.sources ?? Array.from(checkedSources),
+      events_severity_filter: overrides?.severity ?? severityFilter,
+      events_status_filter: overrides?.status ?? statusFilter,
+      events_kind_filter: overrides?.kind ?? kindFilter,
+      events_time_window: overrides?.timeWindow ?? timeWindow,
+      events_actionable_only: overrides?.actionableOnly ?? actionableOnly,
+      events_pinned_only: overrides?.pinnedOnly ?? pinnedOnly,
+      events_hide_transient: overrides?.hideTransient ?? hideTransient,
+    };
+    // Instant localStorage save for fast page restore
+    try {
+      window.localStorage.setItem(FILTER_PREFS_KEY, JSON.stringify(prefs));
+    } catch { /* ignore */ }
+    // Durable backend save (fire-and-forget)
+    fetch(`${API_BASE}/api/v1/ops/preferences`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ preferences: prefs }),
+    }).catch((e) => console.error("Failed to save event preferences", e));
+  }, [checkedSources, severityFilter, statusFilter, kindFilter, timeWindow, actionableOnly, pinnedOnly, hideTransient]);
+
   // Fetch event source preferences on mount (before loading events)
   const fetchEventPreferences = useCallback(async () => {
     try {
       const r = await fetch(`${API_BASE}/api/v1/ops/preferences`, { cache: "no-store" });
       if (r.ok) {
         const data = await r.json();
-        const sources = data.preferences?.events_checked_sources;
+        const p = data.preferences || {};
+        // Restore sources
+        const sources = p.events_checked_sources;
         if (Array.isArray(sources) && sources.length > 0) {
           setCheckedSources(new Set(sources as string[]));
+        } else if (!Array.isArray(sources)) {
+          // No backend prefs yet — keep the default set
         }
+        // Restore all other filter settings
+        if (typeof p.events_severity_filter === "string") setSeverityFilter(p.events_severity_filter);
+        if (typeof p.events_status_filter === "string") setStatusFilter(p.events_status_filter);
+        if (typeof p.events_kind_filter === "string") setKindFilter(p.events_kind_filter);
+        if (typeof p.events_time_window === "string" && p.events_time_window) setTimeWindow(p.events_time_window);
+        if (typeof p.events_actionable_only === "boolean") setActionableOnly(p.events_actionable_only);
+        if (typeof p.events_pinned_only === "boolean") setPinnedOnly(p.events_pinned_only);
+        if (typeof p.events_hide_transient === "boolean") setHideTransient(p.events_hide_transient);
+        // Sync to localStorage for fast restore next time
+        try {
+          window.localStorage.setItem(FILTER_PREFS_KEY, JSON.stringify(p));
+        } catch { /* ignore */ }
       }
     } catch (e) {
       console.error("Failed to load event preferences", e);
@@ -585,35 +686,21 @@ export default function DashboardEventsPage() {
       const next = new Set(prev);
       if (next.has(source)) next.delete(source);
       else next.add(source);
-      const arr = Array.from(next);
-      // Fire-and-forget sync to backend
-      fetch(`${API_BASE}/api/v1/ops/preferences`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ preferences: { events_checked_sources: arr } }),
-      }).catch((e) => console.error("Failed to save event preference", e));
+      saveAllFilterPreferences({ sources: Array.from(next) });
       return next;
     });
-  }, []);
+  }, [saveAllFilterPreferences]);
 
   const selectAllSources = useCallback(() => {
     const allSet = new Set(SOURCE_ORDER);
     setCheckedSources(allSet);
-    fetch(`${API_BASE}/api/v1/ops/preferences`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ preferences: { events_checked_sources: SOURCE_ORDER } }),
-    }).catch((e) => console.error("Failed to save event preference", e));
-  }, []);
+    saveAllFilterPreferences({ sources: [...SOURCE_ORDER] });
+  }, [saveAllFilterPreferences]);
 
   const deselectAllSources = useCallback(() => {
     setCheckedSources(new Set());
-    fetch(`${API_BASE}/api/v1/ops/preferences`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ preferences: { events_checked_sources: [] } }),
-    }).catch((e) => console.error("Failed to save event preference", e));
-  }, []);
+    saveAllFilterPreferences({ sources: [] });
+  }, [saveAllFilterPreferences]);
 
   useEffect(() => {
     void fetchEventPreferences();
@@ -1141,7 +1228,7 @@ export default function DashboardEventsPage() {
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <select
             value={severityFilter}
-            onChange={(event) => setSeverityFilter(event.target.value)}
+            onChange={(event) => { setSeverityFilter(event.target.value); saveAllFilterPreferences({ severity: event.target.value }); }}
             className="rounded border border-border/60 bg-card/40 px-2 py-1 text-[12px]"
           >
             <option value="">All Severity</option>
@@ -1152,7 +1239,7 @@ export default function DashboardEventsPage() {
           </select>
           <select
             value={statusFilter}
-            onChange={(event) => setStatusFilter(event.target.value)}
+            onChange={(event) => { setStatusFilter(event.target.value); saveAllFilterPreferences({ status: event.target.value }); }}
             className="rounded border border-border/60 bg-card/40 px-2 py-1 text-[12px]"
           >
             <option value="">All Status</option>
@@ -1164,7 +1251,7 @@ export default function DashboardEventsPage() {
           </select>
           <select
             value={kindFilter}
-            onChange={(event) => setKindFilter(event.target.value)}
+            onChange={(event) => { setKindFilter(event.target.value); saveAllFilterPreferences({ kind: event.target.value }); }}
             className="rounded border border-border/60 bg-card/40 px-2 py-1 text-[12px]"
           >
             <option value="">All Kinds</option>
@@ -1176,7 +1263,7 @@ export default function DashboardEventsPage() {
           </select>
           <select
             value={timeWindow}
-            onChange={(event) => setTimeWindow(event.target.value)}
+            onChange={(event) => { setTimeWindow(event.target.value); saveAllFilterPreferences({ timeWindow: event.target.value }); }}
             className="rounded border border-border/60 bg-card/40 px-2 py-1 text-[12px]"
           >
             <option value="30m">Last 30m</option>
@@ -1193,7 +1280,7 @@ export default function DashboardEventsPage() {
             <input
               type="checkbox"
               checked={actionableOnly}
-              onChange={(event) => setActionableOnly(event.target.checked)}
+              onChange={(event) => { setActionableOnly(event.target.checked); saveAllFilterPreferences({ actionableOnly: event.target.checked }); }}
             />
             Actionable only
           </label>
@@ -1201,7 +1288,7 @@ export default function DashboardEventsPage() {
             <input
               type="checkbox"
               checked={pinnedOnly}
-              onChange={(event) => setPinnedOnly(event.target.checked)}
+              onChange={(event) => { setPinnedOnly(event.target.checked); saveAllFilterPreferences({ pinnedOnly: event.target.checked }); }}
             />
             Pinned only
           </label>
@@ -1209,7 +1296,7 @@ export default function DashboardEventsPage() {
             <input
               type="checkbox"
               checked={hideTransient}
-              onChange={(event) => setHideTransient(event.target.checked)}
+              onChange={(event) => { setHideTransient(event.target.checked); saveAllFilterPreferences({ hideTransient: event.target.checked }); }}
             />
             Hide transient
           </label>
