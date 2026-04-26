@@ -7,7 +7,6 @@ import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 
 _HEARTBEAT_ARTIFACT_REL_PATHS = (

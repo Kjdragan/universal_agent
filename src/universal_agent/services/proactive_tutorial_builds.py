@@ -9,7 +9,6 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from universal_agent import task_hub
 from universal_agent.services.proactive_task_builder import queue_proactive_task
 from universal_agent.services.proactive_artifacts import ARTIFACT_STATUS_CANDIDATE, make_artifact_id, upsert_artifact
 

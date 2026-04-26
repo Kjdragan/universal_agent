@@ -1,6 +1,5 @@
 import json
 import os
-from typing import Any
 
 
 def write_trace(trace: dict, workspace_dir: str) -> str:

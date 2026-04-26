@@ -26,7 +26,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Optional
+from typing import Any, AsyncIterator, Optional
 
 from universal_agent.agent_core import AgentEvent, EventType
 from universal_agent.identity import resolve_user_id

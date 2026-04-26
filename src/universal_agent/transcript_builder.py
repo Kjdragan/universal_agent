@@ -8,7 +8,7 @@ import json
 import ast
 import re
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any
 
 def format_timestamp(iso_str: str) -> str:
     """Format ISO timestamp to readable time string (HH:MM:SS)."""
