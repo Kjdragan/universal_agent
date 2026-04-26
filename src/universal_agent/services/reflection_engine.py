@@ -34,14 +34,6 @@ from universal_agent.services.proactive_budget import (
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Legacy aliases (kept for backward compat with old tests / heartbeat refs)
-# ---------------------------------------------------------------------------
-DEFAULT_REFLECTION_START_HOUR = 22
-DEFAULT_REFLECTION_END_HOUR = 7
-DEFAULT_MAX_NIGHTLY_TASKS = DEFAULT_DAILY_BUDGET
-
-
 def _parse_int_env(key: str, default: int) -> int:
     raw = (os.getenv(key) or "").strip()
     if not raw:
@@ -50,24 +42,6 @@ def _parse_int_env(key: str, default: int) -> int:
         return int(raw)
     except (ValueError, TypeError):
         return default
-
-
-# Re-export the shared budget key for backward-compat test access
-_NIGHTLY_TASK_COUNTER_KEY = "reflection_nightly_counter"  # legacy
-
-
-def is_reflection_hours(
-    *,
-    now: Optional[datetime] = None,
-    start_hour: Optional[int] = None,
-    end_hour: Optional[int] = None,
-) -> bool:
-    """DEPRECATED: Reflection now runs 24/7.  Always returns True.
-
-    Kept for backward compatibility with existing heartbeat code that
-    imports this function.  Will be removed in a future cleanup.
-    """
-    return True
 
 
 def is_reflection_enabled() -> bool:
@@ -81,21 +55,6 @@ def is_reflection_enabled() -> bool:
     # Fall through — follow UA_HEARTBEAT_AUTONOMOUS_ENABLED
     auto_raw = (os.getenv("UA_HEARTBEAT_AUTONOMOUS_ENABLED") or "").strip().lower()
     return auto_raw not in {"0", "false", "no", "off"}
-
-
-def _get_nightly_task_count(conn: sqlite3.Connection) -> int:
-    """DEPRECATED: Delegates to shared proactive_budget module."""
-    return get_daily_proactive_count(conn)
-
-
-def _increment_nightly_task_count(conn: sqlite3.Connection, increment: int = 1) -> int:
-    """DEPRECATED: Delegates to shared proactive_budget module."""
-    return increment_daily_proactive_count(conn, increment)
-
-
-def has_nightly_budget(conn: sqlite3.Connection) -> bool:
-    """DEPRECATED: Delegates to shared proactive_budget module."""
-    return has_daily_budget(conn)
 
 
 # ---------------------------------------------------------------------------
