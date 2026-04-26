@@ -47,7 +47,7 @@ class MissionDispatchRequest:
     reply_mode: str
     priority: int
     run_id: Optional[str] = None
-    execution_mode: str = "sdk"  # "sdk" (default) or "cli" (Claude Code CLI)
+    execution_mode: str = "sdk"  # "sdk" (default), "cli" (Claude Code CLI), or "dag" (deterministic DAG runner)
 
 
 def dispatch_mission(
@@ -211,6 +211,15 @@ def _build_payload(
         "reply_mode": request.reply_mode or "async",
         "priority": int(request.priority),
         "execution_mode": request.execution_mode,
+        # Pass through DAG workflow definition for dag execution mode
+        **({
+            "dag_definition": request.constraints.get("dag_definition"),
+        } if request.execution_mode == "dag" and isinstance(request.constraints, dict)
+           and request.constraints.get("dag_definition") else {}),
+        **({
+            "dag_definition_path": request.constraints.get("dag_definition_path"),
+        } if request.execution_mode == "dag" and isinstance(request.constraints, dict)
+           and request.constraints.get("dag_definition_path") else {}),
     }
 
 

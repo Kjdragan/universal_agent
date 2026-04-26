@@ -629,7 +629,7 @@ class VpWorkerLoop:
             logger.warning("Failed to teardown git worktree: %s", result.stderr.strip())
 
     def _select_client_for_mission(self, mission: Any) -> VpClient:
-        """Select SDK or CLI client based on mission payload's execution_mode."""
+        """Select SDK, CLI, or DAG client based on mission payload's execution_mode."""
         if self._client is not None:
             return self._client
         payload_json = mission["payload_json"] if "payload_json" in mission.keys() else None
@@ -644,6 +644,13 @@ class VpWorkerLoop:
                         mission.get("mission_id", "?"), self.vp_id,
                     )
                     return ClaudeCodeCLIClient()
+                if execution_mode == "dag":
+                    from universal_agent.vp.clients.dag_client import DagClient
+                    logger.info(
+                        "Mission %s using DAG execution mode (vp=%s)",
+                        mission.get("mission_id", "?"), self.vp_id,
+                    )
+                    return DagClient()
             except (json.JSONDecodeError, Exception):
                 pass
         return self._default_client
