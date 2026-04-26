@@ -30,6 +30,12 @@ TRIAGE_TIERS = {
     if tier.strip()
 }
 TRIAGE_BATCH_LIMIT = max(1, int(os.getenv("UA_DISCORD_TRIAGE_BATCH_LIMIT", "50") or 50))
+# Tiers whose messages are stored at all (everything else is silently dropped at the gateway)
+INGEST_TIERS = {
+    tier.strip().upper()
+    for tier in os.getenv("UA_DISCORD_INGEST_TIERS", "A,B").split(",")
+    if tier.strip()
+}
 SEND_SIMONE_ALERTS = str(os.getenv("UA_DISCORD_SEND_SIMONE_ALERTS", "0")).strip().lower() in {
     "1", "true", "yes", "on",
 }
@@ -185,6 +191,7 @@ class DiscordIntelligenceClient(discord.Client):
 
     async def on_ready(self):
         logger.info(f"Logged in as {self.user} (ID: {self.user.id})")
+        logger.info(f"Ingestion tier gate active — only storing messages from tiers: {sorted(INGEST_TIERS)}")
         # Sync visible servers and channels
         for guild in self.guilds:
             self.db.upsert_server(str(guild.id), guild.name)
@@ -209,6 +216,10 @@ class DiscordIntelligenceClient(discord.Client):
             cur = conn.execute("SELECT tier FROM channels WHERE id = ?", (channel_id_str,))
             row = cur.fetchone()
         tier = row['tier'] if row else 'C'
+
+        # ── Tier gate: only ingest messages from high-priority channels ──
+        if tier.upper() not in INGEST_TIERS:
+            return  # Silently drop — channel is below the ingest threshold
 
         self.db.store_message(
             msg_id=str(message.id),

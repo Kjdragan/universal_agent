@@ -16505,6 +16505,83 @@ async def dashboard_discord_clear_all_signals(request: Request):
     return {"status": "ok", "deleted": deleted}
 
 
+@app.post("/api/v1/dashboard/discord/channels/bulk-tier")
+async def dashboard_discord_bulk_tier(request: Request):
+    """Bulk-reassign channel tiers.
+
+    Body JSON:
+        from_tier: str  — current tier to match (e.g. "C")
+        to_tier: str    — new tier to assign (e.g. "MUTED")
+        server_id: str  — optional, scope to a single server
+    """
+    _require_ops_auth(request)
+    body = await request.json()
+    from_tier = str(body.get("from_tier", "")).strip().upper()
+    to_tier = str(body.get("to_tier", "")).strip().upper()
+    server_id = body.get("server_id")
+
+    valid_tiers = {"A", "B", "C", "D", "MUTED"}
+    if from_tier not in valid_tiers or to_tier not in valid_tiers:
+        raise HTTPException(status_code=400, detail=f"Invalid tier. Valid: {sorted(valid_tiers)}")
+
+    conn = _discord_connect()
+    try:
+        if server_id:
+            cur = conn.execute(
+                "UPDATE channels SET tier = ? WHERE tier = ? AND server_id = ? AND is_active = 1",
+                (to_tier, from_tier, str(server_id)),
+            )
+        else:
+            cur = conn.execute(
+                "UPDATE channels SET tier = ? WHERE tier = ? AND is_active = 1",
+                (to_tier, from_tier),
+            )
+        conn.commit()
+        updated = cur.rowcount
+    except Exception as exc:
+        logger.exception("Failed bulk tier reassignment")
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        conn.close()
+    return {"status": "ok", "updated": updated, "from_tier": from_tier, "to_tier": to_tier}
+
+
+@app.post("/api/v1/dashboard/discord/channels/promote")
+async def dashboard_discord_promote_channels(request: Request):
+    """Promote specific channels to a target tier.
+
+    Body JSON:
+        channel_ids: list[str]  — channel IDs to promote
+        tier: str               — target tier (default "A")
+    """
+    _require_ops_auth(request)
+    body = await request.json()
+    channel_ids = body.get("channel_ids", [])
+    tier = str(body.get("tier", "A")).strip().upper()
+
+    valid_tiers = {"A", "B", "C", "D", "MUTED"}
+    if tier not in valid_tiers:
+        raise HTTPException(status_code=400, detail=f"Invalid tier. Valid: {sorted(valid_tiers)}")
+    if not channel_ids:
+        raise HTTPException(status_code=400, detail="channel_ids list required")
+
+    conn = _discord_connect()
+    try:
+        placeholders = ",".join("?" for _ in channel_ids)
+        cur = conn.execute(
+            f"UPDATE channels SET tier = ? WHERE id IN ({placeholders})",
+            [tier] + list(channel_ids),
+        )
+        conn.commit()
+        updated = cur.rowcount
+    except Exception as exc:
+        logger.exception("Failed channel promotion")
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        conn.close()
+    return {"status": "ok", "updated": updated, "tier": tier}
+
+
 @app.get("/api/v1/dashboard/proactive-signals")
 async def dashboard_proactive_signals(
     request: Request,

@@ -576,13 +576,30 @@ async def get_recent_videos(limit: int = 50):
             parts = eid.split(":")
             video_id = parts[2] if len(parts) >= 3 else ""
 
+            # Ensure UTC timestamps carry a 'Z' suffix so browsers
+            # convert them to the viewer's local timezone (e.g. Houston CDT).
+            # SQLite datetime('now') produces UTC strings without a tz marker,
+            # which JS Date() would otherwise interpret as local time.
+            raw_ingested = row["created_at"] or ""
+            if raw_ingested and not raw_ingested.endswith(("Z", "+00:00", "+0000")) and "T" not in raw_ingested:
+                # sqlite format: "2026-04-26 03:50:00" → "2026-04-26T03:50:00Z"
+                raw_ingested = raw_ingested.replace(" ", "T") + "Z"
+            elif raw_ingested and not raw_ingested.endswith(("Z", "+00:00", "+0000")):
+                raw_ingested = raw_ingested + "Z"
+
+            raw_published = subject.get("published_at") or subject.get("occurred_at") or ""
+            if raw_published and not raw_published.endswith(("Z", "+00:00", "+0000")) and "T" not in raw_published:
+                raw_published = raw_published.replace(" ", "T") + "Z"
+            elif raw_published and not raw_published.endswith(("Z", "+00:00", "+0000")):
+                raw_published = raw_published + "Z"
+
             videos.append({
                 "video_id": video_id,
                 "title": subject.get("title") or subject.get("description", "")[:80] or "Untitled",
                 "channel_name": subject.get("channel_name") or subject.get("author_name") or "Unknown",
                 "channel_id": subject.get("channel_id") or "",
-                "published_at": subject.get("published_at") or subject.get("occurred_at") or "",
-                "ingested_at": row["created_at"] or "",
+                "published_at": raw_published,
+                "ingested_at": raw_ingested,
             })
 
         return {"videos": videos}
