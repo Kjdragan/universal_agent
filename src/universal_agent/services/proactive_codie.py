@@ -17,14 +17,22 @@ from universal_agent.services.proactive_artifacts import (
 from universal_agent.services.proactive_task_builder import queue_proactive_task
 
 DEFAULT_CLEANUP_THEMES = (
-    "reduce brittle routing heuristics",
-    "delete dead code and stale compatibility layers",
-    "add regression tests around fragile task lifecycle paths",
-    "simplify duplicated prompt or dispatch plumbing",
-    "improve documentation drift between code and canonical docs",
+    "add type hints to untyped public function signatures",
+    "add or improve missing docstrings on public functions and classes",
+    "extract magic strings and numeric literals into named constants",
+    "improve error messages and logging context in except blocks",
+    "add lightweight unit tests for under-tested helper functions",
+    "standardize inconsistent import ordering and grouping",
+    "replace bare except clauses with specific exception types",
 )
 
 _GITHUB_PR_RE = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+")
+
+
+def _pick_daily_theme() -> str:
+    """Rotate through themes by day-of-year so each day covers a different focus."""
+    day_of_year = datetime.now(timezone.utc).timetuple().tm_yday
+    return DEFAULT_CLEANUP_THEMES[day_of_year % len(DEFAULT_CLEANUP_THEMES)]
 
 
 def queue_cleanup_task(
@@ -34,9 +42,9 @@ def queue_cleanup_task(
     note: str = "",
     priority: int = 2,
 ) -> dict[str, Any]:
-    """Queue a review-gated CODIE cleanup work item in Task Hub."""
+    """Queue a review-gated CODIE code-quality work item in Task Hub."""
     task_hub.ensure_schema(conn)
-    chosen_theme = str(theme or "").strip() or DEFAULT_CLEANUP_THEMES[0]
+    chosen_theme = str(theme or "").strip() or _pick_daily_theme()
     task_id = _cleanup_task_id(chosen_theme)
     preference_context = _preference_context(conn, task_type="codie_cleanup_task", topic_tags=["codie", "cleanup", chosen_theme])
     description = _cleanup_task_description(chosen_theme=chosen_theme, note=note, preference_context=preference_context)
@@ -153,13 +161,13 @@ def register_pr_artifact_from_text(
 
 def _cleanup_task_description(*, chosen_theme: str, note: str = "", preference_context: str = "") -> str:
     lines = [
-        "CODIE should proactively improve the Universal Agent repository.",
+        "CODIE should proactively improve code quality in the Universal Agent repository.",
         "",
-        f"Cleanup theme: {chosen_theme}",
+        f"Code quality theme: {chosen_theme}",
         "",
         "Instructions:",
-        "1. Inspect the repository for low-hanging fruit matching this theme: find dead code, identify overcomplicated structures, and simplify them for efficiency.",
-        "2. This is cleanup work only. Do NOT make any breaking code changes.",
+        "1. Inspect `src/universal_agent/` for low-hanging fruit matching this theme. Identify 2-5 concrete improvements — small, safe, and non-breaking.",
+        "2. This is code quality work only. Do NOT make any breaking or behavioral changes.",
         "3. Implement the change on a feature branch targeting develop.",
         "4. Add or update focused tests for the behavior touched.",
         "5. Open a pull request targeting develop for Kevin review (do not open as draft).",
@@ -173,7 +181,8 @@ def _cleanup_task_description(*, chosen_theme: str, note: str = "", preference_c
         "   Simone is CC'd for situational awareness only. No action is needed from her.",
         "   ────────────────────────────────────────────────'",
         "11. The email must contain a natural language summary explaining exactly what was proposed in the PR and why.",
-        "12. If no worthwhile improvement is found, produce a short artifact explaining what was inspected.",
+        "12. If no worthwhile improvement is found, produce a short artifact explaining what was inspected and why no PR was warranted.",
+        "13. Scope each PR to a single coherent improvement area. Do not bundle unrelated changes.",
     ]
     extra = str(note or "").strip()
     if extra:

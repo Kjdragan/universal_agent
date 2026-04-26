@@ -25,11 +25,11 @@ def schedule_codie_nightly():
     )
     
     command = (
-        "Run the CODIE proactive cleanup pipeline. Use the internal Python helper "
-        "`universal_agent.services.proactive_codie.queue_cleanup_task(conn)` to pick a "
-        "low-hanging fruit cleanup theme and dispatch the code cleanup task into the Task Hub. "
+        "Run the CODIE proactive code quality pipeline. Use the internal Python helper "
+        "`universal_agent.services.proactive_codie.queue_cleanup_task(conn)` to pick today's "
+        "code quality theme (auto-rotated daily) and dispatch the task into the Task Hub. "
         "Afterward, actively process the newly queued Task Hub item to inspect the codebase, "
-        "build the required cleanup patches, generate the GitHub PR, and finally, "
+        "implement the improvements, generate the GitHub PR, and finally, "
         "send the email report via AgentMail."
     )
     
@@ -43,7 +43,7 @@ def schedule_codie_nightly():
         delete_after_run=False,
         metadata={
             "project": "Universal Agent Maintenance",
-            "type": "Code Cleanup",
+            "type": "Code Quality",
             "scheduled_by": "Antigravity"
         }
     )

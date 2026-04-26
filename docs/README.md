@@ -149,6 +149,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[Self-Improving Agent Notes (2026-02-13)](03_Run_Reviews/05_Self_Improving_Agent_Notes_2026-02-13.md)**: Agent self-improvement patterns.
 - **[Final Integration Sprint Review (2026-02-14)](03_Run_Reviews/06_Final_Integration_Sprint_Review_2026-02-14.md)**: Integration sprint close.
 - **[Happy Path Review and Markdown Remediation (2026-02-19)](03_Run_Reviews/07_Session_20260218_232750_Happy_Path_Review_and_Markdown_Remediation_2026-02-19.md)**: Happy path validation.
+- **[Gemini Interactions Playground Post-Mortem (2026-04-26)](03_Run_Reviews/08_Session_20260426_052318_Gemini_Interactions_Playground_Post_Mortem.md)**: Post-mortem of CODIE VP silent failure, constraint key mismatch, and ephemeral workspace output during Gemini Interactions API playground build. Includes 7 prioritized recommendations.
 
 ### 8. Tutorial Pipeline
 
