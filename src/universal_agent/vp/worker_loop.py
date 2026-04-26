@@ -13,6 +13,8 @@ from typing import Any, Optional
 
 import sqlite3
 
+from universal_agent.services.dag_governor import DagConcurrencyGovernor
+
 from universal_agent.durable.state import (
     acquire_vp_session_lease,
     append_vp_event,
@@ -310,6 +312,10 @@ class VpWorkerLoop:
             self._upsert_session(status="idle")
             return
 
+        await self._execute_mission_logic(mission, mission_id, source_context)
+
+    async def _execute_mission_logic(self, mission: dict[str, Any], mission_id: str, source_context: dict[str, Any]) -> None:
+        """Internal logic to execute a mission after it has been claimed."""
         heartbeat_vp_mission_claim(
             self.conn,
             mission_id=mission_id,
@@ -321,6 +327,8 @@ class VpWorkerLoop:
         # ── VP identity & mission briefing ────────────────────────────
         self._seed_vp_soul(mission)
         self._write_mission_briefing(mission)
+        
+        workspace_path = await self._provision_workspace(mission)
 
         logger.info(
             "VP mission starting: vp_id=%s soul=%s mission_id=%s mission_type=%s",
@@ -332,20 +340,16 @@ class VpWorkerLoop:
 
         client = self._select_client_for_mission(mission)
 
-        # Fix: run a background heartbeat task that extends the mission claim
-        # lease while client.run_mission() is executing.  Without this, the
-        # lease expires after lease_ttl_seconds and the mission is re-claimed
-        # and restarted by the next _tick(), causing an infinite restart loop.
         heartbeat_stop = asyncio.Event()
 
         async def _heartbeat_mission_claim() -> None:
-            interval = max(5, self.lease_ttl_seconds // 3)  # heartbeat at 1/3 of TTL
+            interval = max(5, self.lease_ttl_seconds // 3)
             while not heartbeat_stop.is_set():
                 try:
                     await asyncio.wait_for(heartbeat_stop.wait(), timeout=interval)
-                    break  # stop event was set
+                    break
                 except asyncio.TimeoutError:
-                    pass  # interval elapsed, heartbeat now
+                    pass
                 try:
                     heartbeat_vp_mission_claim(
                         self.conn,
@@ -354,7 +358,6 @@ class VpWorkerLoop:
                         worker_id=self.worker_id,
                         lease_ttl_seconds=self.lease_ttl_seconds,
                     )
-                    # Also heartbeat the session lease
                     heartbeat_vp_session_lease(
                         self.conn,
                         vp_id=self.vp_id,
@@ -369,11 +372,14 @@ class VpWorkerLoop:
 
         heartbeat_task = asyncio.create_task(_heartbeat_mission_claim())
         try:
-            outcome = await client.run_mission(
-                mission=dict(mission),
-                workspace_root=self.profile.workspace_root,
-            )
+            # Phase 2: ZAI Concurrency Management (Global DAG Execution Limiter)
+            async with DagConcurrencyGovernor.get_instance().acquire_slot():
+                outcome = await client.run_mission(
+                    mission=dict(mission),
+                    workspace_root=workspace_path,
+                )
         finally:
+            await self._teardown_workspace(workspace_path)
             heartbeat_stop.set()
             heartbeat_task.cancel()
             try:
@@ -389,7 +395,6 @@ class VpWorkerLoop:
         else:
             finalize_vp_mission(self.conn, mission_id, "completed", result_ref=outcome.result_ref)
             event_type = "vp.mission.completed"
-            # Post-mission hook: push branch, create PR, merge for doc-maintenance missions
             try:
                 mission_type = (dict(mission)["mission_type"] or "").strip()
             except (KeyError, TypeError):
@@ -547,6 +552,81 @@ class VpWorkerLoop:
             except Exception:
                 pass
         return (self.profile.workspace_root / (mission_id or "mission")).resolve()
+
+    async def _provision_workspace(self, mission: Any) -> Path:
+        """Provision the workspace for the mission.
+        
+        If this is vp.coder.primary and the target path is a git repository,
+        this provisions an ephemeral git worktree for the mission.
+        Otherwise, it returns the standard workspace path.
+        """
+        mission_payload = _parse_mission_payload(mission)
+        constraints = mission_payload.get("constraints", {})
+        if not isinstance(constraints, dict):
+            constraints = {}
+        target_path_str = str(constraints.get("target_path") or "").strip()
+        
+        # Default fallback if not a coder mission or no target path
+        if self.vp_id != "vp.coder.primary" or not target_path_str:
+            ws = self._resolve_mission_workspace(mission)
+            ws.mkdir(parents=True, exist_ok=True)
+            return ws
+
+        target_path = Path(target_path_str).expanduser().resolve()
+        
+        # If the target path doesn't have a .git dir, we can't make a worktree
+        if not (target_path / ".git").exists() and not (target_path.parent / ".git").exists():
+            ws = self._resolve_mission_workspace(mission)
+            ws.mkdir(parents=True, exist_ok=True)
+            return ws
+
+        mission_id = str(mission.get("mission_id") or mission["mission_id"]).replace("/", "_").replace("..", "_")
+        worktree_path = (self.profile.workspace_root / mission_id).resolve()
+        branch_name = f"vp-task-{mission_id[:8]}"
+
+        # Create worktree
+        logger.info("Provisioning git worktree at %s (branch: %s)", worktree_path, branch_name)
+        result = subprocess.run(
+            ["git", "worktree", "add", str(worktree_path), "-b", branch_name],
+            cwd=str(target_path),
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode != 0:
+            # If the branch already exists or some other failure, try to just add without -b
+            if "already exists" in result.stderr:
+                result = subprocess.run(
+                    ["git", "worktree", "add", str(worktree_path), branch_name],
+                    cwd=str(target_path),
+                    capture_output=True,
+                    text=True
+                )
+            if result.returncode != 0:
+                logger.warning("Failed to provision git worktree: %s", result.stderr.strip())
+                worktree_path.mkdir(parents=True, exist_ok=True)
+                
+        return worktree_path
+
+    async def _teardown_workspace(self, workspace_path: Path) -> None:
+        """Tear down the workspace if it is an ephemeral git worktree."""
+        if self.vp_id != "vp.coder.primary":
+            return
+            
+        # A git worktree has a .git file (not directory) pointing to the main repo
+        git_marker = workspace_path / ".git"
+        if not git_marker.exists() or not git_marker.is_file():
+            return
+            
+        logger.info("Tearing down git worktree at %s", workspace_path)
+        result = subprocess.run(
+            ["git", "worktree", "remove", "--force", str(workspace_path)],
+            cwd=str(workspace_path.parent),
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            logger.warning("Failed to teardown git worktree: %s", result.stderr.strip())
 
     def _select_client_for_mission(self, mission: Any) -> VpClient:
         """Select SDK or CLI client based on mission payload's execution_mode."""
