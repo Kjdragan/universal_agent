@@ -3,17 +3,12 @@
 from __future__ import annotations
 
 import sqlite3
-from pathlib import Path
 
 import pytest
 
 from universal_agent.services.agent_router import (
     AGENT_SIMONE,
-    AGENT_CODER,
-    AGENT_GENERAL,
     route_all_to_simone,
-    route_claimed_tasks,
-    route_claimed_tasks_llm,
 )
 from universal_agent.vp.coder_runtime import CoderVPRuntime
 
@@ -45,29 +40,6 @@ def test_route_all_to_simone():
         assert task["_routing"]["agent_id"] == AGENT_SIMONE
         assert task["_routing"]["should_delegate"] is False
         assert task["_routing"]["confidence"] == "orchestrator"
-
-
-def test_route_claimed_tasks_alias():
-    """The legacy alias should behave identically to route_all_to_simone."""
-    tasks = [_task(title="Fix auth bug")]
-    buckets = route_claimed_tasks(tasks, available_agents={AGENT_CODER, AGENT_GENERAL})
-
-    assert AGENT_SIMONE in buckets
-    assert len(buckets) == 1
-    assert len(buckets[AGENT_SIMONE]) == 1
-    assert tasks[0]["_routing"]["agent_id"] == AGENT_SIMONE
-
-
-@pytest.mark.asyncio
-async def test_route_claimed_tasks_llm_alias():
-    """The legacy async LLM alias should also route everything to Simone."""
-    tasks = [_task(title="Deep research")]
-    buckets = await route_claimed_tasks_llm(tasks)
-
-    assert AGENT_SIMONE in buckets
-    assert len(buckets) == 1
-    assert len(buckets[AGENT_SIMONE]) == 1
-    assert tasks[0]["_routing"]["agent_id"] == AGENT_SIMONE
 
 
 # ---------------------------------------------------------------------------
