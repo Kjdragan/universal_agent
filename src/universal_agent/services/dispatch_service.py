@@ -43,8 +43,8 @@ def _enrich_with_routing(claimed: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not claimed:
         return claimed
     try:
-        from universal_agent.services.agent_router import route_claimed_tasks
-        route_claimed_tasks(claimed)
+        from universal_agent.services.agent_router import route_all_to_simone
+        route_all_to_simone(claimed)
     except Exception as exc:
         log.debug("Agent routing enrichment unavailable: %s", exc)
     return claimed
