@@ -174,6 +174,60 @@ Returns: `{ ok, result_ref, workspace_root, files_indexed, files_total, artifact
 
 ---
 
+## Constraint Keys Reference
+
+When dispatching missions with `constraints`, use ONLY the documented keys below.
+Unrecognized keys are logged as warnings and **silently ignored** by the VP worker.
+
+### Path Constraints (where the VP works)
+
+| Key | Use |
+|-----|-----|
+| `target_path` | **CANONICAL** — always prefer this key for specifying where CODIE should work |
+| `path` | Alias for `target_path` |
+| `repo_path` | Alias — use when referencing an existing git repository |
+| `workspace_dir` | Alias — use when referencing a workspace directory |
+| `project_path` | Alias — use when referencing a project root |
+
+> **CAUTION:** Keys like `output_path`, `working_directory`, `dest_path` are now accepted
+> as aliases but are **not standard**. Always prefer `target_path` as the canonical key.
+
+### Task Constraints
+
+| Key | Type | Notes |
+|-----|------|-------|
+| `tech_stack` | string | Hint for technology choices |
+| `max_duration_minutes` | int | Soft timeout hint |
+| `required_env_var` | string | Environment variable the task needs |
+| `max_tokens` | int | Token budget hint |
+| `repo_mutation_allowed` | bool | Enable mutations in approved codebase paths |
+
+---
+
+## New Project Scaffolding
+
+When creating a new standalone repository or project, the mission objective MUST include:
+
+1. A `target_path` constraint pointing to the desired project directory (e.g., `/home/kjdragan/lrepos/my-new-project`)
+2. Instructions to initialize with `git init` and create a proper `pyproject.toml`
+3. Instructions to use `uv` for dependency management (not pip)
+4. Instructions to use Infisical for secrets (not `.env` files or `os.environ.get()`)
+
+Example dispatch for new project creation:
+
+```json
+{
+  "vp_id": "vp.coder.primary",
+  "objective": "Create a new Python project at the target path with...",
+  "constraints": {
+    "target_path": "/home/kjdragan/lrepos/my-new-project",
+    "tech_stack": "Python with google-genai SDK"
+  }
+}
+```
+
+---
+
 ## CODIE Guardrails
 
 - Do **not** target UA internal repository or runtime paths for CODIE (coder VP) missions.

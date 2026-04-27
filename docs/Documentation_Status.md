@@ -149,6 +149,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 06 | Final Integration Sprint Review (2026-02-14) |
 | 07 | Happy Path Review and Markdown Remediation (2026-02-19) |
 | 08 | Gemini Interactions Playground Post-Mortem (2026-04-26) — CODIE VP silent failure, constraint key mismatch, ephemeral workspace output; 9 classified errors, 7 prioritized recommendations |
+| 09 | Gemini Interactions Demo Run Analysis (2026-04-26) — second-attempt constraint key mismatch (`working_directory` not recognized), glm-5.1 model verified, CODIE completed in ephemeral workspace; 6 prioritized fixes, cross-attempt comparison |
 
 
 
