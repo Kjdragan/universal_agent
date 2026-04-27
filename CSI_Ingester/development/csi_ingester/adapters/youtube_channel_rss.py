@@ -59,6 +59,7 @@ class YouTubeChannelRSSAdapter(SourceAdapter):
     async def fetch_events(self) -> list[RawEvent]:
         watchlist = self._resolve_watchlist()
         timeout_seconds = max(5, int(self.config.get("timeout_seconds", 20)))
+        max_concurrency = max(1, int(self.config.get("max_concurrency", 20)))
         events: list[RawEvent] = []
         # Route through residential proxy when configured to avoid VPS IP blocks.
         # Set CSI_RSS_PROXY_URL=http://user:pass@host:port in csi-ingester.env
@@ -68,51 +69,70 @@ class YouTubeChannelRSSAdapter(SourceAdapter):
         client_kwargs: dict[str, Any] = {"timeout": timeout_seconds}
         if proxy_url:
             client_kwargs["proxy"] = proxy_url
-        async with httpx.AsyncClient(**client_kwargs) as client:
-            for item in watchlist:
-                channel_id = str(item.get("channel_id") or "").strip()
-                channel_name = str(item.get("channel_name") or "").strip()
-                if not channel_id:
-                    continue
-                self._hydrate_channel_state(channel_id)
+
+        sem = asyncio.Semaphore(max_concurrency)
+        failures = 0
+        total = len(watchlist)
+
+        async def _fetch_one(item: dict[str, str]) -> tuple[str, str, list[dict[str, Any]]]:
+            channel_id = str(item.get("channel_id") or "").strip()
+            channel_name = str(item.get("channel_name") or "").strip()
+            if not channel_id:
+                return ("", "", [])
+            self._hydrate_channel_state(channel_id)
+            async with sem:
                 try:
                     entries = await self._fetch_channel_entries(client, channel_id=channel_id)
                 except Exception as exc:
-                    logger.warning(
-                        "RSS fetch channel failed channel_id=%s error=%s",
-                        channel_id,
-                        exc,
-                    )
-                    self._persist_channel_state(channel_id)
-                    continue
-                if not entries:
-                    self._persist_channel_state(channel_id)
-                    continue
-                if channel_name:
-                    for entry in entries:
-                        entry.setdefault("channel_name", channel_name)
-                seen = self._seen_by_channel.setdefault(channel_id, set())
-                current_ids = [entry["video_id"] for entry in entries if entry.get("video_id")]
-                seeded = self._seeded_by_channel.get(channel_id, False)
-                if not seen and self._seed_on_first_run and not seeded:
-                    seen.update(current_ids)
-                    self._seeded_by_channel[channel_id] = True
-                    self._persist_channel_state(channel_id)
-                    continue
-                new_entries = [entry for entry in entries if entry.get("video_id") and entry["video_id"] not in seen]
-                for entry in reversed(new_entries):
-                    events.append(
-                        RawEvent(
-                            source="youtube_channel_rss",
-                            event_type="channel_new_upload",
-                            payload=entry,
-                            occurred_at=str(entry.get("occurred_at") or _iso_now()),
-                        )
-                    )
-                    seen.add(entry["video_id"])
-                self._seeded_by_channel[channel_id] = True
-                self._seen_by_channel[channel_id] = set(current_ids[: self._max_seen_cache])
+                    logger.warning("RSS fetch channel failed channel_id=%s error=%s", channel_id, exc)
+                    return (channel_id, channel_name, [])
+            return (channel_id, channel_name, entries)
+
+        async with httpx.AsyncClient(**client_kwargs) as client:
+            tasks = [_fetch_one(item) for item in watchlist]
+            results = await asyncio.gather(*tasks)
+
+        for channel_id, channel_name, entries in results:
+            if not channel_id:
+                continue
+            if not entries:
                 self._persist_channel_state(channel_id)
+                failures += 1
+                # Early-exit circuit breaker: abort cycle if >50% channels fail
+                if total > 4 and failures / total > 0.5:
+                    logger.error(
+                        "RSS circuit breaker: %.0f%% failures (%d/%d), aborting cycle",
+                        failures / total * 100,
+                        failures,
+                        total,
+                    )
+                    return events
+                continue
+            if channel_name:
+                for entry in entries:
+                    entry.setdefault("channel_name", channel_name)
+            seen = self._seen_by_channel.setdefault(channel_id, set())
+            current_ids = [entry["video_id"] for entry in entries if entry.get("video_id")]
+            seeded = self._seeded_by_channel.get(channel_id, False)
+            if not seen and self._seed_on_first_run and not seeded:
+                seen.update(current_ids)
+                self._seeded_by_channel[channel_id] = True
+                self._persist_channel_state(channel_id)
+                continue
+            new_entries = [entry for entry in entries if entry.get("video_id") and entry["video_id"] not in seen]
+            for entry in reversed(new_entries):
+                events.append(
+                    RawEvent(
+                        source="youtube_channel_rss",
+                        event_type="channel_new_upload",
+                        payload=entry,
+                        occurred_at=str(entry.get("occurred_at") or _iso_now()),
+                    )
+                )
+                seen.add(entry["video_id"])
+            self._seeded_by_channel[channel_id] = True
+            self._seen_by_channel[channel_id] = set(current_ids[: self._max_seen_cache])
+            self._persist_channel_state(channel_id)
         return events
 
     def _resolve_watchlist(self) -> list[dict[str, str]]:
