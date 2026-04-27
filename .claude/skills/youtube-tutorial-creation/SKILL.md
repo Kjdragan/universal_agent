@@ -182,53 +182,46 @@ Carry key fields from `youtube_ingest.json` into:
 The video description often contains links to source code repositories, datasets, competition pages,
 and documentation that are **essential context** for building high-quality tutorials.
 
-1. Read `metadata.description` from `youtube_ingest.json`
-2. If the description is non-empty, extract all URLs using regex or url-parsing
-3. Classify each URL into one of these categories:
-   - `github_repo` — GitHub/GitLab repository links
-   - `kaggle_competition` or `kaggle_dataset` — Kaggle competition or dataset pages
-   - `documentation` — Official documentation links (readthedocs, docs sites)
-   - `dataset` — Data download links (CSV, Hugging Face, etc.)
-   - `social` — Social media, promotional, or affiliate links (discard)
-   - `other` — Unclassified but potentially useful
-4. For high-value links (github_repo, kaggle_*, documentation, dataset), fetch their content:
+Run the automated link extraction script:
+
+```bash
+UV_CACHE_DIR=/tmp/uv_cache uv run \
+  .claude/skills/youtube-tutorial-creation/scripts/extract_description_links.py \
+  --ingest-json "$CURRENT_RUN_WORKSPACE/downloads/youtube_ingest.json" \
+  --output-dir "$CURRENT_RUN_WORKSPACE/work_products/description_resources" \
+  --report-json "$CURRENT_RUN_WORKSPACE/work_products/description_links_report.json" \
+  --max-links 5 --timeout 10
+```
+
+The script automatically:
+1. Reads `metadata.description` from `youtube_ingest.json`
+2. Extracts and classifies all URLs into categories:
+   - `github_repo` — GitHub/GitLab repository links (fetches README + file tree)
+   - `kaggle_competition` / `kaggle_dataset` — Kaggle pages (fetches overview content)
+   - `documentation` — Official docs (extracts clean markdown)
+   - `dataset` — Data sources like Hugging Face (records URL)
+   - `social` — Social media / promo links (automatically filtered out)
+3. Fetches content for high-value links using **direct connections** (no proxy)
+4. Saves resources to `work_products/description_resources/`
+5. Writes a structured report to `description_links_report.json`
 
 > [!IMPORTANT]
-> **Proxy rule:** Fetch external description links using **direct connections only**.
+> **Proxy rule:** The script fetches external links using **direct connections only**.
 > Do NOT route these through the Webshare residential proxy.
 > The proxy is ONLY for YouTube API calls (transcript + yt-dlp metadata).
 
-   - **GitHub repos:** Fetch README.md and file tree (do not clone entire repo)
-   - **Kaggle:** Fetch competition description and dataset info page
-   - **Documentation:** Use `defuddle` or `read_url_content` for clean markdown extraction
-   - **Datasets:** Note the download URL; do not download large files
-5. Save fetched content to `$CURRENT_RUN_WORKSPACE/work_products/description_resources/`
-6. Record each link and its fetch status in the manifest:
+After the script runs, read `description_links_report.json` and:
+1. Copy the `links` array into `manifest.json` as `description_links`
+2. Read any successfully fetched resources from `work_products/description_resources/`
+3. Use these as **supplementary context** during synthesis (Step 5):
+   - GitHub READMEs provide project structure and setup instructions
+   - Kaggle pages provide problem definitions and evaluation criteria
+   - Documentation provides API references and usage patterns
 
-```json
-{
-  "description_links": [
-    {
-      "url": "https://github.com/user/repo",
-      "type": "github_repo",
-      "fetched": true,
-      "resource_path": "work_products/description_resources/repo_readme.md"
-    },
-    {
-      "url": "https://www.kaggle.com/competitions/...",
-      "type": "kaggle_competition",
-      "fetched": true,
-      "resource_path": "work_products/description_resources/kaggle_page.md"
-    }
-  ]
-}
-```
-
-7. Use fetched resources as supplementary context during CONCEPT.md and IMPLEMENTATION.md synthesis (Step 5)
-8. Cap at **5 high-value links** to avoid excessive fetching
-9. Set a **10-second timeout** per link fetch; record failures rather than blocking the pipeline
+If the script reports `status: skipped_no_description`, skip to Step 4.
 
 **If description is empty or contains no useful links:** Skip this step and continue to Step 4.
+
 
 ### Step 4 — Visual analysis (best-effort)
 
