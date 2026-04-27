@@ -122,6 +122,20 @@ The base systemd units for deployed application services are part of the reposit
 - Production deploy renders the canonical units for `universal-agent-gateway`, `universal-agent-api`, `universal-agent-webui`, `universal-agent-telegram`, Discord services, and the VP worker template against the active checkout path (`/opt/universal_agent` or fallback `/opt/universal_agent_repo`).
 - This prevents host-local systemd drift from silently pinning a service to an old checkout, stale working directory, or missing `EnvironmentFile`.
 - The managed Python service units pin `PYDANTIC_DISABLE_PLUGINS=logfire-plugin` so Logfire's optional Pydantic plugin cannot auto-load during startup and turn observability into a hard startup dependency.
+
+### Gateway Resource Limits (updated 2026-04-27)
+
+The gateway service template includes cgroup-enforced resource limits to prevent runaway memory consumption and fork bombs:
+
+| Limit | Value | Purpose |
+|-------|-------|---------|
+| `MemoryMax` | **8G** | Hard cgroup limit — systemd kills the cgroup if exceeded |
+| `MemoryHigh` | **6G** | Soft limit — triggers kernel memory reclaim/swap pressure |
+| `TasksMax` | **500** | Caps total process count within the cgroup |
+| `OOMPolicy` | `continue` | Gateway survives OOM kills of child processes |
+
+These limits live in both `deployment/systemd/templates/universal-agent-gateway.service.template` (canonical) and the VPS override at `/etc/systemd/system/universal-agent-gateway.service.d/override.conf`.
+
 - Runtime availability and tracing integrity are now separate concerns by design:
   - package bootstrap keeps services fail-open if Logfire import breaks at runtime
   - deploy preflight still blocks a new release unless the target `.venv` can import real OpenTelemetry + Logfire successfully

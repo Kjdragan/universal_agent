@@ -885,6 +885,7 @@ is advisory, never blocks heartbeat execution.
 | [`claude_code_intel_sync.py`](../../src/universal_agent/scripts/claude_code_intel_sync.py) | Twice-daily Claude Code X intelligence poller — runs through Chron, uses `X_BEARER_TOKEN`, and produces durable packets under `<UA_ARTIFACTS_DIR>/proactive/claude_code_intel/` |
 | [`claude_code_intel_replay_packet.py`](../../src/universal_agent/scripts/claude_code_intel_replay_packet.py) | Replay/backfill entry point — reprocesses an existing Claude Code Intel packet into the external vault, candidate ledger, and optional Task Hub reconciliation |
 | [`schedule_nightly_wiki.py`](../../src/universal_agent/scripts/schedule_nightly_wiki.py) | One-time setup script that registers the nightly wiki and morning briefing cron jobs via CronService |
+| [`proactive_digest_agent.py`](../../src/universal_agent/scripts/proactive_digest_agent.py) | Daily proactive artifact digest — auto-surfaces unseen CODIE PRs, tutorial builds, and convergence insights via email (cron: 08:00 CST) |
 
 ### Dashboard / API Files
 
@@ -924,7 +925,7 @@ is advisory, never blocks heartbeat execution.
 
 ## 16. All Proactive Entry Points
 
-The system has **13 distinct ways** that tasks reach agents for proactive execution.
+The system has **14 distinct ways** that tasks reach agents for proactive execution.
 These are central to understanding how the system operates autonomously.
 
 ```mermaid
@@ -986,6 +987,7 @@ flowchart TD
 | 11 | **Priority Classifier** | Deterministic Python gate | N/A (inline) | `priority_classifier.py` |
 | 12 | **Nightly Wiki Creation** | Cron (03:15 CST daily) | Once per night | `scripts/nightly_wiki_agent.py` |
 | 13 | **Morning Briefing** | Cron (06:30 CST daily) | Once per morning | `scripts/briefings_agent.py` |
+| 14 | **Proactive Artifact Digest** | Cron (08:00 CST daily) | Once per morning | `scripts/proactive_digest_agent.py` |
 
 > [!NOTE]
 > **Setup Scripts:** `scripts/schedule_nightly_wiki.py` is a manual (one-time setup) script for Cron Job Registration, rather than an active agent execution entry point.
