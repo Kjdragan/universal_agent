@@ -29,6 +29,9 @@ from universal_agent.guardrails.workspace_guard import (
 from universal_agent.codebase_policy import is_approved_codebase_path, repo_mutation_requested
 from universal_agent.vp.profiles import VpProfile, get_vp_profile
 
+import logging
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_DISPATCH_MAX_ATTEMPTS = 4
 DEFAULT_DISPATCH_INITIAL_BACKOFF_SECONDS = 0.05
@@ -235,6 +238,7 @@ def _validate_dispatch_constraints(
     # Only guard coder VP or CLI-mode missions
     if not is_coder and not is_cli_mode:
         return
+    _warn_unknown_constraint_keys(constraints)
     if not vp_hard_block_ua_repo(default=True):
         return
 
@@ -271,7 +275,8 @@ def _validate_dispatch_constraints(
 
 
 def _extract_target_paths(constraints: dict[str, Any]) -> list[str]:
-    keys = ("target_path", "path", "repo_path", "workspace_dir", "project_path")
+    keys = ("target_path", "path", "repo_path", "workspace_dir", "project_path",
+            "output_path", "working_directory", "dest_path", "destination")
     values: list[str] = []
     for key in keys:
         value = constraints.get(key)
@@ -283,3 +288,24 @@ def _extract_target_paths(constraints: dict[str, Any]) -> list[str]:
             if isinstance(value, str) and value.strip():
                 values.append(value.strip())
     return values
+
+
+_KNOWN_CONSTRAINT_KEYS = frozenset({
+    "target_path", "path", "repo_path", "workspace_dir", "project_path",
+    "output_path", "working_directory", "dest_path", "destination",
+    "targets", "tech_stack", "max_duration_minutes", "required_env_var",
+    "max_tokens", "repo_mutation_allowed", "workflow_kind", "mission_type",
+    "dag_definition", "dag_definition_path",
+})
+
+
+def _warn_unknown_constraint_keys(constraints: dict[str, Any]) -> None:
+    """Log a warning if unrecognized constraint keys are present."""
+    unknown = set(constraints.keys()) - _KNOWN_CONSTRAINT_KEYS
+    if unknown:
+        logger.warning(
+            "VP dispatch contains unrecognized constraint keys: %s — "
+            "path-related keys may be silently ignored. "
+            "Known path keys: target_path, path, repo_path, workspace_dir, project_path",
+            unknown,
+        )

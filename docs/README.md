@@ -150,6 +150,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[Final Integration Sprint Review (2026-02-14)](03_Run_Reviews/06_Final_Integration_Sprint_Review_2026-02-14.md)**: Integration sprint close.
 - **[Happy Path Review and Markdown Remediation (2026-02-19)](03_Run_Reviews/07_Session_20260218_232750_Happy_Path_Review_and_Markdown_Remediation_2026-02-19.md)**: Happy path validation.
 - **[Gemini Interactions Playground Post-Mortem (2026-04-26)](03_Run_Reviews/08_Session_20260426_052318_Gemini_Interactions_Playground_Post_Mortem.md)**: Post-mortem of CODIE VP silent failure, constraint key mismatch, and ephemeral workspace output during Gemini Interactions API playground build. Includes 7 prioritized recommendations.
+- **[Gemini Interactions Demo Run Analysis (2026-04-26)](03_Run_Reviews/09_Session_20260426_201515_Gemini_Interactions_Demo_Run_Analysis.md)**: Second-attempt analysis — CODIE completed but output landed in ephemeral VP workspace due to `working_directory` constraint key mismatch. Confirms glm-5.1 model usage, compares both attempts, provides 6 prioritized fixes.
 
 ### 8. Tutorial Pipeline
 

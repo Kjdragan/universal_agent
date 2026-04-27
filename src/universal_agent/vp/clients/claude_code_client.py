@@ -75,6 +75,21 @@ class ClaudeCodeClient(VpClient):
                 message=error_text,
                 payload={"trace_id": trace_id, "final_text": final_text},
             )
+
+        # Detect zero-output missions (startup crash / silent failure)
+        if not final_text.strip():
+            import logging
+            logging.getLogger(__name__).warning(
+                "VP mission %s produced no output — marking as failed (possible startup crash)",
+                str(mission.get("mission_id") or ""),
+            )
+            return MissionOutcome(
+                status="failed",
+                result_ref=f"workspace://{workspace_dir}",
+                message="Mission produced no output (possible startup crash or adapter failure)",
+                payload={"trace_id": trace_id, "zero_output": True},
+            )
+
         return MissionOutcome(
             status="completed",
             result_ref=f"workspace://{workspace_dir}",
@@ -95,13 +110,30 @@ def _payload(payload_json: Any) -> dict[str, Any]:
     return {}
 
 
+# Path constraint key aliases — matches dispatcher._extract_target_paths vocabulary
+# plus common natural-language variations that Simone may generate.
+_PATH_CONSTRAINT_KEYS = (
+    "target_path", "path", "repo_path", "workspace_dir", "project_path",
+    "output_path", "working_directory", "dest_path", "destination",
+)
+
+
+def _extract_first_target_path(constraints: dict[str, Any]) -> str:
+    """Extract the first non-empty path from recognized constraint keys."""
+    for key in _PATH_CONSTRAINT_KEYS:
+        value = str(constraints.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
 def _resolve_workspace_dir(
     *,
     mission_id: str,
     workspace_root: Path,
     constraints: dict[str, Any],
 ) -> Path:
-    target_path = str(constraints.get("target_path") or "").strip()
+    target_path = _extract_first_target_path(constraints)
     if target_path:
         resolved = Path(target_path).expanduser().resolve()
         _enforce_coder_target_guardrails(resolved, constraints=constraints)

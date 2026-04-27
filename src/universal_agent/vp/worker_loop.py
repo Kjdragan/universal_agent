@@ -39,6 +39,22 @@ from universal_agent.vp.profiles import get_vp_profile
 
 logger = logging.getLogger(__name__)
 
+# Path constraint key aliases — must stay in sync with
+# claude_code_client._PATH_CONSTRAINT_KEYS and dispatcher._extract_target_paths.
+_PATH_CONSTRAINT_KEYS = (
+    "target_path", "path", "repo_path", "workspace_dir", "project_path",
+    "output_path", "working_directory", "dest_path", "destination",
+)
+
+
+def _extract_first_target_path(constraints: dict[str, Any]) -> str:
+    """Extract the first non-empty path from recognized constraint keys."""
+    for key in _PATH_CONSTRAINT_KEYS:
+        value = str(constraints.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
 # ── GitHub repo for doc-maintenance PRs ──────────────────────────────────────
 _GH_REPO = os.getenv("UA_GH_REPO", "Kjdragan/universal_agent")
 
@@ -546,7 +562,7 @@ class VpWorkerLoop:
                 payload = json.loads(payload_json)
                 constraints = payload.get("constraints") if isinstance(payload, dict) else {}
                 if isinstance(constraints, dict):
-                    target_path = str(constraints.get("target_path") or "").strip()
+                    target_path = _extract_first_target_path(constraints)
                     if target_path:
                         return Path(target_path).expanduser().resolve()
             except Exception:
@@ -564,7 +580,7 @@ class VpWorkerLoop:
         constraints = mission_payload.get("constraints", {})
         if not isinstance(constraints, dict):
             constraints = {}
-        target_path_str = str(constraints.get("target_path") or "").strip()
+        target_path_str = _extract_first_target_path(constraints)
         
         # Default fallback if not a coder mission or no target path
         if self.vp_id != "vp.coder.primary" or not target_path_str:
