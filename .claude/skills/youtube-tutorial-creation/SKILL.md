@@ -283,9 +283,85 @@ Write each artifact to the run directory. Quality bar for each:
 - Troubleshooting section for likely failure modes
 - References to `implementation/` scripts
 
-**`implementation/`** — runnable code (only when `learning_mode=concept_plus_implementation`)
+**`implementation/`** — runnable, production-ready project (only when `learning_mode=concept_plus_implementation`)
 
-- Use uv inline scripting (PEP 723) for all Python scripts (see Step 8)
+The `implementation/` directory should be a **fully set up, ready-to-run repository** — not just loose scripts.
+The user should be able to `cd implementation/ && uv sync && uv run main.py` immediately.
+
+Required structure:
+
+```
+implementation/
+├── pyproject.toml          # UV-managed deps (see Step 8)
+├── README.md               # Project-specific usage instructions
+├── main.py                 # Primary entry point (or appropriate name)
+├── load_env.py             # Infisical/env helper (see below)
+├── .env.example            # Template for bootstrap credentials only
+├── docs/                   # Documentation skeleton
+│   ├── README.md           # Thematic index
+│   └── Documentation_Status.md  # Status tracker
+└── <additional source files as needed>
+```
+
+#### Environment & Dependency Setup (MANDATORY)
+
+1. **`pyproject.toml`** — Declare all dependencies via UV:
+   ```toml
+   [project]
+   name = "<project-name>"
+   version = "0.1.0"
+   requires-python = ">=3.11"
+   dependencies = ["google-genai>=1.0.0"]
+   ```
+   The agent must run `uv sync` after creating the project to ensure the `.venv` is ready.
+
+2. **`load_env.py`** — Infisical-first secret loading helper:
+   ```python
+   import os
+   def load_env():
+       """Load secrets from Infisical, falling back to os.environ."""
+       try:
+           from infisical_sdk import InfisicalClient
+           client = InfisicalClient()
+           secret = client.get_secret("GEMINI_API_KEY")
+           if secret and secret.secret_value:
+               os.environ["GEMINI_API_KEY"] = secret.secret_value
+               return
+       except Exception:
+           pass
+       if "GEMINI_API_KEY" not in os.environ:
+           print("Warning: GEMINI_API_KEY not found. Use: infisical run -- uv run main.py")
+   ```
+
+3. **`.env.example`** — Bootstrap template only (NOT secrets):
+   ```bash
+   # Infisical bootstrap (fill in for production/VPS deployment)
+   INFISICAL_CLIENT_ID=""
+   INFISICAL_CLIENT_SECRET=""
+   INFISICAL_PROJECT_ID="9970e5b7-d48a-4ed8-a8af-43e923e67572"
+   INFISICAL_ENVIRONMENT="production"
+   ```
+
+4. **`docs/`** — Seed the documentation skeleton per `references/documentation_pattern.md`:
+   - `docs/README.md` (thematic index)
+   - `docs/Documentation_Status.md` (status tracker)
+   - Include copies of `references/infisical_integration.md` and `references/vps_setup_guide.md`
+     inside `docs/` so the project is self-contained for VPS deployment.
+
+5. **Running instructions in `README.md`**:
+   ```markdown
+   ## Quick Start
+   ```bash
+   uv sync                           # Install dependencies
+   infisical run -- uv run main.py   # Run with secrets injected
+   ```
+
+   ## VPS Deployment
+   See `docs/vps_setup_guide.md` for systemd service setup.
+   ```
+
+#### Code Quality
+- Use uv inline scripting (PEP 723) for standalone scripts (see Step 8)
 - Add comments with provenance (timestamp reference or visual extraction source)
 - Store raw OCR code extractions with confidence headers in `visuals/code-extractions/`
 
@@ -365,3 +441,6 @@ Read these when you need deeper detail:
 | `references/output_contract.md` | Full manifest schema, required vs optional files, status/mode values |
 | `references/ingestion_and_tooling.md` | Tool selection decision matrix, runtime strategy |
 | `references/composio_wiring_checklist.md` | Composio + webhook ingress validation |
+| `references/infisical_integration.md` | **NEW** — Secrets management patterns, `load_env.py` helper, CLI usage |
+| `references/vps_setup_guide.md` | **NEW** — VPS specs, systemd setup, Nginx, ports, CI/CD deploy pattern |
+| `references/documentation_pattern.md` | **NEW** — Dual-index doc system, agent documentation rules |
