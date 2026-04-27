@@ -405,7 +405,7 @@ async def _vp_list_missions_impl(args: dict[str, Any]) -> dict[str, Any]:
 
 @tool(
     name="vp_wait_mission",
-    description="Wait for mission terminal state with bounded timeout/polling.",
+    description="Wait for mission terminal state with bounded timeout/polling. For code_generation missions, use timeout_seconds=1200 or higher (default 1200, max 3600). Short timeouts risk missing completion of complex coding tasks.",
     input_schema={"mission_id": str, "timeout_seconds": int, "poll_seconds": int},
 )
 async def vp_wait_mission_wrapper(args: dict[str, Any]) -> dict[str, Any]:
@@ -417,7 +417,7 @@ async def _vp_wait_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
     if not mission_id:
         return _result(_error_payload("validation_error", "mission_id is required"))
 
-    timeout_seconds = max(1, min(int(args.get("timeout_seconds") or 300), 3600))
+    timeout_seconds = max(1, min(int(args.get("timeout_seconds") or 1200), 3600))
     poll_seconds = max(1, min(int(args.get("poll_seconds") or 3), 30))
     started = time.monotonic()
 
