@@ -124,13 +124,17 @@ type Rolling = {
   bundles?: Bundle[];
 };
 
+type HandleState = {
+  handle?: string;
+  last_seen_post_id?: string;
+  last_success_at?: string;
+  seen_post_count?: number;
+};
+
 type Payload = {
   status: string;
-  state?: {
-    handle?: string;
-    last_seen_post_id?: string;
-    last_success_at?: string;
-    seen_post_count?: number;
+  state?: HandleState & {
+    handles?: HandleState[];
   };
   latest_packet?: Packet | null;
   packets?: Packet[];
@@ -291,6 +295,28 @@ export default function DashboardClaudeCodeIntelPage() {
   const latestPacket = payload?.latest_packet || null;
   const latestGeneratedAt = asText(latestPacket?.generated_at);
   const lastSuccessAt = asText(payload?.state?.last_success_at);
+  const handleStates = payload?.state?.handles ?? [];
+
+  // Determine the most recent poll across all handles
+  const mostRecentPoll = useMemo(() => {
+    if (!handleStates.length) return lastSuccessAt;
+    const dates = handleStates
+      .map((h) => asText(h.last_success_at))
+      .filter(Boolean)
+      .sort()
+      .reverse();
+    return dates[0] || lastSuccessAt;
+  }, [handleStates, lastSuccessAt]);
+
+  // Pipeline health: stale if last poll was >26 hours ago
+  const pipelineHealth = useMemo(() => {
+    if (!mostRecentPoll) return "unknown" as const;
+    const pollDate = new Date(mostRecentPoll);
+    const hoursAgo = (Date.now() - pollDate.getTime()) / (1000 * 60 * 60);
+    if (hoursAgo < 26) return "healthy" as const;
+    if (hoursAgo < 72) return "stale" as const;
+    return "offline" as const;
+  }, [mostRecentPoll]);
 
   return (
     <div className="h-full overflow-auto bg-background text-foreground">
@@ -418,10 +444,16 @@ export default function DashboardClaudeCodeIntelPage() {
 
           <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <MetricCard
-              label="Latest Packet"
+              label="Last Polled"
+              value={mostRecentPoll ? formatDateTimeTz(mostRecentPoll, { placeholder: "--" }) : "--"}
+              accent={pipelineHealth === "healthy" ? "text-emerald-300" : pipelineHealth === "stale" ? "text-amber-300" : "text-red-300"}
+              hint={pipelineHealth === "healthy" ? "✅ Pipeline active" : pipelineHealth === "stale" ? "⚠ Pipeline may be stale" : "❌ Pipeline offline"}
+            />
+            <MetricCard
+              label="Last Content"
               value={latestGeneratedAt ? formatDateTimeTz(latestGeneratedAt, { placeholder: "--" }) : "--"}
               accent="text-cyan-300"
-              hint="Most recent ClaudeDevs packet"
+              hint="Most recent packet with new posts"
             />
             <MetricCard
               label="Rolling Brief"
@@ -430,18 +462,37 @@ export default function DashboardClaudeCodeIntelPage() {
               hint={`${rolling?.synthesis_method === "llm" ? "✦ LLM synthesis" : rolling?.synthesis_method === "fallback" ? "⚠ Fallback templates" : "Current rolling 14-day synthesis"}`}
             />
             <MetricCard
-              label="Actions / Tasks"
-              value={`${asNumber(latestPacket?.action_count)} / ${asNumber(latestPacket?.queued_task_count)}`}
-              accent="text-amber-300"
-              hint="Latest packet action count and queued task count"
-            />
-            <MetricCard
               label="Bundles / Vault"
               value={`${bundles.length} / ${knowledgePages.length}`}
               accent="text-emerald-300"
-              hint={`Checkpoint: ${lastSuccessAt ? formatDateTimeTz(lastSuccessAt, { placeholder: "--" }) : "--"}`}
+              hint={`${handleStates.length} handles tracked · ${asNumber(payload?.state?.seen_post_count)} total seen`}
             />
           </div>
+
+          {/* Per-handle poll status */}
+          {handleStates.length > 0 && (
+            <div className="mt-4 flex flex-wrap gap-3">
+              {handleStates.map((hs) => {
+                const pollTime = asText(hs.last_success_at);
+                const hoursAgo = pollTime ? (Date.now() - new Date(pollTime).getTime()) / (1000 * 60 * 60) : Infinity;
+                const statusColor = hoursAgo < 26 ? "border-emerald-400/30 text-emerald-200" : hoursAgo < 72 ? "border-amber-400/30 text-amber-200" : "border-red-400/30 text-red-200";
+                const statusDot = hoursAgo < 26 ? "bg-emerald-400" : hoursAgo < 72 ? "bg-amber-400" : "bg-red-400";
+                return (
+                  <div
+                    key={asText(hs.handle)}
+                    className={`flex items-center gap-2 rounded-full border ${statusColor} bg-white/5 px-3 py-1.5 text-xs`}
+                  >
+                    <span className={`inline-block h-1.5 w-1.5 rounded-full ${statusDot}`} />
+                    <span className="font-medium">@{hs.handle}</span>
+                    <span className="text-muted-foreground">
+                      {pollTime ? formatDateTimeTz(pollTime, { placeholder: "--" }) : "never"}
+                    </span>
+                    <span className="text-muted-foreground">· {asNumber(hs.seen_post_count)} seen</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </section>
 
         {error ? (
