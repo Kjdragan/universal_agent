@@ -223,7 +223,14 @@ def _safe_filename(url: str, link_type: str) -> str:
 
 
 def _fetch_github_repo(url: str, output_dir: Path, timeout: int) -> dict[str, Any]:
-    """Fetch README and repo info from GitHub API (unauthenticated)."""
+    """Shallow-clone a GitHub repo for full source access.
+
+    Clones with --depth 1 into output_dir/<owner>__<repo>/ so the synthesis
+    agent has the complete code tree.  Also writes a REPO_INFO.md with basic
+    metadata (stars, language, description) fetched from the GitHub API.
+    """
+    import subprocess as sp
+
     import httpx
 
     parsed = urlparse(url)
@@ -232,62 +239,93 @@ def _fetch_github_repo(url: str, output_dir: Path, timeout: int) -> dict[str, An
         return {"ok": False, "error": "Invalid GitHub URL"}
 
     owner, repo = segments[0], segments[1]
-    api_url = f"https://api.github.com/repos/{owner}/{repo}"
-    readme_url = f"https://api.github.com/repos/{owner}/{repo}/readme"
-    tree_url = f"https://api.github.com/repos/{owner}/{repo}/git/trees/HEAD?recursive=1"
+    clone_dir_name = f"{owner}__{repo}"
+    clone_path = output_dir / clone_dir_name
 
-    content_parts: list[str] = []
+    # If already cloned (idempotent), skip
+    if clone_path.exists() and (clone_path / ".git").exists():
+        return {
+            "ok": True,
+            "path": str(clone_path),
+            "dirname": clone_dir_name,
+            "method": "git_clone_cached",
+        }
 
+    output_dir.mkdir(parents=True, exist_ok=True)
+    clone_url = f"https://github.com/{owner}/{repo}.git"
+
+    # --- Shallow clone ---
     try:
+        result = sp.run(
+            ["git", "clone", "--depth", "1", clone_url, str(clone_path)],
+            capture_output=True,
+            text=True,
+            timeout=max(timeout * 3, 60),  # clones may need more time
+        )
+        if result.returncode != 0:
+            err = result.stderr.strip() or result.stdout.strip()
+            return {"ok": False, "error": f"git clone failed: {err}"}
+    except sp.TimeoutExpired:
+        # Clean up partial clone
+        if clone_path.exists():
+            import shutil
+            shutil.rmtree(clone_path, ignore_errors=True)
+        return {"ok": False, "error": f"Clone timed out for {clone_url}"}
+    except FileNotFoundError:
+        return {"ok": False, "error": "git not found on PATH"}
+
+    # --- Write REPO_INFO.md with API metadata (best-effort) ---
+    info_parts: list[str] = [
+        f"# {owner}/{repo}\n",
+        f"- **Cloned from**: {url}",
+        f"- **Clone path**: `{clone_path}`\n",
+    ]
+    try:
+        api_url = f"https://api.github.com/repos/{owner}/{repo}"
         with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-            # Repo info
             resp = client.get(api_url, headers={"Accept": "application/vnd.github.v3+json"})
             if resp.status_code == 200:
                 repo_info = resp.json()
-                content_parts.append(f"# {repo_info.get('full_name', f'{owner}/{repo}')}\n")
                 if repo_info.get("description"):
-                    content_parts.append(f"> {repo_info['description']}\n")
-                content_parts.append(f"- **Stars**: {repo_info.get('stargazers_count', 'N/A')}")
-                content_parts.append(f"- **Language**: {repo_info.get('language', 'N/A')}")
-                content_parts.append(f"- **URL**: {url}\n")
+                    info_parts.append(f"> {repo_info['description']}\n")
+                info_parts.append(f"- **Stars**: {repo_info.get('stargazers_count', 'N/A')}")
+                info_parts.append(f"- **Language**: {repo_info.get('language', 'N/A')}")
+                info_parts.append(f"- **Default branch**: {repo_info.get('default_branch', 'N/A')}")
+                info_parts.append(f"- **License**: {(repo_info.get('license') or {}).get('spdx_id', 'N/A')}")
+    except Exception:
+        info_parts.append("\n_API metadata unavailable (rate-limited or offline)._")
 
-            # README
-            resp = client.get(readme_url, headers={"Accept": "application/vnd.github.v3.raw"})
-            if resp.status_code == 200:
-                readme_text = resp.text
-                # Truncate very long READMEs
-                if len(readme_text) > 15000:
-                    readme_text = readme_text[:15000] + "\n\n... [README truncated at 15000 chars]"
-                content_parts.append("\n## README\n")
-                content_parts.append(readme_text)
+    # Append file listing
+    try:
+        tree_result = sp.run(
+            ["find", str(clone_path), "-not", "-path", "*/.git/*", "-not", "-path", "*/.git"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if tree_result.returncode == 0:
+            files = [
+                str(Path(p).relative_to(clone_path))
+                for p in sorted(tree_result.stdout.strip().split("\n"))
+                if p and p != str(clone_path)
+            ]
+            if files:
+                info_parts.append("\n## File Tree\n")
+                info_parts.append("```")
+                for f in files[:150]:
+                    info_parts.append(f)
+                if len(files) > 150:
+                    info_parts.append(f"... and {len(files) - 150} more files")
+                info_parts.append("```")
+    except Exception:
+        pass
 
-            # File tree (lightweight)
-            resp = client.get(tree_url, headers={"Accept": "application/vnd.github.v3+json"})
-            if resp.status_code == 200:
-                tree_data = resp.json()
-                tree_items = tree_data.get("tree", [])
-                if tree_items:
-                    content_parts.append("\n## File Tree\n")
-                    content_parts.append("```")
-                    for item in tree_items[:100]:  # Cap at 100 files
-                        prefix = "📁 " if item.get("type") == "tree" else "📄 "
-                        content_parts.append(f"{prefix}{item.get('path', '?')}")
-                    if len(tree_items) > 100:
-                        content_parts.append(f"... and {len(tree_items) - 100} more files")
-                    content_parts.append("```")
+    (clone_path / "REPO_INFO.md").write_text("\n".join(info_parts), encoding="utf-8")
 
-    except httpx.TimeoutException:
-        return {"ok": False, "error": f"Timeout fetching {url}"}
-    except Exception as exc:
-        return {"ok": False, "error": str(exc)}
-
-    if not content_parts:
-        return {"ok": False, "error": "No content retrieved"}
-
-    filename = _safe_filename(url, "github_repo")
-    output_path = output_dir / filename
-    output_path.write_text("\n".join(content_parts), encoding="utf-8")
-    return {"ok": True, "path": str(output_path), "filename": filename}
+    return {
+        "ok": True,
+        "path": str(clone_path),
+        "dirname": clone_dir_name,
+        "method": "git_clone",
+    }
 
 
 def _fetch_web_page(url: str, output_dir: Path, link_type: str, timeout: int) -> dict[str, Any]:

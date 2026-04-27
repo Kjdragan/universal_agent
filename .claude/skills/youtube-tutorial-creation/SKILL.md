@@ -196,7 +196,7 @@ UV_CACHE_DIR=/tmp/uv_cache uv run \
 The script automatically:
 1. Reads `metadata.description` from `youtube_ingest.json`
 2. Extracts and classifies all URLs into categories:
-   - `github_repo` — GitHub/GitLab repository links (fetches README + file tree)
+   - `github_repo` — GitHub/GitLab repository links (**shallow-cloned** for full source access)
    - `kaggle_competition` / `kaggle_dataset` — Kaggle pages (fetches overview content)
    - `documentation` — Official docs (extracts clean markdown)
    - `dataset` — Data sources like Hugging Face (records URL)
@@ -214,7 +214,9 @@ After the script runs, read `description_links_report.json` and:
 1. Copy the `links` array into `manifest.json` as `description_links`
 2. Read any successfully fetched resources from `work_products/description_resources/`
 3. Use these as **supplementary context** during synthesis (Step 5):
-   - GitHub READMEs provide project structure and setup instructions
+   - **Cloned GitHub repos** provide the full source code — read key files (README, main scripts,
+     config files, pyproject.toml/requirements.txt) directly from the clone directory.
+     The `REPO_INFO.md` inside each clone has metadata and a file listing.
    - Kaggle pages provide problem definitions and evaluation criteria
    - Documentation provides API references and usage patterns
 
