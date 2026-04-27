@@ -234,7 +234,7 @@ Interpretation:
 | Signal card generation | yes | no default continuous sync found | dashboard sync is explicit/background only | Disconnected producer |
 | Signal curator | helper exists | no promotion call in heartbeat | metadata only, no `promote_cards_to_tasks` call | Incomplete |
 | Proactive artifacts | yes | partial/manual | endpoints and registry exist | Inventory ready |
-| Review digest email | yes | manual endpoint; scheduled reports absent from runtime cron | digest send endpoint exists | Manual unless cron fixed |
+| Review digest email | yes | **automated via `proactive_artifact_digest` cron at 08:00 CST (2026-04-27)** | digest send endpoint + cron script | ✅ Automated |
 | 3x daily proactive reports | yes script/docs | not registered in runtime cron store | in `workspaces/cron_jobs.json`, absent from runtime store | Misregistered |
 | Nightly wiki | yes script/docs | not registered in runtime cron store | same cron store mismatch | Misregistered |
 | CODIE cleanup | helper exists; cron exists | uncertain, gateway down and no runs observed | runtime cron job exists but no matching run rows | Not validated |

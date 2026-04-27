@@ -1,6 +1,6 @@
 # Documentation Status
 
-**Last updated:** 2026-04-25 (Discord Intelligence Phase 5: LLM relevance filter with store-but-hide architecture, cross-channel batching, concurrent Haiku-class workers, gateway API filtering, and dashboard signal toggle)
+**Last updated:** 2026-04-27 (Proactive digest cron automation, gateway resource limits hardening, stale CODIE branch cleanup)
 
 ## Development (development/)
 
@@ -114,7 +114,7 @@ These are the authoritative references for each subsystem. When any other docume
 | Doc | Subject |
 |-----|---------|
 | secrets_and_environments.md | **Canonical entry-point** — Infisical secrets, environments, deploy workflow secrets contract |
-| architecture_overview.md | Git branching, environmental mapping, service topology, and SHA-based release verification |
+| architecture_overview.md | Git branching, environmental mapping, service topology, gateway resource limits (MemoryMax/MemoryHigh/TasksMax), and SHA-based release verification |
 | ci_cd_pipeline.md | Workflow details, timing, pipeline structure, `/ship` branch guard, post-deploy sync, and SHA-first post-release verification |
 | infisical_factories.md | Stage naming and machine bootstrap (superseded by secrets_and_environments.md) |
 
