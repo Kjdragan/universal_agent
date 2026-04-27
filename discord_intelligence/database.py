@@ -1,7 +1,8 @@
-import sqlite3
-import json
-from datetime import datetime
 import contextlib
+from datetime import datetime
+import json
+import sqlite3
+
 
 class DiscordIntelligenceDB:
     def __init__(self, db_path: str):

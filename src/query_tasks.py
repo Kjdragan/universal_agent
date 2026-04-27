@@ -1,7 +1,9 @@
 import sys
+
 sys.path.insert(0, "/home/kjdragan/lrepos/universal_agent/src")
-from universal_agent.durable.db import get_task_hub_db_path
 import sqlite3
+
+from universal_agent.durable.db import get_task_hub_db_path
 
 db_path = get_task_hub_db_path()
 print("DB Path:", db_path)

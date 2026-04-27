@@ -10,9 +10,10 @@ Example:
     python utils/package_skill.py skills/public/my-skill ./dist
 """
 
+from pathlib import Path
 import sys
 import zipfile
-from pathlib import Path
+
 from quick_validate import validate_skill
 
 

@@ -13,12 +13,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from universal_agent.services.system_load_guard import (
-    SystemHealthStatus,
-    is_system_healthy,
     DEFAULT_MAX_PROCESS_COUNT,
     DEFAULT_MAX_SWAP_PCT,
+    SystemHealthStatus,
+    is_system_healthy,
 )
-
 
 # ── Process Count Guard ──────────────────────────────────────────────────────
 

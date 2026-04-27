@@ -1,9 +1,9 @@
 
 import asyncio
-import os
-import sys
-from pathlib import Path
 import logging
+import os
+from pathlib import Path
+import sys
 
 # Add src to path
 sys.path.append(os.path.abspath("src"))
@@ -13,10 +13,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("heartbeat_test")
 
 from universal_agent.agent_core import AgentEvent
+from universal_agent.heartbeat_service import DEFAULT_HEARTBEAT_PROMPT
 from universal_agent.main import ClaudeSDKClient, ExecutionResult
 from universal_agent.utils.message_history import MessageHistory
-from universal_agent.utils.message_history import MessageHistory
-from universal_agent.heartbeat_service import DEFAULT_HEARTBEAT_PROMPT
 
 # Target Session for Context
 SESSION_ID = "session_20260204_232844_10dadb8e"

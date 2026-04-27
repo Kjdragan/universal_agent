@@ -7,7 +7,6 @@ import uuid
 script_dir = Path(__file__).parent.parent.parent / "scripts"
 sys.path.insert(0, str(script_dir))
 import csi_delivery_health_canary
-
 from csi_ingester.store import source_state as source_state_store
 from csi_ingester.store.sqlite import connect, ensure_schema
 

@@ -13,8 +13,6 @@ from typing import AsyncGenerator, Optional
 from universal_agent.agent_core import AgentEvent, EventType
 from universal_agent.api.events import (
     EventType as WSEventType,
-)
-from universal_agent.api.events import (
     SessionInfo,
     WebSocketEvent,
     create_error_event,

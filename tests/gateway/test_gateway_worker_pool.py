@@ -8,25 +8,26 @@ Tests cover:
 - Lease acquisition helpers
 """
 
-import pytest
 import asyncio
-import sqlite3
+from datetime import datetime, timezone
 import json
 from pathlib import Path
-from datetime import datetime, timezone
+import sqlite3
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.durable.state import get_run, list_run_attempts
 
 try:
     from universal_agent.durable.worker_pool import (
+        PoolConfig,
         Worker,
         WorkerConfig,
         WorkerPoolManager,
-        PoolConfig,
-        WorkerStatus,
         WorkerState,
+        WorkerStatus,
         queue_run,
     )
     WORKER_POOL_AVAILABLE = True

@@ -9,7 +9,6 @@ import pytest
 
 from universal_agent.services.dispatch_service import _enrich_with_routing
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

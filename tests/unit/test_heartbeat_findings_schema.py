@@ -14,7 +14,6 @@ from universal_agent.utils.heartbeat_findings_schema import (
 )
 from universal_agent.utils.json_utils import extract_json_payload
 
-
 # ── Schema defaults ──────────────────────────────────────────────────────
 
 

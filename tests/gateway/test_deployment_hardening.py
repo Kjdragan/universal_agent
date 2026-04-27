@@ -1,14 +1,16 @@
-import unittest
-from unittest.mock import patch, MagicMock
-from fastapi.testclient import TestClient
 import os
-import sys
 from pathlib import Path
+import sys
+import unittest
+from unittest.mock import MagicMock, patch
+
+from fastapi.testclient import TestClient
 
 # Adjust path to find src
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from universal_agent.gateway_server import app, is_user_allowed
+
 
 class TestDeploymentHardening(unittest.TestCase):
     def setUp(self):

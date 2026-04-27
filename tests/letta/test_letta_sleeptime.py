@@ -4,7 +4,9 @@ Run: uv run python tests/test_letta_sleeptime.py
 """
 
 import os
+
 from dotenv import load_dotenv
+
 load_dotenv()
 
 from agentic_learning import AgenticLearning

@@ -15,18 +15,19 @@ Usage:
 
 import argparse
 import asyncio
+from datetime import datetime
 import json
 import os
+from pathlib import Path
+import shutil
 import sys
 import tempfile
-import shutil
 import time
-from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 # Load .env file for API keys
 from dotenv import load_dotenv
+
 load_dotenv()
 
 # Results storage
@@ -61,14 +62,23 @@ def test_imports():
     
     # Test execution_engine module
     try:
-        from universal_agent.execution_engine import ProcessTurnAdapter, EngineConfig, ExecutionEngineFactory
+        from universal_agent.execution_engine import (
+            EngineConfig,
+            ExecutionEngineFactory,
+            ProcessTurnAdapter,
+        )
         record_result("import_execution_engine", True, "ProcessTurnAdapter, EngineConfig, ExecutionEngineFactory")
     except Exception as e:
         record_result("import_execution_engine", False, error=str(e))
     
     # Test gateway module with new features
     try:
-        from universal_agent.gateway import InProcessGateway, EXECUTION_ENGINE_AVAILABLE, GatewaySession, GatewayRequest
+        from universal_agent.gateway import (
+            EXECUTION_ENGINE_AVAILABLE,
+            GatewayRequest,
+            GatewaySession,
+            InProcessGateway,
+        )
         record_result("import_gateway", True, f"EXECUTION_ENGINE_AVAILABLE={EXECUTION_ENGINE_AVAILABLE}")
     except Exception as e:
         record_result("import_gateway", False, error=str(e))
@@ -76,11 +86,11 @@ def test_imports():
     # Test workspace guard
     try:
         from universal_agent.guardrails.workspace_guard import (
-            enforce_workspace_path,
-            workspace_scoped_path,
             WorkspaceGuardError,
-            validate_tool_paths,
+            enforce_workspace_path,
             is_inside_workspace,
+            validate_tool_paths,
+            workspace_scoped_path,
         )
         record_result("import_workspace_guard", True, "All guard functions imported")
     except Exception as e:
@@ -95,8 +105,9 @@ def test_imports():
     
     # Test main.py process_turn signature
     try:
-        from universal_agent.main import process_turn
         import inspect
+
+        from universal_agent.main import process_turn
         sig = inspect.signature(process_turn)
         has_event_callback = "event_callback" in sig.parameters
         record_result("process_turn_signature", has_event_callback, 
@@ -117,7 +128,10 @@ def test_unit():
     
     # Test workspace guard - relative path
     try:
-        from universal_agent.guardrails.workspace_guard import enforce_workspace_path, WorkspaceGuardError
+        from universal_agent.guardrails.workspace_guard import (
+            WorkspaceGuardError,
+            enforce_workspace_path,
+        )
         workspace = Path("/tmp/test_ws")
         result = enforce_workspace_path("output.txt", workspace)
         expected = workspace / "output.txt"
@@ -128,7 +142,10 @@ def test_unit():
     
     # Test workspace guard - escape blocked
     try:
-        from universal_agent.guardrails.workspace_guard import enforce_workspace_path, WorkspaceGuardError
+        from universal_agent.guardrails.workspace_guard import (
+            WorkspaceGuardError,
+            enforce_workspace_path,
+        )
         workspace = Path("/tmp/test_ws")
         try:
             enforce_workspace_path("../escape.txt", workspace)
@@ -140,7 +157,10 @@ def test_unit():
     
     # Test workspace guard - absolute outside blocked
     try:
-        from universal_agent.guardrails.workspace_guard import enforce_workspace_path, WorkspaceGuardError
+        from universal_agent.guardrails.workspace_guard import (
+            WorkspaceGuardError,
+            enforce_workspace_path,
+        )
         workspace = Path("/tmp/test_ws")
         try:
             enforce_workspace_path("/etc/passwd", workspace)
@@ -175,7 +195,7 @@ def test_unit():
     
     # Test InProcessGateway uses unified engine
     try:
-        from universal_agent.gateway import InProcessGateway, EXECUTION_ENGINE_AVAILABLE
+        from universal_agent.gateway import EXECUTION_ENGINE_AVAILABLE, InProcessGateway
         gateway = InProcessGateway()
         uses_unified = not gateway._use_legacy and EXECUTION_ENGINE_AVAILABLE
         record_result("gateway_uses_unified_engine", uses_unified,
@@ -244,9 +264,10 @@ async def test_live_cli():
     (temp_workspace / "work_products").mkdir(exist_ok=True)
     
     try:
-        from universal_agent.main import process_turn, setup_session
         from claude_agent_sdk.client import ClaudeSDKClient
+
         from universal_agent.agent_core import AgentEvent, EventType
+        from universal_agent.main import process_turn, setup_session
         
         # Track events via callback
         events_received: list[AgentEvent] = []
@@ -304,8 +325,8 @@ async def test_live_gateway():
     temp_base = Path(tempfile.mkdtemp(prefix="gateway_live_test_"))
     
     try:
-        from universal_agent.gateway import InProcessGateway, GatewayRequest
         from universal_agent.agent_core import EventType
+        from universal_agent.gateway import GatewayRequest, InProcessGateway
         
         gateway = InProcessGateway(workspace_base=temp_base)
         

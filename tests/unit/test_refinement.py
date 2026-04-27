@@ -12,29 +12,29 @@ Tests:
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
-import json
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
 
 from universal_agent.task_hub import (
-    ensure_schema,
-    upsert_item,
-    get_item,
-    advance_refinement,
-    get_refinement_state,
+    REFINEMENT_STAGES,
+    TASK_STATUS_OPEN,
     add_comment,
-    list_comments,
-    enqueue_question,
+    advance_refinement,
     answer_question,
+    enqueue_question,
+    ensure_schema,
+    get_item,
+    get_refinement_state,
+    has_notification,
+    list_comments,
     list_pending_questions,
     record_notification,
-    has_notification,
-    TASK_STATUS_OPEN,
-    REFINEMENT_STAGES,
+    upsert_item,
 )
-
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -250,13 +250,14 @@ class TestGatewayRefinementEndpoints:
     @pytest.fixture(autouse=True)
     def _setup(self):
         try:
-            import httpx
             from fastapi.testclient import TestClient
+            import httpx
         except ImportError:
             pytest.skip("httpx/fastapi not available")
 
     def test_refinement_state_endpoint_404_for_missing(self):
         from fastapi.testclient import TestClient
+
         from universal_agent.gateway_server import app
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.get("/api/v1/dashboard/todolist/tasks/nonexistent/refinement-state")
@@ -264,6 +265,7 @@ class TestGatewayRefinementEndpoints:
 
     def test_questions_endpoint_returns_list(self):
         from fastapi.testclient import TestClient
+
         from universal_agent.gateway_server import app
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.get("/api/v1/dashboard/todolist/tasks/nonexistent/questions")

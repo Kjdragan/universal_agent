@@ -9,7 +9,6 @@ from pathlib import Path
 
 import httpx
 
-
 API_URL_DEFAULT = "https://app.infisical.com"
 
 

@@ -5,11 +5,12 @@ Extracts failed URLs from the session's finalize_research output and re-tests th
 """
 
 import asyncio
-import aiohttp
+from collections import Counter
 import json
 import os
 import sys
-from collections import Counter
+
+import aiohttp
 from dotenv import load_dotenv
 
 # Load from .env

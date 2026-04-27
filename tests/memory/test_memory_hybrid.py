@@ -1,14 +1,15 @@
 import os
+from pathlib import Path
 import shutil
 import tempfile
 import time
 import unittest
-from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 try:
-    from Memory_System.manager import MemoryManager
     import chromadb
+
+    from Memory_System.manager import MemoryManager
 except ImportError:
     MemoryManager = None
 

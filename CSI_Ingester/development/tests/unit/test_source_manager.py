@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from csi_ingester.store.source_manager import (
     auto_promote_demote,
     get_active_reddit_sources,
@@ -19,6 +17,7 @@ from csi_ingester.store.source_manager import (
     seed_youtube_channels,
 )
 from csi_ingester.store.sqlite import connect, ensure_schema
+import pytest
 
 
 @pytest.fixture()

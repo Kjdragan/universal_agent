@@ -7,11 +7,12 @@ Tests cover:
 - Event data validation
 """
 
-import pytest
 from datetime import datetime, timezone
 
+import pytest
+
 try:
-    from universal_agent.agent_core import EventType, AgentEvent
+    from universal_agent.agent_core import AgentEvent, EventType
     EVENTS_AVAILABLE = True
 except ImportError:
     EVENTS_AVAILABLE = False

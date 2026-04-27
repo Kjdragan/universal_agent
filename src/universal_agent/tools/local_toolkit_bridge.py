@@ -13,87 +13,35 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")
 try:
     from mcp_server import (
         append_to_file as append_to_file_core,
-    )
-    from mcp_server import (
         ask_user_questions as ask_user_questions_core,
-    )
-    from mcp_server import (
         batch_tool_execute as batch_tool_execute_core,
-    )
-    from mcp_server import (
         describe_image as describe_image_core,
-    )
-    from mcp_server import (
         finalize_research as finalize_research_core,
-    )
-    from mcp_server import (
         generate_image as generate_image_core,
-    )
-    from mcp_server import (
         generate_image_with_review as generate_image_with_review_core,
-    )
-    from mcp_server import (
         inspect_session_workspace as inspect_session_workspace_core,
-    )
-    from mcp_server import (
         list_agent_sessions as list_agent_sessions_core,
-    )
-    from mcp_server import (
         list_directory as list_directory_core,
-    )
-    from mcp_server import (
         preview_image as preview_image_core,
-    )
-    from mcp_server import (
         read_vps_file as read_vps_file_core,
-    )
-    from mcp_server import (
         upload_to_composio as upload_to_composio_core,
-    )
-    from mcp_server import (
         write_text_file as write_text_file_core,
     )
 except ImportError:
     from src.mcp_server import (
         append_to_file as append_to_file_core,
-    )
-    from src.mcp_server import (
         ask_user_questions as ask_user_questions_core,
-    )
-    from src.mcp_server import (
         batch_tool_execute as batch_tool_execute_core,
-    )
-    from src.mcp_server import (
         describe_image as describe_image_core,
-    )
-    from src.mcp_server import (
         finalize_research as finalize_research_core,
-    )
-    from src.mcp_server import (
         generate_image as generate_image_core,
-    )
-    from src.mcp_server import (
         generate_image_with_review as generate_image_with_review_core,
-    )
-    from src.mcp_server import (
         inspect_session_workspace as inspect_session_workspace_core,
-    )
-    from src.mcp_server import (
         list_agent_sessions as list_agent_sessions_core,
-    )
-    from src.mcp_server import (
         list_directory as list_directory_core,
-    )
-    from src.mcp_server import (
         preview_image as preview_image_core,
-    )
-    from src.mcp_server import (
         read_vps_file as read_vps_file_core,
-    )
-    from src.mcp_server import (
         upload_to_composio as upload_to_composio_core,
-    )
-    from src.mcp_server import (
         write_text_file as write_text_file_core,
     )
 

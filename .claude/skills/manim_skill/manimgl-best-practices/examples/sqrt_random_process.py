@@ -2,9 +2,10 @@
 Visualization of sqrt(rand()) process showing how the square root
 transforms a uniform distribution.
 """
-from manimlib import *
-import random
 import math
+import random
+
+from manimlib import *
 
 
 class Randomize(Animation):

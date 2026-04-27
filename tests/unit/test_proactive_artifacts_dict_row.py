@@ -15,12 +15,12 @@ import pytest
 
 from universal_agent.services.proactive_artifacts import (
     ensure_schema,
+    find_artifact_for_reply,
     get_artifact,
     list_artifacts,
     record_email_delivery,
-    find_artifact_for_reply,
-    upsert_artifact,
     update_artifact_state,
+    upsert_artifact,
 )
 
 

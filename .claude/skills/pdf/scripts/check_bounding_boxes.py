@@ -2,7 +2,6 @@ from dataclasses import dataclass
 import json
 import sys
 
-
 # Script to check that the `fields.json` file that Claude creates when analyzing PDFs
 # does not have overlapping bounding boxes. See forms.md.
 

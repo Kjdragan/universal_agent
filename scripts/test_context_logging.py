@@ -1,13 +1,20 @@
 import asyncio
-import sys
 import json
 from pathlib import Path
+import sys
 
 # Setup paths
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(PROJECT_ROOT / "src"))
 
-from universal_agent.tools.context_logging import log_context_gap, log_offline_task, get_pending_gaps, GAPS_FILE, TASKS_FILE
+from universal_agent.tools.context_logging import (
+    GAPS_FILE,
+    TASKS_FILE,
+    get_pending_gaps,
+    log_context_gap,
+    log_offline_task,
+)
+
 
 async def test_logging():
     print("🚀 Testing Context Gap Logging...")

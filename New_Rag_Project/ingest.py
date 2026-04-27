@@ -8,15 +8,15 @@ Usage:
     python ingest.py <path_to_pdf>
 """
 
-import os
 import base64
-import sys
+import os
 from pathlib import Path
+import sys
 from typing import Optional
 
-import fitz  # PyMuPDF
 from chromadb import PersistentClient
 from chromadb.config import Settings
+import fitz  # PyMuPDF
 from google.genai import Client as GeminiClient
 
 # Configuration

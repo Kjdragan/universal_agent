@@ -16,8 +16,6 @@ import uuid
 from universal_agent.agent_core import AgentEvent, EventType, UniversalAgent
 from universal_agent.api.events import (
     EventType as WSEventType,
-)
-from universal_agent.api.events import (
     SessionInfo,
     WebSocketEvent,
     create_connected_event,

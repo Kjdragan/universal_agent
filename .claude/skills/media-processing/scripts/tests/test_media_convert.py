@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Tests for media_convert.py"""
 
-import sys
 from pathlib import Path
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest

@@ -356,8 +356,6 @@ def _fire_implicit_preference_signal(
     try:
         from universal_agent.services.proactive_preferences import (
             ensure_schema as pref_ensure_schema,
-        )
-        from universal_agent.services.proactive_preferences import (
             rebuild_preference_snapshot,
         )
 

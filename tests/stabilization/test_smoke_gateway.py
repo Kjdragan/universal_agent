@@ -1,8 +1,10 @@
-import pytest
+import os
 import subprocess
 import sys
-import os
 import time
+
+import pytest
+
 
 def test_gateway_mode_plumbing(gateway_server):
     """

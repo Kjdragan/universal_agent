@@ -1,7 +1,7 @@
 import importlib
+from io import StringIO
 import os
 import tempfile
-from io import StringIO
 
 
 def test_process_stdio_redirect_disabled_by_default(monkeypatch):

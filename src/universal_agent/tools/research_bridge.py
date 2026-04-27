@@ -22,16 +22,20 @@ resolve_current_session_workspace = resolve_current_run_workspace
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 try:
-    from mcp_server import _crawl_core
-    from mcp_server import _run_report_generation_legacy as report_gen_core
-    from mcp_server import _run_research_phase_legacy as research_phase_core
-    from mcp_server import _run_research_pipeline_legacy as original_pipeline
+    from mcp_server import (
+        _crawl_core,
+        _run_report_generation_legacy as report_gen_core,
+        _run_research_phase_legacy as research_phase_core,
+        _run_research_pipeline_legacy as original_pipeline,
+    )
 except ImportError:
     # Fallback for when running from different contexts
-    from src.mcp_server import _crawl_core
-    from src.mcp_server import _run_report_generation_legacy as report_gen_core
-    from src.mcp_server import _run_research_phase_legacy as research_phase_core
-    from src.mcp_server import _run_research_pipeline_legacy as original_pipeline
+    from src.mcp_server import (
+        _crawl_core,
+        _run_report_generation_legacy as report_gen_core,
+        _run_research_phase_legacy as research_phase_core,
+        _run_research_pipeline_legacy as original_pipeline,
+    )
 
 # Import Task Guardrails
 from universal_agent.hooks import StdoutToEventStream

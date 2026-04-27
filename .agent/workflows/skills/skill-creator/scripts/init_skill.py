@@ -11,9 +11,8 @@ Examples:
     init_skill.py custom-skill --path /custom/location
 """
 
-import sys
 from pathlib import Path
-
+import sys
 
 SKILL_TEMPLATE = """---
 name: {skill_name}

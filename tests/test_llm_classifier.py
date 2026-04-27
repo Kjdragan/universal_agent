@@ -10,17 +10,17 @@ Tests cover:
 from __future__ import annotations
 
 import json
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from universal_agent.services.llm_classifier import (
-    _parse_json_response,
-    classify_priority,
-    classify_agent_route,
-    generate_calendar_task_description,
-    ClassificationError,
-)
+import pytest
 
+from universal_agent.services.llm_classifier import (
+    ClassificationError,
+    _parse_json_response,
+    classify_agent_route,
+    classify_priority,
+    generate_calendar_task_description,
+)
 
 # ── JSON Parsing ─────────────────────────────────────────────────────────────
 

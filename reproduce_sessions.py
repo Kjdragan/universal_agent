@@ -1,7 +1,7 @@
 
 import os
-import sys
 from pathlib import Path
+import sys
 from unittest.mock import MagicMock
 
 # Add src to path

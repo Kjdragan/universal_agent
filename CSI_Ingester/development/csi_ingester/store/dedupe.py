@@ -8,9 +8,9 @@ purged by ``purge_expired`` to keep the table lean.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import logging
 import sqlite3
-from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-import time
 from pathlib import Path
+import time
 
 import pytest
 
@@ -34,8 +34,8 @@ def _write_state(path: Path, payload: dict) -> None:
 
 @pytest.mark.asyncio
 async def test_process_session_busy_retry_uses_exponential_backoff(monkeypatch, tmp_path):
-    import universal_agent.heartbeat_service as hb
     from universal_agent.gateway import GatewaySession
+    import universal_agent.heartbeat_service as hb
 
     monkeypatch.setenv("UA_HEARTBEAT_RETRY_BASE_SECONDS", "10")
     monkeypatch.setenv("UA_HEARTBEAT_MAX_RETRY_BACKOFF_SECONDS", "300")
@@ -96,8 +96,8 @@ async def test_process_session_busy_retry_uses_exponential_backoff(monkeypatch, 
 
 @pytest.mark.asyncio
 async def test_run_heartbeat_failure_schedules_exponential_retry(monkeypatch, tmp_path):
-    import universal_agent.heartbeat_service as hb
     from universal_agent.gateway import GatewaySession
+    import universal_agent.heartbeat_service as hb
 
     monkeypatch.setenv("UA_HEARTBEAT_MOCK_RESPONSE", "0")
     monkeypatch.setenv("UA_HEARTBEAT_RETRY_BASE_SECONDS", "10")
@@ -153,9 +153,9 @@ async def test_run_heartbeat_completes_without_continuation_when_dispatch_moved(
     claims tasks directly.  Verify that a successful heartbeat run does NOT
     schedule a continuation retry (dispatch_claimed_count is always 0).
     """
-    import universal_agent.heartbeat_service as hb
     from universal_agent import task_hub
     from universal_agent.gateway import GatewaySession
+    import universal_agent.heartbeat_service as hb
 
     monkeypatch.setenv("UA_HEARTBEAT_MOCK_RESPONSE", "1")
     monkeypatch.setenv("UA_HEARTBEAT_CONTINUATION_DELAY_SECONDS", "1")

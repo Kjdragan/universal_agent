@@ -12,14 +12,14 @@ Results saved to: scripts/baseline_comparison_results.json
 """
 
 import asyncio
+from datetime import datetime
 import json
 import os
-import sys
-import time
-import tempfile
-import shutil
-from datetime import datetime
 from pathlib import Path
+import shutil
+import sys
+import tempfile
+import time
 from typing import Any, Optional
 
 # Add src to path
@@ -30,8 +30,9 @@ BASELINE_PROMPT = "Write a brief summary of your capabilities to work_products/s
 
 async def run_cli_path(prompt: str, workspace_dir: Path) -> dict[str, Any]:
     """Run prompt through the CLI process_turn path."""
-    from universal_agent.main import process_turn, setup_session
     from claude_agent_sdk.client import ClaudeSDKClient
+
+    from universal_agent.main import process_turn, setup_session
     
     result_data = {
         "path": "cli_process_turn",
@@ -86,8 +87,8 @@ async def run_cli_path(prompt: str, workspace_dir: Path) -> dict[str, Any]:
 
 async def run_gateway_path(prompt: str, workspace_dir: Path) -> dict[str, Any]:
     """Run prompt through the Gateway path (current implementation)."""
-    from universal_agent.gateway import InProcessGateway, GatewayRequest
     from universal_agent.agent_core import EventType
+    from universal_agent.gateway import GatewayRequest, InProcessGateway
     
     result_data = {
         "path": "gateway_inprocess",

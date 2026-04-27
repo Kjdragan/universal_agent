@@ -122,20 +122,10 @@ from universal_agent.gateway import (
 from universal_agent.heartbeat_mediation import sanitize_heartbeat_recommendation_text
 from universal_agent.heartbeat_service import (
     DEFAULT_INTERVAL_SECONDS as HEARTBEAT_DEFAULT_INTERVAL_SECONDS,
-)
-from universal_agent.heartbeat_service import (
     MIN_INTERVAL_SECONDS as HEARTBEAT_MIN_INTERVAL_SECONDS,
-)
-from universal_agent.heartbeat_service import (
     HeartbeatService,
-)
-from universal_agent.heartbeat_service import (
     _parse_duration_seconds as _parse_heartbeat_duration_seconds,
-)
-from universal_agent.heartbeat_service import (
     _resolve_heartbeat_interval_env as _resolve_hb_interval_env,
-)
-from universal_agent.heartbeat_service import (
     _resolve_min_interval_seconds as _resolve_hb_min_interval_seconds,
 )
 from universal_agent.hooks_service import HooksService, build_manual_youtube_action
@@ -157,18 +147,10 @@ from universal_agent.ops_config import (
 from universal_agent.ops_service import OpsService
 from universal_agent.proactive_signals import (
     apply_card_action,
-    distill_feedback_to_rules,
-)
-from universal_agent.proactive_signals import (
     delete_card as delete_proactive_signal_card,
-)
-from universal_agent.proactive_signals import (
+    distill_feedback_to_rules,
     list_cards as list_proactive_signal_cards,
-)
-from universal_agent.proactive_signals import (
     record_feedback as record_proactive_signal_feedback,
-)
-from universal_agent.proactive_signals import (
     sync_generated_cards as sync_proactive_signal_cards,
 )
 from universal_agent.run_catalog import RunCatalogService

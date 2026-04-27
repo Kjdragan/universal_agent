@@ -1,12 +1,12 @@
 import pytest
 
 from universal_agent.durable.classification import (
+    RELAUNCH,
     REPLAY_EXACT,
     REPLAY_IDEMPOTENT,
-    RELAUNCH,
+    _reset_tool_policy_cache,
     classify_replay_policy,
     classify_tool,
-    _reset_tool_policy_cache,
 )
 
 

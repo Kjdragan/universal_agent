@@ -4,17 +4,17 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
+from datetime import datetime, timezone
 import json
 import os
+from pathlib import Path
 import re
 import sqlite3
 import sys
-import urllib.request
-from collections import Counter
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+import urllib.request
 
 SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 if str(SCRIPT_ROOT) not in sys.path:
@@ -25,8 +25,8 @@ from csi_ingester.analytics.categories import (
     normalize_existing_analysis_categories,
 )
 from csi_ingester.llm_auth import resolve_csi_llm_auth
-from csi_ingester.store import token_usage as token_usage_store
 from csi_ingester.net import parse_endpoint_list, post_json_with_failover
+from csi_ingester.store import token_usage as token_usage_store
 from csi_ingester.store.sqlite import connect, ensure_schema
 
 

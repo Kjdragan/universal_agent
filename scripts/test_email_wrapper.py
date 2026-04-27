@@ -4,7 +4,10 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
-from universal_agent.tools.local_toolkit_bridge import agentmail_send_with_local_attachments_wrapper
+from universal_agent.tools.local_toolkit_bridge import (
+    agentmail_send_with_local_attachments_wrapper,
+)
+
 
 async def run_test(size_mb, prefix):
     filename = f"/tmp/test_file_{prefix}_{size_mb}mb.txt"

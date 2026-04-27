@@ -1,7 +1,7 @@
 from universal_agent.codebase_policy import (
     build_codebase_access,
-    validate_codebase_root,
     resolve_codebase_access,
+    validate_codebase_root,
 )
 
 

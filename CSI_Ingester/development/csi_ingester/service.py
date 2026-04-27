@@ -7,7 +7,6 @@ import sqlite3
 import time
 from typing import Any
 
-from csi_ingester.infisical_bootstrap import bootstrap_csi_secrets
 from csi_ingester.adapters.base import SourceAdapter
 from csi_ingester.adapters.reddit_discovery import RedditDiscoveryAdapter
 from csi_ingester.adapters.threads_owned import ThreadsOwnedAdapter
@@ -18,11 +17,14 @@ from csi_ingester.adapters.youtube_playlist import YouTubePlaylistAdapter
 from csi_ingester.batch_brief import run_batch_cycle
 from csi_ingester.config import CSIConfig
 from csi_ingester.emitter.ua_client import UAEmitter
+from csi_ingester.infisical_bootstrap import bootstrap_csi_secrets
 from csi_ingester.metrics import MetricsRegistry
 from csi_ingester.scheduler import PollingScheduler
-from csi_ingester.store import dedupe as dedupe_store
-from csi_ingester.store import events as event_store
-from csi_ingester.store import source_state as source_state_store
+from csi_ingester.store import (
+    dedupe as dedupe_store,
+    events as event_store,
+    source_state as source_state_store,
+)
 
 logger = logging.getLogger(__name__)
 

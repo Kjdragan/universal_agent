@@ -12,14 +12,14 @@ Output: channels_watchlist.json and channels_watchlist.csv
 """
 
 import asyncio
+from collections import Counter
 import csv
+from dataclasses import asdict, dataclass
 import json
+from typing import Dict, List, Set
 import urllib.parse
 import urllib.request
-from collections import Counter
-from dataclasses import dataclass, asdict
 from xml.etree import ElementTree as ET
-from typing import List, Dict, Set
 
 ATOM_NS = {"a": "http://www.w3.org/2005/Atom", "yt": "http://www.youtube.com/xml/schemas/2015"}
 

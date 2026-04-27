@@ -1,16 +1,18 @@
 import json
-import pytest
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from universal_agent.wiki.kb_registry import (
-    register_kb,
     get_kb,
-    list_kbs,
-    update_kb,
-    remove_kb,
     get_registry_path,
+    list_kbs,
+    register_kb,
+    remove_kb,
+    update_kb,
 )
+
 
 @pytest.fixture
 def mock_registry_dir(tmp_path):

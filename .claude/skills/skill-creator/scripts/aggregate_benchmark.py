@@ -35,11 +35,11 @@ The script supports two directory layouts:
 """
 
 import argparse
+from datetime import datetime, timezone
 import json
 import math
-import sys
-from datetime import datetime, timezone
 from pathlib import Path
+import sys
 
 
 def calculate_stats(values: list[float]) -> dict:

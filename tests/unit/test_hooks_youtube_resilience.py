@@ -9,23 +9,23 @@ R4: Startup warmup delay before recovery dispatch
 R5: Session key double-underscore delimiter for video IDs with underscores
 """
 
-import json
 import asyncio
-import time
+import json
 from pathlib import Path
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from universal_agent.durable.db import connect_runtime_db
 from universal_agent.durable.migrations import ensure_schema
+from universal_agent.gateway import GatewaySession, InProcessGateway
 from universal_agent.hooks_service import (
-    HooksService,
     YOUTUBE_DISPATCH_INTERRUPTION_ERROR_TOKENS,
+    HooksService,
     build_manual_youtube_action,
 )
 from universal_agent.workflow_admission import WorkflowAdmissionService
-from universal_agent.gateway import InProcessGateway, GatewaySession
 
 
 @pytest.fixture

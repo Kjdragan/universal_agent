@@ -3,15 +3,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from universal_agent.services.claude_code_intel_operator_report import (
-    artifact_file_url,
-    build_operator_email,
-    build_operator_report,
-)
 from universal_agent.scripts.claude_code_intel_run_report import (
     _resolved_email_policy,
     _resolved_email_target,
     _should_send_email,
+)
+from universal_agent.services.claude_code_intel_operator_report import (
+    artifact_file_url,
+    build_operator_email,
+    build_operator_report,
 )
 
 

@@ -2527,10 +2527,8 @@ class AgentMailService:
                     )
                     from universal_agent.task_hub import (
                         complete_subtask_and_check_parent,
-                        perform_task_action,
-                    )
-                    from universal_agent.task_hub import (
                         ensure_schema as _th_ensure_schema,
+                        perform_task_action,
                     )
 
                     th_conn = connect_runtime_db(get_activity_db_path())

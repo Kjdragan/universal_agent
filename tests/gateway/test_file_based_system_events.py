@@ -6,8 +6,8 @@ that replaced the old env-var-based approach to avoid E2BIG errors.
 
 import json
 import os
-import tempfile
 from pathlib import Path
+import tempfile
 from unittest.mock import patch
 
 import pytest

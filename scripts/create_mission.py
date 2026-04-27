@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
+import argparse
 import json
 import os
-import argparse
 import uuid
+
 
 def create_mission_manifest(mission_root, tasks, output_dir="."):
     """

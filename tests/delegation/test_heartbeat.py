@@ -9,7 +9,6 @@ import pytest
 
 from universal_agent.delegation.heartbeat import FactoryHeartbeat, HeartbeatConfig
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

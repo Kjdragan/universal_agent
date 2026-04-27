@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from universal_agent.services.email_task_bridge import infer_delivery_mode
 from universal_agent import gateway_server
+from universal_agent.services.email_task_bridge import infer_delivery_mode
 
 
 def test_delivery_mode_defaults_to_standard_for_comprehensive_report():

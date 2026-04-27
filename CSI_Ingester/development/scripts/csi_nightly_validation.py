@@ -4,14 +4,14 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 import json
 import os
+from pathlib import Path
 import sqlite3
 import sys
 import time
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 
 SCRIPT_ROOT = Path(__file__).resolve().parents[1]

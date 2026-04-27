@@ -4,10 +4,11 @@ Convert HTML file to PDF using Google Chrome/Chromium headless mode.
 Usage: python convert_html_to_pdf.py <input_html_path> <output_pdf_path>
 """
 
-import sys
-import subprocess
 import os
 from pathlib import Path
+import subprocess
+import sys
+
 
 def convert_html_to_pdf(html_path, pdf_path=None):
     """

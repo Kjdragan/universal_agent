@@ -1,7 +1,8 @@
-import sys
-import sqlite3
 import os
+import sqlite3
+import sys
 from typing import Optional
+
 
 def _task_hub_open_conn() -> Optional[sqlite3.Connection]:
     try:

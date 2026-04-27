@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import json
+from pathlib import Path
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
 from universal_agent.durable.db import connect_runtime_db, get_vp_db_path
 from universal_agent.durable.migrations import ensure_schema
@@ -15,12 +15,12 @@ from universal_agent.tools.vp_orchestration import (
     _vp_read_result_artifacts_impl,
     _vp_wait_mission_impl,
 )
+from universal_agent.vp.clients.base import MissionOutcome, VpClient
 from universal_agent.vp.dispatcher import (
     MissionDispatchRequest,
     cancel_mission,
     dispatch_mission_with_retry,
 )
-from universal_agent.vp.clients.base import MissionOutcome, VpClient
 from universal_agent.vp.worker_loop import VpWorkerLoop
 
 

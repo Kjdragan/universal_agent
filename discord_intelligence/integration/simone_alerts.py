@@ -1,6 +1,7 @@
-from universal_agent.services.agentmail_service import AgentMailService
-from ..config import init_secrets
 import logging
+
+from ..config import init_secrets
+from universal_agent.services.agentmail_service import AgentMailService
 
 logger = logging.getLogger(__name__)
 

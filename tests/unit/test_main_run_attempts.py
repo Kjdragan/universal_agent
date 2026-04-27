@@ -1,5 +1,5 @@
-import sqlite3
 from pathlib import Path
+import sqlite3
 
 from universal_agent import main as agent_main
 from universal_agent.durable.migrations import ensure_schema

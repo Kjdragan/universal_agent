@@ -2122,8 +2122,6 @@ class HeartbeatService:
                 try:
                     from universal_agent.services.proactive_budget import (
                         has_daily_budget as has_nightly_budget,
-                    )
-                    from universal_agent.services.proactive_budget import (
                         increment_daily_proactive_count as _increment_nightly_task_count,
                     )
                     from universal_agent.services.reflection_engine import (

@@ -1,19 +1,21 @@
 
+import asyncio
 import base64
 import hashlib
 import hmac
 import json
-import asyncio
 import os
-import time
 from pathlib import Path
-import pytest
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import Request
+import pytest
+
 from universal_agent.durable.db import connect_runtime_db
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.durable.state import get_run, get_run_attempt
+from universal_agent.gateway import GatewaySession, InProcessGateway
 from universal_agent.hooks_service import (
     HookAction,
     HookAuthConfig,
@@ -25,7 +27,7 @@ from universal_agent.hooks_service import (
     build_manual_youtube_action,
 )
 from universal_agent.workflow_admission import WorkflowAdmissionService, WorkflowTrigger
-from universal_agent.gateway import InProcessGateway, GatewaySession
+
 
 @pytest.fixture
 def mock_gateway():

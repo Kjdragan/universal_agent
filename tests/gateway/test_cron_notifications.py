@@ -1,16 +1,15 @@
-import time
-import urllib.parse
-import json
 import asyncio
+import json
 from pathlib import Path
+import time
 from types import SimpleNamespace
+import urllib.parse
 
 import pytest
 
 from universal_agent import gateway_server
-from universal_agent.gateway import GatewaySessionSummary
 from universal_agent.cron_service import CronRunRecord, CronService
-from universal_agent.gateway import GatewaySession
+from universal_agent.gateway import GatewaySession, GatewaySessionSummary
 
 
 class _StubGateway:

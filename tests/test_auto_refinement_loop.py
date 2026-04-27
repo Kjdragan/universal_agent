@@ -13,21 +13,21 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
-import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from universal_agent import task_hub
 from universal_agent.services import auto_refinement_loop
 from universal_agent.services.auto_refinement_loop import (
+    AUTO_PROCESSABLE_STAGES,
+    _is_on_cooldown,
+    _record_attempt,
+    clear_cooldowns,
     find_refinement_candidates,
     refine_task,
     run_auto_refinement_cycle,
-    clear_cooldowns,
-    _is_on_cooldown,
-    _record_attempt,
-    AUTO_PROCESSABLE_STAGES,
 )
-from universal_agent import task_hub
-
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 

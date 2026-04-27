@@ -1,8 +1,10 @@
 import json
 import os
+
 import pytest
 
 import src.mcp_server as mcp_server
+
 
 @pytest.mark.asyncio
 async def test_crawl_core_missing_api_key_fails_loudly(monkeypatch):

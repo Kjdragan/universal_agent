@@ -2,8 +2,9 @@
 Visualization showing the correspondence between hexagonal tilings
 and 3D cube stacking patterns.
 """
-from manimlib import *
 import math
+
+from manimlib import *
 
 
 class HexagonCubeCorrespondence(InteractiveScene):

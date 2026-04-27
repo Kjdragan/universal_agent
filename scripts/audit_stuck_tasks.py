@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-import sys
 import os
+import sys
 
 # Ensure src/ is on the path so we can import internal modules
 repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -15,9 +15,11 @@ try:
 except ImportError:
     pass
 
-import sqlite3
 from collections import defaultdict
+import sqlite3
+
 from universal_agent.durable.db import connect_runtime_db
+
 
 def _time_since(updated_at_iso: str) -> str:
     # A simple helper to show age if wanted, but printing raw is fine

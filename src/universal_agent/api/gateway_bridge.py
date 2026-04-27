@@ -23,8 +23,6 @@ import websockets
 
 from universal_agent.api.events import (
     EventType as WSEventType,
-)
-from universal_agent.api.events import (
     SessionInfo,
     WebSocketEvent,
     create_connected_event,

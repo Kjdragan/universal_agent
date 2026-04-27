@@ -4,12 +4,12 @@ import pytest
 
 from universal_agent.services.routing_markers import (
     CODE_WORKFLOW_RE,
-    RESEARCH_WORKFLOW_RE,
+    CSI_AGENT_HINTS_RE,
     CSI_CODE_RE,
+    CSI_HUMAN_HINTS_RE,
     CSI_RESEARCH_RE,
     CSI_WRITER_RE,
-    CSI_AGENT_HINTS_RE,
-    CSI_HUMAN_HINTS_RE,
+    RESEARCH_WORKFLOW_RE,
 )
 
 

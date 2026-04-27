@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import pytest
-
 from csi_ingester.llm_auth import resolve_csi_llm_auth
+import pytest
 
 
 def test_mode_zero_uses_shared_precedence(monkeypatch) -> None:

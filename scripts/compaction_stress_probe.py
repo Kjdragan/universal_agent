@@ -14,14 +14,25 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from dataclasses import asdict, dataclass
 import json
 import os
 import time
-from dataclasses import asdict, dataclass
 from typing import Any, Optional
 
-from claude_agent_sdk import AgentDefinition, ClaudeAgentOptions, ClaudeSDKClient, HookMatcher
-from claude_agent_sdk.types import AssistantMessage, ResultMessage, TextBlock, ToolResultBlock, ToolUseBlock
+from claude_agent_sdk import (
+    AgentDefinition,
+    ClaudeAgentOptions,
+    ClaudeSDKClient,
+    HookMatcher,
+)
+from claude_agent_sdk.types import (
+    AssistantMessage,
+    ResultMessage,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+)
 
 XML_SNIPPET = (
     "<arg_key>tools</arg_key><arg_value>"

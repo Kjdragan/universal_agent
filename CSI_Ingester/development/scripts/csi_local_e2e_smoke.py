@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import sys
 import uuid
-from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -22,6 +22,7 @@ if str(DEV_ROOT) not in sys.path:
 
 from csi_ingester.contract import CreatorSignalEvent
 from csi_ingester.signature import generate_signature
+
 import universal_agent.gateway_server as gateway_server
 
 

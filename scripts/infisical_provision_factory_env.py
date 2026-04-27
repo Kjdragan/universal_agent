@@ -45,8 +45,8 @@ import argparse
 import json
 import logging
 import os
-import sys
 from pathlib import Path
+import sys
 from typing import Any
 
 logger = logging.getLogger(__name__)

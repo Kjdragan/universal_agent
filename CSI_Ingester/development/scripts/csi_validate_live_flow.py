@@ -5,15 +5,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from datetime import datetime, timezone
 import json
 import os
+from pathlib import Path
 import sqlite3
 import sys
 import time
-import uuid
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
+import uuid
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:

@@ -18,11 +18,11 @@ from __future__ import annotations
 
 import base64
 import os
-import sys
 from pathlib import Path
+import sys
 
-from dotenv import load_dotenv
 from composio import Composio
+from dotenv import load_dotenv
 
 
 def _get_user_id() -> str | None:

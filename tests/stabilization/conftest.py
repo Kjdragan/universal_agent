@@ -1,11 +1,12 @@
-import pytest
-import subprocess
-import time
-import requests
 import os
 import signal
+import subprocess
 import sys
+import time
 from typing import Generator
+
+import pytest
+import requests
 
 GATEWAY_PORT = 8002
 GATEWAY_URL = f"http://localhost:{GATEWAY_PORT}"

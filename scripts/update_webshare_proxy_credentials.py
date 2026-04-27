@@ -28,8 +28,8 @@ import argparse
 import getpass
 import json
 import os
-import sys
 from pathlib import Path
+import sys
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
@@ -172,8 +172,11 @@ def _verify_proxy() -> dict:
     except Exception:
         pass
 
-    from universal_agent.youtube_ingest import _build_webshare_proxy_config  # type: ignore
     import urllib.request
+
+    from universal_agent.youtube_ingest import (
+        _build_webshare_proxy_config,  # type: ignore
+    )
 
     proxy_config, proxy_mode = _build_webshare_proxy_config()
 

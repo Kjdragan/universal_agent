@@ -1,14 +1,15 @@
 import json
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from universal_agent.wiki.llm import (
-    extract_entities,
-    extract_concepts,
-    generate_summary,
-    SemanticExtractionError
-)
+import pytest
+
 from universal_agent.wiki.core import wiki_ingest_external_source
+from universal_agent.wiki.llm import (
+    SemanticExtractionError,
+    extract_concepts,
+    extract_entities,
+    generate_summary,
+)
 
 
 @patch("universal_agent.wiki.llm._get_anthropic_client")

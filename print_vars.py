@@ -1,5 +1,7 @@
 import asyncio
+
 from universal_agent.infisical_loader import bootstrap_runtime_secrets
+
 
 async def main():
     bootstrap_runtime_secrets()

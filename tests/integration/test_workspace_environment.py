@@ -7,18 +7,19 @@ This test suite validates that:
 3. Tools correctly use the workspace path when provided
 """
 
-import os
-import sys
-import tempfile
 import json
+import os
 from pathlib import Path
 import subprocess
+import sys
+import tempfile
+
 import pytest
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from mcp_server import draft_report_parallel, compile_report
+from mcp_server import compile_report, draft_report_parallel
 
 
 class TestWorkspaceEnvironment:

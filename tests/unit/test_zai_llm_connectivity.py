@@ -8,8 +8,8 @@ Mark: pytest -m llm
 
 import os
 
-import pytest
 from anthropic import Anthropic
+import pytest
 
 from universal_agent.utils.model_resolution import ZAI_MODEL_MAP
 

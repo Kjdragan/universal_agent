@@ -1,7 +1,6 @@
 import ast
 from pathlib import Path
 
-
 TARGET_FILES = [
     "src/universal_agent/main.py",
     "src/universal_agent/agent_core.py",

@@ -1,5 +1,5 @@
-import pytest
 from fastapi import HTTPException
+import pytest
 
 import universal_agent.gateway_server as gateway_server
 from universal_agent.gateway_server import (

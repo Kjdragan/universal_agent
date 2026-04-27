@@ -11,14 +11,13 @@ import pytest
 
 from universal_agent.delegation.redis_bus import ConsumedMission, RedisMissionBus
 from universal_agent.delegation.redis_vp_bridge import (
+    _SKIP_KINDS,
     MISSION_KIND_TO_VP,
     BridgeConfig,
     RedisVpBridge,
-    _SKIP_KINDS,
 )
 from universal_agent.delegation.schema import MissionEnvelope, MissionPayload
 from universal_agent.durable.migrations import ensure_schema
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

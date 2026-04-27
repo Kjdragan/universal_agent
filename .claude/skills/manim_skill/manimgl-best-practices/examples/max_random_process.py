@@ -2,8 +2,9 @@
 Visualization of max(rand(), rand()) process with animated tracking dots.
 Shows how the maximum of two random uniform values behaves over time.
 """
-from manimlib import *
 import random
+
+from manimlib import *
 
 
 class Randomize(Animation):

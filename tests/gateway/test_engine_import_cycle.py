@@ -1,7 +1,7 @@
 import os
+from pathlib import Path
 import subprocess
 import sys
-from pathlib import Path
 
 
 def test_gateway_import_prefers_execution_engine():

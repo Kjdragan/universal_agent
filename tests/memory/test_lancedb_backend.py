@@ -5,6 +5,7 @@ Tests for LanceDB vector memory backend.
 import os
 import shutil
 import tempfile
+
 import pytest
 
 if (os.getenv("RUN_LANCEDB_TESTS", "") or "").strip().lower() not in {"1", "true", "yes"}:
@@ -15,12 +16,12 @@ if (os.getenv("RUN_LANCEDB_TESTS", "") or "").strip().lower() not in {"1", "true
         allow_module_level=True,
     )
 
-from universal_agent.memory.lancedb_backend import LanceDBMemory
 from universal_agent.memory.embeddings import (
     EmbeddingProvider,
     SentenceTransformerEmbeddings,
     get_embedding_provider,
 )
+from universal_agent.memory.lancedb_backend import LanceDBMemory
 
 
 class TestEmbeddingProviders:
@@ -159,9 +160,10 @@ class TestMemoryStoreIntegration:
         monkeypatch.setenv("UA_MEMORY_INDEX", "vector")
         monkeypatch.setenv("UA_MEMORY_BACKEND", "lancedb")
         
-        from universal_agent.memory.memory_store import append_memory_entry
-        from universal_agent.memory.memory_models import MemoryEntry
         from datetime import datetime
+
+        from universal_agent.memory.memory_models import MemoryEntry
+        from universal_agent.memory.memory_store import append_memory_entry
         
         entry = MemoryEntry(
             entry_id="test-1",

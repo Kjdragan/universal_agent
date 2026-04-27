@@ -55,11 +55,7 @@ from universal_agent.notebooklm_runtime import build_notebooklm_mcp_server_confi
 from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
 from universal_agent.task_stop_guardrails import (
     evaluate_task_stop_policy as _shared_evaluate_task_stop_policy,
-)
-from universal_agent.task_stop_guardrails import (
     extract_task_stop_id as _shared_extract_task_stop_id,
-)
-from universal_agent.task_stop_guardrails import (
     task_stop_rejection_reason as _shared_task_stop_rejection_reason,
 )
 from universal_agent.tools.internal_registry import get_all_internal_tools
@@ -193,14 +189,8 @@ from universal_agent.sdk.task_events import extract_typed_task_payload
 from universal_agent.search_config import SEARCH_TOOL_CONFIG
 from universal_agent.session_ctx import (
     SessionContext as _SessionContext,
-)
-from universal_agent.session_ctx import (
     get_ctx as _get_ctx,
-)
-from universal_agent.session_ctx import (
     require_ctx as _require_ctx,
-)
-from universal_agent.session_ctx import (
     set_ctx as _set_ctx,
 )
 from universal_agent.trace_catalog import (
@@ -8464,8 +8454,6 @@ async def setup_session(
     # --- SHARED PROMPT BUILDER (eliminates prompt divergence) ---
     from universal_agent.prompt_builder import (
         build_sdk_system_prompt as _build_sdk_system_prompt,
-    )
-    from universal_agent.prompt_builder import (
         build_system_prompt as _shared_build_prompt,
     )
 

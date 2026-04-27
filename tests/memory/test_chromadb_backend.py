@@ -5,11 +5,13 @@ Tests for ChromaDB vector memory backend.
 import os
 import shutil
 import tempfile
+
 import pytest
 
 # Check if chromadb is available (it should be)
 try:
     import chromadb
+
     from universal_agent.memory.chromadb_backend import ChromaDBMemory
     CHROMA_AVAILABLE = True
 except ImportError:
@@ -18,6 +20,7 @@ except ImportError:
 from universal_agent.memory.embeddings import (
     SentenceTransformerEmbeddings,
 )
+
 
 @pytest.mark.skipif(not CHROMA_AVAILABLE, reason="ChromaDB not installed")
 class TestChromaDBMemory:

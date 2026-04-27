@@ -1,11 +1,13 @@
-import pytest
-import sqlite3
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch, AsyncMock
+import sqlite3
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from universal_agent.vp.worker_loop import VpWorkerLoop
+import pytest
+
 from universal_agent.vp.profiles import VpProfile
+from universal_agent.vp.worker_loop import VpWorkerLoop
+
 
 @pytest.mark.asyncio
 async def test_vp_coder_provisions_git_worktree(tmp_path: Path):

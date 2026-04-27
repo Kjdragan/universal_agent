@@ -1,14 +1,15 @@
-import pytest
 import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from universal_agent.services.dag_runner import DagState
+import pytest
+
 from universal_agent.services.dag_handlers import (
-    subprocess_handler,
-    make_subprocess_handler,
     make_llm_binary_classifier_handler,
+    make_subprocess_handler,
+    subprocess_handler,
 )
+from universal_agent.services.dag_runner import DagState
 
 
 @pytest.mark.asyncio

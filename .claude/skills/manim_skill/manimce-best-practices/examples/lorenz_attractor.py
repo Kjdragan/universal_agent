@@ -8,8 +8,8 @@ Run with: manim -pql lorenz_attractor.py LorenzAttractor
 """
 
 from manim import *
-from scipy.integrate import solve_ivp
 import numpy as np
+from scipy.integrate import solve_ivp
 
 
 def lorenz_system(t, state, sigma=10, rho=28, beta=8 / 3):

@@ -1,11 +1,13 @@
-from typing import List, Dict, Any, Optional
 from datetime import datetime
 import json
 import os
-from .models import MemoryBlock, ArchivalItem, AgentState
+from typing import Any, Dict, List, Optional
+
+from .models import AgentState, ArchivalItem, MemoryBlock
 from .storage import StorageManager
 from .watcher import MemoryWatcher
 from universal_agent.feature_flags import memory_index_enabled
+
 
 class MemoryManager:
     """

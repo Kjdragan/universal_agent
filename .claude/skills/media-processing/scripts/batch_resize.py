@@ -7,10 +7,10 @@ watermarks, format conversion, and parallel processing.
 """
 
 import argparse
-import subprocess
-import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+import subprocess
+import sys
 from typing import List, Optional, Tuple
 
 

@@ -1,18 +1,20 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import os
-import sqlite3
-import time
-from datetime import datetime, timezone
 from pathlib import Path
-
+import sqlite3
 import sys
+import time
 
 script_dir = Path(__file__).parent.parent.parent / "scripts"
 sys.path.insert(0, str(script_dir))
 import csi_playlist_tutorial_digest
-from csi_playlist_tutorial_digest import _find_stalled_workspace_turns, _prune_pending_by_age
+from csi_playlist_tutorial_digest import (
+    _find_stalled_workspace_turns,
+    _prune_pending_by_age,
+)
 
 
 def _create_events_table(conn: sqlite3.Connection) -> None:

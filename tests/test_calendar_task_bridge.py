@@ -14,9 +14,9 @@ Covers:
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import os
 import sqlite3
-from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 import pytest
@@ -31,7 +31,6 @@ from universal_agent.services.calendar_task_bridge import (
     calendar_bridge_enabled,
     ensure_calendar_task_schema,
 )
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 

@@ -1,6 +1,8 @@
 import sqlite3
 from typing import Optional
+
 from mcp.server.fastmcp import FastMCP
+
 from discord_intelligence.config import get_db_path
 
 mcp = FastMCP("Discord Intelligence Bridge")

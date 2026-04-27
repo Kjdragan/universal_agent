@@ -33,10 +33,8 @@ from .harness_helpers import (
 from .harness_session import HarnessSessionManager
 from .interview import run_planning_from_template, run_planning_interview
 from .plan_persistence import PlanPersistence, SQLitePlanStore
-from .plan_schema import AtomicTask, Phase, Plan
-from .plan_schema import TaskStatus as PlanTaskStatus
-from .state import Artifact, ArtifactType
-from .state import Task as StateTask
+from .plan_schema import AtomicTask, Phase, Plan, TaskStatus as PlanTaskStatus
+from .state import Artifact, ArtifactType, Task as StateTask
 from universal_agent.execution_context import bind_workspace_env
 
 _PHASE_HINT_RULES = [

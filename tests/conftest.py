@@ -1,6 +1,6 @@
 import os
-import pytest
 
+import pytest
 
 os.environ["UA_DISABLE_LOGFIRE"] = "1"
 os.environ["LOGFIRE_TOKEN"] = ""

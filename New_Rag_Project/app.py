@@ -9,9 +9,9 @@ Usage:
 """
 
 import os
+from pathlib import Path
 import sys
 import tempfile
-from pathlib import Path
 from typing import Optional
 
 import streamlit as st

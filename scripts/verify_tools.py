@@ -1,13 +1,14 @@
 
-import sys
-import os
 import asyncio
 import json
+import os
+import sys
 
 # Add src to path
 sys.path.append(os.path.abspath("src"))
 
 import mcp_server
+
 
 def verify_tools():
     print("Verifying Tool Rationalization...")

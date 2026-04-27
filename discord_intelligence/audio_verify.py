@@ -14,15 +14,15 @@ Usage:
 """
 
 import asyncio
-import wave
-import struct
-import math
-import json
-import shutil
-import logging
-import tempfile
 from datetime import datetime, timedelta, timezone
+import json
+import logging
+import math
 from pathlib import Path
+import shutil
+import struct
+import tempfile
+import wave
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("audio_verify")

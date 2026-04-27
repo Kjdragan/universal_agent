@@ -1,18 +1,19 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from pathlib import Path
+import sqlite3
 from unittest.mock import AsyncMock, patch
 
 import pytest
+
 from universal_agent import task_hub
 from universal_agent.services.proactive_convergence import (
     detect_and_queue_convergence,
     extract_topic_signature_from_text,
+    sync_topic_signatures_from_csi,
     track_a_concrete_convergence,
     track_b_ideation_synthesis,
-    sync_topic_signatures_from_csi,
     upsert_topic_signature,
 )
 

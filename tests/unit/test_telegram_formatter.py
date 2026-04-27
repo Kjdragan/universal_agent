@@ -1,7 +1,7 @@
-import unittest
 from dataclasses import dataclass, field
-import sys
 import os
+import sys
+import unittest
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
 

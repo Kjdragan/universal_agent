@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import re
 import sqlite3
-from datetime import datetime, timezone
 from typing import Any
 
 from csi_ingester.store import source_state

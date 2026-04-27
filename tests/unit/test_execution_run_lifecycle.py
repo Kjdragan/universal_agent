@@ -5,14 +5,13 @@ run and attempt records created by ``allocate_execution_run``, preventing
 the stuck-run reaper from falsely marking completed todo runs as timed-out.
 """
 
-import sqlite3
-import tempfile
 import os
 from pathlib import Path
+import sqlite3
+import tempfile
 from unittest import mock
 
 import pytest
-
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -40,12 +39,12 @@ class TestFinalizeExecutionRun:
     """finalize_execution_run must update both runs and run_attempts tables."""
 
     def test_finalize_marks_run_completed(self, _isolated_runtime_db):
+        from universal_agent.durable.db import connect_runtime_db
+        from universal_agent.durable.state import get_run, get_run_attempt
         from universal_agent.services.execution_run_service import (
             allocate_execution_run,
             finalize_execution_run,
         )
-        from universal_agent.durable.db import connect_runtime_db
-        from universal_agent.durable.state import get_run, get_run_attempt
 
         ctx = allocate_execution_run(
             task_id="test:task1",
@@ -84,12 +83,12 @@ class TestFinalizeExecutionRun:
         conn2.close()
 
     def test_finalize_marks_run_failed(self, _isolated_runtime_db):
+        from universal_agent.durable.db import connect_runtime_db
+        from universal_agent.durable.state import get_run
         from universal_agent.services.execution_run_service import (
             allocate_execution_run,
             finalize_execution_run,
         )
-        from universal_agent.durable.db import connect_runtime_db
-        from universal_agent.durable.state import get_run
 
         ctx = allocate_execution_run(
             task_id="test:task2",
@@ -110,12 +109,12 @@ class TestFinalizeExecutionRun:
         conn.close()
 
     def test_finalize_marks_run_cancelled(self, _isolated_runtime_db):
+        from universal_agent.durable.db import connect_runtime_db
+        from universal_agent.durable.state import get_run
         from universal_agent.services.execution_run_service import (
             allocate_execution_run,
             finalize_execution_run,
         )
-        from universal_agent.durable.db import connect_runtime_db
-        from universal_agent.durable.state import get_run
 
         ctx = allocate_execution_run(
             task_id="test:task3",
@@ -137,12 +136,12 @@ class TestFinalizeExecutionRun:
 
     def test_finalize_is_idempotent(self, _isolated_runtime_db):
         """Calling finalize twice does not raise or corrupt data."""
+        from universal_agent.durable.db import connect_runtime_db
+        from universal_agent.durable.state import get_run
         from universal_agent.services.execution_run_service import (
             allocate_execution_run,
             finalize_execution_run,
         )
-        from universal_agent.durable.db import connect_runtime_db
-        from universal_agent.durable.state import get_run
 
         ctx = allocate_execution_run(
             task_id="test:task4",
@@ -174,12 +173,12 @@ class TestFinalizeExecutionRun:
 
     def test_finalize_with_missing_attempt_still_updates_run(self, _isolated_runtime_db):
         """If the attempt row is missing, the run status is still updated."""
+        from universal_agent.durable.db import connect_runtime_db
+        from universal_agent.durable.state import get_run
         from universal_agent.services.execution_run_service import (
             allocate_execution_run,
             finalize_execution_run,
         )
-        from universal_agent.durable.db import connect_runtime_db
-        from universal_agent.durable.state import get_run
 
         ctx = allocate_execution_run(
             task_id="test:task5",

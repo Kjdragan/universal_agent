@@ -5,8 +5,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from universal_agent.vp.worker_loop import VpWorkerLoop
 from universal_agent.vp.profiles import VpProfile
+from universal_agent.vp.worker_loop import VpWorkerLoop
+
 
 @pytest.mark.asyncio
 async def test_vp_coder_respects_dag_concurrency():

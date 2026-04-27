@@ -3,12 +3,14 @@ File Watcher for Memory System.
 Monitors the memory/ directory and syncs changes to the archival memory index.
 """
 
+import hashlib
 import os
 import time
-import hashlib
-from typing import Callable, Any
-from watchdog.observers import Observer
+from typing import Any, Callable
+
 from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
+
 
 class MemoryFileHandler(FileSystemEventHandler):
     def __init__(self, callback: Callable[[str, str], None], patterns: list = ["*.md"]):

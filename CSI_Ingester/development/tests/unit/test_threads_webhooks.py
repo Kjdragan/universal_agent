@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import sqlite3
 
-import pytest
-
 from csi_ingester.contract import CreatorSignalEvent
 from csi_ingester.store.sqlite import ensure_schema
 from csi_ingester.threads_webhooks import (
@@ -14,6 +12,7 @@ from csi_ingester.threads_webhooks import (
     validate_signed_payload,
     validate_verification_request,
 )
+import pytest
 
 
 def test_threads_webhook_verification_token_guard():
@@ -31,8 +30,8 @@ def test_threads_webhook_signature_validation():
     settings = ThreadsWebhookSettings(enabled=True, verify_token="", app_secret="topsecret")
     payload = b'{"object":"threads"}'
 
-    import hmac
     import hashlib
+    import hmac
 
     digest = hmac.new(b"topsecret", payload, hashlib.sha256).hexdigest()
     assert validate_signed_payload(raw_body=payload, signature_header=f"sha256={digest}", settings=settings) is True

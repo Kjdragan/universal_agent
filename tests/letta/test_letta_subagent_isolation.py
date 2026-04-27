@@ -6,6 +6,7 @@ Run: uv run python tests/test_letta_subagent_isolation.py
 import os
 import sys
 import time
+
 from dotenv import load_dotenv
 
 load_dotenv("/home/kjdragan/lrepos/universal_agent/.env")
@@ -14,9 +15,9 @@ repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
-import sitecustomize  # noqa: F401
-
 from agentic_learning import AgenticLearning
+
+import sitecustomize  # noqa: F401
 
 PRIMARY_AGENT = "test_primary_agent"
 SUBAGENT_TYPE = "report-creation-expert"

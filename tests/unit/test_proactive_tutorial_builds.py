@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
+import sqlite3
 
 import pytest
 
@@ -29,7 +29,9 @@ def test_queue_tutorial_build_task_requires_private_repo_policy(tmp_path):
             artifact_path="/tmp/seed",
         )
         from universal_agent.services.proactive_artifacts import record_feedback
-        from universal_agent.services.proactive_preferences import record_artifact_feedback_signal
+        from universal_agent.services.proactive_preferences import (
+            record_artifact_feedback_signal,
+        )
 
         updated = record_feedback(conn, artifact_id=seed["artifact_id"], score=5, text="more tutorials")
         record_artifact_feedback_signal(conn, artifact=updated, score=5, text="more tutorials")

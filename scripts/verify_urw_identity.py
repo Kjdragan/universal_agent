@@ -6,8 +6,9 @@ import sys
 # Add src to path
 sys.path.append(os.path.join(os.getcwd(), "src"))
 
-from universal_agent.urw.integration import GatewayURWAdapter
 from universal_agent.identity.resolver import resolve_user_id
+from universal_agent.urw.integration import GatewayURWAdapter
+
 
 async def verify_urw_identity():
     print("Locked & Loaded: Verifying URW Identity Integration")

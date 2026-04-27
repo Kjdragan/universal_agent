@@ -9,8 +9,9 @@ Preview: manimgl spring_mass_system.py SpringMassDemo -p
 
 Source: Adapted from 3b1b's Laplace transform video (2025)
 """
-from manimlib import *
 import math
+
+from manimlib import *
 
 
 class SpringMassSystem(VGroup):

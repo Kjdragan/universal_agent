@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 _PAGE = Path("web-ui/app/dashboard/supervisors/page.tsx")
 
 

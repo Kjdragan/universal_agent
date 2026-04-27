@@ -4,6 +4,7 @@ Run: uv run python tests/test_letta_connection.py
 """
 
 import os
+
 from dotenv import load_dotenv
 
 # Load environment

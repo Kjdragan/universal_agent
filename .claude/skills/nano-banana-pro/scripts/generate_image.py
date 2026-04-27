@@ -17,11 +17,11 @@ Multi-image editing (up to 14 images):
 """
 
 import argparse
-import os
-import sys
-import shutil
 from datetime import datetime
+import os
 from pathlib import Path
+import shutil
+import sys
 
 
 def get_api_key(provided_key: str | None) -> str | None:

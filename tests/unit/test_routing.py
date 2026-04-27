@@ -1,6 +1,7 @@
 """Tests for the declarative routing module."""
 
 import os
+
 import pytest
 
 from universal_agent.routing import (
@@ -8,10 +9,10 @@ from universal_agent.routing import (
     ROUTE_STANDARD,
     ROUTE_SYSTEM,
     classify_heuristic,
+    is_context_only_intent,
+    is_memory_intent,
     is_system_intent,
     is_tool_required_intent,
-    is_memory_intent,
-    is_context_only_intent,
 )
 
 

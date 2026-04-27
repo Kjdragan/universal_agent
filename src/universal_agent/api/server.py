@@ -102,13 +102,11 @@ from universal_agent.api.agent_bridge import get_agent_bridge
 from universal_agent.api.error_handlers import register_error_handlers
 from universal_agent.api.events import (
     ApprovalResponse,
+    EventType as WSEventType,
     SessionInfo,
     WebSocketEvent,
     create_connected_event,
     create_error_event,
-)
-from universal_agent.api.events import (
-    EventType as WSEventType,
 )
 from universal_agent.durable.db import connect_runtime_db
 from universal_agent.durable.state import list_run_attempts

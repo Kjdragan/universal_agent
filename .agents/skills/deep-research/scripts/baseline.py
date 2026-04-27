@@ -7,12 +7,14 @@
 
 import argparse
 import os
+
 from google import genai
+
 
 def main():
     try:
-        import sys
         from pathlib import Path
+        import sys
         repo_root = Path(__file__).resolve().parent.parent.parent.parent.parent
         sys.path.append(str(repo_root / "src"))
         from universal_agent import infisical_loader

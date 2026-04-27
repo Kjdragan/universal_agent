@@ -2,18 +2,22 @@
 import asyncio
 import os
 import sys
+
 from dotenv import load_dotenv
 
 load_dotenv()
-import logging
 from datetime import datetime
+import logging
 
 # Setup path
 sys.path.append(os.path.join(os.getcwd(), "src"))
 
 # Mock logic or real imports? Real imports.
 try:
-    from universal_agent.agent_core import UniversalAgent as ClaudeAgent, ClaudeAgentOptions
+    from universal_agent.agent_core import (
+        ClaudeAgentOptions,
+        UniversalAgent as ClaudeAgent,
+    )
 except ImportError as e:
     print(f"Import Error: {e}")
     sys.exit(1)

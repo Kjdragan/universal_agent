@@ -1,7 +1,8 @@
+from datetime import datetime
 import os
 import sys
+
 import yaml
-from datetime import datetime
 
 # 1. Setup paths so imports work without PYTHONPATH
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -10,6 +11,7 @@ if os.path.exists(src_dir) and src_dir not in sys.path:
     sys.path.insert(0, src_dir)
 
 from universal_agent.prompt_assets import discover_skills
+
 
 def main():
     print("🚀 Generating Capabilities Manually...")

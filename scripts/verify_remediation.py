@@ -1,15 +1,17 @@
 
-import sys
 import os
 import sqlite3
-import pytest
+import sys
 from unittest.mock import MagicMock
+
+import pytest
 
 # Add src to path
 sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
 
-from universal_agent.guardrails.tool_schema import _match_schema, validate_tool_input
 from universal_agent.durable.ledger import ToolCallLedger
+from universal_agent.guardrails.tool_schema import _match_schema, validate_tool_input
+
 
 def test_tool_schema_matching():
     print("Testing Tool Schema Matching...")
