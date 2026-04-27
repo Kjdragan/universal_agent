@@ -342,11 +342,25 @@ implementation/
    INFISICAL_ENVIRONMENT="production"
    ```
 
-4. **`docs/`** — Seed the documentation skeleton per `references/documentation_pattern.md`:
-   - `docs/README.md` (thematic index)
-   - `docs/Documentation_Status.md` (status tracker)
-   - Include copies of `references/infisical_integration.md` and `references/vps_setup_guide.md`
-     inside `docs/` so the project is self-contained for VPS deployment.
+4. **`docs/`** — **MANDATORY: Seed the documentation skeleton with permanent knowledge.**
+   The generated repo MUST be self-contained. Read the following reference files from this
+   skill and write their full contents into the `implementation/docs/` directory:
+
+   | Source (read from skill) | Destination (write into implementation) |
+   |--------------------------|----------------------------------------|
+   | `references/documentation_pattern.md` | `docs/documentation_pattern.md` |
+   | `references/infisical_integration.md` | `docs/infisical_integration.md` |
+   | `references/vps_setup_guide.md` | `docs/vps_setup_guide.md` |
+
+   Additionally create these index files:
+   - `docs/README.md` — Thematic index linking to all docs above + any project-specific docs
+   - `docs/Documentation_Status.md` — Status tracker listing each doc with last-updated date
+
+   > [!IMPORTANT]
+   > These are NOT optional references. The agent MUST `read` each file from the skill's
+   > `references/` directory and `write` its complete contents into the implementation's
+   > `docs/` directory. The resulting repo must work as standalone knowledge even if the
+   > Universal Agent skill directory is unavailable.
 
 5. **Running instructions in `README.md`**:
    ```markdown
