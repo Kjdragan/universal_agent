@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import os
-import time
 from pathlib import Path
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -18,7 +18,6 @@ from universal_agent.services.daemon_sessions import (
     daemon_sessions_enabled,
     is_daemon_session,
 )
-
 
 # ── is_daemon_session ────────────────────────────────────────────────────────
 

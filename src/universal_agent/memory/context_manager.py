@@ -1,12 +1,19 @@
 
-import logging
-from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 import json
+import logging
+from typing import Any, Dict, List, Optional
 
 # Try to import types from SDK, or fallback to dicts
 try:
-    from claude_agent_sdk.types import Message, UserMessage, AssistantMessage, ToolUseBlock, ToolResultBlock, TextBlock
+    from claude_agent_sdk.types import (
+        AssistantMessage,
+        Message,
+        TextBlock,
+        ToolResultBlock,
+        ToolUseBlock,
+        UserMessage,
+    )
 except ImportError:
     # Fallback types for pure logic if SDK not present (unlikely)
     Message = Dict[str, Any]

@@ -1,14 +1,18 @@
 from __future__ import annotations
 
-import hashlib
-import time
-import uuid
 from dataclasses import dataclass, replace
+import hashlib
+import logging
 from pathlib import Path
-from typing import Any, Optional
-
 import sqlite3
+import time
+from typing import Any, Optional
+import uuid
 
+from universal_agent.codebase_policy import (
+    is_approved_codebase_path,
+    repo_mutation_requested,
+)
 from universal_agent.durable.state import (
     append_vp_event,
     append_vp_session_event,
@@ -26,10 +30,7 @@ from universal_agent.guardrails.workspace_guard import (
     WorkspaceGuardError,
     enforce_external_target_path,
 )
-from universal_agent.codebase_policy import is_approved_codebase_path, repo_mutation_requested
 from universal_agent.vp.profiles import VpProfile, get_vp_profile
-
-import logging
 
 logger = logging.getLogger(__name__)
 

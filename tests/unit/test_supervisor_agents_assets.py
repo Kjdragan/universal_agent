@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import re
 from pathlib import Path
+import re
 
 from universal_agent import prompt_assets
-
 
 FACTORY_AGENT_PATH = Path(".claude/agents/factory-supervisor.md")
 CSI_AGENT_PATH = Path(".claude/agents/csi-supervisor.md")

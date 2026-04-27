@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import asyncio
 
-import httpx
-import pytest
-
 from csi_ingester.contract import CreatorSignalEvent
 from csi_ingester.emitter.ua_client import (
     UAEmitter,
     classify_emission_failure,
     is_transient_failure,
 )
+import httpx
+import pytest
 
 
 def _event() -> CreatorSignalEvent:

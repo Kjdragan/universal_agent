@@ -1,8 +1,8 @@
+from datetime import datetime, timezone
 import json
 import sqlite3
-import uuid
-from datetime import datetime, timezone
 from typing import Any, Optional
+import uuid
 
 
 def _now() -> str:

@@ -8,6 +8,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.
 
 from universal_agent.agent_setup import AgentSetup
 
+
 async def main():
     print("🚀 Verifying Capabilities Generation...")
     

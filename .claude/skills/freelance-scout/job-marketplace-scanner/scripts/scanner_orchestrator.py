@@ -28,14 +28,14 @@ Output:
     - Summary printed to stdout for the agent to parse
 """
 
-import os
-import sys
-import json
-import asyncio
 import argparse
-import logging
+import asyncio
 from datetime import datetime, timedelta
+import json
+import logging
+import os
 from pathlib import Path
+import sys
 
 # Add script directories to path
 SCRIPT_DIR = Path(__file__).parent
@@ -43,9 +43,9 @@ sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(SCRIPT_DIR.parent / "job-marketplace-scanner" / "scripts"))
 sys.path.insert(0, str(SCRIPT_DIR.parent / "opportunity-analyzer" / "scripts"))
 
-from models import Opportunity, ScanResult, Platform, DailyDigest
+from models import DailyDigest, Opportunity, Platform, ScanResult
 from platform_adapters import get_adapter, get_all_adapters
-from scoring_engine import OpportunityScoringEngine, DigestGenerator
+from scoring_engine import DigestGenerator, OpportunityScoringEngine
 
 logging.basicConfig(
     level=logging.INFO,

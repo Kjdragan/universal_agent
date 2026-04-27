@@ -1,4 +1,5 @@
 from typing import Any, Dict
+
 from .manager import MemoryManager
 
 # Since tools in this project are often dynamically bound or use a specific signature style,

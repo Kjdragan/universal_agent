@@ -8,9 +8,9 @@ environment-independent.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import shutil
 import time
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -30,7 +30,6 @@ from src.universal_agent.tools.scrapling_scraper.inbox_processor import (
     _load_job,
     _url_to_filename,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -112,25 +111,33 @@ class TestIsBotBlocked:
 
 class TestUrlToFilename:
     def test_basic_url(self):
-        from src.universal_agent.tools.scrapling_scraper.inbox_processor import _url_to_filename
+        from src.universal_agent.tools.scrapling_scraper.inbox_processor import (
+            _url_to_filename,
+        )
         name = _url_to_filename("https://example.com/some/path")
         assert "example.com" in name
         assert "/" not in name
 
     def test_no_path(self):
-        from src.universal_agent.tools.scrapling_scraper.inbox_processor import _url_to_filename
+        from src.universal_agent.tools.scrapling_scraper.inbox_processor import (
+            _url_to_filename,
+        )
         name = _url_to_filename("https://example.com")
         assert "example.com" in name
         assert len(name) > 0
 
     def test_long_url_is_truncated(self):
-        from src.universal_agent.tools.scrapling_scraper.inbox_processor import _url_to_filename
+        from src.universal_agent.tools.scrapling_scraper.inbox_processor import (
+            _url_to_filename,
+        )
         long_url = "https://example.com/" + "x" * 300
         name = _url_to_filename(long_url)
         assert len(name) <= 120
 
     def test_query_and_fragment_affect_filename(self):
-        from src.universal_agent.tools.scrapling_scraper.inbox_processor import _url_to_filename
+        from src.universal_agent.tools.scrapling_scraper.inbox_processor import (
+            _url_to_filename,
+        )
         a = _url_to_filename("https://example.com/search?q=a#top")
         b = _url_to_filename("https://example.com/search?q=b#top")
         c = _url_to_filename("https://example.com/search")

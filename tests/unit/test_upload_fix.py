@@ -2,18 +2,20 @@
 """
 Quick test of the fixed upload_to_composio function via MCP.
 """
+from datetime import datetime
+import json
 import os
 import sys
-import json
-from datetime import datetime
 
 # Add paths
 sys.path.insert(0, os.path.dirname(__file__) + "/../src")
 from dotenv import load_dotenv
+
 load_dotenv()
 
 # Import the fixed function directly
 from mcp_server import upload_to_composio
+
 
 def main():
     print("="*60)

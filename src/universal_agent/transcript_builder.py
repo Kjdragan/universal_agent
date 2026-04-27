@@ -4,11 +4,12 @@ Parses trace.json data to create a rich, human-readable markdown transcript of t
 Acts as a "Replay Studio" for understanding agent behavior.
 """
 
-import json
 import ast
-import re
 from datetime import datetime
-from typing import Dict, Any
+import json
+import re
+from typing import Any, Dict
+
 
 def format_timestamp(iso_str: str) -> str:
     """Format ISO timestamp to readable time string (HH:MM:SS)."""

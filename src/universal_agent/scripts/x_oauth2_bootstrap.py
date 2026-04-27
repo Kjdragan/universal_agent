@@ -12,13 +12,13 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import os
+from pathlib import Path
 import secrets
 import sys
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
 
@@ -26,7 +26,6 @@ import httpx
 
 from universal_agent.artifacts import resolve_artifacts_dir
 from universal_agent.infisical_loader import initialize_runtime_secrets
-
 
 DEFAULT_SCOPES = ("tweet.read", "users.read", "offline.access")
 TOKEN_URL = "https://api.x.com/2/oauth2/token"

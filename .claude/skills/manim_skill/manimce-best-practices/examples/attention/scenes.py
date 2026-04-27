@@ -7,17 +7,24 @@ Demonstrates the attention mechanism used in transformers.
 Run with: manim -pql scenes.py SceneName
 """
 
+from pathlib import Path
+import sys
+
 from manim import *
 import numpy as np
-import sys
-from pathlib import Path
 
 # Add parent directory to path for helpers import
 sys.path.insert(0, str(Path(__file__).parent))
 from helpers import (
-    NumericEmbedding, WeightMatrix, ContextAnimation,
-    NeuralNetwork, AttentionPattern, softmax, value_to_color,
-    random_bright_color, show_attention_flow
+    AttentionPattern,
+    ContextAnimation,
+    NeuralNetwork,
+    NumericEmbedding,
+    WeightMatrix,
+    random_bright_color,
+    show_attention_flow,
+    softmax,
+    value_to_color,
 )
 
 

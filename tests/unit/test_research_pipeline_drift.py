@@ -14,13 +14,12 @@ Golden run reference: session_20260223_215506_140963c1
 See docs/002_SDK_PERMISSIONS_HOOKS_SUBAGENTS.md for full SDK reference.
 """
 
-import re
 from pathlib import Path
+import re
 
 import pytest
 
 from universal_agent.constants import DISALLOWED_TOOLS, PRIMARY_ONLY_BLOCKED_TOOLS
-
 
 # ---------------------------------------------------------------------------
 # Section 1: Tool Permission Invariants

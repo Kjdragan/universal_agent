@@ -1,5 +1,5 @@
 import threading
-from typing import Optional, Dict
+from typing import Dict, Optional
 
 # Maps main_session_id -> sidebar_session_id
 _sidebar_lock = threading.Lock()

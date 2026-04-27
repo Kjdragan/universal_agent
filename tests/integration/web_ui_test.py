@@ -6,6 +6,7 @@ Uses Playwright to automate the browser interaction.
 
 import sys
 import time
+
 from playwright.sync_api import sync_playwright
 
 # The same prompt from the CLI golden example

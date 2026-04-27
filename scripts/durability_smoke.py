@@ -2,14 +2,13 @@
 import argparse
 import json
 import os
+from pathlib import Path
 import re
 import sqlite3
 import subprocess
 import sys
 import time
-from pathlib import Path
 from typing import Optional
-
 
 RUN_ID_PATTERN = re.compile(r"Run ID:\s*([0-9a-fA-F-]{36})")
 RESUME_CMD_PATTERN = re.compile(r"Resume Command:\s*(.+)")

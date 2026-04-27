@@ -8,34 +8,34 @@ This module provides the UniversalAgent class which encapsulates:
 """
 
 import asyncio
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+import inspect
+import json
 import logging
 import os
-import time
-import json
-import uuid
 import re
-import inspect
-from datetime import datetime
-from typing import TYPE_CHECKING, AsyncGenerator, Any, Callable, Optional
-from dataclasses import dataclass, field
-from enum import Enum
+import time
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Callable, Optional
+import uuid
 
-from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
-from universal_agent.feature_flags import sdk_typed_task_events_enabled
-from universal_agent.sdk.task_events import extract_typed_task_payload
-
-import logfire
 from claude_agent_sdk.client import ClaudeSDKClient
 from claude_agent_sdk.types import (
     AgentDefinition,
     AssistantMessage,
     ResultMessage,
     TextBlock,
-    ToolUseBlock,
-    ToolResultBlock,
     ThinkingBlock,
+    ToolResultBlock,
+    ToolUseBlock,
     UserMessage,
 )
+import logfire
+
+from universal_agent.feature_flags import sdk_typed_task_events_enabled
+from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
+from universal_agent.sdk.task_events import extract_typed_task_payload
 
 if TYPE_CHECKING:
     from composio import Composio
@@ -45,17 +45,20 @@ from universal_agent.durable.tool_gateway import (
 )
 from universal_agent.guardrails.tool_schema import validate_tool_input
 from universal_agent.prompt_assets import (
-    load_capabilities_registry,
-    get_tool_knowledge_block,
     discover_skills,
     generate_skills_xml,
+    get_tool_knowledge_block,
+    load_capabilities_registry,
 )
-from universal_agent.utils.message_history import MessageHistory, TRUNCATION_THRESHOLD
+from universal_agent.utils.message_history import TRUNCATION_THRESHOLD, MessageHistory
+
 
 def _get_history_instance(system_prompt_tokens=2000, session_id=None):
     if os.getenv("UA_ENABLE_LOSSLESS_MEMORY", "1") == "1":
         try:
-            from universal_agent.lossless_memory.history_adapter import LosslessMessageHistory
+            from universal_agent.lossless_memory.history_adapter import (
+                LosslessMessageHistory,
+            )
             return LosslessMessageHistory(system_prompt_tokens=system_prompt_tokens, session_id=session_id)
         except ImportError:
             pass
@@ -944,7 +947,9 @@ def configure_logfire():
 
             def _configure_langsmith():
                 try:
-                    from langsmith.integrations.claude_agent_sdk import configure_claude_agent_sdk
+                    from langsmith.integrations.claude_agent_sdk import (
+                        configure_claude_agent_sdk,
+                    )
                     configure_claude_agent_sdk()
                 except Exception:
                     pass

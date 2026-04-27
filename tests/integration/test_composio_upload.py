@@ -6,12 +6,13 @@ This tests various approaches to find what actually works.
 Run: cd /home/kjdragan/lrepos/universal_agent && uv run tests/test_composio_upload.py
 """
 
+import base64
+import json
 import os
 import sys
-import json
-import base64
-import pytest
+
 from dotenv import load_dotenv
+import pytest
 
 pytest.skip(
     "Composio upload tests are pending fixture setup; skipping for now.",

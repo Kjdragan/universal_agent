@@ -12,15 +12,14 @@ from __future__ import annotations
 import re
 
 from universal_agent.services.email_task_bridge import _AGENT_LABEL_MAP
-from universal_agent.session_policy import classify_request_categories, _POST_RE
+from universal_agent.session_policy import _POST_RE, classify_request_categories
 from universal_agent.youtube_mode_utils import (
-    infer_youtube_mode,
     MODE_EXPLAINER_ONLY,
     MODE_EXPLAINER_PLUS_CODE,
     YOUTUBE_CODE_HINT_KEYWORDS,
     YOUTUBE_NON_CODE_HINT_KEYWORDS,
+    infer_youtube_mode,
 )
-
 
 # ---------------------------------------------------------------------------
 # Change 1: _AGENT_LABEL_MAP

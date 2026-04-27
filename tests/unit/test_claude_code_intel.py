@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from pathlib import Path
+import sqlite3
 
 import httpx
 
 from universal_agent import task_hub
 from universal_agent.services.claude_code_intel import (
     ClaudeCodeIntelConfig,
+    _oauth1_headers,
     classify_post,
     extract_links,
     fetch_user_by_username_with_fallbacks,
-    _oauth1_headers,
     run_sync,
 )
 

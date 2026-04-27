@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-import pytest
 from fastapi.testclient import TestClient
+import pytest
 
 from universal_agent import gateway_server
 

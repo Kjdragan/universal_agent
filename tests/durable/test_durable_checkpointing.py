@@ -1,7 +1,7 @@
 import sqlite3
 
+from universal_agent.durable.checkpointing import load_last_checkpoint, save_checkpoint
 from universal_agent.durable.migrations import ensure_schema
-from universal_agent.durable.checkpointing import save_checkpoint, load_last_checkpoint
 
 
 def _conn() -> sqlite3.Connection:

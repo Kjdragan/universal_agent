@@ -7,8 +7,8 @@ Includes an inline keyboard with a deep link to the TGTG app.
 
 from __future__ import annotations
 
-import logging
 from datetime import datetime, timezone
+import logging
 
 import httpx
 

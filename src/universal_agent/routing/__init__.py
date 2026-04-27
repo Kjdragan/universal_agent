@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
+import os
 
 # Canonical route constants
 ROUTE_SIMPLE = "SIMPLE"

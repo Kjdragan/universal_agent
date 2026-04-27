@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import copy
-import uuid
 from datetime import datetime, timezone
+import uuid
 
 import pytest
 
-from universal_agent import gateway_server
-from universal_agent import task_hub
+from universal_agent import gateway_server, task_hub
 
 
 def _seed_task(

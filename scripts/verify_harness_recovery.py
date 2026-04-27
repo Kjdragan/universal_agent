@@ -1,13 +1,16 @@
 import asyncio
-import sys
 import os
+import sys
+
 sys.path.append(os.path.join(os.getcwd(), "src"))
 
-from universal_agent.agent_core import UniversalAgent, EventType, HarnessError
 from dataclasses import dataclass
 
 # Mock Logfire to avoid errors
 import unittest.mock
+
+from universal_agent.agent_core import EventType, HarnessError, UniversalAgent
+
 sys.modules["logfire"] = unittest.mock.MagicMock()
 
 async def test_consecutive_errors():

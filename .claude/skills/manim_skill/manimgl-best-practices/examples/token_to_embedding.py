@@ -6,9 +6,10 @@ Based on 3Blue1Brown's transformer visualizations.
 
 Run: manimgl token_to_embedding.py TokenToEmbedding -o
 """
+import random
+
 from manimlib import *
 import numpy as np
-import random
 
 
 def value_to_color(

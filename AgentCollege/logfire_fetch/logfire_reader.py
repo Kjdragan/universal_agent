@@ -1,7 +1,10 @@
+from typing import Any, Dict, List
+
 from logfire.query_client import LogfireQueryClient
-from .config import get_settings
 import pandas as pd
-from typing import List, Dict, Any
+
+from .config import get_settings
+
 
 class LogfireReader:
     def __init__(self):

@@ -14,23 +14,23 @@ The adapter ensures that:
 from __future__ import annotations
 
 import asyncio
-import json
-import os
-import tempfile
-import sys
-import time
-import logging
-import uuid
-import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime
+import json
+import logging
+import os
 from pathlib import Path
+import sys
+import tempfile
+import time
+import traceback
 from typing import Any, AsyncIterator, Optional
+import uuid
 
 from universal_agent.agent_core import AgentEvent, EventType
-from universal_agent.identity import resolve_user_id
 from universal_agent.api.input_bridge import set_input_handler
+from universal_agent.identity import resolve_user_id
 from universal_agent.memory.paths import (
     resolve_shared_memory_workspace,
 )
@@ -478,8 +478,10 @@ class ProcessTurnAdapter:
             self._initialized = False
             await self.initialize()
         if self._client is None:
+            from claude_agent_sdk._internal.transport.subprocess_cli import (
+                SubprocessCLITransport,
+            )
             from claude_agent_sdk.client import ClaudeSDKClient
-            from claude_agent_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
 
             # Guard against E2BIG: the SDK transport builds the child process
             # env from process-global os.environ. Narrow sanitization to the
@@ -546,7 +548,8 @@ class ProcessTurnAdapter:
         
         # Import here to avoid circular imports
         from claude_agent_sdk.client import ClaudeSDKClient
-        from universal_agent.main import process_turn, budget_state
+
+        from universal_agent.main import budget_state, process_turn
         
         # Reset budget state per execution (CLI entrypoint manages this separately).
         budget_state["start_ts"] = time.time()
@@ -630,11 +633,14 @@ class ProcessTurnAdapter:
         
         async def run_engine():
             try:
-                from universal_agent.execution_session import ExecutionSession
-                from universal_agent.main import process_turn
-                import universal_agent.main as main_module
-                from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
+                from universal_agent.durable.db import (
+                    connect_runtime_db,
+                    get_runtime_db_path,
+                )
                 from universal_agent.durable.migrations import ensure_schema
+                from universal_agent.execution_session import ExecutionSession
+                import universal_agent.main as main_module
+                from universal_agent.main import process_turn
 
                 runtime_db_conn = getattr(main_module, "runtime_db_conn", None)
                 needs_runtime_db_reset = runtime_db_conn is None
@@ -801,7 +807,10 @@ class ProcessTurnAdapter:
                 # Circuit breaker / budget exits should tear down the underlying Claude subprocess
                 # to avoid orphaned long-running loops. Next call will recreate the client.
                 try:
-                    from universal_agent.main import BudgetExceeded, CircuitBreakerTriggered
+                    from universal_agent.main import (
+                        BudgetExceeded,
+                        CircuitBreakerTriggered,
+                    )
 
                     if isinstance(e, (BudgetExceeded, CircuitBreakerTriggered)):
                         logger.warning("Resetting SDK client after guardrail: %s", type(e).__name__)
@@ -1118,7 +1127,9 @@ class ProcessTurnAdapter:
             # 2. Session index sync: index the transcript for cross-session search
             if memory_session_index_on_end(default=True):
                 try:
-                    from universal_agent.memory.orchestrator import get_memory_orchestrator
+                    from universal_agent.memory.orchestrator import (
+                        get_memory_orchestrator,
+                    )
                     broker = get_memory_orchestrator(workspace_dir=shared_memory_dir)
                     result = broker.sync_session(
                         session_id=session_id,

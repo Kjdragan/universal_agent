@@ -11,9 +11,9 @@ Validates:
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 import os
 import sqlite3
-from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,16 +21,15 @@ import pytest
 from universal_agent import task_hub
 from universal_agent.services.morning_report_sender import (
     MorningReportSender,
-    is_report_due,
-    build_morning_email_body,
-    build_morning_email_subject,
     _already_sent_today,
-    _mark_sent_today,
+    _get_overnight_activity,
     _get_recipient_email,
     _is_morning_report_enabled,
-    _get_overnight_activity,
+    _mark_sent_today,
+    build_morning_email_body,
+    build_morning_email_subject,
+    is_report_due,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

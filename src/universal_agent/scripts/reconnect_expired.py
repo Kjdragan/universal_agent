@@ -1,12 +1,13 @@
 
+import argparse
 import os
 import sys
-import argparse
 
 # Add project root to path for imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
 
 from composio import Composio
+
 
 def reconnect_expired(specific_slugs=None):
     # Load API key

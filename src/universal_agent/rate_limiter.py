@@ -15,10 +15,10 @@ Configuration (environment variables):
 """
 
 import asyncio
+from contextlib import asynccontextmanager
 import os
 import random
 import time
-from contextlib import asynccontextmanager
 from typing import Optional
 
 try:

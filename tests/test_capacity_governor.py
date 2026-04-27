@@ -10,8 +10,8 @@ import pytest
 
 from universal_agent.services.capacity_governor import (
     CapacityGovernor,
-    check_capacity,
     capacity_snapshot,
+    check_capacity,
 )
 
 

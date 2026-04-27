@@ -1,22 +1,22 @@
 import asyncio
+from datetime import datetime
 import logging
 import os
 import signal
 import sys
-from datetime import datetime
 
 # Adjust path to find root (universal_agent/)
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../")))
 
 # Import from root packages
+import logfire
+
 from Memory_System.manager import MemoryManager
 
 # Import from src packages
 from src.universal_agent.agent_college.critic import CriticAgent
-from src.universal_agent.agent_college.professor import ProfessorAgent
 from src.universal_agent.agent_college.logfire_reader import LogfireReader
-
-import logfire
+from src.universal_agent.agent_college.professor import ProfessorAgent
 
 # Configure logging
 logging.basicConfig(
@@ -36,7 +36,7 @@ else:
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
-from src.universal_agent.agent_college.logfire_reader import LogfireReader
+
 
 async def main():
     logger.info("🎓 Agent College Worker Starting...")

@@ -1,7 +1,8 @@
-from mcp.server.fastmcp import FastMCP
 import asyncio
-import os
 import logging
+import os
+
+from mcp.server.fastmcp import FastMCP
 from telegram import Bot
 
 # Logging

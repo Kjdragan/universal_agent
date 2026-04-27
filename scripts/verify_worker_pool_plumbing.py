@@ -1,9 +1,9 @@
 
 import asyncio
-import os
-import sys
 import logging
+import os
 from pathlib import Path
+import sys
 
 # Add src to path
 sys.path.append(os.path.join(os.getcwd(), "src"))
@@ -16,8 +16,14 @@ if os.path.exists(test_db):
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
-from universal_agent.durable.worker_pool import WorkerPoolManager, PoolConfig, WorkerConfig, queue_run
 from universal_agent.durable.db import connect_runtime_db
+from universal_agent.durable.worker_pool import (
+    PoolConfig,
+    WorkerConfig,
+    WorkerPoolManager,
+    queue_run,
+)
+
 
 async def mock_run_handler(run_id: str, workspace_dir: str) -> bool:
     print(f"[{run_id}] Mock Handler: Starting work...")

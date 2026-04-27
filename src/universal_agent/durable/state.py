@@ -1,9 +1,8 @@
+from datetime import datetime, timedelta, timezone
 import json
 import sqlite3
-import uuid
-from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Optional
-
+import uuid
 
 _RUN_SUCCESS_STATUSES = {"succeeded", "completed", "success"}
 _RUN_TERMINAL_STATUSES = _RUN_SUCCESS_STATUSES | {"failed", "cancelled", "needs_review"}

@@ -2,12 +2,13 @@
 # Run once to produce a structured catalog of all servers and channels
 # the bot has access to.
 
-import discord
-import json
+import asyncio
 import csv
 from datetime import datetime
-import asyncio
+import json
 import os
+
+import discord
 
 intents = discord.Intents.default()
 intents.message_content = True

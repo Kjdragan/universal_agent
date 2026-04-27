@@ -6,7 +6,11 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from local_places.google_places import get_place_details, resolve_locations, search_places
+from local_places.google_places import (
+    get_place_details,
+    resolve_locations,
+    search_places,
+)
 from local_places.schemas import (
     LocationResolveRequest,
     LocationResolveResponse,

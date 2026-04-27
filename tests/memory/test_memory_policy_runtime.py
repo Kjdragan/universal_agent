@@ -4,7 +4,10 @@ from pathlib import Path
 
 from universal_agent.execution_engine import _build_memory_env_overrides
 from universal_agent.memory.orchestrator import MemoryOrchestrator
-from universal_agent.session_policy import default_memory_policy, normalize_memory_policy
+from universal_agent.session_policy import (
+    default_memory_policy,
+    normalize_memory_policy,
+)
 
 
 def test_build_memory_env_overrides_disabled_mode() -> None:

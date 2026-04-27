@@ -1,23 +1,22 @@
 
 import asyncio
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 import json
 import logging
 import os
+from pathlib import Path
+import shutil
 import sqlite3
 import time
-from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Optional, Dict, Callable, Any
+from typing import Any, Callable, Dict, Optional
 
-from universal_agent.agent_core import EventType
-from universal_agent.gateway import InProcessGateway, GatewaySession, GatewayRequest
-from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
 from universal_agent import task_hub
-from universal_agent.utils.json_utils import extract_json_payload
+from universal_agent.agent_core import EventType
+from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+from universal_agent.gateway import GatewayRequest, GatewaySession, InProcessGateway
 from universal_agent.utils.heartbeat_findings_schema import HeartbeatFindings
-import shutil
-
+from universal_agent.utils.json_utils import extract_json_payload
 
 try:
     import logfire
@@ -283,8 +282,9 @@ def _build_heartbeat_environment_context(workspace_dir: str) -> str:
     standalone nodes), the agent sees its own machine identity rather than a
     hardcoded "you are on the VPS" instruction.
     """
-    from universal_agent.runtime_role import resolve_machine_slug, resolve_factory_role
     import socket
+
+    from universal_agent.runtime_role import resolve_factory_role, resolve_machine_slug
 
     machine_slug = resolve_machine_slug()
     factory_role = resolve_factory_role().value
@@ -323,8 +323,9 @@ def _build_task_focused_environment_context(workspace_dir: str) -> str:
     the agent needs workspace/file-write rules but NOT system monitoring instructions.
     Health check findings are written deterministically by Python after the run.
     """
-    from universal_agent.runtime_role import resolve_machine_slug, resolve_factory_role
     import socket
+
+    from universal_agent.runtime_role import resolve_factory_role, resolve_machine_slug
 
     machine_slug = resolve_machine_slug()
     factory_role = resolve_factory_role().value
@@ -501,7 +502,10 @@ def _compose_heartbeat_prompt(
     # Inject pending_review tasks for Simone's sign-off
     if runtime_conn is not None:
         try:
-            from universal_agent.task_hub import get_pending_review_tasks, reopen_stale_delegations
+            from universal_agent.task_hub import (
+                get_pending_review_tasks,
+                reopen_stale_delegations,
+            )
             _runtime_conn = runtime_conn
             if _runtime_conn is not None:
                 # 1. Reopen stale delegations (>4h without VP progress)
@@ -1880,7 +1884,9 @@ class HeartbeatService:
                     _capacity_ok = True
                     _capacity_reason = "not_checked"
                     try:
-                        from universal_agent.services.capacity_governor import CapacityGovernor
+                        from universal_agent.services.capacity_governor import (
+                            CapacityGovernor,
+                        )
                         _governor = CapacityGovernor.get_instance()
                         _capacity_ok, _capacity_reason = _governor.can_dispatch()
                         if not _capacity_ok:
@@ -1902,7 +1908,9 @@ class HeartbeatService:
                     # Record a point-in-time sample of slot occupancy and
                     # queue depth for the 3x daily intelligence reports.
                     try:
-                        from universal_agent.services.proactive_intelligence_report import record_utilization_sample
+                        from universal_agent.services.proactive_intelligence_report import (
+                            record_utilization_sample,
+                        )
                         if _capacity_ok or _capacity_reason != "not_checked":
                             # Governor was instantiated above — get snapshot
                             _gov = CapacityGovernor.get_instance()
@@ -1956,7 +1964,9 @@ class HeartbeatService:
                         # Enhancement 3: Context Injection — search memory for relevant
                         # past work on claimed tasks and inject snippets into metadata.
                         try:
-                            from universal_agent.memory.orchestrator import get_memory_orchestrator
+                            from universal_agent.memory.orchestrator import (
+                                get_memory_orchestrator,
+                            )
 
                             broker = get_memory_orchestrator()
                             memory_context_snippets = []
@@ -1991,8 +2001,8 @@ class HeartbeatService:
                         try:
                             from universal_agent.services.proactive_advisor import (
                                 build_brainstorm_context,
-                                format_brainstorm_context_prompt,
                                 build_morning_report,
+                                format_brainstorm_context_prompt,
                             )
                             _brainstorm_ctx = build_brainstorm_context(conn)
                             _brainstorm_ctx_text = format_brainstorm_context_prompt(_brainstorm_ctx)
@@ -2043,9 +2053,9 @@ class HeartbeatService:
                         # happens inside the reflection/ideation prompt.
                         try:
                             from universal_agent.services.signal_curator import (
-                                should_run_curation,
                                 get_pending_cards,
                                 record_curation_run,
+                                should_run_curation,
                             )
                             if should_run_curation(conn):
                                 pending_cards = get_pending_cards(conn, limit=30)
@@ -2179,7 +2189,9 @@ class HeartbeatService:
                 
             _recent_topics_text = ""
             try:
-                from universal_agent.services.proactive_topic_tracker import format_recent_topics_prompt
+                from universal_agent.services.proactive_topic_tracker import (
+                    format_recent_topics_prompt,
+                )
                 _recent_topics_text = format_recent_topics_prompt(state) if not task_hub_claimed else ""
             except Exception as _trk_exc:
                 logger.debug("Failed to format proactive topic history: %s", _trk_exc)
@@ -2364,7 +2376,10 @@ class HeartbeatService:
             # Record proactive topics (only when proactive and non-OK)
             if not ok_only and response_text and not task_hub_claimed:
                 try:
-                    from universal_agent.services.proactive_topic_tracker import record_topic, extract_topic_fingerprint
+                    from universal_agent.services.proactive_topic_tracker import (
+                        extract_topic_fingerprint,
+                        record_topic,
+                    )
                     _fp = extract_topic_fingerprint(response_text)
                     record_topic(state, topic_summary=response_text[:300], fingerprint=_fp)
                 except Exception as _trk_exc:

@@ -4,15 +4,15 @@
 from __future__ import annotations
 
 import argparse
-import json
-import os
-import sqlite3
-import sys
-import urllib.request
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
+import json
+import os
 from pathlib import Path
+import sqlite3
+import sys
 from typing import Any
+import urllib.request
 
 SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 if str(SCRIPT_ROOT) not in sys.path:

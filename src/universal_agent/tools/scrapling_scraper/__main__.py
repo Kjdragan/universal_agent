@@ -16,8 +16,8 @@ success or ``inbox/failed/`` on a parse/fatal error.
 """
 
 import argparse
-import sys
 from pathlib import Path
+import sys
 
 from .inbox_processor import run_inbox_processor
 

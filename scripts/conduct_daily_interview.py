@@ -1,8 +1,9 @@
 
 import asyncio
-import sys
 import os
 from pathlib import Path
+import sys
+
 from dotenv import load_dotenv
 
 # Setup paths
@@ -14,8 +15,9 @@ sys.path.append(str(PROJECT_ROOT))  # Add root for Memory_System package
 sys.path.append(str(PROJECT_ROOT / "skills/agent_interview"))
 
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, create_sdk_mcp_server
+from interview_tool import ask_user, fetch_context_gaps, finish_interview
+
 from universal_agent.utils.model_resolution import resolve_claude_code_model
-from interview_tool import ask_user, finish_interview, fetch_context_gaps
 
 # Load SKILL.md content for instructions
 SKILL_MD = (PROJECT_ROOT / "skills/agent_interview/SKILL.md").read_text()

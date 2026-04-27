@@ -13,18 +13,21 @@ import asyncio
 import json
 import logging
 import os
+from pathlib import Path
 import signal
 import time
-import uuid
-from pathlib import Path
 from typing import Any, Optional
+import uuid
 
+from universal_agent.codebase_policy import (
+    is_approved_codebase_path,
+    repo_mutation_requested,
+)
 from universal_agent.feature_flags import vp_handoff_root, vp_hard_block_ua_repo
 from universal_agent.guardrails.workspace_guard import (
     WorkspaceGuardError,
     enforce_external_target_path,
 )
-from universal_agent.codebase_policy import is_approved_codebase_path, repo_mutation_requested
 from universal_agent.vp.clients.base import MissionOutcome, VpClient
 
 # Lazy-import session budget to avoid circular dependencies

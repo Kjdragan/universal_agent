@@ -23,14 +23,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from pathlib import Path
 import socket
 import sys
 import time
-import urllib.error
-import urllib.request
-from pathlib import Path
 from typing import Any
+import urllib.error
 from urllib.parse import quote
+import urllib.request
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"

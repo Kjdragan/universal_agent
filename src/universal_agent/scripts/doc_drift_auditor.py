@@ -15,15 +15,15 @@ Checks performed:
 """
 
 import argparse
+from collections import Counter, defaultdict
+from datetime import datetime, timezone
 import json
 import logging
 import os
+from pathlib import Path
 import re
 import subprocess
 import sys
-from collections import Counter, defaultdict
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)

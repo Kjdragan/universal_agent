@@ -2,8 +2,9 @@
 Visualization of 3D cube projection along the diagonal.
 Shows how projecting a cube along the [1,1,1] direction creates a hexagonal pattern.
 """
-from manimlib import *
 import itertools as it
+
+from manimlib import *
 
 
 class CubeProjection3D(InteractiveScene):

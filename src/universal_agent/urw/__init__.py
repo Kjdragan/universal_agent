@@ -5,59 +5,59 @@ This package contains the URW outer-loop orchestrator, state manager,
 completion evaluator, decomposer, and adapter hooks for the Universal Agent.
 """
 
-from .state import (
-    Task,
-    TaskStatus,
-    Artifact,
-    ArtifactType,
-    CompletionConfidence,
-    IterationResult,
-    URWStateManager,
-    GitCheckpointer,
-)
 from .decomposer import (
-    Decomposer,
-    TemplateDecomposer,
-    LLMDecomposer,
-    HybridDecomposer,
-    PlanManager,
     DECOMPOSITION_TEMPLATES,
+    Decomposer,
+    HybridDecomposer,
+    LLMDecomposer,
+    PlanManager,
+    TemplateDecomposer,
     estimate_task_complexity,
     validate_task_graph,
 )
+from .evaluation_policy import (
+    DEFAULT_EVALUATION_POLICY,
+    TEMPLATE_EVALUATION_POLICIES,
+    VERIFICATION_TYPE_DEFAULTS,
+    EvaluationPolicySchema,
+    get_policy_summary,
+    resolve_evaluation_policy,
+)
 from .evaluator import (
+    BinaryCheckEvaluator,
+    CompositeEvaluator,
+    ConstraintEvaluator,
     EvaluationResult,
     Evaluator,
-    BinaryCheckEvaluator,
-    ConstraintEvaluator,
     LLMJudgeEvaluator,
-    CompositeEvaluator,
     create_default_evaluator,
     quick_evaluate,
 )
-from .orchestrator import (
-    URWOrchestrator,
-    OrchestratorStatus,
-    URWConfig,
-    URWCallbacks,
-    AgentLoopInterface,
-    AgentExecutionResult,
-    run_universal_task,
-    create_orchestrator_with_callbacks,
-)
 from .integration import (
     BaseAgentAdapter,
-    UniversalAgentAdapter,
     MockAgentAdapter,
+    UniversalAgentAdapter,
     create_adapter_for_system,
 )
-from .evaluation_policy import (
-    EvaluationPolicySchema,
-    DEFAULT_EVALUATION_POLICY,
-    VERIFICATION_TYPE_DEFAULTS,
-    TEMPLATE_EVALUATION_POLICIES,
-    resolve_evaluation_policy,
-    get_policy_summary,
+from .orchestrator import (
+    AgentExecutionResult,
+    AgentLoopInterface,
+    OrchestratorStatus,
+    URWCallbacks,
+    URWConfig,
+    URWOrchestrator,
+    create_orchestrator_with_callbacks,
+    run_universal_task,
+)
+from .state import (
+    Artifact,
+    ArtifactType,
+    CompletionConfidence,
+    GitCheckpointer,
+    IterationResult,
+    Task,
+    TaskStatus,
+    URWStateManager,
 )
 
 __all__ = [
@@ -124,6 +124,6 @@ from .context_summarizer import (
 # Phase planning
 from .phase_planner import (
     Phase,
-    PhaseStatus,
     PhasePlanner,
+    PhaseStatus,
 )

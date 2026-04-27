@@ -1,7 +1,8 @@
-import pytest
 import json
 from pathlib import Path
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from universal_agent.vp.clients.dag_client import DagClient
 

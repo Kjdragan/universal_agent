@@ -1,8 +1,11 @@
 # cc_setup.py
-import os
 import asyncio
+import os
+
 import discord
+
 from universal_agent.infisical_loader import initialize_runtime_secrets
+
 
 async def setup_channels():
     # Only loads valid Infisical secrets if script running standalone

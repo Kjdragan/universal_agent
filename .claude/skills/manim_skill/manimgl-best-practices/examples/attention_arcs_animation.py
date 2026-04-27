@@ -6,9 +6,10 @@ Based on 3Blue1Brown's transformer visualizations.
 
 Run: manimgl attention_arcs_animation.py AttentionArcsAnimation -o
 """
+import random
+
 from manimlib import *
 import numpy as np
-import random
 
 
 def random_bright_color(hue_range=(0.0, 1.0)):

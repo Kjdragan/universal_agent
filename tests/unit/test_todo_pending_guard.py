@@ -4,14 +4,13 @@ This guard prevents premature auto-completion of sessions where the agent
 has outstanding work declared via the Claude Code TodoWrite tool.
 """
 
-import sys
 from pathlib import Path
+import sys
 
 # Ensure the source tree is importable
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src"))
 
 from universal_agent.gateway_server import _agent_has_pending_todo_items
-
 
 # ── positive cases: should detect pending work ──────────────────────────
 

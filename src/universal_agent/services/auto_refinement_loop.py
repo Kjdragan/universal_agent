@@ -137,8 +137,8 @@ async def refine_task(
     Returns a summary dict with action taken.
     """
     from universal_agent import task_hub
-    from universal_agent.services.refinement_agent import refine_with_llm, next_stage
     from universal_agent.services.decomposition_agent import decompose_with_llm
+    from universal_agent.services.refinement_agent import next_stage, refine_with_llm
 
     _record_attempt(task_id)
 

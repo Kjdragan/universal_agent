@@ -4,8 +4,8 @@ import logging
 import os
 from typing import Any
 
-import httpx
 from fastapi import HTTPException
+import httpx
 
 from local_places.schemas import (
     LatLng,

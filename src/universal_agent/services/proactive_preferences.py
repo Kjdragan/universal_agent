@@ -7,10 +7,10 @@ future artifact generation.
 
 from __future__ import annotations
 
-import json
-import sqlite3
-import math
 from datetime import datetime, timezone
+import json
+import math
+import sqlite3
 from typing import Any
 
 

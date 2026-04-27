@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import os
 import time
-from datetime import datetime, timezone
 from typing import Any
 
 import httpx

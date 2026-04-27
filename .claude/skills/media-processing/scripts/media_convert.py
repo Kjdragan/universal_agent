@@ -7,11 +7,10 @@ Supports quality presets, batch processing, and dry-run mode.
 """
 
 import argparse
+from pathlib import Path
 import subprocess
 import sys
-from pathlib import Path
 from typing import List, Optional, Tuple
-
 
 # Format mappings
 VIDEO_FORMATS = {'.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.wmv', '.m4v'}

@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sqlite3
 from pathlib import Path
+import sqlite3
 
 from universal_agent.durable.db import connect_runtime_db, get_vp_db_path
 from universal_agent.durable.migrations import ensure_schema

@@ -1,35 +1,24 @@
-import sys
-import os
-import uuid
+import ast
+from datetime import datetime
 import json
 import logging
-import time
-import ast
-import re
-from typing import Any, Optional, Callable
-import shlex
+import os
 from pathlib import Path
-from datetime import datetime
+import re
+import shlex
+import sys
+import time
+from typing import Any, Callable, Optional
+import uuid
+
 from claude_agent_sdk import HookMatcher
+import logfire
+
 from universal_agent.agent_core import (
     AgentEvent,
     EventType,
     pre_compact_context_capture_hook,
 )
-from universal_agent.execution_context import get_current_workspace
-from universal_agent.guardrails.tool_schema import pre_tool_use_schema_guardrail
-from universal_agent.guardrails.workspace_guard import (
-    validate_tool_paths,
-    WorkspaceGuardError,
-)
-from universal_agent.durable.tool_gateway import parse_tool_identity
-from universal_agent.codebase_policy import (
-    agent_can_mutate_codebase,
-    normalize_codebase_access,
-    path_is_within_roots,
-    resolve_codebase_access,
-)
-from universal_agent.request_runtime import get_request_runtime
 from universal_agent.agentmail_official import (
     extract_agentmail_delivery_fields,
     extract_agentmail_result_ids,
@@ -38,20 +27,35 @@ from universal_agent.agentmail_official import (
     request_requires_single_final_response,
     resolve_email_tracking_from_runtime,
 )
+from universal_agent.codebase_policy import (
+    agent_can_mutate_codebase,
+    normalize_codebase_access,
+    path_is_within_roots,
+    resolve_codebase_access,
+)
+from universal_agent.durable.tool_gateway import parse_tool_identity
+from universal_agent.execution_context import get_current_workspace
+from universal_agent.guardrails.tool_schema import pre_tool_use_schema_guardrail
+from universal_agent.guardrails.workspace_guard import (
+    WorkspaceGuardError,
+    validate_tool_paths,
+)
+from universal_agent.request_runtime import get_request_runtime
 from universal_agent.task_stop_guardrails import (
     evaluate_task_stop_policy as _shared_evaluate_task_stop_policy,
     extract_task_stop_id as _shared_extract_task_stop_id,
     resolve_task_stop_run_kind as _shared_resolve_task_stop_run_kind,
     task_stop_rejection_reason as _shared_task_stop_rejection_reason,
 )
-import logfire
 
 logger = logging.getLogger(__name__)
 
 # Constants
 from contextvars import ContextVar
+
 from universal_agent.agent_core import AgentEvent, EventType
 from universal_agent.constants import DISALLOWED_TOOLS, PRIMARY_ONLY_BLOCKED_TOOLS
+
 _TOOL_EVENT_START_TS: ContextVar[Optional[float]] = ContextVar("_TOOL_EVENT_START_TS", default=None)
 
 # -----------------------------------------------------------------------------
@@ -1289,6 +1293,7 @@ class AgentHookSet:
             raw_path = tool_input.get("path") or tool_input.get("file_path")
             if isinstance(raw_path, str) and raw_path:
                 from pathlib import Path
+
                 from universal_agent.artifacts import resolve_artifacts_dir
 
                 ws_root = Path(self.workspace_dir or current_workspace).resolve()

@@ -1,11 +1,13 @@
 import os
-import shutil
-import pytest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+import shutil
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 # The tool itself
 from universal_agent.tools.artifact_publisher import mcp__internal__publish_artifact
+
 
 @pytest.fixture
 def run_workspace(tmp_path):

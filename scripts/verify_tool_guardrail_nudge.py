@@ -1,12 +1,13 @@
 
-import sys
-import os
 import asyncio
+import os
+import sys
 
 # Add src to path
 sys.path.append(os.path.join(os.getcwd(), "src"))
 
 from universal_agent.guardrails.tool_schema import pre_tool_use_schema_guardrail
+
 
 async def test_guardrail_nudge():
     malformed_input = {

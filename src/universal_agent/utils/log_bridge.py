@@ -1,9 +1,11 @@
+import asyncio
+import io
 import logging
 import sys
-import io
-import asyncio
-from typing import Callable, Any, TextIO
+from typing import Any, Callable, TextIO
+
 from universal_agent.agent_core import EventType
+
 
 class LogBridgeHandler(logging.Handler):
     """

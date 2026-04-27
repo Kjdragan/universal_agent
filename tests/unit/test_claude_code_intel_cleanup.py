@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from universal_agent.services.claude_code_intel_cleanup import cleanup_historical_cron_workspace
+from universal_agent.services.claude_code_intel_cleanup import (
+    cleanup_historical_cron_workspace,
+)
 
 
 def _seed_workspace(root: Path) -> Path:

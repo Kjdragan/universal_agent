@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from universal_agent.memory.memory_models import MemoryEntry
 import universal_agent.memory.memory_store as memory_store
 from universal_agent.memory.memory_store import append_memory_entry
-from universal_agent.memory.memory_models import MemoryEntry
 from universal_agent.tools.memory import memory_search
 
 

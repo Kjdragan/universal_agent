@@ -8,25 +8,25 @@ import importlib.util
 import json
 import logging
 import os
+from pathlib import Path
 import random
 import re
 import shlex
 import sqlite3
 import sys
 import time
-from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 from urllib.parse import urlparse
 
-import httpx
 from fastapi import Request, Response
+import httpx
 from pydantic import BaseModel, Field
 
 from universal_agent.artifacts import resolve_artifacts_dir
 from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.durable.state import get_run, get_run_attempt
-from universal_agent.gateway import InProcessGateway, GatewayRequest
+from universal_agent.gateway import GatewayRequest, InProcessGateway
 from universal_agent.heartbeat_mediation import sanitize_heartbeat_recommendation_text
 from universal_agent.ops_config import load_ops_config, resolve_ops_config_path
 from universal_agent.workflow_admission import (
@@ -1918,7 +1918,9 @@ class HooksService:
             session_alive = False
             if provider_session_id:
                 try:
-                    from universal_agent.gateway_server import get_session as _get_session
+                    from universal_agent.gateway_server import (
+                        get_session as _get_session,
+                    )
                     session = _get_session(provider_session_id)
                     if session is not None:
                         session_alive = True
@@ -2524,13 +2526,20 @@ class HooksService:
         execution_summary: str = "",
     ) -> None:
         """Persist hook-triage evidence without taking over execution ownership."""
-        import sqlite3 as _sqlite3
         from datetime import datetime, timezone
+        import sqlite3 as _sqlite3
 
         try:
-            from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
-            from universal_agent.services.email_task_bridge import parse_email_triage_brief
-            from universal_agent.services.todo_dispatch_service import build_execution_manifest
+            from universal_agent.durable.db import (
+                connect_runtime_db,
+                get_activity_db_path,
+            )
+            from universal_agent.services.email_task_bridge import (
+                parse_email_triage_brief,
+            )
+            from universal_agent.services.todo_dispatch_service import (
+                build_execution_manifest,
+            )
             from universal_agent.task_hub import (
                 ensure_schema,
                 get_item,
@@ -5479,7 +5488,9 @@ class HooksService:
                 # Generate dossier for completed hook sessions
                 if session_workspace is not None:
                     try:
-                        from universal_agent.services.session_dossier import generate_session_dossier
+                        from universal_agent.services.session_dossier import (
+                            generate_session_dossier,
+                        )
 
                         if not (session_workspace / "context_brief.md").exists():
                             await generate_session_dossier(

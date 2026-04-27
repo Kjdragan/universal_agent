@@ -1,19 +1,27 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import json
+from pathlib import Path
 import sqlite3
 import time
-import uuid
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Optional
+import uuid
 
 from claude_agent_sdk import tool
 
-from universal_agent.durable.db import connect_runtime_db, get_activity_db_path, get_vp_db_path
+from universal_agent.durable.db import (
+    connect_runtime_db,
+    get_activity_db_path,
+    get_vp_db_path,
+)
 from universal_agent.durable.migrations import ensure_schema
-from universal_agent.durable.state import get_vp_mission, list_vp_events, list_vp_missions
+from universal_agent.durable.state import (
+    get_vp_mission,
+    list_vp_events,
+    list_vp_missions,
+)
 from universal_agent.vp.dispatcher import (
     MissionDispatchRequest,
     cancel_mission,
@@ -314,7 +322,9 @@ def _with_preference_context(
     if not isinstance(topic_tags, list):
         topic_tags = []
     try:
-        from universal_agent.services.proactive_preferences import get_delegation_context
+        from universal_agent.services.proactive_preferences import (
+            get_delegation_context,
+        )
 
         with connect_runtime_db(get_activity_db_path()) as conn:
             context = get_delegation_context(

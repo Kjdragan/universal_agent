@@ -1,13 +1,20 @@
 
 import asyncio
 import os
-import sys
 from pathlib import Path
+import sys
 
 # Add src to path
 sys.path.append(os.path.abspath("src"))
 
-from universal_agent.heartbeat_service import HeartbeatService, HeartbeatState, HeartbeatScheduleConfig, HeartbeatDeliveryConfig, HeartbeatVisibilityConfig
+from universal_agent.heartbeat_service import (
+    HeartbeatDeliveryConfig,
+    HeartbeatScheduleConfig,
+    HeartbeatService,
+    HeartbeatState,
+    HeartbeatVisibilityConfig,
+)
+
 
 # Mock Gateway Session
 class MockSession:

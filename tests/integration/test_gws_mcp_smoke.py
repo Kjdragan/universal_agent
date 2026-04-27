@@ -14,11 +14,10 @@ Skip automatically if gws binary is not found.
 from __future__ import annotations
 
 import json
-import subprocess
 import shutil
+import subprocess
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Helpers / fixtures

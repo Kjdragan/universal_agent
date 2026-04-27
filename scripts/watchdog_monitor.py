@@ -1,9 +1,9 @@
+from datetime import datetime
+import os
+import signal
+import subprocess
 import sys
 import time
-import subprocess
-import signal
-import os
-from datetime import datetime
 
 WATCHDOG_LOG = "watchdog.log"
 

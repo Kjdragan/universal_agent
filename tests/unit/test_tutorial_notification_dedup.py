@@ -77,15 +77,14 @@ manager = types.SimpleNamespace(session_connections={})
 # copy _add_notification from the source without importing the whole server.
 # ---------------------------------------------------------------------------
 
+import time
+
+import pytest
+
 from universal_agent.gateway_server import (
     _HEALTH_ALERT_NOTIFICATION_KINDS,
     _TUTORIAL_PIPELINE_STAGE_KINDS,
 )
-
-
-import time
-import pytest
-
 
 # ---------------------------------------------------------------------------
 # Lightweight reimplementation of _add_notification (mirrors the real one) so

@@ -4,9 +4,9 @@ import json
 import logging
 import os
 import re
-import urllib.request
 from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse
+import urllib.request
 
 log = logging.getLogger(__name__)
 

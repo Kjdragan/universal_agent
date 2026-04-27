@@ -6,8 +6,8 @@ Supports OpenAI and local Sentence Transformers.
 
 from __future__ import annotations
 
-import os
 from abc import ABC, abstractmethod
+import os
 from typing import Optional
 
 # Lazy imports to avoid heavy dependencies at module load
@@ -104,8 +104,9 @@ class SentenceTransformerEmbeddings(EmbeddingProvider):
 
     def _get_model(self):
         if self._model is None:
-            from sentence_transformers import SentenceTransformer
             import warnings
+
+            from sentence_transformers import SentenceTransformer
 
             try:
                 # Attempt to load from cache without network (prevents HF 429 rate limits on startup)

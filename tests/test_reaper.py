@@ -1,13 +1,13 @@
 """Tests for the session reaper module."""
 
-import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
+import tempfile
 from unittest.mock import patch
 
 import pytest
 
-from universal_agent.session.reaper import cleanup_stale_workspaces, SKIP_PREFIXES
+from universal_agent.session.reaper import SKIP_PREFIXES, cleanup_stale_workspaces
 
 
 @pytest.fixture

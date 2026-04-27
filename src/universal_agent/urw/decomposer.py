@@ -10,17 +10,16 @@ Decomposes user requests into atomic tasks that:
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
 import json
 import os
-import uuid
-from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
-from abc import ABC, abstractmethod
+import uuid
 
-from .state import Task, TaskStatus
 from .evaluation_policy import TEMPLATE_EVALUATION_POLICIES
+from .state import Task, TaskStatus
 from universal_agent.utils.model_resolution import resolve_sonnet
-
 
 DECOMPOSITION_TEMPLATES = {
     "research_report": {

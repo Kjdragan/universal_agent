@@ -4,10 +4,10 @@ import pytest
 
 from universal_agent.tailscale_admin import (
     TailscaleAdminError,
+    TailscaleDevice,
     find_device_by_hostname,
     load_device_roles,
     merge_policy_overlay,
-    TailscaleDevice,
 )
 
 

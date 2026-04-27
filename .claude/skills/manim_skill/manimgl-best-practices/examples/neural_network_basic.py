@@ -2,10 +2,11 @@
 Basic Neural Network visualization with animated connections and layers.
 Demonstrates: Custom VGroup class, randomized styling, layer-based animation
 """
+import itertools as it
+import random
+
 from manimlib import *
 import numpy as np
-import random
-import itertools as it
 
 
 def value_to_color(

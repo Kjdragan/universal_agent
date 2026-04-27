@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Test all Manim CE skill markdown files"""
-import sys
 import argparse
-from pathlib import Path
 from multiprocessing import Pool, cpu_count
+from pathlib import Path
+import sys
+
 from test_utils import test_markdown_file
 
 

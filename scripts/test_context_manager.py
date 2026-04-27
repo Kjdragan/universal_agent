@@ -1,9 +1,10 @@
 
-import sys
-import os
-import unittest
 from dataclasses import dataclass, field
-from typing import List, Any
+import os
+import sys
+from typing import Any, List
+import unittest
+
 
 # Mock SDK classes
 @dataclass
@@ -44,6 +45,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../src"
 # But context_manager handles Dicts too.
 
 from universal_agent.memory.context_manager import ContextManager
+
 
 class TestContextManager(unittest.TestCase):
     def test_pruning(self):

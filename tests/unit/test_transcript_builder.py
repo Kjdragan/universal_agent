@@ -1,8 +1,11 @@
 
-import os
 import json
+import os
+
 import pytest
+
 from src.universal_agent.transcript_builder import generate_transcript
+
 
 def test_generate_transcript(tmp_path):
     """Test generating a transcript from mock trace data."""

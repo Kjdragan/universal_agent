@@ -25,16 +25,20 @@ import re
 import signal
 import urllib.parse
 
+from universal_agent.delegation.heartbeat import FactoryHeartbeat, HeartbeatConfig
 from universal_agent.delegation.redis_bus import (
     MISSION_CONSUMER_GROUP,
     MISSION_DLQ_STREAM,
     MISSION_STREAM,
     RedisMissionBus,
 )
-from universal_agent.delegation.heartbeat import FactoryHeartbeat, HeartbeatConfig
 from universal_agent.delegation.redis_vp_bridge import BridgeConfig, RedisVpBridge
 from universal_agent.delegation.redis_vp_result_bridge import RedisVpResultBridge
-from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path, get_sqlite_busy_timeout_ms
+from universal_agent.durable.db import (
+    connect_runtime_db,
+    get_runtime_db_path,
+    get_sqlite_busy_timeout_ms,
+)
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.runtime_role import resolve_machine_slug
 

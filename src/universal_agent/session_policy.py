@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 import re
 import time
-from pathlib import Path
 from typing import Any
 
-from universal_agent.ops_config import apply_merge_patch
 from universal_agent.codebase_policy import normalize_codebase_access
-
+from universal_agent.ops_config import apply_merge_patch
 
 _MONEY_RE = re.compile(r"\b(pay|purchase|buy|checkout|wire|transfer|invoice|payment)\b", re.IGNORECASE)
 _EMAIL_RE = re.compile(r"\b(email|gmail|send mail|send an email)\b", re.IGNORECASE)

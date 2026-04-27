@@ -6,6 +6,7 @@ Run: uv run python tests/test_letta_full.py
 """
 
 import os
+
 from dotenv import load_dotenv
 
 # Load environment FIRST
@@ -29,7 +30,7 @@ print(f"ANTHROPIC_API_KEY: {'‚úÖ Set' if os.getenv('ANTHROPIC_API_KEY') else '‚ù
 print(f"ANTHROPIC_BASE_URL: {os.getenv('ANTHROPIC_BASE_URL', 'default')}")
 print()
 
-from agentic_learning import learning, AgenticLearning
+from agentic_learning import AgenticLearning, learning
 import anthropic
 
 AGENT_NAME = "test_memory_agent"

@@ -1,15 +1,14 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import hashlib
 import json
+from pathlib import Path
 import re
 import sqlite3
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Optional
 
 from universal_agent import task_hub
-
 
 CARD_STATUS_PENDING = "pending"
 CARD_STATUS_APPROVED = "approved"
@@ -170,7 +169,9 @@ def upsert_generated_card(conn: sqlite3.Connection, card: dict[str, Any]) -> dic
     conn.commit()
     hydrated = get_card(conn, card_id) or payload
     try:
-        from universal_agent.services.proactive_artifacts import upsert_from_proactive_signal_card
+        from universal_agent.services.proactive_artifacts import (
+            upsert_from_proactive_signal_card,
+        )
 
         upsert_from_proactive_signal_card(conn, hydrated)
     except Exception:
@@ -322,7 +323,9 @@ def sync_generated_cards(
         upsert_generated_card(conn, card)
         counts["youtube"] += 1
     try:
-        from universal_agent.services.proactive_convergence import sync_topic_signatures_from_csi
+        from universal_agent.services.proactive_convergence import (
+            sync_topic_signatures_from_csi,
+        )
 
         signature_counts = sync_topic_signatures_from_csi(conn, csi_db_path=csi_db_path)
         counts["topic_signatures"] = int(signature_counts.get("upserted") or 0)
@@ -330,7 +333,9 @@ def sync_generated_cards(
     except Exception:
         logger.debug("Failed syncing CSI topic signatures", exc_info=True)
     try:
-        from universal_agent.services.proactive_tutorial_builds import sync_build_oriented_csi_videos
+        from universal_agent.services.proactive_tutorial_builds import (
+            sync_build_oriented_csi_videos,
+        )
 
         tutorial_counts = sync_build_oriented_csi_videos(conn, csi_db_path=csi_db_path)
         counts["tutorial_build_tasks"] = int(tutorial_counts.get("queued") or 0)
@@ -730,8 +735,10 @@ def _now_iso() -> str:
 
 async def distill_feedback_to_rules(card_dict: dict[str, Any], feedback_text: str, feedback_tags: list[str] = None) -> None:
     """Asynchronously evaluate raw feedback and update proactive generation rules."""
-    import litellm
     import logging
+
+    import litellm
+
     from universal_agent.utils.model_resolution import resolve_sonnet
 
     feedback_tags = feedback_tags or []

@@ -1,12 +1,13 @@
-import os
-import sys
+import argparse
+from datetime import datetime
 import glob
 import json
-import re
-import markdown
-import argparse
+import os
 from pathlib import Path
-from datetime import datetime
+import re
+import sys
+
+import markdown
 
 # =============================================================================
 # THEME DEFINITIONS

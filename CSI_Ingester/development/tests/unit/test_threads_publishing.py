@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-from pathlib import Path
 import json
+from pathlib import Path
 
-import pytest
-
+from csi_ingester.adapters.threads_api import ThreadsAPIError
 from csi_ingester.adapters.threads_publishing import (
     ThreadsPublishingDisabledError,
     ThreadsPublishingGovernanceError,
     ThreadsPublishingInterface,
 )
-from csi_ingester.adapters.threads_api import ThreadsAPIError
+import pytest
 
 
 class _FakeClient:

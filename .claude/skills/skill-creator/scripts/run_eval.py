@@ -6,15 +6,15 @@ for a set of queries. Outputs results as JSON.
 """
 
 import argparse
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import json
 import os
+from pathlib import Path
 import select
 import subprocess
 import sys
 import time
 import uuid
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from pathlib import Path
 
 from scripts.utils import parse_skill_md
 

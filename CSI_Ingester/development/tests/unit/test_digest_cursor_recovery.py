@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import sqlite3
 import sys
-from pathlib import Path
-
 
 script_dir = Path(__file__).parent.parent.parent / "scripts"
 sys.path.insert(0, str(script_dir))

@@ -7,6 +7,7 @@ import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from universal_agent import task_hub
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
 
@@ -1707,52 +1708,76 @@ class TestDetectTargetAgentByName:
     and no longer false-positives on substring matches."""
 
     def test_detects_cody_in_subject(self):
-        from universal_agent.services.agentmail_service import _detect_target_agent_by_name
+        from universal_agent.services.agentmail_service import (
+            _detect_target_agent_by_name,
+        )
         assert _detect_target_agent_by_name("Hey Cody, can you help?", "") == "vp.coder.primary"
 
     def test_detects_codie_in_body(self):
-        from universal_agent.services.agentmail_service import _detect_target_agent_by_name
+        from universal_agent.services.agentmail_service import (
+            _detect_target_agent_by_name,
+        )
         assert _detect_target_agent_by_name("Task", "Please ask codie to review this code.") == "vp.coder.primary"
 
     def test_detects_atlas_in_subject(self):
-        from universal_agent.services.agentmail_service import _detect_target_agent_by_name
+        from universal_agent.services.agentmail_service import (
+            _detect_target_agent_by_name,
+        )
         assert _detect_target_agent_by_name("Atlas: research this topic", "") == "vp.general.primary"
 
     def test_detects_atlas_vp_variant(self):
-        from universal_agent.services.agentmail_service import _detect_target_agent_by_name
+        from universal_agent.services.agentmail_service import (
+            _detect_target_agent_by_name,
+        )
         assert _detect_target_agent_by_name("Assign to Atlas VP", "") == "vp.general.primary"
 
     def test_detects_codie_vp_variant(self):
-        from universal_agent.services.agentmail_service import _detect_target_agent_by_name
+        from universal_agent.services.agentmail_service import (
+            _detect_target_agent_by_name,
+        )
         assert _detect_target_agent_by_name("Ask codie VP to handle", "") == "vp.coder.primary"
 
     def test_no_match_codying(self):
         """'codying' should not match \\bcody\\b."""
-        from universal_agent.services.agentmail_service import _detect_target_agent_by_name
+        from universal_agent.services.agentmail_service import (
+            _detect_target_agent_by_name,
+        )
         assert _detect_target_agent_by_name("I am codying the solution right now", "") is None
 
     def test_no_match_atlassian(self):
         """'atlassian' should not match \\batlas\\b."""
-        from universal_agent.services.agentmail_service import _detect_target_agent_by_name
+        from universal_agent.services.agentmail_service import (
+            _detect_target_agent_by_name,
+        )
         assert _detect_target_agent_by_name("Check the Atlassian Jira board", "") is None
 
     def test_no_match_random_text(self):
-        from universal_agent.services.agentmail_service import _detect_target_agent_by_name
+        from universal_agent.services.agentmail_service import (
+            _detect_target_agent_by_name,
+        )
         assert _detect_target_agent_by_name("Hello, how are you?", "Just checking in.") is None
 
     def test_case_insensitive_cody(self):
-        from universal_agent.services.agentmail_service import _detect_target_agent_by_name
+        from universal_agent.services.agentmail_service import (
+            _detect_target_agent_by_name,
+        )
         assert _detect_target_agent_by_name("CODY please help", "") == "vp.coder.primary"
 
     def test_case_insensitive_atlas(self):
-        from universal_agent.services.agentmail_service import _detect_target_agent_by_name
+        from universal_agent.services.agentmail_service import (
+            _detect_target_agent_by_name,
+        )
         assert _detect_target_agent_by_name("ATLAS report", "") == "vp.general.primary"
 
     def test_empty_inputs(self):
-        from universal_agent.services.agentmail_service import _detect_target_agent_by_name
+        from universal_agent.services.agentmail_service import (
+            _detect_target_agent_by_name,
+        )
         assert _detect_target_agent_by_name("", "") is None
 
     def test_coder_takes_priority_over_general(self):
         """When both cody and atlas are mentioned, coder is checked first."""
-        from universal_agent.services.agentmail_service import _detect_target_agent_by_name
+        from universal_agent.services.agentmail_service import (
+            _detect_target_agent_by_name,
+        )
         assert _detect_target_agent_by_name("Cody and Atlas should coordinate", "") == "vp.coder.primary"

@@ -13,12 +13,12 @@ the TGTG API has ever returned for your configured area.
 
 from __future__ import annotations
 
-import json
-import logging
-import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import json
+import logging
 from pathlib import Path
+import sqlite3
 
 log = logging.getLogger(__name__)
 

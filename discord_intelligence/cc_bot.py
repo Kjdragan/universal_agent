@@ -1,18 +1,24 @@
 # cc_bot.py
-import os
-import logging
 from datetime import datetime
+import logging
+import os
 from pathlib import Path
-import discord
-from discord.ext import commands, tasks
-from discord import app_commands
 
-from .config import init_secrets, get_db_path
-from .database import DiscordIntelligenceDB
+import discord
+from discord import app_commands
+from discord.ext import commands, tasks
+
 from .calendar_sync import sync_event_to_calendar
-from .integration.task_hub import create_task_hub_mission, get_task_hub_items, get_mission_status
+from .config import get_db_path, init_secrets
+from .database import DiscordIntelligenceDB
 from .integration import gateway_client
+from .integration.task_hub import (
+    create_task_hub_mission,
+    get_mission_status,
+    get_task_hub_items,
+)
 from .views.review_queue import ReviewActionView, build_review_embed
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] CC_BOT: %(message)s")
 logger = logging.getLogger("cc_bot")
 BASE_DIR = Path(__file__).resolve().parent
@@ -215,7 +221,9 @@ class CCBot(commands.Bot):
                 conn.execute("UPDATE scheduled_events SET persist_audio = 1 WHERE id = ?", (event["id"],))
                 conn.commit()
             logger.info(f"Marked '{event_name}' for audio tracking/notes.")
-            from discord_intelligence.integration.task_hub import create_task_hub_mission
+            from discord_intelligence.integration.task_hub import (
+                create_task_hub_mission,
+            )
             create_task_hub_mission(title=f"Record/Note: {event_name}", description=f"Track event {event_name} audio/notes.", tags=["discord", "audio"])
             await channel.send(f"🎙️ Flagged event for audio recording and created Task Hub mission: `{event_name}`")
             return
@@ -417,7 +425,9 @@ class CCBot(commands.Bot):
     @tasks.loop(minutes=30)
     async def poll_briefings(self):
         try:
-            import os, glob, json
+            import glob
+            import json
+            import os
             briefings_dir = os.getenv("UA_DISCORD_BRIEFINGS_DIR", str(APP_ROOT / "kb" / "briefings"))
             cache_file = os.path.join(briefings_dir, ".posted_cache.json")
             

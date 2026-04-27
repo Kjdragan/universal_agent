@@ -1,6 +1,10 @@
-import sys, sqlite3, json
+import json
+import sqlite3
+import sys
+
 sys.path.insert(0, "./src")
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+
 
 def main():
     conn = sqlite3.connect(get_activity_db_path())

@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import json
-import os
-import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import json
+import os
 from pathlib import Path
+import re
 from typing import Any, Dict, Optional
-
 
 _SAFE_SLUG_RE = re.compile(r"[^a-zA-Z0-9._-]+")
 CURRENT_WORKSPACE_MARKER_FILENAMES = (

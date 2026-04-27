@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
+import sys
 
 
 def validate_excalidraw(data: dict) -> list[str]:

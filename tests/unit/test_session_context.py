@@ -12,13 +12,12 @@ import pytest
 
 from universal_agent.session_ctx import (
     SessionContext,
+    _default_trace,
     get_ctx,
     require_ctx,
     reset_ctx,
     set_ctx,
-    _default_trace,
 )
-
 
 # ---------------------------------------------------------------------------
 # SessionContext construction

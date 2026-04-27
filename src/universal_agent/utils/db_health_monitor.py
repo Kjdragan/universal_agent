@@ -17,12 +17,12 @@ Databases checked:
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 import os
-import sqlite3
-from datetime import datetime, timezone, timedelta
 from pathlib import Path
+import sqlite3
 from typing import Any
 
 from universal_agent.utils.heartbeat_findings_schema import HeartbeatFinding

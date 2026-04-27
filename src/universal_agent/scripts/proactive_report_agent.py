@@ -14,15 +14,17 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import sqlite3
 from pathlib import Path
+import sqlite3
 
 logger = logging.getLogger(__name__)
 
 
 async def _run_report() -> dict:
     """Compose and deliver the proactive intelligence report."""
-    from universal_agent.services.proactive_intelligence_report import deliver_intelligence_report
+    from universal_agent.services.proactive_intelligence_report import (
+        deliver_intelligence_report,
+    )
 
     # Resolve the DB path (same pattern as briefings_agent.py)
     db_path = os.getenv("UA_DB_PATH", "")

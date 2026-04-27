@@ -2,9 +2,10 @@
 Linear Regression visualization showing data points and a fitted line.
 Demonstrates: Axes, DotCloud, Line, ValueTracker, updaters
 """
+import random
+
 from manimlib import *
 import numpy as np
-import random
 
 
 class LinearRegression(Scene):

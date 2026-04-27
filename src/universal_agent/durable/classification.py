@@ -1,9 +1,8 @@
+from dataclasses import dataclass
 import logging
 import os
 import re
-from dataclasses import dataclass
 from typing import Any, Optional, Pattern
-
 
 SIDE_EFFECT_KEYWORDS = re.compile(
     r"(SEND|CREATE|UPDATE|DELETE|PATCH|POST|MERGE|UPLOAD|INVITE|PUBLISH|COMMENT|REPLY|FORWARD|ARCHIVE|LABEL|MOVE|MARK|ASSIGN)",

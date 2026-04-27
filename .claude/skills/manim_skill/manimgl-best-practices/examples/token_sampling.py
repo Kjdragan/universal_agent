@@ -6,9 +6,10 @@ where the next token is sampled from the probability distribution.
 
 Run with: manimgl token_sampling.py TokenSamplingAnimation
 """
+import random
+
 from manimlib import *
 import numpy as np
-import random
 
 
 class TokenSamplingAnimation(InteractiveScene):

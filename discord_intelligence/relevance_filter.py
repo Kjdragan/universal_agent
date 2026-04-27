@@ -14,13 +14,15 @@ Design:
 
 import asyncio
 import json
+import logging
 import os
 import re
-import logging
+
 from anthropic import AsyncAnthropic
-from universal_agent.rate_limiter import ZAIRateLimiter
+
 from .config import CONFIG
 from .database import DiscordIntelligenceDB
+from universal_agent.rate_limiter import ZAIRateLimiter
 
 logger = logging.getLogger(__name__)
 

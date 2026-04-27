@@ -14,21 +14,21 @@ Flow 5: Edge case — task modified between scan and refine
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import sqlite3
 import time
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, patch, MagicMock
 
 from universal_agent import task_hub
 from universal_agent.services import auto_refinement_loop
 from universal_agent.services.auto_refinement_loop import (
+    clear_cooldowns,
     find_refinement_candidates,
     refine_task,
     run_auto_refinement_cycle,
-    clear_cooldowns,
 )
-
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 

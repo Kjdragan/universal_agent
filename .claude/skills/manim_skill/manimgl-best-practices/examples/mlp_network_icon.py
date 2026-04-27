@@ -2,8 +2,9 @@
 MLP Network Icon - A simple visualization of a multilayer perceptron structure
 Shows dots arranged in layers with connecting lines between neurons.
 """
-from manimlib import *
 import random
+
+from manimlib import *
 
 
 class MLPNetworkIcon(InteractiveScene):

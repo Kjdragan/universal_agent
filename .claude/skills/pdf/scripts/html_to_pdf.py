@@ -1,7 +1,8 @@
-import sys
-import subprocess
-import os
 import argparse
+import os
+import subprocess
+import sys
+
 
 def html_to_pdf(input_html, output_pdf, chrome_binary="/usr/bin/google-chrome"):
     """

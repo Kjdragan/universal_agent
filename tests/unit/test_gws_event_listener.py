@@ -17,7 +17,6 @@ from universal_agent.services.gws_event_listener import (
     _poll_interval,
 )
 
-
 # ---------------------------------------------------------------------------
 # Config helper tests
 # ---------------------------------------------------------------------------

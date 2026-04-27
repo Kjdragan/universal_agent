@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
+import sqlite3
 
 import pytest
 
-from universal_agent import task_hub
-from universal_agent import proactive_signals
+from universal_agent import proactive_signals, task_hub
 from universal_agent.services.email_task_bridge import EmailTaskBridge
 from universal_agent.services.intelligence_reporter import IntelligenceReporter
 from universal_agent.services.proactive_artifacts import (
@@ -14,17 +13,17 @@ from universal_agent.services.proactive_artifacts import (
     DELIVERY_EMAILED,
     DELIVERY_REVIEWED,
     get_artifact,
-    record_feedback,
     record_email_delivery,
+    record_feedback,
     sync_from_proactive_signal_cards,
     upsert_artifact,
 )
 from universal_agent.services.proactive_feedback import parse_feedback_text
-from universal_agent.services.proactive_preferences import record_artifact_feedback_signal
 from universal_agent.services.proactive_preferences import (
     build_weekly_preference_report,
     get_delegation_context,
     get_preference_snapshot,
+    record_artifact_feedback_signal,
 )
 
 

@@ -8,9 +8,9 @@ formatted report text as additional prompt context.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import logging
 import sqlite3
-from datetime import datetime, timezone
 from typing import Any
 
 from universal_agent import task_hub

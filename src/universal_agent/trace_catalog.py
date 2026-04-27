@@ -12,7 +12,6 @@ import os
 import re
 from typing import Any, Optional
 
-
 _LOGFIRE_PROJECT_SLUG = "Kjdragan/composio-claudemultiagent"
 
 _SPAN_TYPES_MAIN = [

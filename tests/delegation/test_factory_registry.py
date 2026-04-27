@@ -1,10 +1,10 @@
 """Tests for the SQLite-backed factory registration store."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import json
 import sqlite3
 import time
-from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -13,7 +13,6 @@ from universal_agent.delegation.factory_registry import (
     STALE_THRESHOLD_SECONDS,
     FactoryRegistry,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

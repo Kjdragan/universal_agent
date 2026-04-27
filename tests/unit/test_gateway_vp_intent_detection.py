@@ -1,4 +1,7 @@
-from universal_agent.gateway import _allow_prompt_inferred_vp_routing, _infer_explicit_vp_target
+from universal_agent.gateway import (
+    _allow_prompt_inferred_vp_routing,
+    _infer_explicit_vp_target,
+)
 
 
 def test_infer_explicit_general_vp_from_vp_general_word_order():

@@ -11,8 +11,8 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import sys
 from pathlib import Path
+import sys
 from typing import Iterable
 
 import httpx
@@ -25,9 +25,9 @@ from infisical_provision_factory_env import (
     _authenticate,
     _bulk_create_secrets,
     _bulk_update_secrets,
-    _list_environments,
     _fetch_secrets,
     _get_infisical_creds,
+    _list_environments,
     _load_dotenv_into_environ,
 )
 

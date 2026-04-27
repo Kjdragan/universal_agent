@@ -1,8 +1,8 @@
+from contextlib import redirect_stdout
+from io import StringIO
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stdout
-from io import StringIO
 
 from universal_agent.trace_catalog import (
     emit_trace_catalog,

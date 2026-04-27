@@ -5,10 +5,12 @@ Run: uv run python tests/test_letta_memory_flow.py
 
 import os
 import time
+
 from dotenv import load_dotenv
+
 load_dotenv()
 
-from agentic_learning import learning, AgenticLearning
+from agentic_learning import AgenticLearning, learning
 import anthropic
 
 AGENT_NAME = "test_flow_agent"

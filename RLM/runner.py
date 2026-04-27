@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import os
-import time
-from datetime import datetime, timezone
 from pathlib import Path
+import time
 
 from .corpus_adapter import build_corpus_bundle, resolve_source
 from .fast_rlm_adapter import run_fast_rlm_adapter

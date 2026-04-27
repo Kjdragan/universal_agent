@@ -17,19 +17,19 @@ what tasks to create.  The engine itself never calls an LLM.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import logging
 import os
 import sqlite3
-from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 
 from universal_agent import task_hub
 from universal_agent.services.proactive_budget import (
+    DEFAULT_DAILY_BUDGET,
+    get_budget_remaining,
     get_daily_proactive_count,
     has_daily_budget,
-    get_budget_remaining,
     increment_daily_proactive_count,
-    DEFAULT_DAILY_BUDGET,
 )
 
 logger = logging.getLogger(__name__)

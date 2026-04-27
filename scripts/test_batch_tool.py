@@ -1,8 +1,9 @@
 
 import concurrent.futures
-import time
-import sys
 import json
+import sys
+import time
+
 
 # Mock globals
 def mock_search_tool(query):

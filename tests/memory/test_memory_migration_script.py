@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import importlib.util
-import sys
 from argparse import Namespace
+import importlib.util
 from pathlib import Path
+import sys
 
 
 def _load_migration_module():

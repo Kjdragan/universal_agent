@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 import os
-import urllib.parse
 from pathlib import Path
 from typing import Any
+import urllib.parse
 
 from universal_agent.artifacts import resolve_artifacts_dir
 

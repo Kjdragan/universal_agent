@@ -13,8 +13,7 @@ from universal_agent.delegation.redis_bus import RedisMissionBus
 from universal_agent.delegation.redis_vp_result_bridge import RedisVpResultBridge
 from universal_agent.delegation.schema import MissionResultEnvelope
 from universal_agent.durable.migrations import ensure_schema
-from universal_agent.durable.state import queue_vp_mission, finalize_vp_mission
-
+from universal_agent.durable.state import finalize_vp_mission, queue_vp_mission
 
 # ---------------------------------------------------------------------------
 # Fixtures

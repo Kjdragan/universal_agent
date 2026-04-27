@@ -1,14 +1,14 @@
-import time
 from collections import deque
 from contextlib import asynccontextmanager
+import time
 
-import pytest
 from fastapi.testclient import TestClient
+import pytest
 from starlette.websockets import WebSocketDisconnect
 
 from universal_agent import gateway_server
-from universal_agent.ops_service import OpsService
 from universal_agent.gateway import InProcessGateway
+from universal_agent.ops_service import OpsService
 from universal_agent.runtime_role import build_factory_runtime_policy
 
 

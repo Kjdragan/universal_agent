@@ -4,15 +4,17 @@ Standalone script for generating images using Gemini 2.5 Flash Image.
 Useful for testing or CLI usage outside the MCP environment.
 """
 
+import argparse
+import base64
+from datetime import datetime
+from io import BytesIO
 import os
 import sys
-import argparse
-from datetime import datetime
+
 from google import genai
 from google.genai.types import GenerateContentConfig, Part
 from PIL import Image
-import base64
-from io import BytesIO
+
 
 def generate_image(prompt, input_image_path=None, output_dir="output", output_filename=None, model_name="gemini-2.5-flash-image"):
     """Generate or edit an image using the Gemini API."""
@@ -97,7 +99,9 @@ def generate_image(prompt, input_image_path=None, output_dir="output", output_fi
         return None
 
 if __name__ == "__main__":
-    from google.genai import types  # Import types explicitly inside main/function scope if needed
+    from google.genai import (
+        types,  # Import types explicitly inside main/function scope if needed
+    )
     
     parser = argparse.ArgumentParser(description="Generate images with Gemini 2.5 Flash Image")
     parser.add_argument("prompt", help="Text prompt for generation")

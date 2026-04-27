@@ -19,7 +19,6 @@ from universal_agent.gateway import (
     _infer_explicit_vp_target,
 )
 
-
 # ---------------------------------------------------------------------------
 # Change 1: Simplified regex patterns
 # ---------------------------------------------------------------------------

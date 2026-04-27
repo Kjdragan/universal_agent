@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-import logging
-import uuid
 from datetime import datetime
+import logging
 from typing import Any, Dict
+import uuid
 
-import pytest
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
+import pytest
 
 from universal_agent.api.error_handlers import (
     AppError,
@@ -26,7 +26,6 @@ from universal_agent.api.error_handlers import (
     ValidationError,
     register_error_handlers,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

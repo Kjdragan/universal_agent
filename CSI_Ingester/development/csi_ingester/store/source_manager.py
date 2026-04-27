@@ -8,12 +8,12 @@ remain as version-controlled seed data; runtime state lives in the DB.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import logging
+from pathlib import Path
 import re
 import sqlite3
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)

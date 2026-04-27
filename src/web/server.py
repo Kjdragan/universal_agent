@@ -7,18 +7,19 @@ stream in `src/universal_agent/gateway_server.py`, not this standalone server.
 """
 
 import asyncio
+from contextlib import asynccontextmanager
+from datetime import datetime
 import json
 import os
-import sys
-from datetime import datetime
 from pathlib import Path
+import sys
 from typing import Optional
-from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
 from universal_agent.run_catalog import RunCatalogService
 from universal_agent.workspace_catalog import list_workspace_summaries
 

@@ -1,22 +1,22 @@
-import asyncio
-import os
-import sqlite3
 import argparse
-import sys
-from pathlib import Path
+import asyncio
 import logging
+import os
+from pathlib import Path
+import sqlite3
+import sys
 
 try:
-    from universal_agent.services.proactive_advisor import build_morning_report
-    from universal_agent.services.health_evaluator import evaluate_health_snapshot
     from universal_agent.durable.db import get_activity_db_path
+    from universal_agent.services.health_evaluator import evaluate_health_snapshot
+    from universal_agent.services.proactive_advisor import build_morning_report
 except ImportError:
     # Handle direct script execution vs module execution paths
     project_root = Path(__file__).parent.parent.parent.parent
     sys.path.insert(0, str(project_root / "src"))
-    from universal_agent.services.proactive_advisor import build_morning_report
-    from universal_agent.services.health_evaluator import evaluate_health_snapshot
     from universal_agent.durable.db import get_activity_db_path
+    from universal_agent.services.health_evaluator import evaluate_health_snapshot
+    from universal_agent.services.proactive_advisor import build_morning_report
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

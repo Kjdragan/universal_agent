@@ -12,10 +12,10 @@ Targets are persisted in tgtg_targets.json alongside your credentials.
 
 from __future__ import annotations
 
-import json
-import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, time
+import json
+import logging
 from pathlib import Path
 from typing import Literal
 

@@ -1,7 +1,9 @@
-import pytest
-import sys
 import os
+import sys
+
 import pexpect
+import pytest
+
 
 @pytest.mark.asyncio
 async def test_fast_path_context_retention_cli():

@@ -1,18 +1,18 @@
-from mcp.server.fastmcp import FastMCP
 from dotenv import load_dotenv
+from mcp.server.fastmcp import FastMCP
 
 # Load params from .env immediately
 load_dotenv()
 
-import os
-import sys
-import json
-import re
-import logging
-import inspect
-import heapq
 from collections import Counter
 from datetime import datetime, timezone
+import heapq
+import inspect
+import json
+import logging
+import os
+import re
+import sys
 import traceback
 
 # UA_LOG_LEVEL Control (INFO by default)
@@ -48,11 +48,12 @@ def mcp_log(message: str, level: str = "INFO", prefix: str = "[Local Toolkit]"):
         sys.stderr.flush()
 
 from functools import wraps
-from pathlib import Path
-from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
 import hashlib
+from pathlib import Path
 import time
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 # Setup logger for MCP server
 logger = logging.getLogger("mcp_server")
@@ -66,19 +67,23 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))  # src/
 sys.path.append(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 )  # Repo Root
+from composio import Composio
+
+from tools.workbench_bridge import WorkbenchBridge
+
+from universal_agent.execution_context import (
+    get_current_workspace as _ctx_get_workspace,
+)
+from universal_agent.feature_flags import (
+    heartbeat_enabled,
+    memory_enabled,
+    memory_index_enabled,
+)
 from universal_agent.search_config import SEARCH_TOOL_CONFIG
-from universal_agent.execution_context import get_current_workspace as _ctx_get_workspace
 from universal_agent.tools.corpus_refiner import refine_corpus_programmatic
 from universal_agent.utils.email_attachment_prep import (
     prepare_attachment_for_composio_upload,
 )
-from universal_agent.feature_flags import (
-    heartbeat_enabled,
-    memory_index_enabled,
-    memory_enabled,
-)
-from tools.workbench_bridge import WorkbenchBridge
-from composio import Composio
 
 # Memory System Integration
 
@@ -91,8 +96,10 @@ MEMORY_INDEX_ENABLED = memory_index_enabled()
 # We use the universal_agent.memory package which implements Hindsight-like memory
 # (Markdown source-of-truth + JSON/Vector index)
 try:
-    from universal_agent.tools.memory import memory_get as memory_get_text
-    from universal_agent.tools.memory import memory_search as memory_search_text
+    from universal_agent.tools.memory import (
+        memory_get as memory_get_text,
+        memory_search as memory_search_text,
+    )
     
     MEMORY_SYSTEM_AVAILABLE = True
     sys.stderr.write("[Local Toolkit] Memory System active (universal_agent.memory).\n")
@@ -1997,8 +2004,9 @@ async def _crawl_single_url_jina(url: str, semaphore) -> dict:
     """
     import asyncio
     import ssl
-    import certifi
     import urllib.request
+
+    import certifi
 
     jina_url = f"https://r.jina.ai/{url}"
     ctx = ssl.create_default_context(cafile=certifi.where())
@@ -2050,6 +2058,7 @@ async def _crawl_core(urls: list[str], session_dir: str, output_dir: str | None 
     Shared by crawl_parallel (manual tool) and finalize_research_corpus (automated).
     """
     import hashlib
+
     import aiohttp
 
     search_results_dir = output_dir or os.path.join(session_dir, "search_results")
@@ -3641,12 +3650,13 @@ def generate_image(
         JSON with status, output_path, description, and viewer_url (if preview=True).
     """
     try:
+        import base64
+        from io import BytesIO
+
         from google import genai
         from google.genai import types
         from google.genai.types import GenerateContentConfig, Part
         from PIL import Image
-        import base64
-        from io import BytesIO
 
         # Initialize Gemini client.
         # Prefer GEMINI_IMAGE_API_KEY (Google AI Studio key) because the org-level GCP
@@ -4208,10 +4218,11 @@ def generate_image_with_review(
 def describe_image_internal(image: Any) -> str:
     """Internal helper to describe image using Gemini vision, with simple fallback."""
     try:
-        from google import genai
-        from google.genai.types import GenerateContentConfig, Part
         import base64
         from io import BytesIO
+
+        from google import genai
+        from google.genai.types import GenerateContentConfig, Part
 
         api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         if not api_key:

@@ -9,9 +9,9 @@ so we can choose the safest default for downstream structured evaluation.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import re
 import sys
-from pathlib import Path
 from typing import Any, Dict, Tuple
 
 

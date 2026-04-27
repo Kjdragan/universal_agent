@@ -16,22 +16,21 @@ Architecture:
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import html
 import json
 import logging
 import os
 import sqlite3
-import uuid
-from datetime import datetime, timezone, timedelta
 from typing import Any
+import uuid
 
-from universal_agent import task_hub
-from universal_agent import proactive_signals
+from universal_agent import proactive_signals, task_hub
 from universal_agent.services.proactive_budget import (
-    get_daily_proactive_count,
-    get_budget_remaining,
-    _parse_int_env,
     DEFAULT_DAILY_BUDGET,
+    _parse_int_env,
+    get_budget_remaining,
+    get_daily_proactive_count,
 )
 
 logger = logging.getLogger(__name__)

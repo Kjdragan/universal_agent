@@ -18,13 +18,13 @@ Usage:
 """
 
 import json
-from typing import Dict, Any, List
+from typing import Any, Dict, List
 
 # Import the modifier decorator and types
 from composio.core.models._modifiers import (
-    after_execute_meta,
     AfterExecuteMeta,
     Modifier,
+    after_execute_meta,
 )
 
 # For type checking (ToolExecutionResponse structure):

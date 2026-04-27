@@ -8,19 +8,20 @@ Tests cover:
 - URW harness with gateway mode
 """
 
-import pytest
 import asyncio
 import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 # Conditional imports
 try:
     from universal_agent.gateway import (
-        InProcessGateway,
         GatewayRequest,
-        GatewaySession,
         GatewayResult,
+        GatewaySession,
+        InProcessGateway,
     )
     GATEWAY_AVAILABLE = True
 except ImportError:
@@ -33,7 +34,10 @@ except ImportError:
     EVENTS_AVAILABLE = False
 
 try:
-    from universal_agent.urw.harness_orchestrator import HarnessOrchestrator, HarnessConfig
+    from universal_agent.urw.harness_orchestrator import (
+        HarnessConfig,
+        HarnessOrchestrator,
+    )
     HARNESS_AVAILABLE = True
 except ImportError:
     HARNESS_AVAILABLE = False

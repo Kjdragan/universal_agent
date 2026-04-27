@@ -4,7 +4,6 @@ import argparse
 import asyncio
 import logging
 import os
-
 import subprocess
 
 from universal_agent.durable.db import connect_runtime_db, get_vp_db_path

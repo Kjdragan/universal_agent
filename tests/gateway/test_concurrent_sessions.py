@@ -10,8 +10,8 @@ These tests do NOT hit the real LLM.  They use mock adapters that simulate
 work with asyncio.sleep() so concurrency is observable via wall-clock timing.
 """
 import asyncio
-import time
 from pathlib import Path
+import time
 from typing import AsyncIterator, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -23,7 +23,6 @@ from universal_agent.session_ctx import (
     require_ctx,
     set_ctx,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

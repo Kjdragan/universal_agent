@@ -23,9 +23,9 @@ import base64
 import hashlib
 import json
 import os
+from pathlib import Path
 import re
 import secrets
-from pathlib import Path
 from typing import Any
 
 OWNER_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")

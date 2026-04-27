@@ -1,6 +1,8 @@
 
-from typing import Callable, Awaitable
+from typing import Awaitable, Callable
+
 from ..core.context import BotContext
+
 
 async def onboarding_middleware(ctx: BotContext, next_fn: Callable[[], Awaitable[None]]):
     """

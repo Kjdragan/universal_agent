@@ -1,7 +1,7 @@
 import sqlite3
 
 from universal_agent import main as agent_main
-from universal_agent.session_ctx import SessionContext, set_ctx, reset_ctx
+from universal_agent.session_ctx import SessionContext, reset_ctx, set_ctx
 
 
 def _set_runtime_step(phase: str = "replay") -> sqlite3.Connection:

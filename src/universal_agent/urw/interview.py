@@ -8,29 +8,28 @@ Based on interview.md design.
 from __future__ import annotations
 
 import asyncio
-import json
-import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+import json
 from pathlib import Path
+import re
 from typing import Any, Dict, List, Optional
-import logfire
 
 from claude_agent_sdk import (
+    AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
-    tool,
-    create_sdk_mcp_server,
-    AssistantMessage,
     TextBlock,
+    create_sdk_mcp_server,
+    tool,
 )
-from universal_agent.api.input_bridge import request_user_input
+import logfire
 
+from .plan_schema import AtomicTask, Phase, Plan, TaskStatus
+from universal_agent.api.input_bridge import request_user_input
 from universal_agent.prompt_assets import discover_skills
 from universal_agent.utils.json_utils import extract_json_payload
-from .plan_schema import Plan, Phase, AtomicTask, TaskStatus
-
 
 # -----------------------------------------------------------------------------
 # Auto-Interview Support
@@ -415,7 +414,10 @@ class InterviewConductor:
                                         print(msg)
                                         if self.event_callback:
                                             try:
-                                                from universal_agent.agent_core import AgentEvent, EventType
+                                                from universal_agent.agent_core import (
+                                                    AgentEvent,
+                                                    EventType,
+                                                )
                                                 self.event_callback(AgentEvent(type=EventType.THINKING, data={"thinking": block.thinking}))
                                             except Exception: pass
 
@@ -424,7 +426,10 @@ class InterviewConductor:
                                         print(msg)
                                         if self.event_callback:
                                             try:
-                                                from universal_agent.agent_core import AgentEvent, EventType
+                                                from universal_agent.agent_core import (
+                                                    AgentEvent,
+                                                    EventType,
+                                                )
                                                 self.event_callback(AgentEvent(type=EventType.TEXT, data={"text": block.text + "\n"}))
                                             except Exception: pass
                                     

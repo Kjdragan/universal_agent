@@ -2,22 +2,28 @@
 import asyncio
 import logging
 import os
+
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CallbackQueryHandler, ContextTypes, TypeHandler
-from universal_agent import process_heartbeat
-from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
+from telegram.ext import (
+    ApplicationBuilder,
+    CallbackQueryHandler,
+    ContextTypes,
+    TypeHandler,
+)
+
+from .agent_adapter import AgentAdapter
 from .config import get_telegram_bot_token
-from .core.runner import UpdateRunner
 from .core.context import BotContext
 from .core.middleware import MiddlewareChain
+from .core.middleware_impl import SessionMiddleware, auth_middleware, logging_middleware
+from .core.runner import UpdateRunner
 from .core.session import FileSessionStore
-from .core.middleware_impl import logging_middleware, auth_middleware, SessionMiddleware
-from .plugins.onboarding import onboarding_middleware
-from .plugins.commands import commands_middleware
-from .task_manager import TaskManager
-from .agent_adapter import AgentAdapter
 from .normalization.formatting import format_telegram_response
-
+from .plugins.commands import commands_middleware
+from .plugins.onboarding import onboarding_middleware
+from .task_manager import TaskManager
+from universal_agent import process_heartbeat
+from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
 
 # Setup Logging
 logging.basicConfig(

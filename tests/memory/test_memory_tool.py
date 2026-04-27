@@ -5,7 +5,12 @@ from pathlib import Path
 import pytest
 
 from universal_agent.memory.orchestrator import get_memory_orchestrator
-from universal_agent.tools.memory import memory_get, memory_get_wrapper, memory_search, memory_search_wrapper
+from universal_agent.tools.memory import (
+    memory_get,
+    memory_get_wrapper,
+    memory_search,
+    memory_search_wrapper,
+)
 
 
 @pytest.fixture

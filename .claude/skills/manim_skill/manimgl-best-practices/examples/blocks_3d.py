@@ -3,9 +3,9 @@
 Demonstrates 3D scene setup with physics simulation.
 Based on the famous 3b1b pi-computing collision video.
 """
-from manimlib import *
 import math
 
+from manimlib import *
 
 LITTLE_BLOCK_COLOR = "#51463E"
 

@@ -1,5 +1,6 @@
-from universal_agent.infisical_loader import load_infisical_environment
 import os
+
+from universal_agent.infisical_loader import load_infisical_environment
 
 load_infisical_environment("development", "local_workstation")
 

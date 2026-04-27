@@ -6,9 +6,9 @@ import json
 import os
 import sys
 import time
+from typing import Any, Dict, Optional
 import urllib.error
 import urllib.request
-from typing import Any, Dict, Optional
 
 DEFAULT_TIMEOUT_S = 60
 DEBUG = os.environ.get("GROK_X_TRENDS_DEBUG", "").lower() in ("1", "true", "yes")

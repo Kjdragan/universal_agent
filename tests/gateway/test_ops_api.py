@@ -1,41 +1,43 @@
-import os
-import json
-import io
-import shutil
-import time
 import asyncio
-import sqlite3
-import tarfile
 from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-import pytest
+import io
+import json
+import os
 from pathlib import Path
-from fastapi.testclient import TestClient
+import shutil
+import sqlite3
+import tarfile
+import time
 
-from universal_agent import gateway_server
-from universal_agent import task_hub
-from universal_agent.ops_service import OpsService
-from universal_agent.gateway import InProcessGateway
-from universal_agent.gateway import GatewaySessionSummary
-from universal_agent.gateway import GatewaySession
+from fastapi.testclient import TestClient
+import pytest
+
+from universal_agent import gateway_server, task_hub
 from universal_agent.cron_service import CronService
+from universal_agent.durable.db import connect_runtime_db
+from universal_agent.durable.migrations import ensure_schema
 from universal_agent.durable.state import (
     append_vp_event,
     append_vp_session_event,
     create_run_attempt,
-    get_vp_mission,
     get_vp_bridge_cursor,
+    get_vp_mission,
     list_vp_events,
     upsert_run,
     upsert_vp_mission,
     upsert_vp_session,
 )
-from universal_agent.durable.db import connect_runtime_db
-from universal_agent.durable.migrations import ensure_schema
+from universal_agent.gateway import (
+    GatewaySession,
+    GatewaySessionSummary,
+    InProcessGateway,
+)
+from universal_agent.ops_service import OpsService
+from universal_agent.runtime_role import build_factory_runtime_policy
 from universal_agent.vp.clients.base import MissionOutcome, VpClient
 from universal_agent.vp.worker_loop import VpWorkerLoop
-from universal_agent.runtime_role import build_factory_runtime_policy
 
 # Mock OpsService to avoid full gateway dependency chains in unit tests
 # OR rely on the fact that lifespan will init a real OpsService with a real InProcessGateway pointing to tmp_path?

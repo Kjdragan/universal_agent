@@ -14,13 +14,13 @@ IMPORTANT: All adapters require platform credentials configured in environment
 variables or a credentials file. See each adapter's docstring for requirements.
 """
 
-import os
-import json
-import logging
-import time
-import hashlib
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
+import hashlib
+import json
+import logging
+import os
+import time
 from typing import Optional
 from urllib.parse import quote_plus, urlencode
 
@@ -29,10 +29,17 @@ logger = logging.getLogger("freelance_scout.adapters")
 
 # Import models from sibling location
 import sys
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from models import (
-    Opportunity, ScanResult, Platform, ProjectType, ExperienceLevel,
-    BudgetInfo, ClientInfo, OpportunityStatus
+    BudgetInfo,
+    ClientInfo,
+    ExperienceLevel,
+    Opportunity,
+    OpportunityStatus,
+    Platform,
+    ProjectType,
+    ScanResult,
 )
 
 

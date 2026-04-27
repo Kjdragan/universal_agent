@@ -1,7 +1,7 @@
+import base64
 import os
 import time
-import base64
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 
 class WorkbenchBridge:

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from universal_agent.services.todo_dispatch_service import _vp_active_counts
 
-
 # ---------------------------------------------------------------------------
 # Basic behaviour
 # ---------------------------------------------------------------------------

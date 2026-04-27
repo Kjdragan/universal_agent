@@ -14,13 +14,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
+from collections import Counter
+from datetime import datetime, timezone
 import json
+from pathlib import Path
 import re
 import subprocess
 import sys
-from collections import Counter
-from datetime import datetime, timezone
-from pathlib import Path
 
 WATCHLIST_PATH_LOCAL = Path(__file__).resolve().parents[1] / "channels_watchlist.json"
 WATCHLIST_PATH_VPS = "/opt/universal_agent/CSI_Ingester/development/channels_watchlist.json"

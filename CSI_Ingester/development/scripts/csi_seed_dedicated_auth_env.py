@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-
 MAPPINGS: list[tuple[str, str]] = [
     ("ANTHROPIC_API_KEY", "CSI_ANTHROPIC_API_KEY"),
     ("ANTHROPIC_AUTH_TOKEN", "CSI_ANTHROPIC_AUTH_TOKEN"),

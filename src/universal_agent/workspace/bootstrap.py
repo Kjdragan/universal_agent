@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 _ROOT = Path(__file__).resolve().parents[3]
 _PROMPT_ASSETS_DIR = Path(__file__).resolve().parents[1] / "prompt_assets"
 _GLOBAL_MEMORY_DIR = _ROOT / "memory"

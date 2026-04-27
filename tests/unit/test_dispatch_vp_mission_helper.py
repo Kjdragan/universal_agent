@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sqlite3
 from pathlib import Path
+import sqlite3
 
-from universal_agent.services.proactive_task_builder import queue_proactive_task
 from universal_agent import task_hub
+from universal_agent.services.proactive_task_builder import queue_proactive_task
 
 
 class TestQueueProactiveTask:

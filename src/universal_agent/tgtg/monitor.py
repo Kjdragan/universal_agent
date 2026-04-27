@@ -9,10 +9,10 @@ Adaptive strategy:
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import itertools
 import logging
 import time
-from datetime import datetime, timezone
 from typing import Callable
 
 from tgtg import TgtgClient

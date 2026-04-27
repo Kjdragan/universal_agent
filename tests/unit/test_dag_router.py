@@ -1,6 +1,7 @@
-import pytest
 import json
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from universal_agent.vp.clients.dag_client import DagClient
 

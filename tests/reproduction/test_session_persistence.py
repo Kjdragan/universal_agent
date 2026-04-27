@@ -1,7 +1,9 @@
 import asyncio
-import shutil
 from pathlib import Path
+import shutil
+
 from universal_agent.gateway import InProcessGateway
+
 
 async def test_session_persistence():
     print("🧪 Testing Session Persistence...")

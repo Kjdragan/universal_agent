@@ -10,28 +10,28 @@ Tests verify:
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import os
 import sqlite3
-from datetime import datetime, timezone, timedelta
 from unittest import mock
 
 import pytest
 
-from universal_agent.services.reflection_engine import (
-    is_reflection_enabled,
-    build_reflection_context,
-    _get_recent_completions,
-    _get_stalled_brainstorms,
-    _get_open_task_count,
-    _format_reflection_prompt,
-)
+from universal_agent import task_hub
 from universal_agent.services.proactive_budget import (
+    DEFAULT_DAILY_BUDGET,
+    get_daily_proactive_count,
     has_daily_budget,
     increment_daily_proactive_count,
-    get_daily_proactive_count,
-    DEFAULT_DAILY_BUDGET,
 )
-from universal_agent import task_hub
+from universal_agent.services.reflection_engine import (
+    _format_reflection_prompt,
+    _get_open_task_count,
+    _get_recent_completions,
+    _get_stalled_brainstorms,
+    build_reflection_context,
+    is_reflection_enabled,
+)
 
 
 @pytest.fixture

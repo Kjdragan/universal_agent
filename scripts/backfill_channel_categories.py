@@ -3,8 +3,8 @@ import asyncio
 import json
 import logging
 import os
-import sqlite3
 from pathlib import Path
+import sqlite3
 
 # Try to import our LLM classifier wrapper
 try:

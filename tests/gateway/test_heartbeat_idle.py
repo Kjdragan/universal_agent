@@ -1,10 +1,11 @@
 import asyncio
+from datetime import datetime, timedelta
 import os
 import unittest
-from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
-from universal_agent.heartbeat_service import HeartbeatService, GatewaySession
+from universal_agent.heartbeat_service import GatewaySession, HeartbeatService
+
 
 class TestHeartbeatIdle(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):

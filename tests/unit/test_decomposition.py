@@ -13,22 +13,22 @@ Tests:
 from __future__ import annotations
 
 import sqlite3
-import pytest
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from universal_agent.task_hub import (
-    ensure_schema,
-    upsert_item,
-    get_item,
-    decompose_task,
+    TASK_STATUS_COMPLETED,
+    TASK_STATUS_OPEN,
     complete_subtask_and_check_parent,
+    decompose_task,
+    ensure_schema,
     get_decomposition_tree,
+    get_item,
     get_parent_progress,
     list_subtasks,
-    TASK_STATUS_OPEN,
-    TASK_STATUS_COMPLETED,
+    upsert_item,
 )
-
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -185,13 +185,14 @@ class TestGatewayDecompositionEndpoints:
     @pytest.fixture(autouse=True)
     def _setup(self):
         try:
-            import httpx
             from fastapi.testclient import TestClient
+            import httpx
         except ImportError:
             pytest.skip("httpx/fastapi not available")
 
     def test_subtasks_endpoint_404_for_missing(self):
         from fastapi.testclient import TestClient
+
         from universal_agent.gateway_server import app
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.get("/api/v1/dashboard/todolist/tasks/nonexistent/subtasks")
@@ -200,6 +201,7 @@ class TestGatewayDecompositionEndpoints:
 
     def test_complete_subtask_endpoint_404_for_missing(self):
         from fastapi.testclient import TestClient
+
         from universal_agent.gateway_server import app
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.post("/api/v1/dashboard/todolist/tasks/nonexistent/complete-subtask")

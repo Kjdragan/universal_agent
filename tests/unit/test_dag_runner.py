@@ -1,7 +1,10 @@
-import pytest
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
 from universal_agent.services.dag_runner import DagRunner, DagState
+
 
 @pytest.mark.asyncio
 async def test_dag_runner_sequential_execution():

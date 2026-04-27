@@ -9,10 +9,16 @@ from typing import Any
 
 from csi_ingester.config import CSIConfig
 from csi_ingester.contract import CreatorSignalEvent
-from csi_ingester.emitter.ua_client import UAEmitter, classify_emission_failure, is_transient_failure
-from csi_ingester.store import delivery_attempts as delivery_attempt_store
-from csi_ingester.store import dlq as dlq_store
-from csi_ingester.store import events as event_store
+from csi_ingester.emitter.ua_client import (
+    UAEmitter,
+    classify_emission_failure,
+    is_transient_failure,
+)
+from csi_ingester.store import (
+    delivery_attempts as delivery_attempt_store,
+    dlq as dlq_store,
+    events as event_store,
+)
 
 logger = logging.getLogger(__name__)
 

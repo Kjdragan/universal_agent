@@ -1,8 +1,8 @@
 import asyncio
 from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
+import pytest
 
 from universal_agent import gateway_server
 from universal_agent.agent_core import AgentEvent, EventType

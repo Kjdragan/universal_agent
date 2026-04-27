@@ -1,23 +1,22 @@
+from datetime import datetime, timezone
 import json
 import logging
+from pathlib import Path
 import re
 import shutil
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Dict, List, Optional
-
-from universal_agent.services.daemon_sessions import DAEMON_SESSION_PREFIX
 
 from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.durable.state import list_run_attempts
+from universal_agent.feature_flags import sdk_session_history_enabled
 from universal_agent.gateway import InProcessGateway
 from universal_agent.memory.orchestrator import get_memory_orchestrator
 from universal_agent.memory.paths import resolve_shared_memory_workspace
-from universal_agent.security_paths import validate_session_id, is_valid_session_id
-from universal_agent.feature_flags import sdk_session_history_enabled
 from universal_agent.run_catalog import RunCatalogService
 from universal_agent.sdk import session_history_adapter
+from universal_agent.security_paths import is_valid_session_id, validate_session_id
+from universal_agent.services.daemon_sessions import DAEMON_SESSION_PREFIX
 
 logger = logging.getLogger(__name__)
 

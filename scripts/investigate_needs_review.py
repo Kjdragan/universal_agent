@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-import sys
-import os
 import json
+import os
 import sqlite3
+import sys
 
 repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 src_path = os.path.join(repo_root, "src")
@@ -10,6 +10,7 @@ if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
 from universal_agent.durable.db import connect_runtime_db
+
 
 def main():
     conn = connect_runtime_db()

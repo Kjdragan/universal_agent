@@ -1,5 +1,6 @@
 import sys
 
+
 class DualWriter:
     """Writes to both a file and the original stream (stdout/stderr)."""
     def __init__(self, file_handle, original_stream):

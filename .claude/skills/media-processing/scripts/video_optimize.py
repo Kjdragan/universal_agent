@@ -7,11 +7,11 @@ multi-pass encoding, and comparison metrics.
 """
 
 import argparse
+from dataclasses import dataclass
 import json
+from pathlib import Path
 import subprocess
 import sys
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional, Tuple
 
 

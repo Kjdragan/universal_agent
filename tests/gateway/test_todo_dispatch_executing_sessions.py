@@ -21,8 +21,8 @@ from __future__ import annotations
 import ast
 import asyncio
 import inspect
-import sqlite3
 from pathlib import Path
+import sqlite3
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -33,7 +33,6 @@ from universal_agent.services.todo_dispatch_service import (
     ToDoDispatchService,
     build_execution_manifest,
 )
-
 
 # ---------------------------------------------------------------------------
 # Source-code inspection helpers: these parse the actual .py file to verify

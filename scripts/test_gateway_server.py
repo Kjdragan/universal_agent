@@ -1,13 +1,14 @@
 
 import asyncio
-import os
-import sys
-import subprocess
-import time
-import requests
-import json
-import websockets
 from contextlib import closing
+import json
+import os
+import subprocess
+import sys
+import time
+
+import requests
+import websockets
 
 # Configure
 HOST = "127.0.0.1"

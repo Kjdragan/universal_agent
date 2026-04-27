@@ -7,13 +7,12 @@ import pytest
 
 from universal_agent.signals_ingest import process_signals_ingest_payload
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CSI_DEV_PATH = PROJECT_ROOT / "CSI_Ingester" / "development"
 if str(CSI_DEV_PATH) not in __import__("sys").path:
     __import__("sys").path.insert(0, str(CSI_DEV_PATH))
 
-from csi_ingester.contract import CSIIngestBatch, CreatorSignalEvent  # noqa: E402
+from csi_ingester.contract import CreatorSignalEvent, CSIIngestBatch  # noqa: E402
 from csi_ingester.signature import generate_signature  # noqa: E402
 
 

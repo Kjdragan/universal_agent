@@ -1,6 +1,9 @@
-from Memory_System.manager import MemoryManager
-from .common import AGENT_COLLEGE_NOTES_BLOCK
 from datetime import datetime
+
+from Memory_System.manager import MemoryManager
+
+from .common import AGENT_COLLEGE_NOTES_BLOCK
+
 
 class CriticAgent:
     def __init__(self, memory_manager: MemoryManager):

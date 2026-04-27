@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from pathlib import Path
+import re
 from typing import Any
 
 from universal_agent.feature_flags import (
     memory_backend,
     memory_enabled,
     memory_index_mode,
-    memory_rollover_mode,
     memory_retrieval_strategy,
+    memory_rollover_mode,
     memory_scope,
     memory_session_delta_bytes,
     memory_session_delta_messages,
@@ -25,8 +25,14 @@ from universal_agent.memory.memory_index import (
     search_entries,
 )
 from universal_agent.memory.memory_models import MemoryEntry
-from universal_agent.memory.memory_store import append_memory_entry, ensure_memory_scaffold
-from universal_agent.memory.memory_vector_index import schedule_vector_upsert, search_vectors
+from universal_agent.memory.memory_store import (
+    append_memory_entry,
+    ensure_memory_scaffold,
+)
+from universal_agent.memory.memory_vector_index import (
+    schedule_vector_upsert,
+    search_vectors,
+)
 
 _BROKERS: dict[str, "MemoryOrchestrator"] = {}
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
@@ -273,7 +279,9 @@ class MemoryOrchestrator:
         _safe_write_json(self.session_state_path, state)
         if written:
             try:
-                from universal_agent.wiki.projection import maybe_auto_sync_internal_memory_vault
+                from universal_agent.wiki.projection import (
+                    maybe_auto_sync_internal_memory_vault,
+                )
 
                 maybe_auto_sync_internal_memory_vault(trigger="sync_session")
             except Exception:
@@ -398,7 +406,9 @@ class MemoryOrchestrator:
                 content,
             )
         try:
-            from universal_agent.wiki.projection import maybe_auto_sync_internal_memory_vault
+            from universal_agent.wiki.projection import (
+                maybe_auto_sync_internal_memory_vault,
+            )
 
             maybe_auto_sync_internal_memory_vault(trigger=f"capture_session_rollover:{trigger}")
         except Exception:

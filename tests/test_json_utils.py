@@ -1,7 +1,10 @@
-import pytest
-from pydantic import BaseModel, Field
 from typing import List
+
+from pydantic import BaseModel, Field
+import pytest
+
 from universal_agent.utils.json_utils import extract_json_payload
+
 
 class MockSection(BaseModel):
     id: str

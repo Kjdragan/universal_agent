@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from claude_agent_sdk import tool
-
-from pathlib import Path
 
 from universal_agent.utils.session_workspace import (
     build_interim_work_product_paths,
@@ -14,6 +13,7 @@ from universal_agent.utils.session_workspace import (
     safe_slug,
     write_json,
 )
+
 
 def _as_dict(obj: Any) -> Any:
     if hasattr(obj, "model_dump"):
@@ -98,6 +98,7 @@ async def reddit_top_posts_wrapper(args: Dict[str, Any]) -> Dict[str, Any]:
 
     # Use the same identity resolution as the rest of the system.
     from composio import Composio  # local import to keep module import cheap
+
     from universal_agent.identity.resolver import resolve_user_id
 
     user_id = resolve_user_id()

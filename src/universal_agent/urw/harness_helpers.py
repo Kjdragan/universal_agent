@@ -6,12 +6,13 @@ Helper functions for managing agent context and workspace transitions during har
 
 from __future__ import annotations
 
-import os
 from datetime import datetime
+import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from universal_agent.execution_context import bind_workspace_env
+
 
 def toggle_session(
     harness_dir: Path,

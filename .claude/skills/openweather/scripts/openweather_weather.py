@@ -13,8 +13,8 @@ import argparse
 import datetime as dt
 import json
 import os
-import sys
 from pathlib import Path
+import sys
 from typing import Any, Dict, List, Optional, Tuple
 
 from lib import cache, dotenv, openweather

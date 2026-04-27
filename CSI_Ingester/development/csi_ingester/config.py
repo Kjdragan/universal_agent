@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import os
-import re
 from dataclasses import dataclass
+import os
 from pathlib import Path
+import re
 from typing import Any
 
 import yaml
-
 
 _ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 

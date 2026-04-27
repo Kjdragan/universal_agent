@@ -6,15 +6,16 @@ Runs the user's specific massive research query to test compaction limits.
 """
 
 import asyncio
-import os
-import sys
-from pathlib import Path
 from datetime import datetime
+import os
+from pathlib import Path
+import sys
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 

@@ -13,8 +13,8 @@ Usage:
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
+import sys
 from urllib.parse import quote
 
 REPO_ROOT = Path(__file__).resolve().parents[4]  # .agents/skills/residential-proxy/scripts -> repo root

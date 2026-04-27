@@ -20,6 +20,7 @@ import json
 import logging
 import os
 from typing import Any, Optional
+
 from universal_agent.utils.model_resolution import resolve_sonnet
 
 logger = logging.getLogger(__name__)
@@ -215,8 +216,9 @@ async def refine_with_llm(
         is_rate_limit = "429" in error_str or "too many requests" in error_str or "overloaded" in error_str
         if is_rate_limit:
             try:
-                from universal_agent.services.capacity_governor import CapacityGovernor
                 import asyncio
+
+                from universal_agent.services.capacity_governor import CapacityGovernor
                 governor = CapacityGovernor.get_instance()
                 asyncio.ensure_future(governor.report_rate_limit("refinement_agent", error=exc))
             except Exception:

@@ -1,8 +1,9 @@
+import json
 import os
+from pathlib import Path
 import sys
 import time
-import json
-from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 # Add src to path
@@ -21,7 +22,7 @@ except Exception as e:
     print(f"DEBUG: Exception during setup: {e}")
 
 # Import the Gateway Server App
-from universal_agent.gateway_server import app, WORKSPACES_DIR
+from universal_agent.gateway_server import WORKSPACES_DIR, app
 
 # Initial Setup
 CLIENT = TestClient(app)
@@ -81,7 +82,7 @@ def run_demo():
     # Let's cheat slightly and use the 'get_gateway().execute()' directly for the execution part,
     # relying on the session created via the API.
     
-    from universal_agent.gateway_server import get_gateway, get_session, GatewayRequest
+    from universal_agent.gateway_server import GatewayRequest, get_gateway, get_session
     gateway = get_gateway()
     
     # Execute A

@@ -6,13 +6,13 @@ Serves the HTML UI and provides a WebSocket endpoint for real-time agent interac
 
 import asyncio
 import json
-import os
 import mimetypes
+import os
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, Response
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
 from .agent_core import UniversalAgent, configure_logfire
 from universal_agent.api.error_handlers import register_error_handlers

@@ -4,10 +4,12 @@ Gradio Image Viewer for Universal Agent
 Displays images with editing capabilities.
 """
 
-import sys
 import os
+import sys
+
 import gradio as gr
 from PIL import Image
+
 
 def view_image(image_path, port=7860):
     """Launch Gradio viewer for the specified image."""

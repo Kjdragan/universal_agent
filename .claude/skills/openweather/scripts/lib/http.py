@@ -6,10 +6,10 @@ import json
 import os
 import sys
 import time
+from typing import Any, Dict, Optional
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Dict, Optional
 
 DEFAULT_TIMEOUT_S = 30
 DEBUG = os.environ.get("OPENWEATHER_DEBUG", "").lower() in ("1", "true", "yes")

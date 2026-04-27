@@ -1,5 +1,5 @@
-from types import SimpleNamespace
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from universal_agent.heartbeat_service import HeartbeatService
 

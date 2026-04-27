@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 from anthropic import Anthropic
 
-from universal_agent.urw import URWConfig, URWOrchestrator, MockAgentAdapter
+from universal_agent.urw import MockAgentAdapter, URWConfig, URWOrchestrator
 
 
 def parse_args() -> argparse.Namespace:

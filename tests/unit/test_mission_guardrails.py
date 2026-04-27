@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from universal_agent.mission_guardrails import MissionGuardrailTracker, build_mission_contract
+from universal_agent.mission_guardrails import (
+    MissionGuardrailTracker,
+    build_mission_contract,
+)
 
 
 def test_email_triage_runs_do_not_fail_email_delivery_guardrails():

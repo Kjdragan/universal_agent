@@ -1,16 +1,18 @@
-import sys
 import os
+import sys
 
 # Add repo root to sys.path to allow importing src.universal_agent
 repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if repo_root not in sys.path:
     sys.path.append(repo_root)
 
-from fastapi import FastAPI, HTTPException, Request
-from .models import TraceItem, FailureItem, WebhookPayload
-from .logfire_reader import LogfireReader
 from typing import List
+
+from fastapi import FastAPI, HTTPException, Request
 import uvicorn
+
+from .logfire_reader import LogfireReader
+from .models import FailureItem, TraceItem, WebhookPayload
 
 # Imports for Agent College Integration
 try:

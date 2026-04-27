@@ -1,16 +1,25 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from pathlib import Path
+import sqlite3
 
 import pytest
 
 from universal_agent import task_hub
-from universal_agent.request_runtime import RequestRuntimeContext, reset_request_runtime, set_request_runtime
-from universal_agent.services.email_task_bridge import EmailTaskBridge, reconcile_terminal_email_task_mappings
+from universal_agent.request_runtime import (
+    RequestRuntimeContext,
+    reset_request_runtime,
+    set_request_runtime,
+)
+from universal_agent.services.email_task_bridge import (
+    EmailTaskBridge,
+    reconcile_terminal_email_task_mappings,
+)
 from universal_agent.tools.agentmail_bridge import _send_agentmail_impl
-from universal_agent.tools.local_toolkit_bridge import _agentmail_send_with_local_attachments_impl
+from universal_agent.tools.local_toolkit_bridge import (
+    _agentmail_send_with_local_attachments_impl,
+)
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:

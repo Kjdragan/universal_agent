@@ -6,18 +6,18 @@ and the core UniversalAgent class from agent_core.py.
 """
 
 import asyncio
+from datetime import datetime
 import json
 import os
-import uuid
-from datetime import datetime
 from pathlib import Path
 from typing import AsyncGenerator, Callable, Optional
+import uuid
 
-from universal_agent.agent_core import UniversalAgent, AgentEvent, EventType
+from universal_agent.agent_core import AgentEvent, EventType, UniversalAgent
 from universal_agent.api.events import (
-    WebSocketEvent,
     EventType as WSEventType,
     SessionInfo,
+    WebSocketEvent,
     create_connected_event,
     create_error_event,
     create_status_event,

@@ -7,15 +7,14 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import os
-import sys
-from datetime import datetime, timezone
 from pathlib import Path
+import sys
 
 from dotenv import find_dotenv, load_dotenv
 from google import genai
-
 
 DEFAULT_PROMPT = (
     "Analyze this video and provide: "

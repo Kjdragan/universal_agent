@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
-import hashlib
-from typing import List, Dict
+from typing import Dict, List
 
 from .memory_models import MemoryEntry
 

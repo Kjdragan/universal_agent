@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import json
-import uuid
 from pathlib import Path
 import sys
+import uuid
 
 script_dir = Path(__file__).parent.parent.parent / "scripts"
 sys.path.insert(0, str(script_dir))
-import csi_rss_quality_gate
-
 from csi_ingester.store.sqlite import connect, ensure_schema
+import csi_rss_quality_gate
 
 
 def _insert_event(conn, *, source: str, delivered: int = 1) -> None:

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import json
-import shutil
 from datetime import datetime, timezone
+import json
 from pathlib import Path
+import shutil
 
 from .corpus_adapter import build_corpus_bundle
 

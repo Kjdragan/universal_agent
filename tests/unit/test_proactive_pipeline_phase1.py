@@ -14,16 +14,14 @@ Components tested:
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import os
 import sqlite3
-from datetime import datetime, timezone, timedelta
 from unittest import mock
 
 import pytest
 
-from universal_agent import task_hub
-from universal_agent import proactive_signals
-
+from universal_agent import proactive_signals, task_hub
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -153,9 +151,9 @@ class TestProactiveDailyBudget:
     def test_budget_resets_on_new_day(self, db_conn):
         """Budget should reset when the date changes."""
         from universal_agent.services.proactive_budget import (
+            _DAILY_BUDGET_KEY,
             get_daily_proactive_count,
             has_daily_budget,
-            _DAILY_BUDGET_KEY,
         )
         # Set a counter from yesterday
         task_hub._set_setting(db_conn, _DAILY_BUDGET_KEY, {
@@ -298,8 +296,10 @@ class TestSignalCuratorPromotion:
     @mock.patch.dict(os.environ, {"UA_PROACTIVE_DAILY_BUDGET": "2"}, clear=False)
     def test_promote_respects_budget(self, db_conn):
         """Should only promote up to the remaining daily budget."""
+        from universal_agent.services.proactive_budget import (
+            increment_daily_proactive_count,
+        )
         from universal_agent.services.signal_curator import promote_cards_to_tasks
-        from universal_agent.services.proactive_budget import increment_daily_proactive_count
 
         # Use 1 of 2 budget slots
         increment_daily_proactive_count(db_conn, increment=1)
