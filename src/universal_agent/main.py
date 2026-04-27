@@ -4,9 +4,9 @@ A standalone agent using Claude Agent SDK with Composio MCP integration.
 Traces are sent to Logfire for observability.
 """
 
-import sys
-import os
 import logging
+import os
+import sys
 
 # Add 'src' to sys.path to allow imports from universal_agent package
 # This ensures functional imports regardless of invocation directory
@@ -23,69 +23,74 @@ if src_dir not in sys.path:
 
 import asyncio
 import copy
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+import glob
+import hashlib
+import inspect
+import json
+from pathlib import Path
+import re
 import signal
 import sqlite3
 import time
-import json
-import hashlib
-import re
+from typing import Any, Callable, Optional
 import uuid
-import inspect
-from pathlib import Path
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from typing import Any, Optional, Callable
-from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
-from universal_agent.notebooklm_runtime import build_notebooklm_mcp_server_config
-from universal_agent.agentmail_official import build_agentmail_mcp_server_config
-from universal_agent.task_stop_guardrails import (
-    evaluate_task_stop_policy as _shared_evaluate_task_stop_policy,
-    extract_task_stop_id as _shared_extract_task_stop_id,
-    task_stop_rejection_reason as _shared_task_stop_rejection_reason,
-)
 
-from universal_agent.utils.message_history import (
-    TRUNCATION_THRESHOLD,
-    CONTEXT_WINDOW_TOKENS,
-)
-import glob
-from universal_agent.harness.verifier import TaskVerifier
+from claude_agent_sdk import HookMatcher, create_sdk_mcp_server
+from claude_agent_sdk.types import ToolUseBlock
+
+from universal_agent import hooks as hook_events
 from universal_agent.agent_core import (
-    UniversalAgent,
     AgentEvent,
     EventType,
     HarnessError,
+    UniversalAgent,
 )
-from claude_agent_sdk import create_sdk_mcp_server, HookMatcher
-from claude_agent_sdk.types import ToolUseBlock
-from universal_agent.tools.research_bridge import (
-    run_research_pipeline_wrapper,
-    crawl_parallel_wrapper,
-    run_research_phase_wrapper,
-    run_report_generation_wrapper,
-    generate_outline_wrapper,
-    draft_report_parallel_wrapper,
-    cleanup_report_wrapper,
-    compile_report_wrapper,
+from universal_agent.agentmail_official import build_agentmail_mcp_server_config
+from universal_agent.gateway import ExternalGateway, GatewayRequest, InProcessGateway
+from universal_agent.harness.verifier import TaskVerifier
+from universal_agent.hooks import AgentHookSet
+from universal_agent.notebooklm_runtime import build_notebooklm_mcp_server_config
+from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
+from universal_agent.task_stop_guardrails import (
+    evaluate_task_stop_policy as _shared_evaluate_task_stop_policy,
 )
+from universal_agent.task_stop_guardrails import (
+    extract_task_stop_id as _shared_extract_task_stop_id,
+)
+from universal_agent.task_stop_guardrails import (
+    task_stop_rejection_reason as _shared_task_stop_rejection_reason,
+)
+from universal_agent.tools.internal_registry import get_all_internal_tools
 from universal_agent.tools.local_toolkit_bridge import (
-    upload_to_composio_wrapper,
-    list_directory_wrapper,
     append_to_file_wrapper,
-    write_text_file_wrapper,
-    finalize_research_wrapper,
-    generate_image_wrapper,
-    describe_image_wrapper,
-    preview_image_wrapper,
     ask_user_questions_wrapper,
     batch_tool_execute_wrapper,
+    describe_image_wrapper,
+    finalize_research_wrapper,
+    generate_image_wrapper,
+    list_directory_wrapper,
+    preview_image_wrapper,
+    upload_to_composio_wrapper,
+    write_text_file_wrapper,
 )
-from universal_agent.tools.pdf_bridge import html_to_pdf_wrapper
 from universal_agent.tools.memory import memory_get_wrapper, memory_search_wrapper
-from universal_agent.tools.internal_registry import get_all_internal_tools
-from universal_agent.gateway import InProcessGateway, ExternalGateway, GatewayRequest
-from universal_agent import hooks as hook_events
-from universal_agent.hooks import AgentHookSet
+from universal_agent.tools.pdf_bridge import html_to_pdf_wrapper
+from universal_agent.tools.research_bridge import (
+    cleanup_report_wrapper,
+    compile_report_wrapper,
+    crawl_parallel_wrapper,
+    draft_report_parallel_wrapper,
+    generate_outline_wrapper,
+    run_report_generation_wrapper,
+    run_research_phase_wrapper,
+    run_research_pipeline_wrapper,
+)
+from universal_agent.utils.message_history import (
+    CONTEXT_WINDOW_TOKENS,
+    TRUNCATION_THRESHOLD,
+)
 
 
 # Timezone helper for consistent date/time across deployments
@@ -130,9 +135,50 @@ class ExecutionResult:
     reset_session: bool = False  # Whether the caller should reset/clear the client
 
 
-import sys
 import argparse
+import sys
 
+from universal_agent.cli_io import (
+    attach_run_log,
+    build_prompt_session,
+    collect_local_tool_trace_ids,
+    list_workspace_artifacts,
+    open_run_log,
+    print_execution_summary_from_events,
+    print_job_completion_summary,
+    print_job_completion_summary_from_events,
+    read_prompt_input,
+    read_run_log_tail,
+    render_agent_events,
+)
+from universal_agent.execution_context import bind_workspace
+from universal_agent.execution_session import ExecutionSession
+from universal_agent.feature_flags import (
+    heartbeat_enabled,
+    memory_enabled,
+    memory_flush_enabled,
+    memory_flush_max_chars,
+    memory_index_enabled,
+    memory_max_tokens,
+    memory_session_enabled,
+    memory_session_index_on_end,
+    sdk_typed_task_events_enabled,
+)
+from universal_agent.logfire_payloads import (
+    PayloadLoggingConfig,
+    load_payload_logging_config,
+    serialize_payload_for_logfire,
+)
+from universal_agent.memory.paths import (
+    resolve_shared_memory_workspace,
+)
+from universal_agent.observers import (
+    observe_and_save_search_results,
+    observe_and_save_video_outputs,
+    observe_and_save_work_products,
+    observe_and_save_workbench_activity,
+    verify_subagent_compliance,
+)
 
 # prompt_toolkit for better terminal input (arrow keys, history, multiline)
 from universal_agent.prompt_assets import (
@@ -142,65 +188,29 @@ from universal_agent.prompt_assets import (
     get_tool_knowledge_content,
     load_capabilities_registry,
 )
-from universal_agent.search_config import SEARCH_TOOL_CONFIG
-from universal_agent.observers import (
-    observe_and_save_search_results,
-    observe_and_save_workbench_activity,
-    observe_and_save_work_products,
-    observe_and_save_video_outputs,
-    verify_subagent_compliance,
-)
-from universal_agent.cli_io import (
-    attach_run_log,
-    open_run_log,
-    read_run_log_tail,
-    collect_local_tool_trace_ids,
-    build_prompt_session,
-    read_prompt_input,
-    print_job_completion_summary,
-    list_workspace_artifacts,
-    render_agent_events,
-    print_execution_summary_from_events,
-    print_job_completion_summary_from_events,
-)
-from universal_agent.execution_context import bind_workspace
-from universal_agent.execution_session import ExecutionSession
-from universal_agent.session_ctx import (
-    SessionContext as _SessionContext,
-    get_ctx as _get_ctx,
-    require_ctx as _require_ctx,
-    set_ctx as _set_ctx,
-)
-from universal_agent.trace_utils import write_trace
-from universal_agent.trace_catalog import (
-    emit_trace_catalog,
-    save_trace_catalog_md,
-    save_trace_catalog_work_product,
-    enrich_trace_json,
-    extract_local_tool_trace_ids_from_trace,
-)
-from universal_agent.feature_flags import (
-    heartbeat_enabled,
-    memory_index_enabled,
-    memory_enabled,
-    memory_max_tokens,
-    memory_flush_enabled,
-    memory_flush_max_chars,
-    memory_session_enabled,
-    memory_session_index_on_end,
-    sdk_typed_task_events_enabled,
-)
-from universal_agent.memory.paths import (
-    resolve_shared_memory_workspace,
-)
-from universal_agent.logfire_payloads import (
-    PayloadLoggingConfig,
-    load_payload_logging_config,
-    serialize_payload_for_logfire,
-)
 from universal_agent.sdk.runtime_info import emit_sdk_runtime_banner
 from universal_agent.sdk.task_events import extract_typed_task_payload
-
+from universal_agent.search_config import SEARCH_TOOL_CONFIG
+from universal_agent.session_ctx import (
+    SessionContext as _SessionContext,
+)
+from universal_agent.session_ctx import (
+    get_ctx as _get_ctx,
+)
+from universal_agent.session_ctx import (
+    require_ctx as _require_ctx,
+)
+from universal_agent.session_ctx import (
+    set_ctx as _set_ctx,
+)
+from universal_agent.trace_catalog import (
+    emit_trace_catalog,
+    enrich_trace_json,
+    extract_local_tool_trace_ids_from_trace,
+    save_trace_catalog_md,
+    save_trace_catalog_work_product,
+)
+from universal_agent.trace_utils import write_trace
 
 # Global State Initialization
 tool_ledger = None
@@ -532,7 +542,6 @@ from universal_agent.agent_setup import DISALLOWED_TOOLS
 from universal_agent.constants import PRIMARY_ONLY_BLOCKED_TOOLS
 
 
-
 def _get_gateway_tool_call_id(raw_id: object) -> str:
     _ctx = _get_ctx()
     if _ctx is not None:
@@ -748,7 +757,9 @@ def _configure_logfire_runtime_if_available() -> bool:
 
             def _configure_langsmith():
                 try:
-                    from langsmith.integrations.claude_agent_sdk import configure_claude_agent_sdk
+                    from langsmith.integrations.claude_agent_sdk import (
+                        configure_claude_agent_sdk,
+                    )
                     configure_claude_agent_sdk()
                 except Exception:
                     pass
@@ -802,30 +813,30 @@ def _refresh_logfire_runtime_flags() -> None:
     _configure_logfire_runtime_if_available()
 
 
+from typing import Any
+
 from claude_agent_sdk.client import ClaudeSDKClient
 from claude_agent_sdk.types import (
-    ClaudeAgentOptions,
     AgentDefinition,
     AssistantMessage,
-    TextBlock,
-    ToolUseBlock,
-    ToolResultBlock,
-    ResultMessage,
-    ThinkingBlock,
-    UserMessage,
-    # Hook types for SubagentStop pattern
-    HookMatcher,
+    ClaudeAgentOptions,
     HookContext,
     HookJSONOutput,
+    # Hook types for SubagentStop pattern
+    HookMatcher,
+    ResultMessage,
+    TextBlock,
+    ThinkingBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+    UserMessage,
 )
-from typing import Any
 from composio import Composio
-from universal_agent.harness.verifier import TaskVerifier
 
 # Durable runtime support
 from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
 from universal_agent.durable.migrations import ensure_schema
-
+from universal_agent.harness.verifier import TaskVerifier
 from universal_agent.utils.log_bridge import LogBridgeHandler, StdoutInterceptor
 
 
@@ -852,48 +863,48 @@ def setup_log_bridge(agent: UniversalAgent):
     return bridge
 
 
-from universal_agent.durable.ledger import ToolCallLedger
-from universal_agent.durable.tool_gateway import (
-    prepare_tool_call,
-    parse_tool_identity,
-    is_malformed_tool_name,
-    parse_malformed_tool_name,
-    is_invalid_tool_name,
+from universal_agent.durable.checkpointing import (
+    load_corpus_cache,
+    load_last_checkpoint,
+    save_checkpoint,
 )
-from universal_agent.durable.normalize import deterministic_task_key, normalize_json
 from universal_agent.durable.classification import (
     classify_replay_policy,
     classify_tool,
     resolve_tool_policy,
     validate_tool_policies,
 )
+from universal_agent.durable.ledger import ToolCallLedger
+from universal_agent.durable.normalize import deterministic_task_key, normalize_json
 from universal_agent.durable.state import (
-    create_run_attempt,
-    get_run_attempt,
-    upsert_run,
-    update_run_attempt,
-    update_run_attempt_provider_session,
-    update_run_tokens,
-    update_run_status,
-    update_run_provider_session,
-    start_step,
     complete_step,
-    update_step_phase,
+    create_run_attempt,
+    get_iteration_info,
     get_run,
+    get_run_attempt,
     get_run_status,
     get_step_count,
-    is_cancel_requested,
+    increment_iteration_count,
     is_cancel_requested,
     mark_run_cancelled,
-    increment_iteration_count,
-    get_iteration_info,
+    start_step,
+    update_run_attempt,
+    update_run_attempt_provider_session,
+    update_run_provider_session,
+    update_run_status,
+    update_run_tokens,
+    update_step_phase,
+    upsert_run,
 )
-from universal_agent.durable.checkpointing import (
-    save_checkpoint,
-    load_last_checkpoint,
-    load_corpus_cache,
+from universal_agent.durable.tool_gateway import (
+    is_invalid_tool_name,
+    is_malformed_tool_name,
+    parse_malformed_tool_name,
+    parse_tool_identity,
+    prepare_tool_call,
 )
 from universal_agent.run_workspace import ensure_run_workspace_scaffold
+
 # Local MCP server provides: crawl_parallel, finalize_research, read_research_files, append_to_file, etc.\n# Note: File Read/Write now uses native Claude SDK tools
 
 # Composio client - will be initialized in main() with file_download_dir
@@ -905,21 +916,21 @@ from universal_agent.guardrails.tool_schema import (
     post_tool_use_schema_nudge,
     pre_tool_use_schema_guardrail,
 )
-from universal_agent.identity import (
-    resolve_email_recipients,
-    validate_recipient_policy,
-    load_identity_registry,
-    resolve_user_id,
-)
 from universal_agent.harness import ask_user_questions, present_plan_summary
+from universal_agent.identity import (
+    load_identity_registry,
+    resolve_email_recipients,
+    resolve_user_id,
+    validate_recipient_policy,
+)
 from universal_agent.routing import (
-    is_system_intent,
-    is_tool_required_intent,
-    is_memory_intent,
-    is_context_only_intent,
     ROUTE_SIMPLE,
     ROUTE_STANDARD,
     ROUTE_SYSTEM,
+    is_context_only_intent,
+    is_memory_intent,
+    is_system_intent,
+    is_tool_required_intent,
 )
 
 # Global Memory Manager is not needed here as it is used locally for prompt injection
@@ -992,7 +1003,7 @@ def _resolve_letta_model() -> str:
 
 
 try:
-    from agentic_learning import learning, AgenticLearning, AsyncAgenticLearning
+    from agentic_learning import AgenticLearning, AsyncAgenticLearning, learning
 
     # Only attempt initialization if explicitly enabled or if we want soft degradation
     if _LETTA_SUBAGENT_ENABLED:
@@ -1414,8 +1425,9 @@ async def on_pre_tool_use_ledger(
         "run_research_pipeline",
         "run_report_generation",
     } and isinstance(guard_tool_input, dict):
-        from universal_agent.execution_context import get_current_workspace as _get_ws
         from pathlib import Path
+
+        from universal_agent.execution_context import get_current_workspace as _get_ws
 
         transcript_hint = ""
         transcript_path = str(input_data.get("transcript_path", "") or "").strip()
@@ -3200,8 +3212,9 @@ def build_skill_prompt_triggers() -> dict[str, list[str]]:
 
     Returns: {"skill-name": ["trigger1", "trigger2", ...]}
     """
-    import yaml
     import re
+
+    import yaml
 
     triggers = {}
     project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
@@ -4054,8 +4067,8 @@ def on_agent_stop(context: HookContext, run_id: str = None, db_conn=None) -> dic
         if not workspace_dir:
             print("⚠️ Harness: No workspace_dir global, skipping verification.")
         else:
-            import json as _json
             import glob as _glob
+            import json as _json
 
             mission_path = os.path.join(workspace_dir, "mission.json")
             if os.path.exists(mission_path):
@@ -8072,6 +8085,7 @@ def parse_cli_args() -> argparse.Namespace:
 
 async def _run_urw_from_cli(args: argparse.Namespace) -> None:
     from pathlib import Path
+
     from anthropic import Anthropic
 
     from universal_agent.urw import URWConfig, URWOrchestrator
@@ -8161,8 +8175,10 @@ def __load_programmatic_agents(src_dir: str) -> dict:
     """Dynamically load agents from Markdown and apply programmatic model resolution."""
     import glob
     import os
-    import yaml
+
     from claude_agent_sdk.types import AgentDefinition
+    import yaml
+
     from universal_agent.utils.model_resolution import resolve_claude_code_model
     
     agents_dir = os.path.join(src_dir, ".claude/agents")
@@ -8447,8 +8463,10 @@ async def setup_session(
 
     # --- SHARED PROMPT BUILDER (eliminates prompt divergence) ---
     from universal_agent.prompt_builder import (
-        build_system_prompt as _shared_build_prompt,
         build_sdk_system_prompt as _build_sdk_system_prompt,
+    )
+    from universal_agent.prompt_builder import (
+        build_system_prompt as _shared_build_prompt,
     )
 
     def _build_legacy_system_prompt(
@@ -9180,8 +9198,8 @@ async def process_turn(
                 # Guardrail tripped: persist a recovery handoff packet so a fresh client can resume.
                 handoff_md_path = None
                 try:
-                    from universal_agent.recovery_handoff import write_recovery_handoff
                     from universal_agent import transcript_builder
+                    from universal_agent.recovery_handoff import write_recovery_handoff
 
                     err_dict = (
                         exc.to_dict()
@@ -9806,6 +9824,7 @@ async def main(args: argparse.Namespace):
     if args.resume and workspace_dir:
         try:
             from pathlib import Path
+
             from universal_agent.session_checkpoint import SessionCheckpointGenerator
 
             ws_path = Path(workspace_dir)
@@ -10245,6 +10264,7 @@ async def main(args: argparse.Namespace):
 
                     try:
                         from pathlib import Path
+
                         from .urw.harness_orchestrator import run_harness
 
                         workspaces_root = Path(workspace_dir).parent
@@ -10288,6 +10308,7 @@ async def main(args: argparse.Namespace):
 
                     try:
                         from pathlib import Path
+
                         from .urw.harness_orchestrator import run_harness
 
                         workspaces_root = Path(workspace_dir).parent
@@ -10681,6 +10702,7 @@ async def main(args: argparse.Namespace):
                         # Generate session checkpoint for context continuity
                         try:
                             from pathlib import Path
+
                             from universal_agent.session_checkpoint import (
                                 SessionCheckpointGenerator,
                             )

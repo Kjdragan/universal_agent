@@ -2,7 +2,7 @@ from dataclasses import dataclass
 import json
 from typing import Any, Optional
 
-from .ledger import ToolCallLedger, LedgerReceipt
+from .ledger import LedgerReceipt, ToolCallLedger
 
 MALFORMED_TOOL_NAME_MARKERS = ("</arg_key>", "<arg_key>", "</arg_value>", "<arg_value>")
 INVALID_TOOL_NAME_MARKERS = ("<", ">", "{", "}", "[", "]", "\"")

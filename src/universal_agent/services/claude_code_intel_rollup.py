@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import json
-import logging
-import re
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+import json
+import logging
 from pathlib import Path
+import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -18,7 +18,6 @@ from universal_agent.services.claude_code_intel import (
     _parse_json_object,
     resolve_lane_root,
 )
-
 
 ROLLING_WINDOW_DAYS = 14
 MAX_ACTION_CONTEXTS = 18

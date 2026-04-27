@@ -11,13 +11,13 @@ assignments.  It is called from the post-action hook in
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import logging
 import os
 import sqlite3
-import uuid
-from datetime import datetime, timezone
 from typing import Any, Optional
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -356,6 +356,8 @@ def _fire_implicit_preference_signal(
     try:
         from universal_agent.services.proactive_preferences import (
             ensure_schema as pref_ensure_schema,
+        )
+        from universal_agent.services.proactive_preferences import (
             rebuild_preference_snapshot,
         )
 

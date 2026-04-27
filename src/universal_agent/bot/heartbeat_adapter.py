@@ -1,6 +1,6 @@
 
 import logging
-from typing import Callable, Awaitable, Any
+from typing import Any, Awaitable, Callable
 
 logger = logging.getLogger(__name__)
 

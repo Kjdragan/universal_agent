@@ -3,8 +3,8 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
-import sys
 from pathlib import Path
+import sys
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from claude_agent_sdk import tool
@@ -40,7 +40,11 @@ def _import_skill_lib() -> Tuple[
     skill_scripts = repo_root / ".claude" / "skills" / "grok-x-trends" / "scripts"
     sys.path.insert(0, str(skill_scripts))
 
-    from lib.xai_x_search import global_trends, parse_trends_response, trends_for_query  # type: ignore
+    from lib.xai_x_search import (  # type: ignore
+        global_trends,
+        parse_trends_response,
+        trends_for_query,
+    )
 
     _SKILL_FUNCS = (trends_for_query, global_trends, parse_trends_response)
     return _SKILL_FUNCS

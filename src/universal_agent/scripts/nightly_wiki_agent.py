@@ -1,14 +1,14 @@
 import asyncio
+from datetime import datetime, timezone
 import json
 import logging
 import os
-import sys
 import sqlite3
-from datetime import datetime, timezone
+import sys
 
-from universal_agent.infisical_loader import initialize_runtime_secrets
 from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
-from universal_agent.proactive_signals import list_cards, CARD_STATUS_PENDING
+from universal_agent.infisical_loader import initialize_runtime_secrets
+from universal_agent.proactive_signals import CARD_STATUS_PENDING, list_cards
 
 logger = logging.getLogger(__name__)
 

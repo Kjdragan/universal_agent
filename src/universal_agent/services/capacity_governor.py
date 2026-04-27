@@ -30,12 +30,12 @@ Configuration (environment variables):
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 import logging
 import os
 import random
 import time
-from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)

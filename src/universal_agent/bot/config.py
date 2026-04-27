@@ -1,7 +1,8 @@
+import logging
 import os
 from typing import List
+
 from dotenv import load_dotenv
-import logging
 
 # Load .env file
 load_dotenv()

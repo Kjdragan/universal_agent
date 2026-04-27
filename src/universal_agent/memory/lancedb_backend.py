@@ -7,9 +7,9 @@ and configurable embedding providers.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from datetime import datetime
+import os
 from typing import Optional
 from uuid import uuid4
 

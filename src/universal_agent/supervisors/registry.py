@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 SUPERVISOR_REGISTRY: list[dict[str, Any]] = [
     {
         "id": "factory-supervisor",

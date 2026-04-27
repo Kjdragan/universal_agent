@@ -12,10 +12,10 @@ bot-detection signals are detected in the response.
 from __future__ import annotations
 
 from copy import deepcopy
-import logging
-import time
 from dataclasses import dataclass, field
 from enum import IntEnum
+import logging
+import time
 from typing import Any, Optional
 from urllib.parse import urlparse
 

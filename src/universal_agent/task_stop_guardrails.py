@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import sqlite3
 import re
+import sqlite3
 from typing import Any, Optional
 
 _TASK_STOP_PLACEHOLDER_IDS = {

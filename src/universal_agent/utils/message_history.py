@@ -5,9 +5,9 @@ Mirrors Anthropic's MessageHistory pattern from claude-quickstarts.
 Tracks per-message token counts and truncates oldest pairs when over threshold.
 """
 
-import logfire
-
 import os
+
+import logfire
 
 # Constants
 CONTEXT_WINDOW_TOKENS = int(os.environ.get("UA_CONTEXT_WINDOW", 200000))  # Claude Sonnet 4.0 context window

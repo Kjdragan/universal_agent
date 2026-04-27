@@ -7,7 +7,6 @@ import json
 import re
 from typing import Any
 
-
 _INTERIM_PATTERNS = (
     re.compile(r"\binterim\b", re.IGNORECASE),
     re.compile(r"\bprogress\s+update", re.IGNORECASE),

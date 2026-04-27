@@ -3,10 +3,9 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-from universal_agent.feature_flags import memory_enabled
-
 from .memory_models import MemoryEntry
 from .memory_store import append_memory_entry
+from universal_agent.feature_flags import memory_enabled
 
 
 def _extract_transcript_tail(

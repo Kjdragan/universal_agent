@@ -9,12 +9,12 @@ Checks whether Stage 1 and Stage 2 completed successfully.
 """
 
 import asyncio
+from datetime import datetime, timezone
 import json
 import logging
 import os
-import sys
-from datetime import datetime, timezone
 from pathlib import Path
+import sys
 
 logger = logging.getLogger(__name__)
 

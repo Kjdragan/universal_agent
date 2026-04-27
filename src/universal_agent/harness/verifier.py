@@ -9,10 +9,10 @@ Responsibility:
   - Tier 3 (Semantic): Optional LLM "vibe check"
 """
 
-import os
-import json
 import glob
-from typing import Tuple, Dict, Any, Optional
+import json
+import os
+from typing import Any, Dict, Optional, Tuple
 
 
 class TaskVerifier:

@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import os
-import sqlite3
-from datetime import datetime, timezone
 from pathlib import Path
+import sqlite3
 
 from universal_agent.artifacts import resolve_artifacts_dir
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
-from universal_agent.services.proactive_convergence import sync_topic_signatures_from_csi
-
+from universal_agent.services.proactive_convergence import (
+    sync_topic_signatures_from_csi,
+)
 
 DEFAULT_CSI_DB_PATH = "/var/lib/universal-agent/csi/csi.db"
 

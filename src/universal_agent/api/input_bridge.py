@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Optional, Callable, Awaitable, List
+from typing import Awaitable, Callable, List, Optional
 
 logger = logging.getLogger(__name__)
 

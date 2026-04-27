@@ -14,17 +14,19 @@ import inspect
 import json
 import logging
 import os
+from pathlib import Path
 import time
 from typing import Any, AsyncGenerator, Optional
-from pathlib import Path
 
 import httpx
 import websockets
 
 from universal_agent.api.events import (
-    WebSocketEvent,
     EventType as WSEventType,
+)
+from universal_agent.api.events import (
     SessionInfo,
+    WebSocketEvent,
     create_connected_event,
     create_error_event,
 )

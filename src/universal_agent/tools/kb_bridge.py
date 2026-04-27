@@ -1,15 +1,18 @@
 """
 Bridge tools for the NotebookLM Knowledge Base registry.
 """
-from typing import Any
 import json
+from typing import Any
+
 from claude_agent_sdk import tool
+
 from universal_agent.wiki.kb_registry import (
-    register_kb,
     get_kb,
     list_kbs,
+    register_kb,
     update_kb,
 )
+
 
 def _ok(payload: Any) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": json.dumps(payload, indent=2, ensure_ascii=False)}]}

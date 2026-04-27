@@ -1,9 +1,10 @@
-from typing import Any
 import base64
 import json
+import os
 from pathlib import Path
 import sys
-import os
+from typing import Any
+
 from claude_agent_sdk import tool
 
 # Ensure src/ is on path so we can import mcp_server directly
@@ -11,37 +12,89 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")
 
 try:
     from mcp_server import (
-        upload_to_composio as upload_to_composio_core,
-        list_directory as list_directory_core,
-        inspect_session_workspace as inspect_session_workspace_core,
-        list_agent_sessions as list_agent_sessions_core,
-        read_vps_file as read_vps_file_core,
         append_to_file as append_to_file_core,
-        write_text_file as write_text_file_core,
-        generate_image as generate_image_core,
-        generate_image_with_review as generate_image_with_review_core,
-        finalize_research as finalize_research_core,
-        describe_image as describe_image_core,
-        preview_image as preview_image_core,
+    )
+    from mcp_server import (
         ask_user_questions as ask_user_questions_core,
+    )
+    from mcp_server import (
         batch_tool_execute as batch_tool_execute_core,
+    )
+    from mcp_server import (
+        describe_image as describe_image_core,
+    )
+    from mcp_server import (
+        finalize_research as finalize_research_core,
+    )
+    from mcp_server import (
+        generate_image as generate_image_core,
+    )
+    from mcp_server import (
+        generate_image_with_review as generate_image_with_review_core,
+    )
+    from mcp_server import (
+        inspect_session_workspace as inspect_session_workspace_core,
+    )
+    from mcp_server import (
+        list_agent_sessions as list_agent_sessions_core,
+    )
+    from mcp_server import (
+        list_directory as list_directory_core,
+    )
+    from mcp_server import (
+        preview_image as preview_image_core,
+    )
+    from mcp_server import (
+        read_vps_file as read_vps_file_core,
+    )
+    from mcp_server import (
+        upload_to_composio as upload_to_composio_core,
+    )
+    from mcp_server import (
+        write_text_file as write_text_file_core,
     )
 except ImportError:
     from src.mcp_server import (
-        upload_to_composio as upload_to_composio_core,
-        list_directory as list_directory_core,
-        inspect_session_workspace as inspect_session_workspace_core,
-        list_agent_sessions as list_agent_sessions_core,
-        read_vps_file as read_vps_file_core,
         append_to_file as append_to_file_core,
-        write_text_file as write_text_file_core,
-        generate_image as generate_image_core,
-        generate_image_with_review as generate_image_with_review_core,
-        finalize_research as finalize_research_core,
-        describe_image as describe_image_core,
-        preview_image as preview_image_core,
+    )
+    from src.mcp_server import (
         ask_user_questions as ask_user_questions_core,
+    )
+    from src.mcp_server import (
         batch_tool_execute as batch_tool_execute_core,
+    )
+    from src.mcp_server import (
+        describe_image as describe_image_core,
+    )
+    from src.mcp_server import (
+        finalize_research as finalize_research_core,
+    )
+    from src.mcp_server import (
+        generate_image as generate_image_core,
+    )
+    from src.mcp_server import (
+        generate_image_with_review as generate_image_with_review_core,
+    )
+    from src.mcp_server import (
+        inspect_session_workspace as inspect_session_workspace_core,
+    )
+    from src.mcp_server import (
+        list_agent_sessions as list_agent_sessions_core,
+    )
+    from src.mcp_server import (
+        list_directory as list_directory_core,
+    )
+    from src.mcp_server import (
+        preview_image as preview_image_core,
+    )
+    from src.mcp_server import (
+        read_vps_file as read_vps_file_core,
+    )
+    from src.mcp_server import (
+        upload_to_composio as upload_to_composio_core,
+    )
+    from src.mcp_server import (
+        write_text_file as write_text_file_core,
     )
 
 from universal_agent.hooks import StdoutToEventStream
@@ -293,9 +346,9 @@ async def _agentmail_send_with_local_attachments_impl(args: dict[str, Any]) -> d
         if p.is_file():
             size_mb = p.stat().st_size / (1024 * 1024)
             if size_mb > 4.0:
-                import uuid
                 import shutil
                 import urllib.parse
+                import uuid
                 
                 artifacts_dir = resolve_artifacts_dir()
                 email_blobs_dir = artifacts_dir / "agentmail_drops"
@@ -342,8 +395,8 @@ async def _agentmail_send_with_local_attachments_impl(args: dict[str, Any]) -> d
         "attachments": attachments
     }
 
-    import urllib.request
     import urllib.error
+    import urllib.request
 
     api_key = os.getenv("AGENTMAIL_API_KEY", "").strip()
     if not api_key:
@@ -375,8 +428,10 @@ async def _agentmail_send_with_local_attachments_impl(args: dict[str, Any]) -> d
 
 def _record_agentmail_delivery_from_runtime(*, message_id: str = "", draft_id: str = "") -> None:
     try:
-        from universal_agent.agentmail_official import resolve_email_tracking_from_runtime
         from universal_agent import task_hub
+        from universal_agent.agentmail_official import (
+            resolve_email_tracking_from_runtime,
+        )
     except Exception:
         return
 
@@ -453,9 +508,9 @@ async def agentmail_reply_with_local_attachments_wrapper(args: dict[str, Any]) -
         if p.is_file():
             size_mb = p.stat().st_size / (1024 * 1024)
             if size_mb > 4.0:
-                import uuid
                 import shutil
                 import urllib.parse
+                import uuid
                 
                 artifacts_dir = resolve_artifacts_dir()
                 email_blobs_dir = artifacts_dir / "agentmail_drops"
@@ -498,8 +553,8 @@ async def agentmail_reply_with_local_attachments_wrapper(args: dict[str, Any]) -
         "attachments": attachments
     }
 
-    import urllib.request
     import urllib.error
+    import urllib.request
 
     api_key = os.getenv("AGENTMAIL_API_KEY", "").strip()
     if not api_key:

@@ -1,7 +1,9 @@
+import logging
 import os
 import subprocess
-import logging
+
 from Memory_System.manager import MemoryManager
+
 from .common import AGENT_COLLEGE_NOTES_BLOCK
 
 logger = logging.getLogger(__name__)

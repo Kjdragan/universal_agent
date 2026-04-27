@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import re
 import sqlite3
-from dataclasses import dataclass
 from typing import Any, Optional
 
 from universal_agent.services import proactive_artifacts
-from universal_agent.services.proactive_preferences import record_artifact_feedback_signal
+from universal_agent.services.proactive_preferences import (
+    record_artifact_feedback_signal,
+)
 
 _FEEDBACK_RE = re.compile(r"^\s*([1-5])(?:\s*[-:.)]\s*|\s+)?(.*)$", re.DOTALL)
 

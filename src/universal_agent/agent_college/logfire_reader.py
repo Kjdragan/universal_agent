@@ -1,7 +1,9 @@
-from logfire.query_client import LogfireQueryClient
-from .config import get_settings
-from typing import List, Dict, Any
 import logging
+from typing import Any, Dict, List
+
+from logfire.query_client import LogfireQueryClient
+
+from .config import get_settings
 
 logger = logging.getLogger(__name__)
 

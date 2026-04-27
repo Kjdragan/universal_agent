@@ -21,9 +21,9 @@ Configuration via environment variables:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
 import os
-from dataclasses import dataclass
 from typing import Optional
 
 logger = logging.getLogger(__name__)

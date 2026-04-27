@@ -1,24 +1,29 @@
 from __future__ import annotations
 
+from collections import Counter, defaultdict
+from dataclasses import dataclass
+from datetime import datetime, timezone
 import hashlib
 import json
 import logging
 import os
+from pathlib import Path
 import re
 import shutil
 import time
-from collections import Counter, defaultdict
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 import yaml
+
 from universal_agent.artifacts import resolve_artifacts_dir
 from universal_agent.memory.paths import resolve_shared_memory_workspace
+from universal_agent.wiki.llm import (
+    extract_concepts,
+    extract_entities,
+    generate_summary,
+)
 from universal_agent.workspace_catalog import list_workspace_summaries
 
-from universal_agent.wiki.llm import extract_entities, extract_concepts, generate_summary
 
 def _candidate_lines(body: str) -> list[str]:
     return [line.strip() for line in body.splitlines() if line.strip()]

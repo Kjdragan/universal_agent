@@ -1,13 +1,16 @@
-from typing import Any
-from pathlib import Path
-from claude_agent_sdk import tool
-import sys
-import os
 import logging
+import os
+from pathlib import Path
+import sys
+from typing import Any
+
+from claude_agent_sdk import tool
 
 logger = logging.getLogger(__name__)
 
-from universal_agent.execution_context import get_current_workspace as _ctx_get_workspace
+from universal_agent.execution_context import (
+    get_current_workspace as _ctx_get_workspace,
+)
 from universal_agent.utils.session_workspace import resolve_current_run_workspace
 
 # Backward-compatible alias for older tests and call sites that still patch the
@@ -19,20 +22,23 @@ resolve_current_session_workspace = resolve_current_run_workspace
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 try:
-    from mcp_server import _run_research_pipeline_legacy as original_pipeline
     from mcp_server import _crawl_core
-    from mcp_server import _run_research_phase_legacy as research_phase_core
     from mcp_server import _run_report_generation_legacy as report_gen_core
+    from mcp_server import _run_research_phase_legacy as research_phase_core
+    from mcp_server import _run_research_pipeline_legacy as original_pipeline
 except ImportError:
     # Fallback for when running from different contexts
-    from src.mcp_server import _run_research_pipeline_legacy as original_pipeline
     from src.mcp_server import _crawl_core
-    from src.mcp_server import _run_research_phase_legacy as research_phase_core
     from src.mcp_server import _run_report_generation_legacy as report_gen_core
+    from src.mcp_server import _run_research_phase_legacy as research_phase_core
+    from src.mcp_server import _run_research_pipeline_legacy as original_pipeline
 
 # Import Task Guardrails
-from universal_agent.utils.task_guardrails import normalize_task_name, resolve_best_task_match
 from universal_agent.hooks import StdoutToEventStream
+from universal_agent.utils.task_guardrails import (
+    normalize_task_name,
+    resolve_best_task_match,
+)
 
 
 def _is_session_workspace(path_value: str) -> bool:

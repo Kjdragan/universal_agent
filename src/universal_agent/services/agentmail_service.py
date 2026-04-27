@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from datetime import datetime, timezone
 from email.utils import parseaddr
 import json
 import logging
@@ -31,9 +32,8 @@ import random
 import re
 import sqlite3
 import time
-import uuid
-from datetime import datetime, timezone
 from typing import Any, Callable, Coroutine, Optional
+import uuid
 
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
 
@@ -1154,7 +1154,7 @@ class AgentMailService:
 
     async def _ws_connect_and_listen(self) -> None:
         """Single WebSocket connection lifecycle."""
-        from agentmail import Subscribe, MessageReceivedEvent
+        from agentmail import MessageReceivedEvent, Subscribe
 
         inbox_targets = self._inbox_ids if self._inbox_ids else [self._inbox_id]
         logger.info("📧 WebSocket connecting to AgentMail for inboxes=%s", inbox_targets)
@@ -1304,8 +1304,8 @@ class AgentMailService:
                 classified_priority: int | None = None
                 try:
                     from universal_agent.services.priority_classifier import (
-                        classify_email_priority,
                         TaskPriority,
+                        classify_email_priority,
                     )
 
                     _priority_decision = classify_email_priority(
@@ -1529,8 +1529,8 @@ class AgentMailService:
         The cron job's command instructs the system to execute the task at
         the scheduled time, independent of any session lifecycle.
         """
-        import os
         from datetime import datetime
+        import os
 
         port = os.getenv("UA_GATEWAY_PORT", "8002")
         base_url = f"http://127.0.0.1:{port}"
@@ -1694,8 +1694,8 @@ class AgentMailService:
         """
         try:
             from universal_agent.services.priority_classifier import (
-                classify_email_priority,
                 TaskPriority,
+                classify_email_priority,
             )
 
             decision = classify_email_priority(
@@ -2160,7 +2160,9 @@ class AgentMailService:
             )
 
     def _request_requires_single_final_response(self, text: str) -> bool:
-        from universal_agent.tools.agentmail_bridge import _request_requires_single_final_response
+        from universal_agent.tools.agentmail_bridge import (
+            _request_requires_single_final_response,
+        )
 
         return _request_requires_single_final_response(text)
 
@@ -2196,8 +2198,8 @@ class AgentMailService:
         if not task_id:
             return {}
         try:
-            from universal_agent.durable.db import connect_runtime_db
             from universal_agent import task_hub
+            from universal_agent.durable.db import connect_runtime_db
 
             with connect_runtime_db() as conn:
                 item = task_hub.get_item(conn, task_id)
@@ -2519,11 +2521,16 @@ class AgentMailService:
 
             if completed_rows:
                 try:
-                    from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+                    from universal_agent.durable.db import (
+                        connect_runtime_db,
+                        get_activity_db_path,
+                    )
+                    from universal_agent.task_hub import (
+                        complete_subtask_and_check_parent,
+                        perform_task_action,
+                    )
                     from universal_agent.task_hub import (
                         ensure_schema as _th_ensure_schema,
-                        perform_task_action,
-                        complete_subtask_and_check_parent,
                     )
 
                     th_conn = connect_runtime_db(get_activity_db_path())

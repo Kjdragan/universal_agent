@@ -16,11 +16,12 @@ Checkpoint captures:
 
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
 
 @dataclass
 class SessionCheckpoint:
@@ -393,7 +394,9 @@ class SessionCheckpointGenerator:
         md_path.write_text(markdown)
         (self.workspace_path / self.LEGACY_CHECKPOINT_MARKDOWN_FILENAME).write_text(markdown)
         try:
-            from universal_agent.wiki.projection import maybe_auto_sync_internal_memory_vault
+            from universal_agent.wiki.projection import (
+                maybe_auto_sync_internal_memory_vault,
+            )
 
             maybe_auto_sync_internal_memory_vault(trigger="session_checkpoint_save")
         except Exception:

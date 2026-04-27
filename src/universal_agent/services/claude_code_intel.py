@@ -7,17 +7,17 @@ Task Hub follow-up only for posts that look implementation-worthy.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import hashlib
 import hmac
 import json
 import logging
 import os
+from pathlib import Path
 import re
 import sqlite3
 import time
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlsplit
 
@@ -25,14 +25,13 @@ import httpx
 
 from universal_agent import task_hub
 from universal_agent.artifacts import resolve_artifacts_dir
-from universal_agent.utils.model_resolution import resolve_sonnet
 from universal_agent.services.proactive_artifacts import (
     ARTIFACT_STATUS_CANDIDATE,
     ARTIFACT_STATUS_PRODUCED,
     make_artifact_id,
     upsert_artifact,
 )
-
+from universal_agent.utils.model_resolution import resolve_sonnet
 
 DEFAULT_HANDLE = "ClaudeDevs"
 DEFAULT_HANDLES = ["ClaudeDevs", "bcherny"]

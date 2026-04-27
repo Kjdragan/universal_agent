@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from datetime import datetime
+import os
 from typing import Optional
 
+from .memory_index import _content_hash, append_index_entry, recent_entries
 from .memory_models import MemoryEntry
-from .memory_index import append_index_entry, recent_entries, _content_hash
 from .memory_vector_index import schedule_vector_upsert
-from universal_agent.feature_flags import memory_index_mode, memory_backend
+from universal_agent.feature_flags import memory_backend, memory_index_mode
 
 # Lazy import for vector memory backend to avoid heavy dependencies at module load
 _vector_memory = None
@@ -154,7 +154,9 @@ def append_memory_entry(
                 entry.content,
             )
     try:
-        from universal_agent.wiki.projection import maybe_auto_sync_internal_memory_vault
+        from universal_agent.wiki.projection import (
+            maybe_auto_sync_internal_memory_vault,
+        )
 
         maybe_auto_sync_internal_memory_vault(trigger="append_memory_entry")
     except Exception:

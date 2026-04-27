@@ -9,29 +9,29 @@ Usage:
 """
 
 import asyncio
-import contextlib
-from collections import deque
 import base64
+from collections import deque
+import contextlib
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 import hashlib
+import io
 import json
 import logging
 import mimetypes
 import os
+from pathlib import Path
 import re
-import socket
 import shutil
+import socket
 import sqlite3
+import tarfile
 import threading
 import time
-import urllib.parse
-import uuid
-import io
-import tarfile
-from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Awaitable, Callable, Optional
+import urllib.parse
+import uuid
 from zoneinfo import ZoneInfo
 
 try:
@@ -40,82 +40,113 @@ except Exception:  # pragma: no cover - degraded runtime fallback
     httpx = None  # type: ignore[assignment]
 
 BASE_DIR = Path(__file__).parent.parent.parent
-from universal_agent import get_logfire_runtime_state
+from fastapi import (
+    BackgroundTasks,
+    FastAPI,
+    File,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field
+
+from universal_agent import get_logfire_runtime_state, process_heartbeat
+from universal_agent.agent_core import AgentEvent, EventType
+from universal_agent.approvals import (
+    clear_approvals,
+    list_approvals,
+    update_approval,
+    upsert_approval,
+)
+from universal_agent.artifacts import resolve_artifacts_dir
 from universal_agent.auth.ops_auth import (
     allow_legacy_ops_auth,
     issue_ops_jwt,
     validate_ops_token,
 )
-from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
-from universal_agent.runtime_role import FactoryRole, build_factory_runtime_policy
-from universal_agent.session_hub import set_active_sidebar, get_active_sidebar, clear_active_sidebar
+from universal_agent.codebase_policy import (
+    approved_codebase_roots_from_env,
+    build_codebase_access,
+    validate_codebase_root,
+)
+from universal_agent.cron_service import CronJob, CronService, parse_run_at
+from universal_agent.delegation.factory_registry import (
+    FactoryRegistry,
+    connect_registry_db,
+)
 from universal_agent.delegation.redis_bus import (
     MISSION_CONSUMER_GROUP,
     MISSION_DLQ_STREAM,
     MISSION_STREAM,
     RedisMissionBus,
 )
-from universal_agent.delegation.factory_registry import FactoryRegistry, connect_registry_db
 from universal_agent.delegation.schema import MissionEnvelope, MissionPayload
-
-from fastapi import BackgroundTasks, FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect, HTTPException, Request, Response, status
-from fastapi.responses import JSONResponse, StreamingResponse
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-
-from universal_agent.gateway import (
-    InProcessGateway,
-    GatewaySession,
-    GatewayRequest,
-)
-from universal_agent.agent_core import AgentEvent, EventType
-from universal_agent.feature_flags import (
-    heartbeat_enabled,
-    memory_index_enabled,
-    cron_enabled,
-    coder_vp_enabled,
-    dynamic_mcp_enabled,
-    sdk_session_history_enabled,
-)
-from universal_agent.sdk import session_history_adapter
-from universal_agent.utils.model_resolution import resolve_sonnet
-from universal_agent.identity import resolve_user_id
 from universal_agent.durable.db import (
     connect_runtime_db,
-    get_runtime_db_path,
     get_activity_db_path,
+    get_runtime_db_path,
     get_sqlite_busy_timeout_ms,
 )
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.durable.state import (
     append_vp_event,
     finalize_vp_mission,
-    get_vp_mission,
     get_vp_bridge_cursor,
+    get_vp_mission,
     get_vp_session,
     list_vp_events,
     list_vp_missions,
-    list_vp_sessions,
     list_vp_session_events,
+    list_vp_sessions,
     upsert_vp_bridge_cursor,
 )
-from universal_agent.vp import (
-    MissionDispatchRequest,
-    cancel_mission,
-    dispatch_mission_with_retry,
-    is_sqlite_lock_error,
+from universal_agent.feature_flags import (
+    coder_vp_enabled,
+    cron_enabled,
+    dynamic_mcp_enabled,
+    heartbeat_enabled,
+    memory_index_enabled,
+    sdk_session_history_enabled,
 )
+from universal_agent.gateway import (
+    GatewayRequest,
+    GatewaySession,
+    InProcessGateway,
+)
+from universal_agent.heartbeat_mediation import sanitize_heartbeat_recommendation_text
 from universal_agent.heartbeat_service import (
     DEFAULT_INTERVAL_SECONDS as HEARTBEAT_DEFAULT_INTERVAL_SECONDS,
+)
+from universal_agent.heartbeat_service import (
     MIN_INTERVAL_SECONDS as HEARTBEAT_MIN_INTERVAL_SECONDS,
+)
+from universal_agent.heartbeat_service import (
     HeartbeatService,
-    _resolve_min_interval_seconds as _resolve_hb_min_interval_seconds,
+)
+from universal_agent.heartbeat_service import (
     _parse_duration_seconds as _parse_heartbeat_duration_seconds,
+)
+from universal_agent.heartbeat_service import (
     _resolve_heartbeat_interval_env as _resolve_hb_interval_env,
 )
-from universal_agent.cron_service import CronJob, CronService, parse_run_at
-from universal_agent.ops_service import OpsService
-from universal_agent.run_catalog import RunCatalogService
+from universal_agent.heartbeat_service import (
+    _resolve_min_interval_seconds as _resolve_hb_min_interval_seconds,
+)
+from universal_agent.hooks_service import HooksService, build_manual_youtube_action
+from universal_agent.identity import resolve_user_id
+from universal_agent.memory.memory_index import load_index
+from universal_agent.memory.orchestrator import get_memory_orchestrator
+from universal_agent.memory.paths import resolve_shared_memory_workspace
+from universal_agent.mission_guardrails import (
+    MissionGuardrailTracker,
+    build_mission_contract,
+)
 from universal_agent.ops_config import (
     apply_merge_patch,
     load_ops_config,
@@ -123,52 +154,59 @@ from universal_agent.ops_config import (
     ops_config_schema,
     write_ops_config,
 )
-from universal_agent.artifacts import resolve_artifacts_dir
-from universal_agent.approvals import list_approvals, update_approval, upsert_approval, clear_approvals
+from universal_agent.ops_service import OpsService
 from universal_agent.proactive_signals import (
     apply_card_action,
-    delete_card as delete_proactive_signal_card,
-    list_cards as list_proactive_signal_cards,
-    record_feedback as record_proactive_signal_feedback,
-    sync_generated_cards as sync_proactive_signal_cards,
     distill_feedback_to_rules,
 )
-from universal_agent.work_threads import (
-    append_work_thread_decision,
-    list_work_threads,
-    update_work_thread,
-    upsert_work_thread,
+from universal_agent.proactive_signals import (
+    delete_card as delete_proactive_signal_card,
 )
-from universal_agent.hooks_service import HooksService, build_manual_youtube_action
-from universal_agent.heartbeat_mediation import sanitize_heartbeat_recommendation_text
-from universal_agent.services.youtube_playlist_watcher import YouTubePlaylistWatcher
-from universal_agent.services.gws_event_listener import GwsEventListener
-from universal_agent.services.agentmail_service import AgentMailService
-from universal_agent.services.dispatch_service import (
-    dispatch_immediate, dispatch_on_approval, dispatch_scheduled_due, DispatchError,
+from universal_agent.proactive_signals import (
+    list_cards as list_proactive_signal_cards,
 )
-from universal_agent.services.decomposition_agent import (
-    decompose_with_llm, DecompositionError,
+from universal_agent.proactive_signals import (
+    record_feedback as record_proactive_signal_feedback,
 )
-from universal_agent.services.refinement_agent import (
-    refine_with_llm, RefinementError,
+from universal_agent.proactive_signals import (
+    sync_generated_cards as sync_proactive_signal_cards,
 )
-from universal_agent.services.capacity_governor import capacity_snapshot
-from universal_agent.services.execution_run_service import (
-    resolve_active_codebase_root,
-    resolve_active_execution_workspace,
-)
-
-from universal_agent import process_heartbeat
-from universal_agent.workflow_admission import (
-    WorkflowAdmissionService,
-    WorkflowTrigger,
-)
+from universal_agent.run_catalog import RunCatalogService
+from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
+from universal_agent.runtime_role import FactoryRole, build_factory_runtime_policy
+from universal_agent.sdk import session_history_adapter
 from universal_agent.security_paths import (
     allow_external_workspaces_from_env,
     resolve_ops_log_path,
     resolve_workspace_dir,
     validate_session_id,
+)
+from universal_agent.services.agentmail_service import AgentMailService
+from universal_agent.services.capacity_governor import capacity_snapshot
+from universal_agent.services.decomposition_agent import (
+    DecompositionError,
+    decompose_with_llm,
+)
+from universal_agent.services.dispatch_service import (
+    DispatchError,
+    dispatch_immediate,
+    dispatch_on_approval,
+    dispatch_scheduled_due,
+)
+from universal_agent.services.execution_run_service import (
+    resolve_active_codebase_root,
+    resolve_active_execution_workspace,
+)
+from universal_agent.services.gws_event_listener import GwsEventListener
+from universal_agent.services.refinement_agent import (
+    RefinementError,
+    refine_with_llm,
+)
+from universal_agent.services.youtube_playlist_watcher import YouTubePlaylistWatcher
+from universal_agent.session_hub import (
+    clear_active_sidebar,
+    get_active_sidebar,
+    set_active_sidebar,
 )
 from universal_agent.session_policy import (
     evaluate_request_against_policy,
@@ -177,37 +215,47 @@ from universal_agent.session_policy import (
     save_session_policy,
     update_session_policy,
 )
-from universal_agent.codebase_policy import (
-    approved_codebase_roots_from_env,
-    build_codebase_access,
-    validate_codebase_root,
-)
-from universal_agent.utils.json_utils import extract_json_payload
-from universal_agent.utils.heartbeat_findings_schema import HeartbeatFindings
-from universal_agent.youtube_ingest import ingest_youtube_transcript, normalize_video_target
-from universal_agent.youtube_mode_utils import (
-    youtube_explicitly_non_code,
-    youtube_probably_code,
-)
 from universal_agent.signals_ingest import (
     extract_valid_events,
     process_signals_ingest_payload,
     to_manual_youtube_payload,
 )
-from universal_agent.mission_guardrails import build_mission_contract, MissionGuardrailTracker
-from universal_agent.memory.orchestrator import get_memory_orchestrator
-from universal_agent.memory.paths import resolve_shared_memory_workspace
-from universal_agent.memory.memory_index import load_index
+from universal_agent.utils.heartbeat_findings_schema import HeartbeatFindings
+from universal_agent.utils.json_utils import extract_json_payload
+from universal_agent.utils.model_resolution import resolve_sonnet
+from universal_agent.vp import (
+    MissionDispatchRequest,
+    cancel_mission,
+    dispatch_mission_with_retry,
+    is_sqlite_lock_error,
+)
+from universal_agent.work_threads import (
+    append_work_thread_decision,
+    list_work_threads,
+    update_work_thread,
+    upsert_work_thread,
+)
+from universal_agent.workflow_admission import (
+    WorkflowAdmissionService,
+    WorkflowTrigger,
+)
+from universal_agent.youtube_ingest import (
+    ingest_youtube_transcript,
+    normalize_video_target,
+)
+from universal_agent.youtube_mode_utils import (
+    youtube_explicitly_non_code,
+    youtube_probably_code,
+)
+
+
 # CSI Redesign (2026-03-15): csi_confidence module deleted.
 # These stubs prevent NameErrors in any remaining dead-code references.
 def _csi_confidence_baseline_model(*a, **kw): return {}  # noqa: E731
 def _csi_score_event_confidence(*a, **kw): return {}  # noqa: E731
-from universal_agent.runtime_env import ensure_runtime_path, runtime_tool_status
-from universal_agent.timeout_policy import (
-    gateway_ws_send_timeout_seconds,
-    session_cancel_wait_seconds,
-)
 from universal_agent import task_hub
+from universal_agent.api.error_handlers import register_error_handlers
+from universal_agent.runtime_env import ensure_runtime_path, runtime_tool_status
 from universal_agent.supervisors import (
     build_csi_snapshot,
     build_factory_snapshot,
@@ -216,7 +264,10 @@ from universal_agent.supervisors import (
     persist_snapshot,
     supervisor_registry,
 )
-from universal_agent.api.error_handlers import register_error_handlers
+from universal_agent.timeout_policy import (
+    gateway_ws_send_timeout_seconds,
+    session_cancel_wait_seconds,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -277,6 +328,7 @@ TEXT_EXTENSIONS = (
 # ---------------------------------------------------------------------------
 try:
     from pathlib import Path as _Path
+
     from dotenv import load_dotenv as _early_load_dotenv
     _early_dotenv = _Path(__file__).resolve().parents[2] / ".env"
     if _early_dotenv.exists():
@@ -5160,8 +5212,11 @@ _CSI_RECOMMENDATION_TEXT_KEYS = (
     "name",
 )
 from universal_agent.services.routing_markers import (
-    CSI_CODE_RE, CSI_RESEARCH_RE, CSI_WRITER_RE,
-    CSI_AGENT_HINTS_RE, CSI_HUMAN_HINTS_RE,
+    CSI_AGENT_HINTS_RE,
+    CSI_CODE_RE,
+    CSI_HUMAN_HINTS_RE,
+    CSI_RESEARCH_RE,
+    CSI_WRITER_RE,
 )
 
 
@@ -6301,7 +6356,9 @@ def _match_auto_delegate_targets(
 
 
 def _todo_task_expected_final_channel(item: dict[str, Any]) -> str:
-    from universal_agent.services.todo_dispatch_service import resolve_execution_manifest
+    from universal_agent.services.todo_dispatch_service import (
+        resolve_execution_manifest,
+    )
 
     metadata = item.get("metadata") if isinstance(item, dict) else {}
     resolved_metadata = metadata if isinstance(metadata, dict) else {}
@@ -6863,7 +6920,10 @@ async def _run_gateway_session_request(
     request_runtime_token = None
 
     try:
-        from universal_agent.request_runtime import RequestRuntimeContext, set_request_runtime
+        from universal_agent.request_runtime import (
+            RequestRuntimeContext,
+            set_request_runtime,
+        )
 
         request_runtime_token = set_request_runtime(
             RequestRuntimeContext(
@@ -7002,7 +7062,10 @@ async def _run_gateway_session_request(
                 if str(task_id).strip()
             ]
             if claimed_task_ids:
-                from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+                from universal_agent.durable.db import (
+                    connect_runtime_db,
+                    get_activity_db_path,
+                )
 
                 with connect_runtime_db(get_activity_db_path()) as conn:
                     recorded_task_ids = _record_todo_chat_final_delivery(
@@ -7371,7 +7434,9 @@ async def _run_gateway_session_request(
             _fin_run_id = str(request_metadata.get("workflow_run_id") or "").strip()
             if _fin_run_id:
                 try:
-                    from universal_agent.services.execution_run_service import finalize_execution_run
+                    from universal_agent.services.execution_run_service import (
+                        finalize_execution_run,
+                    )
 
                     _TERMINAL_TO_STATUS = {
                         "completed": "completed",
@@ -8797,6 +8862,14 @@ def _merge_activity_actions(*action_sets: list[dict[str, Any]]) -> list[dict[str
             seen.add(action_id)
             merged.append(action)
     return merged
+
+
+def _runtime_db_connect() -> sqlite3.Connection:
+    """Return the main runtime_state.db connection held by the gateway."""
+    conn = getattr(main_module, "runtime_db_conn", None)
+    if conn is None:
+        raise RuntimeError("runtime_db_conn not initialized")
+    return conn
 
 
 def _activity_connect() -> sqlite3.Connection:
@@ -12894,6 +12967,7 @@ def _load_skill_catalog() -> list[dict]:
     entries: list[dict] = []
     try:
         import yaml
+
         from universal_agent.prompt_assets import _check_skill_requirements
     except Exception:
         yaml = None
@@ -13109,8 +13183,8 @@ def _mark_run_cancel_requested(run_id: Optional[str], reason: str) -> Optional[s
     if not run_id:
         return None
     try:
-        import universal_agent.main as main_module
         from universal_agent.durable.state import request_run_cancel
+        import universal_agent.main as main_module
 
         if main_module.runtime_db_conn:
             request_run_cancel(main_module.runtime_db_conn, run_id, reason)
@@ -13720,7 +13794,9 @@ async def lifespan(app: FastAPI):
         # (5 minutes) since we KNOW the process was dead.
         try:
             from universal_agent import task_hub as _recovery_task_hub
-            from universal_agent.services.email_task_bridge import reconcile_terminal_email_task_mappings
+            from universal_agent.services.email_task_bridge import (
+                reconcile_terminal_email_task_mappings,
+            )
             _recovery_conn = connect_runtime_db(get_activity_db_path())
             _recovery_conn.row_factory = sqlite3.Row
             _recovery_task_hub.ensure_schema(_recovery_conn)
@@ -13798,7 +13874,9 @@ async def lifespan(app: FastAPI):
 
     # Auto-archive stale workspace directories (older than 48h)
     try:
-        from universal_agent.session.reaper import cleanup_stale_workspaces as _archive_stale
+        from universal_agent.session.reaper import (
+            cleanup_stale_workspaces as _archive_stale,
+        )
         _archived = await _archive_stale(
             max_age_hours=int(os.getenv("UA_WORKSPACE_ARCHIVE_AGE_HOURS", "48")),
             workspaces_dir=WORKSPACES_DIR,
@@ -14056,7 +14134,9 @@ async def lifespan(app: FastAPI):
 
     # --- Idle Agent Dispatch Loop (Phase D — proactive task processing) ---
     try:
-        from universal_agent.services.idle_dispatch_loop import idle_dispatch_loop as _idle_loop
+        from universal_agent.services.idle_dispatch_loop import (
+            idle_dispatch_loop as _idle_loop,
+        )
         _spawn_background_task(
             _run_after_deployment_window(
                 "idle_dispatch_loop",
@@ -14216,8 +14296,10 @@ register_error_handlers(app)
 
 # Mount modular API routers
 try:
+    from universal_agent.api.routers.csi_discord_watchlist import (
+        router as csi_discord_watchlist_router,
+    )
     from universal_agent.api.routers.csi_watchlist import router as csi_watchlist_router
-    from universal_agent.api.routers.csi_discord_watchlist import router as csi_discord_watchlist_router
     app.include_router(csi_watchlist_router)
     app.include_router(csi_discord_watchlist_router)
 except Exception:
@@ -16985,7 +17067,9 @@ def _proactive_calendar_context(enabled: bool) -> dict[str, Any]:
 
 def _register_tutorial_bootstrap_proactive_artifact(job: dict[str, Any]) -> None:
     try:
-        from universal_agent.services.proactive_tutorial_builds import register_tutorial_bootstrap_job_artifact
+        from universal_agent.services.proactive_tutorial_builds import (
+            register_tutorial_bootstrap_job_artifact,
+        )
 
         with _activity_store_lock:
             conn = _activity_connect()
@@ -17435,7 +17519,9 @@ async def dashboard_proactive_artifact_feedback(
 ):
     _require_ops_auth(request)
     from universal_agent.services.proactive_artifacts import record_feedback
-    from universal_agent.services.proactive_preferences import record_artifact_feedback_signal
+    from universal_agent.services.proactive_preferences import (
+        record_artifact_feedback_signal,
+    )
 
     with _activity_store_lock:
         conn = _activity_connect()
@@ -17544,7 +17630,9 @@ async def dashboard_proactive_tutorial_build_task(
     payload: ProactiveTutorialBuildQueueRequest,
 ):
     _require_ops_auth(request)
-    from universal_agent.services.proactive_tutorial_builds import queue_tutorial_build_task
+    from universal_agent.services.proactive_tutorial_builds import (
+        queue_tutorial_build_task,
+    )
 
     with _activity_store_lock:
         conn = _activity_connect()
@@ -17573,7 +17661,9 @@ async def dashboard_proactive_tutorial_build_artifact(
     payload: ProactiveTutorialBuildRegisterRequest,
 ):
     _require_ops_auth(request)
-    from universal_agent.services.proactive_tutorial_builds import register_tutorial_build_artifact
+    from universal_agent.services.proactive_tutorial_builds import (
+        register_tutorial_build_artifact,
+    )
 
     with _activity_store_lock:
         conn = _activity_connect()
@@ -21372,7 +21462,10 @@ async def dashboard_todolist_dismiss_task(task_id: str):
 async def dashboard_todolist_email_tasks(limit: int = 50):
     """Return all email-originated tasks with their thread context."""
     try:
-        from universal_agent.services.email_task_bridge import EmailTaskBridge, ensure_email_task_schema
+        from universal_agent.services.email_task_bridge import (
+            EmailTaskBridge,
+            ensure_email_task_schema,
+        )
 
         with _activity_store_lock:
             conn = _task_hub_open_conn()
@@ -23840,7 +23933,9 @@ async def ops_proactive_reports_get(request: Request, limit: int = 10):
     """Retrieve recent proactive intelligence reports for dashboard display."""
     _require_ops_auth(request)
     try:
-        from universal_agent.services.proactive_intelligence_report import get_latest_reports
+        from universal_agent.services.proactive_intelligence_report import (
+            get_latest_reports,
+        )
         with _activity_store_lock:
             conn = _task_hub_open_conn()
             try:
@@ -23858,7 +23953,9 @@ async def ops_proactive_utilization_get(request: Request, window_hours: int = 24
     """Retrieve system utilization statistics from heartbeat sampling."""
     _require_ops_auth(request)
     try:
-        from universal_agent.services.proactive_intelligence_report import get_utilization_stats
+        from universal_agent.services.proactive_intelligence_report import (
+            get_utilization_stats,
+        )
         with _activity_store_lock:
             conn = _task_hub_open_conn()
             try:
@@ -23877,7 +23974,8 @@ async def ops_proactive_outcomes_get(request: Request, window_hours: int = 168, 
     _require_ops_auth(request)
     try:
         from universal_agent.services.proactive_outcome_tracker import (
-            get_outcome_stats, get_recent_outcomes,
+            get_outcome_stats,
+            get_recent_outcomes,
         )
         with _activity_store_lock:
             conn = _task_hub_open_conn()
@@ -29512,8 +29610,9 @@ async def websocket_stream(
 
 
 if __name__ == "__main__":
-    import uvicorn
     import time
+
+    import uvicorn
 
     port = int(os.getenv("UA_GATEWAY_PORT", "8002"))
     host = os.getenv("UA_GATEWAY_HOST", "0.0.0.0")

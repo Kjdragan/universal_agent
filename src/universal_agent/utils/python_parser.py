@@ -6,8 +6,8 @@ and module metadata with error recovery for syntax errors.
 """
 
 import ast
-import logging
 from enum import Enum
+import logging
 from pathlib import Path
 from typing import Optional, Union
 

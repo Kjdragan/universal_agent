@@ -24,11 +24,11 @@ Schema
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import logging
 import sqlite3
 import threading
-from datetime import datetime, timezone
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)

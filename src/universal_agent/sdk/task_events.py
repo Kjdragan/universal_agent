@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-
 _TASK_STARTED_CLASS_NAMES = {"TaskStartedMessage", "TaskStarted"}
 _TASK_PROGRESS_CLASS_NAMES = {"TaskProgressMessage", "TaskProgress"}
 _TASK_NOTIFICATION_CLASS_NAMES = {"TaskNotificationMessage", "TaskNotification"}

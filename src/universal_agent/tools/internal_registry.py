@@ -7,62 +7,76 @@ This module provides a single source of truth for:
 """
 
 import os
-from typing import List, Callable, Any
+from typing import Any, Callable, List
 
-# Research Bridge Tools
-from universal_agent.tools.research_bridge import (
-    run_research_pipeline_wrapper,
-    crawl_parallel_wrapper,
-    run_report_generation_wrapper,
-    run_research_phase_wrapper,
-    generate_outline_wrapper,
-    draft_report_parallel_wrapper,
-    cleanup_report_wrapper,
-    compile_report_wrapper,
-)
-
-# Local Toolkit Bridge Tools
-from universal_agent.tools.local_toolkit_bridge import (
-    upload_to_composio_wrapper,
-    list_directory_wrapper,
-    inspect_session_workspace_wrapper,
-    append_to_file_wrapper,
-    write_text_file_wrapper,
-    prepare_agentmail_attachment_wrapper,
-    finalize_research_wrapper,
-    generate_image_wrapper,
-    generate_image_with_review_wrapper,
-    describe_image_wrapper,
-    preview_image_wrapper,
-    ask_user_questions_wrapper,
-    batch_tool_execute_wrapper,
-    agentmail_send_with_local_attachments_wrapper,
-    agentmail_reply_with_local_attachments_wrapper,
-)
-
-# PDF Bridge Tools
-from universal_agent.tools.pdf_bridge import html_to_pdf_wrapper
-# Mermaid Bridge Tools
-from universal_agent.tools.mermaid_bridge import mermaid_to_image
-
-# Memory Tools
-from universal_agent.tools.memory import memory_get_wrapper, memory_search_wrapper
-
-# X Trends (xAI/Grok x_search) evidence fetch
-from universal_agent.tools.x_trends_bridge import x_trends_posts_wrapper
-
-# Reddit (Composio-backed) compact structured output
-from universal_agent.tools.reddit_bridge import reddit_top_posts_wrapper
+# Artifact Publisher Tool
+from universal_agent.tools.artifact_publisher import mcp__internal__publish_artifact
 
 # CSI bridge tools (read-only CSI reports/opportunities/health/watchlist snapshots)
 from universal_agent.tools.csi_bridge import (
-    csi_recent_reports_wrapper,
     csi_opportunity_bundles_wrapper,
+    csi_recent_reports_wrapper,
     csi_source_health_wrapper,
     csi_watchlist_snapshot_wrapper,
 )
 
-from universal_agent.tools.task_hub_bridge import task_hub_task_action_wrapper, task_hub_decompose_wrapper
+# NotebookLM Knowledge Base Bridge Tools
+from universal_agent.tools.kb_bridge import (
+    kb_get_wrapper,
+    kb_list_wrapper,
+    kb_register_wrapper,
+    kb_update_wrapper,
+)
+
+# Live Chrome Bridge (CDP session attachment) — feature-gated
+from universal_agent.tools.live_chrome_bridge import LIVE_CHROME_TOOLS
+
+# Local Toolkit Bridge Tools
+from universal_agent.tools.local_toolkit_bridge import (
+    agentmail_reply_with_local_attachments_wrapper,
+    agentmail_send_with_local_attachments_wrapper,
+    append_to_file_wrapper,
+    ask_user_questions_wrapper,
+    batch_tool_execute_wrapper,
+    describe_image_wrapper,
+    finalize_research_wrapper,
+    generate_image_with_review_wrapper,
+    generate_image_wrapper,
+    inspect_session_workspace_wrapper,
+    list_directory_wrapper,
+    prepare_agentmail_attachment_wrapper,
+    preview_image_wrapper,
+    upload_to_composio_wrapper,
+    write_text_file_wrapper,
+)
+
+# Memory Tools
+from universal_agent.tools.memory import memory_get_wrapper, memory_search_wrapper
+
+# Mermaid Bridge Tools
+from universal_agent.tools.mermaid_bridge import mermaid_to_image
+
+# PDF Bridge Tools
+from universal_agent.tools.pdf_bridge import html_to_pdf_wrapper
+
+# Reddit (Composio-backed) compact structured output
+from universal_agent.tools.reddit_bridge import reddit_top_posts_wrapper
+
+# Research Bridge Tools
+from universal_agent.tools.research_bridge import (
+    cleanup_report_wrapper,
+    compile_report_wrapper,
+    crawl_parallel_wrapper,
+    draft_report_parallel_wrapper,
+    generate_outline_wrapper,
+    run_report_generation_wrapper,
+    run_research_phase_wrapper,
+    run_research_pipeline_wrapper,
+)
+from universal_agent.tools.task_hub_bridge import (
+    task_hub_decompose_wrapper,
+    task_hub_task_action_wrapper,
+)
 from universal_agent.tools.vp_orchestration import (
     vp_cancel_mission_wrapper,
     vp_dispatch_mission_wrapper,
@@ -73,24 +87,13 @@ from universal_agent.tools.vp_orchestration import (
 )
 from universal_agent.tools.wiki_bridge import (
     wiki_init_vault_wrapper,
-    wiki_sync_internal_memory_wrapper,
-    wiki_query_wrapper,
     wiki_lint_wrapper,
+    wiki_query_wrapper,
+    wiki_sync_internal_memory_wrapper,
 )
 
-# NotebookLM Knowledge Base Bridge Tools
-from universal_agent.tools.kb_bridge import (
-    kb_list_wrapper,
-    kb_get_wrapper,
-    kb_register_wrapper,
-    kb_update_wrapper,
-)
-
-# Live Chrome Bridge (CDP session attachment) — feature-gated
-from universal_agent.tools.live_chrome_bridge import LIVE_CHROME_TOOLS
-
-# Artifact Publisher Tool
-from universal_agent.tools.artifact_publisher import mcp__internal__publish_artifact
+# X Trends (xAI/Grok x_search) evidence fetch
+from universal_agent.tools.x_trends_bridge import x_trends_posts_wrapper
 
 
 def get_core_internal_tools() -> List[Callable]:

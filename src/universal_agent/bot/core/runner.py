@@ -1,7 +1,8 @@
 
 import asyncio
 import logging
-from typing import Dict, Any, Callable, Awaitable
+from typing import Any, Awaitable, Callable, Dict
+
 from telegram import Update
 from telegram.ext import ContextTypes
 

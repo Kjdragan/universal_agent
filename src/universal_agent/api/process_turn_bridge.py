@@ -11,14 +11,16 @@ import os
 from typing import AsyncGenerator, Optional
 
 from universal_agent.agent_core import AgentEvent, EventType
-from universal_agent.gateway import InProcessGateway, GatewayRequest, GatewaySession
-from universal_agent.identity import resolve_user_id
 from universal_agent.api.events import (
-    WebSocketEvent,
     EventType as WSEventType,
+)
+from universal_agent.api.events import (
     SessionInfo,
+    WebSocketEvent,
     create_error_event,
 )
+from universal_agent.gateway import GatewayRequest, GatewaySession, InProcessGateway
+from universal_agent.identity import resolve_user_id
 from universal_agent.run_catalog import RunCatalogService
 from universal_agent.workspace_catalog import list_workspace_summaries
 

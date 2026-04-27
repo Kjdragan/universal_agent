@@ -7,18 +7,19 @@ Outer loop that orchestrates long-running task execution.
 from __future__ import annotations
 
 import asyncio
-import json
-import os
-import time
-import traceback
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum
+import json
+import os
 from pathlib import Path
+import time
+import traceback
 from typing import Any, Callable, Dict, List, Optional, Protocol
 
-from universal_agent.utils.model_resolution import resolve_sonnet
-
+from .decomposer import Decomposer, HybridDecomposer, PlanManager
+from .evaluator import CompositeEvaluator, EvaluationResult
+from .phase_planner import Phase, PhasePlanner, PhaseStatus
 from .state import (
     Artifact,
     ArtifactType,
@@ -28,9 +29,7 @@ from .state import (
     TaskStatus,
     URWStateManager,
 )
-from .decomposer import Decomposer, HybridDecomposer, PlanManager
-from .evaluator import CompositeEvaluator, EvaluationResult
-from .phase_planner import Phase, PhasePlanner, PhaseStatus
+from universal_agent.utils.model_resolution import resolve_sonnet
 
 
 @dataclass

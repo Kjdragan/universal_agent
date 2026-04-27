@@ -14,14 +14,14 @@ Key design decisions:
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import hashlib
 import logging
 import os
+from pathlib import Path
 import re
 import sqlite3
 import time
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -371,7 +371,9 @@ class EmailTaskBridge:
 
         if sender_trusted:
             try:
-                from universal_agent.services.proactive_feedback import handle_proactive_feedback_reply
+                from universal_agent.services.proactive_feedback import (
+                    handle_proactive_feedback_reply,
+                )
 
                 feedback_result = handle_proactive_feedback_reply(
                     self._conn,
@@ -565,7 +567,7 @@ class EmailTaskBridge:
         self._conn.commit()
 
         try:
-            from universal_agent.task_hub import upsert_item, ensure_schema
+            from universal_agent.task_hub import ensure_schema, upsert_item
 
             ensure_schema(self._conn)
             metadata: dict[str, Any] = {}
@@ -997,7 +999,7 @@ class EmailTaskBridge:
             ``in_progress`` when it seizes the task for execution.
         """
         try:
-            from universal_agent.task_hub import upsert_item, ensure_schema
+            from universal_agent.task_hub import ensure_schema, upsert_item
 
             ensure_schema(self._conn)
 

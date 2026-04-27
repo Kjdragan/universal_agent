@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
+import json
 from typing import Any, Protocol
 
 from universal_agent.delegation.schema import MissionEnvelope, MissionResultEnvelope

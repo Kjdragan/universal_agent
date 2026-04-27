@@ -14,14 +14,13 @@ making judgment calls about what's interesting, not generating code.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import logging
 import os
 import sqlite3
-from datetime import datetime, timezone, timedelta
 from typing import Any
 
-from universal_agent import task_hub
-from universal_agent import proactive_signals
+from universal_agent import proactive_signals, task_hub
 from universal_agent.services.proactive_budget import (
     has_daily_budget,
     increment_daily_proactive_count,

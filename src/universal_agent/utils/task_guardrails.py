@@ -1,9 +1,9 @@
+import logging
 import os
 from pathlib import Path
-from typing import Optional
-import logging
-import sys
 import re
+import sys
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 

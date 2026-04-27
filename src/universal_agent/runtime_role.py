@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from enum import Enum
 import logging
 import os
 import socket
-from dataclasses import dataclass
-from enum import Enum
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -90,7 +90,8 @@ def resolve_factory_role(raw_role: Optional[str] = None) -> FactoryRole:
         return FactoryRole.LOCAL_WORKER
 
 
-from typing import Optional, Any
+from typing import Any, Optional
+
 
 def build_factory_runtime_policy(raw_role: Optional[str] = None) -> FactoryRuntimePolicy:
     role = resolve_factory_role(raw_role)

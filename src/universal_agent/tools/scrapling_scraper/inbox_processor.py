@@ -47,14 +47,14 @@ automatically extracts URL-like fields (``url``, ``link``, ``href``,
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 import hashlib
 import json
 import logging
+from pathlib import Path
 import re
 import shutil
 import time
-from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse
 

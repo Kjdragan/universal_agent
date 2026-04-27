@@ -1,53 +1,53 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import inspect
 import json
 import logging
 import os
+from pathlib import Path
 import re
 import time
-import uuid
-from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, AsyncIterator, Optional
+import uuid
 
+from universal_agent.constants import TODO_EXECUTION_DISALLOWED_TOOLS
 from universal_agent.durable.db import (
     connect_runtime_db,
     get_coder_vp_db_path,
     get_runtime_db_path,
     get_vp_db_path,
 )
-from universal_agent.durable.state import get_vp_session
 from universal_agent.durable.migrations import ensure_schema
+from universal_agent.durable.state import get_vp_session
 from universal_agent.feature_flags import (
     coder_vp_display_name,
     coder_vp_id,
     dynamic_mcp_enabled,
     sdk_session_history_enabled,
     vp_dispatch_mode,
-    vp_require_live_worker_for_dispatch,
     vp_explicit_intent_require_external,
     vp_external_dispatch_enabled,
+    vp_require_live_worker_for_dispatch,
     vp_worker_heartbeat_stale_seconds,
     vp_worker_recovery_poll_seconds,
     vp_worker_recovery_wait_seconds,
 )
 from universal_agent.memory.paths import resolve_shared_memory_workspace
+from universal_agent.sdk import session_history_adapter
 from universal_agent.timeout_policy import (
     gateway_http_timeout_seconds,
     websocket_connect_kwargs,
 )
-from universal_agent.workspace import seed_workspace_bootstrap
-from universal_agent.constants import TODO_EXECUTION_DISALLOWED_TOOLS
 from universal_agent.vp import (
     CoderVPRuntime,
     MissionDispatchRequest,
     dispatch_mission_with_retry,
 )
-from universal_agent.sdk import session_history_adapter
+from universal_agent.workspace import seed_workspace_bootstrap
 
 try:
     from universal_agent.agent_core import AgentEvent, EventType
@@ -62,7 +62,7 @@ except ImportError:
 
 # Import ProcessTurnAdapter for unified execution engine
 try:
-    from universal_agent.execution_engine import ProcessTurnAdapter, EngineConfig
+    from universal_agent.execution_engine import EngineConfig, ProcessTurnAdapter
     EXECUTION_ENGINE_AVAILABLE = True
 except ImportError:
     EXECUTION_ENGINE_AVAILABLE = False
@@ -1741,7 +1741,9 @@ class InProcessGateway(Gateway):
         is never disrupted.
         """
         try:
-            from universal_agent.services.session_dossier import generate_session_dossier
+            from universal_agent.services.session_dossier import (
+                generate_session_dossier,
+            )
 
             # Skip if dossier already exists (e.g. from hooks path)
             if (workspace / "context_brief.md").exists():

@@ -9,27 +9,35 @@ Server runs on port 8001 by default (configurable via PORT env var).
 
 import asyncio
 import base64
-import time
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from datetime import datetime
+import hashlib
+import hmac
 import json
 import logging
 import mimetypes
 import os
-import shutil
-import hmac
-import hashlib
-import re
-from contextlib import asynccontextmanager
-from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
+import re
+import shutil
+import time
 from typing import Any, Optional
 
-import httpx
-import websockets
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, UploadFile, File
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi import (
+    FastAPI,
+    File,
+    HTTPException,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, Response
+import httpx
 from pydantic import BaseModel
+import websockets
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -91,29 +99,32 @@ _SYSTEM_SESSION_OWNERS = {
 # Import agent bridge
 from universal_agent import get_logfire_runtime_state
 from universal_agent.api.agent_bridge import get_agent_bridge
+from universal_agent.api.error_handlers import register_error_handlers
 from universal_agent.api.events import (
-    WebSocketEvent,
-    EventType as WSEventType,
+    ApprovalResponse,
     SessionInfo,
+    WebSocketEvent,
     create_connected_event,
     create_error_event,
-    ApprovalResponse,
 )
-from universal_agent.api.error_handlers import register_error_handlers
+from universal_agent.api.events import (
+    EventType as WSEventType,
+)
 from universal_agent.durable.db import connect_runtime_db
 from universal_agent.durable.state import list_run_attempts
 from universal_agent.run_catalog import RunCatalogService
-from universal_agent.runtime_env import ensure_runtime_path, runtime_tool_status
 from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
+from universal_agent.runtime_env import ensure_runtime_path, runtime_tool_status
 from universal_agent.timeout_policy import (
     gateway_owner_lookup_timeout_seconds,
-    gateway_ws_send_timeout_seconds,
     gateway_ws_handshake_timeout_seconds,
+    gateway_ws_send_timeout_seconds,
 )
 from universal_agent.workspace_catalog import (
     list_workspace_summaries,
     looks_like_agent_workspace,
 )
+
 ensure_runtime_path()
 
 _DEPLOYMENT_PROFILE = (os.getenv("UA_DEPLOYMENT_PROFILE") or "local_workstation").strip().lower()
@@ -1400,8 +1411,11 @@ async def require_dashboard_auth(request: Request, call_next):
 # REST API Endpoints
 # =============================================================================
 
+from universal_agent.api.routers.csi_discord_watchlist import (
+    router as csi_discord_watchlist_router,
+)
 from universal_agent.api.routers.csi_watchlist import router as csi_watchlist_router
-from universal_agent.api.routers.csi_discord_watchlist import router as csi_discord_watchlist_router
+
 app.include_router(csi_watchlist_router)
 app.include_router(csi_discord_watchlist_router)
 
@@ -2142,7 +2156,9 @@ async def websocket_agent(websocket: WebSocket, session_id: Optional[str] = None
                     response = client_event.data.get("response", "")
                     if input_id:
                         from universal_agent.api.gateway_bridge import GatewayBridge
-                        from universal_agent.api.process_turn_bridge import ProcessTurnBridge
+                        from universal_agent.api.process_turn_bridge import (
+                            ProcessTurnBridge,
+                        )
                         if isinstance(bridge, GatewayBridge):
                             await bridge.send_input_response(input_id, response)
                         elif isinstance(bridge, ProcessTurnBridge):
@@ -2162,7 +2178,9 @@ async def websocket_agent(websocket: WebSocket, session_id: Optional[str] = None
                     reason = str(client_event.data.get("reason") or "User requested stop")
                     handled = False
                     from universal_agent.api.gateway_bridge import GatewayBridge
-                    from universal_agent.api.process_turn_bridge import ProcessTurnBridge
+                    from universal_agent.api.process_turn_bridge import (
+                        ProcessTurnBridge,
+                    )
                     if isinstance(bridge, GatewayBridge):
                         handled = await bridge.send_cancel(reason)
                     elif isinstance(bridge, ProcessTurnBridge):

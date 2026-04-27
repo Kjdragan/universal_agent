@@ -1,16 +1,15 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 import os
 import re
 import sqlite3
 import time
-import uuid
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
-
+import uuid
 
 TASK_STATUS_OPEN = "open"
 TASK_STATUS_IN_PROGRESS = "in_progress"
@@ -3092,7 +3091,9 @@ def perform_task_action(
     _OUTCOME_TERMINAL_ACTIONS = {"complete", "block", "review", "park", "approve"}
     if action_norm in _OUTCOME_TERMINAL_ACTIONS:
         try:
-            from universal_agent.services.proactive_outcome_tracker import record_proactive_outcome
+            from universal_agent.services.proactive_outcome_tracker import (
+                record_proactive_outcome,
+            )
             record_proactive_outcome(
                 conn,
                 task=item,

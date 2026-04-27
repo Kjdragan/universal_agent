@@ -9,18 +9,22 @@ Designed to run as an asyncio task alongside the Redis→SQLite bridge.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass, field
 import logging
 import os
 import platform
 import socket
 import time
-from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import httpx
 
 from universal_agent.feature_flags import coder_vp_enabled, vp_enabled_ids
-from universal_agent.runtime_role import build_factory_runtime_policy, resolve_machine_slug, resolve_runtime_stage
+from universal_agent.runtime_role import (
+    build_factory_runtime_policy,
+    resolve_machine_slug,
+    resolve_runtime_stage,
+)
 
 logger = logging.getLogger(__name__)
 

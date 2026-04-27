@@ -6,10 +6,11 @@ This script provides helpful diagnostics and recovery suggestions
 when the report writing process encounters issues.
 """
 
-import os
 import json
+import os
 from pathlib import Path
 import sys
+
 
 def check_workspace_structure(workspace_path: str) -> dict:
     """Validate workspace structure and provide diagnostics."""

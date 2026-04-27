@@ -15,9 +15,10 @@ Design principles:
 from __future__ import annotations
 
 import json
-import os
 import logging
+import os
 from typing import Any, Optional
+
 from universal_agent.utils.model_resolution import resolve_sonnet
 
 logger = logging.getLogger(__name__)
@@ -455,6 +456,7 @@ async def extract_due_at(
         # Determine current datetime in Central Time
         if not current_datetime_ct:
             from datetime import datetime
+
             import pytz
             ct = pytz.timezone("America/Chicago")
             current_datetime_ct = datetime.now(ct).strftime("%Y-%m-%d %I:%M %p %Z")

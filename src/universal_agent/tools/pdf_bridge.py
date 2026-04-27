@@ -1,13 +1,16 @@
-from typing import Any
 import os
-import sys
-import subprocess
 from pathlib import Path
+import subprocess
+import sys
+from typing import Any
+
 from claude_agent_sdk import tool
 
-from universal_agent.hooks import StdoutToEventStream
+from universal_agent.execution_context import (
+    get_current_workspace as _ctx_get_workspace,
+)
 from universal_agent.guardrails.workspace_guard import normalize_workspace_path
-from universal_agent.execution_context import get_current_workspace as _ctx_get_workspace
+from universal_agent.hooks import StdoutToEventStream
 
 
 def _resolve_path(path_value: str) -> str:

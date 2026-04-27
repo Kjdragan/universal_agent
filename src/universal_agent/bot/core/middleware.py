@@ -1,6 +1,7 @@
 
 import logging
-from typing import List, Protocol, Callable, Awaitable
+from typing import Awaitable, Callable, List, Protocol
+
 from .context import BotContext
 
 logger = logging.getLogger(__name__)

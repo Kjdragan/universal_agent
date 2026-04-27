@@ -1,9 +1,9 @@
 """Script to register the nightly CODIE Proactive Cleanup cron job."""
 
 import os
+from pathlib import Path
 import sys
 import time
-from pathlib import Path
 
 # Add project root/src to path for imports
 BASE_DIR = Path(__file__).parent.parent.parent.parent
@@ -11,6 +11,7 @@ sys.path.append(str(BASE_DIR / "src"))
 
 from universal_agent.cron_service import CronService
 from universal_agent.gateway import InProcessGateway
+
 
 def schedule_codie_nightly():
     workspaces_dir = BASE_DIR / "AGENT_RUN_WORKSPACES"
