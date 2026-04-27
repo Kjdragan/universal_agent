@@ -7,7 +7,7 @@ const API_BASE = "/api/dashboard/gateway";
 const PRESET_CACHE_KEY = "ua.dashboard.events.presets.v1";
 const FILTER_PREFS_KEY = "ua.dashboard.events.filterPrefs.v1";
 
-const DEFAULT_CHECKED_SOURCES = ["csi", "tutorial", "continuity"];
+const DEFAULT_CHECKED_SOURCES = ["csi", "tutorial", "continuity", "simone"];
 
 type ActivityAction = {
   id?: string;
@@ -114,6 +114,7 @@ const SOURCE_STYLES: Record<string, string> = {
   cron: "bg-accent/10 text-accent border-accent/30",
   continuity: "bg-accent/10 text-accent border-accent/30",
   heartbeat: "bg-primary/10 text-primary border-primary/20",
+  simone: "bg-fuchsia-500/10 text-fuchsia-300 border-fuchsia-500/30",
   system: "bg-muted-foreground/10 text-foreground/80 border-muted-foreground/30",
 };
 
@@ -124,7 +125,7 @@ const SEVERITY_STYLES: Record<string, string> = {
   info: "text-sky-300",
 };
 
-const SOURCE_ORDER = ["csi", "tutorial", "cron", "continuity", "heartbeat", "system"];
+const SOURCE_ORDER = ["csi", "tutorial", "cron", "continuity", "heartbeat", "simone", "system"];
 
 function emptyCounters(): EventCounters {
   const bySource: Record<string, SourceCounter> = {};

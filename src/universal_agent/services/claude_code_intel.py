@@ -738,6 +738,164 @@ def queue_follow_up_tasks(
     return queued
 
 
+# ── Activity-event emission for CSI ──────────────────────────────────────
+#
+# The activity_events table is what the Notifications & Events dashboard reads.
+# The CSI pipeline previously only wrote to proactive_artifacts and task_hub,
+# leaving "csi" events invisible in the dashboard.
+
+_ACTIVITY_SCHEMA_ENSURED = False
+
+def _ensure_activity_events_table(conn: sqlite3.Connection) -> None:
+    """Idempotently create the activity_events table (subset of gateway schema)."""
+    global _ACTIVITY_SCHEMA_ENSURED
+    if _ACTIVITY_SCHEMA_ENSURED:
+        return
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS activity_events (
+            id TEXT PRIMARY KEY,
+            event_class TEXT NOT NULL DEFAULT 'notification',
+            source_domain TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            title TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            full_message TEXT NOT NULL,
+            severity TEXT NOT NULL DEFAULT 'info',
+            status TEXT NOT NULL DEFAULT 'new',
+            requires_action INTEGER NOT NULL DEFAULT 0,
+            session_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            entity_ref_json TEXT NOT NULL DEFAULT '{}',
+            actions_json TEXT NOT NULL DEFAULT '[]',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            channels_json TEXT NOT NULL DEFAULT '[]',
+            email_targets_json TEXT NOT NULL DEFAULT '[]'
+        );
+        CREATE INDEX IF NOT EXISTS idx_activity_events_created_at ON activity_events(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_activity_events_source_domain ON activity_events(source_domain, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_activity_events_kind ON activity_events(kind, created_at DESC);
+    """)
+    _ACTIVITY_SCHEMA_ENSURED = True
+
+
+def emit_csi_activity_event(
+    conn: sqlite3.Connection,
+    *,
+    handle: str,
+    new_post_count: int,
+    action_count: int,
+    queued_task_count: int,
+    packet_dir: str = "",
+    actions: list[dict[str, Any]] | None = None,
+    error: str = "",
+) -> str:
+    """Write a CSI sync-completed event to activity_events for dashboard visibility.
+
+    Returns the generated event ID.
+    """
+    import uuid as _uuid
+
+    _ensure_activity_events_table(conn)
+
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    event_id = f"csi_sync_{handle}_{_uuid.uuid4().hex[:12]}"
+    kind = "csi_sync_completed" if not error else "csi_sync_failed"
+    severity = "info" if not error else "error"
+
+    # Build a descriptive summary for the dashboard card
+    tier_counts: dict[int, int] = {}
+    for act in (actions or []):
+        t = int(act.get("tier") or 0)
+        if t > 0:
+            tier_counts[t] = tier_counts.get(t, 0) + 1
+    tier_summary = ", ".join(f"T{t}={c}" for t, c in sorted(tier_counts.items())) if tier_counts else "no tiers"
+
+    title = f"CSI @{handle}: {new_post_count} new post{'s' if new_post_count != 1 else ''}"
+    summary = (
+        f"Polled @{handle}: {new_post_count} new, "
+        f"{action_count} actions ({tier_summary}), "
+        f"{queued_task_count} tasks queued."
+    )
+    if error:
+        title = f"CSI @{handle}: sync failed"
+        summary = f"Error syncing @{handle}: {error[:200]}"
+
+    full_message = summary
+    if packet_dir:
+        full_message += f"\nPacket: {packet_dir}"
+
+    metadata = {
+        "handle": handle,
+        "new_post_count": new_post_count,
+        "action_count": action_count,
+        "queued_task_count": queued_task_count,
+        "tier_counts": tier_counts,
+        "packet_dir": packet_dir,
+        "pipeline": "csi_x_sync",
+    }
+    if error:
+        metadata["error"] = error[:500]
+
+    entity_ref = {
+        "type": "csi_handle",
+        "handle": handle,
+        "dashboard_path": "/dashboard/claude-code-intel",
+    }
+
+    actions_json_list = []
+    if packet_dir:
+        actions_json_list.append({
+            "id": "view_csi",
+            "label": "View in CSI",
+            "type": "navigate",
+            "href": "/dashboard/claude-code-intel",
+        })
+
+    try:
+        conn.execute(
+            """
+            INSERT INTO activity_events (
+                id, event_class, source_domain, kind, title, summary, full_message,
+                severity, status, requires_action, session_id,
+                created_at, updated_at,
+                entity_ref_json, actions_json, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                title=excluded.title,
+                summary=excluded.summary,
+                full_message=excluded.full_message,
+                severity=excluded.severity,
+                status=excluded.status,
+                updated_at=excluded.updated_at,
+                metadata_json=excluded.metadata_json
+            """,
+            (
+                event_id,
+                "notification",
+                "csi",           # source_domain — matches the routing table
+                kind,
+                title,
+                summary,
+                full_message,
+                severity,
+                "new",
+                0,               # requires_action
+                "cron_claude_code_intel_sync",
+                now_iso,
+                now_iso,
+                json.dumps(entity_ref),
+                json.dumps(actions_json_list),
+                json.dumps(metadata),
+            ),
+        )
+        logger.info("📣 Emitted CSI activity event: %s — %s", event_id, summary)
+    except Exception as exc:
+        logger.warning("Failed to emit CSI activity event: %s", exc)
+
+    return event_id
+
+
 def write_reference_kb_update(
     *,
     packet_dir: Path,

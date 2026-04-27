@@ -15,7 +15,7 @@ from typing import Any
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
 from universal_agent.infisical_loader import initialize_runtime_secrets
 from universal_agent.services.agentmail_service import AgentMailService
-from universal_agent.services.claude_code_intel import ClaudeCodeIntelConfig, run_sync
+from universal_agent.services.claude_code_intel import ClaudeCodeIntelConfig, emit_csi_activity_event, run_sync
 from universal_agent.services.claude_code_intel_operator_report import (
     build_operator_email,
     build_operator_report,
@@ -242,6 +242,19 @@ async def main() -> int:
             all_results.append(handle_payload)
             if result.ok:
                 any_ok = True
+                # Emit CSI activity event for dashboard visibility
+                try:
+                    emit_csi_activity_event(
+                        conn,
+                        handle=handle,
+                        new_post_count=result.new_post_count,
+                        action_count=result.action_count,
+                        queued_task_count=int(post_process.get("queued_task_count") or result.queued_task_count),
+                        packet_dir=result.packet_dir or "",
+                        actions=result.actions,
+                    )
+                except Exception:
+                    logger.warning("Failed to emit CSI activity event for @%s", handle, exc_info=True)
                 # Write a per-handle operator report only when there are actual
                 # new posts — empty polls don't need operator reports.
                 if result.packet_dir and result.new_post_count > 0:
@@ -258,6 +271,19 @@ async def main() -> int:
                         logger.info("Wrote per-handle operator report: %s", handle_report_path)
                     except Exception:
                         logger.warning("Failed to write per-handle operator report for @%s", handle, exc_info=True)
+            else:
+                # Emit failure event so CSI errors also show in the dashboard
+                try:
+                    emit_csi_activity_event(
+                        conn,
+                        handle=handle,
+                        new_post_count=0,
+                        action_count=0,
+                        queued_task_count=0,
+                        error=result.error or "Unknown sync failure",
+                    )
+                except Exception:
+                    logger.warning("Failed to emit CSI failure event for @%s", handle, exc_info=True)
             logger.info(
                 "Handle @%s: ok=%s, new_posts=%d, actions=%d",
                 handle, result.ok, result.new_post_count, result.action_count,
