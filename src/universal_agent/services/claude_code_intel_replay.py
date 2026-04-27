@@ -7,15 +7,15 @@ a durable candidate ledger and materializes a first-pass external wiki vault.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+import hashlib
 import html
 import json
 import os
+from pathlib import Path
+import re
 import shutil
 import sqlite3
-import hashlib
-import re
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 

@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-import sys, json, sqlite3
+import json
+import sqlite3
+import sys
+
 sys.path.insert(0, "/opt/universal_agent/src")
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
 

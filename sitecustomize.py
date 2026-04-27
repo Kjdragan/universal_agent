@@ -107,7 +107,9 @@ def _patch_letta_claude_stream_flush() -> None:
             user_message = config.get("pending_user_message")
             assistant_message = "".join(accumulated_text) if accumulated_text else None
             if user_message or assistant_message:
-                from agentic_learning.interceptors.utils import _save_conversation_turn_async
+                from agentic_learning.interceptors.utils import (
+                    _save_conversation_turn_async,
+                )
 
                 await _save_conversation_turn_async(
                     provider=self.PROVIDER,

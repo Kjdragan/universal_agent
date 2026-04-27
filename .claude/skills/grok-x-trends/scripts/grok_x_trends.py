@@ -13,7 +13,6 @@ from typing import Any, Dict
 
 from lib.xai_x_search import global_trends, parse_trends_response, trends_for_query
 
-
 DEFAULT_MODEL = "grok-4-1-fast"
 
 

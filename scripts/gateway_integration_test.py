@@ -14,8 +14,8 @@ Usage:
 """
 
 import asyncio
-import sys
 from pathlib import Path
+import sys
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -26,14 +26,14 @@ def test_imports():
     print("Testing imports...")
     
     try:
-        from universal_agent.execution_engine import ProcessTurnAdapter, EngineConfig
+        from universal_agent.execution_engine import EngineConfig, ProcessTurnAdapter
         print("  ✅ ProcessTurnAdapter imported")
     except ImportError as e:
         print(f"  ❌ ProcessTurnAdapter import failed: {e}")
         return False
     
     try:
-        from universal_agent.gateway import InProcessGateway, EXECUTION_ENGINE_AVAILABLE
+        from universal_agent.gateway import EXECUTION_ENGINE_AVAILABLE, InProcessGateway
         print(f"  ✅ InProcessGateway imported (EXECUTION_ENGINE_AVAILABLE={EXECUTION_ENGINE_AVAILABLE})")
     except ImportError as e:
         print(f"  ❌ InProcessGateway import failed: {e}")
@@ -41,9 +41,9 @@ def test_imports():
     
     try:
         from universal_agent.guardrails.workspace_guard import (
+            WorkspaceGuardError,
             enforce_workspace_path,
             workspace_scoped_path,
-            WorkspaceGuardError,
         )
         print("  ✅ Workspace guard imported")
     except ImportError as e:
@@ -58,10 +58,10 @@ def test_workspace_guard():
     print("\nTesting workspace guard...")
     
     from universal_agent.guardrails.workspace_guard import (
-        enforce_workspace_path,
-        workspace_scoped_path,
         WorkspaceGuardError,
+        enforce_workspace_path,
         is_inside_workspace,
+        workspace_scoped_path,
     )
     
     workspace = Path("/tmp/test_workspace")
@@ -109,7 +109,7 @@ def test_gateway_uses_unified_engine():
     """Test that InProcessGateway uses ProcessTurnAdapter by default."""
     print("\nTesting gateway uses unified engine...")
     
-    from universal_agent.gateway import InProcessGateway, EXECUTION_ENGINE_AVAILABLE
+    from universal_agent.gateway import EXECUTION_ENGINE_AVAILABLE, InProcessGateway
     
     # Check that execution engine is available
     if not EXECUTION_ENGINE_AVAILABLE:
@@ -143,8 +143,9 @@ async def test_gateway_session_creation():
     """Test that gateway session creation works."""
     print("\nTesting gateway session creation...")
     
-    import tempfile
     import shutil
+    import tempfile
+
     from universal_agent.gateway import InProcessGateway
     
     # Create temp workspace base
@@ -171,17 +172,17 @@ async def test_live_execution():
     """Test actual execution through gateway (requires API keys)."""
     print("\nTesting live execution through gateway...")
     
-    import tempfile
-    import shutil
     import os
+    import shutil
+    import tempfile
     
     # Check for API keys
     if not os.getenv("ANTHROPIC_API_KEY") and not os.getenv("ZAI_API_KEY"):
         print("  ⚠️ Skipping live test - no API key found")
         return True
     
-    from universal_agent.gateway import InProcessGateway, GatewayRequest
     from universal_agent.agent_core import EventType
+    from universal_agent.gateway import GatewayRequest, InProcessGateway
     
     temp_base = Path(tempfile.mkdtemp(prefix="gateway_live_test_"))
     

@@ -11,31 +11,31 @@ Simplified orchestrator for massive requests that uses:
 from __future__ import annotations
 
 import asyncio
-import json
-import os
-import re
-import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+import json
+import os
 from pathlib import Path
+import re
+import shutil
 from typing import Any, Callable, Dict, List, Optional, Protocol
+import uuid
 
-from .plan_schema import Plan, Phase, AtomicTask, TaskStatus as PlanTaskStatus
-from .plan_persistence import PlanPersistence, SQLitePlanStore
-from .harness_session import HarnessSessionManager
-from .harness_helpers import (
-    toggle_session,
-    compact_agent_context,
-    build_harness_context_injection,
-    generate_phase_summary,
-)
-from .interview import run_planning_interview, run_planning_from_template
-from .evaluator import CompositeEvaluator, EvaluationResult, create_default_evaluator
 from .adapter import HarnessAdapter
+from .evaluator import CompositeEvaluator, EvaluationResult, create_default_evaluator
+from .harness_helpers import (
+    build_harness_context_injection,
+    compact_agent_context,
+    generate_phase_summary,
+    toggle_session,
+)
+from .harness_session import HarnessSessionManager
+from .interview import run_planning_from_template, run_planning_interview
+from .plan_persistence import PlanPersistence, SQLitePlanStore
+from .plan_schema import AtomicTask, Phase, Plan, TaskStatus as PlanTaskStatus
 from .state import Artifact, ArtifactType, Task as StateTask
 from universal_agent.execution_context import bind_workspace_env
-import uuid
 
 _PHASE_HINT_RULES = [
     (
@@ -52,8 +52,13 @@ _PHASE_HINT_RULES = [
 
 # Gateway imports for Stage 5
 try:
-    from universal_agent.gateway import Gateway, InProcessGateway, ExternalGateway, GatewayRequest
     from universal_agent.agent_core import AgentEvent, EventType
+    from universal_agent.gateway import (
+        ExternalGateway,
+        Gateway,
+        GatewayRequest,
+        InProcessGateway,
+    )
     GATEWAY_AVAILABLE = True
 except ImportError:
     GATEWAY_AVAILABLE = False

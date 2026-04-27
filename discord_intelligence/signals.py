@@ -1,4 +1,5 @@
 import re
+
 from .config import CONFIG
 
 RELEASE_PATTERN = re.compile(r'\b(v?\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?)\b', re.IGNORECASE)

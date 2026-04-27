@@ -1,19 +1,21 @@
 
 import asyncio
 import os
+from pathlib import Path
 import shutil
 import sys
-from pathlib import Path
+
 from dotenv import load_dotenv
 
 # Add src to path
 sys.path.append(str(Path(__file__).resolve().parent.parent / "src"))
 
+# Setup logging
+import logging
+
 from universal_agent.urw.integration import UniversalAgentAdapter
 from universal_agent.urw.state import Task
 
-# Setup logging
-import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("verify_complex")
 

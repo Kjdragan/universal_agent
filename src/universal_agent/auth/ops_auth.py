@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime, timezone
 import hmac
 import os
 import time
-from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any, Optional
 
 import jwt

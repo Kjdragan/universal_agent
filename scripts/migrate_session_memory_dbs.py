@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 import hashlib
 import json
+from pathlib import Path
 import sqlite3
 import sys
-from dataclasses import dataclass, asdict
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]

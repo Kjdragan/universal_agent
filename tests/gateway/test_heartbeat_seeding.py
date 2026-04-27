@@ -1,16 +1,18 @@
-import sys
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
-import pytest
 import shutil
+import sys
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 # Mock dependencies before import
 sys.modules["universal_agent.durable.db"] = MagicMock()
 sys.modules["universal_agent.durable.migrations"] = MagicMock()
 sys.modules["logfire"] = MagicMock()
 
-from universal_agent.heartbeat_service import HeartbeatService, GatewaySession
+from universal_agent.heartbeat_service import GatewaySession, HeartbeatService
+
 
 @pytest.fixture
 def mock_gateway():

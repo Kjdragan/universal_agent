@@ -6,12 +6,12 @@ Reads run_checkpoint.json and trace.json files, outputs structured JSON for dash
 Usage:
     python3 extract_profiler_data.py [--workspaces-root PATH] [--top-n 10] [--output PATH]
 """
-import json
-import os
-import glob
 import argparse
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
+import glob
+import json
+import os
 
 
 def load_checkpoints(root, top_n=15):

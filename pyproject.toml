@@ -93,7 +93,15 @@ dependencies = [
 # E402: Module level import not at top of file (intentional - after Logfire setup)
 # F401: Imported but unused (sometimes kept for re-export or conditional use)
 # F811: Redefinition of unused name (sometimes intentional for conditional imports)
+lint.extend-select = ["I"]
 lint.ignore = ["E402", "F401", "F811"]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+force-single-line = false
+force-sort-within-sections = true
+known-third-party = ["logfire", "pydantic", "httpx", "redis", "fastapi", "uvicorn", "agentmail", "composio", "claude_agent_sdk", "yaml", "dotenv", "infisical", "obsidian_cli", "claudeds", "nlm", "google.genai"]
+known-local-folder = ["universal_agent"]
 
 [dependency-groups]
 dev = [
@@ -101,6 +109,7 @@ dev = [
     "pexpect>=4.9.0",
     "pytest>=9.0.2",
     "pytest-asyncio>=0.23.8",
+    "ruff>=0.15.12",
 ]
 
 [tool.pytest.ini_options]

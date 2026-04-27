@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
+import sqlite3
 
 from universal_agent import task_hub
 from universal_agent.hooks_service import HookAction, HooksService

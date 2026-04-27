@@ -1,4 +1,6 @@
-import subprocess, re
+import re
+import subprocess
+
 output = subprocess.check_output(["journalctl", "-u", "universal-agent-api.service", "--since", "13:00"]).decode("utf-8")
 tracebacks = output.split("Traceback (most recent call last):")
 if len(tracebacks) > 1:

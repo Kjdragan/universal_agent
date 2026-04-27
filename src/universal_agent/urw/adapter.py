@@ -3,13 +3,14 @@ Adapter module for converting Harness objects to State objects.
 Bridges schema differences between plan_schema.AtomicTask and state.Task.
 """
 
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
 # Harness imports
 from .plan_schema import AtomicTask
 
 # State imports (for evaluation)
 from .state import Task, TaskStatus
+
 
 class HarnessAdapter:
     """Adapts Harness definition objects to URW State objects."""

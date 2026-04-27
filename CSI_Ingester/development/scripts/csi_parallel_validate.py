@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 import argparse
-import sqlite3
 from pathlib import Path
+import sqlite3
 
 
 def _query_int(conn: sqlite3.Connection, sql: str, params: tuple = ()) -> int:

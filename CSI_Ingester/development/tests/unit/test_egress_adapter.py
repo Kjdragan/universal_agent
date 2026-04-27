@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import json
 
-from csi_ingester.net.egress_adapter import detect_anti_bot_block, parse_endpoint_list, post_json_with_failover
+from csi_ingester.net.egress_adapter import (
+    detect_anti_bot_block,
+    parse_endpoint_list,
+    post_json_with_failover,
+)
 
 
 def test_parse_endpoint_list_dedupes_and_fallback():

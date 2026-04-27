@@ -1,14 +1,15 @@
 
 import asyncio
 import os
-import sys
 from pprint import pprint
+import sys
 
 # Ensure we can import from src
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
 
 from claude_agent_sdk.client import ClaudeSDKClient
 from claude_agent_sdk.types import ClaudeAgentOptions, HookMatcher
+
 
 async def main():
     print("🔍 Inspecting ClaudeSDKClient Context Management...")

@@ -1,8 +1,9 @@
+import asyncio
 import os
 import sys
-import asyncio
-from telegram import Bot
+
 from dotenv import load_dotenv
+from telegram import Bot
 
 load_dotenv()
 

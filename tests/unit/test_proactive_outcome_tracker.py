@@ -16,16 +16,15 @@ Covers:
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import json
 import os
 import sqlite3
-import uuid
-from datetime import datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import MagicMock, patch
+import uuid
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -150,7 +149,9 @@ def _add_assignment(conn: sqlite3.Connection, task_id: str, **kwargs):
 
 def test_record_outcome_proactive_task(fresh_conn):
     """Verify outcome is recorded for a proactive-sourced task."""
-    from universal_agent.services.proactive_outcome_tracker import record_proactive_outcome
+    from universal_agent.services.proactive_outcome_tracker import (
+        record_proactive_outcome,
+    )
 
     task = _make_proactive_task(source_kind="reflection")
     _add_assignment(fresh_conn, task["task_id"])
@@ -189,7 +190,9 @@ def test_record_outcome_proactive_task(fresh_conn):
 
 def test_skip_non_proactive_task(fresh_conn):
     """Verify non-proactive tasks are skipped."""
-    from universal_agent.services.proactive_outcome_tracker import record_proactive_outcome
+    from universal_agent.services.proactive_outcome_tracker import (
+        record_proactive_outcome,
+    )
 
     task = _make_proactive_task(source_kind="email")
 
@@ -216,7 +219,8 @@ def test_skip_non_proactive_task(fresh_conn):
 def test_outcome_stats_aggregation(fresh_conn):
     """Verify stats correctly aggregate by action and source."""
     from universal_agent.services.proactive_outcome_tracker import (
-        ensure_schema, get_outcome_stats,
+        ensure_schema,
+        get_outcome_stats,
     )
 
     ensure_schema(fresh_conn)
@@ -265,7 +269,9 @@ def test_outcome_stats_aggregation(fresh_conn):
 
 def test_implicit_preference_signal(fresh_conn):
     """Verify success/failure generates correct preference weight."""
-    from universal_agent.services.proactive_outcome_tracker import _fire_implicit_preference_signal
+    from universal_agent.services.proactive_outcome_tracker import (
+        _fire_implicit_preference_signal,
+    )
 
     task = _make_proactive_task(source_kind="reflection")
 
@@ -283,7 +289,9 @@ def test_implicit_preference_signal(fresh_conn):
 
 def test_implicit_preference_signal_failure(fresh_conn):
     """Verify failure generates negative weight."""
-    from universal_agent.services.proactive_outcome_tracker import _fire_implicit_preference_signal
+    from universal_agent.services.proactive_outcome_tracker import (
+        _fire_implicit_preference_signal,
+    )
 
     task = _make_proactive_task(source_kind="proactive_signal")
 
@@ -332,7 +340,9 @@ def test_duration_no_assignments(fresh_conn):
 
 def test_memory_write_success_path():
     """Verify successful task writes positive memory entry."""
-    from universal_agent.services.proactive_outcome_tracker import _write_outcome_to_memory
+    from universal_agent.services.proactive_outcome_tracker import (
+        _write_outcome_to_memory,
+    )
 
     task = _make_proactive_task(source_kind="reflection")
     outcome = {
@@ -363,7 +373,9 @@ def test_memory_write_success_path():
 
 def test_memory_write_failure_path():
     """Verify failed task writes negative memory entry with diagnostic."""
-    from universal_agent.services.proactive_outcome_tracker import _write_outcome_to_memory
+    from universal_agent.services.proactive_outcome_tracker import (
+        _write_outcome_to_memory,
+    )
 
     task = _make_proactive_task(source_kind="csi")
     outcome = {
@@ -394,7 +406,9 @@ def test_memory_write_failure_path():
 
 def test_auto_investigation_triggered(fresh_conn):
     """Verify investigation fires for block/review actions."""
-    from universal_agent.services.proactive_outcome_tracker import record_proactive_outcome
+    from universal_agent.services.proactive_outcome_tracker import (
+        record_proactive_outcome,
+    )
 
     task = _make_proactive_task(source_kind="reflection")
     _add_assignment(fresh_conn, task["task_id"])
@@ -422,7 +436,9 @@ def test_auto_investigation_triggered(fresh_conn):
 
 def test_auto_investigation_skipped_when_disabled(fresh_conn):
     """Verify feature flag gates investigation."""
-    from universal_agent.services.proactive_outcome_tracker import record_proactive_outcome
+    from universal_agent.services.proactive_outcome_tracker import (
+        record_proactive_outcome,
+    )
 
     task = _make_proactive_task(source_kind="reflection")
 
@@ -447,7 +463,9 @@ def test_auto_investigation_skipped_when_disabled(fresh_conn):
 
 def test_deterministic_fallback_diagnostic():
     """Verify template diagnostic when LLM unavailable."""
-    from universal_agent.services.proactive_auto_investigator import _deterministic_diagnostic
+    from universal_agent.services.proactive_auto_investigator import (
+        _deterministic_diagnostic,
+    )
 
     context = {
         "task": {
@@ -489,7 +507,9 @@ def test_deterministic_fallback_diagnostic():
 def test_gateway_outcomes_endpoint_shape(fresh_conn):
     """Verify get_outcome_stats returns the expected shape."""
     from universal_agent.services.proactive_outcome_tracker import (
-        ensure_schema, get_outcome_stats, get_recent_outcomes,
+        ensure_schema,
+        get_outcome_stats,
+        get_recent_outcomes,
     )
 
     ensure_schema(fresh_conn)
@@ -536,7 +556,9 @@ def test_report_includes_outcome_stats(fresh_conn):
 
 def test_record_outcome_non_terminal_action(fresh_conn):
     """Verify non-terminal actions (like delegate) are skipped."""
-    from universal_agent.services.proactive_outcome_tracker import record_proactive_outcome
+    from universal_agent.services.proactive_outcome_tracker import (
+        record_proactive_outcome,
+    )
 
     task = _make_proactive_task(source_kind="reflection")
     result = record_proactive_outcome(fresh_conn, task=task, action="delegate")
@@ -546,7 +568,8 @@ def test_record_outcome_non_terminal_action(fresh_conn):
 def test_recent_outcomes_with_filter(fresh_conn):
     """Verify action filter works on recent outcomes."""
     from universal_agent.services.proactive_outcome_tracker import (
-        ensure_schema, get_recent_outcomes,
+        ensure_schema,
+        get_recent_outcomes,
     )
 
     ensure_schema(fresh_conn)

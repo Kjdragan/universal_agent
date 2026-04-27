@@ -6,8 +6,6 @@ import json
 import sqlite3
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from csi_ingester.batch_brief import (
     _build_prompt,
     _fallback_brief,
@@ -16,6 +14,7 @@ from csi_ingester.batch_brief import (
     run_batch_cycle,
 )
 from csi_ingester.store.sqlite import ensure_schema
+import pytest
 
 
 @pytest.fixture

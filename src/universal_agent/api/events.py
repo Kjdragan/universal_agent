@@ -8,9 +8,9 @@ between the frontend and the Universal Agent backend.
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
 import json
 import time
+from typing import Any, Optional
 
 
 class EventType(str, Enum):

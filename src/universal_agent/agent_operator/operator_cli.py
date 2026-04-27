@@ -1,15 +1,15 @@
 import argparse
+from collections import deque
 import json
 import os
 import time
-from collections import deque
 from typing import Iterable, Optional
 
 from .operator_db import (
     get_last_checkpoint,
     get_run,
-    list_runs,
     list_receipt_tool_calls,
+    list_runs,
     list_tool_calls,
     policy_counts_by_side_effect,
     policy_input_variance,

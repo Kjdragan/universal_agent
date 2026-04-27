@@ -3,8 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from universal_agent.infisical_loader import SecretBootstrapResult, initialize_runtime_secrets
-from universal_agent.runtime_role import FactoryRuntimePolicy, build_factory_runtime_policy, normalize_llm_provider_override
+from universal_agent.infisical_loader import (
+    SecretBootstrapResult,
+    initialize_runtime_secrets,
+)
+from universal_agent.runtime_role import (
+    FactoryRuntimePolicy,
+    build_factory_runtime_policy,
+    normalize_llm_provider_override,
+)
 from universal_agent.utils.env_aliases import apply_xai_key_aliases
 
 

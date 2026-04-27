@@ -12,12 +12,12 @@ Run:
 from __future__ import annotations
 
 import argparse
-import json
-import os
-import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+import json
+import os
 from pathlib import Path
+import re
 from typing import Iterable
 
 

@@ -79,8 +79,13 @@ def test_vp_dispatch_injects_preference_context(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("UA_VP_DB_PATH", str((tmp_path / "vp_state.db").resolve()))
     monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str((tmp_path / "activity_state.db").resolve()))
 
-    from universal_agent.services.proactive_artifacts import record_feedback, upsert_artifact
-    from universal_agent.services.proactive_preferences import record_artifact_feedback_signal
+    from universal_agent.services.proactive_artifacts import (
+        record_feedback,
+        upsert_artifact,
+    )
+    from universal_agent.services.proactive_preferences import (
+        record_artifact_feedback_signal,
+    )
 
     activity_conn = connect_runtime_db(str((tmp_path / "activity_state.db").resolve()))
     try:

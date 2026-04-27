@@ -6,31 +6,22 @@ ensuring consistent behavior across all entry points.
 """
 
 import asyncio
-import os
-import sys
-import uuid
 from datetime import datetime
+import os
 from pathlib import Path
+import sys
 from typing import Any, Optional
+import uuid
+
+from claude_agent_sdk import create_sdk_mcp_server
+from claude_agent_sdk.types import ClaudeAgentOptions, HookMatcher
+from composio import Composio
 import yaml
 
-from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
-from universal_agent.runtime_role import resolve_factory_role
-from universal_agent.feature_flags import coder_vp_enabled
-
-from composio import Composio
-from claude_agent_sdk.types import ClaudeAgentOptions, HookMatcher
-
-from universal_agent.prompt_assets import (
-    discover_skills,
-    generate_skills_xml,
-)
-from universal_agent.prompt_builder import build_system_prompt, build_sdk_system_prompt
-from claude_agent_sdk import create_sdk_mcp_server
-from universal_agent.tools.internal_registry import get_all_internal_tools
-from universal_agent.execution_context import bind_workspace_env
 from universal_agent.agentmail_official import build_agentmail_mcp_server_config
+from universal_agent.execution_context import bind_workspace_env
 from universal_agent.feature_flags import (
+    coder_vp_enabled,
     memory_enabled,
     memory_max_tokens,
 )
@@ -38,7 +29,15 @@ from universal_agent.memory.paths import (
     resolve_shared_memory_workspace,
 )
 from universal_agent.notebooklm_runtime import build_notebooklm_mcp_server_config
+from universal_agent.prompt_assets import (
+    discover_skills,
+    generate_skills_xml,
+)
+from universal_agent.prompt_builder import build_sdk_system_prompt, build_system_prompt
+from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
+from universal_agent.runtime_role import resolve_factory_role
 from universal_agent.sdk.runtime_info import emit_sdk_runtime_banner
+from universal_agent.tools.internal_registry import get_all_internal_tools
 
 
 # Get project directories
@@ -262,7 +261,7 @@ class AgentSetup:
         try:
             from universal_agent.utils.composio_discovery import (
                 discover_connected_toolkits_with_meta,
-                fetch_toolkit_meta
+                fetch_toolkit_meta,
             )
             
             # 1. Discover connected apps
@@ -759,10 +758,12 @@ class AgentSetup:
         try:
             from universal_agent.agent_core import (
                 malformed_tool_guardrail_hook,
-                tool_output_validator_hook,
                 pre_compact_context_capture_hook,
+                tool_output_validator_hook,
             )
-            from universal_agent.guardrails.tool_schema import pre_tool_use_schema_guardrail
+            from universal_agent.guardrails.tool_schema import (
+                pre_tool_use_schema_guardrail,
+            )
             return {
                 "PreToolUse": [
                     HookMatcher(matcher="*", hooks=[pre_tool_use_schema_guardrail]),

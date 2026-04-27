@@ -1,12 +1,13 @@
 import asyncio
 import os
-import sys
 from pathlib import Path
+import sys
 
 # Add src to path
 sys.path.append(str(Path(__file__).parent / "src"))
 
-from universal_agent.agent_core import UniversalAgent, EventType, ctx_session_id
+from universal_agent.agent_core import EventType, UniversalAgent, ctx_session_id
+
 
 async def verify_session_info():
     print("🚀 Verifying SESSION_INFO and Logging Context...")

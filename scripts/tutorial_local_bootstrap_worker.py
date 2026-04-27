@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from pathlib import Path
 import re
 import shutil
 import socket
@@ -19,11 +20,10 @@ import sys
 import tarfile
 import tempfile
 import time
+from typing import Any, Optional
 import urllib.error
 import urllib.parse
 import urllib.request
-from pathlib import Path
-from typing import Any, Optional
 
 from universal_agent.delegation.redis_bus import (
     MISSION_CONSUMER_GROUP,

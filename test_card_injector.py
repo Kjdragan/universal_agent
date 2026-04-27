@@ -1,4 +1,5 @@
 import sqlite3
+
 from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
 from universal_agent.proactive_signals import upsert_generated_card
 

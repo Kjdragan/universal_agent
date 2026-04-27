@@ -6,11 +6,10 @@ an inbound email or generic task based on observable signals.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from enum import Enum
+import re
 from typing import Optional
-
 
 # ── Priority Tiers ───────────────────────────────────────────────────────────
 

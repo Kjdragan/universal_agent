@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import hashlib
 import re
 import sqlite3
-from datetime import datetime, timezone
 from typing import Any
 
 from universal_agent import task_hub
@@ -194,7 +194,9 @@ def _cleanup_task_description(*, chosen_theme: str, note: str = "", preference_c
 
 def _preference_context(conn: sqlite3.Connection, *, task_type: str, topic_tags: list[str]) -> str:
     try:
-        from universal_agent.services.proactive_preferences import get_delegation_context
+        from universal_agent.services.proactive_preferences import (
+            get_delegation_context,
+        )
 
         return get_delegation_context(conn, task_type=task_type, topic_tags=topic_tags)
     except Exception:

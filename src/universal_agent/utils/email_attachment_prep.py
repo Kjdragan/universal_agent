@@ -4,7 +4,6 @@ import html
 import os
 from pathlib import Path
 
-
 _TRUTHY = {"1", "true", "yes", "on"}
 
 

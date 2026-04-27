@@ -1,6 +1,8 @@
 import os
-import yaml
 from pathlib import Path
+
+import yaml
+
 from universal_agent.infisical_loader import initialize_runtime_secrets
 
 BASE_DIR = Path(__file__).resolve().parent

@@ -14,11 +14,12 @@ Usage:
     uv run .agents/skills/captcha-solver/scripts/solve_with_nopecha.py <URL> --proxy "$PROXY_URL"
 """
 import argparse
-import sys
 import os
+import sys
 import time
 from urllib.parse import urlparse
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
+
+from playwright.sync_api import TimeoutError as PlaywrightTimeout, sync_playwright
 
 EXTENSION_PATH = os.path.expanduser("~/.config/nopecha-extension")
 

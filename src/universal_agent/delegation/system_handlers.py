@@ -7,11 +7,11 @@ operations like self-update to be delegated via the same Redis bus.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
 import os
-import subprocess
-from dataclasses import dataclass
 from pathlib import Path
+import subprocess
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)

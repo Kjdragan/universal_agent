@@ -19,13 +19,13 @@ Design contract:
 
 from __future__ import annotations
 
-import logging
-import os
-import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import logging
+import os
 from pathlib import Path
 from typing import Any, Optional
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -189,7 +189,7 @@ def finalize_execution_run(
     Safe to call multiple times (idempotent status update).
     """
     from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
-    from universal_agent.durable.state import update_run_status, update_run_attempt
+    from universal_agent.durable.state import update_run_attempt, update_run_status
 
     db_path = get_runtime_db_path()
     conn = connect_runtime_db(db_path)

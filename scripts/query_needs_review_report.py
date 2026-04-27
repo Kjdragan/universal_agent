@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Query all needs_review tasks and produce a diagnostic report."""
-import sqlite3
+import glob
 import json
 import os
-import glob
+import sqlite3
+
 
 def find_db():
     db_path = os.environ.get("UA_ACTIVITY_DB_PATH", "/opt/universal_agent/data/activity_state.db")

@@ -18,9 +18,9 @@ Env vars:
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
 import os
-from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)

@@ -5,8 +5,9 @@ import argparse
 import asyncio
 import json
 import os
-import sys
 from pathlib import Path
+import sys
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -14,11 +15,12 @@ load_dotenv()
 from anthropic import Anthropic
 
 from universal_agent.urw import (
+    MockAgentAdapter,
+    UniversalAgentAdapter,
     URWConfig,
     URWOrchestrator,
-    UniversalAgentAdapter,
-    MockAgentAdapter,
 )
+
 
 class Tee:
     def __init__(self, *streams):

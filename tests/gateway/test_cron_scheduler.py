@@ -1,12 +1,12 @@
 import asyncio
 import os
+from pathlib import Path
 import socket
 import subprocess
 import sys
 import time
 
 import aiohttp
-from pathlib import Path
 
 
 def _get_free_port() -> int:

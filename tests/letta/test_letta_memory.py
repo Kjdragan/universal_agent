@@ -4,6 +4,7 @@ Run: uv run python tests/test_letta_memory.py
 """
 
 import os
+
 from dotenv import load_dotenv
 
 # Load environment
@@ -16,10 +17,10 @@ repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
-import sitecustomize  # noqa: F401
-
-from agentic_learning import learning, AgenticLearning
+from agentic_learning import AgenticLearning, learning
 import anthropic
+
+import sitecustomize  # noqa: F401
 
 AGENT_NAME = "universal_agent_test"
 

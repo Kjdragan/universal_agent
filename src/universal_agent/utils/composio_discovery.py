@@ -7,8 +7,8 @@ This handles:
 2. Definition of local MCP tools exposed by our local server.
 """
 
-from typing import List, Dict, Any
 import os
+from typing import Any, Dict, List
 
 try:
     from composio import Composio

@@ -5,13 +5,13 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 import re
 import subprocess
 import time
+from typing import Any
 import urllib.error
 import urllib.request
-from pathlib import Path
-from typing import Any
 
 STATE_FILE = Path(
     os.getenv("UA_OOM_ALERT_STATE_FILE", "/var/lib/universal-agent/watchdog/oom_notifier_state.json")

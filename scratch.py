@@ -1,6 +1,7 @@
 import asyncio
-from universal_agent.gateway_server import _task_hub_open_conn
+
 from universal_agent import task_hub
+from universal_agent.gateway_server import _task_hub_open_conn
 
 conn = _task_hub_open_conn()
 try:

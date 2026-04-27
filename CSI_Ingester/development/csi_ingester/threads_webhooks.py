@@ -13,11 +13,13 @@ from pydantic import BaseModel, Field
 
 from csi_ingester.adapters.threads_api import stable_hash, verify_threads_signature
 from csi_ingester.contract import CreatorSignalEvent
-from csi_ingester.store import dedupe as dedupe_store
-from csi_ingester.store import delivery_attempts as delivery_attempt_store
-from csi_ingester.store import dlq as dlq_store
-from csi_ingester.store import events as event_store
-from csi_ingester.store import source_state as source_state_store
+from csi_ingester.store import (
+    dedupe as dedupe_store,
+    delivery_attempts as delivery_attempt_store,
+    dlq as dlq_store,
+    events as event_store,
+    source_state as source_state_store,
+)
 
 if False:  # pragma: no cover - typing only
     from csi_ingester.emitter.ua_client import UAEmitter

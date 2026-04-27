@@ -1,8 +1,9 @@
 import asyncio
 import os
+from pathlib import Path
 import sys
 import uuid
-from pathlib import Path
+
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -13,8 +14,9 @@ src_dir = os.path.join(os.getcwd(), "src")
 if src_dir not in sys.path:
     sys.path.insert(0, src_dir)
 
-from universal_agent.execution_engine import ProcessTurnAdapter, EngineConfig
 from universal_agent.agent_core import EventType
+from universal_agent.execution_engine import EngineConfig, ProcessTurnAdapter
+
 
 async def test_session_persistence():
     print("--- Testing Session Persistence ---")

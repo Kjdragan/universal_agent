@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-
 DEFAULT_APPROVED_CODEBASE_ROOT = "/opt/universal_agent"
 _KNOWN_VPS_CODEBASE_ROOTS = (
     DEFAULT_APPROVED_CODEBASE_ROOT,

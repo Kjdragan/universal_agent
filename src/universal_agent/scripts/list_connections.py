@@ -7,6 +7,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.
 
 from composio import Composio
 
+
 def list_connections():
     # Load API key
     api_key = os.environ.get("COMPOSIO_API_KEY")

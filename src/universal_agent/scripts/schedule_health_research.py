@@ -1,8 +1,8 @@
 
 import os
+from pathlib import Path
 import sys
 import time
-from pathlib import Path
 
 # Add project root to path for imports
 BASE_DIR = Path(__file__).parent.parent.parent.parent
@@ -10,6 +10,7 @@ sys.path.append(str(BASE_DIR))
 
 from universal_agent.cron_service import CronService, parse_run_at
 from universal_agent.gateway import InProcessGateway
+
 
 def schedule_task():
     workspaces_dir = BASE_DIR / "AGENT_RUN_WORKSPACES"

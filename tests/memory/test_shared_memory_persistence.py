@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
+import shutil
 
-import universal_agent.memory.orchestrator as orchestrator
 from universal_agent.memory.memory_context import build_file_memory_context
+import universal_agent.memory.orchestrator as orchestrator
 from universal_agent.memory.paths import resolve_shared_memory_workspace
 
 

@@ -7,7 +7,11 @@ import logging
 from typing import Any
 
 from csi_ingester.adapters.base import RawEvent, SourceAdapter
-from csi_ingester.adapters.threads_api import ThreadsAPIClient, normalize_threads_item, stable_hash
+from csi_ingester.adapters.threads_api import (
+    ThreadsAPIClient,
+    normalize_threads_item,
+    stable_hash,
+)
 from csi_ingester.adapters.threads_trends import rank_terms
 from csi_ingester.contract import CreatorSignalEvent
 

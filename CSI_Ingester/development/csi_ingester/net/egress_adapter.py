@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import json
+from typing import Any, Callable
 import urllib.error
 import urllib.request
-from typing import Any, Callable
-
 
 ANTI_BOT_MARKERS = (
     "request_blocked",

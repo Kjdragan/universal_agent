@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 import logging
 import os
-import threading
-from dataclasses import dataclass, field
 from pathlib import Path
+import threading
 from typing import Any
 
 from universal_agent.runtime_role import resolve_machine_slug, resolve_runtime_stage
@@ -311,10 +311,10 @@ def upsert_infisical_secret(key: str, value: str) -> bool:
         from infisical_client import (
             AuthenticationOptions,
             ClientSettings,
+            CreateSecretOptions,
             InfisicalClient,
             UniversalAuthMethod,
             UpdateSecretOptions,
-            CreateSecretOptions,
         )
 
         client = InfisicalClient(

@@ -15,11 +15,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from dataclasses import asdict
 import json
+from pathlib import Path
 import statistics
 import time
-from dataclasses import asdict
-from pathlib import Path
 from typing import Any
 
 from claude_agent_sdk.client import ClaudeSDKClient
@@ -29,7 +29,6 @@ from claude_agent_sdk.types import (
     ResultMessage,
     TextBlock,
 )
-
 
 DEFAULT_PROMPT = "Compute 1234*5678. Respond with only the integer, no other text."
 DEFAULT_MODELS = ["opus", "sonnet", "haiku"]

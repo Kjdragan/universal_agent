@@ -1,4 +1,5 @@
 import os
+
 from universal_agent.infisical_loader import initialize_runtime_secrets
 
 initialize_runtime_secrets(profile="local_workstation")

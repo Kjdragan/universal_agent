@@ -7,8 +7,8 @@ noise in the final markdown.
 
 from __future__ import annotations
 
-import re
 from datetime import datetime, timezone
+import re
 from typing import Any
 from urllib.parse import urljoin, urlparse
 

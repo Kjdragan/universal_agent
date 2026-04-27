@@ -5,13 +5,13 @@ Original: videos/_2024/transformers/helpers.py
 Contains utility functions and classes for attention visualization.
 """
 
+import itertools as it
+import random
+from typing import Optional, Tuple
+import warnings
+
 from manim import *
 import numpy as np
-import warnings
-import random
-import itertools as it
-from typing import Optional, Tuple
-
 
 # =============================================================================
 # UTILITY FUNCTIONS

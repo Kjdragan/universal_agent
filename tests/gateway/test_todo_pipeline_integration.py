@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import copy
-import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+import sqlite3
 from unittest.mock import AsyncMock
 
 import pytest
 
-from universal_agent import gateway_server
-from universal_agent import task_hub
+from universal_agent import gateway_server, task_hub
 from universal_agent.gateway import GatewayRequest, GatewaySession
-from universal_agent.mission_guardrails import MissionGuardrailTracker, build_mission_contract
+from universal_agent.mission_guardrails import (
+    MissionGuardrailTracker,
+    build_mission_contract,
+)
 from universal_agent.services.todo_dispatch_service import ToDoDispatchService
 
 

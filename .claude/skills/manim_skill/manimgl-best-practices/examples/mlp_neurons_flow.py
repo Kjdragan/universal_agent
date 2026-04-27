@@ -6,10 +6,11 @@ Based on 3Blue1Brown's transformer visualizations.
 
 Run: manimgl mlp_neurons_flow.py MLPNeuronsFlow -o
 """
+import itertools as it
+import random
+
 from manimlib import *
 import numpy as np
-import random
-import itertools as it
 
 
 def value_to_color(

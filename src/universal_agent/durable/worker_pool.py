@@ -12,30 +12,30 @@ Architecture:
 """
 
 import asyncio
-import json
-import logging
-import os
-import sqlite3
-import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+import json
+import logging
+import os
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Awaitable
+import sqlite3
+from typing import Any, Awaitable, Callable, Dict, List, Optional
+import uuid
 
+from .db import connect_runtime_db
+from .migrations import ensure_schema
 from .state import (
     acquire_run_lease,
     create_run_attempt,
+    get_run,
     get_run_attempt,
     heartbeat_run_lease,
-    release_run_lease,
     list_runs_with_status,
-    get_run,
+    release_run_lease,
     update_run_attempt,
     update_run_status,
 )
-from .db import connect_runtime_db
-from .migrations import ensure_schema
 from universal_agent.run_workspace import ensure_run_workspace_scaffold
 
 logger = logging.getLogger(__name__)
@@ -491,7 +491,11 @@ class WorkerPoolManager:
     async def _default_run_handler(self, run_id: str, workspace_dir: str) -> bool:
         """Default run handler using gateway."""
         try:
-            from universal_agent.gateway import InProcessGateway, ExternalGateway, GatewayRequest
+            from universal_agent.gateway import (
+                ExternalGateway,
+                GatewayRequest,
+                InProcessGateway,
+            )
             
             gateway_url = self.worker_config_template.gateway_url
             if gateway_url:

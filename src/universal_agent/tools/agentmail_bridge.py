@@ -3,11 +3,12 @@ AgentMail Bridge Tool.
 
 Provides internal MCP tools for sending emails natively.
 """
-import sqlite3
-import re
-from typing import Any, Dict
 import json
 import logging
+import re
+import sqlite3
+from typing import Any, Dict
+
 from claude_agent_sdk import tool
 
 logger = logging.getLogger(__name__)

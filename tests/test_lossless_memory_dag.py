@@ -1,9 +1,12 @@
-import pytest
-import os
 import asyncio
+import os
+
+import pytest
+
+from universal_agent.lossless_memory.dag_condenser import run_compaction_sweep
 from universal_agent.lossless_memory.db import LosslessDB
 from universal_agent.lossless_memory.history_adapter import LosslessMessageHistory
-from universal_agent.lossless_memory.dag_condenser import run_compaction_sweep
+
 
 @pytest.fixture
 def temp_db(tmp_path):

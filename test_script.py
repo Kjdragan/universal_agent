@@ -1,6 +1,7 @@
 import asyncio
 import sys
 
+
 async def fake_dispatch(*args, **kwargs):
     print("MOCK DISPATCH")
     # print(args[0])  # keep it less noisy

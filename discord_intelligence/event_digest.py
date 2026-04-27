@@ -1,14 +1,15 @@
-import os
-import sqlite3
-import json
-import logging
 import asyncio
 from datetime import datetime, timedelta, timezone
+import json
+import logging
+import os
 from pathlib import Path
+import sqlite3
 from typing import Optional
 
-from universal_agent.services.llm_classifier import _call_llm
 from discord_intelligence.config import get_db_path, init_secrets
+
+from universal_agent.services.llm_classifier import _call_llm
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] EVENT_DIGEST: %(message)s")
 logger = logging.getLogger("event_digest")
@@ -202,7 +203,9 @@ async def run_pipeline():
                         body_content = "\n".join(body_lines)
                         
                         try:
-                            from universal_agent.services.agentmail_service import AgentMailService
+                            from universal_agent.services.agentmail_service import (
+                                AgentMailService,
+                            )
                             svc = AgentMailService()
                             await svc.startup()
                             if svc._started:

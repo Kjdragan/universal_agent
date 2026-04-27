@@ -5,13 +5,20 @@ from pathlib import Path
 from typing import Any, Optional
 
 from universal_agent.agent_core import EventType
+from universal_agent.codebase_policy import (
+    is_approved_codebase_path,
+    repo_mutation_requested,
+)
 from universal_agent.execution_engine import EngineConfig, ProcessTurnAdapter
-from universal_agent.feature_flags import coder_vp_id, vp_handoff_root, vp_hard_block_ua_repo
+from universal_agent.feature_flags import (
+    coder_vp_id,
+    vp_handoff_root,
+    vp_hard_block_ua_repo,
+)
 from universal_agent.guardrails.workspace_guard import (
     WorkspaceGuardError,
     enforce_external_target_path,
 )
-from universal_agent.codebase_policy import is_approved_codebase_path, repo_mutation_requested
 from universal_agent.vp.clients.base import MissionOutcome, VpClient
 
 

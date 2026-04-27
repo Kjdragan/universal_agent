@@ -1,19 +1,20 @@
+import datetime
 import os
+from pathlib import Path
 import shutil
+import sqlite3
 import tempfile
 import unittest
-import sqlite3
-import datetime
-from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 # Import necessary modules (mocking where appropriate if env not stable)
 # We need to test the actual integration, so we will try to import real modules
 # but sandbox the storage directory.
 
 try:
-    from Memory_System.manager import MemoryManager
     import chromadb
+
+    from Memory_System.manager import MemoryManager
 except ImportError:
     MemoryManager = None
 
@@ -101,9 +102,10 @@ class TestMemoryIndexing(unittest.TestCase):
         
         # Simulation:
         with patch.dict(os.environ, {"UA_ENABLE_MEMORY_INDEX": "1", "UA_DISABLE_LOCAL_MEMORY": "0"}):
-            import src.mcp_server as server_module
             # Reload to force flag check
             import importlib
+
+            import src.mcp_server as server_module
             importlib.reload(server_module)
             
             self.assertIsNotNone(server_module.MEMORY_MANAGER)

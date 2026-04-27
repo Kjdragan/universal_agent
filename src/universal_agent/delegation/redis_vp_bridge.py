@@ -11,12 +11,12 @@ local VP SQLite for execution.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass, field
 import logging
 import re
 import sqlite3
-import uuid
-from dataclasses import dataclass, field
 from typing import Any
+import uuid
 
 from universal_agent.delegation.redis_bus import (
     ConsumedMission,

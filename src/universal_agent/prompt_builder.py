@@ -5,8 +5,8 @@ Both agent_setup.py (gateway/cron) and main.py (legacy CLI) import from here,
 eliminating the divergence documented in Doc 29.
 """
 
-import os
 from datetime import datetime, timedelta, timezone
+import os
 from typing import Optional
 
 DEFAULT_SYSTEM_PROMPT_MODE = "claude_code_append"

@@ -1,6 +1,7 @@
-import time
-from pathlib import Path
 import json
+from pathlib import Path
+import time
+
 
 def test():
     t0 = time.time()

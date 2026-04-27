@@ -1,23 +1,23 @@
 import asyncio
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 import json
 import logging
 import os
+from pathlib import Path
 import re
 import shutil
 import time
+from typing import Any, Callable, Dict, Iterable, Optional
 import uuid
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Optional, Dict, Any, Iterable, Callable
 
-import pytz
 from croniter import croniter
+import pytz
 
 from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.durable.state import get_run_attempt
-from universal_agent.gateway import InProcessGateway, GatewayRequest
+from universal_agent.gateway import GatewayRequest, InProcessGateway
 from universal_agent.heartbeat_service import _parse_duration_seconds
 from universal_agent.workflow_admission import WorkflowAdmissionService, WorkflowTrigger
 
@@ -1044,8 +1044,8 @@ class CronService:
                                 logger.info(f"Chron job {job.job_id} executing native script: {script_path}")
                                 
                                 # Use asyncio.create_subprocess_exec
-                                import sys
                                 import subprocess
+                                import sys
                                 
                                 env = os.environ.copy()
                                 cwd_str = str(job.workspace_dir_resolved) if hasattr(job, "workspace_dir_resolved") else str(Path(__file__).resolve().parents[2])
@@ -1096,7 +1096,9 @@ class CronService:
                             else:
                                 # Standard LLM cron execution
                                 try:
-                                    from universal_agent.artifacts import resolve_artifacts_dir
+                                    from universal_agent.artifacts import (
+                                        resolve_artifacts_dir,
+                                    )
                                     _artifacts_dir = str(resolve_artifacts_dir())
                                 except Exception:
                                     _artifacts_dir = os.getenv("UA_ARTIFACTS_DIR", "").strip()
@@ -1251,8 +1253,12 @@ class CronService:
                     try:
                         from universal_agent.feature_flags import memory_enabled
                         if memory_enabled():
-                            from universal_agent.memory.orchestrator import get_memory_orchestrator
-                            from universal_agent.memory.paths import resolve_shared_memory_workspace
+                            from universal_agent.memory.orchestrator import (
+                                get_memory_orchestrator,
+                            )
+                            from universal_agent.memory.paths import (
+                                resolve_shared_memory_workspace,
+                            )
                             _ws_dir = str(job.workspace_dir)
                             _transcript = os.path.join(_ws_dir, "transcript.md")
                             _shared_root = resolve_shared_memory_workspace(_ws_dir)
@@ -1310,7 +1316,9 @@ class CronService:
                     if _task_id:
                         try:
                             from universal_agent import task_hub as _th
-                            from universal_agent.gateway_server import _task_hub_open_conn
+                            from universal_agent.gateway_server import (
+                                _task_hub_open_conn,
+                            )
                             _conn = _task_hub_open_conn()
                             try:
                                 _th.perform_task_action(

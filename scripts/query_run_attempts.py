@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-import sys, os, sqlite3, json
+import json
+import os
+import sqlite3
+import sys
+
 repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(repo_root, "src"))
 from universal_agent.durable.db import connect_runtime_db
+
 
 def main():
     conn = connect_runtime_db()

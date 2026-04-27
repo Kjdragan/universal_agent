@@ -7,9 +7,9 @@ using Claude with extended thinking.
 
 import argparse
 import json
+from pathlib import Path
 import re
 import sys
-from pathlib import Path
 
 import anthropic
 

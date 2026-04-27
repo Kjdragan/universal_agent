@@ -1,7 +1,8 @@
-import urllib.request
-import urllib.error
-import os
 import json
+import os
+import urllib.error
+import urllib.request
+
 
 def test_size(size_mb):
     payload = {
@@ -23,5 +24,6 @@ def test_size(size_mb):
         print(f"{size_mb}MB FAILED: {e.code} API Error - {e.read().decode('utf-8')}")
 
 import sys
+
 size = int(sys.argv[1])
 test_size(size)

@@ -3,7 +3,10 @@ from pathlib import Path
 
 import pytest
 
-from universal_agent.guardrails.tool_schema import ToolSchema, pre_tool_use_schema_guardrail
+from universal_agent.guardrails.tool_schema import (
+    ToolSchema,
+    pre_tool_use_schema_guardrail,
+)
 
 
 @pytest.fixture(autouse=True)

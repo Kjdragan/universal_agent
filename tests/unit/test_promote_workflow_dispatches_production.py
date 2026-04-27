@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 _DEPLOY_WORKFLOW = Path(".github/workflows/deploy.yml")
 
 

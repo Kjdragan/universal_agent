@@ -29,14 +29,15 @@ Usage:
 from __future__ import annotations
 
 import argparse
+from collections import deque
+from datetime import datetime, timedelta, timezone
 import logging
 import sys
 import threading
 import time
-from collections import deque
-from datetime import datetime, timedelta, timezone
 
 from .config import (
+    DASHBOARD_PORT,
     TGTG_AUTO_PURCHASE,
     TGTG_DAILY_BUDGET,
     TGTG_EMAIL,
@@ -46,7 +47,6 @@ from .config import (
     TGTG_PAYMENT_REMINDER_MINUTES,
     TGTG_RADIUS,
     TGTG_SCAN_INTERVAL_HOURS,
-    DASHBOARD_PORT,
     load_saved_credentials,
 )
 from .dashboard import push_item_update, push_log, push_order, start_dashboard

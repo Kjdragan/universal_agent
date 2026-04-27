@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from universal_agent.memory.memory_flush import flush_pre_compact_memory
 from universal_agent.memory.memory_context import build_file_memory_context
+from universal_agent.memory.memory_flush import flush_pre_compact_memory
 from universal_agent.memory.memory_store import ensure_memory_scaffold
 
 

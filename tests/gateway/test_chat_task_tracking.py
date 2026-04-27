@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
+import sqlite3
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import pytest
 from fastapi.testclient import TestClient
+import pytest
 
 from universal_agent import gateway_server, task_hub
 from universal_agent.agent_core import AgentEvent, EventType

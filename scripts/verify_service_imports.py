@@ -4,10 +4,9 @@
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
 import sys
 import traceback
-from pathlib import Path
-
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = REPO_ROOT / "src"

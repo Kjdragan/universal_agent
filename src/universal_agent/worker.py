@@ -1,9 +1,9 @@
 import argparse
+from datetime import datetime, timezone
 import os
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
 from typing import Optional
 
 from universal_agent.durable.db import connect_runtime_db

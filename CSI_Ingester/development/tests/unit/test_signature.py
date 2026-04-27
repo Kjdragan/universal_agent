@@ -2,7 +2,11 @@ import hashlib
 import hmac
 import json
 
-from csi_ingester.signature import build_signing_string, generate_signature, verify_signature
+from csi_ingester.signature import (
+    build_signing_string,
+    generate_signature,
+    verify_signature,
+)
 
 
 def test_signature_roundtrip(monkeypatch):

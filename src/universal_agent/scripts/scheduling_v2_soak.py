@@ -8,11 +8,11 @@ status codes, and pass/fail summary.
 from __future__ import annotations
 
 import argparse
-import json
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import json
 from pathlib import Path
+import time
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode

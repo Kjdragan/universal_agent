@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
+import sqlite3
 
 from universal_agent import task_hub
 from universal_agent.services.proactive_artifacts import get_artifact
@@ -27,7 +27,9 @@ def test_queue_cleanup_task_creates_agent_ready_review_gated_task(tmp_path):
             title="Seed CODIE preference",
         )
         from universal_agent.services.proactive_artifacts import record_feedback
-        from universal_agent.services.proactive_preferences import record_artifact_feedback_signal
+        from universal_agent.services.proactive_preferences import (
+            record_artifact_feedback_signal,
+        )
 
         updated = record_feedback(conn, artifact_id=seed["artifact_id"], score=5, text="more cleanup")
         record_artifact_feedback_signal(conn, artifact=updated, score=5, text="more cleanup")

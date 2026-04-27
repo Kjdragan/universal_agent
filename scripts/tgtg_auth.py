@@ -14,16 +14,17 @@ caller can track progress.  The path is printed on startup.
 
 import json
 import os
+from pathlib import Path
 import sys
 import tempfile
 import threading
 import time
-from pathlib import Path
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from tgtg import TgtgClient
+
 from src.universal_agent.tgtg.config import CREDENTIALS_FILE
 
 # ── Configuration ─────────────────────────────────────────────────────────────

@@ -1,12 +1,12 @@
 
 import asyncio
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
 import sys
 import uuid
-import re
 
 # Set up environment
 WORKSPACE_ROOT = os.path.abspath("AGENT_RUN_WORKSPACES")
@@ -14,8 +14,9 @@ TEST_RUN_ID = f"test_harness_{uuid.uuid4().hex[:8]}"
 TEST_WORKSPACE = os.path.join(WORKSPACE_ROOT, f"session_{TEST_RUN_ID}")
 DB_PATH = os.path.join(WORKSPACE_ROOT, "runtime_state.db")
 
-from universal_agent.durable.migrations import ensure_schema
 from universal_agent.durable.db import connect_runtime_db
+from universal_agent.durable.migrations import ensure_schema
+
 
 def setup_db():
    conn = connect_runtime_db(DB_PATH)

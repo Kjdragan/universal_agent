@@ -1,11 +1,11 @@
-import os
 import json
 import logging
+import os
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Any, Dict, List, Optional
 
-import httpx
 from fastapi import APIRouter, HTTPException
+import httpx
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -52,7 +52,10 @@ async def _classify_channel_llm(
 ) -> tuple[str, str]:
     """Classify a channel using LLM. Returns (category, method)."""
     try:
-        from universal_agent.services.llm_classifier import _call_llm, _parse_json_response
+        from universal_agent.services.llm_classifier import (
+            _call_llm,
+            _parse_json_response,
+        )
 
         content_parts = [f"Channel name: {channel_name}"]
         if description:

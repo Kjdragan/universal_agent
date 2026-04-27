@@ -4,15 +4,15 @@
 from __future__ import annotations
 
 import argparse
-import json
-import os
-import sqlite3
-import sys
-import urllib.request
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
+import json
+import os
 from pathlib import Path
+import sqlite3
+import sys
 from typing import Any
+import urllib.request
 
 SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 if str(SCRIPT_ROOT) not in sys.path:
@@ -27,9 +27,11 @@ from csi_ingester.config import load_config
 from csi_ingester.contract import CreatorSignalEvent
 from csi_ingester.emitter.ua_client import UAEmitter
 from csi_ingester.llm_auth import resolve_csi_llm_auth
-from csi_ingester.store import dlq as dlq_store
-from csi_ingester.store import events as event_store
-from csi_ingester.store import token_usage as token_usage_store
+from csi_ingester.store import (
+    dlq as dlq_store,
+    events as event_store,
+    token_usage as token_usage_store,
+)
 from csi_ingester.store.sqlite import connect, ensure_schema
 
 

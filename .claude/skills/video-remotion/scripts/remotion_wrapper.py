@@ -1,16 +1,17 @@
+import argparse
+from dataclasses import dataclass
+import json
 import os
 import subprocess
-import json
 import tempfile
 import time
-import argparse
-from typing import Optional, Dict, Any, Union
-from dataclasses import dataclass
+from typing import Any, Dict, Optional, Union
+
 from dotenv import load_dotenv
 
 # Try importing the official SDK, but handle if it's not installed
 try:
-    from remotion_lambda import RenderMediaParams, RemotionClient, Privacy
+    from remotion_lambda import Privacy, RemotionClient, RenderMediaParams
     HAS_LAMBDA_SDK = True
 except ImportError:
     HAS_LAMBDA_SDK = False

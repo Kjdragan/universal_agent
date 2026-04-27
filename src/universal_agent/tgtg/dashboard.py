@@ -8,15 +8,15 @@ with a REST API and Server-Sent Events (SSE) for live updates.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 import json
 import logging
 import threading
-from datetime import datetime
 from typing import Any
 
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, StreamingResponse
 
 from .config import DASHBOARD_HOST, DASHBOARD_PORT
 

@@ -1,7 +1,7 @@
 """Tests for the Python parser module."""
 
-import tempfile
 from pathlib import Path
+import tempfile
 
 import pytest
 
@@ -23,7 +23,6 @@ from universal_agent.utils.python_parser import (
     parse_python,
     parse_python_file,
 )
-
 
 # Sample Python code for testing
 SAMPLE_MODULE = '''

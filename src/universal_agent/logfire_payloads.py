@@ -1,9 +1,8 @@
+from dataclasses import dataclass
 import json
 import os
 import re
-from dataclasses import dataclass
 from typing import Any
-
 
 _SENSITIVE_KEY_RE = re.compile(
     r"(token|secret|password|api[_-]?key|authorization|cookie|set-cookie|private[_-]?key|client[_-]?secret|refresh[_-]?token)",

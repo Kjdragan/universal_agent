@@ -9,11 +9,11 @@ summary from the other sections' opening lines.
 import re
 
 from universal_agent.scripts.cleanup_report import (
-    preprocess_sections,
-    write_updates,
     check_placeholders,
-    strip_wrapping_code_fence,
     normalize_headings,
+    preprocess_sections,
+    strip_wrapping_code_fence,
+    write_updates,
 )
 
 
@@ -21,8 +21,8 @@ from universal_agent.scripts.cleanup_report import (
 def _apply_updates_and_check_fallback(sections: dict, updates_payload: dict) -> dict:
     """Simulate the post-LLM update logic from cleanup_report_async."""
     from universal_agent.scripts.cleanup_report import (
-        strip_wrapping_code_fence,
         normalize_headings,
+        strip_wrapping_code_fence,
     )
     pending_marker = re.compile(
         r"^\s*\[Pending Synthesis by Cleanup Tool\]\s*$",

@@ -5,11 +5,11 @@ URW integration adapters for the Universal Agent system.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import json
+from pathlib import Path
 import re
 import time
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .orchestrator import AgentExecutionResult, AgentLoopInterface
@@ -17,8 +17,13 @@ from .state import Task
 
 # Gateway imports for Stage 5
 try:
-    from universal_agent.gateway import Gateway, InProcessGateway, ExternalGateway, GatewayRequest
     from universal_agent.agent_core import EventType
+    from universal_agent.gateway import (
+        ExternalGateway,
+        Gateway,
+        GatewayRequest,
+        InProcessGateway,
+    )
     GATEWAY_AVAILABLE = True
 except ImportError:
     GATEWAY_AVAILABLE = False
@@ -143,8 +148,9 @@ class UniversalAgentAdapter(BaseAgentAdapter):
             
             # Use shared AgentHookSet logic (matching main.py CLI behavior)
             try:
-                from universal_agent.hooks import AgentHookSet
                 import uuid
+
+                from universal_agent.hooks import AgentHookSet
                 hooks_manager = AgentHookSet(
                     run_id=str(uuid.uuid4()),
                     enable_skills=True,

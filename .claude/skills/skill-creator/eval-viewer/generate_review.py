@@ -14,18 +14,18 @@ No dependencies beyond the Python stdlib are required.
 
 import argparse
 import base64
+from functools import partial
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import mimetypes
 import os
+from pathlib import Path
 import re
 import signal
 import subprocess
 import sys
 import time
 import webbrowser
-from functools import partial
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from pathlib import Path
 
 # Files to exclude from output listings
 METADATA_FILES = {"transcript.md", "user_notes.md", "metrics.json"}

@@ -7,14 +7,14 @@ Based on interview.md design.
 
 from __future__ import annotations
 
-import json
-import sqlite3
 from datetime import datetime
+import json
 from pathlib import Path
+import sqlite3
 from typing import List, Optional
 from uuid import UUID
 
-from .plan_schema import AtomicTask, Plan, Phase, TaskStatus
+from .plan_schema import AtomicTask, Phase, Plan, TaskStatus
 
 
 class PlanPersistence:

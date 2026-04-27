@@ -1,8 +1,15 @@
 import asyncio
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
+
 from claude_agent_sdk import tool
+
 from universal_agent.api.input_bridge import request_user_input
-from universal_agent.tools.context_logging import get_pending_gaps, mark_gaps_resolved, log_offline_task
+from universal_agent.tools.context_logging import (
+    get_pending_gaps,
+    log_offline_task,
+    mark_gaps_resolved,
+)
+
 
 @tool("fetch_context_gaps", "Fetch pending questions or issues logged for this interview.", {})
 async def fetch_context_gaps(args: Dict[str, Any]) -> Dict[str, Any]:

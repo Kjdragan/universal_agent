@@ -11,8 +11,8 @@ Supports:
 from __future__ import annotations
 
 import argparse
-import json
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import secrets
 import sys

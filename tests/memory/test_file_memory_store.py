@@ -3,8 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from universal_agent.memory import MemoryEntry
-from universal_agent.memory.memory_store import ensure_memory_scaffold, append_memory_entry
 from universal_agent.memory.memory_context import build_file_memory_context
+from universal_agent.memory.memory_store import (
+    append_memory_entry,
+    ensure_memory_scaffold,
+)
 
 
 def test_append_memory_entry_creates_files(tmp_path: Path) -> None:

@@ -5,12 +5,12 @@ These models normalize data from multiple platforms (Upwork, Freelancer.com, etc
 into a common schema that the opportunity analyzer can score and rank.
 """
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Optional
-import json
 import hashlib
+import json
+from typing import Optional
 
 
 class Platform(Enum):

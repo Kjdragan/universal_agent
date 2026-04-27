@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
-import sqlite3
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import sqlite3
 from typing import Any, Callable, Optional
 
+from universal_agent.services.proactive_artifacts import (
+    ARTIFACT_STATUS_CANDIDATE,
+    make_artifact_id,
+    upsert_artifact,
+)
 from universal_agent.services.proactive_task_builder import queue_proactive_task
-from universal_agent.services.proactive_artifacts import ARTIFACT_STATUS_CANDIDATE, make_artifact_id, upsert_artifact
 
 SignatureMatcher = Callable[[dict[str, Any], list[dict[str, Any]]], list[dict[str, Any]]]
 
@@ -350,7 +354,10 @@ async def extract_topic_signature_from_text(
         ]
     )
     try:
-        from universal_agent.services.llm_classifier import _call_llm, _parse_json_response
+        from universal_agent.services.llm_classifier import (
+            _call_llm,
+            _parse_json_response,
+        )
 
         raw = await _call_llm(system=_SIGNATURE_SYSTEM, user=user, max_tokens=900)
         parsed = _parse_json_response(raw)
@@ -425,7 +432,10 @@ async def track_a_concrete_convergence(
         ensure_ascii=True,
     )
     try:
-        from universal_agent.services.llm_classifier import _call_llm, _parse_json_response
+        from universal_agent.services.llm_classifier import (
+            _call_llm,
+            _parse_json_response,
+        )
 
         raw = await _call_llm(system=_MATCH_SYSTEM, user=user, max_tokens=1200)
         parsed = _parse_json_response(raw)
@@ -475,7 +485,10 @@ async def track_b_ideation_synthesis(
     )
     
     try:
-        from universal_agent.services.llm_classifier import _call_llm, _parse_json_response
+        from universal_agent.services.llm_classifier import (
+            _call_llm,
+            _parse_json_response,
+        )
 
         raw = await _call_llm(system=_IDEATION_SYSTEM, user=user, max_tokens=1500)
         parsed = _parse_json_response(raw)
@@ -778,7 +791,9 @@ def _brief_task_description(*, primary_topic: str, signatures: list[dict[str, An
 
 def _preference_context(conn: sqlite3.Connection, *, task_type: str, topic_tags: list[str]) -> str:
     try:
-        from universal_agent.services.proactive_preferences import get_delegation_context
+        from universal_agent.services.proactive_preferences import (
+            get_delegation_context,
+        )
 
         return get_delegation_context(conn, task_type=task_type, topic_tags=topic_tags)
     except Exception:

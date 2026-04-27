@@ -2,12 +2,14 @@
 import asyncio
 import os
 import sys
+
 from dotenv import load_dotenv
 
 # Add src to path
 sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
 
 from universal_agent.agent_setup import AgentSetup
+
 
 async def main():
     load_dotenv()

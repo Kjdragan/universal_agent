@@ -6,11 +6,12 @@ Tests: 1) Single API call, 2) Parallel API calls, 3) Fast model availability
 
 import asyncio
 import os
-import time
 from pathlib import Path
+import time
 
 # Load env vars from .env
 from dotenv import load_dotenv
+
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 import httpx

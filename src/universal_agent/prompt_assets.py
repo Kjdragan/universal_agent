@@ -12,7 +12,6 @@ from typing import Optional
 
 import logfire
 
-
 _PROJECT_ROOT = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 )
@@ -159,6 +158,7 @@ def get_tool_knowledge_block() -> str:
 
 
 import shutil
+
 
 def _check_skill_requirements(frontmatter: dict) -> tuple[bool, str]:
     """

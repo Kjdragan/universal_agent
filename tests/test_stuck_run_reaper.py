@@ -10,17 +10,18 @@ A run that stopped heartbeating 30 minutes ago is stuck and gets reaped.
 
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime, timedelta, timezone
+import sqlite3
 
 import pytest
+
+from universal_agent.durable.migrations import ensure_schema
 
 # These will be the module under test — tests are RED until we create the module.
 from universal_agent.services.stuck_run_reaper import (
     ReapedRunInfo,
     reap_stale_runs,
 )
-from universal_agent.durable.migrations import ensure_schema
 
 
 def _now() -> str:

@@ -7,9 +7,9 @@ import argparse
 import asyncio
 import json
 import os
+from pathlib import Path
 import sys
 import uuid
-from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:

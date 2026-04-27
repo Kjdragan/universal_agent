@@ -16,8 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from csi_ingester.config import load_config
 from csi_ingester.contract import CreatorSignalEvent
 from csi_ingester.emitter.ua_client import UAEmitter
-from csi_ingester.store import dlq as dlq_store
-from csi_ingester.store import events as event_store
+from csi_ingester.store import dlq as dlq_store, events as event_store
 from csi_ingester.store.sqlite import connect, ensure_schema
 
 

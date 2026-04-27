@@ -1,8 +1,10 @@
-import os
-import json
-import logfire
-from .db import LosslessDB
 import asyncio
+import json
+import os
+
+import logfire
+
+from .db import LosslessDB
 
 # A global fallback instance if someone forgets to pass a DB
 _GLOBAL_DB = None

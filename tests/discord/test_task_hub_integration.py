@@ -1,5 +1,5 @@
-import sqlite3
 from datetime import UTC, datetime
+import sqlite3
 
 from discord_intelligence.database import DiscordIntelligenceDB
 from discord_intelligence.integration import task_hub as discord_task_hub

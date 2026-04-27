@@ -2,9 +2,10 @@
 Visualization distinguishing between weights (model parameters) and data.
 Demonstrates: DecimalMatrix, VGroup organization, Transform animations
 """
+import random
+
 from manimlib import *
 import numpy as np
-import random
 
 
 def value_to_color(

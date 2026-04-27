@@ -1,8 +1,12 @@
-import sys, os, sqlite3, json
+import json
+import os
+import sqlite3
+import sys
 
 # Adjust this if needed, but normally universal-agent is installed or loaded via pyproject.toml
 sys.path.insert(0, "./src")
 from universal_agent.durable.db import connect_runtime_db
+
 
 def main():
     conn = connect_runtime_db()

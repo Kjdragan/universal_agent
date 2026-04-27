@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
-import sqlite3
 from pathlib import Path
+import sqlite3
 from typing import Any, Optional
 
 from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path

@@ -15,9 +15,9 @@ import argparse
 import json
 import os
 import sys
+from typing import Any
 import urllib.error
 import urllib.request
-from typing import Any
 
 from universal_agent.ops_config import load_ops_config, resolve_ops_config_path
 

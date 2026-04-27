@@ -6,8 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from universal_agent import gateway_server
-from universal_agent import task_hub
+from universal_agent import gateway_server, task_hub
 
 
 def _seed_completed_assignment(

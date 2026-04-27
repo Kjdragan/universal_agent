@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import argparse
-import json
-import os
-import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import json
+import os
 from pathlib import Path
+import sys
 from typing import Any, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode

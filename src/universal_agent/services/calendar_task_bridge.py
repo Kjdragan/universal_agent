@@ -27,12 +27,12 @@ Key behaviors:
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import hashlib
 import logging
 import os
 import re
 import sqlite3
-from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -436,7 +436,9 @@ class CalendarTaskBridge:
             duration = int((end_dt - start_dt).total_seconds() / 60)
 
         try:
-            from universal_agent.services.llm_classifier import generate_calendar_task_description
+            from universal_agent.services.llm_classifier import (
+                generate_calendar_task_description,
+            )
 
             desc_result = await generate_calendar_task_description(
                 title=title,
@@ -534,7 +536,7 @@ class CalendarTaskBridge:
         }
 
         try:
-            from universal_agent.task_hub import upsert_item, ensure_schema
+            from universal_agent.task_hub import ensure_schema, upsert_item
             ensure_schema(self._conn)
 
             item = {
@@ -746,7 +748,7 @@ class CalendarTaskBridge:
     ) -> dict[str, Any]:
         """Create or update a Task Hub entry for this calendar event."""
         try:
-            from universal_agent.task_hub import upsert_item, ensure_schema
+            from universal_agent.task_hub import ensure_schema, upsert_item
 
             ensure_schema(self._conn)
 

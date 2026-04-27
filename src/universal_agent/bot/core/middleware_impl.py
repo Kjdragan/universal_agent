@@ -1,9 +1,10 @@
 
 import logging
-from typing import Callable, Awaitable
+from typing import Awaitable, Callable
+
+from ..config import get_allowed_user_ids
 from .context import BotContext
 from .session import SessionStore
-from ..config import get_allowed_user_ids
 
 logger = logging.getLogger(__name__)
 

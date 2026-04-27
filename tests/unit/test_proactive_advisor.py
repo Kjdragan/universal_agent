@@ -5,8 +5,8 @@ Tests the deterministic morning report builder, brainstorm context assembly,
 and prompt formatting functions.
 """
 
+from datetime import datetime, timedelta, timezone
 import sqlite3
-from datetime import datetime, timezone, timedelta
 from unittest.mock import patch
 
 import pytest
@@ -14,12 +14,11 @@ import pytest
 from universal_agent import task_hub
 from universal_agent.services.proactive_advisor import (
     _parse_iso_age_hours,
-    build_morning_report,
-    format_morning_report_prompt,
     build_brainstorm_context,
+    build_morning_report,
     format_brainstorm_context_prompt,
+    format_morning_report_prompt,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

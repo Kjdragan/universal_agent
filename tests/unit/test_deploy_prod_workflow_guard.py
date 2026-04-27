@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 _DEPLOY_WORKFLOW = Path(".github/workflows/deploy.yml")
 _RUNTIME_HELPER = Path("scripts/deploy_validate_runtime.sh")
 _SYSTEMD_INSTALLER = Path("scripts/install_vps_systemd_units.sh")

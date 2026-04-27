@@ -11,10 +11,10 @@ Usage:
 """
 
 import asyncio
+from dataclasses import dataclass
 import os
 import sys
 from typing import Any, Optional
-from dataclasses import dataclass
 
 # Ensure src is in path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -86,8 +86,9 @@ def _composio_init_with_file_dir_result() -> TestResult:
         return TestResult("Composio Init (file dir)", False, "COMPOSIO_API_KEY not set")
     
     try:
-        from composio import Composio
         import tempfile
+
+        from composio import Composio
         
         with tempfile.TemporaryDirectory() as tmpdir:
             client = Composio(api_key=api_key, file_download_dir=tmpdir)
@@ -154,8 +155,9 @@ def _connected_accounts_list_result() -> TestResult:
 def _composio_init_signature_result() -> TestResult:
     """Test 9: Check Composio init parameters (provider pattern)."""
     try:
-        from composio import Composio
         import inspect
+
+        from composio import Composio
         
         sig = inspect.signature(Composio.__init__)
         params = list(sig.parameters.keys())
@@ -202,12 +204,12 @@ def _session_modifier_availability_result() -> TestResult:
     """Test 11: NEW - Check if session modifiers are available."""
     try:
         from composio.core.models._modifiers import (
-            schema_modifier,
-            before_execute_meta,
-            after_execute_meta,
-            SchemaModifier,
-            BeforeExecuteMeta,
             AfterExecuteMeta,
+            BeforeExecuteMeta,
+            SchemaModifier,
+            after_execute_meta,
+            before_execute_meta,
+            schema_modifier,
         )
         
         return TestResult(

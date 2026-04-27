@@ -1,7 +1,7 @@
 
 import os
-import sys
 from pathlib import Path
+import sys
 
 # Add src to path
 sys.path.append("/home/kjdragan/lrepos/universal_agent/src")

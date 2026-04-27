@@ -7,9 +7,9 @@ stealthy), converts results to Markdown, and moves files through the
 inbox pipeline (pending → processing → done/failed).
 """
 
-from .inbox_processor import InboxProcessor, run_inbox_processor
-from .fetcher_strategy import FetcherStrategy, FetcherLevel
 from .content_converter import page_to_markdown
+from .fetcher_strategy import FetcherLevel, FetcherStrategy
+from .inbox_processor import InboxProcessor, run_inbox_processor
 
 __all__ = [
     "InboxProcessor",

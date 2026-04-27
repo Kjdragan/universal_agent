@@ -16,13 +16,13 @@ Available scenes:
 - QueryMap
 - MultiHeadedAttention
 """
-from manimlib import *
-import numpy as np
-import re
 import itertools as it
 import random
+import re
 import warnings
 
+from manimlib import *
+import numpy as np
 
 # ============================================================
 # Helper Functions

@@ -13,22 +13,22 @@ Usage:
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import logging
 import os
-import sys
-from datetime import datetime, timezone
 from pathlib import Path
+import sys
 
 # Ensure csi_ingester package is importable
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from csi_ingester.store.sqlite import connect, ensure_schema
 from csi_ingester.store.source_manager import (
     auto_promote_demote,
     get_source_summary,
     record_quality_assessment,
 )
+from csi_ingester.store.sqlite import connect, ensure_schema
 
 logging.basicConfig(
     level=logging.INFO,

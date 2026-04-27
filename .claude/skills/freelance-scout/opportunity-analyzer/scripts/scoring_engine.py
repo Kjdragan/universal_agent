@@ -12,19 +12,23 @@ The engine is designed to be calibrated over time as we learn which factors
 actually predict successful engagements.
 """
 
-import os
-import sys
+from collections import Counter
+from datetime import datetime
 import json
 import logging
+import os
 import re
-from datetime import datetime
+import sys
 from typing import Optional
-from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from models import (
-    Opportunity, OpportunityStatus, ProjectType, ExperienceLevel,
-    DailyDigest, BudgetInfo
+    BudgetInfo,
+    DailyDigest,
+    ExperienceLevel,
+    Opportunity,
+    OpportunityStatus,
+    ProjectType,
 )
 
 logger = logging.getLogger("freelance_scout.scoring")

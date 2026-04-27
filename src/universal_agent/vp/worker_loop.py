@@ -1,19 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import json
 import logging
 import os
+from pathlib import Path
+import sqlite3
 import subprocess
 import time
-import uuid
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Optional
-
-import sqlite3
-
-from universal_agent.services.dag_governor import DagConcurrencyGovernor
+import uuid
 
 from universal_agent.durable.state import (
     acquire_vp_session_lease,
@@ -32,6 +29,7 @@ from universal_agent.feature_flags import (
     vp_max_concurrent_missions,
     vp_poll_interval_seconds,
 )
+from universal_agent.services.dag_governor import DagConcurrencyGovernor
 from universal_agent.vp.clients.base import VpClient
 from universal_agent.vp.clients.claude_code_client import ClaudeCodeClient
 from universal_agent.vp.clients.claude_generalist_client import ClaudeGeneralistClient
@@ -67,8 +65,8 @@ def _post_mission_push_pr_merge(*, workspace_root: str, mission_id: str) -> None
     commits but cannot push (sandbox blocks outbound HTTPS auth).
     """
     import re
-    import urllib.request
     import urllib.error
+    import urllib.request
 
     cwd = workspace_root
 
@@ -246,7 +244,9 @@ class VpWorkerLoop:
                 error_str = str(exc).lower()
                 is_rate_limit = "429" in error_str or "too many requests" in error_str or "overloaded" in error_str
                 if is_rate_limit:
-                    from universal_agent.services.capacity_governor import CapacityGovernor
+                    from universal_agent.services.capacity_governor import (
+                        CapacityGovernor,
+                    )
                     asyncio.ensure_future(
                         CapacityGovernor.get_instance().report_rate_limit(
                             f"vp_{self.vp_id}", error=exc
@@ -457,8 +457,13 @@ class VpWorkerLoop:
 
     def _register_proactive_pr_artifact(self, *, mission: sqlite3.Row, payload: dict[str, Any]) -> None:
         try:
-            from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
-            from universal_agent.services.proactive_codie import register_pr_artifact_from_text
+            from universal_agent.durable.db import (
+                connect_runtime_db,
+                get_activity_db_path,
+            )
+            from universal_agent.services.proactive_codie import (
+                register_pr_artifact_from_text,
+            )
 
             text = "\n".join(
                 [
@@ -654,7 +659,9 @@ class VpWorkerLoop:
                 payload = json.loads(payload_json)
                 execution_mode = str(payload.get("execution_mode") or "").strip().lower()
                 if execution_mode == "cli":
-                    from universal_agent.vp.clients.claude_cli_client import ClaudeCodeCLIClient
+                    from universal_agent.vp.clients.claude_cli_client import (
+                        ClaudeCodeCLIClient,
+                    )
                     logger.info(
                         "Mission %s using CLI execution mode (vp=%s)",
                         mission.get("mission_id", "?"), self.vp_id,

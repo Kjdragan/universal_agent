@@ -1,13 +1,12 @@
 """Unit tests for ExecutionRunService — run-per-task workspace isolation."""
 
 import os
+from pathlib import Path
 import sqlite3
 import tempfile
-from pathlib import Path
 from unittest import mock
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -42,7 +41,9 @@ def _isolate_env(tmp_path, monkeypatch):
 
 class TestAllocateExecutionRun:
     def test_creates_workspace_directory(self, tmp_path):
-        from universal_agent.services.execution_run_service import allocate_execution_run
+        from universal_agent.services.execution_run_service import (
+            allocate_execution_run,
+        )
 
         ctx = allocate_execution_run(
             task_id="test_task_1",
@@ -55,7 +56,9 @@ class TestAllocateExecutionRun:
         assert Path(ctx.workspace_dir).is_dir()
 
     def test_workspace_under_agent_run_workspaces(self, tmp_path):
-        from universal_agent.services.execution_run_service import allocate_execution_run
+        from universal_agent.services.execution_run_service import (
+            allocate_execution_run,
+        )
 
         ctx = allocate_execution_run(task_id="t1", origin="test")
 
@@ -65,9 +68,11 @@ class TestAllocateExecutionRun:
         )
 
     def test_registers_in_durable_catalog(self, tmp_path):
-        from universal_agent.services.execution_run_service import allocate_execution_run
         from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
         from universal_agent.durable.state import get_run
+        from universal_agent.services.execution_run_service import (
+            allocate_execution_run,
+        )
 
         ctx = allocate_execution_run(
             task_id="test_task_2",
@@ -85,9 +90,11 @@ class TestAllocateExecutionRun:
         assert row["status"] == "running"
 
     def test_creates_attempt_record(self, tmp_path):
-        from universal_agent.services.execution_run_service import allocate_execution_run
         from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
         from universal_agent.durable.state import list_run_attempts
+        from universal_agent.services.execution_run_service import (
+            allocate_execution_run,
+        )
 
         ctx = allocate_execution_run(
             task_id="test_task_3",
@@ -103,7 +110,9 @@ class TestAllocateExecutionRun:
         assert attempts[0]["attempt_id"] == ctx.attempt_id
 
     def test_unique_run_ids(self, tmp_path):
-        from universal_agent.services.execution_run_service import allocate_execution_run
+        from universal_agent.services.execution_run_service import (
+            allocate_execution_run,
+        )
 
         ctx1 = allocate_execution_run(task_id="t1", origin="test")
         ctx2 = allocate_execution_run(task_id="t2", origin="test")
@@ -112,7 +121,9 @@ class TestAllocateExecutionRun:
         assert ctx1.workspace_dir != ctx2.workspace_dir
 
     def test_context_fields_populated(self, tmp_path):
-        from universal_agent.services.execution_run_service import allocate_execution_run
+        from universal_agent.services.execution_run_service import (
+            allocate_execution_run,
+        )
 
         ctx = allocate_execution_run(
             task_id="t_field_test",

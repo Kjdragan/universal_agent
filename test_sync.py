@@ -1,9 +1,11 @@
+from datetime import datetime
+import json
 import os
 import sqlite3
-import json
-from datetime import datetime
+
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
 from universal_agent.services.proactive_convergence import get_topic_signature
+
 
 def test():
     csi_path = "csi.db"

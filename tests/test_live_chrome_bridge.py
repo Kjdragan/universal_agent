@@ -9,8 +9,8 @@ from __future__ import annotations
 import json
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
-import pytest
 
+import pytest
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -90,7 +90,10 @@ class TestChromeConnect:
 
     @pytest.mark.asyncio
     async def test_connect_success(self):
-        from universal_agent.tools.live_chrome_bridge import _chrome_connect_impl, _state
+        from universal_agent.tools.live_chrome_bridge import (
+            _chrome_connect_impl,
+            _state,
+        )
 
         mock_page = MagicMock()
         mock_page.title.return_value = "Test Page"
@@ -223,7 +226,10 @@ class TestChromeNavigate:
 
     @pytest.mark.asyncio
     async def test_navigate_success(self):
-        from universal_agent.tools.live_chrome_bridge import _chrome_navigate_impl, _state
+        from universal_agent.tools.live_chrome_bridge import (
+            _chrome_navigate_impl,
+            _state,
+        )
 
         mock_page = MagicMock()
         mock_page.goto = AsyncMock()
@@ -247,7 +253,10 @@ class TestChromeNavigate:
 
     @pytest.mark.asyncio
     async def test_navigate_no_url(self):
-        from universal_agent.tools.live_chrome_bridge import _chrome_navigate_impl, _state
+        from universal_agent.tools.live_chrome_bridge import (
+            _chrome_navigate_impl,
+            _state,
+        )
         _state["browser"] = MagicMock()
         _state["connected"] = True
 
@@ -256,7 +265,10 @@ class TestChromeNavigate:
 
     @pytest.mark.asyncio
     async def test_navigate_bad_tab_index(self):
-        from universal_agent.tools.live_chrome_bridge import _chrome_navigate_impl, _state
+        from universal_agent.tools.live_chrome_bridge import (
+            _chrome_navigate_impl,
+            _state,
+        )
 
         mock_context = MagicMock()
         mock_context.pages = []
@@ -349,7 +361,10 @@ class TestChromeEvaluate:
 
     @pytest.mark.asyncio
     async def test_evaluate_returns_result(self):
-        from universal_agent.tools.live_chrome_bridge import _chrome_evaluate_impl, _state
+        from universal_agent.tools.live_chrome_bridge import (
+            _chrome_evaluate_impl,
+            _state,
+        )
 
         mock_page = MagicMock()
         mock_page.evaluate = AsyncMock(return_value={"users": 42})
@@ -369,7 +384,10 @@ class TestChromeEvaluate:
 
     @pytest.mark.asyncio
     async def test_evaluate_no_expression(self):
-        from universal_agent.tools.live_chrome_bridge import _chrome_evaluate_impl, _state
+        from universal_agent.tools.live_chrome_bridge import (
+            _chrome_evaluate_impl,
+            _state,
+        )
         _state["browser"] = MagicMock()
         _state["connected"] = True
 
@@ -386,7 +404,10 @@ class TestChromeSnapshot:
 
     @pytest.mark.asyncio
     async def test_snapshot_returns_tree(self):
-        from universal_agent.tools.live_chrome_bridge import _chrome_snapshot_impl, _state
+        from universal_agent.tools.live_chrome_bridge import (
+            _chrome_snapshot_impl,
+            _state,
+        )
 
         mock_accessibility = MagicMock()
         mock_accessibility.snapshot = AsyncMock(return_value={"role": "document", "children": []})

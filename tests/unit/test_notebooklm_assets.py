@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import re
 from pathlib import Path
+import re
 
 from universal_agent import prompt_assets
-
 
 SKILL_PATH = Path(".claude/skills/notebooklm-orchestration/SKILL.md")
 AGENT_PATH = Path(".claude/agents/notebooklm-operator.md")

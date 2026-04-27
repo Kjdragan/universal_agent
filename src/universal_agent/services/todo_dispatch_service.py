@@ -1,14 +1,17 @@
 import asyncio
+from datetime import datetime, timezone
 import json
 import logging
 import os
 import time
-from datetime import datetime, timezone
-from typing import Optional, Dict, Any, Callable, Awaitable
+from typing import Any, Awaitable, Callable, Dict, Optional
 
-from universal_agent.gateway import GatewaySession, GatewayRequest
 from universal_agent.codebase_policy import approved_codebase_roots_from_env
-from universal_agent.services.routing_markers import CODE_WORKFLOW_RE, RESEARCH_WORKFLOW_RE
+from universal_agent.gateway import GatewayRequest, GatewaySession
+from universal_agent.services.routing_markers import (
+    CODE_WORKFLOW_RE,
+    RESEARCH_WORKFLOW_RE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +80,11 @@ def _vp_active_counts(active_assignments: list[dict[str, Any]] | None) -> tuple[
 def _available_agents_for_llm_routing(
     active_assignments: list[dict[str, Any]] | None,
 ) -> frozenset[str]:
-    from universal_agent.services.agent_router import AGENT_CODER, AGENT_GENERAL, AGENT_SIMONE
+    from universal_agent.services.agent_router import (
+        AGENT_CODER,
+        AGENT_GENERAL,
+        AGENT_SIMONE,
+    )
 
     active_coder, active_general = _vp_active_counts(active_assignments)
     max_coder = _env_positive_int("UA_MAX_CONCURRENT_VP_CODER", 1)
@@ -525,11 +532,15 @@ class ToDoDispatchService:
                 await asyncio.sleep(5)
 
     async def _process_session(self, session: GatewaySession):
-        from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
-        from universal_agent.services.dispatch_service import dispatch_sweep
-        from universal_agent.services.capacity_governor import CapacityGovernor, capacity_snapshot
-        from universal_agent import task_hub
         import traceback
+
+        from universal_agent import task_hub
+        from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+        from universal_agent.services.capacity_governor import (
+            CapacityGovernor,
+            capacity_snapshot,
+        )
+        from universal_agent.services.dispatch_service import dispatch_sweep
 
         claimed_assignment_ids: list[str] = []
         activity_db_path = get_activity_db_path()

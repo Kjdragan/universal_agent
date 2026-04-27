@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 _SIDEBAR = Path("web-ui/components/dashboard/GlobalSidebar.tsx")
 
 

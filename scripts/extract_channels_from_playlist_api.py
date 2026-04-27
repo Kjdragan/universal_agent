@@ -10,12 +10,13 @@ Requirements: YOUTUBE_DATA_API_KEY in .env
 
 import asyncio
 import csv
+from dataclasses import asdict, dataclass
 import json
 import os
-import sys
-from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import List, Dict
+import sys
+from typing import Dict, List
+
 from dotenv import load_dotenv
 import httpx
 

@@ -9,17 +9,15 @@ re-supplying local transcript.
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import json
 import os
-import uuid
-from dataclasses import dataclass
 from typing import Optional
+import uuid
 
 import anyio
-
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
 from claude_agent_sdk.types import AssistantMessage, ResultMessage, TextBlock
-
 
 DEFAULT_STATE_PATH = os.path.join(
     "AGENT_RUN_WORKSPACES", "session_continuity_probe_state.json"

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Tests for batch_resize.py"""
 
-import sys
 from pathlib import Path
+import sys
 from unittest.mock import MagicMock, call, patch
 
 import pytest

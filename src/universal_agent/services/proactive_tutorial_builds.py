@@ -5,12 +5,16 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import sqlite3
 from pathlib import Path
+import sqlite3
 from typing import Any
 
+from universal_agent.services.proactive_artifacts import (
+    ARTIFACT_STATUS_CANDIDATE,
+    make_artifact_id,
+    upsert_artifact,
+)
 from universal_agent.services.proactive_task_builder import queue_proactive_task
-from universal_agent.services.proactive_artifacts import ARTIFACT_STATUS_CANDIDATE, make_artifact_id, upsert_artifact
 
 
 def queue_tutorial_build_task(
@@ -252,7 +256,9 @@ def _build_task_description(
 
 def _preference_context(conn: sqlite3.Connection, *, task_type: str, topic_tags: list[str]) -> str:
     try:
-        from universal_agent.services.proactive_preferences import get_delegation_context
+        from universal_agent.services.proactive_preferences import (
+            get_delegation_context,
+        )
 
         return get_delegation_context(conn, task_type=task_type, topic_tags=topic_tags)
     except Exception:

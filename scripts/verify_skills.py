@@ -1,9 +1,12 @@
 
+from datetime import datetime
 import os
 import sys
+
 import yaml
-from datetime import datetime
+
 from universal_agent.prompt_assets import discover_skills
+
 
 def main():
     print("🚀 Verifying Skills & Generating Capabilities...")

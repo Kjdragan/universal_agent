@@ -6,7 +6,6 @@ import subprocess
 import sys
 from typing import Optional
 
-
 RUN_ID_RE = re.compile(r"Run ID:\s*([a-f0-9-]+)", re.IGNORECASE)
 RESUME_CMD_RE = re.compile(r"Resume Command:\s*(.+)")
 

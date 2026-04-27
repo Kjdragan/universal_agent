@@ -7,7 +7,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from universal_agent.services.youtube_playlist_watcher import YouTubePlaylistWatcher, _state_path
+from universal_agent.services.youtube_playlist_watcher import (
+    YouTubePlaylistWatcher,
+    _state_path,
+)
 
 
 @pytest.mark.asyncio

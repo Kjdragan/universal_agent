@@ -23,10 +23,10 @@ human-readable notification messages for Simone's investigation.
 
 from __future__ import annotations
 
-import logging
-import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import logging
+import sqlite3
 
 logger = logging.getLogger(__name__)
 

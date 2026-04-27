@@ -15,13 +15,14 @@ Output:
 Part of the discord_intelligence subsystem for Universal Agent.
 """
 
-import discord
-import json
+import asyncio
 import csv
 from datetime import datetime
-import asyncio
+import json
 import os
 import sys
+
+import discord
 
 # discord.py-self does not require intents for user accounts
 client = discord.Client()

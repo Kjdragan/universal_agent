@@ -1,6 +1,9 @@
 from pathlib import Path
 
-from universal_agent.utils.task_guardrails import normalize_task_name, resolve_best_task_match
+from universal_agent.utils.task_guardrails import (
+    normalize_task_name,
+    resolve_best_task_match,
+)
 
 
 def test_normalize_task_name_snake_case():

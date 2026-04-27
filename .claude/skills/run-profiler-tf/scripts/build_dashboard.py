@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Build markdown performance dashboard from profiler_data.json."""
+from collections import Counter
 import json
 import os
-from collections import Counter
 
 WORKSPACE = "/opt/universal_agent/AGENT_RUN_WORKSPACES/session_20260421_123445_747eb265"
 DATA_PATH = os.path.join(WORKSPACE, "work_products/profiler_data.json")

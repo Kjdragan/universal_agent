@@ -10,18 +10,18 @@ Evaluates whether tasks are complete using multiple strategies:
 
 from __future__ import annotations
 
-import json
-import os
-import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+import json
+import os
 from pathlib import Path
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from .state import Task, Artifact, CompletionConfidence, ArtifactType
-from .evaluation_policy import resolve_evaluation_policy, get_policy_summary
+from .evaluation_policy import get_policy_summary, resolve_evaluation_policy
+from .state import Artifact, ArtifactType, CompletionConfidence, Task
 from universal_agent.utils.model_resolution import resolve_sonnet
 
 
@@ -272,6 +272,7 @@ class LLMJudgeEvaluator(Evaluator):
                 
                 # FALLBACK: Create a fresh client from env vars (Safest fallback)
                 import os
+
                 from anthropic import AsyncAnthropic
                 api_key = os.getenv("ANTHROPIC_AUTH_TOKEN") or os.getenv("ZAI_API_KEY")
                 if not api_key:

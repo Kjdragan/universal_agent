@@ -1,20 +1,21 @@
 import asyncio
-import os
-import logging
 from datetime import datetime
+import logging
+import os
+
 import discord
 from discord.ext import tasks
 
-from .config import init_secrets, get_discord_token, get_db_path, CONFIG
+from .audio_cleanup import AudioCleanup
+from .audio_recorder import AudioRecorder
+from .config import CONFIG, get_db_path, get_discord_token, init_secrets
 from .database import DiscordIntelligenceDB
-from .signals import detect_signals
-from .triage import run_triage_batch
 from .integration.simone_alerts import send_simone_alert
 from .integration.task_hub import create_task_hub_mission
-from .audio_recorder import AudioRecorder
-from .transcriber import Transcriber
-from .audio_cleanup import AudioCleanup
 from .relevance_filter import run_relevance_sweep
+from .signals import detect_signals
+from .transcriber import Transcriber
+from .triage import run_triage_batch
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("discord_daemon")
@@ -42,6 +43,7 @@ SEND_SIMONE_ALERTS = str(os.getenv("UA_DISCORD_SEND_SIMONE_ALERTS", "0")).strip(
 
 # Base recordings directory (relative to discord_intelligence package)
 import pathlib
+
 RECORDINGS_DIR = str(pathlib.Path(__file__).resolve().parent / "recordings")
 
 

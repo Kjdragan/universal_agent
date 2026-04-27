@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 from pathlib import Path
+import re
 from typing import Any
 
 API_URL_DEFAULT = "https://app.infisical.com"

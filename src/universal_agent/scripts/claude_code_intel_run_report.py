@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from dataclasses import replace
 import json
 import logging
 import os
-import sqlite3
-from dataclasses import replace
 from pathlib import Path
+import sqlite3
 from typing import Any
 
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
@@ -20,12 +20,15 @@ from universal_agent.services.claude_code_intel_operator_report import (
     build_operator_email,
     build_operator_report,
 )
-from universal_agent.services.claude_code_intel_rollup import build_rolling_assets
 from universal_agent.services.claude_code_intel_replay import (
     ClaudeCodeIntelReplayConfig,
     replay_packet,
 )
-from universal_agent.services.proactive_artifacts import record_email_delivery, upsert_artifact
+from universal_agent.services.claude_code_intel_rollup import build_rolling_assets
+from universal_agent.services.proactive_artifacts import (
+    record_email_delivery,
+    upsert_artifact,
+)
 
 logger = logging.getLogger(__name__)
 

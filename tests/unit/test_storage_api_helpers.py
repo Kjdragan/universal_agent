@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+import pytest
 
 from universal_agent.api import server as api_server
 from universal_agent.durable.db import connect_runtime_db

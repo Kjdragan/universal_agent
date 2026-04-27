@@ -16,8 +16,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 from pathlib import Path
+import sys
 
 SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 if str(SCRIPT_ROOT) not in sys.path:
@@ -65,7 +65,12 @@ def _load_updates(*, raw_json: str, json_file: str, env_var: str) -> dict[str, s
 
 
 def _build_client(*, client_id: str, client_secret: str, api_url: str):
-    from infisical_client import AuthenticationOptions, ClientSettings, InfisicalClient, UniversalAuthMethod
+    from infisical_client import (
+        AuthenticationOptions,
+        ClientSettings,
+        InfisicalClient,
+        UniversalAuthMethod,
+    )
 
     settings = ClientSettings(
         auth=AuthenticationOptions(

@@ -1,6 +1,8 @@
 import asyncio
+
 from claude_agent_sdk.client import ClaudeSDKClient
 from claude_agent_sdk.types import AssistantMessage, TextBlock
+
 
 async def main():
     async with ClaudeSDKClient() as client:

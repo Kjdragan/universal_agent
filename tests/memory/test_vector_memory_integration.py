@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import shutil
 import tempfile
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-import universal_agent.memory.memory_store as memory_store
 from universal_agent.memory.memory_models import MemoryEntry
+import universal_agent.memory.memory_store as memory_store
 from universal_agent.memory.memory_store import append_memory_entry
 from universal_agent.memory.orchestrator import MemoryOrchestrator
 

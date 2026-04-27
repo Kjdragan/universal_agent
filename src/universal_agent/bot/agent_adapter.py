@@ -1,25 +1,27 @@
-import os
-import sys
 import asyncio
-import uuid
-import logging
-from pathlib import Path
-from typing import Optional, Any, AsyncIterator
 from dataclasses import dataclass
+import logging
+import os
+from pathlib import Path
+import sys
+from typing import Any, AsyncIterator, Optional
+import uuid
+
 from .config import UA_GATEWAY_URL, UA_TELEGRAM_ALLOW_INPROCESS
+from universal_agent.agent_core import AgentEvent, EventType, UniversalAgent
+from universal_agent.gateway import (
+    ExternalGateway,
+    Gateway,
+    GatewayRequest,
+    GatewaySession,
+    InProcessGateway,
+)
+from universal_agent.session_checkpoint import SessionCheckpointGenerator
+
 # UA_GATEWAY_URL is the canonical production path (ExternalGateway).
 # InProcessGateway is for local-dev only and does not go through
 # the gateway server's session store.
 from universal_agent.timeout_policy import telegram_task_timeout_seconds
-from universal_agent.gateway import (
-    Gateway, 
-    InProcessGateway, 
-    ExternalGateway, 
-    GatewayRequest, 
-    GatewaySession
-)
-from universal_agent.agent_core import AgentEvent, EventType, UniversalAgent
-from universal_agent.session_checkpoint import SessionCheckpointGenerator
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -79,8 +81,8 @@ class AgentAdapter:
             # [Heartbeat Integration]
             from universal_agent.feature_flags import heartbeat_enabled
             if heartbeat_enabled():
-                from universal_agent.heartbeat_service import HeartbeatService
                 from .heartbeat_adapter import BotConnectionAdapter
+                from universal_agent.heartbeat_service import HeartbeatService
                 
                 # Check if we have the send callback
                 if not hasattr(self, 'send_message_callback'):

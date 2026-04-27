@@ -11,13 +11,13 @@ assignments.  It is called from the post-action hook in
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import logging
 import os
 import sqlite3
-import uuid
-from datetime import datetime, timezone
 from typing import Any, Optional
+import uuid
 
 logger = logging.getLogger(__name__)
 

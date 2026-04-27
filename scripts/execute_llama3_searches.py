@@ -4,17 +4,17 @@ Execute comprehensive web searches for Llama-3 70B fine-tuning research.
 Uses MCP COMPOSIO_SEARCH_WEB tool via direct imports.
 """
 
-import json
 import asyncio
-import sys
-from pathlib import Path
 from datetime import datetime
+import json
+from pathlib import Path
+import sys
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 try:
-    from composio import ComposioToolSet, Action
+    from composio import Action, ComposioToolSet
     print("Successfully imported Composio tools")
 except ImportError as e:
     print(f"Failed to import Composio: {e}")

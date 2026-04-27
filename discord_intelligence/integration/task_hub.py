@@ -5,14 +5,13 @@ async functions (for approval/rejection actions that need concurrency safety).
 """
 
 import logging
-import uuid
 from typing import Any
-
-from universal_agent import task_hub
-from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+import uuid
 
 from ..config import init_secrets
 from . import gateway_client
+from universal_agent import task_hub
+from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
 
 logger = logging.getLogger(__name__)
 

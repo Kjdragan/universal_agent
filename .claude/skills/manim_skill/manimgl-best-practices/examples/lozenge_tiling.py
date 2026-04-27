@@ -2,8 +2,9 @@
 Visualization of lozenge (rhombus) tiling patterns.
 Shows how lozenges can tile the plane in a honeycomb-like pattern.
 """
-from manimlib import *
 import math
+
+from manimlib import *
 
 
 def get_lozenge(side_length=1):

@@ -15,14 +15,15 @@ Features:
 
 import argparse
 import asyncio
+from dataclasses import dataclass
 import os
+from pathlib import Path
 import re
 import time
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
+
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 import httpx

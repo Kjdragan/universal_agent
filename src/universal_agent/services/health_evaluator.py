@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 import litellm
+
 from universal_agent.utils.model_resolution import resolve_sonnet
 
 logger = logging.getLogger(__name__)

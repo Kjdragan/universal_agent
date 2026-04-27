@@ -2,13 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-import pytest
-
 from csi_ingester.adapters.threads_api import (
     ThreadsAPIClient,
     ThreadsQuotaBudgetManager,
     ThreadsTokenManager,
 )
+import pytest
 
 
 def test_threads_quota_budget_blocks_after_limit() -> None:

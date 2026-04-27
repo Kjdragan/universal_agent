@@ -19,8 +19,14 @@ from universal_agent.memory.memory_index import (
     search_entries,
 )
 from universal_agent.memory.memory_models import MemoryEntry
-from universal_agent.memory.memory_store import append_memory_entry, ensure_memory_scaffold
-from universal_agent.memory.memory_vector_index import schedule_vector_upsert, search_vectors
+from universal_agent.memory.memory_store import (
+    append_memory_entry,
+    ensure_memory_scaffold,
+)
+from universal_agent.memory.memory_vector_index import (
+    schedule_vector_upsert,
+    search_vectors,
+)
 
 
 class UAFileMemoryAdapter(MemoryAdapter):

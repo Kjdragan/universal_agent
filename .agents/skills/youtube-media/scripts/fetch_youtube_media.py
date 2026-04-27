@@ -6,6 +6,7 @@ import subprocess
 import sys
 from typing import List
 
+
 def strip_proxies(env_dict: dict) -> dict:
     """
     Remove all known proxy-related environment variables to guarantee

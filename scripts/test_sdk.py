@@ -1,7 +1,8 @@
 import base64
-from agentmail import AgentMail
 import os
 import sys
+
+from agentmail import AgentMail
 
 size_mb = int(sys.argv[1])
 client = AgentMail(api_key=os.getenv("AGENTMAIL_API_KEY", "").strip())

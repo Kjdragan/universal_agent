@@ -23,7 +23,6 @@ import tempfile
 
 from google.cloud import texttospeech
 
-
 # ── Defaults ────────────────────────────────────────────────────────────────
 DEFAULT_VOICE = "Aoede"
 DEFAULT_MODEL = "gemini-3.1-flash-tts-preview"

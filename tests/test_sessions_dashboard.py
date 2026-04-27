@@ -1,6 +1,10 @@
 """Unit tests for Sessions Dashboard UX Overhaul — backend components."""
-import sys, os, json, tempfile, shutil
+import json
+import os
 from pathlib import Path
+import shutil
+import sys
+import tempfile
 
 # Ensure the source is importable
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))

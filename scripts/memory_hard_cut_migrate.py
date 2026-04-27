@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import argparse
-import json
-import os
-import tarfile
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+import json
+import os
 from pathlib import Path
-from typing import Any
 import sys
+import tarfile
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"

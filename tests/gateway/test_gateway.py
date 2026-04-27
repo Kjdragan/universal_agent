@@ -13,15 +13,16 @@ Actual API (from gateway.py):
 - InProcessGateway: create_session, resume_session, execute, run_query, list_sessions
 """
 
-import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from universal_agent.gateway import (
-    InProcessGateway,
-    GatewaySession,
     GatewayRequest,
     GatewayResult,
+    GatewaySession,
+    InProcessGateway,
 )
 
 

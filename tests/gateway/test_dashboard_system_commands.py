@@ -4,8 +4,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from universal_agent import gateway_server
-from universal_agent import task_hub
+from universal_agent import gateway_server, task_hub
+
+
 class _CronStub:
     def __init__(self):
         self.running_jobs: set[str] = set()

@@ -7,11 +7,11 @@ inventory with feedback and delivery lifecycle.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import hashlib
 import json
 import re
 import sqlite3
-from datetime import datetime, timezone
 from typing import Any, Optional
 
 ARTIFACT_STATUS_PRODUCED = "produced"

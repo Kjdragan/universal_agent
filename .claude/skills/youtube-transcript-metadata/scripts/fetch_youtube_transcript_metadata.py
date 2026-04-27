@@ -11,11 +11,11 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
-import re
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import re
 from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse
 
@@ -447,8 +447,8 @@ def write_text(path: str, text: str) -> None:
 
 def self_test() -> int:
     try:
-        import yt_dlp  # noqa: F401
         from youtube_transcript_api import YouTubeTranscriptApi  # noqa: F401
+        import yt_dlp  # noqa: F401
     except Exception as exc:
         print(f"SELF_TEST_FAIL: {exc}")
         return 1

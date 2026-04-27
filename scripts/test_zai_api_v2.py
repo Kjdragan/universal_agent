@@ -11,10 +11,11 @@ Strategies tested:
 
 import asyncio
 import os
-import time
 from pathlib import Path
+import time
 
 from dotenv import load_dotenv
+
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 import httpx

@@ -6,16 +6,15 @@ This script evaluates MCP servers by running test questions against them using C
 import argparse
 import asyncio
 import json
+from pathlib import Path
 import re
 import sys
 import time
 import traceback
-import xml.etree.ElementTree as ET
-from pathlib import Path
 from typing import Any
+import xml.etree.ElementTree as ET
 
 from anthropic import Anthropic
-
 from connections import create_connection
 
 EVALUATION_PROMPT = """You are an AI assistant with access to tools.

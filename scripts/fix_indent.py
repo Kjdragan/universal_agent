@@ -2,6 +2,7 @@
 import os
 import re
 
+
 def fix_indentation(filepath):
     print(f"Processing {filepath}...")
     with open(filepath, 'r') as f:

@@ -7,16 +7,18 @@
 
 import argparse
 import base64
+from datetime import datetime
 import os
 import time
-from datetime import datetime
+
 from google import genai
 from google.genai.errors import APIError
 
+
 def main():
     try:
-        import sys
         from pathlib import Path
+        import sys
         repo_root = Path(__file__).resolve().parent.parent.parent.parent.parent
         sys.path.append(str(repo_root / "src"))
         from universal_agent import infisical_loader

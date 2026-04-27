@@ -5,22 +5,18 @@ Uses MockAgentAdapter to simulate agent execution without LLM calls.
 """
 
 import asyncio
+import json
+import os
+from pathlib import Path
 import shutil
 import sys
-import os
-import json
-from pathlib import Path
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from universal_agent.urw import (
-    URWConfig,
-    URWOrchestrator,
-    MockAgentAdapter,
-    TaskStatus
-)
+from universal_agent.urw import MockAgentAdapter, TaskStatus, URWConfig, URWOrchestrator
 from universal_agent.urw.decomposer import HybridDecomposer, Task
+
 
 # Mock LLM Client for Decomposer/Evaluator
 class MockLLMClient:
@@ -125,5 +121,6 @@ async def test_phase_execution():
     # shutil.rmtree(workspace)
 
 import json
+
 if __name__ == "__main__":
     asyncio.run(test_phase_execution())

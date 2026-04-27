@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 import logging
-import sqlite3
-from dataclasses import replace
 from pathlib import Path
+import sqlite3
 
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
 from universal_agent.infisical_loader import initialize_runtime_secrets

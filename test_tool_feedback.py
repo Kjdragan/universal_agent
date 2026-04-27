@@ -1,8 +1,8 @@
+import asyncio
 import json
 import os
-import sys
-import asyncio
 from pathlib import Path
+import sys
 
 # Add src to sys.path
 src_dir = os.path.dirname(os.path.abspath(__file__)) + "/src"
@@ -10,6 +10,7 @@ sys.path.insert(0, src_dir)
 
 # Mock _resolve_workspace
 import mcp_server
+
 os.environ["CURRENT_SESSION_WORKSPACE"] = "/tmp/ua_test_workspace"
 workspace = "/tmp/ua_test_workspace"
 os.makedirs(workspace, exist_ok=True)

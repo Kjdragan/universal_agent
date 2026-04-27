@@ -9,11 +9,11 @@ Adapted from Claude SDK AskUserQuestion pattern.
 
 import json
 from typing import Any
+
 from rich.console import Console
 from rich.panel import Panel
-from rich.prompt import Prompt, Confirm
+from rich.prompt import Confirm, Prompt
 from rich.table import Table
-
 
 console = Console()
 

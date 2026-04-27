@@ -1,5 +1,8 @@
 
-from universal_agent.tools.internal_registry import get_internal_tool_slugs, get_all_internal_tools
+from universal_agent.tools.internal_registry import (
+    get_all_internal_tools,
+    get_internal_tool_slugs,
+)
 
 print("--- Slugs ---")
 slugs = get_internal_tool_slugs(enable_memory=True)

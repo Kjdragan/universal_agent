@@ -1,8 +1,8 @@
 """Utility functions for testing markdown skill files."""
-import re
-import tempfile
-import subprocess
 from pathlib import Path
+import re
+import subprocess
+import tempfile
 
 
 def extract_python_code_blocks(markdown_content):

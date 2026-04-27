@@ -14,20 +14,19 @@ Run:
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
+from datetime import datetime, timezone
 import hashlib
+from html.parser import HTMLParser
 import json
 import os
+from pathlib import Path
 import random
 import re
 import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from html.parser import HTMLParser
-from pathlib import Path
-
 
 BASE = "https://www.visualcapitalist.com"
 ROBOTS = urllib.parse.urljoin(BASE, "/robots.txt")

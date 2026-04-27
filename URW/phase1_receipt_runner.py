@@ -6,13 +6,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
-import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import uuid
 
 from anthropic import Anthropic
 
-from universal_agent.urw import URWConfig, URWOrchestrator, UniversalAgentAdapter
+from universal_agent.urw import UniversalAgentAdapter, URWConfig, URWOrchestrator
 from universal_agent.urw.decomposer import Decomposer
 from universal_agent.urw.state import Task, TaskStatus
 

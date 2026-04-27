@@ -4,16 +4,15 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
+from datetime import datetime, timezone
 import json
 import logging
+from pathlib import Path
 import re
 import shutil
 import sys
 import time
-from collections import Counter
-from datetime import datetime, timezone
-from pathlib import Path
-
 
 TIER_RE = re.compile(r"^- \*\*Fetcher tier\*\*: (.+)$", re.MULTILINE)
 STATUS_RE = re.compile(r"^- \*\*HTTP Status\*\*: (.+)$", re.MULTILINE)

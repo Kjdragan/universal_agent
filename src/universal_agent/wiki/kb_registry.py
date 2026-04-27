@@ -11,6 +11,7 @@ from typing import Any
 from universal_agent.artifacts import resolve_artifacts_dir
 from universal_agent.wiki.core import _now_iso
 
+
 def get_registry_path() -> Path:
     registry_dir = Path(resolve_artifacts_dir()) / "knowledge-bases"
     registry_dir.mkdir(parents=True, exist_ok=True)
