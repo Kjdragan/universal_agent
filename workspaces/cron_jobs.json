@@ -89,6 +89,24 @@
       "last_run_at": null,
       "next_run_at": null,
       "metadata": {"description": "Afternoon proactive intelligence report — pipeline stats + LLM analysis"}
+    },
+    {
+      "job_id": "proactive_artifact_digest",
+      "user_id": "system",
+      "workspace_dir": "/home/kjdragan/lrepos/universal_agent/workspaces/cron_proactive_digest",
+      "command": "!script universal_agent.scripts.proactive_digest_agent",
+      "every_seconds": 0,
+      "cron_expr": "0 8 * * *",
+      "timezone": "America/Chicago",
+      "run_at": null,
+      "delete_after_run": false,
+      "model": null,
+      "timeout_seconds": 300,
+      "enabled": true,
+      "created_at": 1776175852.3359642,
+      "last_run_at": null,
+      "next_run_at": null,
+      "metadata": {"description": "Daily proactive artifact digest — surfaces unseen CODIE PRs, tutorial builds, and convergence insights via email"}
     }
   ]
 }

@@ -19,9 +19,9 @@ RestartSec=5
 # MemoryMax: hard cgroup limit (systemd kills cgroup if exceeded).
 # MemoryHigh: soft limit (triggers kernel memory reclaim/swap pressure).
 # TasksMax: caps total process count within the cgroup.
-MemoryMax=6G
-MemoryHigh=5G
-TasksMax=150
+MemoryMax=8G
+MemoryHigh=6G
+TasksMax=500
 
 [Install]
 WantedBy=multi-user.target

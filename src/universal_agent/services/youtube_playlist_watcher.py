@@ -640,6 +640,9 @@ class YouTubePlaylistWatcher:
                                 "video_id": video_id,
                                 "url": f"https://www.youtube.com/watch?v={video_id}",
                                 "title": str(snippet.get("title") or ""),
+                                "description": str(
+                                    snippet.get("description") or ""
+                                ),
                                 "channel_id": str(
                                     snippet.get("videoOwnerChannelId")
                                     or snippet.get("channelId")
@@ -712,12 +715,14 @@ class YouTubePlaylistWatcher:
             item.get("channel_id"),
             item.get("url"),
             item.get("playlist_id"),
+            item.get("description"),
         )
         payload = {
             "video_url": item.get("url", f"https://www.youtube.com/watch?v={item['video_id']}"),
             "video_id": item.get("video_id", ""),
             "channel_id": item.get("channel_id", ""),
             "title": item.get("title", ""),
+            "description": item.get("description", ""),
             "mode": mode,
             "allow_degraded_transcript_only": True,
             "source": "yt_playlist_watcher",

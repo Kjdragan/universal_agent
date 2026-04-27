@@ -174,8 +174,61 @@ PY
 
 Carry key fields from `youtube_ingest.json` into:
 
-- `manifest.json`: `title`, `channel`, `duration`, `upload_date`, `metadata_status`, `metadata_source`
+- `manifest.json`: `title`, `channel`, `duration`, `upload_date`, `description`, `metadata_status`, `metadata_source`
 - `README.md`: context block at the top (URL, title, channel, duration, upload date)
+
+### Step 3e — Description link analysis (MANDATORY when description exists)
+
+The video description often contains links to source code repositories, datasets, competition pages,
+and documentation that are **essential context** for building high-quality tutorials.
+
+1. Read `metadata.description` from `youtube_ingest.json`
+2. If the description is non-empty, extract all URLs using regex or url-parsing
+3. Classify each URL into one of these categories:
+   - `github_repo` — GitHub/GitLab repository links
+   - `kaggle_competition` or `kaggle_dataset` — Kaggle competition or dataset pages
+   - `documentation` — Official documentation links (readthedocs, docs sites)
+   - `dataset` — Data download links (CSV, Hugging Face, etc.)
+   - `social` — Social media, promotional, or affiliate links (discard)
+   - `other` — Unclassified but potentially useful
+4. For high-value links (github_repo, kaggle_*, documentation, dataset), fetch their content:
+
+> [!IMPORTANT]
+> **Proxy rule:** Fetch external description links using **direct connections only**.
+> Do NOT route these through the Webshare residential proxy.
+> The proxy is ONLY for YouTube API calls (transcript + yt-dlp metadata).
+
+   - **GitHub repos:** Fetch README.md and file tree (do not clone entire repo)
+   - **Kaggle:** Fetch competition description and dataset info page
+   - **Documentation:** Use `defuddle` or `read_url_content` for clean markdown extraction
+   - **Datasets:** Note the download URL; do not download large files
+5. Save fetched content to `$CURRENT_RUN_WORKSPACE/work_products/description_resources/`
+6. Record each link and its fetch status in the manifest:
+
+```json
+{
+  "description_links": [
+    {
+      "url": "https://github.com/user/repo",
+      "type": "github_repo",
+      "fetched": true,
+      "resource_path": "work_products/description_resources/repo_readme.md"
+    },
+    {
+      "url": "https://www.kaggle.com/competitions/...",
+      "type": "kaggle_competition",
+      "fetched": true,
+      "resource_path": "work_products/description_resources/kaggle_page.md"
+    }
+  ]
+}
+```
+
+7. Use fetched resources as supplementary context during CONCEPT.md and IMPLEMENTATION.md synthesis (Step 5)
+8. Cap at **5 high-value links** to avoid excessive fetching
+9. Set a **10-second timeout** per link fetch; record failures rather than blocking the pipeline
+
+**If description is empty or contains no useful links:** Skip this step and continue to Step 4.
 
 ### Step 4 — Visual analysis (best-effort)
 
@@ -254,11 +307,15 @@ full schema. Required fields:
   "video_url": "...",
   "video_id": "...",
   "source": "manual | composio | direct",
-  "metadata": { "title": "...", "channel": "...", "duration": 0, "upload_date": "...", "metadata_status": "...", "metadata_source": "yt_dlp" },
+  "metadata": { "title": "...", "channel": "...", "duration": 0, "upload_date": "...", "description": "...", "metadata_status": "...", "metadata_source": "yt_dlp" },
+  "description_links": [
+    { "url": "...", "type": "github_repo | kaggle_competition | documentation | dataset | other", "fetched": true, "resource_path": "..." }
+  ],
   "extraction": {
     "transcript": "attempted_succeeded | attempted_failed | not_attempted",
     "metadata": "attempted_succeeded | attempted_failed | not_attempted",
-    "visual": "attempted_succeeded | attempted_failed | not_attempted"
+    "visual": "attempted_succeeded | attempted_failed | not_attempted",
+    "description_links": "attempted_succeeded | attempted_failed | not_attempted | skipped_no_links"
   },
   "outputs": { "CONCEPT.md": "...", "IMPLEMENTATION.md": "...", "manifest.json": "..." },
   "retention": { "transcript.txt": "temp", "transcript.clean.txt": "temp" },

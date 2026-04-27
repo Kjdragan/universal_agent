@@ -60,13 +60,23 @@ Set `manifest.json.learning_mode` to one of:
     "channel": "string|null",
     "duration": "number|null",
     "upload_date": "string|null",
+    "description": "string|null",
     "metadata_status": "attempted_succeeded|attempted_failed|not_attempted",
     "metadata_source": "yt_dlp|other"
   },
+  "description_links": [
+    {
+      "url": "string",
+      "type": "github_repo|kaggle_competition|kaggle_dataset|documentation|dataset|other",
+      "fetched": "boolean",
+      "resource_path": "string|null"
+    }
+  ],
   "extraction": {
     "transcript": "attempted_succeeded|attempted_failed|not_attempted",
     "metadata": "attempted_succeeded|attempted_failed|not_attempted",
-    "visual": "attempted_succeeded|attempted_failed|not_attempted"
+    "visual": "attempted_succeeded|attempted_failed|not_attempted",
+    "description_links": "attempted_succeeded|attempted_failed|not_attempted|skipped_no_links"
   },
   "notes": []
 }

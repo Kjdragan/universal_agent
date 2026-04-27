@@ -187,13 +187,17 @@ def transform(ctx: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(channel_id, str):
         channel_id = ""
 
+    description = payload.get("description")
+    if not isinstance(description, str):
+        description = ""
+
     explicit_mode = payload.get("mode")
     mode = _normalize_mode(explicit_mode or MODE_AUTO)
     if mode == MODE_AUTO:
         title_hint = payload.get("title")
         mode = (
             MODE_EXPLAINER_PLUS_CODE
-            if _is_probably_code_tutorial(title_hint, channel_id, video_url)
+            if _is_probably_code_tutorial(title_hint, channel_id, video_url, description)
             else MODE_EXPLAINER_ONLY
         )
     learning_mode = _learning_mode_from_mode(mode)
@@ -230,6 +234,7 @@ def transform(ctx: dict[str, Any]) -> dict[str, Any] | None:
         f"video_id: {video_id}",
         f"channel_id: {channel_id}",
         f"title: {payload.get('title', '')}",
+        f"description_hint: {description[:500] if description else ''}",
         f"mode: {mode}",
         f"learning_mode: {learning_mode}",
         f"allow_degraded_transcript_only: {str(allow_degraded).lower()}",
@@ -238,6 +243,13 @@ def transform(ctx: dict[str, Any]) -> dict[str, Any] | None:
         "Transcript path: youtube-transcript-api is source of truth. yt-dlp is metadata-only.",
         "Video analysis path: use Gemini multimodal video understanding with the YouTube URL directly when available.",
         "Use visual analysis when possible. Continue with transcript-only mode when visual processing is unavailable.",
+        "DESCRIPTION LINK ANALYSIS: After metadata ingestion (Step 3d), check metadata.description for useful links.",
+        "Extract URLs from the video description. Classify each as: github_repo, kaggle_competition, documentation, dataset, or other.",
+        "For high-value links (GitHub repos, Kaggle problems, technical docs): fetch their content using DIRECT connections (no residential proxy).",
+        "For GitHub repos: fetch README and file tree. For Kaggle: fetch competition/dataset page. For docs: extract clean content.",
+        "Save fetched resources under work_products/description_resources/ and use them to enrich CONCEPT.md and IMPLEMENTATION.md.",
+        "Record all extracted links and their fetch status in manifest.json under description_links array.",
+        "Do NOT route external link fetches through the Webshare residential proxy — only YouTube API calls use the proxy.",
     ]
 
     return {
