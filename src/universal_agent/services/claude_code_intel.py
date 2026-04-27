@@ -370,6 +370,7 @@ def fetch_user_posts_with_fallbacks(
     user_id: str,
     max_results: int = DEFAULT_MAX_RESULTS,
     since_id: str | None = None,
+    pagination_token: str | None = None,
 ) -> dict[str, Any]:
     params: dict[str, str] = {
         "max_results": str(max(5, min(int(max_results or DEFAULT_MAX_RESULTS), 100))),
@@ -381,12 +382,84 @@ def fetch_user_posts_with_fallbacks(
     }
     if since_id:
         params["since_id"] = since_id
+    if pagination_token:
+        params["pagination_token"] = pagination_token
     return _get_json_with_auth_fallbacks(
         client,
         url=f"https://api.x.com/2/users/{user_id}/tweets",
         params=params,
         app_bearer_token=token,
     )
+
+
+def fetch_all_user_posts_paginated(
+    client: httpx.Client,
+    *,
+    token: str,
+    user_id: str,
+    max_results: int = 100,
+    since_id: str | None = None,
+    max_pages: int = 20,
+    cutoff_days: int = 60,
+) -> list[dict[str, Any]]:
+    """Fetch all user posts with automatic pagination up to *cutoff_days* back.
+
+    Returns a flat list of raw post dicts (newest-first).  The caller is
+    responsible for deduplication.
+    """
+    from datetime import timedelta
+
+    cutoff_dt = datetime.now(timezone.utc) - timedelta(days=cutoff_days)
+    all_posts: list[dict[str, Any]] = []
+    next_token: str | None = None
+
+    for page in range(1, max_pages + 1):
+        payload = fetch_user_posts_with_fallbacks(
+            client,
+            token=token,
+            user_id=user_id,
+            max_results=max_results,
+            since_id=since_id,
+            pagination_token=next_token,
+        )
+        posts = normalize_posts(payload)
+        if not posts:
+            logger.info("Paginated fetch page %d: empty, stopping.", page)
+            break
+
+        reached_cutoff = False
+        for post in posts:
+            created = str(post.get("created_at") or "")
+            if created:
+                try:
+                    post_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                    if post_dt < cutoff_dt:
+                        reached_cutoff = True
+                        break
+                except (ValueError, TypeError):
+                    pass
+            all_posts.append(post)
+
+        logger.info(
+            "Paginated fetch page %d: %d posts (%s → %s)%s",
+            page,
+            len(posts),
+            posts[0].get("created_at", "?"),
+            posts[-1].get("created_at", "?"),
+            " [cutoff reached]" if reached_cutoff else "",
+        )
+
+        if reached_cutoff:
+            break
+
+        meta = payload.get("meta", {})
+        next_token = str(meta.get("next_token") or "").strip() or None
+        if not next_token:
+            break
+
+        time.sleep(1)  # Rate-limit courtesy
+
+    return all_posts
 
 
 def normalize_posts(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1032,7 +1105,7 @@ def _save_state(path: Path, state: dict[str, Any]) -> None:
 def _next_state(*, state: dict[str, Any], handle: str, user_id: str, posts: list[dict[str, Any]], generated_at: str) -> dict[str, Any]:
     existing = [str(v) for v in state.get("seen_post_ids", []) if str(v)]
     ids = [str(post.get("id") or "").strip() for post in posts if str(post.get("id") or "").strip()]
-    merged = list(dict.fromkeys(ids + existing))[:1000]
+    merged = list(dict.fromkeys(ids + existing))[:5000]
     next_state = dict(state)
     next_state.update(
         {
