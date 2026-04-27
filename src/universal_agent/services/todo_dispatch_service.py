@@ -701,6 +701,24 @@ class ToDoDispatchService:
                     }
                 })
 
+            # ── Mission contract input: use the raw task descriptions, NOT the
+            # inflated execution prompt.  The prompt template contains email/
+            # delivery language that would cause build_mission_contract() to
+            # falsely set email_required=true for non-email tasks.
+            raw_descriptions = " ".join(
+                str(item.get("description") or "").strip()
+                for item in task_hub_claimed
+            ).strip()
+            # Fall back to original_user_input stored in task metadata
+            if not raw_descriptions:
+                raw_descriptions = " ".join(
+                    str(
+                        (item.get("metadata") if isinstance(item.get("metadata"), dict) else {})
+                        .get("original_user_input", "")
+                    ).strip()
+                    for item in task_hub_claimed
+                ).strip()
+
             req = GatewayRequest(
                 user_input=prompt,
                 force_complex=True,
@@ -710,6 +728,8 @@ class ToDoDispatchService:
                     "dispatch_kind": "todo",
                     "claimed_task_ids": task_ids,
                     "claimed_assignment_ids": claimed_assignment_ids,
+                    # ── Guard against false-positive email_required ──
+                    "mission_contract_input": raw_descriptions or "",
                     # ── Run-per-task lineage (first task's run) ──
                     "workflow_run_id": str(task_hub_claimed[0].get("workflow_run_id") or "").strip() if task_hub_claimed else "",
                     "workspace_dir": str(task_hub_claimed[0].get("workspace_dir") or "").strip() if task_hub_claimed else "",
