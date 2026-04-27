@@ -1,6 +1,6 @@
 # 03. VP Workers and Delegation Architecture
 
-**Last verified against source code:** 2026-04-17
+**Last verified against source code:** 2026-04-27
 
 ## Overview
 
@@ -251,6 +251,23 @@ HQ maintains a SQLite-backed factory registry (`factory_registry.py`):
 | `POST /api/v1/ops/factory/control` | Publish `system:pause_factory` or `system:resume_factory` |
 
 Pause/resume: bridge stops consuming work missions but stays running (heartbeat continues, reports `paused` status). System missions are always processed even when paused.
+
+## VP Orchestration Tools
+
+Simone dispatches and monitors VP missions through six internal tools defined in `src/universal_agent/tools/vp_orchestration.py`:
+
+| Tool | Purpose | Key Parameters |
+|------|---------|----------------|
+| `vp_dispatch_mission` | Queue a new mission for a VP worker | `vp_id`, `objective`, `mission_type`, `constraints`, `idempotency_key` |
+| `vp_get_mission` | Get state and lifecycle details for one mission | `mission_id` |
+| `vp_list_missions` | List missions by VP ID or status | `vp_id`, `status`, `limit` |
+| `vp_wait_mission` | Block until mission reaches terminal state | `mission_id`, `timeout_seconds` (default 1200, max 3600), `poll_seconds` (default 3, max 30) |
+| `vp_cancel_mission` | Request cancellation of a queued/running mission | `mission_id`, `reason` |
+| `vp_read_result_artifacts` | Summarize output artifacts from mission workspace | `mission_id`, `max_files`, `max_bytes` |
+
+### Timeout Guidance
+
+The `vp_wait_mission` default timeout is 1200 seconds (20 minutes). For `code_generation` missions, use `timeout_seconds=1200` or higher — complex coding tasks routinely exceed 10 minutes. The maximum allowed timeout is 3600 seconds (1 hour). Short timeouts risk missing completion of complex coding tasks, leading to false-negative "failed" states.
 
 ## Cross-Health Surface
 
