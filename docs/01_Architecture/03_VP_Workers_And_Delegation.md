@@ -164,6 +164,37 @@ CODIE is the autonomous coding VP agent with additional runtime management:
 - **Single-lane execution** — dedicated `_coder_vp_lock` in the gateway
 - **Lifecycle events** — emits session created/resumed/degraded events to VP event tables
 
+### Canonical Output Directory
+
+By architectural convention, CODIE saves generated projects and code outputs to a dedicated external workspace directory. This strictly separates agent-generated code from the `universal_agent` infrastructure repository:
+
+- **Canonical Path:** `/home/ua/vpsrepos/` (which may be symlinked to `/opt/vpsrepos/`)
+- When dispatching missions to CODIE, explicitly specify this path using the `target_path` constraint in the `vp_dispatch_mission` payload.
+
+### Execution Observability
+
+Because VP missions execute autonomously as headless background jobs via the worker daemon, they **do not stream live UI events** back to the web dashboard. The UI will simply show Simone polling for completion via `vp_wait_mission`. 
+
+To observe CODIE's progress in real-time, connect to the VPS and use these three methods:
+
+1. **Watch the Output Log (Live Stream):**
+   Tail the VP worker log to see every prompt, tool execution, and response as it happens:
+   ```bash
+   ssh ua@uaonvps 'tail -f /opt/universal_agent/logs/vp-worker-vp.coder.primary.log'
+   ```
+
+2. **Watch the Output Directory:**
+   Monitor the file system to see files materialize as CODIE creates them:
+   ```bash
+   ssh ua@uaonvps 'watch -n 2 ls -la /home/ua/vpsrepos/<project-name>/'
+   ```
+
+3. **Check the Mission Status Database:**
+   Query the VP state database to check the exact lifecycle status (`queued`, `running`, `completed`, `failed`):
+   ```bash
+   ssh ua@uaonvps 'sqlite3 /opt/universal_agent/AGENT_RUN_WORKSPACES/vp_state.db "SELECT status, started_at FROM vp_missions WHERE mission_id = '\''<mission-id>'\''"'
+   ```
+
 ## Factory Heartbeat and Registry
 
 ```mermaid
