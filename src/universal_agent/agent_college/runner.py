@@ -36,7 +36,6 @@ else:
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
-from src.universal_agent.agent_college.logfire_reader import LogfireReader
 
 
 async def main():
