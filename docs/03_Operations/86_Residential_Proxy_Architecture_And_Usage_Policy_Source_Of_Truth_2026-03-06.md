@@ -215,6 +215,7 @@ The residential proxy must **not** be used for:
 - random experimentation against unknown targets without explicit approval
 - expensive bandwidth-heavy data transfer that is not part of an approved path
 - retry loops that could burn through bandwidth (use one-off only)
+- **YouTube video description link fetching** — links extracted from video descriptions (GitHub repos, Kaggle datasets, documentation pages) are standard public web resources that should be fetched using direct connections
 
 The reason is both operational and financial:
 - residential proxy traffic costs money
