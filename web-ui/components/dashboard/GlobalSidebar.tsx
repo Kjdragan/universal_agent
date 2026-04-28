@@ -24,6 +24,7 @@ import {
   Bot,
   GraduationCap,
   Clock,
+  History,
   Settings,
   Wrench,
   FolderOpen,
@@ -80,6 +81,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/dashboard/events", label: "Events", icon: Bell },
       { href: "/dashboard/proactive-signals", label: "Proactive Signals", icon: Lightbulb },
+      { href: "/dashboard/proactive-task-history", label: "Task History", icon: History },
       { href: "/dashboard/claude-code-intel", label: "Claude Code Intel", icon: Bot },
       { href: "/dashboard/discord", label: "Discord Intel", icon: Radio },
       { href: "/dashboard/csi", label: "CSI Feed", icon: Radio },

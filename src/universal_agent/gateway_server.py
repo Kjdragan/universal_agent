@@ -16865,6 +16865,60 @@ async def dashboard_proactive_signal_action(
     return {"status": "ok", "card": card, "task_id": (card.get("selected_action") or {}).get("task_id")}
 
 
+@app.get("/api/v1/dashboard/proactive-task-history")
+async def dashboard_proactive_task_history(
+    request: Request,
+    limit: int = 80,
+):
+    _require_ops_auth(request)
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            tasks = task_hub.list_completed_tasks(conn, limit=limit)
+        finally:
+            conn.close()
+    return {"status": "ok", "tasks": tasks}
+
+
+@app.patch("/api/v1/dashboard/proactive-task-history/{task_id}/feedback")
+async def dashboard_proactive_task_feedback(
+    request: Request,
+    task_id: str,
+    payload: ProactiveSignalFeedbackRequest,
+    background_tasks: BackgroundTasks,
+):
+    _require_ops_auth(request)
+    actor = _activity_actor_from_request(request)
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            try:
+                task = task_hub.record_task_feedback(
+                    conn,
+                    task_id=task_id,
+                    feedback_tags=payload.feedback_tags,
+                    feedback_text=str(payload.feedback_text or ""),
+                    status=payload.status,
+                    actor=actor,
+                )
+            except KeyError:
+                raise HTTPException(status_code=404, detail="Task not found")
+        finally:
+            conn.close()
+
+    # Trigger background rule distillation if there was text feedback or tags
+    if (payload.feedback_text and str(payload.feedback_text).strip()) or payload.feedback_tags:
+        # Map task hub item to look like a signal card for distillation
+        distill_card = {
+            "source": task.get("source_kind"),
+            "title": task.get("title"),
+            "summary": task.get("description"),
+        }
+        background_tasks.add_task(distill_feedback_to_rules, distill_card, str(payload.feedback_text or ""), payload.feedback_tags)
+
+    return {"status": "ok", "task": task}
+
+
 @app.delete("/api/v1/dashboard/proactive-signals/{card_id}")
 async def dashboard_proactive_signal_delete(
     request: Request,

@@ -201,6 +201,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             stale_state TEXT NOT NULL DEFAULT 'fresh',
             seizure_state TEXT NOT NULL DEFAULT 'unseized',
             mirror_status TEXT NOT NULL DEFAULT 'internal',
+            feedback_json TEXT NOT NULL DEFAULT '{}',
             metadata_json TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -295,6 +296,19 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             UNIQUE(task_id, event_key)
         );
         CREATE INDEX IF NOT EXISTS idx_task_hub_notifications_task ON task_hub_notifications(task_id, sent_at DESC);
+
+        CREATE TABLE IF NOT EXISTS task_hub_delivery_evidence (
+            evidence_id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            channel TEXT NOT NULL DEFAULT 'agentmail',
+            message_id TEXT,
+            thread_id TEXT,
+            draft_id TEXT,
+            attachment_paths_json TEXT NOT NULL DEFAULT '[]',
+            work_product_paths_json TEXT NOT NULL DEFAULT '[]',
+            sent_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_hub_evidence_task ON task_hub_delivery_evidence(task_id, sent_at DESC);
         """
     )
     for ddl in (
@@ -322,6 +336,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         "ALTER TABLE task_hub_evaluations ADD COLUMN score REAL",
         "ALTER TABLE task_hub_evaluations ADD COLUMN score_confidence REAL",
         "ALTER TABLE task_hub_evaluations ADD COLUMN judge_payload_json TEXT NOT NULL DEFAULT '{}'",
+        "ALTER TABLE task_hub_items ADD COLUMN feedback_json TEXT NOT NULL DEFAULT '{}'",
         "ALTER TABLE task_hub_dispatch_queue ADD COLUMN eligible INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE task_hub_dispatch_queue ADD COLUMN skip_reason TEXT",
     ):
@@ -1355,6 +1370,44 @@ def update_assignment_lineage(
     conn.commit()
 
 
+def record_task_feedback(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    feedback_tags: list[str],
+    feedback_text: str,
+    status: Optional[str] = None,
+    actor: Optional[str] = None,
+) -> dict[str, Any]:
+    ensure_schema(conn)
+    row = conn.execute("SELECT * FROM task_hub_items WHERE task_id = ?", (task_id,)).fetchone()
+    if not row:
+        raise KeyError(f"Task not found: {task_id}")
+
+    item = hydrate_item(dict(row))
+    feedback = _json_loads_obj(item.get("feedback_json"), default={})
+    
+    # Update feedback metadata
+    feedback["tags"] = list(set(feedback_tags))
+    feedback["text"] = str(feedback_text or "").strip()
+    feedback["updated_at"] = datetime.now(timezone.utc).isoformat()
+    if actor:
+        feedback["actor"] = actor
+
+    updates = {
+        "feedback_json": json.dumps(feedback),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if status:
+        updates["status"] = status
+
+    _sql_update_item(conn, task_id, updates)
+    
+    # Return updated item
+    updated_row = conn.execute("SELECT * FROM task_hub_items WHERE task_id = ?", (task_id,)).fetchone()
+    return hydrate_item(dict(updated_row))
+
+
 def list_completed_tasks(conn: sqlite3.Connection, *, limit: int = 80) -> list[dict[str, Any]]:
     ensure_schema(conn)
     rows = conn.execute(
@@ -1413,6 +1466,26 @@ def list_completed_tasks(conn: sqlite3.Connection, *, limit: int = 80) -> list[d
             or item.get("updated_at")
             or ""
         )
+
+        # Attach delivery evidence
+        evidence_rows = conn.execute(
+            "SELECT * FROM task_hub_delivery_evidence WHERE task_id = ? ORDER BY sent_at DESC",
+            (task_id,),
+        ).fetchall()
+        item["delivery_evidence"] = [
+            {
+                "evidence_id": str(ev["evidence_id"]),
+                "channel": str(ev["channel"]),
+                "message_id": ev["message_id"],
+                "thread_id": ev["thread_id"],
+                "draft_id": ev["draft_id"],
+                "attachment_paths": _json_loads_obj(ev["attachment_paths_json"], default=[]),
+                "work_product_paths": _json_loads_obj(ev["work_product_paths_json"], default=[]),
+                "sent_at": str(ev["sent_at"]),
+            }
+            for ev in evidence_rows
+        ]
+
         out.append(item)
     return out
 
@@ -1506,6 +1579,18 @@ def _email_side_effects_detected(conn: sqlite3.Connection, task_id: str) -> bool
             for field in ("sent_at", "message_id", "draft_id")
         ):
             return True
+            
+    # Check new delivery evidence table
+    try:
+        evidence_row = conn.execute(
+            "SELECT 1 FROM task_hub_delivery_evidence WHERE task_id = ? LIMIT 1",
+            (str(task_id or "").strip(),),
+        ).fetchone()
+        if evidence_row:
+            return True
+    except Exception:
+        pass
+        
     try:
         row = conn.execute(
             "SELECT * FROM email_task_mappings WHERE task_id = ? LIMIT 1",
@@ -1605,6 +1690,9 @@ def record_task_outbound_delivery(
     message_id: str = "",
     draft_id: str = "",
     sent_at: Optional[str] = None,
+    thread_id: str = "",
+    attachment_paths: Optional[list[str]] = None,
+    work_product_paths: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """Persist a generic outbound-delivery marker on the Task Hub item.
 
@@ -1612,10 +1700,13 @@ def record_task_outbound_delivery(
     originate from an email thread and therefore has no ``email_task_mappings``
     row to prove that final delivery already happened.
     """
+    import uuid
     ensure_schema(conn)
     current = get_item(conn, str(task_id or "").strip())
     if not current:
         raise ValueError(f"No task found with ID: {task_id}")
+
+    actual_sent_at = str(sent_at or _now_iso()).strip()
 
     metadata = dict(current.get("metadata") or {})
     dispatch_meta = dict(metadata.get("dispatch") or {})
@@ -1623,7 +1714,7 @@ def record_task_outbound_delivery(
     outbound.update(
         {
             "channel": str(channel or outbound.get("channel") or "agentmail").strip() or "agentmail",
-            "sent_at": str(sent_at or outbound.get("sent_at") or _now_iso()).strip(),
+            "sent_at": actual_sent_at,
             "message_id": str(message_id or outbound.get("message_id") or "").strip(),
             "draft_id": str(draft_id or outbound.get("draft_id") or "").strip(),
         }
@@ -1634,6 +1725,31 @@ def record_task_outbound_delivery(
         "UPDATE task_hub_items SET metadata_json=?, updated_at=? WHERE task_id=?",
         (_json_dumps(metadata), _now_iso(), str(task_id or "").strip()),
     )
+    
+    # Also record structured evidence row
+    evidence_id = str(uuid.uuid4())
+    attachments_json = _json_dumps(attachment_paths or [])
+    work_products_json = _json_dumps(work_product_paths or [])
+    
+    conn.execute(
+        """
+        INSERT INTO task_hub_delivery_evidence 
+        (evidence_id, task_id, channel, message_id, thread_id, draft_id, attachment_paths_json, work_product_paths_json, sent_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            evidence_id,
+            str(task_id or "").strip(),
+            str(channel or "agentmail").strip() or "agentmail",
+            str(message_id or "").strip(),
+            str(thread_id or "").strip(),
+            str(draft_id or "").strip(),
+            attachments_json,
+            work_products_json,
+            actual_sent_at
+        )
+    )
+    
     conn.commit()
     return get_item(conn, str(task_id or "").strip()) or current
 

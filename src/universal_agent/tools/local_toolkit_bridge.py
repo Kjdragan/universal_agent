@@ -366,6 +366,7 @@ async def _agentmail_send_with_local_attachments_impl(args: dict[str, Any]) -> d
             _record_agentmail_delivery_from_runtime(
                 message_id=str(result_payload.get("messageId") or result_payload.get("message_id") or "").strip(),
                 draft_id=str(result_payload.get("draftId") or result_payload.get("draft_id") or "").strip(),
+                attachment_paths=attachment_paths,
             )
             return {"content": [{"type": "text", "text": f"Email successfully sent.\n{resp_body}"}]}
     except urllib.error.HTTPError as e:
@@ -374,7 +375,7 @@ async def _agentmail_send_with_local_attachments_impl(args: dict[str, Any]) -> d
         return {"content": [{"type": "text", "text": f"error: {str(e)}"}]}
 
 
-def _record_agentmail_delivery_from_runtime(*, message_id: str = "", draft_id: str = "") -> None:
+def _record_agentmail_delivery_from_runtime(*, message_id: str = "", draft_id: str = "", attachment_paths: list[str] = None) -> None:
     try:
         from universal_agent import task_hub
         from universal_agent.agentmail_official import (
@@ -389,6 +390,19 @@ def _record_agentmail_delivery_from_runtime(*, message_id: str = "", draft_id: s
     run_kind = ""
     claimed_task_ids: list[str] = []
     conn = None
+    
+    if attachment_paths is None:
+        attachment_paths = []
+        
+    work_product_paths = []
+    generic_attachments = []
+    
+    for p in attachment_paths:
+        if "work_products" in str(p) or "UA_ARTIFACTS_DIR" in str(p):
+            work_product_paths.append(str(p))
+        else:
+            generic_attachments.append(str(p))
+            
     try:
         runtime, bridge, mapping, run_kind, claimed_task_ids, conn = resolve_email_tracking_from_runtime()
         if conn is None:
@@ -405,6 +419,9 @@ def _record_agentmail_delivery_from_runtime(*, message_id: str = "", draft_id: s
                     channel="agentmail",
                     message_id=message_id,
                     draft_id=draft_id,
+                    thread_id=thread_id if mapping else "",
+                    attachment_paths=generic_attachments,
+                    work_product_paths=work_product_paths,
                 )
     except Exception:
         return
@@ -517,6 +534,15 @@ async def agentmail_reply_with_local_attachments_wrapper(args: dict[str, Any]) -
         data = json.dumps(payload).encode("utf-8")
         with urllib.request.urlopen(req, data=data, timeout=60.0) as resp:
             resp_body = resp.read().decode("utf-8")
+            try:
+                result_payload = json.loads(resp_body)
+            except Exception:
+                result_payload = {}
+            _record_agentmail_delivery_from_runtime(
+                message_id=str(result_payload.get("messageId") or result_payload.get("message_id") or "").strip(),
+                draft_id=str(result_payload.get("draftId") or result_payload.get("draft_id") or "").strip(),
+                attachment_paths=attachment_paths,
+            )
             return {"content": [{"type": "text", "text": f"Reply successfully sent.\n{resp_body}"}]}
     except urllib.error.HTTPError as e:
         return {"content": [{"type": "text", "text": f"error: {e.code} API Error - {e.read().decode('utf-8')}"}]}
