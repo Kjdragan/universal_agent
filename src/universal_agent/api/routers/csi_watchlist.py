@@ -544,7 +544,7 @@ async def reclassify_channel(request: ReclassifyRequest):
 
 
 @router.get("/recent-videos")
-async def get_recent_videos(limit: int = 50):
+async def get_recent_videos(limit: int = 50, category: Optional[str] = None):
     """Return the most recently ingested YouTube videos from the CSI events table."""
     import sqlite3
 
@@ -552,9 +552,25 @@ async def get_recent_videos(limit: int = 50):
     if not db_path.exists():
         return {"videos": []}
 
+    target_channel_ids = None
+    if category and category != "all":
+        path = get_watchlist_path()
+        if path.exists():
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                target_channel_ids = {ch["channel_id"] for ch in data.get("channels", []) if ch.get("domain") == category}
+            except Exception as e:
+                logger.error(f"Error reading watchlist for category filter: {e}")
+                target_channel_ids = set()
+
     try:
         conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
+        
+        # If we have a category filter, search deeper to find matching videos.
+        fetch_limit = 1000 if target_channel_ids is not None else min(limit, 200)
+
         rows = conn.execute(
             """
             SELECT event_id, subject_json, created_at
@@ -563,15 +579,23 @@ async def get_recent_videos(limit: int = 50):
             ORDER BY created_at DESC
             LIMIT ?
             """,
-            (min(limit, 200),),
+            (fetch_limit,),
         ).fetchall()
         conn.close()
 
         videos = []
         for row in rows:
+            if len(videos) >= limit:
+                break
+                
             try:
                 subject = json.loads(row["subject_json"])
             except Exception:
+                continue
+
+            channel_id = subject.get("channel_id") or ""
+            
+            if target_channel_ids is not None and channel_id not in target_channel_ids:
                 continue
 
             # Extract YouTube video ID from event_id like "yt:rss:<video_id>:<ts>"
@@ -600,7 +624,7 @@ async def get_recent_videos(limit: int = 50):
                 "video_id": video_id,
                 "title": subject.get("title") or subject.get("description", "")[:80] or "Untitled",
                 "channel_name": subject.get("channel_name") or subject.get("author_name") or "Unknown",
-                "channel_id": subject.get("channel_id") or "",
+                "channel_id": channel_id,
                 "published_at": raw_published,
                 "ingested_at": raw_ingested,
             })

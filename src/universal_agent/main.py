@@ -4164,24 +4164,8 @@ def on_agent_stop(context: HookContext, run_id: str = None, db_conn=None) -> dic
                 "action": "complete",  # Let it stop naturally
             }
         }
-    else:
-        # Determine feedback message
-        if intent_to_complete:
-            msg = f"Promise Mismatch: Expected '<promise>{promise}</promise>', Got '<promise>{extracted_promise}</promise>'"
-        else:
-            msg = f"The previous attempt did not include the required completion promise <promise>{promise}</promise>"
 
-        print(f"⚠️ {msg}")
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "AgentStop",
-                "action": "restart",
-                "nextPrompt": f"RESUMING: {msg}\n\n[INSTRUCTION]\nIf you have completed the objective, you MUST output the EXACT promise tag:\n<promise>{promise}</promise>\n\nEnsure all artifacts are created before doing this.",
-            }
-        }
     # If we get here, the promise was NOT met.
-    # We must RESTART the agent to force it to finish.
-
     # Check limits first
     if current_iter >= max_iter:
         logfire.warning(
@@ -4198,27 +4182,19 @@ def on_agent_stop(context: HookContext, run_id: str = None, db_conn=None) -> dic
             },
         }
 
-    # Force Restart / Nudge
-    return {
-        "systemMessage": f"REJECTED: You claimed to be done, but did not provide the required completion promise: <promise>{promise}</promise>. You must complete the task and output the exact promise tag.",
-        "hookSpecificOutput": {
-            "hookEventName": "AgentStop",
-            "action": "restart",
-            "nextPrompt": (
-                f"RESUMING: The previous attempt did not include the required completion promise <promise>{promise}</promise>. "
-                "Continue working until the task is fully complete, then output the promise.\n\n"
-                "RUTHLESS AUTONOMY: Do NOT ask the user for guidance. Make reasonable decisions and continue. "
-                "You have full authority to proceed. Never output 'Would you like me to...' questions."
-            ),
-        },
-    }
-
-    # PROCEED TO HANDOFF
-    # 1. Save checkpoint (happens automatically in main loop mostly, but good to ensure)
-    # 2. Increment iteration
+    # PROCEED TO HANDOFF / NUDGE
+    # 1. Increment iteration
     new_iter = increment_iteration_count(use_db, use_run_id)
 
-    # 3. Construct Continuation Prompt
+    # Determine feedback message based on intent
+    if intent_to_complete:
+        msg = f"Promise Mismatch: Expected '<promise>{promise}</promise>', Got '<promise>{extracted_promise}</promise>'"
+    else:
+        msg = f"The previous attempt did not include the required completion promise <promise>{promise}</promise>"
+
+    print(f"⚠️ {msg}")
+
+    # 2. Construct Continuation Prompt
     import json
 
     run_spec_json = info.get("run_spec_json") or "{}"
@@ -4238,6 +4214,9 @@ Current Iteration: {new_iter} / {max_iter}
 ## Original Objective
 {original_objective}
 
+## Reason for Restart
+{msg}
+
 ## Required Completion Artifact
 You must output exactly "{promise}" when you are fully done.
 You have NOT output this yet, so you must continue.
@@ -4245,9 +4224,10 @@ You have NOT output this yet, so you must continue.
 ## Instructions
 1. Review your workspace files to see what has been done.
 2. Continue the work. Do NOT start over.
+3. RUTHLESS AUTONOMY: Do NOT ask the user for guidance. Make reasonable decisions and continue. You have full authority to proceed. Never output 'Would you like me to...' questions.
 """
 
-    logfire.info("harness_handoff_triggered", run_id=run_id, new_iteration=new_iter)
+    logfire.info("harness_handoff_triggered", run_id=use_run_id, new_iteration=new_iter)
 
     return {
         "systemMessage": continuation_prompt,
@@ -4257,8 +4237,6 @@ You have NOT output this yet, so you must continue.
             "nextPrompt": continuation_prompt,
         },
     }
-
-    return {}
 
 
 # =============================================================================

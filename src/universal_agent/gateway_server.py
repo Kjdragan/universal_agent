@@ -6441,6 +6441,28 @@ def _agent_has_pending_todo_items(
     return False
 
 
+def _has_substantive_mutating_tool_calls(tool_calls_by_id: dict[str, dict[str, Any]] | None) -> bool:
+    if not tool_calls_by_id:
+        return False
+    
+    mutating_tools = {
+        "run_command", "bash", "edit", "replace_file_content", "multi_replace_file_content",
+        "write_to_file",
+    }
+    
+    for tc in tool_calls_by_id.values():
+        name = str(tc.get("name") or "").strip().lower()
+        if name in mutating_tools:
+            return True
+        # Catch github mutating tools
+        if "github" in name and any(x in name for x in ["create", "update", "push", "merge", "add", "delete", "assign", "close", "comment", "review"]):
+            return True
+        # Catch agentmail mutating tools
+        if "agentmail" in name and any(x in name for x in ["send", "reply", "label", "archive", "trash", "mark", "modify", "star", "prepare"]):
+            return True
+    return False
+
+
 def _todo_execution_auto_complete_after_final_delivery(
     *,
     conn: sqlite3.Connection,
@@ -6470,16 +6492,28 @@ def _todo_execution_auto_complete_after_final_delivery(
         return goal_satisfaction, unresolved
 
     auto_complete_candidates: list[dict[str, Any]] = []
+    has_substantive_work = _has_substantive_mutating_tool_calls(tool_calls_by_id)
+
     for snapshot in unresolved:
         item = snapshot.get("item") if isinstance(snapshot.get("item"), dict) else {}
         if not item:
             continue
+        
         if not _todo_task_has_recorded_final_delivery(conn, snapshot=snapshot):
-            continue
-        # Chat-facing tasks need both a durable outbound delivery marker and
-        # confirmation that this run actually delivered the final response.
-        if _todo_task_expected_final_channel(item) == "chat" and not chat_response_delivered:
-            continue
+            if has_substantive_work:
+                logger.info(
+                    "Task %s lacks final delivery marker, but session %s has substantive tool calls. Proceeding with soft auto-complete.",
+                    snapshot.get("task_id"),
+                    session.session_id
+                )
+            else:
+                continue
+        else:
+            # Chat-facing tasks need both a durable outbound delivery marker and
+            # confirmation that this run actually delivered the final response.
+            if _todo_task_expected_final_channel(item) == "chat" and not chat_response_delivered:
+                continue
+                
         auto_complete_candidates.append(snapshot)
 
     if not auto_complete_candidates:
@@ -7125,7 +7159,12 @@ async def _run_gateway_session_request(
                 session_id=session_id,
                 severity="error",
                 requires_action=True,
-                metadata={"goal_satisfaction": goal_satisfaction},
+                metadata={
+                    "goal_satisfaction": goal_satisfaction,
+                    "run_id": _session_run_id(session),
+                    "workspace_dir": session.workspace_dir or "",
+                    "active_run_workspace": _session_active_run_workspace(session) or "",
+                },
             )
             await manager.broadcast(
                 session_id,
@@ -16516,6 +16555,86 @@ async def dashboard_discord_server_messages(
         messages.append(d)
 
     return {"status": "ok", "server_id": server_id, "total": total_filtered, "total_all": total_all, "messages": messages}
+
+
+@app.get("/api/v1/dashboard/discord/recent-messages")
+async def dashboard_discord_recent_messages(
+    request: Request,
+    limit: int = 50,
+    category: Optional[str] = None
+):
+    """Return the most recently ingested Discord messages from the intelligence DB."""
+    _require_ops_auth(request)
+    
+    target_server_ids = None
+    if category and category != "all":
+        import json
+        path = Path(os.getenv("DISCORD_WATCHLIST_PATH", "/var/lib/universal-agent/discord/discord_watchlist.json")).expanduser()
+        if path.exists():
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                target_server_ids = {srv["server_id"] for srv in data.get("servers", []) if srv.get("domain") == category}
+            except Exception as e:
+                logger.error(f"Error reading discord watchlist for category filter: {e}")
+                target_server_ids = set()
+
+    conn = _discord_connect()
+    try:
+        where_clause = "WHERE m.is_meaningful = 1"
+        params = []
+        if target_server_ids is not None:
+            if not target_server_ids:
+                return {"status": "ok", "messages": []} # no servers for this category
+            placeholders = ",".join("?" for _ in target_server_ids)
+            where_clause += f" AND m.server_id IN ({placeholders})"
+            params.extend(target_server_ids)
+        
+        params.append(min(limit, 200))
+        
+        rows = conn.execute(
+            f"""
+            SELECT m.id, m.server_id, m.channel_id, c.name AS channel_name,
+                   m.author_name, m.content, m.timestamp,
+                   m.is_bot, m.has_attachments, m.processed_by_triage,
+                   m.is_meaningful,
+                   GROUP_CONCAT(s.rule_matched || ':' || s.severity, '|') AS signals
+            FROM messages m
+            LEFT JOIN channels c ON c.id = m.channel_id
+            LEFT JOIN signals s ON s.message_id = m.id
+            {where_clause}
+            GROUP BY m.id
+            ORDER BY m.timestamp DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+        
+        messages = []
+        for row in rows:
+            d = dict(row)
+            raw_sigs = d.pop("signals", None) or ""
+            sigs = []
+            for part in raw_sigs.split("|"):
+                if ":" in part:
+                    rule, sev = part.split(":", 1)
+                    sigs.append({"rule": rule, "severity": sev})
+            d["signals"] = sigs
+            
+            ts = d.get("timestamp") or ""
+            if ts and not ts.endswith(("Z", "+00:00", "+0000")) and "T" not in ts:
+                d["timestamp"] = ts.replace(" ", "T") + "Z"
+            elif ts and not ts.endswith(("Z", "+00:00", "+0000")):
+                d["timestamp"] = ts + "Z"
+                
+            messages.append(d)
+            
+        return {"status": "ok", "messages": messages}
+    except Exception as exc:
+        logger.exception("Failed loading recent Discord messages")
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        conn.close()
 
 
 @app.delete("/api/v1/dashboard/discord/servers/{server_id}/messages")
@@ -28222,9 +28341,18 @@ async def ops_logs_tail(
 
     if session_id:
         session_id = _sanitize_session_id_or_400(session_id)
-        result = _ops_service.tail_file(session_id, "run.log", cursor=cursor, limit=limit, max_bytes=max_bytes)
-        file_path = str(_ops_service.workspaces_dir / session_id / "run.log")
-        return {"file": file_path, **result}
+        # Resolve daemon session IDs (e.g. daemon_simone_todo) to their
+        # actual timestamped workspace (run_daemon_simone_todo_<ts>).
+        try:
+            resolved_ws = _resolve_session_workspace(session_id)
+        except HTTPException:
+            resolved_ws = _ops_service.workspaces_dir / session_id
+        log_path = resolved_ws / "run.log"
+        if log_path.exists():
+            result = _ops_service.read_log_slice(log_path, cursor=cursor, limit=limit, max_bytes=max_bytes)
+        else:
+            result = {"size": 0, "cursor": 0, "lines": [], "truncated": False, "reset": False}
+        return {"file": str(log_path), **result}
     elif path:
         try:
             candidate = resolve_ops_log_path(WORKSPACES_DIR, path)
