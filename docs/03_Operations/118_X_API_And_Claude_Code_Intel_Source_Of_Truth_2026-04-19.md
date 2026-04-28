@@ -322,6 +322,8 @@ Status update (2026-04-22): tiering is no longer purely heuristic. The lane now 
 
 The fallback specifically downshifts community/event announcements (for example hackathon/application posts) out of `demo_task` unless there is stronger technical evidence. The LLM-assisted classifier can further refine this using post text plus fetched-source summaries and source-type context.
 
+Status update (2026-04-27): the live sync path now enriches linked URLs **before** classification via a three-pass pipeline in `csi_url_judge.py` (regex pre-filter → Anthropic LLM judge → selective fetch). The tier classifier receives actual linked page content, dramatically improving accuracy. Gated by `UA_CSI_URL_ENRICHMENT_ENABLED` (default `1`). See `ClaudeDevs_X_Intelligence_System.md § URL Enrichment Pipeline` for full architecture.
+
 ## Replay And Backfill Contract
 
 The first successful packet was run with `--no-task-hub`, so its five posts were marked seen but not queued into Task Hub. Replay/backfill is now implemented for the first delivery slice.
@@ -351,9 +353,8 @@ When implementing future posting or interaction features, require a separate des
 
 - OAuth2 refresh-token support exists in `x_oauth2_bootstrap.py`, but the cron lane does not yet auto-refresh expired OAuth2 access tokens before polling.
 - Media download or image/video understanding is not implemented yet.
-- Linked source ingestion is materially implemented: `linked_sources.json`, packet candidate ledgers, post-source vault pages, bounded direct-link fetch snapshots, source-type metadata, and source-type-aware `analysis.md` guidance are written. Deeper repo/docs-specific extraction is still limited.
+- Linked source ingestion is materially implemented: `linked_sources.json`, packet candidate ledgers, post-source vault pages, bounded direct-link fetch snapshots, source-type metadata, and source-type-aware `analysis.md` guidance are written. The live sync path now also enriches URLs before classification via `csi_url_judge.py`.
 - The local KB index is a lightweight source index, not a full NotebookLM-backed external knowledge base yet.
-- The first tiering model is keyword-based. A future pass should add an LLM classifier once enough real packets exist.
-- The classifier is now LLM-assisted with deterministic fallback and uses linked-source summaries plus source-type context. A future pass should use richer extracted linked-source analyses, not just summary excerpts.
+- The classifier is now LLM-assisted with deterministic fallback and uses linked-source summaries, source-type context, and as of 2026-04-27, actual fetched linked-page content via the three-pass URL enrichment pipeline.
 - Packet candidate ledgers now hydrate task ids, assignment ids, assignment workspaces, outbound-delivery markers, email evidence ids from assignment workspaces, and per-post wiki page paths. Full lineage reconciliation across every historical task/artifact/email path is still evolving.
 - Existing production cron workspaces that were already polluted by earlier heartbeat follow-up can now be cleaned with the dedicated cleanup utility. The original production `cron_claude_code_intel_sync` workspace has already been cleaned once; mixed transcript/trace files were intentionally left in place and must still be interpreted as historically noisy.

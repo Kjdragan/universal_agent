@@ -7,6 +7,8 @@
 
 The YouTube Tutorial Pipeline is an automated system that watches YouTube playlists for new videos, ingests their content (transcripts, metadata), dispatches an AI agent session to generate a structured tutorial artifact, optionally bootstraps a GitHub repository for the tutorial code, and notifies stakeholders at each stage.
 
+As of 2026-04-27, the pipeline includes LLM-judged URL classification for description links, replacing brittle regex-only classification with Anthropic-powered assessment and Pydantic validation.
+
 ```
 Playlist Watch → New Video Detection → Webhook Dispatch → Agent Session
   → Transcript Ingest → Tutorial Generation → Repo Bootstrap → Notification
@@ -260,6 +262,49 @@ After tutorial generation, the pipeline can automatically create a GitHub reposi
 | `tests/unit/test_tutorial_telegram_dedup.py` | Telegram notifier dedup tests |
 | `scripts/check_proxy.py` | Provider-agnostic proxy connectivity diagnostic (TCP, HTTP, HTTPS, YouTube) |
 | `scripts/purge_youtube_backlog.py` | Operational script: reset playlist watcher state, finalize stale runs, purge pending signal cards |
+| `.claude/skills/youtube-tutorial-creation/scripts/extract_description_links.py` | LLM-judged URL classification and content extraction from video descriptions |
+
+---
+
+## 8A. Description Link Classification (URL Intelligence)
+
+The `extract_description_links.py` script classifies URLs found in YouTube video descriptions using a two-pass architecture:
+
+### Pass 1: Deterministic Pre-Filter
+
+Fast regex-based filtering strips known social domains (`twitter.com`, `x.com`, `discord.gg`, `instagram.com`, etc.) and promotional path keywords (`/discord`, `/newsletter`, `/subscribe`, `/merch`).
+
+### Pass 2: LLM Judge
+
+Remaining candidate URLs are assessed by an Anthropic LLM (via `ZAI_API_KEY` or `ANTHROPIC_API_KEY`) using `tool_use` structured output. Each URL receives:
+
+- `type`: `github_repo`, `documentation`, `blog_post`, `api_reference`, `dataset`, `tool_page`, `changelog`, `promotional`, `media_only`, `social`, `other`
+- `worth_fetching`: boolean indicating if the URL contains fetchable technical content
+- `reasoning`: brief explanation of the assessment
+
+The LLM output is validated via Pydantic models (`UrlVerdict`) with `HttpUrl` validation and automatic retries on validation failure.
+
+### Fallback
+
+If no LLM API key is available, the script falls back to the original deterministic regex classification, ensuring backward compatibility in environments without API access.
+
+### Content Fetch
+
+URLs marked `worth_fetching: true` are fetched downstream using either:
+- **GitHub API**: README + repo metadata for `github_repo` URLs (shallow clone for richer content)
+- **defuddle-cli**: Clean markdown extraction for web pages
+
+Fetched content is stored alongside the tutorial artifacts and included in the evaluation context for concept preparation and code demo analysis.
+
+### Environment Variables
+
+| Variable | Description |
+|---|---|
+| `ZAI_API_KEY` / `ANTHROPIC_API_KEY` | API key for the LLM URL judge (falls back to regex if missing) |
+| `ANTHROPIC_BASE_URL` | Optional base URL for ZAI proxy |
+
+> [!NOTE]
+> The same three-pass URL enrichment architecture is shared with the ClaudeDevs X Intelligence pipeline via `csi_url_judge.py`. Changes to one should be considered for the other.
 
 ---
 

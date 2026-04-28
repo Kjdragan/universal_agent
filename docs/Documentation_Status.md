@@ -1,6 +1,6 @@
 # Documentation Status
 
-**Last updated:** 2026-04-27 (Proactive digest cron automation, gateway resource limits hardening, stale CODIE branch cleanup)
+**Last updated:** 2026-04-27 (URL intelligence pipeline: LLM-judged URL enrichment for CSI and YouTube tutorial pipelines, csi_url_judge.py three-pass architecture)
 
 ## Development (development/)
 

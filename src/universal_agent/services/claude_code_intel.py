@@ -235,7 +235,57 @@ def run_sync(
         posts = normalize_posts(posts_payload)
         seen_ids = {str(v) for v in state.get("seen_post_ids", []) if str(v)}
         new_posts = [post for post in posts if str(post.get("id") or "") not in seen_ids]
-        actions = [classify_post(post, handle=cfg.handle) for post in new_posts]
+
+        # ── URL enrichment: enrich linked sources before classification ──
+        url_enrichment_enabled = str(
+            os.getenv("UA_CSI_URL_ENRICHMENT_ENABLED", "1")
+        ).strip().lower() in _TRUTHY
+        enrichment_cache: dict[str, str] = {}  # post_id → linked_context
+
+        if url_enrichment_enabled and new_posts:
+            try:
+                from universal_agent.services.csi_url_judge import (
+                    enrich_urls,
+                    build_linked_context,
+                )
+
+                enrich_dir = packet_dir / "url_enrichment"
+                for post in new_posts:
+                    post_id = str(post.get("id") or "").strip()
+                    post_links = extract_links(post)
+                    if not post_links:
+                        continue
+                    try:
+                        records = enrich_urls(
+                            urls=post_links,
+                            context=str(post.get("text") or "")[:2000],
+                            output_dir=enrich_dir / post_id,
+                            max_fetch=3,
+                            timeout=15,
+                        )
+                        linked_ctx = build_linked_context(records)
+                        if linked_ctx:
+                            enrichment_cache[post_id] = linked_ctx
+                            logger.info(
+                                "CSI URL enrichment for post %s: %d records, %d chars context",
+                                post_id, len(records), len(linked_ctx),
+                            )
+                    except Exception as exc:
+                        logger.warning(
+                            "CSI URL enrichment failed for post %s: %s",
+                            post_id, exc,
+                        )
+            except ImportError:
+                logger.warning("csi_url_judge module not available; skipping URL enrichment")
+
+        actions = [
+            classify_post(
+                post,
+                handle=cfg.handle,
+                linked_context=enrichment_cache.get(str(post.get("id") or "").strip(), ""),
+            )
+            for post in new_posts
+        ]
         queued = 0
         artifact_id = ""
 

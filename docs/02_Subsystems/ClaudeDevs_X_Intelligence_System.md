@@ -41,6 +41,8 @@ The system can now:
 23. Provide operator trigger controls (`Run Pipeline`, `Rollup Only`) on the dashboard via `POST /api/v1/dashboard/claude-code-intel/trigger`.
 24. Support multiple intelligence handles via `UA_CLAUDE_CODE_INTEL_X_HANDLES` env var (default: `ClaudeDevs,bcherny`), with per-handle state files (`state__{handle}.json`) and automatic migration from legacy single `state.json`.
 25. Filter Tier 1 digest posts from rolling synthesis (`MIN_SYNTHESIS_TIER = 2`) so personal/community chatter never becomes capability bundles while remaining in packet history.
+26. Enrich linked URLs during live sync via a three-pass pipeline (regex pre-filter → Anthropic LLM judge → selective fetch) before post classification, providing actual linked content to the tier classifier for informed tier decisions.
+27. Feature-gate URL enrichment via `UA_CSI_URL_ENRICHMENT_ENABLED` env var (default: `1`/on) for safe production rollout.
 
 ## Canonical Paths
 
@@ -67,7 +69,11 @@ The system can now:
 flowchart TD
     Cron["claude_code_intel_sync"] --> Fetch["Fetch @ClaudeDevs via X API"]
     Fetch --> Packet["Write packet files"]
-    Packet --> Classify["Tier posts"]
+    Packet --> Enrich["URL Enrichment (3-pass)"]
+    Enrich --> Filter["Pass 1: Regex pre-filter"]
+    Filter --> Judge["Pass 2: LLM judge"]
+    Judge --> Scrape["Pass 3: Selective fetch"]
+    Scrape --> Classify["Tier posts (with linked context)"]
     Classify --> Queue["Queue Tier 3/4 Task Hub work"]
     Packet --> Replay["Post-process / replay packet"]
     Replay --> Sources["Fetch linked sources"]
@@ -121,11 +127,61 @@ The classifier now runs in two layers:
 
 The fallback explicitly downshifts generic community/event posts such as hackathons and application announcements when they lack stronger engineering implications. The LLM layer can further refine this judgment.
 
-## Linked Source Expansion
+## URL Enrichment Pipeline (Live Sync)
 
-The system no longer treats the X post alone as the whole source of truth.
+As of 2026-04-27, the live sync path (`run_sync`) enriches URLs **before** post classification using a three-pass architecture implemented in `csi_url_judge.py`:
 
-For each direct linked source, the replay path now:
+```mermaid
+flowchart LR
+    A[Post URLs] --> B[Pass 1: Regex Pre-Filter]
+    B --> C{Social/product?}
+    C -->|Yes| D[Filtered out]
+    C -->|No| E[Pass 2: LLM Judge]
+    E --> F{Worth fetching?}
+    F -->|No| G[Skipped]
+    F -->|Yes| H[Pass 3: Selective Fetch]
+    H --> I[defuddle / GitHub API / httpx]
+    I --> J[linked_context for classifier]
+```
+
+### Pass 1: Fast Regex Pre-Filter
+
+Deterministic exclusion of social domains (`twitter.com`, `x.com`, `discord.gg`, etc.), product app domains (`claude.ai`, `chatgpt.com`), and social path keywords (`/discord`, `/newsletter`, `/subscribe`).
+
+### Pass 2: LLM Judge
+
+Remaining URLs are evaluated by an Anthropic LLM (via `resolve_sonnet()` and ZAI proxy) using `tool_use` structured output with Pydantic validation. Each URL receives a `UrlVerdict` with:
+
+- `category`: `github_repo`, `documentation`, `blog_post`, `api_reference`, `dataset`, `tool_page`, `changelog`, `promotional`, `media_only`, `social_noise`, `other`
+- `worth_fetching`: boolean
+- `reasoning`: brief explanation
+
+Falls back to domain-based heuristics if no LLM key is available.
+
+### Pass 3: Selective Fetch
+
+Only URLs marked `worth_fetching: true` are fetched, using:
+- **GitHub repos**: README + metadata via GitHub API (fast, no clone)
+- **Web pages**: `defuddle-cli` for clean markdown extraction, `httpx` as fallback
+- Content is truncated at 20,000 characters
+
+The enriched content is assembled into a `linked_context` string and passed to `classify_post()`, allowing the tier classifier to make informed decisions based on actual linked content rather than just URL strings.
+
+### Feature Flag
+
+| Variable | Default | Description |
+|---|---|---|
+| `UA_CSI_URL_ENRICHMENT_ENABLED` | `1` | Enable/disable URL enrichment in live sync |
+
+### Impact on Classification
+
+With URL enrichment, the classifier receives actual page content alongside the tweet text. Testing shows this materially improves tier accuracy — for example, a post linking to documentation pages is correctly classified as Tier 2 (kb_update) rather than over-promoted to Tier 3 (demo_task).
+
+## Linked Source Expansion (Replay Path)
+
+The replay/post-processing path provides a **second layer** of source expansion beyond the live enrichment.
+
+For each direct linked source, the replay path:
 
 - classifies the source type
 - fetches the source in a bounded way
@@ -305,7 +361,8 @@ Each bundle preserves:
 
 | File | Role |
 | --- | --- |
-| [`claude_code_intel.py`](../../src/universal_agent/services/claude_code_intel.py) | Live X polling, post classification, packet creation, Task Hub queueing |
+| [`claude_code_intel.py`](../../src/universal_agent/services/claude_code_intel.py) | Live X polling, URL enrichment orchestration, post classification, packet creation, Task Hub queueing |
+| [`csi_url_judge.py`](../../src/universal_agent/services/csi_url_judge.py) | Three-pass URL enrichment pipeline (regex filter → LLM judge → selective fetch) with Pydantic validation |
 | [`claude_code_intel_replay.py`](../../src/universal_agent/services/claude_code_intel_replay.py) | Replay, source expansion, ledger writing, vault population |
 | [`claude_code_intel_sync.py`](../../src/universal_agent/scripts/claude_code_intel_sync.py) | Cron/script entry point |
 | [`claude_code_intel_replay_packet.py`](../../src/universal_agent/scripts/claude_code_intel_replay_packet.py) | Replay/backfill entry point |
@@ -317,9 +374,9 @@ Each bundle preserves:
 
 The subsystem is now functionally real, but a few refinements remain:
 
-- richer repo/docs-specific extraction beyond current typed guidance and summary excerpts
-- broader end-to-end production validation over more real packets
+- broader end-to-end production validation of the URL enrichment pipeline over more real packets
 - optional future promotion of Claude Code knowledge into NotebookLM-backed KB flows if desired
+- potential Jina Reader fallback for complex, content-heavy pages that resist defuddle extraction
 
 ## Related Docs
 

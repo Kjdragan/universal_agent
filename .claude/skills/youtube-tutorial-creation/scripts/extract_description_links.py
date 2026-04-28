@@ -1,13 +1,14 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["httpx>=0.27.0"]
+# dependencies = ["httpx>=0.27.0", "anthropic>=0.40.0", "pydantic>=2.0.0"]
 # ///
 """Extract, classify, and fetch links from YouTube video descriptions.
 
-Deterministic plumbing script — no LLM needed.  Extracts URLs from free-form
-video descriptions, classifies them by type (github_repo, kaggle_competition,
-documentation, social, etc.), and optionally fetches high-value resources
-(README files, competition pages) using direct connections (no proxy).
+Two-pass classification: (1) deterministic social domain pre-filter,
+(2) LLM judge for remaining URLs using Anthropic structured output.
+Falls back to regex classification when no LLM key is available.
+Extracts URLs from free-form video descriptions, classifies them by type,
+and optionally fetches high-value resources using direct connections (no proxy).
 
 Usage:
     # From a youtube_ingest.json file
@@ -34,12 +35,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+import os
 import re
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
+
+from pydantic import BaseModel, HttpUrl, field_validator
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -87,6 +94,86 @@ _URL_PATTERN = re.compile(
     r"https?://[^\s<>\"'\)\],;]+",
     re.IGNORECASE,
 )
+
+
+# ---------------------------------------------------------------------------
+# Pydantic models for structured LLM output
+# ---------------------------------------------------------------------------
+
+UrlCategory = Literal[
+    "github_repo", "documentation", "blog_post", "api_reference",
+    "dataset", "tool_page", "changelog", "kaggle_competition",
+    "kaggle_dataset", "social", "promotional", "media_only", "other",
+]
+
+
+class UrlVerdict(BaseModel):
+    """A single URL's assessment from the LLM judge."""
+    url: HttpUrl
+    worth_fetching: bool
+    category: UrlCategory
+    reasoning: str = ""
+
+    @field_validator("url", mode="before")
+    @classmethod
+    def strip_url(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            return v.strip()
+        return v
+
+
+class UrlJudgmentResult(BaseModel):
+    """Batch result from the LLM URL judge."""
+    verdicts: list[UrlVerdict]
+
+
+# Anthropic tool_use schema for structured output
+_URL_JUDGE_TOOL = {
+    "name": "url_assessment",
+    "description": "Return the assessment verdicts for each URL",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "verdicts": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string", "description": "The URL being assessed"},
+                        "worth_fetching": {"type": "boolean", "description": "Whether this URL is worth fetching"},
+                        "category": {
+                            "type": "string",
+                            "enum": [
+                                "github_repo", "documentation", "blog_post",
+                                "api_reference", "dataset", "tool_page",
+                                "changelog", "kaggle_competition", "kaggle_dataset",
+                                "promotional", "media_only", "other",
+                            ],
+                        },
+                        "reasoning": {"type": "string", "description": "Brief explanation"},
+                    },
+                    "required": ["url", "worth_fetching", "category", "reasoning"],
+                },
+            },
+        },
+        "required": ["verdicts"],
+    },
+}
+
+_URL_JUDGE_SYSTEM = """\
+You are a URL value assessor for a technical video tutorial analysis pipeline.
+
+Given a context (video title and description excerpt) and a list of candidate URLs,
+evaluate which URLs are likely to contain high-value technical content worth fetching.
+
+Guidelines:
+- GitHub repos, documentation pages, blog posts with code → worth_fetching: true
+- API references, changelogs, Kaggle competitions/datasets → worth_fetching: true
+- Tool/product landing pages with technical docs → worth_fetching: true
+- Generic marketing pages, newsletters, promotional → worth_fetching: false
+- Media-only URLs (images, video embeds) → worth_fetching: false
+- If uncertain, lean toward worth_fetching: true for technical domains
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -166,43 +253,188 @@ def classify_url(url: str) -> str:
     return "other"
 
 
+def _llm_judge_urls(
+    urls: list[str],
+    context: str,
+    *,
+    max_retries: int = 2,
+) -> list[dict[str, Any]] | None:
+    """Use Anthropic LLM with structured output to judge URL value.
+
+    Returns list of dicts with url/type/worth_fetching/reasoning,
+    or None if LLM is unavailable (caller should use regex fallback).
+    """
+    api_key = (
+        os.environ.get("ANTHROPIC_API_KEY")
+        or os.environ.get("ANTHROPIC_AUTH_TOKEN")
+        or os.environ.get("ZAI_API_KEY")
+    )
+    if not api_key:
+        return None  # Signal caller to use regex fallback
+
+    try:
+        from anthropic import Anthropic
+    except ImportError:
+        return None
+
+    client_kwargs: dict[str, Any] = {"api_key": api_key}
+    base_url = os.environ.get("ANTHROPIC_BASE_URL")
+    if base_url:
+        client_kwargs["base_url"] = base_url
+
+    client = Anthropic(**client_kwargs)
+    user_prompt = (
+        f"Context: {context[:2000]}\n\n"
+        f"Candidate URLs to assess ({len(urls)}):\n"
+        + "\n".join(f"  {i+1}. {url}" for i, url in enumerate(urls))
+    )
+
+    for attempt in range(max_retries):
+        try:
+            # Determine model — prefer ANTHROPIC_MODEL env var, fallback to Sonnet
+            model = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+            response = client.messages.create(
+                model=model,
+                max_tokens=1000,
+                system=_URL_JUDGE_SYSTEM,
+                messages=[{"role": "user", "content": user_prompt}],
+                tools=[_URL_JUDGE_TOOL],
+                tool_choice={"type": "tool", "name": "url_assessment"},
+            )
+
+            # Extract tool_use block
+            raw_input = None
+            for block in response.content:
+                if hasattr(block, "type") and block.type == "tool_use":
+                    raw_input = block.input
+                    break
+
+            if raw_input is None:
+                logger.warning("LLM URL judge attempt %d: no tool_use block", attempt + 1)
+                continue
+
+            # Validate with Pydantic
+            result = UrlJudgmentResult.model_validate(raw_input)
+
+            # Convert to link record format
+            records: list[dict[str, Any]] = []
+            for verdict in result.verdicts:
+                # Map LLM categories to our type system
+                link_type = str(verdict.category)
+                records.append({
+                    "url": str(verdict.url),
+                    "type": link_type,
+                    "worth_fetching": verdict.worth_fetching,
+                    "reasoning": verdict.reasoning,
+                    "fetched": False,
+                    "resource_path": None,
+                })
+
+            # Ensure all input URLs are accounted for
+            judged_urls = {r["url"].rstrip("/") for r in records}
+            for url in urls:
+                if url.rstrip("/") not in judged_urls:
+                    records.append({
+                        "url": url,
+                        "type": classify_url(url),
+                        "worth_fetching": True,
+                        "reasoning": "missed by LLM judge, defaulting to regex classification",
+                        "fetched": False,
+                        "resource_path": None,
+                    })
+
+            logger.info(
+                "LLM URL judge: %d URLs assessed, %d worth fetching",
+                len(records),
+                sum(1 for r in records if r.get("worth_fetching")),
+            )
+            return records
+
+        except Exception as exc:
+            logger.warning(
+                "LLM URL judge attempt %d/%d failed: %s",
+                attempt + 1, max_retries, exc,
+            )
+            if attempt == max_retries - 1:
+                return None
+
+    return None
+
+
 def classify_and_filter(
     description: str | None,
     *,
+    context_title: str = "",
     max_high_value: int = 5,
 ) -> list[dict[str, Any]]:
-    """Extract URLs, classify each, and return structured link records.
+    """Extract URLs, classify each via two-pass approach, return structured link records.
+
+    Pass 1: Deterministic social domain pre-filter (regex).
+    Pass 2: LLM judge for remaining URLs (falls back to regex if no LLM key).
 
     Args:
         description: Free-form video description text.
+        context_title: Video title for additional context to the LLM judge.
         max_high_value: Cap on high-value links to include (default 5).
 
     Returns:
-        List of dicts with keys: url, type, fetched (always False here).
+        List of dicts with keys: url, type, fetched, resource_path, and optionally
+        worth_fetching, reasoning (when LLM judge is used).
     """
     urls = extract_urls(description)
-    results: list[dict[str, Any]] = []
-    high_value_count = 0
+    if not urls:
+        return []
 
+    # Pass 1: deterministic social domain pre-filter
+    social_records: list[dict[str, Any]] = []
+    candidate_urls: list[str] = []
     for url in urls:
         link_type = classify_url(url)
-        is_high_value = link_type in HIGH_VALUE_TYPES
+        if link_type == "social":
+            social_records.append({
+                "url": url,
+                "type": "social",
+                "fetched": False,
+                "resource_path": None,
+                "worth_fetching": False,
+                "reasoning": "social domain filtered",
+            })
+        else:
+            candidate_urls.append(url)
 
+    # Pass 2: LLM judge for candidates (or regex fallback)
+    llm_context = f"Video: {context_title}\nDescription excerpt: {(description or '')[:500]}"
+    llm_records = _llm_judge_urls(candidate_urls, llm_context) if candidate_urls else None
+
+    if llm_records is not None:
+        # LLM judge succeeded — use its classifications
+        results = social_records + llm_records
+    else:
+        # Fallback to regex-only classification
+        results = social_records
+        for url in candidate_urls:
+            link_type = classify_url(url)
+            results.append({
+                "url": url,
+                "type": link_type,
+                "fetched": False,
+                "resource_path": None,
+                "worth_fetching": link_type in HIGH_VALUE_TYPES,
+                "reasoning": "regex classification (LLM unavailable)",
+            })
+
+    # Apply high-value cap
+    capped_results: list[dict[str, Any]] = []
+    high_value_count = 0
+    for record in results:
+        is_high_value = record.get("worth_fetching", record["type"] in HIGH_VALUE_TYPES)
         if is_high_value and high_value_count >= max_high_value:
-            continue  # Skip excess high-value links
-
-        record = {
-            "url": url,
-            "type": link_type,
-            "fetched": False,
-            "resource_path": None,
-        }
-        results.append(record)
-
+            continue
+        capped_results.append(record)
         if is_high_value:
             high_value_count += 1
 
-    return results
+    return capped_results
 
 
 # ---------------------------------------------------------------------------
@@ -389,12 +621,15 @@ def fetch_links(
 ) -> list[dict[str, Any]]:
     """Fetch content for high-value links. Modifies links in-place and returns them.
 
-    Only fetches links with type in HIGH_VALUE_TYPES. Social/other links are skipped.
+    Uses worth_fetching flag from LLM judge if available, otherwise falls back
+    to checking type in HIGH_VALUE_TYPES.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for link in links:
-        if link["type"] not in HIGH_VALUE_TYPES:
+        # Use LLM judge verdict if available, otherwise fall back to type check
+        should_fetch = link.get("worth_fetching", link["type"] in HIGH_VALUE_TYPES)
+        if not should_fetch:
             continue
 
         link_type = link["type"]
@@ -497,16 +732,30 @@ def main() -> int:
         return 1
 
     # Extract and classify
-    links = classify_and_filter(description, max_high_value=args.max_links)
+    # Extract video title for LLM judge context
+    video_title = ""
+    if args.ingest_json:
+        ingest_path = Path(args.ingest_json)
+        if ingest_path.exists():
+            data = json.loads(ingest_path.read_text(encoding="utf-8"))
+            video_title = (data.get("metadata") or {}).get("title") or ""
 
-    high_value = [l for l in links if l["type"] in HIGH_VALUE_TYPES]
+    links = classify_and_filter(description, context_title=video_title, max_high_value=args.max_links)
+
+    high_value = [l for l in links if l.get("worth_fetching", l["type"] in HIGH_VALUE_TYPES)]
     social = [l for l in links if l["type"] == "social"]
 
     print(f"📋 Extracted {len(links)} links: {len(high_value)} high-value, {len(social)} social")
 
     for link in links:
-        marker = "🔗" if link["type"] in HIGH_VALUE_TYPES else "⏭️"
-        print(f"  {marker} [{link['type']}] {link['url']}")
+        if link.get("worth_fetching", link["type"] in HIGH_VALUE_TYPES):
+            marker = "🔗"
+        elif link["type"] == "social":
+            marker = "🚫"
+        else:
+            marker = "⏭️"
+        reasoning = f" ({link['reasoning']})" if link.get("reasoning") else ""
+        print(f"  {marker} [{link['type']}] {link['url']}{reasoning}")
 
     # Fetch if not dry-run
     if not args.dry_run and high_value:
