@@ -252,6 +252,12 @@ Heartbeat and Task Hub execution no longer share the same Simone daemon session.
 
 This split prevents run-log/transcript cross-talk between heartbeat supervision and email/task execution.
 
+## 8B. Heartbeat-Safe Autonomous Subsystem Isolation
+
+Proactive curation tasks (such as those triggered by cron) are explicitly isolated from heartbeat supervision to prevent recursive "check the checker" behavior.
+- **Metadata Exclusion**: `metadata: {"skip_heartbeat": True}` is injected into these sessions. The Gateway Server honors this flag to bypass standard heartbeat registration.
+- **Guardrail Overrides**: The Heartbeat Service tracks `_curation_dispatched` events, safely bypassing standard mission guard policies during active proactive curation.
+
 ## 9. Implementation Files
 
 | File | Role |

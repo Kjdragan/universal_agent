@@ -101,6 +101,8 @@ These are the authoritative references for each subsystem. When any other docume
 | 122 | ClaudeDevs X Intel Implementation Plan — code-verified phased implementation plan for replay/backfill, external vault creation, linked-source expansion, packet candidate ledgering, Task Hub completion evidence mapping, cron/heartbeat workspace separation, operator skill/report surface, and LLM-assisted tiering |
 | 123 | Gemini TTS Source of Truth — **canonical source of truth** for Gemini Text-to-Speech: API architecture (Cloud TTS vs Vertex AI vs AI Studio), model registry, auth patterns (service account + ADC), production code samples, voice inventory, markup tags, chunking strategy, region requirements, and lessons learned |
 | 124 | Archon Integration and Operations Guide — canonical operations guide for the Archon AI workflow engine integration, covering repository isolation, Infisical wrapping, Claude Code Z.ai endpoint emulation, and VPS deployment architecture |
+| 125 | Heartbeat-Safe Proactive Pipeline Operations — canonical handoff and architecture record for isolation of proactive curation pipelines from the system heartbeat (`skip_heartbeat` metadata, `_curation_dispatched` overrides) and ship/rebase operator rules |
+| 126 | Candidate Ledger Reconciliation Operations — canonical documentation for the Phase 3 completion of the Packet Candidate Ledger, detailing the `reconcile_packet_candidate_ledger` workflow and TDD maintenance protocols |
 
 ## CSI Subsystem (04_CSI/)
 

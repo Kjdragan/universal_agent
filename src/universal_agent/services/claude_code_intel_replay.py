@@ -431,7 +431,46 @@ def ingest_packet_into_external_vault(
         "work_product_pages": work_product_pages,
         "email_evidence_ids": email_evidence_ids,
     }
+def reconcile_packet_candidate_ledger(
+    *,
+    packet_dir: Path,
+    conn: sqlite3.Connection | None,
+    artifacts_root: Path | None = None,
+) -> dict[str, Any]:
+    packet_dir = packet_dir.expanduser().resolve()
+    payload = load_packet(packet_dir)
+    actions = payload["actions"]
+    handle = str(payload["manifest"].get("handle") or "ClaudeDevs")
 
+    summary_path = packet_dir / "replay_summary.json"
+    packet_artifact_id = ""
+    vault_result: dict[str, Any] = {}
+
+    if summary_path.exists():
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            packet_artifact_id = summary.get("packet_artifact_id") or ""
+            vault_result = {
+                "pages": summary.get("wiki_pages") or [],
+                "email_evidence_ids": summary.get("email_evidence_ids") or [],
+            }
+        except Exception:
+            pass
+
+    ledger_entries = build_candidate_ledger(
+        packet_dir=packet_dir,
+        handle=handle,
+        actions=actions,
+        conn=conn,
+        packet_artifact_id=packet_artifact_id,
+        vault_result=vault_result,
+        artifacts_root=artifacts_root,
+    )
+    return {
+        "ok": True,
+        "packet_ledger_path": ledger_entries["packet_ledger_path"],
+        "lane_ledger_path": ledger_entries["lane_ledger_path"],
+    }
 
 def build_candidate_ledger(
     *,

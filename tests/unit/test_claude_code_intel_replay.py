@@ -600,3 +600,61 @@ def test_replay_hydrates_email_evidence_from_task_and_assignment_workspace(monke
     assert "msg-email-map-801" in ledger[0]["email_evidence_ids"]
     assert "msg-artifact-801" in ledger[0]["email_evidence_ids"]
     assert ledger[0]["task_outbound_delivery"]["message_id"] == "msg-801"
+
+
+def test_reconcile_packet_candidate_ledger_standalone(monkeypatch, tmp_path: Path) -> None:
+    from universal_agent.services.claude_code_intel_replay import reconcile_packet_candidate_ledger
+    
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    task_hub.ensure_schema(conn)
+
+    packet_dir = tmp_path / "packet_reconcile"
+    packet_dir.mkdir()
+    (packet_dir / "manifest.json").write_text(
+        json.dumps({"handle": "ClaudeDevs", "ok": True, "new_post_count": 1, "action_count": 1}),
+        encoding="utf-8",
+    )
+    (packet_dir / "new_posts.json").write_text(
+        json.dumps([{"id": "reconcile_1", "text": "foo", "created_at": "2026-04-19T12:00:00.000Z"}]),
+        encoding="utf-8",
+    )
+    (packet_dir / "actions.json").write_text(
+        json.dumps(
+            [
+                {
+                    "post_id": "reconcile_1",
+                    "tier": 4,
+                    "action_type": "strategic_follow_up",
+                    "url": "https://x.com/ClaudeDevs/status/reconcile_1",
+                    "text": "foo",
+                    "links": [],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (packet_dir / "replay_summary.json").write_text(
+        json.dumps({
+            "packet_artifact_id": "pa_reconcile_test",
+            "wiki_pages": ["/fake/path.md"],
+            "email_evidence_ids": ["msg-123"]
+        }),
+        encoding="utf-8",
+    )
+
+    result = reconcile_packet_candidate_ledger(
+        packet_dir=packet_dir,
+        conn=conn,
+        artifacts_root=tmp_path,
+    )
+
+    assert result["ok"] is True
+    assert "packet_ledger_path" in result
+
+    ledger = json.loads((packet_dir / "candidate_ledger.json").read_text(encoding="utf-8"))
+    assert len(ledger) == 1
+    assert ledger[0]["packet_artifact_id"] == "pa_reconcile_test"
+    assert ledger[0]["candidate_artifact_id"] == ""
+    assert ledger[0]["wiki_pages"] == ["/fake/path.md"]
+    assert ledger[0]["email_evidence_ids"] == ["msg-123"]
