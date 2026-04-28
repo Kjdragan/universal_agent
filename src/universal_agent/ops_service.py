@@ -46,6 +46,27 @@ class OpsService:
             workspace.relative_to(self.workspaces_dir.resolve())
         except Exception as exc:
             raise ValueError("Session path escapes workspace root") from exc
+
+        # Direct match — the common case
+        if workspace.is_dir():
+            return workspace
+
+        # Daemon session glob fallback: daemon_simone_todo → run_daemon_simone_todo_*
+        if safe_session_id.startswith("daemon_"):
+            prefix = f"run_{safe_session_id}_"
+            candidates: list[Path] = []
+            for p in self.workspaces_dir.iterdir():
+                if p.is_dir() and p.name.startswith(prefix):
+                    candidates.append(p)
+            archive_root = self.workspaces_dir / "_daemon_archives"
+            if archive_root.is_dir():
+                for p in archive_root.iterdir():
+                    if p.is_dir() and p.name.startswith(prefix):
+                        candidates.append(p)
+            if candidates:
+                candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                return candidates[0]
+
         return workspace
 
     def _read_policy_owner(self, session_path: Path) -> Optional[str]:

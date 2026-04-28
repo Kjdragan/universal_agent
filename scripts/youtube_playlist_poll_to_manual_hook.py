@@ -24,7 +24,7 @@ from xml.etree import ElementTree as ET
 
 ATOM_NS = {"a": "http://www.w3.org/2005/Atom", "yt": "http://www.youtube.com/xml/schemas/2015"}
 DEFAULT_HOOK_URL = "http://127.0.0.1:8002/api/v1/hooks/youtube/manual"
-DEFAULT_STATE_FILE = "/opt/universal_agent/AGENT_RUN_WORKSPACES/youtube_playlist_trigger_state.json"
+DEFAULT_STATE_FILE = "/var/lib/universal-agent/csi/youtube_playlist_trigger_state.json"
 DEFAULT_MODE = "explainer_only"
 
 

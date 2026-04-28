@@ -479,14 +479,38 @@ export default function CsiDiscordWatchlistPage() {
   const [totalAllMessages, setTotalAllMessages] = useState(0);
 
   /* Collapsible categories */
-  const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
   const toggleCategory = (domain: string) => {
-    setCollapsedCategories(prev => {
+    setExpandedCategories(prev => {
       const next = new Set(prev);
       next.has(domain) ? next.delete(domain) : next.add(domain);
       return next;
     });
   };
+
+  /* Recently Ingested Messages */
+  const [recentMessages, setRecentMessages] = useState<any[]>([]);
+  const [recentLoading, setRecentLoading] = useState(false);
+  const [recentCategoryFilter, setRecentCategoryFilter] = useState<string | null>(null);
+
+  const loadRecentMessages = useCallback(async (catFilter?: string | null) => {
+    setRecentLoading(true);
+    try {
+      let url = `${GATEWAY}/api/v1/dashboard/discord/recent-messages?limit=50`;
+      if (catFilter && catFilter !== "all") {
+        url += `&category=${encodeURIComponent(catFilter)}`;
+      }
+      const r = await fetch(url, { cache: "no-store" });
+      if (!r.ok) throw new Error("Failed to fetch recent messages");
+      const data = await r.json();
+      setRecentMessages(data.messages || []);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setRecentLoading(false);
+    }
+  }, []);
+
 
   /* ── Load watchlist ───────────────────────────────────────────────── */
   const loadWatchlist = useCallback(async () => {
@@ -728,7 +752,12 @@ export default function CsiDiscordWatchlistPage() {
                   {/* Category header */}
                   <div
                     className="flex items-center gap-1.5 px-1 group/hdr cursor-pointer select-none"
-                    onClick={() => { if (editingCategory !== domain) toggleCategory(domain); }}
+                    onClick={() => { 
+                      if (editingCategory !== domain) {
+                        toggleCategory(domain);
+                        setRecentCategoryFilter(domain);
+                      }
+                    }}
                   >
                     {editingCategory === domain ? (
                       <input autoFocus
@@ -742,7 +771,7 @@ export default function CsiDiscordWatchlistPage() {
                     ) : (
                       <>
                         <ChevronDown
-                          className={`h-3 w-3 text-muted-foreground/40 transition-transform duration-150 ${collapsedCategories.has(domain) ? "-rotate-90" : ""}`}
+                          className={`h-3 w-3 text-muted-foreground/40 transition-transform duration-150 ${!expandedCategories.has(domain) ? "-rotate-90" : ""}`}
                         />
                         <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 flex-1 truncate">
                           {displayTitle}
@@ -761,8 +790,8 @@ export default function CsiDiscordWatchlistPage() {
                   </div>
 
                   {/* Server cards (collapsible) */}
-                  {!collapsedCategories.has(domain) && domainServers.map(srv => {
-                    const watchedCount = srv.channels.filter(c => c.is_watched).length;
+                  {expandedCategories.has(domain) && domainServers.map(srv => {
+                    const watchedCount = srv.channels.length;
                     const isActive = activeServerId === srv.server_id;
                     return (
                       <div key={srv.server_id}
@@ -798,6 +827,57 @@ export default function CsiDiscordWatchlistPage() {
               );
             })
           )}
+        </div>
+
+        {/* ── MIDDLE: Recently Ingested Messages ── */}
+        <div className="hidden lg:flex w-[260px] xl:w-[300px] shrink-0 border border-border/40 bg-card/20 rounded-xl flex-col overflow-hidden">
+          <div className="bg-background/80 border-b border-border/40 px-4 py-3 shrink-0 flex items-center justify-between">
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center gap-2">
+                <MessageSquare className="w-4 h-4 text-indigo-400" />
+                <h3 className="font-bold text-foreground text-sm">Recently Ingested</h3>
+              </div>
+              {recentCategoryFilter && (
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-medium text-indigo-400 bg-indigo-400/10 px-1.5 py-0.5 rounded border border-indigo-400/20">
+                    {recentCategoryFilter.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ")}
+                  </span>
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); setRecentCategoryFilter(null); }}
+                    className="text-[10px] text-muted-foreground hover:text-indigo-400 underline underline-offset-2"
+                  >
+                    Clear / Show All
+                  </button>
+                </div>
+              )}
+            </div>
+            <button onClick={() => loadRecentMessages(recentCategoryFilter)} disabled={recentLoading} className="text-xs text-muted-foreground hover:text-foreground transition mt-[-10px] self-start">
+              <RefreshCw className={`w-3.5 h-3.5 ${recentLoading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto custom-scrollbar">
+            {recentMessages.length === 0 && !recentLoading && (
+              <div className="text-xs text-muted-foreground/50 text-center py-8">No recent messages</div>
+            )}
+            {recentMessages.map((msg) => {
+              const srv = servers.find(s => s.server_id === msg.server_id);
+              return (
+                <button
+                  key={msg.id}
+                  onClick={() => { setActiveTab("messages"); selectServer(msg.server_id); }}
+                  className={`w-full text-left px-3 py-2.5 border-b border-border/20 hover:bg-indigo-500/5 transition-colors ${
+                    activeServerId === msg.server_id ? 'bg-indigo-500/10 border-l-2 border-l-indigo-500' : ''
+                  }`}
+                >
+                  <p className="text-[13px] font-medium text-foreground/90 leading-snug line-clamp-2">{msg.content || '...'}</p>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-[11px] text-indigo-400/80 truncate max-w-[140px]">{srv?.server_name || 'Unknown Server'}</span>
+                    <span className="text-[10px] text-muted-foreground/60 ml-auto whitespace-nowrap">{fmtTime(msg.timestamp)}</span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {/* ── RIGHT: Tabbed panel ── */}

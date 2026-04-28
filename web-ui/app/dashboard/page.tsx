@@ -1799,7 +1799,10 @@ export default function DashboardPage() {
             const relatedProgress = videoKey ? tutorialProgressByVideo.get(videoKey) : undefined;
             const relatedSessionId = asText(relatedProgress?.sessionId);
             const effectiveSessionId = sessionId || relatedSessionId;
-            const chatHref = chatSessionHref(item.session_id);
+            const metadataRunId = asText(metadata.run_id);
+            const chatHref = metadataRunId
+              ? `/?${new URLSearchParams({ run_id: metadataRunId, role: "viewer" }).toString()}`
+              : chatSessionHref(item.session_id);
             const relatedChatHref = chatSessionHref(effectiveSessionId);
             const sessionRunLogHref = effectiveSessionId
               ? workspaceExplorerHref(`${effectiveSessionId}/run.log`)
@@ -1851,6 +1854,7 @@ export default function DashboardPage() {
                         onClick={() =>
                           openOrFocusChatWindow({
                             sessionId: effectiveSessionId,
+                            runId: metadataRunId || undefined,
                             attachMode: "tail",
                             role: "viewer",
                           })

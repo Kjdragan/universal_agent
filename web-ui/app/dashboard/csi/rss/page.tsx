@@ -70,6 +70,9 @@ export default function CsiWatchlistPage() {
   // Visual Drag State (optional glow effect)
   const [dragOverCategory, setDragOverCategory] = useState<string | null>(null);
 
+  // Recently ingested videos filter
+  const [recentCategoryFilter, setRecentCategoryFilter] = useState<string | null>(null);
+
   const loadWatchlist = async (clearSuccess = true) => {
     setLoading(true);
     setErrorMsg("");
@@ -89,10 +92,14 @@ export default function CsiWatchlistPage() {
     }
   };
 
-  const loadRecentVideos = async () => {
+  const loadRecentVideos = async (catFilter?: string | null) => {
     setRecentLoading(true);
+    const filter = catFilter !== undefined ? catFilter : recentCategoryFilter;
     try {
-      const resp = await fetch("/api/v1/csi/watchlist/recent-videos?limit=60");
+      const url = filter 
+        ? `/api/v1/csi/watchlist/recent-videos?limit=60&category=${encodeURIComponent(filter)}`
+        : `/api/v1/csi/watchlist/recent-videos?limit=60`;
+      const resp = await fetch(url);
       if (resp.ok) {
         const data = await resp.json();
         setRecentVideos(data.videos || []);
@@ -397,7 +404,13 @@ export default function CsiWatchlistPage() {
                     {/* Category Header */}
                     <div 
                       className="mb-3 flex items-center justify-between border-b border-border/30 pb-2 group/header cursor-pointer"
-                      onClick={() => !editingCategory && toggleCategory(domain)}
+                      onClick={() => {
+                         if (!editingCategory) {
+                             toggleCategory(domain);
+                             setRecentCategoryFilter(domain);
+                             loadRecentVideos(domain);
+                         }
+                      }}
                     >
                       {editingCategory === domain ? (
                         <input 
@@ -493,11 +506,26 @@ export default function CsiWatchlistPage() {
           {/* Recently Ingested Videos Column */}
           <div className="hidden lg:flex w-[260px] xl:w-[300px] shrink-0 border border-border/40 bg-card/20 rounded-xl flex-col overflow-hidden">
             <div className="bg-background/80 border-b border-border/40 px-4 py-3 shrink-0 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <ListVideo className="w-4 h-4 text-red-400" />
-                <h3 className="font-bold text-foreground text-sm">Recently Ingested</h3>
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center gap-2">
+                  <ListVideo className="w-4 h-4 text-red-400" />
+                  <h3 className="font-bold text-foreground text-sm">Recently Ingested</h3>
+                </div>
+                {recentCategoryFilter && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-medium text-primary bg-primary/10 px-1.5 py-0.5 rounded border border-primary/20">
+                      {recentCategoryFilter.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ")}
+                    </span>
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); setRecentCategoryFilter(null); loadRecentVideos(null); }}
+                      className="text-[10px] text-muted-foreground hover:text-red-400 underline underline-offset-2"
+                    >
+                      Clear / Show All
+                    </button>
+                  </div>
+                )}
               </div>
-              <button onClick={loadRecentVideos} disabled={recentLoading} className="text-xs text-muted-foreground hover:text-foreground transition">
+              <button onClick={() => loadRecentVideos()} disabled={recentLoading} className="text-xs text-muted-foreground hover:text-foreground transition mt-[-10px] self-start">
                 <RefreshCw className={`w-3.5 h-3.5 ${recentLoading ? 'animate-spin' : ''}`} />
               </button>
             </div>
@@ -536,7 +564,7 @@ export default function CsiWatchlistPage() {
                            {recentVideos.find(v => v.video_id === previewVideoId)?.channel_name || ''}
                          </p>
                       </div>
-                      <a href={`https://www.youtube.com/watch?v=${previewVideoId}`} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-xs bg-red-500/10 text-red-400 hover:bg-red-500/20 px-2 py-1 rounded transition-colors font-medium">
+                      <a href={`https://www.youtube.com/watch?v=${previewVideoId}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-xs bg-red-500/10 text-red-400 hover:bg-red-500/20 px-2 py-1 rounded transition-colors font-medium">
                          <Youtube className="w-3.5 h-3.5" /> Open
                       </a>
                    </div>
@@ -545,7 +573,6 @@ export default function CsiWatchlistPage() {
                           className="w-full h-full border-0"
                           src={`https://www.youtube.com/embed/${previewVideoId}?autoplay=1&playsinline=1`}
                           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
-                          sandbox="allow-same-origin allow-scripts allow-presentation"
                           title="Video Preview"
                        />
                    </div>
@@ -557,16 +584,15 @@ export default function CsiWatchlistPage() {
                          <h3 className="font-bold text-foreground text-sm truncate w-[280px]">{previewChannel.channel_name}</h3>
                          <p className="text-xs text-muted-foreground mt-0.5">Latest Uploads Viewer</p>
                       </div>
-                      <a href={previewChannel.youtube_url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-xs bg-red-500/10 text-red-400 hover:bg-red-500/20 px-2 py-1 rounded transition-colors font-medium">
-                         <Youtube className="w-3.5 h-3.5" /> URL
+                      <a href={`https://www.youtube.com/playlist?list=UU${previewChannel.channel_id.replace(/^UC/, '')}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-xs bg-red-500/10 text-red-400 hover:bg-red-500/20 px-2 py-1 rounded transition-colors font-medium">
+                         <Youtube className="w-3.5 h-3.5" /> Open
                       </a>
                    </div>
                    <div className="flex-1 w-full bg-black">
                        <iframe
                           className="w-full h-full border-0"
                           src={`https://www.youtube.com/embed/videoseries?list=UU${previewChannel.channel_id.replace(/^UC/, '')}&playsinline=1&fs=0`}
-                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                          sandbox="allow-same-origin allow-scripts allow-presentation"
+                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
                           title="Channel Uploads Playlist Viewer"
                        />
                    </div>
