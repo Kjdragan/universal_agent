@@ -1,0 +1,113 @@
+"""{{PROJECT_NAME}} — Infisical-first configuration loader.
+
+Loads secrets from Infisical at startup, falling back to environment
+variables only for the bootstrap credentials needed to reach Infisical itself.
+"""
+
+from __future__ import annotations
+
+import os
+import logging
+from functools import lru_cache
+
+import httpx
+from pydantic_settings import BaseSettings
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Bootstrap: these come from the machine-local .env (Infisical credentials)
+# ---------------------------------------------------------------------------
+INFISICAL_CLIENT_ID = os.getenv("INFISICAL_CLIENT_ID", "")
+INFISICAL_CLIENT_SECRET = os.getenv("INFISICAL_CLIENT_SECRET", "")
+INFISICAL_PROJECT_ID = os.getenv("INFISICAL_PROJECT_ID", "")
+INFISICAL_SITE_URL = os.getenv("INFISICAL_SITE_URL", "https://app.infisical.com")
+INFISICAL_ENVIRONMENT = os.getenv("INFISICAL_ENVIRONMENT", "development")
+
+
+def _load_infisical_secrets() -> dict[str, str]:
+    """Authenticate with Infisical and load project secrets into a dict."""
+    if not all([INFISICAL_CLIENT_ID, INFISICAL_CLIENT_SECRET, INFISICAL_PROJECT_ID]):
+        logger.warning(
+            "Infisical bootstrap credentials missing — falling back to env vars only. "
+            "Set INFISICAL_CLIENT_ID, INFISICAL_CLIENT_SECRET, INFISICAL_PROJECT_ID."
+        )
+        return {}
+
+    try:
+        # Universal Auth — machine identity login
+        auth_resp = httpx.post(
+            f"{INFISICAL_SITE_URL}/api/v1/auth/universal-auth/login",
+            json={
+                "clientId": INFISICAL_CLIENT_ID,
+                "clientSecret": INFISICAL_CLIENT_SECRET,
+            },
+            timeout=15,
+        )
+        auth_resp.raise_for_status()
+        token = auth_resp.json()["accessToken"]
+
+        # Fetch secrets
+        secrets_resp = httpx.get(
+            f"{INFISICAL_SITE_URL}/api/v3/secrets/raw",
+            params={
+                "workspaceId": INFISICAL_PROJECT_ID,
+                "environment": INFISICAL_ENVIRONMENT,
+                "secretPath": "/",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=15,
+        )
+        secrets_resp.raise_for_status()
+
+        secrets = {}
+        for s in secrets_resp.json().get("secrets", []):
+            key = s["secretKey"]
+            value = s["secretValue"]
+            secrets[key] = value
+            os.environ.setdefault(key, value)
+
+        logger.info(
+            "Loaded %d secrets from Infisical (env=%s)", len(secrets), INFISICAL_ENVIRONMENT
+        )
+        return secrets
+
+    except Exception:
+        logger.exception("Failed to load secrets from Infisical — falling back to env vars")
+        return {}
+
+
+# Load secrets at import time
+_infisical_secrets = _load_infisical_secrets()
+
+
+class Settings(BaseSettings):
+    """Application settings — values come from Infisical, then env vars."""
+
+    # App
+    APP_NAME: str = "{{PROJECT_NAME}}"
+    APP_SECRET_KEY: str = "change-me-in-infisical"
+    DEBUG: bool = False
+
+    # Database
+    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:{{DB_PORT}}/{{PROJECT_MODULE}}"
+
+    # Anthropic
+    ANTHROPIC_API_KEY: str = ""
+
+    # DataImpulse Proxy (documentation-only — configure in Infisical when needed)
+    DATAIMPULSE_PROXY_USER: str = ""
+    DATAIMPULSE_PROXY_PASS: str = ""
+    DATAIMPULSE_PROXY_HOST: str = "gw.dataimpulse.com"
+    DATAIMPULSE_PROXY_PORT: str = "823"
+
+    class Config:
+        env_file = ".env"
+        env_file_encoding = "utf-8"
+        extra = "ignore"
+
+
+@lru_cache
+def get_settings() -> Settings:
+    """Cached settings singleton."""
+    return Settings()

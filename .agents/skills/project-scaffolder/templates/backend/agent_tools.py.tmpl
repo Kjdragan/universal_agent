@@ -1,0 +1,90 @@
+"""{{PROJECT_NAME}} — Agent tool definitions.
+
+Register tools here for the agent to use. Each tool needs:
+1. A schema definition in TOOLS list (Anthropic tool format)
+2. An implementation function
+3. Registration in the execute_tool dispatcher
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Tool schemas — Anthropic tool format
+# ---------------------------------------------------------------------------
+TOOLS: list[dict[str, Any]] = [
+    {
+        "name": "get_current_time",
+        "description": "Get the current UTC time. Use when the user asks for the current time or date.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "calculate",
+        "description": "Perform a mathematical calculation. Use for arithmetic, unit conversions, or numeric analysis.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "expression": {
+                    "type": "string",
+                    "description": "Mathematical expression to evaluate (e.g., '2 + 2', '100 * 0.15')",
+                },
+            },
+            "required": ["expression"],
+        },
+    },
+]
+
+
+# ---------------------------------------------------------------------------
+# Tool implementations
+# ---------------------------------------------------------------------------
+async def _get_current_time(**kwargs: Any) -> str:
+    """Return the current UTC time."""
+    now = datetime.now(timezone.utc)
+    return now.strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+async def _calculate(expression: str, **kwargs: Any) -> str:
+    """Safely evaluate a mathematical expression."""
+    # Only allow safe math operations
+    allowed_chars = set("0123456789+-*/().% ")
+    if not all(c in allowed_chars for c in expression):
+        return f"Error: expression contains disallowed characters: {expression}"
+    try:
+        result = eval(expression)  # noqa: S307 — restricted to numeric chars
+        return str(result)
+    except Exception as e:
+        return f"Error evaluating '{expression}': {e}"
+
+
+# ---------------------------------------------------------------------------
+# Tool dispatcher
+# ---------------------------------------------------------------------------
+_TOOL_REGISTRY: dict[str, Any] = {
+    "get_current_time": _get_current_time,
+    "calculate": _calculate,
+}
+
+
+async def execute_tool(tool_name: str, tool_input: dict[str, Any]) -> str:
+    """Dispatch a tool call to the appropriate implementation."""
+    handler = _TOOL_REGISTRY.get(tool_name)
+    if handler is None:
+        logger.error("Unknown tool requested: %s", tool_name)
+        return f"Error: unknown tool '{tool_name}'"
+
+    try:
+        result = await handler(**tool_input)
+        return result
+    except Exception as e:
+        logger.exception("Tool '%s' failed", tool_name)
+        return f"Error executing tool '{tool_name}': {e}"

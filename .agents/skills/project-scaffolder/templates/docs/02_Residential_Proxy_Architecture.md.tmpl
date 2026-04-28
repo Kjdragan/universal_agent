@@ -1,0 +1,131 @@
+# Residential Proxy Architecture and Usage Policy
+
+## Purpose
+
+This document is the canonical source of truth for residential proxy usage in {{PROJECT_NAME}}.
+
+It defines where the residential proxy is used, which use cases are approved, which are explicitly disallowed, what env vars control it, and operational health signals.
+
+## Executive Summary
+
+{{PROJECT_NAME}} supports a **rotating residential proxy** via **DataImpulse** for use cases where datacenter IPs are blocked or degraded.
+
+| Provider | Endpoint | Port | Protocol |
+|---|---|---|---|
+| **DataImpulse** | `gw.dataimpulse.com` | `823` | HTTP/HTTPS |
+
+The proxy is a **cost-sensitive shared resource** and must not be used as a generic project-wide scraping tunnel.
+
+## Configuration
+
+### Infisical Secrets
+
+All proxy credentials are stored in Infisical — never in `.env` files or source code.
+
+| Secret Name | Description |
+|---|---|
+| `DATAIMPULSE_PROXY_USER` | DataImpulse account username |
+| `DATAIMPULSE_PROXY_PASS` | DataImpulse account password |
+| `DATAIMPULSE_PROXY_HOST` | Proxy host (default: `gw.dataimpulse.com`) |
+| `DATAIMPULSE_PROXY_PORT` | Proxy port (default: `823`) |
+
+### Building the Proxy URL
+
+```python
+from {{PROJECT_MODULE}}.config import settings
+
+proxy_url = (
+    f"http://{settings.DATAIMPULSE_PROXY_USER}:"
+    f"{settings.DATAIMPULSE_PROXY_PASS}@"
+    f"{settings.DATAIMPULSE_PROXY_HOST}:"
+    f"{settings.DATAIMPULSE_PROXY_PORT}"
+)
+```
+
+### Usage with httpx (async)
+
+```python
+import httpx
+
+async def fetch_with_proxy(url: str) -> str:
+    async with httpx.AsyncClient(proxy=proxy_url) as client:
+        response = await client.get(url)
+        return response.text
+```
+
+### Usage with requests (sync)
+
+```python
+import requests
+
+proxies = {"http": proxy_url, "https": proxy_url}
+response = requests.get(url, proxies=proxies, timeout=30)
+```
+
+## Approved Uses
+
+The residential proxy is approved for:
+
+1. **Scraping targets that block datacenter IPs** — when you get 403/503/Cloudflare blocks from the VPS IP
+2. **API calls to services with IP reputation checks** — where datacenter IPs are deprioritized
+3. **One-off data retrieval** — single requests, not bulk loops
+
+## Explicitly Disallowed Uses
+
+- **Binary/media downloads** — never route video, audio, or large file downloads through the proxy
+- **Generic project-wide scraping** — not a default network path
+- **Retry loops** — one-off usage only, no automated retry loops
+- **Random experimentation** — requires explicit approval for new use cases
+
+## Cost and Safety Rules
+
+- **Every byte matters** — proxy bandwidth costs money
+- **Try direct first** — only escalate to proxy when hitting IP-based blocks
+- **Small payloads only** — HTML pages, API responses; never multi-megabyte files
+- **Bandwidth cap applies** — monitor via the DataImpulse telemetry API
+
+## DataImpulse Bandwidth Telemetry
+
+The DataImpulse User API (port 777) provides real-time bandwidth stats.
+
+```python
+import httpx
+
+async def get_dataimpulse_usage_stats() -> dict:
+    """Check bandwidth consumption via DataImpulse management API."""
+    url = f"https://{settings.DATAIMPULSE_PROXY_HOST}:777/api/stats"
+    auth = (settings.DATAIMPULSE_PROXY_USER, settings.DATAIMPULSE_PROXY_PASS)
+    
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(url, auth=auth, timeout=10)
+        data = resp.json()
+        return {
+            "ok": True,
+            "total_traffic": data.get("total_traffic"),
+            "traffic_used": data.get("traffic_used"),
+            "traffic_left": data.get("traffic_left"),
+            "used_threads": data.get("used_threads"),
+        }
+```
+
+> [!NOTE]
+> The telemetry API uses port 777 (management API), not port 823 (proxy traffic).
+> This is a free API call that does not consume bandwidth.
+
+## Operational Health Signals
+
+**Healthy state:**
+- Proxy credentials loaded from Infisical
+- Requests through proxy succeed without bot-block errors
+- Bandwidth consumption within expected bounds
+
+**Unhealthy indicators:**
+- Missing credentials → proxy calls fail silently or with auth errors
+- `proxy_auth_failed` → credential rotation needed
+- `proxy_connect_failed` → provider issue or network problem
+- Rapid bandwidth depletion → possible bulk misuse
+
+## Source Files
+
+- `backend/src/{{PROJECT_MODULE}}/config.py` — credential loading from Infisical
+- `backend/src/{{PROJECT_MODULE}}/services/proxy.py` — proxy URL builder and utility functions
