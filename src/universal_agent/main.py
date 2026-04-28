@@ -4224,7 +4224,7 @@ def on_agent_stop(context: HookContext, run_id: str = None, db_conn=None) -> dic
     run_spec_json = info.get("run_spec_json") or "{}"
     try:
         run_spec = json.loads(run_spec_json)
-    except:
+    except (json.JSONDecodeError, ValueError):
         run_spec = {}
 
     original_objective = run_spec.get(
@@ -10072,7 +10072,7 @@ async def main(args: argparse.Namespace):
                 # Cleanup if partially initialized
                 try:
                     await first_attempt_client.__aexit__(None, None, None)
-                except:
+                except Exception:
                     pass
             # Retry with clean options
             client = ClaudeSDKClient(options)
