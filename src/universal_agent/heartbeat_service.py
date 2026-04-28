@@ -1863,8 +1863,6 @@ class HeartbeatService:
                             stale_result.get("finalized"),
                             stale_result.get("reopened"),
                         )
-
-                    import time
                     if getattr(task_hub, "_last_pruned_timestamp", 0) < time.time() - 86400:
                         try:
                             _prune_res = task_hub.prune_settled_tasks(conn, retention_days=21)
@@ -2048,9 +2046,8 @@ class HeartbeatService:
 
                         # ── Signal Curator (Track 1) ────────────────────────
                         # When the queue is empty, check if accumulated signal
-                        # cards warrant an LLM curation pass.  This only
-                        # evaluates the trigger condition; the actual LLM call
-                        # happens inside the reflection/ideation prompt.
+                        # cards warrant an async curation pass.
+                        _curation_dispatched = False
                         try:
                             from universal_agent.services.signal_curator import (
                                 get_pending_cards,
@@ -2060,17 +2057,38 @@ class HeartbeatService:
                             if should_run_curation(conn):
                                 pending_cards = get_pending_cards(conn, limit=30)
                                 if pending_cards:
-                                    metadata["signal_curator"] = {
-                                        "triggered": True,
-                                        "pending_card_count": len(pending_cards),
-                                        "cards": pending_cards[:10],  # Cap context size
-                                    }
                                     record_curation_run(conn)
                                     logger.info(
-                                        "Signal curator triggered for %s: %d pending cards",
+                                        "Signal curator triggered for %s: %d pending cards. Dispatching async mission.",
                                         session.session_id,
                                         len(pending_cards),
                                     )
+                                    from universal_agent.tools.vp_orchestration import (
+                                        dispatch_vp_mission,
+                                    )
+                                    
+                                    # Create an explicit async task to prevent blocking the heartbeat
+
+                                    async def _dispatch_curation():
+                                        try:
+                                            await dispatch_vp_mission(
+                                                objective=f"Curate {len(pending_cards)} pending proactive signal cards using task_hub_promote_signals tool.",
+                                                mission_type="curation",
+                                                idempotency_key=f"curation-{session.session_id}-{int(time.time())}",
+                                                vp_id="vp.general.primary",
+                                                source_session_id=session.session_id,
+                                                metadata={
+                                                    "source": "heartbeat",
+                                                    "run_kind": "proactive_curation",
+                                                    "skip_heartbeat": True
+                                                }
+                                            )
+                                        except Exception as d_exc:
+                                            logger.error("Failed to dispatch signal curation mission: %s", d_exc)
+                                            
+                                    asyncio.create_task(_dispatch_curation())
+                                    _curation_dispatched = True
+                                    
                         except Exception as _sc_exc:
                             logger.debug("Signal curator unavailable: %s", _sc_exc)
                         # ────────────────────────────────────────────────────
@@ -2100,6 +2118,12 @@ class HeartbeatService:
             )
             guard_skip_reason = str(guard_policy.get("skip_reason") or "").strip()
             _is_reflection_mode = bool(guard_policy.get("reflection_mode", False))
+            
+            # --- Override guard for curation ---
+            if locals().get("_curation_dispatched") and not guard_skip_reason:
+                guard_skip_reason = "proactive_curation_dispatched"
+                _is_reflection_mode = False
+            # -----------------------------------
             metadata["heartbeat_guard"] = {
                 "autonomous_enabled": bool(guard_policy.get("autonomous_enabled")),
                 "max_actionable": int(guard_policy.get("max_actionable") or DEFAULT_HEARTBEAT_MAX_ACTIONABLE),

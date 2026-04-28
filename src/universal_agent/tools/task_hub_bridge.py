@@ -164,3 +164,111 @@ async def _task_hub_decompose_impl(args: Dict[str, Any]) -> Dict[str, Any]:
             "subtask_ids": [str(s.get("task_id", "")) for s in created],
         }
     )
+
+
+# ── Phase 3: Proactive Task Generation ───────────────────────────────────────
+
+
+@tool(
+    name="task_hub_create",
+    description=(
+        "Create a new task in the Task Hub. Use this for proactive task ideation. "
+        "Provide title, description, priority (1-4), labels (array of strings), "
+        "and source_kind (e.g., 'reflection', 'proactive')."
+    ),
+    input_schema={
+        "title": str,
+        "description": str,
+        "priority": int,
+        "labels": list,
+        "source_kind": str,
+    },
+)
+async def task_hub_create_wrapper(args: Dict[str, Any]) -> Dict[str, Any]:
+    return await _task_hub_create_impl(args)
+
+
+async def _task_hub_create_impl(args: Dict[str, Any]) -> Dict[str, Any]:
+    title = str(args.get("title") or "").strip()
+    if not title:
+        return _err("title is required")
+
+    description = str(args.get("description") or "").strip()
+    priority = args.get("priority")
+    try:
+        priority = int(priority) if priority is not None else 2
+    except ValueError:
+        priority = 2
+
+    labels = args.get("labels", [])
+    if not isinstance(labels, list):
+        labels = [str(labels)]
+
+    source_kind = str(args.get("source_kind", "reflection") or "reflection").strip()
+
+    conn = connect_runtime_db(get_activity_db_path())
+    conn.row_factory = sqlite3.Row
+    try:
+        import uuid
+        task_id = f"task_{uuid.uuid4().hex[:12]}"
+
+        item = {
+            "task_id": task_id,
+            "title": title,
+            "description": description,
+            "priority": priority,
+            "labels": labels,
+            "source_kind": source_kind,
+            "status": "open",
+            "agent_ready": True,
+            "trigger_type": "autonomous",
+        }
+
+        created = task_hub.upsert_item(conn, item)
+    except Exception as exc:
+        return _err(str(exc))
+    finally:
+        conn.close()
+
+    return _ok({
+        "success": True,
+        "task_id": task_id,
+        "item": created,
+    })
+
+
+@tool(
+    name="task_hub_promote_signals",
+    description=(
+        "Promote curated signal cards into actionable Task Hub items. "
+        "Takes an array of curated signal dicts. "
+        "Each dict should contain: 'card_id', 'task_title', 'task_description', 'priority' (1-4), and 'rationale'."
+    ),
+    input_schema={
+        "curated_cards": list,
+    },
+)
+async def task_hub_promote_signals_wrapper(args: Dict[str, Any]) -> Dict[str, Any]:
+    return await _task_hub_promote_signals_impl(args)
+
+
+async def _task_hub_promote_signals_impl(args: Dict[str, Any]) -> Dict[str, Any]:
+    curated_cards = args.get("curated_cards", [])
+    if not isinstance(curated_cards, list) or not curated_cards:
+        return _err("curated_cards must be a non-empty array")
+
+    conn = connect_runtime_db(get_activity_db_path())
+    conn.row_factory = sqlite3.Row
+    try:
+        from universal_agent.services.signal_curator import promote_cards_to_tasks
+        created_ids = promote_cards_to_tasks(conn, curated_cards)
+    except Exception as exc:
+        return _err(str(exc))
+    finally:
+        conn.close()
+
+    return _ok({
+        "success": True,
+        "created_task_ids": created_ids,
+        "count": len(created_ids),
+    })

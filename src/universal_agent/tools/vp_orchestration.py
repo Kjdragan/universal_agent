@@ -64,7 +64,9 @@ def _result(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _error_payload(code: str, message: str, *, retryable: bool = False) -> dict[str, Any]:
+def _error_payload(
+    code: str, message: str, *, retryable: bool = False
+) -> dict[str, Any]:
     return {
         "ok": False,
         "error": {
@@ -121,7 +123,9 @@ def _mission_duration_seconds(started_at: Any, completed_at: Any) -> Optional[fl
 def _mission_to_dict(row: Any) -> Optional[dict[str, Any]]:
     if row is None:
         return None
-    payload = {key: row[key] for key in row.keys()} if hasattr(row, "keys") else dict(row)
+    payload = (
+        {key: row[key] for key in row.keys()} if hasattr(row, "keys") else dict(row)
+    )
     budget = _parse_json(payload.get("budget_json"))
     if isinstance(budget, dict):
         payload["budget"] = budget
@@ -136,7 +140,9 @@ def _mission_to_dict(row: Any) -> Optional[dict[str, Any]]:
 
 
 def _event_to_dict(row: Any) -> dict[str, Any]:
-    payload = {key: row[key] for key in row.keys()} if hasattr(row, "keys") else dict(row)
+    payload = (
+        {key: row[key] for key in row.keys()} if hasattr(row, "keys") else dict(row)
+    )
     payload["payload"] = _parse_json(payload.get("payload_json"))
     return payload
 
@@ -209,7 +215,9 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
         return _result(_error_payload("validation_error", "objective is required"))
 
     mission_type = str(args.get("mission_type") or "task").strip() or "task"
-    constraints = args.get("constraints") if isinstance(args.get("constraints"), dict) else {}
+    constraints = (
+        args.get("constraints") if isinstance(args.get("constraints"), dict) else {}
+    )
     budget = args.get("budget") if isinstance(args.get("budget"), dict) else {}
     objective = _with_preference_context(
         vp_id=vp_id,
@@ -233,12 +241,18 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
                 constraints=constraints,
                 budget=budget,
                 idempotency_key=idempotency_key,
-                source_session_id=str(args.get("source_session_id") or "internal.vp_tool"),
+                source_session_id=str(
+                    args.get("source_session_id") or "internal.vp_tool"
+                ),
                 source_turn_id=str(args.get("source_turn_id") or uuid.uuid4().hex),
                 reply_mode=reply_mode,
                 priority=priority,
                 run_id=str(args.get("run_id") or "").strip() or None,
-                execution_mode=str(args.get("execution_mode") or "sdk").strip() or "sdk",
+                execution_mode=str(args.get("execution_mode") or "sdk").strip()
+                or "sdk",
+                metadata=args.get("metadata")
+                if isinstance(args.get("metadata"), dict)
+                else {},
             ),
         )
         mission = _mission_to_dict(row) or {}
@@ -262,7 +276,6 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
         return _result(_error_payload("dispatch_failed", str(exc)))
     finally:
         conn.close()
-
 
 
 async def dispatch_vp_mission(
@@ -357,14 +370,20 @@ async def _vp_get_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
     try:
         row = get_vp_mission(conn, mission_id)
         if row is None:
-            return _result(_error_payload("not_found", f"Mission not found: {mission_id}"))
+            return _result(
+                _error_payload("not_found", f"Mission not found: {mission_id}")
+            )
         mission = _mission_to_dict(row) or {}
-        events = [_event_to_dict(item) for item in list_vp_events(conn, mission_id=mission_id, limit=100)]
+        events = [
+            _event_to_dict(item)
+            for item in list_vp_events(conn, mission_id=mission_id, limit=100)
+        ]
         return _result(
             {
                 "ok": True,
                 "mission": mission,
-                "terminal": str(mission.get("status") or "").lower() in _TERMINAL_MISSION_STATUSES,
+                "terminal": str(mission.get("status") or "").lower()
+                in _TERMINAL_MISSION_STATUSES,
                 "failure_detail": _failure_detail(events),
                 "events": events,
             }
@@ -436,7 +455,9 @@ async def _vp_wait_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
         try:
             row = get_vp_mission(conn, mission_id)
             if row is None:
-                return _result(_error_payload("not_found", f"Mission not found: {mission_id}"))
+                return _result(
+                    _error_payload("not_found", f"Mission not found: {mission_id}")
+                )
             mission = _mission_to_dict(row) or {}
             status = str(mission.get("status") or "").lower()
             if status in _TERMINAL_MISSION_STATUSES:
@@ -482,7 +503,11 @@ async def _vp_cancel_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
     try:
         cancelled = cancel_mission(conn, mission_id, reason=reason)
         if not cancelled:
-            return _result(_error_payload("not_found", f"Mission not found or not cancellable: {mission_id}"))
+            return _result(
+                _error_payload(
+                    "not_found", f"Mission not found or not cancellable: {mission_id}"
+                )
+            )
         mission = _mission_to_dict(get_vp_mission(conn, mission_id)) or {}
         return _result(
             {
@@ -518,7 +543,9 @@ async def _vp_read_result_artifacts_impl(args: dict[str, Any]) -> dict[str, Any]
     try:
         mission_row = get_vp_mission(conn, mission_id)
         if mission_row is None:
-            return _result(_error_payload("not_found", f"Mission not found: {mission_id}"))
+            return _result(
+                _error_payload("not_found", f"Mission not found: {mission_id}")
+            )
         mission = _mission_to_dict(mission_row) or {}
         result_ref = str(mission.get("result_ref") or "").strip()
         if not result_ref.startswith("workspace://"):
@@ -529,7 +556,9 @@ async def _vp_read_result_artifacts_impl(args: dict[str, Any]) -> dict[str, Any]
                 )
             )
 
-        workspace_root = Path(result_ref.replace("workspace://", "", 1)).expanduser().resolve()
+        workspace_root = (
+            Path(result_ref.replace("workspace://", "", 1)).expanduser().resolve()
+        )
         if not workspace_root.exists():
             return _result(
                 _error_payload(
@@ -557,7 +586,9 @@ async def _vp_read_result_artifacts_impl(args: dict[str, Any]) -> dict[str, Any]
                     "path": relpath,
                     "bytes": size,
                     "excerpt": excerpt,
-                    "excerpt_truncated": bool(excerpt and size > len(excerpt.encode("utf-8", errors="ignore"))),
+                    "excerpt_truncated": bool(
+                        excerpt and size > len(excerpt.encode("utf-8", errors="ignore"))
+                    ),
                 }
             )
 

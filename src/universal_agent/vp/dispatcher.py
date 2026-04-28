@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import hashlib
 import logging
 from pathlib import Path
@@ -52,6 +52,7 @@ class MissionDispatchRequest:
     priority: int
     run_id: Optional[str] = None
     execution_mode: str = "sdk"  # "sdk" (default), "cli" (Claude Code CLI), or "dag" (deterministic DAG runner)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 def dispatch_mission(
@@ -66,13 +67,24 @@ def dispatch_mission(
 
     mission_id = _resolve_mission_id(request)
     payload = _build_payload(request=request, profile=profile, mission_id=mission_id)
-    _validate_dispatch_constraints(profile=profile, constraints=request.constraints, execution_mode=request.execution_mode)
+    _validate_dispatch_constraints(
+        profile=profile,
+        constraints=request.constraints,
+        execution_mode=request.execution_mode,
+    )
 
     existing = get_vp_mission(conn, mission_id)
     if existing is not None:
         return existing
 
     profile.workspace_root.mkdir(parents=True, exist_ok=True)
+    session_metadata = {
+        "client_kind": profile.client_kind,
+        "display_name": profile.display_name,
+    }
+    if request.metadata:
+        session_metadata.update(request.metadata)
+
     upsert_vp_session(
         conn=conn,
         vp_id=profile.vp_id,
@@ -80,7 +92,7 @@ def dispatch_mission(
         status="idle",
         session_id=f"{profile.vp_id}.external",
         workspace_dir=str(profile.workspace_root),
-        metadata={"client_kind": profile.client_kind, "display_name": profile.display_name},
+        metadata=session_metadata,
     )
     append_vp_session_event(
         conn=conn,
@@ -215,15 +227,26 @@ def _build_payload(
         "reply_mode": request.reply_mode or "async",
         "priority": int(request.priority),
         "execution_mode": request.execution_mode,
+        "metadata": request.metadata,
         # Pass through DAG workflow definition for dag execution mode
-        **({
-            "dag_definition": request.constraints.get("dag_definition"),
-        } if request.execution_mode == "dag" and isinstance(request.constraints, dict)
-           and request.constraints.get("dag_definition") else {}),
-        **({
-            "dag_definition_path": request.constraints.get("dag_definition_path"),
-        } if request.execution_mode == "dag" and isinstance(request.constraints, dict)
-           and request.constraints.get("dag_definition_path") else {}),
+        **(
+            {
+                "dag_definition": request.constraints.get("dag_definition"),
+            }
+            if request.execution_mode == "dag"
+            and isinstance(request.constraints, dict)
+            and request.constraints.get("dag_definition")
+            else {}
+        ),
+        **(
+            {
+                "dag_definition_path": request.constraints.get("dag_definition_path"),
+            }
+            if request.execution_mode == "dag"
+            and isinstance(request.constraints, dict)
+            and request.constraints.get("dag_definition_path")
+            else {}
+        ),
     }
 
 
@@ -276,8 +299,17 @@ def _validate_dispatch_constraints(
 
 
 def _extract_target_paths(constraints: dict[str, Any]) -> list[str]:
-    keys = ("target_path", "path", "repo_path", "workspace_dir", "project_path",
-            "output_path", "working_directory", "dest_path", "destination")
+    keys = (
+        "target_path",
+        "path",
+        "repo_path",
+        "workspace_dir",
+        "project_path",
+        "output_path",
+        "working_directory",
+        "dest_path",
+        "destination",
+    )
     values: list[str] = []
     for key in keys:
         value = constraints.get(key)
@@ -291,13 +323,29 @@ def _extract_target_paths(constraints: dict[str, Any]) -> list[str]:
     return values
 
 
-_KNOWN_CONSTRAINT_KEYS = frozenset({
-    "target_path", "path", "repo_path", "workspace_dir", "project_path",
-    "output_path", "working_directory", "dest_path", "destination",
-    "targets", "tech_stack", "max_duration_minutes", "required_env_var",
-    "max_tokens", "repo_mutation_allowed", "workflow_kind", "mission_type",
-    "dag_definition", "dag_definition_path",
-})
+_KNOWN_CONSTRAINT_KEYS = frozenset(
+    {
+        "target_path",
+        "path",
+        "repo_path",
+        "workspace_dir",
+        "project_path",
+        "output_path",
+        "working_directory",
+        "dest_path",
+        "destination",
+        "targets",
+        "tech_stack",
+        "max_duration_minutes",
+        "required_env_var",
+        "max_tokens",
+        "repo_mutation_allowed",
+        "workflow_kind",
+        "mission_type",
+        "dag_definition",
+        "dag_definition_path",
+    }
+)
 
 
 def _warn_unknown_constraint_keys(constraints: dict[str, Any]) -> None:

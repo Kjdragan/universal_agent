@@ -27919,6 +27919,31 @@ async def ops_vp_dispatch_mission(
             ),
             workspace_base=WORKSPACES_DIR,
         )
+        
+        try:
+            th_conn = _task_hub_open_conn()
+            task_hub.upsert_item(
+                th_conn,
+                {
+                    "task_id": mission.mission_id,
+                    "title": f"Dashboard Dispatch: {vp_identifier}",
+                    "description": objective,
+                    "status": task_hub.TASK_STATUS_IN_PROGRESS,
+                    "source_kind": "dashboard",
+                    "source_ref": vp_identifier,
+                    "mirror_status": "external",
+                }
+            )
+            task_hub.claim_task_for_agent(
+                th_conn,
+                task_id=mission.mission_id,
+                agent_id=vp_identifier,
+                claim_reason="dashboard_manual_dispatch"
+            )
+        except Exception as th_exc:
+            import logging
+            logging.getLogger("ops").error(f"Failed to insert dashboard mission into task hub: {th_exc}")
+            
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except HTTPException:

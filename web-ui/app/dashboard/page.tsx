@@ -738,16 +738,30 @@ export default function DashboardPage() {
 
   // "Clear All" support for Recent Missions panel
   const [clearedMissionsBefore, setClearedMissionsBefore] = useState<string | null>(null);
+  const [deletedMissionIds, setDeletedMissionIds] = useState<Set<string>>(new Set());
+
   useEffect(() => {
     try {
       const stored = localStorage.getItem(CLEARED_MISSIONS_LS_KEY);
       if (stored) setClearedMissionsBefore(stored);
+      const storedDeleted = localStorage.getItem("ua.deleted_missions.v1");
+      if (storedDeleted) setDeletedMissionIds(new Set(JSON.parse(storedDeleted)));
     } catch { /* localStorage unavailable */ }
   }, []);
+
   const handleClearMissions = useCallback(() => {
     const now = new Date().toISOString();
     try { localStorage.setItem(CLEARED_MISSIONS_LS_KEY, now); } catch { /* ignore */ }
     setClearedMissionsBefore(now);
+  }, []);
+
+  const handleDeleteMission = useCallback((missionId: string) => {
+    setDeletedMissionIds((prev) => {
+      const next = new Set(prev);
+      next.add(missionId);
+      try { localStorage.setItem("ua.deleted_missions.v1", JSON.stringify([...next])); } catch {}
+      return next;
+    });
   }, []);
 
   const filteredVpMissions = useMemo(
@@ -755,6 +769,7 @@ export default function DashboardPage() {
       const clearedTs = clearedMissionsBefore ? new Date(clearedMissionsBefore).getTime() : null;
       return vpMissions.filter((mission) => {
         if (selectedVpId !== "all" && mission.vp_id !== selectedVpId) return false;
+        if (deletedMissionIds.has(mission.mission_id)) return false;
         // Auto-clear missions older than 36 hours
         const ts = mission.updated_at || mission.created_at;
         if (ts) {
@@ -766,7 +781,7 @@ export default function DashboardPage() {
         return true;
       });
     },
-    [selectedVpId, vpMissions, clearedMissionsBefore],
+    [selectedVpId, vpMissions, clearedMissionsBefore, deletedMissionIds],
   );
 
   const filteredVpSessions = useMemo(
@@ -894,6 +909,7 @@ export default function DashboardPage() {
           objective,
           source_session_id: "ops.dashboard",
           reply_mode: "async",
+          constraints: { skip_preference_context: true },
         }),
       });
       if (!res.ok) {
@@ -1290,7 +1306,7 @@ export default function DashboardPage() {
                 : effectiveStatus === "cancelled" ? "text-muted-foreground"
                 : "text-muted-foreground";
               return (
-                <div key={mission.mission_id} className="rounded border border-border bg-background/40 px-2 py-1.5">
+                <div key={mission.mission_id} className="group rounded border border-border bg-background/40 px-2 py-1.5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
                       <p className="font-mono text-[11px] text-foreground/80">
@@ -1304,15 +1320,27 @@ export default function DashboardPage() {
                         <span className="rounded bg-red-400/10 px-1.5 py-0.5 text-[10px] font-semibold text-red-400/80" title={`${restartCount} vp.mission.started events detected — indicates restart loop`}>⟳ {restartCount} restarts</span>
                       )}
                     </div>
-                    {cancellable && (
+                    <div className="flex items-center gap-2">
+                      {cancellable && (
+                        <button
+                          type="button"
+                          onClick={() => cancelMission(mission.mission_id)}
+                          className="rounded border border-red-400/30 bg-red-400/10 px-2 py-0.5 text-[10px] text-red-400/80 hover:bg-red-400/20"
+                        >
+                          Cancel
+                        </button>
+                      )}
                       <button
                         type="button"
-                        onClick={() => cancelMission(mission.mission_id)}
-                        className="rounded border border-red-400/30 bg-red-400/10 px-2 py-0.5 text-[10px] text-red-400/80 hover:bg-red-400/20"
+                        onClick={() => handleDeleteMission(mission.mission_id)}
+                        title="Delete mission from view"
+                        className="opacity-0 group-hover:opacity-100 rounded p-0.5 text-secondary/60 hover:text-secondary hover:bg-red-400/10 transition"
                       >
-                        Cancel
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-3.5 w-3.5">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+                        </svg>
                       </button>
-                    )}
+                    </div>
                   </div>
                   <p className="mt-1 text-foreground">{mission.objective || "(no objective)"}</p>
                   {missionStatus === "running" && Number.isFinite(claimSecsLeft) && (
