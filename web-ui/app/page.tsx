@@ -98,8 +98,8 @@ type VpHydrationSnapshot = {
   warning?: string;
 };
 
-const RUN_LOG_USER_LINE = /^\[\d{2}:\d{2}:\d{2}\]\s+👤\s+USER:\s*(.+)$/;
-const RUN_LOG_ASSISTANT_LINE = /^\[\d{2}:\d{2}:\d{2}\]\s+🤖\s+ASSISTANT:\s*(.+)$/;
+const RUN_LOG_USER_LINE = /^\[\d{2}:\d{2}:\d{2}\]\s+👤\s+USER:\s*(.*)$/;
+const RUN_LOG_ASSISTANT_LINE = /^\[\d{2}:\d{2}:\d{2}\]\s+🤖\s+ASSISTANT:\s*(.*)$/;
 
 const RUN_LOG_TIMESTAMPED_LINE = /^\[\d{2}:\d{2}:\d{2}\]\s+([\s\S]+)$/;
 const RUN_LOG_LEVEL_PREFIX = /^(INFO|WARN|WARNING|ERROR|DEBUG|TRACE)\b[:\s-]*(.*)$/i;
@@ -109,39 +109,45 @@ function extractHistoryFromRunLog(raw: string): { messages: HydratedChatMessage[
   const messages: HydratedChatMessage[] = [];
   const logs: HydratedActivityLog[] = [];
   const lines = raw.split(/\r?\n/);
+  
+  let currentBlock: "user" | "assistant" | "log" | null = null;
+  
   for (const line of lines) {
     const userMatch = line.match(RUN_LOG_USER_LINE);
-    if (userMatch?.[1]) {
-      const content = userMatch[1].trim();
-      if (content) messages.push({ role: "user", content });
+    if (userMatch !== null) {
+      const content = (userMatch[1] || "").trim();
+      messages.push({ role: "user", content });
+      currentBlock = "user";
       continue;
     }
 
     const assistantMatch = line.match(RUN_LOG_ASSISTANT_LINE);
-    if (assistantMatch?.[1]) {
-      const content = assistantMatch[1].trim();
-      if (content) {
-        const lastMsg = messages[messages.length - 1];
-        if (lastMsg && lastMsg.role === "assistant") {
-          lastMsg.content += "\n" + content;
-        } else {
-          messages.push({ role: "assistant", content });
-        }
+    if (assistantMatch !== null) {
+      const content = (assistantMatch[1] || "").trim();
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg && lastMsg.role === "assistant") {
+        lastMsg.content += (lastMsg.content ? "\n" : "") + content;
+      } else {
+        messages.push({ role: "assistant", content });
       }
+      currentBlock = "assistant";
       continue;
     }
 
     const timestamped = line.match(RUN_LOG_TIMESTAMPED_LINE);
-    if (timestamped?.[1]) {
-      const rawMessage = timestamped[1].trim();
-      if (!rawMessage) continue;
+    if (timestamped !== null) {
+      const rawMessage = (timestamped[1] || "").trim();
+      if (!rawMessage) {
+        currentBlock = null;
+        continue;
+      }
 
       let level = "INFO";
       let message = rawMessage;
       const noIconPrefix = rawMessage.replace(/^[^A-Za-z0-9]+/, "");
       const levelPrefix = noIconPrefix.match(RUN_LOG_LEVEL_PREFIX);
-      if (levelPrefix?.[1]) {
-        const normalized = levelPrefix[1].toUpperCase();
+      if (levelPrefix) {
+        const normalized = (levelPrefix[1] || "").toUpperCase();
         level = normalized === "WARNING" ? "WARN" : normalized;
         message = (levelPrefix[2] || "").trim() || noIconPrefix;
       } else if (RUN_LOG_TOOL_HINT.test(noIconPrefix)) {
@@ -154,8 +160,32 @@ function extractHistoryFromRunLog(raw: string): { messages: HydratedChatMessage[
         level,
         prefix: "rehydrated",
       });
+      currentBlock = "log";
+      continue;
+    }
+
+    // Continuation line
+    if (currentBlock === "assistant") {
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg && lastMsg.role === "assistant") {
+        lastMsg.content += "\n" + line;
+      }
+    } else if (currentBlock === "user") {
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg && lastMsg.role === "user") {
+        lastMsg.content += "\n" + line;
+      }
+    } else if (currentBlock === "log") {
+      const lastLog = logs[logs.length - 1];
+      if (lastLog) {
+        lastLog.message += "\n" + line;
+      }
     }
   }
+  
+  // Cleanup
+  messages.forEach(m => m.content = m.content.trim());
+  logs.forEach(l => l.message = l.message.trim());
 
   // Hook/tail sessions sometimes contain lines that do not fit strict patterns.
   // If parsing yielded nothing, show a compact tail fallback so observer attach
