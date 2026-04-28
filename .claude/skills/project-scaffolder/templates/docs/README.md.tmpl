@@ -1,0 +1,43 @@
+# {{PROJECT_NAME}} Documentation
+
+Welcome to the technical documentation for **{{PROJECT_NAME}}**.
+
+## ⚠️ MANDATORY: Documentation Rules
+
+This `README.md` and `Documentation_Status.md` serve as the **authoritative indexes** for all project documentation.
+
+- All documentation MUST be located within the `docs/` directory.
+- Before creating a new document, search these indexes to ensure the topic isn't already covered. Always prefer updating an existing document over creating a new one.
+- **Rule:** If you create a new documentation file, you MUST add a link to it in this `README.md` index and in `Documentation_Status.md`.
+
+## 📚 Table of Contents
+
+### 1. [Architecture](01_Architecture)
+
+- **[System Overview](01_Architecture/01_System_Overview.md)**: Component map, services, data stores, deployment topology.
+
+### 2. [API Reference](02_API)
+
+- **[Endpoints](02_API/01_Endpoints.md)**: REST API endpoint reference.
+
+### 3. [Operations](03_Operations)
+
+- **[Deployment](03_Operations/01_Deployment.md)**: Production deployment procedures and runbook.
+- **[Residential Proxy Architecture](03_Operations/02_Residential_Proxy_Architecture.md)**: DataImpulse rotating residential proxy configuration, approved usage policy, and bandwidth monitoring.
+
+### 4. [Agents](04_Agents)
+
+- **[Agent Architecture](04_Agents/01_Agent_Architecture.md)**: Claude Agent SDK integration, tool registration, and agent execution lifecycle.
+
+### 5. [Deployment Canonical Docs](deployment)
+
+- **[Secrets and Environments](deployment/secrets_and_environments.md)**: Infisical secrets management and environment configuration.
+- **[CI/CD Pipeline](deployment/ci_cd_pipeline.md)**: GitHub Actions workflow, deploy triggers, and verification.
+
+---
+
+## 🚀 Getting Started
+
+1. Check the **[System Overview](01_Architecture/01_System_Overview.md)** for architecture context.
+2. See **[Deployment](03_Operations/01_Deployment.md)** for how to deploy and operate.
+3. Read **[Secrets and Environments](deployment/secrets_and_environments.md)** for secret management.

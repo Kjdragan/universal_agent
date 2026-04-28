@@ -1,0 +1,91 @@
+"""{{PROJECT_NAME}} — Claude Agent SDK starter.
+
+Provides a minimal agent framework using the Anthropic Python SDK
+with tool-use capabilities. Extend this with custom tools for your
+application's AI features.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from typing import Any
+
+import anthropic
+
+from {{PROJECT_MODULE}}.config import get_settings
+from {{PROJECT_MODULE}}.agent.tools import TOOLS, execute_tool
+
+logger = logging.getLogger(__name__)
+settings = get_settings()
+
+# Initialize client — API key loaded from Infisical via config
+client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+
+DEFAULT_MODEL = "claude-sonnet-4-20250514"
+DEFAULT_MAX_TOKENS = 4096
+MAX_TOOL_ROUNDS = 10
+
+
+async def run_agent(
+    user_message: str,
+    *,
+    system_prompt: str | None = None,
+    model: str = DEFAULT_MODEL,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+) -> str:
+    """Run a single agent conversation with tool use.
+
+    Args:
+        user_message: The user's input message.
+        system_prompt: Optional system instructions for the agent.
+        model: Anthropic model to use.
+        max_tokens: Maximum tokens in the response.
+
+    Returns:
+        The agent's final text response after all tool calls are resolved.
+    """
+    messages: list[dict[str, Any]] = [{"role": "user", "content": user_message}]
+
+    for round_num in range(MAX_TOOL_ROUNDS):
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": messages,
+        }
+        if system_prompt:
+            kwargs["system"] = system_prompt
+        if TOOLS:
+            kwargs["tools"] = TOOLS
+
+        response = client.messages.create(**kwargs)
+
+        # Check if the model wants to use tools
+        if response.stop_reason != "tool_use":
+            # No more tool calls — extract final text
+            text_parts = [b.text for b in response.content if hasattr(b, "text")]
+            return "\n".join(text_parts)
+
+        # Process tool calls
+        tool_results = []
+        for block in response.content:
+            if block.type == "tool_use":
+                logger.info(
+                    "Agent tool call [round %d]: %s(%s)",
+                    round_num + 1,
+                    block.name,
+                    json.dumps(block.input, default=str)[:200],
+                )
+                result = await execute_tool(block.name, block.input)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": str(result),
+                })
+
+        # Add assistant response and tool results to conversation
+        messages.append({"role": "assistant", "content": response.content})
+        messages.append({"role": "user", "content": tool_results})
+
+    logger.warning("Agent hit max tool rounds (%d)", MAX_TOOL_ROUNDS)
+    return "I've reached the maximum number of processing steps. Please try a simpler request."

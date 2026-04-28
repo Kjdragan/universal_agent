@@ -1,0 +1,14 @@
+[Unit]
+Description={{PROJECT_NAME}} Documentation Server (MkDocs)
+After=network.target
+
+[Service]
+Type=simple
+User=ua
+WorkingDirectory=/opt/{{PROJECT_NAME}}
+ExecStart=/opt/{{PROJECT_NAME}}/backend/.venv/bin/python -m http.server {{DOCS_PORT}} --directory site
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

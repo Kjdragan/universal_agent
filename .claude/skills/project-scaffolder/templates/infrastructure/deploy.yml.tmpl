@@ -1,0 +1,61 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+          tags: tag:ci-gha
+
+      - name: Write bootstrap .env
+        run: |
+          ssh -o StrictHostKeyChecking=no ua@uaonvps "cat > /opt/{{PROJECT_NAME}}/.env << 'ENVEOF'
+          INFISICAL_CLIENT_ID=${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET=${{ secrets.INFISICAL_CLIENT_SECRET }}
+          INFISICAL_PROJECT_ID=${{ secrets.INFISICAL_PROJECT_ID }}
+          INFISICAL_ENVIRONMENT=production
+          ENVEOF"
+
+      - name: Deploy
+        run: |
+          ssh -o StrictHostKeyChecking=no ua@uaonvps << 'DEPLOY'
+          set -euo pipefail
+          cd /opt/{{PROJECT_NAME}}
+
+          # Pull latest
+          git pull origin main
+
+          # Backend: sync dependencies
+          cd backend
+          uv sync --frozen
+          uv run alembic upgrade head
+          cd ..
+
+          # Frontend: install and build
+          cd frontend
+          npm ci
+          npm run build
+          cd ..
+
+          # Restart services
+          sudo systemctl restart {{PROJECT_NAME}}-api
+
+          echo "✅ Deploy complete"
+          DEPLOY
+
+      - name: Verify
+        run: |
+          sleep 5
+          ssh -o StrictHostKeyChecking=no ua@uaonvps \
+            "curl -sf http://localhost:{{BACKEND_PORT}}/api/health | python3 -m json.tool"

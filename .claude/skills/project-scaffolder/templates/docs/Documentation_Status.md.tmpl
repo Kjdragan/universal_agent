@@ -1,0 +1,43 @@
+# Documentation Status
+
+**Last updated:** {{CREATED_DATE}}
+
+## ⚠️ MANDATORY: Documentation Rules
+
+This file and `docs/README.md` serve as the **authoritative indexes** for all project documentation.
+
+- All documentation MUST be located strictly within the `docs/` directory.
+- Always check this index to update existing documents before creating new ones.
+- **Rule:** If you create a new documentation file, you MUST log it and link it in this file and in `docs/README.md`.
+
+## Architecture (01_Architecture/)
+
+| Doc | Subject |
+|-----|---------|
+| 01_System_Overview.md | System architecture — component map, services, data stores, deployment topology |
+
+## API Reference (02_API/)
+
+| Doc | Subject |
+|-----|---------|
+| 01_Endpoints.md | REST API endpoint reference and OpenAPI spec |
+
+## Operations (03_Operations/)
+
+| Doc | Subject |
+|-----|---------|
+| 01_Deployment.md | Production deployment procedures, systemd services, and operational runbook |
+| 02_Residential_Proxy_Architecture.md | **Canonical source of truth** — DataImpulse rotating residential proxy, approved usage, bandwidth monitoring, and cost policy |
+
+## Agents (04_Agents/)
+
+| Doc | Subject |
+|-----|---------|
+| 01_Agent_Architecture.md | Claude Agent SDK integration, tool registration, and agent execution lifecycle |
+
+## Deployment Canonical Docs (deployment/)
+
+| Doc | Subject |
+|-----|---------|
+| secrets_and_environments.md | **Canonical entry-point** — Infisical secrets, environments, deploy workflow secrets contract |
+| ci_cd_pipeline.md | Workflow details, deploy triggers, pipeline structure |

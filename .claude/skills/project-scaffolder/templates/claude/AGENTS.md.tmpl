@@ -1,0 +1,81 @@
+# Repository Agent Rules
+
+## Problem-Solving Philosophy
+
+When investigating or fixing issues, always solve the **root cause** holistically — never just cure symptoms with band-aids. Before implementing a fix, ask:
+
+1. **Can we expand capabilities** rather than restrict them? (e.g., raise a system limit rather than cap our data to fit under it)
+2. **Is there a proper architectural pattern** for this? (e.g., write large data to files instead of stuffing it into env vars)
+3. **Are we losing information or functionality** with this approach? If yes, find a better way.
+
+Defensive guards and safety nets are acceptable as a *last resort backstop*, but they must not be the primary fix. The primary fix should eliminate the problem at its source.
+
+## Code-Verified Answers
+
+When answering questions about how this system works — architecture, data flows, service interactions, or any behavioral claim — you **MUST read the actual source code first** before responding. Do not answer from memory, assumptions, or general knowledge.
+
+**Mandatory process:**
+
+1. **Read before you speak.** If the user asks "how does X work?", open and read the relevant source files before forming your answer.
+2. **Cite what you find.** Reference specific files, functions, and line numbers.
+3. **Never fabricate steps.** This system has specific flows. Do not simplify or omit steps you haven't verified.
+4. **Distinguish what you know from what you're inferring.** If you've read the code and it's clear, state it with confidence. If extrapolating, flag it.
+5. **When in doubt, investigate more.** It is always better to spend an extra 30 seconds reading code than to give a wrong answer.
+
+## Documentation
+
+All documentation for this project MUST reside exclusively within the `docs/` directory.
+
+When asked to update or create documentation:
+
+1. **Always Check the Indexes First**: You must consult `docs/README.md` and `docs/Documentation_Status.md` before proceeding.
+2. **Update Over Create**: If a document already exists for your topic, update the existing file rather than creating a new one.
+3. **Log New Documents**: If you must create a new file, you MUST add a link to it in both `docs/README.md` and `docs/Documentation_Status.md`.
+4. **No Unindexed Files**: No document should exist in `docs/` without being linked from one of the two index files.
+
+### Dynamic Documentation Maintenance (MANDATORY)
+
+Documentation updates are **not optional follow-up work** — they are part of the implementation itself. When you make code changes that affect system behavior, architecture, routing, protocols, or configuration:
+
+1. **Update docs during implementation, not after.** Treat documentation updates as a deliverable of the same work unit, not a separate task.
+2. **Identify affected docs before coding.** Check `docs/README.md` and `docs/Documentation_Status.md` to find which existing documents cover the areas you are changing.
+3. **Update canonical source-of-truth docs first.** Always update the canonical doc, not a peripheral reference.
+4. **Include visual artifacts.** Mermaid diagrams, routing tables, and code-verified citations — not just prose.
+5. **Update both indexes.** Any new doc must appear in both `docs/README.md` and `docs/Documentation_Status.md`.
+6. **When in doubt, update.** Architecture drift caused by undocumented changes is worse than a minor redundant doc update.
+
+## Deployment Contract
+
+This repository has exactly one supported deployment path. Production is branch-driven and automated.
+
+1. **Integration:** Open reviewed feature work against `develop`.
+2. **Production:** Fast-forward `develop` to `main`. Push to `main` triggers the automated deploy workflow.
+
+**Do not** use ad hoc `ssh`, `rsync`, `git pull`, or manual VPS deployment flows.
+
+## Variables and Secrets
+
+Use Infisical for all secrets and configuration variables. **No `.env` files** for secrets in any environment except for the initial machine bootstrap (Infisical credentials themselves).
+
+- Use `infisical secrets` CLI to manage secrets
+- Use the project's `config.py` Infisical loader at runtime
+- Never store API keys, passwords, or credentials in `.env`, `os.getenv()` calls, or hardcoded in source
+
+## Implementation Plan Quality Standards
+
+Every implementation plan MUST include:
+
+1. **Mermaid sequence diagrams** for multi-component interactions
+2. **Code-verified citations** with file/line references
+3. **Summary tables** for change impact
+4. **Concrete code snippets** for proposed modifications
+5. **Phase-by-phase breakdown** with clear boundaries
+
+## Review Guidelines
+
+- Flag code that logs, stores, or transmits PII or secrets without redaction.
+- Verify new API routes have authentication/authorization middleware.
+- Flag blocking I/O inside async event loops without proper executor offloading.
+- Flag Python code that imports secrets via `os.getenv` instead of the Infisical loader.
+- Do not flag formatting-only issues unless they break a linter.
+- Treat typos in user-facing strings as P1.

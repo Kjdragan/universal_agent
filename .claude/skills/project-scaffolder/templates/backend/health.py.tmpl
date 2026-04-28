@@ -1,0 +1,13 @@
+"""Health check endpoint."""
+
+from __future__ import annotations
+
+from fastapi import APIRouter
+
+router = APIRouter(tags=["health"])
+
+
+@router.get("/health")
+async def health_check():
+    """Basic health check — returns 200 if the service is running."""
+    return {"status": "ok", "service": "{{PROJECT_NAME}}"}
