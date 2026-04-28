@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.12"
-# dependencies = []
+# dependencies = ["httpx"]
 # ///
 """Project Scaffolder — creates fully-provisioned VPS projects.
 
@@ -12,6 +12,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import re
@@ -22,9 +23,19 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+try:
+    import httpx
+except ImportError:
+    httpx = None  # type: ignore
+
 SKILL_DIR = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = SKILL_DIR / "templates"
 UA_SKILLS_DIR = Path("/home/kjdragan/lrepos/universal_agent/.agents/skills")
+
+# Infisical API config
+INFISICAL_API_URL = "https://app.infisical.com"
+INFISICAL_ORG_ID = "42e4d09c-9723-48fb-8244-43e5c7b9fae3"
+VPS_IP = "187.77.16.29"
 
 CURATED_SKILLS = [
     "clean-code", "systematic-debugging", "verification-before-completion",
@@ -60,6 +71,109 @@ def find_free_port(start: int, end: int) -> int:
             except OSError:
                 continue
     raise RuntimeError(f"No free port in range {start}-{end}")
+
+
+# ---------------------------------------------------------------------------
+# Infisical helpers
+# ---------------------------------------------------------------------------
+
+def _infisical_auth() -> tuple[str, str, str]:
+    """Get Infisical access token using UA's machine-identity credentials.
+
+    Returns (access_token, client_id, client_secret).
+    Reads from INFISICAL_CLIENT_ID / INFISICAL_CLIENT_SECRET env vars,
+    falling back to the UA .env file.
+    """
+    # Try env first, then load from UA .env
+    client_id = os.environ.get("INFISICAL_CLIENT_ID", "").strip()
+    client_secret = os.environ.get("INFISICAL_CLIENT_SECRET", "").strip()
+    if not client_id or not client_secret:
+        ua_env = Path("/home/kjdragan/lrepos/universal_agent/.env")
+        if not ua_env.exists():
+            ua_env = Path("/opt/universal_agent/.env")
+        if ua_env.exists():
+            for line in ua_env.read_text().splitlines():
+                if "=" in line and not line.strip().startswith("#"):
+                    k, _, v = line.partition("=")
+                    k, v = k.strip(), v.strip()
+                    if k == "INFISICAL_CLIENT_ID" and not client_id:
+                        client_id = v
+                    elif k == "INFISICAL_CLIENT_SECRET" and not client_secret:
+                        client_secret = v
+
+    if not client_id or not client_secret:
+        raise RuntimeError("Cannot find INFISICAL_CLIENT_ID / INFISICAL_CLIENT_SECRET")
+
+    if httpx is None:
+        raise RuntimeError("httpx is required for Infisical API calls")
+
+    with httpx.Client(timeout=20.0) as client:
+        resp = client.post(
+            f"{INFISICAL_API_URL}/api/v1/auth/universal-auth/login",
+            json={"clientId": client_id, "clientSecret": client_secret},
+        )
+        resp.raise_for_status()
+        token = resp.json()["accessToken"]
+    return token, client_id, client_secret
+
+
+def create_infisical_project(project_name: str) -> str:
+    """Create an Infisical project and return its ID.
+
+    If a project with the same name already exists, return its ID instead.
+    """
+    token, _, _ = _infisical_auth()
+    headers = {"Authorization": f"Bearer {token}"}
+
+    if httpx is None:
+        raise RuntimeError("httpx is required for Infisical API calls")
+
+    with httpx.Client(timeout=20.0) as client:
+        # Check for existing project with same name
+        list_resp = client.get(
+            f"{INFISICAL_API_URL}/api/v2/organizations/{INFISICAL_ORG_ID}/workspaces",
+            headers=headers,
+        )
+        if list_resp.status_code == 200:
+            for w in list_resp.json().get("workspaces", []):
+                if w.get("name", "").lower() == project_name.lower():
+                    print(f"  ℹ Infisical project '{project_name}' already exists (ID: {w['id']})")
+                    return w["id"]
+
+        # Create new project
+        resp = client.post(
+            f"{INFISICAL_API_URL}/api/v2/workspace",
+            json={"projectName": project_name, "organizationId": INFISICAL_ORG_ID},
+            headers=headers,
+        )
+        resp.raise_for_status()
+        project_id = resp.json()["project"]["id"]
+        print(f"  ✓ Created Infisical project '{project_name}' (ID: {project_id})")
+        return project_id
+
+
+# ---------------------------------------------------------------------------
+# Directory helpers
+# ---------------------------------------------------------------------------
+
+def ensure_project_dir(project_dir: Path) -> None:
+    """Create the project root directory, using sudo if needed for /opt."""
+    if project_dir.exists():
+        return
+    try:
+        project_dir.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        print(f"  ⚠ Permission denied for {project_dir}, using sudo...")
+        user = getpass.getuser()
+        subprocess.run(
+            ["sudo", "mkdir", "-p", str(project_dir)],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["sudo", "chown", "-R", f"{user}:{user}", str(project_dir)],
+            check=True, capture_output=True,
+        )
+        print(f"  ✓ Created {project_dir} (owned by {user})")
 
 
 def render_template(template_path: Path, variables: dict[str, str]) -> str:
@@ -401,12 +515,15 @@ def main():
     parser = argparse.ArgumentParser(description="Scaffold a new VPS project")
     parser.add_argument("--name", required=True, help="Project name (lowercase, hyphenated)")
     parser.add_argument("--description", required=True, help="Project description")
-    parser.add_argument("--infisical-project-id", default="", help="Infisical project ID")
+    parser.add_argument("--infisical-project-id", default="", help="Infisical project ID (auto-created if omitted)")
+    parser.add_argument("--skip-infisical", action="store_true", help="Skip Infisical project creation")
     parser.add_argument("--base-dir", default="/opt", help="Base directory for projects")
     parser.add_argument("--dry-run", action="store_true", help="Print plan without creating files")
     args = parser.parse_args()
 
     name = args.name.lower().strip()
+    # Normalize: underscores → hyphens for DNS/subdomain compatibility
+    dns_name = name.replace("_", "-")
     module = slugify(name)
     project_dir = Path(args.base_dir) / name
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -417,6 +534,16 @@ def main():
     db_port = find_free_port(DB_PORT_RANGE_START, DB_PORT_RANGE_END)
     docs_port = find_free_port(DOCS_PORT_RANGE_START, DOCS_PORT_RANGE_END)
 
+    # Auto-provision Infisical project if not provided
+    infisical_project_id = args.infisical_project_id
+    if not infisical_project_id and not args.skip_infisical and not args.dry_run:
+        try:
+            print(f"\n🔑 Provisioning Infisical project...")
+            infisical_project_id = create_infisical_project(dns_name)
+        except Exception as exc:
+            print(f"  ⚠ Infisical auto-creation failed: {exc}")
+            print(f"  ℹ Continuing without Infisical. Set up manually later.")
+
     variables = {
         "PROJECT_NAME": name,
         "PROJECT_MODULE": module,
@@ -425,7 +552,7 @@ def main():
         "FRONTEND_PORT": str(frontend_port),
         "DB_PORT": str(db_port),
         "DOCS_PORT": str(docs_port),
-        "INFISICAL_PROJECT_ID": args.infisical_project_id,
+        "INFISICAL_PROJECT_ID": infisical_project_id,
         "CREATED_DATE": now,
     }
 
@@ -437,8 +564,10 @@ def main():
     print(f"   Frontend: port {frontend_port}")
     print(f"   Database: port {db_port}")
     print(f"   Docs:     port {docs_port}")
-    print(f"   Prod URL: https://{name}.clearspringcg.com")
-    print(f"   Dev URL:  https://dev-{name}.clearspringcg.com")
+    print(f"   Prod URL: https://{dns_name}.clearspringcg.com")
+    print(f"   Dev URL:  https://dev-{dns_name}.clearspringcg.com")
+    if infisical_project_id:
+        print(f"   Infisical: {infisical_project_id}")
 
     if args.dry_run:
         print("\n🔍 Dry run — no files created.")
@@ -448,7 +577,11 @@ def main():
         print(f"\n❌ Directory already exists: {project_dir}")
         sys.exit(1)
 
-    print(f"\n📁 Creating directory structure...")
+    # Create root dir (with sudo fallback for /opt)
+    print(f"\n📁 Creating project directory...")
+    ensure_project_dir(project_dir)
+
+    print(f"📁 Creating directory structure...")
     create_directory_structure(project_dir, module)
 
     print(f"📝 Writing __init__.py files...")
@@ -476,14 +609,27 @@ def main():
 
     print(f"\n✅ Project scaffolded at {project_dir}")
     print(f"\n📋 Next steps:")
-    print(f"   1. Add DNS A records for {name}.clearspringcg.com")
-    print(f"   2. Create GitHub repo: gh repo create kjdragan/{name} --private --source={project_dir} --push")
-    print(f"   3. Seed Infisical secrets (ANTHROPIC_API_KEY, DATABASE_URL, APP_SECRET_KEY)")
-    print(f"   4. Install nginx config: sudo cp {project_dir}/_nginx/{name}.conf /etc/nginx/sites-enabled/")
-    print(f"   5. SSL: sudo certbot --nginx -d {name}.clearspringcg.com -d dev-{name}.clearspringcg.com")
-    print(f"   6. Install systemd: sudo cp {project_dir}/_systemd/*.service /etc/systemd/system/")
-    print(f"   7. Bootstrap: cd {project_dir} && bash scripts/bootstrap.sh")
-    print(f"   8. Start: sudo systemctl enable --now {name}-db {name}-api {name}-docs")
+    print(f"")
+    print(f"   1. 🌐 DNS — Add A records at your domain registrar:")
+    print(f"      {dns_name}.clearspringcg.com     → A → {VPS_IP}")
+    print(f"      dev-{dns_name}.clearspringcg.com  → A → {VPS_IP}")
+    print(f"")
+    print(f"   2. 📦 GitHub — Create repo and push:")
+    print(f"      gh repo create kjdragan/{name} --private --source={project_dir} --push")
+    print(f"")
+    if infisical_project_id:
+        print(f"   3. 🔑 Infisical — Project auto-created (ID: {infisical_project_id})")
+        print(f"      Seed secrets: ANTHROPIC_API_KEY, DATABASE_URL, APP_SECRET_KEY")
+    else:
+        print(f"   3. 🔑 Infisical — Create project at app.infisical.com and seed secrets")
+    print(f"")
+    print(f"   4. 🔧 VPS setup:")
+    print(f"      sudo cp {project_dir}/_nginx/{name}.conf /etc/nginx/sites-enabled/")
+    print(f"      sudo certbot --nginx -d {dns_name}.clearspringcg.com -d dev-{dns_name}.clearspringcg.com")
+    print(f"      sudo cp {project_dir}/_systemd/*.service /etc/systemd/system/")
+    print(f"      cd {project_dir} && bash scripts/bootstrap.sh")
+    print(f"      sudo systemctl enable --now {name}-db {name}-api {name}-docs")
+
 
 
 if __name__ == "__main__":

@@ -26,11 +26,9 @@ any manual project setup — always prefer it over improvising directory structu
 
 Before running the scaffolder, ensure:
 
-1. **DNS records exist** — The user must have created A records at their domain registrar:
-   - `<project_name>.clearspringcg.com` → `187.77.16.29`
-   - `dev-<project_name>.clearspringcg.com` → `187.77.16.29`
-2. **Infisical project created** — Create a new project in the Infisical web UI (https://app.infisical.com). Note the project ID. The free plan limits API-based project creation, so this is done manually.
-3. **GitHub CLI authenticated** — `gh auth status` must succeed on the VPS.
+1. **GitHub CLI authenticated** — `gh auth status` must succeed on the VPS.
+2. **Infisical credentials available** — The UA `.env` must contain `INFISICAL_CLIENT_ID` and `INFISICAL_CLIENT_SECRET`. The Infisical project is **auto-created** by the script.
+3. **DNS records** — Can be set up before or after scaffolding. The script will print the exact records needed.
 
 ## Execution Procedure
 
@@ -39,13 +37,8 @@ Before running the scaffolder, ensure:
 Ask the user for:
 - `project_name` (required)
 - `project_description` (required)
-- `infisical_project_id` (from the manually-created Infisical project)
 
-Verify DNS records have propagated:
-```bash
-dig +short <project_name>.clearspringcg.com A
-dig +short dev-<project_name>.clearspringcg.com A
-```
+**Do NOT ask for `infisical_project_id`** — the script auto-creates it via the Infisical REST API.
 
 ### Step 2: Run the Scaffold Script
 
@@ -53,20 +46,17 @@ dig +short dev-<project_name>.clearspringcg.com A
 cd /home/kjdragan/lrepos/universal_agent
 uv run .agents/skills/project-scaffolder/scripts/scaffold.py \
   --name <project_name> \
-  --description "<project_description>" \
-  --infisical-project-id <infisical_project_id>
+  --description "<project_description>"
 ```
 
 The script handles:
+- **Infisical project auto-creation** via REST API (idempotent — reuses existing)
+- **`/opt` permission handling** with `sudo` fallback
 - Directory creation at `/opt/<project_name>/`
 - Git initialization
 - All project files from templates
 - Port allocation (scans for next available)
 - Bootstrap `.env` generation
-- Python venv creation with `uv`
-- React app initialization with `npm`
-- Docker Compose for PostgreSQL
-- Alembic migration initialization
 - Skills symlinking
 
 ### Step 3: Post-Scaffold Manual Steps
