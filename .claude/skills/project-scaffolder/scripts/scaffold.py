@@ -30,7 +30,19 @@ except ImportError:
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = SKILL_DIR / "templates"
-UA_SKILLS_DIR = Path("/home/kjdragan/lrepos/universal_agent/.agents/skills")
+# Auto-detect: script lives in <ua_root>/.agents/skills/project-scaffolder/scripts/
+# So SKILL_DIR.parent = .agents/skills/ (or .claude/skills/)
+UA_SKILLS_DIR = SKILL_DIR.parent
+# Verify it looks right (contains other skill dirs)
+if not (UA_SKILLS_DIR / "clean-code").exists():
+    # Fallback: search common locations
+    for _candidate in [
+        Path("/opt/universal_agent/.agents/skills"),
+        Path("/home/kjdragan/lrepos/universal_agent/.agents/skills"),
+    ]:
+        if _candidate.exists():
+            UA_SKILLS_DIR = _candidate
+            break
 
 # Infisical API config
 INFISICAL_API_URL = "https://app.infisical.com"
@@ -156,24 +168,47 @@ def create_infisical_project(project_name: str) -> str:
 # Directory helpers
 # ---------------------------------------------------------------------------
 
+def _default_base_dir() -> str:
+    """Pick a writable base directory for new projects."""
+    if os.access("/opt", os.W_OK):
+        return "/opt"
+    # VPS: ua user can't write to /opt — use ~/projects
+    fallback = Path.home() / "projects"
+    fallback.mkdir(exist_ok=True)
+    return str(fallback)
+
+
 def ensure_project_dir(project_dir: Path) -> None:
-    """Create the project root directory, using sudo if needed for /opt."""
+    """Create the project root directory.
+
+    Tries direct mkdir first. If that fails (e.g. /opt as non-root),
+    attempts sudo. If sudo also fails, falls back to ~/projects/.
+    """
     if project_dir.exists():
         return
     try:
         project_dir.mkdir(parents=True, exist_ok=True)
     except PermissionError:
-        print(f"  ⚠ Permission denied for {project_dir}, using sudo...")
-        user = getpass.getuser()
-        subprocess.run(
-            ["sudo", "mkdir", "-p", str(project_dir)],
-            check=True, capture_output=True,
-        )
-        subprocess.run(
-            ["sudo", "chown", "-R", f"{user}:{user}", str(project_dir)],
-            check=True, capture_output=True,
-        )
-        print(f"  ✓ Created {project_dir} (owned by {user})")
+        # Try sudo (works on desktop, may fail on VPS)
+        try:
+            user = getpass.getuser()
+            print(f"  ⚠ Permission denied for {project_dir}, trying sudo...")
+            subprocess.run(
+                ["sudo", "mkdir", "-p", str(project_dir)],
+                check=True, capture_output=True,
+            )
+            subprocess.run(
+                ["sudo", "chown", "-R", f"{user}:{user}", str(project_dir)],
+                check=True, capture_output=True,
+            )
+            print(f"  ✓ Created {project_dir} (owned by {user})")
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            # sudo not available — re-raise with helpful message
+            raise PermissionError(
+                f"Cannot create {project_dir}. "
+                f"Run with --base-dir ~/projects or ask an admin to: "
+                f"sudo mkdir -p {project_dir} && sudo chown {getpass.getuser()} {project_dir}"
+            )
 
 
 def render_template(template_path: Path, variables: dict[str, str]) -> str:
@@ -517,7 +552,7 @@ def main():
     parser.add_argument("--description", required=True, help="Project description")
     parser.add_argument("--infisical-project-id", default="", help="Infisical project ID (auto-created if omitted)")
     parser.add_argument("--skip-infisical", action="store_true", help="Skip Infisical project creation")
-    parser.add_argument("--base-dir", default="/opt", help="Base directory for projects")
+    parser.add_argument("--base-dir", default=_default_base_dir(), help="Base directory for projects (auto-detected)")
     parser.add_argument("--dry-run", action="store_true", help="Print plan without creating files")
     args = parser.parse_args()
 
