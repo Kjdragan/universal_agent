@@ -1,5 +1,7 @@
 # Heartbeat Service
 
+**Last updated:** 2026-04-29
+
 The **Heartbeat Service** is the "autonomic nervous system" of the Universal Agent. It allows the agent to function without direct user interaction.
 
 > [!IMPORTANT]
@@ -61,6 +63,7 @@ The heartbeat is highly configurable via environment variables.
 | `UA_HEARTBEAT_ACTIVE_END` | None | End of active hours window (e.g., "20:00"). |
 | `UA_HEARTBEAT_EXEC_TIMEOUT` | 1600 | Maximum execution time for a single heartbeat turn (in seconds). |
 | `UA_HEARTBEAT_AUTONOMOUS_ENABLED` | 1 | Set to "0" to disable autonomous heartbeat actions entirely. |
+| `UA_DAEMON_IDLE_TIMEOUT` | 1800 (30 min) | Strict daemon stuck-run timeout. Daemon heartbeat idle checks and gateway daemon execution watchdogs use this threshold before cancellation and crash-report writing. |
 
 ### Retry & Continuation
 
@@ -251,6 +254,8 @@ Heartbeat and Task Hub execution no longer share the same Simone daemon session.
 | ToDo daemon | `daemon_simone_todo` | Task Hub claim, execution, delegation, review, final delivery |
 
 This split prevents run-log/transcript cross-talk between heartbeat supervision and email/task execution.
+
+Daemon sessions are not permanently immune from timeout cleanup. They keep their stable session IDs, but any daemon whose runtime activity is stale beyond `UA_DAEMON_IDLE_TIMEOUT` is treated as stuck even if `active_runs` is still nonzero. The heartbeat idle check writes `work_products/daemon_timeout_crash.json` under the session's actual `workspace_dir`, unregisters the daemon from heartbeat supervision, and asks the gateway to cancel any active execution task. Separately, gateway-registered daemon execution tasks have a watchdog with the same 30-minute default so ToDo daemon runs cannot remain alive indefinitely after a dispatch is accepted.
 
 ## 8B. Heartbeat-Safe Autonomous Subsystem Isolation
 

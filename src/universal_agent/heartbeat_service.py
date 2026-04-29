@@ -943,12 +943,14 @@ class HeartbeatService:
         system_event_provider: Optional[SystemEventProvider] = None,
         event_sink: Optional[HeartbeatEventSink] = None,
         heartbeat_scope: str = "global",
+        session_timeout_callback: Optional[Callable[[GatewaySession, dict[str, Any]], Any]] = None,
     ):
         self.gateway = gateway
         self.connection_manager = connection_manager
         self.system_event_provider = system_event_provider
         self.event_sink = event_sink
         self.heartbeat_scope = heartbeat_scope
+        self.session_timeout_callback = session_timeout_callback
         self.execution_timeout_seconds = _resolve_exec_timeout_seconds()
         self.retry_base_seconds = max(
             1,
@@ -1281,6 +1283,60 @@ class HeartbeatService:
         )
         logger.info("Heartbeat wake-next requested for %s (%s)", session_id, reason)
 
+    def _write_daemon_timeout_crash_report(
+        self,
+        session: GatewaySession,
+        *,
+        runtime: dict[str, Any],
+        active_runs: int,
+        active_connections: int,
+        cm_connections: int,
+        elapsed_seconds: float,
+        timeout_seconds: int,
+        timestamp: str,
+    ) -> dict[str, Any]:
+        workspace_dir = Path(session.workspace_dir)
+        crash_file = workspace_dir / "work_products" / "daemon_timeout_crash.json"
+        payload: dict[str, Any] = {
+            "error": "Daemon session killed due to timeout (likely stuck task)",
+            "reason": "daemon_idle_timeout",
+            "session_id": session.session_id,
+            "workspace_dir": str(workspace_dir),
+            "crash_report_path": str(crash_file),
+            "idle_duration_seconds": elapsed_seconds,
+            "timeout_threshold": timeout_seconds,
+            "timeout_threshold_seconds": timeout_seconds,
+            "runtime_metadata": runtime,
+            "active_connections_reported": active_connections,
+            "connection_manager_connections": cm_connections,
+            "active_runs_reported": active_runs,
+            "timestamp": timestamp,
+        }
+        try:
+            crash_file.parent.mkdir(parents=True, exist_ok=True)
+            crash_file.write_text(json.dumps(payload, indent=2, default=str))
+        except Exception as ex:
+            logger.warning("Failed to write daemon crash report for %s: %s", session.session_id, ex)
+        return payload
+
+    def _notify_session_timeout(self, session: GatewaySession, payload: dict[str, Any]) -> None:
+        if not self.session_timeout_callback:
+            return
+        try:
+            result = self.session_timeout_callback(session, payload)
+            if hasattr(result, "__await__"):
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    close = getattr(result, "close", None)
+                    if callable(close):
+                        close()
+                    logger.warning("Cannot await daemon timeout callback outside an event loop")
+                    return
+                loop.create_task(result)
+        except Exception:
+            logger.exception("Daemon timeout callback failed for %s", session.session_id)
+
     async def _scheduler_loop(self):
         """Main loop that checks sessions periodically."""
         logger.info("Heartbeat scheduler loop starting")
@@ -1316,12 +1372,8 @@ class HeartbeatService:
         Check if session is idle (no connections, no active runs, and past timeout).
         Returns True if session was unregistered (and thus processing should stop).
         """
-        # Daemon sessions (persistent agent sessions) are intentionally
-        # connection-less; they exist solely for proactive heartbeat dispatch.
-        # Never reap them via idle timeout.
         from universal_agent.services.daemon_sessions import is_daemon_session
-        if is_daemon_session(session.session_id):
-            return False
+        is_daemon = is_daemon_session(session.session_id)
 
         unregister_idle = _parse_bool(os.getenv("UA_HEARTBEAT_UNREGISTER_IDLE"), default=True)
         if not unregister_idle:
@@ -1343,8 +1395,8 @@ class HeartbeatService:
         if active_connections > 0 or cm_connections > 0:
             return False
             
-        # If any runs are active, it's not idle
-        if active_runs > 0:
+        # If any runs are active, it's not idle. But we bypass this for daemons to kill stuck zombies.
+        if active_runs > 0 and not is_daemon:
             return False
 
         # Keep session registered if it has an explicit wake request queued.
@@ -1363,15 +1415,36 @@ class HeartbeatService:
             last_activity = datetime.fromisoformat(ts_str)
             now = datetime.now(last_activity.tzinfo) if last_activity.tzinfo else datetime.now()
             
-            # Default 10 minutes (600s) for admin/heartbeat sessions
-            idle_timeout = int(os.getenv("UA_HEARTBEAT_IDLE_TIMEOUT", "600"))
+            # Default 10 minutes (600s) for user sessions, 30 minutes (1800s) for daemon sessions
+            if is_daemon:
+                idle_timeout = int(os.getenv("UA_DAEMON_IDLE_TIMEOUT", "1800"))
+            else:
+                idle_timeout = int(os.getenv("UA_HEARTBEAT_IDLE_TIMEOUT", "600"))
             
             elapsed = (now - last_activity).total_seconds()
             if elapsed > idle_timeout:
-                logger.info(
-                    "🧹 Unregistering idle session %s (idle for %.1fs > %ds, 0 connections)", 
-                    session.session_id, elapsed, idle_timeout
-                )
+                if is_daemon:
+                    logger.error(
+                        "💀 Daemon session %s exceeded timeout (idle for %.1fs > %ds). "
+                        "Terminating stuck daemon process to prevent zombie retry loops.",
+                        session.session_id, elapsed, idle_timeout
+                    )
+                    crash_payload = self._write_daemon_timeout_crash_report(
+                        session,
+                        runtime=runtime,
+                        active_runs=active_runs,
+                        active_connections=active_connections,
+                        cm_connections=cm_connections,
+                        elapsed_seconds=elapsed,
+                        timeout_seconds=idle_timeout,
+                        timestamp=now.isoformat(),
+                    )
+                    self._notify_session_timeout(session, crash_payload)
+                else:
+                    logger.info(
+                        "🧹 Unregistering idle session %s (idle for %.1fs > %ds, 0 connections)", 
+                        session.session_id, elapsed, idle_timeout
+                    )
                 self.unregister_session(session.session_id)
                 return True
         except Exception as e:

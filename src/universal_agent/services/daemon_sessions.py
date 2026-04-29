@@ -6,7 +6,7 @@ heartbeat supervision and Task Hub execution do not share the same runtime.
 Each daemon session:
 - Has a stable session ID (e.g. ``daemon_simone_heartbeat``)
 - Gets a fresh workspace on each gateway startup
-- Is exempt from idle timeout reaping
+- Is protected from normal user-session idle reaping but subject to daemon stuck-run timeouts
 - Gets recycled after its own role-specific runs
 """
 

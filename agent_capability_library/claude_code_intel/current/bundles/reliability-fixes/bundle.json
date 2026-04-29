@@ -1,0 +1,36 @@
+{
+  "bundle_id": "reliability-fixes",
+  "canonical_sources": [],
+  "discovery_posts": [
+    "2049228279945802129",
+    "2046366854227312896"
+  ],
+  "for_kevin_markdown": "They patched three specific bugs:\n1. **WebFetch Stalls:** Large pages no longer hang.\n2. **Proxy 204s:** Previously crashed session.\n3. **API 400s:** Cache-control race condition on parallel requests.\n\nIf UA has custom `web_fetch` or parallel request logic, audit it for these specific edge cases.",
+  "for_ua_markdown": "**Code Pattern to Avoid:**\n```python\n# Bad: Assumes 204 has a body\nif response.status == 204:\n    data = response.json() # Crash potential\n```\n\n**Correct Pattern:**\n```python\nif response.status == 204:\n    return # No content\n```",
+  "likely_agent_system_value": "High - Prevents agent death during common tasks.",
+  "likely_ua_value": "High - UA performs web fetches and parallel requests.",
+  "recommended_variant": "hardening_checklist",
+  "summary": "Specific fixes for WebFetch stalls on huge pages, Proxy 204 crashes, and intermittent API 400s from cache-control races.",
+  "title": "Concurrency & Harness Reliability Fixes",
+  "variants": [
+    {
+      "applicability": [
+        "Shared",
+        "UA"
+      ],
+      "confidence": "high",
+      "intent": "Prevent the specific crashes identified by Anthropic.",
+      "key": "hardening_checklist",
+      "label": "Reliability Hardening Checklist",
+      "primitives": [
+        {
+          "content_markdown": "When implementing WebFetch, enforce:\n1. **Max Size Limits:** Set a `max_content_length` (e.g., 200KB). If exceeded, truncate or fail gracefully rather than hanging.\n2. **Timeout Enforcement:** Always use a strict timeout (e.g., 10s) for fetches.\n3. **204 Safety:** Explicitly check `if status == 204: return None` before attempting to parse body/JSON.",
+          "kind": "prompt_pattern",
+          "rationale": "To handle large pages without hanging or crashing.",
+          "title": "Safe Fetch Handling"
+        }
+      ]
+    }
+  ],
+  "why_now": "These fixes address common 'hang' issues in agent frameworks."
+}

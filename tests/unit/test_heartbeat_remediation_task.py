@@ -278,6 +278,41 @@ def test_autonomous_remediation_decision_is_blocked_for_secret_or_policy_changes
     assert allowed is False
 
 
+def test_autonomous_remediation_allows_bounded_codebase_self_healing():
+    import universal_agent.gateway_server as gs
+
+    allowed = gs._heartbeat_autonomous_remediation_allowed(
+        {
+            "classification": "code_regression_plus_known_noise",
+            "autonomous_remediation_approved": True,
+            "autonomous_remediation_confidence": "medium",
+            "proposed_changes": ["Initialize a missing local variable and add regression coverage."],
+            "autonomous_remediation_rationale": (
+                "Bounded hook regression; Simone/Cody can apply and verify the coding fix."
+            ),
+        },
+        recommended_next_step="Fix missing local variable in fast-path handler.",
+    )
+
+    assert allowed is True
+
+
+def test_autonomous_remediation_blocks_destructive_or_design_level_changes():
+    import universal_agent.gateway_server as gs
+
+    allowed = gs._heartbeat_autonomous_remediation_allowed(
+        {
+            "classification": "architecture_rewrite",
+            "autonomous_remediation_approved": True,
+            "autonomous_remediation_confidence": "high",
+            "proposed_changes": ["Rewrite architecture and drop table state for a clean migration."],
+        },
+        recommended_next_step="Rewrite architecture and drop table state.",
+    )
+
+    assert allowed is False
+
+
 @pytest.mark.asyncio
 async def test_investigation_skips_remediation_when_operator_review_required(
     _activity_db, monkeypatch

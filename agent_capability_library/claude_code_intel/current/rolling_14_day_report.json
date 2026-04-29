@@ -1,447 +1,139 @@
 {
   "bundles": [
     {
-      "bundle_id": "new-in-claude-code-ultrareview-research-preview-runs-a-fleet-of-bug",
-      "canonical_sources": [],
-      "discovery_posts": [
-        "2046999435239133246"
-      ],
-      "for_kevin_markdown": "## What changed\n\nNew in Claude Code: /ultrareview (research preview) runs a fleet of bug-hunting agents in the cloud.\n\nFindings land in the CLI or Desktop automatically. Run it before merging critical changes\u2014auth, data migrations, etc. \n\nPro and Max users get 3 free reviews through 5/5. https://t.co/OEzhNHcZdE\n\n## Why it matters\n\nThis is most valuable if we can turn it into reusable building blocks quickly, before the underlying capability disappears into stale model knowledge.\n",
-      "for_ua_markdown": "## UA Adoption Package\n\n- Use the linked official source as the canonical reference.\n- Materialize multiple implementation primitives, not just a narrative summary.\n- Keep the output reusable for UA and standalone Agent SDK projects.\n",
-      "likely_agent_system_value": "Likely transferable into standalone agent-system projects.",
-      "likely_ua_value": "Likely useful for extending UA workflows and agent building blocks.",
-      "recommended_variant": "ua-adaptation",
-      "summary": "New in Claude Code: /ultrareview (research preview) runs a fleet of bug-hunting agents in the cloud.\n\nFindings land in the CLI or Desktop automatically. Run it before merging critical changes\u2014auth, data migrations, etc. \n\nPro and Max users get 3 free reviews t",
-      "title": "New in Claude Code: /ultrareview (research preview) runs a fleet of bug-",
-      "variants": [
-        {
-          "applicability": [
-            "UA",
-            "Shared"
-          ],
-          "confidence": "medium",
-          "intent": "Translate the capability into reusable UA building blocks.",
-          "key": "ua-adaptation",
-          "label": "UA Adaptation",
-          "primitives": [
-            {
-              "content_markdown": "## UA Adaptation Pattern\n\n- Anchor on the canonical source(s): linked technical references.\n- Distill the feature into reusable prompt/workflow/code assets before wiring it into runtime behavior.\n- Prefer adding this as a reusable building block for Simone/Cody and future client-system builds.\n",
-              "kind": "ua_adaptation_pattern",
-              "rationale": "Turn the capability into a repeatable UA integration pattern.",
-              "title": "UA adaptation pattern"
-            },
-            {
-              "content_markdown": "## Workflow Recipe\n\n1. Read the canonical linked source.\n2. Extract the behavior contract.\n3. Generate prompt/code/workflow primitives.\n4. Validate the most promising path in UA.\n",
-              "kind": "workflow_recipe",
-              "rationale": "Capture the control flow needed to use the capability repeatedly.",
-              "title": "Workflow recipe"
-            }
-          ]
-        },
-        {
-          "applicability": [
-            "Agent SDK",
-            "Shared"
-          ],
-          "confidence": "medium",
-          "intent": "Translate the capability into standalone agent-system primitives.",
-          "key": "agent-sdk-transfer",
-          "label": "Agent SDK Transfer",
-          "primitives": [
-            {
-              "content_markdown": "## Agent SDK Adaptation Pattern\n\n- Translate the capability into standalone agent-system patterns, not just IDE assistance.\n- Capture the control flow, prompt shape, and code surface required to reproduce the feature in a new project.\n- Preserve source provenance so future coding agents can rebuild from official references.\n",
-              "kind": "agent_sdk_adaptation_pattern",
-              "rationale": "Frame the capability for standalone agent systems.",
-              "title": "Agent SDK adaptation pattern"
-            },
-            {
-              "content_markdown": "## Prompt Pattern\n\n```text\nGiven the official feature docs and any linked demo material, synthesize:\n1. the minimal agent behavior contract,\n2. the reusable prompt skeleton,\n3. the workflow boundaries,\n4. the failure modes we should guard against.\n```\n",
-              "kind": "prompt_pattern",
-              "rationale": "Capture the reusable instruction shape behind the capability.",
-              "title": "Prompt pattern"
-            }
-          ]
-        }
-      ],
-      "why_now": "Recent ClaudeDevs updates suggest this capability is new enough that model cutoffs may miss it, so we should materialize it now."
-    },
-    {
-      "bundle_id": "building-agents-that-reach-production-systems-with-mcp-claude",
+      "bundle_id": "claude-code-postmortem",
       "canonical_sources": [
         {
-          "domain": "claude.com",
-          "source_type": "generic_web",
-          "summary_excerpt": "# Linked Source Building agents that reach production systems with MCP | Claude Meet Claude Products Claude Claude Code Claude Cowork Features Claude for Chrome Claude for Slack Claude for Excel Claude for PowerPoint Claude for Word Skills",
-          "title": "Building agents that reach production systems with MCP | Claude",
-          "url": "https://claude.com/blog/building-agents-that-reach-production-systems-with-mcp",
-          "why_canonical": "official Anthropic / Claude source material"
-        },
-        {
-          "domain": "claude.com",
-          "source_type": "generic_web",
-          "summary_excerpt": "# Linked Source Building agents that reach production systems with MCP | Claude Meet Claude Products Claude Claude Code Claude Cowork Features Claude for Chrome Claude for Slack Claude for Excel Claude for PowerPoint Claude for Word Skills",
-          "title": "Building agents that reach production systems with MCP | Claude",
-          "url": "https://claude.com/blog/building-agents-that-reach-production-systems-with-mcp",
-          "why_canonical": "official Anthropic / Claude source material"
-        }
-      ],
-      "discovery_posts": [
-        "2047086372666921217"
-      ],
-      "for_kevin_markdown": "## What changed\n\nNew blog: Building agents that reach production systems with MCP.\n\nWhen should agents use direct APIs vs CLIs vs MCP? Plus patterns for building MCP servers, context-efficient clients and pairing MCP with skills.\n\nhttps://t.co/JEogw5vWly\n\n## Why it matters\n\nThis is most valuable if we can turn it into reusable building blocks quickly, before the underlying capability disappears into stale model knowledge.\n",
-      "for_ua_markdown": "## UA Adoption Package\n\n- Use the linked official source as the canonical reference.\n- Materialize multiple implementation primitives, not just a narrative summary.\n- Keep the output reusable for UA and standalone Agent SDK projects.\n",
-      "likely_agent_system_value": "Likely transferable into standalone agent-system projects.",
-      "likely_ua_value": "Likely useful for extending UA workflows and agent building blocks.",
-      "recommended_variant": "ua-adaptation",
-      "summary": "New blog: Building agents that reach production systems with MCP.\n\nWhen should agents use direct APIs vs CLIs vs MCP? Plus patterns for building MCP servers, context-efficient clients and pairing MCP with skills.\n\nhttps://t.co/JEogw5vWly",
-      "title": "Building agents that reach production systems with MCP | Claude",
-      "variants": [
-        {
-          "applicability": [
-            "UA",
-            "Shared"
-          ],
-          "confidence": "medium",
-          "intent": "Translate the capability into reusable UA building blocks.",
-          "key": "ua-adaptation",
-          "label": "UA Adaptation",
-          "primitives": [
-            {
-              "content_markdown": "## UA Adaptation Pattern\n\n- Anchor on the canonical source(s): Building agents that reach production systems with MCP | Claude, Building agents that reach production systems with MCP | Claude.\n- Distill the feature into reusable prompt/workflow/code assets before wiring it into runtime behavior.\n- Prefer adding this as a reusable building block for Simone/Cody and future client-system builds.\n",
-              "kind": "ua_adaptation_pattern",
-              "rationale": "Turn the capability into a repeatable UA integration pattern.",
-              "title": "UA adaptation pattern"
-            },
-            {
-              "content_markdown": "## Workflow Recipe\n\n1. Read the canonical linked source.\n2. Extract the behavior contract.\n3. Generate prompt/code/workflow primitives.\n4. Validate the most promising path in UA.\n",
-              "kind": "workflow_recipe",
-              "rationale": "Capture the control flow needed to use the capability repeatedly.",
-              "title": "Workflow recipe"
-            }
-          ]
-        },
-        {
-          "applicability": [
-            "Agent SDK",
-            "Shared"
-          ],
-          "confidence": "medium",
-          "intent": "Translate the capability into standalone agent-system primitives.",
-          "key": "agent-sdk-transfer",
-          "label": "Agent SDK Transfer",
-          "primitives": [
-            {
-              "content_markdown": "## Agent SDK Adaptation Pattern\n\n- Translate the capability into standalone agent-system patterns, not just IDE assistance.\n- Capture the control flow, prompt shape, and code surface required to reproduce the feature in a new project.\n- Preserve source provenance so future coding agents can rebuild from official references.\n",
-              "kind": "agent_sdk_adaptation_pattern",
-              "rationale": "Frame the capability for standalone agent systems.",
-              "title": "Agent SDK adaptation pattern"
-            },
-            {
-              "content_markdown": "## Prompt Pattern\n\n```text\nGiven the official feature docs and any linked demo material, synthesize:\n1. the minimal agent behavior contract,\n2. the reusable prompt skeleton,\n3. the workflow boundaries,\n4. the failure modes we should guard against.\n```\n",
-              "kind": "prompt_pattern",
-              "rationale": "Capture the reusable instruction shape behind the capability.",
-              "title": "Prompt pattern"
-            }
-          ]
-        }
-      ],
-      "why_now": "Recent ClaudeDevs updates suggest this capability is new enough that model cutoffs may miss it, so we should materialize it now."
-    },
-    {
-      "bundle_id": "find-bugs-with-ultrareview-claude-code-docs",
-      "canonical_sources": [
-        {
-          "domain": "code.claude.com",
-          "source_type": "generic_web",
-          "summary_excerpt": "# Linked Source Find bugs with ultrareview - Claude Code Docs Skip to main content Claude Code Docs home page English Search... \u2318 K Ask AI Claude Developer Platform Claude Code on the Web Claude Code on the Web Search... Navigation Claude C",
-          "title": "Find bugs with ultrareview - Claude Code Docs",
-          "url": "https://code.claude.com/docs/en/ultrareview",
-          "why_canonical": "official Anthropic / Claude source material"
-        },
-        {
-          "domain": "code.claude.com",
-          "source_type": "generic_web",
-          "summary_excerpt": "# Linked Source Find bugs with ultrareview - Claude Code Docs Skip to main content Claude Code Docs home page English Search... \u2318 K Ask AI Claude Developer Platform Claude Code on the Web Claude Code on the Web Search... Navigation Claude C",
-          "title": "Find bugs with ultrareview - Claude Code Docs",
-          "url": "https://code.claude.com/docs/en/ultrareview",
-          "why_canonical": "official Anthropic / Claude source material"
-        }
-      ],
-      "discovery_posts": [
-        "2046999436522619373"
-      ],
-      "for_kevin_markdown": "## What changed\n\nRun `claude update` to try it out. Learn more in the docs: https://t.co/NhIw6ayYXZ\n\n## Why it matters\n\nThis is most valuable if we can turn it into reusable building blocks quickly, before the underlying capability disappears into stale model knowledge.\n",
-      "for_ua_markdown": "## UA Adoption Package\n\n- Use the linked official source as the canonical reference.\n- Materialize multiple implementation primitives, not just a narrative summary.\n- Keep the output reusable for UA and standalone Agent SDK projects.\n",
-      "likely_agent_system_value": "Likely transferable into standalone agent-system projects.",
-      "likely_ua_value": "Likely useful for extending UA workflows and agent building blocks.",
-      "recommended_variant": "ua-adaptation",
-      "summary": "Run `claude update` to try it out. Learn more in the docs: https://t.co/NhIw6ayYXZ",
-      "title": "Find bugs with ultrareview - Claude Code Docs",
-      "variants": [
-        {
-          "applicability": [
-            "UA",
-            "Shared"
-          ],
-          "confidence": "medium",
-          "intent": "Translate the capability into reusable UA building blocks.",
-          "key": "ua-adaptation",
-          "label": "UA Adaptation",
-          "primitives": [
-            {
-              "content_markdown": "## UA Adaptation Pattern\n\n- Anchor on the canonical source(s): Find bugs with ultrareview - Claude Code Docs, Find bugs with ultrareview - Claude Code Docs.\n- Distill the feature into reusable prompt/workflow/code assets before wiring it into runtime behavior.\n- Prefer adding this as a reusable building block for Simone/Cody and future client-system builds.\n",
-              "kind": "ua_adaptation_pattern",
-              "rationale": "Turn the capability into a repeatable UA integration pattern.",
-              "title": "UA adaptation pattern"
-            },
-            {
-              "content_markdown": "## Workflow Recipe\n\n1. Read the canonical linked source.\n2. Extract the behavior contract.\n3. Generate prompt/code/workflow primitives.\n4. Validate the most promising path in UA.\n",
-              "kind": "workflow_recipe",
-              "rationale": "Capture the control flow needed to use the capability repeatedly.",
-              "title": "Workflow recipe"
-            }
-          ]
-        },
-        {
-          "applicability": [
-            "Agent SDK",
-            "Shared"
-          ],
-          "confidence": "medium",
-          "intent": "Translate the capability into standalone agent-system primitives.",
-          "key": "agent-sdk-transfer",
-          "label": "Agent SDK Transfer",
-          "primitives": [
-            {
-              "content_markdown": "## Agent SDK Adaptation Pattern\n\n- Translate the capability into standalone agent-system patterns, not just IDE assistance.\n- Capture the control flow, prompt shape, and code surface required to reproduce the feature in a new project.\n- Preserve source provenance so future coding agents can rebuild from official references.\n",
-              "kind": "agent_sdk_adaptation_pattern",
-              "rationale": "Frame the capability for standalone agent systems.",
-              "title": "Agent SDK adaptation pattern"
-            },
-            {
-              "content_markdown": "## Prompt Pattern\n\n```text\nGiven the official feature docs and any linked demo material, synthesize:\n1. the minimal agent behavior contract,\n2. the reusable prompt skeleton,\n3. the workflow boundaries,\n4. the failure modes we should guard against.\n```\n",
-              "kind": "prompt_pattern",
-              "rationale": "Capture the reusable instruction shape behind the capability.",
-              "title": "Prompt pattern"
-            }
-          ]
-        }
-      ],
-      "why_now": "Recent ClaudeDevs updates suggest this capability is new enough that model cutoffs may miss it, so we should materialize it now."
-    },
-    {
-      "bundle_id": "learn-tips-on-how-to-maximize-your-prompt-cache-hit-rate-in-trq212-s-po",
-      "canonical_sources": [],
-      "discovery_posts": [
-        "2046710819904524348"
-      ],
-      "for_kevin_markdown": "## What changed\n\nLearn tips on how to maximize your prompt cache hit rate in @trq212's post: https://t.co/3n7z1rLwbk\n\n## Why it matters\n\nThis is most valuable if we can turn it into reusable building blocks quickly, before the underlying capability disappears into stale model knowledge.\n",
-      "for_ua_markdown": "## UA Adoption Package\n\n- Use the linked official source as the canonical reference.\n- Materialize multiple implementation primitives, not just a narrative summary.\n- Keep the output reusable for UA and standalone Agent SDK projects.\n",
-      "likely_agent_system_value": "Likely transferable into standalone agent-system projects.",
-      "likely_ua_value": "Likely useful for extending UA workflows and agent building blocks.",
-      "recommended_variant": "ua-adaptation",
-      "summary": "Learn tips on how to maximize your prompt cache hit rate in @trq212's post: https://t.co/3n7z1rLwbk",
-      "title": "Learn tips on how to maximize your prompt cache hit rate in @trq212's po",
-      "variants": [
-        {
-          "applicability": [
-            "UA",
-            "Shared"
-          ],
-          "confidence": "medium",
-          "intent": "Translate the capability into reusable UA building blocks.",
-          "key": "ua-adaptation",
-          "label": "UA Adaptation",
-          "primitives": [
-            {
-              "content_markdown": "## UA Adaptation Pattern\n\n- Anchor on the canonical source(s): linked technical references.\n- Distill the feature into reusable prompt/workflow/code assets before wiring it into runtime behavior.\n- Prefer adding this as a reusable building block for Simone/Cody and future client-system builds.\n",
-              "kind": "ua_adaptation_pattern",
-              "rationale": "Turn the capability into a repeatable UA integration pattern.",
-              "title": "UA adaptation pattern"
-            },
-            {
-              "content_markdown": "## Workflow Recipe\n\n1. Read the canonical linked source.\n2. Extract the behavior contract.\n3. Generate prompt/code/workflow primitives.\n4. Validate the most promising path in UA.\n",
-              "kind": "workflow_recipe",
-              "rationale": "Capture the control flow needed to use the capability repeatedly.",
-              "title": "Workflow recipe"
-            }
-          ]
-        },
-        {
-          "applicability": [
-            "Agent SDK",
-            "Shared"
-          ],
-          "confidence": "medium",
-          "intent": "Translate the capability into standalone agent-system primitives.",
-          "key": "agent-sdk-transfer",
-          "label": "Agent SDK Transfer",
-          "primitives": [
-            {
-              "content_markdown": "## Agent SDK Adaptation Pattern\n\n- Translate the capability into standalone agent-system patterns, not just IDE assistance.\n- Capture the control flow, prompt shape, and code surface required to reproduce the feature in a new project.\n- Preserve source provenance so future coding agents can rebuild from official references.\n",
-              "kind": "agent_sdk_adaptation_pattern",
-              "rationale": "Frame the capability for standalone agent systems.",
-              "title": "Agent SDK adaptation pattern"
-            },
-            {
-              "content_markdown": "## Prompt Pattern\n\n```text\nGiven the official feature docs and any linked demo material, synthesize:\n1. the minimal agent behavior contract,\n2. the reusable prompt skeleton,\n3. the workflow boundaries,\n4. the failure modes we should guard against.\n```\n",
-              "kind": "prompt_pattern",
-              "rationale": "Capture the reusable instruction shape behind the capability.",
-              "title": "Prompt pattern"
-            }
-          ]
-        }
-      ],
-      "why_now": "Recent ClaudeDevs updates suggest this capability is new enough that model cutoffs may miss it, so we should materialize it now."
-    },
-    {
-      "bundle_id": "what-is-prompt-caching-learn-more-in-rlancemartin-s-article-on-prompt",
-      "canonical_sources": [],
-      "discovery_posts": [
-        "2046710818260345163"
-      ],
-      "for_kevin_markdown": "## What changed\n\nWhat is prompt caching? Learn more in @RLanceMartin's article on prompt caching in the Claude API:  https://t.co/GW9D0wEDnI\n\n## Why it matters\n\nThis is most valuable if we can turn it into reusable building blocks quickly, before the underlying capability disappears into stale model knowledge.\n",
-      "for_ua_markdown": "## UA Adoption Package\n\n- Use the linked official source as the canonical reference.\n- Materialize multiple implementation primitives, not just a narrative summary.\n- Keep the output reusable for UA and standalone Agent SDK projects.\n",
-      "likely_agent_system_value": "Likely transferable into standalone agent-system projects.",
-      "likely_ua_value": "Likely useful for extending UA workflows and agent building blocks.",
-      "recommended_variant": "ua-adaptation",
-      "summary": "What is prompt caching? Learn more in @RLanceMartin's article on prompt caching in the Claude API:  https://t.co/GW9D0wEDnI",
-      "title": "What is prompt caching? Learn more in @RLanceMartin's article on prompt ",
-      "variants": [
-        {
-          "applicability": [
-            "UA",
-            "Shared"
-          ],
-          "confidence": "medium",
-          "intent": "Translate the capability into reusable UA building blocks.",
-          "key": "ua-adaptation",
-          "label": "UA Adaptation",
-          "primitives": [
-            {
-              "content_markdown": "## UA Adaptation Pattern\n\n- Anchor on the canonical source(s): linked technical references.\n- Distill the feature into reusable prompt/workflow/code assets before wiring it into runtime behavior.\n- Prefer adding this as a reusable building block for Simone/Cody and future client-system builds.\n",
-              "kind": "ua_adaptation_pattern",
-              "rationale": "Turn the capability into a repeatable UA integration pattern.",
-              "title": "UA adaptation pattern"
-            },
-            {
-              "content_markdown": "## Workflow Recipe\n\n1. Read the canonical linked source.\n2. Extract the behavior contract.\n3. Generate prompt/code/workflow primitives.\n4. Validate the most promising path in UA.\n",
-              "kind": "workflow_recipe",
-              "rationale": "Capture the control flow needed to use the capability repeatedly.",
-              "title": "Workflow recipe"
-            }
-          ]
-        },
-        {
-          "applicability": [
-            "Agent SDK",
-            "Shared"
-          ],
-          "confidence": "medium",
-          "intent": "Translate the capability into standalone agent-system primitives.",
-          "key": "agent-sdk-transfer",
-          "label": "Agent SDK Transfer",
-          "primitives": [
-            {
-              "content_markdown": "## Agent SDK Adaptation Pattern\n\n- Translate the capability into standalone agent-system patterns, not just IDE assistance.\n- Capture the control flow, prompt shape, and code surface required to reproduce the feature in a new project.\n- Preserve source provenance so future coding agents can rebuild from official references.\n",
-              "kind": "agent_sdk_adaptation_pattern",
-              "rationale": "Frame the capability for standalone agent systems.",
-              "title": "Agent SDK adaptation pattern"
-            },
-            {
-              "content_markdown": "## Prompt Pattern\n\n```text\nGiven the official feature docs and any linked demo material, synthesize:\n1. the minimal agent behavior contract,\n2. the reusable prompt skeleton,\n3. the workflow boundaries,\n4. the failure modes we should guard against.\n```\n",
-              "kind": "prompt_pattern",
-              "rationale": "Capture the reusable instruction shape behind the capability.",
-              "title": "Prompt pattern"
-            }
-          ]
-        }
-      ],
-      "why_now": "Recent ClaudeDevs updates suggest this capability is new enough that model cutoffs may miss it, so we should materialize it now."
-    },
-    {
-      "bundle_id": "caching-claude-platform",
-      "canonical_sources": [
-        {
-          "domain": "platform.claude.com",
+          "domain": "www.anthropic.com",
           "source_type": "vendor_web",
-          "summary_excerpt": "# Linked Source Caching | Claude Platform Loading...",
-          "title": "Caching | Claude Platform",
-          "url": "https://platform.claude.com/usage/cache",
-          "why_canonical": "official Anthropic / Claude source material"
-        },
-        {
-          "domain": "platform.claude.com",
-          "source_type": "vendor_web",
-          "summary_excerpt": "# Linked Source Caching | Claude Platform Loading...",
-          "title": "Caching | Claude Platform",
-          "url": "https://platform.claude.com/usage/cache",
-          "why_canonical": "official Anthropic / Claude source material"
+          "title": "An update on recent Claude Code quality reports",
+          "url": "https://www.anthropic.com/engineering/april-23-postmortem",
+          "why_canonical": "Official engineering post-mortem detailing the root causes of the regression (Harness, System Prompt Isolation)."
         }
       ],
       "discovery_posts": [
-        "2046710816884625509"
+        "2047371123185287223",
+        "2047371125395783769",
+        "2047371126503047578",
+        "2047371124238062069",
+        "2047375800945783056",
+        "2047376081767014703"
       ],
-      "for_kevin_markdown": "## What changed\n\nCaching is critical for customers to lower both costs and TTFT.\n\nWe\u2019re launching a new dashboard in Claude Developer Console to increase visibility and help customers optimize their usage.\n\nCheck it out here: https://t.co/zgBJ4dHXyI https://t.co/Uwje2iPbLT\n\n## Why it matters\n\nThis is most valuable if we can turn it into reusable building blocks quickly, before the underlying capability disappears into stale model knowledge.\n",
-      "for_ua_markdown": "## UA Adoption Package\n\n- Use the linked official source as the canonical reference.\n- Materialize multiple implementation primitives, not just a narrative summary.\n- Keep the output reusable for UA and standalone Agent SDK projects.\n",
-      "likely_agent_system_value": "Likely transferable into standalone agent-system projects.",
-      "likely_ua_value": "Likely useful for extending UA workflows and agent building blocks.",
-      "recommended_variant": "ua-adaptation",
-      "summary": "Caching is critical for customers to lower both costs and TTFT.\n\nWe\u2019re launching a new dashboard in Claude Developer Console to increase visibility and help customers optimize their usage.\n\nCheck it out here: https://t.co/zgBJ4dHXyI https://t.co/Uwje2iPbLT",
-      "title": "Caching | Claude Platform",
+      "for_kevin_markdown": "This is a high-value learning opportunity. The team admitted that 'system prompt changes' and 'harness' issues caused the regression. \n\n1. **Read the Post-Mortem:** [Link](https://www.anthropic.com/engineering/april-23-postmortem)\n2. **Adopt the Fix:** They mentioned creating evals specifically for *isolated* system prompt changes. If UA updates its system prompt, do we have a test suite that catches regressions in *tool usage* specifically?\n3. **Monitor Version:** Ensure you are on v2.1.116+ if using Claude Code/Agent SDK directly.",
+      "for_ua_markdown": "The post-mortem identifies three specific issues:\n1. Isolation of system prompt changes.\n2. Harness changes.\n3. Config drift.\n\n**Action:** Ensure UA's \"harness\" (the code that executes the model's decisions) is version-controlled separately from the model logic. When we change how UA handles tools, we should run a specific regression suite.",
+      "likely_agent_system_value": "High - Validates that tooling/harness is the primary failure point for agent reliability, not model intelligence.",
+      "likely_ua_value": "High - Understanding root causes of 'agentic' failures helps prevent similar regressions in UA.",
+      "recommended_variant": "operational_protocol",
+      "summary": "Anthropic published a rare post-mortem regarding quality slippage in Claude Code, identifying root causes in the Agent SDK harness and system prompt isolation. Fixes deployed in v2.1.116+.",
+      "title": "Quality Regression Post-Mortem & Fixes",
       "variants": [
         {
           "applicability": [
-            "UA",
-            "Shared"
+            "UA"
           ],
-          "confidence": "medium",
-          "intent": "Translate the capability into reusable UA building blocks.",
-          "key": "ua-adaptation",
-          "label": "UA Adaptation",
+          "confidence": "high",
+          "intent": "To establish testing protocols that prevent the type of regression Anthropic experienced.",
+          "key": "operational_protocol",
+          "label": "Ops Protocol: Regression Detection",
           "primitives": [
             {
-              "content_markdown": "## UA Adaptation Pattern\n\n- Anchor on the canonical source(s): Caching | Claude Platform, Caching | Claude Platform.\n- Distill the feature into reusable prompt/workflow/code assets before wiring it into runtime behavior.\n- Prefer adding this as a reusable building block for Simone/Cody and future client-system builds.\n",
-              "kind": "ua_adaptation_pattern",
-              "rationale": "Turn the capability into a repeatable UA integration pattern.",
-              "title": "UA adaptation pattern"
-            },
-            {
-              "content_markdown": "## Workflow Recipe\n\n1. Read the canonical linked source.\n2. Extract the behavior contract.\n3. Generate prompt/code/workflow primitives.\n4. Validate the most promising path in UA.\n",
+              "content_markdown": "1. **Baseline Test:** Create a set of 50 agentic tasks (web fetch, file edit, terminal command).\n2. **Prompt Update:** When changing the UA system prompt, run this suite.\n3. **Focus:** Don't just check 'accuracy'; check for *hangs*, *refusal to act*, and *hallucinated tool usage*.\n4. **Control:** Run the test against the old prompt and the new prompt in parallel to diff 'agentic' behavior.",
               "kind": "workflow_recipe",
-              "rationale": "Capture the control flow needed to use the capability repeatedly.",
-              "title": "Workflow recipe"
-            }
-          ]
-        },
-        {
-          "applicability": [
-            "Agent SDK",
-            "Shared"
-          ],
-          "confidence": "medium",
-          "intent": "Translate the capability into standalone agent-system primitives.",
-          "key": "agent-sdk-transfer",
-          "label": "Agent SDK Transfer",
-          "primitives": [
-            {
-              "content_markdown": "## Agent SDK Adaptation Pattern\n\n- Translate the capability into standalone agent-system patterns, not just IDE assistance.\n- Capture the control flow, prompt shape, and code surface required to reproduce the feature in a new project.\n- Preserve source provenance so future coding agents can rebuild from official references.\n",
-              "kind": "agent_sdk_adaptation_pattern",
-              "rationale": "Frame the capability for standalone agent systems.",
-              "title": "Agent SDK adaptation pattern"
+              "rationale": "Anthropic noted that system prompt changes broke tool usage in non-obvious ways.",
+              "title": "Isolation Testing for System Prompts"
             },
             {
-              "content_markdown": "## Prompt Pattern\n\n```text\nGiven the official feature docs and any linked demo material, synthesize:\n1. the minimal agent behavior contract,\n2. the reusable prompt skeleton,\n3. the workflow boundaries,\n4. the failure modes we should guard against.\n```\n",
-              "kind": "prompt_pattern",
-              "rationale": "Capture the reusable instruction shape behind the capability.",
-              "title": "Prompt pattern"
+              "content_markdown": "Ensure any dependency on `anthropic-agent-sdk` or `claude-code` CLI is pinned to `>=2.1.116`. Previous versions contain the harness race conditions.",
+              "kind": "integration_note",
+              "rationale": "Fixes are pinned to v2.1.116+.",
+              "title": "Version Pin Requirement"
             }
           ]
         }
       ],
-      "why_now": "Recent ClaudeDevs updates suggest this capability is new enough that model cutoffs may miss it, so we should materialize it now."
+      "why_now": "Active remediation phase; usage limits reset; new quality assurance protocols being adopted by Anthropic."
+    },
+    {
+      "bundle_id": "memory-managed-agents",
+      "canonical_sources": [
+        {
+          "domain": "github.com",
+          "source_type": "github_tree",
+          "title": "skills/skills/claude-api",
+          "url": "https://github.com/anthropics/skills/tree/main/skills/claude-api",
+          "why_canonical": "Contains the implementation code for interacting with the new Memory feature via the API."
+        }
+      ],
+      "discovery_posts": [
+        "2047424067284894201",
+        "2047424063543681240"
+      ],
+      "for_kevin_markdown": "New feature to explore: **Memory**. \n\n1. **Try it:** In Claude Code, run `/claude-api` and ask about \"Managed Agents memory\".\n2. **Source:** Check the [skill on GitHub](https://github.com/anthropics/skills/tree/main/skills/claude-api) to see how they implemented the API calls for memory.\n3. **Concept:** This allows agents to learn across sessions. Does UA need cross-session memory?",
+      "for_ua_markdown": "The `claude-api` skill now includes logic to interact with Managed Agents Memory. \n\n**Implementation Hint:** If building custom agents, inspect the API calls made by this skill to understand the interface for `update_memory` and `query_memory` endpoints.",
+      "likely_agent_system_value": "Medium - Understanding how memory handles state across sessions is crucial for long-running agents.",
+      "likely_ua_value": "Medium - Reference implementation for persistent memory.",
+      "recommended_variant": "exploratory_skill",
+      "summary": "Anthropic released 'Memory' for Claude Managed Agents (public beta) and added support for this feature to the built-in `claude-api` skill in Claude Code.",
+      "title": "Managed Agents Memory & Skill Integration",
+      "variants": [
+        {
+          "applicability": [
+            "Agent SDK"
+          ],
+          "confidence": "high",
+          "intent": "To understand the API surface for the new Memory feature.",
+          "key": "exploratory_skill",
+          "label": "Skill Discovery: Memory API",
+          "primitives": [
+            {
+              "content_markdown": "Inside Claude Code, execute:\n```\n/claude-api\n```\nThen ask: \"Show me the code for Managed Agents memory support.\"\n\nThis will reveal the specific API endpoints (e.g., `POST /v1/memory`) used by the system.",
+              "kind": "code_snippet",
+              "rationale": "The fastest way to see the implementation is to let the agent show it.",
+              "title": "Trigger the Skill"
+            }
+          ]
+        }
+      ],
+      "why_now": "New capability launched (Public Beta); accessible via CLI skill."
+    },
+    {
+      "bundle_id": "reliability-fixes",
+      "canonical_sources": [],
+      "discovery_posts": [
+        "2049228279945802129",
+        "2046366854227312896"
+      ],
+      "for_kevin_markdown": "They patched three specific bugs:\n1. **WebFetch Stalls:** Large pages no longer hang.\n2. **Proxy 204s:** Previously crashed session.\n3. **API 400s:** Cache-control race condition on parallel requests.\n\nIf UA has custom `web_fetch` or parallel request logic, audit it for these specific edge cases.",
+      "for_ua_markdown": "**Code Pattern to Avoid:**\n```python\n# Bad: Assumes 204 has a body\nif response.status == 204:\n    data = response.json() # Crash potential\n```\n\n**Correct Pattern:**\n```python\nif response.status == 204:\n    return # No content\n```",
+      "likely_agent_system_value": "High - Prevents agent death during common tasks.",
+      "likely_ua_value": "High - UA performs web fetches and parallel requests.",
+      "recommended_variant": "hardening_checklist",
+      "summary": "Specific fixes for WebFetch stalls on huge pages, Proxy 204 crashes, and intermittent API 400s from cache-control races.",
+      "title": "Concurrency & Harness Reliability Fixes",
+      "variants": [
+        {
+          "applicability": [
+            "Shared",
+            "UA"
+          ],
+          "confidence": "high",
+          "intent": "Prevent the specific crashes identified by Anthropic.",
+          "key": "hardening_checklist",
+          "label": "Reliability Hardening Checklist",
+          "primitives": [
+            {
+              "content_markdown": "When implementing WebFetch, enforce:\n1. **Max Size Limits:** Set a `max_content_length` (e.g., 200KB). If exceeded, truncate or fail gracefully rather than hanging.\n2. **Timeout Enforcement:** Always use a strict timeout (e.g., 10s) for fetches.\n3. **204 Safety:** Explicitly check `if status == 204: return None` before attempting to parse body/JSON.",
+              "kind": "prompt_pattern",
+              "rationale": "To handle large pages without hanging or crashing.",
+              "title": "Safe Fetch Handling"
+            }
+          ]
+        }
+      ],
+      "why_now": "These fixes address common 'hang' issues in agent frameworks."
     }
   ],
-  "narrative_markdown": "# Rolling 14-Day Claude Code Builder Brief\n\n## For Kevin\n\n- Over the last 14 days, the most meaningful Claude Code developments clustered around code.claude.com, claude.com, platform.claude.com.\n- The practical pattern is that new capability announcements quickly expand into more concrete usage guidance in linked official docs and demos.\n- The current opportunity is to turn those updates into reusable agent-building primitives instead of leaving them as interesting release notes.\n\n### Most Actionable Changes\n\n- `strategic_follow_up` / tier `4`: New in Claude Code: /ultrareview (research preview) runs a fleet of bug-hunting agents in the cloud.\n\nFindings land in the CLI or Desktop automatically. Run it before merging critical changes\u2014auth, data migrations, etc. \n- `demo_task` / tier `3`: New blog: Building agents that reach production systems with MCP.\n\nWhen should agents use direct APIs vs CLIs vs MCP? Plus patterns for building MCP servers, context-efficient clients and pairing MCP with skills.\n\nhttps:\n- `kb_update` / tier `2`: Run `claude update` to try it out. Learn more in the docs: https://t.co/NhIw6ayYXZ\n\n## For UA\n\n- Treat the official linked docs and repos as the canonical implementation layer.\n- Prefer building reusable prompt, workflow, code, and adaptation primitives instead of one-off experiments.\n- Use the rolling capability bundles below as the first retrieval target when building new UA or Agent SDK functionality.\n",
-  "title": "Rolling 14-Day Claude Code Builder Brief"
+  "narrative_markdown": "## For Kevin\n\n**TL;DR:** Anthropic navigated a significant regression in Claude Code quality (stemming from the Agent SDK harness, not the model). They have issued fixes, a public post-mortem, and reset usage limits. They are also actively rolling out reliability fixes (fewer hangs/stalls).\n\n**The Shift:** This period highlights the fragility of the \"harness\"\u2014the orchestration layer connecting the model to tools. For Universal Agent (UA), this confirms that custom tooling and \"harness\" logic are high-risk areas for regressions.\n\n**Action Item:** Read the [official post-mortem](https://www.anthropic.com/engineering/april-23-postmortem) to understand how isolated system prompt changes broke the harness. Upgrade UA's internal testing to include \"harness isolation\" tests similar to what Anthropic is implementing internally.\n\n## For UA\n\n**Critical Update:** The stability issues reported (agent loops, quality slips) were caused by the **Agent SDK Harness**, not the Claude model itself.\n\n**Implementation Takeaway:** UA relies on similar orchestration logic. The specific bugs listed (WebFetch stalling, Proxy 204 crashes, API 400 race conditions) are classic concurrency/state management issues in agent systems.\n\n**Recommendation:** Review UA's error handling around web fetching and parallel requests. Specifically, ensure that `204 No Content` responses don't trigger logic that assumes a body exists, and that cache headers in parallel requests don't cause race conditions.",
+  "synthesis_method": "llm",
+  "title": "Rolling Brief: Post-Mortem Protocol & Harness Stability (v2.1.116)"
 }

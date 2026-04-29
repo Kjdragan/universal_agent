@@ -261,6 +261,7 @@ The architectural rule is now explicit:
   - decomposition is allowed inside canonical execution, not as a required pre-processing step at email ingress
 - **Heartbeat auto-remediation is actionable ingress**
   - Simone makes an explicit memory-guided decision about whether a heartbeat finding is safe to fix autonomously or should be referred to Kevin
+  - the decision is autonomy-biased: Simone/Cody are assumed capable of most bounded coding fixes, and Kevin referral is an extreme safety net for destructive, design-level, security, public-data, or approval-bound cases
   - approved actionable heartbeat investigations create `source_kind='heartbeat_remediation'` tasks with `trigger_type='immediate'`
   - that ingress also nudges the idle dispatch loop so `daemon_simone_todo` can claim the remediation promptly instead of waiting as passive backlog
 

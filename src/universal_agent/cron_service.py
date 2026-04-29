@@ -1,6 +1,7 @@
 import asyncio
+import contextlib
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 import os
@@ -1059,7 +1060,18 @@ class CronService:
                                     cwd=cwd_str,
                                     env=env,
                                 )
-                                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
+                                try:
+                                    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
+                                except asyncio.TimeoutError:
+                                    with contextlib.suppress(ProcessLookupError):
+                                        proc.kill()
+                                    try:
+                                        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5)
+                                    except Exception:
+                                        stdout, stderr = b"", b""
+                                    output_text = stdout.decode(errors="replace") + "\n" + stderr.decode(errors="replace")
+                                    record.output_preview = output_text[:400]
+                                    raise
                                 
                                 exit_code = proc.returncode
                                 output_text = stdout.decode(errors="replace") + "\n" + stderr.decode(errors="replace")
@@ -1196,6 +1208,12 @@ class CronService:
                 timeout_label = timeout_seconds if timeout_seconds is not None else "configured"
                 record.error = f"execution timed out after {timeout_label}s"
                 logger.error("Chron job %s timed out after %ss", job.job_id, timeout_label)
+                self._write_timeout_crash_report(
+                    job,
+                    record,
+                    timeout_seconds=timeout_seconds,
+                    source="cron_service",
+                )
                 self._finalize_workflow_attempt(
                     job=job,
                     record=record,
@@ -1407,6 +1425,38 @@ class CronService:
                 artifacts_target.write_text(content, encoding="utf-8")
         except Exception as exc:
             logger.warning("Failed to persist chron output for %s: %s", job.job_id, exc)
+
+    def _write_timeout_crash_report(
+        self,
+        job: CronJob,
+        record: CronRunRecord,
+        *,
+        timeout_seconds: Optional[int],
+        source: str,
+    ) -> None:
+        try:
+            workspace = Path(job.workspace_dir).resolve()
+            crash_file = workspace / "work_products" / "daemon_timeout_crash.json"
+            payload = {
+                "error": record.error or "Cron job execution timed out",
+                "reason": "cron_execution_timeout",
+                "source": source,
+                "job_id": job.job_id,
+                "run_id": record.run_id,
+                "workflow_run_id": record.workflow_run_id,
+                "workflow_attempt_id": record.workflow_attempt_id,
+                "workspace_dir": str(workspace),
+                "crash_report_path": str(crash_file),
+                "timeout_threshold": timeout_seconds,
+                "timeout_threshold_seconds": timeout_seconds,
+                "command": job.command,
+                "output_preview": record.output_preview,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            crash_file.parent.mkdir(parents=True, exist_ok=True)
+            crash_file.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+        except Exception as exc:
+            logger.warning("Failed to write chron timeout crash report for %s: %s", job.job_id, exc)
 
     def _dedupe_destination(self, path: Path) -> Path:
         if not path.exists():

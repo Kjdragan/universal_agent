@@ -195,6 +195,10 @@ _QUEUE_STATUS_QUARANTINED = "quarantined"
 _QUEUE_STATUS_COMPLETED = "completed"
 _QUEUE_STATUS_FAILED = "failed"
 _QUEUE_STATUS_CANCELLED = "cancelled"
+_FAILED_QUEUE_AUTO_CANCEL_DAYS = max(
+    1,
+    int(os.getenv("UA_AGENTMAIL_FAILED_QUEUE_AUTO_CANCEL_DAYS", "7") or 7),
+)
 
 
 def _is_enabled() -> bool:
@@ -2461,6 +2465,7 @@ class AgentMailService:
             "reset_dispatching": 0,
             "requeued_sigterm": 0,
             "reconciled_completed": 0,
+            "auto_cancelled_stale_failed": 0,
         }
 
         # ── Pass 1: Reset dispatching → queued ──────────────────────────
@@ -2532,6 +2537,42 @@ class AgentMailService:
                 )
         except Exception as exc:
             logger.warning("📧🔄 Startup recovery pass-2 (SIGTERM re-queue) failed: %s", exc)
+
+        # ── Pass 2B: Age out stale terminal failures without deleting audit ──
+        try:
+            now = _iso_now()
+            with self._queue_connect() as conn:
+                cur = conn.execute(
+                    """
+                    UPDATE agentmail_inbox_queue
+                    SET status = ?,
+                        completed_at = COALESCE(NULLIF(completed_at, ''), ?),
+                        session_exit_status = 'auto_cancelled_stale_failed',
+                        last_error = CASE
+                            WHEN last_error = '' THEN 'auto_cancelled_stale_failed'
+                            ELSE 'auto_cancelled_stale_failed: ' || last_error
+                        END,
+                        updated_at = ?
+                    WHERE status = ?
+                      AND sender_role = 'trusted_operator'
+                      AND updated_at < datetime('now', ?)
+                    """,
+                    (
+                        _QUEUE_STATUS_CANCELLED,
+                        now,
+                        now,
+                        _QUEUE_STATUS_FAILED,
+                        f"-{int(_FAILED_QUEUE_AUTO_CANCEL_DAYS)} days",
+                    ),
+                )
+                stats["auto_cancelled_stale_failed"] = int(cur.rowcount or 0)
+            if stats["auto_cancelled_stale_failed"] > 0:
+                logger.info(
+                    "📧🔄 Startup recovery: auto-cancelled %d stale failed trusted inbox item(s)",
+                    stats["auto_cancelled_stale_failed"],
+                )
+        except Exception as exc:
+            logger.warning("📧🔄 Startup recovery pass-2B (stale failed auto-cancel) failed: %s", exc)
 
         # ── Pass 3: Reconcile completed queue items with open task hub ──
         try:

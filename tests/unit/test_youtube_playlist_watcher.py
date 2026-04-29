@@ -65,6 +65,24 @@ async def test_loop_seed_clears_stale_last_error(monkeypatch, tmp_path):
     assert status["seen_count"] == 1
 
 
+def test_permanent_failure_marker_clears_when_artifacts_exist(monkeypatch, tmp_path):
+    monkeypatch.setenv("YT_TUTORIALS_PLAYLIST_ID", "PLdemo")
+    monkeypatch.setenv("YOUTUBE_API_KEY", "demo-key")
+    monkeypatch.setenv("UA_OPS_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        "universal_agent.services.youtube_playlist_watcher._video_has_processed_tutorial_artifacts",
+        lambda video_id: video_id == "recovered-video",
+    )
+
+    watcher = YouTubePlaylistWatcher(dispatch_fn=AsyncMock(return_value=(True, "agent")))
+    watcher._permanently_failed_videos = {"recovered-video", "still-failed"}
+
+    cleared = watcher._prune_recovered_permanently_failed_videos()
+
+    assert cleared == 1
+    assert watcher.status()["permanently_failed_video_ids"] == ["still-failed"]
+
+
 @pytest.mark.asyncio
 async def test_fetch_playlist_items_falls_back_to_rss_when_api_quota_exceeded(monkeypatch, tmp_path):
     monkeypatch.setenv("YT_TUTORIALS_PLAYLIST_ID", "PLdemo")

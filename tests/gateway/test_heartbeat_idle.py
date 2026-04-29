@@ -1,6 +1,9 @@
 import asyncio
 from datetime import datetime, timedelta
+import json
 import os
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -142,3 +145,72 @@ class TestHeartbeatIdle(unittest.IsolatedAsyncioTestCase):
         # Default is True — idle sessions should be unregistered
         self.assertTrue(result)
         self.assertNotIn("s6", self.service.active_sessions)
+
+    async def test_daemon_session_timeout_ignores_active_runs_and_writes_crash_report(self):
+        """Daemon sessions are killed after their daemon timeout even when active_runs is stuck."""
+        callbacks: list[dict] = []
+
+        def _timeout_callback(_session, payload):
+            callbacks.append(payload)
+
+        service = HeartbeatService(
+            gateway=self.gateway,
+            connection_manager=self.connection_manager,
+            session_timeout_callback=_timeout_callback,
+        )
+        last_activity = datetime.now() - timedelta(hours=1)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace_dir = Path(tmpdir) / "run_daemon_simone_heartbeat_20260429_010203_abcd1234"
+            session = GatewaySession(
+                session_id="daemon_simone_heartbeat",
+                user_id="daemon",
+                workspace_dir=str(workspace_dir),
+                metadata={"runtime": {
+                    "active_connections": 0,
+                    "active_runs": 1,
+                    "last_activity_at": last_activity.isoformat(),
+                }},
+            )
+            service.register_session(session)
+
+            with patch.dict(
+                os.environ,
+                {"UA_DAEMON_IDLE_TIMEOUT": "300", "UA_HEARTBEAT_UNREGISTER_IDLE": "1"},
+            ):
+                result = service._check_session_idle(session)
+
+            crash_file = workspace_dir / "work_products" / "daemon_timeout_crash.json"
+            self.assertTrue(result)
+            self.assertNotIn("daemon_simone_heartbeat", service.active_sessions)
+            self.assertTrue(crash_file.exists())
+            payload = json.loads(crash_file.read_text())
+            self.assertEqual(payload["session_id"], "daemon_simone_heartbeat")
+            self.assertEqual(payload["workspace_dir"], str(workspace_dir))
+            self.assertEqual(payload["timeout_threshold_seconds"], 300)
+            self.assertEqual(payload["active_runs_reported"], 1)
+            self.assertEqual(len(callbacks), 1)
+            self.assertEqual(callbacks[0]["crash_report_path"], str(crash_file))
+
+    async def test_daemon_session_with_recent_activity_is_not_killed(self):
+        last_activity = datetime.now() - timedelta(minutes=1)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            session = GatewaySession(
+                session_id="daemon_simone_heartbeat",
+                user_id="daemon",
+                workspace_dir=tmpdir,
+                metadata={"runtime": {
+                    "active_connections": 0,
+                    "active_runs": 1,
+                    "last_activity_at": last_activity.isoformat(),
+                }},
+            )
+            self.service.register_session(session)
+
+            with patch.dict(
+                os.environ,
+                {"UA_DAEMON_IDLE_TIMEOUT": "300", "UA_HEARTBEAT_UNREGISTER_IDLE": "1"},
+            ):
+                result = self.service._check_session_idle(session)
+
+            self.assertFalse(result)
+            self.assertIn("daemon_simone_heartbeat", self.service.active_sessions)
