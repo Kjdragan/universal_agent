@@ -21660,9 +21660,11 @@ def _serialize_task_hub_queue_item(conn: sqlite3.Connection, item: dict[str, Any
     serialized["canonical_execution_run_id"] = (
         str((latest_assignment or {}).get("workflow_run_id") or "") or None
     )
-    serialized["canonical_execution_workspace"] = (
-        str((latest_assignment or {}).get("workspace_dir") or session_profile.get("workspace_dir") or "") or None
-    )
+    workspace = str((latest_assignment or {}).get("workspace_dir") or session_profile.get("workspace_dir") or "")
+    result_ref = str(metadata.get("result_ref") or "")
+    if not workspace and result_ref.startswith("workspace://"):
+        workspace = result_ref.replace("workspace://", "")
+    serialized["canonical_execution_workspace"] = workspace or None
     serialized["links"] = _task_history_links_for_session(
         serialized["canonical_execution_session_id"] or "",
         workspace_dir=serialized["canonical_execution_workspace"] or ""
@@ -21687,10 +21689,17 @@ async def dashboard_todolist_completed(limit: int = 60):
             assignment.get("session_id") or assignment.get("provider_session_id") or ""
         ) or None
         item["canonical_execution_run_id"] = str(assignment.get("workflow_run_id") or "") or None
-        item["canonical_execution_workspace"] = str(assignment.get("workspace_dir") or "") or None
+        
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        result_ref = str(metadata.get("result_ref") or "")
+        workspace = str(assignment.get("workspace_dir") or "")
+        if not workspace and result_ref.startswith("workspace://"):
+            workspace = result_ref.replace("workspace://", "")
+            
+        item["canonical_execution_workspace"] = workspace or None
         links = _task_history_links_for_session(
             str(assignment.get("session_id") or ""),
-            workspace_dir=str(assignment.get("workspace_dir") or ""),
+            workspace_dir=workspace,
         )
         item["links"] = links
         enriched.append(item)
