@@ -1,8 +1,8 @@
 # Proactive Intelligence Work Product Pipeline
 
-**Status:** Phase 1/2 foundation implemented; later automation phases planned  
-**Last updated:** 2026-04-27  
-**Owner:** Kevin Dragan  
+**Status:** Phase 1/2 foundation implemented; proactive task history/recap foundation in progress
+**Last updated:** 2026-04-29
+**Owner:** Kevin Dragan
 **Related systems:** Task Hub, Proactive Pipeline, CSI, LLM Wiki, AgentMail, CODIE, ATLAS, tutorial pipeline, GWS MCP
 
 ## Product Directive
@@ -56,6 +56,23 @@ The artifact layer records every generated work product:
 - durable locations: run workspace, artifact path, wiki URL/key, private GitHub repo URL, PR URL, dashboard URL, source URLs
 
 Task Hub remains the execution system. The artifact registry is the inventory and learning system.
+
+The Proactive Task History dashboard should read from Task Hub plus the artifact/recap stores. Its primary unit is the proactive work item, not only a surfaced artifact. Each work item should expose:
+
+- lifecycle stage: opportunity, queued, running, completed, or needs attention
+- source and scoring context
+- the latest assignment/session lineage
+- a three-panel session link for run log, transcript, and workspace audit
+- durable work products and delivery evidence
+- an evaluator recap describing the original idea, what was implemented, known issues, success assessment, and recommended next action
+
+Implementation update as of 2026-04-29:
+
+- `task_hub.list_proactive_work_tasks()` now returns proactive Task Hub items across queued/running/completed/needs-attention states, while excluding user-directed dashboard quick-add work unless it is explicitly marked as proactive.
+- The `/api/v1/dashboard/proactive-task-history` endpoint now returns opportunities, lifecycle counts, artifacts, session links, delivery evidence, and recap data for each proactive work item.
+- `proactive_work_recaps` stores durable evaluator recaps keyed by task id. The first implementation evaluates terminal tasks from Task Hub metadata, latest assignment, session workspace, `transcript.md`, `run.log`, and `work_products/`, while preserving a raw payload for a later LLM-backed evaluator.
+- The terminal proactive outcome hook now writes both the outcome record and the recap record after complete/block/review/park/approve actions.
+- The React Proactive Task History page now includes lifecycle filters, opportunity cards, evaluator recap blocks, artifact/evidence links, and a three-panel session opener.
 
 Recommended state model:
 
@@ -161,14 +178,23 @@ Implementation status as of 2026-04-15:
 - Cleanup tasks are ordinary Task Hub work items with explicit `code_change` workflow metadata and hard instructions not to merge, push to `main`, or deploy.
 - Registered CODIE PRs become `codie_pr` proactive artifacts and are eligible for the same review email, digest, and feedback loop as other proactive work products.
 
+Implementation update as of 2026-04-29:
+
+- CODIE's nightly cleanup cron is now a deterministic script command (`!script universal_agent.scripts.codie_cleanup_enqueue`) rather than an LLM prompt that asks the cron agent to call Python helpers.
+- Gateway startup auto-ensures the `codie_proactive_cleanup` cron job and upgrades the legacy `cron_codie_cleanup` job in place when present.
+- Queued CODIE cleanup tasks now carry explicit `target_agent=vp.coder.primary`, `codebase_root=/home/kjdragan/lrepos/universal_agent`, `complexity_target=low_to_medium`, and `expected_work_product=pull_request_to_develop` metadata.
+- CODIE cleanup briefs now require a low/medium complexity scope, prefer simplification over expansion, permit use of an installed Claude Code simplify/cleanup skill as a bounded helper, require red-green TDD evidence for behavior-touching changes, and keep a PR to `develop` as the required final work product unless no worthwhile improvement is found.
+
 Scope:
 
 1. Add a scheduled/idle CODIE cleanup mission generator.
 2. CODIE may inspect the repo and choose its own cleanup/fix target.
 3. CODIE delivers changes as draft PRs against `develop`.
-4. Simone sends a `[UA PR Review]` email with PR link, rationale, risk, tests run, and what she wants Kevin to review.
-5. Merge and deployment remain manual/review-gated.
-6. PR acceptance/rejection updates preference signals for future CODIE cleanup choices.
+4. CODIE uses red-green TDD for behavior-touching cleanup: write or update a focused failing regression first when practical, implement the smallest safe fix, then rerun the focused test to green.
+5. Mechanical-only cleanup that cannot produce a meaningful failing regression must explain why red-green was not applicable and still include focused verification evidence.
+6. Simone sends a `[UA PR Review]` email with PR link, rationale, risk, red-green evidence or exception rationale, tests run, and what she wants Kevin to review.
+7. Merge and deployment remain manual/review-gated.
+8. PR acceptance/rejection updates preference signals for future CODIE cleanup choices.
 
 Constraints:
 
@@ -180,6 +206,8 @@ Constraints:
 Acceptance criteria:
 
 - CODIE can create a branch and draft PR for a small cleanup.
+- Behavior-touching PRs include red-green TDD evidence in the PR body and review email.
+- Mechanical-only PRs include a concise explanation for why red-green was not applicable plus focused verification output.
 - Simone announces the PR by email as a review candidate.
 - Rejected/closed PR feedback updates the preference model without disabling future proactive cleanup.
 
@@ -568,9 +596,10 @@ Work items:
 
 1. Verify GitHub credentials through the existing GitHub app/CLI path, not ad hoc token probing in code.
 2. Run a small CODIE cleanup task and ensure it creates a draft PR against `develop`.
-3. Register that PR as a proactive artifact and send a `[UA PR Review]` email.
-4. Run a controlled tutorial build task and ensure private repo creation or local fallback.
-5. Register the result as a `tutorial_build` artifact and send a `[UA Build Review]` email.
+3. Verify behavior-touching CODIE cleanup PRs include red-green TDD evidence, or mechanical-only PRs explain why red-green was not applicable.
+4. Register that PR as a proactive artifact and send a `[UA PR Review]` email.
+5. Run a controlled tutorial build task and ensure private repo creation or local fallback.
+6. Register the result as a `tutorial_build` artifact and send a `[UA Build Review]` email.
 
 Acceptance criteria:
 

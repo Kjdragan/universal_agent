@@ -50,6 +50,14 @@ def test_queue_cleanup_task_creates_agent_ready_review_gated_task(tmp_path):
     assert "do not merge" in task["description"].lower()
     assert "Preference context:" in task["description"]
     assert task["metadata"]["workflow_manifest"]["workflow_kind"] == "code_change"
+    assert task["metadata"]["workflow_manifest"]["target_agent"] == "vp.coder.primary"
+    assert task["metadata"]["workflow_manifest"]["codebase_root"].endswith("/universal_agent")
+    assert task["metadata"]["complexity_target"] == "low_to_medium"
+    assert task["metadata"]["expected_work_product"] == "pull_request_to_develop"
+    assert "low-to-medium complexity" in task["description"].lower()
+    assert "pr is the required final work product" in task["description"].lower()
+    assert "red-green tdd" in task["description"].lower()
+    assert "red-green evidence" in task["description"].lower()
     assert artifact is not None
     assert artifact["artifact_type"] == "codie_cleanup_task"
 

@@ -12,6 +12,10 @@ sys.path.append(str(BASE_DIR / "src"))
 from universal_agent.cron_service import CronService
 from universal_agent.gateway import InProcessGateway
 
+CODIE_CLEANUP_WORKSPACE_NAME = "cron_codie_cleanup"
+CODIE_CLEANUP_SYSTEM_JOB = "codie_proactive_cleanup"
+CODIE_CLEANUP_COMMAND = "!script universal_agent.scripts.codie_cleanup_enqueue"
+
 
 def schedule_codie_nightly():
     workspaces_dir = BASE_DIR / "AGENT_RUN_WORKSPACES"
@@ -25,29 +29,55 @@ def schedule_codie_nightly():
         workspaces_dir=workspaces_dir
     )
     
-    command = (
-        "Run the CODIE proactive code quality pipeline. Use the internal Python helper "
-        "`universal_agent.services.proactive_codie.queue_cleanup_task(conn)` to pick today's "
-        "code quality theme (auto-rotated daily) and dispatch the task into the Task Hub. "
-        "Afterward, actively process the newly queued Task Hub item to inspect the codebase, "
-        "implement the improvements, generate the GitHub PR, and finally, "
-        "send the email report via AgentMail."
-    )
+    workspace_dir = str(workspaces_dir / CODIE_CLEANUP_WORKSPACE_NAME)
+    metadata = {
+        "project": "Universal Agent Maintenance",
+        "type": "Code Cleanup",
+        "scheduled_by": "system",
+        "system_job": CODIE_CLEANUP_SYSTEM_JOB,
+        "autonomous": True,
+        "proactive_producer": "codie_cleanup",
+        "session_id": CODIE_CLEANUP_WORKSPACE_NAME,
+    }
+
+    existing = None
+    for candidate in service.list_jobs():
+        candidate_meta = getattr(candidate, "metadata", None)
+        candidate_workspace = str(getattr(candidate, "workspace_dir", "") or "")
+        if isinstance(candidate_meta, dict) and candidate_meta.get("system_job") == CODIE_CLEANUP_SYSTEM_JOB:
+            existing = candidate
+            break
+        if candidate_workspace == workspace_dir:
+            existing = candidate
+            break
     
     # Schedule for 1:30 AM daily
-    job = service.add_job(
-        user_id="kjdragan",
-        workspace_dir=str(workspaces_dir / "cron_codie_cleanup"),
-        command=command,
-        cron_expr="30 1 * * *", 
-        timezone="America/Chicago",
-        delete_after_run=False,
-        metadata={
-            "project": "Universal Agent Maintenance",
-            "type": "Code Quality",
-            "scheduled_by": "Antigravity"
-        }
-    )
+    if existing is not None:
+        job = service.update_job(
+            existing.job_id,
+            {
+                "user_id": "system",
+                "workspace_dir": workspace_dir,
+                "command": CODIE_CLEANUP_COMMAND,
+                "description": "Queue one low-to-medium complexity CODIE cleanup task into Task Hub; execution must end in a PR to develop or a no-PR artifact.",
+                "cron_expr": "30 1 * * *",
+                "timezone": "America/Chicago",
+                "delete_after_run": False,
+                "enabled": True,
+                "metadata": metadata,
+            },
+        )
+    else:
+        job = service.add_job(
+            user_id="system",
+            workspace_dir=workspace_dir,
+            command=CODIE_CLEANUP_COMMAND,
+            description="Queue one low-to-medium complexity CODIE cleanup task into Task Hub; execution must end in a PR to develop or a no-PR artifact.",
+            cron_expr="30 1 * * *",
+            timezone="America/Chicago",
+            delete_after_run=False,
+            metadata=metadata,
+        )
     
     print(f"✅ Scheduled CODIE proactive cleanup job (ID: {job.job_id})")
     print(f"🕒 Cron Expression: {job.cron_expr} (America/Chicago)")

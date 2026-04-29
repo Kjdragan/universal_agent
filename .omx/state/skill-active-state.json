@@ -1,15 +1,15 @@
 {
   "version": 1,
   "active": true,
-  "skill": "analyze",
-  "keyword": "investigate",
+  "skill": "tdd",
+  "keyword": "TDD",
   "phase": "planning",
-  "activated_at": "2026-04-23T17:29:27.692Z",
-  "updated_at": "2026-04-29T19:32:24.213Z",
+  "activated_at": "2026-04-29T23:19:07.712Z",
+  "updated_at": "2026-04-29T23:19:07.712Z",
   "source": "keyword-detector",
   "session_id": "",
   "thread_id": "019ddab2-9420-76f3-9e59-409b8b5080ea",
-  "turn_id": "019ddab5-9b9f-7493-b160-8b13c68592a0",
+  "turn_id": "019ddb88-e744-7562-8eeb-168893d0fd8b",
   "input_lock": {
     "active": false,
     "scope": "deep-interview-auto-approval",
@@ -25,7 +25,9 @@
       "next i should"
     ],
     "message": "Deep interview is active; auto-approval shortcuts are blocked until the interview finishes.",
-    "released_at": "2026-04-29T19:32:24.213Z",
+    "released_at": "2026-04-29T23:19:07.712Z",
     "exit_reason": "handoff"
-  }
+  },
+  "iteration": 1,
+  "last_turn_at": "2026-04-29T23:35:31.318Z"
 }

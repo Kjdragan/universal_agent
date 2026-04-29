@@ -25,6 +25,8 @@ DEFAULT_CLEANUP_THEMES = (
     "standardize inconsistent import ordering and grouping",
     "replace bare except clauses with specific exception types",
 )
+DEFAULT_CODEBASE_ROOT = "/home/kjdragan/lrepos/universal_agent"
+CODIE_TARGET_AGENT = "vp.coder.primary"
 
 _GITHUB_PR_RE = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+")
 
@@ -61,6 +63,10 @@ def queue_cleanup_task(
             "source": "proactive_codie",
             "theme": chosen_theme,
             "review_gate": "pr_to_develop",
+            "complexity_target": "low_to_medium",
+            "expected_work_product": "pull_request_to_develop",
+            "target_agent": CODIE_TARGET_AGENT,
+            "codebase_root": DEFAULT_CODEBASE_ROOT,
             "external_effect_policy": {
                 "allow_pr": True,
                 "allow_merge": False,
@@ -73,6 +79,8 @@ def queue_cleanup_task(
                 "requires_pdf": False,
                 "final_channel": "chat",
                 "canonical_executor": "simone_first",
+                "target_agent": CODIE_TARGET_AGENT,
+                "codebase_root": DEFAULT_CODEBASE_ROOT,
                 "repo_mutation_allowed": True,
             },
         },
@@ -166,23 +174,26 @@ def _cleanup_task_description(*, chosen_theme: str, note: str = "", preference_c
         f"Code quality theme: {chosen_theme}",
         "",
         "Instructions:",
-        "1. Inspect `src/universal_agent/` for low-hanging fruit matching this theme. Identify 2-5 concrete improvements — small, safe, and non-breaking.",
-        "2. This is code quality work only. Do NOT make any breaking or behavioral changes.",
-        "3. Implement the change on a feature branch targeting develop.",
-        "4. Add or update focused tests for the behavior touched.",
-        "5. Open a pull request targeting develop for Kevin review (do not open as draft).",
-        "6. Do not merge, push to main, deploy, delete production data, or make public releases.",
-        "7. In the PR body, include rationale, changed files, tests run, risks, and rollback notes.",
-        "8. After creating the PR, use the AgentMail tools from the shared VP mailbox (vp.agents@agentmail.to) to send an email to kevin.dragan@outlook.com.",
-        "9. CC Simone's inbox (oddcity216@agentmail.to) on the email for situational awareness.",
-        "10. Prefix the subject with '[VP Status]' and include this header at the top of the email body before your content:",
+        "1. Inspect the Universal Agent repository for low-to-medium complexity cleanup work matching this theme. Prefer one coherent improvement area over broad sweeping changes.",
+        "2. Keep the task non-breaking and reviewable. Do NOT redesign subsystems, change product behavior, alter deployment/config/secrets, or take on high-complexity migrations.",
+        "3. Prefer simplification over expansion: delete dead code, reuse existing helpers, reduce brittle branching, and tighten tests before adding new abstractions.",
+        "4. If a Claude Code simplify/cleanup skill is available in the runtime, use it as a focused helper for the chosen improvement area; do not let skill usage expand the scope.",
+        "5. Implement the change on a feature branch targeting develop.",
+        "6. Use red-green TDD for behavior-touching changes: add or update a focused regression test, confirm it fails before the fix when practical, implement the smallest fix, then confirm the test passes.",
+        "7. For mechanical-only cleanup where a failing regression is not meaningful, explain why red-green was not applicable and still run the focused test/lint/typecheck command that proves the cleanup is safe.",
+        "8. Open a pull request targeting develop for Kevin review. A PR is the required final work product unless no worthwhile improvement is found.",
+        "9. Do not merge, push to main, deploy, delete production data, or make public releases.",
+        "10. In the PR body, include rationale, changed files, tests run, red-green evidence or why it was not applicable, risks, rollback notes, and why the scope remained low/medium complexity.",
+        "11. After creating the PR, use the AgentMail tools from the shared VP mailbox (vp.agents@agentmail.to) to send an email to kevin.dragan@outlook.com.",
+        "12. CC Simone's inbox (oddcity216@agentmail.to) on the email for situational awareness.",
+        "13. Prefix the subject with '[VP Status]' and include this header at the top of the email body before your content:",
         "   '── VP Status Update (FYI — no action required) ──",
         "   This reply was sent by Codie (vp.coder.primary) directly to Kevin.",
         "   Simone is CC'd for situational awareness only. No action is needed from her.",
         "   ────────────────────────────────────────────────'",
-        "11. The email must contain a natural language summary explaining exactly what was proposed in the PR and why.",
-        "12. If no worthwhile improvement is found, produce a short artifact explaining what was inspected and why no PR was warranted.",
-        "13. Scope each PR to a single coherent improvement area. Do not bundle unrelated changes.",
+        "14. The email must contain a natural language summary explaining exactly what was proposed in the PR and why.",
+        "15. If no worthwhile improvement is found, produce a short artifact explaining what was inspected and why no PR was warranted.",
+        "16. Scope each PR to a single coherent improvement area. Do not bundle unrelated changes.",
     ]
     extra = str(note or "").strip()
     if extra:

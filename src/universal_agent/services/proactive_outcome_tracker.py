@@ -27,6 +27,12 @@ PROACTIVE_SOURCES = frozenset({
     "proactive_signal",
     "reflection",
     "convergence_detection",
+    "insight_detection",
+    "proactive_codie",
+    "tutorial_build",
+    "claude_code_demo_task",
+    "claude_code_kb_update",
+    "heartbeat_remediation",
     "csi",
     "brainstorm",
     "calendar_bridge",
@@ -204,7 +210,26 @@ def _record_outcome_impl(
     if _outcome_memory_enabled():
         _write_outcome_to_memory(task=task, outcome=outcome)
 
+    # Store an auditable recap for dashboard history (non-critical).
+    _store_work_recap(conn, task=task, action=action, reason=reason)
+
     return outcome
+
+
+def _store_work_recap(
+    conn: sqlite3.Connection,
+    *,
+    task: dict[str, Any],
+    action: str,
+    reason: str,
+) -> None:
+    try:
+        from universal_agent.services.proactive_work_recap import upsert_recap_for_task
+
+        upsert_recap_for_task(conn, task=task, action=action, reason=reason)
+    except Exception as exc:
+        task_id = str(task.get("task_id") or "")
+        logger.warning("Proactive work recap failed for %s: %s", task_id, exc)
 
 
 # ── Statistics & Queries ─────────────────────────────────────────────────

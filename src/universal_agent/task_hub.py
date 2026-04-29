@@ -32,6 +32,21 @@ VALID_ACTIONS = {"seize", "reject", "block", "unblock", "review", "complete", "p
 
 TRIGGER_TYPES = {"immediate", "scheduled", "event_triggered", "human_approved", "brainstorm", "heartbeat_poll", "vp_dispatch"}
 DEFAULT_TRIGGER_TYPE = "heartbeat_poll"
+PROACTIVE_HISTORY_SOURCE_KINDS = frozenset(
+    {
+        "proactive_signal",
+        "reflection",
+        "convergence_detection",
+        "insight_detection",
+        "proactive_codie",
+        "tutorial_build",
+        "claude_code_demo_task",
+        "claude_code_kb_update",
+        "heartbeat_remediation",
+        "brainstorm",
+        "csi",
+    }
+)
 
 REFINEMENT_STAGES = {"raw_idea", "interviewing", "exploring", "crystallizing", "decomposing", "actionable"}
 CSI_ROUTING_INCUBATING = "incubating"
@@ -1488,6 +1503,91 @@ def list_completed_tasks(conn: sqlite3.Connection, *, limit: int = 80) -> list[d
 
         out.append(item)
     return out
+
+
+def _attach_latest_assignment_and_evidence(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any]:
+    task_id = str(item.get("task_id") or "")
+    assignment_row = conn.execute(
+        """
+        SELECT assignment_id, agent_id, workflow_run_id, workflow_attempt_id, provider_session_id, workspace_dir, state, started_at, ended_at, result_summary
+        FROM task_hub_assignments
+        WHERE task_id = ?
+        ORDER BY COALESCE(ended_at, started_at) DESC
+        LIMIT 1
+        """,
+        (task_id,),
+    ).fetchone()
+    if assignment_row:
+        agent_id = str(assignment_row["agent_id"] or "")
+        lineage = _assignment_lineage(
+            item,
+            agent_id=agent_id,
+            workflow_run_id=assignment_row["workflow_run_id"],
+            workflow_attempt_id=assignment_row["workflow_attempt_id"],
+            provider_session_id=assignment_row["provider_session_id"],
+            workspace_dir=assignment_row["workspace_dir"],
+        )
+        item["last_assignment"] = {
+            "assignment_id": str(assignment_row["assignment_id"] or ""),
+            "agent_id": agent_id,
+            "state": str(assignment_row["state"] or ""),
+            "started_at": str(assignment_row["started_at"] or ""),
+            "ended_at": str(assignment_row["ended_at"] or ""),
+            "result_summary": str(assignment_row["result_summary"] or ""),
+            "session_id": lineage["session_id"],
+            "workflow_run_id": lineage["workflow_run_id"],
+            "workflow_attempt_id": lineage["workflow_attempt_id"],
+            "provider_session_id": lineage["provider_session_id"],
+            "workspace_dir": lineage["workspace_dir"],
+        }
+    else:
+        item["last_assignment"] = None
+
+    item["completed_at"] = str(
+        ((item.get("last_assignment") or {}).get("ended_at") if isinstance(item.get("last_assignment"), dict) else "")
+        or (item.get("updated_at") if str(item.get("status") or "") == TASK_STATUS_COMPLETED else "")
+        or ""
+    )
+
+    evidence_rows = conn.execute(
+        "SELECT * FROM task_hub_delivery_evidence WHERE task_id = ? ORDER BY sent_at DESC",
+        (task_id,),
+    ).fetchall()
+    item["delivery_evidence"] = [
+        {
+            "evidence_id": str(ev["evidence_id"]),
+            "channel": str(ev["channel"]),
+            "message_id": ev["message_id"],
+            "thread_id": ev["thread_id"],
+            "draft_id": ev["draft_id"],
+            "attachment_paths": _json_loads_obj(ev["attachment_paths_json"], default=[]),
+            "work_product_paths": _json_loads_obj(ev["work_product_paths_json"], default=[]),
+            "sent_at": str(ev["sent_at"]),
+        }
+        for ev in evidence_rows
+    ]
+    return item
+
+
+def list_proactive_work_tasks(conn: sqlite3.Connection, *, limit: int = 120) -> list[dict[str, Any]]:
+    """Return autonomous/proactive Task Hub items across all lifecycle states."""
+    ensure_schema(conn)
+    source_placeholders = ",".join("?" for _ in PROACTIVE_HISTORY_SOURCE_KINDS)
+    rows = conn.execute(
+        f"""
+        SELECT *
+        FROM task_hub_items
+        WHERE project_key = 'proactive'
+           OR lower(source_kind) IN ({source_placeholders})
+        ORDER BY updated_at DESC
+        LIMIT ?
+        """,
+        (*sorted(PROACTIVE_HISTORY_SOURCE_KINDS), max(1, min(int(limit), 500))),
+    ).fetchall()
+    return [
+        _attach_latest_assignment_and_evidence(conn, hydrate_item(dict(row)))
+        for row in rows
+    ]
 
 
 def get_task_history(conn: sqlite3.Connection, *, task_id: str, limit: int = 80) -> dict[str, Any]:

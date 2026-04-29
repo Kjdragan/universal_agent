@@ -441,6 +441,13 @@ PAPER_TO_PODCAST_DEFAULT_TIMEZONE = (
     or (os.getenv("UA_DEFAULT_TIMEZONE") or "").strip()
     or "America/Chicago"
 )
+CODIE_PROACTIVE_CLEANUP_JOB_KEY = "codie_proactive_cleanup"
+CODIE_PROACTIVE_CLEANUP_DEFAULT_CRON = "30 1 * * *"
+CODIE_PROACTIVE_CLEANUP_DEFAULT_TIMEZONE = (
+    (os.getenv("UA_CODIE_PROACTIVE_CLEANUP_TIMEZONE") or "").strip()
+    or (os.getenv("UA_DEFAULT_TIMEZONE") or "").strip()
+    or "America/Chicago"
+)
 PAPER_TO_PODCAST_TOPICS = [
     "Agentic AI architectures and multi-agent systems",
     "Large language model reasoning and chain-of-thought",
@@ -14040,6 +14047,7 @@ async def lifespan(app: FastAPI):
             await _cron_service.start()
         try:
             _ensure_autonomous_daily_briefing_job()
+            _ensure_codie_proactive_cleanup_cron_job()
             _ensure_csi_convergence_cron_job()
             _ensure_claude_code_intel_cron_job()
             _ensure_paper_to_podcast_cron_job()
@@ -17040,10 +17048,21 @@ async def dashboard_proactive_task_history(
     with _activity_store_lock:
         conn = _task_hub_open_conn()
         try:
-            tasks = task_hub.list_completed_tasks(conn, limit=limit)
+            tasks = task_hub.list_proactive_work_tasks(conn, limit=limit)
+            artifacts_by_task = _proactive_artifacts_by_task(conn, tasks)
+            opportunities = _proactive_task_history_opportunities(conn, limit=40)
+            enriched_tasks = [
+                _serialize_proactive_work_item(conn, task, artifacts_by_task=artifacts_by_task)
+                for task in tasks
+            ]
         finally:
             conn.close()
-    return {"status": "ok", "tasks": tasks}
+    return {
+        "status": "ok",
+        "tasks": enriched_tasks,
+        "opportunities": opportunities,
+        "counts": _proactive_task_history_counts(enriched_tasks, opportunities),
+    }
 
 
 @app.patch("/api/v1/dashboard/proactive-task-history/{task_id}/feedback")
@@ -17083,6 +17102,243 @@ async def dashboard_proactive_task_feedback(
         background_tasks.add_task(distill_feedback_to_rules, distill_card, str(payload.feedback_text or ""), payload.feedback_tags)
 
     return {"status": "ok", "task": task}
+
+
+def _proactive_task_stage(item: dict[str, Any]) -> str:
+    status = str(item.get("status") or "").strip().lower()
+    if status == task_hub.TASK_STATUS_COMPLETED:
+        return "completed"
+    if status in {task_hub.TASK_STATUS_IN_PROGRESS, task_hub.TASK_STATUS_DELEGATED}:
+        return "running"
+    if status in {
+        task_hub.TASK_STATUS_BLOCKED,
+        task_hub.TASK_STATUS_REVIEW,
+        task_hub.TASK_STATUS_PENDING_REVIEW,
+        task_hub.TASK_STATUS_PARKED,
+        task_hub.TASK_STATUS_CANCELLED,
+    }:
+        return "needs_attention"
+    return "queued"
+
+
+def _proactive_recap_for_task(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any]:
+    task_id = str(item.get("task_id") or "").strip()
+    if task_id:
+        try:
+            from universal_agent.services.proactive_work_recap import get_recap_for_task
+
+            stored_recap = get_recap_for_task(conn, task_id)
+        except Exception:
+            stored_recap = None
+        if stored_recap:
+            return {
+                "status": str(stored_recap.get("evaluation_status") or stored_recap.get("status") or "evaluated"),
+                "idea": str(stored_recap.get("idea") or ""),
+                "implemented": str(stored_recap.get("implemented") or ""),
+                "known_issues": str(stored_recap.get("known_issues") or ""),
+                "success_assessment": str(stored_recap.get("success_assessment") or ""),
+                "recommended_next_action": str(stored_recap.get("recommended_next_action") or ""),
+                "confidence": stored_recap.get("confidence"),
+                "generated_at": str(stored_recap.get("generated_at") or stored_recap.get("updated_at") or ""),
+            }
+
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    recap = metadata.get("llm_completion_recap") if isinstance(metadata.get("llm_completion_recap"), dict) else {}
+    if recap:
+        return {
+            "status": "evaluated",
+            "idea": str(recap.get("idea") or recap.get("original_idea") or ""),
+            "implemented": str(recap.get("implemented") or recap.get("what_was_done") or ""),
+            "known_issues": str(recap.get("known_issues") or ""),
+            "success_assessment": str(recap.get("success_assessment") or ""),
+            "recommended_next_action": str(recap.get("recommended_next_action") or ""),
+            "confidence": recap.get("confidence"),
+            "generated_at": str(recap.get("generated_at") or ""),
+        }
+
+    assignment = item.get("last_assignment") if isinstance(item.get("last_assignment"), dict) else {}
+    status = str(item.get("status") or "").strip().lower()
+    result_summary = str(assignment.get("result_summary") or "").strip()
+    if status == task_hub.TASK_STATUS_COMPLETED:
+        assessment = "Completed, pending LLM post-run evaluation."
+        issues = "" if result_summary else "No assignment result summary was recorded."
+    elif status in {task_hub.TASK_STATUS_BLOCKED, task_hub.TASK_STATUS_REVIEW, task_hub.TASK_STATUS_PENDING_REVIEW}:
+        assessment = "Needs operator or Simone review before it can count as successful proactive work."
+        issues = str((metadata.get("dispatch") or {}).get("last_disposition_reason") or status)
+    elif status in {task_hub.TASK_STATUS_IN_PROGRESS, task_hub.TASK_STATUS_DELEGATED}:
+        assessment = "Execution is underway; no completion assessment is available yet."
+        issues = ""
+    else:
+        assessment = "Queued for execution; no completion assessment is available yet."
+        issues = ""
+    return {
+        "status": "pending_llm_evaluation",
+        "idea": str(item.get("title") or ""),
+        "implemented": result_summary,
+        "known_issues": issues,
+        "success_assessment": assessment,
+        "recommended_next_action": "Run post-session evaluator after the work item reaches a terminal state.",
+        "confidence": None,
+        "generated_at": "",
+    }
+
+
+def _proactive_artifacts_by_task(conn: sqlite3.Connection, tasks: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    try:
+        from universal_agent.services.proactive_artifacts import list_artifacts
+
+        artifacts = list_artifacts(conn, limit=500)
+    except Exception:
+        artifacts = []
+    by_task: dict[str, list[dict[str, Any]]] = {}
+    task_refs: dict[str, set[str]] = {}
+    for task in tasks:
+        task_id = str(task.get("task_id") or "").strip()
+        if not task_id:
+            continue
+        task_refs[task_id] = {
+            task_id,
+            str(task.get("source_ref") or "").strip(),
+        }
+    for artifact in artifacts:
+        metadata = artifact.get("metadata") if isinstance(artifact.get("metadata"), dict) else {}
+        artifact_refs = {
+            str(artifact.get("source_ref") or "").strip(),
+            str(metadata.get("task_id") or "").strip(),
+        }
+        for task_id, refs in task_refs.items():
+            if refs & artifact_refs:
+                by_task.setdefault(task_id, []).append(artifact)
+    return by_task
+
+
+def _artifact_href_for_dashboard(artifact: dict[str, Any]) -> str:
+    uri = str(artifact.get("artifact_uri") or artifact.get("source_url") or "").strip()
+    if uri.startswith(("http://", "https://")):
+        return uri
+    path = str(artifact.get("artifact_path") or "").strip()
+    if path:
+        try:
+            rel_path = str(Path(path).resolve().relative_to(ARTIFACTS_DIR.resolve()))
+        except Exception:
+            rel_path = path
+        return _storage_explorer_href(scope="artifacts", path=rel_path, preview=rel_path)
+    return ""
+
+
+def _serialize_proactive_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "artifact_id": str(artifact.get("artifact_id") or ""),
+        "artifact_type": str(artifact.get("artifact_type") or ""),
+        "title": str(artifact.get("title") or ""),
+        "summary": str(artifact.get("summary") or ""),
+        "status": str(artifact.get("status") or ""),
+        "delivery_state": str(artifact.get("delivery_state") or ""),
+        "href": _artifact_href_for_dashboard(artifact),
+        "created_at": str(artifact.get("created_at") or ""),
+        "updated_at": str(artifact.get("updated_at") or ""),
+    }
+
+
+def _serialize_proactive_work_item(
+    conn: sqlite3.Connection,
+    item: dict[str, Any],
+    *,
+    artifacts_by_task: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    task_id = str(item.get("task_id") or "")
+    assignment = item.get("last_assignment") if isinstance(item.get("last_assignment"), dict) else {}
+    session_id = str(assignment.get("session_id") or assignment.get("provider_session_id") or "")
+    run_id = str(assignment.get("workflow_run_id") or "")
+    workspace_dir = str(assignment.get("workspace_dir") or "")
+    links = _task_history_links_for_session(session_id, workspace_dir=workspace_dir)
+    query = urllib.parse.urlencode(
+        {
+            key: value
+            for key, value in {
+                "session_id": session_id,
+                "run_id": run_id,
+                "workspace": workspace_dir,
+                "attach": "tail" if session_id else "",
+                "role": "viewer" if session_id else "",
+            }.items()
+            if value
+        }
+    )
+    links["three_panel_href"] = f"/?{query}" if query else ""
+    evidence = []
+    for ev in item.get("delivery_evidence") or []:
+        evidence.append(
+            {
+                "evidence_id": str(ev.get("evidence_id") or ""),
+                "source_kind": str(ev.get("channel") or "delivery"),
+                "title": str(ev.get("channel") or "Delivery evidence"),
+                "url": "",
+                "description": str(ev.get("message_id") or ev.get("thread_id") or ""),
+                "occurred_at": str(ev.get("sent_at") or ""),
+            }
+        )
+    profile = _execution_profile_for_session(session_id, workspace_dir=workspace_dir)
+    serialized = dict(item)
+    serialized.update(
+        {
+            "stage": _proactive_task_stage(item),
+            "session_id": session_id,
+            "run_id": run_id,
+            "workspace_dir": workspace_dir,
+            "agent_id": str(assignment.get("agent_id") or ""),
+            "session_role": profile.get("session_role"),
+            "run_kind": profile.get("run_kind"),
+            "links": links,
+            "recap": _proactive_recap_for_task(conn, item),
+            "artifacts": [
+                _serialize_proactive_artifact(artifact)
+                for artifact in artifacts_by_task.get(task_id, [])
+            ],
+            "evidence": evidence,
+            "result_summary": str(assignment.get("result_summary") or ""),
+        }
+    )
+    return serialized
+
+
+def _proactive_task_history_opportunities(conn: sqlite3.Connection, *, limit: int = 40) -> list[dict[str, Any]]:
+    try:
+        cards = list_proactive_signal_cards(conn, status="pending", limit=max(1, min(int(limit), 100)))
+    except Exception:
+        cards = []
+    opportunities: list[dict[str, Any]] = []
+    for card in cards:
+        opportunities.append(
+            {
+                "id": str(card.get("card_id") or ""),
+                "source": str(card.get("source") or ""),
+                "title": str(card.get("title") or ""),
+                "summary": str(card.get("summary") or ""),
+                "status": str(card.get("status") or ""),
+                "priority": int(card.get("priority") or 0),
+                "confidence_score": card.get("confidence_score"),
+                "created_at": str(card.get("created_at") or ""),
+                "updated_at": str(card.get("updated_at") or ""),
+            }
+        )
+    return opportunities
+
+
+def _proactive_task_history_counts(tasks: list[dict[str, Any]], opportunities: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {
+        "opportunities": len(opportunities),
+        "queued": 0,
+        "running": 0,
+        "completed": 0,
+        "needs_attention": 0,
+        "total_tasks": len(tasks),
+    }
+    for task in tasks:
+        stage = str(task.get("stage") or "")
+        if stage in counts:
+            counts[stage] += 1
+    return counts
 
 
 @app.delete("/api/v1/dashboard/proactive-signals/{card_id}")
@@ -17149,6 +17405,78 @@ def _find_cron_job_by_system_job(system_job: str) -> Any:
         if isinstance(metadata, dict) and str(metadata.get("system_job") or "") == system_job:
             return job
     return None
+
+
+def _find_legacy_codie_cleanup_cron_job() -> Any:
+    if not _cron_service:
+        return None
+    try:
+        jobs = _cron_service.list_jobs()
+    except Exception:
+        jobs = []
+    expected_workspace = str(WORKSPACES_DIR / "cron_codie_cleanup")
+    for job in jobs:
+        metadata = getattr(job, "metadata", None)
+        if isinstance(metadata, dict):
+            if str(metadata.get("system_job") or "") == CODIE_PROACTIVE_CLEANUP_JOB_KEY:
+                return job
+            if str(metadata.get("session_id") or "") == "cron_codie_cleanup":
+                return job
+        if str(getattr(job, "workspace_dir", "") or "") == expected_workspace:
+            return job
+    return None
+
+
+def _codie_proactive_cleanup_enabled() -> bool:
+    return os.getenv("UA_CODIE_PROACTIVE_CLEANUP_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _ensure_codie_proactive_cleanup_cron_job() -> Optional[dict[str, Any]]:
+    if not _cron_service or not _codie_proactive_cleanup_enabled():
+        return None
+    cron_expr = (
+        os.getenv("UA_CODIE_PROACTIVE_CLEANUP_CRON", CODIE_PROACTIVE_CLEANUP_DEFAULT_CRON).strip()
+        or CODIE_PROACTIVE_CLEANUP_DEFAULT_CRON
+    )
+    timezone_name = (
+        os.getenv("UA_CODIE_PROACTIVE_CLEANUP_TIMEZONE", CODIE_PROACTIVE_CLEANUP_DEFAULT_TIMEZONE).strip()
+        or CODIE_PROACTIVE_CLEANUP_DEFAULT_TIMEZONE
+    )
+    workspace_dir = str(WORKSPACES_DIR / "cron_codie_cleanup")
+    metadata = {
+        "system_job": CODIE_PROACTIVE_CLEANUP_JOB_KEY,
+        "autonomous": True,
+        "source": "system",
+        "session_id": "cron_codie_cleanup",
+        "proactive_producer": "codie_cleanup",
+    }
+    updates = {
+        "user_id": "system",
+        "workspace_dir": workspace_dir,
+        "command": "!script universal_agent.scripts.codie_cleanup_enqueue",
+        "description": "Queue one low-to-medium complexity CODIE cleanup task into Task Hub; execution must end in a PR to develop or a no-PR artifact.",
+        "cron_expr": cron_expr,
+        "timezone": timezone_name,
+        "enabled": True,
+        "catch_up_on_restart": False,
+        "metadata": metadata,
+    }
+    existing = _find_legacy_codie_cleanup_cron_job()
+    if existing is not None:
+        updated = _cron_service.update_job(str(getattr(existing, "job_id", "")), updates)
+        return updated.to_dict() if hasattr(updated, "to_dict") else {"job_id": str(getattr(updated, "job_id", ""))}
+    job = _cron_service.add_job(
+        user_id="system",
+        workspace_dir=workspace_dir,
+        command="!script universal_agent.scripts.codie_cleanup_enqueue",
+        description=updates["description"],
+        cron_expr=cron_expr,
+        timezone=timezone_name,
+        enabled=True,
+        catch_up_on_restart=False,
+        metadata=metadata,
+    )
+    return job.to_dict() if hasattr(job, "to_dict") else {"job_id": str(getattr(job, "job_id", ""))}
 
 
 def _ensure_autonomous_daily_briefing_job() -> Optional[dict[str, Any]]:
