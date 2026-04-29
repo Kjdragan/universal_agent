@@ -314,6 +314,7 @@ function RefLine({
   label: string;
   value?: string | null;
   storagePath?: string | null;
+  sessionHref?: string | null;
 }) {
   const text = asText(value);
   if (!text) return null;
@@ -324,6 +325,16 @@ function RefLine({
       <span className="min-w-[180px] flex-1 break-all">
         <LinkifiedText text={text} />
       </span>
+      {sessionHref && (
+        <a
+          href={sessionHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="rounded border border-sky-400/20 bg-sky-400/5 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.12em] text-sky-400 hover:bg-sky-400/10"
+        >
+          Open Session
+        </a>
+      )}
       {explorerHref && (
         <Link
           href={explorerHref}
@@ -1217,7 +1228,7 @@ export default function DashboardPage() {
                     {mission.completed_at && <span>completed: {formatLocalDateTime(mission.completed_at)}</span>}
                     {typeof mission.duration_seconds === "number" && <span>duration: {formatElapsed(mission.duration_seconds * 1000)}</span>}
                   </div>
-                  <RefLine label="result_ref" value={resultRef} />
+                  <RefLine label="result_ref" value={resultRef} sessionHref={chatSessionHref(mission.mission_id)} />
                   <RefLine label="result_path" value={resultPath} storagePath={resultPath} />
                   <RefLine label="artifact_relpath" value={artifactRelpath} />
                   <RefLine label="artifact_path" value={artifactPath} storagePath={artifactPath} />
