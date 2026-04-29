@@ -60,7 +60,6 @@ const NAV_GROUPS: NavGroup[] = [
       { href: "/dashboard/mission-control", label: "Mission Control", icon: Activity },
       { href: "/dashboard/corporation", label: "Corporation", icon: Building2, requiresHeadquarters: true },
       { href: "/dashboard/supervisors", label: "Supervisor Agents", icon: ShieldCheck, requiresHeadquarters: true },
-      { href: "/dashboard/approvals", label: "Approvals", icon: CheckCircle },
       { href: "/dashboard/todolist", label: "To Do List", icon: ListTodo },
       { href: "/dashboard/kanban", label: "Kanban Board", icon: Kanban },
       { href: "/dashboard/sessions", label: "Sessions", icon: Clipboard },

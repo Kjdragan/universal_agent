@@ -17191,7 +17191,7 @@ def _ensure_claude_code_intel_cron_job() -> None:
         "description": "Poll Claude Code intelligence handles (@ClaudeDevs, @bcherny) through the X API, queue follow-up work, synthesize a combined rolling brief, and email the operator report.",
         "cron_expr": cron_expr,
         "timezone": timezone_name,
-        "timeout_seconds": int(os.getenv("UA_CLAUDE_CODE_INTEL_CRON_TIMEOUT_SECONDS", "900") or 900),
+        "timeout_seconds": int(os.getenv("UA_CLAUDE_CODE_INTEL_CRON_TIMEOUT_SECONDS", "1800") or 1800),
         "enabled": True,
         "metadata": metadata,
     }

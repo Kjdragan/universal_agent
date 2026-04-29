@@ -71,14 +71,6 @@ type AgentQueueItem = {
   };
 };
 
-type ApprovalRow = {
-  approval_id: string;
-  title: string;
-  status: string;
-  priority: number;
-  focus_href: string;
-  created_at?: string | number;
-};
 
 type AgentActivity = {
   active_agents: number;
@@ -168,11 +160,6 @@ type OverviewPayload = {
   };
 };
 
-type ApprovalHighlightPayload = {
-  status: string;
-  pending_count: number;
-  approvals: ApprovalRow[];
-};
 
 type AgentQueuePayload = {
   status: string;
@@ -418,7 +405,7 @@ export default function ToDoListDashboardPage() {
   const [countdown, setCountdown] = useState(AUTO_REFRESH_SECONDS);
 
   const [overview, setOverview] = useState<OverviewPayload | null>(null);
-  const [approvalsHighlight, setApprovalsHighlight] = useState<ApprovalHighlightPayload | null>(null);
+
   const [agentQueue, setAgentQueue] = useState<AgentQueuePayload | null>(null);
   const [agentActivity, setAgentActivity] = useState<AgentActivity | null>(null);
   const [completedTasks, setCompletedTasks] = useState<CompletedTasksPayload | null>(null);
@@ -484,9 +471,8 @@ export default function ToDoListDashboardPage() {
       const agentQueueUrl = new URL(`${API_BASE}/api/v1/dashboard/todolist/agent-queue`, window.location.origin);
       agentQueueUrl.searchParams.set("limit", "120");
 
-      const [overviewRes, approvalsRes, agentRes, activityRes, completedRes] = await Promise.all([
+      const [overviewRes, agentRes, activityRes, completedRes] = await Promise.all([
         fetch(`${API_BASE}/api/v1/dashboard/todolist/overview`, { cache: "no-store" }),
-        fetch(`${API_BASE}/api/v1/dashboard/approvals/highlight`, { cache: "no-store" }),
         fetch(`${agentQueueUrl.pathname}${agentQueueUrl.search}`, { cache: "no-store" }),
         fetch(`${API_BASE}/api/v1/dashboard/todolist/agent-activity`, { cache: "no-store" }),
         fetch(`${API_BASE}/api/v1/dashboard/todolist/completed?limit=80`, { cache: "no-store" }),
@@ -519,12 +505,8 @@ export default function ToDoListDashboardPage() {
         activityRes.json(),
         completedRes.json(),
       ]);
-      const approvalsJson = approvalsRes.ok
-        ? await approvalsRes.json()
-        : { status: "degraded", pending_count: 0, approvals: [] };
 
       setOverview(overviewJson as OverviewPayload);
-      setApprovalsHighlight(approvalsJson as ApprovalHighlightPayload);
       setAgentQueue(agentJson as AgentQueuePayload);
       setAgentActivity(activityJson as AgentActivity);
       setCompletedTasks(completedJson as CompletedTasksPayload);
@@ -1586,13 +1568,7 @@ export default function ToDoListDashboardPage() {
             className="flex items-center gap-1 px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-cyan/10 text-kcd-cyan border-none rounded-sm cursor-pointer hover:bg-kcd-cyan/20 transition-colors disabled:opacity-40">
             <span className="material-symbols-outlined text-sm">favorite</span> {wakePending ? "Queueing…" : "Heartbeat"}
           </button>
-          <Link href="/dashboard/approvals"
-            className="flex items-center gap-1 px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-amber/10 text-kcd-amber no-underline rounded-sm hover:bg-kcd-amber/20 transition-colors">
-            Approvals
-            {(approvalsHighlight?.pending_count || 0) > 0 && (
-              <span className="ml-1 px-1.5 py-px bg-kcd-amber text-kcd-bg font-mono text-[9px] font-bold rounded-sm">{approvalsHighlight!.pending_count}</span>
-            )}
-          </Link>
+
         </div>
       </header>
 
@@ -1665,7 +1641,7 @@ export default function ToDoListDashboardPage() {
           <span className="text-kcd-text-muted">Eligible: <strong className="text-kcd-text">{overview?.queue_health?.dispatch_eligible || 0}</strong></span>
           <span className="text-kcd-text-muted">Agents: <strong className="text-kcd-cyan">{agentActivity?.active_agents || 0}</strong></span>
           <span className="text-kcd-text-muted">Backlog: <strong className="text-kcd-text">{agentActivity?.backlog_open || 0}</strong></span>
-          <span className="text-kcd-text-muted">Approvals: <strong className="text-kcd-amber">{approvalsHighlight?.pending_count || 0}</strong></span>
+
           <span className="text-kcd-text-muted">Rate: <strong className={completionRate24h !== null ? (completionRate24h >= 70 ? "text-kcd-green" : completionRate24h >= 40 ? "text-kcd-amber" : "text-kcd-red") : "text-kcd-text-muted"}>{completionRate24h !== null ? `${completionRate24h}%` : "—"}</strong></span>
           <span className="h-3 w-px bg-white/10 mx-1" />
           <span className="text-[9px] font-bold tracking-[0.1em] text-kcd-text-muted uppercase shrink-0">Efficiency</span>

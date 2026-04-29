@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import hmac
 import json
@@ -16,6 +17,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import shutil
 import sqlite3
 import time
 from typing import Any
@@ -191,6 +193,10 @@ def run_sync(
     conn: sqlite3.Connection | None = None,
     client: httpx.Client | None = None,
 ) -> ClaudeCodeIntelRun:
+    start_time = time.time()
+    # Allow 25 minutes to safely stay under the 30-minute cron timeout
+    max_run_time_seconds = 25 * 60
+
     cfg = config or ClaudeCodeIntelConfig.from_env()
     generated_at = _now_iso()
     lane_root = resolve_lane_root(cfg.artifacts_root)
@@ -234,71 +240,132 @@ def run_sync(
 
         posts = normalize_posts(posts_payload)
         seen_ids = {str(v) for v in state.get("seen_post_ids", []) if str(v)}
-        new_posts = [post for post in posts if str(post.get("id") or "") not in seen_ids]
+        
+        all_new_posts = [post for post in posts if str(post.get("id") or "") not in seen_ids]
+        
+        # Sort oldest-first so we make forward progress
+        try:
+            all_new_posts.sort(key=lambda x: int(x.get("id") or 0))
+        except ValueError:
+            pass
+            
+        url_enrichment_enabled = str(os.getenv("UA_CSI_URL_ENRICHMENT_ENABLED", "1")).strip().lower() in _TRUTHY
 
-        # ── URL enrichment: enrich linked sources before classification ──
-        url_enrichment_enabled = str(
-            os.getenv("UA_CSI_URL_ENRICHMENT_ENABLED", "1")
-        ).strip().lower() in _TRUTHY
-        enrichment_cache: dict[str, str] = {}  # post_id → linked_context
-
-        if url_enrichment_enabled and new_posts:
-            try:
-                from universal_agent.services.csi_url_judge import (
-                    enrich_urls,
-                    build_linked_context,
-                )
-
-                enrich_dir = packet_dir / "url_enrichment"
-                for post in new_posts:
-                    post_id = str(post.get("id") or "").strip()
-                    post_links = extract_links(post)
-                    if not post_links:
-                        continue
-                    try:
-                        records = enrich_urls(
-                            urls=post_links,
-                            context=str(post.get("text") or "")[:2000],
-                            output_dir=enrich_dir / post_id,
-                            max_fetch=3,
-                            timeout=15,
-                        )
-                        linked_ctx = build_linked_context(records)
-                        if linked_ctx:
-                            enrichment_cache[post_id] = linked_ctx
-                            logger.info(
-                                "CSI URL enrichment for post %s: %d records, %d chars context",
-                                post_id, len(records), len(linked_ctx),
-                            )
-                    except Exception as exc:
-                        logger.warning(
-                            "CSI URL enrichment failed for post %s: %s",
-                            post_id, exc,
-                        )
-            except ImportError:
-                logger.warning("csi_url_judge module not available; skipping URL enrichment")
-
-        actions = [
-            classify_post(
-                post,
-                handle=cfg.handle,
-                linked_context=enrichment_cache.get(str(post.get("id") or "").strip(), ""),
-            )
-            for post in new_posts
-        ]
         queued = 0
         artifact_id = ""
+        current_state = state
+        
+        chunk_size = 10
+        total_chunks = (len(all_new_posts) + chunk_size - 1) // chunk_size
 
-        # ── Short-circuit: no new posts → update state only, skip packet noise ──
+        for chunk_idx in range(total_chunks):
+            chunk = all_new_posts[chunk_idx * chunk_size : (chunk_idx + 1) * chunk_size]
+            if not chunk:
+                break
+                
+            elapsed_time = time.time() - start_time
+            if elapsed_time > max_run_time_seconds:
+                logger.warning("📡 CSI poll @%s: Time limit exceeded (%.1fs). Saving incremental state and exiting.", cfg.handle, elapsed_time)
+                break
+
+            enrichment_cache: dict[str, str] = {}
+            
+            # --- 1. Concurrent URL Enrichment ---
+            if url_enrichment_enabled:
+                try:
+                    from universal_agent.services.csi_url_judge import enrich_urls, build_linked_context
+                    enrich_dir = packet_dir / "url_enrichment"
+                    
+                    def enrich_post(post):
+                        post_id = str(post.get("id") or "").strip()
+                        post_links = extract_links(post)
+                        if not post_links:
+                            return post_id, None
+                        try:
+                            records = enrich_urls(
+                                urls=post_links,
+                                context=str(post.get("text") or "")[:2000],
+                                output_dir=enrich_dir / post_id,
+                                max_fetch=3,
+                                timeout=15,
+                            )
+                            linked_ctx = build_linked_context(records)
+                            if linked_ctx:
+                                return post_id, linked_ctx
+                        except Exception as exc:
+                            logger.warning("CSI URL enrichment failed for post %s: %s", post_id, exc)
+                        return post_id, None
+
+                    with ThreadPoolExecutor(max_workers=5) as executor:
+                        future_to_post = {executor.submit(enrich_post, p): p for p in chunk}
+                        for future in as_completed(future_to_post):
+                            pid, ctx = future.result()
+                            if ctx:
+                                enrichment_cache[pid] = ctx
+                except ImportError:
+                    logger.warning("csi_url_judge module not available; skipping URL enrichment")
+
+            # --- 2. Concurrent Post Classification ---
+            def classify_worker(post):
+                return classify_post(
+                    post,
+                    handle=cfg.handle,
+                    linked_context=enrichment_cache.get(str(post.get("id") or "").strip(), "")
+                )
+
+            chunk_actions = []
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                futures = {executor.submit(classify_worker, p): p for p in chunk}
+                for future in as_completed(futures):
+                    try:
+                        chunk_actions.append(future.result())
+                    except Exception as e:
+                        logger.error("Classification failed: %s", e)
+            
+            # --- 3. Incremental Packet & Artifact Saving ---
+            new_posts.extend(chunk)
+            actions.extend(chunk_actions)
+                
+            write_reference_kb_update(
+                packet_dir=packet_dir,
+                handle=cfg.handle,
+                actions=chunk_actions,
+                posts=chunk,
+                artifacts_root=cfg.artifacts_root,
+            )
+            _write_packet_files(
+                packet_dir=packet_dir,
+                generated_at=generated_at,
+                handle=cfg.handle,
+                user_payload=user_payload,
+                posts_payload=posts_payload,
+                new_posts=new_posts,
+                actions=actions,
+                error="",
+            )
+            if conn is not None:
+                artifact_id = register_packet_artifact(conn, packet_dir=packet_dir, handle=cfg.handle, actions=actions, new_posts=new_posts)
+                if cfg.queue_task_hub:
+                    queued += queue_follow_up_tasks(conn, handle=cfg.handle, packet_dir=packet_dir, actions=chunk_actions)
+                    
+            # Checkpoint the state forward
+            current_state = _next_state(
+                state=current_state,
+                handle=cfg.handle,
+                user_id=str((user_payload.get("data") or {}).get("id") or ""),
+                posts=chunk,
+                generated_at=generated_at
+            )
+            _save_state(state_path, current_state)
+
+        # ── Short-circuit: no new posts processed ──
         if not new_posts:
-            # Still update state (tracks last_success_at, seen_post_ids) but
-            # don't create a full packet dir — empty polls are pure noise.
+            # Still update state (tracks last_success_at, seen_post_ids)
             import shutil
             _save_state(
                 state_path,
-                _next_state(state=state, handle=cfg.handle, user_id=str((user_payload.get("data") or {}).get("id") or ""), posts=posts, generated_at=generated_at),
+                _next_state(state=current_state, handle=cfg.handle, user_id=str((user_payload.get("data") or {}).get("id") or ""), posts=posts, generated_at=generated_at),
             )
-            # Remove the pre-created empty packet dir
             try:
                 if packet_dir.exists() and not any(packet_dir.iterdir()):
                     shutil.rmtree(packet_dir, ignore_errors=True)
@@ -312,37 +379,9 @@ def run_sync(
             run.action_count = 0
             run.queued_task_count = 0
             run.packet_dir = ""
-            logger.info(
-                "📡 CSI poll @%s: no new posts (seen=%d). Skipping packet creation.",
-                cfg.handle, len(posts),
-            )
+            logger.info("📡 CSI poll @%s: no new posts (seen=%d). Skipping packet creation.", cfg.handle, len(posts))
             return run
 
-        write_reference_kb_update(
-            packet_dir=packet_dir,
-            handle=cfg.handle,
-            actions=actions,
-            posts=new_posts,
-            artifacts_root=cfg.artifacts_root,
-        )
-        _write_packet_files(
-            packet_dir=packet_dir,
-            generated_at=generated_at,
-            handle=cfg.handle,
-            user_payload=user_payload,
-            posts_payload=posts_payload,
-            new_posts=new_posts,
-            actions=actions,
-            error="",
-        )
-        if conn is not None:
-            artifact_id = register_packet_artifact(conn, packet_dir=packet_dir, handle=cfg.handle, actions=actions, new_posts=new_posts)
-            if cfg.queue_task_hub:
-                queued = queue_follow_up_tasks(conn, handle=cfg.handle, packet_dir=packet_dir, actions=actions)
-        _save_state(
-            state_path,
-            _next_state(state=state, handle=cfg.handle, user_id=str((user_payload.get("data") or {}).get("id") or ""), posts=posts, generated_at=generated_at),
-        )
         run.ok = True
         run.user_id = str((user_payload.get("data") or {}).get("id") or "")
         run.auth_mode = auth_mode
@@ -374,7 +413,6 @@ def run_sync(
         )
         run.error = error
         return run
-
 
 def fetch_user_by_username(client: httpx.Client, *, token: str, username: str) -> dict[str, Any]:
     resp = client.get(
