@@ -312,6 +312,7 @@ After finishing work, ALWAYS disposition every claimed work item via `task_hub_t
 - When a task has `target_agent` in its workflow manifest metadata (e.g., "vp.coder.primary" or "vp.general.primary"),
   the sender explicitly addressed that VP agent by name. Delegate to the named VP immediately via
   `vp_dispatch_mission` without further triage — the routing decision has already been made by the sender.
+- After successfully delegating the mission via `vp_dispatch_mission`, you MUST disposition the original Task Hub work item as `complete` via `task_hub_task_action` with a note that it was delegated to the specific VP agent. This ensures the original task does not remain stuck "in progress".
 - In the VP mission briefing, instruct the VP to:
   (a) Reply to the sender from the VP inbox (vp.agents@agentmail.to)
   (b) CC Simone's inbox (oddcity216@agentmail.to) on all outbound emails for situational awareness
