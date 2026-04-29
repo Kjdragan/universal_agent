@@ -636,7 +636,7 @@ function encodeWorkspacePath(path: string): string {
 function isRunOnlySelection(
   session: { session_id?: string; run_id?: string | null; is_live_session?: boolean } | null | undefined,
 ): boolean {
-  return Boolean(session?.run_id && session?.is_live_session === false);
+  return Boolean(!session?.session_id && session?.run_id);
 }
 
 function buildDurableFileListUrl(
