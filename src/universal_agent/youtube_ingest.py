@@ -423,10 +423,10 @@ def _build_proxy_config() -> tuple[Optional[Any], str]:
     """Route to the correct proxy builder based on PROXY_PROVIDER env var.
 
     Supported values:
-      - "webshare"     (default) — Webshare.io via WebshareProxyConfig
-      - "dataimpulse"  — DataImpulse via GenericProxyConfig
+      - "dataimpulse"  (default) — DataImpulse via GenericProxyConfig
+      - "webshare"     — Webshare.io via WebshareProxyConfig
     """
-    provider = (os.getenv("PROXY_PROVIDER") or "webshare").strip().lower()
+    provider = (os.getenv("PROXY_PROVIDER") or "dataimpulse").strip().lower()
     if provider == "dataimpulse":
         return _build_dataimpulse_proxy_config()
     return _build_webshare_proxy_config()
@@ -698,7 +698,7 @@ def ingest_youtube_transcript(
     proxy_config, proxy_mode = _build_proxy_config()
 
     if require_proxy and proxy_config is None:
-        _provider = (os.getenv("PROXY_PROVIDER") or "webshare").strip().lower()
+        _provider = (os.getenv("PROXY_PROVIDER") or "dataimpulse").strip().lower()
         _reason = (
             "PROXY NOT CONFIGURED — YouTube transcript fetch BLOCKED. "
             "Residential proxy is REQUIRED to avoid IP bans on this server. "

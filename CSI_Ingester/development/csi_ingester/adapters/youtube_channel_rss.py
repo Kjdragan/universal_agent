@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import asyncio
 import json
 import logging
 import os
@@ -47,6 +48,14 @@ class YouTubeChannelRSSAdapter(SourceAdapter):
         self._db_seeded: bool = False
         self._load_state_fn = lambda source_key: None
         self._save_state_fn = lambda source_key, state: None
+        # ── Time-aware schedule ──────────────────────────────────────
+        self._schedule_tz_name = str(config.get("schedule_timezone") or "").strip()
+        self._schedule_fetch_hours: list[int] = []
+        raw_hours = config.get("schedule_fetch_hours")
+        if isinstance(raw_hours, list):
+            self._schedule_fetch_hours = [int(h) for h in raw_hours if isinstance(h, (int, float))]
+        self._schedule_min_interval = max(0, int(config.get("schedule_min_interval_seconds", 0)))
+        self._last_fetch_epoch: float = 0.0
 
     def set_state_backend(self, load_state_fn, save_state_fn) -> None:
         self._load_state_fn = load_state_fn
@@ -57,6 +66,41 @@ class YouTubeChannelRSSAdapter(SourceAdapter):
         self._db_conn = conn
 
     async def fetch_events(self) -> list[RawEvent]:
+        # ── Time-aware schedule gate ─────────────────────────────────
+        # If schedule_fetch_hours is configured, only actually fetch RSS
+        # when the current hour (in the configured timezone) is in the list
+        # AND enough time has elapsed since the last fetch.
+        if self._schedule_fetch_hours:
+            import time
+            try:
+                from zoneinfo import ZoneInfo
+                tz = ZoneInfo(self._schedule_tz_name or "America/Chicago")
+            except Exception:
+                # Fallback: assume UTC-5 (CDT) offset manually
+                from datetime import timedelta
+                tz = timezone(timedelta(hours=-5))
+            now_ct = datetime.now(tz)
+            current_hour = now_ct.hour
+            now_epoch = time.time()
+            if current_hour not in self._schedule_fetch_hours:
+                logger.debug(
+                    "Schedule gate: skipping RSS fetch — CT hour %d not in allowed hours %s",
+                    current_hour, self._schedule_fetch_hours,
+                )
+                return []
+            if self._schedule_min_interval and self._last_fetch_epoch:
+                elapsed = now_epoch - self._last_fetch_epoch
+                if elapsed < self._schedule_min_interval:
+                    logger.debug(
+                        "Schedule gate: skipping RSS fetch — only %.0fs since last fetch (min %ds)",
+                        elapsed, self._schedule_min_interval,
+                    )
+                    return []
+            logger.info(
+                "Schedule gate: proceeding with RSS fetch — CT hour %d, last fetch %.0fs ago",
+                current_hour, now_epoch - self._last_fetch_epoch if self._last_fetch_epoch else 0,
+            )
+
         watchlist = self._resolve_watchlist()
         timeout_seconds = max(5, int(self.config.get("timeout_seconds", 20)))
         max_concurrency = max(1, int(self.config.get("max_concurrency", 20)))
@@ -133,6 +177,9 @@ class YouTubeChannelRSSAdapter(SourceAdapter):
             self._seeded_by_channel[channel_id] = True
             self._seen_by_channel[channel_id] = set(current_ids[: self._max_seen_cache])
             self._persist_channel_state(channel_id)
+        # Update last-fetch timestamp for schedule gating
+        import time
+        self._last_fetch_epoch = time.time()
         return events
 
     def _resolve_watchlist(self) -> list[dict[str, str]]:

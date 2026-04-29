@@ -13,7 +13,18 @@ sources:
       - id: "${YT_TUTORIALS_PLAYLIST_ID}"
   youtube_channel_rss:
     enabled: true
-    poll_interval_seconds: 300
+    # Scheduler wake-up interval — adapter gates itself by time-of-day.
+    # Actual RSS fetches happen every 2 hours from 6 AM–8 PM CT,
+    # plus once at 2 AM CT for overnight catch-up.
+    # This short interval lets the adapter check the clock frequently;
+    # it will skip (no-op) if the current CT hour isn't a fetch window.
+    poll_interval_seconds: 1800  # wake every 30 min to check schedule
+    # ── Time-aware polling schedule (Central Time) ──────────────
+    schedule_timezone: "America/Chicago"
+    # Fetch hours in CT — adapter will only run RSS fetch at these hours
+    schedule_fetch_hours: [2, 6, 8, 10, 12, 14, 16, 18, 20]
+    # Minimum seconds between actual fetches (prevents double-runs)
+    schedule_min_interval_seconds: 5400  # 1.5 hours
     watchlist_file: "/var/lib/universal-agent/csi/channels_watchlist.json"
     watchlist: []
   reddit_discovery:

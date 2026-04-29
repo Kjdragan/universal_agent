@@ -52,7 +52,7 @@ POLL_WINDOW_MINUTES: int = int(os.getenv("TGTG_POLL_WINDOW_MINUTES", "90"))
 #   used by the YouTube transcript module).  If TGTG_PROXIES is not set but
 #   proxy credentials are present, a single rotating-residential URL is
 #   constructed automatically.  PROXY_PROVIDER selects the provider:
-#   "webshare" (default) or "dataimpulse".
+#   "dataimpulse" (default) or "webshare".
 #
 # Webshare residential endpoint:    proxy.webshare.io:80  (HTTP)
 # DataImpulse residential endpoint: gw.dataimpulse.com:823 (HTTP/HTTPS)
@@ -69,17 +69,17 @@ def _build_proxy_list() -> list[str]:
     # Fall back to shared residential proxy credentials if explicitly enabled
     tgtg_fallback = os.getenv("TGTG_PROXY_FALLBACK", "false").lower() == "true"
     if tgtg_fallback:
-        provider = (os.getenv("PROXY_PROVIDER") or "webshare").strip().lower()
-        if provider == "dataimpulse":
-            user = (os.getenv("DATAIMPULSE_PROXY_USER") or "").strip()
-            pw = (os.getenv("DATAIMPULSE_PROXY_PASS") or "").strip()
-            if user and pw:
-                return [f"http://{user}:{pw}@{_DATAIMPULSE_HOST}:{_DATAIMPULSE_PORT}"]
-        else:
+        provider = (os.getenv("PROXY_PROVIDER") or "dataimpulse").strip().lower()
+        if provider == "webshare":
             user = (os.getenv("PROXY_USERNAME") or os.getenv("WEBSHARE_PROXY_USER") or "").strip()
             pw   = (os.getenv("PROXY_PASSWORD") or os.getenv("WEBSHARE_PROXY_PASS") or "").strip()
             if user and pw:
                 return [f"http://{user}:{pw}@{_WEBSHARE_HOST}:{_WEBSHARE_PORT}"]
+        else:
+            user = (os.getenv("DATAIMPULSE_PROXY_USER") or "").strip()
+            pw = (os.getenv("DATAIMPULSE_PROXY_PASS") or "").strip()
+            if user and pw:
+                return [f"http://{user}:{pw}@{_DATAIMPULSE_HOST}:{_DATAIMPULSE_PORT}"]
     return []
 
 TGTG_PROXIES: list[str] = _build_proxy_list()
