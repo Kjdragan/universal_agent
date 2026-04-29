@@ -28296,19 +28296,20 @@ async def ops_vp_dispatch_mission(
                 th_conn,
                 {
                     "task_id": mission.mission_id,
-                    "title": f"Dashboard Dispatch: {vp_identifier}",
+                    "title": objective[:200],
                     "description": objective,
-                    "status": task_hub.TASK_STATUS_IN_PROGRESS,
-                    "source_kind": "dashboard",
+                    "status": task_hub.TASK_STATUS_DELEGATED,
+                    "source_kind": "vp_mission",
                     "source_ref": vp_identifier,
                     "mirror_status": "external",
+                    "trigger_type": "vp_dispatch",
+                    "agent_ready": True,
+                    "metadata": {
+                        "vp_id": vp_identifier,
+                        "mission_type": body.mission_type.strip() or "task",
+                        "dispatch_channel": "dashboard",
+                    },
                 }
-            )
-            task_hub.claim_task_for_agent(
-                th_conn,
-                task_id=mission.mission_id,
-                agent_id=vp_identifier,
-                claim_reason="dashboard_manual_dispatch"
             )
         except Exception as th_exc:
             import logging

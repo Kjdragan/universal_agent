@@ -256,6 +256,37 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
             ),
         )
         mission = _mission_to_dict(row) or {}
+
+        # Register in Task Hub for Kanban board visibility
+        try:
+            from universal_agent.durable.db import get_activity_db_path, connect_runtime_db
+            from universal_agent import task_hub
+
+            th_conn = connect_runtime_db(get_activity_db_path())
+            task_hub.ensure_schema(th_conn)
+            task_hub.upsert_item(
+                th_conn,
+                {
+                    "task_id": mission.get("mission_id"),
+                    "title": objective[:200],
+                    "description": objective,
+                    "status": task_hub.TASK_STATUS_DELEGATED,
+                    "source_kind": "vp_mission",
+                    "source_ref": vp_id,
+                    "mirror_status": "external",
+                    "trigger_type": "vp_dispatch",
+                    "agent_ready": True,
+                    "metadata": {
+                        "vp_id": vp_id,
+                        "mission_type": mission_type,
+                        "dispatch_channel": "agent_tool",
+                    },
+                },
+            )
+            th_conn.close()
+        except Exception:
+            pass  # Task Hub registration is best-effort
+
         return _result(
             {
                 "ok": True,

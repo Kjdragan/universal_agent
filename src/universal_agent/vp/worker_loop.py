@@ -387,6 +387,21 @@ class VpWorkerLoop:
                     )
 
         heartbeat_task = asyncio.create_task(_heartbeat_mission_claim())
+
+        # Mark Task Hub item as in_progress when VP worker claims execution
+        try:
+            from universal_agent.durable.db import get_activity_db_path, connect_runtime_db
+            from universal_agent import task_hub
+            th_conn = connect_runtime_db(get_activity_db_path())
+            task_hub.ensure_schema(th_conn)
+            task_hub.upsert_item(th_conn, {
+                "task_id": mission_id,
+                "status": task_hub.TASK_STATUS_IN_PROGRESS,
+            })
+            th_conn.close()
+        except Exception:
+            pass  # Task Hub status sync is best-effort
+
         try:
             # Phase 2: ZAI Concurrency Management (Global DAG Execution Limiter)
             async with DagConcurrencyGovernor.get_instance().acquire_slot():
@@ -411,6 +426,32 @@ class VpWorkerLoop:
         else:
             finalize_vp_mission(self.conn, mission_id, "completed", result_ref=outcome.result_ref)
             event_type = "vp.mission.completed"
+
+        # Sync terminal status to Task Hub for Kanban board visibility
+        try:
+            from universal_agent.durable.db import get_activity_db_path, connect_runtime_db
+            from universal_agent import task_hub
+            _th_status_map = {
+                "vp.mission.completed": task_hub.TASK_STATUS_COMPLETED,
+                "vp.mission.failed": task_hub.TASK_STATUS_OPEN,
+                "vp.mission.cancelled": task_hub.TASK_STATUS_CANCELLED,
+            }
+            th_status = _th_status_map.get(event_type, task_hub.TASK_STATUS_COMPLETED)
+            th_conn = connect_runtime_db(get_activity_db_path())
+            task_hub.ensure_schema(th_conn)
+            task_hub.upsert_item(th_conn, {
+                "task_id": mission_id,
+                "status": th_status,
+                "metadata": {
+                    "vp_terminal_status": event_type.replace("vp.mission.", ""),
+                    "result_ref": outcome.result_ref or "",
+                },
+            })
+            th_conn.close()
+        except Exception as th_exc:
+            logger.warning("Task Hub finalize sync failed for %s: %s", mission_id, th_exc)
+
+        if event_type == "vp.mission.completed":
             try:
                 mission_type = (dict(mission)["mission_type"] or "").strip()
             except (KeyError, TypeError):

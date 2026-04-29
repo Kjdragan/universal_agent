@@ -30,7 +30,7 @@ ACTIVE_STATUSES = {
 }
 VALID_ACTIONS = {"seize", "reject", "block", "unblock", "review", "complete", "park", "snooze", "delegate", "approve"}
 
-TRIGGER_TYPES = {"immediate", "scheduled", "event_triggered", "human_approved", "brainstorm", "heartbeat_poll"}
+TRIGGER_TYPES = {"immediate", "scheduled", "event_triggered", "human_approved", "brainstorm", "heartbeat_poll", "vp_dispatch"}
 DEFAULT_TRIGGER_TYPE = "heartbeat_poll"
 
 REFINEMENT_STAGES = {"raw_idea", "interviewing", "exploring", "crystallizing", "decomposing", "actionable"}
