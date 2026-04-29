@@ -596,15 +596,7 @@ export default function DashboardPage() {
     [router],
   );
 
-  const cards = useMemo(
-    () => [
-      { label: "Active Sessions", value: summary?.sessions?.active ?? 0 },
-      { label: "Pending Approvals", value: summary?.approvals?.pending ?? 0 },
-      { label: "Unread Alerts", value: summary?.notifications?.unread ?? 0 },
-      { label: "Enabled Cron Jobs", value: summary?.cron?.enabled ?? 0 },
-    ],
-    [summary],
-  );
+
   const openContinuityAlerts = useMemo(
     () =>
       notifications.filter(
@@ -802,58 +794,14 @@ export default function DashboardPage() {
     return index;
   }, [vpMissions]);
 
-  const missionCountByStatus = useMemo(() => {
-    const counts = {
-      queued: 0,
-      running: 0,
-      stalled: 0,
-      completed: 0,
-      failed: 0,
-      cancelled: 0,
-    };
-    for (const mission of filteredVpMissions) {
-      const status = String(mission.status || "unknown").toLowerCase();
-      if (status === "running") {
-        const claimTs = mission.claim_expires_at ? new Date(mission.claim_expires_at).getTime() : Number.NaN;
-        const updatedTs = mission.updated_at ? new Date(mission.updated_at).getTime() : Number.NaN;
-        const staleByClaim = Number.isFinite(claimTs) && claimTs < Date.now();
-        const staleByNoClaim = !Number.isFinite(claimTs) && Number.isFinite(updatedTs) && Date.now() - updatedTs > VP_STALE_WINDOW_MS;
-        if (staleByClaim || staleByNoClaim) {
-          counts.stalled += 1;
-          continue;
-        }
-      }
-      if (status in counts) {
-        counts[status as keyof typeof counts] += 1;
-      }
-    }
-    return counts;
-  }, [filteredVpMissions]);
+
 
   const visibleVpIds = useMemo(
     () => (selectedVpId === "all" ? vpIds : vpIds.filter((vpId) => vpId === selectedVpId)),
     [selectedVpId, vpIds],
   );
 
-  const activeWorkerCount = useMemo(
-    () =>
-      filteredVpSessions.filter((session) => {
-        if (session.stale === true) return false;
-        const effectiveStatus = String(session.effective_status || "").toLowerCase();
-        if (effectiveStatus) {
-          return ["active", "running", "healthy"].includes(effectiveStatus);
-        }
-        if (!["active", "running", "healthy"].includes(String(session.status || "").toLowerCase())) {
-          return false;
-        }
-        const heartbeatTs = session.last_heartbeat_at ? new Date(session.last_heartbeat_at).getTime() : Number.NaN;
-        const updatedTs = session.updated_at ? new Date(session.updated_at).getTime() : Number.NaN;
-        if (Number.isFinite(heartbeatTs) && Date.now() - heartbeatTs <= VP_STALE_WINDOW_MS) return true;
-        if (Number.isFinite(updatedTs) && Date.now() - updatedTs <= VP_STALE_WINDOW_MS) return true;
-        return false;
-      }).length,
-    [filteredVpSessions],
-  );
+
 
   const recentVpEvents = useMemo(() => {
     const events: VpEventSnapshot[] = [];
@@ -1097,32 +1045,11 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {cards.map((card) => (
-          <article
-            key={card.label}
-            className="rounded-xl border border-border/40 bg-card/10 p-4 cursor-pointer transition hover:border-primary/30 hover:bg-card/20"
-            onClick={() => handleCardClick(card.label)}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") handleCardClick(card.label); }}
-          >
-            <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">{card.label}</p>
-            <p className="mt-2 text-3xl font-semibold text-foreground">{card.value}</p>
-          </article>
-        ))}
-      </section>
-
       <section className="rounded-xl border border-border bg-background/70 p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-foreground/80">
-              External Primary Agent Operations
-            </h2>
-            <p className="text-[11px] text-muted-foreground">
-              Simone dispatches missions. External workers execute autonomously and report mission events.
-            </p>
-          </div>
+          <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-foreground/80">
+            Dispatch Mission
+          </h2>
           <div className="flex items-center gap-2">
             <select
               value={selectedVpId}
@@ -1146,35 +1073,8 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
-          <div className="rounded-lg border border-border/80 bg-background/50 p-3">
-            <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Active Workers</p>
-            <p className="mt-1 text-xl font-semibold text-foreground">{activeWorkerCount}</p>
-          </div>
-          <div className="rounded-lg border border-border/80 bg-background/50 p-3">
-            <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Queued</p>
-            <p className="mt-1 text-xl font-semibold text-foreground">{missionCountByStatus.queued}</p>
-          </div>
-          <div className="rounded-lg border border-border/80 bg-background/50 p-3">
-            <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Running</p>
-            <p className="mt-1 text-xl font-semibold text-primary/80">{missionCountByStatus.running}</p>
-          </div>
-          <div className="rounded-lg border border-border/80 bg-background/50 p-3">
-            <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Completed</p>
-            <p className="mt-1 text-xl font-semibold text-foreground">{missionCountByStatus.completed}</p>
-          </div>
-          <div className="rounded-lg border border-border/80 bg-background/50 p-3">
-            <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Failed</p>
-            <p className="mt-1 text-xl font-semibold text-red-400/80">{missionCountByStatus.failed}</p>
-          </div>
-          <div className="rounded-lg border border-border/80 bg-background/50 p-3">
-            <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Stalled</p>
-            <p className="mt-1 text-xl font-semibold text-amber-200">{missionCountByStatus.stalled}</p>
-          </div>
-        </div>
-        <div className="mt-3 rounded-lg border border-border/80 bg-background/50 p-3">
-          <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Dispatch Mission</p>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
+        <div className="rounded-lg border border-border/80 bg-background/50 p-3">
+          <div className="flex flex-wrap items-center gap-2">
             <select
               value={dispatchVpId}
               onChange={(event) => setDispatchVpId(event.target.value)}
