@@ -310,6 +310,7 @@ function RefLine({
   label,
   value,
   storagePath,
+  sessionHref,
 }: {
   label: string;
   value?: string | null;
