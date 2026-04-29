@@ -459,14 +459,14 @@ class ToDoDispatchService:
         self.execution_callback = execution_callback
         self.event_callback = event_callback
 
-    async def start(self):
+    async def start(self) -> None:
         if self.running:
             return
         self.running = True
         self.task = asyncio.create_task(self._scheduler_loop())
         logger.info("📋 ToDo Dispatch Service started")
 
-    async def stop(self):
+    async def stop(self) -> None:
         if not self.running:
             return
         self.running = False
@@ -478,7 +478,7 @@ class ToDoDispatchService:
                 pass
         logger.info("📋 ToDo Dispatch Service stopped")
         
-    def register_session(self, session: GatewaySession):
+    def register_session(self, session: GatewaySession) -> None:
         metadata = session.metadata if isinstance(session.metadata, dict) else {}
         session_role = str(metadata.get("session_role") or "").strip().lower()
         if session_role not in {"todo_execution", "todo"}:
@@ -494,7 +494,7 @@ class ToDoDispatchService:
                 "wake_pending": session.session_id in self.wake_sessions,
             })
 
-    def unregister_session(self, session_id: str):
+    def unregister_session(self, session_id: str) -> None:
         if session_id in self.active_sessions:
             del self.active_sessions[session_id]
         if self.event_callback:

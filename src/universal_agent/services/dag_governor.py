@@ -34,7 +34,7 @@ class DagConcurrencyGovernor:
         cls._instance = None
         
     @asynccontextmanager
-    async def acquire_slot(self):
+    async def acquire_slot(self) -> None:
         """Acquire a concurrency slot for DAG execution."""
         await self._semaphore.acquire()
         try:

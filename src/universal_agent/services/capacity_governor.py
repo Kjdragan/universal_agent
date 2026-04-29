@@ -186,7 +186,7 @@ class CapacityGovernor:
     # ------------------------------------------------------------------
 
     @asynccontextmanager
-    async def acquire_slot(self, context: str = ""):
+    async def acquire_slot(self, context: str = "") -> None:
         """Acquire a capacity slot for an agent execution.
 
         Usage:
