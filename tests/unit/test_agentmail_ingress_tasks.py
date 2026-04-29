@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from universal_agent.services.agentmail_service import _extract_inbound_email_tasks
+from universal_agent.services.agentmail_service import (
+    _extract_inbound_email_tasks,
+    _trusted_triage_is_non_action,
+)
 
 
 @pytest.mark.asyncio
@@ -42,3 +45,25 @@ async def test_email_ingress_can_opt_into_disjoint_task_splitting(monkeypatch):
     )
 
     assert [task["task_content"] for task in tasks] == ["Task one", "Task two"]
+
+
+def test_trusted_triage_non_action_closes_acknowledgements():
+    triage = {
+        "safety_status": "clean",
+        "routing_decision": "trusted_execute",
+        "classification": "status_update",
+        "raw_text": "action_items:\n- no action required",
+    }
+
+    assert _trusted_triage_is_non_action(triage) is True
+
+
+def test_trusted_triage_non_action_keeps_actionable_instructions():
+    triage = {
+        "safety_status": "clean",
+        "routing_decision": "trusted_execute",
+        "classification": "instruction",
+        "raw_text": "action_items:\n1. check the deployment",
+    }
+
+    assert _trusted_triage_is_non_action(triage) is False

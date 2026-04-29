@@ -1,5 +1,7 @@
 # Heartbeat Issue Mediation and Auto-Triage (2026-03-12)
 
+**Last updated:** 2026-04-29
+
 ## Summary
 
 Non-OK heartbeats are now treated as operational investigations, not passive informational logs.
@@ -16,7 +18,7 @@ The current flow is:
    - a dashboard notification
    - an AgentMail summary from Simone
 
-This is deliberately an auto-investigation workflow, not auto-remediation.
+This is an auto-investigation workflow with memory-guided autonomous remediation for bounded system fixes.
 
 ## Scope and Safety
 
@@ -27,12 +29,7 @@ Enabled behavior:
 - structured investigation status in the Events dashboard
 - operator notification for unknown or out-of-rule findings
 
-Explicitly excluded in v1:
-
-- automatic code edits
-- automatic deploys
-- automatic shell remediation
-- Todoist task creation
+Autonomous remediation is allowed when Simone actively decides, from current evidence plus memory/runbook context, that the fix is familiar, bounded, reversible, and safe. Normal controls still apply: no destructive operations, no public/private data-boundary changes, no secrets or credential changes, no security-policy changes, and no production deploys without the normal release path.
 
 ## Structured Findings Contract
 
@@ -127,14 +124,32 @@ Expected JSON fields:
 - `recommended_next_step`
 - `proposed_changes`
 - `email_summary`
+- `autonomous_remediation_approved`
+- `autonomous_remediation_confidence`
+- `autonomous_remediation_rationale`
+- `memory_evidence`
+
+## Autonomous Remediation Decision
+
+Simone owns the decision. The gateway does not blindly route every code-looking finding into a fix lane. The investigation prompt requires Simone to:
+
+1. search memory for the finding signature, classification, error text, and prior repairs
+2. reason about whether the fix is familiar and bounded
+3. write an explicit remediation decision in `heartbeat_investigation_summary.json`
+
+If `autonomous_remediation_approved=true` and the recommendation passes the normal safety controls, the gateway creates a Task Hub item with `source_kind='heartbeat_remediation'`, `trigger_type='immediate'`, and nudges the idle dispatcher so Simone/Cody can apply and verify the fix. The remediation task carries Simone's confidence, rationale, and memory evidence, and instructs the fixer to search memory before editing.
+
+If Simone is not comfortable, or the recommendation touches secrets, credentials, security policy, public exposure, destructive operations, or deployment approval, she sets `operator_review_required=true` and Kevin is notified.
 
 ## Operator Notification Policy
 
 Default policy:
 
 - all non-OK heartbeat findings auto-dispatch Simone
-- known-rule findings do not email Kevin by default
-- unknown findings, or investigations marked `operator_review_required=true`, do email Kevin
+- Simone uses memory and reasoning to decide whether the finding is safe for autonomous remediation
+- known bounded fixes with explicit autonomous approval become Task Hub remediation work instead of email
+- findings that Simone refers to Kevin, or autonomous decisions blocked by safety controls, do email Kevin
+- unknown findings no longer require email by themselves when Simone explicitly approves a memory-backed safe fix
 
 Delivery path:
 
@@ -171,6 +186,4 @@ Manual handoff remains available as a fallback.
 
 ## Operational Guidance
 
-Use this flow when a heartbeat finds something material but not yet obviously remediable.
-
-Do not expand this into automatic remediation casually. Any future auto-remediation should be restricted to a small whitelist of deterministic, reversible actions and documented separately.
+Use this flow when a heartbeat finds something material that may need system repair. The desired behavior is preventative maintenance: Simone should clear safe issues herself or direct Cody through Task Hub, and escalate only when her memory/reasoning says the fix is unsafe, unfamiliar, or approval-bound.

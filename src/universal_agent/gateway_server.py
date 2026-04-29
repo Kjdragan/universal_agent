@@ -25171,12 +25171,17 @@ async def _dispatch_heartbeat_to_simone(notification_id: str) -> None:
         "- Investigate the heartbeat finding set.\n"
         "- Correlate the issue with session/artifact context.\n"
         "- Determine whether this is noise, infra/config drift, or code regression.\n"
-        "- Recommend next step.\n"
-        "- Do not implement code changes or remediation automatically.\n"
+        "- Search memory for the finding signature, classification, error text, and prior fixes before deciding.\n"
+        "- Make an active decision: either approve autonomous remediation or refer to Kevin.\n"
+        "- Approve autonomous remediation when your memory plus current evidence make the fix familiar, bounded, reversible, non-destructive, and not a public-data/secrets/security-policy change.\n"
+        "- Refer to Kevin when the fix is destructive, exposes or changes public/private data boundaries, touches secrets/credentials/security policy, requires production deployment approval, or your confidence is low.\n"
+        "- Do not edit code in this investigation session; when autonomous remediation is approved, write the remediation decision so Task Hub/Cody can apply and verify it.\n"
         "- Write work_products/heartbeat_investigation_summary.md.\n"
         "- If possible also write work_products/heartbeat_investigation_summary.json with fields:\n"
         "  version, source_notification_id, session_key, classification, operator_review_required,\n"
-        "  recommended_next_step, proposed_changes, email_summary.\n\n"
+        "  recommended_next_step, proposed_changes, email_summary,\n"
+        "  autonomous_remediation_approved, autonomous_remediation_confidence,\n"
+        "  autonomous_remediation_rationale, memory_evidence.\n\n"
         "provider_context:\n"
         "- VPS provider: Hostinger (`uaonvps`, accessed via Tailscale as `uaonvps`).\n"
         "- When referencing the VPS provider, always use 'Hostinger VPS'.\n"
@@ -25353,6 +25358,76 @@ _HEARTBEAT_AUTO_REMEDIATION_ENABLED = str(
     os.getenv("UA_HEARTBEAT_AUTO_REMEDIATION_ENABLED", "1")
 ).strip().lower() in {"1", "true", "yes", "on"}
 
+_HEARTBEAT_REMEDIATION_RISK_MARKERS = (
+    "api key",
+    "credential",
+    "password",
+    "public internet",
+    "rotate api",
+    "rotate key",
+    "rotate secret",
+    "rotate token",
+    "secret",
+    "ssh policy",
+    "tailscale acl",
+    "token",
+)
+
+
+def _metadata_bool(metadata: dict[str, Any], *keys: str) -> bool:
+    for key in keys:
+        if key not in metadata:
+            continue
+        value = metadata.get(key)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on", "approved"}
+    return False
+
+
+def _heartbeat_autonomous_remediation_allowed(
+    metadata: dict[str, Any],
+    *,
+    recommended_next_step: str,
+) -> bool:
+    """Honor Simone's explicit fix decision, bounded by normal safety controls."""
+    if not _metadata_bool(
+        metadata,
+        "autonomous_remediation_approved",
+        "auto_remediation_approved",
+    ):
+        return False
+    if not (recommended_next_step or metadata.get("proposed_changes")):
+        return False
+
+    confidence = str(
+        metadata.get("autonomous_remediation_confidence")
+        or metadata.get("remediation_confidence")
+        or metadata.get("confidence")
+        or ""
+    ).strip().lower()
+    if confidence in {"low", "unsafe", "uncertain", "operator"}:
+        return False
+
+    proposed_changes = metadata.get("proposed_changes")
+    proposed_text = (
+        " ".join(str(item) for item in proposed_changes if str(item).strip())
+        if isinstance(proposed_changes, list)
+        else str(proposed_changes or "")
+    )
+    decision_text = " ".join(
+        [
+            str(metadata.get("classification") or ""),
+            recommended_next_step,
+            proposed_text,
+            str(metadata.get("autonomous_remediation_rationale") or ""),
+        ]
+    ).lower()
+    return not any(marker in decision_text for marker in _HEARTBEAT_REMEDIATION_RISK_MARKERS)
+
 
 def _create_heartbeat_remediation_task(
     *,
@@ -25364,6 +25439,9 @@ def _create_heartbeat_remediation_task(
     session_id: Optional[str],
     run_id: Optional[str] = None,
     attempt_id: Optional[str] = None,
+    autonomous_remediation_confidence: str = "",
+    autonomous_remediation_rationale: str = "",
+    memory_evidence: Any = None,
 ) -> Optional[dict[str, Any]]:
     """Create a Task Hub item for autonomous remediation of a heartbeat finding.
 
@@ -25382,6 +25460,18 @@ def _create_heartbeat_remediation_task(
         description_parts.append(f"**Summary**: {email_summary}")
     if recommended_next_step:
         description_parts.append(f"**Recommended Fix**: {recommended_next_step}")
+    if autonomous_remediation_confidence:
+        description_parts.append(f"**Simone Confidence**: {autonomous_remediation_confidence}")
+    if autonomous_remediation_rationale:
+        description_parts.append(f"**Simone Rationale**: {autonomous_remediation_rationale}")
+    if isinstance(memory_evidence, list) and memory_evidence:
+        evidence_text = "\n".join(
+            f"- {str(item).strip()}" for item in memory_evidence if str(item).strip()
+        )
+        if evidence_text:
+            description_parts.append(f"**Memory Evidence**:\n{evidence_text}")
+    elif isinstance(memory_evidence, str) and memory_evidence.strip():
+        description_parts.append(f"**Memory Evidence**: {memory_evidence.strip()}")
     if isinstance(proposed_changes, list) and proposed_changes:
         changes_text = "\n".join(
             f"- {str(c).strip()}" for c in proposed_changes if str(c).strip()
@@ -25397,7 +25487,8 @@ def _create_heartbeat_remediation_task(
         description_parts.append(f"Provider session: {session_id}")
     description_parts.append(
         "This task was auto-created from a heartbeat investigation. "
-        "Apply the recommended fix and verify the issue is resolved."
+        "Before editing, search memory for this issue signature and related prior fixes; "
+        "use memory as guidance, then apply the recommended fix and verify the issue is resolved."
     )
     description = "\n\n".join(description_parts)
 
@@ -25430,6 +25521,9 @@ def _create_heartbeat_remediation_task(
                 "recommended_next_step": recommended_next_step,
                 "proposed_changes": proposed_changes if isinstance(proposed_changes, list) else [],
                 "auto_remediation": True,
+                "autonomous_remediation_confidence": autonomous_remediation_confidence,
+                "autonomous_remediation_rationale": autonomous_remediation_rationale,
+                "memory_evidence": memory_evidence if isinstance(memory_evidence, (list, str)) else [],
                 "session_id": session_id,
                 "run_id": run_id,
                 "attempt_id": attempt_id,
@@ -25478,6 +25572,27 @@ async def _process_heartbeat_investigation_notification(payload: dict[str, Any])
         str(metadata.get("email_summary") or "").strip(),
         field="summary",
     )
+    autonomous_remediation_requested = _metadata_bool(
+        metadata,
+        "autonomous_remediation_approved",
+        "auto_remediation_approved",
+    )
+    autonomous_remediation_allowed = _heartbeat_autonomous_remediation_allowed(
+        metadata,
+        recommended_next_step=recommended_next_step,
+    )
+    autonomous_remediation_confidence = str(
+        metadata.get("autonomous_remediation_confidence")
+        or metadata.get("remediation_confidence")
+        or metadata.get("confidence")
+        or ""
+    ).strip()
+    autonomous_remediation_rationale = str(
+        metadata.get("autonomous_remediation_rationale")
+        or metadata.get("remediation_rationale")
+        or ""
+    ).strip()
+    memory_evidence = metadata.get("memory_evidence")
     update_patch = {
         "heartbeat_mediation_status": "investigation_completed",
         "heartbeat_investigation_summary_workspace_relpath": summary_rel,
@@ -25487,8 +25602,23 @@ async def _process_heartbeat_investigation_notification(payload: dict[str, Any])
         "heartbeat_investigation_classification": str(metadata.get("classification") or "").strip(),
         "heartbeat_investigation_recommended_next_step": recommended_next_step,
         "heartbeat_investigation_email_summary": email_summary,
+        "heartbeat_autonomous_remediation_requested": autonomous_remediation_requested,
+        "heartbeat_autonomous_remediation_approved": autonomous_remediation_allowed,
+        "heartbeat_autonomous_remediation_confidence": autonomous_remediation_confidence,
+        "heartbeat_autonomous_remediation_rationale": autonomous_remediation_rationale,
+        "heartbeat_autonomous_remediation_memory_evidence": (
+            memory_evidence if isinstance(memory_evidence, (list, str)) else []
+        ),
     }
-    _update_notification_record(origin_id, metadata_patch=update_patch, requires_action=True)
+    should_notify = (
+        (operator_review_required or bool(metadata.get("unknown_rule_count")))
+        and not autonomous_remediation_allowed
+    ) or (autonomous_remediation_requested and not autonomous_remediation_allowed)
+    _update_notification_record(
+        origin_id,
+        metadata_patch=update_patch,
+        requires_action=should_notify,
+    )
     _record_activity_audit(
         event_id=origin_id,
         action="heartbeat_auto_route",
@@ -25498,15 +25628,13 @@ async def _process_heartbeat_investigation_notification(payload: dict[str, Any])
         metadata={"session_key": str(metadata.get("session_key") or "")},
     )
 
-    should_notify = operator_review_required or bool(metadata.get("unknown_rule_count"))
-
     # --- Autonomous remediation: create a Task Hub item for actionable fixes ---
-    # When the investigation found an actionable fix but doesn't need operator
-    # review, inject a Task Hub task so the proactive pipeline picks it up.
+    # When Simone decides a fix is safe, or finds an actionable fix that does not
+    # need operator review, inject a Task Hub task so the proactive pipeline picks it up.
     has_actionable_fix = bool(recommended_next_step) or bool(
         metadata.get("proposed_changes")
     )
-    if has_actionable_fix and not operator_review_required:
+    if has_actionable_fix and (autonomous_remediation_allowed or not operator_review_required):
         remediation_task = _create_heartbeat_remediation_task(
             origin_id=origin_id,
             classification=str(metadata.get("classification") or "unknown_issue").strip(),
@@ -25516,8 +25644,21 @@ async def _process_heartbeat_investigation_notification(payload: dict[str, Any])
             session_id=str(payload.get("session_id") or "").strip() or None,
             run_id=str(payload.get("run_id") or metadata.get("run_id") or "").strip() or None,
             attempt_id=str(payload.get("attempt_id") or metadata.get("attempt_id") or "").strip() or None,
+            autonomous_remediation_confidence=autonomous_remediation_confidence,
+            autonomous_remediation_rationale=autonomous_remediation_rationale,
+            memory_evidence=memory_evidence,
         )
         if remediation_task:
+            _update_notification_record(
+                origin_id,
+                metadata_patch={
+                    "heartbeat_autonomous_remediation_status": "task_created",
+                    "heartbeat_autonomous_remediation_task_id": str(
+                        remediation_task.get("task_id") or ""
+                    ),
+                },
+                requires_action=should_notify,
+            )
             try:
                 from universal_agent.services.idle_dispatch_loop import nudge_dispatch
 

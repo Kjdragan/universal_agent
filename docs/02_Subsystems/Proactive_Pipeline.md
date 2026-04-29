@@ -260,7 +260,8 @@ The architectural rule is now explicit:
   - once a request is accepted for tracked work, it should execute under the Task Hub / `todo_execution` lifecycle
   - decomposition is allowed inside canonical execution, not as a required pre-processing step at email ingress
 - **Heartbeat auto-remediation is actionable ingress**
-  - actionable heartbeat investigations create `source_kind='heartbeat_remediation'` tasks with `trigger_type='immediate'`
+  - Simone makes an explicit memory-guided decision about whether a heartbeat finding is safe to fix autonomously or should be referred to Kevin
+  - approved actionable heartbeat investigations create `source_kind='heartbeat_remediation'` tasks with `trigger_type='immediate'`
   - that ingress also nudges the idle dispatch loop so `daemon_simone_todo` can claim the remediation promptly instead of waiting as passive backlog
 
 ### 3.8 Trusted Email Canonical Flow

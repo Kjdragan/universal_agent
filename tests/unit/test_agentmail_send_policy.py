@@ -136,6 +136,32 @@ def test_record_final_outbound_stamps_delivery_even_without_provider_ids(tmp_pat
     assert str(row["final_draft_id"] or "") == ""
 
 
+def test_non_action_email_reply_completes_task_without_review(tmp_path):
+    db_path = tmp_path / "activity_state.db"
+    seeded = _seed_email_task(db_path, session_key="hook-non-action")
+
+    with _connect(db_path) as conn:
+        bridge = EmailTaskBridge(db_conn=conn)
+        assert bridge.complete_thread_as_non_action(
+            seeded["thread_id"],
+            classification="status_update",
+            reason="trusted_non_action_email_reply",
+        )
+        item = task_hub.get_item(conn, seeded["task_id"])
+        mapping = conn.execute(
+            "SELECT status FROM email_task_mappings WHERE thread_id = ?",
+            (seeded["thread_id"],),
+        ).fetchone()
+
+    assert item is not None
+    assert item["status"] == task_hub.TASK_STATUS_COMPLETED
+    assert item["seizure_state"] == "completed"
+    assert item["agent_ready"] is False
+    assert item["metadata"]["email_triage_routing"] == "auto_completed_non_action"
+    assert item["metadata"]["dispatch"]["completion_unverified"] is False
+    assert str(mapping["status"]) == "completed"
+
+
 def test_target_agent_labels_use_exact_map(tmp_path):
     db_path = tmp_path / "activity_state.db"
     with _connect(db_path) as conn:

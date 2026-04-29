@@ -1,7 +1,7 @@
 # Production — serves built frontend + proxies to FastAPI backend
 server {
     listen 80;
-    server_name {{PROJECT_NAME}}.clearspringcg.com;
+    server_name {{DNS_NAME}}.clearspringcg.com;
 
     # API requests → FastAPI
     location /api/ {
@@ -19,7 +19,7 @@ server {
 
     # Static frontend
     location / {
-        root /opt/{{PROJECT_NAME}}/frontend/dist;
+        root {{PROJECT_DIR}}/frontend/dist;
         try_files $uri $uri/ /index.html;
     }
 }
@@ -27,7 +27,7 @@ server {
 # Development — proxies to Vite dev server + FastAPI
 server {
     listen 80;
-    server_name dev-{{PROJECT_NAME}}.clearspringcg.com;
+    server_name dev-{{DNS_NAME}}.clearspringcg.com;
 
     # API requests → FastAPI
     location /api/ {

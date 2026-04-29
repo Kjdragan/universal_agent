@@ -1172,7 +1172,6 @@ export default function DashboardPage() {
             <p className="mt-1 text-xl font-semibold text-amber-200">{missionCountByStatus.stalled}</p>
           </div>
         </div>
-
         <div className="mt-3 rounded-lg border border-border/80 bg-background/50 p-3">
           <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Dispatch Mission</p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -1211,51 +1210,6 @@ export default function DashboardPage() {
           {(dispatchStatus || vpError) && (
             <p className="mt-2 text-xs text-accent">{dispatchStatus || vpError}</p>
           )}
-        </div>
-
-        <div className="mt-3 grid gap-2 md:grid-cols-2">
-          {visibleVpIds.map((vpId) => {
-            const metrics = vpMetrics[vpId];
-            const vpSession = vpSessions.find((row) => row.vp_id === vpId);
-            const p95Latency = metrics?.latency_seconds?.p95_seconds;
-            const workerStatus = String(vpSession?.effective_status || vpSession?.status || metrics?.session?.status || "unknown");
-            const statusColors = VP_STATUS_COLORS[workerStatus] || VP_STATUS_COLORS.unknown;
-            const lastError = vpSession?.last_error || null;
-            const leaseExpires = vpSession?.lease_expires_at ? new Date(vpSession.lease_expires_at).getTime() : NaN;
-            const leaseSecondsLeft = Number.isFinite(leaseExpires) ? Math.max(0, Math.floor((leaseExpires - Date.now()) / 1000)) : NaN;
-            return (
-              <div key={vpId} className={`rounded-lg border bg-background/50 p-3 text-xs text-foreground/80 ${statusColors.bg}`}>
-                <div className="flex items-center justify-between">
-                  <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">{vpId}</p>
-                  <div className="flex items-center gap-1.5">
-                    <span className={`inline-block h-2 w-2 rounded-full ${statusColors.dot}`} />
-                    <span className={`text-[11px] font-semibold uppercase ${statusColors.text}`}>{workerStatus}</span>
-                  </div>
-                </div>
-                {lastError && workerStatus === "degraded" && (
-                  <div className="mt-2 rounded border border-red-400/25 bg-red-400/10 px-2 py-1.5">
-                    <p className="text-[10px] font-medium uppercase tracking-wide text-secondary">Last Error</p>
-                    <p className="mt-0.5 text-[11px] text-red-400/80 break-all">{lastError}</p>
-                  </div>
-                )}
-                <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1">
-                  <p className="text-muted-foreground">session</p>
-                  <p className="text-right font-mono text-[10px]">{vpSession?.session_id || metrics?.session?.session_id || "--"}</p>
-                  <p className="text-muted-foreground">queue / running</p>
-                  <p className="text-right">{metrics?.mission_counts?.queued ?? 0} / {metrics?.mission_counts?.running ?? 0}</p>
-                  <p className="text-muted-foreground">p95 latency</p>
-                  <p className="text-right">{typeof p95Latency === "number" ? `${p95Latency.toFixed(1)}s` : "--"}</p>
-                  {Number.isFinite(leaseSecondsLeft) && (
-                    <><p className="text-muted-foreground">lease TTL</p>
-                    <p className={`text-right ${leaseSecondsLeft < 30 ? "text-secondary" : leaseSecondsLeft < 60 ? "text-accent" : "text-primary"}`}>{formatElapsed(leaseSecondsLeft * 1000)}</p></>
-                  )}
-                </div>
-                <p className="mt-2 text-[10px] text-muted">
-                  heartbeat: {formatLocalDateTime(vpSession?.last_heartbeat_at || vpSession?.updated_at)}
-                </p>
-              </div>
-            );
-          })}
         </div>
 
         <div className="mt-3 rounded-lg border border-border/80 bg-background/50 p-3 text-xs">

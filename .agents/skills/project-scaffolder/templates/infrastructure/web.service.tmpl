@@ -1,0 +1,18 @@
+[Unit]
+Description={{PROJECT_NAME}} Web (Vite dev server)
+After=network.target {{PROJECT_NAME}}-api.service
+Requires={{PROJECT_NAME}}-api.service
+
+[Service]
+Type=simple
+User=ua
+WorkingDirectory={{PROJECT_DIR}}/frontend
+Environment=PATH={{PROJECT_DIR}}/frontend/node_modules/.bin:/usr/local/bin:/usr/bin
+ExecStart=/usr/bin/env npm run dev -- --host 127.0.0.1 --port {{FRONTEND_PORT}}
+Restart=on-failure
+RestartSec=5
+MemoryMax=512M
+MemoryHigh=384M
+
+[Install]
+WantedBy=multi-user.target

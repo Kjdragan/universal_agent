@@ -9,19 +9,20 @@ Usage:
     uv run .agents/skills/project-scaffolder/scripts/scaffold.py \
         --name my-project --description "My new project"
 """
+
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import getpass
 import json
 import os
+from pathlib import Path
 import re
 import shutil
 import socket
 import subprocess
 import sys
-from datetime import datetime, timezone
-from pathlib import Path
 
 try:
     import httpx
@@ -44,17 +45,68 @@ if not (UA_SKILLS_DIR / "clean-code").exists():
             UA_SKILLS_DIR = _candidate
             break
 
+UA_ROOT = SKILL_DIR.parents[2]
+
+
+def _skill_source_dirs() -> list[Path]:
+    """Return canonical and legacy skill source directories, in lookup order."""
+    candidates = [
+        UA_ROOT / ".agents" / "skills",
+        UA_SKILLS_DIR,
+        UA_ROOT / ".claude" / "skills",
+        Path("/opt/universal_agent/.agents/skills"),
+        Path("/opt/universal_agent/.claude/skills"),
+        Path("/home/kjdragan/lrepos/universal_agent/.agents/skills"),
+        Path("/home/kjdragan/lrepos/universal_agent/.claude/skills"),
+    ]
+    seen: set[Path] = set()
+    existing: list[Path] = []
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved in seen or not candidate.exists():
+            continue
+        seen.add(resolved)
+        existing.append(candidate)
+    return existing
+
+
+UA_SKILL_SOURCE_DIRS = _skill_source_dirs()
+
 # Infisical API config
 INFISICAL_API_URL = "https://app.infisical.com"
 INFISICAL_ORG_ID = "42e4d09c-9723-48fb-8244-43e5c7b9fae3"
 VPS_IP = "187.77.16.29"
+CORE_HOST_CHECKS = [
+    ("git", ["git", "--version"]),
+    ("uv", ["uv", "--version"]),
+    ("node", ["node", "--version"]),
+    ("npm", ["npm", "--version"]),
+    ("docker compose", ["docker", "compose", "version"]),
+]
 
 CURATED_SKILLS = [
-    "clean-code", "systematic-debugging", "verification-before-completion",
-    "git-commit", "github", "dependency-management", "task-forge", "skill-creator",
-    "coding-agent", "deep-research", "defuddle", "deepwiki", "image-generation",
-    "webapp-testing", "pdf", "media-processing", "json-canvas", "grill-me",
-    "ideation", "just", "obsidian", "weather",
+    "clean-code",
+    "systematic-debugging",
+    "verification-before-completion",
+    "git-commit",
+    "github",
+    "dependency-management",
+    "task-forge",
+    "skill-creator",
+    "coding-agent",
+    "deep-research",
+    "defuddle",
+    "deepwiki",
+    "image-generation",
+    "webapp-testing",
+    "pdf",
+    "media-processing",
+    "json-canvas",
+    "grill-me",
+    "ideation",
+    "just",
+    "obsidian",
+    "weather",
 ]
 
 # Port ranges for auto-allocation
@@ -88,6 +140,7 @@ def find_free_port(start: int, end: int) -> int:
 # ---------------------------------------------------------------------------
 # Infisical helpers
 # ---------------------------------------------------------------------------
+
 
 def _infisical_auth() -> tuple[str, str, str]:
     """Get Infisical access token using UA's machine-identity credentials.
@@ -149,7 +202,9 @@ def create_infisical_project(project_name: str) -> str:
         if list_resp.status_code == 200:
             for w in list_resp.json().get("workspaces", []):
                 if w.get("name", "").lower() == project_name.lower():
-                    print(f"  ℹ Infisical project '{project_name}' already exists (ID: {w['id']})")
+                    print(
+                        f"  ℹ Infisical project '{project_name}' already exists (ID: {w['id']})"
+                    )
                     return w["id"]
 
         # Create new project
@@ -167,6 +222,7 @@ def create_infisical_project(project_name: str) -> str:
 # ---------------------------------------------------------------------------
 # Directory helpers
 # ---------------------------------------------------------------------------
+
 
 def _default_base_dir() -> str:
     """Pick a writable base directory for new projects."""
@@ -195,11 +251,13 @@ def ensure_project_dir(project_dir: Path) -> None:
             print(f"  ⚠ Permission denied for {project_dir}, trying sudo...")
             subprocess.run(
                 ["sudo", "mkdir", "-p", str(project_dir)],
-                check=True, capture_output=True,
+                check=True,
+                capture_output=True,
             )
             subprocess.run(
                 ["sudo", "chown", "-R", f"{user}:{user}", str(project_dir)],
-                check=True, capture_output=True,
+                check=True,
+                capture_output=True,
             )
             print(f"  ✓ Created {project_dir} (owned by {user})")
         except (subprocess.CalledProcessError, FileNotFoundError):
@@ -222,7 +280,8 @@ def render_template(template_path: Path, variables: dict[str, str]) -> str:
 def create_directory_structure(project_dir: Path, module_name: str) -> None:
     """Create the full project directory tree."""
     dirs = [
-        ".claude/skills", ".agents/skills",
+        ".claude",
+        ".agents/skills",
         ".github/workflows",
         f"backend/src/{module_name}/routers",
         f"backend/src/{module_name}/services",
@@ -230,9 +289,13 @@ def create_directory_structure(project_dir: Path, module_name: str) -> None:
         f"backend/src/{module_name}/agent",
         "backend/tests",
         "backend/alembic/versions",
-        "frontend/src/components", "frontend/public",
-        "docs/01_Architecture", "docs/02_API", "docs/03_Operations",
-        "docs/04_Agents", "docs/deployment",
+        "frontend/src/components",
+        "frontend/public",
+        "docs/01_Architecture",
+        "docs/02_API",
+        "docs/03_Operations",
+        "docs/04_Agents",
+        "docs/deployment",
         "scripts",
     ]
     for d in dirs:
@@ -279,6 +342,7 @@ def render_and_write_templates(project_dir: Path, variables: dict[str, str]) -> 
         "infrastructure/nginx.conf.tmpl": f"_nginx/{variables['PROJECT_NAME']}.conf",
         "infrastructure/api.service.tmpl": f"_systemd/{variables['PROJECT_NAME']}-api.service",
         "infrastructure/db.service.tmpl": f"_systemd/{variables['PROJECT_NAME']}-db.service",
+        "infrastructure/web.service.tmpl": f"_systemd/{variables['PROJECT_NAME']}-web.service",
         "infrastructure/docs.service.tmpl": f"_systemd/{variables['PROJECT_NAME']}-docs.service",
     }
 
@@ -304,8 +368,8 @@ def write_static_files(project_dir: Path, variables: dict[str, str]) -> None:
 
     # .gitignore
     (project_dir / ".gitignore").write_text(
-        "__pycache__/\n*.pyc\n.venv/\nnode_modules/\ndist/\nsite/\n"
-        ".env\n*.egg-info/\n.ruff_cache/\n.mypy_cache/\n_nginx/\n_systemd/\n"
+        "__pycache__/\n*.pyc\n.venv/\nnode_modules/\ndist/\nsite/\n*.tsbuildinfo\n"
+        ".env\n*.egg-info/\n.ruff_cache/\n.mypy_cache/\n"
     )
 
     # .env.sample
@@ -313,23 +377,75 @@ def write_static_files(project_dir: Path, variables: dict[str, str]) -> None:
         "# Bootstrap credentials — only these go in .env\n"
         "# All other secrets are loaded from Infisical at runtime\n"
         "INFISICAL_CLIENT_ID=\nINFISICAL_CLIENT_SECRET=\n"
-        f"INFISICAL_PROJECT_ID=\nINFISICAL_ENVIRONMENT=development\n"
+        f"INFISICAL_PROJECT_ID={variables.get('INFISICAL_PROJECT_ID', '')}\n"
+        "INFISICAL_ENVIRONMENT=development\n"
     )
 
     # .infisical.json
-    (project_dir / ".infisical.json").write_text(json.dumps({
-        "workspaceId": variables.get("INFISICAL_PROJECT_ID", ""),
-        "defaultEnvironment": "development",
-    }, indent=2) + "\n")
+    (project_dir / ".infisical.json").write_text(
+        json.dumps(
+            {
+                "workspaceId": variables.get("INFISICAL_PROJECT_ID", ""),
+                "defaultEnvironment": "development",
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+
+    (project_dir / "project.scaffold.json").write_text(
+        json.dumps(
+            {
+                "project_name": name,
+                "project_module": module,
+                "description": variables["PROJECT_DESCRIPTION"],
+                "project_dir": variables["PROJECT_DIR"],
+                "dns": {
+                    "production": f"{variables['DNS_NAME']}.clearspringcg.com",
+                    "development": f"dev-{variables['DNS_NAME']}.clearspringcg.com",
+                },
+                "ports": {
+                    "backend": int(variables["BACKEND_PORT"]),
+                    "frontend": int(variables["FRONTEND_PORT"]),
+                    "database": int(variables["DB_PORT"]),
+                    "docs": int(variables["DOCS_PORT"]),
+                },
+                "infisical": {
+                    "project_id": variables.get("INFISICAL_PROJECT_ID", ""),
+                    "default_environment": "development",
+                    "site_url": INFISICAL_API_URL,
+                },
+                "dependencies": {
+                    "host_clis": [
+                        "git",
+                        "uv",
+                        "node",
+                        "npm",
+                        "docker compose",
+                        "infisical",
+                        "gh",
+                    ],
+                    "backend_install": "uv sync --extra dev",
+                    "frontend_install": "npm install",
+                },
+            },
+            indent=2,
+        )
+        + "\n"
+    )
 
     # README.md
     (project_dir / "README.md").write_text(
         f"# {name}\n\n{variables['PROJECT_DESCRIPTION']}\n\n"
         f"## Quick Start\n\n```bash\n# Start database\n"
-        f"docker compose up -d\n\n# Backend\ncd backend && uv sync && "
+        f"docker compose up -d\n\n# Backend\ncd backend && uv sync --extra dev && "
         f"uv run uvicorn {module}.main:app --reload --port {variables['BACKEND_PORT']}\n\n"
         f"# Frontend\ncd frontend && npm install && npm run dev\n```\n\n"
+        f"## Provisioning Check\n\n```bash\nbash scripts/preflight.sh\n```\n\n"
         f"## Documentation\n\nSee [docs/README.md](docs/README.md)\n"
+    )
+    (project_dir / "backend" / "README.md").write_text(
+        f"# {name} Backend\n\nFastAPI backend package for {name}.\n"
     )
 
     # Alembic
@@ -379,32 +495,55 @@ def write_static_files(project_dir: Path, variables: dict[str, str]) -> None:
 
     # Starter docs
     for doc, content in [
-        ("docs/01_Architecture/01_System_Overview.md",
-         f"# System Overview\n\n{name} architecture overview.\n\n## Components\n\n"
-         "- **FastAPI Backend** — REST API + agent services\n"
-         "- **React Frontend** — Vite-powered SPA\n"
-         "- **PostgreSQL** — primary data store\n"
-         "- **Claude Agent SDK** — AI agent capabilities\n"),
-        ("docs/02_API/01_Endpoints.md",
-         f"# API Endpoints\n\nSee FastAPI auto-generated docs at `/api/docs`.\n\n"
-         "## Health\n\n- `GET /api/health` — returns `{{\"status\": \"ok\"}}`\n"),
-        ("docs/03_Operations/01_Deployment.md",
-         f"# Deployment\n\n## Production\n\nPush to `main` triggers automated deploy.\n\n"
-         f"## Services\n\n- `{name}-api` — FastAPI backend\n"
-         f"- `{name}-db` — PostgreSQL container\n"
-         f"- `{name}-docs` — MkDocs server\n"),
-        ("docs/04_Agents/01_Agent_Architecture.md",
-         f"# Agent Architecture\n\n{name} uses the Anthropic Python SDK for AI agent capabilities.\n\n"
-         "## Key Files\n\n- `backend/src/*/agent/core.py` — agent execution loop\n"
-         "- `backend/src/*/agent/tools.py` — tool definitions and dispatcher\n"),
-        ("docs/deployment/secrets_and_environments.md",
-         f"# Secrets and Environments\n\nAll secrets managed via Infisical.\n\n"
-         "## Bootstrap\n\nOnly `.env` contains Infisical credentials.\n"
-         "All other secrets loaded at runtime via `config.py`.\n"),
-        ("docs/deployment/ci_cd_pipeline.md",
-         "# CI/CD Pipeline\n\n## Trigger\n\nPush to `main` → deploy via GitHub Actions.\n\n"
-         "## Steps\n\n1. Connect Tailscale\n2. Write bootstrap .env\n"
-         "3. Pull + sync deps\n4. Run migrations\n5. Build frontend\n6. Restart services\n"),
+        (
+            "docs/01_Architecture/01_System_Overview.md",
+            f"# System Overview\n\n{name} architecture overview.\n\n## Components\n\n"
+            "- **FastAPI Backend** — REST API + agent services\n"
+            "- **React Frontend** — Vite-powered SPA\n"
+            "- **PostgreSQL** — primary data store\n"
+            "- **Claude Agent SDK** — AI agent capabilities\n",
+        ),
+        (
+            "docs/02_API/01_Endpoints.md",
+            "# API Endpoints\n\nSee FastAPI auto-generated docs at `/api/docs`.\n\n"
+            '## Health\n\n- `GET /api/health` — returns `{{"status": "ok"}}`\n',
+        ),
+        (
+            "docs/03_Operations/01_Deployment.md",
+            f"# Deployment\n\n## Production\n\nPush to `main` triggers automated deploy.\n\n"
+            f"## Services\n\n- `{name}-api` — FastAPI backend\n"
+            f"- `{name}-db` — PostgreSQL container\n"
+            f"- `{name}-web` — Vite dev server for dev subdomain\n"
+            f"- `{name}-docs` — MkDocs server\n",
+        ),
+        (
+            "docs/04_Agents/01_Agent_Architecture.md",
+            f"# Agent Architecture\n\n{name} uses the Anthropic Python SDK for AI agent capabilities.\n\n"
+            "## Key Files\n\n- `backend/src/*/agent/core.py` — agent execution loop\n"
+            "- `backend/src/*/agent/tools.py` — tool definitions and dispatcher\n",
+        ),
+        (
+            "docs/deployment/secrets_and_environments.md",
+            "# Secrets and Environments\n\nAll secrets managed via Infisical.\n\n"
+            "## Project Context\n\n"
+            f"- Infisical project ID: `{variables.get('INFISICAL_PROJECT_ID', '')}`\n"
+            "- Default environment: `development`\n"
+            "- Project metadata: `project.scaffold.json`\n\n"
+            "## Bootstrap\n\nOnly `.env` contains Infisical credentials.\n"
+            "All other secrets loaded at runtime via `config.py`.\n\n"
+            "## CLI Checks\n\n"
+            "```bash\n"
+            "infisical --version\n"
+            "infisical secrets list --env development\n"
+            'infisical secrets set APP_SECRET_KEY="..." --env development\n'
+            "```\n",
+        ),
+        (
+            "docs/deployment/ci_cd_pipeline.md",
+            "# CI/CD Pipeline\n\n## Trigger\n\nPush to `main` → deploy via GitHub Actions.\n\n"
+            "## Steps\n\n1. Connect Tailscale\n2. Write bootstrap .env\n"
+            "3. Pull + sync deps\n4. Run migrations\n5. Build frontend\n6. Restart services\n",
+        ),
         ("docs/Glossary.md", "# Glossary\n\nProject terminology reference.\n"),
     ]:
         p = project_dir / doc
@@ -412,9 +551,15 @@ def write_static_files(project_dir: Path, variables: dict[str, str]) -> None:
         p.write_text(content)
 
     # .claude/settings.json
-    (project_dir / ".claude" / "settings.json").write_text(json.dumps({
-        "permissions": {"allow": ["Read", "Edit", "Write", "Command"]},
-    }, indent=2) + "\n")
+    (project_dir / ".claude" / "settings.json").write_text(
+        json.dumps(
+            {
+                "permissions": {"allow": ["Read", "Edit", "Write", "Command"]},
+            },
+            indent=2,
+        )
+        + "\n"
+    )
 
     # scripts/dev.sh
     dev_script = project_dir / "scripts" / "dev.sh"
@@ -434,67 +579,302 @@ def write_static_files(project_dir: Path, variables: dict[str, str]) -> None:
     bootstrap = project_dir / "scripts" / "bootstrap.sh"
     bootstrap.write_text(
         "#!/usr/bin/env bash\nset -euo pipefail\n\n"
-        "echo '📦 Setting up backend...'\ncd backend\nuv sync\n"
+        "echo '📦 Setting up backend...'\ncd backend\nuv sync --extra dev\n"
         "uv run alembic upgrade head\ncd ..\n\n"
         "echo '⚛️  Setting up frontend...'\ncd frontend\nnpm install\ncd ..\n\n"
         "echo '✅ Bootstrap complete. Run scripts/dev.sh to start.'\n"
     )
     bootstrap.chmod(0o755)
 
+    preflight = project_dir / "scripts" / "preflight.sh"
+    preflight.write_text(
+        "#!/usr/bin/env bash\nset -euo pipefail\n\n"
+        "check() {\n"
+        '  local label="$1"\n'
+        "  shift\n"
+        "  printf 'Checking %s... ' \"$label\"\n"
+        '  "$@" >/dev/null\n'
+        "  printf 'ok\\n'\n"
+        "}\n\n"
+        "check git git --version\n"
+        "check uv uv --version\n"
+        "check node node --version\n"
+        "check npm npm --version\n"
+        "check 'docker compose' docker compose version\n"
+        "check infisical infisical --version\n"
+        "check gh gh --version\n\n"
+        "test -f .infisical.json\n"
+        "test -f project.scaffold.json\n"
+        "test -d backend/.venv\n"
+        "test -d frontend/node_modules\n\n"
+        "echo 'Preflight complete.'\n"
+    )
+    preflight.chmod(0o755)
+
 
 def symlink_skills(project_dir: Path) -> None:
-    """Symlink curated skills from UA to the new project."""
-    for dest_parent in [".claude/skills", ".agents/skills"]:
-        dest_dir = project_dir / dest_parent
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        for skill in CURATED_SKILLS:
-            src = UA_SKILLS_DIR / skill
-            dst = dest_dir / skill
-            if src.exists() and not dst.exists():
-                dst.symlink_to(src)
-                print(f"  ✓ {dest_parent}/{skill} → {src}")
-            elif not src.exists():
-                print(f"  ⚠ Skill not found: {skill}")
+    """Symlink curated skills from UA to the new project's canonical skill dir."""
+    dest_dir = project_dir / ".agents" / "skills"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    for skill in CURATED_SKILLS:
+        src = next(
+            (
+                source_dir / skill
+                for source_dir in UA_SKILL_SOURCE_DIRS
+                if (source_dir / skill).exists()
+            ),
+            None,
+        )
+        dst = dest_dir / skill
+        if src is None:
+            print(f"  ⚠ Skill not found: {skill}")
+            continue
+        if dst.exists():
+            continue
+        dst.symlink_to(src)
+        print(f"  ✓ .agents/skills/{skill} → {src}")
+
+
+def run_command(
+    command: list[str], cwd: Path, label: str, *, required: bool = True
+) -> bool:
+    """Run a command and print a concise status line."""
+    executable = shutil.which(command[0])
+    if executable is None:
+        message = f"  ⚠ {label} skipped: {command[0]} not found"
+        if required:
+            raise RuntimeError(message)
+        print(message)
+        return False
+
+    result = subprocess.run(command, cwd=cwd, text=True, capture_output=True)
+    if result.returncode == 0:
+        print(f"  ✓ {label}")
+        return True
+
+    stderr = (
+        result.stderr.strip()
+        or result.stdout.strip()
+        or f"exit code {result.returncode}"
+    )
+    message = f"  ⚠ {label} failed: {stderr}"
+    if required:
+        raise RuntimeError(message)
+    print(message)
+    return False
+
+
+def check_cli(command: list[str], label: str, *, required: bool = True) -> bool:
+    """Verify a host CLI is available and runnable."""
+    if shutil.which(command[0]) is None:
+        message = f"  ⚠ {label} check failed: {command[0]} not found on PATH"
+        if required:
+            raise RuntimeError(message)
+        print(message)
+        return False
+
+    result = subprocess.run(command, text=True, capture_output=True)
+    if result.returncode == 0:
+        version = (result.stdout.strip() or result.stderr.strip()).splitlines()[0]
+        print(f"  ✓ {label} available ({version})")
+        return True
+
+    stderr = result.stderr.strip() or result.stdout.strip()
+    message = f"  ⚠ {label} check failed: {stderr}"
+    if required:
+        raise RuntimeError(message)
+    print(message)
+    return False
+
+
+def check_infisical_cli(*, required: bool = True) -> bool:
+    """Verify the host has the Infisical CLI available for post-scaffold secret work."""
+    return check_cli(["infisical", "--version"], "Infisical CLI", required=required)
+
+
+def check_host_dependencies(*, skip_infisical: bool, skip_github: bool) -> None:
+    """Verify required host CLIs before creating a project."""
+    print("\n🔎 Checking host dependencies...")
+    for label, command in CORE_HOST_CHECKS:
+        check_cli(command, label)
+    if not skip_infisical:
+        check_infisical_cli()
+    if not skip_github:
+        check_cli(["gh", "--version"], "GitHub CLI")
+
+
+def install_dependencies(project_dir: Path) -> bool:
+    """Install backend and frontend dependencies so the scaffold is runnable."""
+    backend_ok = run_command(
+        ["uv", "sync", "--extra", "dev"],
+        project_dir / "backend",
+        "Backend dependencies",
+    )
+    frontend_ok = run_command(
+        ["npm", "install"], project_dir / "frontend", "Frontend dependencies"
+    )
+    return backend_ok and frontend_ok
+
+
+def initialize_git(project_dir: Path) -> None:
+    """Create a main-branch repository with an initial Lore-compatible commit."""
+    try:
+        run_command(
+            ["git", "init", "-b", "main"], project_dir, "Git repository initialized"
+        )
+    except RuntimeError:
+        run_command(["git", "init"], project_dir, "Git repository initialized")
+        run_command(
+            ["git", "branch", "-M", "main"], project_dir, "Git branch renamed to main"
+        )
+
+    run_command(
+        ["git", "config", "user.name", "Universal Agent Scaffolder"],
+        project_dir,
+        "Git author name configured",
+    )
+    run_command(
+        ["git", "config", "user.email", "ua-scaffolder@clearspringcg.com"],
+        project_dir,
+        "Git author email configured",
+    )
+    run_command(["git", "add", "."], project_dir, "Git files staged")
+    run_command(
+        [
+            "git",
+            "commit",
+            "-m",
+            "chore: initial scaffold",
+            "-m",
+            "Create the generated project baseline from the Universal Agent project-scaffolder skill.",
+            "-m",
+            "Constraint: Generated project should be immediately reproducible from committed scaffold output\nConfidence: high\nScope-risk: narrow\nTested: scaffold.py generation path",
+        ],
+        project_dir,
+        "Initial git commit created",
+    )
+
+
+def publish_github_repo(
+    project_dir: Path, owner: str, name: str, description: str
+) -> bool:
+    """Create or reuse a GitHub repository and push the main branch."""
+    if not run_command(
+        ["gh", "auth", "status"], project_dir, "GitHub authentication", required=False
+    ):
+        return False
+
+    repo = f"{owner}/{name}"
+    repo_exists = (
+        subprocess.run(
+            ["gh", "repo", "view", repo, "--json", "name"],
+            cwd=project_dir,
+            text=True,
+            capture_output=True,
+        ).returncode
+        == 0
+    )
+
+    if repo_exists:
+        remote_url = f"git@github.com:{repo}.git"
+        remote_exists = (
+            subprocess.run(
+                ["git", "remote", "get-url", "origin"],
+                cwd=project_dir,
+                capture_output=True,
+            ).returncode
+            == 0
+        )
+        if not remote_exists:
+            run_command(
+                ["git", "remote", "add", "origin", remote_url],
+                project_dir,
+                "GitHub remote configured",
+            )
+        run_command(
+            ["git", "push", "-u", "origin", "main"],
+            project_dir,
+            "Pushed main to existing GitHub repo",
+        )
+        return True
+
+    run_command(
+        [
+            "gh",
+            "repo",
+            "create",
+            repo,
+            "--private",
+            "--description",
+            description,
+            "--source",
+            str(project_dir),
+            "--remote",
+            "origin",
+            "--push",
+        ],
+        project_dir,
+        "GitHub repository created and pushed",
+    )
+    return True
 
 
 def write_frontend_files(project_dir: Path, variables: dict[str, str]) -> None:
     """Write Vite + React starter files."""
     fe = project_dir / "frontend"
 
-    (fe / "package.json").write_text(json.dumps({
-        "name": variables["PROJECT_NAME"],
-        "private": True,
-        "version": "0.1.0",
-        "type": "module",
-        "scripts": {
-            "dev": "vite",
-            "build": "tsc -b && vite build",
-            "preview": "vite preview",
-        },
-        "dependencies": {
-            "react": "^19.0.0",
-            "react-dom": "^19.0.0",
-        },
-        "devDependencies": {
-            "@types/react": "^19.0.0",
-            "@types/react-dom": "^19.0.0",
-            "@vitejs/plugin-react": "^4.3.0",
-            "typescript": "~5.7.0",
-            "vite": "^6.0.0",
-        },
-    }, indent=2) + "\n")
+    (fe / "package.json").write_text(
+        json.dumps(
+            {
+                "name": variables["PROJECT_NAME"],
+                "private": True,
+                "version": "0.1.0",
+                "type": "module",
+                "scripts": {
+                    "dev": "vite",
+                    "build": "tsc -b && vite build",
+                    "preview": "vite preview",
+                },
+                "dependencies": {
+                    "react": "^19.0.0",
+                    "react-dom": "^19.0.0",
+                },
+                "devDependencies": {
+                    "@types/react": "^19.0.0",
+                    "@types/react-dom": "^19.0.0",
+                    "@vitejs/plugin-react": "^4.3.0",
+                    "typescript": "~5.7.0",
+                    "vite": "^6.0.0",
+                },
+            },
+            indent=2,
+        )
+        + "\n"
+    )
 
-    (fe / "tsconfig.json").write_text(json.dumps({
-        "compilerOptions": {
-            "target": "ES2020", "useDefineForClassFields": True,
-            "lib": ["ES2020", "DOM", "DOM.Iterable"],
-            "module": "ESNext", "skipLibCheck": True,
-            "moduleResolution": "bundler", "allowImportingTsExtensions": True,
-            "isolatedModules": True, "moduleDetection": "force",
-            "noEmit": True, "jsx": "react-jsx", "strict": True,
-        },
-        "include": ["src"],
-    }, indent=2) + "\n")
+    (fe / "tsconfig.json").write_text(
+        json.dumps(
+            {
+                "compilerOptions": {
+                    "target": "ES2020",
+                    "useDefineForClassFields": True,
+                    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+                    "module": "ESNext",
+                    "skipLibCheck": True,
+                    "moduleResolution": "bundler",
+                    "allowImportingTsExtensions": True,
+                    "isolatedModules": True,
+                    "moduleDetection": "force",
+                    "noEmit": True,
+                    "jsx": "react-jsx",
+                    "strict": True,
+                },
+                "include": ["src"],
+            },
+            indent=2,
+        )
+        + "\n"
+    )
 
     name = variables["PROJECT_NAME"]
     backend_port = variables["BACKEND_PORT"]
@@ -510,10 +890,10 @@ def write_frontend_files(project_dir: Path, variables: dict[str, str]) -> None:
         f'<!doctype html>\n<html lang="en">\n<head>\n'
         f'  <meta charset="UTF-8" />\n  <meta name="viewport" '
         f'content="width=device-width, initial-scale=1.0" />\n'
-        f'  <title>{name}</title>\n</head>\n<body>\n'
+        f"  <title>{name}</title>\n</head>\n<body>\n"
         f'  <div id="root"></div>\n'
         f'  <script type="module" src="/src/main.tsx"></script>\n'
-        f'</body>\n</html>\n'
+        f"</body>\n</html>\n"
     )
 
     (fe / "src" / "main.tsx").write_text(
@@ -529,9 +909,9 @@ def write_frontend_files(project_dir: Path, variables: dict[str, str]) -> None:
         "  useEffect(() => {\n    fetch('/api/health')\n"
         "      .then(r => r.json())\n      .then(d => setHealth(d.status))\n"
         "      .catch(() => setHealth('error'))\n  }, [])\n\n"
-        f"  return (\n    <div className=\"app\">\n"
+        f'  return (\n    <div className="app">\n'
         f"      <h1>{name}</h1>\n"
-        f"      <p>API Status: <span className=\"status\">{{health}}</span></p>\n"
+        f'      <p>API Status: <span className="status">{{health}}</span></p>\n'
         f"    </div>\n  )\n}}\n\nexport default App\n"
     )
 
@@ -548,19 +928,44 @@ def write_frontend_files(project_dir: Path, variables: dict[str, str]) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="Scaffold a new VPS project")
-    parser.add_argument("--name", required=True, help="Project name (lowercase, hyphenated)")
+    parser.add_argument(
+        "--name", required=True, help="Project name (lowercase, hyphenated)"
+    )
     parser.add_argument("--description", required=True, help="Project description")
-    parser.add_argument("--infisical-project-id", default="", help="Infisical project ID (auto-created if omitted)")
-    parser.add_argument("--skip-infisical", action="store_true", help="Skip Infisical project creation")
-    parser.add_argument("--base-dir", default=_default_base_dir(), help="Base directory for projects (auto-detected)")
-    parser.add_argument("--dry-run", action="store_true", help="Print plan without creating files")
+    parser.add_argument(
+        "--infisical-project-id",
+        default="",
+        help="Infisical project ID (auto-created if omitted)",
+    )
+    parser.add_argument(
+        "--skip-infisical", action="store_true", help="Skip Infisical project creation"
+    )
+    parser.add_argument(
+        "--skip-install", action="store_true", help="Skip uv sync and npm install"
+    )
+    parser.add_argument(
+        "--skip-github",
+        action="store_true",
+        help="Skip GitHub repository creation and push",
+    )
+    parser.add_argument(
+        "--github-owner", default="kjdragan", help="GitHub owner for the new repository"
+    )
+    parser.add_argument(
+        "--base-dir",
+        default=_default_base_dir(),
+        help="Base directory for projects (auto-detected)",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Print plan without creating files"
+    )
     args = parser.parse_args()
 
     name = args.name.lower().strip()
     # Normalize: underscores → hyphens for DNS/subdomain compatibility
     dns_name = name.replace("_", "-")
     module = slugify(name)
-    project_dir = Path(args.base_dir) / name
+    project_dir = Path(args.base_dir).expanduser().resolve() / name
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     # Allocate ports
@@ -569,20 +974,28 @@ def main():
     db_port = find_free_port(DB_PORT_RANGE_START, DB_PORT_RANGE_END)
     docs_port = find_free_port(DOCS_PORT_RANGE_START, DOCS_PORT_RANGE_END)
 
+    if not args.dry_run:
+        check_host_dependencies(
+            skip_infisical=args.skip_infisical,
+            skip_github=args.skip_github,
+        )
+
     # Auto-provision Infisical project if not provided
     infisical_project_id = args.infisical_project_id
     if not infisical_project_id and not args.skip_infisical and not args.dry_run:
         try:
-            print(f"\n🔑 Provisioning Infisical project...")
+            print("\n🔑 Provisioning Infisical project...")
             infisical_project_id = create_infisical_project(dns_name)
         except Exception as exc:
             print(f"  ⚠ Infisical auto-creation failed: {exc}")
-            print(f"  ℹ Continuing without Infisical. Set up manually later.")
+            print("  ℹ Continuing without Infisical. Set up manually later.")
 
     variables = {
         "PROJECT_NAME": name,
         "PROJECT_MODULE": module,
         "PROJECT_DESCRIPTION": args.description,
+        "PROJECT_DIR": str(project_dir),
+        "DNS_NAME": dns_name,
         "BACKEND_PORT": str(backend_port),
         "FRONTEND_PORT": str(frontend_port),
         "DB_PORT": str(db_port),
@@ -591,7 +1004,7 @@ def main():
         "CREATED_DATE": now,
     }
 
-    print(f"\n🏗  Project Scaffolder")
+    print("\n🏗  Project Scaffolder")
     print(f"   Name:     {name}")
     print(f"   Module:   {module}")
     print(f"   Dir:      {project_dir}")
@@ -613,58 +1026,78 @@ def main():
         sys.exit(1)
 
     # Create root dir (with sudo fallback for /opt)
-    print(f"\n📁 Creating project directory...")
+    print("\n📁 Creating project directory...")
     ensure_project_dir(project_dir)
 
-    print(f"📁 Creating directory structure...")
+    print("📁 Creating directory structure...")
     create_directory_structure(project_dir, module)
 
-    print(f"📝 Writing __init__.py files...")
+    print("📝 Writing __init__.py files...")
     write_init_files(project_dir, module)
 
-    print(f"📄 Rendering templates...")
+    print("📄 Rendering templates...")
     render_and_write_templates(project_dir, variables)
 
-    print(f"📄 Writing static files...")
+    print("📄 Writing static files...")
     write_static_files(project_dir, variables)
 
-    print(f"⚛️  Writing frontend files...")
+    print("⚛️  Writing frontend files...")
     write_frontend_files(project_dir, variables)
 
-    print(f"🔗 Symlinking skills...")
+    print("🔗 Symlinking skills...")
     symlink_skills(project_dir)
 
-    print(f"\n🔧 Initializing git...")
-    subprocess.run(["git", "init"], cwd=project_dir, capture_output=True)
-    subprocess.run(["git", "add", "."], cwd=project_dir, capture_output=True)
-    subprocess.run(
-        ["git", "commit", "-m", f"Initial scaffold for {name}"],
-        cwd=project_dir, capture_output=True,
-    )
+    if not args.skip_install:
+        print("\n📦 Installing dependencies...")
+        install_dependencies(project_dir)
+
+    print("\n🔧 Initializing git...")
+    initialize_git(project_dir)
+
+    github_published = False
+    if not args.skip_github:
+        print("\n📦 Creating GitHub repository...")
+        github_published = publish_github_repo(
+            project_dir,
+            args.github_owner,
+            name,
+            args.description,
+        )
 
     print(f"\n✅ Project scaffolded at {project_dir}")
-    print(f"\n📋 Next steps:")
-    print(f"")
-    print(f"   1. 🌐 DNS — Add A records at your domain registrar:")
+    print("\n📋 Next steps:")
+    print("")
+    print("   1. 🌐 DNS — Add A records at your domain registrar:")
     print(f"      {dns_name}.clearspringcg.com     → A → {VPS_IP}")
     print(f"      dev-{dns_name}.clearspringcg.com  → A → {VPS_IP}")
-    print(f"")
-    print(f"   2. 📦 GitHub — Create repo and push:")
-    print(f"      gh repo create kjdragan/{name} --private --source={project_dir} --push")
-    print(f"")
+    print("")
+    if github_published:
+        print(f"   2. 📦 GitHub — Created and pushed: {args.github_owner}/{name}")
+    else:
+        print("   2. 📦 GitHub — Create repo and push when ready:")
+        print(
+            f"      gh repo create {args.github_owner}/{name} --private --source={project_dir} --push"
+        )
+    print("")
     if infisical_project_id:
         print(f"   3. 🔑 Infisical — Project auto-created (ID: {infisical_project_id})")
-        print(f"      Seed secrets: ANTHROPIC_API_KEY, DATABASE_URL, APP_SECRET_KEY")
+        print("      Seed secrets: ANTHROPIC_API_KEY, DATABASE_URL, APP_SECRET_KEY")
     else:
-        print(f"   3. 🔑 Infisical — Create project at app.infisical.com and seed secrets")
-    print(f"")
-    print(f"   4. 🔧 VPS setup:")
+        print(
+            "   3. 🔑 Infisical — Create project at app.infisical.com and seed secrets"
+        )
+    print("")
+    print("   4. 🔧 VPS setup:")
     print(f"      sudo cp {project_dir}/_nginx/{name}.conf /etc/nginx/sites-enabled/")
-    print(f"      sudo certbot --nginx -d {dns_name}.clearspringcg.com -d dev-{dns_name}.clearspringcg.com")
+    print(
+        f"      sudo certbot --nginx -d {dns_name}.clearspringcg.com -d dev-{dns_name}.clearspringcg.com"
+    )
     print(f"      sudo cp {project_dir}/_systemd/*.service /etc/systemd/system/")
-    print(f"      cd {project_dir} && bash scripts/bootstrap.sh")
-    print(f"      sudo systemctl enable --now {name}-db {name}-api {name}-docs")
-
+    if args.skip_install:
+        print(f"      cd {project_dir} && bash scripts/bootstrap.sh")
+    print(
+        f"      sudo systemctl enable --now {name}-db {name}-api {name}-web {name}-docs"
+    )
 
 
 if __name__ == "__main__":

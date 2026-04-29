@@ -40,11 +40,37 @@ from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
 logger = logging.getLogger(__name__)
 
 _TRUTHY = {"1", "true", "yes", "on"}
+_NON_ACTION_TRIAGE_CLASSIFICATIONS = {"fyi", "social", "status_update"}
 
 
 def _email_ingress_task_splitting_enabled() -> bool:
     """Return whether trusted inbound email should be pre-split at ingress."""
     return str(os.getenv("UA_AGENTMAIL_SPLIT_DISJOINT_TASKS", "0")).strip().lower() in _TRUTHY
+
+
+def _trusted_triage_is_non_action(triage: dict[str, Any]) -> bool:
+    """Return whether a trusted clean triage brief can be closed without ToDo."""
+    classification = str(triage.get("classification") or "").strip().lower()
+    if classification not in _NON_ACTION_TRIAGE_CLASSIFICATIONS:
+        return False
+    safety_status = str(triage.get("safety_status") or "").strip().lower()
+    if safety_status and safety_status != "clean":
+        return False
+    raw_text = str(triage.get("raw_text") or "").strip().lower()
+    if "action_items" not in raw_text:
+        return True
+    action_tail = raw_text.split("action_items", 1)[-1][:500]
+    return any(
+        token in action_tail
+        for token in (
+            "none",
+            "no action",
+            "no follow-up",
+            "not required",
+            "nothing to do",
+            "no task",
+        )
+    )
 
 
 async def _extract_inbound_email_tasks(*, subject: str, body: str) -> list[dict[str, Any]]:
@@ -2747,6 +2773,52 @@ class AgentMailService:
                     continue
 
                 if sender_trusted:
+                    if _trusted_triage_is_non_action(triage):
+                        bridge = self._get_email_task_bridge()
+                        completed_non_action = False
+                        if bridge is not None and thread_id:
+                            completed_non_action = bool(
+                                bridge.complete_thread_as_non_action(
+                                    thread_id,
+                                    classification=classification,
+                                    reason="trusted_non_action_email_reply",
+                                )
+                            )
+                        if completed_non_action:
+                            self._mark_queue_ack_status(
+                                queue_id=queue_id,
+                                ack_status="not_required",
+                                ack_message_id="",
+                                last_error="",
+                            )
+                            self._set_queue_status(
+                                queue_id,
+                                status=_QUEUE_STATUS_COMPLETED,
+                                attempts=attempts,
+                                last_error="",
+                                session_exit_status="auto_completed_non_action",
+                                classification=classification,
+                                reply_sent=False,
+                                completed=True,
+                            )
+                            self._emit_notification(
+                                kind="agentmail_non_action_completed",
+                                title="Email Auto-Completed",
+                                message=f"Subject: {subject}" + (f" | From: {sender_email}" if sender_email else ""),
+                                severity="info",
+                                metadata={
+                                    "queue_id": queue_id,
+                                    "message_id": str(payload.get("message_id") or ""),
+                                    "subject": subject,
+                                    "sender_email": sender_email,
+                                    "session_id": session_id,
+                                    "trigger": "trusted_email",
+                                    "classification": classification,
+                                    "routing_decision": routing_decision or "trusted_execute",
+                                },
+                            )
+                            continue
+
                     ack_status, ack_message_id, reply_sent = await self._maybe_send_trusted_receipt_ack(
                         payload=payload,
                         triage=triage,

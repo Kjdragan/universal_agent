@@ -619,6 +619,69 @@ class EmailTaskBridge:
         self._conn.commit()
         return True
 
+    def complete_thread_as_non_action(
+        self,
+        thread_id: str,
+        *,
+        classification: str = "",
+        reason: str = "",
+    ) -> bool:
+        """Complete a trusted reply that contains no follow-up work."""
+        thread = str(thread_id or "").strip()
+        if not thread:
+            return False
+
+        now = _now_iso()
+        self._conn.execute(
+            "UPDATE email_task_mappings SET status = 'completed', updated_at = ? WHERE thread_id = ?",
+            (now, thread),
+        )
+        self._conn.commit()
+
+        try:
+            from universal_agent import task_hub
+
+            task_hub.ensure_schema(self._conn)
+            task_id = _deterministic_task_id(thread)
+            current = task_hub.get_item(self._conn, task_id) or {}
+            metadata = dict(current.get("metadata") or {})
+            dispatch_meta = dict(metadata.get("dispatch") or {})
+            dispatch_meta.update(
+                {
+                    "last_disposition": "completed",
+                    "last_disposition_reason": str(reason or "trusted_non_action_email_reply").strip(),
+                    "completion_unverified": False,
+                    "auto_completed_by": "agentmail_triage",
+                    "auto_completed_at": now,
+                }
+            )
+            metadata["dispatch"] = dispatch_meta
+            metadata["email_triage_routing"] = "auto_completed_non_action"
+            metadata["email_triage_classification"] = str(classification or "").strip()
+
+            task_hub.upsert_item(
+                self._conn,
+                {
+                    "task_id": task_id,
+                    "source_kind": _EMAIL_TASK_SOURCE_KIND,
+                    "status": task_hub.TASK_STATUS_COMPLETED,
+                    "seizure_state": "completed",
+                    "labels": ["email-task", "non-action", "auto-completed"],
+                    "agent_ready": False,
+                    "metadata": metadata,
+                },
+            )
+            logger.info(
+                "📧→📋 Auto-completed non-action trusted email task: task_id=%s thread=%s classification=%s",
+                task_id,
+                thread,
+                classification,
+            )
+            return True
+        except Exception as exc:
+            logger.warning("📧→📋 Non-action completion failed thread=%s: %s", thread, exc)
+            return False
+
     def mark_email_sent(self, thread_id: str) -> bool:
         """Record that an email response was sent for this thread.
 

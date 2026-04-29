@@ -6,9 +6,9 @@ Requires={{PROJECT_NAME}}-db.service
 [Service]
 Type=simple
 User=ua
-WorkingDirectory=/opt/{{PROJECT_NAME}}/backend
-Environment=PATH=/opt/{{PROJECT_NAME}}/backend/.venv/bin:/usr/local/bin:/usr/bin
-ExecStart=/opt/{{PROJECT_NAME}}/backend/.venv/bin/uvicorn {{PROJECT_MODULE}}.main:app --host 127.0.0.1 --port {{BACKEND_PORT}} --workers 2
+WorkingDirectory={{PROJECT_DIR}}/backend
+Environment=PATH={{PROJECT_DIR}}/backend/.venv/bin:/usr/local/bin:/usr/bin
+ExecStart={{PROJECT_DIR}}/backend/.venv/bin/uvicorn {{PROJECT_MODULE}}.main:app --host 127.0.0.1 --port {{BACKEND_PORT}} --workers 2
 Restart=on-failure
 RestartSec=5
 MemoryMax=512M

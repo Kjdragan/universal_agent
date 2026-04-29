@@ -6,12 +6,12 @@ variables only for the bootstrap credentials needed to reach Infisical itself.
 
 from __future__ import annotations
 
-import os
 import logging
+import os
 from functools import lru_cache
 
 import httpx
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
 
@@ -68,12 +68,16 @@ def _load_infisical_secrets() -> dict[str, str]:
             os.environ.setdefault(key, value)
 
         logger.info(
-            "Loaded %d secrets from Infisical (env=%s)", len(secrets), INFISICAL_ENVIRONMENT
+            "Loaded %d secrets from Infisical (env=%s)",
+            len(secrets),
+            INFISICAL_ENVIRONMENT,
         )
         return secrets
 
     except Exception:
-        logger.exception("Failed to load secrets from Infisical — falling back to env vars")
+        logger.exception(
+            "Failed to load secrets from Infisical — falling back to env vars"
+        )
         return {}
 
 
@@ -87,7 +91,7 @@ class Settings(BaseSettings):
     # App
     APP_NAME: str = "{{PROJECT_NAME}}"
     APP_SECRET_KEY: str = "change-me-in-infisical"
-    DEBUG: bool = False
+    APP_DEBUG: bool = False
 
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:{{DB_PORT}}/{{PROJECT_MODULE}}"
@@ -101,10 +105,11 @@ class Settings(BaseSettings):
     DATAIMPULSE_PROXY_HOST: str = "gw.dataimpulse.com"
     DATAIMPULSE_PROXY_PORT: str = "823"
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        extra = "ignore"
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
 
 @lru_cache

@@ -2459,6 +2459,17 @@ class HooksService:
             str(payload.get("email_summary") or "").strip(),
             field="summary",
         )
+        auto_remediation_value = payload.get(
+            "autonomous_remediation_approved",
+            payload.get("auto_remediation_approved", False),
+        )
+        if isinstance(auto_remediation_value, str):
+            autonomous_remediation_approved = (
+                auto_remediation_value.strip().lower()
+                in {"1", "true", "yes", "on", "approved"}
+            )
+        else:
+            autonomous_remediation_approved = bool(auto_remediation_value)
         metadata: dict[str, Any] = {
             "source": "heartbeat",
             "session_key": session_key,
@@ -2471,6 +2482,23 @@ class HooksService:
             "email_summary": email_summary,
             "proposed_changes": payload.get("proposed_changes") if isinstance(payload.get("proposed_changes"), list) else [],
             "unknown_rule_count": int(payload.get("unknown_rule_count") or 0),
+            "autonomous_remediation_approved": autonomous_remediation_approved,
+            "autonomous_remediation_confidence": str(
+                payload.get("autonomous_remediation_confidence")
+                or payload.get("remediation_confidence")
+                or payload.get("confidence")
+                or ""
+            ).strip(),
+            "autonomous_remediation_rationale": str(
+                payload.get("autonomous_remediation_rationale")
+                or payload.get("remediation_rationale")
+                or ""
+            ).strip(),
+            "memory_evidence": (
+                payload.get("memory_evidence")
+                if isinstance(payload.get("memory_evidence"), (list, str))
+                else []
+            ),
         }
         if md_path.exists():
             try:

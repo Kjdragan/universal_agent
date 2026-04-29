@@ -7844,6 +7844,8 @@ async def handle_simple_query(client: ClaudeSDKClient, query: str) -> tuple[bool
     Also returns the full response text.
     """
     _ctx = _get_ctx()
+    current_step_id = None
+    run_id = None
     if _ctx is not None:
         current_step_id = _ctx.current_step_id
         run_id = _ctx.run_id
@@ -7868,7 +7870,8 @@ async def handle_simple_query(client: ClaudeSDKClient, query: str) -> tuple[bool
     full_response = ""
     tool_use_detected = False
     ignored_tool_names = set()
-    if not memory_enabled(default=True):
+    disable_local_memory = not memory_enabled(default=True)
+    if disable_local_memory:
         ignored_tool_names.update(
             [
                 "memory_search",

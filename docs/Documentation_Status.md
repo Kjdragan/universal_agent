@@ -1,6 +1,6 @@
 # Documentation Status
 
-**Last updated:** 2026-04-27 (URL intelligence pipeline: LLM-judged URL enrichment for CSI and YouTube tutorial pipelines, csi_url_judge.py three-pass architecture)
+**Last updated:** 2026-04-29 (Heartbeat memory-guided autonomous remediation, AgentMail trusted non-action replies, and project-scaffolder hardening documented)
 
 ## Development (development/)
 
@@ -65,7 +65,7 @@ These are the authoritative references for each subsystem. When any other docume
 |---|---------|
 | 07 | WebSocket Architecture (`02_Flows/`) |
 | 08 | Auth & Session Security (`02_Flows/`) |
-| 82 | Email / AgentMail — includes multi-inbox VP routing (Cody/Atlas direct engagement), CC protocol, FYI suppression |
+| 82 | Email / AgentMail — includes multi-inbox VP routing (Cody/Atlas direct engagement), CC protocol, FYI suppression, trusted non-action reply auto-completion |
 | 83 | Webhooks |
 | 85 | Infisical Secrets |
 | 86 | Residential Proxy — dual-provider architecture (Webshare + DataImpulse), `PROXY_PROVIDER` selection, approved paths, YouTube guardrails |
@@ -96,6 +96,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 117 | ClaudeDevs X Intelligence Lane Design Handoff — historical design note for a dedicated Claude Code intelligence lane monitoring `@ClaudeDevs`, including source-access findings, tiering, KB/wiki expectations, mirror fallback, and resume checklist |
 | 118 | X API And Claude Code Intel Source Of Truth — canonical implementation reference for X API development, `@ClaudeDevs` polling, Infisical keys, packet outputs, operator report artifact generation, skill invocation shape, and cron registration |
 | 119 | Task Forge: Autonomous Skill Generation Pipeline — **canonical source of truth** for the meta-skill that converts human intent into structured, reusable task-skills; 7-phase pipeline (intent → scaffold → execute → quality gate → archive/promote), skill maturity model (v0→v3), dispatch integration, hook hardening, skill-creator cooperative relationship, recursive learning loop philosophy, paper-to-podcast case study (cross-skill orchestration, sub-agent delegation anti-pattern, CLI audio fallback) |
+| 127 | Project Scaffolder Skill Guide — Canonical operations guide for the `project-scaffolder` skill, including core host dependency and Infisical CLI preflight, structured scaffold metadata, generated project preflight, real-path infrastructure rendering, main-branch initial commits, frontend systemd service generation, canonical `.agents/skills` links, dependency install, GitHub publishing, and remaining operator steps. |
 | 120 | ClaudeDevs X Intel VPS Runtime Audit — read-only production audit of the first 19-post `@ClaudeDevs` cron packet, downstream Simone work products, Task Hub/artifact state, email verification, tier-count discrepancy, and recommendations for the Claude Code intelligence wiki pipeline |
 | 121 | Test Strategy and Regression Prevention — **canonical source of truth** for test suite layout (1211 unit tests), mandatory pre-ship commands, ContextVar isolation architecture, common failure patterns, CI/CD test gap analysis, maintenance checklist, and the April 20 stabilization history |
 | 122 | ClaudeDevs X Intel Implementation Plan — code-verified phased implementation plan for replay/backfill, external vault creation, linked-source expansion, packet candidate ledgering, Task Hub completion evidence mapping, cron/heartbeat workspace separation, operator skill/report surface, and LLM-assisted tiering |
@@ -126,7 +127,7 @@ These are the authoritative references for each subsystem. When any other docume
 |---|---------|
 | 93 | Prioritized Cleanup Plan from Canonical Review |
 | 94 | Architectural Integration Review |
-| 95 | Heartbeat Issue Mediation and Auto-Triage |
+| 95 | Heartbeat Issue Mediation and Auto-Triage — Simone memory-guided autonomous remediation decisions, Task Hub remediation ingress, and operator escalation boundaries |
 | 112 | Codebase Recommendations and Cleanup Agenda |
 
 ## Deployment and Environment Continuity Docs (06_Deployment_And_Environments/)

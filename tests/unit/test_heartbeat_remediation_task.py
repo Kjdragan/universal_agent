@@ -193,6 +193,92 @@ async def test_investigation_creates_remediation_task_for_actionable_finding(
 
 
 @pytest.mark.asyncio
+async def test_investigation_honors_simone_autonomous_remediation_decision(
+    _activity_db, monkeypatch
+):
+    """A memory-backed Simone decision should create a fix task without emailing Kevin,
+    even when the original finding was unknown."""
+    import universal_agent.gateway_server as gs
+
+    monkeypatch.setattr(gs, "_get_activity_event", lambda _id: {"metadata": {}})
+    updated_records: list[dict] = []
+    monkeypatch.setattr(
+        gs,
+        "_update_notification_record",
+        lambda *a, **kw: updated_records.append({"args": a, "kwargs": kw}),
+    )
+    monkeypatch.setattr(gs, "_record_activity_audit", lambda **kw: None)
+    notifications: list[dict] = []
+    monkeypatch.setattr(gs, "_add_notification", lambda **kw: notifications.append(kw) or kw)
+
+    async def _unexpected_operator_email(*args, **kwargs):
+        raise AssertionError("operator email should not be sent")
+
+    monkeypatch.setattr(gs, "_notify_operator_of_heartbeat_recommendation", _unexpected_operator_email)
+
+    nudge_reasons: list[str] = []
+    monkeypatch.setattr(
+        "universal_agent.services.idle_dispatch_loop.nudge_dispatch",
+        lambda reason="external": nudge_reasons.append(reason),
+    )
+
+    created_tasks: list[dict] = []
+    original_create = gs._create_heartbeat_remediation_task
+
+    def _capture_create(**kwargs):
+        result = original_create(**kwargs)
+        if result is not None:
+            created_tasks.append(result)
+        return result
+
+    monkeypatch.setattr(gs, "_create_heartbeat_remediation_task", _capture_create)
+
+    payload = {
+        "metadata": {
+            "source_notification_id": "ntf_auto_decision",
+            "classification": "code_regression_plus_known_noise",
+            "operator_review_required": False,
+            "unknown_rule_count": 1,
+            "recommended_next_step": "Fix disable_local_memory NameError in main.py",
+            "proposed_changes": ["Initialize the fast-path memory-disabled guard."],
+            "autonomous_remediation_approved": True,
+            "autonomous_remediation_confidence": "high",
+            "autonomous_remediation_rationale": "Known bounded code regression with prior memory.",
+            "memory_evidence": ["memory/heartbeat_schema_fix.md showed prior heartbeat prompt repair pattern."],
+        },
+        "session_id": "sess_test",
+    }
+
+    await gs._process_heartbeat_investigation_notification(payload)
+
+    assert len(created_tasks) == 1
+    assert created_tasks[0]["task_id"] == "heartbeat_fix:code_regression_plus_known_noise"
+    assert notifications == []
+    assert nudge_reasons == [
+        "heartbeat_remediation:heartbeat_fix:code_regression_plus_known_noise"
+    ]
+    assert any(
+        item["kwargs"].get("requires_action") is False for item in updated_records
+    )
+
+
+def test_autonomous_remediation_decision_is_blocked_for_secret_or_policy_changes():
+    import universal_agent.gateway_server as gs
+
+    allowed = gs._heartbeat_autonomous_remediation_allowed(
+        {
+            "classification": "credential_rotation",
+            "autonomous_remediation_approved": True,
+            "autonomous_remediation_confidence": "high",
+            "proposed_changes": ["Rotate API keys and update Tailscale ACL."],
+        },
+        recommended_next_step="Rotate API keys and update Tailscale ACL.",
+    )
+
+    assert allowed is False
+
+
+@pytest.mark.asyncio
 async def test_investigation_skips_remediation_when_operator_review_required(
     _activity_db, monkeypatch
 ):

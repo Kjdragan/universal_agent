@@ -26,9 +26,11 @@ any manual project setup — always prefer it over improvising directory structu
 
 Before running the scaffolder, ensure:
 
-1. **GitHub CLI authenticated** — `gh auth status` must succeed on the VPS.
-2. **Infisical credentials available** — The UA `.env` must contain `INFISICAL_CLIENT_ID` and `INFISICAL_CLIENT_SECRET`. The Infisical project is **auto-created** by the script.
-3. **DNS records** — Can be set up before or after scaffolding. The script will print the exact records needed.
+1. **GitHub CLI authenticated** — `gh auth status` must succeed on the VPS unless using `--skip-github`.
+2. **Infisical CLI installed** — `infisical --version` must succeed unless using `--skip-infisical`.
+3. **Infisical credentials available** — The UA `.env` must contain `INFISICAL_CLIENT_ID` and `INFISICAL_CLIENT_SECRET`. The Infisical project is **auto-created** by the script.
+4. **Core host CLIs installed** — `git`, `uv`, `node`, `npm`, and `docker compose` must be available.
+5. **DNS records** — Can be set up before or after scaffolding. The script will print the exact records needed.
 
 ## Execution Procedure
 
@@ -50,22 +52,35 @@ uv run .agents/skills/project-scaffolder/scripts/scaffold.py \
 ```
 
 The script handles:
+- **Core host dependency preflight** for `git`, `uv`, `node`, `npm`, Docker Compose, Infisical CLI, and GitHub CLI
+- **Infisical CLI preflight** so generated projects are provisioned on a host that can manage Infisical secrets
 - **Infisical project auto-creation** via REST API (idempotent — reuses existing)
 - **`/opt` permission handling** with `sudo` fallback
-- Directory creation at `/opt/<project_name>/`
-- Git initialization
+- Directory creation at `/opt/<project_name>/` when writable, otherwise `~/projects/<project_name>/`
+- Systemd, Nginx, and CI/CD templates rendered with the actual project directory
+- Git initialization on `main` with an initial `chore: initial scaffold` commit
+- Backend `uv sync --extra dev` and frontend `npm install`
+- GitHub repository creation and push when `gh` is authenticated
 - All project files from templates
 - Port allocation (scans for next available)
 - Bootstrap `.env` generation
-- Skills symlinking
+- Structured `project.scaffold.json` metadata with paths, ports, DNS names, Infisical project ID, and install commands
+- Generated `scripts/preflight.sh` so future agents can verify core CLIs, Infisical CLI, installed dependencies, and scaffold metadata
+- Canonical `.agents/skills/` skill symlinking with legacy `.claude/skills/` fallback lookup
 
-### Step 3: Post-Scaffold Manual Steps
+Optional flags:
+- `--skip-infisical` — skip Infisical CLI preflight and project creation.
+- `--skip-install` — skip dependency installation.
+- `--skip-github` — skip GitHub repository creation and push.
+- `--github-owner <owner>` — override the default GitHub owner (`kjdragan`).
 
-After the script completes, perform these steps:
+### Step 3: Remaining Operator Steps
 
-#### 3a. Create GitHub Repository
+After the script completes, perform only the steps that require external coordination or secrets.
+
+#### 3a. Create GitHub Repository (Only If Skipped Or Auth Failed)
 ```bash
-cd /opt/<project_name>
+cd <project_dir>
 gh repo create kjdragan/<project_name> --private --source=. --push
 ```
 
@@ -114,7 +129,7 @@ sudo systemctl enable --now <project_name>-docs
 
 #### 3f. Run Initial Migration
 ```bash
-cd /opt/<project_name>/backend
+cd <project_dir>/backend
 uv run alembic upgrade head
 ```
 
@@ -142,7 +157,8 @@ uv run alembic upgrade head
 
 ## Curated Skills Included
 
-The following skills are symlinked from UA's skill library:
+The following skills are symlinked into the generated project's canonical `.agents/skills/`
+directory from UA's skill library:
 
 clean-code, systematic-debugging, verification-before-completion, git-commit, github,
 dependency-management, task-forge, skill-creator, coding-agent, deep-research, defuddle,

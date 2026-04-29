@@ -272,6 +272,10 @@ def test_emit_heartbeat_investigation_completion_sanitizes_recommendation_text(m
                     "VPS is healthy via Tailscale mesh but SSH is blocked by ACL policy. "
                     "Add workstation IP to the DigitalOcean firewall if public fallback is needed."
                 ),
+                "autonomous_remediation_approved": True,
+                "autonomous_remediation_confidence": "high",
+                "autonomous_remediation_rationale": "Known bounded operational fix.",
+                "memory_evidence": ["memory/HEARTBEAT.md autonomous repair policy"],
             }
         ),
         encoding="utf-8",
@@ -292,6 +296,9 @@ def test_emit_heartbeat_investigation_completion_sanitizes_recommendation_text(m
     assert metadata["recommended_next_step"].startswith("Update Tailscale ACL/SSH policy")
     assert "DigitalOcean" not in metadata["email_summary"]
     assert "VPS host firewall" in metadata["email_summary"]
+    assert metadata["autonomous_remediation_approved"] is True
+    assert metadata["autonomous_remediation_confidence"] == "high"
+    assert metadata["memory_evidence"] == ["memory/HEARTBEAT.md autonomous repair policy"]
 
 
 def test_validate_youtube_tutorial_artifacts_accepts_nested_video_id_manifest(mock_gateway, tmp_path):

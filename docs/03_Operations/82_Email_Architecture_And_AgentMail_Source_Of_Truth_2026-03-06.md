@@ -1,6 +1,6 @@
 # Email Architecture and AgentMail Source of Truth
 
-> **Last updated: 2026-04-17** — added multi-inbox VP routing (Cody/Atlas direct email engagement), CC-based Simone awareness protocol, automated VP FYI suppression, and `target_agent` workflow manifest routing.
+> **Last updated: 2026-04-29** — added trusted non-action reply auto-completion so acknowledgements/status updates do not linger in Task Hub review.
 
 ## Purpose
 
@@ -37,7 +37,8 @@ Email arrives → AgentMailService (WebSocket)
   → Dispatch to email-handler triage agent
     → Classify, enrich with thread context, security assessment
     → Persist structured triage brief metadata
-    → Optional short receipt acknowledgement only when allowed
+    → If trusted + non-action (`fyi`, `social`, `status_update`), auto-complete
+    → Optional short receipt acknowledgement only when allowed for actionable work
   → Dedicated ToDo executor claims the Task Hub item
   → Simone executes, delegates, reviews, and completes from the canonical lifecycle
 ```
@@ -334,6 +335,29 @@ Canonical follow-up happens in Task Hub:
 - once handed off to `todo_execution`, Simone must not re-triage or call SDK meta task controls; execution stays inside Task Hub and must end with a durable lifecycle mutation such as `complete`, `review`, `block`, `park`, or `delegate`
 - hook-side `TaskStop` guardrails now hard-block both `email_triage` and downstream `todo_execution` use, with corrective guidance that points the agent back to triage-only behavior or `task_hub_task_action(...)` as appropriate
 - `task_hub_task_action(action="claim")` is treated as an alias for `seize` and is idempotent for already-claimed work, which prevents retry loops if the model redundantly asks to claim an in-progress task
+
+### Trusted Non-Action Reply Completion
+
+Some replies from Kevin are confirmations, thanks, or status updates after Simone has already completed the real work. These should not become human-review chores.
+
+Implementation:
+- `AgentMailService._trusted_triage_is_non_action(...)` recognizes clean trusted triage classifications of `fyi`, `social`, or `status_update` when the triage brief says there are no action items.
+- `EmailTaskBridge.complete_thread_as_non_action(...)` marks both `email_task_mappings.status` and the corresponding Task Hub item as `completed`.
+- The completed Task Hub item records `metadata.email_triage_routing = "auto_completed_non_action"` and `dispatch.last_disposition_reason = "trusted_non_action_email_reply"` for auditability.
+
+This rule is intentionally post-triage. The system still records the message, sender, thread, classification, and reason; it simply avoids promoting non-action mail into ToDo execution or `needs_review`.
+
+```mermaid
+flowchart TD
+    E[Inbound trusted email] --> M[Materialize email Task Hub item]
+    M --> Q[Queue agentmail_inbox_queue row]
+    Q --> T[email-handler triage]
+    T --> C{classification}
+    C -->|fyi/social/status_update + no action items| AC[Mark mapping completed and Task Hub completed]
+    C -->|instruction/feedback/question/action items| TD[Promote to ToDo dispatch]
+    C -->|quarantine| QR[Block/quarantine]
+    TD --> EX[Dedicated ToDo execution]
+```
 
 ---
 

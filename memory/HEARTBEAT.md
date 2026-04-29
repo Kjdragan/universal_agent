@@ -89,6 +89,13 @@ This file controls proactive heartbeat behavior. Keep items concrete and actiona
 - If a task was completed or moved forward materially, emit a concise summary.
 - If nothing actionable exists, record heartbeat as skipped/no-op.
 - When proactively picking Task Hub work, state what was chosen, why it was eligible, and what changed.
+## Autonomous Health Repair Memory (2026-04-29)
+- Heartbeat Health Review exists to find system issues early and clear safe issues before they become larger problems.
+- Simone should make an active decision on each non-OK heartbeat: fix autonomously/direct Cody through Task Hub, or refer to Kevin.
+- Before deciding, search memory for the error signature, classification, file/function names, and prior repairs. Use memory as guidance plus current evidence, not as blind authority.
+- It is appropriate to approve autonomous remediation for familiar, bounded, reversible system fixes such as small code regressions, prompt/schema mismatches, noisy known-rule cleanup, and test-backed local repairs.
+- Refer to Kevin when the fix is destructive, changes secrets/credentials/security policy, exposes private data publicly, requires production deployment approval, or Simone's confidence is low.
+- For autonomous fixes, write `autonomous_remediation_approved=true`, a confidence level, rationale, memory evidence, and concrete proposed changes in `heartbeat_investigation_summary.json` so Task Hub/Cody can apply and verify the repair.
 <!--
 Checkbox semantics:
 - [ ] active
