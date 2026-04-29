@@ -413,8 +413,6 @@ export default function ToDoListDashboardPage() {
   const [openActionMenuId, setOpenActionMenuId] = useState<string | null>(null);
   const [actionPendingTaskId, setActionPendingTaskId] = useState("");
   const [wakePending, setWakePending] = useState(false);
-  const [taskHistory, setTaskHistory] = useState<TaskHistoryPayload | null>(null);
-  const [taskHistoryLoadingId, setTaskHistoryLoadingId] = useState("");
   const [selectedTaskDetails, setSelectedTaskDetails] = useState<any | null>(null);
   const [selectedSessionDetail, setSelectedSessionDetail] = useState<any | null>(null);
   const [sessionDetailLoading, setSessionDetailLoading] = useState("");
@@ -556,26 +554,6 @@ export default function ToDoListDashboardPage() {
     }
   }, [load]);
 
-  const handleOpenTaskHistory = useCallback(async (taskId: string) => {
-    setTaskHistoryLoadingId(taskId);
-    try {
-      const res = await fetch(
-        `${API_BASE}/api/v1/dashboard/todolist/tasks/${encodeURIComponent(taskId)}/history?limit=120`,
-        { cache: "no-store" },
-      );
-      if (!res.ok) {
-        const payload = await res.json().catch(() => ({}));
-        throw new Error(String(payload?.detail || `History failed (${res.status})`));
-      }
-      const payload = await res.json();
-      setTaskHistory(payload as TaskHistoryPayload);
-      setError("");
-    } catch (err: any) {
-      setError(err?.message || "Failed to load task history.");
-    } finally {
-      setTaskHistoryLoadingId("");
-    }
-  }, []);
 
   const handleWakeHeartbeat = useCallback(async (taskId?: string) => {
     setWakePending(true);
@@ -685,126 +663,7 @@ export default function ToDoListDashboardPage() {
     [allQueueItems],
   );
   const inProgressItems = useMemo(
-    () => allQueueItems.filter((i) => String(i.board_lane || "") === "in_progress"),
-    [allQueueItems],
-  );
-  const needsReviewItems = useMemo(
-    () => allQueueItems.filter((i) => String(i.board_lane || "") === "needs_review"),
-    [allQueueItems],
-  );
-  const blockedItems = useMemo(
-    () => allQueueItems.filter((i) => String(i.board_lane || "") === "blocked"),
-    [allQueueItems],
-  );
-
-  const completedRows = useMemo(
-    () => (Array.isArray(completedTasks?.items) ? completedTasks!.items : []),
-    [completedTasks],
-  );
-  const visibleCompletedRows = useMemo(
-    () => completedRows.filter((r) => !deletedTaskIds.has(r.task_id)),
-    [completedRows, deletedTaskIds],
-  );
-
-  const handleDeleteAllNotAssigned = useCallback(async () => {
-    if (!notAssignedItems.length) return;
-    const confirmed = window.confirm(
-      `Park all ${notAssignedItems.length} unassigned task${notAssignedItems.length === 1 ? "" : "s"}? They will be moved out of the active board.`,
-    );
-    if (!confirmed) return;
-    setDeleteAllNotAssignedPending(true);
-    try {
-      await Promise.allSettled(
-        notAssignedItems.map((item) =>
-          fetch(`${API_BASE}/api/v1/dashboard/todolist/tasks/${encodeURIComponent(item.task_id)}/action`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "park", reason: "bulk_delete_unassigned" }),
-          }),
-        ),
-      );
-    } catch {
-      // noop — best-effort
-    } finally {
-      await load(true);
-      setDeleteAllNotAssignedPending(false);
-    }
-  }, [notAssignedItems, load]);
-
-  // Allocation breakdown: source_kind counts
-  const allocationBySource = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const item of allQueueItems) {
-      const k = String(item.source_kind || "internal");
-      counts[k] = (counts[k] || 0) + 1;
-    }
-    return Object.entries(counts).sort((a, b) => b[1] - a[1]);
-  }, [allQueueItems]);
-
-  // Allocation breakdown: project_key counts
-  const allocationByProject = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const item of allQueueItems) {
-      const k = String(item.project_key || "—");
-      counts[k] = (counts[k] || 0) + 1;
-    }
-    return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8);
-  }, [allQueueItems]);
-
-  const agentMetrics1h = agentActivity?.metrics?.["1h"];
-  const agentMetrics24h = agentActivity?.metrics?.["24h"];
-
-  const completionRate24h = useMemo(() => {
-    const completed = agentMetrics24h?.completed || 0;
-    const rejected = agentMetrics24h?.rejected || 0;
-    const total = completed + rejected;
-    if (!total) return null;
-    return Math.round((completed / total) * 100);
-  }, [agentMetrics24h]);
-
-  const dispatchThreshold = Number(overview?.queue_health?.threshold || 0);
-
-  // Heartbeat alert logic: only surface when something is interesting
-  const heartbeatAlerts = useMemo(() => {
-    const hb = overview?.heartbeat;
-    if (!hb) return [];
-    const alerts: string[] = [];
-    if (!hb.enabled) alerts.push("Heartbeat disabled");
-    if (hb.busy_sessions > 0) alerts.push(`${hb.busy_sessions} busy session${hb.busy_sessions > 1 ? "s" : ""}`);
-    const nextRun = hb.nearest_next_run_epoch;
-    if (nextRun) {
-      const secsUntil = nextRun - Math.floor(Date.now() / 1000);
-      if (secsUntil < 0 && Math.abs(secsUntil) > 120) {
-        alerts.push("Heartbeat overdue");
-      }
-    }
-    if (hb.session_state_count === 0 && hb.session_count === 0) alerts.push("No sessions running");
-    return alerts;
-  }, [overview?.heartbeat]);
-
-  const todoDispatch = overview?.todo_dispatch;
-  const lastResultState = String(todoDispatch?.last_result_state || todoDispatch?.last_dispatch_decision || "").trim();
-  const lastResultDisplay = lastResultState || "No execution recorded";
-  const lastResultSub = todoDispatch?.last_result_at
-    ? `${formatTs(todoDispatch?.last_result_at || null)} · ${todoDispatch?.last_result_session_id || "unknown"}`
-    : todoDispatch?.last_submitted_at
-      ? `${formatTs(todoDispatch?.last_submitted_at || null)} · ${todoDispatch?.last_submitted_session_id || "unknown"}`
-      : (todoDispatch?.last_failure_error || "No execution recorded");
-  const lastResultClass = (() => {
-    const state = lastResultState.toLowerCase();
-    if (["completed", "delegated", "awaiting_final_delivery", "awaiting_review"].includes(state)) return "text-kcd-green";
-    if (["accepted", "triaged", "in_progress"].includes(state)) return "text-kcd-cyan";
-    if (["deferred", "cancelled"].includes(state)) return "text-kcd-amber";
-    if (["failed", "invalid"].includes(state)) return "text-kcd-red";
-    return "text-kcd-text";
-  })();
-  const todoDispatchAlerts = useMemo(() => {
-    const alerts: string[] = [];
-    if (todoDispatch?.sleeping_session_warning) {
-      alerts.push("Last wake targeted a session that was not registered");
-    }
-    if (Number(todoDispatch?.pending_wake_count || 0) > 0) {
-      alerts.push(`${todoDispatch?.pending_wake_count || 0} pending wake request${Number(todoDispatch?.pending_wake_count || 0) === 1 ? "" : "s"}`);
+    () => allQueueItems.filter((i)ake_count || 0} pending wake request${Number(todoDispatch?.pending_wake_count || 0) === 1 ? "" : "s"}`);
     }
     if ((todoDispatch?.last_dispatch_decision || "").toLowerCase() === "busy") {
       alerts.push("Last dispatch was rejected because the target was busy");
@@ -1061,10 +920,6 @@ export default function ToDoListDashboardPage() {
                 </button>
               );
             })()}
-            <button onClick={(e) => { e.stopPropagation(); void handleOpenTaskHistory(item.task_id); }} disabled={taskHistoryLoadingId === item.task_id}
-              className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-cyan/10 text-kcd-cyan border-none rounded-sm cursor-pointer hover:bg-kcd-cyan/20 transition-colors disabled:opacity-40">
-              {taskHistoryLoadingId === item.task_id ? "Loading…" : "📜 History"}
-            </button>
             <button onClick={(e) => { e.stopPropagation(); setSelectedTaskDetails(item); }}
               className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-indigo/10 text-kcd-indigo border-none rounded-sm cursor-pointer hover:bg-kcd-indigo/20 transition-colors">
               🔍 Inspect
@@ -1205,10 +1060,6 @@ export default function ToDoListDashboardPage() {
           {item.last_assignment?.agent_id && <><span className="opacity-40">│</span><span className="text-kcd-text-dim">{item.last_assignment.agent_id}</span></>}
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200" onClick={(e) => e.stopPropagation()}>
-          <button onClick={(e) => { e.stopPropagation(); void handleOpenTaskHistory(item.task_id); }} disabled={taskHistoryLoadingId === item.task_id}
-            className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-cyan/10 text-kcd-cyan border-none rounded-sm cursor-pointer hover:bg-kcd-cyan/20 transition-colors disabled:opacity-40">
-            {taskHistoryLoadingId === item.task_id ? "Loading…" : "Review"}
-          </button>
           <button onClick={(e) => { e.stopPropagation(); setSelectedTaskDetails(item); }}
             className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-indigo/10 text-kcd-indigo border-none rounded-sm cursor-pointer hover:bg-kcd-indigo/20 transition-colors">
             Inspect
@@ -1391,154 +1242,6 @@ export default function ToDoListDashboardPage() {
 
   // ── Work item history panel ───────────────────────────────────────────────────
 
-  const renderTaskHistoryPanel = () => (
-    <section className="rounded-xl border border-border bg-background/70 p-4">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <div>
-          <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-sky-300">Work Item History</h2>
-          <p className="text-xs text-muted-foreground">Assignment/evaluation trail and links to run artifacts.</p>
-        </div>
-        {taskHistory ? (
-          <button
-            onClick={() => setTaskHistory(null)}
-            className="rounded border border-border bg-card/80 px-2 py-1 text-[10px] uppercase tracking-wide text-foreground/80 hover:bg-card/50"
-          >
-            Clear
-          </button>
-        ) : null}
-      </div>
-      {!taskHistory ? (
-        <p className="text-xs text-muted-foreground italic">Select &quot;Review&quot; on any work item to load run history.</p>
-      ) : (
-        <div className="space-y-3 text-xs">
-          <div className="rounded border border-border/70 bg-background/50 p-2">
-            <div className="font-semibold text-foreground flex items-baseline gap-2 min-w-0">
-              <span className="shrink-0">{taskHistory.task?.title || taskHistory.task?.task_id || "Work Item"}</span>
-              {taskHistory.task?.description && (
-                <span className="text-[11px] font-normal text-muted-foreground truncate">— {taskHistory.task.description.slice(0, 100)}{taskHistory.task.description.length > 100 ? "…" : ""}</span>
-              )}
-            </div>
-            <div className="mt-1 flex items-center gap-2 text-muted-foreground">
-              <span>{taskHistory.task?.task_id}</span>
-              {taskHistory.task?.status && <span className="opacity-40">│</span>}
-              {taskHistory.task?.status && <span className="text-[10px] uppercase tracking-wider">{taskHistory.task.status}</span>}
-              {taskHistory.task?.board_lane && <><span className="opacity-40">│</span><span className="text-[10px] uppercase tracking-wider">{taskHistory.task.board_lane}</span></>}
-              {taskHistory.task?.score !== undefined && <><span className="opacity-40">│</span><span className="text-[10px]">score {taskHistory.task.score}</span></>}
-            </div>
-          </div>
-          {(taskHistory.email_mapping || taskHistory.reconciliation) && (
-            <div className="rounded border border-border/70 bg-background/50 p-2">
-              <div className="mb-1 text-[10px] uppercase tracking-[0.16em] text-muted-foreground">Forensics</div>
-              <div className="space-y-1 text-[11px] text-foreground/80">
-                {taskHistory.email_mapping?.thread_id && (
-                  <div>
-                    Email thread <span className="font-mono text-muted-foreground">{taskHistory.email_mapping.thread_id}</span>
-                    {taskHistory.email_mapping.subject ? ` · ${taskHistory.email_mapping.subject}` : ""}
-                  </div>
-                )}
-                {taskHistory.email_mapping?.sender_email && (
-                  <div>Sender {taskHistory.email_mapping.sender_email}</div>
-                )}
-                {taskHistory.email_mapping?.email_sent_at && (
-                  <div>Email sent {formatTs(taskHistory.email_mapping.email_sent_at)}</div>
-                )}
-                {taskHistory.delivery_mode && (
-                  <div>Delivery mode {taskHistory.delivery_mode}</div>
-                )}
-                {taskHistory.canonical_execution?.session_id && (
-                  <div>
-                    Canonical execution <span className="font-mono text-muted-foreground">{taskHistory.canonical_execution.session_id}</span>
-                    {taskHistory.canonical_execution.session_role ? ` · ${taskHistory.canonical_execution.session_role}` : ""}
-                  </div>
-                )}
-                {taskHistory.reconciliation?.orphaned_in_progress && (
-                  <div className="text-kcd-red">Flagged orphaned in-progress state</div>
-                )}
-                {taskHistory.reconciliation?.completion_unverified && (
-                  <div className="text-kcd-amber">Completion is unverified and requires Simone review</div>
-                )}
-                {taskHistory.artifacts?.transcript_href && (
-                  <a href={taskHistory.artifacts.transcript_href} className="text-sky-300 hover:underline">
-                    Open transcript
-                  </a>
-                )}
-                {taskHistory.artifacts?.run_log_href && (
-                  <a href={taskHistory.artifacts.run_log_href} className="text-sky-300 hover:underline">
-                    Open run log
-                  </a>
-                )}
-              </div>
-            </div>
-          )}
-          <div className="rounded border border-border/70 bg-background/50 p-2">
-            <div className="mb-1 text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
-              Assignments ({taskHistory.assignments?.length || 0})
-            </div>
-            {(taskHistory.assignments || []).length === 0 ? (
-              <p className="text-muted-foreground">No assignment history.</p>
-            ) : (
-              <div className="space-y-1.5">
-                {(taskHistory.assignments || []).slice(0, 10).map((row) => (
-                  <div key={row.assignment_id} className="rounded border border-border bg-background/50 px-2 py-1.5">
-                    <div className="text-foreground">
-                      <span className="font-semibold">{row.agent_id || "unknown-agent"}</span> · {row.state}
-                    </div>
-                    <div className="text-[10px] text-muted-foreground">
-                      started {formatTs(row.started_at)} · ended {formatTs(row.ended_at)}
-                    </div>
-                    <div className="text-[10px] text-muted-foreground">
-                      {row.session_role || "unknown-role"}{row.run_kind ? ` · ${row.run_kind}` : ""}
-                    </div>
-                    <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                    {(() => {
-                      const target = resolveTaskWorkspaceTarget({
-                        links: row.links,
-                        canonical_execution_session_id: row.session_id,
-                        workflow_run_id: row.workflow_run_id,
-                      });
-                      if (!target) return null;
-                      return (
-                        <button
-                          onClick={() => {
-                            openOrFocusChatWindow({ ...target, attachMode: "tail", role: "viewer" });
-                          }}
-                          className="rounded border border-emerald-700/60 bg-emerald-900/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-300 hover:bg-emerald-900/35 cursor-pointer inline-flex items-center gap-1"
-                        >
-                          <span className="text-[9px]">📂</span> Workspace
-                        </button>
-                      );
-                    })()}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-          <div className="rounded border border-border/70 bg-background/50 p-2">
-            <div className="mb-1 text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
-              Evaluations ({taskHistory.evaluations?.length || 0})
-            </div>
-            {(taskHistory.evaluations || []).length === 0 ? (
-              <p className="text-muted-foreground">No evaluation records.</p>
-            ) : (
-              <div className="space-y-1.5">
-                {(taskHistory.evaluations || []).slice(0, 12).map((row) => (
-                  <div key={row.id} className="rounded border border-border bg-background/50 px-2 py-1.5">
-                    <div className="text-foreground">
-                      <span className="font-semibold">{row.decision || "n/a"}</span> · {row.reason || "n/a"}
-                    </div>
-                    <div className="text-[10px] text-muted-foreground">
-                      score {row.score ?? 0} ({row.score_confidence ?? 0}) · {formatTs(row.evaluated_at)}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-    </section>
-  );
 
 
 
@@ -1595,70 +1298,6 @@ export default function ToDoListDashboardPage() {
 
 
 
-        {/* ── NOW: Current Assignments (priority — moved to top) ── */}
-        <section className="backdrop-blur-sm bg-kcd-surface-dim/70 border border-white/[0.06] rounded-lg p-4">
-        <div className="flex items-center gap-2 mb-3">
-          <span className="material-symbols-outlined text-lg text-kcd-cyan">bolt</span>
-          <h2 className="font-mono text-[11px] font-bold tracking-[0.1em] text-kcd-cyan uppercase m-0">Now — Active ({(agentActivity?.active_assignments || []).length})</h2>
-        </div>
-        {(agentActivity?.active_assignments || []).length === 0 ? (
-          <p className="text-xs text-kcd-text-muted italic">No agents currently working. Queue a heartbeat to dispatch work.</p>
-        ) : (
-          <div className="grid gap-2 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3">
-            {(agentActivity?.active_assignments || []).map((a) => {
-              const aPCls = priorityColorClass(a.priority);
-              return (
-                <div key={a.assignment_id} className="bg-kcd-cyan/[0.08] border border-kcd-cyan/20 rounded-md p-3 hover:bg-kcd-cyan/[0.12] transition-colors">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <div className="font-mono text-[9px] font-bold tracking-wider text-kcd-cyan uppercase">{a.agent_id}</div>
-                      <div className="text-[13px] font-medium text-kcd-text mt-1 leading-snug">{a.title}</div>
-                    </div>
-                    <span className={`font-mono text-[10px] font-bold shrink-0 ${aPCls}`}>{priorityText(a.priority)}</span>
-                  </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-1.5 font-mono text-[10px] text-kcd-text-muted">
-                    {a.project_key && <span>{a.project_key}</span>}
-                    <span className="opacity-40">│</span>
-                    <span>Started {formatTs(a.started_at)}</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
-      {/* ── Consolidated Dispatcher & Stats Strip ── */}
-      <section className="backdrop-blur-sm bg-kcd-surface-dim/70 border border-white/[0.06] rounded-lg px-4 py-2.5">
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-1.5 font-mono text-[11px]">
-          <span className="text-[9px] font-bold tracking-[0.1em] text-kcd-text-muted uppercase shrink-0">Dispatcher</span>
-          <span className="text-kcd-text-muted">{formatTs(todoDispatch?.last_wake_requested_at || null) || "No wake"}</span>
-          <span className="text-kcd-text-muted">Claim: <strong className={todoDispatch?.last_claimed_at ? "text-kcd-cyan" : "text-kcd-text-muted"}>{todoDispatch?.last_claimed_at ? `${todoDispatch?.last_claimed_task_count || 0} task(s)` : "none"}</strong></span>
-          <span className="text-kcd-text-muted">Result: <strong className={lastResultClass}>{lastResultDisplay}</strong></span>
-          <span className="text-kcd-text-muted">Wake Q: <strong className={Number(todoDispatch?.pending_wake_count || 0) > 0 ? "text-kcd-amber" : "text-kcd-text"}>{todoDispatch?.pending_wake_count || 0}</strong></span>
-          <span className="h-3 w-px bg-white/10 mx-1" />
-          <span className="text-[9px] font-bold tracking-[0.1em] text-kcd-text-muted uppercase shrink-0">Stats</span>
-          <span className="text-kcd-text-muted">Eligible: <strong className="text-kcd-text">{overview?.queue_health?.dispatch_eligible || 0}</strong></span>
-          <span className="text-kcd-text-muted">Agents: <strong className="text-kcd-cyan">{agentActivity?.active_agents || 0}</strong></span>
-          <span className="text-kcd-text-muted">Backlog: <strong className="text-kcd-text">{agentActivity?.backlog_open || 0}</strong></span>
-
-          <span className="text-kcd-text-muted">Rate: <strong className={completionRate24h !== null ? (completionRate24h >= 70 ? "text-kcd-green" : completionRate24h >= 40 ? "text-kcd-amber" : "text-kcd-red") : "text-kcd-text-muted"}>{completionRate24h !== null ? `${completionRate24h}%` : "—"}</strong></span>
-          <span className="h-3 w-px bg-white/10 mx-1" />
-          <span className="text-[9px] font-bold tracking-[0.1em] text-kcd-text-muted uppercase shrink-0">Efficiency</span>
-          <span className="text-kcd-text-muted">1h: <strong className="text-kcd-text">{agentMetrics1h?.seized || 0}</strong>s · <strong className="text-kcd-cyan">{agentMetrics1h?.completed || 0}</strong>d · <strong className="text-kcd-red">{agentMetrics1h?.rejected || 0}</strong>r</span>
-          <span className="text-kcd-text-muted">24h: <strong className="text-kcd-text">{agentMetrics24h?.seized || 0}</strong>s · <strong className="text-kcd-cyan">{agentMetrics24h?.completed || 0}</strong>d · <strong className="text-kcd-red">{agentMetrics24h?.rejected || 0}</strong>r</span>
-        </div>
-        {(todoDispatchAlerts.length > 0 || heartbeatAlerts.length > 0) && (
-          <div className="mt-1.5 flex flex-wrap gap-2">
-            {todoDispatchAlerts.map((alert, idx) => (
-              <span key={`todo-alert-${idx}`} className="font-mono text-[10px] text-kcd-amber">⚠ {alert}</span>
-            ))}
-            {heartbeatAlerts.map((alert, idx) => (
-              <span key={`hb-alert-${idx}`} className="font-mono text-[10px] text-kcd-text-muted">♥ {alert}</span>
-            ))}
-          </div>
-        )}
-      </section>
 
       {/* ── Kanban Time Horizon Board ── */}
       <div className="grid gap-3 grid-cols-1 xl:grid-cols-4" onClick={(e) => e.stopPropagation()}>
@@ -1709,51 +1348,7 @@ export default function ToDoListDashboardPage() {
         </div>
       )}
 
-      {/* ── Allocation Breakdown ── */}
-      {allQueueItems.length > 0 && (
-        <section className="backdrop-blur-sm bg-kcd-surface-dim/70 border border-white/[0.06] rounded-lg p-4">
-          <h2 className="font-mono text-[11px] font-bold tracking-[0.1em] text-kcd-text-dim uppercase m-0 mb-3">Work Allocation</h2>
-          <div className="grid gap-6 grid-cols-1 md:grid-cols-2">
-            <div>
-              <h3 className="font-mono text-[9px] font-bold tracking-[0.1em] text-kcd-text-muted uppercase m-0 mb-2">By Source</h3>
-              <div className="flex flex-col gap-2">
-                {allocationBySource.map(([kind, count]) => {
-                  const pct = Math.round((count / allQueueItems.length) * 100);
-                  return (
-                    <div key={kind} className="grid items-center gap-3 text-[11px]" style={{ gridTemplateColumns: "8rem 1fr 4rem" }}>
-                      <div className="overflow-hidden">{sourceKindPill(kind)}</div>
-                      <div className="bg-kcd-surface-bright h-1 min-w-0 rounded-full overflow-hidden">
-                        <div className="h-1 bg-kcd-cyan rounded-full transition-all duration-500" style={{ width: `${pct}%` }} />
-                      </div>
-                      <span className="text-right text-kcd-text-muted font-mono text-[10px] whitespace-nowrap">{count} ({pct}%)</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-            <div>
-              <h3 className="font-mono text-[9px] font-bold tracking-[0.1em] text-kcd-text-muted uppercase m-0 mb-2">By Project</h3>
-              <div className="flex flex-col gap-1.5">
-                {allocationByProject.map(([proj, count]) => {
-                  const pct = Math.round((count / allQueueItems.length) * 100);
-                  return (
-                    <div key={proj} className="flex items-center gap-2 text-[11px]">
-                      <span className="w-28 shrink-0 truncate text-kcd-text-dim">{proj}</span>
-                      <div className="flex-1 bg-kcd-surface-bright h-1 rounded-full overflow-hidden">
-                        <div className="h-1 bg-kcd-indigo rounded-full transition-all duration-500" style={{ width: `${pct}%` }} />
-                      </div>
-                      <span className="w-14 text-right text-kcd-text-muted font-mono text-[10px]">{count} ({pct}%)</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        </section>
-      )}
 
-      {/* ── Work Item History Detail ── */}
-      {renderTaskHistoryPanel()}
 
       {/* ── Heartbeat Status ── */}
       {heartbeatAlerts.length > 0 && (
