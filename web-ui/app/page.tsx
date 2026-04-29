@@ -350,9 +350,25 @@ function extractHistoryFromTraceJson(data: TraceJsonData): TraceHydrationResult 
   return { messages, logs, toolCalls };
 }
 
-function vpIdFromObserverSession(sessionId: string): string {
+function vpIdFromObserverSession(sessionId: string, workspace?: string): string {
   const sid = String(sessionId || "").trim();
   if (!sid) return "";
+  // vp-mission-* IDs: derive VP identity from workspace path if available
+  if (/^vp-mission-/i.test(sid)) {
+    // Workspace path like "vp_general_primary_external/vp-mission-.../..."
+    const ws = String(workspace || "").trim();
+    if (ws) {
+      const firstSegment = ws.split("/")[0] || "";
+      if (/^vp_/i.test(firstSegment)) {
+        return firstSegment
+          .replace(/^vp_/i, "vp.")
+          .replace(/_external$/i, "")
+          .replace(/_/g, ".");
+      }
+    }
+    // No workspace context — try well-known VP id patterns from the dashboard
+    return "";
+  }
   if (/^vp\./i.test(sid)) {
     return sid.replace(/\.external$/i, "");
   }
@@ -392,8 +408,8 @@ function parseIsoMillis(value: string): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-async function fetchVpHydrationSnapshot(sessionId: string): Promise<VpHydrationSnapshot | null> {
-  const vpId = vpIdFromObserverSession(sessionId);
+async function fetchVpHydrationSnapshot(sessionId: string, workspace?: string): Promise<VpHydrationSnapshot | null> {
+  const vpId = vpIdFromObserverSession(sessionId, workspace);
   if (!vpId) return null;
 
   const query = `vp_id=${encodeURIComponent(vpId)}&mission_limit=30&event_limit=80`;
@@ -760,6 +776,20 @@ function FileExplorer() {
       console.warn("Failed to read local file:", err);
     }
   };
+
+  // Auto-switch to VPS workspaces mode for VP mission sessions
+  useEffect(() => {
+    const sid = currentSession?.session_id || "";
+    const ws = currentSession?.workspace || "";
+    if (/^vp-mission-/i.test(sid) && ws) {
+      const vpWorkspaceRel = workspaceRelativePathFromAbsolute(ws);
+      if (vpWorkspaceRel) {
+        setMode("vps_workspaces");
+        setPath(vpWorkspaceRel);
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSession?.session_id, currentSession?.workspace]);
 
   useEffect(() => {
     if (mode === "session" && !currentSession?.session_id && !currentSession?.run_id) return;
@@ -1420,7 +1450,7 @@ function ChatInterface() {
   const effectiveRunId = (currentSession?.run_id || requestedRunIdFromUrl || "").trim();
   const isRunWorkspaceOnly = isRunOnlySelection(currentSession) || (!effectiveSessionId && !!effectiveRunId);
   const effectiveViewerKey = effectiveSessionId || effectiveRunId;
-  const isVpObserverSession = /^vp_/i.test(effectiveSessionId);
+  const isVpObserverSession = /^vp[_-]/i.test(effectiveSessionId) || /^vp-mission-/i.test(effectiveSessionId);
   const setCurrentSession = useAgentStore((s) => s.setCurrentSession);
 
   // ── File Attachment State ──
@@ -2013,7 +2043,7 @@ function ChatInterface() {
         }
 
         if (!cancelled && isVpObserverSession) {
-          const vpSnapshot = await fetchVpHydrationSnapshot(sessionId);
+          const vpSnapshot = await fetchVpHydrationSnapshot(sessionId, currentSession?.workspace);
           if (vpSnapshot) {
             if (store.messages.length === 0 && vpSnapshot.messages.length > 0) {
               for (const msg of vpSnapshot.messages.slice(-20)) {
@@ -2579,6 +2609,7 @@ export default function HomePage() {
     const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
     const requestedSessionId = (params?.get("session_id") || "").trim();
     const requestedRunId = (params?.get("run_id") || "").trim();
+    const requestedWorkspace = (params?.get("workspace") || "").trim();
     const requestedAttach = (params?.get("attach") || "").trim().toLowerCase();
     const requestedNewSession = (params?.get("new_session") || "").trim() === "1";
 
@@ -2605,12 +2636,12 @@ export default function HomePage() {
       if (!sameSession || (requestedRunId && existing?.run_id !== requestedRunId)) {
         store.setCurrentSession({
           session_id: requestedSessionId,
-          workspace: sameSession ? existing?.workspace || "" : "",
+          workspace: requestedWorkspace || (sameSession ? existing?.workspace || "" : ""),
           user_id: sameSession ? existing?.user_id || "observer" : "observer",
           session_url: sameSession ? existing?.session_url : undefined,
           logfire_enabled: sameSession ? Boolean(existing?.logfire_enabled) : false,
           run_id: nextRunId || null,
-          is_live_session: true,
+          is_live_session: !requestedWorkspace,
         });
       }
       ws.attachToSession(requestedSessionId);

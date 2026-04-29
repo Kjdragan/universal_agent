@@ -256,7 +256,7 @@ function artifactExplorerHref(path?: string | null): string {
   return `/storage?${params.toString()}`;
 }
 
-function chatSessionHref(sessionId?: string | null): string {
+function chatSessionHref(sessionId?: string | null, workspace?: string | null): string {
   const sid = asText(sessionId);
   if (!sid) return "";
   const params = new URLSearchParams({
@@ -264,6 +264,10 @@ function chatSessionHref(sessionId?: string | null): string {
     attach: "tail",
     role: "viewer",
   });
+  const ws = asText(workspace);
+  if (ws) {
+    params.set("workspace", ws);
+  }
   return `/?${params.toString()}`;
 }
 
@@ -1229,7 +1233,7 @@ export default function DashboardPage() {
                     {mission.completed_at && <span>completed: {formatLocalDateTime(mission.completed_at)}</span>}
                     {typeof mission.duration_seconds === "number" && <span>duration: {formatElapsed(mission.duration_seconds * 1000)}</span>}
                   </div>
-                  <RefLine label="result_ref" value={resultRef} sessionHref={chatSessionHref(mission.mission_id)} />
+                  <RefLine label="result_ref" value={resultRef} sessionHref={chatSessionHref(mission.mission_id, resultPath)} />
                   <RefLine label="result_path" value={resultPath} storagePath={resultPath} />
                   <RefLine label="artifact_relpath" value={artifactRelpath} />
                   <RefLine label="artifact_path" value={artifactPath} storagePath={artifactPath} />
