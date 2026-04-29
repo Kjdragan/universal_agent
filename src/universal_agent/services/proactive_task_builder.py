@@ -7,12 +7,13 @@ proactive_codie, proactive_tutorial_builds, and proactive_convergence.
 from __future__ import annotations
 
 from typing import Any
+import sqlite3
 
 from universal_agent import task_hub
 
 
 def queue_proactive_task(
-    conn,
+    conn: sqlite3.Connection,
     *,
     task_id: str,
     source_kind: str,

@@ -276,7 +276,7 @@ def run_sync(
                     from universal_agent.services.csi_url_judge import enrich_urls, build_linked_context
                     enrich_dir = packet_dir / "url_enrichment"
                     
-                    def enrich_post(post):
+                    def enrich_post(post: dict[str, Any]) -> tuple[str, str | None]:
                         post_id = str(post.get("id") or "").strip()
                         post_links = extract_links(post)
                         if not post_links:
@@ -306,7 +306,7 @@ def run_sync(
                     logger.warning("csi_url_judge module not available; skipping URL enrichment")
 
             # --- 2. Concurrent Post Classification ---
-            def classify_worker(post):
+            def classify_worker(post: dict[str, Any]) -> dict[str, Any]:
                 return classify_post(
                     post,
                     handle=cfg.handle,
