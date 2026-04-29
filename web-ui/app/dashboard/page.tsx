@@ -327,9 +327,11 @@ function RefLine({
   return (
     <p className="mt-1 flex flex-wrap items-start gap-2 text-[10px] text-muted-foreground">
       <span className="text-muted-foreground">{label}:</span>
-      <span className="min-w-[180px] flex-1 break-all">
-        <LinkifiedText text={text} />
-      </span>
+      {!sessionHref && !explorerHref && (
+        <span className="min-w-[180px] flex-1 break-all">
+          <LinkifiedText text={text} />
+        </span>
+      )}
       {sessionHref && (
         <a
           href={sessionHref}
@@ -864,16 +866,15 @@ export default function DashboardPage() {
     setDispatchPending(true);
     setDispatchStatus("");
     try {
-      const res = await fetch(`${API_BASE}/api/v1/ops/vp/missions/dispatch`, {
+      const res = await fetch(`${API_BASE}/api/v1/dashboard/todolist/tasks`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          vp_id: dispatchVpId,
-          mission_type: "task",
-          objective,
-          source_session_id: "ops.dashboard",
-          reply_mode: "async",
-          constraints: { skip_preference_context: true },
+          title: objective.substring(0, 80) + (objective.length > 80 ? "..." : ""),
+          description: objective,
+          target_agent: dispatchVpId,
+          project_key: "immediate",
+          priority: 1,
         }),
       });
       if (!res.ok) {
@@ -882,7 +883,7 @@ export default function DashboardPage() {
         return;
       }
       const data = await res.json();
-      setDispatchStatus(`Queued mission ${data?.mission?.mission_id || ""}`.trim());
+      setDispatchStatus(`Queued task ${data?.task?.task_id || ""}`.trim());
       setDispatchObjective("");
       await load();
     } finally {

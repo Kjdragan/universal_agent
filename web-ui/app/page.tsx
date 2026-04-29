@@ -1450,7 +1450,7 @@ function ChatInterface() {
   const effectiveRunId = (currentSession?.run_id || requestedRunIdFromUrl || "").trim();
   const isRunWorkspaceOnly = isRunOnlySelection(currentSession) || (!effectiveSessionId && !!effectiveRunId);
   const effectiveViewerKey = effectiveSessionId || effectiveRunId;
-  const isVpObserverSession = /^vp[_-]/i.test(effectiveSessionId) || /^vp-mission-/i.test(effectiveSessionId);
+  const isVpObserverSession = /^vp[_-]/i.test(effectiveSessionId) || /^vp-mission-/i.test(effectiveSessionId) || /^m-/i.test(effectiveSessionId);
   const setCurrentSession = useAgentStore((s) => s.setCurrentSession);
 
   // ── File Attachment State ──
@@ -1953,7 +1953,7 @@ function ChatInterface() {
 
           // ── Try trace.json for full-detail rehydration ──
           let usedTraceJson = false;
-          if (!cancelled && !isVpObserverSession) {
+          if (!cancelled) {
             try {
               const traceUrl = isVpObserverSession && vpWorkspaceRel
                 ? `${API_BASE}/api/vps/file?scope=workspaces&path=${encodeURIComponent(`${vpWorkspaceRel}/trace.json`)}`
