@@ -1,6 +1,6 @@
 # Email Architecture and AgentMail Source of Truth
 
-> **Last updated: 2026-04-29** — added trusted non-action reply auto-completion so acknowledgements/status updates do not linger in Task Hub review.
+> **Last updated: 2026-04-29** — added trusted non-action reply auto-completion and stale failed AgentMail queue auto-cancellation so old poison rows stop surfacing as live queue health.
 
 ## Purpose
 
@@ -238,6 +238,10 @@ Behavior:
 - Subscribes to Simone's inbox
 - Listens for `MessageReceivedEvent`
 - Reconnects with exponential backoff and jitter on disconnect
+
+### Trusted Queue Lifecycle
+
+Trusted inbound messages are persisted in `agentmail_inbox_queue` before triage/dispatch. Startup recovery requeues interrupted `dispatching` rows, retries SIGTERM-style failures within the retry cap, reconciles completed rows back to Task Hub, and auto-cancels stale trusted `failed` rows older than `UA_AGENTMAIL_FAILED_QUEUE_AUTO_CANCEL_DAYS` (default 7). Auto-cancel keeps the row for audit but removes it from live failed-queue health.
 
 This design is preferred because:
 - No public webhook endpoint required

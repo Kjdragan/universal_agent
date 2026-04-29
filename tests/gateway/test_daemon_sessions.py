@@ -208,14 +208,14 @@ class TestDaemonSessionManager:
         assert archived_copy.exists()
 
 
-# ── Heartbeat idle exemption ─────────────────────────────────────────────────
+# ── Heartbeat idle timeout ───────────────────────────────────────────────────
 
 
-class TestHeartbeatDaemonExemption:
-    """Verify that daemon sessions are exempt from idle reaping."""
+class TestHeartbeatDaemonIdleTimeout:
+    """Verify that daemon sessions remain registered until runtime activity becomes stale."""
 
-    def test_daemon_session_not_reaped(self):
-        """Daemon sessions should never be marked idle."""
+    def test_daemon_session_without_runtime_activity_is_not_reaped(self):
+        """Daemon sessions without runtime activity are left alone for other lifecycle checks."""
         from universal_agent.gateway import GatewaySession
         from universal_agent.heartbeat_service import HeartbeatService
 
@@ -232,7 +232,5 @@ class TestHeartbeatDaemonExemption:
             metadata={},
         )
 
-        # _check_session_idle should return False for daemon sessions
-        # (meaning: do NOT unregister, session is NOT idle)
         result = hb._check_session_idle(daemon_session)
         assert result is False

@@ -38,7 +38,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[Agent Architecture: agent_core.py vs main.py](001_AGENT_ARCHITECTURE.md)**: Entry point comparison, AgentSetup synchronization, URW session management.
 - **[SDK Permissions, Hooks & Subagents](002_SDK_PERMISSIONS_HOOKS_SUBAGENTS.md)**: Permission model, hooks architecture, subagent patterns.
 - **[Regression Control and Golden Runs](003_REGRESSION_CONTROL_AND_GOLDEN_RUNS.md)**: Testing stability, golden run preservation.
-- **[Database Architecture](01_Architecture/Database_Architecture.md)**: Absolute source of truth for database paradigms, schema structure, segregation boundaries, and lifecycle pruning logic.
+- **[Database Architecture](01_Architecture/Database_Architecture.md)**: Absolute source of truth for database paradigms, schema structure, segregation boundaries, activity notification lifecycle, and pruning logic.
 - **[Model Choice and Resolution](01_Architecture/10_Model_Choice_And_Resolution.md)**: Anthropic Z.AI proxy emulation, model resolution mapping, and inference health governance.
 - **[Archon Comparison & Integration Strategy](01_Architecture/11_Archon_Comparison_And_Integration_Strategy_2026-04-25.md)**: Critical architectural review comparing Archon to UA, evaluating Git Worktree isolation emulation and asynchronous YAML-driven coding service integration.
 
@@ -67,7 +67,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 
 ### 4. [Operations](03_Operations)
 
-- **[Email Architecture and AgentMail Source of Truth (2026-03-06)](03_Operations/82_Email_Architecture_And_AgentMail_Source_Of_Truth_2026-03-06.md)**: Canonical reference for AgentMail email identity, triage→Simone inbound architecture, HTML-aware reply extraction, prompt injection defense, queue lifecycle, trusted non-action reply auto-completion, multi-inbox VP routing (Cody/Atlas direct email engagement), CC-based Simone awareness protocol, and outbound policy.
+- **[Email Architecture and AgentMail Source of Truth (2026-03-06)](03_Operations/82_Email_Architecture_And_AgentMail_Source_Of_Truth_2026-03-06.md)**: Canonical reference for AgentMail email identity, triage→Simone inbound architecture, HTML-aware reply extraction, prompt injection defense, queue lifecycle, trusted non-action reply auto-completion, stale failed queue auto-cancellation, multi-inbox VP routing (Cody/Atlas direct email engagement), CC-based Simone awareness protocol, and outbound policy.
 - **[Webhook Architecture and Operations Source of Truth (2026-03-06)](03_Operations/83_Webhook_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md)**: Canonical reference for hook ingress, auth strategies, transforms, dispatch queueing, and public versus trusted internal webhook paths.
 - **[Infisical Secrets Architecture and Operations Source of Truth (2026-03-06)](03_Operations/85_Infisical_Secrets_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md)**: Canonical reference for Infisical-first runtime secret bootstrap, strict/fallback modes, provisioning, and secure operational use.
 - **[Residential Proxy Architecture and Usage Policy Source of Truth (2026-03-06)](03_Operations/86_Residential_Proxy_Architecture_And_Usage_Policy_Source_Of_Truth_2026-03-06.md)**: Canonical reference for residential proxy usage (Webshare and DataImpulse), provider selection via `PROXY_PROVIDER`, approved/disallowed paths, YouTube guardrails, and failure alerts.
@@ -131,7 +131,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 
 ### 4C. [CSI Subsystem](04_CSI)
 
-- **[CSI Master Architecture & Design](04_CSI/CSI_Master_Architecture.md)**: Canonical living document for the Creator Signal Intelligence subsystem — domain taxonomy, source management (SQLite), quality scoring, adapter architecture, batch processing, delivery contracts, passive UA ingest boundary for RSS/channel analytics, and subsystem boundaries. Supersedes scattered CSI docs for architecture reference.
+- **[CSI Master Architecture & Design](04_CSI/CSI_Master_Architecture.md)**: Canonical living document for the Creator Signal Intelligence subsystem — domain taxonomy, source management (SQLite), dedupe TTL health, quality scoring, adapter architecture, batch processing, delivery contracts, passive UA ingest boundary for RSS/channel analytics, and subsystem boundaries. Supersedes scattered CSI docs for architecture reference.
 - **[CSI Convergence Intelligence Pipeline](04_CSI/CSI_Convergence_Intelligence_Pipeline.md)**: Canonical living document for the dual-track detection architecture, generating concrete convergence-brief and abstract insight-brief tasks from ingested video schemas.
 
 ### 5. [API Reference](04_API_Reference)
@@ -157,7 +157,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 
 ### 8. Tutorial Pipeline
 
-- **[Tutorial Pipeline Architecture & Operations](03_Operations/99_Tutorial_Pipeline_Architecture_And_Operations.md)**: Canonical single-source-of-truth for the YouTube tutorial pipeline — pipeline flow, notification kinds, 3-layer dedup, proxy config, env vars, API endpoints.
+- **[Tutorial Pipeline Architecture & Operations](03_Operations/99_Tutorial_Pipeline_Architecture_And_Operations.md)**: Canonical single-source-of-truth for the YouTube tutorial pipeline — pipeline flow, notification kinds, permanent-failure self-clear behavior, 3-layer dedup, proxy config, env vars, API endpoints.
 
 ### 9. [SDK Phases and Integration Docs](.)
 

@@ -1,6 +1,7 @@
 # Scheduling Runtime V2 Operational Runbook (Cron + Heartbeat + Calendar)
 
 Date: 2026-02-08  
+Last updated: 2026-04-29  
 Owner: Universal Agent Ops  
 Status: Active (Development/Staging)
 
@@ -105,6 +106,11 @@ Issue: Heartbeat panel not reflecting run state
 - Verify selected/attached session id.
 - Check `GET /api/v1/heartbeat/last?session_id=<id>`.
 - Check busy flag and heartbeat event emissions in logs.
+
+Issue: Cron or daemon run keeps retrying/failing without ending
+- Cron jobs honor their configured `timeout_seconds`; `claude_code_intel_sync` defaults to 1800 seconds through `UA_CLAUDE_CODE_INTEL_CRON_TIMEOUT_SECONDS`.
+- On cron timeout, `cron_service.py` marks the attempt failed/retryable, explicitly kills timed-out native script subprocesses, and writes `work_products/daemon_timeout_crash.json` in the cron workspace.
+- Daemon gateway execution tasks use `UA_DAEMON_IDLE_TIMEOUT` (default 1800 seconds) as a stuck-run watchdog and write the same crash-report filename under the daemon session workspace before cancellation.
 
 ## 8. Notes
 - Heartbeat remains the catch-all loop.

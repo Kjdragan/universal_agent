@@ -1,6 +1,6 @@
 # Documentation Status
 
-**Last updated:** 2026-04-29 (Heartbeat memory-guided autonomous remediation, AgentMail trusted non-action replies, and project-scaffolder hardening documented)
+**Last updated:** 2026-04-29 (Heartbeat memory-guided autonomous remediation, activity notification lifecycle, CSI dedupe TTL health, AgentMail stale queue lifecycle, and project-scaffolder hardening documented)
 
 ## Development (development/)
 
@@ -20,7 +20,7 @@ This file and `docs/README.md` serve as the **authoritative indexes** for all pr
 
 | Doc | Subject |
 |-----|---------| 
-| Heartbeat_Service.md | **Canonical source of truth** — heartbeat supervision cycle, health findings contract, mediation flow, and the separation between heartbeat runtimes and dedicated ToDo execution |
+| Heartbeat_Service.md | **Canonical source of truth** — heartbeat supervision cycle, health findings contract, mediation flow, daemon stuck-run timeout/crash reporting, and the separation between heartbeat runtimes and dedicated ToDo execution |
 | Proactive_Pipeline.md | **Canonical source of truth** — end-to-end proactive pipeline: trusted email triage, Task Hub scoring, dedicated ToDo dispatch lifecycle, delivery-mode heuristics, brainstorm refinement, morning report, 24/7 autonomous ideation (Signal Curator + Reflection Engine), shared daily budget, priority lanes, proactive wiki creation, autonomous morning briefing, 3x daily hybrid intelligence reports (Phase 2), system utilization tracking, LLM analysis, outcome tracking with implicit preference feedback (Phase 3), auto-investigation of failures, memory integration, roadmap, and test coverage |
 | Proactive_Intelligence_Work_Product_Pipeline.md | Planned phased implementation for abundant proactive artifact generation, review candidate emails, feedback learning, CODIE proactive PRs, tutorial build automation, convergence detection, and GWS enhancements |
 | Task_Hub_Dashboard.md | **Canonical source of truth** — frontend design system (`kcd-*` palette, glassmorphism), Kanban component architecture, embedded/full Agent Flow visual process display, lightweight spotlight and visual preference persistence contracts, dispatcher health, forensic task history, workspace action routing, and derived board-lane UX |
@@ -65,7 +65,7 @@ These are the authoritative references for each subsystem. When any other docume
 |---|---------|
 | 07 | WebSocket Architecture (`02_Flows/`) |
 | 08 | Auth & Session Security (`02_Flows/`) |
-| 82 | Email / AgentMail — includes multi-inbox VP routing (Cody/Atlas direct engagement), CC protocol, FYI suppression, trusted non-action reply auto-completion |
+| 82 | Email / AgentMail — includes multi-inbox VP routing (Cody/Atlas direct engagement), CC protocol, FYI suppression, trusted non-action reply auto-completion, stale failed queue auto-cancellation |
 | 83 | Webhooks |
 | 85 | Infisical Secrets |
 | 86 | Residential Proxy — dual-provider architecture (Webshare + DataImpulse), `PROXY_PROVIDER` selection, approved paths, YouTube guardrails |
@@ -194,7 +194,7 @@ These are the authoritative references for each subsystem. When any other docume
 |-----|---------|
 | 01 | Heartbeat Debug Fixes — historical debug reference |
 | 02 | Browser Debugging Lessons — debugging patterns, browser-profile comparison, and targeted storage-key resets |
-| 11 | Scheduling Runtime V2 Operational Runbook — cron operations |
+| 11 | Scheduling Runtime V2 Operational Runbook — cron operations, timeout handling, and stuck-run crash reports |
 | 13 | Skill Dependency Setup Guide — skill installation |
 | 14 | Session Runtime Behavior And Recovery Model |
 | 15 | Execution Lock Concurrency Architecture |

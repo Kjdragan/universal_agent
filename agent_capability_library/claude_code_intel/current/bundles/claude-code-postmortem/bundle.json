@@ -1,0 +1,53 @@
+{
+  "bundle_id": "claude-code-postmortem",
+  "canonical_sources": [
+    {
+      "domain": "www.anthropic.com",
+      "source_type": "vendor_web",
+      "title": "An update on recent Claude Code quality reports",
+      "url": "https://www.anthropic.com/engineering/april-23-postmortem",
+      "why_canonical": "Official engineering post-mortem detailing the root causes of the regression (Harness, System Prompt Isolation)."
+    }
+  ],
+  "discovery_posts": [
+    "2047371123185287223",
+    "2047371125395783769",
+    "2047371126503047578",
+    "2047371124238062069",
+    "2047375800945783056",
+    "2047376081767014703"
+  ],
+  "for_kevin_markdown": "This is a high-value learning opportunity. The team admitted that 'system prompt changes' and 'harness' issues caused the regression. \n\n1. **Read the Post-Mortem:** [Link](https://www.anthropic.com/engineering/april-23-postmortem)\n2. **Adopt the Fix:** They mentioned creating evals specifically for *isolated* system prompt changes. If UA updates its system prompt, do we have a test suite that catches regressions in *tool usage* specifically?\n3. **Monitor Version:** Ensure you are on v2.1.116+ if using Claude Code/Agent SDK directly.",
+  "for_ua_markdown": "The post-mortem identifies three specific issues:\n1. Isolation of system prompt changes.\n2. Harness changes.\n3. Config drift.\n\n**Action:** Ensure UA's \"harness\" (the code that executes the model's decisions) is version-controlled separately from the model logic. When we change how UA handles tools, we should run a specific regression suite.",
+  "likely_agent_system_value": "High - Validates that tooling/harness is the primary failure point for agent reliability, not model intelligence.",
+  "likely_ua_value": "High - Understanding root causes of 'agentic' failures helps prevent similar regressions in UA.",
+  "recommended_variant": "operational_protocol",
+  "summary": "Anthropic published a rare post-mortem regarding quality slippage in Claude Code, identifying root causes in the Agent SDK harness and system prompt isolation. Fixes deployed in v2.1.116+.",
+  "title": "Quality Regression Post-Mortem & Fixes",
+  "variants": [
+    {
+      "applicability": [
+        "UA"
+      ],
+      "confidence": "high",
+      "intent": "To establish testing protocols that prevent the type of regression Anthropic experienced.",
+      "key": "operational_protocol",
+      "label": "Ops Protocol: Regression Detection",
+      "primitives": [
+        {
+          "content_markdown": "1. **Baseline Test:** Create a set of 50 agentic tasks (web fetch, file edit, terminal command).\n2. **Prompt Update:** When changing the UA system prompt, run this suite.\n3. **Focus:** Don't just check 'accuracy'; check for *hangs*, *refusal to act*, and *hallucinated tool usage*.\n4. **Control:** Run the test against the old prompt and the new prompt in parallel to diff 'agentic' behavior.",
+          "kind": "workflow_recipe",
+          "rationale": "Anthropic noted that system prompt changes broke tool usage in non-obvious ways.",
+          "title": "Isolation Testing for System Prompts"
+        },
+        {
+          "content_markdown": "Ensure any dependency on `anthropic-agent-sdk` or `claude-code` CLI is pinned to `>=2.1.116`. Previous versions contain the harness race conditions.",
+          "kind": "integration_note",
+          "rationale": "Fixes are pinned to v2.1.116+.",
+          "title": "Version Pin Requirement"
+        }
+      ]
+    }
+  ],
+  "why_now": "Active remediation phase; usage limits reset; new quality assurance protocols being adopted by Anthropic."
+}

@@ -1,5 +1,7 @@
 # Universal Agent Database Architecture
 
+**Last updated:** 2026-04-29
+
 This document serves as the absolute source of truth for the database paradigms, table schemas, and pruning logic across the Universal Agent architecture.
 
 ## Overview
@@ -117,11 +119,11 @@ Databases are strictly segregated to avoid "cross battles" (lock contention) bet
 
 - **Module Source**: `src/universal_agent/gateway_server.py`
 - **Schema Lifecycle**: `_ensure_activity_schema()`
-- **Pruning**: Actively runs `_activity_prune_old()` during gateway downtime routines. Expiration length is configured dynamically. Uses `PRAGMA incremental_vacuum()` immediately after.
+- **Pruning and lifecycle**: Actively runs `_activity_prune_old()` during activity writes. Expiration length is configured dynamically. Non-actionable `info`/`success` notification rows older than `UA_ACTIVITY_NOTIFICATION_AUTO_READ_HOURS` (default 24) are marked `read`, not left as unread operator work. Uses `PRAGMA incremental_vacuum()` after lifecycle maintenance.
 
 **Core Tables**:
 
-- `activity_events`: Long-form string/json data.
+- `activity_events`: Long-form string/json data. `event_class='notification'` is reserved for dashboard/operator lifecycle rows; routine non-actionable telemetry is auto-read so health checks measure real unconsumed work.
 - `activity_event_stream`: High-velocity firehose cache.
 - `csi_digests`: Compressed metrics over rolling windows.
 

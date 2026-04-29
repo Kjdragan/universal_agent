@@ -2579,6 +2579,10 @@ _activity_events_retention_days = max(
     7,
     int(os.getenv("UA_ACTIVITY_EVENTS_RETENTION_DAYS", "90") or 90),
 )
+_activity_notification_auto_read_hours = max(
+    1,
+    int(os.getenv("UA_ACTIVITY_NOTIFICATION_AUTO_READ_HOURS", "24") or 24),
+)
 _activity_events_default_window_days = max(
     1,
     int(os.getenv("UA_ACTIVITY_DEFAULT_WINDOW_DAYS", "7") or 7),
@@ -4279,6 +4283,84 @@ def _record_session_event(session_id: str, event_type: Optional[str] = None) -> 
     _sync_runtime_metadata(session_id)
 
 
+def _daemon_execution_timeout_seconds() -> int:
+    try:
+        return max(1, int(os.getenv("UA_DAEMON_IDLE_TIMEOUT", "1800") or 1800))
+    except Exception:
+        return 1800
+
+
+def _write_daemon_execution_crash_report(
+    session_id: str,
+    *,
+    reason: str,
+    timeout_seconds: int,
+    task_created_at: float,
+    source: str,
+    extra: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    session = get_session(session_id)
+    workspace_dir = Path(getattr(session, "workspace_dir", "") or WORKSPACES_DIR / session_id)
+    crash_file = workspace_dir / "work_products" / "daemon_timeout_crash.json"
+    runtime = _session_runtime_snapshot(session_id)
+    now = datetime.now(timezone.utc)
+    payload: dict[str, Any] = {
+        "error": "Daemon execution killed due to timeout",
+        "reason": reason,
+        "source": source,
+        "session_id": session_id,
+        "workspace_dir": str(workspace_dir),
+        "crash_report_path": str(crash_file),
+        "elapsed_seconds": max(0.0, time.time() - task_created_at),
+        "timeout_threshold": timeout_seconds,
+        "timeout_threshold_seconds": timeout_seconds,
+        "runtime_metadata": runtime,
+        "timestamp": now.isoformat(),
+    }
+    if extra:
+        payload.update(extra)
+    try:
+        crash_file.parent.mkdir(parents=True, exist_ok=True)
+        crash_file.write_text(json.dumps(payload, indent=2, default=str))
+    except Exception as exc:
+        logger.warning("Failed to write daemon execution crash report for %s: %s", session_id, exc)
+    return payload
+
+
+async def _daemon_execution_timeout_watchdog(
+    session_id: str,
+    task: asyncio.Task[Any],
+    *,
+    timeout_seconds: int,
+    task_created_at: float,
+) -> None:
+    try:
+        await asyncio.sleep(timeout_seconds)
+        if task.done():
+            return
+        payload = _write_daemon_execution_crash_report(
+            session_id,
+            reason="daemon_execution_timeout",
+            timeout_seconds=timeout_seconds,
+            task_created_at=task_created_at,
+            source="gateway_execution_watchdog",
+        )
+        logger.error(
+            "Daemon session %s execution exceeded %ss; cancelling stuck run (crash_report=%s)",
+            session_id,
+            timeout_seconds,
+            payload.get("crash_report_path"),
+        )
+        await _cancel_session_execution(
+            session_id,
+            reason=f"daemon_execution_timeout:{timeout_seconds}s",
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("Daemon execution timeout watchdog failed for %s", session_id)
+
+
 def _session_turn_lock(session_id: str) -> asyncio.Lock:
     lock = _session_turn_locks.get(session_id)
     if lock is None:
@@ -4289,11 +4371,29 @@ def _session_turn_lock(session_id: str) -> asyncio.Lock:
 
 def _register_execution_task(session_id: str, task: asyncio.Task[Any]) -> None:
     _session_execution_tasks[session_id] = task
+    daemon_watchdog: Optional[asyncio.Task[Any]] = None
+    try:
+        from universal_agent.services.daemon_sessions import is_daemon_session
+
+        if is_daemon_session(session_id):
+            timeout_seconds = _daemon_execution_timeout_seconds()
+            daemon_watchdog = asyncio.create_task(
+                _daemon_execution_timeout_watchdog(
+                    session_id,
+                    task,
+                    timeout_seconds=timeout_seconds,
+                    task_created_at=time.time(),
+                )
+            )
+    except Exception:
+        logger.exception("Failed to start daemon execution watchdog for %s", session_id)
 
     def _cleanup(done_task: asyncio.Task[Any]) -> None:
         current = _session_execution_tasks.get(session_id)
         if current is done_task:
             _session_execution_tasks.pop(session_id, None)
+        if daemon_watchdog is not None and daemon_watchdog is not asyncio.current_task():
+            daemon_watchdog.cancel()
         # Clear ToDo dispatch executing_sessions so idle dispatch loop
         # knows this session is free for new work.
         if _todo_dispatch_service is not None:
@@ -9408,6 +9508,31 @@ def _delete_event_filter_preset(*, owner_id: str, preset_id: str) -> bool:
 
 
 def _activity_prune_old(conn: sqlite3.Connection) -> None:
+    now_iso = _utc_now_iso()
+    auto_read = conn.execute(
+        """
+        UPDATE activity_events
+        SET status = 'read',
+            updated_at = ?,
+            metadata_json = json_set(
+                COALESCE(NULLIF(metadata_json, ''), '{}'),
+                '$.auto_read_reason',
+                'non_actionable_notification_ttl',
+                '$.auto_read_at',
+                ?
+            )
+        WHERE event_class = 'notification'
+          AND LOWER(status) IN ('new', 'pending')
+          AND requires_action = 0
+          AND LOWER(severity) IN ('info', 'success')
+          AND created_at < datetime('now', ?)
+        """,
+        (
+            now_iso,
+            now_iso,
+            f"-{int(_activity_notification_auto_read_hours)} hours",
+        ),
+    )
     c1 = conn.execute(
         "DELETE FROM activity_events WHERE created_at < datetime('now', ?)",
         (f"-{int(_activity_events_retention_days)} days",),
@@ -9421,14 +9546,18 @@ def _activity_prune_old(conn: sqlite3.Connection) -> None:
         (f"-{int(_activity_evaluations_retention_days)} days",),
     )
     conn.commit()
-    deleted = (c1.rowcount or 0) + (c2.rowcount or 0) + (c3.rowcount or 0)
-    if deleted > 0:
+    changed = (auto_read.rowcount or 0) + (c1.rowcount or 0) + (c2.rowcount or 0) + (c3.rowcount or 0)
+    if changed > 0:
         try:
             # Reclaim pages incrementally to prevent locking the database
             # globally rather than doing a full VACUUM sweep.
             conn.execute("PRAGMA auto_vacuum = INCREMENTAL;")
             conn.execute("PRAGMA incremental_vacuum(500);")
-            logger.info("Activity DB pruned %d rows and incrementally vacuumed", deleted)
+            logger.info(
+                "Activity DB lifecycle maintenance changed %d rows (auto_read=%d)",
+                changed,
+                auto_read.rowcount or 0,
+            )
         except Exception as exc:
             logger.debug("Activity DB incremental_vacuum skipped: %s", exc)
 
@@ -9574,6 +9703,14 @@ _SUPERSEDED_FAILURE_KINDS = frozenset({
 })
 
 
+def _initial_notification_status(*, severity: str, requires_action: bool) -> str:
+    if requires_action:
+        return "new"
+    if str(severity or "info").strip().lower() in {"info", "success"}:
+        return "read"
+    return "new"
+
+
 def _notification_video_id(metadata: Any) -> str:
     if not isinstance(metadata, dict):
         return ""
@@ -9657,10 +9794,10 @@ def _auto_resolve_superseded_failures(record: dict[str, Any]) -> None:
                 _ensure_activity_schema(conn)
                 # Find failure/interrupted rows for this video_id
                 rows = conn.execute(
-                    """
+                    f"""
                     SELECT id, kind, metadata_json
                     FROM activity_events
-                    WHERE LOWER(kind) IN (?, ?)
+                    WHERE LOWER(kind) IN ({",".join("?" for _ in _SUPERSEDED_FAILURE_KINDS)})
                       AND status NOT IN ('resolved', 'dismissed')
                     ORDER BY created_at DESC
                     LIMIT 50
@@ -11080,7 +11217,10 @@ def _add_notification(
             existing["summary"] = summary if summary is not None else _activity_summary_text(message)
             existing["severity"] = severity
             existing["updated_at"] = _utc_now_iso()
-            existing["status"] = "new"
+            existing["status"] = _initial_notification_status(
+                severity=severity,
+                requires_action=requires_action,
+            )
             if isinstance(metadata, dict):
                 existing_meta = existing.setdefault("metadata", {})
                 if isinstance(existing_meta, dict):
@@ -11117,7 +11257,10 @@ def _add_notification(
                 existing["severity"] = severity
                 existing["requires_action"] = requires_action
                 existing["updated_at"] = _utc_now_iso()
-                existing["status"] = "new"
+                existing["status"] = _initial_notification_status(
+                    severity=severity,
+                    requires_action=requires_action,
+                )
                 if isinstance(metadata, dict):
                     ex_meta.update(metadata_obj)
                     ex_meta["source_domain"] = _activity_source_domain(str(kind or ""), metadata_obj)
@@ -11166,7 +11309,10 @@ def _add_notification(
                 existing["severity"] = severity
                 existing["requires_action"] = requires_action
                 existing["updated_at"] = _utc_now_iso()
-                existing["status"] = "new"
+                existing["status"] = _initial_notification_status(
+                    severity=severity,
+                    requires_action=requires_action,
+                )
                 if isinstance(metadata, dict):
                     ex_meta.update(metadata_obj)
                 _replace_notification_cache_record(existing)
@@ -11193,7 +11339,10 @@ def _add_notification(
             existing["session_id"] = session_id
             existing["severity"] = severity
             existing["requires_action"] = requires_action
-            existing["status"] = "new"
+            existing["status"] = _initial_notification_status(
+                severity=severity,
+                requires_action=requires_action,
+            )
             existing["updated_at"] = _utc_now_iso()
             existing["metadata"] = {
                 **existing_meta,
@@ -11276,7 +11425,10 @@ def _add_notification(
         "session_id": session_id,
         "severity": severity,
         "requires_action": requires_action,
-        "status": "new",
+        "status": _initial_notification_status(
+            severity=severity,
+            requires_action=requires_action,
+        ),
         "created_at": timestamp,
         "updated_at": timestamp,
         "channels": targets["channels"],
@@ -13729,12 +13881,26 @@ async def lifespan(app: FastAPI):
     global _vp_event_bridge_task, _vp_event_bridge_stop_event
     if HEARTBEAT_ENABLED:
         logger.info("💓 Heartbeat System ENABLED")
+
+        async def _heartbeat_session_timeout_callback(session: GatewaySession, payload: dict[str, Any]) -> None:
+            try:
+                timeout_seconds = int(payload.get("timeout_threshold_seconds") or payload.get("timeout_threshold") or 0)
+            except Exception:
+                timeout_seconds = 0
+            reason = (
+                f"daemon_idle_timeout:{timeout_seconds}s"
+                if timeout_seconds > 0
+                else "daemon_idle_timeout"
+            )
+            await _cancel_session_execution(session.session_id, reason=reason)
+
         _heartbeat_service = HeartbeatService(
             get_gateway(),
             manager,
             system_event_provider=_drain_system_events,
             event_sink=_emit_heartbeat_event,
             heartbeat_scope=_FACTORY_POLICY.heartbeat_scope,
+            session_timeout_callback=_heartbeat_session_timeout_callback,
         )
 
         # --- Persistent Daemon Sessions (always-on agents) ---
@@ -25173,8 +25339,9 @@ async def _dispatch_heartbeat_to_simone(notification_id: str) -> None:
         "- Determine whether this is noise, infra/config drift, or code regression.\n"
         "- Search memory for the finding signature, classification, error text, and prior fixes before deciding.\n"
         "- Make an active decision: either approve autonomous remediation or refer to Kevin.\n"
-        "- Approve autonomous remediation when your memory plus current evidence make the fix familiar, bounded, reversible, non-destructive, and not a public-data/secrets/security-policy change.\n"
-        "- Refer to Kevin when the fix is destructive, exposes or changes public/private data boundaries, touches secrets/credentials/security policy, requires production deployment approval, or your confidence is low.\n"
+        "- Assume Simone and Cody are advanced coding agents who can usually handle self-healing codebase fixes, including code regressions, hook failures, test-backed local repairs, prompt/schema fixes, and bounded refactors.\n"
+        "- Bias toward autonomous remediation when the fix is bounded, reversible, testable, and can be validated locally before normal deployment.\n"
+        "- Refer to Kevin only as an extreme safety net: destructive code/data changes, public/private data-boundary exposure, secrets/credentials/security-policy changes, unusually complex design decisions, unique unfamiliar failures with weak evidence, or production deployment approval.\n"
         "- Do not edit code in this investigation session; when autonomous remediation is approved, write the remediation decision so Task Hub/Cody can apply and verify it.\n"
         "- Write work_products/heartbeat_investigation_summary.md.\n"
         "- If possible also write work_products/heartbeat_investigation_summary.json with fields:\n"
@@ -25360,17 +25527,25 @@ _HEARTBEAT_AUTO_REMEDIATION_ENABLED = str(
 
 _HEARTBEAT_REMEDIATION_RISK_MARKERS = (
     "api key",
+    "breaking api",
     "credential",
+    "delete production",
+    "destructive",
+    "drop table",
     "password",
     "public internet",
+    "public/private",
+    "publicly expose",
     "rotate api",
     "rotate key",
     "rotate secret",
     "rotate token",
     "secret",
+    "security policy",
     "ssh policy",
     "tailscale acl",
     "token",
+    "rewrite architecture",
 )
 
 

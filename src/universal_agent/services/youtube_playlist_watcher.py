@@ -300,6 +300,7 @@ class YouTubePlaylistWatcher:
                 str(v or "").strip() for v in raw_perm_failed
                 if str(v or "").strip()
             }
+        self._prune_recovered_permanently_failed_videos()
         # Prune stale pending entries that already produced artifacts while the
         # watcher was offline (for example recovered by another route).
         for video_id in list(self._pending_dispatch_items):
@@ -341,7 +342,28 @@ class YouTubePlaylistWatcher:
             "seen_count": self._seen_count,
             "dispatched_total": self._dispatched_total,
             "poll_count": self._poll_count,
+            "permanently_failed_count": len(self._permanently_failed_videos),
+            "permanently_failed_video_ids": sorted(self._permanently_failed_videos),
         }
+
+    def _prune_recovered_permanently_failed_videos(self) -> int:
+        """Clear permanent-failure markers once artifacts prove recovery."""
+        recovered = [
+            video_id
+            for video_id in list(self._permanently_failed_videos)
+            if _video_has_processed_tutorial_artifacts(video_id)
+        ]
+        for video_id in recovered:
+            self._permanently_failed_videos.discard(video_id)
+            self._dispatch_timestamps.pop(video_id, None)
+            self._run_retry_counts.pop(video_id, None)
+            self._pending_dispatch_items.pop(video_id, None)
+            self._notified_delayed_videos.discard(video_id)
+            logger.info(
+                "📺 Run monitoring: cleared recovered permanent failure marker for video_id=%s",
+                video_id,
+            )
+        return len(recovered)
 
     def _persist_seen_state(
         self,
@@ -484,6 +506,7 @@ class YouTubePlaylistWatcher:
         grace = _run_grace_seconds()
         max_retries = _max_run_retries()
         now = time.time()
+        self._prune_recovered_permanently_failed_videos()
 
         # Build candidate set: videos in seen_ids that have a dispatch_timestamp
         # but are NOT already tracked in _pending_dispatch_items, NOT permanently

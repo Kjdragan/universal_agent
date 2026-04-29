@@ -9,6 +9,7 @@ Persistent context for the agent.
 ## [RECENT_CONTEXT]
 Recent context snapshots (most recent first):
 
+- 2026-04-29T12:28:05.057761+00:00: Heartbeat self-healing is autonomy-biased: Simone/Cody should usually fix bounded coding issues; Kevin referral is an extreme safety net. (tags: heartbeat, autonomous_remediation, simone, cody, self_healing, operator_policy)
 - 2026-04-29T03:06:19.724194+00:00: Simone should use memory and reasoning to decide whether heartbeat issues can be fixed autonomously or should be referred to Kevin. (tags: heartbeat, autonomous_remediation, simone, cody, operator_policy)
 - 2026-04-19T03:49:28.289488+00:00: Proactive task completed successfully: Email report task Source: convergence_detection | Duration: 0s This type of proactive work was productive. (tags: proactive_outcome, success, source:convergence_detection)
 - 2026-02-15T04:43:05.568797+00:00: Daily check-in completed. User's primary goal for today is "Final Check" — indicating a review or wrap-up focus. Weekly and monthly goals were skipped, and no additional context was added. No pending context gaps were found. (tags: daily_interview, goals, profile:dev_standard)

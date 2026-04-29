@@ -1,0 +1,43 @@
+{
+  "bundle_id": "memory-managed-agents",
+  "canonical_sources": [
+    {
+      "domain": "github.com",
+      "source_type": "github_tree",
+      "title": "skills/skills/claude-api",
+      "url": "https://github.com/anthropics/skills/tree/main/skills/claude-api",
+      "why_canonical": "Contains the implementation code for interacting with the new Memory feature via the API."
+    }
+  ],
+  "discovery_posts": [
+    "2047424067284894201",
+    "2047424063543681240"
+  ],
+  "for_kevin_markdown": "New feature to explore: **Memory**. \n\n1. **Try it:** In Claude Code, run `/claude-api` and ask about \"Managed Agents memory\".\n2. **Source:** Check the [skill on GitHub](https://github.com/anthropics/skills/tree/main/skills/claude-api) to see how they implemented the API calls for memory.\n3. **Concept:** This allows agents to learn across sessions. Does UA need cross-session memory?",
+  "for_ua_markdown": "The `claude-api` skill now includes logic to interact with Managed Agents Memory. \n\n**Implementation Hint:** If building custom agents, inspect the API calls made by this skill to understand the interface for `update_memory` and `query_memory` endpoints.",
+  "likely_agent_system_value": "Medium - Understanding how memory handles state across sessions is crucial for long-running agents.",
+  "likely_ua_value": "Medium - Reference implementation for persistent memory.",
+  "recommended_variant": "exploratory_skill",
+  "summary": "Anthropic released 'Memory' for Claude Managed Agents (public beta) and added support for this feature to the built-in `claude-api` skill in Claude Code.",
+  "title": "Managed Agents Memory & Skill Integration",
+  "variants": [
+    {
+      "applicability": [
+        "Agent SDK"
+      ],
+      "confidence": "high",
+      "intent": "To understand the API surface for the new Memory feature.",
+      "key": "exploratory_skill",
+      "label": "Skill Discovery: Memory API",
+      "primitives": [
+        {
+          "content_markdown": "Inside Claude Code, execute:\n```\n/claude-api\n```\nThen ask: \"Show me the code for Managed Agents memory support.\"\n\nThis will reveal the specific API endpoints (e.g., `POST /v1/memory`) used by the system.",
+          "kind": "code_snippet",
+          "rationale": "The fastest way to see the implementation is to let the agent show it.",
+          "title": "Trigger the Skill"
+        }
+      ]
+    }
+  ],
+  "why_now": "New capability launched (Public Beta); accessible via CLI skill."
+}

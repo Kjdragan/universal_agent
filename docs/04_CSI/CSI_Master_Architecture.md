@@ -2,6 +2,7 @@
 
 > **Status**: Living document — updated alongside CSI redesign phases.
 > **Supersedes**: `03_Operations/92_CSI_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md` (for architecture reference), `csi-rebuild/` (for rebuild-era docs), `005_CSI_YOUTUBE_PROXY_USAGE_AUDIT.md`, `006_CSI_TREND_ANALYSIS_FUNCTIONAL_REVIEW_AND_PLAN.md`, `007_CSI_PERSISTENCE_BRIEFING_AND_REMINDER_OPERATIONS.md`
+> **Last updated:** 2026-04-29 — UA health checks now alert on expired CSI dedupe keys that failed purge, not raw active dedupe volume.
 
 ## 1. Purpose & Vision
 

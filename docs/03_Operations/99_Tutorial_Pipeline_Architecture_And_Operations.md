@@ -2,6 +2,8 @@
 
 > **Canonical source-of-truth** for the YouTube Tutorial Pipeline. All other
 > tutorial-related documentation should reference this file.
+>
+> **Last updated:** 2026-04-29 — playlist watcher permanent-failure markers now self-clear when tutorial artifacts later appear.
 
 ## 1. Pipeline Overview
 
@@ -88,6 +90,7 @@ All tutorial pipeline notification kinds are defined in `_TUTORIAL_NOTIFICATION_
 | `youtube_tutorial_interrupted` | Processing | Agent session was interrupted (timeout, error) |
 | `youtube_tutorial_ready` | Complete | Tutorial artifact generated successfully |
 | `youtube_tutorial_failed` | Complete | Tutorial generation failed |
+| `youtube_tutorial_permanently_failed` | Monitoring | Playlist watcher exhausted retries without artifacts; marker is cleared automatically if artifacts later appear |
 | `youtube_ingest_failed` | Ingestion | Transcript ingestion failed |
 | `youtube_ingest_proxy_alert` | System Health | Proxy rotation failure (global, not per-video) |
 | `youtube_hook_recovery_queued` | Recovery | Recovery queued for a previously failed hook |

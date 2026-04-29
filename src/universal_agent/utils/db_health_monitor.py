@@ -459,7 +459,12 @@ def check_csi_unemitted_events() -> list[HeartbeatFinding]:
 
 
 def check_csi_dedupe_bloat() -> list[HeartbeatFinding]:
-    """Check if csi.db dedupe_keys table is bloated."""
+    """Check whether expired CSI dedupe keys are failing to purge.
+
+    A high active-key count can be healthy for high-volume sources with
+    30-90 day TTLs. The operational problem is expired keys remaining after
+    the CSI ingester's startup/hourly cleanup should have removed them.
+    """
     findings: list[HeartbeatFinding] = []
     conn = _safe_connect(_csi_db_path())
     if not conn:
@@ -467,20 +472,31 @@ def check_csi_dedupe_bloat() -> list[HeartbeatFinding]:
     try:
         if not _table_exists(conn, "dedupe_keys"):
             return findings
-        rows = conn.execute("SELECT COUNT(*) AS cnt FROM dedupe_keys").fetchone()
-        count = int(rows["cnt"]) if rows else 0
-        if count >= CSI_DEDUPE_BLOAT_WARN:
+        rows = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN expires_at <= datetime('now') THEN 1 ELSE 0 END) AS expired
+            FROM dedupe_keys
+            """
+        ).fetchone()
+        total = int(rows["total"]) if rows else 0
+        expired = int(rows["expired"] or 0) if rows else 0
+        if expired > 0:
             findings.append(HeartbeatFinding(
-                finding_id="csi_dedupe_table_bloat",
+                finding_id="csi_dedupe_expired_keys_unpurged",
                 category="database",
                 severity="warn",
-                metric_key="csi.dedupe_keys_count",
-                observed_value=count,
-                threshold_text=f">={CSI_DEDUPE_BLOAT_WARN}",
+                metric_key="csi.dedupe_keys_expired_count",
+                observed_value=expired,
+                threshold_text=">0 expired keys",
                 known_rule_match=False,
-                confidence="medium",
-                title=f"CSI dedupe table has {count:,} entries — consider cleanup",
-                recommendation="Expired dedupe keys are auto-purged hourly by the CSI Ingester. If count stays high, verify the ingester service is running with latest code.",
+                confidence="high",
+                title=f"CSI dedupe table has {expired:,} expired key(s) that were not purged",
+                recommendation=(
+                    "Verify csi-ingester startup/hourly dedupe cleanup is running. "
+                    f"Total active+expired keys observed: {total:,}."
+                ),
             ))
     except Exception as exc:
         logger.debug("check_csi_dedupe_bloat failed: %s", exc)

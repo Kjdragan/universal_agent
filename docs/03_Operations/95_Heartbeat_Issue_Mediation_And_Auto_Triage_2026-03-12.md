@@ -29,7 +29,7 @@ Enabled behavior:
 - structured investigation status in the Events dashboard
 - operator notification for unknown or out-of-rule findings
 
-Autonomous remediation is allowed when Simone actively decides, from current evidence plus memory/runbook context, that the fix is familiar, bounded, reversible, and safe. Normal controls still apply: no destructive operations, no public/private data-boundary changes, no secrets or credential changes, no security-policy changes, and no production deploys without the normal release path.
+Autonomous remediation is the preferred outcome when Simone actively decides, from current evidence plus memory/runbook context, that the fix is bounded, reversible, and testable. Simone and Cody are advanced coding agents and should be assumed capable of self-healing codebase repairs, including code regressions, hook failures, prompt/schema mismatches, test-backed local repairs, and bounded refactors. Normal controls still apply: no destructive operations, no public/private data-boundary changes, no secrets or credential changes, no security-policy changes, and no production deploys without the normal release path.
 
 ## Structured Findings Contract
 
@@ -131,22 +131,22 @@ Expected JSON fields:
 
 ## Autonomous Remediation Decision
 
-Simone owns the decision. The gateway does not blindly route every code-looking finding into a fix lane. The investigation prompt requires Simone to:
+Simone owns the decision. The gateway does not blindly route every code-looking finding into a fix lane, but the operating bias is autonomy: Kevin referral is an extreme safety net, not the normal path for coding fixes. The investigation prompt requires Simone to:
 
 1. search memory for the finding signature, classification, error text, and prior repairs
-2. reason about whether the fix is familiar and bounded
+2. reason from the assumption that Simone/Cody can usually fix bounded system/code issues autonomously
 3. write an explicit remediation decision in `heartbeat_investigation_summary.json`
 
 If `autonomous_remediation_approved=true` and the recommendation passes the normal safety controls, the gateway creates a Task Hub item with `source_kind='heartbeat_remediation'`, `trigger_type='immediate'`, and nudges the idle dispatcher so Simone/Cody can apply and verify the fix. The remediation task carries Simone's confidence, rationale, and memory evidence, and instructs the fixer to search memory before editing.
 
-If Simone is not comfortable, or the recommendation touches secrets, credentials, security policy, public exposure, destructive operations, or deployment approval, she sets `operator_review_required=true` and Kevin is notified.
+If the recommendation is destructive, exposes or changes public/private data boundaries, touches secrets, credentials, or security policy, requires production deployment approval, involves an unusually complex design decision, or is a unique unfamiliar failure with weak evidence, Simone sets `operator_review_required=true` and Kevin is notified.
 
 ## Operator Notification Policy
 
 Default policy:
 
 - all non-OK heartbeat findings auto-dispatch Simone
-- Simone uses memory and reasoning to decide whether the finding is safe for autonomous remediation
+- Simone uses memory and reasoning to decide whether the finding is safe for autonomous remediation, starting from the assumption that Simone/Cody are capable of most coding fixes
 - known bounded fixes with explicit autonomous approval become Task Hub remediation work instead of email
 - findings that Simone refers to Kevin, or autonomous decisions blocked by safety controls, do email Kevin
 - unknown findings no longer require email by themselves when Simone explicitly approves a memory-backed safe fix
@@ -186,4 +186,4 @@ Manual handoff remains available as a fallback.
 
 ## Operational Guidance
 
-Use this flow when a heartbeat finds something material that may need system repair. The desired behavior is preventative maintenance: Simone should clear safe issues herself or direct Cody through Task Hub, and escalate only when her memory/reasoning says the fix is unsafe, unfamiliar, or approval-bound.
+Use this flow when a heartbeat finds something material that may need system repair. The desired behavior is preventative maintenance: Simone should clear safe issues herself or direct Cody through Task Hub. Escalation to Kevin is reserved for extreme safety, design, destructiveness, or approval-bound cases.

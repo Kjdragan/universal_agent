@@ -105,5 +105,23 @@
     "preview": "Simone should use memory and reasoning to decide whether heartbeat issues can be fixed autonomously or should be referred to Kevin.",
     "file_path": "/home/kjdragan/lrepos/universal_agent/memory/2026-04-29.md",
     "content_hash": "52f6564cb7a1f76c501d140e39b59ae899e7f32e9a992871110b621d555d5279"
+  },
+  {
+    "entry_id": "071ba8f6-90ba-4e62-8256-3cd0b97f659a",
+    "timestamp": "2026-04-29T12:28:05.057761+00:00",
+    "source": "operator_policy",
+    "session_id": "heartbeat_autonomy_bias_policy_2026_04_29",
+    "tags": [
+      "heartbeat",
+      "autonomous_remediation",
+      "simone",
+      "cody",
+      "self_healing",
+      "operator_policy"
+    ],
+    "summary": "Heartbeat self-healing is autonomy-biased: Simone/Cody should usually fix bounded coding issues; Kevin referral is an extreme safety net.",
+    "preview": "Heartbeat self-healing is autonomy-biased: Simone/Cody should usually fix bounded coding issues; Kevin referral is an extreme safety net.",
+    "file_path": "/home/kjdragan/lrepos/universal_agent/memory/2026-04-29.md",
+    "content_hash": "ed34da12f568cf3ef4d13ba2f13adc5dfd7a50567250d81a60a5d9b8d9d66409"
   }
 ]

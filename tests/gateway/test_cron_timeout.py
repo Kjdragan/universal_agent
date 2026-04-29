@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,7 +13,7 @@ class _SlowGateway:
     async def create_session(self, user_id: str, workspace_dir: str):
         return SimpleNamespace(user_id=user_id, workspace_dir=workspace_dir)
 
-    async def run_query(self, session, request):
+    async def run_query(self, session, request, **_kwargs):
         await asyncio.sleep(1.5)
         return SimpleNamespace(response_text="late")
 
@@ -44,3 +45,9 @@ def test_cron_job_timeout_is_enforced(tmp_path: Path):
     assert [int(row["attempt_number"]) for row in attempts] == [1, 2]
     assert str(attempts[0]["status"]) == "failed"
     assert str(attempts[1]["status"]) == "queued"
+    crash_file = tmp_path / "cron_timeout" / "work_products" / "daemon_timeout_crash.json"
+    assert crash_file.exists()
+    crash_report = json.loads(crash_file.read_text())
+    assert crash_report["job_id"] == job.job_id
+    assert crash_report["reason"] == "cron_execution_timeout"
+    assert crash_report["timeout_threshold_seconds"] == 1

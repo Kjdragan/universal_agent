@@ -1539,6 +1539,46 @@ class TestPostTriageLifecycle:
         assert notifications[0]["kind"] == "agentmail_processing_failed"
         assert "q2" in notifications[0]["message"]
 
+    @pytest.mark.asyncio
+    async def test_recover_abandoned_sessions_auto_cancels_stale_failed_trusted_queue(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str(tmp_path / "test_stale_failed.db"))
+        monkeypatch.setenv("UA_AGENTMAIL_FAILED_QUEUE_AUTO_CANCEL_DAYS", "7")
+        from universal_agent.services.agentmail_service import AgentMailService
+
+        svc = AgentMailService()
+        svc._ensure_queue_schema()
+        with svc._queue_connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO agentmail_inbox_queue
+                (queue_id, message_id, thread_id, sender, sender_email, sender_role,
+                 session_key, status, attempt_count, last_error, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'failed', 5, 'old parser assertion', ?, ?)
+                """,
+                (
+                    "q-stale",
+                    "msg-stale",
+                    "thread-stale",
+                    "Kevin",
+                    "kevinjdragan@gmail.com",
+                    "trusted_operator",
+                    "session-stale",
+                    "2026-04-01T00:00:00Z",
+                    "2026-04-01T00:00:00Z",
+                ),
+            )
+
+        stats = await svc.recover_abandoned_sessions()
+
+        assert stats["auto_cancelled_stale_failed"] == 1
+        with svc._queue_connect() as conn:
+            row = conn.execute(
+                "SELECT status, session_exit_status, last_error FROM agentmail_inbox_queue WHERE queue_id = 'q-stale'"
+            ).fetchone()
+        assert row["status"] == "cancelled"
+        assert row["session_exit_status"] == "auto_cancelled_stale_failed"
+        assert "old parser assertion" in row["last_error"]
+
 
 # ── Bounce / Automated Email Filtering ─────────────────────────────────
 
