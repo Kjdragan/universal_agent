@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "worktreeRoot": "/home/kjdragan/lrepos/universal_agent",
+  "gitDir": "/home/kjdragan/lrepos/universal_agent/.git",
+  "indexMtimeMs": 1777554353483.2048,
+  "indexSize": 386881,
+  "map": "  tests/: check_width\n  web-ui/: route, route, route, route, route.test, route, route, route, page, page\n  (root): test_empty_log\n  .agents/: condition-based-waiting-example\n  .claude/: gold-standard-card, component-template, validate, WalkthroughComposition, screen-slide-template, auth-layout, data-table, form-pattern, gold-standard-card, component-template",
+  "createdAt": "2026-04-30T13:24:07.612Z"
+}

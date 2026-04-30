@@ -252,7 +252,7 @@ Next slice:
 
 Fresh verification from the April 30 implementation pass:
 
-- `uv run pytest tests/unit/test_proactive_intelligence_phase1.py tests/unit/test_task_hub_proactive_history.py tests/unit/test_proactive_codie.py tests/unit/test_proactive_outcome_tracker.py -q` -> 42 passed
+- `uv run pytest tests/unit/test_proactive_intelligence_phase1.py tests/unit/test_task_hub_proactive_history.py tests/unit/test_proactive_codie.py tests/unit/test_proactive_outcome_tracker.py -q` -> 43 passed
 - `python3 -m py_compile` over touched backend modules -> passed
 - `npx eslint app/dashboard/proactive-task-history/page.tsx` -> passed
 - `npx tsc --noEmit --pretty false` -> passed

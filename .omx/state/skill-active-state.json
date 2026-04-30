@@ -1,11 +1,11 @@
 {
   "version": 1,
-  "active": true,
+  "active": false,
   "skill": "tdd",
   "keyword": "TDD",
-  "phase": "planning",
+  "phase": "complete",
   "activated_at": "2026-04-29T23:19:07.712Z",
-  "updated_at": "2026-04-29T23:19:07.712Z",
+  "updated_at": "2026-04-30T13:24:23.703Z",
   "source": "keyword-detector",
   "session_id": "",
   "thread_id": "019ddab2-9420-76f3-9e59-409b8b5080ea",
@@ -28,6 +28,7 @@
     "released_at": "2026-04-29T23:19:07.712Z",
     "exit_reason": "handoff"
   },
-  "iteration": 5,
-  "last_turn_at": "2026-04-30T04:33:58.656Z"
+  "iteration": 6,
+  "last_turn_at": "2026-04-30T13:10:03.589Z",
+  "active_skills": []
 }
