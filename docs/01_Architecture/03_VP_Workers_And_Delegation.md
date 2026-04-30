@@ -1,6 +1,6 @@
 # 03. VP Workers and Delegation Architecture
 
-**Last verified against source code:** 2026-04-27
+**Last verified against source code:** 2026-04-30
 
 ## Overview
 
@@ -265,9 +265,23 @@ Simone dispatches and monitors VP missions through six internal tools defined in
 | `vp_cancel_mission` | Request cancellation of a queued/running mission | `mission_id`, `reason` |
 | `vp_read_result_artifacts` | Summarize output artifacts from mission workspace | `mission_id`, `max_files`, `max_bytes` |
 
+### Preference Context Injection
+
+When dispatching missions to `vp.coder.primary` or `vp.general.primary`, `vp_dispatch_mission` automatically appends Kevin's proactive preference context to the mission objective. This context is derived from explicit feedback signals (review replies, PR acceptance/rejection) stored in `proactive_preferences` and helps VP workers deprioritize topics or patterns Kevin has repeatedly rejected.
+
+The preference context block is appended as a `KEVIN'S PREFERENCE CONTEXT` section at the end of the objective string. Set `constraints.skip_preference_context` to `true` to disable injection for a specific dispatch.
+
+### Task Hub Mirror Registration
+
+On successful dispatch, `vp_dispatch_mission` also registers a mirror item in Task Hub with `source_kind=vp_mission` and `mirror_status=external`. This gives the Kanban dashboard visibility into VP missions without the Task Hub item owning the execution lifecycle. The Task Hub registration is best-effort; dispatch succeeds even if registration fails.
+
 ### Timeout Guidance
 
 The `vp_wait_mission` default timeout is 1200 seconds (20 minutes). For `code_generation` missions, use `timeout_seconds=1200` or higher — complex coding tasks routinely exceed 10 minutes. The maximum allowed timeout is 3600 seconds (1 hour). Short timeouts risk missing completion of complex coding tasks, leading to false-negative "failed" states.
+
+### Convenience Wrapper
+
+`dispatch_vp_mission()` is an async convenience function that dispatches a VP mission and unwraps the result payload, raising `RuntimeError` on failure. It is used by internal callers (heartbeat dispatch, ops dispatch) that prefer exception-based error handling over the tool-call result format.
 
 ## Cross-Health Surface
 

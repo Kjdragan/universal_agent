@@ -1,7 +1,7 @@
 # Proactive Intelligence Work Product Pipeline
 
-**Status:** Phase 1/2 foundation implemented; proactive task history/recap foundation in progress
-**Last updated:** 2026-04-29
+**Status:** Phase 1/2 foundation implemented; proactive task history/recap/reporting foundation in progress
+**Last updated:** 2026-04-30
 **Owner:** Kevin Dragan
 **Related systems:** Task Hub, Proactive Pipeline, CSI, LLM Wiki, AgentMail, CODIE, ATLAS, tutorial pipeline, GWS MCP
 
@@ -75,6 +75,10 @@ Implementation update as of 2026-04-29:
 - The React Proactive Task History page now includes lifecycle filters, opportunity cards, evaluator recap blocks, artifact/evidence links, and a three-panel session opener.
 - Feedback on proactive history tasks can now create a fresh `proactive_feedback_continuation` Task Hub item when Kevin explicitly asks for continuation or follow-up. The continuation item links back to the original task and carries prior workspace context for safe reuse.
 - Proactive history rows now include continuation chain summaries, and ToDo execution prompts surface prior workspace, prior recap, and feedback context for continuation tasks.
+- `IntelligenceReporter` now syncs terminal proactive Task Hub items into proactive artifact inventory as `proactive_work_item` candidates before digest ranking, preserving task id, source kind, lifecycle stage, recap, session id, workspace path, and Proactive Task History audit URL.
+- Digest and individual review email composition now include task-backed recap context: assessment, recommended next action, implementation recap, known issues, and `/dashboard/proactive-task-history?task_id=...` audit links.
+- Continuation dispatch now allocates a fresh run workspace and, when a prior workspace exists, writes `proactive_continuation_context.json` plus a non-clobbering `continuation_context/previous_workspace` symlink so agents can reuse prior work without re-templating over it.
+- The Proactive Task History endpoint and UI now expose operational health counts for terminal tasks, missing recaps, failed recaps, fallback recaps, and email delivery failures.
 
 Recommended state model:
 
@@ -146,6 +150,12 @@ Implementation status as of 2026-04-15:
 - Digest ranking uses explicit preference signals without suppressing generation.
 - Dashboard digest preview endpoint is available; send endpoint uses the existing initialized AgentMail service.
 
+Implementation update as of 2026-04-30:
+
+- Terminal proactive Task Hub items now sync into proactive artifact inventory before digest ranking, so completed autonomous work appears in the same review queue as signal-card, tutorial, CODIE PR, and convergence artifacts.
+- Digest entries for task-backed work include the evaluator success assessment, recommended next action, and Proactive Task History audit link.
+- Individual review emails for task-backed artifacts include a `Task audit` block with the proactive history link and recap fields.
+
 Scope:
 
 1. Build an intelligence digest composer that reads artifact inventory, proactive signal cards, tutorial notifications, CODIE PR artifacts, and wiki entries.
@@ -165,7 +175,9 @@ Email contract:
 Acceptance criteria:
 
 - Daily digest includes new proactive artifacts and links to final products.
+- Daily digest includes completed proactive Task Hub work with recap assessment and proactive history audit link.
 - Individual review email includes concise framing plus full artifact access.
+- Individual review email includes task audit context when the artifact is backed by a proactive Task Hub item.
 - Email records map to artifact IDs for reply feedback.
 - Email failures are retried or surfaced as artifact delivery failures without crashing generation.
 
@@ -381,6 +393,10 @@ Completed foundations:
 9. Tutorial build work can be queued as private-repo CODIE work.
 10. Completed tutorial private repos/local fallbacks can be registered as review artifacts.
 11. Topic signatures can be stored and deterministic cross-channel convergence can queue ATLAS brief tasks.
+12. Terminal proactive Task Hub work syncs into artifact inventory before digest ranking.
+13. Digest and review emails surface proactive task recaps and Proactive Task History audit links.
+14. Proactive feedback continuation tasks receive guarded prior-workspace references inside fresh run workspaces.
+15. Proactive Task History shows recap/delivery health counts for audit.
 
 Outstanding product work:
 
