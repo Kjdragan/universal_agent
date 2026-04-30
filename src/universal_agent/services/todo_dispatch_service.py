@@ -69,6 +69,19 @@ def _store_continuation_workspace_context(item: dict[str, Any], context: dict[st
     item["metadata"] = metadata
 
 
+def _write_continuation_workspace_manifest(current_workspace_raw: str, context: dict[str, Any]) -> dict[str, Any]:
+    try:
+        current_path = Path(current_workspace_raw).expanduser().resolve()
+        current_path.mkdir(parents=True, exist_ok=True)
+        (current_path / CONTINUATION_CONTEXT_FILENAME).write_text(
+            json.dumps(context, indent=2, ensure_ascii=True) + "\n",
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        context["manifest_write_error"] = str(exc)[:300]
+    return context
+
+
 def _attach_continuation_workspace_reference(
     item: dict[str, Any],
     *,
@@ -108,6 +121,7 @@ def _attach_continuation_workspace_reference(
         context["current_workspace_dir"] = str(current_path)
         if not previous_path.is_dir():
             context["mode"] = "previous_workspace_missing"
+            _write_continuation_workspace_manifest(current_workspace_raw, context)
             _store_continuation_workspace_context(item, context)
             return context
 
@@ -132,15 +146,7 @@ def _attach_continuation_workspace_reference(
         context["mode"] = "reference_manifest_only"
         context["error"] = str(exc)[:300]
 
-    try:
-        current_path = Path(current_workspace_raw).expanduser().resolve()
-        current_path.mkdir(parents=True, exist_ok=True)
-        (current_path / CONTINUATION_CONTEXT_FILENAME).write_text(
-            json.dumps(context, indent=2, ensure_ascii=True) + "\n",
-            encoding="utf-8",
-        )
-    except Exception as exc:
-        context["manifest_write_error"] = str(exc)[:300]
+    _write_continuation_workspace_manifest(current_workspace_raw, context)
 
     _store_continuation_workspace_context(item, context)
     return context

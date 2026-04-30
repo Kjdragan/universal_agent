@@ -422,3 +422,33 @@ def test_continuation_workspace_reference_uses_fresh_workspace_without_overwrite
     assert f"current_workspace_dir={current_workspace}" in prompt
     assert f"previous_workspace_reference={reference_path}" in prompt
     assert "workspace_reuse_mode=referenced_existing_workspace" in prompt
+
+
+def test_continuation_workspace_reference_writes_manifest_when_previous_missing(tmp_path):
+    from universal_agent.services.todo_dispatch_service import (
+        CONTINUATION_CONTEXT_FILENAME,
+        _attach_continuation_workspace_reference,
+    )
+
+    previous_workspace = tmp_path / "missing-previous-workspace"
+    current_workspace = tmp_path / "current-workspace"
+    item = {
+        "task_id": "proactive_cont:missing-workspace",
+        "metadata": {
+            "proactive_continuation": {
+                "parent_task_id": "parent-task",
+                "previous_workspace_dir": str(previous_workspace),
+                "feedback_tags": ["continue_work"],
+            }
+        },
+    }
+
+    context = _attach_continuation_workspace_reference(
+        item,
+        current_workspace_dir=str(current_workspace),
+        run_id="run_missing",
+    )
+
+    assert context["mode"] == "previous_workspace_missing"
+    assert (current_workspace / CONTINUATION_CONTEXT_FILENAME).is_file()
+    assert item["metadata"]["workspace_reuse_context"]["mode"] == "previous_workspace_missing"
