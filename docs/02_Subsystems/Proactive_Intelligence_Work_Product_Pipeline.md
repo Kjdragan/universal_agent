@@ -70,9 +70,10 @@ Implementation update as of 2026-04-29:
 
 - `task_hub.list_proactive_work_tasks()` now returns proactive Task Hub items across queued/running/completed/needs-attention states, while excluding user-directed dashboard quick-add work unless it is explicitly marked as proactive.
 - The `/api/v1/dashboard/proactive-task-history` endpoint now returns opportunities, lifecycle counts, artifacts, session links, delivery evidence, and recap data for each proactive work item.
-- `proactive_work_recaps` stores durable evaluator recaps keyed by task id. The first implementation evaluates terminal tasks from Task Hub metadata, latest assignment, session workspace, `transcript.md`, `run.log`, and `work_products/`, while preserving a raw payload for a later LLM-backed evaluator.
+- `proactive_work_recaps` stores durable evaluator recaps keyed by task id. The current implementation builds a session-evidence bundle from Task Hub metadata, latest assignment, session workspace, `transcript.md`, `run.log`, and `work_products/`, evaluates it with a high-capability LLM when enabled, and falls back to deterministic session-evidence evaluation if the model call fails.
 - The terminal proactive outcome hook now writes both the outcome record and the recap record after complete/block/review/park/approve actions.
 - The React Proactive Task History page now includes lifecycle filters, opportunity cards, evaluator recap blocks, artifact/evidence links, and a three-panel session opener.
+- Feedback on proactive history tasks can now create a fresh `proactive_feedback_continuation` Task Hub item when Kevin explicitly asks for continuation or follow-up. The continuation item links back to the original task and carries prior workspace context for safe reuse.
 
 Recommended state model:
 

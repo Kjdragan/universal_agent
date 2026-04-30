@@ -2,8 +2,8 @@
 
 The recap is intentionally stored separately from task metadata so the dashboard
 can audit the evaluator output without mutating the original task record.  The
-current evaluator is session-evidence based and keeps a raw payload that can be
-replaced by an LLM response when model-backed evaluation is enabled.
+current evaluator uses a high-capability LLM when enabled and keeps a
+session-evidence fallback for provider failures.
 """
 
 from __future__ import annotations
@@ -11,15 +11,20 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 import logging
+import os
 from pathlib import Path
 import sqlite3
 from typing import Any, Optional
 import uuid
 
+from universal_agent.utils.model_resolution import resolve_opus
+
 logger = logging.getLogger(__name__)
 
 MAX_EXCERPT_CHARS = 6000
 MAX_WORK_PRODUCTS = 25
+LLM_MAX_CONTEXT_CHARS = 20_000
+LLM_TIMEOUT_SECONDS = 20
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
@@ -97,12 +102,19 @@ def upsert_recap_for_task(
     existing = get_recap_for_task(conn, task_id)
     recap_id = str((existing or {}).get("recap_id") or f"pwr_{uuid.uuid4().hex[:16]}")
     created_at = str((existing or {}).get("created_at") or now_iso)
-    generated = _evaluate_from_session_evidence(
+    evidence = _collect_evidence_bundle(
         task=task,
         assignment=assignment,
         action=action,
         reason=reason,
         workspace_dir=workspace_dir,
+    )
+    generated = _evaluate_recap(
+        task=task,
+        assignment=assignment,
+        action=action,
+        reason=reason,
+        evidence=evidence,
     )
 
     conn.execute(
@@ -173,7 +185,7 @@ def _latest_assignment(conn: sqlite3.Connection, task_id: str) -> dict[str, Any]
     return {key: row[key] for key in row.keys()}
 
 
-def _evaluate_from_session_evidence(
+def _collect_evidence_bundle(
     *,
     task: dict[str, Any],
     assignment: dict[str, Any],
@@ -181,15 +193,73 @@ def _evaluate_from_session_evidence(
     reason: str,
     workspace_dir: str,
 ) -> dict[str, Any]:
+    workspace = Path(workspace_dir).expanduser() if workspace_dir else None
+    return {
+        "action": str(action or "").strip().lower(),
+        "reason": str(reason or "").strip(),
+        "workspace_dir": workspace_dir,
+        "work_products": _list_work_products(workspace),
+        "transcript_tail": _read_tail(workspace / "transcript.md") if workspace else "",
+        "run_log_tail": _read_tail(workspace / "run.log") if workspace else "",
+        "workspace_exists": bool(workspace and workspace.exists()),
+    }
+
+
+def _evaluate_recap(
+    *,
+    task: dict[str, Any],
+    assignment: dict[str, Any],
+    action: str,
+    reason: str,
+    evidence: dict[str, Any],
+) -> dict[str, Any]:
+    heuristic = _evaluate_from_session_evidence(
+        task=task,
+        assignment=assignment,
+        action=action,
+        reason=reason,
+        evidence=evidence,
+    )
+    if not _llm_recap_enabled():
+        return heuristic
+    try:
+        generated = _call_llm_recap_evaluator(
+            task=task,
+            assignment=assignment,
+            action=action,
+            reason=reason,
+            evidence=evidence,
+        )
+        return _normalize_llm_recap(generated, heuristic=heuristic)
+    except Exception as exc:
+        logger.warning("LLM proactive recap failed for task=%s: %s", task.get("task_id"), exc)
+        fallback = dict(heuristic)
+        fallback["evaluation_status"] = "llm_failed_fallback"
+        raw = dict(fallback.get("raw_model_output") or {})
+        raw["llm_error"] = str(exc)
+        raw["fallback_evaluator"] = raw.get("evaluator") or "session_evidence_recap_v1"
+        fallback["raw_model_output"] = raw
+        return fallback
+
+
+def _evaluate_from_session_evidence(
+    *,
+    task: dict[str, Any],
+    assignment: dict[str, Any],
+    action: str,
+    reason: str,
+    evidence: dict[str, Any],
+) -> dict[str, Any]:
     title = str(task.get("title") or "").strip()
     description = str(task.get("description") or "").strip()
     result_summary = str(assignment.get("result_summary") or "").strip()
-    action_norm = str(action or "").strip().lower()
-    reason_text = str(reason or "").strip()
-    workspace = Path(workspace_dir).expanduser() if workspace_dir else None
-    work_products = _list_work_products(workspace)
-    transcript_tail = _read_tail(workspace / "transcript.md") if workspace else ""
-    run_log_tail = _read_tail(workspace / "run.log") if workspace else ""
+    action_norm = str(evidence.get("action") or action or "").strip().lower()
+    reason_text = str(evidence.get("reason") or reason or "").strip()
+    workspace_dir = str(evidence.get("workspace_dir") or "").strip()
+    work_products = [str(item) for item in evidence.get("work_products") or []]
+    transcript_tail = str(evidence.get("transcript_tail") or "")
+    run_log_tail = str(evidence.get("run_log_tail") or "")
+    workspace_exists = bool(evidence.get("workspace_exists"))
 
     idea = title or description or "Untitled proactive work item"
     implemented = _implemented_summary(
@@ -203,7 +273,8 @@ def _evaluate_from_session_evidence(
         action=action_norm,
         reason=reason_text,
         result_summary=result_summary,
-        workspace=workspace,
+        workspace_exists=workspace_exists,
+        workspace_dir=workspace_dir,
         work_products=work_products,
     )
     success_assessment, confidence = _success_assessment(
@@ -248,6 +319,171 @@ def _evaluate_from_session_evidence(
     }
 
 
+def _llm_recap_enabled() -> bool:
+    raw = (os.getenv("UA_PROACTIVE_RECAP_LLM_ENABLED") or "").strip().lower()
+    if raw in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    if raw in {"0", "false", "no", "off", "disabled"}:
+        return False
+    return bool(
+        (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+        or (os.getenv("ANTHROPIC_AUTH_TOKEN") or "").strip()
+        or (os.getenv("ZAI_API_KEY") or "").strip()
+        or (os.getenv("OPENAI_API_KEY") or "").strip()
+    )
+
+
+def _call_llm_recap_evaluator(
+    *,
+    task: dict[str, Any],
+    assignment: dict[str, Any],
+    action: str,
+    reason: str,
+    evidence: dict[str, Any],
+) -> dict[str, Any]:
+    import litellm
+
+    model = (os.getenv("UA_PROACTIVE_RECAP_LLM_MODEL") or "").strip() or resolve_opus()
+    prompt = _build_llm_recap_prompt(
+        task=task,
+        assignment=assignment,
+        action=action,
+        reason=reason,
+        evidence=evidence,
+    )
+    response = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.0,
+        max_tokens=900,
+        timeout=LLM_TIMEOUT_SECONDS,
+    )
+    raw_text = str(response.choices[0].message.content or "").strip()
+    parsed = _loads_json_object(raw_text)
+    parsed["raw_model_output"] = {
+        "evaluator": "llm_recap_v1",
+        "model": model,
+        "raw_text": raw_text,
+        "heuristic_context": {
+            "work_products": evidence.get("work_products") or [],
+            "transcript_tail_chars": len(str(evidence.get("transcript_tail") or "")),
+            "run_log_tail_chars": len(str(evidence.get("run_log_tail") or "")),
+        },
+    }
+    parsed["evaluation_status"] = "llm_evaluated"
+    return parsed
+
+
+def _build_llm_recap_prompt(
+    *,
+    task: dict[str, Any],
+    assignment: dict[str, Any],
+    action: str,
+    reason: str,
+    evidence: dict[str, Any],
+) -> str:
+    context = {
+        "task": {
+            "task_id": task.get("task_id"),
+            "source_kind": task.get("source_kind"),
+            "title": task.get("title"),
+            "description": task.get("description"),
+            "status": task.get("status"),
+            "metadata": task.get("metadata") or {},
+        },
+        "terminal_action": action,
+        "terminal_reason": reason,
+        "latest_assignment": {
+            "assignment_id": assignment.get("assignment_id"),
+            "agent_id": assignment.get("agent_id"),
+            "provider_session_id": assignment.get("provider_session_id"),
+            "workspace_dir": assignment.get("workspace_dir"),
+            "state": assignment.get("state"),
+            "result_summary": assignment.get("result_summary"),
+        },
+        "evidence": {
+            "workspace_dir": evidence.get("workspace_dir"),
+            "workspace_exists": evidence.get("workspace_exists"),
+            "work_products": evidence.get("work_products") or [],
+            "transcript_tail": _truncate(str(evidence.get("transcript_tail") or ""), LLM_MAX_CONTEXT_CHARS // 2),
+            "run_log_tail": _truncate(str(evidence.get("run_log_tail") or ""), LLM_MAX_CONTEXT_CHARS // 2),
+        },
+    }
+    return (
+        "You evaluate completed or terminal proactive autonomous work for Universal Agent.\n"
+        "Return strict JSON only. Do not wrap it in markdown.\n\n"
+        "Fields required:\n"
+        "- idea: concise description of the original idea/opportunity\n"
+        "- implemented: what concrete work was actually completed or produced\n"
+        "- known_issues: defects, missing evidence, blockers, or empty string\n"
+        "- success_assessment: whether this succeeded and why, grounded only in evidence\n"
+        "- recommended_next_action: what Kevin/Simone should do next\n"
+        "- confidence: number between 0 and 1\n\n"
+        "Rules:\n"
+        "- Do not treat ideation alone as completion.\n"
+        "- Do not infer success from silence.\n"
+        "- Mention missing artifacts/session evidence when relevant.\n"
+        "- Recommend a fresh continuation session when follow-up work is needed.\n\n"
+        f"Evidence bundle:\n{json.dumps(context, ensure_ascii=True, indent=2, default=str)}"
+    )
+
+
+def _normalize_llm_recap(raw: dict[str, Any], *, heuristic: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise ValueError("LLM recap was not an object")
+    normalized = {
+        "evaluation_status": "llm_evaluated",
+        "idea": _clean_text(raw.get("idea")) or heuristic["idea"],
+        "implemented": _clean_text(raw.get("implemented")) or heuristic["implemented"],
+        "known_issues": _clean_text(raw.get("known_issues")),
+        "success_assessment": _clean_text(raw.get("success_assessment")) or heuristic["success_assessment"],
+        "recommended_next_action": _clean_text(raw.get("recommended_next_action")) or heuristic["recommended_next_action"],
+        "confidence": _bounded_float(raw.get("confidence"), default=heuristic["confidence"]),
+        "raw_model_output": raw.get("raw_model_output") if isinstance(raw.get("raw_model_output"), dict) else raw,
+    }
+    return normalized
+
+
+def _loads_json_object(raw: str) -> dict[str, Any]:
+    text = str(raw or "").strip()
+    if text.startswith("```json"):
+        text = text[7:].strip()
+    if text.startswith("```"):
+        text = text[3:].strip()
+    if text.endswith("```"):
+        text = text[:-3].strip()
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start < 0 or end <= start:
+            raise
+        parsed = json.loads(text[start : end + 1])
+    if not isinstance(parsed, dict):
+        raise ValueError("LLM recap JSON was not an object")
+    return parsed
+
+
+def _clean_text(value: Any) -> str:
+    return str(value or "").strip()[:1600]
+
+
+def _bounded_float(value: Any, *, default: float) -> float:
+    try:
+        parsed = float(value)
+    except Exception:
+        parsed = float(default)
+    return max(0.0, min(1.0, parsed))
+
+
+def _truncate(value: str, limit: int) -> str:
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    return text[-limit:]
+
+
 def _implemented_summary(
     *,
     result_summary: str,
@@ -275,13 +511,14 @@ def _known_issues(
     action: str,
     reason: str,
     result_summary: str,
-    workspace: Optional[Path],
+    workspace_exists: bool,
+    workspace_dir: str,
     work_products: list[str],
 ) -> str:
     issues: list[str] = []
     if action in {"block", "review", "park"}:
         issues.append(reason or result_summary or f"Terminal action was {action}.")
-    if workspace and not workspace.exists():
+    if workspace_dir and not workspace_exists:
         issues.append("Recorded workspace directory is not available for audit.")
     if action in {"complete", "approve"} and not work_products and not result_summary:
         issues.append("No result summary or work product files were found.")

@@ -43,6 +43,7 @@ PROACTIVE_HISTORY_SOURCE_KINDS = frozenset(
         "claude_code_demo_task",
         "claude_code_kb_update",
         "heartbeat_remediation",
+        "proactive_feedback_continuation",
         "brainstorm",
         "csi",
     }
@@ -1391,6 +1392,7 @@ def record_task_feedback(
     task_id: str,
     feedback_tags: list[str],
     feedback_text: str,
+    sentiment: Optional[str] = None,
     status: Optional[str] = None,
     actor: Optional[str] = None,
 ) -> dict[str, Any]:
@@ -1406,6 +1408,10 @@ def record_task_feedback(
     feedback["tags"] = list(set(feedback_tags))
     feedback["text"] = str(feedback_text or "").strip()
     feedback["updated_at"] = datetime.now(timezone.utc).isoformat()
+    if sentiment is not None:
+        clean_sentiment = str(sentiment or "").strip().lower()
+        if clean_sentiment in {"positive", "negative", "neutral"}:
+            feedback["sentiment"] = clean_sentiment
     if actor:
         feedback["actor"] = actor
 
@@ -1416,11 +1422,151 @@ def record_task_feedback(
     if status:
         updates["status"] = status
 
-    _sql_update_item(conn, task_id, updates)
+    sets = []
+    params: list[Any] = []
+    for key, value in updates.items():
+        sets.append(f"{key} = ?")
+        params.append(value)
+    params.append(task_id)
+    conn.execute(
+        f"UPDATE task_hub_items SET {', '.join(sets)} WHERE task_id = ?",
+        params,
+    )
+    conn.commit()
     
     # Return updated item
     updated_row = conn.execute("SELECT * FROM task_hub_items WHERE task_id = ?", (task_id,)).fetchone()
     return hydrate_item(dict(updated_row))
+
+
+def create_proactive_feedback_continuation(
+    conn: sqlite3.Connection,
+    *,
+    parent_task_id: str,
+    feedback_tags: list[str],
+    feedback_text: str,
+    actor: str = "",
+) -> Optional[dict[str, Any]]:
+    """Create or refresh a fresh-session continuation task from proactive feedback."""
+    ensure_schema(conn)
+    parent_id = str(parent_task_id or "").strip()
+    if not parent_id:
+        return None
+    parent = get_item(conn, parent_id)
+    if not parent:
+        raise KeyError(f"Task not found: {parent_id}")
+
+    tags = sorted({str(tag).strip().lower() for tag in feedback_tags if str(tag).strip()})
+    text = str(feedback_text or "").strip()
+    if not _feedback_requests_continuation(tags=tags, text=text):
+        return None
+
+    assignment = conn.execute(
+        """
+        SELECT assignment_id, agent_id, provider_session_id, workflow_run_id, workspace_dir, result_summary
+        FROM task_hub_assignments
+        WHERE task_id = ?
+        ORDER BY COALESCE(ended_at, started_at) DESC
+        LIMIT 1
+        """,
+        (parent_id,),
+    ).fetchone()
+    latest_assignment = {key: assignment[key] for key in assignment.keys()} if assignment else {}
+    workspace_dir = str(latest_assignment.get("workspace_dir") or "").strip()
+    source_ref = f"{parent_id}:feedback_continuation"
+    continuation_id = f"proactive_cont:{uuid.uuid5(uuid.NAMESPACE_URL, source_ref).hex[:16]}"
+    title = f"Continue proactive work: {str(parent.get('title') or parent_id)[:120]}"
+    prior_recap = _latest_proactive_recap(conn, parent_id)
+    description_parts = [
+        "Continue the prior proactive work in a fresh session.",
+        "",
+        f"Original task: {parent.get('title') or parent_id}",
+        f"Original description: {parent.get('description') or ''}",
+    ]
+    if prior_recap:
+        description_parts.extend(
+            [
+                "",
+                "Prior recap:",
+                f"- Idea: {prior_recap.get('idea') or ''}",
+                f"- Implemented: {prior_recap.get('implemented') or ''}",
+                f"- Known issues: {prior_recap.get('known_issues') or ''}",
+                f"- Assessment: {prior_recap.get('success_assessment') or ''}",
+                f"- Recommended next action: {prior_recap.get('recommended_next_action') or ''}",
+            ]
+        )
+    description_parts.extend(
+        [
+            "",
+            f"Kevin feedback tags: {', '.join(tags) if tags else '(none)'}",
+            f"Kevin feedback text: {text or '(none)'}",
+            "",
+            "Use the previous workspace as context. Reuse existing work products when helpful, but do not overwrite prior outputs unless the change is intentional and noted.",
+        ]
+    )
+    if workspace_dir:
+        description_parts.append(f"Previous workspace: {workspace_dir}")
+
+    metadata = {
+        "proactive_continuation": {
+            "parent_task_id": parent_id,
+            "feedback_tags": tags,
+            "feedback_text": text,
+            "actor": actor,
+            "previous_workspace_dir": workspace_dir,
+            "previous_assignment": latest_assignment,
+            "prior_recap": prior_recap,
+            "created_from": "proactive_task_history_feedback",
+        }
+    }
+    return upsert_item(
+        conn,
+        {
+            "task_id": continuation_id,
+            "source_kind": "proactive_feedback_continuation",
+            "source_ref": source_ref,
+            "title": title,
+            "description": "\n".join(description_parts),
+            "project_key": "proactive",
+            "priority": max(2, _safe_int(parent.get("priority"), 2)),
+            "labels": ["proactive", "continuation", "agent-ready"],
+            "status": TASK_STATUS_OPEN,
+            "parent_task_id": parent_id,
+            "agent_ready": True,
+            "score": max(0.75, _safe_float(parent.get("score"), 0.0)),
+            "score_confidence": max(0.7, _safe_float(parent.get("score_confidence"), 0.0)),
+            "metadata": metadata,
+        },
+    )
+
+
+def _feedback_requests_continuation(*, tags: list[str], text: str) -> bool:
+    tag_set = {tag.strip().lower() for tag in tags}
+    if tag_set & {"continue_work", "needs_followup", "follow_up", "more_like_this"}:
+        return True
+    lowered = str(text or "").strip().lower()
+    return any(
+        phrase in lowered
+        for phrase in (
+            "continue",
+            "follow up",
+            "follow-up",
+            "next step",
+            "keep working",
+            "do more",
+            "more like this",
+        )
+    )
+
+
+def _latest_proactive_recap(conn: sqlite3.Connection, task_id: str) -> dict[str, Any]:
+    try:
+        from universal_agent.services.proactive_work_recap import get_recap_for_task
+
+        recap = get_recap_for_task(conn, task_id)
+    except Exception:
+        recap = None
+    return dict(recap or {})
 
 
 def list_completed_tasks(conn: sqlite3.Connection, *, limit: int = 80) -> list[dict[str, Any]]:

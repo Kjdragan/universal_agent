@@ -2191,6 +2191,7 @@ class CSISpecialistLoopCleanupRequest(BaseModel):
 
 class ProactiveSignalFeedbackRequest(BaseModel):
     status: Optional[str] = None
+    sentiment: Optional[str] = None
     feedback_tags: list[str] = Field(default_factory=list)
     feedback_text: Optional[str] = None
 
@@ -17083,7 +17084,15 @@ async def dashboard_proactive_task_feedback(
                     task_id=task_id,
                     feedback_tags=payload.feedback_tags,
                     feedback_text=str(payload.feedback_text or ""),
+                    sentiment=payload.sentiment,
                     status=payload.status,
+                    actor=actor,
+                )
+                continuation_task = task_hub.create_proactive_feedback_continuation(
+                    conn,
+                    parent_task_id=task_id,
+                    feedback_tags=payload.feedback_tags,
+                    feedback_text=str(payload.feedback_text or ""),
                     actor=actor,
                 )
             except KeyError:
@@ -17101,7 +17110,7 @@ async def dashboard_proactive_task_feedback(
         }
         background_tasks.add_task(distill_feedback_to_rules, distill_card, str(payload.feedback_text or ""), payload.feedback_tags)
 
-    return {"status": "ok", "task": task}
+    return {"status": "ok", "task": task, "continuation_task": continuation_task}
 
 
 def _proactive_task_stage(item: dict[str, Any]) -> str:

@@ -33,6 +33,7 @@ PROACTIVE_SOURCES = frozenset({
     "claude_code_demo_task",
     "claude_code_kb_update",
     "heartbeat_remediation",
+    "proactive_feedback_continuation",
     "csi",
     "brainstorm",
     "calendar_bridge",

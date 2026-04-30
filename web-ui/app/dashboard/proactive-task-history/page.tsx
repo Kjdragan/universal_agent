@@ -25,6 +25,8 @@ const FEEDBACK_CHIPS = [
   "too_slow",
   "unexpected",
   "helpful",
+  "continue_work",
+  "needs_followup",
   "annoying",
   "out_of_scope",
 ];
@@ -57,6 +59,7 @@ type TaskRecap = {
   success_assessment?: string;
   recommended_next_action?: string;
   confidence?: number | null;
+  generated_at?: string;
 };
 
 type TaskLinks = {
@@ -314,6 +317,11 @@ export default function ProactiveTaskHistoryPage() {
           const feedback = safeJson(task.feedback_json);
           const stageLabel = STAGE_LABELS[task.stage || task.status] || task.status;
           const recap = task.recap || {};
+          const recapStatus = recap.status || "";
+          const recapStatusLabel = recapStatus
+            ? recapStatus.replace(/_/g, " ")
+            : "not evaluated";
+          const recapIsLlm = recapStatus === "llm_evaluated";
 
           return (
             <div
@@ -370,12 +378,25 @@ export default function ProactiveTaskHistoryPage() {
 	                    <div className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold mb-1 flex items-center gap-1.5">
 	                      <MessageSquare className="w-3 h-3" />
 	                      Evaluated Recap
+                        <span className={`ml-2 rounded border px-1.5 py-0.5 tracking-normal ${
+                          recapIsLlm
+                            ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+                            : "border-amber-500/30 bg-amber-500/10 text-amber-300"
+                        }`}>
+                          {recapStatusLabel}
+                        </span>
+                        {typeof recap.confidence === "number" && (
+                          <span className="ml-auto text-[10px] text-slate-500 tracking-normal">
+                            confidence {recap.confidence.toFixed(2)}
+                          </span>
+                        )}
 	                    </div>
                       <div className="space-y-2 text-sm text-slate-300">
                         {recap.idea && <p><span className="text-slate-500">Idea:</span> {recap.idea}</p>}
                         {(recap.implemented || task.result_summary) && <p><span className="text-slate-500">Implemented:</span> {recap.implemented || task.result_summary}</p>}
                         {recap.known_issues && <p><span className="text-slate-500">Known issues:</span> {recap.known_issues}</p>}
                         {recap.success_assessment && <p><span className="text-slate-500">Assessment:</span> {recap.success_assessment}</p>}
+                        {recap.recommended_next_action && <p><span className="text-slate-500">Next:</span> {recap.recommended_next_action}</p>}
                       </div>
 	                  </div>
 	                )}
