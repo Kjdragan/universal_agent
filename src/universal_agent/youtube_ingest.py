@@ -393,6 +393,11 @@ def _build_dataimpulse_proxy_config() -> tuple[Optional[Any], str]:
     password = (os.getenv("DATAIMPULSE_PROXY_PASS") or "").strip()
     if not username or not password:
         return None, "disabled"
+        
+    # DataImpulse uses username__zone suffixes for targeting (e.g. __cr.us)
+    # If the user only provided the base ID in Infisical, default to US targeting
+    if "__" not in username:
+        username = f"{username}__cr.us"
 
     try:
         from youtube_transcript_api.proxies import GenericProxyConfig
