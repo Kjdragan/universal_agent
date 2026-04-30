@@ -42,8 +42,14 @@ def isolated_audit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 @pytest.fixture
 def link_enabled(monkeypatch: pytest.MonkeyPatch):
-    """Turn on the master switch (test mode by default — live still gated)."""
+    """Turn on the master switch with stub-mode forced.
+
+    These tests exercise guardrails/audit/validation logic, not the subprocess
+    path. UA_LINK_FORCE_STUB=1 keeps `_bridge_mode()` returning 'stub' so the
+    bridge never shells out to link-cli.
+    """
     monkeypatch.setenv("UA_ENABLE_LINK", "1")
+    monkeypatch.setenv("UA_LINK_FORCE_STUB", "1")
 
 
 # ── master_switch ─────────────────────────────────────────────────────────────

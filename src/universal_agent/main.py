@@ -8611,6 +8611,24 @@ async def setup_session(
     if agentmail_mcp_config is not None:
         mcp_servers_config["agentmail"] = agentmail_mcp_config
 
+    # Link payments (Stripe Link CLI). Only registered when UA_ENABLE_LINK=1.
+    # The bridge restores the auth blob (LINK_AUTH_BLOB → UA_LINK_AUTH_BLOB_PATH)
+    # before the MCP subprocess starts. Health probe runs once after registration
+    # so misconfigurations surface in startup logs immediately.
+    try:
+        from universal_agent.tools.link_bridge import build_link_mcp_server_config
+        from universal_agent.services.link_health import run_link_health_probe
+
+        link_mcp_config = build_link_mcp_server_config()
+        if link_mcp_config is not None:
+            mcp_servers_config["link"] = link_mcp_config
+            try:
+                run_link_health_probe()
+            except Exception as exc:  # pragma: no cover — defensive
+                print(f"⚠️  Link health probe raised: {exc}")
+    except Exception as exc:  # pragma: no cover — defensive
+        print(f"⚠️  Link MCP registration skipped: {exc}")
+
     options = ClaudeAgentOptions(
         model=resolve_claude_code_model(default="opus"),
         agents=__load_programmatic_agents(src_dir),

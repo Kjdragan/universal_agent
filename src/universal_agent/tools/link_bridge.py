@@ -28,8 +28,12 @@ Guardrails (in order, fail-closed):
 
 from __future__ import annotations
 
+import base64
 import json
+import logging
 import os
+import shutil
+import subprocess
 import time
 import uuid
 from datetime import datetime, timezone
@@ -39,10 +43,13 @@ from urllib.parse import urlparse
 
 from universal_agent import feature_flags
 
+logger = logging.getLogger(__name__)
+
 ALLOWED_CALLERS: tuple[str, ...] = (
     "chat",
     "ui",
     "skill:link-purchase",
+    "ops",  # health probe, auth status checks, ops tooling
     "test",
 )
 
@@ -77,8 +84,17 @@ def _new_audit_id() -> str:
 
 
 def _bridge_mode() -> str:
-    """Returns 'stub', 'test', or 'live' for the audit log + caller responses."""
+    """Returns 'stub', 'test', or 'live' for the audit log + caller responses.
+
+    `UA_LINK_FORCE_STUB=1` is an ops/test escape hatch: when set, the bridge
+    behaves as if disabled (returns stub responses) even with the master
+    switch on. Used by tests to assert guardrail/audit logic without invoking
+    real subprocess calls, and by operators who want to neuter the bridge
+    without losing the rest of the runtime config.
+    """
     if not feature_flags.link_enabled():
+        return "stub"
+    if _is_truthy(os.getenv("UA_LINK_FORCE_STUB")):
         return "stub"
     if feature_flags.link_live_mode_active():
         return "live"
@@ -381,16 +397,66 @@ def create_spend_request(
         )
         return _err_response(guardrail, audit_id)
 
-    # Stub-mode response (Phase 1).
-    spend_request = _stub_spend_request(
-        payment_method_id=payment_method_id,
-        merchant_name=merchant_name,
-        merchant_url=merchant_url,
-        amount_cents=amount_cents,
-        currency=currency,
-        credential_type=credential_type,
-        request_approval=request_approval,
-    )
+    mode = _bridge_mode()
+
+    if mode == "stub":
+        spend_request = _stub_spend_request(
+            payment_method_id=payment_method_id,
+            merchant_name=merchant_name,
+            merchant_url=merchant_url,
+            amount_cents=amount_cents,
+            currency=currency,
+            credential_type=credential_type,
+            request_approval=request_approval,
+        )
+        _append_audit(
+            {
+                "audit_id": audit_id,
+                "event": "create_attempt",
+                "caller": caller,
+                "amount_cents": amount_cents,
+                "merchant_url": merchant_url,
+                "credential_type": credential_type,
+                "spend_request_id": spend_request["id"],
+                "guardrail_blocked": None,
+                "stub": True,
+            }
+        )
+        return _ok_response(spend_request, audit_id)
+
+    # Real CLI invocation (test or live mode).
+    cli_args = [
+        "spend-request",
+        "create",
+        "--payment-method-id",
+        payment_method_id,
+        "--merchant-name",
+        merchant_name,
+        "--merchant-url",
+        merchant_url,
+        "--context",
+        context,
+        "--amount",
+        str(amount_cents),
+        "--currency",
+        currency,
+        "--credential-type",
+        credential_type,
+    ]
+    if line_items:
+        for item in line_items:
+            cli_args.extend(["--line-item", _format_line_item(item)])
+    if total:
+        cli_args.extend(["--total", _format_line_item(total)])
+    if network_id:
+        cli_args.extend(["--network-id", network_id])
+    if request_approval:
+        cli_args.append("--request-approval")
+
+    cli_result = _run_link_cli(cli_args, test_flag=(mode == "test"))
+    spend_request_id = None
+    if cli_result["ok"] and isinstance(cli_result["data"], dict):
+        spend_request_id = cli_result["data"].get("id")
 
     _append_audit(
         {
@@ -400,13 +466,21 @@ def create_spend_request(
             "amount_cents": amount_cents,
             "merchant_url": merchant_url,
             "credential_type": credential_type,
-            "spend_request_id": spend_request["id"],
+            "spend_request_id": spend_request_id,
             "guardrail_blocked": None,
-            "stub": True,
+            "cli_exit_code": cli_result.get("exit_code"),
+            "error": cli_result.get("error"),
         }
     )
 
-    return _ok_response(spend_request, audit_id)
+    if not cli_result["ok"]:
+        return _err_response(cli_result["error"], audit_id)
+    return _ok_response(cli_result["data"], audit_id)
+
+
+def _format_line_item(item: dict[str, Any]) -> str:
+    """Encode a line-item dict as the CLI's `key:value,key:value` form."""
+    return ",".join(f"{k}:{v}" for k, v in item.items())
 
 
 def retrieve_spend_request(
@@ -415,7 +489,7 @@ def retrieve_spend_request(
     spend_request_id: str,
     include_card: bool = False,
 ) -> dict[str, Any]:
-    """Retrieve a spend request by id. Stub returns a synthetic 'approved' record."""
+    """Retrieve a spend request by id."""
     audit_id = _new_audit_id()
     for check in (_check_master_switch(), _check_caller(caller)):
         if check is not None:
@@ -431,21 +505,41 @@ def retrieve_spend_request(
             )
             return _err_response(check, audit_id)
 
-    data: dict[str, Any] = {
-        "id": spend_request_id,
-        "status": "approved",
-        "_stub": True,
-    }
-    if include_card:
-        data["card"] = {
-            "last4": "4242",
-            "brand": "visa",
-            "exp_month": 12,
-            "exp_year": 2030,
-            "valid_until": int(_now_ts()) + 3600,
+    mode = _bridge_mode()
+
+    if mode == "stub":
+        data: dict[str, Any] = {
+            "id": spend_request_id,
+            "status": "approved",
             "_stub": True,
-            # PAN/CVC intentionally omitted in stub. Phase 2 will receive the real masked card.
         }
+        if include_card:
+            data["card"] = {
+                "last4": "4242",
+                "brand": "visa",
+                "exp_month": 12,
+                "exp_year": 2030,
+                "valid_until": int(_now_ts()) + 3600,
+                "_stub": True,
+            }
+        _append_audit(
+            {
+                "audit_id": audit_id,
+                "event": "retrieve_attempt",
+                "caller": caller,
+                "spend_request_id": spend_request_id,
+                "include_card": bool(include_card),
+                "guardrail_blocked": None,
+                "stub": True,
+            }
+        )
+        return _ok_response(data, audit_id)
+
+    cli_args = ["spend-request", "retrieve", spend_request_id]
+    if include_card:
+        cli_args.extend(["--include", "card"])
+
+    cli_result = _run_link_cli(cli_args)
 
     _append_audit(
         {
@@ -455,10 +549,14 @@ def retrieve_spend_request(
             "spend_request_id": spend_request_id,
             "include_card": bool(include_card),
             "guardrail_blocked": None,
-            "stub": True,
+            "cli_exit_code": cli_result.get("exit_code"),
+            "error": cli_result.get("error"),
         }
     )
-    return _ok_response(data, audit_id)
+
+    if not cli_result["ok"]:
+        return _err_response(cli_result["error"], audit_id)
+    return _ok_response(cli_result["data"], audit_id)
 
 
 def list_payment_methods(*, caller: str) -> dict[str, Any]:
@@ -476,16 +574,42 @@ def list_payment_methods(*, caller: str) -> dict[str, Any]:
             )
             return _err_response(check, audit_id)
 
+    mode = _bridge_mode()
+
+    if mode == "stub":
+        _append_audit(
+            {
+                "audit_id": audit_id,
+                "event": "payment_methods_list",
+                "caller": caller,
+                "guardrail_blocked": None,
+                "stub": True,
+            }
+        )
+        return _ok_response({"payment_methods": _stub_payment_methods()}, audit_id)
+
+    cli_result = _run_link_cli(["payment-methods", "list"])
     _append_audit(
         {
             "audit_id": audit_id,
             "event": "payment_methods_list",
             "caller": caller,
             "guardrail_blocked": None,
-            "stub": True,
+            "cli_exit_code": cli_result.get("exit_code"),
+            "error": cli_result.get("error"),
         }
     )
-    return _ok_response({"payment_methods": _stub_payment_methods()}, audit_id)
+    if not cli_result["ok"]:
+        return _err_response(cli_result["error"], audit_id)
+
+    raw = cli_result["data"]
+    if isinstance(raw, list):
+        payload = {"payment_methods": raw}
+    elif isinstance(raw, dict) and "payment_methods" in raw:
+        payload = raw
+    else:
+        payload = {"payment_methods": [], "raw": raw}
+    return _ok_response(payload, audit_id)
 
 
 def mpp_pay(
@@ -518,6 +642,48 @@ def mpp_pay(
             )
             return _err_response(check, audit_id)
 
+    mode = _bridge_mode()
+
+    if mode == "stub":
+        _append_audit(
+            {
+                "audit_id": audit_id,
+                "event": "mpp_pay_attempt",
+                "caller": caller,
+                "spend_request_id": spend_request_id,
+                "url": url,
+                "method": method,
+                "guardrail_blocked": None,
+                "stub": True,
+            }
+        )
+        return _ok_response(
+            {
+                "spend_request_id": spend_request_id,
+                "url": url,
+                "method": method,
+                "response": {"status": 200, "body": {"_stub": True, "ok": True}},
+            },
+            audit_id,
+        )
+
+    cli_args = [
+        "mpp",
+        "pay",
+        url,
+        "--spend-request-id",
+        spend_request_id,
+        "--method",
+        method,
+    ]
+    if data is not None:
+        cli_args.extend(["--data", json.dumps(data)])
+    if headers:
+        for name, value in headers.items():
+            cli_args.extend(["--header", f"{name}: {value}"])
+
+    cli_result = _run_link_cli(cli_args, timeout=60)
+
     _append_audit(
         {
             "audit_id": audit_id,
@@ -527,18 +693,30 @@ def mpp_pay(
             "url": url,
             "method": method,
             "guardrail_blocked": None,
-            "stub": True,
+            "cli_exit_code": cli_result.get("exit_code"),
+            "error": cli_result.get("error"),
         }
     )
-    return _ok_response(
-        {
-            "spend_request_id": spend_request_id,
-            "url": url,
-            "method": method,
-            "response": {"status": 200, "body": {"_stub": True, "ok": True}},
-        },
-        audit_id,
-    )
+
+    if not cli_result["ok"]:
+        return _err_response(cli_result["error"], audit_id)
+    return _ok_response(cli_result["data"], audit_id)
+
+
+def auth_status(*, caller: str = "ops") -> dict[str, Any]:
+    """Return Link CLI auth status. Stub-mode returns a synthetic 'unauthenticated'."""
+    audit_id = _new_audit_id()
+    for check in (_check_master_switch(), _check_caller(caller)):
+        if check is not None:
+            return _err_response(check, audit_id)
+
+    if _bridge_mode() == "stub":
+        return _ok_response({"authenticated": False, "_stub": True}, audit_id)
+
+    cli_result = _run_link_cli(["auth", "status"], timeout=15)
+    if not cli_result["ok"]:
+        return _err_response(cli_result["error"], audit_id)
+    return _ok_response(cli_result["data"], audit_id)
 
 
 # ── Diagnostics / introspection ──────────────────────────────────────────────
@@ -560,4 +738,231 @@ def bridge_status() -> dict[str, Any]:
         "spent_today_cents": _spent_today_cents(),
         "merchant_allowlist": feature_flags.link_merchant_allowlist(),
         "audit_path": str(resolve_audit_path()),
+        "cli_path": _resolve_cli_path(),
+        "auth_seed_status": _last_auth_seed_status(),
+    }
+
+
+# ── Real CLI invocation (Phase 2a) ───────────────────────────────────────────
+#
+# When the master switch is on (`UA_ENABLE_LINK=1`), the bridge invokes the
+# real Stripe Link CLI instead of returning stub payloads. We shell out via
+# `subprocess.run` with `--format json` so output is parseable, set short
+# timeouts (the bridge intentionally does NOT poll inside subprocess.run —
+# polling and approval-flow handling come in Phase 2c).
+
+
+_CLI_DEFAULT_TIMEOUT_SECONDS = 30
+_CLI_NPX_FALLBACK = ("npx", "-y", "@stripe/link-cli")
+_AUTH_SEED_STATUS: dict[str, Any] = {"applied": False, "path": None, "reason": None}
+
+
+def _resolve_cli_path() -> str | None:
+    """Find a usable link-cli command. Prefer global install; fall back to npx."""
+    override = os.getenv("UA_LINK_CLI_PATH")
+    if override:
+        return override
+    found = shutil.which("link-cli")
+    if found:
+        return found
+    if shutil.which("npx"):
+        return "npx"
+    return None
+
+
+def _link_cli_argv(args: list[str]) -> list[str]:
+    """Build the argv to invoke link-cli, respecting CLI overrides."""
+    override = os.getenv("UA_LINK_CLI_PATH")
+    if override:
+        return [override, *args]
+    if shutil.which("link-cli"):
+        return ["link-cli", *args]
+    return [*_CLI_NPX_FALLBACK, *args]
+
+
+def _last_auth_seed_status() -> dict[str, Any]:
+    return dict(_AUTH_SEED_STATUS)
+
+
+def _ensure_auth_seeded(*, force: bool = False) -> dict[str, Any]:
+    """Restore the Link CLI auth blob from Infisical-injected env vars.
+
+    Idempotent: only writes the file once per process unless `force=True`.
+    Returns the status dict (also stored on _AUTH_SEED_STATUS for diagnostics).
+    """
+    if _AUTH_SEED_STATUS.get("applied") and not force:
+        return _last_auth_seed_status()
+
+    if not _is_truthy(os.getenv("UA_LINK_AUTH_SEED_ENABLED"), default=True):
+        _AUTH_SEED_STATUS.update({"applied": False, "path": None, "reason": "seed_disabled"})
+        return _last_auth_seed_status()
+
+    blob = os.getenv("LINK_AUTH_BLOB")
+    if not blob:
+        _AUTH_SEED_STATUS.update({"applied": False, "path": None, "reason": "no_blob"})
+        return _last_auth_seed_status()
+
+    raw_path = os.getenv("UA_LINK_AUTH_BLOB_PATH")
+    if not raw_path:
+        _AUTH_SEED_STATUS.update(
+            {"applied": False, "path": None, "reason": "no_path"}
+        )
+        return _last_auth_seed_status()
+
+    try:
+        target = Path(os.path.expandvars(os.path.expanduser(raw_path)))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        decoded = base64.b64decode(blob, validate=False)
+        target.write_bytes(decoded)
+        try:
+            target.chmod(0o600)
+        except OSError:
+            pass
+        _AUTH_SEED_STATUS.update(
+            {"applied": True, "path": str(target), "reason": None}
+        )
+        logger.info("Link auth blob restored to %s", target)
+    except Exception as exc:  # pragma: no cover — defensive
+        _AUTH_SEED_STATUS.update(
+            {"applied": False, "path": raw_path, "reason": f"write_failed: {exc!r}"}
+        )
+        logger.warning("Failed to restore Link auth blob: %s", exc)
+
+    return _last_auth_seed_status()
+
+
+def _is_truthy(value: str | None, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _run_link_cli(
+    args: list[str],
+    *,
+    timeout: int | float | None = None,
+    test_flag: bool = False,
+) -> dict[str, Any]:
+    """Invoke the Link CLI synchronously, parse JSON stdout, normalize errors.
+
+    Always passes `--format json`. If `test_flag=True`, appends `--test` for
+    commands that support it.
+
+    Returns:
+      {"ok": True,  "data": <parsed json>, "raw_stdout": "...", "exit_code": 0}
+      {"ok": False, "error": {"code": str, "message": str}, "raw_stdout": "...",
+       "raw_stderr": "...", "exit_code": int}
+    """
+    _ensure_auth_seeded()
+
+    argv = _link_cli_argv(args + (["--test"] if test_flag else []) + ["--format", "json"])
+    env = os.environ.copy()
+    env.setdefault("NO_UPDATE_NOTIFIER", "1")
+
+    try:
+        completed = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=timeout if timeout is not None else _CLI_DEFAULT_TIMEOUT_SECONDS,
+            env=env,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        return {
+            "ok": False,
+            "error": {
+                "code": "cli_not_found",
+                "message": f"link-cli binary not found: {exc}",
+            },
+            "raw_stdout": "",
+            "raw_stderr": str(exc),
+            "exit_code": 127,
+        }
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "ok": False,
+            "error": {
+                "code": "cli_timeout",
+                "message": f"link-cli timed out after {exc.timeout}s",
+            },
+            "raw_stdout": exc.stdout or "",
+            "raw_stderr": exc.stderr or "",
+            "exit_code": -1,
+        }
+
+    raw_stdout = completed.stdout or ""
+    raw_stderr = completed.stderr or ""
+
+    parsed: Any = None
+    if raw_stdout.strip():
+        try:
+            parsed = json.loads(raw_stdout.strip().splitlines()[-1])
+        except json.JSONDecodeError:
+            parsed = None
+
+    if completed.returncode == 0:
+        return {
+            "ok": True,
+            "data": parsed if parsed is not None else {"raw": raw_stdout.strip()},
+            "raw_stdout": raw_stdout,
+            "exit_code": 0,
+        }
+
+    if isinstance(parsed, dict) and parsed.get("code"):
+        err = {
+            "code": str(parsed.get("code")),
+            "message": str(parsed.get("message") or "Link CLI error."),
+        }
+    else:
+        err = {
+            "code": "cli_error",
+            "message": (raw_stderr or raw_stdout or "Link CLI exited non-zero.").strip(),
+        }
+
+    return {
+        "ok": False,
+        "error": err,
+        "raw_stdout": raw_stdout,
+        "raw_stderr": raw_stderr,
+        "exit_code": completed.returncode,
+    }
+
+
+# ── MCP server config builder ────────────────────────────────────────────────
+
+
+def build_link_mcp_server_config() -> dict[str, Any] | None:
+    """Return a Claude Agent SDK MCP server config for link-cli, or None.
+
+    Mirrors the existing pattern (`build_notebooklm_mcp_server_config`,
+    `build_agentmail_mcp_server_config`). When the master switch is off, we
+    return None so the MCP server is never spawned.
+    """
+    if not feature_flags.link_enabled():
+        return None
+    cli = _resolve_cli_path()
+    if cli is None:
+        logger.warning(
+            "UA_ENABLE_LINK=1 but no link-cli/npx found; skipping MCP registration."
+        )
+        return None
+    _ensure_auth_seeded()
+
+    # Always invoke via npx to get a known-good version regardless of global
+    # install state. Operators can override via UA_LINK_CLI_PATH if they want
+    # to pin to a globally-installed binary.
+    override = os.getenv("UA_LINK_CLI_PATH")
+    if override:
+        argv = [override, "--mcp"]
+    elif shutil.which("link-cli"):
+        argv = ["link-cli", "--mcp"]
+    else:
+        argv = ["npx", "-y", "@stripe/link-cli", "--mcp"]
+
+    return {
+        "type": "stdio",
+        "command": argv[0],
+        "args": argv[1:],
+        "env": {"NO_UPDATE_NOTIFIER": "1"},
     }

@@ -58,6 +58,7 @@ def test_resolve_audit_path_default_under_agent_run_workspaces(monkeypatch):
 
 def test_create_writes_audit_entry(isolated_audit, monkeypatch):
     monkeypatch.setenv("UA_ENABLE_LINK", "1")
+    monkeypatch.setenv("UA_LINK_FORCE_STUB", "1")
     link_bridge.create_spend_request(
         caller="test",
         payment_method_id="csmrpd_x",
@@ -82,6 +83,7 @@ def test_create_writes_audit_entry(isolated_audit, monkeypatch):
 
 def test_blocked_create_writes_audit_with_guardrail(isolated_audit, monkeypatch):
     monkeypatch.setenv("UA_ENABLE_LINK", "1")
+    monkeypatch.setenv("UA_LINK_FORCE_STUB", "1")
     monkeypatch.setenv("UA_LINK_MAX_AMOUNT_CENTS", "1000")
     link_bridge.create_spend_request(
         caller="test",
@@ -114,6 +116,7 @@ def test_disabled_master_writes_stub_mode_audit(isolated_audit):
 
 def test_retrieve_writes_audit(isolated_audit, monkeypatch):
     monkeypatch.setenv("UA_ENABLE_LINK", "1")
+    monkeypatch.setenv("UA_LINK_FORCE_STUB", "1")
     link_bridge.retrieve_spend_request(
         caller="test", spend_request_id="lsrq_x", include_card=True
     )
@@ -126,6 +129,7 @@ def test_retrieve_writes_audit(isolated_audit, monkeypatch):
 
 def test_list_payment_methods_writes_audit(isolated_audit, monkeypatch):
     monkeypatch.setenv("UA_ENABLE_LINK", "1")
+    monkeypatch.setenv("UA_LINK_FORCE_STUB", "1")
     link_bridge.list_payment_methods(caller="test")
     entries = _read_audit(isolated_audit)
     assert len(entries) == 1
@@ -134,6 +138,7 @@ def test_list_payment_methods_writes_audit(isolated_audit, monkeypatch):
 
 def test_mpp_pay_writes_audit(isolated_audit, monkeypatch):
     monkeypatch.setenv("UA_ENABLE_LINK", "1")
+    monkeypatch.setenv("UA_LINK_FORCE_STUB", "1")
     link_bridge.mpp_pay(
         caller="test",
         spend_request_id="lsrq_x",
@@ -150,6 +155,7 @@ def test_mpp_pay_writes_audit(isolated_audit, monkeypatch):
 def test_audit_never_contains_card_pan_or_cvc(isolated_audit, monkeypatch):
     """Card details must never appear in audit entries — even from the stub."""
     monkeypatch.setenv("UA_ENABLE_LINK", "1")
+    monkeypatch.setenv("UA_LINK_FORCE_STUB", "1")
     link_bridge.create_spend_request(
         caller="test",
         payment_method_id="csmrpd_x",
@@ -172,6 +178,7 @@ def test_audit_never_contains_card_pan_or_cvc(isolated_audit, monkeypatch):
 def test_daily_cap_window_excludes_old_entries(isolated_audit, monkeypatch):
     """Entries older than 24h must not count toward today's spent total."""
     monkeypatch.setenv("UA_ENABLE_LINK", "1")
+    monkeypatch.setenv("UA_LINK_FORCE_STUB", "1")
     monkeypatch.setenv("UA_LINK_MAX_AMOUNT_CENTS", "10000")
     monkeypatch.setenv("UA_LINK_DAILY_BUDGET_CENTS", "5000")
 
@@ -206,6 +213,7 @@ def test_daily_cap_window_excludes_old_entries(isolated_audit, monkeypatch):
 
 def test_audit_entries_are_jsonl_one_per_line(isolated_audit, monkeypatch):
     monkeypatch.setenv("UA_ENABLE_LINK", "1")
+    monkeypatch.setenv("UA_LINK_FORCE_STUB", "1")
     for _ in range(3):
         link_bridge.list_payment_methods(caller="test")
 
