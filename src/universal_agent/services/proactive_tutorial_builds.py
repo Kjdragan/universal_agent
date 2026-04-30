@@ -227,6 +227,7 @@ def _build_task_description(
     extraction_plan: dict[str, Any],
     preference_context: str = "",
 ) -> str:
+    """Build the full task description for a CODIE tutorial build."""
     plan_json = json.dumps(extraction_plan or {}, indent=2, ensure_ascii=True)
     base = "\n".join(
         [
@@ -255,6 +256,7 @@ def _build_task_description(
 
 
 def _preference_context(conn: sqlite3.Connection, *, task_type: str, topic_tags: list[str]) -> str:
+    """Fetch preference delegation context, returning empty string on failure."""
     try:
         from universal_agent.services.proactive_preferences import (
             get_delegation_context,
@@ -266,12 +268,14 @@ def _preference_context(conn: sqlite3.Connection, *, task_type: str, topic_tags:
 
 
 def _build_artifact_summary(metadata: dict[str, Any]) -> str:
+    """Create a one-line artifact summary from build metadata."""
     location = metadata.get("repo_url") or metadata.get("artifact_path") or "artifact"
     status = metadata.get("build_status") or "success"
     return f"Tutorial build {status}; final work product: {location}"
 
 
 def _looks_build_oriented(*, subject: dict[str, Any], analysis: dict[str, Any], category: str, summary: str) -> bool:
+    """Check whether a video subject matches build-oriented keyword signals."""
     text = " ".join(
         [
             str(subject.get("title") or ""),
@@ -303,6 +307,7 @@ def _looks_build_oriented(*, subject: dict[str, Any], analysis: dict[str, Any], 
 
 
 def _extraction_plan_from_analysis(*, analysis: dict[str, Any], row: Any) -> dict[str, Any]:
+    """Derive an implementation extraction plan from CSI analysis fields."""
     return {
         "language": str(analysis.get("language") or analysis.get("primary_language") or "unknown"),
         "estimated_complexity": str(analysis.get("estimated_complexity") or "unknown"),
@@ -314,11 +319,13 @@ def _extraction_plan_from_analysis(*, analysis: dict[str, Any], row: Any) -> dic
 
 
 def _auto_route_disabled() -> bool:
+    """Return True when tutorial auto-routing is explicitly disabled via env var."""
     raw = str(os.getenv("UA_PROACTIVE_TUTORIAL_AUTO_ROUTE", "1") or "1").strip().lower()
     return raw in {"0", "false", "no", "off"}
 
 
 def _json_loads_obj(raw: Any) -> dict[str, Any]:
+    """Parse a JSON object from raw text or return the input if already a dict."""
     if isinstance(raw, dict):
         return dict(raw)
     if isinstance(raw, str) and raw.strip():

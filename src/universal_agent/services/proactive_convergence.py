@@ -61,6 +61,7 @@ If there are no non-obvious relationships, return an empty "insights" list. Do n
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
+    """Create convergence tables and indexes if they do not exist."""
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS proactive_topic_signatures (
@@ -116,6 +117,7 @@ def upsert_topic_signature(
     content_type: str = "",
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Insert or update a topic signature for a video, returning the stored row."""
     ensure_schema(conn)
     clean_video_id = str(video_id or "").strip()
     if not clean_video_id:
@@ -235,6 +237,7 @@ def sync_topic_signatures_from_csi(
 
 
 def get_topic_signature(conn: sqlite3.Connection, video_id: str) -> Optional[dict[str, Any]]:
+    """Fetch a single topic signature by video_id, returning None if not found."""
     ensure_schema(conn)
     row = conn.execute(
         "SELECT * FROM proactive_topic_signatures WHERE video_id = ? LIMIT 1",
@@ -292,6 +295,7 @@ async def _detect_and_queue_convergence_async(
     window_hours: int = 72,
     min_channels: int = 2,
 ) -> list[dict[str, Any]]:
+    """Core async convergence detection across both Track A and Track B."""
     ensure_schema(conn)
     candidates = _recent_other_channel_signatures(conn, signature=signature, window_hours=window_hours)
 
@@ -527,6 +531,7 @@ def create_convergence_brief_task(
     *,
     signatures: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    """Queue a convergence brief task and artifact from matched signatures."""
     ensure_schema(conn)
     if len(signatures) < 2:
         raise ValueError("at least two signatures are required")
@@ -586,6 +591,7 @@ def create_insight_brief_task(
     value: str,
     signatures: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    """Queue an insight brief task from an abstract ideation narrative."""
     ensure_schema(conn)
     primary_topic = (narrative[:47] + "...") if len(narrative) > 50 else narrative
     video_ids = [str(item.get("video_id") or "").strip() for item in signatures if str(item.get("video_id") or "").strip()]
@@ -663,6 +669,7 @@ def create_insight_brief_task(
 
 
 def get_convergence_event(conn: sqlite3.Connection, event_id: str) -> Optional[dict[str, Any]]:
+    """Fetch a single convergence event by event_id, returning None if not found."""
     ensure_schema(conn)
     row = conn.execute(
         "SELECT * FROM proactive_convergence_events WHERE event_id = ? LIMIT 1",
@@ -677,6 +684,7 @@ def _recent_other_channel_signatures(
     signature: dict[str, Any],
     window_hours: int,
 ) -> list[dict[str, Any]]:
+    """Query signatures from other channels within a rolling time window."""
     ingested = _parse_time(signature.get("ingested_at")) or datetime.now(timezone.utc)
     start = (ingested - timedelta(hours=max(1, int(window_hours or 72)))).isoformat()
     end = ingested.isoformat()
@@ -701,6 +709,7 @@ def _recent_other_channel_signatures(
 
 
 def _analysis_topics(*, analysis: dict[str, Any], category: str, title: str) -> list[str]:
+    """Extract topic strings from CSI analysis fields and category."""
     raw_topics: list[Any] = []
     for key in ("themes", "topics", "primary_topics", "tags"):
         value = analysis.get(key)
@@ -714,6 +723,7 @@ def _analysis_topics(*, analysis: dict[str, Any], category: str, title: str) -> 
 
 
 def _analysis_claims(*, analysis: dict[str, Any], summary_text: str) -> list[str]:
+    """Extract claim strings from analysis keys, falling back to summary."""
     raw_claims: list[Any] = []
     for key in ("key_claims", "claims", "takeaways"):
         value = analysis.get(key)
@@ -725,6 +735,7 @@ def _analysis_claims(*, analysis: dict[str, Any], summary_text: str) -> list[str
 
 
 def _fallback_signature(*, title: str, summary_text: str, error: str = "") -> dict[str, Any]:
+    """Generate a deterministic topic signature from title and summary when LLM fails."""
     words = [
         word.strip(".,:;!?()[]{}\"'").lower()
         for word in f"{title} {summary_text}".split()
@@ -748,6 +759,7 @@ def _fallback_signature(*, title: str, summary_text: str, error: str = "") -> di
 
 
 def _primary_topic(signatures: list[dict[str, Any]]) -> str:
+    """Return the most common primary topic across a set of signatures."""
     counts: dict[str, int] = {}
     for signature in signatures:
         for topic in signature.get("primary_topics") or []:
@@ -760,6 +772,7 @@ def _primary_topic(signatures: list[dict[str, Any]]) -> str:
 
 
 def _brief_task_description(*, primary_topic: str, signatures: list[dict[str, Any]], preference_context: str = "") -> str:
+    """Build the task description for a convergence brief research task."""
     lines = [
         f"Generate a convergence brief about: {primary_topic}",
         "",
@@ -790,6 +803,7 @@ def _brief_task_description(*, primary_topic: str, signatures: list[dict[str, An
 
 
 def _preference_context(conn: sqlite3.Connection, *, task_type: str, topic_tags: list[str]) -> str:
+    """Fetch preference delegation context, returning empty string on failure."""
     try:
         from universal_agent.services.proactive_preferences import (
             get_delegation_context,
@@ -809,6 +823,7 @@ def _record_convergence_event(
     task_id: str,
     artifact_id: str,
 ) -> None:
+    """Persist a convergence event row to the database."""
     now = _now_iso()
     video_ids = [str(item.get("video_id") or "").strip() for item in signatures if str(item.get("video_id") or "").strip()]
     channel_names = [str(item.get("channel_name") or item.get("channel_id") or "").strip() for item in signatures]
@@ -838,11 +853,13 @@ def _record_convergence_event(
 
 
 def _convergence_event_id(*, primary_topic: str, video_ids: list[str]) -> str:
+    """Generate a deterministic convergence event ID from topic and video IDs."""
     seed = "|".join([primary_topic.lower(), *sorted(video_ids)])
     return f"conv_{hashlib.sha256(seed.encode()).hexdigest()[:16]}"
 
 
 def _hydrate_signature(row: dict[str, Any]) -> dict[str, Any]:
+    """Convert JSON-prefixed columns into parsed Python lists and dicts."""
     row["primary_topics"] = _json_loads_list(row.pop("primary_topics_json", "[]"))
     row["secondary_topics"] = _json_loads_list(row.pop("secondary_topics_json", "[]"))
     row["key_claims"] = _json_loads_list(row.pop("key_claims_json", "[]"))
@@ -851,6 +868,7 @@ def _hydrate_signature(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _hydrate_event(row: dict[str, Any]) -> dict[str, Any]:
+    """Convert JSON-prefixed columns in an event row into parsed Python objects."""
     row["video_ids"] = _json_loads_list(row.pop("video_ids_json", "[]"))
     row["channel_names"] = _json_loads_list(row.pop("channel_names_json", "[]"))
     row["metadata"] = _json_loads_obj(row.pop("metadata_json", "{}"))
@@ -858,14 +876,17 @@ def _hydrate_event(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _clean_list(values: list[Any]) -> list[str]:
+    """Strip and filter empty strings from a list of values."""
     return [str(value).strip() for value in values if str(value).strip()]
 
 
 def _json_dumps(value: Any) -> str:
+    """Serialize value to compact JSON without ASCII escaping."""
     return json.dumps(value, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
 
 
 def _json_loads_list(raw: Any) -> list[Any]:
+    """Parse a JSON list from raw text or return the input if already a list."""
     if isinstance(raw, list):
         return list(raw)
     if isinstance(raw, str) and raw.strip():
@@ -879,6 +900,7 @@ def _json_loads_list(raw: Any) -> list[Any]:
 
 
 def _json_loads_obj(raw: Any) -> dict[str, Any]:
+    """Parse a JSON object from raw text or return the input if already a dict."""
     if isinstance(raw, dict):
         return dict(raw)
     if isinstance(raw, str) and raw.strip():
@@ -892,6 +914,7 @@ def _json_loads_obj(raw: Any) -> dict[str, Any]:
 
 
 def _parse_time(raw: Any) -> Optional[datetime]:
+    """Parse an ISO-8601 timestamp string into a timezone-aware datetime."""
     text = str(raw or "").strip()
     if not text:
         return None
@@ -905,4 +928,5 @@ def _parse_time(raw: Any) -> Optional[datetime]:
 
 
 def _now_iso() -> str:
+    """Return the current UTC time as an ISO-8601 string."""
     return datetime.now(timezone.utc).isoformat()
