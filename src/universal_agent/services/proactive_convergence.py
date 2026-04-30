@@ -881,7 +881,7 @@ def _clean_list(values: list[Any]) -> list[str]:
 
 
 def _json_dumps(value: Any) -> str:
-    """Serialize value to compact JSON without ASCII escaping."""
+    """Serialize value to compact, deterministic JSON with ASCII escaping."""
     return json.dumps(value, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
 
 
