@@ -667,6 +667,59 @@ def _emit_csi_digest(
         logger.error("Failed to emit CSI digest: %s", exc)
         return False
 
+# ---------------------------------------------------------------------------
+# Database State Management
+# ---------------------------------------------------------------------------
+
+def _ingestion_db_path() -> Path:
+    return _workspace_dir() / "youtube_ingestion_state.db"
+
+
+def _init_ingestion_db() -> None:
+    db_path = _ingestion_db_path()
+    conn = sqlite3.connect(str(db_path))
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS processed_videos (
+            video_id TEXT,
+            day TEXT,
+            title TEXT,
+            processed_at TEXT,
+            PRIMARY KEY (video_id, day)
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+
+def _filter_unprocessed_items(items: list[dict], day_name: str) -> list[dict]:
+    _init_ingestion_db()
+    db_path = _ingestion_db_path()
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.cursor()
+    cursor.execute("SELECT video_id FROM processed_videos WHERE day = ?", (day_name,))
+    processed_ids = {row[0] for row in cursor.fetchall()}
+    conn.close()
+    
+    filtered = []
+    for item in items:
+        if item.get("video_id") not in processed_ids:
+            filtered.append(item)
+    return filtered
+
+
+def _save_processed_videos(items: list[dict], day_name: str) -> None:
+    db_path = _ingestion_db_path()
+    conn = sqlite3.connect(str(db_path))
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        conn.executemany(
+            "INSERT OR REPLACE INTO processed_videos (video_id, day, title, processed_at) VALUES (?, ?, ?, ?)",
+            [(item.get("video_id"), day_name, item.get("title"), now) for item in items]
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
 
 # ---------------------------------------------------------------------------
 # Main processing
@@ -700,7 +753,16 @@ def process_daily_digest(
         logger.info("Playlist is empty. Nothing to process today.")
         return
 
-    logger.info("Found %d videos in the playlist.", len(items))
+    logger.info("Found %d total videos in the playlist.", len(items))
+
+    # Deduplicate against the database
+    new_items = _filter_unprocessed_items(items, day_name)
+    if not new_items:
+        logger.info("No new videos to process for %s. All videos in the playlist were already processed. Exiting gracefully.", day_name)
+        return
+
+    logger.info("Found %d NEW videos to process for %s.", len(new_items), day_name)
+    items = new_items
 
     transcripts: list[str] = []
     processed_items: list[dict] = []
@@ -873,17 +935,12 @@ def process_daily_digest(
             logger.error("Failed to send email: %s", e)
 
     if dry_run:
-        logger.info("DRY RUN enabled. Skipping physical deletion of videos.")
+        logger.info("DRY RUN enabled. Skipping database state persistence.")
         return
 
-    logger.info("Starting physical deletion of processed videos...")
-    for item in processed_items:
-        try:
-            success = remove_playlist_item(item["playlist_item_id"])
-            if success:
-                logger.info("Deleted %s from playlist.", item["video_id"])
-        except Exception as e:
-            logger.error("Failed to delete item %s: %s", item["playlist_item_id"], e)
+    logger.info("Saving state to processed_videos database...")
+    _save_processed_videos(processed_items, day_name)
+    logger.info("Successfully recorded %d videos as processed for %s.", len(processed_items), day_name)
 
 
 if __name__ == "__main__":

@@ -28,28 +28,37 @@ Playlist Watch → New Video Detection → Webhook Dispatch → Agent Session
 | Dashboard (Tutorials) | `web-ui/app/dashboard/tutorials/page.tsx` | Tutorial runs, review jobs, bootstrap jobs, notifications with client-side dedup |
 | Dashboard (Main) | `web-ui/app/dashboard/page.tsx` | Notification panel with video-level dedup |
 
-### 1.1A Daily Digest Ranking, Tutorial Dispatch, and Repopulate Pockets
+### 1.1A Daily Digest Ranking, Tutorial Dispatch, and Database State Management
 
-The Daily YouTube Digest cron uses day-specific playlists as clean inboxes: after a digest succeeds, processed videos are removed from that day's playlist. Digest synthesis uses the repository's Anthropic-compatible ZAI inference path, defaulting to `glm-5-turbo` via `resolve_model("sonnet")` unless `UA_YOUTUBE_DIGEST_MODEL` overrides it.
+The Daily YouTube Digest cron uses day-specific playlists as incoming queues. Previously, it operated on a "destructive physical deletion" model, which consumed ~500 API quota units per run to clear the playlist. **As of 2026-04-30, the digest uses a Zero-Quota Database State Model.** 
 
-The digest LLM now produces both human-readable markdown and a structured `youtube_digest_decisions` block. The code normalizes that block, sorts videos by `value_score`, saves a candidate artifact, and dispatches the highest-value `code_implementation_prospect=true` videos to the YouTube tutorial pipeline. Concept-only videos can still appear in the digest as high-value learning items, but they are not automatically dispatched. The machine-readable decision block is stripped from the human-facing digest/email; the email instead includes a compact "YouTube Tutorial Pipeline Dispatch" section listing selected videos and hook acceptance status.
+It fetches the playlist (costing 1 API unit) and deduplicates videos against `youtube_ingestion_state.db` using a composite key of `(video_id, day)`. This allows you to process a video on the `MONDAY_YT_PLAYLIST` and re-process the exact same video on the `WEDNESDAY_YT_PLAYLIST` without conflict, while strictly deduplicating within the same day.
+
+Digest synthesis uses the repository's Anthropic-compatible ZAI inference path, defaulting to `glm-5-turbo` via `resolve_model("sonnet")` unless `UA_YOUTUBE_DIGEST_MODEL` overrides it.
+
+The digest LLM now produces both human-readable markdown and a structured `youtube_digest_decisions` block. The code normalizes that block, sorts videos by `value_score`, saves a candidate artifact, and dispatches the highest-value `code_implementation_prospect=true` videos to the YouTube tutorial pipeline. The machine-readable decision block is stripped from the human-facing digest/email; the email instead includes a compact "YouTube Tutorial Pipeline Dispatch" section listing selected videos and hook acceptance status.
+
+> [!WARNING]
+> **Testing Status (2026-04-30)**: The transition to the SQLite Database state model has been fully implemented in the codebase, and the python deduplication logic has been verified via unit mocks. However, **end-to-end testing with actual YouTube data has not been finalized yet due to Google Cloud Project API quota limitations** hit during development. Full live validation is scheduled to resume tomorrow when the quota resets.
 
 ```mermaid
 sequenceDiagram
     participant Cron as youtube_daily_digest.py
     participant YT as YouTube playlist
+    participant DB as youtube_ingestion_state.db
     participant FS as daily_digests artifacts
     participant Hooks as /api/v1/hooks/youtube/manual
     participant CSI as CSI digests DB
 
     Cron->>YT: Read day playlist items
+    Cron->>DB: Filter unprocessed (video_id, day)
     Cron->>Cron: Ingest transcripts / metadata fallbacks
     Cron->>Cron: Generate ranked digest + structured decisions via ZAI model
     Cron->>FS: Save Digest.md and tutorial_candidates.json
     Cron->>Hooks: Dispatch top code implementation prospects only
     Cron->>FS: Save {date}_{DAY}_playlist_pocket.json
     Cron->>CSI: Emit daily digest record
-    Cron->>YT: Delete processed playlist items
+    Cron->>DB: Save processed state (INSERT OR REPLACE)
 ```
 
 Candidate files live under:
