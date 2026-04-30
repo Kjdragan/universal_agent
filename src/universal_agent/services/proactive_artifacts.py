@@ -86,6 +86,7 @@ def _normalize_list(value: Any) -> list[str]:
 
 
 def make_artifact_id(*, source_kind: str, source_ref: str, artifact_type: str, title: str = "") -> str:
+    """Return a deterministic 16-hex artifact ID derived from identifying fields."""
     seed = "|".join(
         [
             str(source_kind or "").strip().lower(),
@@ -98,6 +99,7 @@ def make_artifact_id(*, source_kind: str, source_ref: str, artifact_type: str, t
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
+    """Create proactive_artifacts tables and indexes if they do not exist."""
     conn.row_factory = sqlite3.Row
     conn.executescript(
         """
@@ -187,6 +189,7 @@ def upsert_artifact(
     topic_tags: Optional[list[str]] = None,
     metadata: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
+    """Insert a new proactive artifact or update an existing one by artifact_id."""
     ensure_schema(conn)
     normalized_status = status if status in VALID_ARTIFACT_STATUSES else ARTIFACT_STATUS_PRODUCED
     normalized_delivery = delivery_state if delivery_state in VALID_DELIVERY_STATES else DELIVERY_NOT_SURFACED
@@ -244,6 +247,8 @@ def upsert_artifact(
 
 
 def get_artifact(conn: sqlite3.Connection, artifact_id: str) -> Optional[dict[str, Any]]:
+    """Fetch a single artifact row by ID, returning None if not found."""
+
     ensure_schema(conn)
     row = conn.execute(
         "SELECT * FROM proactive_artifacts WHERE artifact_id = ? LIMIT 1",
@@ -259,6 +264,8 @@ def list_artifacts(
     delivery_state: str = "",
     limit: int = 50,
 ) -> list[dict[str, Any]]:
+    """Query artifacts with optional status and delivery_state filters, ordered by priority."""
+
     ensure_schema(conn)
     clauses: list[str] = []
     params: list[Any] = []
@@ -337,6 +344,7 @@ def update_artifact_state(
     status: str | None = None,
     delivery_state: str | None = None,
 ) -> dict[str, Any]:
+    """Transition an artifact status and delivery state, recording lifecycle timestamps."""
     ensure_schema(conn)
     current = get_artifact(conn, artifact_id)
     if current is None:
@@ -382,6 +390,7 @@ def record_email_delivery(
     recipient: str = "",
     metadata: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
+    """Log an email send for an artifact and advance its delivery state to emailed."""
     ensure_schema(conn)
     if get_artifact(conn, artifact_id) is None:
         raise KeyError(artifact_id)
@@ -420,6 +429,8 @@ def find_artifact_for_reply(
     thread_id: str = "",
     message_id: str = "",
 ) -> Optional[dict[str, Any]]:
+    """Locate an artifact by matching email thread_id, message_id, or artifact ID in subject."""
+
     ensure_schema(conn)
     clean_thread = str(thread_id or "").strip()
     if clean_thread:
@@ -469,6 +480,7 @@ def record_feedback(
     message_id: str = "",
     metadata: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
+    """Record user feedback with a 1-5 score and update the artifact acceptance state."""
     ensure_schema(conn)
     artifact = get_artifact(conn, artifact_id)
     if artifact is None:

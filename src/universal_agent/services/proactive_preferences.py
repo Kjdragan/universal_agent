@@ -23,6 +23,7 @@ def _json_dumps(value: Any) -> str:
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
+    """Create preference signal and model tables if they do not exist."""
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS proactive_preference_signals (
@@ -57,6 +58,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
 
 
 def signal_weight_for_score(score: int | None) -> float:
+    """Map a 1-5 feedback score to a preference weight between -0.8 and 0.9."""
     if score in {1, 5}:
         return 0.9
     if score in {3, 4}:
@@ -73,6 +75,7 @@ def record_artifact_feedback_signal(
     score: int | None,
     text: str = "",
 ) -> None:
+    """Extract signal keys from an artifact and record weighted feedback signals."""
     ensure_schema(conn)
     base_weight = signal_weight_for_score(score)
     if base_weight == 0.0 and not str(text or "").strip():
@@ -105,6 +108,7 @@ def record_artifact_feedback_signal(
 
 
 def score_artifact_for_review(conn: sqlite3.Connection, artifact: dict[str, Any]) -> float:
+    """Compute a preference-adjusted priority score for a candidate artifact."""
     ensure_schema(conn)
     keys = _artifact_signal_keys(artifact)
     if not keys:
@@ -127,6 +131,7 @@ def score_artifact_for_review(conn: sqlite3.Connection, artifact: dict[str, Any]
 
 
 def rebuild_preference_snapshot(conn: sqlite3.Connection, *, half_life_days: float = 14.0) -> dict[str, Any]:
+    """Recompute the preference model with time-decay weighting from all signals."""
     ensure_schema(conn)
     rows = conn.execute(
         """
@@ -193,6 +198,7 @@ def rebuild_preference_snapshot(conn: sqlite3.Connection, *, half_life_days: flo
 
 
 def get_preference_snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Load the cached preference model, rebuilding it if absent or corrupt."""
     ensure_schema(conn)
     row = conn.execute("SELECT model_json FROM proactive_preference_model WHERE id = 1").fetchone()
     if row is None:
@@ -210,6 +216,7 @@ def get_delegation_context(
     task_type: str = "",
     topic_tags: list[str] | None = None,
 ) -> str:
+    """Return a human-readable preference context string for task descriptions."""
     model = get_preference_snapshot(conn)
     preferences = model.get("topic_preferences") if isinstance(model.get("topic_preferences"), dict) else {}
     keys = _context_keys(task_type=task_type, topic_tags=topic_tags or [])
@@ -234,6 +241,7 @@ def get_delegation_context(
 
 
 def build_weekly_preference_report(conn: sqlite3.Connection, *, top_n: int = 10) -> dict[str, Any]:
+    """Generate a ranked summary of positive and negative preferences."""
     model = rebuild_preference_snapshot(conn)
     preferences = model.get("topic_preferences") if isinstance(model.get("topic_preferences"), dict) else {}
     ranked = sorted(
