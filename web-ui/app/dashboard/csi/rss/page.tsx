@@ -1,7 +1,9 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Youtube, Trash2, Plus, Loader2, RefreshCw, Edit2, PlaySquare, FolderPlus, ListVideo, Search, ChevronDown, ChevronRight } from "lucide-react";
+import { Youtube, Trash2, Plus, Loader2, RefreshCw, Edit2, PlaySquare, FolderPlus, ListVideo, Search, ChevronDown, ChevronRight, FileText, BookOpen } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 type Channel = {
   channel_id: string;
@@ -24,6 +26,18 @@ type RecentVideo = {
 type WatchlistResponse = {
   channels: Channel[];
   categories: string[];
+};
+
+type DailyDigest = {
+  id: string;
+  event_id: string;
+  source: string;
+  event_type: string;
+  title: string;
+  summary: string;
+  full_report_md: string;
+  source_types: string[];
+  created_at: string;
 };
 
 function compactDate(iso: string): string {
@@ -62,6 +76,12 @@ export default function CsiWatchlistPage() {
   // Recently ingested videos
   const [recentVideos, setRecentVideos] = useState<RecentVideo[]>([]);
   const [recentLoading, setRecentLoading] = useState(false);
+
+  // Daily Digests
+  const [middleColumnMode, setMiddleColumnMode] = useState<'recent' | 'digests'>('recent');
+  const [dailyDigests, setDailyDigests] = useState<DailyDigest[]>([]);
+  const [digestsLoading, setDigestsLoading] = useState(false);
+  const [selectedDigest, setSelectedDigest] = useState<DailyDigest | null>(null);
 
   // Renaming Categories
   const [editingCategory, setEditingCategory] = useState<string | null>(null);
@@ -106,6 +126,23 @@ export default function CsiWatchlistPage() {
       }
     } catch { /* silent */ }
     finally { setRecentLoading(false); }
+  };
+
+  const loadDailyDigests = async () => {
+    setDigestsLoading(true);
+    try {
+      const resp = await fetch("/api/dashboard/gateway/api/v1/dashboard/csi/digests?limit=100");
+      if (resp.ok) {
+        const data = await resp.json();
+        const allDigests: DailyDigest[] = data.digests || [];
+        // Filter to only youtube_daily_digest events
+        const ytDigests = allDigests.filter(d => 
+          (d.event_type || '').toLowerCase().includes('youtube_daily_digest')
+        );
+        setDailyDigests(ytDigests);
+      }
+    } catch { /* silent */ }
+    finally { setDigestsLoading(false); }
   };
 
   useEffect(() => {
@@ -503,57 +540,186 @@ export default function CsiWatchlistPage() {
             </div>
           </div>
 
-          {/* Recently Ingested Videos Column */}
+          {/* Middle Column: Recently Ingested Videos / Daily Digests */}
           <div className="hidden lg:flex w-[260px] xl:w-[300px] shrink-0 border border-border/40 bg-card/20 rounded-xl flex-col overflow-hidden">
-            <div className="bg-background/80 border-b border-border/40 px-4 py-3 shrink-0 flex items-center justify-between">
-              <div className="flex flex-col gap-1">
-                <div className="flex items-center gap-2">
-                  <ListVideo className="w-4 h-4 text-red-400" />
-                  <h3 className="font-bold text-foreground text-sm">Recently Ingested</h3>
-                </div>
-                {recentCategoryFilter && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-[11px] font-medium text-primary bg-primary/10 px-1.5 py-0.5 rounded border border-primary/20">
-                      {recentCategoryFilter.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ")}
-                    </span>
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); setRecentCategoryFilter(null); loadRecentVideos(null); }}
-                      className="text-[10px] text-muted-foreground hover:text-red-400 underline underline-offset-2"
-                    >
-                      Clear / Show All
-                    </button>
-                  </div>
-                )}
-              </div>
-              <button onClick={() => loadRecentVideos()} disabled={recentLoading} className="text-xs text-muted-foreground hover:text-foreground transition mt-[-10px] self-start">
-                <RefreshCw className={`w-3.5 h-3.5 ${recentLoading ? 'animate-spin' : ''}`} />
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto custom-scrollbar">
-              {recentVideos.length === 0 && !recentLoading && (
-                <div className="text-xs text-muted-foreground/50 text-center py-8">No recent videos</div>
-              )}
-              {recentVideos.map((v) => (
+            {/* Toggle Header */}
+            <div className="bg-background/80 border-b border-border/40 px-2 py-2 shrink-0">
+              <div className="flex bg-background/50 border border-border/40 rounded-lg p-0.5">
                 <button
-                  key={`${v.video_id}-${v.ingested_at}`}
-                  onClick={() => { setPreviewVideoId(v.video_id); setPreviewChannel(null); }}
-                  className={`w-full text-left px-3 py-2.5 border-b border-border/20 hover:bg-primary/5 transition-colors ${
-                    previewVideoId === v.video_id ? 'bg-primary/10 border-l-2 border-l-primary' : ''
+                  onClick={() => { setMiddleColumnMode('recent'); setSelectedDigest(null); }}
+                  className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md text-[11px] font-semibold transition-colors ${
+                    middleColumnMode === 'recent'
+                      ? 'bg-red-500/20 text-red-400 shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
                   }`}
                 >
-                  <p className="text-[13px] font-medium text-foreground/90 leading-snug line-clamp-2">{v.title || 'Untitled'}</p>
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className="text-[11px] text-cyan-400/80 truncate max-w-[140px]">{v.channel_name}</span>
-                    <span className="text-[10px] text-muted-foreground/60 ml-auto whitespace-nowrap">{compactDate(v.ingested_at)}</span>
-                  </div>
+                  <ListVideo className="w-3.5 h-3.5" />
+                  Recent
                 </button>
-              ))}
+                <button
+                  onClick={() => { setMiddleColumnMode('digests'); setPreviewVideoId(null); setPreviewChannel(null); loadDailyDigests(); }}
+                  className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md text-[11px] font-semibold transition-colors ${
+                    middleColumnMode === 'digests'
+                      ? 'bg-amber-500/20 text-amber-400 shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <BookOpen className="w-3.5 h-3.5" />
+                  Daily Digests
+                </button>
+              </div>
+            </div>
+
+            {/* Sub-header (contextual) */}
+            {middleColumnMode === 'recent' && (
+              <div className="bg-background/60 border-b border-border/30 px-4 py-2 shrink-0 flex items-center justify-between">
+                <div className="flex flex-col gap-1">
+                  {recentCategoryFilter && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] font-medium text-primary bg-primary/10 px-1.5 py-0.5 rounded border border-primary/20">
+                        {recentCategoryFilter.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ")}
+                      </span>
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); setRecentCategoryFilter(null); loadRecentVideos(null); }}
+                        className="text-[10px] text-muted-foreground hover:text-red-400 underline underline-offset-2"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <button onClick={() => loadRecentVideos()} disabled={recentLoading} className="text-xs text-muted-foreground hover:text-foreground transition">
+                  <RefreshCw className={`w-3.5 h-3.5 ${recentLoading ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
+            )}
+            {middleColumnMode === 'digests' && (
+              <div className="bg-background/60 border-b border-border/30 px-4 py-2 shrink-0 flex items-center justify-between">
+                <span className="text-[11px] text-muted-foreground font-medium">
+                  {dailyDigests.length} digest{dailyDigests.length !== 1 ? 's' : ''}
+                </span>
+                <button onClick={() => loadDailyDigests()} disabled={digestsLoading} className="text-xs text-muted-foreground hover:text-foreground transition">
+                  <RefreshCw className={`w-3.5 h-3.5 ${digestsLoading ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
+            )}
+
+            {/* Content */}
+            <div className="flex-1 overflow-y-auto custom-scrollbar">
+              {middleColumnMode === 'recent' ? (
+                <>
+                  {recentVideos.length === 0 && !recentLoading && (
+                    <div className="text-xs text-muted-foreground/50 text-center py-8">No recent videos</div>
+                  )}
+                  {recentVideos.map((v) => (
+                    <button
+                      key={`${v.video_id}-${v.ingested_at}`}
+                      onClick={() => { setPreviewVideoId(v.video_id); setPreviewChannel(null); setSelectedDigest(null); }}
+                      className={`w-full text-left px-3 py-2.5 border-b border-border/20 hover:bg-primary/5 transition-colors ${
+                        previewVideoId === v.video_id ? 'bg-primary/10 border-l-2 border-l-primary' : ''
+                      }`}
+                    >
+                      <p className="text-[13px] font-medium text-foreground/90 leading-snug line-clamp-2">{v.title || 'Untitled'}</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className="text-[11px] text-cyan-400/80 truncate max-w-[140px]">{v.channel_name}</span>
+                        <span className="text-[10px] text-muted-foreground/60 ml-auto whitespace-nowrap">{compactDate(v.ingested_at)}</span>
+                      </div>
+                    </button>
+                  ))}
+                </>
+              ) : (
+                <>
+                  {dailyDigests.length === 0 && !digestsLoading && (
+                    <div className="flex flex-col items-center justify-center py-8 gap-2">
+                      <BookOpen className="w-8 h-8 text-border" />
+                      <span className="text-xs text-muted-foreground/50 text-center px-4">
+                        No daily digests yet. They appear after the daily cron processes your YouTube playlists.
+                      </span>
+                    </div>
+                  )}
+                  {dailyDigests.map((digest) => {
+                    const isActive = selectedDigest?.id === digest.id;
+                    // Extract day and date from title like "Daily YouTube Digest: Monday, 2026-04-30 (8 videos)"
+                    const dateMatch = digest.title.match(/(\w+day),\s*([\d-]+)/);
+                    const dayLabel = dateMatch ? dateMatch[1] : '';
+                    const dateLabel = dateMatch ? dateMatch[2] : compactDate(digest.created_at);
+                    const videoCountMatch = digest.title.match(/(\d+)\s*videos?/);
+                    const videoCount = videoCountMatch ? videoCountMatch[1] : '';
+
+                    return (
+                      <button
+                        key={digest.id}
+                        onClick={() => { setSelectedDigest(digest); setPreviewVideoId(null); setPreviewChannel(null); }}
+                        className={`w-full text-left px-3 py-3 border-b border-border/20 hover:bg-amber-500/5 transition-colors ${
+                          isActive ? 'bg-amber-500/10 border-l-2 border-l-amber-400' : ''
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 mb-1">
+                          <FileText className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                          <span className="text-[13px] font-semibold text-foreground/90">
+                            {dayLabel || 'Digest'}
+                          </span>
+                          {videoCount && (
+                            <span className="text-[10px] font-medium bg-amber-500/15 text-amber-400 px-1.5 py-0.5 rounded ml-auto">
+                              {videoCount} videos
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-muted-foreground leading-snug">
+                          {dateLabel}
+                        </p>
+                        {digest.summary && (
+                          <p className="text-[10px] text-muted-foreground/60 mt-1 line-clamp-2 leading-relaxed">
+                            {digest.summary.slice(0, 120)}
+                          </p>
+                        )}
+                      </button>
+                    );
+                  })}
+                </>
+              )}
             </div>
           </div>
 
           {/* Persistent Preview Viewer Panel */}
           <div className="hidden md:flex w-[440px] lg:w-[500px] xl:w-[600px] shrink-0 border border-border/40 bg-card/20 rounded-xl flex-col shadow-inner overflow-hidden">
-             {previewVideoId ? (
+             {selectedDigest ? (
+                <>
+                   <div className="bg-background/80 border-b border-border/40 p-4 shrink-0 flex items-center justify-between">
+                      <div className="flex-1 min-w-0">
+                         <div className="flex items-center gap-2 mb-1">
+                           <span className="text-[10px] font-bold tracking-wide bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded">
+                             DAILY DIGEST
+                           </span>
+                         </div>
+                         <h3 className="font-bold text-foreground text-sm truncate">
+                           {selectedDigest.title}
+                         </h3>
+                         <p className="text-xs text-muted-foreground mt-0.5">
+                           {compactDate(selectedDigest.created_at)}
+                         </p>
+                      </div>
+                   </div>
+                   <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
+                     <div className="prose prose-invert prose-sm max-w-none
+                       prose-headings:text-foreground prose-headings:font-bold
+                       prose-p:text-muted-foreground prose-p:leading-relaxed
+                       prose-strong:text-foreground
+                       prose-a:text-cyan-400 prose-a:no-underline hover:prose-a:underline
+                       prose-code:text-amber-400 prose-code:bg-amber-500/10 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:text-[12px]
+                       prose-pre:bg-background/80 prose-pre:border prose-pre:border-border/40
+                       prose-li:text-muted-foreground
+                       prose-hr:border-border/40
+                       prose-blockquote:border-l-amber-400 prose-blockquote:text-muted-foreground
+                       prose-th:text-foreground/80 prose-td:text-muted-foreground
+                     ">
+                       <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                         {selectedDigest.full_report_md || selectedDigest.summary || 'No content available.'}
+                       </ReactMarkdown>
+                     </div>
+                   </div>
+                </>
+             ) : previewVideoId ? (
                 <>
                    <div className="bg-background/80 border-b border-border/40 p-4 shrink-0 flex items-center justify-between">
                       <div>
@@ -600,7 +766,7 @@ export default function CsiWatchlistPage() {
              ) : (
                 <div className="flex-1 flex flex-col items-center justify-center text-center p-8 text-muted-foreground/60 space-y-4">
                     <PlaySquare className="w-12 h-12 text-border" />
-                    <p className="text-sm">Click a recent video or channel to preview.</p>
+                    <p className="text-sm">{middleColumnMode === 'digests' ? 'Select a digest to read.' : 'Click a recent video or channel to preview.'}</p>
                 </div>
              )}
           </div>

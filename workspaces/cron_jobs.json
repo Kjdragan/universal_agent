@@ -5,6 +5,7 @@
       "user_id": "system",
       "workspace_dir": "/home/kjdragan/lrepos/universal_agent/workspaces/cron_nightly_wiki",
       "command": "!script universal_agent.scripts.nightly_wiki_agent",
+      "description": null,
       "every_seconds": 0,
       "cron_expr": "15 3 * * *",
       "timezone": "America/Chicago",
@@ -13,16 +14,20 @@
       "model": null,
       "timeout_seconds": 1800,
       "enabled": true,
+      "catch_up_on_restart": false,
       "created_at": 1776175852.3359642,
       "last_run_at": null,
       "next_run_at": null,
-      "metadata": {"description": "Proactive overnight wiki generation from pending signal cards"}
+      "metadata": {
+        "description": "Proactive overnight wiki generation from pending signal cards"
+      }
     },
     {
       "job_id": "morning_briefing",
       "user_id": "system",
       "workspace_dir": "/home/kjdragan/lrepos/universal_agent/workspaces/cron_morning_briefing",
       "command": "!script universal_agent.scripts.briefings_agent",
+      "description": null,
       "every_seconds": 0,
       "cron_expr": "30 6 * * *",
       "timezone": "America/Chicago",
@@ -31,16 +36,20 @@
       "model": null,
       "timeout_seconds": 900,
       "enabled": true,
+      "catch_up_on_restart": false,
       "created_at": 1776175852.3359642,
       "last_run_at": null,
       "next_run_at": null,
-      "metadata": {"description": "Daily morning briefing combining telemetry + nightly wiki output"}
+      "metadata": {
+        "description": "Daily morning briefing combining telemetry + nightly wiki output"
+      }
     },
     {
       "job_id": "proactive_report_7am",
       "user_id": "system",
       "workspace_dir": "/home/kjdragan/lrepos/universal_agent/workspaces/cron_proactive_reports",
       "command": "!script universal_agent.scripts.proactive_report_agent",
+      "description": null,
       "every_seconds": 0,
       "cron_expr": "0 7 * * *",
       "timezone": "America/Chicago",
@@ -49,16 +58,20 @@
       "model": null,
       "timeout_seconds": 600,
       "enabled": true,
+      "catch_up_on_restart": false,
       "created_at": 1776175852.3359642,
       "last_run_at": null,
       "next_run_at": null,
-      "metadata": {"description": "Morning proactive intelligence report — pipeline stats + LLM analysis"}
+      "metadata": {
+        "description": "Morning proactive intelligence report \u2014 pipeline stats + LLM analysis"
+      }
     },
     {
       "job_id": "proactive_report_12pm",
       "user_id": "system",
       "workspace_dir": "/home/kjdragan/lrepos/universal_agent/workspaces/cron_proactive_reports",
       "command": "!script universal_agent.scripts.proactive_report_agent",
+      "description": null,
       "every_seconds": 0,
       "cron_expr": "0 12 * * *",
       "timezone": "America/Chicago",
@@ -67,16 +80,20 @@
       "model": null,
       "timeout_seconds": 600,
       "enabled": true,
+      "catch_up_on_restart": false,
       "created_at": 1776175852.3359642,
       "last_run_at": null,
       "next_run_at": null,
-      "metadata": {"description": "Midday proactive intelligence report — pipeline stats + LLM analysis"}
+      "metadata": {
+        "description": "Midday proactive intelligence report \u2014 pipeline stats + LLM analysis"
+      }
     },
     {
       "job_id": "proactive_report_4pm",
       "user_id": "system",
       "workspace_dir": "/home/kjdragan/lrepos/universal_agent/workspaces/cron_proactive_reports",
       "command": "!script universal_agent.scripts.proactive_report_agent",
+      "description": null,
       "every_seconds": 0,
       "cron_expr": "0 16 * * *",
       "timezone": "America/Chicago",
@@ -85,16 +102,20 @@
       "model": null,
       "timeout_seconds": 600,
       "enabled": true,
+      "catch_up_on_restart": false,
       "created_at": 1776175852.3359642,
       "last_run_at": null,
       "next_run_at": null,
-      "metadata": {"description": "Afternoon proactive intelligence report — pipeline stats + LLM analysis"}
+      "metadata": {
+        "description": "Afternoon proactive intelligence report \u2014 pipeline stats + LLM analysis"
+      }
     },
     {
       "job_id": "proactive_artifact_digest",
       "user_id": "system",
       "workspace_dir": "/home/kjdragan/lrepos/universal_agent/workspaces/cron_proactive_digest",
       "command": "!script universal_agent.scripts.proactive_digest_agent",
+      "description": null,
       "every_seconds": 0,
       "cron_expr": "0 8 * * *",
       "timezone": "America/Chicago",
@@ -103,10 +124,33 @@
       "model": null,
       "timeout_seconds": 300,
       "enabled": true,
+      "catch_up_on_restart": false,
       "created_at": 1776175852.3359642,
       "last_run_at": null,
       "next_run_at": null,
-      "metadata": {"description": "Daily proactive artifact digest — surfaces unseen CODIE PRs, tutorial builds, and convergence insights via email"}
+      "metadata": {
+        "description": "Daily proactive artifact digest \u2014 surfaces unseen CODIE PRs, tutorial builds, and convergence insights via email"
+      }
+    },
+    {
+      "job_id": "daily_youtube_digest",
+      "user_id": "system",
+      "workspace_dir": "/home/kjdragan/lrepos/universal_agent/workspaces/cron_daily_youtube_digest",
+      "command": "!script universal_agent.scripts.youtube_daily_digest",
+      "description": null,
+      "every_seconds": 0,
+      "cron_expr": "0 8 * * *",
+      "timezone": "America/Chicago",
+      "run_at": null,
+      "delete_after_run": false,
+      "model": null,
+      "timeout_seconds": 3600,
+      "enabled": true,
+      "catch_up_on_restart": false,
+      "created_at": 1777565101.872888,
+      "last_run_at": null,
+      "next_run_at": null,
+      "metadata": {}
     }
   ]
 }
