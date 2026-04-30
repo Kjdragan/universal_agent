@@ -93,7 +93,7 @@ def _emit_csi_digest(
     can be processed by the batch brief / proactive signal pipeline.
     """
     # Locate the CSI digests DB — same path the gateway uses
-    workspaces_dir = Path(os.getenv("UA_WORKSPACE_DIR") or Path.cwd()) / "workspaces"
+    workspaces_dir = Path(os.getenv("UA_WORKSPACES_DIR") or (Path.cwd() / "AGENT_RUN_WORKSPACES"))
     db_path = workspaces_dir / ".csi_digests.db"
 
     if not db_path.exists():
@@ -141,10 +141,10 @@ def _emit_csi_digest(
 # Main processing
 # ---------------------------------------------------------------------------
 
-def process_daily_digest(dry_run: bool = False):
+def process_daily_digest(dry_run: bool = False, day_override: str | None = None):
     initialize_runtime_secrets()
 
-    day_name = DAYS[datetime.now().weekday()]
+    day_name = day_override.upper() if day_override else DAYS[datetime.now().weekday()]
     playlist_id_var = f"{day_name}_YT_PLAYLIST"
     playlist_id = os.getenv(playlist_id_var)
 
@@ -223,7 +223,9 @@ def process_daily_digest(dry_run: bool = False):
     logger.info("Generating Meta-Synthesis with Gemini (Vertex AI)...")
 
     # Always use Vertex AI — works on both VPS (service account) and desktop (ADC)
-    client = genai.Client(vertexai=True)
+    vertex_project = os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("VERTEX_PROJECT") or "gen-lang-client-0229532959"
+    vertex_location = os.getenv("VERTEX_LOCATION", "us-central1")
+    client = genai.Client(vertexai=True, project=vertex_project, location=vertex_location)
 
     full_prompt = SYNTHESIS_PROMPT + "\n\n---\n\n".join(transcripts)
 
@@ -242,7 +244,7 @@ def process_daily_digest(dry_run: bool = False):
 
     # Save Artifact to the persistent daily_digests workspace
     date_str = datetime.now().strftime("%Y-%m-%d")
-    workspace_dir = Path(os.getenv("UA_WORKSPACE_DIR") or Path.cwd()) / "workspaces"
+    workspace_dir = Path(os.getenv("UA_WORKSPACES_DIR") or (Path.cwd() / "AGENT_RUN_WORKSPACES"))
     artifacts_dir = workspace_dir / "daily_digests"
     artifacts_dir.mkdir(parents=True, exist_ok=True)
 
@@ -288,21 +290,10 @@ if __name__ == "__main__":
 
     if args.day:
         day_upper = args.day.upper()
-        if day_upper in DAYS:
-            # Monkey-patch the weekday() to return the desired day index
-            _original_now = datetime.now
-            _day_idx = DAYS.index(day_upper)
-
-            class _FakeDateTime(datetime):
-                @classmethod
-                def now(cls, tz=None):
-                    real = _original_now(tz)
-                    # Shift to the desired weekday
-                    delta = _day_idx - real.weekday()
-                    return real.replace(day=real.day) if delta == 0 else real
-
-            # Simple approach: just set the env var
-            os.environ[f"{day_upper}_YT_PLAYLIST"] = os.getenv(f"{day_upper}_YT_PLAYLIST", "")
-            logger.info("Day override: %s", day_upper)
-
-    process_daily_digest(dry_run=args.dry_run)
+        if day_upper not in DAYS:
+            logger.error("Invalid day: %s. Must be one of %s", args.day, DAYS)
+            sys.exit(1)
+        logger.info("Day override: %s", day_upper)
+        process_daily_digest(dry_run=args.dry_run, day_override=day_upper)
+    else:
+        process_daily_digest(dry_run=args.dry_run)
