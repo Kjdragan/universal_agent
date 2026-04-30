@@ -10,6 +10,26 @@ When investigating or fixing issues, always solve the **root cause** holisticall
 
 Defensive guards and safety nets are acceptable as a *last resort backstop*, but they must not be the primary fix. The primary fix should eliminate the problem at its source.
 
+## LLM-Native Intelligence Design
+
+When designing intelligence, briefing, ideation, curation, or pattern-detection features, prefer using LLM reasoning over building custom Pythonic pseudo-reasoning systems unless scale, latency, auditability, or determinism clearly require code.
+
+Default division of labor:
+
+1. **Code collects and preserves evidence.** Store raw facts, source records, timestamps, links, tags, state, ownership, and retrieval metadata faithfully.
+2. **Code gates and protects execution.** Use deterministic rules for safety boundaries, budget/concurrency limits, deduplication, auth, irreversible actions, and promotion into Task Hub work.
+3. **LLMs synthesize meaning.** When the corpus is bounded enough to fit into a briefing, handoff, or retrieval context, let the LLM infer themes, neglected opportunities, recurring blockers, and recommended actions from the evidence.
+
+Avoid creating elaborate programmatic trend/theme/scoring systems that attempt to imitate reasoning over small-to-medium corpora. These systems often add noise, hardcode brittle assumptions, and make the agent less capable than simply giving a strong LLM the right context and asking for explicit synthesis.
+
+Use Pythonic aggregation when it solves a real systems problem: reducing a huge corpus to retrievable chunks, enforcing invariants, computing objective metrics, maintaining indexes, or producing deterministic eligibility decisions. Do not use it just because a pattern could be expressed in code.
+
+For briefings and operator-intelligence surfaces, prefer this pattern:
+
+`raw records -> durable knowledge blocks -> bounded retrieval context -> LLM synthesis -> gated action candidates`
+
+Required briefing behavior: when recent knowledge blocks include surfaced ideas, repeated warnings, stalled work, or recurring observations, the briefing LLM should explicitly assess whether any pattern or opportunity is emerging. If action is warranted, it should propose a candidate through existing gates rather than directly creating uncontrolled work.
+
 ## Code-Verified Answers
 
 When answering questions about how this system works — architecture, data flows, service interactions, agent pipelines, or any behavioral claim — you **MUST read the actual source code first** before responding. Do not answer from memory, assumptions, or general knowledge.

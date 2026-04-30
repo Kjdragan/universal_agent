@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "branch_name": "feature/latest2",
+      "worktree_path": "/home/kjdragan/lrepos/universal_agent",
+      "status": "active",
+      "created_at": "2026-04-30T14:11:10.186Z",
+      "updated_at": "2026-04-30T14:32:53.790Z"
+    }
+  ]
+}

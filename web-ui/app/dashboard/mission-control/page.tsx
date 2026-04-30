@@ -1,11 +1,9 @@
 "use client";
 
-import { CapacityGovernorPanel } from "@/components/dashboard/CapacityGovernorPanel";
-import { PipelineStatsPanel } from "@/components/dashboard/PipelineStatsPanel";
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Activity, BarChart3, Bell, Briefcase, CheckCircle, Clock, DollarSign, Download, Heart, Loader2, RefreshCw, Timer, Trash2, TrendingUp, Cpu, XCircle, Zap } from "lucide-react";
+import { Activity, AlertTriangle, ArrowRight, BarChart3, Bell, Briefcase, CheckCircle, ClipboardList, Clock, FileText, Loader2, RefreshCw, Timer, Trash2, XCircle } from "lucide-react";
 import { formatDistanceToNow, parseISO } from "date-fns";
 
 const API_BASE = "/api/dashboard/gateway";
@@ -107,7 +105,7 @@ const RefreshContext = createContext<RefreshContextType>({
   isRefreshing: false,
 });
 
-// Active Work Items Panel (Task Queue Overview)
+// Current Work Panel (Task Queue Overview)
 function ActiveTasksPanel() {
   const [loading, setLoading] = useState(true);
   const { refreshKey } = useContext(RefreshContext);
@@ -153,7 +151,7 @@ function ActiveTasksPanel() {
       const json = await res.json();
       setData(json as AgentQueuePayload);
     } catch (err: any) {
-      setError(err.message || "Failed to load active work items");
+      setError(err.message || "Failed to load current work");
     } finally {
       setLoading(false);
     }
@@ -171,11 +169,11 @@ function ActiveTasksPanel() {
 
   if (loading) {
     return (
-      <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
-        <div className="mb-4 flex items-center justify-between">
+      <div className="min-w-0 rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <BarChart3 className="h-4 w-4 text-muted-foreground" />
-            <h2 className="text-sm font-medium text-foreground/80">Active Work Items</h2>
+            <h2 className="text-sm font-medium text-foreground/80">Current Work</h2>
           </div>
           <div className="flex items-center gap-2">
             <select
@@ -206,11 +204,11 @@ function ActiveTasksPanel() {
 
   if (error) {
     return (
-      <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
+      <div className="min-w-0 rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <BarChart3 className="h-4 w-4 text-muted-foreground" />
-            <h2 className="text-sm font-medium text-foreground/80">Active Work Items</h2>
+            <h2 className="text-sm font-medium text-foreground/80">Current Work</h2>
           </div>
           <div className="flex items-center gap-2">
             <select
@@ -245,11 +243,11 @@ function ActiveTasksPanel() {
   const items = data?.items || [];
 
   return (
-    <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
-      <div className="mb-4 flex items-center justify-between">
+    <div className="min-w-0 rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <BarChart3 className="h-4 w-4 text-muted-foreground" />
-          <h2 className="text-sm font-medium text-foreground/80">Active Work Items</h2>
+          <h2 className="text-sm font-medium text-foreground/80">Current Work</h2>
         </div>
         <div className="flex items-center gap-2">
           <select
@@ -269,7 +267,7 @@ function ActiveTasksPanel() {
 
       {items.length === 0 ? (
         <div className="flex flex-1 items-center justify-center py-8">
-          <p className="text-sm text-muted-foreground">No active work items</p>
+          <p className="text-sm text-muted-foreground">No current work</p>
         </div>
       ) : (
         <div className="max-h-80 space-y-2 overflow-y-auto">
@@ -277,13 +275,13 @@ function ActiveTasksPanel() {
             <Link
               key={item.task_id}
               href={`/dashboard/todolist?mode=agent&focus=${item.task_id}`}
-              className="group block rounded-lg border border-border/50 bg-card/30 p-3 transition-colors hover:border-border hover:bg-card/50"
+              className="group block min-w-0 overflow-hidden rounded-lg border border-border/50 bg-card/30 p-3 transition-colors hover:border-border hover:bg-card/50"
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-foreground leading-snug">{item.title}</p>
+                  <p className="break-words text-sm font-medium text-foreground leading-snug">{item.title}</p>
                   {item.description && (
-                    <p className="mt-0.5 text-xs text-muted-foreground leading-snug line-clamp-2">{item.description}</p>
+                    <p className="mt-0.5 break-words text-xs text-muted-foreground leading-snug line-clamp-2">{item.description}</p>
                   )}
                 </div>
                 <button
@@ -373,7 +371,7 @@ function SystemStatusPanel() {
 
   if (loading) {
     return (
-      <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
+      <div className="min-w-0 rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
         <div className="mb-4 flex items-center gap-2">
           <Activity className="h-4 w-4 text-muted-foreground" />
           <h2 className="text-sm font-medium text-foreground/80">System Status</h2>
@@ -480,77 +478,65 @@ function SystemStatusPanel() {
   );
 }
 
-const CLEARED_EVENTS_LS_KEY = "mc_cleared_events_before";
-
-// Activity Event type for the /api/v1/dashboard/events endpoint
-type ActivityEvent = {
+type DashboardSituation = {
   id: string;
-  event_class?: string;
-  source_domain?: string;
   kind?: string;
   title?: string;
   summary?: string;
-  severity?: string;
+  priority?: "high" | "medium" | "low" | string;
   status?: string;
   requires_action?: boolean;
+  tags?: string[];
   created_at_utc?: string;
   updated_at_utc?: string;
-  session_id?: string;
-  metadata?: Record<string, unknown>;
+  source_domain?: string;
+  primary_href?: string;
+  knowledge_block?: {
+    source?: string;
+    event_ids?: string[];
+    task_ids?: string[];
+    session_id?: string | null;
+    recommended_action?: string;
+    handoff_prompt?: string;
+    evidence?: Record<string, unknown>;
+  };
 };
 
-function severityBadge(severity?: string): { color: string; label: string } {
-  const s = (severity || "info").toLowerCase();
-  if (s === "error" || s === "critical") return { color: "bg-red-500/10 text-red-400", label: s };
-  if (s === "warning" || s === "warn") return { color: "bg-accent/10 text-accent", label: "warn" };
-  if (s === "success") return { color: "bg-primary/10 text-primary", label: s };
-  return { color: "bg-muted-foreground/10 text-muted-foreground", label: s };
+function situationPriorityBadge(priority?: string): { color: string; label: string; icon: ReactNode } {
+  const p = (priority || "low").toLowerCase();
+  if (p === "high") {
+    return { color: "bg-red-500/10 text-red-300 border-red-500/25", label: "high", icon: <AlertTriangle className="h-3.5 w-3.5" /> };
+  }
+  if (p === "medium") {
+    return { color: "bg-accent/10 text-accent border-accent/25", label: "medium", icon: <Clock className="h-3.5 w-3.5" /> };
+  }
+  return { color: "bg-primary/10 text-primary border-primary/25", label: "low", icon: <CheckCircle className="h-3.5 w-3.5" /> };
 }
 
-function sourceDomainIcon(domain?: string): string {
-  const d = (domain || "").toLowerCase();
-  if (d === "csi") return "📊";
-  if (d === "heartbeat") return "💓";
-  if (d === "tutorial") return "🎬";
-  if (d === "cron") return "⏰";
-  if (d === "simone" || d === "agentmail") return "📧";
-  if (d === "continuity") return "🔄";
-  return "⚡";
-}
-
-// Recent Events Panel — wired to /api/v1/dashboard/events (real activity events)
-function RecentEventsPanel() {
+// Operator Brief Panel — curated situation cards backed by /api/v1/dashboard/situations.
+function OperatorBriefPanel() {
   const [loading, setLoading] = useState(true);
   const { refreshKey } = useContext(RefreshContext);
   const [error, setError] = useState<string | null>(null);
-  const [events, setEvents] = useState<ActivityEvent[]>([]);
-  const [clearedBefore, setClearedBefore] = useState<string | null>(null);
-  const [showFocusMode, setShowFocusMode] = useState(true);
-
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(CLEARED_EVENTS_LS_KEY);
-      if (stored) setClearedBefore(stored);
-    } catch { /* localStorage unavailable */ }
-  }, []);
+  const [situations, setSituations] = useState<DashboardSituation[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/dashboard/events?limit=20&all_noise=${!showFocusMode}`, {
+      const res = await fetch(`${API_BASE}/api/v1/dashboard/situations?limit=10`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Failed to load: ${res.status}`);
       const json = await res.json();
-      const items: ActivityEvent[] = Array.isArray(json.events) ? json.events : [];
-      setEvents(items);
+      const items: DashboardSituation[] = Array.isArray(json.situations) ? json.situations : [];
+      setSituations(items);
     } catch (err: any) {
-      setError(err.message || "Failed to load recent events");
+      setError(err.message || "Failed to load operator brief");
     } finally {
       setLoading(false);
     }
-  }, [showFocusMode]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -560,20 +546,14 @@ function RecentEventsPanel() {
     return () => {
       cancelled = true;
     };
-  }, [load, refreshKey, showFocusMode]);
-
-  const handleClearAll = () => {
-    const now = new Date().toISOString();
-    try { localStorage.setItem(CLEARED_EVENTS_LS_KEY, now); } catch { /* ignore */ }
-    setClearedBefore(now);
-  };
+  }, [load, refreshKey]);
 
   if (loading) {
     return (
       <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
         <div className="mb-4 flex items-center gap-2">
-          <Clock className="h-4 w-4 text-muted-foreground" />
-          <h2 className="text-sm font-medium text-foreground/80">Recent Events</h2>
+          <ClipboardList className="h-4 w-4 text-muted-foreground" />
+          <h2 className="text-sm font-medium text-foreground/80">Operator Brief</h2>
         </div>
         <div className="space-y-3">
           {[1, 2, 3].map((i) => (
@@ -591,8 +571,8 @@ function RecentEventsPanel() {
     return (
       <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
         <div className="mb-4 flex items-center gap-2">
-          <Clock className="h-4 w-4 text-muted-foreground" />
-          <h2 className="text-sm font-medium text-foreground/80">Recent Events</h2>
+          <ClipboardList className="h-4 w-4 text-muted-foreground" />
+          <h2 className="text-sm font-medium text-foreground/80">Operator Brief</h2>
         </div>
         <div className="flex flex-col items-center justify-center py-6 text-center">
           <XCircle className="mb-2 h-8 w-8 text-red-400" />
@@ -609,89 +589,95 @@ function RecentEventsPanel() {
     );
   }
 
-  const clearedTs = clearedBefore ? new Date(clearedBefore).getTime() : null;
-  const isHidden = (e: ActivityEvent) => {
-    const st = (e.status || "").toLowerCase();
-    return st === "dismissed" || st === "resolved";
-  };
-  const items = clearedTs
-    ? events.filter((e) => {
-        if (isHidden(e)) return false;
-        const ts = e.created_at_utc || e.updated_at_utc || "";
-        if (!ts) return false;
-        return new Date(ts).getTime() > clearedTs;
-      })
-    : events.filter((e) => !isHidden(e));
-
   return (
-    <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
-      <div className="mb-4 flex items-center justify-between">
-        <Link href="/dashboard/events" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
-          <Clock className="h-4 w-4 text-muted-foreground" />
-          <h2 className="text-sm font-medium text-foreground/80">Recent Events</h2>
-        </Link>
+    <div className="min-w-0 rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <label className="text-[11px] text-muted-foreground font-medium flex items-center cursor-pointer gap-1.5 mr-2">
-            <input 
-              type="checkbox" 
-              checked={showFocusMode}
-              onChange={(e) => setShowFocusMode(e.target.checked)}
-              className="accent-amber-600 cursor-pointer h-3 w-3"
-            />
-            Focus Mode
-          </label>
-          <span className="text-xs text-muted-foreground">{items.length} shown</span>
-          {items.length > 0 && (
-            <button
-              onClick={handleClearAll}
-              className="rounded border border-border bg-card px-2 py-0.5 text-xs text-muted-foreground hover:bg-card/50 hover:text-foreground/80"
-            >
-              Clear All
-            </button>
-          )}
+          <ClipboardList className="h-4 w-4 text-muted-foreground" />
+          <h2 className="text-sm font-medium text-foreground/80">Operator Brief</h2>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">{situations.length} situation{situations.length === 1 ? "" : "s"}</span>
+          <Link
+            href="/dashboard/events"
+            className="inline-flex items-center gap-1 rounded border border-border bg-card px-2 py-0.5 text-xs text-muted-foreground hover:bg-card/50 hover:text-foreground/80"
+          >
+            Event Log
+            <ArrowRight className="h-3 w-3" />
+          </Link>
         </div>
       </div>
 
-      {items.length === 0 ? (
+      {situations.length === 0 ? (
         <div className="flex flex-1 items-center justify-center py-8">
-          <p className="text-sm text-muted-foreground">No recent events</p>
+          <p className="text-sm text-muted-foreground">No operator-relevant situations right now.</p>
         </div>
       ) : (
-        <div className="max-h-80 space-y-2 overflow-y-auto">
-          {items.map((event) => {
-            const sev = severityBadge(event.severity);
+        <div className="max-h-[30rem] space-y-3 overflow-y-auto pr-1">
+          {situations.map((situation) => {
+            const badge = situationPriorityBadge(situation.priority);
+            const kb = situation.knowledge_block || {};
             return (
               <div
-                key={event.id}
-                className="rounded-lg border border-border/50 bg-card/30 p-3"
+                key={situation.id}
+                className="min-w-0 overflow-hidden rounded-lg border border-border/50 bg-card/30 p-3"
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-foreground leading-snug">
-                      {sourceDomainIcon(event.source_domain)} {event.title || event.kind || "Event"}
-                    </p>
-                    {event.summary && (
-                      <p className="mt-0.5 text-xs text-muted-foreground leading-snug line-clamp-2">
-                        {event.summary}
+                    <p className="break-words text-sm font-medium text-foreground leading-snug">{situation.title || "Situation"}</p>
+                    {situation.summary && (
+                      <p className="mt-0.5 break-words text-xs text-muted-foreground leading-snug line-clamp-2">
+                        {situation.summary}
                       </p>
                     )}
                   </div>
-                  <span className={`flex-shrink-0 rounded px-1.5 py-0.5 text-xs ${sev.color}`}>
-                    {sev.label}
+                  <span className={`inline-flex flex-shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-xs ${badge.color}`}>
+                    {badge.icon}
+                    {badge.label}
                   </span>
                 </div>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
-                  {event.source_domain && (
-                    <span className="rounded bg-card/50 px-1.5 py-0.5 text-xs text-muted-foreground">
-                      {event.source_domain}
+                  {(situation.tags || []).slice(0, 6).map((tag) => (
+                    <span key={tag} className="rounded bg-card/50 px-1.5 py-0.5 text-xs text-muted-foreground">
+                      {tag}
                     </span>
-                  )}
-                  {event.status && event.status !== "new" && (
-                    <span className="text-xs text-muted-foreground">{event.status}</span>
+                  ))}
+                  {situation.status && (
+                    <span className="text-xs text-muted-foreground">{situation.status}</span>
                   )}
                   <span className="text-xs text-muted-foreground">
-                    {formatTs(event.created_at_utc || event.updated_at_utc)}
+                    {formatTs(situation.updated_at_utc || situation.created_at_utc)}
                   </span>
+                </div>
+                {kb.recommended_action && (
+                  <p className="mt-2 text-xs text-foreground/75">
+                    <span className="text-muted-foreground">Recommended:</span> {kb.recommended_action}
+                  </p>
+                )}
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  {situation.primary_href && (
+                    <Link
+                      href={situation.primary_href}
+                      className="inline-flex items-center gap-1 rounded border border-primary/30 bg-primary/10 px-2 py-1 text-[11px] text-primary/80 hover:bg-primary/20"
+                    >
+                      Open Source
+                      <ArrowRight className="h-3 w-3" />
+                    </Link>
+                  )}
+                  <details className="group">
+                    <summary className="inline-flex cursor-pointer items-center gap-1 rounded border border-border bg-background/40 px-2 py-1 text-[11px] text-foreground/80 hover:bg-card/60">
+                      <FileText className="h-3 w-3" />
+                      Knowledge Block
+                    </summary>
+                    <div className="mt-2 max-h-48 overflow-y-auto rounded border border-border/60 bg-background/60 p-2 text-[11px] leading-relaxed text-muted-foreground">
+                      {kb.task_ids && kb.task_ids.length > 0 && <p>Tasks: {kb.task_ids.join(", ")}</p>}
+                      {kb.event_ids && kb.event_ids.length > 0 && <p>Events: {kb.event_ids.join(", ")}</p>}
+                      {kb.session_id && <p>Session: {kb.session_id}</p>}
+                      {kb.handoff_prompt && (
+                        <pre className="mt-2 whitespace-pre-wrap font-mono text-[10px] text-foreground/70">{kb.handoff_prompt}</pre>
+                      )}
+                    </div>
+                  </details>
                 </div>
               </div>
             );
@@ -702,604 +688,51 @@ function RecentEventsPanel() {
   );
 }
 
-type CSIDigestItem = {
-  id: string;
-  event_id: string;
-  source: string;
-  event_type: string;
-  title: string;
-  summary: string;
-  created_at: string;
-};
-
-function csiSourceIcon(eventType: string): string {
-  const t = (eventType || "").toLowerCase();
-  if (t.includes("reddit")) return "🟠";
-  if (t.includes("threads")) return "🟣";
-  if (t.includes("rss") || t.includes("youtube")) return "🔴";
-  if (t.includes("global") || t.includes("batch") || t.includes("brief")) return "🔵";
-  return "📊";
-}
-
-// CSI Signals Panel — wired to /api/v1/dashboard/csi/digests (actual CSI reports)
-function CSISignalsPanel() {
-  const [loading, setLoading] = useState(true);
-  const { refreshKey } = useContext(RefreshContext);
-  const [error, setError] = useState<string | null>(null);
-  const [items, setItems] = useState<CSIDigestItem[]>([]);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(
-        `${API_BASE}/api/v1/dashboard/csi/digests?limit=10`,
-        { cache: "no-store" }
-      );
-      if (!res.ok) throw new Error(`Failed: ${res.status}`);
-      const json = await res.json();
-      const digests: CSIDigestItem[] = Array.isArray(json.digests) ? json.digests : [];
-      setItems(digests);
-    } catch (err: any) {
-      setError(err.message || "Failed to load CSI signals");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    queueMicrotask(() => {
-      if (!cancelled) void load();
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [load, refreshKey]);
-
-  if (loading) {
-    return (
-      <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
-        <div className="mb-4 flex items-center gap-2">
-          <TrendingUp className="h-4 w-4 text-secondary" />
-          <h2 className="text-sm font-medium text-foreground/80">CSI Signals</h2>
-        </div>
-        <div className="flex items-center justify-center py-8">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
-        <div className="mb-4 flex items-center gap-2">
-          <TrendingUp className="h-4 w-4 text-secondary" />
-          <h2 className="text-sm font-medium text-foreground/80">CSI Signals</h2>
-        </div>
-        <div className="flex flex-col items-center justify-center py-6 text-center">
-          <XCircle className="mb-2 h-8 w-8 text-red-400" />
-          <p className="text-sm text-muted-foreground">{error}</p>
-          <button
-            onClick={load}
-            className="mt-3 flex items-center gap-1 rounded bg-card/50 px-3 py-1.5 text-xs text-foreground/80 hover:bg-muted"
-          >
-            <RefreshCw className="h-3 w-3" />
-            Retry
-          </button>
-        </div>
-      </div>
-    );
-  }
+function OperatingPosturePanel() {
+  const links = [
+    { href: "/dashboard/events", label: "Event Log", detail: "Raw notifications, diagnostics, and source events", icon: Bell },
+    { href: "/dashboard/todolist", label: "Task Hub", detail: "Durable missions, approvals, dispatch, and history", icon: Briefcase },
+    { href: "/dashboard/csi", label: "CSI", detail: "Content and signal intelligence workbench", icon: BarChart3 },
+  ];
 
   return (
-    <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
-      <div className="mb-4 flex items-center justify-between">
-        <Link href="/dashboard/csi" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
-          <TrendingUp className="h-4 w-4 text-secondary" />
-          <h2 className="text-sm font-medium text-foreground/80">CSI Signals</h2>
-        </Link>
-        <span className="text-xs text-muted-foreground">{items.length} signals</span>
-      </div>
-
-      {items.length === 0 ? (
-        <div className="flex flex-1 items-center justify-center py-8">
-          <p className="text-sm text-muted-foreground">No recent CSI signals</p>
+    <div className="flex min-w-0 flex-col gap-4">
+      <SystemStatusPanel />
+      <div className="min-w-0 rounded-none border border-white/10 bg-[#0b1326]/70 p-4 backdrop-blur-md">
+        <div className="mb-3 flex items-center gap-2">
+          <ArrowRight className="h-4 w-4 text-muted-foreground" />
+          <h2 className="text-sm font-medium text-foreground/80">Deep Dives</h2>
         </div>
-      ) : (
-        <div className="max-h-80 space-y-2 overflow-y-auto">
-          {items.map((digest) => (
+        <div className="space-y-2">
+          {links.map(({ href, label, detail, icon: Icon }) => (
             <Link
-              key={digest.id}
-              href="/dashboard/csi"
-              className="block rounded-lg border border-border/50 bg-card/30 p-3 transition-colors hover:border-border hover:bg-card/50"
+              key={href}
+              href={href}
+              className="block min-w-0 rounded-lg border border-border/50 bg-card/25 p-3 transition-colors hover:border-border hover:bg-card/45"
             >
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-foreground leading-snug line-clamp-2">
-                  {csiSourceIcon(digest.event_type)} {digest.title || "CSI Report"}
-                </p>
-                {digest.summary && (
-                  <p className="mt-1 text-xs text-muted-foreground line-clamp-2">{digest.summary}</p>
-                )}
-              </div>
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <span className="rounded bg-secondary/10 px-1.5 py-0.5 text-xs text-secondary">
-                  {digest.event_type?.replace(/_/g, " ") || digest.source}
-                </span>
-                <span className="text-xs text-muted-foreground">
-                  {formatTs(digest.created_at)}
-                </span>
+              <div className="flex items-start gap-2">
+                <Icon className="mt-0.5 h-4 w-4 flex-shrink-0 text-muted-foreground" />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-foreground/85">{label}</p>
+                  <p className="mt-0.5 break-words text-xs leading-snug text-muted-foreground">{detail}</p>
+                </div>
               </div>
             </Link>
           ))}
         </div>
-      )}
-    </div>
-  );
-}
-
-type SystemResourcesPayload = {
-  version: number;
-  overall_status: "ok" | "warn" | "critical";
-  generated_at_utc: string;
-  summary: string;
-  metrics: {
-    cpu_load_1m: number;
-    cpu_load_5m: number;
-    cpu_load_15m: number;
-    cpu_cores: number;
-    load_per_core: number;
-    ram_used_gb: number;
-    ram_total_gb: number;
-    ram_percent: number;
-    swap_used_gb: number;
-    swap_total_gb: number;
-    swap_percent: number;
-    disk_used_gb: number;
-    disk_total_gb: number;
-    disk_percent: number;
-    active_agent_sessions: number;
-    gateway_errors_30m: number;
-    dispatch_concurrency: number;
-  };
-  findings: Array<{
-    metric: string;
-    value: number | string;
-    threshold?: number;
-    status: string;
-    message: string;
-  }>;
-};
-
-function MetricBar({ label, value, percent, unit }: { label: string; value: number; percent: number; unit?: string }) {
-  const color =
-    percent >= 85 ? "bg-red-500" : percent >= 70 ? "bg-accent" : "bg-primary";
-  const textColor =
-    percent >= 85 ? "text-red-400" : percent >= 70 ? "text-accent" : "text-primary";
-  return (
-    <div className="space-y-1">
-      <div className="flex items-center justify-between text-xs">
-        <span className="text-muted-foreground">{label}</span>
-        <span className={textColor}>
-          {value}{unit || ""} ({percent}%)
-        </span>
-      </div>
-      <div className="h-1.5 w-full rounded-full bg-card/50">
-        <div
-          className={`h-1.5 rounded-full transition-all duration-500 ${color}`}
-          style={{ width: `${Math.min(percent, 100)}%` }}
-        />
       </div>
     </div>
   );
 }
 
-function SystemResourcesPanel() {
-  const [loading, setLoading] = useState(true);
-  const { refreshKey } = useContext(RefreshContext);
-  const [error, setError] = useState<string | null>(null);
-  const [data, setData] = useState<SystemResourcesPayload | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      const res = await fetch(`${API_BASE}/api/v1/dashboard/system-resources`, {
-        cache: "no-store",
-      });
-      if (!res.ok) throw new Error(`Failed: ${res.status}`);
-      const json = await res.json();
-      setData(json as SystemResourcesPayload);
-      setError(null);
-    } catch (err: any) {
-      setError(err.message || "Failed to load");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    queueMicrotask(() => {
-      if (!cancelled) void load();
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [load, refreshKey]);
-
-  if (loading) {
-    return (
-      <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
-        <div className="mb-4 flex items-center gap-2">
-          <Cpu className="h-4 w-4 text-muted-foreground" />
-          <h2 className="text-sm font-medium text-foreground/80">System Resources</h2>
-        </div>
-        <div className="space-y-3">
-          {[1, 2, 3, 4].map((i) => (
-            <Skeleton key={i} className="h-4 w-full" />
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
-        <div className="mb-4 flex items-center gap-2">
-          <Cpu className="h-4 w-4 text-muted-foreground" />
-          <h2 className="text-sm font-medium text-foreground/80">System Resources</h2>
-        </div>
-        <div className="flex flex-col items-center justify-center py-6 text-center">
-          <XCircle className="mb-2 h-8 w-8 text-red-400" />
-          <p className="text-sm text-muted-foreground">{error}</p>
-          <button
-            onClick={load}
-            className="mt-3 flex items-center gap-1 rounded bg-card/50 px-3 py-1.5 text-xs text-foreground/80 hover:bg-muted"
-          >
-            <RefreshCw className="h-3 w-3" />
-            Retry
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  const m = data?.metrics;
-  if (!m) return null;
-
-  const statusColor =
-    data.overall_status === "critical"
-      ? "bg-red-500/10 text-red-400 ring-red-500/20"
-      : data.overall_status === "warn"
-      ? "bg-accent/10 text-accent ring-yellow-500/20"
-      : "bg-primary/10 text-primary ring-green-500/20";
-
-  return (
-    <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
-      <div className="mb-4 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Cpu className="h-4 w-4 text-muted-foreground" />
-          <h2 className="text-sm font-medium text-foreground/80">System Resources</h2>
-        </div>
-        <span className={`rounded px-2 py-0.5 text-xs font-medium ring-1 ${statusColor}`}>
-          {data.overall_status}
-        </span>
-      </div>
-
-      <div className="space-y-3">
-        {/* CPU */}
-        <div className="space-y-1">
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-muted-foreground">CPU Load</span>
-            <span className="text-foreground/80">
-              {m.cpu_load_1m.toFixed(2)} / {m.cpu_cores} cores
-            </span>
-          </div>
-          <div className="h-1.5 w-full rounded-full bg-card/50">
-            <div
-              className={`h-1.5 rounded-full transition-all duration-500 ${
-                m.load_per_core >= 1 ? "bg-red-500" : m.load_per_core >= 0.7 ? "bg-accent" : "bg-primary"
-              }`}
-              style={{ width: `${Math.min(m.load_per_core * 100, 100)}%` }}
-            />
-          </div>
-        </div>
-
-        {/* RAM */}
-        <MetricBar label="RAM" value={m.ram_used_gb} percent={m.ram_percent} unit=" GiB" />
-
-        {/* Swap */}
-        <MetricBar label="Swap" value={m.swap_used_gb} percent={m.swap_percent} unit=" GiB" />
-
-        {/* Disk */}
-        <MetricBar label="Disk" value={m.disk_used_gb} percent={m.disk_percent} unit=" GB" />
-
-        {/* Session count */}
-        <div className="flex items-center justify-between rounded-lg bg-card/30 px-3 py-2">
-          <span className="text-xs text-muted-foreground">Active Sessions</span>
-          <span className={`text-sm font-medium ${
-            m.active_agent_sessions > 50 ? "text-red-400" : m.active_agent_sessions > 30 ? "text-accent" : "text-primary"
-          }`}>
-            {m.active_agent_sessions}
-          </span>
-        </div>
-
-        {/* Error count */}
-        <div className="flex items-center justify-between rounded-lg bg-card/30 px-3 py-2">
-          <span className="text-xs text-muted-foreground">Errors (30m)</span>
-          <span className={`text-sm font-medium ${
-            m.gateway_errors_30m > 50 ? "text-red-400" : m.gateway_errors_30m > 10 ? "text-accent" : "text-primary"
-          }`}>
-            {m.gateway_errors_30m}
-          </span>
-        </div>
-
-        {/* Updated timestamp */}
-        {data.generated_at_utc && (
-          <div className="text-center text-xs text-muted">
-            Updated {formatTs(data.generated_at_utc)}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-
-// Heartbeat status chip -- shows live session heartbeat status
-function HeartbeatChip() {
-  const { refreshKey } = useContext(RefreshContext);
-  const [sessions, setSessions] = useState<number>(0);
-  const [busyCount, setBusyCount] = useState<number>(0);
-  const [lastRun, setLastRun] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      const res = await fetch(`${API_BASE}/api/v1/heartbeat/last`, { cache: "no-store" });
-      if (!res.ok) return;
-      const json = await res.json();
-      const heartbeats = json.heartbeats || {};
-      const keys = Object.keys(heartbeats);
-      setSessions(keys.length);
-      setBusyCount(keys.filter((k: string) => heartbeats[k].busy).length);
-      // Get most recent last_run across sessions
-      const runs = keys
-        .map((k: string) => heartbeats[k].last_run)
-        .filter(Boolean)
-        .sort()
-        .reverse();
-      setLastRun(runs[0] || null);
-    } catch {
-      // silently ignore
-    }
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    queueMicrotask(() => {
-      if (!cancelled) void load();
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [load, refreshKey]);
-
-  if (sessions === 0) return null;
-
-  const dotColor = busyCount > 0 ? "bg-accent animate-pulse" : "bg-primary";
-
-  return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-border/50 bg-card/50 px-2.5 py-1 text-xs text-muted-foreground">
-      <span className={`inline-block h-2 w-2 rounded-full ${dotColor}`} />
-      <Heart className="h-3 w-3 text-muted-foreground" />
-      {busyCount > 0 ? `${busyCount} running` : "idle"}
-      {lastRun && <span className="text-muted-foreground/60">· last {formatTs(lastRun)}</span>}
-    </span>
-  );
-}
-
-
-// Freelance Pipeline types
-type FreelanceOpportunity = {
-  id: string;
-  title: string;
-  platform: string;
-  rate?: string;
-  fit_score?: number;
-  status: string;
-  created_at: string;
-};
-
-type FreelanceApplication = {
-  id: string;
-  position_title: string;
-  platform: string;
-  company?: string;
-  status: string;
-  created_at: string;
-};
-
-type FreelancePipelineSummary = {
-  opportunities: FreelanceOpportunity[];
-  applications: FreelanceApplication[];
-  stats: {
-    total_opportunities: number;
-    active_applications: number;
-    draft_applications: number;
-    submitted_applications: number;
-    responses: number;
-    interviews: number;
-    success_rate: number;
-  };
-};
-
-// Freelance Pipeline Panel
-function FreelancePipelinePanel() {
-  const [loading, setLoading] = useState(true);
-  const { refreshKey } = useContext(RefreshContext);
-  const [error, setError] = useState<string | null>(null);
-  const [data, setData] = useState<FreelancePipelineSummary | null>(null);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(`${API_BASE}/api/v1/dashboard/freelance/pipeline`, {
-        cache: "no-store",
-      });
-      if (!res.ok) {
-        throw new Error(`Failed to load: ${res.status}`);
-      }
-      const json = await res.json();
-      setData(json as FreelancePipelineSummary);
-    } catch (err: any) {
-      setError(err.message || "Failed to load freelance pipeline");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    queueMicrotask(() => {
-      if (!cancelled) void load();
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [load, refreshKey]);
-
-  if (loading) {
-    return (
-      <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
-        <div className="mb-4 flex items-center gap-2">
-          <Briefcase className="h-4 w-4 text-muted-foreground" />
-          <h2 className="text-sm font-medium text-foreground/80">Freelance Pipeline</h2>
-        </div>
-        <div className="space-y-3">
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="space-y-2">
-              <Skeleton className="h-4 w-3/4" />
-              <Skeleton className="h-3 w-1/2" />
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
-        <div className="mb-4 flex items-center gap-2">
-          <Briefcase className="h-4 w-4 text-muted-foreground" />
-          <h2 className="text-sm font-medium text-foreground/80">Freelance Pipeline</h2>
-        </div>
-        <div className="flex flex-col items-center justify-center py-6 text-center">
-          <XCircle className="mb-2 h-8 w-8 text-red-400" />
-          <p className="text-sm text-muted-foreground">{error}</p>
-          <button
-            onClick={load}
-            className="mt-3 flex items-center gap-1 rounded bg-card/50 px-3 py-1.5 text-xs text-foreground/80 hover:bg-muted"
-          >
-            <RefreshCw className="h-3 w-3" />
-            Retry
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  const { opportunities, applications, stats } = data || {
-    opportunities: [],
-    applications: [],
-    stats: { total_opportunities: 0, active_applications: 0, draft_applications: 0, submitted_applications: 0, responses: 0, interviews: 0, success_rate: 0 }
-  };
-
-  return (
-    <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
-      <div className="mb-4 flex items-center justify-between">
-        <Link href="/dashboard/todolist" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
-          <Briefcase className="h-4 w-4 text-muted-foreground" />
-          <h2 className="text-sm font-medium text-foreground/80">Freelance Pipeline</h2>
-        </Link>
-        <span className="text-xs text-muted-foreground">
-          {stats.total_opportunities} opps · {stats.active_applications} apps
-        </span>
-      </div>
-
-      {/* Stats Row */}
-      <div className="mb-3 grid grid-cols-5 gap-2 text-center">
-        <div className="rounded-lg bg-card/30 p-2">
-          <p className="text-lg font-bold text-foreground">{stats.draft_applications}</p>
-          <p className="text-xs text-muted-foreground">Drafts</p>
-        </div>
-        <div className="rounded-lg bg-card/30 p-2">
-          <p className="text-lg font-bold text-foreground">{stats.submitted_applications}</p>
-          <p className="text-xs text-muted-foreground">Sent</p>
-        </div>
-        <div className="rounded-lg bg-card/30 p-2">
-          <p className="text-lg font-bold text-accent">{stats.responses}</p>
-          <p className="text-xs text-muted-foreground">Replies</p>
-        </div>
-        <div className="rounded-lg bg-card/30 p-2">
-          <p className="text-lg font-bold text-accent">{stats.interviews}</p>
-          <p className="text-xs text-muted-foreground">Calls</p>
-        </div>
-        <div className="rounded-lg bg-card/30 p-2">
-          <p className="text-lg font-bold text-primary">{stats.success_rate.toFixed(0)}%</p>
-          <p className="text-xs text-muted-foreground">Win %</p>
-        </div>
-      </div>
-
-      {/* Applications List */}
-      {applications.length > 0 && (
-        <div className="max-h-40 space-y-1.5 overflow-y-auto">
-          {applications.slice(0, 4).map((app) => (
-            <div
-              key={app.id}
-              className="rounded-lg border border-border/50 bg-card/30 p-2"
-            >
-              <div className="flex items-start justify-between gap-2">
-                <p className="text-sm font-medium text-foreground leading-snug line-clamp-1">
-                  {app.position_title}
-                </p>
-                <span className={`flex-shrink-0 rounded px-1.5 py-0.5 text-xs ${statusColor(app.status)}`}>
-                  {app.status}
-                </span>
-              </div>
-              <div className="mt-1 flex flex-wrap items-center gap-2">
-                <span className="rounded bg-card/50 px-1.5 py-0.5 text-xs text-muted-foreground">
-                  {app.platform}
-                </span>
-                <span className="text-xs text-muted-foreground">
-                  {formatTs(app.created_at)}
-                </span>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {applications.length === 0 && (
-        <div className="flex flex-1 items-center justify-center py-4">
-          <p className="text-sm text-muted-foreground">No active applications</p>
-        </div>
-      )}
-    </div>
-  );
-}
 
 /**
  * Mission Control Dashboard
  *
- * A centralized task monitoring interface with five main panels:
- * - Active Tasks: Currently running tasks and operations
- * - System Status: Health and status of system components
- * - System Resources: Live VPS metrics (CPU, RAM, Swap, Disk, Sessions)
- * - Recent Events: Latest events and notifications
- * - CSI Signals: Content & Signal Intelligence feed
+ * Operator-awareness surface:
+ * - Operator Brief: curated situations with knowledge blocks
+ * - Current Work: recent durable Task Hub missions
+ * - Operating Posture: compact health and navigation to deeper tools
  */
 export default function MissionControlPage() {
   const router = useRouter();
@@ -1318,72 +751,28 @@ export default function MissionControlPage() {
 
   // Single coordinated interval -- drives all child panels via context
   useEffect(() => {
-    triggerRefresh(); // initial load
+    queueMicrotask(triggerRefresh); // initial load
     intervalRef.current = setInterval(triggerRefresh, REFRESH_INTERVAL);
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
   }, [triggerRefresh]);
 
-  const exportReport = async () => {
-    try {
-      const res = await fetch(`${API_BASE}/api/v1/dashboard/system-resources`, { cache: "no-store" });
-      if (!res.ok) throw new Error(`Failed: ${res.status}`);
-      const data = await res.json();
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `mission-control-report-${Date.now()}.json`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch {
-      // silently fail -- could add toast notification later
-    }
-  };
-
-  const [heartbeatLoading, setHeartbeatLoading] = useState(false);
-  const [heartbeatResult, setHeartbeatResult] = useState<string | null>(null);
-
-  const triggerHeartbeat = useCallback(async () => {
-    setHeartbeatLoading(true);
-    setHeartbeatResult(null);
-    try {
-      const res = await fetch(`${API_BASE}/api/v1/heartbeat/wake`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reason: "mission_control_manual", mode: "now" }),
-      });
-      if (!res.ok) throw new Error(`Failed: ${res.status}`);
-      const json = await res.json();
-      setHeartbeatResult(`Queued ${json.count ?? json.session_id ?? "?"} session(s)`);
-    } catch (err: any) {
-      setHeartbeatResult(err.message || "Failed");
-    } finally {
-      setHeartbeatLoading(false);
-      // Clear result after 5s
-      setTimeout(() => setHeartbeatResult(null), 5000);
-    }
-  }, []);
-
   return (
     <RefreshContext.Provider value={{ refreshKey, lastRefresh, isRefreshing }}>
-      <div className="flex h-full flex-col gap-6">
+      <div className="flex h-full min-w-0 flex-col gap-6">
         {/* Page Header */}
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 ring-1 ring-primary/20">
               <Activity className="h-5 w-5 text-primary" />
             </div>
             <div>
               <h1 className="text-lg font-semibold text-foreground">Mission Control</h1>
-              <p className="text-sm text-muted-foreground">Centralized task monitoring and system overview</p>
+              <p className="text-sm text-muted-foreground">Operator brief, current work, and system posture</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <HeartbeatChip />
             {lastRefresh && (
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <Timer className="h-3.5 w-3.5" />
@@ -1405,58 +794,28 @@ export default function MissionControlPage() {
               Refresh All
             </button>
             <button
-              onClick={triggerHeartbeat}
-              disabled={heartbeatLoading}
-              className="flex items-center gap-2 rounded-lg bg-card px-3 py-2 text-sm text-foreground/80 transition-colors hover:bg-card/50 disabled:opacity-60"
-            >
-              <Zap className={`h-4 w-4 ${heartbeatLoading ? "animate-pulse" : ""}`} />
-              {heartbeatLoading ? "Triggering..." : "Trigger Heartbeat"}
-            </button>
-            {heartbeatResult && (
-              <span className="flex items-center gap-1 rounded-lg bg-primary/10 px-3 py-2 text-xs text-primary">
-                {heartbeatResult}
-              </span>
-            )}
-            <button
-              onClick={() => router.push("/dashboard/notifications")}
+              onClick={() => router.push("/dashboard/events")}
               className="flex items-center gap-2 rounded-lg bg-card px-3 py-2 text-sm text-foreground/80 transition-colors hover:bg-card/50"
             >
               <Bell className="h-4 w-4" />
-              View Notifications
+              Event Log
             </button>
             <button
               onClick={() => router.push("/dashboard/todolist")}
               className="flex items-center gap-2 rounded-lg bg-card px-3 py-2 text-sm text-foreground/80 transition-colors hover:bg-card/50"
             >
               <Briefcase className="h-4 w-4" />
-              Freelance Board
-            </button>
-            <button
-              onClick={exportReport}
-              className="flex items-center gap-2 rounded-lg bg-card px-3 py-2 text-sm text-foreground/80 transition-colors hover:bg-card/50"
-            >
-              <Download className="h-4 w-4" />
-              Export Report
+              Task Hub
             </button>
           </div>
         </div>
 
-        {/* Main Content Grid - Top row: 3 cols, Bottom row: 2 cols */}
-        <div className="grid flex-1 gap-4 lg:grid-cols-4">
-          <div className="col-span-1 lg:col-span-2 flex flex-col gap-4">
+        <div className="grid min-w-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1.8fr)_minmax(280px,0.8fr)]">
+          <div className="flex min-w-0 flex-col gap-4">
+            <OperatorBriefPanel />
             <ActiveTasksPanel />
-            <RecentEventsPanel />
           </div>
-          <div className="col-span-1 flex flex-col gap-4">
-            <SystemStatusPanel />
-            <CapacityGovernorPanel refreshKey={refreshKey} />
-            <SystemResourcesPanel />
-          </div>
-          <div className="col-span-1 flex flex-col gap-4">
-            <PipelineStatsPanel refreshKey={refreshKey} />
-            <CSISignalsPanel />
-            <FreelancePipelinePanel />
-          </div>
+          <OperatingPosturePanel />
         </div>
       </div>
     </RefreshContext.Provider>

@@ -1,6 +1,6 @@
 # Documentation Status
 
-**Last updated:** 2026-04-29 (Heartbeat memory-guided autonomous remediation, activity notification lifecycle, CSI dedupe TTL health, AgentMail stale queue lifecycle, project-scaffolder hardening, and proactive autonomous work-product project documented)
+**Last updated:** 2026-04-30 (Mission Control Operator Brief situation read model, Heartbeat memory-guided autonomous remediation, activity notification lifecycle, CSI dedupe TTL health, AgentMail stale queue lifecycle, project-scaffolder hardening, and proactive autonomous work-product project documented)
 
 ## Development (development/)
 
@@ -24,7 +24,7 @@ This file and `docs/README.md` serve as the **authoritative indexes** for all pr
 | Proactive_Pipeline.md | **Canonical source of truth** — end-to-end proactive pipeline: trusted email triage, Task Hub scoring, dedicated ToDo dispatch lifecycle, delivery-mode heuristics, brainstorm refinement, morning report, 24/7 autonomous ideation (Signal Curator + Reflection Engine), shared daily budget, priority lanes, proactive wiki creation, autonomous morning briefing, 3x daily hybrid intelligence reports (Phase 2), system utilization tracking, LLM analysis, outcome tracking with implicit preference feedback (Phase 3), auto-investigation of failures, memory integration, roadmap, and test coverage |
 | Proactive_Intelligence_Work_Product_Pipeline.md | Planned phased implementation for abundant proactive artifact generation, review candidate emails, feedback learning, CODIE proactive PRs, tutorial build automation, convergence detection, and GWS enhancements |
 | Proactive_Autonomous_Work_Product_Project.md | Active implementation reference for the autonomous work-product project: proactive Task Hub history read model, durable session-evidence recaps, three-panel audit links, CODIE cleanup cron lane, feedback/continuation design, and verification record |
-| Task_Hub_Dashboard.md | **Canonical source of truth** — frontend design system (`kcd-*` palette, glassmorphism), Kanban component architecture, embedded/full Agent Flow visual process display, lightweight spotlight and visual preference persistence contracts, dispatcher health, forensic task history, workspace action routing, and derived board-lane UX |
+| Task_Hub_Dashboard.md | **Canonical source of truth** — frontend design system (`kcd-*` palette, glassmorphism), Kanban component architecture, Mission Control Operator Brief situations, embedded/full Agent Flow visual process display, lightweight spotlight and visual preference persistence contracts, dispatcher health, forensic task history, workspace action routing, and derived board-lane UX |
 | Memory_System.md | Tiered memory, auto-flush, and LLM Wiki internal-vault sync integration |
 | Lossless_Memory.md | Opt-in DAG-based context compression and SQLite history store |
 | Durable_Execution.md | Resilience features |

@@ -535,7 +535,61 @@ function getStubDataForPath(pathname: string): unknown | null {
     };
   }
 
-  // Dashboard events stub (used by Recent Events panel in Mission Control)
+  // Dashboard situations stub (used by Operator Brief panel in Mission Control)
+  if (pathname === "/api/v1/dashboard/situations") {
+    return {
+      status: "ok",
+      generated_at: new Date().toISOString(),
+      source: "dev_stub",
+      raw_events_href: "/dashboard/events",
+      situations: [
+        {
+          id: "task:stub-task-003",
+          kind: "task_situation",
+          title: "Set up n8n webhook integration for Upwork alerts needs operator attention",
+          summary: "Create n8n workflow that receives Upwork job alert webhooks and routes them to the CSI pipeline.",
+          priority: "high",
+          status: "blocked",
+          requires_action: true,
+          tags: ["task-hub", "email", "blocked", "p3", "engineering"],
+          created_at_utc: new Date(Date.now() - 3600000).toISOString(),
+          updated_at_utc: new Date(Date.now() - 3600000).toISOString(),
+          source_domain: "task_hub",
+          primary_href: "/dashboard/todolist?mode=agent&focus=stub-task-003",
+          knowledge_block: {
+            source: "task_hub",
+            task_ids: ["stub-task-003"],
+            event_ids: [],
+            recommended_action: "Review the Task Hub state and unblock, approve, or route the next step.",
+            handoff_prompt: "Assess this Universal Agent Task Hub situation and recommend the next action.\nTask: Set up n8n webhook integration for Upwork alerts\nStatus: blocked\nTask ID: stub-task-003",
+          },
+        },
+        {
+          id: "event:stub-evt-004",
+          kind: "event_situation",
+          title: "Cron email task failed",
+          summary: "Weekly digest email failed to send: SMTP connection timeout",
+          priority: "high",
+          status: "new",
+          requires_action: true,
+          tags: ["cron", "cron-task-failed", "error", "needs-action"],
+          created_at_utc: new Date(Date.now() - 7200000).toISOString(),
+          updated_at_utc: new Date(Date.now() - 7200000).toISOString(),
+          source_domain: "cron",
+          primary_href: "/dashboard/events",
+          knowledge_block: {
+            source: "activity_event",
+            task_ids: [],
+            event_ids: ["stub-evt-004"],
+            recommended_action: "Review and resolve the required operator action.",
+            handoff_prompt: "Assess this Universal Agent situation and recommend the next action.\nTitle: Cron email task failed\nSummary: Weekly digest email failed to send: SMTP connection timeout\nSource: cron/cron_task_failed\nSeverity: error",
+          },
+        },
+      ],
+    };
+  }
+
+  // Dashboard events stub (used by raw Event Log and fallback testing)
   if (pathname === "/api/v1/dashboard/events") {
     return {
       events: [

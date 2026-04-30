@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { 
   History, 
   RefreshCw, 
@@ -149,6 +149,16 @@ const STAGE_LABELS: Record<string, string> = {
   needs_attention: "Needs Attention",
 };
 
+function isDefaultHiddenSource(source: string): boolean {
+  return source.toLowerCase().includes("heartbeat");
+}
+
+function sourceLabel(source: string): string {
+  return source
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 function safeJson(raw: string | undefined | null): any {
   if (!raw) return null;
   try {
@@ -174,8 +184,6 @@ function compactDateTime(iso: string | undefined | null): string {
 export default function ProactiveTaskHistoryPage() {
   const [tasks, setTasks] = useState<TaskHistoryItem[]>([]);
   const [opportunities, setOpportunities] = useState<OpportunityItem[]>([]);
-  const [counts, setCounts] = useState<HistoryCounts>({});
-  const [health, setHealth] = useState<HistoryHealth>({});
   const [stage, setStage] = useState("all");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -184,6 +192,7 @@ export default function ProactiveTaskHistoryPage() {
   const [feedbackText, setFeedbackText] = useState("");
   const [feedbackTags, setFeedbackTags] = useState<string[]>([]);
   const [sentiment, setSentiment] = useState<"positive" | "negative" | "neutral" | null>(null);
+  const [selectedSources, setSelectedSources] = useState<string[] | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -194,8 +203,6 @@ export default function ProactiveTaskHistoryPage() {
       const data = await res.json();
       setTasks(Array.isArray(data.tasks) ? data.tasks : []);
       setOpportunities(Array.isArray(data.opportunities) ? data.opportunities : []);
-      setCounts(data.counts || {});
-      setHealth(data.health || {});
     } catch (err) {
       setError((err as Error).message || "Failed to load task history.");
     } finally {
@@ -249,8 +256,88 @@ export default function ProactiveTaskHistoryPage() {
     });
   };
 
-  const visibleTasks = tasks.filter((task) => stage === "all" || task.stage === stage);
+  const availableSources = useMemo(() => {
+    const values = new Set<string>();
+    tasks.forEach((task) => {
+      if (task.source_kind) values.add(task.source_kind);
+    });
+    opportunities.forEach((item) => {
+      if (item.source) values.add(item.source);
+    });
+    return Array.from(values).sort((a, b) => sourceLabel(a).localeCompare(sourceLabel(b)));
+  }, [tasks, opportunities]);
+  const activeSources = selectedSources ?? availableSources.filter((source) => !isDefaultHiddenSource(source));
+  const activeSourceSet = useMemo(() => new Set(activeSources), [activeSources]);
+  const sourceFilteredTasks = useMemo(
+    () => tasks.filter((task) => activeSourceSet.has(task.source_kind)),
+    [tasks, activeSourceSet],
+  );
+  const sourceFilteredOpportunities = useMemo(
+    () => opportunities.filter((item) => activeSourceSet.has(item.source)),
+    [opportunities, activeSourceSet],
+  );
+  const displayCounts = useMemo(() => {
+    const next: HistoryCounts = {
+      opportunities: sourceFilteredOpportunities.length,
+      queued: 0,
+      running: 0,
+      completed: 0,
+      needs_attention: 0,
+      total_tasks: sourceFilteredTasks.length,
+    };
+    sourceFilteredTasks.forEach((task) => {
+      const key = task.stage || "";
+      if (key === "queued" || key === "running" || key === "completed" || key === "needs_attention") {
+        next[key] = (next[key] || 0) + 1;
+      }
+    });
+    return next;
+  }, [sourceFilteredTasks, sourceFilteredOpportunities]);
+  const displayHealth = useMemo(() => {
+    const next: HistoryHealth = {
+      status: "ok",
+      terminal_tasks: 0,
+      missing_terminal_recaps: 0,
+      failed_recaps: 0,
+      fallback_recaps: 0,
+      email_delivery_failures: 0,
+    };
+    sourceFilteredTasks.forEach((task) => {
+      if (task.stage === "completed" || task.stage === "needs_attention") {
+        next.terminal_tasks = (next.terminal_tasks || 0) + 1;
+        const recapStatus = (task.recap?.status || "").toLowerCase();
+        if (!recapStatus || recapStatus === "pending_llm_evaluation") {
+          next.missing_terminal_recaps = (next.missing_terminal_recaps || 0) + 1;
+        } else if (recapStatus.includes("failed")) {
+          next.failed_recaps = (next.failed_recaps || 0) + 1;
+        } else if (recapStatus !== "llm_evaluated") {
+          next.fallback_recaps = (next.fallback_recaps || 0) + 1;
+        }
+      }
+      (task.artifacts || []).forEach((artifact) => {
+        if ((artifact.delivery_state || "").toLowerCase() === "email_failed") {
+          next.email_delivery_failures = (next.email_delivery_failures || 0) + 1;
+        }
+      });
+    });
+    if ((next.missing_terminal_recaps || 0) || (next.failed_recaps || 0) || (next.email_delivery_failures || 0)) {
+      next.status = "needs_attention";
+    } else if (next.fallback_recaps || 0) {
+      next.status = "degraded";
+    }
+    return next;
+  }, [sourceFilteredTasks]);
+  const visibleTasks = sourceFilteredTasks.filter((task) => stage === "all" || task.stage === stage);
+  const visibleOpportunities = sourceFilteredOpportunities;
   const showOpportunities = stage === "all" || stage === "opportunities";
+  const toggleSource = (source: string) => {
+    setSelectedSources((prev) => {
+      const current = prev ?? availableSources.filter((value) => !isDefaultHiddenSource(value));
+      return current.includes(source)
+        ? current.filter((value) => value !== source)
+        : [...current, source].sort();
+    });
+  };
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
@@ -284,10 +371,10 @@ export default function ProactiveTaskHistoryPage() {
       <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
         {(["all", "opportunities", "queued", "running", "completed", "needs_attention"] as const).map((key) => {
           const count = key === "all"
-            ? (counts.total_tasks || 0) + (counts.opportunities || 0)
+            ? (displayCounts.total_tasks || 0) + (displayCounts.opportunities || 0)
             : key === "opportunities"
-              ? counts.opportunities || 0
-              : counts[key] || 0;
+              ? displayCounts.opportunities || 0
+              : displayCounts[key] || 0;
           return (
             <button
               key={key}
@@ -303,63 +390,116 @@ export default function ProactiveTaskHistoryPage() {
         })}
       </div>
 
+      {availableSources.length > 0 && (
+        <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-xs uppercase tracking-[0.18em] text-slate-300">Activity Types</div>
+              <p className="mt-1 text-xs text-slate-500">Heartbeat health checks are hidden by default; enable them when auditing infrastructure autonomy.</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setSelectedSources(availableSources)}
+                className="rounded border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-slate-300 hover:bg-white/10"
+              >
+                Select All
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedSources(null)}
+                className="rounded border border-cyan-500/20 bg-cyan-500/10 px-2.5 py-1 text-xs text-cyan-200 hover:bg-cyan-500/20"
+              >
+                Default
+              </button>
+            </div>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {availableSources.map((source) => {
+              const checked = activeSourceSet.has(source);
+              const sourceCount = tasks.filter((task) => task.source_kind === source).length
+                + opportunities.filter((item) => item.source === source).length;
+              return (
+                <label
+                  key={source}
+                  className={`flex cursor-pointer items-center gap-2 rounded border px-3 py-1.5 text-xs transition-all ${
+                    checked
+                      ? "border-cyan-500/30 bg-cyan-500/10 text-cyan-100"
+                      : "border-white/10 bg-black/10 text-slate-500 hover:bg-white/5"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleSource(source)}
+                    className="h-3.5 w-3.5 accent-cyan-500"
+                  />
+                  <span>{sourceLabel(source)}</span>
+                  <span className="rounded bg-black/20 px-1.5 py-0.5 font-mono text-[10px] text-slate-400">{sourceCount}</span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div className={`rounded-lg border p-4 ${
-        health.status === "needs_attention"
+        displayHealth.status === "needs_attention"
           ? "border-amber-500/30 bg-amber-500/10"
-          : health.status === "degraded"
+          : displayHealth.status === "degraded"
             ? "border-cyan-500/20 bg-cyan-500/10"
             : "border-emerald-500/20 bg-emerald-500/10"
       }`}>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            {health.status === "needs_attention" ? (
+            {displayHealth.status === "needs_attention" ? (
               <AlertCircle className="w-4 h-4 text-amber-300" />
             ) : (
               <CheckCircle2 className="w-4 h-4 text-emerald-300" />
             )}
             <span className="text-xs uppercase tracking-[0.18em] text-slate-300">Operational Health</span>
           </div>
-          <span className="text-xs font-mono text-slate-400">{health.status || "ok"}</span>
+          <span className="text-xs font-mono text-slate-400">{displayHealth.status || "ok"}</span>
         </div>
         <div className="mt-3 grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
           <div className="rounded border border-white/10 bg-black/10 px-3 py-2">
             <div className="text-slate-500">Terminal</div>
-            <div className="text-sm font-semibold text-white">{health.terminal_tasks || 0}</div>
+            <div className="text-sm font-semibold text-white">{displayHealth.terminal_tasks || 0}</div>
           </div>
           <div className="rounded border border-white/10 bg-black/10 px-3 py-2">
             <div className="text-slate-500">Missing Recaps</div>
-            <div className="text-sm font-semibold text-white">{health.missing_terminal_recaps || 0}</div>
+            <div className="text-sm font-semibold text-white">{displayHealth.missing_terminal_recaps || 0}</div>
           </div>
           <div className="rounded border border-white/10 bg-black/10 px-3 py-2">
             <div className="text-slate-500">Failed Recaps</div>
-            <div className="text-sm font-semibold text-white">{health.failed_recaps || 0}</div>
+            <div className="text-sm font-semibold text-white">{displayHealth.failed_recaps || 0}</div>
           </div>
           <div className="rounded border border-white/10 bg-black/10 px-3 py-2">
             <div className="text-slate-500">Fallback Recaps</div>
-            <div className="text-sm font-semibold text-white">{health.fallback_recaps || 0}</div>
+            <div className="text-sm font-semibold text-white">{displayHealth.fallback_recaps || 0}</div>
           </div>
           <div className="rounded border border-white/10 bg-black/10 px-3 py-2">
             <div className="text-slate-500">Email Failures</div>
-            <div className="text-sm font-semibold text-white">{health.email_delivery_failures || 0}</div>
+            <div className="text-sm font-semibold text-white">{displayHealth.email_delivery_failures || 0}</div>
           </div>
         </div>
       </div>
 
-      {!loading && tasks.length === 0 && opportunities.length === 0 && (
+      {!loading && visibleTasks.length === 0 && (!showOpportunities || visibleOpportunities.length === 0) && (
         <div className="flex flex-col items-center justify-center py-20 border border-dashed border-border rounded-xl bg-card/10">
           <Clock className="w-12 h-12 text-muted-foreground/30 mb-4" />
-          <p className="text-muted-foreground">No proactive opportunities or tasks found.</p>
+          <p className="text-muted-foreground">No proactive opportunities or tasks match the current filters.</p>
         </div>
       )}
 
-      {showOpportunities && opportunities.length > 0 && (
+      {showOpportunities && visibleOpportunities.length > 0 && (
         <section className="space-y-3">
           <div className="flex items-center gap-2 text-xs uppercase tracking-[0.18em] text-cyan-300">
             <Layers className="w-4 h-4" />
             Opportunities Detected
           </div>
           <div className="grid gap-3">
-            {opportunities.map((item) => (
+            {visibleOpportunities.map((item) => (
               <div key={item.id} className="rounded-xl border border-cyan-500/10 bg-cyan-500/[0.04] p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="min-w-0">

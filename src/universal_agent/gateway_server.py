@@ -17172,6 +17172,9 @@ def _proactive_recap_for_task(conn: sqlite3.Connection, item: dict[str, Any]) ->
     if status == task_hub.TASK_STATUS_COMPLETED:
         assessment = "Completed, pending LLM post-run evaluation."
         issues = "" if result_summary else "No assignment result summary was recorded."
+    elif status == task_hub.TASK_STATUS_PARKED:
+        assessment = "Parked or dispositioned for review; no further autonomous execution is currently scheduled."
+        issues = str((metadata.get("dispatch") or {}).get("last_disposition_reason") or status)
     elif status in {task_hub.TASK_STATUS_BLOCKED, task_hub.TASK_STATUS_REVIEW, task_hub.TASK_STATUS_PENDING_REVIEW}:
         assessment = "Needs operator or Simone review before it can count as successful proactive work."
         issues = str((metadata.get("dispatch") or {}).get("last_disposition_reason") or status)
@@ -22592,6 +22595,266 @@ async def dashboard_events(
         "source": "in_memory",
         "next_cursor": next_cursor,
         "has_more": has_more,
+    }
+
+
+def _dashboard_situation_priority(
+    *,
+    severity: str = "",
+    status: str = "",
+    requires_action: bool = False,
+    priority: Any = None,
+) -> str:
+    severity_norm = str(severity or "").strip().lower()
+    status_norm = str(status or "").strip().lower()
+    try:
+        task_priority = int(priority)
+    except Exception:
+        task_priority = 0
+    if severity_norm in {"critical", "error"} or status_norm in {"blocked", "failed"} or task_priority >= 4:
+        return "high"
+    if requires_action or status_norm in {"needs_review", "pending_review"} or severity_norm in {"warning", "warn"} or task_priority == 3:
+        return "medium"
+    return "low"
+
+
+def _dashboard_situation_title_for_event(event: dict[str, Any]) -> str:
+    title = str(event.get("title") or "").strip()
+    kind = str(event.get("kind") or "").strip().replace("_", " ")
+    source = str(event.get("source_domain") or "system").strip()
+    generic_titles = {
+        "autonomous task failed",
+        "autonomous task completed",
+        "autonomous heartbeat activity completed",
+        "heartbeat auto-triage failed",
+        "heartbeat auto-triage dispatched",
+    }
+    if title and title.lower() not in generic_titles:
+        return title
+    metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+    if source == "heartbeat":
+        summary = str(metadata.get("heartbeat_mediation_summary") or event.get("summary") or "").strip()
+        if summary:
+            return f"Heartbeat finding: {summary[:90]}"
+    if kind:
+        return f"{source.title()} {kind}"
+    return "Operator-relevant system event"
+
+
+def _dashboard_situation_from_event(event: dict[str, Any]) -> dict[str, Any]:
+    metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+    severity = str(event.get("severity") or "info")
+    source_domain = str(event.get("source_domain") or "system")
+    kind = str(event.get("kind") or "")
+    summary = str(
+        metadata.get("heartbeat_mediation_summary")
+        or event.get("summary")
+        or event.get("full_message")
+        or ""
+    ).strip()
+    title = _dashboard_situation_title_for_event(event)
+    tags = [
+        value
+        for value in {
+            source_domain,
+            kind.replace("_", "-") if kind else "",
+            severity.lower(),
+            "needs-action" if bool(event.get("requires_action")) else "",
+        }
+        if value
+    ]
+    recommended_action = "Review the evidence and decide whether follow-up work should be routed."
+    if bool(event.get("requires_action")):
+        recommended_action = "Review and resolve the required operator action."
+    if source_domain == "heartbeat":
+        recommended_action = "Review the heartbeat finding and route remediation only if the evidence is actionable."
+    return {
+        "id": f"event:{event.get('id')}",
+        "kind": "event_situation",
+        "title": title,
+        "summary": _activity_summary_text(summary, max_chars=360),
+        "priority": _dashboard_situation_priority(
+            severity=severity,
+            status=str(event.get("status") or ""),
+            requires_action=bool(event.get("requires_action")),
+        ),
+        "status": str(event.get("status") or "new"),
+        "requires_action": bool(event.get("requires_action")),
+        "tags": tags[:8],
+        "created_at_utc": str(event.get("created_at_utc") or _utc_now_iso()),
+        "updated_at_utc": str(event.get("updated_at_utc") or event.get("created_at_utc") or _utc_now_iso()),
+        "source_domain": source_domain,
+        "primary_href": "/dashboard/events",
+        "knowledge_block": {
+            "source": "activity_event",
+            "event_ids": [str(event.get("id") or "")],
+            "task_ids": [],
+            "session_id": event.get("session_id"),
+            "event": {
+                "id": str(event.get("id") or ""),
+                "kind": kind,
+                "source_domain": source_domain,
+                "severity": severity,
+                "status": str(event.get("status") or "new"),
+                "requires_action": bool(event.get("requires_action")),
+                "summary": summary,
+            },
+            "evidence": metadata,
+            "recommended_action": recommended_action,
+            "handoff_prompt": (
+                "Assess this Universal Agent situation and recommend the next action.\n"
+                f"Title: {title}\nSummary: {summary}\n"
+                f"Source: {source_domain}/{kind}\nSeverity: {severity}\n"
+            ),
+        },
+    }
+
+
+def _dashboard_situation_from_task(item: dict[str, Any]) -> dict[str, Any]:
+    status = str(item.get("status") or "open").strip().lower()
+    task_id = str(item.get("task_id") or "")
+    title = str(item.get("title") or "Task Hub item").strip()
+    priority = item.get("priority")
+    summary = str(item.get("description") or "").strip()
+    status_label = status.replace("_", " ")
+    if status in {task_hub.TASK_STATUS_BLOCKED, task_hub.TASK_STATUS_REVIEW, task_hub.TASK_STATUS_PENDING_REVIEW}:
+        situation_title = f"{title} needs operator attention"
+        recommended_action = "Review the Task Hub state and unblock, approve, or route the next step."
+    elif status in {task_hub.TASK_STATUS_IN_PROGRESS, task_hub.TASK_STATUS_DELEGATED}:
+        situation_title = f"{title} is currently in progress"
+        recommended_action = "Monitor progress; intervene only if the task stalls or requests review."
+    else:
+        situation_title = title
+        recommended_action = "Use as current-work context."
+    tags = [
+        value
+        for value in [
+            "task-hub",
+            str(item.get("source_kind") or "").strip(),
+            status.replace("_", "-"),
+            f"p{priority}" if priority else "",
+            "must-complete" if bool(item.get("must_complete")) else "",
+            str(item.get("project_key") or "").strip(),
+        ]
+        if value
+    ]
+    return {
+        "id": f"task:{task_id}",
+        "kind": "task_situation",
+        "title": situation_title,
+        "summary": _activity_summary_text(summary or f"Task Hub item is {status_label}.", max_chars=360),
+        "priority": _dashboard_situation_priority(status=status, priority=priority),
+        "status": status,
+        "requires_action": status in {task_hub.TASK_STATUS_BLOCKED, task_hub.TASK_STATUS_REVIEW, task_hub.TASK_STATUS_PENDING_REVIEW},
+        "tags": tags[:8],
+        "created_at_utc": str(item.get("created_at") or item.get("updated_at") or _utc_now_iso()),
+        "updated_at_utc": str(item.get("updated_at") or item.get("created_at") or _utc_now_iso()),
+        "source_domain": "task_hub",
+        "primary_href": f"/dashboard/todolist?mode=agent&focus={task_id}",
+        "knowledge_block": {
+            "source": "task_hub",
+            "event_ids": [],
+            "task_ids": [task_id],
+            "session_id": item.get("canonical_execution_session_id") or (item.get("links") or {}).get("session_id"),
+            "task": item,
+            "evidence": {
+                "status": status,
+                "priority": priority,
+                "labels": item.get("labels") or [],
+                "reconciliation": item.get("reconciliation") or {},
+                "canonical_execution_session_id": item.get("canonical_execution_session_id"),
+                "canonical_execution_run_id": item.get("canonical_execution_run_id"),
+                "canonical_execution_workspace": item.get("canonical_execution_workspace"),
+            },
+            "recommended_action": recommended_action,
+            "handoff_prompt": (
+                "Assess this Universal Agent Task Hub situation and recommend the next action.\n"
+                f"Task: {title}\nStatus: {status}\nSummary: {summary}\nTask ID: {task_id}\n"
+            ),
+        },
+    }
+
+
+@app.get("/api/v1/dashboard/situations")
+async def dashboard_situations(limit: int = 12):
+    """Return the Mission Control operator brief read model.
+
+    Raw events remain available on /api/v1/dashboard/events. This endpoint
+    derives a compact operator-awareness view from existing Task Hub and event
+    records so the UI can show situations instead of raw notification noise.
+    """
+    bounded_limit = max(1, min(int(limit), 50))
+    situations: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            attention_statuses = [
+                task_hub.TASK_STATUS_BLOCKED,
+                task_hub.TASK_STATUS_REVIEW,
+                task_hub.TASK_STATUS_PENDING_REVIEW,
+                task_hub.TASK_STATUS_IN_PROGRESS,
+                task_hub.TASK_STATUS_DELEGATED,
+            ]
+            placeholders = ",".join("?" * len(attention_statuses))
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM task_hub_items
+                WHERE status IN ({placeholders})
+                ORDER BY
+                  CASE status
+                    WHEN ? THEN 0
+                    WHEN ? THEN 1
+                    WHEN ? THEN 1
+                    ELSE 2
+                  END,
+                  priority DESC,
+                  updated_at DESC
+                LIMIT ?
+                """,
+                [
+                    *attention_statuses,
+                    task_hub.TASK_STATUS_BLOCKED,
+                    task_hub.TASK_STATUS_REVIEW,
+                    task_hub.TASK_STATUS_PENDING_REVIEW,
+                    bounded_limit,
+                ],
+            ).fetchall()
+            for row in rows:
+                hydrated = task_hub.hydrate_item(dict(row))
+                situation = _dashboard_situation_from_task(_serialize_task_hub_queue_item(conn, hydrated))
+                situations.append(situation)
+                seen.add(str(situation.get("id") or ""))
+        finally:
+            conn.close()
+
+    try:
+        events = _query_activity_events(limit=100, hide_noise=True)
+    except Exception:
+        events = []
+    for event in events:
+        event_id = f"event:{event.get('id')}"
+        if event_id in seen:
+            continue
+        if _notification_hidden_by_default(str(event.get("status") or "")):
+            continue
+        situation = _dashboard_situation_from_event(event)
+        situations.append(situation)
+        seen.add(event_id)
+        if len(situations) >= bounded_limit * 2:
+            break
+
+    priority_rank = {"high": 0, "medium": 1, "low": 2}
+    situations.sort(key=lambda item: str(item.get("updated_at_utc") or item.get("created_at_utc") or ""), reverse=True)
+    situations.sort(key=lambda item: priority_rank.get(str(item.get("priority") or "low"), 3))
+    return {
+        "status": "ok",
+        "generated_at": _utc_now_iso(),
+        "situations": situations[:bounded_limit],
+        "raw_events_href": "/dashboard/events",
+        "source": "derived_operator_brief",
     }
 
 

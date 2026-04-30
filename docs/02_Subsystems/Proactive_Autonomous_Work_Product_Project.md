@@ -41,6 +41,8 @@ The April 29-30 implementation established the first durable audit spine:
 | Guarded continuation workspace reference | Fresh continuation runs now write `proactive_continuation_context.json` in the new workspace and create a non-clobbering `continuation_context/previous_workspace` symlink to prior work when available. | `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/todo_dispatch_service.py#L72` |
 | Operational health reporting | The Proactive Task History API now returns health counts for terminal tasks, missing recaps, failed recaps, fallback recaps, and email delivery failures. | `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/gateway_server.py#L17354` |
 | Dashboard health band | The Proactive Task History UI displays the health summary above the work-item list for quick audit of recap and delivery gaps. | `file:///home/kjdragan/lrepos/universal_agent/web-ui/app/dashboard/proactive-task-history/page.tsx#L306` |
+| Activity type filters | The Proactive Task History UI builds source-type checkboxes from returned tasks/opportunities and hides heartbeat remediation by default. | `file:///home/kjdragan/lrepos/universal_agent/web-ui/app/dashboard/proactive-task-history/page.tsx#L252` |
+| Legacy maintenance tool | `proactive_history_maintenance` classifies legacy/noisy proactive rows, supports dry-run by default, and can explicitly apply metadata tags or backfill missing recaps. | `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/scripts/proactive_history_maintenance.py#L1` |
 
 ## Execution Architecture
 
@@ -243,19 +245,23 @@ Current slice:
 - Terminal proactive Task Hub work is synced into proactive artifact inventory as `proactive_work_item` candidates for surfacing.
 - Continuation dispatch creates a guarded previous-workspace reference in the fresh run workspace without re-templating over prior outputs.
 - Proactive Task History reports health counts for missing/failed/fallback recaps and email delivery failures.
+- Proactive Task History can filter by activity type, with heartbeat health-check remediation hidden by default.
+- Legacy/pre-cutover rows can be classified non-destructively before applying archive/backfill metadata.
 
 Next slice:
 
 - Add active alerting/escalation for repeated health failures instead of only showing the dashboard health band.
+- Add production automation around the maintenance dry-run report after Kevin reviews the first classification output.
 
 ## Verification Record
 
 Fresh verification from the April 30 implementation pass:
 
-- `uv run pytest tests/unit/test_proactive_intelligence_phase1.py tests/unit/test_task_hub_proactive_history.py tests/unit/test_proactive_codie.py tests/unit/test_proactive_outcome_tracker.py -q` -> 43 passed
+- `uv run pytest tests/unit/test_proactive_intelligence_phase1.py tests/unit/test_task_hub_proactive_history.py tests/unit/test_proactive_codie.py tests/unit/test_proactive_outcome_tracker.py -q` -> 46 passed
 - `python3 -m py_compile` over touched backend modules -> passed
 - `npx eslint app/dashboard/proactive-task-history/page.tsx` -> passed
 - `npx tsc --noEmit --pretty false` -> passed
 - `git diff --check` over touched implementation/docs -> passed
 - Browser smoke opened `/dashboard/proactive-task-history` locally; the real gateway proxy returned 502 because the backend gateway was not running in that dev session
 - Mocked Playwright smoke intercepted the gateway routes and verified the updated tab rendered `Proactive Task History`, `Operational Health`, `Missing Recaps`, and `Email Failures`
+- Mocked Playwright smoke verified `Heartbeat Remediation` is unchecked and hidden by default, while re-checking it shows heartbeat rows.

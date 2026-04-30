@@ -452,3 +452,81 @@ def test_continuation_workspace_reference_writes_manifest_when_previous_missing(
     assert context["mode"] == "previous_workspace_missing"
     assert (current_workspace / CONTINUATION_CONTEXT_FILENAME).is_file()
     assert item["metadata"]["workspace_reuse_context"]["mode"] == "previous_workspace_missing"
+
+
+def test_parked_proactive_fallback_recap_is_not_described_as_queued(tmp_path):
+    from universal_agent import gateway_server
+
+    db_path = tmp_path / "activity.db"
+    with _connect(db_path) as conn:
+        task = task_hub.upsert_item(
+            conn,
+            {
+                "task_id": "parked-proactive",
+                "source_kind": "proactive_codie",
+                "title": "Parked proactive work",
+                "description": "Legacy proactive item.",
+                "project_key": "proactive",
+                "status": task_hub.TASK_STATUS_PARKED,
+                "metadata": {
+                    "dispatch": {
+                        "last_disposition_reason": "legacy_pre_recap_pipeline",
+                    }
+                },
+            },
+        )
+
+        recap = gateway_server._proactive_recap_for_task(conn, task)
+
+    assert recap["status"] == "pending_llm_evaluation"
+    assert "Parked" in recap["success_assessment"]
+    assert "Queued for execution" not in recap["success_assessment"]
+    assert recap["known_issues"] == "legacy_pre_recap_pipeline"
+
+
+def test_proactive_history_maintenance_classifies_heartbeat_as_noise():
+    from datetime import datetime, timezone
+
+    from universal_agent.scripts.proactive_history_maintenance import classify_proactive_history_item
+
+    classification = classify_proactive_history_item(
+        {
+            "task_id": "heartbeat-legacy",
+            "source_kind": "heartbeat_remediation",
+            "title": "Heartbeat Remediation: Noise",
+            "description": "No action required.",
+            "status": task_hub.TASK_STATUS_PARKED,
+            "updated_at": "2026-04-24T10:00:00+00:00",
+        },
+        cutover=datetime(2026, 4, 30, tzinfo=timezone.utc),
+        recap=None,
+    )
+
+    assert classification["action"] == "archive_legacy"
+    assert classification["hidden_by_default"] is True
+    assert "heartbeat_health_check_noise" in classification["reasons"]
+    assert "pre_cutover_terminal_legacy" in classification["reasons"]
+
+
+def test_proactive_history_maintenance_classifies_lifecycle_failure_for_investigation():
+    from datetime import datetime, timezone
+
+    from universal_agent.scripts.proactive_history_maintenance import classify_proactive_history_item
+
+    classification = classify_proactive_history_item(
+        {
+            "task_id": "claude-legacy",
+            "source_kind": "claude_code_kb_update",
+            "title": "Analyze strategic Claude Code update",
+            "description": "Process update.",
+            "status": task_hub.TASK_STATUS_PARKED,
+            "updated_at": "2026-04-23T10:00:00+00:00",
+            "metadata": {"dispatch": {"last_disposition_reason": "stale_assignment_timeout:300s"}},
+        },
+        cutover=datetime(2026, 4, 30, tzinfo=timezone.utc),
+        recap=None,
+    )
+
+    assert classification["action"] == "investigate"
+    assert classification["hidden_by_default"] is True
+    assert "historical_lifecycle_or_delivery_failure" in classification["reasons"]
