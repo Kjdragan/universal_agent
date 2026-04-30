@@ -32,6 +32,7 @@ import sqlite3
 import sys
 import threading
 import uuid
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -42,6 +43,7 @@ from google import genai
 from google.genai import types
 
 from universal_agent.infisical_loader import initialize_runtime_secrets
+from universal_agent.services.agentmail_service import AgentMailService
 from universal_agent.services.youtube_playlist_manager import (
     get_playlist_items,
     remove_playlist_item,
@@ -141,7 +143,7 @@ def _emit_csi_digest(
 # Main processing
 # ---------------------------------------------------------------------------
 
-def process_daily_digest(dry_run: bool = False, day_override: str | None = None):
+def process_daily_digest(dry_run: bool = False, day_override: str | None = None, email_to: str | None = None):
     initialize_runtime_secrets()
 
     day_name = day_override.upper() if day_override else DAYS[datetime.now().weekday()]
@@ -265,6 +267,30 @@ def process_daily_digest(dry_run: bool = False, day_override: str | None = None)
         video_titles=video_titles,
     )
 
+    if email_to:
+        logger.info("Sending email digest to %s...", email_to)
+        async def _send():
+            mail = AgentMailService()
+            await mail.startup()
+            try:
+                import markdown
+                html_content = markdown.markdown(full_content, extensions=["extra", "nl2br"])
+                await mail.send_email(
+                    to=email_to,
+                    subject=f"Daily YouTube Digest: {day_name.title()}",
+                    html=f"<html><head><style>body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; max-width: 800px; margin: 0 auto; padding: 20px; }} h1, h2, h3 {{ border-bottom: 1px solid #eee; padding-bottom: 8px; }} img {{ max-width: 100%; }} blockquote {{ border-left: 4px solid #ddd; margin: 0; padding-left: 16px; color: #666; }} pre {{ background-color: #f6f8fa; padding: 16px; border-radius: 6px; overflow: auto; }}</style></head><body>{html_content}</body></html>",
+                    text=full_content,
+                    force_send=True,
+                    require_approval=False,
+                )
+            finally:
+                await mail.shutdown()
+        try:
+            asyncio.run(_send())
+            logger.info("Email sent successfully.")
+        except Exception as e:
+            logger.error("Failed to send email: %s", e)
+
     if dry_run:
         logger.info("DRY RUN enabled. Skipping physical deletion of videos.")
         return
@@ -286,6 +312,7 @@ if __name__ == "__main__":
     parser.add_argument("--dry-run", action="store_true", help="Do not delete videos from the playlist.")
     parser.add_argument("--day", type=str, default=None,
                         help="Override day of week (e.g., 'MONDAY'). Uses current day if not set.")
+    parser.add_argument("--email-to", type=str, default="kevinjdragan@gmail.com", help="Email recipient for the digest.")
     args = parser.parse_args()
 
     if args.day:
@@ -294,6 +321,6 @@ if __name__ == "__main__":
             logger.error("Invalid day: %s. Must be one of %s", args.day, DAYS)
             sys.exit(1)
         logger.info("Day override: %s", day_upper)
-        process_daily_digest(dry_run=args.dry_run, day_override=day_upper)
+        process_daily_digest(dry_run=args.dry_run, day_override=day_upper, email_to=args.email_to)
     else:
-        process_daily_digest(dry_run=args.dry_run)
+        process_daily_digest(dry_run=args.dry_run, email_to=args.email_to)

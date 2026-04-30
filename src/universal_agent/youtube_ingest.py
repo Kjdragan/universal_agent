@@ -618,15 +618,28 @@ def _run_youtube_transcript_api_extract(
         }
 
     try:
-        api_kwargs: dict[str, Any] = {}
-        if proxy_config is not None:
-            api_kwargs["proxy_config"] = proxy_config
-        api = YouTubeTranscriptApi(**api_kwargs)
         lang = (language or "").strip().lower() or "en"
         preferred_languages = [lang] if lang != "en" else ["en"]
         if "en" not in preferred_languages:
             preferred_languages.append("en")
-        fetched = api.fetch(video_id, languages=preferred_languages)
+
+        api_kwargs: dict[str, Any] = {}
+        if proxy_config is not None:
+            api_kwargs["proxy_config"] = proxy_config
+            
+        try:
+            api = YouTubeTranscriptApi(**api_kwargs)
+            fetched = api.fetch(video_id, languages=preferred_languages)
+            actual_proxy_mode = proxy_mode
+        except Exception as proxy_exc:
+            if proxy_config is not None:
+                log.warning("Proxy failed for %s (%s), retrying without proxy...", video_id, str(proxy_exc))
+                api = YouTubeTranscriptApi()
+                fetched = api.fetch(video_id, languages=preferred_languages)
+                actual_proxy_mode = "fallback_disabled"
+            else:
+                raise proxy_exc
+
         lines: list[str] = []
         snippets = getattr(fetched, "snippets", None)
         if snippets is not None:
@@ -651,7 +664,7 @@ def _run_youtube_transcript_api_extract(
             "transcript_text": transcript_text,
             "source": "youtube_transcript_api",
             "language": lang,
-            "proxy_mode": proxy_mode,
+            "proxy_mode": actual_proxy_mode,
         }
     except Exception as exc:
         detail = str(exc)
