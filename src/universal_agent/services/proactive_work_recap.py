@@ -28,6 +28,7 @@ LLM_TIMEOUT_SECONDS = 20
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
+    """Create proactive_work_recaps tables and indexes if they do not exist."""
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS proactive_work_recaps (
@@ -58,6 +59,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
 
 
 def get_recap_for_task(conn: sqlite3.Connection, task_id: str) -> Optional[dict[str, Any]]:
+    """Fetch the stored recap for a task, returning None if not found."""
     ensure_schema(conn)
     row = conn.execute(
         """
@@ -166,6 +168,7 @@ def upsert_recap_for_task(
 
 
 def _latest_assignment(conn: sqlite3.Connection, task_id: str) -> dict[str, Any]:
+    """Return the most recent task_hub_assignments row for a task_id."""
     try:
         row = conn.execute(
             """
@@ -193,6 +196,7 @@ def _collect_evidence_bundle(
     reason: str,
     workspace_dir: str,
 ) -> dict[str, Any]:
+    """Gather workspace artifacts, transcript tail, and run log into an evidence dict."""
     workspace = Path(workspace_dir).expanduser() if workspace_dir else None
     return {
         "action": str(action or "").strip().lower(),
@@ -213,6 +217,7 @@ def _evaluate_recap(
     reason: str,
     evidence: dict[str, Any],
 ) -> dict[str, Any]:
+    """Evaluate a recap via LLM when available, falling back to session evidence heuristics."""
     heuristic = _evaluate_from_session_evidence(
         task=task,
         assignment=assignment,
@@ -250,6 +255,7 @@ def _evaluate_from_session_evidence(
     reason: str,
     evidence: dict[str, Any],
 ) -> dict[str, Any]:
+    """Produce a heuristic recap from session evidence without calling an LLM."""
     title = str(task.get("title") or "").strip()
     description = str(task.get("description") or "").strip()
     result_summary = str(assignment.get("result_summary") or "").strip()
@@ -320,6 +326,7 @@ def _evaluate_from_session_evidence(
 
 
 def _llm_recap_enabled() -> bool:
+    """Return True when LLM recap evaluation should be attempted."""
     raw = (os.getenv("UA_PROACTIVE_RECAP_LLM_ENABLED") or "").strip().lower()
     if raw in {"1", "true", "yes", "on", "enabled"}:
         return True
@@ -341,6 +348,7 @@ def _call_llm_recap_evaluator(
     reason: str,
     evidence: dict[str, Any],
 ) -> dict[str, Any]:
+    """Call an LLM to evaluate the recap and return the parsed JSON response."""
     import litellm
 
     model = (os.getenv("UA_PROACTIVE_RECAP_LLM_MODEL") or "").strip() or resolve_opus()
@@ -382,6 +390,7 @@ def _build_llm_recap_prompt(
     reason: str,
     evidence: dict[str, Any],
 ) -> str:
+    """Build the LLM prompt for recap evaluation from task and evidence context."""
     context = {
         "task": {
             "task_id": task.get("task_id"),
@@ -429,6 +438,7 @@ def _build_llm_recap_prompt(
 
 
 def _normalize_llm_recap(raw: dict[str, Any], *, heuristic: dict[str, Any]) -> dict[str, Any]:
+    """Validate and normalize LLM output, falling back to heuristic fields for missing values."""
     if not isinstance(raw, dict):
         raise ValueError("LLM recap was not an object")
     normalized = {
@@ -445,6 +455,7 @@ def _normalize_llm_recap(raw: dict[str, Any], *, heuristic: dict[str, Any]) -> d
 
 
 def _loads_json_object(raw: str) -> dict[str, Any]:
+    """Parse a JSON object from raw text, tolerating markdown code fences."""
     text = str(raw or "").strip()
     if text.startswith("```json"):
         text = text[7:].strip()
@@ -466,10 +477,12 @@ def _loads_json_object(raw: str) -> dict[str, Any]:
 
 
 def _clean_text(value: Any) -> str:
+    """Strip and truncate a text value to 1600 characters."""
     return str(value or "").strip()[:1600]
 
 
 def _bounded_float(value: Any, *, default: float) -> float:
+    """Parse a float from value, clamped to [0.0, 1.0], falling back to default."""
     try:
         parsed = float(value)
     except Exception:
@@ -478,6 +491,7 @@ def _bounded_float(value: Any, *, default: float) -> float:
 
 
 def _truncate(value: str, limit: int) -> str:
+    """Return the trailing limit characters of value when it exceeds the limit."""
     text = str(value or "")
     if len(text) <= limit:
         return text
@@ -492,6 +506,7 @@ def _implemented_summary(
     transcript_tail: str,
     run_log_tail: str,
 ) -> str:
+    """Derive a human-readable summary of what was implemented."""
     if result_summary:
         summary = result_summary
     elif reason:
@@ -515,6 +530,7 @@ def _known_issues(
     workspace_dir: str,
     work_products: list[str],
 ) -> str:
+    """Detect and describe known issues from terminal action, workspace, and artifact state."""
     issues: list[str] = []
     if action in {"block", "review", "park"}:
         issues.append(reason or result_summary or f"Terminal action was {action}.")
@@ -534,6 +550,7 @@ def _success_assessment(
     transcript_tail: str,
     run_log_tail: str,
 ) -> tuple[str, float]:
+    """Return a qualitative success string and a 0-1 confidence score."""
     has_evidence = bool(implemented.strip()) and (
         bool(work_products) or bool(transcript_tail) or bool(run_log_tail)
     )
@@ -549,6 +566,7 @@ def _success_assessment(
 
 
 def _recommended_next_action(*, action: str, known_issues: str, work_products: list[str]) -> str:
+    """Suggest a follow-up action based on terminal state and available evidence."""
     if action in {"block", "review"}:
         return "Create a fresh continuation session that reuses the recorded workspace and addresses the issue above."
     if action == "park":
@@ -561,6 +579,7 @@ def _recommended_next_action(*, action: str, known_issues: str, work_products: l
 
 
 def _list_work_products(workspace: Optional[Path]) -> list[str]:
+    """List files under workspace/work_products/, capped at MAX_WORK_PRODUCTS."""
     if not workspace:
         return []
     root = workspace / "work_products"
@@ -579,6 +598,7 @@ def _list_work_products(workspace: Optional[Path]) -> list[str]:
 
 
 def _read_tail(path: Path) -> str:
+    """Return the last MAX_EXCERPT_CHARS bytes of a file, or empty string."""
     try:
         if not path.exists() or not path.is_file():
             return ""
@@ -589,6 +609,7 @@ def _read_tail(path: Path) -> str:
 
 
 def _first_meaningful_line(text: str) -> str:
+    """Return the first line of text that looks like human-readable prose (>=20 chars)."""
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if len(line) >= 20 and not line.startswith(("{", "[", "TRACE", "DEBUG")):
@@ -597,6 +618,7 @@ def _first_meaningful_line(text: str) -> str:
 
 
 def _row_to_recap(row: sqlite3.Row) -> dict[str, Any]:
+    """Convert a sqlite3.Row into a normalized recap dict with parsed JSON fields."""
     raw_json = str(row["raw_model_output_json"] or "{}")
     try:
         raw = json.loads(raw_json)
@@ -625,4 +647,5 @@ def _row_to_recap(row: sqlite3.Row) -> dict[str, Any]:
 
 
 def _now_iso() -> str:
+    """Return the current UTC time as an ISO-8601 string."""
     return datetime.now(timezone.utc).isoformat()
