@@ -4,23 +4,19 @@
 This script runs autonomously on a schedule (via UA Cron Service). It:
 1. Selects today's dedicated playlist (e.g. "Monday Digest" on Mondays).
 2. Extracts transcripts using residential proxies (with graceful fallback).
-3. Synthesizes a compressed retelling + meta-analysis via Gemini (Vertex AI).
+3. Synthesizes a compressed retelling + meta-analysis via the standard
+   Anthropic-compatible ZAI inference path.
 4. Saves the markdown artifact to the daily_digests workspace.
 5. Emits the digest as a CSI record so it appears in the CSI Feed dashboard
    and can be processed by the proactive signal pipeline.
-6. Deletes processed videos from the playlist (clean inbox pattern).
+6. Saves a ranked tutorial-candidate decision artifact.
+7. Dispatches the top code-implementation prospects to the YouTube tutorial pipeline.
+8. Saves a repopulate pocket for the processed videos.
+9. Deletes processed videos from the playlist (clean inbox pattern).
 
 Playlist IDs are stored in Infisical as <DAY>_YT_PLAYLIST:
   MONDAY_YT_PLAYLIST, TUESDAY_YT_PLAYLIST, ..., SUNDAY_YT_PLAYLIST
 
-# TODO(proactive-signal): The daily digest currently produces a single
-# markdown document. The existing CSI batch brief pipeline will sweep it
-# for proactive signal candidates. To improve signal extraction, consider
-# having the Gemini synthesis prompt output structured follow-up
-# recommendations (e.g. explicit JSON action blocks alongside the
-# markdown) that the batch brief can parse more deterministically.
-# This would make Tutorial Pipeline Triggers and cross-video themes
-# more reliably surfaced as proactive cards.
 """
 
 from __future__ import annotations
@@ -28,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sqlite3
 import sys
 import threading
@@ -35,27 +32,32 @@ import uuid
 import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
+from urllib import error, request
 
 # Fix python path for local execution if needed
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from google import genai
-from google.genai import types
+from anthropic import AsyncAnthropic
 
 from universal_agent.infisical_loader import initialize_runtime_secrets
+from universal_agent.rate_limiter import ZAIRateLimiter
 from universal_agent.services.agentmail_service import AgentMailService
 from universal_agent.services.youtube_playlist_manager import (
+    add_playlist_item,
     get_playlist_items,
     remove_playlist_item,
     YouTubeAPIError,
     YouTubeOAuthError,
 )
+from universal_agent.utils.model_resolution import resolve_model
 from universal_agent.youtube_ingest import ingest_youtube_transcript
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 DAYS = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]
+POCKET_SCHEMA_VERSION = 1
 
 SYNTHESIS_PROMPT = """You are an expert technical researcher and knowledge synthesizer.
 You are given the transcripts and metadata of several YouTube videos that the user queued up to watch today.
@@ -65,20 +67,498 @@ For each video, provide:
 1. A concise, dense summary of the core thesis and key facts.
 2. Any actionable advice or technical insights.
 3. A priority ranking (e.g., High/Medium/Low Value) based on the depth of information.
+4. A tutorial pipeline decision:
+   - code_implementation_prospect=true only when the transcript or metadata shows concrete software/code/build/configuration work that can produce runnable implementation artifacts.
+   - code_implementation_prospect=false for concept-only commentary, news, strategy, high-level education, product positioning, interviews, or videos that lack enough concrete implementation steps.
+   - concept_only=true when the video is useful for understanding but should not be sent to a code implementation tutorial pipeline.
+
+Sort all video sections from highest value to lowest value.
 
 Finally, provide a "Meta-Synthesis" section at the top that identifies any cross-video themes,
 learning insights, or neglected opportunities across the entire playlist.
 
-If a video contains an excellent technical tutorial that the user should definitely try out,
-call it out explicitly as a "TUTORIAL PIPELINE TRIGGER" candidate.
+If a video contains an excellent technical tutorial that should become a runnable code implementation,
+call it out explicitly as a "TUTORIAL PIPELINE TRIGGER" candidate. Do not use that trigger for concept-only videos.
+
+After the markdown digest, include exactly one fenced JSON block labeled youtube_digest_decisions.
+The JSON must have this shape:
+```youtube_digest_decisions
+{
+  "ranked_videos": [
+    {
+      "rank": 1,
+      "video_id": "string",
+      "title": "string",
+      "value_score": 0,
+      "value_tier": "high|medium|low",
+      "code_implementation_prospect": true,
+      "concept_only": false,
+      "tutorial_candidate": true,
+      "recommended_tutorial_mode": "explainer_plus_code|concept_only|none",
+      "evidence_quality": "transcript|metadata_only|mixed",
+      "reason": "short reason grounded in the transcript or metadata"
+    }
+  ]
+}
+```
+Rules for the JSON:
+- ranked_videos must be sorted by value_score descending.
+- tutorial_candidate may be true only when code_implementation_prospect is true.
+- recommended_tutorial_mode must be explainer_plus_code for dispatched code prospects.
+- Use metadata_only evidence_quality when transcript text was unavailable.
+- Include every input video exactly once.
 
 Here are the videos:
 """
 
 
 # ---------------------------------------------------------------------------
+# LLM synthesis
+# ---------------------------------------------------------------------------
+
+async def _generate_digest_content(full_prompt: str) -> str:
+    """Generate digest synthesis through the Anthropic-compatible ZAI path."""
+    api_key = (
+        os.getenv("ANTHROPIC_API_KEY")
+        or os.getenv("ANTHROPIC_AUTH_TOKEN")
+        or os.getenv("ZAI_API_KEY")
+    )
+    if not api_key:
+        raise RuntimeError("No ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or ZAI_API_KEY configured")
+
+    model = os.getenv("UA_YOUTUBE_DIGEST_MODEL") or resolve_model("sonnet")
+    client_kwargs: dict[str, Any] = {
+        "api_key": api_key,
+        "max_retries": 0,
+        "timeout": float(os.getenv("UA_YOUTUBE_DIGEST_LLM_TIMEOUT_SECONDS", "180")),
+    }
+    base_url = os.getenv("ANTHROPIC_BASE_URL")
+    if base_url:
+        client_kwargs["base_url"] = base_url
+    elif os.getenv("ZAI_API_KEY") and api_key == os.getenv("ZAI_API_KEY"):
+        client_kwargs["base_url"] = "https://api.z.ai/api/anthropic"
+
+    client = AsyncAnthropic(**client_kwargs)
+    limiter = ZAIRateLimiter.get_instance()
+    max_retries = int(os.getenv("UA_YOUTUBE_DIGEST_LLM_MAX_RETRIES", "5"))
+    max_tokens = int(os.getenv("UA_YOUTUBE_DIGEST_MAX_TOKENS", "12000"))
+    context = "youtube_daily_digest"
+    last_error: Exception | None = None
+
+    logger.info("Generating Meta-Synthesis with Anthropic-compatible model=%s...", model)
+    for attempt in range(max_retries):
+        async with limiter.acquire(context):
+            try:
+                response = await client.messages.create(
+                    model=model,
+                    max_tokens=max_tokens,
+                    temperature=0.4,
+                    messages=[{"role": "user", "content": full_prompt}],
+                )
+                await limiter.record_success()
+                text = "".join(getattr(block, "text", "") for block in response.content).strip()
+                if not text:
+                    raise RuntimeError("LLM returned an empty digest response")
+                return text
+            except Exception as exc:
+                last_error = exc
+                error_str = str(exc).lower()
+                if "429" not in error_str and "too many requests" not in error_str and "high concurrency" not in error_str:
+                    raise
+                await limiter.record_429(context)
+                if attempt >= max_retries - 1:
+                    break
+                delay = limiter.get_backoff(attempt)
+                logger.warning(
+                    "Digest LLM rate limited; retrying in %.1fs (attempt %d/%d): %s",
+                    delay,
+                    attempt + 1,
+                    max_retries,
+                    exc,
+                )
+                await asyncio.sleep(delay)
+
+    raise RuntimeError(f"Digest LLM synthesis failed after {max_retries} attempts: {last_error}")
+
+
+# ---------------------------------------------------------------------------
 # CSI Digest emission — write directly to the gateway's CSI SQLite DB
 # ---------------------------------------------------------------------------
+
+def _workspace_dir() -> Path:
+    return Path(os.getenv("UA_WORKSPACES_DIR") or (Path.cwd() / "AGENT_RUN_WORKSPACES"))
+
+
+def _digest_artifacts_dir() -> Path:
+    return _workspace_dir() / "daily_digests"
+
+
+def _pockets_dir() -> Path:
+    return _digest_artifacts_dir() / "repopulate_pockets"
+
+
+def _pocket_path(*, day_name: str, date_str: str) -> Path:
+    day_upper = day_name.upper()
+    return _pockets_dir() / day_upper / f"{date_str}_{day_upper}_playlist_pocket.json"
+
+
+def _tutorial_candidates_path(*, day_name: str, date_str: str) -> Path:
+    day_upper = day_name.upper()
+    return _digest_artifacts_dir() / f"{date_str}_{day_upper}_tutorial_candidates.json"
+
+
+def _latest_pocket_path(day_name: str) -> Path | None:
+    day_upper = day_name.upper()
+    day_dir = _pockets_dir() / day_upper
+    if not day_dir.exists():
+        return None
+    pockets = sorted(day_dir.glob(f"*_{day_upper}_playlist_pocket.json"))
+    return pockets[-1] if pockets else None
+
+
+def _save_repopulate_pocket(
+    *,
+    day_name: str,
+    date_str: str,
+    playlist_id: str,
+    items: list[dict],
+    artifact_path: Path,
+    dry_run: bool,
+) -> Path:
+    """Persist processed playlist contents before cleanup deletion."""
+    path = _pocket_path(day_name=day_name, date_str=date_str)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    videos = [
+        {
+            "video_id": str(item.get("video_id") or ""),
+            "title": str(item.get("title") or ""),
+            "original_playlist_item_id": str(item.get("playlist_item_id") or ""),
+        }
+        for item in items
+        if item.get("video_id")
+    ]
+    pocket = {
+        "schema_version": POCKET_SCHEMA_VERSION,
+        "day_name": day_name.upper(),
+        "date": date_str,
+        "playlist_id": playlist_id,
+        "artifact_path": str(artifact_path),
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "cleanup_mode": "dry_run" if dry_run else "delete_after_digest",
+        "video_count": len(videos),
+        "videos": videos,
+    }
+    path.write_text(json.dumps(pocket, indent=2, ensure_ascii=False), encoding="utf-8")
+    logger.info("Saved digest repopulate pocket: %s (%d videos)", path, len(videos))
+    return path
+
+
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _coerce_score(value: Any) -> int:
+    try:
+        return max(0, min(100, int(float(value))))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _extract_decision_json(digest_content: str) -> dict[str, Any]:
+    """Extract the LLM's structured digest decision block."""
+    match = re.search(
+        r"```(?:youtube_digest_decisions|json)\s*(.*?)\s*```",
+        digest_content,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    if not match:
+        return {"ranked_videos": []}
+    try:
+        parsed = json.loads(match.group(1))
+    except json.JSONDecodeError as exc:
+        logger.warning("Failed to parse youtube_digest_decisions JSON block: %s", exc)
+        return {"ranked_videos": []}
+    if not isinstance(parsed, dict):
+        return {"ranked_videos": []}
+    videos = parsed.get("ranked_videos")
+    if not isinstance(videos, list):
+        parsed["ranked_videos"] = []
+    return parsed
+
+
+def _rank_digest_decisions(decisions: dict[str, Any], processed_items: list[dict]) -> dict[str, Any]:
+    """Normalize LLM decisions and keep only known playlist videos."""
+    items_by_id = {str(item.get("video_id") or ""): item for item in processed_items if item.get("video_id")}
+    ranked: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for raw in decisions.get("ranked_videos", []):
+        if not isinstance(raw, dict):
+            continue
+        video_id = str(raw.get("video_id") or "").strip()
+        if not video_id or video_id not in items_by_id or video_id in seen:
+            continue
+        seen.add(video_id)
+        item = items_by_id[video_id]
+        code_prospect = _coerce_bool(raw.get("code_implementation_prospect"))
+        tutorial_candidate = _coerce_bool(raw.get("tutorial_candidate")) and code_prospect
+        concept_only = _coerce_bool(raw.get("concept_only")) or not code_prospect
+        mode = "explainer_plus_code" if tutorial_candidate else ("concept_only" if concept_only else "none")
+        ranked.append(
+            {
+                "video_id": video_id,
+                "title": str(raw.get("title") or item.get("title") or ""),
+                "value_score": _coerce_score(raw.get("value_score")),
+                "value_tier": str(raw.get("value_tier") or "").strip().lower() or "low",
+                "code_implementation_prospect": code_prospect,
+                "concept_only": concept_only,
+                "tutorial_candidate": tutorial_candidate,
+                "recommended_tutorial_mode": mode,
+                "evidence_quality": str(raw.get("evidence_quality") or "").strip().lower() or "unknown",
+                "reason": str(raw.get("reason") or "").strip(),
+            }
+        )
+
+    for video_id, item in items_by_id.items():
+        if video_id in seen:
+            continue
+        ranked.append(
+            {
+                "video_id": video_id,
+                "title": str(item.get("title") or ""),
+                "value_score": 0,
+                "value_tier": "unknown",
+                "code_implementation_prospect": False,
+                "concept_only": True,
+                "tutorial_candidate": False,
+                "recommended_tutorial_mode": "concept_only",
+                "evidence_quality": "unknown",
+                "reason": "No structured LLM decision was available for this video.",
+            }
+        )
+
+    ranked.sort(key=lambda row: int(row.get("value_score") or 0), reverse=True)
+    for idx, row in enumerate(ranked, start=1):
+        row["rank"] = idx
+    return {"ranked_videos": ranked}
+
+
+def _select_tutorial_dispatch_candidates(
+    decisions: dict[str, Any],
+    *,
+    top_n: int,
+) -> list[dict[str, Any]]:
+    if top_n <= 0:
+        return []
+    candidates = [
+        row
+        for row in decisions.get("ranked_videos", [])
+        if row.get("tutorial_candidate") is True
+        and row.get("code_implementation_prospect") is True
+        and row.get("recommended_tutorial_mode") == "explainer_plus_code"
+    ]
+    return candidates[:top_n]
+
+
+def _save_tutorial_candidates(
+    *,
+    day_name: str,
+    date_str: str,
+    artifact_path: Path,
+    decisions: dict[str, Any],
+    selected: list[dict[str, Any]],
+    dry_run: bool,
+    top_n: int,
+) -> Path:
+    path = _tutorial_candidates_path(day_name=day_name, date_str=date_str)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": 1,
+        "day_name": day_name.upper(),
+        "date": date_str,
+        "digest_artifact_path": str(artifact_path),
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "dry_run": dry_run,
+        "auto_tutorial_top_n": top_n,
+        "selected_count": len(selected),
+        "selected_video_ids": [str(row.get("video_id") or "") for row in selected],
+        "ranked_videos": decisions.get("ranked_videos", []),
+    }
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    logger.info("Saved tutorial candidate decisions: %s (%d selected)", path, len(selected))
+    return path
+
+
+def _gateway_base_url() -> str:
+    configured = (
+        os.getenv("UA_YOUTUBE_DIGEST_TUTORIAL_HOOK_URL")
+        or os.getenv("UA_GATEWAY_URL")
+        or "http://127.0.0.1:8002"
+    ).strip()
+    if configured.endswith("/api/v1/hooks/youtube/manual"):
+        return configured
+    return configured.rstrip("/") + "/api/v1/hooks/youtube/manual"
+
+
+def _dispatch_tutorial_candidate(
+    *,
+    candidate: dict[str, Any],
+    day_name: str,
+    date_str: str,
+    digest_artifact_path: Path,
+    candidates_artifact_path: Path,
+    timeout_seconds: float = 20.0,
+) -> dict[str, Any]:
+    video_id = str(candidate.get("video_id") or "").strip()
+    if not video_id:
+        return {"ok": False, "reason": "missing_video_id"}
+
+    hook_token = (os.getenv("UA_HOOKS_TOKEN") or "").strip()
+    if not hook_token:
+        return {"ok": False, "reason": "missing_UA_HOOKS_TOKEN"}
+
+    payload = {
+        "video_id": video_id,
+        "video_url": f"https://www.youtube.com/watch?v={video_id}",
+        "title": str(candidate.get("title") or ""),
+        "mode": "explainer_plus_code",
+        "allow_degraded_transcript_only": True,
+        "description": (
+            "Auto-selected by Daily YouTube Digest as a code implementation prospect. "
+            f"Digest day={day_name}, date={date_str}, rank={candidate.get('rank')}, "
+            f"value_score={candidate.get('value_score')}. Reason: {candidate.get('reason') or ''}"
+        ),
+        "source": "youtube_daily_digest",
+        "digest_rank": candidate.get("rank"),
+        "digest_value_score": candidate.get("value_score"),
+        "digest_artifact_path": str(digest_artifact_path),
+        "tutorial_candidates_artifact_path": str(candidates_artifact_path),
+    }
+    body = json.dumps(payload).encode("utf-8")
+    req = request.Request(
+        _gateway_base_url(),
+        data=body,
+        method="POST",
+        headers={
+            "authorization": f"Bearer {hook_token}",
+            "content-type": "application/json",
+            "x-ua-source": "youtube_daily_digest",
+        },
+    )
+    try:
+        with request.urlopen(req, timeout=timeout_seconds) as resp:
+            text = resp.read().decode("utf-8", errors="replace")
+            return {
+                "ok": 200 <= int(resp.status) < 300,
+                "status": int(resp.status),
+                "response": text[:1000],
+            }
+    except error.HTTPError as exc:
+        text = exc.read().decode("utf-8", errors="replace")
+        return {"ok": False, "status": exc.code, "reason": "http_error", "response": text[:1000]}
+    except Exception as exc:
+        return {"ok": False, "reason": type(exc).__name__, "error": str(exc)}
+
+
+def _dispatch_tutorial_candidates(
+    *,
+    selected: list[dict[str, Any]],
+    day_name: str,
+    date_str: str,
+    digest_artifact_path: Path,
+    candidates_artifact_path: Path,
+    dry_run: bool,
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for candidate in selected:
+        if dry_run:
+            result = {"ok": True, "reason": "dry_run", "video_id": candidate.get("video_id")}
+        else:
+            result = _dispatch_tutorial_candidate(
+                candidate=candidate,
+                day_name=day_name,
+                date_str=date_str,
+                digest_artifact_path=digest_artifact_path,
+                candidates_artifact_path=candidates_artifact_path,
+            )
+            result["video_id"] = candidate.get("video_id")
+        results.append(result)
+        logger.info(
+            "Tutorial candidate dispatch video_id=%s ok=%s reason=%s status=%s",
+            candidate.get("video_id"),
+            result.get("ok"),
+            result.get("reason"),
+            result.get("status"),
+        )
+    return results
+
+
+def repopulate_digest_playlist(
+    *,
+    day_override: str,
+    date_override: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Restore a day's digest playlist from a saved repopulate pocket."""
+    initialize_runtime_secrets()
+
+    day_name = day_override.upper()
+    if day_name not in DAYS:
+        raise ValueError(f"Invalid day: {day_override}. Must be one of {DAYS}")
+
+    playlist_id_var = f"{day_name}_YT_PLAYLIST"
+    playlist_id = os.getenv(playlist_id_var)
+    if not playlist_id:
+        raise YouTubeOAuthError(f"No playlist configured for {day_name}: {playlist_id_var} is not set")
+
+    path = _pocket_path(day_name=day_name, date_str=date_override) if date_override else _latest_pocket_path(day_name)
+    if path is None or not path.exists():
+        suffix = f" on {date_override}" if date_override else ""
+        raise FileNotFoundError(f"No repopulate pocket found for {day_name}{suffix}")
+
+    pocket = json.loads(path.read_text(encoding="utf-8"))
+    videos = [video for video in pocket.get("videos", []) if video.get("video_id")]
+    current_ids = {str(item.get("video_id")) for item in get_playlist_items(playlist_id)}
+
+    added: list[str] = []
+    skipped_existing: list[str] = []
+    for video in videos:
+        video_id = str(video["video_id"])
+        if video_id in current_ids:
+            skipped_existing.append(video_id)
+            continue
+        if not dry_run:
+            add_playlist_item(playlist_id, video_id)
+            current_ids.add(video_id)
+            logger.info("Repopulated %s into %s playlist", video_id, day_name)
+        added.append(video_id)
+
+    result = {
+        "pocket_path": str(path),
+        "day_name": day_name,
+        "date": pocket.get("date"),
+        "playlist_id": playlist_id,
+        "dry_run": dry_run,
+        "requested": len(videos),
+        "added": len(added),
+        "skipped_existing": len(skipped_existing),
+        "added_video_ids": added,
+        "skipped_existing_video_ids": skipped_existing,
+    }
+    logger.info(
+        "Repopulate complete day=%s requested=%d added=%d skipped_existing=%d dry_run=%s",
+        day_name,
+        result["requested"],
+        result["added"],
+        result["skipped_existing"],
+        dry_run,
+    )
+    return result
+
 
 def _emit_csi_digest(
     *,
@@ -95,7 +575,7 @@ def _emit_csi_digest(
     can be processed by the batch brief / proactive signal pipeline.
     """
     # Locate the CSI digests DB — same path the gateway uses
-    workspaces_dir = Path(os.getenv("UA_WORKSPACES_DIR") or (Path.cwd() / "AGENT_RUN_WORKSPACES"))
+    workspaces_dir = _workspace_dir()
     db_path = workspaces_dir / ".csi_digests.db"
 
     if not db_path.exists():
@@ -143,7 +623,12 @@ def _emit_csi_digest(
 # Main processing
 # ---------------------------------------------------------------------------
 
-def process_daily_digest(dry_run: bool = False, day_override: str | None = None, email_to: str | None = None):
+def process_daily_digest(
+    dry_run: bool = False,
+    day_override: str | None = None,
+    email_to: str | None = None,
+    auto_tutorial_top_n: int | None = None,
+):
     initialize_runtime_secrets()
 
     day_name = day_override.upper() if day_override else DAYS[datetime.now().weekday()]
@@ -222,41 +707,74 @@ def process_daily_digest(dry_run: bool = False, day_override: str | None = None,
         logger.info("No transcripts could be extracted. Exiting.")
         return
 
-    logger.info("Generating Meta-Synthesis with Gemini (Vertex AI)...")
-
-    # Always use Vertex AI — works on both VPS (service account) and desktop (ADC)
-    vertex_project = os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("VERTEX_PROJECT") or "gen-lang-client-0229532959"
-    vertex_location = os.getenv("VERTEX_LOCATION", "us-central1")
-    client = genai.Client(vertexai=True, project=vertex_project, location=vertex_location)
-
     full_prompt = SYNTHESIS_PROMPT + "\n\n---\n\n".join(transcripts)
 
     try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=full_prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.4,
-            ),
-        )
-        digest_content = response.text
+        digest_content = asyncio.run(_generate_digest_content(full_prompt))
     except Exception as e:
-        logger.error("Failed to generate content with Gemini: %s", e)
+        logger.error("Failed to generate digest content with LLM: %s", e)
         return
 
     # Save Artifact to the persistent daily_digests workspace
     date_str = datetime.now().strftime("%Y-%m-%d")
-    workspace_dir = Path(os.getenv("UA_WORKSPACES_DIR") or (Path.cwd() / "AGENT_RUN_WORKSPACES"))
-    artifacts_dir = workspace_dir / "daily_digests"
+    artifacts_dir = _digest_artifacts_dir()
     artifacts_dir.mkdir(parents=True, exist_ok=True)
 
     artifact_path = artifacts_dir / f"{date_str}_{day_name}_Digest.md"
     full_content = f"# Daily YouTube Digest: {day_name.title()}, {date_str}\n\n{digest_content}"
 
-    with open(artifact_path, "w") as f:
+    with open(artifact_path, "w", encoding="utf-8") as f:
         f.write(full_content)
 
     logger.info("Daily Digest saved to: %s", artifact_path)
+
+    try:
+        configured_top_n = (
+            auto_tutorial_top_n
+            if auto_tutorial_top_n is not None
+            else int(os.getenv("UA_YOUTUBE_DIGEST_AUTO_TUTORIAL_TOP_N", "4"))
+        )
+    except ValueError:
+        logger.warning("Invalid UA_YOUTUBE_DIGEST_AUTO_TUTORIAL_TOP_N; defaulting to 4")
+        configured_top_n = 4
+    decisions = _rank_digest_decisions(
+        _extract_decision_json(digest_content),
+        processed_items,
+    )
+    selected_tutorial_candidates = _select_tutorial_dispatch_candidates(
+        decisions,
+        top_n=configured_top_n,
+    )
+    candidates_path = _save_tutorial_candidates(
+        day_name=day_name,
+        date_str=date_str,
+        artifact_path=artifact_path,
+        decisions=decisions,
+        selected=selected_tutorial_candidates,
+        dry_run=dry_run,
+        top_n=configured_top_n,
+    )
+    dispatch_results = _dispatch_tutorial_candidates(
+        selected=selected_tutorial_candidates,
+        day_name=day_name,
+        date_str=date_str,
+        digest_artifact_path=artifact_path,
+        candidates_artifact_path=candidates_path,
+        dry_run=dry_run,
+    )
+    if dispatch_results:
+        dispatch_path = candidates_path.with_name(candidates_path.stem + "_dispatch_results.json")
+        dispatch_path.write_text(json.dumps(dispatch_results, indent=2, ensure_ascii=False), encoding="utf-8")
+        logger.info("Saved tutorial dispatch results: %s", dispatch_path)
+
+    _save_repopulate_pocket(
+        day_name=day_name,
+        date_str=date_str,
+        playlist_id=playlist_id,
+        items=processed_items,
+        artifact_path=artifact_path,
+        dry_run=dry_run,
+    )
 
     # Emit as a CSI digest record for dashboard visibility + proactive signal pipeline
     _emit_csi_digest(
@@ -313,7 +831,29 @@ if __name__ == "__main__":
     parser.add_argument("--day", type=str, default=None,
                         help="Override day of week (e.g., 'MONDAY'). Uses current day if not set.")
     parser.add_argument("--email-to", type=str, default="kevinjdragan@gmail.com", help="Email recipient for the digest.")
+    parser.add_argument("--repopulate", action="store_true", help="Restore a day's digest playlist from its saved repopulate pocket.")
+    parser.add_argument("--date", type=str, default=None, help="Pocket date to repopulate (YYYY-MM-DD). Defaults to the latest pocket for the day.")
+    parser.add_argument(
+        "--auto-tutorial-top-n",
+        type=int,
+        default=None,
+        help="Number of ranked code-implementation prospects to dispatch to the tutorial pipeline. Defaults to UA_YOUTUBE_DIGEST_AUTO_TUTORIAL_TOP_N or 4.",
+    )
+    parser.add_argument(
+        "--no-auto-tutorial-dispatch",
+        action="store_true",
+        help="Disable automatic tutorial dispatch for this digest run.",
+    )
     args = parser.parse_args()
+
+    if args.repopulate:
+        day_upper = (args.day or DAYS[datetime.now().weekday()]).upper()
+        if day_upper not in DAYS:
+            logger.error("Invalid day: %s. Must be one of %s", args.day, DAYS)
+            sys.exit(1)
+        result = repopulate_digest_playlist(day_override=day_upper, date_override=args.date, dry_run=args.dry_run)
+        print(json.dumps(result, indent=2))
+        sys.exit(0)
 
     if args.day:
         day_upper = args.day.upper()
@@ -321,6 +861,15 @@ if __name__ == "__main__":
             logger.error("Invalid day: %s. Must be one of %s", args.day, DAYS)
             sys.exit(1)
         logger.info("Day override: %s", day_upper)
-        process_daily_digest(dry_run=args.dry_run, day_override=day_upper, email_to=args.email_to)
+        process_daily_digest(
+            dry_run=args.dry_run,
+            day_override=day_upper,
+            email_to=args.email_to,
+            auto_tutorial_top_n=0 if args.no_auto_tutorial_dispatch else args.auto_tutorial_top_n,
+        )
     else:
-        process_daily_digest(dry_run=args.dry_run, email_to=args.email_to)
+        process_daily_digest(
+            dry_run=args.dry_run,
+            email_to=args.email_to,
+            auto_tutorial_top_n=0 if args.no_auto_tutorial_dispatch else args.auto_tutorial_top_n,
+        )

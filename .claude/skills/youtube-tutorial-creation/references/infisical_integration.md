@@ -11,7 +11,7 @@ Infisical is our canonical secrets management and environment configuration serv
 
 The only variables that belong in a `.env` file are the **bare minimum bootstrap credentials** required for the machine to authenticate with the Infisical service itself (such as a Machine Identity Client ID/Secret or a Universal Auth Token). 
 
-Once the machine is authenticated, Infisical provides all other application secrets (like your `GEMINI_API_KEY`) dynamically.
+Once the machine is authenticated, Infisical provides all other application secrets (like your `ZAI_API_KEY`) dynamically.
 
 ### The Bootstrapping Flow
 1. **Machine Authentication:** A minimal `.env` file contains only the credentials needed to talk to Infisical.
@@ -40,21 +40,21 @@ Inside your code, you simply read the environment variable as usual. The code re
 import os
 
 # This will successfully read the key injected by the CLI
-api_key = os.environ.get("GEMINI_API_KEY") 
+api_key = os.environ.get("ZAI_API_KEY")
 ```
 
 ### Method 2: Programmatic Access (Python SDK)
 
 If you need to fetch secrets dynamically from within your application code, you can use the `infisical-sdk` Python package. 
 
-Here is an example `load_env.py` helper you can include in your new project. It attempts to load the Gemini API key from Infisical programmatically, and falls back to standard environment variables if already injected via the CLI:
+Here is an example `load_env.py` helper you can include in your new project. It attempts to load the ZAI API key from Infisical programmatically, and falls back to standard environment variables if already injected via the CLI:
 
 ```python
 import os
 
 def load_env():
     """
-    Attempts to load the GEMINI_API_KEY from Infisical programmatically.
+    Attempts to load the ZAI_API_KEY from Infisical programmatically.
     Falls back to os.environ if already injected via CLI or local environment.
     """
     try:
@@ -64,37 +64,37 @@ def load_env():
         client = InfisicalClient()
         
         # Fetch the specific secret. 
-        secret = client.get_secret("GEMINI_API_KEY")
+        secret = client.get_secret("ZAI_API_KEY")
         if secret and secret.secret_value:
-            os.environ["GEMINI_API_KEY"] = secret.secret_value
+            os.environ["ZAI_API_KEY"] = secret.secret_value
             return
             
     except Exception as e:
         # If Infisical is unavailable, rely on the standard environment fallback
         pass
 
-    if "GEMINI_API_KEY" not in os.environ:
-        print("Warning: GEMINI_API_KEY not found in Infisical or environment.")
+    if "ZAI_API_KEY" not in os.environ:
+        print("Warning: ZAI_API_KEY not found in Infisical or environment.")
 ```
 
 **Usage in your main script:**
 ```python
 from load_env import load_env
-from google import genai
+from anthropic import Anthropic
 
 # Inject the secret into the environment memory
 load_env()
 
-# The genai SDK automatically looks for os.environ["GEMINI_API_KEY"]
-client = genai.Client() 
+# ZAI is normally accessed through the Anthropic-compatible endpoint in this repo.
+client = Anthropic(api_key=os.environ["ZAI_API_KEY"], base_url="https://api.z.ai/api/anthropic")
 ```
 
 ---
 
-## Configuring Your Gemini Project
+## Configuring Your ZAI Project
 
-For your upcoming Gemini API project, follow these steps to ensure compliance with the secrets policy:
+For ZAI-backed inference, follow these steps to ensure compliance with the secrets policy:
 
-1. **Centralize the Key:** Ensure `GEMINI_API_KEY` is added to your Infisical project dashboard under the relevant environment (e.g., `dev` or `prod`).
-2. **Keep `.env` Clean:** Do not place `GEMINI_API_KEY` into your local `.env`. Only include your Infisical bootstrap token.
-3. **Provision at Runtime:** Use `infisical run -- uv run ...` or the `load_env()` helper pattern to securely provision the key to the `google-genai` SDK at execution time.
+1. **Centralize the Key:** Ensure `ZAI_API_KEY` is added to your Infisical project dashboard under the relevant environment (e.g., `dev` or `prod`).
+2. **Keep `.env` Clean:** Do not place `ZAI_API_KEY` into your local `.env`. Only include your Infisical bootstrap token.
+3. **Provision at Runtime:** Use `infisical run -- uv run ...` or the `load_env()` helper pattern to securely provision the key to the Anthropic-compatible ZAI client at execution time.

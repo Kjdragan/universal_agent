@@ -3,7 +3,7 @@
 > **Canonical source-of-truth** for the YouTube Tutorial Pipeline. All other
 > tutorial-related documentation should reference this file.
 >
-> **Last updated:** 2026-04-29 — playlist watcher permanent-failure markers now self-clear when tutorial artifacts later appear.
+> **Last updated:** 2026-04-30 — Daily YouTube Digest now ranks videos, saves tutorial-candidate decisions, and can auto-dispatch the top code implementation prospects while preserving repopulate pockets.
 
 ## 1. Pipeline Overview
 
@@ -27,6 +27,62 @@ Playlist Watch → New Video Detection → Webhook Dispatch → Agent Session
 | Telegram Notifier | `services/tutorial_telegram_notifier.py` | Per-video dedup Telegram alerts for tutorial events |
 | Dashboard (Tutorials) | `web-ui/app/dashboard/tutorials/page.tsx` | Tutorial runs, review jobs, bootstrap jobs, notifications with client-side dedup |
 | Dashboard (Main) | `web-ui/app/dashboard/page.tsx` | Notification panel with video-level dedup |
+
+### 1.1A Daily Digest Ranking, Tutorial Dispatch, and Repopulate Pockets
+
+The Daily YouTube Digest cron uses day-specific playlists as clean inboxes: after a digest succeeds, processed videos are removed from that day's playlist. Digest synthesis uses the repository's Anthropic-compatible ZAI inference path, defaulting to `glm-5-turbo` via `resolve_model("sonnet")` unless `UA_YOUTUBE_DIGEST_MODEL` overrides it.
+
+The digest LLM now produces both human-readable markdown and a structured `youtube_digest_decisions` block. The code normalizes that block, sorts videos by `value_score`, saves a candidate artifact, and dispatches only the highest-value `code_implementation_prospect=true` videos to the YouTube tutorial pipeline. Concept-only videos can still appear in the digest as high-value learning items, but they are not automatically dispatched.
+
+```mermaid
+sequenceDiagram
+    participant Cron as youtube_daily_digest.py
+    participant YT as YouTube playlist
+    participant FS as daily_digests artifacts
+    participant Hooks as /api/v1/hooks/youtube/manual
+    participant CSI as CSI digests DB
+
+    Cron->>YT: Read day playlist items
+    Cron->>Cron: Ingest transcripts / metadata fallbacks
+    Cron->>Cron: Generate ranked digest + structured decisions via ZAI model
+    Cron->>FS: Save Digest.md and tutorial_candidates.json
+    Cron->>Hooks: Dispatch top code implementation prospects only
+    Cron->>FS: Save {date}_{DAY}_playlist_pocket.json
+    Cron->>CSI: Emit daily digest record
+    Cron->>YT: Delete processed playlist items
+```
+
+Candidate files live under:
+
+```text
+AGENT_RUN_WORKSPACES/daily_digests/{YYYY-MM-DD}_{DAY}_tutorial_candidates.json
+```
+
+Automatic dispatch is bounded by `UA_YOUTUBE_DIGEST_AUTO_TUTORIAL_TOP_N` and defaults to `4`. Use `--no-auto-tutorial-dispatch` to disable it for a manual run. `--dry-run` writes/prints decision artifacts but does not dispatch tutorial runs or delete playlist entries.
+
+Pocket files live under:
+
+```text
+AGENT_RUN_WORKSPACES/daily_digests/repopulate_pockets/{DAY}/{YYYY-MM-DD}_{DAY}_playlist_pocket.json
+```
+
+To restore the latest saved Monday pocket:
+
+```bash
+PYTHONPATH=src uv run python -m universal_agent.scripts.youtube_daily_digest --repopulate --day MONDAY
+```
+
+To preview without modifying YouTube:
+
+```bash
+PYTHONPATH=src uv run python -m universal_agent.scripts.youtube_daily_digest --repopulate --day MONDAY --dry-run
+```
+
+To restore a specific date:
+
+```bash
+PYTHONPATH=src uv run python -m universal_agent.scripts.youtube_daily_digest --repopulate --day MONDAY --date 2026-04-30
+```
 
 ---
 
@@ -247,6 +303,15 @@ After tutorial generation, the pipeline can automatically create a GitHub reposi
 | `DATAIMPULSE_USER` | — | DataImpulse proxy username |
 | `DATAIMPULSE_PASS` | — | DataImpulse proxy password |
 
+### Daily Digest Auto Tutorial Dispatch
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `UA_YOUTUBE_DIGEST_AUTO_TUTORIAL_TOP_N` | `4` | Max ranked code implementation prospects to dispatch per digest run |
+| `UA_YOUTUBE_DIGEST_TUTORIAL_HOOK_URL` | `UA_GATEWAY_URL + /api/v1/hooks/youtube/manual` | Optional explicit manual YouTube hook URL for digest dispatch |
+| `UA_HOOKS_TOKEN` | — | Required bearer token for digest-to-hook dispatch |
+
+Optional video/vision analysis in `youtube-tutorial-creation` is gated to `concept_plus_implementation` runs. `concept_only` runs use transcript and metadata evidence and set visual extraction to `not_attempted`.
+
 ---
 
 ## 8. Key Source Files
@@ -257,6 +322,7 @@ After tutorial generation, the pipeline can automatically create a GitHub reposi
 | `src/universal_agent/gateway_server.py` | Notification CRUD, tutorial dashboard API, dedup constants |
 | `src/universal_agent/youtube_ingest.py` | Transcript fetching via rotating residential proxy (Webshare or DataImpulse) |
 | `src/universal_agent/youtube_mode_utils.py` | Shared concept-only vs code-worthy mode inference used by CSI signal ingest, hooks, gateway tutorial indexing, and playlist watching |
+| `src/universal_agent/scripts/youtube_daily_digest.py` | Daily playlist digest, ranked tutorial-candidate decisions, and bounded code-prospect dispatch |
 | `src/universal_agent/services/youtube_playlist_watcher.py` | Playlist polling |
 | `src/universal_agent/services/tutorial_telegram_notifier.py` | Telegram notification sink with per-video dedup |
 | `web-ui/app/dashboard/page.tsx` | Main dashboard with notification dedup |

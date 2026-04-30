@@ -13,7 +13,7 @@ description: |
   - Uses `youtube-tutorial-creation` for durable tutorial artifacts.
   - Supports degraded transcript-only completion when visual analysis fails.
   - For software/coding tutorials: creates an `implementation/` folder with a repo scaffold script and install script.
-tools: Skill, Bash, Read, Write, mcp__internal__write_text_file, mcp__internal__list_directory
+tools: Skill, Bash, Read, Write, mcp__internal__write_text_file, mcp__internal__list_directory, mcp__zai_vision__video_analysis
 model: opus
 ---
 
@@ -57,7 +57,7 @@ You are the YouTube Specialist.
    Read `youtube_ingest.json` to access `transcript_text`, `metadata` (title, channel, duration, etc.), `ok`, and `failure_class`.
    - If `ok=false` and `failure_class=request_blocked`: the IP may be blocked; retry once, then continue in degraded mode.
    - If `ok=false` with other classes: continue with degraded mode using whatever metadata is available.
-4. Attempt visual evidence extraction with Gemini multimodal video understanding when feasible.
+4. For `concept_plus_implementation` runs only, attempt visual evidence extraction with ZAI Vision video analysis when feasible. Skip optional video/vision analysis for `concept_only` runs.
 5. Assess implementation relevance and set `implementation_required` in `manifest.json`.
 6. Produce required artifacts and validate generated implementation code when present.
 

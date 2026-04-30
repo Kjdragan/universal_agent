@@ -29,7 +29,7 @@ be understandable *without* watching the video.
 | `CONCEPT.md` | ✅ Always | Standalone tutorial — understandable without watching the video |
 | `IMPLEMENTATION.md` | ✅ Usually | Prerequisites/steps; for concept-only this can be procedural (recipe/runbook) |
 | `implementation/` | ⬜ Conditional | Runnable code/scripts only for software/coding tutorials |
-| `visuals/gemini_video_analysis.md` | ⬜ Best-effort | Timestamped visual analysis from Gemini |
+| `visuals/zai_video_analysis.md` | ⬜ Best-effort for coding runs | Timestamped visual analysis from ZAI Vision |
 | `research/sources.md` | ⬜ When gaps exist | Gap-filling sources and citations |
 | `transcript.clean.txt` | ⬜ Recommended | Deduplicated transcript (retention: temp) |
 
@@ -101,7 +101,7 @@ Read `youtube_ingest.json` and look at `ok`, `failure_class`, `transcript_text`,
 |-----------|--------|
 | `ok=true` | Continue to Step 3b (normal path) |
 | `ok=false`, `failure_class=request_blocked` | Retry once; if still blocked, proceed degraded with metadata only |
-| `ok=false`, `failure_class=empty_or_low_quality_transcript` | Use Gemini visual analysis as primary source; set status `degraded_transcript_only` |
+| `ok=false`, `failure_class=empty_or_low_quality_transcript` | For `concept_plus_implementation`, use ZAI Vision analysis as supplemental evidence when available; for `concept_only`, continue with metadata-only degraded output |
 | `ok=false`, metadata succeeded | Preserve metadata in manifest; proceed degraded |
 | Both transcript and metadata failed | Set status `failed`; still write `manifest.json` + `README.md` with error detail |
 
@@ -225,32 +225,24 @@ If the script reports `status: skipped_no_description`, skip to Step 4.
 **If description is empty or contains no useful links:** Skip this step and continue to Step 4.
 
 
-### Step 4 — Visual analysis (best-effort)
+### Step 4 — Visual analysis (best-effort, coding runs only)
 
-Attempt Gemini multimodal analysis against the YouTube URL:
+Run optional video/vision analysis only when `learning_mode` is `concept_plus_implementation`.
+For `concept_only` runs, skip this step and set `extraction.visual = "not_attempted"` in the manifest.
 
-```bash
-UV_CACHE_DIR=/tmp/uv_cache uv run .claude/skills/youtube-tutorial-creation/scripts/gemini_video_analysis.py \
-  --url "<YOUTUBE_URL>" \
-  --out "<run_dir>/visuals/gemini_video_analysis.md" \
-  --json-out "<run_dir>/visuals/gemini_video_analysis.json"
+When visual analysis is appropriate, use `mcp__zai_vision__video_analysis` when available to the agent runtime and save the result under:
+
+```text
+<run_dir>/visuals/zai_video_analysis.md
+<run_dir>/visuals/zai_video_analysis.json
 ```
 
-If the script fails (no API key, model unavailable, rate limited), **do not skip the whole skill**.
-Set `extraction.visual = "attempted_failed"` in the manifest and continue with transcript only.
-
-> Do NOT skip visual analysis just because you *assume* the transcript is sufficient.
-> Attempt it, record the result, and proceed.
-
-Self-test (verifies imports only, no API call):
-
-```bash
-UV_CACHE_DIR=/tmp/uv_cache uv run .claude/skills/youtube-tutorial-creation/scripts/gemini_video_analysis.py --self-test
-```
+If ZAI Vision is unavailable, rate limited, or cannot analyze the video, **do not skip the whole skill**.
+Set `extraction.visual = "attempted_failed"` in the manifest and continue with transcript-only mode.
 
 ### Step 5 — Synthesis
 
-Merge "what they said" (transcript) with "what they showed" (visual findings):
+Merge "what they said" (transcript) with "what they showed" (visual findings, when a coding run attempted them):
 
 - Identify gaps and ambiguities in the content
 - Do supplementary research when needed (prefer official docs, then reputable sources)

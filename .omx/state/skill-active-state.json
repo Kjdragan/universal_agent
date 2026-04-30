@@ -5,13 +5,13 @@
   "keyword": "investigate",
   "phase": "reviewing",
   "activated_at": "2026-04-30T13:38:49.784Z",
-  "updated_at": "2026-04-30T19:19:45.009Z",
+  "updated_at": "2026-04-30T20:19:21.673Z",
   "source": "keyword-detector",
   "input_lock": {
     "active": false,
     "scope": "deep-interview-auto-approval",
     "acquired_at": "2026-04-15T02:45:23.458Z",
-    "released_at": "2026-04-30T13:38:49.784Z",
+    "released_at": "2026-04-30T20:02:10.924Z",
     "blocked_inputs": [
       "yes",
       "y",

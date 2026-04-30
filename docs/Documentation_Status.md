@@ -1,6 +1,6 @@
 # Documentation Status
 
-**Last updated:** 2026-04-30 (Mission Control Operator Brief situation read model, Heartbeat memory-guided autonomous remediation, activity notification lifecycle, CSI dedupe TTL health, AgentMail stale queue lifecycle, project-scaffolder hardening, and proactive autonomous work-product project documented)
+**Last updated:** 2026-04-30 (Daily YouTube Digest ranked code-prospect tutorial dispatch and repopulate pockets, Mission Control Operator Brief situation read model, Heartbeat memory-guided autonomous remediation, activity notification lifecycle, CSI dedupe TTL health, AgentMail stale queue lifecycle, project-scaffolder hardening, and proactive autonomous work-product project documented)
 
 ## Development (development/)
 
@@ -78,6 +78,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 96 | NotebookLM Integration & Research Pipeline — now includes lesson #11 (audio download CDN auth scoping, CLI fallback pattern) |
 | 97 | Infisical CLI Reference & Lessons Learned |
 | 98 | Agent Skills Directory (`.agents/skills/`) |
+| 99_Tutorial | Tutorial Pipeline Architecture & Operations — canonical YouTube tutorial pipeline reference, including Daily Digest ranked code-prospect tutorial dispatch and repopulate pockets, playlist watcher flow, notification kinds, permanent-failure self-clear behavior, dedup, proxy config, env vars, and API endpoints |
 | 99 | Documentation Drift Maintenance Pipeline — two-stage nightly audit (heuristic drift detection → VP remediation dispatch), PR persistence, issue batching, verify-before-fix rules |
 | 100 | OpenClaw Release Sync Pipeline |
 | 101 | VP Agent Identity & Prompt Architecture — CODIE/ATLAS souls, VP system prompt, mission briefing injection

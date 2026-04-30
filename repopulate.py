@@ -1,38 +1,29 @@
-import os
-import requests
-import time
-from universal_agent.infisical_loader import initialize_runtime_secrets
-from universal_agent.services.youtube_playlist_manager import _get_access_token
+#!/usr/bin/env python3
+"""Restore a Daily YouTube Digest playlist from its saved repopulate pocket."""
 
-initialize_runtime_secrets()
+from __future__ import annotations
 
-video_ids = [
-    "XSmI7OYd7iM", "MDtMwKcx_4E", "Qn2c_U-cWQs", "QmdCkaTM1P4", "0h7Gnjm6VQk",
-    "M0WsMnnNlKE", "bFO0uAMPx1g", "gRcBu8LyfGo", "LAOXy3DLyPg", "03DjE7j0Suw",
-    "ZhMGNlCU4qc", "nXafozNIk3c", "n4EVksU_EOs", "l7eJfXmaCjc", "EN7frwQIbKc",
-    "0UnZnonMN9o", "SFaOwbWGbY8", "aUlhaeb0o4w", "5L_tYKt2ENo", "RZPAeep6XDA"
-]
+import argparse
+import json
 
-playlist_id = os.environ.get('MONDAY_YT_PLAYLIST', '')
+from universal_agent.scripts.youtube_daily_digest import DAYS, repopulate_digest_playlist
 
-for vid in video_ids:
-    token = _get_access_token()
-    url = "https://www.googleapis.com/youtube/v3/playlistItems?part=snippet"
-    payload = {
-        "snippet": {
-            "playlistId": playlist_id,
-            "resourceId": {
-                "kind": "youtube#video",
-                "videoId": vid
-            }
-        }
-    }
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    
-    response = requests.post(url, json=payload, headers=headers)
-    if response.status_code == 200:
-        print(f"Added {vid}")
-    else:
-        print(f"Failed {vid}: {response.text}")
-    time.sleep(0.5)
-print("Repopulation complete.")
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Repopulate a day-specific YouTube Digest playlist.")
+    parser.add_argument("--day", default="MONDAY", help="Digest day to restore, e.g. MONDAY.")
+    parser.add_argument("--date", default=None, help="Pocket date to restore, YYYY-MM-DD. Defaults to latest.")
+    parser.add_argument("--dry-run", action="store_true", help="Preview without adding videos to YouTube.")
+    args = parser.parse_args()
+
+    day = args.day.upper()
+    if day not in DAYS:
+        parser.error(f"--day must be one of {', '.join(DAYS)}")
+
+    result = repopulate_digest_playlist(day_override=day, date_override=args.date, dry_run=args.dry_run)
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -158,7 +158,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 
 ### 8. Tutorial Pipeline
 
-- **[Tutorial Pipeline Architecture & Operations](03_Operations/99_Tutorial_Pipeline_Architecture_And_Operations.md)**: Canonical single-source-of-truth for the YouTube tutorial pipeline — pipeline flow, notification kinds, permanent-failure self-clear behavior, 3-layer dedup, proxy config, env vars, API endpoints.
+- **[Tutorial Pipeline Architecture & Operations](03_Operations/99_Tutorial_Pipeline_Architecture_And_Operations.md)**: Canonical single-source-of-truth for the YouTube tutorial pipeline — pipeline flow, Daily Digest ranked code-prospect dispatch and repopulate pockets, notification kinds, permanent-failure self-clear behavior, 3-layer dedup, proxy config, env vars, API endpoints.
 
 ### 9. [SDK Phases and Integration Docs](.)
 

@@ -100,6 +100,31 @@ def get_playlist_items(playlist_id: str) -> list[dict[str, Any]]:
     return items
 
 
+def add_playlist_item(playlist_id: str, video_id: str) -> dict[str, Any]:
+    """Add a video to a YouTube playlist and return the created playlist item."""
+    access_token = _get_access_token()
+    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+    payload = {
+        "snippet": {
+            "playlistId": playlist_id,
+            "resourceId": {
+                "kind": "youtube#video",
+                "videoId": video_id,
+            },
+        },
+    }
+
+    with httpx.Client(headers=headers, timeout=15.0) as client:
+        response = client.post(
+            f"{YOUTUBE_API_BASE}/playlistItems",
+            params={"part": "snippet"},
+            json=payload,
+        )
+        if response.status_code not in {200, 201}:
+            raise YouTubeAPIError(f"Failed to add video {video_id} to playlist {playlist_id}: {response.text}")
+        return response.json()
+
+
 def remove_playlist_item(playlist_item_id: str) -> bool:
     """Physically delete an item from the user's YouTube playlist."""
     access_token = _get_access_token()

@@ -337,8 +337,8 @@ def build_manual_youtube_action(
         "Set implementation_required=true only when transcript+metadata confirm software/coding content.",
         "If learning_mode is concept_plus_implementation, include runnable code in implementation/ and explain how to run it.",
         "Transcript path: youtube-transcript-api is source of truth. yt-dlp is metadata-only.",
-        "Video analysis path: use Gemini multimodal video understanding with the YouTube URL directly when available.",
-        "Use visual analysis when possible. Continue with transcript-only mode when visual processing is unavailable.",
+        "Video analysis path: for concept_plus_implementation runs only, use ZAI Vision video analysis when available.",
+        "Skip optional video/vision analysis for concept_only runs. Continue with transcript-only mode when visual processing is unavailable.",
     ]
     return {
         "kind": "agent",

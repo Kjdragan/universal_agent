@@ -12,15 +12,15 @@ Write durable outputs under:
 2. `README.md`
 3. `CONCEPT.md`
 4. `IMPLEMENTATION.md`
-5. `implementation/` (directory)
 
 ## Optional Files
 
 1. `transcript.txt`
 2. `transcript.clean.txt`
 3. `youtube_ingest.json`
-4. `visuals/gemini_video_analysis.md`
+4. `visuals/zai_video_analysis.md`
 5. `research/*`
+6. `implementation/` (directory, only when `implementation_required=true`)
 
 ## Status Values
 
