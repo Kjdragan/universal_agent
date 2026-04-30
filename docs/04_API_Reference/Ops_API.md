@@ -279,6 +279,8 @@ Proactive artifact endpoints are review-oriented. They create inventory, Task Hu
 | `/api/v1/dashboard/notifications` | PATCH | Update notifications |
 | `/api/v1/dashboard/notifications/purge` | POST | Purge notifications |
 
+Non-actionable notifications with `info` or `success` severity are automatically marked as `read` after the TTL configured by `UA_ACTIVITY_NOTIFICATION_AUTO_READ_HOURS` (default 24 hours). Actionable notifications retain their initial status until explicitly resolved.
+
 ### Events
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -417,6 +419,8 @@ Hooks allow external systems to trigger agent actions via webhook-style endpoint
 | `/api/v1/ops/sessions/{id}/archive` | POST | Archive session |
 | `/api/v1/ops/sessions/{id}/cancel` | POST | Cancel running session |
 
+Daemon sessions (always-on heartbeat agents) are guarded by an execution timeout watchdog. If a daemon session run exceeds `UA_DAEMON_IDLE_TIMEOUT` seconds (default 1800), the watchdog cancels the stuck execution and writes a crash report to `work_products/daemon_timeout_crash.json` in the session workspace. The heartbeat service also supports a session timeout callback to cancel daemon runs that exceed idle thresholds during heartbeat cycles.
+
 ## 15. Session Lifecycle Extensions
 
 | Endpoint | Method | Description |
@@ -549,7 +553,35 @@ Related implementation:
 - `src/universal_agent/proactive_signals.py` — Card management, feedback recording, rule distillation
 - `src/universal_agent/gateway_server.py` — Dashboard API endpoints
 
-## 22. Dashboard Supervisors
+## 22. Dashboard Proactive Task History
+
+Browse completed and in-progress proactive work tasks (from Task Hub) with associated artifacts and opportunity signals. Provides a richer historical view than signal cards alone, including task outcomes, linked artifacts, and convergence opportunities.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/dashboard/proactive-task-history` | GET | List proactive work tasks with artifacts and opportunities |
+| `/api/v1/dashboard/proactive-task-history/{task_id}/feedback` | PATCH | Record feedback (tags, text, sentiment, status) on a proactive task |
+
+### Query Parameters (list)
+
+| Param | Default | Description |
+|-------|---------|-------------|
+| `limit` | `80` | Maximum tasks to return |
+
+### Feedback Request Body
+
+```json
+{
+  "status": "optional-new-status",
+  "sentiment": "optional-sentiment-positive-or-negative",
+  "feedback_tags": ["tag1", "tag2"],
+  "feedback_text": "Optional free-text feedback"
+}
+```
+
+Feedback triggers background rule distillation when feedback text or tags are provided, mirroring the proactive signal feedback flow.
+
+## 23. Dashboard Supervisors
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -558,7 +590,7 @@ Related implementation:
 | `/api/v1/dashboard/supervisors/{id}/run` | POST | Trigger supervisor run |
 | `/api/v1/dashboard/supervisors/{id}/runs` | GET | List supervisor run history |
 
-## 23. AgentMail Extended Ops
+## 24. AgentMail Extended Ops
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -575,7 +607,7 @@ Related implementation:
 | `/api/v1/ops/agentmail/inbox-queue/{id}/retry-now` | POST | Retry a queued inbox item |
 | `/api/v1/ops/agentmail/messages` | GET | List AgentMail messages |
 
-## 24. Calendar and Scheduling
+## 25. Calendar and Scheduling
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -587,7 +619,7 @@ Related implementation:
 | `/api/v1/ops/scheduling/events` | GET | List scheduling events |
 | `/api/v1/ops/scheduling/stream` | GET | Stream scheduling events (SSE) |
 
-## 25. Skills and Models
+## 26. Skills and Models
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -596,7 +628,7 @@ Related implementation:
 | `/api/v1/ops/skills/{key}/doc` | GET | Get skill documentation |
 | `/api/v1/ops/models` | GET | List available models |
 
-## 26. Channels, Presence, and System Events
+## 27. Channels, Presence, and System Events
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -607,7 +639,7 @@ Related implementation:
 | `/api/v1/system/events` | GET | Get system events |
 | `/api/v1/system/event` | POST | Post system event |
 
-## 27. Additional Metrics and Budget
+## 28. Additional Metrics and Budget
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -619,14 +651,14 @@ Related implementation:
 | `/api/v1/ops/session-budget/status` | GET | Current session token budget status |
 | `/api/v1/ops/session-budget/heavy-mode` | POST | Toggle heavy execution mode |
 
-## 28. Factory Live Chrome
+## 29. Factory Live Chrome
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/v1/factory/live-chrome/status` | GET | Live Chrome tunnel status |
 | `/api/v1/factory/live-chrome/status` | POST | Start/stop Live Chrome tunnel |
 
-## 29. Heartbeat and Telemetry
+## 30. Heartbeat and Telemetry
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -635,7 +667,7 @@ Related implementation:
 | `/api/v1/ops/telemetry/briefing` | POST | Generate telemetry briefing |
 | `/api/v1/ops/system-health` | GET | System health overview |
 
-## 30. Artifacts and File Browsing
+## 31. Artifacts and File Browsing
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -645,13 +677,13 @@ Related implementation:
 | `/api/files/{session_id}/{path}` | GET | Get file contents from a session |
 | `/api/v1/sessions/{id}/upload` | POST | Upload file to session workspace |
 
-## 31. Vision
+## 32. Vision
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/v1/vision/describe` | POST | Describe an image using vision model |
 
-## 32. Environment Variables
+## 33. Environment Variables
 
 Key environment variables controlling gateway behavior:
 
@@ -663,8 +695,11 @@ Key environment variables controlling gateway behavior:
 | `UA_SESSION_API_AUTH_ENABLED` | `false` | Enable session API auth |
 | `UA_OPS_AUTH_ENABLED` | `true` | Enable ops auth |
 | `UA_OPS_AUTH_PASSWORD` | - | Password for ops token issuance |
+| `UA_DAEMON_IDLE_TIMEOUT` | `1800` | Seconds before daemon session execution is killed as stuck |
+| `UA_ACTIVITY_NOTIFICATION_AUTO_READ_HOURS` | `24` | Hours after which non-actionable info/success notifications are auto-marked as read |
+| `UA_CODIE_PROACTIVE_CLEANUP_TIMEZONE` | `America/Chicago` | Timezone for CODIE proactive cleanup cron job |
 
-## 33. Error Responses
+## 34. Error Responses
 
 All endpoints return standard HTTP status codes:
 
@@ -685,7 +720,7 @@ Error response body:
 }
 ```
 
-## 34. Source Files
+## 35. Source Files
 
 Primary implementation:
 - `src/universal_agent/gateway_server.py` — Main FastAPI application
@@ -697,7 +732,7 @@ Related services:
 - `src/universal_agent/hooks_service.py` — Hooks processing
 - `src/universal_agent/timeout_policy.py` — WebSocket timeouts
 
-## 35. Related Documentation
+## 36. Related Documentation
 
 - `docs/02_Flows/07_WebSocket_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md` — WebSocket details
 - `docs/02_Flows/08_Gateway_And_Web_UI_Auth_And_Session_Security_Source_Of_Truth_2026-03-06.md` — Auth flows
