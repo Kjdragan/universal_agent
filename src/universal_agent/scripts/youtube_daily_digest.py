@@ -81,6 +81,7 @@ If a video contains an excellent technical tutorial that should become a runnabl
 call it out explicitly as a "TUTORIAL PIPELINE TRIGGER" candidate. Do not use that trigger for concept-only videos.
 
 After the markdown digest, include exactly one fenced JSON block labeled youtube_digest_decisions.
+This JSON block is for automation only and will be stripped from the human-facing email.
 The JSON must have this shape:
 ```youtube_digest_decisions
 {
@@ -290,6 +291,17 @@ def _extract_decision_json(digest_content: str) -> dict[str, Any]:
     return parsed
 
 
+def _strip_digest_decision_blocks(digest_content: str) -> str:
+    """Remove machine-readable decision blocks from human-facing digest text."""
+    cleaned = re.sub(
+        r"\n?```(?:youtube_digest_decisions|json)\s*.*?\s*```\s*",
+        "\n",
+        digest_content,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
 def _rank_digest_decisions(decisions: dict[str, Any], processed_items: list[dict]) -> dict[str, Any]:
     """Normalize LLM decisions and keep only known playlist videos."""
     items_by_id = {str(item.get("video_id") or ""): item for item in processed_items if item.get("video_id")}
@@ -489,6 +501,49 @@ def _dispatch_tutorial_candidates(
             result.get("status"),
         )
     return results
+
+
+def _format_tutorial_dispatch_summary(
+    *,
+    selected: list[dict[str, Any]],
+    dispatch_results: list[dict[str, Any]],
+    candidates_path: Path,
+    dispatch_path: Path | None,
+    top_n: int,
+    dry_run: bool,
+) -> str:
+    """Build the human-facing tutorial pipeline section for the digest email/artifact."""
+    lines = [
+        "## YouTube Tutorial Pipeline Dispatch",
+        "",
+        f"Automation target: top {max(0, top_n)} code implementation prospects.",
+    ]
+    if dry_run:
+        lines.append("Mode: dry run; no tutorial pipeline dispatches were sent.")
+    if not selected:
+        lines.extend(
+            [
+                "",
+                "No videos were selected for the tutorial pipeline because no ranked video was classified as a code implementation prospect.",
+            ]
+        )
+    else:
+        result_by_id = {str(row.get("video_id") or ""): row for row in dispatch_results}
+        lines.extend(["", "Selected videos:"])
+        for row in selected:
+            video_id = str(row.get("video_id") or "")
+            result = result_by_id.get(video_id, {})
+            status = "accepted" if result.get("ok") else f"not accepted ({result.get('reason') or result.get('status') or 'unknown'})"
+            lines.append(
+                "- "
+                f"#{row.get('rank')} {row.get('title') or video_id} "
+                f"({video_id}) — score {row.get('value_score')}; {status}. "
+                f"Reason: {row.get('reason') or 'classified as a code implementation prospect.'}"
+            )
+    lines.extend(["", f"Decision artifact: `{candidates_path}`"])
+    if dispatch_path:
+        lines.append(f"Dispatch results: `{dispatch_path}`")
+    return "\n".join(lines).strip()
 
 
 def repopulate_digest_playlist(
@@ -715,12 +770,7 @@ def process_daily_digest(
     artifacts_dir.mkdir(parents=True, exist_ok=True)
 
     artifact_path = artifacts_dir / f"{date_str}_{day_name}_Digest.md"
-    full_content = f"# Daily YouTube Digest: {day_name.title()}, {date_str}\n\n{digest_content}"
-
-    with open(artifact_path, "w", encoding="utf-8") as f:
-        f.write(full_content)
-
-    logger.info("Daily Digest saved to: %s", artifact_path)
+    human_digest_content = _strip_digest_decision_blocks(digest_content)
 
     try:
         configured_top_n = (
@@ -756,10 +806,29 @@ def process_daily_digest(
         candidates_artifact_path=candidates_path,
         dry_run=dry_run,
     )
+    dispatch_path = None
     if dispatch_results:
         dispatch_path = candidates_path.with_name(candidates_path.stem + "_dispatch_results.json")
         dispatch_path.write_text(json.dumps(dispatch_results, indent=2, ensure_ascii=False), encoding="utf-8")
         logger.info("Saved tutorial dispatch results: %s", dispatch_path)
+
+    tutorial_dispatch_summary = _format_tutorial_dispatch_summary(
+        selected=selected_tutorial_candidates,
+        dispatch_results=dispatch_results,
+        candidates_path=candidates_path,
+        dispatch_path=dispatch_path,
+        top_n=configured_top_n,
+        dry_run=dry_run,
+    )
+    full_content = (
+        f"# Daily YouTube Digest: {day_name.title()}, {date_str}\n\n"
+        f"{human_digest_content}\n\n---\n\n{tutorial_dispatch_summary}\n"
+    )
+
+    with open(artifact_path, "w", encoding="utf-8") as f:
+        f.write(full_content)
+
+    logger.info("Daily Digest saved to: %s", artifact_path)
 
     _save_repopulate_pocket(
         day_name=day_name,

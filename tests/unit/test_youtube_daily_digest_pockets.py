@@ -207,3 +207,51 @@ def test_digest_dispatch_dry_run_does_not_call_gateway(tmp_path):
     )
 
     assert results == [{"ok": True, "reason": "dry_run", "video_id": "abc123"}]
+
+
+def test_strip_digest_decision_blocks_removes_machine_json_from_email_body():
+    digest = """# Human Brief
+
+Useful text.
+
+```youtube_digest_decisions
+{"ranked_videos": [{"video_id": "abc"}]}
+```
+
+More useful text.
+"""
+
+    cleaned = youtube_daily_digest._strip_digest_decision_blocks(digest)
+
+    assert "youtube_digest_decisions" not in cleaned
+    assert "ranked_videos" not in cleaned
+    assert "Useful text." in cleaned
+    assert "More useful text." in cleaned
+
+
+def test_format_tutorial_dispatch_summary_lists_selected_videos(tmp_path):
+    candidates_path = tmp_path / "candidates.json"
+    dispatch_path = tmp_path / "dispatch.json"
+
+    summary = youtube_daily_digest._format_tutorial_dispatch_summary(
+        selected=[
+            {
+                "rank": 2,
+                "title": "Build Agent",
+                "video_id": "abc123",
+                "value_score": 91,
+                "reason": "Runnable coding walkthrough.",
+            }
+        ],
+        dispatch_results=[{"video_id": "abc123", "ok": True, "status": 200}],
+        candidates_path=candidates_path,
+        dispatch_path=dispatch_path,
+        top_n=4,
+        dry_run=False,
+    )
+
+    assert "YouTube Tutorial Pipeline Dispatch" in summary
+    assert "Build Agent" in summary
+    assert "abc123" in summary
+    assert "accepted" in summary
+    assert str(candidates_path) in summary

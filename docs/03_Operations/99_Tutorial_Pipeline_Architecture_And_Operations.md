@@ -32,7 +32,7 @@ Playlist Watch → New Video Detection → Webhook Dispatch → Agent Session
 
 The Daily YouTube Digest cron uses day-specific playlists as clean inboxes: after a digest succeeds, processed videos are removed from that day's playlist. Digest synthesis uses the repository's Anthropic-compatible ZAI inference path, defaulting to `glm-5-turbo` via `resolve_model("sonnet")` unless `UA_YOUTUBE_DIGEST_MODEL` overrides it.
 
-The digest LLM now produces both human-readable markdown and a structured `youtube_digest_decisions` block. The code normalizes that block, sorts videos by `value_score`, saves a candidate artifact, and dispatches the highest-value `code_implementation_prospect=true` videos to the YouTube tutorial pipeline. Concept-only videos can still appear in the digest as high-value learning items, but they are not automatically dispatched.
+The digest LLM now produces both human-readable markdown and a structured `youtube_digest_decisions` block. The code normalizes that block, sorts videos by `value_score`, saves a candidate artifact, and dispatches the highest-value `code_implementation_prospect=true` videos to the YouTube tutorial pipeline. Concept-only videos can still appear in the digest as high-value learning items, but they are not automatically dispatched. The machine-readable decision block is stripped from the human-facing digest/email; the email instead includes a compact "YouTube Tutorial Pipeline Dispatch" section listing selected videos and hook acceptance status.
 
 ```mermaid
 sequenceDiagram

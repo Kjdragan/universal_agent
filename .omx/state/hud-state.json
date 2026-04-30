@@ -1,6 +1,6 @@
 {
-  "last_turn_at": "2026-04-30T20:27:07.543Z",
-  "turn_count": 26,
-  "last_progress_at": "2026-04-30T20:27:07.543Z",
-  "last_agent_output": "Sign-off: **the core Monday Digest flow is working**, but **playlist cleanup is not fully clean beca"
+  "last_turn_at": "2026-04-30T20:43:02.712Z",
+  "turn_count": 27,
+  "last_progress_at": "2026-04-30T20:43:02.712Z",
+  "last_agent_output": "I investigated the email source from the run. The weird “code” in the email was the fenced `youtube_"
 }
