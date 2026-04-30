@@ -169,6 +169,31 @@ Digest text.
     assert all(row["recommended_tutorial_mode"] == "explainer_plus_code" for row in selected)
 
 
+def test_digest_decisions_dispatch_code_prospects_even_without_secondary_tutorial_flag():
+    decisions = youtube_daily_digest._rank_digest_decisions(
+        {
+            "ranked_videos": [
+                {
+                    "video_id": "code",
+                    "title": "Code Prospect",
+                    "value_score": 80,
+                    "code_implementation_prospect": True,
+                    "concept_only": False,
+                    "tutorial_candidate": False,
+                    "recommended_tutorial_mode": "none",
+                }
+            ]
+        },
+        [{"video_id": "code", "title": "Code Prospect"}],
+    )
+
+    selected = youtube_daily_digest._select_tutorial_dispatch_candidates(decisions, top_n=4)
+
+    assert selected[0]["video_id"] == "code"
+    assert selected[0]["tutorial_candidate"] is True
+    assert selected[0]["recommended_tutorial_mode"] == "explainer_plus_code"
+
+
 def test_digest_dispatch_dry_run_does_not_call_gateway(tmp_path):
     selected = [{"video_id": "abc123", "title": "Code", "rank": 1, "value_score": 90}]
 

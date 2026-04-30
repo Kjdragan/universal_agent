@@ -1,6 +1,6 @@
 {
-  "last_turn_at": "2026-04-30T20:19:21.668Z",
-  "turn_count": 25,
-  "last_progress_at": "2026-04-30T20:19:21.668Z",
-  "last_agent_output": "Yes, for production both should resolve to the VPS.\n\nThe code builds the hook URL from:\n\n1. `UA_YOUT"
+  "last_turn_at": "2026-04-30T20:27:07.543Z",
+  "turn_count": 26,
+  "last_progress_at": "2026-04-30T20:27:07.543Z",
+  "last_agent_output": "Sign-off: **the core Monday Digest flow is working**, but **playlist cleanup is not fully clean beca"
 }

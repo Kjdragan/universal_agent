@@ -103,7 +103,7 @@ The JSON must have this shape:
 ```
 Rules for the JSON:
 - ranked_videos must be sorted by value_score descending.
-- tutorial_candidate may be true only when code_implementation_prospect is true.
+- tutorial_candidate may be true only when code_implementation_prospect is true. The automation will dispatch the highest-value code_implementation_prospect videos even if tutorial_candidate is false.
 - recommended_tutorial_mode must be explainer_plus_code for dispatched code prospects.
 - Use metadata_only evidence_quality when transcript text was unavailable.
 - Include every input video exactly once.
@@ -305,7 +305,7 @@ def _rank_digest_decisions(decisions: dict[str, Any], processed_items: list[dict
         seen.add(video_id)
         item = items_by_id[video_id]
         code_prospect = _coerce_bool(raw.get("code_implementation_prospect"))
-        tutorial_candidate = _coerce_bool(raw.get("tutorial_candidate")) and code_prospect
+        tutorial_candidate = code_prospect
         concept_only = _coerce_bool(raw.get("concept_only")) or not code_prospect
         mode = "explainer_plus_code" if tutorial_candidate else ("concept_only" if concept_only else "none")
         ranked.append(
@@ -354,13 +354,7 @@ def _select_tutorial_dispatch_candidates(
 ) -> list[dict[str, Any]]:
     if top_n <= 0:
         return []
-    candidates = [
-        row
-        for row in decisions.get("ranked_videos", [])
-        if row.get("tutorial_candidate") is True
-        and row.get("code_implementation_prospect") is True
-        and row.get("recommended_tutorial_mode") == "explainer_plus_code"
-    ]
+    candidates = [row for row in decisions.get("ranked_videos", []) if row.get("code_implementation_prospect") is True]
     return candidates[:top_n]
 
 
