@@ -363,3 +363,62 @@ def test_todo_prompt_surfaces_proactive_continuation_context(tmp_path):
     assert "parent_task_id=parent-task" in prompt
     assert "prior_implemented=First implementation" in prompt
     assert "feedback_text=Please keep going." in prompt
+
+
+def test_continuation_workspace_reference_uses_fresh_workspace_without_overwrite(tmp_path):
+    from universal_agent.services.todo_dispatch_service import (
+        CONTINUATION_CONTEXT_FILENAME,
+        CONTINUATION_REFERENCE_DIRNAME,
+        CONTINUATION_REFERENCE_LINKNAME,
+        _attach_continuation_workspace_reference,
+        build_todo_execution_prompt,
+    )
+
+    previous_workspace = tmp_path / "previous-workspace"
+    current_workspace = tmp_path / "current-workspace"
+    previous_workspace.mkdir()
+    current_workspace.mkdir()
+    (previous_workspace / "work_products.md").write_text("prior output", encoding="utf-8")
+    item = {
+        "task_id": "proactive_cont:workspace",
+        "title": "Continue workspace task",
+        "description": "Continue the prior work.",
+        "metadata": {
+            "proactive_continuation": {
+                "parent_task_id": "parent-task",
+                "previous_workspace_dir": str(previous_workspace),
+                "feedback_tags": ["continue_work"],
+                "feedback_text": "Keep developing this.",
+            }
+        },
+    }
+
+    context = _attach_continuation_workspace_reference(
+        item,
+        current_workspace_dir=str(current_workspace),
+        run_id="run_test",
+    )
+    continuation = item["metadata"]["proactive_continuation"]
+    reference_path = current_workspace / CONTINUATION_REFERENCE_DIRNAME / CONTINUATION_REFERENCE_LINKNAME
+
+    assert context["mode"] == "referenced_existing_workspace"
+    assert context["current_workspace_dir"] == str(current_workspace.resolve())
+    assert context["previous_workspace_dir"] == str(previous_workspace.resolve())
+    assert reference_path.is_symlink()
+    assert reference_path.resolve() == previous_workspace.resolve()
+    assert (current_workspace / CONTINUATION_CONTEXT_FILENAME).is_file()
+    assert (previous_workspace / "work_products.md").read_text(encoding="utf-8") == "prior output"
+    assert continuation["current_workspace_dir"] == str(current_workspace)
+    assert continuation["workspace_reuse_mode"] == "referenced_existing_workspace"
+    assert continuation["workspace_reference_path"] == str(reference_path)
+
+    prompt = build_todo_execution_prompt(
+        claimed_items=[item],
+        capacity_snapshot_data={},
+        active_assignments=[],
+        origin_label="test",
+    )
+
+    assert f"current_workspace_dir={current_workspace}" in prompt
+    assert f"previous_workspace_reference={reference_path}" in prompt
+    assert "workspace_reuse_mode=referenced_existing_workspace" in prompt

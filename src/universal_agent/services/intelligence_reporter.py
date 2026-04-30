@@ -5,9 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import html
+import os
 import sqlite3
 from typing import Any
 
+from universal_agent import task_hub
 from universal_agent.services import proactive_artifacts
 from universal_agent.services.proactive_preferences import (
     build_weekly_preference_report,
@@ -219,6 +221,7 @@ class IntelligenceReporter:
         summary = str(artifact.get("summary") or "").strip()
         artifact_link = _artifact_link(artifact)
         source_url = str(artifact.get("source_url") or "").strip()
+        task_context = self._artifact_task_context(artifact)
         lines = [
             "I made this proactively because I think it may be useful. Please review when convenient.",
             "",
@@ -226,6 +229,8 @@ class IntelligenceReporter:
         ]
         if summary:
             lines.extend(["", summary])
+        if task_context:
+            lines.extend(_task_context_lines(task_context))
         if artifact_link:
             lines.extend(["", f"Final work product: {artifact_link}"])
         if source_url:
@@ -258,6 +263,7 @@ class IntelligenceReporter:
 
     def _rank_digest_artifacts(self, *, limit: int) -> list[dict[str, Any]]:
         proactive_artifacts.sync_from_proactive_signal_cards(self._conn)
+        self._sync_from_proactive_work_items()
         artifacts = proactive_artifacts.list_artifacts(self._conn, limit=250)
         candidates = [
             artifact
@@ -305,6 +311,18 @@ class IntelligenceReporter:
             )
             if summary:
                 lines.append(f"   Summary: {summary}")
+            task_context = self._artifact_task_context(artifact)
+            if task_context:
+                recap = task_context.get("recap") if isinstance(task_context.get("recap"), dict) else {}
+                assessment = str(recap.get("success_assessment") or "").strip()
+                next_action = str(recap.get("recommended_next_action") or "").strip()
+                audit_url = str(task_context.get("dashboard_url") or "").strip()
+                if assessment:
+                    lines.append(f"   Assessment: {assessment}")
+                if next_action:
+                    lines.append(f"   Next: {next_action}")
+                if audit_url:
+                    lines.append(f"   Audit: {audit_url}")
             if link:
                 lines.append(f"   Final work product: {link}")
         lines.extend(
@@ -322,6 +340,106 @@ class IntelligenceReporter:
         )
         return "\n".join(lines)
 
+    def _sync_from_proactive_work_items(self, *, limit: int = 250) -> dict[str, int]:
+        try:
+            tasks = task_hub.list_proactive_work_tasks(self._conn, limit=limit)
+        except Exception:
+            return {"seen": 0, "upserted": 0}
+        upserted = 0
+        for item in tasks:
+            status = str(item.get("status") or "").strip().lower()
+            if status not in {
+                task_hub.TASK_STATUS_COMPLETED,
+                task_hub.TASK_STATUS_BLOCKED,
+                task_hub.TASK_STATUS_REVIEW,
+                task_hub.TASK_STATUS_PENDING_REVIEW,
+                task_hub.TASK_STATUS_PARKED,
+            }:
+                continue
+            task_id = str(item.get("task_id") or "").strip()
+            if not task_id:
+                continue
+            recap = self._task_recap(task_id)
+            summary = (
+                str(recap.get("success_assessment") or "").strip()
+                or str(item.get("description") or "").strip()
+                or str((item.get("last_assignment") or {}).get("result_summary") or "").strip()
+            )
+            metadata = {
+                "task_id": task_id,
+                "source_kind": item.get("source_kind"),
+                "status": status,
+                "stage": _task_stage(item),
+                "recap": recap,
+                "session_id": str((item.get("last_assignment") or {}).get("session_id") or ""),
+                "workspace_dir": str((item.get("last_assignment") or {}).get("workspace_dir") or ""),
+                "dashboard_url": _dashboard_task_url(task_id),
+            }
+            artifact_id = proactive_artifacts.make_artifact_id(
+                source_kind=str(item.get("source_kind") or "proactive_task"),
+                source_ref=task_id,
+                artifact_type="proactive_work_item",
+                title=str(item.get("title") or ""),
+            )
+            existing = proactive_artifacts.get_artifact(self._conn, artifact_id)
+            artifact_status = proactive_artifacts.ARTIFACT_STATUS_CANDIDATE
+            delivery_state = proactive_artifacts.DELIVERY_NOT_SURFACED
+            if existing:
+                existing_status = str(existing.get("status") or "").strip()
+                if existing_status in proactive_artifacts.VALID_ARTIFACT_STATUSES:
+                    artifact_status = existing_status
+                existing_delivery = str(existing.get("delivery_state") or "").strip()
+                if existing_delivery in proactive_artifacts.VALID_DELIVERY_STATES:
+                    delivery_state = existing_delivery
+            proactive_artifacts.upsert_artifact(
+                self._conn,
+                artifact_id=artifact_id,
+                artifact_type="proactive_work_item",
+                source_kind=str(item.get("source_kind") or "proactive_task"),
+                source_ref=task_id,
+                title=str(item.get("title") or "Proactive work item"),
+                summary=summary[:1200],
+                status=artifact_status,
+                delivery_state=delivery_state,
+                priority=max(1, int(item.get("priority") or 2)),
+                source_url=_dashboard_task_url(task_id),
+                topic_tags=["proactive-work", str(item.get("source_kind") or "")],
+                metadata=metadata,
+            )
+            upserted += 1
+        return {"seen": len(tasks), "upserted": upserted}
+
+    def _artifact_task_context(self, artifact: dict[str, Any]) -> dict[str, Any]:
+        metadata = artifact.get("metadata") if isinstance(artifact.get("metadata"), dict) else {}
+        task_id = str(metadata.get("task_id") or "").strip()
+        if not task_id:
+            source_ref = str(artifact.get("source_ref") or "").strip()
+            task = task_hub.get_item(self._conn, source_ref) if source_ref else None
+            task_id = str((task or {}).get("task_id") or "").strip()
+        if not task_id:
+            return {}
+        task = task_hub.get_item(self._conn, task_id) or {}
+        if not task:
+            return {}
+        recap = self._task_recap(task_id)
+        return {
+            "task_id": task_id,
+            "title": str(task.get("title") or ""),
+            "status": str(task.get("status") or ""),
+            "source_kind": str(task.get("source_kind") or ""),
+            "dashboard_url": str(metadata.get("dashboard_url") or _dashboard_task_url(task_id)),
+            "recap": recap,
+        }
+
+    def _task_recap(self, task_id: str) -> dict[str, Any]:
+        try:
+            from universal_agent.services.proactive_work_recap import get_recap_for_task
+
+            recap = get_recap_for_task(self._conn, task_id)
+        except Exception:
+            recap = None
+        return dict(recap or {})
+
 
 def _artifact_link(artifact: dict[str, Any]) -> str:
     for key in ("artifact_uri", "source_url", "artifact_path"):
@@ -329,3 +447,51 @@ def _artifact_link(artifact: dict[str, Any]) -> str:
         if value:
             return value
     return ""
+
+
+def _dashboard_task_url(task_id: str) -> str:
+    base = str(os.getenv("FRONTEND_URL") or "https://app.clearspringcg.com").rstrip("/")
+    clean_task_id = str(task_id or "").strip()
+    if not clean_task_id:
+        return f"{base}/dashboard/proactive-task-history"
+    return f"{base}/dashboard/proactive-task-history?task_id={clean_task_id}"
+
+
+def _task_stage(item: dict[str, Any]) -> str:
+    status = str(item.get("status") or "").strip().lower()
+    if status == task_hub.TASK_STATUS_COMPLETED:
+        return "completed"
+    if status in {task_hub.TASK_STATUS_IN_PROGRESS, task_hub.TASK_STATUS_DELEGATED}:
+        return "running"
+    if status in {
+        task_hub.TASK_STATUS_BLOCKED,
+        task_hub.TASK_STATUS_REVIEW,
+        task_hub.TASK_STATUS_PENDING_REVIEW,
+        task_hub.TASK_STATUS_PARKED,
+        task_hub.TASK_STATUS_CANCELLED,
+    }:
+        return "needs_attention"
+    return "queued"
+
+
+def _task_context_lines(context: dict[str, Any]) -> list[str]:
+    recap = context.get("recap") if isinstance(context.get("recap"), dict) else {}
+    lines = ["", "Task audit:"]
+    lines.append(f"- Task: {context.get('title') or context.get('task_id')}")
+    lines.append(f"- Status: {context.get('status') or 'unknown'}")
+    audit_url = str(context.get("dashboard_url") or "").strip()
+    if audit_url:
+        lines.append(f"- Proactive history: {audit_url}")
+    implemented = str(recap.get("implemented") or "").strip()
+    issues = str(recap.get("known_issues") or "").strip()
+    assessment = str(recap.get("success_assessment") or "").strip()
+    next_action = str(recap.get("recommended_next_action") or "").strip()
+    if implemented:
+        lines.append(f"- Implemented: {implemented}")
+    if issues:
+        lines.append(f"- Known issues: {issues}")
+    if assessment:
+        lines.append(f"- Assessment: {assessment}")
+    if next_action:
+        lines.append(f"- Recommended next action: {next_action}")
+    return lines

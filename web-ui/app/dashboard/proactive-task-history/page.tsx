@@ -131,6 +131,15 @@ type HistoryCounts = {
   total_tasks?: number;
 };
 
+type HistoryHealth = {
+  status?: "ok" | "degraded" | "needs_attention" | string;
+  terminal_tasks?: number;
+  missing_terminal_recaps?: number;
+  failed_recaps?: number;
+  fallback_recaps?: number;
+  email_delivery_failures?: number;
+};
+
 const STAGE_LABELS: Record<string, string> = {
   all: "All",
   opportunities: "Opportunities",
@@ -166,6 +175,7 @@ export default function ProactiveTaskHistoryPage() {
   const [tasks, setTasks] = useState<TaskHistoryItem[]>([]);
   const [opportunities, setOpportunities] = useState<OpportunityItem[]>([]);
   const [counts, setCounts] = useState<HistoryCounts>({});
+  const [health, setHealth] = useState<HistoryHealth>({});
   const [stage, setStage] = useState("all");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -185,6 +195,7 @@ export default function ProactiveTaskHistoryPage() {
       setTasks(Array.isArray(data.tasks) ? data.tasks : []);
       setOpportunities(Array.isArray(data.opportunities) ? data.opportunities : []);
       setCounts(data.counts || {});
+      setHealth(data.health || {});
     } catch (err) {
       setError((err as Error).message || "Failed to load task history.");
     } finally {
@@ -290,6 +301,48 @@ export default function ProactiveTaskHistoryPage() {
             </button>
           );
         })}
+      </div>
+
+      <div className={`rounded-lg border p-4 ${
+        health.status === "needs_attention"
+          ? "border-amber-500/30 bg-amber-500/10"
+          : health.status === "degraded"
+            ? "border-cyan-500/20 bg-cyan-500/10"
+            : "border-emerald-500/20 bg-emerald-500/10"
+      }`}>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            {health.status === "needs_attention" ? (
+              <AlertCircle className="w-4 h-4 text-amber-300" />
+            ) : (
+              <CheckCircle2 className="w-4 h-4 text-emerald-300" />
+            )}
+            <span className="text-xs uppercase tracking-[0.18em] text-slate-300">Operational Health</span>
+          </div>
+          <span className="text-xs font-mono text-slate-400">{health.status || "ok"}</span>
+        </div>
+        <div className="mt-3 grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
+          <div className="rounded border border-white/10 bg-black/10 px-3 py-2">
+            <div className="text-slate-500">Terminal</div>
+            <div className="text-sm font-semibold text-white">{health.terminal_tasks || 0}</div>
+          </div>
+          <div className="rounded border border-white/10 bg-black/10 px-3 py-2">
+            <div className="text-slate-500">Missing Recaps</div>
+            <div className="text-sm font-semibold text-white">{health.missing_terminal_recaps || 0}</div>
+          </div>
+          <div className="rounded border border-white/10 bg-black/10 px-3 py-2">
+            <div className="text-slate-500">Failed Recaps</div>
+            <div className="text-sm font-semibold text-white">{health.failed_recaps || 0}</div>
+          </div>
+          <div className="rounded border border-white/10 bg-black/10 px-3 py-2">
+            <div className="text-slate-500">Fallback Recaps</div>
+            <div className="text-sm font-semibold text-white">{health.fallback_recaps || 0}</div>
+          </div>
+          <div className="rounded border border-white/10 bg-black/10 px-3 py-2">
+            <div className="text-slate-500">Email Failures</div>
+            <div className="text-sm font-semibold text-white">{health.email_delivery_failures || 0}</div>
+          </div>
+        </div>
       </div>
 
       {!loading && tasks.length === 0 && opportunities.length === 0 && (

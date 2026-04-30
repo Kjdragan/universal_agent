@@ -1,7 +1,7 @@
 # Proactive Autonomous Work Product Project
 
 **Status:** Active implementation reference
-**Last updated:** 2026-04-29
+**Last updated:** 2026-04-30
 **Owner:** Kevin Dragan
 **Related docs:** [Proactive Pipeline](Proactive_Pipeline.md), [Proactive Intelligence Work Product Pipeline](Proactive_Intelligence_Work_Product_Pipeline.md), [Task Hub Dashboard](Task_Hub_Dashboard.md)
 
@@ -20,7 +20,7 @@ The current project goal is to make autonomous work visible and trustworthy:
 
 ## Current Implementation Slice
 
-The April 29 implementation established the first durable audit spine:
+The April 29-30 implementation established the first durable audit spine:
 
 | Area | Implementation | Code citation |
 | --- | --- | --- |
@@ -36,6 +36,11 @@ The April 29 implementation established the first durable audit spine:
 | Feedback continuation | Feedback tags/text can create a fresh proactive continuation task linked to the original task and prior workspace. | `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/task_hub.py#L1442` |
 | Continuation chain audit | Proactive history rows now include parent/child chain summaries so original work and follow-up tasks are visible together. | `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/task_hub.py#L1508` |
 | Continuation dispatch context | ToDo execution prompts surface prior workspace, feedback, and recap context for continuation tasks. | `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/todo_dispatch_service.py#L459` |
+| AgentMail reporting bridge | Daily digest ranking syncs terminal proactive Task Hub work into proactive artifact inventory, carrying recap metadata and Proactive Task History audit URLs. | `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/intelligence_reporter.py#L264` |
+| Review email audit context | Individual review emails for task-backed artifacts include the task audit block, proactive history URL, implementation recap, issues, assessment, and recommended next action. | `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/intelligence_reporter.py#L219` |
+| Guarded continuation workspace reference | Fresh continuation runs now write `proactive_continuation_context.json` in the new workspace and create a non-clobbering `continuation_context/previous_workspace` symlink to prior work when available. | `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/todo_dispatch_service.py#L72` |
+| Operational health reporting | The Proactive Task History API now returns health counts for terminal tasks, missing recaps, failed recaps, fallback recaps, and email delivery failures. | `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/gateway_server.py#L17354` |
+| Dashboard health band | The Proactive Task History UI displays the health summary above the work-item list for quick audit of recap and delivery gaps. | `file:///home/kjdragan/lrepos/universal_agent/web-ui/app/dashboard/proactive-task-history/page.tsx#L306` |
 
 ## Execution Architecture
 
@@ -103,6 +108,34 @@ The primary unit on `/dashboard/proactive-task-history` is a proactive work item
 | evidence | Delivery evidence such as AgentMail sends, drafts, attachments, or work-product paths. |
 | recap | Evaluator summary of idea, implementation, known issues, success, and next action. |
 | feedback control | Records Kevin feedback for scoring and potential continuation work. |
+
+## Reporting Surface Contract
+
+AgentMail digest and individual review emails are now downstream audit surfaces, not separate disconnected channels.
+
+```mermaid
+sequenceDiagram
+    participant TH as Task Hub
+    participant IR as IntelligenceReporter
+    participant AR as Proactive Artifact Registry
+    participant WR as Work Recap Store
+    participant AM as AgentMail
+    participant UI as Proactive Task History
+
+    IR->>TH: list_proactive_work_tasks()
+    IR->>WR: get_recap_for_task(task_id)
+    IR->>AR: upsert proactive_work_item artifact
+    IR->>AR: rank candidates with preferences
+    IR->>AM: send digest/review email
+    AM->>UI: include /dashboard/proactive-task-history?task_id=...
+```
+
+Email requirements:
+
+- Completed, blocked, parked, review, and pending-review proactive Task Hub items are eligible for proactive artifact inventory sync.
+- Digest entries include the recap assessment, recommended next action, and audit URL when the artifact is backed by a Task Hub item.
+- Individual review emails include a `Task audit` section with task status, proactive history link, implementation recap, known issues, success assessment, and next action.
+- The durable dashboard URL is the common audit handle for the three-panel session view, artifacts, evidence, recap, and feedback.
 
 ## Recap Evaluation Design
 
@@ -183,7 +216,14 @@ Current dispatch behavior:
 - the prompt includes `parent_task_id`, prior recap fields, feedback tags/text, and `previous_workspace_dir`
 - agents are instructed to reuse existing work products when helpful and not overwrite prior outputs unless intentional and noted
 
-Open design point: workspace reuse is currently expressed in the continuation task description, metadata, and execution prompt. A later dispatch/session-creation slice should add a guarded runtime path that can mount or reference an existing directory without re-templating over existing outputs.
+Runtime workspace behavior:
+
+- continuation tasks still allocate a fresh run workspace for clean execution/session context
+- when the prior workspace exists, the new workspace gets `continuation_context/previous_workspace` as a symlink reference
+- the new workspace also gets `proactive_continuation_context.json` with parent task id, prior/current workspace paths, reuse mode, and overwrite policy
+- Task Hub metadata stores the same `workspace_reuse_context` for audit and prompt construction
+- agents receive `current_workspace_dir`, `previous_workspace_dir`, `previous_workspace_reference`, and `workspace_reuse_mode` in the ToDo execution prompt
+- if the prior workspace is missing or symlink creation fails, the task still runs with explicit context instead of silently blocking or overwriting files
 
 ## Acceptance Criteria
 
@@ -199,19 +239,23 @@ Current slice:
 - Feedback can create proactive continuation tasks in fresh sessions with prior workspace context.
 - Proactive Task History can show parent/child continuation chain context.
 - ToDo execution prompts include prior workspace and recap context for continuation tasks.
+- AgentMail digest/review email composition includes proactive task recaps and Proactive Task History audit links.
+- Terminal proactive Task Hub work is synced into proactive artifact inventory as `proactive_work_item` candidates for surfacing.
+- Continuation dispatch creates a guarded previous-workspace reference in the fresh run workspace without re-templating over prior outputs.
+- Proactive Task History reports health counts for missing/failed/fallback recaps and email delivery failures.
 
 Next slice:
 
-- Dashboard cards show whether a recap is heuristic, LLM-evaluated, failed, or stale.
-- AgentMail digest/email surfaces completed proactive work with the same recap and links.
+- Add active alerting/escalation for repeated health failures instead of only showing the dashboard health band.
 
 ## Verification Record
 
-Fresh verification from the April 29 implementation pass:
+Fresh verification from the April 30 implementation pass:
 
-- `uv run pytest tests/unit/test_task_hub_proactive_history.py tests/unit/test_proactive_codie.py tests/unit/test_proactive_outcome_tracker.py -q` -> 21 passed
+- `uv run pytest tests/unit/test_proactive_intelligence_phase1.py tests/unit/test_task_hub_proactive_history.py tests/unit/test_proactive_codie.py tests/unit/test_proactive_outcome_tracker.py -q` -> 42 passed
 - `python3 -m py_compile` over touched backend modules -> passed
 - `npx eslint app/dashboard/proactive-task-history/page.tsx` -> passed
 - `npx tsc --noEmit --pretty false` -> passed
 - `git diff --check` over touched implementation/docs -> passed
-- Browser smoke rendered `/dashboard/proactive-task-history` locally; local gateway proxy returned 502 because the backend gateway was not running in that dev session
+- Browser smoke opened `/dashboard/proactive-task-history` locally; the real gateway proxy returned 502 because the backend gateway was not running in that dev session
+- Mocked Playwright smoke intercepted the gateway routes and verified the updated tab rendered `Proactive Task History`, `Operational Health`, `Missing Recaps`, and `Email Failures`
