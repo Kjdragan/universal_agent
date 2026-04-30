@@ -439,3 +439,123 @@ def llm_wiki_auto_sync_internal(default: bool = False) -> bool:
     if _is_truthy(os.getenv("UA_LLM_WIKI_AUTO_SYNC_INTERNAL")):
         return True
     return default
+
+
+# ── Link payments (Stripe Link CLI) ──────────────────────────────────────────
+#
+# All Link payment flags default OFF / safe. The master switch
+# (UA_ENABLE_LINK) gates everything; live mode requires both
+# UA_ENABLE_LINK_LIVE=1 AND UA_LINK_TEST_MODE=0.
+#
+# Provisioned via Infisical in production (never via committed .env).
+
+
+def link_enabled(default: bool = False) -> bool:
+    """Master switch for Link payments. Default OFF."""
+    if _is_truthy(os.getenv("UA_DISABLE_LINK")):
+        return False
+    if _is_truthy(os.getenv("UA_ENABLE_LINK")):
+        return True
+    return default
+
+
+def link_live_mode_active(default: bool = False) -> bool:
+    """Return True only when BOTH gates allow live spend.
+
+    Requires UA_ENABLE_LINK_LIVE=1 AND UA_LINK_TEST_MODE=0.
+    Either missing → test mode. Belt-and-suspenders.
+    """
+    if not link_enabled():
+        return False
+    live_gate = _is_truthy(os.getenv("UA_ENABLE_LINK_LIVE"))
+    test_mode = os.getenv("UA_LINK_TEST_MODE")
+    test_mode_on = test_mode is None or _is_truthy(test_mode)
+    if not live_gate:
+        return False
+    if test_mode_on:
+        return False
+    return True
+
+
+def link_test_mode(default: bool = True) -> bool:
+    """Return True when test-mode credentials should be requested."""
+    if not link_enabled():
+        return True
+    return not link_live_mode_active()
+
+
+def link_entry_chat_enabled(default: bool = True) -> bool:
+    if not link_enabled():
+        return False
+    if _is_truthy(os.getenv("UA_LINK_DISABLE_ENTRY_CHAT")):
+        return False
+    raw = os.getenv("UA_LINK_ENTRY_CHAT")
+    if raw is None:
+        return default
+    return _is_truthy(raw)
+
+
+def link_entry_ui_enabled(default: bool = True) -> bool:
+    if not link_enabled():
+        return False
+    if _is_truthy(os.getenv("UA_LINK_DISABLE_ENTRY_UI")):
+        return False
+    raw = os.getenv("UA_LINK_ENTRY_UI")
+    if raw is None:
+        return default
+    return _is_truthy(raw)
+
+
+def link_entry_skill_enabled(default: bool = True) -> bool:
+    if not link_enabled():
+        return False
+    if _is_truthy(os.getenv("UA_LINK_DISABLE_ENTRY_SKILL")):
+        return False
+    raw = os.getenv("UA_LINK_ENTRY_SKILL")
+    if raw is None:
+        return default
+    return _is_truthy(raw)
+
+
+def link_auto_checkout_enabled(default: bool = True) -> bool:
+    """Whether agent_purchaser should attempt browser-automated checkout."""
+    if not link_enabled():
+        return False
+    if _is_truthy(os.getenv("UA_LINK_DISABLE_AUTO_CHECKOUT")):
+        return False
+    raw = os.getenv("UA_LINK_AUTO_CHECKOUT")
+    if raw is None:
+        return default
+    return _is_truthy(raw)
+
+
+def link_max_amount_cents(default: int = 5000) -> int:
+    """Per-call ceiling. Defense-in-depth above Link's own 50000 cap."""
+    return _read_int("UA_LINK_MAX_AMOUNT_CENTS", default, minimum=0)
+
+
+def link_daily_budget_cents(default: int = 10000) -> int:
+    """Rolling 24h budget across all spend requests."""
+    return _read_int("UA_LINK_DAILY_BUDGET_CENTS", default, minimum=0)
+
+
+def link_daily_captcha_budget(default: int = 20) -> int:
+    """Max captcha-solver invocations per day from purchase flows."""
+    return _read_int("UA_LINK_DAILY_CAPTCHA_BUDGET", default, minimum=0)
+
+
+def link_merchant_allowlist() -> list[str]:
+    """Comma-separated list of allowed merchant hostnames. Empty = no filter."""
+    return _read_csv_list("UA_LINK_MERCHANT_ALLOWLIST")
+
+
+def link_signed_url_ttl_seconds(default: int = 900) -> int:
+    return _read_int("UA_LINK_SIGNED_URL_TTL_SECONDS", default, minimum=60)
+
+
+def link_audit_retention_days(default: int = 90) -> int:
+    return _read_int("UA_LINK_AUDIT_RETENTION_DAYS", default, minimum=1)
+
+
+def link_reconciler_interval_seconds(default: int = 30) -> int:
+    return _read_int("UA_LINK_RECONCILER_INTERVAL_SECONDS", default, minimum=5)
