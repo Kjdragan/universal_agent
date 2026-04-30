@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import json
 import logging
 import os
+from pathlib import Path
 import time
 from typing import Any, Awaitable, Callable, Dict, Optional
 
@@ -19,6 +20,10 @@ TODO_DISPATCH_MAX_PER_SWEEP = max(
     1,
     min(5, int(os.getenv("UA_TODO_DISPATCH_MAX_PER_SWEEP", "1") or 1)),
 )
+
+CONTINUATION_CONTEXT_FILENAME = "proactive_continuation_context.json"
+CONTINUATION_REFERENCE_DIRNAME = "continuation_context"
+CONTINUATION_REFERENCE_LINKNAME = "previous_workspace"
 
 
 def _event_timestamp() -> str:
@@ -48,6 +53,97 @@ def _env_positive_int(name: str, default: int) -> int:
         return max(0, int(os.getenv(name, str(default)) or default))
     except Exception:
         return default
+
+
+def _store_continuation_workspace_context(item: dict[str, Any], context: dict[str, Any]) -> None:
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    continuation = metadata.get("proactive_continuation") if isinstance(metadata.get("proactive_continuation"), dict) else {}
+    continuation = dict(continuation)
+    if context.get("current_workspace_dir"):
+        continuation["current_workspace_dir"] = context["current_workspace_dir"]
+    continuation["workspace_reuse_mode"] = context.get("mode")
+    if context.get("reference_path"):
+        continuation["workspace_reference_path"] = context["reference_path"]
+    metadata["proactive_continuation"] = continuation
+    metadata["workspace_reuse_context"] = context
+    item["metadata"] = metadata
+
+
+def _attach_continuation_workspace_reference(
+    item: dict[str, Any],
+    *,
+    current_workspace_dir: str,
+    run_id: str = "",
+) -> dict[str, Any]:
+    """Reference a prior proactive workspace from a fresh continuation run.
+
+    Continuations should get fresh execution/session context, but the agent
+    needs a durable, non-clobbering handle to prior work.  This helper never
+    templates over the previous directory.  It writes a manifest into the new
+    run workspace and creates a symlink when the filesystem allows it.
+    """
+
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    continuation = metadata.get("proactive_continuation") if isinstance(metadata.get("proactive_continuation"), dict) else {}
+    previous_workspace_raw = str(continuation.get("previous_workspace_dir") or "").strip()
+    current_workspace_raw = str(current_workspace_dir or "").strip()
+    if not previous_workspace_raw or not current_workspace_raw:
+        return {}
+
+    context: dict[str, Any] = {
+        "mode": "pending",
+        "run_id": str(run_id or "").strip(),
+        "task_id": str(item.get("task_id") or "").strip(),
+        "parent_task_id": str(continuation.get("parent_task_id") or "").strip(),
+        "previous_workspace_dir": previous_workspace_raw,
+        "current_workspace_dir": current_workspace_raw,
+        "overwrite_policy": "reference_only_do_not_template_or_overwrite_previous_workspace",
+        "created_at": _event_timestamp(),
+    }
+
+    try:
+        previous_path = Path(previous_workspace_raw).expanduser().resolve()
+        current_path = Path(current_workspace_raw).expanduser().resolve()
+        context["previous_workspace_dir"] = str(previous_path)
+        context["current_workspace_dir"] = str(current_path)
+        if not previous_path.is_dir():
+            context["mode"] = "previous_workspace_missing"
+            _store_continuation_workspace_context(item, context)
+            return context
+
+        reference_dir = current_path / CONTINUATION_REFERENCE_DIRNAME
+        reference_dir.mkdir(parents=True, exist_ok=True)
+        reference_path = reference_dir / CONTINUATION_REFERENCE_LINKNAME
+        context["reference_path"] = str(reference_path)
+
+        if reference_path.exists() or reference_path.is_symlink():
+            try:
+                if reference_path.resolve() == previous_path:
+                    context["mode"] = "referenced_existing_workspace"
+                else:
+                    context["mode"] = "reference_path_already_exists"
+                    context["reference_path_target"] = str(reference_path.resolve())
+            except Exception:
+                context["mode"] = "reference_path_already_exists"
+        else:
+            reference_path.symlink_to(previous_path, target_is_directory=True)
+            context["mode"] = "referenced_existing_workspace"
+    except Exception as exc:
+        context["mode"] = "reference_manifest_only"
+        context["error"] = str(exc)[:300]
+
+    try:
+        current_path = Path(current_workspace_raw).expanduser().resolve()
+        current_path.mkdir(parents=True, exist_ok=True)
+        (current_path / CONTINUATION_CONTEXT_FILENAME).write_text(
+            json.dumps(context, indent=2, ensure_ascii=True) + "\n",
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        context["manifest_write_error"] = str(exc)[:300]
+
+    _store_continuation_workspace_context(item, context)
+    return context
 
 
 def _vp_active_counts(active_assignments: list[dict[str, Any]] | None) -> tuple[int, int]:
@@ -444,10 +540,19 @@ def build_todo_execution_prompt(
         continuation = metadata.get("proactive_continuation") if isinstance(metadata.get("proactive_continuation"), dict) else {}
         if continuation:
             previous_workspace = str(continuation.get("previous_workspace_dir") or "").strip()
+            current_workspace = str(continuation.get("current_workspace_dir") or "").strip()
+            workspace_reference = str(continuation.get("workspace_reference_path") or "").strip()
+            workspace_reuse_mode = str(continuation.get("workspace_reuse_mode") or "").strip()
             lines.append("== PROACTIVE CONTINUATION CONTEXT ==")
             lines.append(f"parent_task_id={continuation.get('parent_task_id') or ''}")
+            if current_workspace:
+                lines.append(f"current_workspace_dir={current_workspace}")
             if previous_workspace:
                 lines.append(f"previous_workspace_dir={previous_workspace}")
+                if workspace_reference:
+                    lines.append(f"previous_workspace_reference={workspace_reference}")
+                if workspace_reuse_mode:
+                    lines.append(f"workspace_reuse_mode={workspace_reuse_mode}")
                 lines.append(
                     "Use the previous workspace as read/write context when helpful. Reuse existing work products, "
                     "but do not overwrite prior outputs unless the change is intentional and noted in your final disposition."
@@ -612,6 +717,13 @@ class ToDoDispatchService:
                         run_kind="todo_execution",
                         trigger_source="todo_dispatch",
                     )
+                    workspace_reuse_context = _attach_continuation_workspace_reference(
+                        item,
+                        current_workspace_dir=run_ctx.workspace_dir,
+                        run_id=run_ctx.run_id,
+                    )
+                    if workspace_reuse_context:
+                        task_hub.upsert_item(conn, {"task_id": task_id_val, "metadata": item.get("metadata")})
 
                     # Stamp the assignment with run-scoped lineage
                     assignment_id = str(item.get("assignment_id") or "").strip()

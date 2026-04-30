@@ -17063,6 +17063,7 @@ async def dashboard_proactive_task_history(
         "tasks": enriched_tasks,
         "opportunities": opportunities,
         "counts": _proactive_task_history_counts(enriched_tasks, opportunities),
+        "health": _proactive_task_history_health(enriched_tasks),
     }
 
 
@@ -17348,6 +17349,45 @@ def _proactive_task_history_counts(tasks: list[dict[str, Any]], opportunities: l
         if stage in counts:
             counts[stage] += 1
     return counts
+
+
+def _proactive_task_history_health(tasks: list[dict[str, Any]]) -> dict[str, Any]:
+    terminal_stages = {"completed", "needs_attention"}
+    failed_recap_statuses = {"llm_failed_fallback", "llm_failed", "invalid_json_fallback"}
+    health = {
+        "status": "ok",
+        "terminal_tasks": 0,
+        "missing_terminal_recaps": 0,
+        "failed_recaps": 0,
+        "fallback_recaps": 0,
+        "email_delivery_failures": 0,
+    }
+    for task in tasks:
+        stage = str(task.get("stage") or "").strip().lower()
+        recap = task.get("recap") if isinstance(task.get("recap"), dict) else {}
+        recap_status = str(recap.get("status") or "").strip().lower()
+        if stage in terminal_stages:
+            health["terminal_tasks"] += 1
+            if not recap_status or recap_status == "pending_llm_evaluation":
+                health["missing_terminal_recaps"] += 1
+            elif recap_status in failed_recap_statuses or "failed" in recap_status:
+                health["failed_recaps"] += 1
+            elif recap_status != "llm_evaluated":
+                health["fallback_recaps"] += 1
+        for artifact in task.get("artifacts") or []:
+            if not isinstance(artifact, dict):
+                continue
+            if str(artifact.get("delivery_state") or "").strip().lower() == "email_failed":
+                health["email_delivery_failures"] += 1
+    if (
+        health["missing_terminal_recaps"]
+        or health["failed_recaps"]
+        or health["email_delivery_failures"]
+    ):
+        health["status"] = "needs_attention"
+    elif health["fallback_recaps"]:
+        health["status"] = "degraded"
+    return health
 
 
 @app.delete("/api/v1/dashboard/proactive-signals/{card_id}")
