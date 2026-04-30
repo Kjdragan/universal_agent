@@ -70,6 +70,24 @@ type TaskLinks = {
   workspace_dir?: string;
 };
 
+type ChainTaskRef = {
+  task_id: string;
+  source_kind?: string;
+  title?: string;
+  status?: string;
+  updated_at?: string;
+};
+
+type ProactiveChain = {
+  root_task_id?: string;
+  parent_task_id?: string;
+  parent?: ChainTaskRef | null;
+  children?: ChainTaskRef[];
+  child_count?: number;
+  continuation_count?: number;
+  is_continuation?: boolean;
+};
+
 type TaskHistoryItem = {
   task_id: string;
   source_kind: string;
@@ -90,6 +108,7 @@ type TaskHistoryItem = {
   artifacts?: TaskArtifact[];
   recap?: TaskRecap;
   links?: TaskLinks;
+  proactive_chain?: ProactiveChain;
 };
 
 type OpportunityItem = {
@@ -322,6 +341,9 @@ export default function ProactiveTaskHistoryPage() {
             ? recapStatus.replace(/_/g, " ")
             : "not evaluated";
           const recapIsLlm = recapStatus === "llm_evaluated";
+          const chain = task.proactive_chain || {};
+          const chainChildren = Array.isArray(chain.children) ? chain.children : [];
+          const hasChain = Boolean(chain.is_continuation || (chain.child_count || 0) > 0);
 
           return (
             <div
@@ -398,6 +420,34 @@ export default function ProactiveTaskHistoryPage() {
                         {recap.success_assessment && <p><span className="text-slate-500">Assessment:</span> {recap.success_assessment}</p>}
                         {recap.recommended_next_action && <p><span className="text-slate-500">Next:</span> {recap.recommended_next_action}</p>}
                       </div>
+	                  </div>
+	                )}
+
+	                {hasChain && (
+	                  <div className="mt-4 rounded-lg border border-cyan-500/10 bg-cyan-500/[0.04] p-3">
+	                    <div className="mb-2 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest text-cyan-300">
+	                      <Layers className="h-3 w-3" />
+	                      Continuation Chain
+	                    </div>
+	                    <div className="space-y-1 text-xs text-slate-300">
+	                      {chain.parent && (
+	                        <div>
+	                          <span className="text-slate-500">Parent:</span> {chain.parent.title || chain.parent.task_id}
+	                        </div>
+	                      )}
+	                      {!chain.parent && (chain.child_count || 0) > 0 && (
+	                        <div>
+	                          <span className="text-slate-500">Follow-ups:</span> {chain.child_count} task{chain.child_count === 1 ? "" : "s"}
+	                        </div>
+	                      )}
+	                      {chainChildren.slice(0, 3).map((child) => (
+	                        <div key={child.task_id} className="flex items-center gap-2 text-slate-400">
+	                          <span className="h-1 w-1 rounded-full bg-cyan-300" />
+	                          <span className="truncate">{child.title || child.task_id}</span>
+	                          <span className="shrink-0 rounded bg-white/5 px-1.5 py-0.5 text-[10px] uppercase text-slate-500">{child.status}</span>
+	                        </div>
+	                      ))}
+	                    </div>
 	                  </div>
 	                )}
 

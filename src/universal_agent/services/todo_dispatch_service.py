@@ -441,6 +441,25 @@ def build_todo_execution_prompt(
         ).strip()
         if target_agent:
             lines.append(f"⚡ TARGET_AGENT={target_agent} (sender explicitly addressed this VP — delegate immediately)")
+        continuation = metadata.get("proactive_continuation") if isinstance(metadata.get("proactive_continuation"), dict) else {}
+        if continuation:
+            previous_workspace = str(continuation.get("previous_workspace_dir") or "").strip()
+            lines.append("== PROACTIVE CONTINUATION CONTEXT ==")
+            lines.append(f"parent_task_id={continuation.get('parent_task_id') or ''}")
+            if previous_workspace:
+                lines.append(f"previous_workspace_dir={previous_workspace}")
+                lines.append(
+                    "Use the previous workspace as read/write context when helpful. Reuse existing work products, "
+                    "but do not overwrite prior outputs unless the change is intentional and noted in your final disposition."
+                )
+            prior_recap = continuation.get("prior_recap") if isinstance(continuation.get("prior_recap"), dict) else {}
+            if prior_recap:
+                lines.append(f"prior_idea={prior_recap.get('idea') or ''}")
+                lines.append(f"prior_implemented={prior_recap.get('implemented') or ''}")
+                lines.append(f"prior_known_issues={prior_recap.get('known_issues') or ''}")
+                lines.append(f"prior_recommended_next_action={prior_recap.get('recommended_next_action') or ''}")
+            lines.append(f"feedback_tags={', '.join(continuation.get('feedback_tags') or [])}")
+            lines.append(f"feedback_text={continuation.get('feedback_text') or ''}")
         lines.append("")
     return f"{TODO_DISPATCH_PROMPT}\n\n" + "\n".join(lines)
 

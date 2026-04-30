@@ -265,6 +265,13 @@ def test_feedback_can_create_proactive_continuation_task(tmp_path):
     assert "Previous workspace" in continuation["description"]
     assert str(workspace) in continuation["description"]
     assert continuation["task_id"] in {row["task_id"] for row in rows}
+    parent_row = next(row for row in rows if row["task_id"] == "proactive-parent")
+    continuation_row = next(row for row in rows if row["task_id"] == continuation["task_id"])
+    assert parent_row["proactive_chain"]["child_count"] == 1
+    assert parent_row["proactive_chain"]["continuation_count"] == 1
+    assert parent_row["proactive_chain"]["children"][0]["task_id"] == continuation["task_id"]
+    assert continuation_row["proactive_chain"]["is_continuation"] is True
+    assert continuation_row["proactive_chain"]["parent"]["task_id"] == "proactive-parent"
 
 
 def test_feedback_without_continuation_signal_does_not_create_task(tmp_path):
@@ -318,3 +325,41 @@ def test_record_task_feedback_preserves_sentiment(tmp_path):
     feedback = json.loads(updated["feedback_json"])
     assert feedback["sentiment"] == "positive"
     assert feedback["actor"] == "kevin"
+
+
+def test_todo_prompt_surfaces_proactive_continuation_context(tmp_path):
+    from universal_agent.services.todo_dispatch_service import build_todo_execution_prompt
+
+    previous_workspace = str(tmp_path / "previous-workspace")
+    prompt = build_todo_execution_prompt(
+        claimed_items=[
+            {
+                "task_id": "proactive_cont:abc",
+                "title": "Continue proactive work",
+                "description": "Continue the prior proactive work in a fresh session.",
+                "metadata": {
+                    "proactive_continuation": {
+                        "parent_task_id": "parent-task",
+                        "previous_workspace_dir": previous_workspace,
+                        "feedback_tags": ["continue_work"],
+                        "feedback_text": "Please keep going.",
+                        "prior_recap": {
+                            "idea": "Original idea",
+                            "implemented": "First implementation",
+                            "known_issues": "Needs more work",
+                            "recommended_next_action": "Continue",
+                        },
+                    }
+                },
+            }
+        ],
+        capacity_snapshot_data={},
+        active_assignments=[],
+        origin_label="test",
+    )
+
+    assert "== PROACTIVE CONTINUATION CONTEXT ==" in prompt
+    assert f"previous_workspace_dir={previous_workspace}" in prompt
+    assert "parent_task_id=parent-task" in prompt
+    assert "prior_implemented=First implementation" in prompt
+    assert "feedback_text=Please keep going." in prompt

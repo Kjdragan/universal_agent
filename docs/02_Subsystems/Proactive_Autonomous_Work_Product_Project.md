@@ -34,6 +34,8 @@ The April 29 implementation established the first durable audit spine:
 | Terminal outcome hook | Proactive outcome recording now also stores a recap after terminal actions. | `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/proactive_outcome_tracker.py#L213` |
 | CODIE cleanup cron | Gateway startup auto-ensures the CODIE proactive cleanup cron and upgrades legacy jobs. | `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/gateway_server.py#L14047` |
 | Feedback continuation | Feedback tags/text can create a fresh proactive continuation task linked to the original task and prior workspace. | `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/task_hub.py#L1442` |
+| Continuation chain audit | Proactive history rows now include parent/child chain summaries so original work and follow-up tasks are visible together. | `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/task_hub.py#L1508` |
+| Continuation dispatch context | ToDo execution prompts surface prior workspace, feedback, and recap context for continuation tasks. | `file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/todo_dispatch_service.py#L459` |
 
 ## Execution Architecture
 
@@ -167,6 +169,7 @@ Target behavior:
    - explicit instruction to reuse existing files without overwriting unless necessary
 5. The continuation session writes new artifacts into the same workspace or a clearly linked child workspace.
 6. The new task appears as its own proactive history item with separate assignment/session lineage.
+7. The Proactive Task History card shows the parent/child continuation chain so audit does not require manually searching task IDs.
 
 Implemented trigger signals:
 
@@ -174,7 +177,13 @@ Implemented trigger signals:
 - feedback tag `needs_followup`
 - text containing phrases such as "continue", "follow up", "next step", "keep working", "do more", or "more like this"
 
-Open design point: workspace reuse is currently expressed in the continuation task description and metadata. A later dispatch/session-creation slice should add a guarded runtime path that can mount or reference an existing directory without re-templating over existing outputs.
+Current dispatch behavior:
+
+- continuation metadata is injected into the ToDo execution prompt under `PROACTIVE CONTINUATION CONTEXT`
+- the prompt includes `parent_task_id`, prior recap fields, feedback tags/text, and `previous_workspace_dir`
+- agents are instructed to reuse existing work products when helpful and not overwrite prior outputs unless intentional and noted
+
+Open design point: workspace reuse is currently expressed in the continuation task description, metadata, and execution prompt. A later dispatch/session-creation slice should add a guarded runtime path that can mount or reference an existing directory without re-templating over existing outputs.
 
 ## Acceptance Criteria
 
@@ -188,10 +197,11 @@ Current slice:
 - CODIE cleanup work is deterministic, TDD-aware, PR-oriented, and gateway-ensured.
 - LLM-backed recaps use a high-capability model path and deterministic fallback.
 - Feedback can create proactive continuation tasks in fresh sessions with prior workspace context.
+- Proactive Task History can show parent/child continuation chain context.
+- ToDo execution prompts include prior workspace and recap context for continuation tasks.
 
 Next slice:
 
-- Proactive history can group task chains: original idea, continuation tasks, artifacts, and outcomes.
 - Dashboard cards show whether a recap is heuristic, LLM-evaluated, failed, or stale.
 - AgentMail digest/email surfaces completed proactive work with the same recap and links.
 

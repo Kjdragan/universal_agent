@@ -74,6 +74,7 @@ Implementation update as of 2026-04-29:
 - The terminal proactive outcome hook now writes both the outcome record and the recap record after complete/block/review/park/approve actions.
 - The React Proactive Task History page now includes lifecycle filters, opportunity cards, evaluator recap blocks, artifact/evidence links, and a three-panel session opener.
 - Feedback on proactive history tasks can now create a fresh `proactive_feedback_continuation` Task Hub item when Kevin explicitly asks for continuation or follow-up. The continuation item links back to the original task and carries prior workspace context for safe reuse.
+- Proactive history rows now include continuation chain summaries, and ToDo execution prompts surface prior workspace, prior recap, and feedback context for continuation tasks.
 
 Recommended state model:
 

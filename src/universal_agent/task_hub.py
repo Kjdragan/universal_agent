@@ -1712,7 +1712,63 @@ def _attach_latest_assignment_and_evidence(conn: sqlite3.Connection, item: dict[
         }
         for ev in evidence_rows
     ]
+    item["proactive_chain"] = _proactive_chain_summary(conn, item)
     return item
+
+
+def _proactive_chain_summary(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any]:
+    task_id = str(item.get("task_id") or "").strip()
+    parent_task_id = str(item.get("parent_task_id") or "").strip()
+    root_task_id = parent_task_id or task_id
+    parent_summary: Optional[dict[str, Any]] = None
+    if parent_task_id:
+        parent = get_item(conn, parent_task_id)
+        if parent:
+            parent_summary = _task_chain_ref(parent)
+
+    children_rows = conn.execute(
+        """
+        SELECT task_id, source_kind, title, status, updated_at
+        FROM task_hub_items
+        WHERE parent_task_id = ?
+        ORDER BY updated_at DESC
+        LIMIT 20
+        """,
+        (root_task_id,),
+    ).fetchall()
+    children = [
+        {
+            "task_id": str(row["task_id"] or ""),
+            "source_kind": str(row["source_kind"] or ""),
+            "title": str(row["title"] or ""),
+            "status": str(row["status"] or ""),
+            "updated_at": str(row["updated_at"] or ""),
+        }
+        for row in children_rows
+    ]
+    return {
+        "root_task_id": root_task_id,
+        "parent_task_id": parent_task_id,
+        "parent": parent_summary,
+        "children": children,
+        "child_count": len(children),
+        "continuation_count": sum(
+            1
+            for child in children
+            if str(child.get("source_kind") or "").strip().lower() == "proactive_feedback_continuation"
+        ),
+        "is_continuation": bool(parent_task_id),
+    }
+
+
+def _task_chain_ref(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "task_id": str(item.get("task_id") or ""),
+        "source_kind": str(item.get("source_kind") or ""),
+        "title": str(item.get("title") or ""),
+        "status": str(item.get("status") or ""),
+        "updated_at": str(item.get("updated_at") or ""),
+    }
 
 
 def list_proactive_work_tasks(conn: sqlite3.Connection, *, limit: int = 120) -> list[dict[str, Any]]:
