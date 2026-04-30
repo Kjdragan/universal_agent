@@ -556,7 +556,18 @@ def retrieve_spend_request(
 
     if not cli_result["ok"]:
         return _err_response(cli_result["error"], audit_id)
-    return _ok_response(cli_result["data"], audit_id)
+    response = _ok_response(cli_result["data"], audit_id)
+
+    # Fire the notifier hook on newly-approved spend requests. Idempotent
+    # per spend_request_id (notifier maintains its own state file).
+    try:
+        from universal_agent.services import link_notifier
+
+        link_notifier.maybe_notify_from_retrieve(response)
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.warning("Link notifier hook failed: %s", exc)
+
+    return response
 
 
 def list_payment_methods(*, caller: str) -> dict[str, Any]:

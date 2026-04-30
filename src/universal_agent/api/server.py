@@ -1417,6 +1417,16 @@ from universal_agent.api.routers.csi_watchlist import router as csi_watchlist_ro
 app.include_router(csi_watchlist_router)
 app.include_router(csi_discord_watchlist_router)
 
+# Link payments router (Phase 2b). Mounts /api/link/* and /link/card/{token}.
+# Inert when UA_ENABLE_LINK=0 (bridge returns guardrail_disabled before any
+# CLI work), so this is safe to register unconditionally.
+try:
+    from universal_agent.api.link_routes import router as link_router
+
+    app.include_router(link_router)
+except Exception as exc:  # pragma: no cover — defensive
+    logger.warning("Link routes registration failed: %s", exc)
+
 @app.get("/")
 async def root():
     """API root endpoint."""
