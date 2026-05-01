@@ -169,6 +169,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[Threads Phase 2/3 Closeout Go/No-Go Report](010_THREADS_PHASE2_3_CLOSEOUT_GO_NO_GO_REPORT.md)**: Phase closeout report.
 - **[SDK Phase 5 Accelerated Canary Rollout](011_SDK_PHASE5_ACCELERATED_CANARY_ROLLOUT.md)**: Canary rollout.
 - **[NotebookLM Integration](012_NOTEBOOKLM_INTEGRATION.md)**: NotebookLM integration notes.
+- **[Link Payments Integration](013_LINK_PAYMENTS_INTEGRATION.md)**: Stripe Link wallet integration — one-time-use card and SPT credentials, layered guardrails (caller allowlist + per-call/daily caps + merchant allowlist), signed-URL one-shot card-details page, AgentMail approval notifier, `agent-purchaser` sub-agent for browser-automated checkout (with captcha-solver + residential-proxy fallback chain), MPP/HTTP-402 server-to-server settlement, double-gate live-mode flip, reconciler service, and end-to-end demo walkthrough. See also the operator runbook at [link_payments_runbook.md](link_payments_runbook.md).
 
 ### 10. [Reference Docs](.)
 
