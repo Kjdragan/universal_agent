@@ -16,7 +16,7 @@ import {
   FileText,
   Layers
 } from "lucide-react";
-import { openOrFocusChatWindow } from "@/lib/chatWindow";
+import { openViewer } from "@/lib/viewer/openViewer";
 
 const API_BASE = "/api/dashboard/gateway";
 const FEEDBACK_CHIPS = [
@@ -247,12 +247,15 @@ export default function ProactiveTaskHistoryPage() {
 
   const rehydrateSession = (item: TaskHistoryItem) => {
     if (!item.session_id) return;
-    openOrFocusChatWindow({
-      sessionId: item.session_id,
-      runId: item.run_id,
-      workspace: item.workspace_dir || item.links?.workspace_dir,
+    // Track B: read-only proactive history view — route through the
+    // centralized resolver so the viewer's three panels load from the
+    // backend hydration endpoint rather than client-side trace parsing.
+    void openViewer({
+      session_id: item.session_id,
+      run_id: item.run_id,
+      workspace_dir: item.workspace_dir || item.links?.workspace_dir,
       attachMode: "tail",
-      role: "viewer"
+      role: "viewer",
     });
   };
 
