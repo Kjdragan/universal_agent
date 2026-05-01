@@ -240,6 +240,49 @@ def get_delegation_context(
     return "\n".join(lines) if len(lines) > 1 else ""
 
 
+def should_block_proactive_task(
+    conn: sqlite3.Connection,
+    *,
+    task_type: str = "",
+    topic_tags: list[str] | None = None,
+    block_threshold: float = -0.5,
+) -> tuple[bool, str]:
+    """Hard gate: return (True, reason) if preferences strongly oppose this task.
+
+    A task is blocked when *every* matching preference key carries a weight
+    at or below ``block_threshold`` (default -0.5).  If there are no matching
+    signals at all the task is allowed through (benefit of the doubt).
+
+    Returns:
+        (should_block, reason) — ``should_block`` is True when the task
+        should be silently dropped, and ``reason`` explains why.
+    """
+    ensure_schema(conn)
+    model = get_preference_snapshot(conn)
+    preferences = model.get("topic_preferences") if isinstance(model.get("topic_preferences"), dict) else {}
+    keys = _context_keys(task_type=task_type, topic_tags=topic_tags or [])
+    if not keys:
+        return False, ""
+
+    matched = [(k, preferences[k]) for k in keys if k in preferences]
+    if not matched:
+        return False, ""  # No signal → allow
+
+    negative_keys: list[str] = []
+    for key, value in matched:
+        weight = float((value or {}).get("weight") or 0.0)
+        if weight > block_threshold:
+            return False, ""  # At least one dimension is neutral/positive → allow
+        negative_keys.append(f"{key}={weight:.2f}")
+
+    reason = (
+        f"All {len(negative_keys)} preference dimension(s) are strongly negative "
+        f"(threshold {block_threshold}): {', '.join(negative_keys)}. "
+        f"Proactive task suppressed."
+    )
+    return True, reason
+
+
 def build_weekly_preference_report(conn: sqlite3.Connection, *, top_n: int = 10) -> dict[str, Any]:
     """Generate a ranked summary of positive and negative preferences."""
     model = rebuild_preference_snapshot(conn)

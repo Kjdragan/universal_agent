@@ -410,7 +410,6 @@ class VpWorkerLoop:
                     workspace_root=workspace_path,
                 )
         finally:
-            await self._teardown_workspace(workspace_path)
             heartbeat_stop.set()
             heartbeat_task.cancel()
             try:
@@ -426,6 +425,22 @@ class VpWorkerLoop:
         else:
             finalize_vp_mission(self.conn, mission_id, "completed", result_ref=outcome.result_ref)
             event_type = "vp.mission.completed"
+
+        # Teardown worktree AFTER finalization so result_ref is persisted.
+        # Skip teardown if the agent's result_ref points at the worktree itself
+        # (meaning the agent wrote output there and we'd lose artifacts).
+        _result_dir = ""
+        if outcome.result_ref:
+            _result_dir = str(outcome.result_ref).removeprefix("workspace://").strip()
+        worktree_str = str(workspace_path).rstrip("/")
+        result_str = _result_dir.rstrip("/")
+        if not result_str or result_str != worktree_str:
+            await self._teardown_workspace(workspace_path)
+        else:
+            logger.info(
+                "Skipping worktree teardown — agent output is at worktree path: %s",
+                workspace_path,
+            )
 
         # Sync terminal status to Task Hub for Kanban board visibility
         try:
