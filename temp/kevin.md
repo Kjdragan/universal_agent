@@ -67,3 +67,45 @@ If you have a starting template for each project, it will improve the developmen
 NextResearch for a just anounced X API skill via openclaw.  We may be able to copy it to access X.com data like the "@ClaudeDevs" account"
 
 Task Forge:  use the new Google text to speech model described here:<https://docs.cloud.google.com/text-to-speech/docs/gemini-tts> to produce a high-quality audio file of the text from any source supplied (urls, text block, .tx or .md files, etc) that will read the article or text source, ignoring headers, etc, in a in an appealing narration so that it serves for people who don't want to read the article but would prefer to have someone read it to them aloud. email the file as an attachment, with the email body being just the link to the original source material. Make sure you use the agentmail_send_with_local_attachments tool to send the email. And make sure that the email is sent to <kevinjdragan@gmail.com> Here is the text source: <https://x.com/garrytan/status/2042925773300908103>  It is an x post so use our X API skill to extract the full text of the post in this case
+I'm having problems with a feature in our code that breaks all the time. I don't know if this is because it is generated in different ways in different parts of our code, or it's inefficient, or what the problem is. But I want you to look at the context below to help rework it so that it is efficient and consistent and modularly approached if needed so we consistently are using the same functionality and getting a proper result that doesn't break
+
+Context
+You are working on the Universal Agent project, a multi-agent orchestration system with a Next.js frontend dashboard and a Python backend (FastAPI).
+
+A critical feature of our UI is the "Three-Panel Session View". When a user clicks to view a session (e.g., clicking the "Workspace" button on a completed Kanban card in the Task Hub, viewing a dispatched VP mission from the Dashboard, or viewing a direct chat session with our primary agent Simone), the UI should hydrate a three-panel layout containing:
+
+Left Panel: The historical chat and conversation details.
+Middle Panel: The actual logs and processes that occurred during the session.
+Right Panel: A file browser pointing to the full VPS workspace, showing work products and files created during the session.
+The Problem
+Currently, the architecture supporting the routing, linking, and hydration of this three-panel output is very brittle. Users frequently encounter states where:
+
+The left chat panel is completely empty or fails to load.
+The right file browser panel does not link to the correct session path, or shows an empty directory.
+The links generated from various entry points (Task Hub completed cards, Dashboard VP sessions, etc.) have inconsistent URL structures or missing query parameters, leading to broken hydration.
+There appear to be race conditions or mistaken path resolutions where the backend hasn't flushed the logs or workspace data by the time the UI attempts to read it.
+Your Objective
+Conduct a full architectural review of the codebase wherever this three-panel output is generated and hydrated, and implement a robust, universal solution to ensure it works consistently without breaking due to race conditions or mistaken paths.
+
+Specific Investigation Areas:
+Link Generation & Routing:
+
+Audit how session links are constructed across the Next.js frontend (e.g., in the Task Hub Kanban board cards, the main Dashboard, and direct chat history).
+Ensure a unified routing schema (e.g., /dashboard/session/[id]) that reliably passes all necessary context (session ID, workspace path, run ID) to the three-panel UI.
+Backend Path Resolution:
+
+Check the Python backend endpoints responsible for serving the chat history, logs, and file tree for a given session.
+Look for hardcoded paths, volatile temporary directories, or incorrect path joins that might cause the file browser to fail to locate the workspace.
+Session Hydration & Race Conditions:
+
+Investigate the hydration logic in the frontend components responsible for the three panels.
+Ensure there is proper loading state management, polling, or retries if the backend is still finalizing a workspace or flushing logs after a mission completes.
+Verify that when a VP mission completes and moves to the "Completed" tab, the artifacts are durable and the path provided to the UI is stable.
+Consistency Enforcement:
+
+Abstract the three-panel hydration logic into a single, unified set of hooks or components if it is currently duplicated and behaving differently depending on the entry point.
+Deliverables:
+Discovery Report: A brief summary of where the path mapping, link generation, or hydration logic is currently failing or diverging.
+Implementation Plan: Propose a unified mechanism for session linking and data hydration before making large changes.
+Robust Fixes: Implement the necessary frontend and backend changes to guarantee the three-panel view consistently loads the correct chat, logs, and workspace files for any session type.
+Please begin by searching the codebase for the relevant React components (e.g., searching for "Workspace", "chat panel", "file browser" in the Next.js app) and the backend routes handling session data retrieval. Read the code carefully before proposing your fixes.

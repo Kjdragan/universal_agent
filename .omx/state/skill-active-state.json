@@ -1,17 +1,17 @@
 {
   "version": 1,
-  "active": true,
+  "active": false,
   "skill": "analyze",
-  "keyword": "investigate",
-  "phase": "reviewing",
+  "keyword": "Investigate",
+  "phase": "completing",
   "activated_at": "2026-05-01T01:07:21.208Z",
-  "updated_at": "2026-05-01T01:15:30.221Z",
+  "updated_at": "2026-05-01T15:28:10.952Z",
   "source": "keyword-detector",
   "input_lock": {
     "active": false,
     "scope": "deep-interview-auto-approval",
     "acquired_at": "2026-04-15T02:45:23.458Z",
-    "released_at": "2026-05-01T01:07:21.208Z",
+    "released_at": "2026-05-01T15:28:10.948Z",
     "blocked_inputs": [
       "yes",
       "y",
