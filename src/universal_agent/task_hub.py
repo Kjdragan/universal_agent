@@ -2148,19 +2148,29 @@ def reconcile_task_lifecycle(
                             """,
                             (assignment_started_at or "1970-01-01T00:00:00+00:00",),
                         ).fetchall()
-                        matches: list[tuple[str, str]] = []
+                        strong_matches: list[tuple[str, str]] = []
+                        weak_matches: list[tuple[str, str]] = []
                         for candidate_row in candidate_rows:
                             payload = _json_loads_obj(candidate_row["payload_json"], default={})
-                            if str(payload.get("source_session_id") or "").strip() != assignment_session_id:
-                                continue
-                            matches.append(
-                                (
-                                    str(candidate_row["mission_id"] or "").strip(),
-                                    str(candidate_row["vp_id"] or "").strip() or "vp.general.primary",
-                                )
+                            candidate_source_session_id = str(payload.get("source_session_id") or "").strip()
+                            candidate_idempotency_key = str(payload.get("idempotency_key") or "").strip()
+                            
+                            item = (
+                                str(candidate_row["mission_id"] or "").strip(),
+                                str(candidate_row["vp_id"] or "").strip() or "vp.general.primary",
                             )
-                        if len(matches) == 1:
-                            mission_id, vp_id = matches[0]
+                            
+                            if assignment_session_id and candidate_source_session_id == assignment_session_id:
+                                strong_matches.append(item)
+                            elif task_id and task_id in candidate_idempotency_key:
+                                strong_matches.append(item)
+                            elif candidate_source_session_id == "internal.vp_tool":
+                                weak_matches.append(item)
+                                
+                        if len(strong_matches) == 1:
+                            mission_id, vp_id = strong_matches[0]
+                        elif len(strong_matches) == 0 and len(weak_matches) == 1:
+                            mission_id, vp_id = weak_matches[0]
                 except Exception:
                     logger.exception("Failed reconciling VP mission linkage for task %s", task_id)
 

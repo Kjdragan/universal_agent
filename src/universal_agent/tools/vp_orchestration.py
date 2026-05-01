@@ -230,6 +230,23 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
     raw_idempotency = str(args.get("idempotency_key") or "").strip()
     idempotency_key = raw_idempotency or f"vp-tool-{uuid.uuid4().hex}"
 
+    source_session_id = str(args.get("source_session_id") or "").strip()
+    run_id = str(args.get("run_id") or "").strip()
+    
+    try:
+        from universal_agent.session_ctx import get_ctx
+        ctx = get_ctx()
+        if ctx:
+            if not source_session_id:
+                source_session_id = str(ctx.trace.get("provider_session_id") or ctx.run_id or "").strip()
+            if not run_id:
+                run_id = str(ctx.run_id or "").strip()
+    except Exception:
+        pass
+        
+    if not source_session_id:
+        source_session_id = "internal.vp_tool"
+
     conn = _connect_vp_db()
     try:
         row = dispatch_mission_with_retry(
@@ -241,13 +258,11 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
                 constraints=constraints,
                 budget=budget,
                 idempotency_key=idempotency_key,
-                source_session_id=str(
-                    args.get("source_session_id") or "internal.vp_tool"
-                ),
+                source_session_id=source_session_id,
                 source_turn_id=str(args.get("source_turn_id") or uuid.uuid4().hex),
                 reply_mode=reply_mode,
                 priority=priority,
-                run_id=str(args.get("run_id") or "").strip() or None,
+                run_id=run_id or None,
                 execution_mode=str(args.get("execution_mode") or "sdk").strip()
                 or "sdk",
                 metadata=args.get("metadata")
@@ -259,8 +274,11 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
 
         # Register in Task Hub for Kanban board visibility
         try:
-            from universal_agent.durable.db import get_activity_db_path, connect_runtime_db
             from universal_agent import task_hub
+            from universal_agent.durable.db import (
+                connect_runtime_db,
+                get_activity_db_path,
+            )
 
             th_conn = connect_runtime_db(get_activity_db_path())
             task_hub.ensure_schema(th_conn)
