@@ -1,6 +1,6 @@
 # Documentation Status
 
-**Last updated:** 2026-04-30 (YouTube Digest transition to Zero-Quota SQLite database tracking, Ranked code-prospect tutorial dispatch, Mission Control Chief-of-Staff durable readout and Operator Brief situation read model, Heartbeat memory-guided autonomous remediation, activity notification lifecycle, CSI dedupe TTL health, AgentMail stale queue lifecycle, project-scaffolder hardening, and proactive autonomous work-product project documented)
+**Last updated:** 2026-05-01 (Email pre-triage deterministic security screening: injection pattern scanner, unknown @agentmail.to auto-quarantine, sender reputation tracking with auto-escalation; YouTube Digest transition to Zero-Quota SQLite database tracking, Ranked code-prospect tutorial dispatch, Mission Control Chief-of-Staff durable readout and Operator Brief situation read model, Heartbeat memory-guided autonomous remediation, activity notification lifecycle, CSI dedupe TTL health, AgentMail stale queue lifecycle, project-scaffolder hardening, and proactive autonomous work-product project documented)
 
 ## Development (development/)
 
@@ -66,7 +66,7 @@ These are the authoritative references for each subsystem. When any other docume
 |---|---------|
 | 07 | WebSocket Architecture (`02_Flows/`) |
 | 08 | Auth & Session Security (`02_Flows/`) |
-| 82 | Email / AgentMail — includes multi-inbox VP routing (Cody/Atlas direct engagement), CC protocol, FYI suppression, trusted non-action reply auto-completion, stale failed queue auto-cancellation |
+| 82 | Email / AgentMail — includes pre-triage deterministic security screening (injection scanner, @agentmail.to auto-quarantine, sender reputation auto-escalation), multi-inbox VP routing (Cody/Atlas direct engagement), CC protocol, FYI suppression, trusted non-action reply auto-completion, stale failed queue auto-cancellation |
 | 83 | Webhooks |
 | 85 | Infisical Secrets |
 | 86 | Residential Proxy — dual-provider architecture (Webshare + DataImpulse), `PROXY_PROVIDER` selection, approved paths, YouTube guardrails |

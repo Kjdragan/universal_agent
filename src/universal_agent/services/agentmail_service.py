@@ -1273,6 +1273,97 @@ class AgentMailService:
                 sender, subject, thread_id, reply_is_extracted, sender_trusted,
             )
 
+            # ── Pre-triage deterministic security screening ──────────────
+            # These checks fire BEFORE any email content reaches the triage
+            # LLM.  They are pure Python — deterministic, microsecond-fast,
+            # and cannot be bypassed by prompt injection.
+            if not sender_trusted:
+                try:
+                    from universal_agent.services.email_security import (
+                        is_sender_blocked,
+                        record_sender_seen,
+                        scan_for_injection,
+                        should_auto_quarantine_agentmail_sender,
+                    )
+
+                    # Track sender reputation
+                    try:
+                        _rep_conn = connect_runtime_db(get_activity_db_path())
+                        record_sender_seen(_rep_conn, sender_email)
+                    except Exception as _rep_exc:
+                        logger.debug("Sender reputation tracking (non-fatal): %s", _rep_exc)
+                        _rep_conn = None
+
+                    # Gate 0: Sender blocklist
+                    if _rep_conn and is_sender_blocked(_rep_conn, sender_email):
+                        logger.warning(
+                            "📧🔒 Blocked sender auto-quarantined: %s subject=%r",
+                            sender_email, subject,
+                        )
+                        self._pre_triage_quarantine(
+                            sender=sender, sender_email=sender_email,
+                            subject=subject, thread_id=thread_id,
+                            message_id=message_id,
+                            text_body=text_body,
+                            reply_text=reply_text or text_body or "",
+                            reason="blocked_sender",
+                            receiving_inbox=receiving_inbox,
+                        )
+                        return
+
+                    # Gate 1: Auto-quarantine unknown @agentmail.to senders
+                    if should_auto_quarantine_agentmail_sender(
+                        sender_email, self._trusted_senders,
+                    ):
+                        logger.warning(
+                            "📧⛔ Unknown @agentmail.to sender auto-quarantined "
+                            "PRE-TRIAGE: from=%s subject=%r",
+                            sender_email, subject,
+                        )
+                        self._pre_triage_quarantine(
+                            sender=sender, sender_email=sender_email,
+                            subject=subject, thread_id=thread_id,
+                            message_id=message_id,
+                            text_body=text_body,
+                            reply_text=reply_text or text_body or "",
+                            reason="unknown_agentmail_sender",
+                            receiving_inbox=receiving_inbox,
+                        )
+                        return
+
+                    # Gate 2: Deterministic injection pattern scan
+                    _scan = scan_for_injection(
+                        subject, reply_text or text_body or "",
+                    )
+                    if _scan.is_suspicious:
+                        logger.warning(
+                            "📧🚨 Injection patterns detected PRE-TRIAGE: "
+                            "from=%s subject=%r threats=%s confidence=%s",
+                            sender_email, subject,
+                            _scan.threats, _scan.confidence,
+                        )
+                        self._pre_triage_quarantine(
+                            sender=sender, sender_email=sender_email,
+                            subject=subject, thread_id=thread_id,
+                            message_id=message_id,
+                            text_body=text_body,
+                            reply_text=reply_text or text_body or "",
+                            reason=f"injection_detected:{','.join(_scan.threats)}",
+                            scan_result=_scan,
+                            receiving_inbox=receiving_inbox,
+                        )
+                        return
+                except ImportError:
+                    logger.debug("email_security module not available, skipping pre-triage screen")
+                except Exception as _screen_exc:
+                    # Pre-triage screening must never block the pipeline.
+                    # If it fails, fall through to the existing post-triage guards.
+                    logger.warning(
+                        "📧 Pre-triage screening failed (falling through): %s",
+                        _screen_exc,
+                    )
+
+
             # ── Detect target VP agent by name ──
             # Check if the email explicitly targets Cody or Atlas, either
             # because it arrived at the VP inbox with a name mention, or
@@ -1393,6 +1484,21 @@ class AgentMailService:
                     due_at=extracted_due_at if sender_trusted else None,
                     target_agent=target_agent,
                 )
+
+                # ── Immediate notification for external email arrivals ──
+                if not sender_trusted:
+                    self._emit_notification(
+                        kind="agentmail_external_arrived",
+                        title="📧⚠️ External Email Received",
+                        message=f"From: {sender_email} | Subject: {subject}",
+                        severity="warning",
+                        metadata={
+                            "thread_id": thread_id,
+                            "sender_email": sender_email,
+                            "message_id": message_id,
+                            "receiving_inbox": receiving_inbox,
+                        },
+                    )
 
                 _task_id = bridge_result.get("task_id", "") if bridge_result else ""
                 if bridge_result and bridge_result.get("handled_as") == "proactive_feedback":
@@ -2358,6 +2464,97 @@ class AgentMailService:
                 "sender_email": str(payload.get("sender_email") or ""),
                 "session_key": str(payload.get("session_key") or ""),
             },
+        )
+
+    def _pre_triage_quarantine(
+        self,
+        *,
+        sender: str,
+        sender_email: str,
+        subject: str,
+        thread_id: str,
+        message_id: str,
+        text_body: str,
+        reply_text: str,
+        reason: str,
+        scan_result: Any = None,
+        receiving_inbox: str = "",
+    ) -> None:
+        """Quarantine an email BEFORE it reaches the triage LLM.
+
+        This is a deterministic security gate — it materializes the email
+        as a quarantined Task Hub item with immediate operator notification.
+        The email never enters ``agentmail_inbox_queue`` and is never
+        dispatched to the ``email-handler`` triage agent.
+        """
+        # ① Materialize as quarantined task
+        bridge_result = self._materialize_email_task(
+            thread_id=thread_id,
+            message_id=message_id,
+            sender_email=sender_email,
+            subject=subject,
+            reply_text=reply_text,
+            session_key=f"pretriage_quarantine_{thread_id or message_id}",
+            sender_trusted=False,
+            security_classification="quarantine",
+            triage_pending=False,
+        )
+
+        # ② Mark as quarantined in the email task bridge
+        bridge = self._get_email_task_bridge()
+        if bridge is not None:
+            note_parts = [f"Pre-triage quarantine: {reason}"]
+            if scan_result and hasattr(scan_result, "threats"):
+                note_parts.append(f"Threats: {', '.join(scan_result.threats)}")
+            if scan_result and hasattr(scan_result, "confidence"):
+                note_parts.append(f"Confidence: {scan_result.confidence}")
+            bridge.mark_quarantined(
+                thread_id,
+                note=" | ".join(note_parts),
+                sender_trusted=False,
+            )
+
+        # ③ Record quarantine in sender reputation
+        try:
+            from universal_agent.services.email_security import record_sender_quarantined
+
+            _rep_conn = connect_runtime_db(get_activity_db_path())
+            threats = []
+            if scan_result and hasattr(scan_result, "threats"):
+                threats = list(scan_result.threats)
+            record_sender_quarantined(_rep_conn, sender_email, threats)
+        except Exception as _rep_exc:
+            logger.debug("Sender quarantine reputation update (non-fatal): %s", _rep_exc)
+
+        # ④ Emit immediate operator notification
+        severity = "error" if (scan_result and hasattr(scan_result, "confidence") and scan_result.confidence == "high") else "warning"
+        scan_info = ""
+        if scan_result and hasattr(scan_result, "threats"):
+            scan_info = f" | Threats: {', '.join(scan_result.threats)}"
+
+        self._emit_notification(
+            kind="agentmail_pre_triage_quarantined",
+            title="🚨 Email Auto-Quarantined (Pre-Triage)",
+            message=f"From: {sender_email} | Subject: {subject} | Reason: {reason}{scan_info}",
+            severity=severity,
+            metadata={
+                "thread_id": thread_id,
+                "message_id": message_id,
+                "sender_email": sender_email,
+                "subject": subject,
+                "receiving_inbox": receiving_inbox,
+                "reason": reason,
+                "scan_result": scan_result.to_dict() if scan_result and hasattr(scan_result, "to_dict") else {},
+                "stage": "pre_triage",
+            },
+        )
+
+        logger.info(
+            "📧🚨 Pre-triage quarantine complete: from=%s subject=%r reason=%s task_id=%s",
+            sender_email,
+            subject,
+            reason,
+            (bridge_result or {}).get("task_id", ""),
         )
 
     def _route_external_email_task(
