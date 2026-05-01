@@ -10,24 +10,60 @@ import { proxyApiRequest } from "@/lib/apiProxy";
 // so without this proxy every Link API call returns 404. Inert until the
 // master switch UA_ENABLE_LINK is set, but kept symmetric with the viewer
 // proxy so both routers are reachable when needed.
+//
+// Export pattern matches /api/dashboard/gateway/[...path]/route.ts
+// (named-function `export async function`).
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type Params = { path: string[] };
-
-async function handler(
-  req: NextRequest,
-  ctx: { params: Promise<Params> },
+async function forward(
+  request: NextRequest,
+  context: { params: Promise<{ path: string[] }> },
 ): Promise<Response> {
-  const { path } = await ctx.params;
+  const { path } = await context.params;
   const subpath = ["link", ...(path || [])].join("/");
-  return proxyApiRequest(req, subpath);
+  return proxyApiRequest(request, subpath);
 }
 
-export const GET = handler;
-export const POST = handler;
-export const PUT = handler;
-export const PATCH = handler;
-export const DELETE = handler;
-export const OPTIONS = handler;
+export async function GET(
+  request: NextRequest,
+  context: { params: Promise<{ path: string[] }> },
+): Promise<Response> {
+  return forward(request, context);
+}
+
+export async function POST(
+  request: NextRequest,
+  context: { params: Promise<{ path: string[] }> },
+): Promise<Response> {
+  return forward(request, context);
+}
+
+export async function PUT(
+  request: NextRequest,
+  context: { params: Promise<{ path: string[] }> },
+): Promise<Response> {
+  return forward(request, context);
+}
+
+export async function PATCH(
+  request: NextRequest,
+  context: { params: Promise<{ path: string[] }> },
+): Promise<Response> {
+  return forward(request, context);
+}
+
+export async function DELETE(
+  request: NextRequest,
+  context: { params: Promise<{ path: string[] }> },
+): Promise<Response> {
+  return forward(request, context);
+}
+
+export async function OPTIONS(
+  request: NextRequest,
+  context: { params: Promise<{ path: string[] }> },
+): Promise<Response> {
+  return forward(request, context);
+}

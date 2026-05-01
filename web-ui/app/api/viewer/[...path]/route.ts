@@ -12,24 +12,62 @@ import { proxyApiRequest } from "@/lib/apiProxy";
 // alerted "Could not resolve a viewer target for this item." The 404 was
 // from Next.js, not from the backend resolver. The resolver was never even
 // invoked. This proxy fixes that by forwarding to port 8001.
+//
+// Export pattern matches /api/dashboard/gateway/[...path]/route.ts
+// (named-function `export async function`) which is the verified-working
+// shape for Next.js 16 / Turbopack route discovery. The `export const GET =
+// handler` alias style does not get picked up reliably.
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type Params = { path: string[] };
-
-async function handler(
-  req: NextRequest,
-  ctx: { params: Promise<Params> },
+async function forward(
+  request: NextRequest,
+  context: { params: Promise<{ path: string[] }> },
 ): Promise<Response> {
-  const { path } = await ctx.params;
+  const { path } = await context.params;
   const subpath = ["viewer", ...(path || [])].join("/");
-  return proxyApiRequest(req, subpath);
+  return proxyApiRequest(request, subpath);
 }
 
-export const GET = handler;
-export const POST = handler;
-export const PUT = handler;
-export const PATCH = handler;
-export const DELETE = handler;
-export const OPTIONS = handler;
+export async function GET(
+  request: NextRequest,
+  context: { params: Promise<{ path: string[] }> },
+): Promise<Response> {
+  return forward(request, context);
+}
+
+export async function POST(
+  request: NextRequest,
+  context: { params: Promise<{ path: string[] }> },
+): Promise<Response> {
+  return forward(request, context);
+}
+
+export async function PUT(
+  request: NextRequest,
+  context: { params: Promise<{ path: string[] }> },
+): Promise<Response> {
+  return forward(request, context);
+}
+
+export async function PATCH(
+  request: NextRequest,
+  context: { params: Promise<{ path: string[] }> },
+): Promise<Response> {
+  return forward(request, context);
+}
+
+export async function DELETE(
+  request: NextRequest,
+  context: { params: Promise<{ path: string[] }> },
+): Promise<Response> {
+  return forward(request, context);
+}
+
+export async function OPTIONS(
+  request: NextRequest,
+  context: { params: Promise<{ path: string[] }> },
+): Promise<Response> {
+  return forward(request, context);
+}
