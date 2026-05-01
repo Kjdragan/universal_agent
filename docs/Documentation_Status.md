@@ -169,6 +169,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 010 | Threads Phase 2/3 Closeout Go/No-Go Report |
 | 011 | SDK Phase 5 Accelerated Canary Rollout |
 | 012 | NotebookLM Integration |
+| 013 | Link Payments Integration — Stripe Link wallet, guardrails, signed-URL card page, agent_purchaser sub-agent, MPP, live-mode flip |
 
 ## Reference Docs
 
