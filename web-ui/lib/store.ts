@@ -806,6 +806,23 @@ export function processWebSocketEvent(event: WebSocketEvent): void {
       store.setConnectionStatus("connected");
       const rawPayload = ((data.session as Record<string, unknown> | undefined) ?? data) as Record<string, unknown>;
       const existing = store.currentSession;
+
+      // Guard: If the store already holds a VP observer/mission session, do NOT
+      // let the gateway's own active session overwrite it. The WS connection is
+      // only used for transport in VP observer mode — the session identity must
+      // remain the VP mission ID so isVpObserverSession stays true and hydrated
+      // data is preserved.  Without this guard, the gateway's "connected" event
+      // replaces the VP session_id causing a "flash then reset" where VP data
+      // briefly appears then gets wiped by a re-render in non-observer mode.
+      const existingId = String(existing?.session_id || "").trim();
+      const isExistingVpObserver =
+        /^vp[_-]/i.test(existingId) || /^vp-mission-/i.test(existingId) || /^m-/i.test(existingId);
+      const gatewaySessionId = String(rawPayload?.session_id || "").trim();
+      if (isExistingVpObserver && gatewaySessionId && gatewaySessionId !== existingId) {
+        // Gateway returned a different session — keep the VP observer session intact.
+        break;
+      }
+
       const sessionId = String(rawPayload?.session_id || existing?.session_id || "").trim();
       if (sessionId) {
         const normalized: SessionInfo = {
