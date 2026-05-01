@@ -21,16 +21,50 @@ from universal_agent.run_workspace import ensure_run_workspace_scaffold
 
 logger = logging.getLogger(__name__)
 
+# ── Run status constants ──
+STATUS_QUEUED = "queued"
+STATUS_RUNNING = "running"
+STATUS_BLOCKED = "blocked"
+STATUS_PAUSED = "paused"
+STATUS_WAITING_ON_HUMAN = "waiting_on_human"
+STATUS_IN_PROGRESS = "in_progress"
+STATUS_COMPLETED = "completed"
+STATUS_SUCCEEDED = "succeeded"
+STATUS_SUCCESS = "success"
+STATUS_FAILED = "failed"
+STATUS_NEEDS_REVIEW = "needs_review"
+
 _ACTIVE_RUN_STATUSES = {
-    "queued",
-    "running",
-    "blocked",
-    "paused",
-    "waiting_for_human",
-    "in_progress",
+    STATUS_QUEUED,
+    STATUS_RUNNING,
+    STATUS_BLOCKED,
+    STATUS_PAUSED,
+    STATUS_WAITING_ON_HUMAN,
+    STATUS_IN_PROGRESS,
 }
-_SUCCESS_RUN_STATUSES = {"completed", "succeeded", "success"}
-_FAILED_RUN_STATUSES = {"failed"}
+_SUCCESS_RUN_STATUSES = {STATUS_COMPLETED, STATUS_SUCCEEDED, STATUS_SUCCESS}
+_FAILED_RUN_STATUSES = {STATUS_FAILED}
+
+# ── Admission decision action constants ──
+ACTION_START_NEW_RUN = "start_new_run"
+ACTION_ATTACH_TO_EXISTING = "attach_to_existing_run"
+ACTION_START_NEW_ATTEMPT = "start_new_attempt"
+ACTION_SKIP_DUPLICATE = "skip_duplicate"
+ACTION_DEFER = "defer"
+ACTION_ESCALATE_REVIEW = "escalate_review"
+
+# ── Admission reason constants ──
+REASON_EXISTING_COMPLETED = "existing_completed_run"
+REASON_ACTIVE_RUN_DEFERRED = "active_run_deferred"
+REASON_ACTIVE_RUN_EXISTS = "active_run_exists"
+REASON_RETRY_EXHAUSTED = "retry_exhausted"
+REASON_RETRYABLE_FAILURE = "retryable_failure"
+REASON_NEW_RUN_CREATED = "new_run_created"
+REASON_UNKNOWN_RUN = "unknown_run"
+REASON_RETRY_QUEUED = "retry_queued"
+
+# ── Default failure class ──
+DEFAULT_FAILURE_CLASS = "dispatch_failed"
 _T = TypeVar("_T")
 
 
@@ -157,11 +191,11 @@ class WorkflowAdmissionService:
                 attempt_count = int(existing["attempt_count"] or 0)
 
                 if status in _SUCCESS_RUN_STATUSES:
-                    return WorkflowAdmissionDecision("skip_duplicate", run_id, latest_attempt_id, "existing_completed_run")
+                    return WorkflowAdmissionDecision(ACTION_SKIP_DUPLICATE, run_id, latest_attempt_id, REASON_EXISTING_COMPLETED)
                 if status in _ACTIVE_RUN_STATUSES:
                     if trigger.interrupt_policy == "defer_if_foreground":
-                        return WorkflowAdmissionDecision("defer", run_id, latest_attempt_id, "active_run_deferred")
-                    return WorkflowAdmissionDecision("attach_to_existing_run", run_id, latest_attempt_id, "active_run_exists")
+                        return WorkflowAdmissionDecision(ACTION_DEFER, run_id, latest_attempt_id, REASON_ACTIVE_RUN_DEFERRED)
+                    return WorkflowAdmissionDecision(ACTION_ATTACH_TO_EXISTING, run_id, latest_attempt_id, REASON_ACTIVE_RUN_EXISTS)
                 if retryable_failure and status in _FAILED_RUN_STATUSES:
                     if attempt_count >= max(1, int(max_attempts)):
                         upsert_run(
@@ -169,25 +203,25 @@ class WorkflowAdmissionService:
                             run_id=run_id or "",
                             entrypoint=entrypoint,
                             run_spec=self._parse_run_spec(existing) or run_spec,
-                            status="needs_review",
+                            status=STATUS_NEEDS_REVIEW,
                             workspace_dir=workspace_dir,
                             run_kind=trigger.run_kind,
                             trigger_source=trigger.trigger_source,
                             dedup_key=trigger.dedup_key,
                             run_policy=trigger.run_policy,
                             interrupt_policy=trigger.interrupt_policy,
-                            terminal_reason="retry_exhausted",
+                            terminal_reason=REASON_RETRY_EXHAUSTED,
                             external_origin=trigger.external_origin,
                             external_origin_id=trigger.external_origin_id,
                             external_correlation_id=trigger.external_correlation_id,
                         )
                         conn.commit()
-                        return WorkflowAdmissionDecision("escalate_review", run_id, latest_attempt_id, "retry_exhausted")
+                        return WorkflowAdmissionDecision(ACTION_ESCALATE_REVIEW, run_id, latest_attempt_id, REASON_RETRY_EXHAUSTED)
                     attempt_id = create_run_attempt(
                         conn,
                         run_id or "",
-                        status="queued",
-                        retry_reason="retryable_failure",
+                        status=STATUS_QUEUED,
+                        retry_reason=REASON_RETRYABLE_FAILURE,
                     )
                     attempt_row = get_run_attempt(conn, attempt_id)
                     effective_workspace_dir = workspace_dir or str(existing["workspace_dir"] or "").strip() or None
@@ -197,7 +231,7 @@ class WorkflowAdmissionService:
                             run_id=run_id or "",
                             attempt_id=attempt_id,
                             attempt_number=int(attempt_row["attempt_number"] or 0),
-                            status="queued",
+                            status=STATUS_QUEUED,
                             run_kind=trigger.run_kind,
                             trigger_source=trigger.trigger_source,
                         )
@@ -206,7 +240,7 @@ class WorkflowAdmissionService:
                         run_id=run_id or "",
                         entrypoint=entrypoint,
                         run_spec=self._parse_run_spec(existing) or run_spec,
-                        status="queued",
+                        status=STATUS_QUEUED,
                         workspace_dir=workspace_dir,
                         run_kind=trigger.run_kind,
                         trigger_source=trigger.trigger_source,
@@ -218,7 +252,7 @@ class WorkflowAdmissionService:
                         external_correlation_id=trigger.external_correlation_id,
                     )
                     conn.commit()
-                    return WorkflowAdmissionDecision("start_new_attempt", run_id, attempt_id, "retryable_failure")
+                    return WorkflowAdmissionDecision(ACTION_START_NEW_ATTEMPT, run_id, attempt_id, REASON_RETRYABLE_FAILURE)
 
             run_id = self._generate_run_id(trigger)
             upsert_run(
@@ -226,7 +260,7 @@ class WorkflowAdmissionService:
                 run_id=run_id,
                 entrypoint=entrypoint,
                 run_spec=run_spec,
-                status="queued",
+                status=STATUS_QUEUED,
                 workspace_dir=workspace_dir,
                 run_kind=trigger.run_kind,
                 trigger_source=trigger.trigger_source,
@@ -237,7 +271,7 @@ class WorkflowAdmissionService:
                 external_origin_id=trigger.external_origin_id,
                 external_correlation_id=trigger.external_correlation_id,
             )
-            attempt_id = create_run_attempt(conn, run_id, status="queued")
+            attempt_id = create_run_attempt(conn, run_id, status=STATUS_QUEUED)
             attempt_row = get_run_attempt(conn, attempt_id)
             if workspace_dir and attempt_row is not None:
                 ensure_run_workspace_scaffold(
@@ -245,12 +279,12 @@ class WorkflowAdmissionService:
                     run_id=run_id,
                     attempt_id=attempt_id,
                     attempt_number=int(attempt_row["attempt_number"] or 0),
-                    status="queued",
+                    status=STATUS_QUEUED,
                     run_kind=trigger.run_kind,
                     trigger_source=trigger.trigger_source,
                 )
             conn.commit()
-            return WorkflowAdmissionDecision("start_new_run", run_id, attempt_id, "new_run_created")
+            return WorkflowAdmissionDecision(ACTION_START_NEW_RUN, run_id, attempt_id, REASON_NEW_RUN_CREATED)
         return self._run_with_retry(_operation)
 
     def mark_completed(
@@ -269,7 +303,7 @@ class WorkflowAdmissionService:
                 run_id=run_id,
                 entrypoint=str(row["entrypoint"] or "workflow_admission"),
                 run_spec=self._parse_run_spec(row),
-                status="completed",
+                status=STATUS_COMPLETED,
                 workspace_dir=row["workspace_dir"],
                 run_kind=row["run_kind"],
                 trigger_source=row["trigger_source"],
@@ -284,7 +318,7 @@ class WorkflowAdmissionService:
                 update_run_attempt(
                     conn,
                     attempt_id,
-                    status="completed",
+                    status=STATUS_COMPLETED,
                     summary=summary,
                     promote_to_canonical=False,
                 )
@@ -295,7 +329,7 @@ class WorkflowAdmissionService:
                         run_id=run_id,
                         attempt_id=attempt_id,
                         attempt_number=int(attempt_row["attempt_number"] or 0),
-                        status="completed",
+                        status=STATUS_COMPLETED,
                         run_kind=str(row["run_kind"] or "") or None,
                         trigger_source=str(row["trigger_source"] or "") or None,
                     )
@@ -319,7 +353,7 @@ class WorkflowAdmissionService:
                 run_id=run_id,
                 entrypoint=str(row["entrypoint"] or "workflow_admission"),
                 run_spec=self._parse_run_spec(row),
-                status="running",
+                status=STATUS_RUNNING,
                 workspace_dir=row["workspace_dir"],
                 run_kind=row["run_kind"],
                 trigger_source=row["trigger_source"],
@@ -336,7 +370,7 @@ class WorkflowAdmissionService:
                 update_run_attempt(
                     conn,
                     attempt_id,
-                    status="running",
+                    status=STATUS_RUNNING,
                     provider_session_id=provider_session_id,
                     summary=summary,
                 )
@@ -347,7 +381,7 @@ class WorkflowAdmissionService:
                         run_id=run_id,
                         attempt_id=attempt_id,
                         attempt_number=int(attempt_row["attempt_number"] or 0),
-                        status="running",
+                        status=STATUS_RUNNING,
                         run_kind=str(row["run_kind"] or "") or None,
                         trigger_source=str(row["trigger_source"] or "") or None,
                     )
@@ -371,7 +405,7 @@ class WorkflowAdmissionService:
                 run_id=run_id,
                 entrypoint=str(row["entrypoint"] or "workflow_admission"),
                 run_spec=self._parse_run_spec(row),
-                status="blocked",
+                status=STATUS_BLOCKED,
                 workspace_dir=row["workspace_dir"],
                 run_kind=row["run_kind"],
                 trigger_source=row["trigger_source"],
@@ -387,7 +421,7 @@ class WorkflowAdmissionService:
                 update_run_attempt(
                     conn,
                     attempt_id,
-                    status="blocked",
+                    status=STATUS_BLOCKED,
                     failure_reason=reason,
                     summary=summary,
                 )
@@ -398,7 +432,7 @@ class WorkflowAdmissionService:
                         run_id=run_id,
                         attempt_id=attempt_id,
                         attempt_number=int(attempt_row["attempt_number"] or 0),
-                        status="blocked",
+                        status=STATUS_BLOCKED,
                         run_kind=str(row["run_kind"] or "") or None,
                         trigger_source=str(row["trigger_source"] or "") or None,
                     )
@@ -423,7 +457,7 @@ class WorkflowAdmissionService:
                 run_id=run_id,
                 entrypoint=str(row["entrypoint"] or "workflow_admission"),
                 run_spec=self._parse_run_spec(row),
-                status="needs_review",
+                status=STATUS_NEEDS_REVIEW,
                 workspace_dir=row["workspace_dir"],
                 run_kind=row["run_kind"],
                 trigger_source=row["trigger_source"],
@@ -439,7 +473,7 @@ class WorkflowAdmissionService:
                 update_run_attempt(
                     conn,
                     attempt_id,
-                    status="failed",
+                    status=STATUS_FAILED,
                     failure_class=failure_class,
                     failure_reason=reason,
                     terminal_reason=reason,
@@ -452,7 +486,7 @@ class WorkflowAdmissionService:
                         run_id=run_id,
                         attempt_id=attempt_id,
                         attempt_number=int(attempt_row["attempt_number"] or 0),
-                        status="failed",
+                        status=STATUS_FAILED,
                         run_kind=str(row["run_kind"] or "") or None,
                         trigger_source=str(row["trigger_source"] or "") or None,
                     )
@@ -474,7 +508,7 @@ class WorkflowAdmissionService:
         def _operation(conn: sqlite3.Connection) -> WorkflowAdmissionDecision:
             row = get_run(conn, run_id)
             if row is None:
-                return WorkflowAdmissionDecision("escalate_review", run_id, attempt_id, "unknown_run")
+                return WorkflowAdmissionDecision(ACTION_ESCALATE_REVIEW, run_id, attempt_id, REASON_UNKNOWN_RUN)
             attempt_row = get_run_attempt(conn, attempt_id) if attempt_id else None
             existing_attempt_count = int(row["attempt_count"] or 0)
             current_attempt_number = int(attempt_row["attempt_number"] or 0) if attempt_row is not None else existing_attempt_count
@@ -485,7 +519,7 @@ class WorkflowAdmissionService:
                 update_run_attempt(
                     conn,
                     attempt_id,
-                    status="failed",
+                    status=STATUS_FAILED,
                     failure_class=failure_class,
                     failure_reason=failure_reason,
                     terminal_reason=failure_reason,
@@ -496,7 +530,7 @@ class WorkflowAdmissionService:
                         run_id=run_id,
                         attempt_id=attempt_id,
                         attempt_number=int(attempt_row["attempt_number"] or 0),
-                        status="failed",
+                        status=STATUS_FAILED,
                         run_kind=str(row["run_kind"] or "") or None,
                         trigger_source=str(row["trigger_source"] or "") or None,
                     )
@@ -507,7 +541,7 @@ class WorkflowAdmissionService:
                     run_id=run_id,
                     entrypoint=str(row["entrypoint"] or entrypoint or "workflow_admission"),
                     run_spec=self._parse_run_spec(row),
-                    status="needs_review",
+                    status=STATUS_NEEDS_REVIEW,
                     workspace_dir=effective_workspace_dir,
                     run_kind=trigger.run_kind,
                     trigger_source=trigger.trigger_source,
@@ -520,12 +554,12 @@ class WorkflowAdmissionService:
                     external_correlation_id=trigger.external_correlation_id,
                 )
                 conn.commit()
-                return WorkflowAdmissionDecision("escalate_review", run_id, attempt_id, "retry_exhausted")
+                return WorkflowAdmissionDecision(ACTION_ESCALATE_REVIEW, run_id, attempt_id, REASON_RETRY_EXHAUSTED)
 
             next_attempt_id = create_run_attempt(
                 conn,
                 run_id,
-                status="queued",
+                status=STATUS_QUEUED,
                 retry_reason=failure_reason,
             )
             next_attempt_row = get_run_attempt(conn, next_attempt_id)
@@ -534,7 +568,7 @@ class WorkflowAdmissionService:
                 run_id=run_id,
                 entrypoint=str(row["entrypoint"] or entrypoint or "workflow_admission"),
                 run_spec=self._parse_run_spec(row),
-                status="queued",
+                status=STATUS_QUEUED,
                 workspace_dir=effective_workspace_dir,
                 run_kind=trigger.run_kind,
                 trigger_source=trigger.trigger_source,
@@ -551,12 +585,12 @@ class WorkflowAdmissionService:
                     run_id=run_id,
                     attempt_id=next_attempt_id,
                     attempt_number=int(next_attempt_row["attempt_number"] or 0),
-                    status="queued",
+                    status=STATUS_QUEUED,
                     run_kind=str(row["run_kind"] or "") or None,
                     trigger_source=str(row["trigger_source"] or "") or None,
                 )
             conn.commit()
-            return WorkflowAdmissionDecision("start_new_attempt", run_id, next_attempt_id, "retry_queued")
+            return WorkflowAdmissionDecision(ACTION_START_NEW_ATTEMPT, run_id, next_attempt_id, REASON_RETRY_QUEUED)
         return self._run_with_retry(_operation)
 
     def mark_failed(
@@ -565,7 +599,7 @@ class WorkflowAdmissionService:
         *,
         attempt_id: Optional[str],
         failure_reason: str,
-        failure_class: str = "dispatch_failed",
+        failure_class: str = DEFAULT_FAILURE_CLASS,
     ) -> None:
         def _operation(conn: sqlite3.Connection) -> None:
             row = get_run(conn, run_id)
@@ -576,7 +610,7 @@ class WorkflowAdmissionService:
                 run_id=run_id,
                 entrypoint=str(row["entrypoint"] or "workflow_admission"),
                 run_spec=self._parse_run_spec(row),
-                status="failed",
+                status=STATUS_FAILED,
                 workspace_dir=row["workspace_dir"],
                 run_kind=row["run_kind"],
                 trigger_source=row["trigger_source"],
@@ -592,7 +626,7 @@ class WorkflowAdmissionService:
                 update_run_attempt(
                     conn,
                     attempt_id,
-                    status="failed",
+                    status=STATUS_FAILED,
                     failure_class=failure_class,
                     failure_reason=failure_reason,
                     terminal_reason=failure_reason,
@@ -604,7 +638,7 @@ class WorkflowAdmissionService:
                         run_id=run_id,
                         attempt_id=attempt_id,
                         attempt_number=int(attempt_row["attempt_number"] or 0),
-                        status="failed",
+                        status=STATUS_FAILED,
                         run_kind=str(row["run_kind"] or "") or None,
                         trigger_source=str(row["trigger_source"] or "") or None,
                     )
