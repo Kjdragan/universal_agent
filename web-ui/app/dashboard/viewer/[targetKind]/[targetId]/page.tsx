@@ -1,11 +1,14 @@
-// Centralized three-panel viewer page (Track B Commit 2).
+// Centralized three-panel viewer page (Track B Commit 2 + Track C Commit 2).
 //
 // Renders chat history | logs | workspace files from a single backend
-// hydration call. While readiness=pending, polls every 2s. When the
-// session is live (is_live_session=true), shows a "Connect live" link
-// that hands off to the legacy chat viewer's WebSocket — Commit 2 keeps
-// streaming on the existing implementation; the migration of producers
-// and the eventual deletion of the legacy viewer happen in later commits.
+// hydration call. While readiness=pending, polls every 2s.
+//
+// Live writer mode (Track C C2): when the URL query has role=writer AND
+// the resolved target is_live_session=true AND the feature flag
+// NEXT_PUBLIC_UA_VIEWER_LIVE_WRITER=1 is set, the left panel renders the
+// new <StreamingChat> component (WebSocket attach + composer) instead of
+// the read-only HistoryPanel. With the flag OFF, the read-only Track B
+// behavior is unchanged — that's the rollback path.
 //
 // Producers MUST reach this page via openViewer() (see lib/viewer/openViewer.ts).
 // Building the URL by hand is the bug Track B exists to eliminate.
@@ -13,7 +16,9 @@
 "use client";
 
 import { use, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
+import StreamingChat from "@/components/chat/StreamingChat";
 import type { HydrationPayload } from "@/lib/viewer/types";
 
 const POLL_INTERVAL_MS = 2000;
@@ -65,7 +70,15 @@ function formatTime(ts: number | null): string {
   }
 }
 
-function ReadinessBanner({ payload }: { payload: HydrationPayload }) {
+function ReadinessBanner({
+  payload,
+  liveWriterFlag,
+  currentRole,
+}: {
+  payload: HydrationPayload;
+  liveWriterFlag: boolean;
+  currentRole: string;
+}) {
   const { readiness, target } = payload;
   let bg = "#222";
   let label = `Pending — ${readiness.reason ?? "no marker yet"}`;
@@ -93,19 +106,40 @@ function ReadinessBanner({ payload }: { payload: HydrationPayload }) {
       <span style={{ opacity: 0.6 }}>
         {target.target_kind}/{target.target_id}
       </span>
-      {target.is_live_session ? (
-        <a
-          href={`/?session_id=${encodeURIComponent(target.session_id ?? target.target_id)}${
-            target.run_id ? `&run_id=${encodeURIComponent(target.run_id)}` : ""
-          }`}
-          style={{
-            marginLeft: "auto",
-            color: "#7fffd4",
-            textDecoration: "underline",
-          }}
-        >
-          Connect live →
-        </a>
+      {target.is_live_session && currentRole !== "writer" ? (
+        liveWriterFlag ? (
+          // Track C C2: same route, writer mode → live composer attaches
+          // via <StreamingChat>. No need to bounce out to the legacy root.
+          <a
+            href={`${target.viewer_href}?role=writer`}
+            style={{
+              marginLeft: "auto",
+              color: "#7fffd4",
+              textDecoration: "underline",
+            }}
+          >
+            Connect live →
+          </a>
+        ) : (
+          // Flag off (default until validated) → legacy root viewer.
+          <a
+            href={`/?session_id=${encodeURIComponent(target.session_id ?? target.target_id)}${
+              target.run_id ? `&run_id=${encodeURIComponent(target.run_id)}` : ""
+            }`}
+            style={{
+              marginLeft: "auto",
+              color: "#7fffd4",
+              textDecoration: "underline",
+            }}
+          >
+            Connect live →
+          </a>
+        )
+      ) : null}
+      {currentRole === "writer" ? (
+        <span style={{ marginLeft: "auto", color: "#7fffd4", fontWeight: 600 }}>
+          ◉ writer
+        </span>
       ) : null}
     </div>
   );
@@ -239,6 +273,9 @@ export default function ViewerPage({
   params: Promise<Params>;
 }) {
   const { targetKind, targetId } = use(params);
+  const searchParams = useSearchParams();
+  const role = searchParams?.get("role") ?? "viewer";
+  const liveWriterFlag = process.env.NEXT_PUBLIC_UA_VIEWER_LIVE_WRITER === "1";
   const [state, setState] = useState<FetchState>({ state: "loading" });
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -299,12 +336,30 @@ export default function ViewerPage({
     );
   }
 
+  const target = state.payload.target;
+  const liveWriterEnabled =
+    liveWriterFlag && role === "writer" && target.is_live_session;
+
   return (
     <div>
-      <ReadinessBanner payload={state.payload} />
+      <ReadinessBanner
+        payload={state.payload}
+        liveWriterFlag={liveWriterFlag}
+        currentRole={role}
+      />
       <div style={layoutStyle}>
-        <div style={{ borderRight: "1px solid #222", overflow: "auto" }}>
-          <HistoryPanel payload={state.payload} />
+        <div style={{ borderRight: "1px solid #222", overflow: "hidden" }}>
+          {liveWriterEnabled ? (
+            <StreamingChat
+              sessionId={target.session_id}
+              runId={target.run_id}
+              readOnly={false}
+            />
+          ) : (
+            <div style={{ overflow: "auto", height: "100%" }}>
+              <HistoryPanel payload={state.payload} />
+            </div>
+          )}
         </div>
         <div style={{ borderRight: "1px solid #222", overflow: "auto" }}>
           <LogsPanel payload={state.payload} />

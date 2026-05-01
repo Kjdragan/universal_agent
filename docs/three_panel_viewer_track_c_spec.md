@@ -1,14 +1,41 @@
 # Three-Panel Viewer — Track C Implementation Spec
 
-> **Status**: Spec for review. No code changes yet. Track C finishes
-> what Track B intentionally deferred: it migrates the live writer-mode
-> chat (WebSocket streaming + input composer) onto the new viewer
-> route, retires `app/page.tsx`'s legacy viewer, deletes
-> `chatWindow.ts` + `taskWorkspaceTarget.ts`, and redirects `/` to a
-> dashboard landing.
+> **Status**: 🟡 Foundation landed (C1 + C2). Pause for re-evaluation
+> before C3+, per the user's scope-cap call.
+>
+> | Commit | What | Hash |
+> |---|---|---|
+> | C1 | StreamingChat foundation component | `261ac8d0` |
+> | C2 | Wire StreamingChat into viewer route behind feature flag | TBD |
+>
+> ## Activation
+>
+> Live writer mode is **off by default**. To turn it on for testing:
+>
+> ```
+> NEXT_PUBLIC_UA_VIEWER_LIVE_WRITER=1
+> ```
+>
+> When set, navigating to `/dashboard/viewer/<kind>/<id>?role=writer`
+> against a live session renders `<StreamingChat>` in the chat column
+> (left panel). Without the flag, the read-only Track B behavior is
+> unchanged, and the "Connect live →" link in the readiness banner
+> still points at the legacy root viewer (`/?session_id=...`) for
+> writer-mode chat.
+>
+> ## What's deferred to a future evaluation
+>
+> - C3: `/dashboard/compose` route for new-session flows
+> - C4-C7: migrate the 15 remaining writer-mode `chatWindow.ts` call
+>   sites in OpsDropdowns / dashboard/page / SessionsPage / Chat dashboard
+> - C8: delete `chatWindow.ts` + `taskWorkspaceTarget.ts`
+> - C9: retire `app/page.tsx`; `/` → `/dashboard` (clean break, no
+>   legacy URL preservation since we're still in dev mode per user's call)
+> - C10: e2e tests + final spec status
 >
 > Track A shipped (`f9dcc65`). Track B shipped 8 commits up through
-> `89ef647`. This is the third and final track.
+> `89ef647`. Track C C1+C2 land the foundation; C3+ awaits the
+> re-evaluation gate.
 
 ## Why Track C exists
 
