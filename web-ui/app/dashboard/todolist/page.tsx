@@ -4,8 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { formatDistanceToNow, parseISO } from "date-fns";
-import { openOrFocusChatWindow } from "@/lib/chatWindow";
 import { resolveTaskWorkspaceTarget } from "@/lib/taskWorkspaceTarget";
+import { openViewer } from "@/lib/viewer/openViewer";
 
 const API_BASE = "/api/dashboard/gateway";
 const AUTO_REFRESH_SECONDS = 30;
@@ -1054,7 +1054,17 @@ export default function ToDoListDashboardPage() {
               if (!target) return null;
               return (
                 <button onClick={() => {
-                  openOrFocusChatWindow({ ...target, attachMode: "tail", role: "viewer" });
+                  // Track B: navigate via the centralized viewer resolver
+                  // instead of building the URL with chatWindow.ts. The
+                  // local resolveTaskWorkspaceTarget call is kept only as
+                  // a render-gate (no identity = no button) and will be
+                  // removed in Commit 8 once all producers are migrated.
+                  void openViewer({
+                    session_id: target.sessionId,
+                    run_id: target.runId,
+                    attachMode: "tail",
+                    role: "viewer",
+                  });
                 }}
                   className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-emerald-500/10 text-emerald-400 border-none rounded-sm cursor-pointer hover:bg-emerald-500/20 transition-colors inline-flex items-center gap-1">
                   <span className="text-[10px]">📂</span> Workspace
@@ -1222,7 +1232,12 @@ export default function ToDoListDashboardPage() {
             return (
               <button onClick={(e) => {
                 e.stopPropagation();
-                openOrFocusChatWindow({ ...target, attachMode: "tail", role: "viewer" });
+                void openViewer({
+                  session_id: target.sessionId,
+                  run_id: target.runId,
+                  attachMode: "tail",
+                  role: "viewer",
+                });
               }}
                 className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-emerald-500/10 text-emerald-400 border-none rounded-sm cursor-pointer hover:bg-emerald-500/20 transition-colors inline-flex items-center gap-1">
                 <span className="text-[10px]">📂</span> Workspace
@@ -1500,7 +1515,12 @@ export default function ToDoListDashboardPage() {
                       return (
                         <button
                           onClick={() => {
-                            openOrFocusChatWindow({ ...target, attachMode: "tail", role: "viewer" });
+                            void openViewer({
+                              session_id: target.sessionId,
+                              run_id: target.runId,
+                              attachMode: "tail",
+                              role: "viewer",
+                            });
                           }}
                           className="rounded border border-emerald-700/60 bg-emerald-900/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-300 hover:bg-emerald-900/35 cursor-pointer inline-flex items-center gap-1"
                         >

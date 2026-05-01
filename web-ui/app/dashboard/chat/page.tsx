@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { openOrFocusChatWindow } from "@/lib/chatWindow";
+import { openViewer } from "@/lib/viewer/openViewer";
 import {
   deleteSessionDirectoryEntry,
   fetchSessionDirectory,
@@ -92,7 +93,10 @@ export default function DashboardChatPage() {
       return;
     }
     if (!selectedAttachable && selectedRow?.run_id) {
-      openOrFocusChatWindow({ runId: selectedRow.run_id, role: "viewer" });
+      // Track B: run-only viewer routes through the centralized resolver
+      // — fixes the case where the legacy chatWindow URL required
+      // session_id and silently broke for archived run-only rows.
+      void openViewer({ run_id: selectedRow.run_id, role: "viewer" });
       return;
     }
     if (!selectedAttachable) {

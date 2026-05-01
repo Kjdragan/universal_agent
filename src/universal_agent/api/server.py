@@ -1427,6 +1427,16 @@ try:
 except Exception as exc:  # pragma: no cover — defensive
     logger.warning("Link routes registration failed: %s", exc)
 
+# Three-panel viewer router (Track B). Mounts /api/viewer/resolve + /hydrate.
+# Centralizes session/run/workspace resolution and panel hydration so UI
+# producers no longer build viewer URLs locally.
+try:
+    from universal_agent.api.viewer_routes import router as viewer_router
+
+    app.include_router(viewer_router)
+except Exception as exc:  # pragma: no cover — defensive
+    logger.warning("Viewer routes registration failed: %s", exc)
+
 @app.get("/")
 async def root():
     """API root endpoint."""

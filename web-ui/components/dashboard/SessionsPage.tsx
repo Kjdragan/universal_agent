@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { useAgentStore } from "@/lib/store";
 import { getWebSocket } from "@/lib/websocket";
 import { openOrFocusChatWindow } from "@/lib/chatWindow";
+import { openViewer } from "@/lib/viewer/openViewer";
 import { formatDateTimeTz, formatTimeTz, getDisplayTimezone } from "@/lib/timezone";
 import { OpsProvider, useOps } from "@/components/OpsDropdowns";
 
@@ -353,12 +354,22 @@ function SessionsPageInner() {
       const target = sessions.find((item) => item.session_id === sid);
       const runId = String(target?.run_id || "").trim();
       if (target && !isLiveAttachableSession(target) && runId) {
-        openOrFocusChatWindow({ runId, role: "viewer" });
+        // Track B: run-only viewer goes through the centralized resolver,
+        // which fixes the case where chatWindow.ts produced a URL that
+        // required session_id and silently dropped run-only links.
+        void openViewer({ run_id: runId, role: "viewer" });
         return;
       }
       const forceViewer = /^vp_/i.test(sid) || /^session[_-]hook_/i.test(sid) || /^cron_/i.test(sid) || /^worker_/i.test(sid);
       if (typeof window !== "undefined" && window.location.pathname.startsWith("/dashboard")) {
-        openOrFocusChatWindow({ sessionId: sid, attachMode: "tail", role: forceViewer ? "viewer" : "writer" });
+        if (forceViewer) {
+          // Track B: viewer-only sessions (vp_, hook, cron, worker) read
+          // through the centralized resolver. Writer-mode (live attach)
+          // continues on the legacy root chat viewer until Commit 8.
+          void openViewer({ session_id: sid, role: "viewer", attachMode: "tail" });
+        } else {
+          openOrFocusChatWindow({ sessionId: sid, attachMode: "tail", role: "writer" });
+        }
         return;
       }
       const store = useAgentStore.getState();

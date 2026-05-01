@@ -1,9 +1,57 @@
 # Three-Panel Viewer Centralization — Track B Implementation Spec
 
-> **Status**: Spec for review. No code changes yet. Track A (the
-> daemon_-strip bug + session_id query-param compatibility) shipped in
-> commit `f9dcc65` as the immediate bleed-stopper. Track B is the proper
-> architectural fix that ends the link-correctness whack-a-mole.
+> **Status**: ✅ Track B complete. All 8 commits shipped to
+> `feature/latest2`. Track A's bleed-stopper (`f9dcc65`) is included.
+>
+> | Commit | What | Hash |
+> |---|---|---|
+> | A | daemon_ strip fix + sid/session_id compat | `f9dcc65` |
+> | 1 | Backend: resolver + hydration + routes (50+ tests) | `2baf98a` |
+> | 2 | Frontend: openViewer helper + new viewer route | `989ff84` |
+> | 3 | Migrate Task Hub workspace buttons (3 sites) | `2f1c32b` |
+> | 4 | Migrate Sessions dashboard viewer paths | `728dc62` |
+> | 5 | Migrate Calendar open_session action | `0b22123` |
+> | 6 | Migrate Proactive history rehydrate | `2fe6173` |
+> | 7 | Migrate Chat dashboard run-only viewer | `7ff6320` |
+> | 8 | Completion notes + integration smoke + scope-honest cleanup | TBD |
+>
+> ## What's done
+>
+> All read-only viewer paths now resolve through `POST /api/viewer/resolve`
+> and hydrate via `GET /api/viewer/hydrate`. The new
+> `/dashboard/viewer/<targetKind>/<targetId>` route renders the three
+> panels server-assembled, with PAN-shaped strings masked, polling for
+> readiness, and a "Connect live →" link to the legacy chat viewer when
+> live writer-mode is needed.
+>
+> ## What's NOT in Track B (intentional)
+>
+> - **Writer-mode (live chat) still uses the legacy root page.** The new
+>   viewer route is read-only by design; live WebSocket streaming and
+>   typing-into-a-session continue on `/?session_id=...&run_id=...` via
+>   `chatWindow.ts`. Migrating writer-mode would require porting the
+>   WebSocket attach to the new route — that's a separate Track C effort.
+> - **`chatWindow.ts` is NOT deleted.** Still in active use by writer-mode
+>   producers (SessionsPage rehydrate + Chat-with-Simone, Chat dashboard
+>   new-session button).
+> - **Client-side `app/page.tsx` log/trace parsers are NOT deleted.** Still
+>   serve the legacy root viewer for writer-mode.
+> - **`?sid=` legacy reader in SessionsPage stays.** Forever-redirect for
+>   any external bookmarks; the per-spec recommended sunset policy.
+> - **`taskWorkspaceTarget.ts` stays as a render-gate.** Could be inlined
+>   but does no harm now that the daemon_-strip bug is gone (Track A).
+>
+> ## Future Track C (if desired)
+>
+> 1. Move WebSocket streaming from `app/page.tsx` to the new viewer route.
+> 2. Once writer-mode is on the new route, retire `chatWindow.ts`.
+> 3. Delete `app/page.tsx` viewer code; root `/` becomes a redirect to a
+>    dashboard landing or the new chat compose page.
+> 4. Delete `taskWorkspaceTarget.ts` once render-gates are inlined.
+>
+> Track A (the `daemon_`-strip bug + session_id query-param compatibility)
+> shipped in commit `f9dcc65` as the immediate bleed-stopper. Track B
+> below is the architectural fix that's now complete.
 
 ## Problem statement
 

@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import SystemCommandBar from "@/components/dashboard/SystemCommandBar";
+import { openViewer } from "@/lib/viewer/openViewer";
 
 /* ─── API plumbing ─────────────────────────────────────────── */
 const API_BASE = "/api/dashboard/gateway";
@@ -649,8 +650,12 @@ export default function CalendarPage() {
       if (action === "open_session") {
         const sid = String(data.session_id || "");
         if (sid) {
-          // Navigate to the sessions page with the session pre-selected
-          window.location.href = `/dashboard/sessions?sid=${encodeURIComponent(sid)}`;
+          // Track B: navigate via the centralized resolver, which returns
+          // the canonical viewer_href whether this is a live session, a
+          // run-only archive, or a daemon workspace. Replaces the prior
+          // `?sid=...` hand-built URL that only the SessionsPage knew how
+          // to consume (and which Track A made tolerant of `?session_id=`).
+          void openViewer({ session_id: sid, role: "viewer" });
           setToast({ message: `Opening session ${sid.slice(0, 12)}…`, type: "info" });
         } else {
           setToast({ message: "No session found for this event", type: "error" });
