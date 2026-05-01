@@ -21,16 +21,12 @@ function cleanId(value: string | null | undefined): string {
 export function resolveTaskWorkspaceTarget(
   item: TaskWorkspaceTargetInput,
 ): TaskWorkspaceTarget | null {
-  let sessionId = cleanId(
+  const sessionId = cleanId(
     item.links?.session_id ||
       item.canonical_execution_session_id ||
       item.assigned_session_id,
   );
   const runId = cleanId(item.canonical_execution_run_id || item.workflow_run_id);
-
-  if (sessionId.startsWith("daemon_")) {
-    sessionId = "";
-  }
 
   if (sessionId) {
     return runId ? { sessionId, runId } : { sessionId };

@@ -194,9 +194,12 @@ function SessionsPageInner() {
   const [dossierGenerating, setDossierGenerating] = useState<string | null>(null);
   const [showOlderSessions, setShowOlderSessions] = useState(false);
 
-  // ── Deep-link from calendar / other pages via ?sid=SESSION_ID ──
+  // ── Deep-link from calendar / Task Hub / other pages ──
+  // Accept BOTH `?session_id=` (canonical, used by chatWindow.ts + Task Hub +
+  // gateway emitters) and `?sid=` (legacy, used by CalendarPage). Prefer the
+  // canonical form so `?session_id=...&sid=...` resolves consistently.
   const searchParams = useSearchParams();
-  const deepLinkSid = searchParams.get("sid");
+  const deepLinkSid = searchParams.get("session_id") || searchParams.get("sid");
   const deepLinkApplied = useRef(false);
 
   useEffect(() => {

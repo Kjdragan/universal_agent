@@ -50,4 +50,30 @@ describe("resolveTaskWorkspaceTarget", () => {
       }),
     ).toBeNull();
   });
+
+  // ── Track A regression guard ──────────────────────────────────────────────
+  // A prior implementation stripped any session_id starting with `daemon_`,
+  // which silently broke every Task Hub workspace link. The tests above pin
+  // the correct behavior — these cases re-state the contract explicitly so
+  // any future regression to that bug is caught immediately.
+  it("does NOT strip daemon_ prefix from session ids (regression)", () => {
+    expect(
+      resolveTaskWorkspaceTarget({
+        links: { session_id: "daemon_simone_todo" },
+        canonical_execution_run_id: "run_xyz",
+      }),
+    ).toEqual({ sessionId: "daemon_simone_todo", runId: "run_xyz" });
+
+    expect(
+      resolveTaskWorkspaceTarget({
+        canonical_execution_session_id: "daemon_cody_todo",
+      }),
+    ).toEqual({ sessionId: "daemon_cody_todo" });
+
+    expect(
+      resolveTaskWorkspaceTarget({
+        assigned_session_id: "daemon_atlas_todo",
+      }),
+    ).toEqual({ sessionId: "daemon_atlas_todo" });
+  });
 });
