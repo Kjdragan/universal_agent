@@ -22284,6 +22284,8 @@ async def dashboard_todolist_task_history(task_id: str, limit: int = 120):
         "session_role": None,
         "run_kind": None,
     }
+    task_meta = history.get("task") if isinstance(history.get("task"), dict) else {}
+
     if enriched_assignments:
         latest_links = dict(enriched_assignments[0].get("links") or {})
         canonical_execution = {
@@ -22293,7 +22295,7 @@ async def dashboard_todolist_task_history(task_id: str, limit: int = 120):
             "session_role": enriched_assignments[0].get("session_role"),
             "run_kind": enriched_assignments[0].get("run_kind"),
         }
-    elif isinstance(email_mapping, dict):
+    elif isinstance(email_mapping, dict) and email_mapping.get("provider_session_id"):
         latest_links = _task_history_links_for_session(
             str(email_mapping.get("provider_session_id") or ""),
             workspace_dir="",
@@ -22306,8 +22308,32 @@ async def dashboard_todolist_task_history(task_id: str, limit: int = 120):
             "session_role": email_profile.get("session_role"),
             "run_kind": email_profile.get("run_kind"),
         }
+    elif task_meta.get("source_kind") == "vp_mission":
+        try:
+            vp_conn = _external_vp_conn(get_gateway())
+            mission = get_vp_mission(vp_conn, str(task_meta.get("task_id") or ""))
+            if mission:
+                m_result_ref = mission["result_ref"] or ""
+                m_run_id = mission["run_id"] or ""
+                m_workspace_dir = ""
+                if m_result_ref and str(m_result_ref).startswith("workspace://"):
+                    m_workspace_dir = str(m_result_ref)[12:]
+                latest_links = _task_history_links_for_session(
+                    m_run_id,
+                    workspace_dir=m_workspace_dir,
+                )
+                vp_profile = _execution_profile_for_session(m_run_id) if m_run_id else {}
+                canonical_execution = {
+                    "session_id": m_run_id or None,
+                    "run_id": m_run_id or None,
+                    "workspace_dir": latest_links.get("workspace_dir") or m_workspace_dir or None,
+                    "session_role": vp_profile.get("session_role"),
+                    "run_kind": vp_profile.get("run_kind"),
+                }
+        except Exception as exc:
+            logger.warning("Failed to load vp_mission links for task history: %s", exc)
+
     history["artifacts"] = latest_links
-    task_meta = history.get("task") if isinstance(history.get("task"), dict) else {}
     history["delivery_mode"] = str(
         (
             task_meta.get("metadata")
