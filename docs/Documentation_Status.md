@@ -123,6 +123,7 @@ These are the authoritative references for each subsystem. When any other docume
 | architecture_overview.md | Git branching, environmental mapping, service topology, gateway resource limits (MemoryMax/MemoryHigh/TasksMax), and SHA-based release verification |
 | ci_cd_pipeline.md | Workflow details, timing, pipeline structure, `/ship` branch guard, post-deploy sync, and SHA-first post-release verification |
 | infisical_factories.md | Stage naming and machine bootstrap (superseded by secrets_and_environments.md) |
+| ai_coder_instructions.md | Coordination rules for external AI coding agents — branch discipline (`feature/latest2` only), commit conventions, and `/ship` handoff protocol |
 
 ## Review & Decision Documents
 

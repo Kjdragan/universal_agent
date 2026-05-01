@@ -130,6 +130,7 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - **[Architecture Overview](deployment/architecture_overview.md)**: Git branching, environmental mapping, service topology, and gateway resource limits (MemoryMax/MemoryHigh/TasksMax).
 - **[CI/CD Pipeline](deployment/ci_cd_pipeline.md)**: Workflow details, timing, pipeline structure, and SHA-first post-release verification guidance.
 - **[Infisical Factories](deployment/infisical_factories.md)**: Stage naming and machine bootstrap detail (superseded by Secrets and Environments).
+- **[AI Coder Instructions](deployment/ai_coder_instructions.md)**: Coordination rules for external AI coding agents — branch discipline (`feature/latest2` only), commit conventions, and the `/ship` handoff protocol.
 
 ### 4C. [CSI Subsystem](04_CSI)
 
