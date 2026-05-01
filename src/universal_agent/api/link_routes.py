@@ -160,6 +160,56 @@ async def link_attempt_checkout(spend_request_id: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content=outcome)
 
 
+# ── MPP / HTTP-402 (Phase 3) ─────────────────────────────────────────────────
+
+
+class MPPDecodeBody(BaseModel):
+    challenge: str = Field(min_length=1)
+
+
+class MPPPayBody(BaseModel):
+    spend_request_id: str
+    url: str
+    method: str = "POST"
+    data: Optional[dict[str, Any]] = None
+    headers: Optional[dict[str, str]] = None
+
+
+@router.post("/api/link/mpp/decode")
+async def link_mpp_decode(body: MPPDecodeBody) -> JSONResponse:
+    """Decode a `WWW-Authenticate` header value into a Stripe MPP challenge.
+
+    Used when a merchant returns HTTP 402 — the header carries one or more
+    payment challenges. We extract the Stripe `network_id` so callers can
+    mint a `shared_payment_token` spend request.
+    """
+    result = link_bridge.mpp_decode(caller="ui", challenge=body.challenge)
+    if not result["ok"]:
+        return JSONResponse(status_code=400, content={"detail": result["error"]})
+    return JSONResponse(content=result)
+
+
+@router.post("/api/link/mpp/pay")
+async def link_mpp_pay(body: MPPPayBody) -> JSONResponse:
+    """Settle an MPP/HTTP-402 payment using an approved SPT spend request.
+
+    The spend request must already be approved with credential_type=
+    'shared_payment_token'. The SPT is one-time-use — if the payment fails,
+    a new spend request must be created.
+    """
+    result = link_bridge.mpp_pay(
+        caller="ui",
+        spend_request_id=body.spend_request_id,
+        url=body.url,
+        method=body.method,
+        data=body.data,
+        headers=body.headers,
+    )
+    if not result["ok"]:
+        return JSONResponse(status_code=400, content={"detail": result["error"]})
+    return JSONResponse(content=result)
+
+
 # ── /api/link/spend-requests ─────────────────────────────────────────────────
 
 

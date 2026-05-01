@@ -714,6 +714,82 @@ def mpp_pay(
     return _ok_response(cli_result["data"], audit_id)
 
 
+def mpp_decode(
+    *,
+    caller: str,
+    challenge: str,
+) -> dict[str, Any]:
+    """Decode a raw `WWW-Authenticate` header value into a Stripe MPP challenge.
+
+    Used by callers that received an HTTP 402 from a merchant: the response
+    header contains one or more payment challenges; `mpp decode` returns the
+    `network_id` needed to mint a shared_payment_token spend request.
+
+    Phase 3: real CLI in non-stub modes. Stub returns a synthetic decoded payload.
+    """
+    audit_id = _new_audit_id()
+    for check in (_check_master_switch(), _check_caller(caller)):
+        if check is not None:
+            _append_audit(
+                {
+                    "audit_id": audit_id,
+                    "event": "mpp_decode_attempt",
+                    "caller": caller,
+                    "guardrail_blocked": check["code"],
+                    "error": check,
+                }
+            )
+            return _err_response(check, audit_id)
+
+    if not isinstance(challenge, str) or not challenge.strip():
+        err = _err("validation_challenge", "challenge string required.")
+        _append_audit(
+            {
+                "audit_id": audit_id,
+                "event": "mpp_decode_attempt",
+                "caller": caller,
+                "guardrail_blocked": "validation_challenge",
+                "error": err,
+            }
+        )
+        return _err_response(err, audit_id)
+
+    mode = _bridge_mode()
+    if mode == "stub":
+        _append_audit(
+            {
+                "audit_id": audit_id,
+                "event": "mpp_decode_attempt",
+                "caller": caller,
+                "guardrail_blocked": None,
+                "stub": True,
+            }
+        )
+        return _ok_response(
+            {
+                "network_id": "stub_network_001",
+                "method": "stripe",
+                "request": {"_stub": True},
+            },
+            audit_id,
+        )
+
+    cli_result = _run_link_cli(["mpp", "decode", "--challenge", challenge])
+    _append_audit(
+        {
+            "audit_id": audit_id,
+            "event": "mpp_decode_attempt",
+            "caller": caller,
+            "guardrail_blocked": None,
+            "cli_exit_code": cli_result.get("exit_code"),
+            "error": cli_result.get("error"),
+        }
+    )
+    if not cli_result["ok"]:
+        return _err_response(cli_result["error"], audit_id)
+    return _ok_response(cli_result["data"], audit_id)
+
+
 def auth_status(*, caller: str = "ops") -> dict[str, Any]:
     """Return Link CLI auth status. Stub-mode returns a synthetic 'unauthenticated'."""
     audit_id = _new_audit_id()
