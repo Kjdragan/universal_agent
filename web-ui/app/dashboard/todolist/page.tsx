@@ -1062,6 +1062,7 @@ export default function ToDoListDashboardPage() {
                   void openViewer({
                     session_id: target.sessionId,
                     run_id: target.runId,
+                    workspace_name: target.workspaceName,
                     attachMode: "tail",
                     role: "viewer",
                   });
@@ -1235,6 +1236,7 @@ export default function ToDoListDashboardPage() {
                 void openViewer({
                   session_id: target.sessionId,
                   run_id: target.runId,
+                  workspace_name: target.workspaceName,
                   attachMode: "tail",
                   role: "viewer",
                 });
@@ -1518,6 +1520,7 @@ export default function ToDoListDashboardPage() {
                             void openViewer({
                               session_id: target.sessionId,
                               run_id: target.runId,
+                              workspace_name: target.workspaceName,
                               attachMode: "tail",
                               role: "viewer",
                             });

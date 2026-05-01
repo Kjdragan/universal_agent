@@ -65,13 +65,24 @@ async def viewer_resolve(body: ResolveBody) -> JSONResponse:
             detail="At least one of session_id, run_id, workspace_dir, workspace_name is required.",
         )
 
+    trace: list[str] = []
     target = resolve_session_view_target(
         session_id=body.session_id,
         run_id=body.run_id,
         workspace_dir=body.workspace_dir,
         workspace_name=body.workspace_name,
+        trace=trace,
     )
     if target is None:
+        # Surface a per-branch diagnostic trace so the network tab tells us
+        # exactly why this hint set didn't resolve. Operators can read it to
+        # see whether the catalog is missing rows, the workspaces root is
+        # wrong, the session id has an unexpected prefix, etc.
+        logger.warning(
+            "Viewer resolver miss: hints=%s trace=%s",
+            body.model_dump(exclude_none=True),
+            trace,
+        )
         return JSONResponse(
             status_code=404,
             content={
@@ -79,6 +90,7 @@ async def viewer_resolve(body: ResolveBody) -> JSONResponse:
                     "code": "viewer_target_not_found",
                     "message": "Could not resolve a viewer target from the given hints.",
                     "hints": body.model_dump(exclude_none=True),
+                    "trace": trace,
                 }
             },
         )

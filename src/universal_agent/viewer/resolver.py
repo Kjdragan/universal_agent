@@ -183,12 +183,19 @@ def resolve_session_view_target(
     run_id: Optional[str] = None,
     workspace_dir: Optional[str] = None,
     workspace_name: Optional[str] = None,
+    trace: Optional[list[str]] = None,
 ) -> Optional[SessionViewTarget]:
     """Accept any combination of identity hints; return the canonical target.
 
     Returns None when none of the inputs resolves. Never raises on bad input.
+    When `trace` is supplied, every branch records what it tried + why it
+    missed — used by the route handler to surface diagnostic info on 404s.
     """
     catalog = _get_run_catalog()
+
+    def _trace(msg: str) -> None:
+        if trace is not None:
+            trace.append(msg)
 
     # 1. run_id direct lookup
     if run_id:
@@ -197,6 +204,9 @@ def resolve_session_view_target(
             built = _build_target_from_run(run, source="run_catalog.get_run")
             if built:
                 return built
+            _trace(f"run_id={run_id!r}: catalog row found but missing workspace_dir")
+        else:
+            _trace(f"run_id={run_id!r}: not in run_catalog")
 
     # 2. workspace_dir reverse lookup
     if workspace_dir:
@@ -208,12 +218,15 @@ def resolve_session_view_target(
             )
             if built:
                 return built
-        # Workspace exists on disk but isn't in the catalog (live session)
-        built = _build_target_from_path(
-            ws_path, source="workspace_dir_path", session_id=session_id
-        )
-        if built:
-            return built
+            _trace(f"workspace_dir={workspace_dir!r}: catalog row found but malformed")
+        elif ws_path.is_dir():
+            built = _build_target_from_path(
+                ws_path, source="workspace_dir_path", session_id=session_id
+            )
+            if built:
+                return built
+        else:
+            _trace(f"workspace_dir={workspace_dir!r}: not in catalog and not on disk")
 
     # 3. workspace_name → derive absolute path, recurse
     if workspace_name:
@@ -224,7 +237,21 @@ def resolve_session_view_target(
                 session_id=session_id,
                 run_id=run_id,
                 workspace_dir=str(candidate),
+                trace=trace,
             )
+        # Also check the daemon archive subdir
+        archive_candidate = root / "_daemon_archives" / workspace_name
+        if archive_candidate.is_dir():
+            return resolve_session_view_target(
+                session_id=session_id,
+                run_id=run_id,
+                workspace_dir=str(archive_candidate),
+                trace=trace,
+            )
+        _trace(
+            f"workspace_name={workspace_name!r}: not found at "
+            f"{root}/{workspace_name} or {root}/_daemon_archives/{workspace_name}"
+        )
 
     # 4. session_id via provider_session_id mapping
     if session_id:
@@ -237,8 +264,13 @@ def resolve_session_view_target(
             )
             if built:
                 return built
+            _trace(
+                f"session_id={session_id!r}: provider lookup found row but malformed"
+            )
+        else:
+            _trace(f"session_id={session_id!r}: no provider_session_id match in catalog")
 
-        # 5. Daemon active workspace fallback
+        # 5. Daemon active workspace fallback (prefix glob)
         daemon_workspace = _daemon_glob_workspace(session_id)
         if daemon_workspace is not None:
             run = catalog.find_run_for_workspace(str(daemon_workspace))
@@ -257,5 +289,38 @@ def resolve_session_view_target(
             )
             if built:
                 return built
+        else:
+            if session_id.startswith("daemon_"):
+                _trace(
+                    f"session_id={session_id!r}: daemon glob found no matches "
+                    f"under {_resolve_workspaces_root()}"
+                )
+
+        # 6. Literal directory fallback — `<root>/<session_id>` as a basename.
+        # Some non-daemon sessions persist their workspace under a directory
+        # named exactly the session id (e.g. some VP missions, hooks).
+        root = _resolve_workspaces_root()
+        for candidate in (root / session_id, root / "_daemon_archives" / session_id):
+            if candidate.is_dir():
+                run = catalog.find_run_for_workspace(str(candidate.resolve()))
+                if run:
+                    built = _build_target_from_run(
+                        run,
+                        source="session_id_literal_dir+run_catalog",
+                        fallback_session_id=session_id,
+                    )
+                    if built:
+                        return built
+                built = _build_target_from_path(
+                    candidate,
+                    source="session_id_literal_dir",
+                    session_id=session_id,
+                )
+                if built:
+                    return built
+        _trace(
+            f"session_id={session_id!r}: literal dir fallback also missed at "
+            f"{root}/{session_id}"
+        )
 
     return None

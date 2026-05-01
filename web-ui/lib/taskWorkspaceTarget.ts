@@ -12,6 +12,7 @@ export type TaskWorkspaceTargetInput = {
 export type TaskWorkspaceTarget = {
   sessionId?: string;
   runId?: string;
+  workspaceName?: string;
 };
 
 function cleanId(value: string | null | undefined): string {
@@ -27,12 +28,23 @@ export function resolveTaskWorkspaceTarget(
       item.assigned_session_id,
   );
   const runId = cleanId(item.canonical_execution_run_id || item.workflow_run_id);
+  const workspaceName = cleanId(item.links?.workspace_name);
 
-  if (sessionId) {
-    return runId ? { sessionId, runId } : { sessionId };
+  // Note: workspace_name alone (a path-like string with `/` in it) is NOT a
+  // valid navigation identity. The backend resolver has a `workspace_dir`
+  // branch but treats workspace_name as a basename only. Producers should
+  // pass workspaceName as a HINT alongside sessionId/runId — the resolver
+  // uses it as a fallback when the catalog lookup misses.
+  const hasNavigableId = Boolean(sessionId || runId);
+  if (!hasNavigableId) {
+    return null;
   }
-  if (runId) {
-    return { runId };
+
+  const target: TaskWorkspaceTarget = {};
+  if (sessionId) target.sessionId = sessionId;
+  if (runId) target.runId = runId;
+  if (workspaceName && !workspaceName.includes("/")) {
+    target.workspaceName = workspaceName;
   }
-  return null;
+  return target;
 }
