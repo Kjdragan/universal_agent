@@ -130,6 +130,36 @@ async def link_reconcile_now(
     )
 
 
+# ── Browser-automated checkout (Phase 4) ─────────────────────────────────────
+
+
+@router.get("/api/link/checkout/captcha-budget")
+async def link_checkout_captcha_budget() -> dict[str, Any]:
+    """Snapshot of today's captcha-solver usage from purchase flows.
+
+    Consumed by the agent-purchaser sub-agent before invoking captcha-solver,
+    so research flows that share NopeCHA quota aren't starved.
+    """
+    from universal_agent.services.link_purchaser import captcha_budget_snapshot
+
+    return captcha_budget_snapshot()
+
+
+@router.post("/api/link/spend-requests/{spend_request_id}/checkout")
+async def link_attempt_checkout(spend_request_id: str) -> JSONResponse:
+    """Trigger automated checkout for an approved spend request.
+
+    Idempotent per spend_request_id (one attempt only — the card is single-use
+    and a failed-but-charged card cannot be retried). Returns the structured
+    outcome envelope from link_purchaser.attempt_checkout.
+    """
+    from universal_agent.services.link_purchaser import attempt_checkout
+
+    outcome = attempt_checkout(spend_request_id)
+    status_code = 200 if outcome.get("ok") else 202  # accepted, fallback registered
+    return JSONResponse(status_code=status_code, content=outcome)
+
+
 # ── /api/link/spend-requests ─────────────────────────────────────────────────
 
 
