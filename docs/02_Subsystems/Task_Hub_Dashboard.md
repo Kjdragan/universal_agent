@@ -2,7 +2,7 @@
 
 > **Canonical source of truth** for the Task Hub Dashboard frontend — design system, component architecture, API integration, and Kanban UX patterns.
 >
-> **Last updated:** 2026-04-30 — Mission Control Operator Brief, situation read model, and Chief-of-Staff phased direction documented.
+> **Last updated:** 2026-04-30 — Mission Control Chief-of-Staff durable readout, evidence collection, and situation read model documented.
 
 ---
 
@@ -198,26 +198,49 @@ The dashboard consumes the following backend REST endpoints from `gateway_server
 | `/api/v1/dashboard/todolist/completed` | GET | Completed tasks with session/workspace links |
 | `/api/v1/dashboard/todolist/tasks/{task_id}/history` | GET | Assignment/evaluation trail, email mapping, transcript/run-log links, and canonical execution forensics |
 | `/api/v1/dashboard/todolist/morning-report` | GET | Deterministic morning report snapshot |
+| `/api/v1/dashboard/chief-of-staff` | GET | Latest durable Mission Control Chief-of-Staff readout plus recent journal entries |
+| `/api/v1/dashboard/chief-of-staff/refresh` | POST | Generate a fresh Chief-of-Staff pass from bounded evidence through the Anthropic-compatible ZAI inference path |
 | `/api/v1/dashboard/situations` | GET | Mission Control Operator Brief read model: curated situation cards with compact titles, recommended next action, tags, and expandable knowledge blocks |
 
 Read endpoints must not rebuild the Task Hub dispatch queue. They read the latest stored queue snapshot so sidebar navigation and polling do not perform expensive scoring/write work while holding the activity-store lock. Use `/api/v1/dashboard/todolist/dispatch-queue/rebuild` or dispatcher/write paths when a queue rebuild is intentionally required.
 
 Queue, completed, and history responses surface `canonical_execution_session_id`, `canonical_execution_run_id`, and `canonical_execution_workspace` as distinct fields. The dashboard treats `session_id` as the attach target for the normal agent workspace view and treats `run_id` as the durable evidence/file-browsing key. Run-only workspace views must load `/api/v1/runs/{run_id}` and `/api/v1/runs/{run_id}/files` through the dashboard gateway proxy when the Web UI is deployed separately from the gateway; direct same-origin calls can fail auth and appear as empty workspaces.
 
-### 5.1A Mission Control Operator Brief
+### 5.1A Mission Control Chief-of-Staff Readout
 
-Mission Control is no longer treated as a raw notification list. It is a clean operator-awareness tab with three surfaces only: **Operator Brief**, **Current Work**, and **Operating Posture**. Raw events, system metrics, CSI details, proactive-pipeline counters, and other micromanagement views stay behind deep links instead of competing for first-screen attention.
+Mission Control is no longer treated as a raw notification list. Its primary surface is the **Chief-of-Staff Readout**: a durable LLM-written operating picture generated from bounded evidence about missions, completed work, failures, created artifacts, tutorial/CSI outputs, and follow-up opportunities. The page still keeps **Operator Brief**, **Current Work**, and **Operating Posture** as supporting views, but raw events, system metrics, CSI details, proactive-pipeline counters, and other micromanagement views stay behind deep links instead of competing for first-screen attention.
+
+The design follows the repository LLM-native intelligence contract: code collects and preserves evidence, code gates storage/retention/execution boundaries, and the LLM synthesizes meaning. Mission Control should not grow a Pythonic pseudo-reasoning layer that tries to decide themes, trends, or importance beyond mechanical noise suppression and bounded collection.
 
 Code-verified anchors:
-- The frontend fetches `/api/v1/dashboard/situations?limit=10` and renders situation cards in `OperatorBriefPanel`. Source: file:///home/kjdragan/lrepos/universal_agent/web-ui/app/dashboard/mission-control/page.tsx#L527
+- The frontend fetches `/api/v1/dashboard/chief-of-staff` and renders the readout in `ChiefOfStaffReadoutPanel`. Source: file:///home/kjdragan/lrepos/universal_agent/web-ui/app/dashboard/mission-control/page.tsx#L517
+- The frontend can trigger a backend refresh through `/api/v1/dashboard/chief-of-staff/refresh`. Source: file:///home/kjdragan/lrepos/universal_agent/web-ui/app/dashboard/mission-control/page.tsx#L542
+- The gateway exposes the latest readout and refresh endpoints in `dashboard_chief_of_staff` and `dashboard_chief_of_staff_refresh`. Source: file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/gateway_server.py#L22867
+- The service gathers bounded evidence in `collect_evidence_bundle`. Source: file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/mission_control_chief_of_staff.py#L313
+- The service delegates meaning-making to the LLM in `synthesize_readout` and stores durable readouts in `persist_readout`. Source: file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/mission_control_chief_of_staff.py#L430
+- The frontend still fetches `/api/v1/dashboard/situations?limit=10` and renders supporting situation cards in `OperatorBriefPanel`. Source: file:///home/kjdragan/lrepos/universal_agent/web-ui/app/dashboard/mission-control/page.tsx#L528
 - The gateway derives situation cards from Task Hub rows and activity events in `dashboard_situations`. Source: file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/gateway_server.py#L22778
 - Situation cards include the expandable `knowledge_block` with task ids, event ids, session id, evidence, recommended action, and handoff prompt. Source: file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/gateway_server.py#L22688
 
 ```mermaid
 flowchart LR
+    TaskHub["Task Hub missions"] --> Evidence["Bounded evidence bundle"]
+    Activity["Activity events, warnings, failures"] --> Evidence
+    Tutorials["Tutorial pipeline manifests"] --> Evidence
+    CSI["CSI digests"] --> Evidence
+    Artifacts["Recent work products"] --> Evidence
+    Evidence --> LLM["LLM Chief-of-Staff synthesis"]
+    LLM --> Store["mission_control_chief_of_staff.db"]
+    Store --> Readout["Mission Control: Chief-of-Staff Readout"]
+    Readout --> Candidates["Gated action candidates only"]
+    Readout --> DeepDives["Task Hub / Event Log / CSI deep links"]
+```
+
+```mermaid
+flowchart LR
     RawEvents["activity_events / notifications"] --> Situations["/api/v1/dashboard/situations"]
-    TaskHub["task_hub_items"] --> Situations
-    Situations --> OperatorBrief["Mission Control: Operator Brief"]
+    TaskHub2["task_hub_items"] --> Situations
+    Situations --> OperatorBrief["Mission Control: supporting Operator Brief"]
     OperatorBrief --> KnowledgeBlock["Expandable Knowledge Block"]
     OperatorBrief --> EventLog["/dashboard/events raw Event Log"]
     OperatorBrief --> TaskHubUI["/dashboard/todolist Task Hub"]
@@ -226,26 +249,34 @@ flowchart LR
 ```mermaid
 sequenceDiagram
     participant UI as Mission Control UI
-    participant API as Gateway /dashboard/situations
+    participant API as Gateway /dashboard/chief-of-staff
+    participant COS as Chief-of-Staff Service
+    participant LLM as Anthropic-compatible ZAI model
+    participant DB as mission_control_chief_of_staff.db
     participant TH as Task Hub SQLite
     participant EV as Activity Store
 
-    UI->>API: GET /api/v1/dashboard/situations?limit=10
-    API->>TH: read blocked/review/in-progress/delegated tasks
-    API->>EV: read non-noise activity events
-    API-->>UI: situations[] with title, summary, priority, tags, knowledge_block
-    UI->>UI: render compact cards
-    UI->>API: operator opens source links only when needed
+    UI->>API: POST /api/v1/dashboard/chief-of-staff/refresh
+    API->>COS: generate_and_store_readout()
+    COS->>TH: collect active, attention, and recent completed work
+    COS->>EV: collect bounded non-routine events
+    COS->>LLM: synthesize meaning from evidence bundle
+    LLM-->>COS: JSON readout with sections, watchlist, candidates, evidence refs
+    COS->>DB: persist readout + journal entry with bounded retention
+    API-->>UI: latest readout
+    UI->>API: GET /api/v1/dashboard/chief-of-staff
+    API->>DB: read latest durable readout
+    API-->>UI: Chief-of-Staff readout + journal
 ```
 
-The current implementation is intentionally a read model, not the final durable intelligence layer. The phased Chief-of-Staff direction is:
+The current first pass implements the durable Chief-of-Staff layer while keeping action creation gated. The next phase is not to add programmatic ranking; it is to add scheduled and major-event refresh triggers, then let Simone/Cody/Atlas consume the resulting journal/readout blocks through existing proactive and Task Hub gates.
 
 | Phase | Scope | Contract |
 |-------|-------|----------|
-| 1 | Working Operator Brief tab | Derive situation cards from existing Task Hub and event records; keep raw Event Log separate |
-| 2 | LLM-improved card language | Enrich qualified situation titles, summaries, recommendations, and handoff prompts without calling an LLM on every dashboard refresh |
-| 3 | Shared intelligence corpus | Store durable knowledge blocks as bounded retrieval context for briefings and agent handoffs |
-| 4 | Gated routing | Let Simone/Cody/Atlas consume situation briefs through existing proactive/Task Hub gates, not an unbounded event stream |
+| 1 | Durable Chief-of-Staff readout | Collect bounded evidence, run an LLM synthesis on demand, store latest readout and journal entries, and render it as the primary Mission Control surface |
+| 2 | Scheduled and major-event refresh | Refresh on a schedule and after meaningful events such as blocked/failed/review work, tutorial failures/completions, CSI/proactive promotions, and real system breakage |
+| 3 | Shared intelligence context | Feed recent readouts and journal entries into daily briefings and agent handoffs as knowledge blocks |
+| 4 | Gated routing | Let Simone/Cody/Atlas consume action candidates through existing proactive/Task Hub gates, not an unbounded event stream |
 
 ### 5.2 Write Endpoints
 

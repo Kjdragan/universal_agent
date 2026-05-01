@@ -3,11 +3,11 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Activity, AlertTriangle, ArrowRight, BarChart3, Bell, Briefcase, CheckCircle, ClipboardList, Clock, FileText, Loader2, RefreshCw, Timer, Trash2, XCircle } from "lucide-react";
+import { Activity, AlertTriangle, ArrowRight, BarChart3, Bell, Briefcase, CheckCircle, ClipboardList, Clock, FileText, Lightbulb, Loader2, RefreshCw, Sparkles, Timer, Trash2, XCircle } from "lucide-react";
 import { formatDistanceToNow, parseISO } from "date-fns";
 
 const API_BASE = "/api/dashboard/gateway";
-const REFRESH_INTERVAL = 30_000; // 30 seconds
+const REFRESH_INTERVAL = 60_000; // 60 seconds
 
 // Types for API responses
 type AgentQueueItem = {
@@ -50,6 +50,42 @@ type HealthPayload = {
   version?: string;
   db_status?: string;
   db_error?: string | null;
+};
+
+type ChiefOfStaffItem = {
+  title?: string;
+  body?: string;
+  why_it_matters?: string;
+  recommended_next_step?: string;
+  tags?: string[];
+  evidence_refs?: string[];
+};
+
+type ChiefOfStaffSection = {
+  title?: string;
+  summary?: string;
+  items?: ChiefOfStaffItem[];
+};
+
+type ChiefOfStaffReadout = {
+  id?: string;
+  headline?: string;
+  generated_at_utc?: string;
+  executive_snapshot?: string[];
+  sections?: ChiefOfStaffSection[];
+  watchlist?: Array<{ title?: string; reason?: string; evidence_refs?: string[] }>;
+  action_candidates?: Array<{ title?: string; rationale?: string; gate?: string; evidence_refs?: string[] }>;
+  journal_entry?: string;
+  source_counts?: Record<string, number>;
+  synthesis_status?: string;
+  model?: string;
+};
+
+type ChiefOfStaffPayload = {
+  status: string;
+  generated_at?: string;
+  readout?: ChiefOfStaffReadout | null;
+  journal?: Array<{ id: string; generated_at_utc: string; summary: string; readout_id: string }>;
 };
 
 // Helper functions
@@ -478,6 +514,229 @@ function SystemStatusPanel() {
   );
 }
 
+function ChiefOfStaffReadoutPanel() {
+  const [loading, setLoading] = useState(true);
+  const [refreshingReadout, setRefreshingReadout] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<ChiefOfStaffPayload | null>(null);
+  const { refreshKey } = useContext(RefreshContext);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/dashboard/chief-of-staff`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`Failed to load: ${res.status}`);
+      setData((await res.json()) as ChiefOfStaffPayload);
+    } catch (err: any) {
+      setError(err.message || "Failed to load Chief-of-Staff readout");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const refreshReadout = useCallback(async () => {
+    setRefreshingReadout(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/dashboard/chief-of-staff/refresh`, {
+        method: "POST",
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`Refresh failed: ${res.status}`);
+      const json = await res.json();
+      setData((prev) => ({ ...(prev || { status: "ok" }), status: "ok", readout: json.readout }));
+    } catch (err: any) {
+      setError(err.message || "Failed to refresh Chief-of-Staff readout");
+    } finally {
+      setRefreshingReadout(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void load();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [load, refreshKey]);
+
+  const readout = data?.readout;
+
+  if (loading) {
+    return (
+      <div className="rounded-none border border-white/10 bg-[#0b1326]/80 p-5 backdrop-blur-md">
+        <div className="mb-4 flex items-center gap-2">
+          <Sparkles className="h-4 w-4 text-primary" />
+          <h2 className="text-sm font-medium text-foreground/85">Chief-of-Staff Readout</h2>
+        </div>
+        <div className="space-y-3">
+          <Skeleton className="h-5 w-4/5" />
+          <Skeleton className="h-4 w-3/5" />
+          <Skeleton className="h-24 w-full" />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-w-0 rounded-none border border-white/10 bg-[#0b1326]/80 p-5 backdrop-blur-md">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-primary" />
+            <h2 className="text-sm font-medium text-foreground/85">Chief-of-Staff Readout</h2>
+          </div>
+          <p className="mt-1 max-w-4xl text-sm leading-relaxed text-foreground/80">
+            {readout?.headline || "No synthesized Mission Control readout has been generated yet."}
+          </p>
+          {readout?.generated_at_utc && (
+            <p className="mt-1 text-xs text-muted-foreground">Generated {formatTs(readout.generated_at_utc)}</p>
+          )}
+        </div>
+        <button
+          onClick={refreshReadout}
+          disabled={refreshingReadout}
+          className="inline-flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-sm text-primary/90 transition-colors hover:bg-primary/20 disabled:opacity-60"
+        >
+          <RefreshCw className={`h-4 w-4 ${refreshingReadout ? "animate-spin" : ""}`} />
+          Run Brief
+        </button>
+      </div>
+
+      {error && (
+        <div className="mb-4 rounded border border-red-500/25 bg-red-500/10 p-3 text-sm text-red-300">
+          {error}
+        </div>
+      )}
+
+      {!readout ? (
+        <div className="rounded border border-border/50 bg-card/25 p-4 text-sm text-muted-foreground">
+          Generate a readout to turn current missions, artifacts, failures, and follow-up signals into a compact operator briefing.
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {readout.executive_snapshot && readout.executive_snapshot.length > 0 && (
+            <div className="grid gap-2 md:grid-cols-2">
+              {readout.executive_snapshot.slice(0, 4).map((point, index) => (
+                <div key={`${point}-${index}`} className="rounded border border-border/50 bg-card/25 p-3">
+                  <p className="text-sm leading-relaxed text-foreground/85">{point}</p>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {(readout.sections || []).slice(0, 4).map((section, index) => (
+            <section key={`${section.title || "section"}-${index}`} className="min-w-0 rounded border border-border/50 bg-card/20 p-4">
+              <div className="mb-3">
+                <h3 className="text-sm font-semibold text-foreground">{section.title || "Operational Signal"}</h3>
+                {section.summary && <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{section.summary}</p>}
+              </div>
+              <div className="space-y-3">
+                {(section.items || []).slice(0, 4).map((item, itemIndex) => (
+                  <div key={`${item.title || "item"}-${itemIndex}`} className="border-l border-primary/30 pl-3">
+                    <p className="text-sm font-medium leading-snug text-foreground/90">{item.title || "Signal"}</p>
+                    {item.body && <p className="mt-1 text-xs leading-relaxed text-foreground/75">{item.body}</p>}
+                    {item.why_it_matters && (
+                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                        <span className="text-foreground/70">Why it matters:</span> {item.why_it_matters}
+                      </p>
+                    )}
+                    {item.recommended_next_step && (
+                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                        <span className="text-foreground/70">Next:</span> {item.recommended_next_step}
+                      </p>
+                    )}
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {(item.tags || []).slice(0, 6).map((tag) => (
+                        <span key={tag} className="rounded bg-background/50 px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                    {item.evidence_refs && item.evidence_refs.length > 0 && (
+                      <details className="mt-2">
+                        <summary className="cursor-pointer text-[11px] text-primary/80">Evidence refs</summary>
+                        <pre className="mt-1 whitespace-pre-wrap rounded border border-border/40 bg-background/50 p-2 text-[10px] text-muted-foreground">
+                          {item.evidence_refs.join("\n")}
+                        </pre>
+                      </details>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </section>
+          ))}
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="rounded border border-border/50 bg-card/20 p-4">
+              <div className="mb-2 flex items-center gap-2">
+                <Clock className="h-4 w-4 text-muted-foreground" />
+                <h3 className="text-sm font-medium text-foreground/85">Watchlist</h3>
+              </div>
+              {(readout.watchlist || []).length === 0 ? (
+                <p className="text-xs text-muted-foreground">No watchlist items in this readout.</p>
+              ) : (
+                <div className="space-y-2">
+                  {(readout.watchlist || []).slice(0, 5).map((item, index) => (
+                    <div key={`${item.title || "watch"}-${index}`}>
+                      <p className="text-sm text-foreground/85">{item.title}</p>
+                      {item.reason && <p className="text-xs leading-relaxed text-muted-foreground">{item.reason}</p>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="rounded border border-border/50 bg-card/20 p-4">
+              <div className="mb-2 flex items-center gap-2">
+                <Lightbulb className="h-4 w-4 text-accent" />
+                <h3 className="text-sm font-medium text-foreground/85">Action Candidates</h3>
+              </div>
+              {(readout.action_candidates || []).length === 0 ? (
+                <p className="text-xs text-muted-foreground">No gated action candidates in this readout.</p>
+              ) : (
+                <div className="space-y-2">
+                  {(readout.action_candidates || []).slice(0, 5).map((item, index) => (
+                    <div key={`${item.title || "candidate"}-${index}`}>
+                      <p className="text-sm text-foreground/85">{item.title}</p>
+                      {item.rationale && <p className="text-xs leading-relaxed text-muted-foreground">{item.rationale}</p>}
+                      {item.gate && <p className="mt-0.5 text-[11px] text-muted-foreground">Gate: {item.gate}</p>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <details>
+            <summary className="inline-flex cursor-pointer items-center gap-1 rounded border border-border bg-background/40 px-2 py-1 text-[11px] text-foreground/80 hover:bg-card/60">
+              <FileText className="h-3 w-3" />
+              Readout Knowledge Block
+            </summary>
+            <pre className="mt-2 max-h-80 overflow-y-auto whitespace-pre-wrap rounded border border-border/60 bg-background/60 p-3 text-[10px] leading-relaxed text-muted-foreground">
+              {JSON.stringify(
+                {
+                  id: readout.id,
+                  generated_at_utc: readout.generated_at_utc,
+                  headline: readout.headline,
+                  source_counts: readout.source_counts,
+                  journal_entry: readout.journal_entry,
+                  synthesis_status: readout.synthesis_status,
+                  model: readout.model,
+                },
+                null,
+                2,
+              )}
+            </pre>
+          </details>
+        </div>
+      )}
+    </div>
+  );
+}
+
 type DashboardSituation = {
   id: string;
   kind?: string;
@@ -729,8 +988,9 @@ function OperatingPosturePanel() {
 /**
  * Mission Control Dashboard
  *
- * Operator-awareness surface:
- * - Operator Brief: curated situations with knowledge blocks
+ * Chief-of-Staff-first operator intelligence surface:
+ * - Chief-of-Staff Readout: durable LLM synthesis from bounded evidence
+ * - Operator Brief: supporting curated situations with knowledge blocks
  * - Current Work: recent durable Task Hub missions
  * - Operating Posture: compact health and navigation to deeper tools
  */
@@ -769,7 +1029,7 @@ export default function MissionControlPage() {
             </div>
             <div>
               <h1 className="text-lg font-semibold text-foreground">Mission Control</h1>
-              <p className="text-sm text-muted-foreground">Operator brief, current work, and system posture</p>
+              <p className="text-sm text-muted-foreground">Chief-of-Staff readout, current work, and deeper evidence</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -812,6 +1072,7 @@ export default function MissionControlPage() {
 
         <div className="grid min-w-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1.8fr)_minmax(280px,0.8fr)]">
           <div className="flex min-w-0 flex-col gap-4">
+            <ChiefOfStaffReadoutPanel />
             <OperatorBriefPanel />
             <ActiveTasksPanel />
           </div>

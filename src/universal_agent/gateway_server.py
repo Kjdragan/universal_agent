@@ -238,6 +238,11 @@ def _csi_score_event_confidence(*a, **kw): return {}  # noqa: E731
 from universal_agent import task_hub
 from universal_agent.api.error_handlers import register_error_handlers
 from universal_agent.runtime_env import ensure_runtime_path, runtime_tool_status
+from universal_agent.services.mission_control_chief_of_staff import (
+    generate_and_store_readout as generate_mission_control_readout,
+    get_latest_readout as get_latest_mission_control_readout,
+    get_recent_journal as get_mission_control_journal,
+)
 from universal_agent.supervisors import (
     build_csi_snapshot,
     build_factory_snapshot,
@@ -22855,6 +22860,35 @@ async def dashboard_situations(limit: int = 12):
         "situations": situations[:bounded_limit],
         "raw_events_href": "/dashboard/events",
         "source": "derived_operator_brief",
+    }
+
+
+@app.get("/api/v1/dashboard/chief-of-staff")
+async def dashboard_chief_of_staff(include_evidence: bool = False, journal_limit: int = 8):
+    """Return the latest durable Mission Control Chief-of-Staff readout."""
+    readout = get_latest_mission_control_readout(include_evidence=include_evidence)
+    journal = get_mission_control_journal(limit=journal_limit)
+    return {
+        "status": "ok" if readout else "empty",
+        "generated_at": _utc_now_iso(),
+        "readout": readout,
+        "journal": journal,
+        "refresh_endpoint": "/api/v1/dashboard/chief-of-staff/refresh",
+        "source": "mission_control_chief_of_staff",
+    }
+
+
+@app.post("/api/v1/dashboard/chief-of-staff/refresh")
+async def dashboard_chief_of_staff_refresh(include_evidence: bool = False):
+    """Generate and store a fresh Chief-of-Staff readout now."""
+    readout = await generate_mission_control_readout()
+    if not include_evidence:
+        readout.pop("evidence_bundle", None)
+    return {
+        "status": "ok",
+        "generated_at": _utc_now_iso(),
+        "readout": readout,
+        "source": "mission_control_chief_of_staff",
     }
 
 

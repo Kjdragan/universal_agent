@@ -1041,6 +1041,7 @@ def _task_description(*, handle: str, packet_dir: Path, action: dict[str, Any]) 
             "- Study referenced docs/articles if links are present.",
             "- Update the Claude Code intelligence knowledge base notes when durable knowledge is learned.",
             "- For Tier 3 items, build a small private demo or implementation plan if the capability is code-worthy.",
+            "  - IMPORTANT: When building code or demos on the VPS, ALWAYS save them to `/home/ua/vpsrepos/<project_name>` instead of the ephemeral run workspace.",
             "- Do not post to X. This lane is read-only unless explicitly re-authorized.",
         ]
     )

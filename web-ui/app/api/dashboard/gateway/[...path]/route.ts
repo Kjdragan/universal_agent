@@ -535,6 +535,86 @@ function getStubDataForPath(pathname: string): unknown | null {
     };
   }
 
+  // Mission Control Chief-of-Staff readout stub
+  if (pathname === "/api/v1/dashboard/chief-of-staff") {
+    return {
+      status: "ok",
+      generated_at: new Date().toISOString(),
+      source: "dev_stub",
+      readout: {
+        id: "stub-chief-of-staff",
+        headline: "Tutorial digestion completed and a blocked integration task is the main operator-relevant issue.",
+        generated_at_utc: new Date(Date.now() - 900000).toISOString(),
+        executive_snapshot: [
+          "The YouTube digest flow produced implementation candidates and should be checked for tutorial pipeline follow-through.",
+          "The Upwork/n8n integration remains blocked and is the clearest item needing operator attention.",
+          "No routine heartbeat activity is surfaced here because it does not change the operating picture.",
+        ],
+        sections: [
+          {
+            title: "Follow-through from generated work",
+            summary: "Recent digestion work created downstream tutorial candidates; the useful question is whether the follow-up pipeline is actually moving.",
+            items: [
+              {
+                title: "Confirm tutorial candidates were accepted by the pipeline",
+                body: "The digest run selected code-implementation prospects, but Mission Control should keep attention on whether those became real tutorial runs.",
+                why_it_matters: "This is the difference between a useful intelligence feed and a passive report.",
+                recommended_next_step: "Open Tutorial Pipeline and verify selected videos have run manifests.",
+                tags: ["youtube", "tutorial-pipeline", "follow-through"],
+                evidence_refs: ["tutorial_pipeline:latest-manifest", "task_hub:recent-completed"],
+              },
+            ],
+          },
+          {
+            title: "Operator attention",
+            summary: "One blocked integration task is more important than routine system events.",
+            items: [
+              {
+                title: "n8n webhook integration remains blocked",
+                body: "The task needs a clear unblock/route decision before it can progress.",
+                why_it_matters: "This blocks an automation path for Upwork alert ingestion.",
+                recommended_next_step: "Review the Task Hub item and either supply missing credentials or park it.",
+                tags: ["blocked", "task-hub", "integration"],
+                evidence_refs: ["task_hub:stub-task-003"],
+              },
+            ],
+          },
+        ],
+        watchlist: [
+          {
+            title: "Digest-to-tutorial handoff",
+            reason: "High-value video processing should become visible as tutorial pipeline runs, not just email text.",
+            evidence_refs: ["workspace_artifacts:youtube-digest"],
+          },
+        ],
+        action_candidates: [
+          {
+            title: "Create a gated follow-up to audit tutorial handoff quality",
+            rationale: "If selected videos repeatedly fail to reach the tutorial pipeline, Task Hub should inspect the handoff.",
+            gate: "Task Hub proactive review",
+            evidence_refs: ["tutorial_pipeline:latest-manifest"],
+          },
+        ],
+        journal_entry: "Mission Control saw useful downstream work from YouTube digestion and one blocked integration task; next briefing should check whether tutorial candidates became real runs.",
+        source_counts: {
+          task_hub_active_or_attention_items: 3,
+          task_hub_recent_completed_items: 2,
+          activity_events: 8,
+          tutorial_pipeline: 2,
+          csi_digests: 1,
+          workspace_artifacts: 5,
+        },
+        synthesis_status: "ok",
+        model: "dev-stub",
+      },
+      journal: [],
+    };
+  }
+
+  if (pathname === "/api/v1/dashboard/chief-of-staff/refresh") {
+    return getStubDataForPath("/api/v1/dashboard/chief-of-staff");
+  }
+
   // Dashboard situations stub (used by Operator Brief panel in Mission Control)
   if (pathname === "/api/v1/dashboard/situations") {
     return {

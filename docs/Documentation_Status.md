@@ -1,6 +1,6 @@
 # Documentation Status
 
-**Last updated:** 2026-04-30 (YouTube Digest transition to Zero-Quota SQLite database tracking, Ranked code-prospect tutorial dispatch, Mission Control Operator Brief situation read model, Heartbeat memory-guided autonomous remediation, activity notification lifecycle, CSI dedupe TTL health, AgentMail stale queue lifecycle, project-scaffolder hardening, and proactive autonomous work-product project documented)
+**Last updated:** 2026-04-30 (YouTube Digest transition to Zero-Quota SQLite database tracking, Ranked code-prospect tutorial dispatch, Mission Control Chief-of-Staff durable readout and Operator Brief situation read model, Heartbeat memory-guided autonomous remediation, activity notification lifecycle, CSI dedupe TTL health, AgentMail stale queue lifecycle, project-scaffolder hardening, and proactive autonomous work-product project documented)
 
 ## Development (development/)
 
@@ -24,7 +24,7 @@ This file and `docs/README.md` serve as the **authoritative indexes** for all pr
 | Proactive_Pipeline.md | **Canonical source of truth** — end-to-end proactive pipeline: trusted email triage, Task Hub scoring, dedicated ToDo dispatch lifecycle, delivery-mode heuristics, brainstorm refinement, morning report, 24/7 autonomous ideation (Signal Curator + Reflection Engine), shared daily budget, priority lanes, proactive wiki creation, autonomous morning briefing, 3x daily hybrid intelligence reports (Phase 2), system utilization tracking, LLM analysis, outcome tracking with implicit preference feedback (Phase 3), auto-investigation of failures, memory integration, roadmap, and test coverage |
 | Proactive_Intelligence_Work_Product_Pipeline.md | Planned phased implementation for abundant proactive artifact generation, review candidate emails, feedback learning, CODIE proactive PRs, tutorial build automation, convergence detection, and GWS enhancements |
 | Proactive_Autonomous_Work_Product_Project.md | Active implementation reference for the autonomous work-product project: proactive Task Hub history read model, durable session-evidence recaps, three-panel audit links, CODIE cleanup cron lane, feedback/continuation design, and verification record |
-| Task_Hub_Dashboard.md | **Canonical source of truth** — frontend design system (`kcd-*` palette, glassmorphism), Kanban component architecture, Mission Control Operator Brief situations, embedded/full Agent Flow visual process display, lightweight spotlight and visual preference persistence contracts, dispatcher health, forensic task history, workspace action routing, and derived board-lane UX |
+| Task_Hub_Dashboard.md | **Canonical source of truth** — frontend design system (`kcd-*` palette, glassmorphism), Kanban component architecture, Mission Control Chief-of-Staff readout and supporting Operator Brief situations, embedded/full Agent Flow visual process display, lightweight spotlight and visual preference persistence contracts, dispatcher health, forensic task history, workspace action routing, and derived board-lane UX |
 | Memory_System.md | Tiered memory, auto-flush, and LLM Wiki internal-vault sync integration |
 | Lossless_Memory.md | Opt-in DAG-based context compression and SQLite history store |
 | Durable_Execution.md | Resilience features |
@@ -106,6 +106,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 124 | Archon Integration and Operations Guide — canonical operations guide for the Archon AI workflow engine integration, covering repository isolation, Infisical wrapping, Claude Code Z.ai endpoint emulation, and VPS deployment architecture |
 | 125 | Heartbeat-Safe Proactive Pipeline Operations — canonical handoff and architecture record for isolation of proactive curation pipelines from the system heartbeat (`skip_heartbeat` metadata, `_curation_dispatched` overrides) and ship/rebase operator rules |
 | 126 | Candidate Ledger Reconciliation Operations — canonical documentation for the Phase 3 completion of the Packet Candidate Ledger, detailing the `reconcile_packet_candidate_ledger` workflow and TDD maintenance protocols |
+| 128 | Artifact Saving and Proactive Work Products — canonical reference for proactive agent artifact generation, centralizing VP code demos to `/home/ua/vpsrepos/`, and mitigating loss inside transient daemon archives |
 
 ## CSI Subsystem (04_CSI/)
 

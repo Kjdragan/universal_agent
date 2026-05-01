@@ -1,0 +1,600 @@
+"""Mission Control Chief-of-Staff readout service.
+
+The service gathers bounded operational evidence and asks an LLM to synthesize
+meaning. Deterministic code is limited to collection, storage, retention, and
+fallback reporting; it does not try to score or invent operational themes.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+import sqlite3
+from typing import Any
+
+from universal_agent import task_hub
+from universal_agent.durable.db import (
+    connect_runtime_db,
+    get_activity_db_path,
+    get_sqlite_busy_timeout_ms,
+)
+from universal_agent.rate_limiter import ZAIRateLimiter
+from universal_agent.utils.model_resolution import resolve_model
+
+logger = logging.getLogger(__name__)
+
+SERVICE_SOURCE = "mission_control_chief_of_staff"
+DEFAULT_DB_FILENAME = "mission_control_chief_of_staff.db"
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def workspace_root() -> Path:
+    configured = os.getenv("UA_WORKSPACES_DIR")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return (Path(__file__).resolve().parents[3] / "AGENT_RUN_WORKSPACES").resolve()
+
+
+def default_db_path() -> Path:
+    configured = os.getenv("UA_MISSION_CONTROL_COS_DB_PATH")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    root = workspace_root()
+    root.mkdir(parents=True, exist_ok=True)
+    return root / DEFAULT_DB_FILENAME
+
+
+def open_store(db_path: Path | None = None) -> sqlite3.Connection:
+    path = db_path or default_db_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(
+        str(path),
+        timeout=get_sqlite_busy_timeout_ms() / 1000.0,
+        isolation_level=None,
+    )
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute(f"PRAGMA busy_timeout={get_sqlite_busy_timeout_ms()};")
+    ensure_schema(conn)
+    return conn
+
+
+def ensure_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS mission_control_readouts (
+            id TEXT PRIMARY KEY,
+            generated_at_utc TEXT NOT NULL,
+            source TEXT NOT NULL,
+            model TEXT,
+            readout_json TEXT NOT NULL,
+            evidence_json TEXT NOT NULL,
+            created_at_utc TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_mission_control_readouts_generated
+            ON mission_control_readouts(generated_at_utc DESC);
+
+        CREATE TABLE IF NOT EXISTS mission_control_journal (
+            id TEXT PRIMARY KEY,
+            generated_at_utc TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            readout_id TEXT NOT NULL,
+            created_at_utc TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_mission_control_journal_generated
+            ON mission_control_journal(generated_at_utc DESC);
+        """
+    )
+
+
+def _shorten(value: Any, *, max_chars: int = 600) -> str:
+    text = str(value or "").strip()
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1].rstrip() + "..."
+
+
+def _safe_json_loads(raw: Any, fallback: Any) -> Any:
+    if raw is None:
+        return fallback
+    if isinstance(raw, (dict, list)):
+        return raw
+    try:
+        return json.loads(str(raw))
+    except Exception:
+        return fallback
+
+
+def _row_dict(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
+    return dict(row)
+
+
+def _task_summary(item: dict[str, Any]) -> dict[str, Any]:
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    return {
+        "task_id": item.get("task_id"),
+        "title": _shorten(item.get("title"), max_chars=220),
+        "description": _shorten(item.get("description"), max_chars=700),
+        "status": item.get("status"),
+        "priority": item.get("priority"),
+        "source_kind": item.get("source_kind"),
+        "project_key": item.get("project_key"),
+        "labels": (item.get("labels") or [])[:8],
+        "must_complete": bool(item.get("must_complete")),
+        "due_at": item.get("due_at"),
+        "updated_at": item.get("updated_at"),
+        "created_at": item.get("created_at"),
+        "stale_state": item.get("stale_state"),
+        "metadata_keys": sorted(metadata.keys())[:12],
+        "dispatch": metadata.get("dispatch") if isinstance(metadata.get("dispatch"), dict) else None,
+        "delegation": metadata.get("delegation") if isinstance(metadata.get("delegation"), dict) else None,
+    }
+
+
+def collect_task_hub_evidence(*, limit: int = 20, completed_limit: int = 12) -> dict[str, Any]:
+    with connect_runtime_db(get_activity_db_path()) as conn:
+        task_hub.ensure_schema(conn)
+        queue = task_hub.list_agent_queue(
+            conn,
+            limit=limit,
+            include_csi=True,
+            collapse_csi=True,
+            include_not_ready=True,
+        )
+        active_items = [_task_summary(item) for item in queue.get("items", [])[:limit]]
+        completed_items = [
+            _task_summary(item)
+            for item in task_hub.list_completed_tasks(conn, limit=completed_limit)[:completed_limit]
+        ]
+    return {
+        "active_or_attention_items": active_items,
+        "recent_completed_items": completed_items,
+        "counts": {
+            "active_or_attention_items": len(active_items),
+            "recent_completed_items": len(completed_items),
+        },
+    }
+
+
+def collect_activity_evidence(*, limit: int = 80) -> dict[str, Any]:
+    try:
+        with connect_runtime_db(get_activity_db_path()) as conn:
+            rows = conn.execute(
+                """
+                SELECT id, event_class, source_domain, kind, title, summary,
+                       full_message, severity, status, requires_action, session_id,
+                       created_at, updated_at, metadata_json
+                FROM activity_events
+                WHERE (
+                    LOWER(COALESCE(severity, '')) IN ('warning', 'error', 'critical')
+                    OR COALESCE(requires_action, 0) = 1
+                    OR LOWER(COALESCE(source_domain, '')) NOT IN ('heartbeat')
+                )
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (max(1, min(int(limit), 300)),),
+            ).fetchall()
+    except sqlite3.OperationalError as exc:
+        logger.info("Mission Control activity evidence unavailable: %s", exc)
+        return {"items": [], "counts": {"items": 0}, "unavailable": str(exc)}
+
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        data = _row_dict(row)
+        metadata = _safe_json_loads(data.pop("metadata_json", None), {})
+        kind = str(data.get("kind") or "").lower()
+        source = str(data.get("source_domain") or "").lower()
+        severity = str(data.get("severity") or "").lower()
+        if source == "heartbeat" and severity in {"", "info", "success"} and "fail" not in kind and "error" not in kind:
+            continue
+        data["summary"] = _shorten(data.get("summary") or data.get("full_message"), max_chars=700)
+        data["full_message"] = _shorten(data.get("full_message"), max_chars=900)
+        data["metadata"] = metadata
+        items.append(data)
+    return {"items": items, "counts": {"items": len(items)}}
+
+
+def collect_tutorial_evidence(*, limit: int = 12) -> dict[str, Any]:
+    roots = [
+        workspace_root() / "youtube_tutorial_pipeline",
+        workspace_root() / "tutorial_pipeline",
+        workspace_root() / "youtube_tutorial_runs",
+    ]
+    manifests: list[tuple[float, Path, dict[str, Any]]] = []
+    for root in roots:
+        if not root.exists() or not root.is_dir():
+            continue
+        for manifest_path in root.rglob("manifest.json"):
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                mtime = manifest_path.stat().st_mtime
+            except Exception:
+                continue
+            manifests.append((mtime, manifest_path, manifest))
+    manifests.sort(key=lambda item: item[0], reverse=True)
+
+    items: list[dict[str, Any]] = []
+    for mtime, manifest_path, manifest in manifests[: max(1, min(int(limit), 50))]:
+        items.append(
+            {
+                "run_name": manifest_path.parent.name,
+                "run_dir": str(manifest_path.parent),
+                "created_at": datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat(),
+                "title": _shorten(manifest.get("title") or manifest_path.parent.name, max_chars=220),
+                "video_url": manifest.get("video_url"),
+                "learning_mode": manifest.get("learning_mode") or manifest.get("mode"),
+                "status": manifest.get("status") or manifest.get("pipeline_status"),
+                "implementation_required": manifest.get("implementation_required"),
+            }
+        )
+    return {"items": items, "counts": {"items": len(items)}}
+
+
+def collect_csi_evidence(*, limit: int = 12) -> dict[str, Any]:
+    db_path = workspace_root() / ".csi_digests.db"
+    if not db_path.exists():
+        return {"items": [], "counts": {"items": 0}}
+    try:
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT id, event_id, source, event_type, title, summary,
+                       source_types, created_at
+                FROM csi_digests
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (max(1, min(int(limit), 100)),),
+            ).fetchall()
+    except sqlite3.Error as exc:
+        logger.info("Mission Control CSI evidence unavailable: %s", exc)
+        return {"items": [], "counts": {"items": 0}, "unavailable": str(exc)}
+
+    items = []
+    for row in rows:
+        data = _row_dict(row)
+        data["summary"] = _shorten(data.get("summary"), max_chars=900)
+        data["source_types"] = _safe_json_loads(data.get("source_types"), [])
+        items.append(data)
+    return {"items": items, "counts": {"items": len(items)}}
+
+
+def collect_workspace_artifact_evidence(*, limit: int = 18) -> dict[str, Any]:
+    root = workspace_root()
+    if not root.exists():
+        return {"items": [], "counts": {"items": 0}}
+    candidates: list[tuple[float, Path]] = []
+    allowed_names = {
+        "summary.md",
+        "report.md",
+        "digest.md",
+        "manifest.json",
+        "handoff.md",
+        "completion.md",
+        "operator_report.md",
+    }
+    for path in root.rglob("*"):
+        if not path.is_file() or path.name not in allowed_names:
+            continue
+        try:
+            mtime = path.stat().st_mtime
+        except Exception:
+            continue
+        candidates.append((mtime, path))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+
+    items: list[dict[str, Any]] = []
+    for mtime, path in candidates[: max(1, min(int(limit), 60))]:
+        preview = ""
+        try:
+            preview = _shorten(path.read_text(encoding="utf-8", errors="ignore"), max_chars=900)
+        except Exception:
+            pass
+        items.append(
+            {
+                "path": str(path),
+                "workspace": path.parent.name,
+                "name": path.name,
+                "updated_at": datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat(),
+                "preview": preview,
+            }
+        )
+    return {"items": items, "counts": {"items": len(items)}}
+
+
+def collect_evidence_bundle() -> dict[str, Any]:
+    generated_at = utc_now_iso()
+    evidence = {
+        "generated_at_utc": generated_at,
+        "source": SERVICE_SOURCE,
+        "collection_policy": {
+            "purpose": "Bound evidence for LLM operator synthesis, not programmatic pseudo-reasoning.",
+            "suppressed_noise": "Routine heartbeat success is excluded unless tied to warnings, errors, or required action.",
+        },
+        "sources": {
+            "task_hub": collect_task_hub_evidence(),
+            "activity_events": collect_activity_evidence(),
+            "tutorial_pipeline": collect_tutorial_evidence(),
+            "csi_digests": collect_csi_evidence(),
+            "workspace_artifacts": collect_workspace_artifact_evidence(),
+        },
+    }
+    source_counts = {
+        name: int((source.get("counts") or {}).get("items") or 0)
+        for name, source in evidence["sources"].items()
+    }
+    source_counts["task_hub_active_or_attention_items"] = int(
+        evidence["sources"]["task_hub"]["counts"].get("active_or_attention_items") or 0
+    )
+    source_counts["task_hub_recent_completed_items"] = int(
+        evidence["sources"]["task_hub"]["counts"].get("recent_completed_items") or 0
+    )
+    evidence["source_counts"] = source_counts
+    return evidence
+
+
+def _llm_prompt(evidence: dict[str, Any]) -> str:
+    return (
+        "You are Universal Agent Mission Control Chief of Staff. Produce a concise operator "
+        "intelligence readout for Kevin.\n\n"
+        "Design rule: do not summarize raw logs by source. Identify what seems meaningful "
+        "about missions, completed work, failures, follow-up needs, created artifacts, "
+        "upcoming obligations, or useful ideas. Routine successful heartbeat/system noise "
+        "should disappear unless it changes what the operator should understand.\n\n"
+        "Use the evidence exactly as evidence. If a claim is uncertain, say so. Preserve "
+        "handoff utility by referencing evidence refs that another agent could inspect.\n\n"
+        "Return ONLY valid JSON with this schema:\n"
+        "{\n"
+        '  "headline": "one sentence current operating picture",\n'
+        '  "generated_at_utc": "ISO timestamp",\n'
+        '  "executive_snapshot": ["2-5 concise bullets"],\n'
+        '  "sections": [\n'
+        "    {\n"
+        '      "title": "meaning-based section title",\n'
+        '      "summary": "short synthesis",\n'
+        '      "items": [\n'
+        "        {\n"
+        '          "title": "specific evaluated item title",\n'
+        '          "body": "what is going on",\n'
+        '          "why_it_matters": "why Kevin might care",\n'
+        '          "recommended_next_step": "optional next step",\n'
+        '          "tags": ["short tags"],\n'
+        '          "evidence_refs": ["source:id/path/task_id/etc"]\n'
+        "        }\n"
+        "      ]\n"
+        "    }\n"
+        "  ],\n"
+        '  "watchlist": [{"title": "thing to watch", "reason": "why", "evidence_refs": []}],\n'
+        '  "action_candidates": [{"title": "candidate only, not executed", "rationale": "why", "gate": "existing Task Hub/proactive gate to use", "evidence_refs": []}],\n'
+        '  "journal_entry": "short durable paragraph for later briefing context",\n'
+        '  "source_counts": {}\n'
+        "}\n\n"
+        "Evidence bundle:\n"
+        f"{json.dumps(evidence, ensure_ascii=False, indent=2)}"
+    )
+
+
+def _extract_json_object(text: str) -> dict[str, Any]:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`")
+        if cleaned.lower().startswith("json"):
+            cleaned = cleaned[4:].strip()
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start >= 0 and end > start:
+            return json.loads(cleaned[start : end + 1])
+        raise
+
+
+def fallback_readout(evidence: dict[str, Any], *, error: str | None = None) -> dict[str, Any]:
+    generated_at = str(evidence.get("generated_at_utc") or utc_now_iso())
+    counts = evidence.get("source_counts") if isinstance(evidence.get("source_counts"), dict) else {}
+    message = "Chief-of-Staff LLM synthesis is unavailable; showing bounded evidence inventory."
+    if error:
+        message = f"{message} Error: {_shorten(error, max_chars=240)}"
+    return {
+        "id": f"mcos_{generated_at.replace(':', '').replace('+', 'Z')}",
+        "headline": "Mission Control evidence is collected; synthesis needs a successful LLM pass.",
+        "generated_at_utc": generated_at,
+        "executive_snapshot": [
+            message,
+            f"Evidence counts: {json.dumps(counts, sort_keys=True)}",
+        ],
+        "sections": [
+            {
+                "title": "Evidence Awaiting Synthesis",
+                "summary": "Raw evidence was bounded and preserved for a future Chief-of-Staff pass.",
+                "items": [],
+            }
+        ],
+        "watchlist": [],
+        "action_candidates": [],
+        "journal_entry": message,
+        "source_counts": counts,
+        "synthesis_status": "fallback",
+    }
+
+
+async def synthesize_readout(evidence: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+    api_key = (
+        os.getenv("ANTHROPIC_API_KEY")
+        or os.getenv("ANTHROPIC_AUTH_TOKEN")
+        or os.getenv("ZAI_API_KEY")
+    )
+    if not api_key:
+        return fallback_readout(evidence, error="No Anthropic-compatible API key configured."), None
+
+    try:
+        from anthropic import AsyncAnthropic
+    except Exception as exc:
+        return fallback_readout(evidence, error=f"anthropic package unavailable: {exc}"), None
+
+    model = os.getenv("UA_MISSION_CONTROL_COS_MODEL") or resolve_model("sonnet")
+    client_kwargs: dict[str, Any] = {
+        "api_key": api_key,
+        "max_retries": 0,
+        "timeout": float(os.getenv("UA_MISSION_CONTROL_COS_TIMEOUT_SECONDS", "180")),
+    }
+    base_url = os.getenv("ANTHROPIC_BASE_URL")
+    if base_url:
+        client_kwargs["base_url"] = base_url
+    elif os.getenv("ZAI_API_KEY") and api_key == os.getenv("ZAI_API_KEY"):
+        client_kwargs["base_url"] = "https://api.z.ai/api/anthropic"
+
+    client = AsyncAnthropic(**client_kwargs)
+    limiter = ZAIRateLimiter.get_instance()
+    max_retries = int(os.getenv("UA_MISSION_CONTROL_COS_MAX_RETRIES", "3"))
+    max_tokens = int(os.getenv("UA_MISSION_CONTROL_COS_MAX_TOKENS", "9000"))
+    prompt = _llm_prompt(evidence)
+    last_error: Exception | None = None
+
+    for attempt in range(max_retries):
+        async with limiter.acquire("mission_control_chief_of_staff"):
+            try:
+                response = await client.messages.create(
+                    model=model,
+                    max_tokens=max_tokens,
+                    temperature=0.3,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                await limiter.record_success()
+                text = "".join(getattr(block, "text", "") for block in response.content).strip()
+                readout = _extract_json_object(text)
+                readout.setdefault("generated_at_utc", evidence.get("generated_at_utc") or utc_now_iso())
+                readout.setdefault("source_counts", evidence.get("source_counts") or {})
+                readout["synthesis_status"] = "ok"
+                return readout, model
+            except Exception as exc:
+                last_error = exc
+                if "429" in str(exc) or "rate" in str(exc).lower():
+                    await limiter.record_429("mission_control_chief_of_staff")
+                if attempt < max_retries - 1:
+                    import asyncio
+
+                    await asyncio.sleep(limiter.get_backoff(attempt))
+
+    return fallback_readout(evidence, error=str(last_error or "unknown LLM error")), model
+
+
+def persist_readout(
+    readout: dict[str, Any],
+    evidence: dict[str, Any],
+    *,
+    model: str | None,
+    db_path: Path | None = None,
+) -> dict[str, Any]:
+    generated_at = str(readout.get("generated_at_utc") or evidence.get("generated_at_utc") or utc_now_iso())
+    readout_id = str(readout.get("id") or f"mcos_{generated_at.replace(':', '').replace('+', 'Z')}")
+    readout["id"] = readout_id
+    now = utc_now_iso()
+    journal_entry = _shorten(readout.get("journal_entry") or readout.get("headline"), max_chars=1800)
+    with open_store(db_path) as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO mission_control_readouts
+                (id, generated_at_utc, source, model, readout_json, evidence_json, created_at_utc)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                readout_id,
+                generated_at,
+                SERVICE_SOURCE,
+                model,
+                json.dumps(readout, ensure_ascii=False),
+                json.dumps(evidence, ensure_ascii=False),
+                now,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO mission_control_journal
+                (id, generated_at_utc, summary, readout_id, created_at_utc)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (f"journal_{readout_id}", generated_at, journal_entry, readout_id, now),
+        )
+        retention = max(10, int(os.getenv("UA_MISSION_CONTROL_COS_RETENTION", "200")))
+        conn.execute(
+            """
+            DELETE FROM mission_control_readouts
+            WHERE id NOT IN (
+                SELECT id FROM mission_control_readouts
+                ORDER BY generated_at_utc DESC
+                LIMIT ?
+            )
+            """,
+            (retention,),
+        )
+        conn.execute(
+            """
+            DELETE FROM mission_control_journal
+            WHERE id NOT IN (
+                SELECT id FROM mission_control_journal
+                ORDER BY generated_at_utc DESC
+                LIMIT ?
+            )
+            """,
+            (retention,),
+        )
+    return readout
+
+
+async def generate_and_store_readout(*, db_path: Path | None = None) -> dict[str, Any]:
+    evidence = collect_evidence_bundle()
+    readout, model = await synthesize_readout(evidence)
+    return persist_readout(readout, evidence, model=model, db_path=db_path)
+
+
+def get_latest_readout(*, include_evidence: bool = False, db_path: Path | None = None) -> dict[str, Any] | None:
+    try:
+        with open_store(db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT id, generated_at_utc, source, model, readout_json, evidence_json, created_at_utc
+                FROM mission_control_readouts
+                ORDER BY generated_at_utc DESC
+                LIMIT 1
+                """
+            ).fetchone()
+    except sqlite3.Error as exc:
+        logger.warning("Mission Control readout store unavailable: %s", exc)
+        return None
+
+    if not row:
+        return None
+    readout = _safe_json_loads(row["readout_json"], {})
+    if not isinstance(readout, dict):
+        return None
+    readout.setdefault("id", row["id"])
+    readout.setdefault("generated_at_utc", row["generated_at_utc"])
+    readout["model"] = row["model"]
+    readout["source"] = row["source"]
+    if include_evidence:
+        readout["evidence_bundle"] = _safe_json_loads(row["evidence_json"], {})
+    return readout
+
+
+def get_recent_journal(*, limit: int = 20, db_path: Path | None = None) -> list[dict[str, Any]]:
+    with open_store(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, generated_at_utc, summary, readout_id, created_at_utc
+            FROM mission_control_journal
+            ORDER BY generated_at_utc DESC
+            LIMIT ?
+            """,
+            (max(1, min(int(limit), 100)),),
+        ).fetchall()
+    return [_row_dict(row) for row in rows]
