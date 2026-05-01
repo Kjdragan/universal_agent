@@ -113,6 +113,23 @@ async def link_health_probe_now() -> dict[str, Any]:
     return run_link_health_probe()
 
 
+@router.post("/api/link/reconcile")
+async def link_reconcile_now(
+    lookback_hours: int = 48, max_per_tick: int = 10
+) -> dict[str, Any]:
+    """Run one reconciler pass over non-terminal spend requests.
+
+    Designed to be called from cron / a periodic supervisor. Bounded per call
+    by `max_per_tick` to avoid hammering the CLI with a backlog.
+    """
+    from universal_agent.services.link_reconciler import reconcile_once
+
+    return reconcile_once(
+        lookback_hours=max(1, min(lookback_hours, 168)),
+        max_per_tick=max(1, min(max_per_tick, 50)),
+    )
+
+
 # ── /api/link/spend-requests ─────────────────────────────────────────────────
 
 
