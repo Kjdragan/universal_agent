@@ -15,7 +15,7 @@ import logging
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict
 
-from universal_agent.services.dag_runner import DagState
+from universal_agent.services.dag_runner import DagState, STATUS_FAILED, STATUS_SUCCESS
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ def make_subprocess_handler(
         command = str(node.get("command") or "").strip()
         if not command:
             return {
-                "status": "failed",
+                "status": STATUS_FAILED,
                 "error": f"Node '{node['id']}' has no 'command' field.",
             }
 
@@ -68,12 +68,12 @@ def make_subprocess_handler(
         }
 
         if exit_code != 0:
-            result["status"] = "failed"
+            result["status"] = STATUS_FAILED
             result["error"] = (
                 f"Command exited with code {exit_code}: {stderr[:500]}"
             )
         else:
-            result["status"] = "success"
+            result["status"] = STATUS_SUCCESS
 
         return result
 
@@ -103,7 +103,7 @@ def make_llm_binary_classifier_handler(
         prompt = str(node.get("prompt") or "").strip()
         if not prompt:
             return {
-                "status": "failed",
+                "status": STATUS_FAILED,
                 "error": f"Node '{node['id']}' has no 'prompt' field.",
             }
 
@@ -126,7 +126,7 @@ def make_llm_binary_classifier_handler(
         except Exception as exc:
             logger.error("LLM call failed for node '%s': %s", node["id"], exc)
             return {
-                "status": "failed",
+                "status": STATUS_FAILED,
                 "error": f"LLM call failed: {exc}",
             }
 
@@ -154,7 +154,7 @@ def make_llm_binary_classifier_handler(
         )
 
         return {
-            "status": "success",
+            "status": STATUS_SUCCESS,
             "result": binary_result,
             "context_update": {
                 "classifier_raw": cleaned,

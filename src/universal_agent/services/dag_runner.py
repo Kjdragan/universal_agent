@@ -9,11 +9,20 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_MAX_ITERATIONS = int(os.getenv("UA_DAG_MAX_ITERATIONS", "50") or 50)
 
+# Named status constants -- single source of truth for DAG lifecycle states.
+STATUS_PENDING = "pending"
+STATUS_RUNNING = "running"
+STATUS_COMPLETED = "completed"
+STATUS_FAILED = "failed"
+STATUS_WAITING_ON_HUMAN = "waiting_on_human"
+STATUS_SUCCESS = "success"
+STATUS_ERROR = "error"
+
 
 @dataclass
 class DagState:
     """State of a DAG execution."""
-    status: str = "pending"  # pending, running, completed, waiting_on_human, failed
+    status: str = STATUS_PENDING  # pending, running, completed, waiting_on_human, failed
     current_node: Optional[str] = None
     context: Dict[str, Any] = field(default_factory=dict)
     history: List[Dict[str, Any]] = field(default_factory=list)
@@ -80,20 +89,20 @@ class DagRunner:
     async def run(self, initial_state: Optional[DagState] = None) -> DagState:
         """Run the DAG state machine until completion, failure, or human gate."""
         state = initial_state or DagState(
-            status="running",
+            status=STATUS_RUNNING,
             current_node=self.workflow_def.get("start"),
         )
 
-        if state.status == "pending":
-            state.status = "running"
+        if state.status == STATUS_PENDING:
+            state.status = STATUS_RUNNING
 
         iteration = 0
 
-        while state.status == "running" and state.current_node:
+        while state.status == STATUS_RUNNING and state.current_node:
             # ── Safety valve: prevent infinite loops ──
             iteration += 1
             if iteration > self.max_iterations:
-                state.status = "failed"
+                state.status = STATUS_FAILED
                 state.context["error"] = (
                     f"DAG execution exceeded max iterations ({self.max_iterations}). "
                     "Possible infinite loop detected."
@@ -107,7 +116,7 @@ class DagRunner:
 
             node = self.nodes.get(state.current_node)
             if not node:
-                state.status = "failed"
+                state.status = STATUS_FAILED
                 state.context["error"] = (
                     f"Node '{state.current_node}' not found in workflow."
                 )
@@ -117,15 +126,15 @@ class DagRunner:
             logger.info("DAG node executing: id=%s type=%s", node["id"], node_type)
 
             if node_type == "human_gate":
-                state.status = "waiting_on_human"
+                state.status = STATUS_WAITING_ON_HUMAN
                 state.history.append(
-                    {"node_id": node["id"], "status": "waiting_on_human"}
+                    {"node_id": node["id"], "status": STATUS_WAITING_ON_HUMAN}
                 )
                 break
 
             handler = self.handlers.get(node_type)
             if not handler:
-                state.status = "failed"
+                state.status = STATUS_FAILED
                 state.context["error"] = (
                     f"No handler registered for node type '{node_type}'."
                 )
@@ -138,15 +147,15 @@ class DagRunner:
                 if "context_update" in result:
                     state.context.update(result["context_update"])
 
-                if result.get("status") == "failed":
-                    state.status = "failed"
+                if result.get("status") == STATUS_FAILED:
+                    state.status = STATUS_FAILED
                     state.context["error"] = result.get(
                         "error", "Node execution failed."
                     )
-                    state.history.append({"node_id": node["id"], "status": "failed"})
+                    state.history.append({"node_id": node["id"], "status": STATUS_FAILED})
                     break
 
-                state.history.append({"node_id": node["id"], "status": "success"})
+                state.history.append({"node_id": node["id"], "status": STATUS_SUCCESS})
 
                 # Advance to next node
                 next_node = self._get_next_node(state.current_node, result)
@@ -154,19 +163,19 @@ class DagRunner:
                     state.current_node = next_node
                 else:
                     state.current_node = None
-                    state.status = "completed"
+                    state.status = STATUS_COMPLETED
 
             except Exception as e:
-                state.status = "failed"
+                state.status = STATUS_FAILED
                 state.context["error"] = str(e)
-                state.history.append({"node_id": node["id"], "status": "error"})
+                state.history.append({"node_id": node["id"], "status": STATUS_ERROR})
                 logger.exception(
                     "DAG node '%s' raised an exception", node["id"]
                 )
                 break
 
-        if state.status == "running" and not state.current_node:
-            state.status = "completed"
+        if state.status == STATUS_RUNNING and not state.current_node:
+            state.status = STATUS_COMPLETED
 
         logger.info(
             "DAG execution finished: status=%s nodes_visited=%d",
