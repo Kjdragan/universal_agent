@@ -50,6 +50,12 @@ const ICONS = {
 type HydratedChatMessage = {
   role: "user" | "assistant";
   content: string;
+  // Optional fields used for full-fidelity rehydration from trace.json's
+  // `messages[]` (R1.5). Run.log fallback parsers leave these unset.
+  thinking?: string;
+  messageType?: "speech" | "thought";
+  author?: string;
+  time_offset?: number;
 };
 
 type HydratedActivityLog = {
@@ -236,8 +242,20 @@ type TraceJsonIteration = {
   query?: string;
 };
 
+type TraceJsonMessage = {
+  // Persisted by agent_core.py for each TextBlock/ThinkingBlock yield and
+  // for the user query at run start. role="assistant_thinking" carries the
+  // full thinking content (live wire events truncate to 1KB).
+  role?: "user" | "assistant" | "assistant_thinking" | string;
+  content?: string;
+  author?: string;
+  ts?: string;
+  time_offset?: number;
+};
+
 type TraceJsonData = {
   query?: string;
+  messages?: TraceJsonMessage[];
   tool_calls?: TraceJsonToolCall[];
   tool_results?: TraceJsonToolResult[];
   iterations?: TraceJsonIteration[];
@@ -271,10 +289,53 @@ function extractHistoryFromTraceJson(data: TraceJsonData): TraceHydrationResult 
   const logs: HydratedActivityLog[] = [];
   const toolCalls: TraceHydrationResult["toolCalls"] = [];
 
-  // 1. Full user query → chat message
-  const query = String(data.query || "").trim();
-  if (query) {
-    messages.push({ role: "user", content: query });
+  // 1a. Prefer the structured `messages[]` array (R1.5) — emitted by
+  // agent_core.py for every TextBlock and ThinkingBlock yield, plus the
+  // user query at run start. This is the source of truth for full-fidelity
+  // chat-panel rehydration including Thinking Process blocks.
+  const structured = Array.isArray(data.messages) ? data.messages : [];
+  if (structured.length > 0) {
+    for (const m of structured) {
+      const role = String(m.role || "").trim();
+      const content = String(m.content || "");
+      if (role === "user") {
+        messages.push({
+          role: "user",
+          content,
+          messageType: "speech",
+          author: m.author,
+          time_offset: m.time_offset,
+        });
+      } else if (role === "assistant") {
+        messages.push({
+          role: "assistant",
+          content,
+          messageType: "speech",
+          author: m.author,
+          time_offset: m.time_offset,
+        });
+      } else if (role === "assistant_thinking") {
+        // Thinking blocks carry their text in `thinking`, not `content`.
+        // Live store puts these in messages with messageType="thought".
+        messages.push({
+          role: "assistant",
+          content: "",
+          thinking: content,
+          messageType: "thought",
+          author: m.author,
+          time_offset: m.time_offset,
+        });
+      }
+      // Unknown roles are skipped (forward-compat).
+    }
+  } else {
+    // 1b. Fallback for traces that pre-date R1.5: synthesize the user
+    // turn from `query`. Assistant turns will be missing here — that's
+    // the symptom that motivated R1.5.
+    const query = String(data.query || "").trim();
+    if (query) {
+      messages.push({ role: "user", content: query });
+    }
   }
 
   // 2. Build tool_use_id → result lookup
@@ -1964,16 +2025,27 @@ function ChatInterface() {
                 const traceResult = extractHistoryFromTraceJson(traceData);
 
                 const { messages: runLogMessages } = extractHistoryFromRunLog(raw);
-                const messagesToUse = runLogMessages.length > 0 ? runLogMessages : traceResult.messages;
+                // R1.5: when trace.json has the structured `messages[]`
+                // array (assistant turns + thinking blocks), prefer it over
+                // the lossy run.log parser. Run.log only sees the stdout
+                // capture and has no reliable role/thinking distinction.
+                const traceHasStructured = traceResult.messages.some(
+                  (m) => m.messageType === "thought" || m.role === "assistant",
+                );
+                const messagesToUse = traceHasStructured
+                  ? traceResult.messages
+                  : (runLogMessages.length > 0 ? runLogMessages : traceResult.messages);
 
-                // Populate chat messages from run.log preferably (has full conversational blocks) or trace.json
                 if (messagesToUse.length > 0 && store.messages.length === 0) {
                   for (const msg of messagesToUse) {
                     store.addMessage({
                       role: msg.role,
                       content: msg.content,
-                      time_offset: 0,
+                      time_offset: msg.time_offset ?? 0,
                       is_complete: true,
+                      author: msg.author,
+                      messageType: msg.messageType,
+                      thinking: msg.thinking,
                     });
                   }
                   hydratedMessageCount += messagesToUse.length;

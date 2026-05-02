@@ -1388,6 +1388,14 @@ class UniversalAgent:
             "total_duration_seconds": None,
             "tool_calls": [],
             "tool_results": [],
+            # `messages`: full chat-replay record persisted alongside tool
+            # events so a completed session rehydrates with the same level
+            # of detail as the live UI (user query, assistant turns,
+            # thinking blocks). The live event stream (TEXT / THINKING /
+            # query) is also fed through this list so client-side
+            # `extractHistoryFromTraceJson` can drive the chat panel without
+            # needing run.log parsing.
+            "messages": [],
             "iterations": [],
             "token_usage": {"input": 0, "output": 0, "total": 0},
             "compact_boundary_events": [],
@@ -1591,6 +1599,8 @@ class UniversalAgent:
             "total_duration_seconds": None,
             "tool_calls": [],
             "tool_results": [],
+            # See sibling init above for `messages` semantics.
+            "messages": [],
             "iterations": [],
             "token_usage": {"input": 0, "output": 0, "total": 0},
             "compact_boundary_events": [],
@@ -1898,6 +1908,16 @@ class UniversalAgent:
         self.trace["query"] = query
         self.trace["start_time"] = datetime.now().isoformat()
         self.start_ts = time.time()
+        # Persist the user turn as the first message so chat-panel rehydration
+        # reconstructs the conversation in time order.
+        self.trace.setdefault("messages", []).append(
+            {
+                "role": "user",
+                "content": query,
+                "ts": self.trace["start_time"],
+                "time_offset": 0.0,
+            }
+        )
 
         # Initialize event queue
         self._event_queue = asyncio.Queue()
@@ -2400,18 +2420,40 @@ class UniversalAgent:
                                         data={"auth_link": links[0]},
                                     )
 
+                            text_offset = round(time.time() - self.start_ts, 3)
+                            # Persist the assistant turn so trace.json holds
+                            # the full conversation, not just tool events.
+                            self.trace.setdefault("messages", []).append(
+                                {
+                                    "role": "assistant",
+                                    "author": msg_author,
+                                    "content": block.text,
+                                    "ts": datetime.now().isoformat(),
+                                    "time_offset": text_offset,
+                                }
+                            )
                             yield AgentEvent(
                                 type=EventType.TEXT,
                                 data={
                                     "text": block.text,
                                     "author": msg_author,
-                                    "time_offset": round(
-                                        time.time() - self.start_ts, 3
-                                    ),
+                                    "time_offset": text_offset,
                                 },
                             )
 
                         elif isinstance(block, ThinkingBlock):
+                            think_offset = round(time.time() - self.start_ts, 3)
+                            # Persist the FULL thinking content (the live
+                            # event truncates to [:1000] for transport).
+                            self.trace.setdefault("messages", []).append(
+                                {
+                                    "role": "assistant_thinking",
+                                    "author": msg_author,
+                                    "content": block.thinking,
+                                    "ts": datetime.now().isoformat(),
+                                    "time_offset": think_offset,
+                                }
+                            )
                             yield AgentEvent(
                                 type=EventType.THINKING,
                                 data={"thinking": block.thinking[:1000]},
@@ -2515,6 +2557,13 @@ class UniversalAgent:
                             block_content = getattr(block, "content", "")
                             content_str = str(block_content)
 
+                            # Persist the result body (truncated) so the
+                            # rehydrated middle panel can show the same
+                            # collapsible Result card the live UI shows. The
+                            # live wire event already passes content_preview
+                            # to clients; here we make sure it survives in
+                            # trace.json on disk.
+                            content_preview_persisted = content_str[:8000]
                             result_record = {
                                 "run_id": self.run_id,
                                 "step_id": step_id,
@@ -2523,6 +2572,8 @@ class UniversalAgent:
                                     time.time() - self.start_ts, 3
                                 ),
                                 "is_error": is_error,
+                                "content_preview": content_preview_persisted,
+                                "content_size_bytes": len(content_str),
                             }
                             self.trace["tool_results"].append(result_record)
 
