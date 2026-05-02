@@ -222,7 +222,11 @@ async def write_text_file_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     description=(
         "Prepare a local file for the official AgentMail MCP send/reply tools. "
         "Reads a file from disk and returns an official AgentMail attachment object "
-        "with base64 content and filename."
+        "with base64 content and filename. **REFUSES files larger than 24 KB on disk** "
+        "(base64 inflation would push the tool result past a context-pressure "
+        "threshold that empirically causes inference hangs after the next tool call). "
+        "For larger files, use `agentmail_send_with_local_attachments` which "
+        "encodes server-side and bypasses the context window entirely."
     ),
     input_schema={"path": str, "filename": str, "content_id": str},
 )
@@ -234,6 +238,35 @@ async def prepare_agentmail_attachment_wrapper(args: dict[str, Any]) -> dict[str
     file_path = Path(raw_path).expanduser()
     if not file_path.is_file():
         return {"content": [{"type": "text", "text": f"error: file not found: {file_path}"}]}
+
+    # Hard guard against context-window bloat. Empirically observed hang at
+    # ~30 KB original (≈41 KB base64) when paired with another small attachment
+    # in the same conversation: the agent prepared two attachments back-to-back,
+    # then the next inference call (the actual `mcp__agentmail__send_message`)
+    # never returned and the run sat "running" with no log activity for 30+ min.
+    # The 24 KB threshold leaves headroom for one base64 attachment in context
+    # without putting downstream inference at risk. Large files MUST go via
+    # `agentmail_send_with_local_attachments` which posts directly to AgentMail
+    # without round-tripping through the LLM context.
+    MAX_INLINE_BYTES = 24 * 1024
+    file_size = file_path.stat().st_size
+    if file_size > MAX_INLINE_BYTES:
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        f"error: file size {file_size} bytes exceeds the inline-attachment "
+                        f"limit of {MAX_INLINE_BYTES} bytes. Base64-encoding this file would "
+                        f"bloat the conversation context to ~{int(file_size * 1.34)} bytes "
+                        f"and risk hanging the next inference call. "
+                        f"Use `agentmail_send_with_local_attachments` instead — that tool "
+                        f"encodes server-side and posts directly to AgentMail without "
+                        f"putting the file content in the model's context."
+                    ),
+                }
+            ]
+        }
 
     filename = str(args.get("filename") or "").strip() or file_path.name
     content_id = str(args.get("content_id") or "").strip()
