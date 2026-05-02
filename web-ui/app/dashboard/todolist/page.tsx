@@ -67,6 +67,7 @@ type AgentQueueItem = {
       last_assignment_ended_at?: string | null;
       last_provider_session_id?: string | null;
       last_disposition_reason?: string | null;
+      todo_retry_count?: number | string | null;
     };
   };
 };
