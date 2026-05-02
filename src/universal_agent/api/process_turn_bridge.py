@@ -7,6 +7,7 @@ so the UI and CLI share identical execution behavior.
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import AsyncGenerator, Optional
 
@@ -21,6 +22,8 @@ from universal_agent.gateway import GatewayRequest, GatewaySession, InProcessGat
 from universal_agent.identity import resolve_user_id
 from universal_agent.run_catalog import RunCatalogService
 from universal_agent.workspace_catalog import list_workspace_summaries
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_session_run_id(workspace_dir: str) -> Optional[str]:
@@ -62,6 +65,7 @@ class ProcessTurnBridge:
         try:
             session = await self.gateway.resume_session(session_id)
         except Exception:
+            logger.warning("Failed to resume session %s", session_id, exc_info=True)
             return None
 
         self.current_session = session

@@ -8,10 +8,13 @@ and the core UniversalAgent class from agent_core.py.
 import asyncio
 from datetime import datetime
 import json
+import logging
 import os
 from pathlib import Path
 from typing import AsyncGenerator, Callable, Optional
 import uuid
+
+logger = logging.getLogger(__name__)
 
 from universal_agent.agent_core import AgentEvent, EventType, UniversalAgent
 from universal_agent.api.events import (
@@ -159,6 +162,7 @@ class AgentBridge:
             )
 
         except Exception as e:
+            logger.error("Query execution failed for session %s: %s", self.current_session_id, e, exc_info=True)
             yield create_error_event(str(e))
 
     def _convert_agent_event(self, agent_event: AgentEvent) -> WebSocketEvent:
@@ -281,7 +285,7 @@ class AgentBridge:
                 if hasattr(self.current_agent, "close"):
                     await self.current_agent.close()
             except Exception:
-                pass
+                logger.debug("Error closing agent for session %s", self.current_session_id, exc_info=True)
             self.current_agent = None
         self.current_session_id = None
         self._session_registry.clear()
