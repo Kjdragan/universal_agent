@@ -94,6 +94,13 @@ _SYSTEM_SESSION_OWNERS = {
     "ops_tutorial_review",
     "cron_system",
     "ops:system-configuration-agent",
+    # Daemon executors (Simone-todo, etc.) create their persistent
+    # gateway sessions with user_id="daemon" (see
+    # services/daemon_sessions.py:97). Without this entry, every
+    # dashboard owner trying to view a daemon's workspace via
+    # /api/files gets a 403 from _enforce_session_owner — exactly
+    # the symptom that broke the Task Hub Workspace button.
+    "daemon",
 }
 
 # Import agent bridge
@@ -1338,6 +1345,65 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+def _resolve_workspace_for_session(session_id: str) -> Path:
+    """Resolve a session_id (including daemon sessions) to its on-disk workspace.
+
+    Mirrors `gateway_server.py:_resolve_session_workspace` but for the
+    api/server (port 8001) world, which doesn't have access to the live
+    gateway `_sessions` map. The order is:
+
+        1. Direct match: `WORKSPACES_DIR / session_id`
+        2. Archive match: `WORKSPACES_DIR / _daemon_archives / session_id`
+        3. For `daemon_*` ids: glob `run_{session_id}_*` in active and
+           archive roots, return the most recently modified.
+
+    Returns `WORKSPACES_DIR / session_id` (which may not exist) when
+    nothing matches, so callers see "EMPTY DIRECTORY" instead of an
+    error. The downstream path-traversal check still protects against
+    escaping the workspaces root.
+
+    The daemon-glob fallback is what lets Task Hub's Workspace button
+    land on the daemon executor's actual run workspace
+    (`run_daemon_simone_todo_<timestamp>_<uuid>/`) when given the
+    persistent session id (`daemon_simone_todo`).
+    """
+    safe_id = (session_id or "").strip()
+    if not safe_id:
+        return WORKSPACES_DIR
+
+    direct = WORKSPACES_DIR / safe_id
+    if direct.is_dir():
+        return direct
+
+    archive_exact = WORKSPACES_DIR / "_daemon_archives" / safe_id
+    if archive_exact.is_dir():
+        return archive_exact
+
+    if safe_id.startswith("daemon_"):
+        prefix = f"run_{safe_id}_"
+        candidates: list[Path] = []
+        try:
+            for p in WORKSPACES_DIR.iterdir():
+                if p.is_dir() and p.name.startswith(prefix):
+                    candidates.append(p)
+            archive_root = WORKSPACES_DIR / "_daemon_archives"
+            if archive_root.is_dir():
+                for p in archive_root.iterdir():
+                    if p.is_dir() and p.name.startswith(prefix):
+                        candidates.append(p)
+        except OSError:
+            pass
+
+        if candidates:
+            candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            return candidates[0]
+
+    # Fall back to the direct path so the listing returns empty rather
+    # than raising. This is the same behavior as a non-daemon session
+    # whose workspace doesn't exist yet.
+    return direct
+
+
 # =============================================================================
 # Lifespan Manager
 # =============================================================================
@@ -1632,7 +1698,9 @@ async def list_files(
     # Determine which workspace to use
     if session_id:
         await _enforce_session_owner(session_id, owner_id, auth_required)
-        workspace = WORKSPACES_DIR / session_id
+        # Daemon-aware: resolve `daemon_simone_todo` to its actual
+        # run workspace via daemon-glob fallback.
+        workspace = _resolve_workspace_for_session(session_id)
     elif run_id:
         workspace = await _resolve_run_workspace(run_id)
         if workspace is None:
@@ -1650,7 +1718,11 @@ async def get_file(session_id: str, file_path: str, request: Request):
     auth_required = auth.auth_required if isinstance(auth, DashboardAuthResult) else _dashboard_auth_required()
     await _enforce_session_owner(session_id, owner_id, auth_required)
 
-    workspace = WORKSPACES_DIR / session_id
+    # Daemon-aware: same resolution as the listing endpoint so a fetch
+    # like /api/files/daemon_simone_todo/run.log lands on the latest
+    # `run_daemon_simone_todo_*` workspace that actually contains the
+    # file, not an empty stub at WORKSPACES_DIR/daemon_simone_todo/.
+    workspace = _resolve_workspace_for_session(session_id)
     return _read_workspace_file_response(workspace, file_path)
 
 
