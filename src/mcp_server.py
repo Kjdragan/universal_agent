@@ -1177,18 +1177,29 @@ def append_to_file(path: str, content: str) -> str:
     """
     Append content to an existing file in the Local Workspace.
 
+    Path resolution mirrors `write_text_file`: relative paths anchor at
+    CURRENT_RUN_WORKSPACE (falling back to UA_ARTIFACTS_DIR), so
+    ``append_to_file("work_products/foo.md", ...)`` reaches the same
+    file the agent created via ``write_text_file("work_products/foo.md", ...)``.
+
     CRITICAL: Use this ONLY for chunked writing of large files (>50KB).
     1. Create the file first using the native `Write` tool (this tool requires the file to exist).
     2. Then call this tool to append subsequent chunks.
     """
     try:
-        abs_path = os.path.abspath(path)
+        ws = _resolve_workspace()
+        artifacts_root = _resolve_artifacts_root()
+        if not os.path.isabs(path):
+            anchor = ws or artifacts_root
+            abs_path = os.path.abspath(os.path.join(anchor, path)) if anchor else os.path.abspath(path)
+        else:
+            abs_path = os.path.abspath(path)
         if not os.path.exists(abs_path):
-            return f"Error: File does not exist at {path}. Use native Write tool to create it first."
+            return f"Error: File does not exist at {abs_path}. Use native Write tool to create it first."
 
         with open(abs_path, "a", encoding="utf-8") as f:
             f.write(content)
-        return f"Successfully appended {len(content)} chars to {path}"
+        return f"Successfully appended {len(content)} chars to {abs_path}"
     except Exception as e:
         return f"Error appending to file: {str(e)}"
 
@@ -1226,6 +1237,18 @@ def write_text_file(path: str, content: str, overwrite: bool = True) -> str:
     """
     Write a UTF-8 text file.
 
+    Path resolution:
+      - Absolute paths are used as-is.
+      - Relative paths resolve against CURRENT_RUN_WORKSPACE first (the
+        agent's natural mental model), falling back to UA_ARTIFACTS_DIR
+        if the workspace isn't set. This matches what the agent typically
+        means when it writes ``work_products/foo.html`` — it expects the
+        file to land inside its own session workspace, not the host
+        process's cwd. Without this resolution, ``os.path.abspath`` would
+        anchor relative paths at ``/opt/universal_agent`` (the API
+        server's cwd) and the safety check below would reject every
+        natural relative path.
+
     Security: only allows writing under:
     - CURRENT_RUN_WORKSPACE (ephemeral scratch; CURRENT_SESSION_WORKSPACE is the legacy alias)
     - UA_ARTIFACTS_DIR (durable artifacts)
@@ -1234,9 +1257,21 @@ def write_text_file(path: str, content: str, overwrite: bool = True) -> str:
         if content is None:
             return "Error: content is required"
 
-        abs_path = os.path.abspath(fix_path_typos(path))
+        raw_path = fix_path_typos(path)
         ws = _resolve_workspace()
         artifacts_root = _resolve_artifacts_root()
+
+        # Resolve relative paths against the workspace before falling
+        # back to cwd-relative resolution. Absolute paths skip this and
+        # are still subject to the boundary check below.
+        if not os.path.isabs(raw_path):
+            anchor = ws or artifacts_root
+            if anchor:
+                abs_path = os.path.abspath(os.path.join(anchor, raw_path))
+            else:
+                abs_path = os.path.abspath(raw_path)
+        else:
+            abs_path = os.path.abspath(raw_path)
 
         allowed = False
         if ws and _is_within_root(ws, abs_path):
