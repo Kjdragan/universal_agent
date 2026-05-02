@@ -233,7 +233,7 @@ class GatewayBridge:
             yield create_error_event(f"Gateway connection closed: {e}")
         except Exception as e:
             self._current_ws = None
-            logger.error(f"Gateway execution error: {e}")
+            logger.error("Gateway execution error for session %s on ws_endpoint %s: %s", self.current_session_id, ws_endpoint, e,)
             yield create_error_event(str(e))
 
     async def close(self) -> None:
@@ -299,7 +299,7 @@ class GatewayBridge:
             )
             
         except Exception as e:
-            logger.error(f"Failed to convert gateway event: {e}")
+            logger.error("Failed to convert gateway event type=%s: %s", event_type, e,)
             return None
 
     async def send_input_response(self, input_id: str, response: str) -> bool:
@@ -319,7 +319,7 @@ class GatewayBridge:
             await self._current_ws.send(json.dumps(msg))
             return True
         except Exception as e:
-            logger.error(f"Failed to send input response to gateway: {e}")
+            logger.error("Failed to send input response to gateway for input_id=%s: %s", input_id, e,)
             return False
 
     async def send_cancel(self, reason: str = "User requested stop") -> bool:
@@ -335,7 +335,7 @@ class GatewayBridge:
             await self._current_ws.send(json.dumps(msg))
             return True
         except Exception as e:
-            logger.error(f"Failed to send cancel to gateway: {e}")
+            logger.error("Failed to send cancel to gateway (session %s, reason=%r): %s", self.current_session_id, reason, e,)
             return False
 
     def get_current_workspace(self) -> Optional[str]:
@@ -357,7 +357,7 @@ class GatewayBridge:
             else:
                 return loop.run_until_complete(self._list_sessions_async())
         except Exception as e:
-            logger.error(f"Failed to list sessions: {e}")
+            logger.error("Failed to list sessions from %s: %s", self.gateway_url, e)
             return []
 
     async def _list_sessions_async(self) -> list[dict]:
@@ -372,7 +372,7 @@ class GatewayBridge:
             data = response.json()
             return data.get("sessions", [])
         except Exception as e:
-            logger.error(f"Failed to list gateway sessions: {e}")
+            logger.error("Failed to list gateway sessions from %s: %s", self.gateway_url, e,)
             return []
 
     def get_session_file(self, session_id: str, file_path: str) -> Optional[tuple[str, str, bytes]]:
@@ -442,7 +442,7 @@ class GatewayBridge:
             return (content_type, file_full.name, content)
             
         except Exception as e:
-            logger.error(f"Failed to read file {file_path}: {e}")
+            logger.error("Failed to read file %s in session %s: %s", file_path, session_id, e,)
             return None
 
     async def close(self):

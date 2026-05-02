@@ -181,7 +181,7 @@ Since April 2026, the wiki engine uses a semantic LLM layer (`wiki/llm.py`) for:
 - **Concept extraction** — abstract concepts and themes extracted via LLM, with heuristic fallback
 - **Summary generation** — 1-3 sentence semantic summaries via LLM, with first-sentence heuristic fallback
 
-The LLM layer uses the project's standard **Z.AI Anthropic emulation** (same pattern as `llm_classifier.py`). API key chain: `ANTHROPIC_API_KEY` → `ANTHROPIC_AUTH_TOKEN` → `ZAI_API_KEY`. Model resolved via `resolve_sonnet()`.
+The LLM layer uses the project's standard **Z.AI Anthropic emulation** (same pattern as `llm_classifier.py`). API key chain: `ANTHROPIC_API_KEY` → `ANTHROPIC_AUTH_TOKEN` → `ZAI_API_KEY`. Model resolved via `resolve_opus()` with a 2048-token cap.
 
 ### Graceful Degradation
 
