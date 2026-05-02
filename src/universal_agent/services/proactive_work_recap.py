@@ -378,8 +378,6 @@ def _call_llm_recap_evaluator(
 
     Uses the Anthropic SDK (same pattern as llm_classifier.py) which correctly
     handles Z.AI model routing for glm-5.1 / glm-5-turbo model identifiers.
-    The previous litellm.completion() call failed because litellm requires an
-    explicit provider prefix (e.g., 'openai/glm-5.1') for non-standard models.
     """
     from anthropic import Anthropic
 
