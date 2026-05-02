@@ -1369,17 +1369,30 @@ def _resolve_workspace_for_session(session_id: str) -> Path:
         1. Direct match: `WORKSPACES_DIR / session_id`
         2. Archive match: `WORKSPACES_DIR / _daemon_archives / session_id`
         3. For `daemon_*` ids: glob `run_{session_id}_*` in active and
-           archive roots, return the most recently modified.
+           archive roots, prefer the most recent candidate that has
+           durable run content (run.log or trace.json), falling back to
+           the most recent overall if none has content.
+
+    The "prefer with content" tiebreak is critical: every gateway
+    restart creates a new empty bootstrap workspace for each daemon.
+    Without the tiebreak, that fresh empty workspace shadows the
+    previous task's actual execution workspace whenever the user
+    clicks Workspace shortly after a deploy.
 
     Returns `WORKSPACES_DIR / session_id` (which may not exist) when
     nothing matches, so callers see "EMPTY DIRECTORY" instead of an
     error. The downstream path-traversal check still protects against
     escaping the workspaces root.
 
-    The daemon-glob fallback is what lets Task Hub's Workspace button
-    land on the daemon executor's actual run workspace
-    (`run_daemon_simone_todo_<timestamp>_<uuid>/`) when given the
-    persistent session id (`daemon_simone_todo`).
+    Known limitation: when multiple non-empty `run_daemon_*_*`
+    workspaces exist (e.g., Simone ran two tasks since restart), the
+    most recent with content wins — which may not be the specific
+    task the user clicked. The architecturally correct fix is to
+    record the executor workspace on the run record at dispatch time
+    (`runs.executor_workspace_dir`), then look it up by `run_id`. That's
+    a follow-up; this content-aware tiebreak handles the common case
+    of "click Workspace right after a deploy" without backend schema
+    changes.
     """
     safe_id = (session_id or "").strip()
     if not safe_id:
@@ -1409,8 +1422,22 @@ def _resolve_workspace_for_session(session_id: str) -> Path:
             pass
 
         if candidates:
-            candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-            return candidates[0]
+            def _has_content(p: Path) -> bool:
+                """A daemon workspace is "useful" once the agent has
+                written either run.log (always present from
+                agent_core's centralized logger setup) or trace.json
+                (written on _save_trace at run end). The bootstrap
+                workspace created at gateway startup contains only
+                .md system-prompt files and empty work_products/."""
+                try:
+                    return (p / "run.log").exists() or (p / "trace.json").exists()
+                except OSError:
+                    return False
+
+            with_content = [p for p in candidates if _has_content(p)]
+            pool = with_content or candidates
+            pool.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            return pool[0]
 
     # Fall back to the direct path so the listing returns empty rather
     # than raising. This is the same behavior as a non-daemon session

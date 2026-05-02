@@ -142,6 +142,63 @@ def test_resolve_workspace_prefers_direct_match_when_present(tmp_path, monkeypat
     assert api_server._resolve_workspace_for_session("session_abc123") == direct
 
 
+def test_resolve_workspace_prefers_candidate_with_run_log(tmp_path, monkeypatch):
+    """The fix for the deploy-restart bug: a freshly-restarted gateway
+    creates a new empty bootstrap workspace for each daemon. Without
+    the content-aware tiebreak, that empty newer workspace shadows
+    the previous task's actual execution workspace.
+
+    Production reproduction: the user ran a poem task at 04:13, then
+    /ship deployed and restarted the gateway at 04:33. Without the
+    tiebreak, clicking Workspace landed on the 04:33 bootstrap dir
+    (no run.log) instead of the 04:13 execution dir.
+    """
+    ws_root = tmp_path / "AGENT_RUN_WORKSPACES"
+    ws_root.mkdir()
+
+    older_with_content = ws_root / "run_daemon_simone_todo_20260502_041316_aaaa"
+    older_with_content.mkdir()
+    (older_with_content / "run.log").write_text("real task output")
+
+    newer_empty_bootstrap = ws_root / "run_daemon_simone_todo_20260502_043330_bbbb"
+    newer_empty_bootstrap.mkdir()
+    (newer_empty_bootstrap / "AGENTS.md").write_text("system prompt only")
+
+    import os, time
+    os.utime(older_with_content, (time.time() - 1200, time.time() - 1200))
+    os.utime(newer_empty_bootstrap, (time.time(), time.time()))
+
+    monkeypatch.setattr(api_server, "WORKSPACES_DIR", ws_root)
+
+    resolved = api_server._resolve_workspace_for_session("daemon_simone_todo")
+    assert resolved == older_with_content, (
+        f"Expected the older workspace WITH run.log to win the content-aware "
+        f"tiebreak, got {resolved.name}. Newer empty bootstraps must not "
+        f"shadow real task workspaces."
+    )
+
+
+def test_resolve_workspace_falls_back_to_newest_when_none_have_content(tmp_path, monkeypatch):
+    """If multiple daemon workspaces exist but none have run.log or
+    trace.json, fall back to the most recent (no harm done — caller
+    sees empty workspace either way)."""
+    ws_root = tmp_path / "AGENT_RUN_WORKSPACES"
+    ws_root.mkdir()
+
+    older = ws_root / "run_daemon_simone_todo_20260101_120000_aaaa"
+    older.mkdir()
+    newer = ws_root / "run_daemon_simone_todo_20260502_120000_bbbb"
+    newer.mkdir()
+
+    import os, time
+    os.utime(older, (time.time() - 3600, time.time() - 3600))
+    os.utime(newer, (time.time(), time.time()))
+
+    monkeypatch.setattr(api_server, "WORKSPACES_DIR", ws_root)
+
+    assert api_server._resolve_workspace_for_session("daemon_simone_todo") == newer
+
+
 def test_resolve_workspace_returns_direct_path_when_nothing_matches(tmp_path, monkeypatch):
     """When neither the direct dir nor any glob candidate exists, the
     resolver returns the direct (non-existent) path. Callers downstream
