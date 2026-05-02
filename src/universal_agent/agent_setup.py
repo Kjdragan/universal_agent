@@ -397,10 +397,15 @@ class AgentSetup:
         from universal_agent.utils.model_resolution import (
             resolve_agent_teams_enabled,
             resolve_claude_code_model,
+            resolve_haiku,
+            resolve_sonnet,
         )
 
         return ClaudeAgentOptions(
-            model=resolve_claude_code_model(default="opus"),
+            # Global daemon model is sonnet (glm-5-turbo) per the
+            # post-atom-poem operational decision; explicit heavy-tier
+            # subagents still override this via their own YAML.
+            model=resolve_claude_code_model(default="sonnet"),
             add_dirs=[os.path.join(self.src_dir, ".claude")],
             setting_sources=["project"],  # Enable loading agents from .claude/agents/
             disallowed_tools=disallowed_tools,
@@ -410,6 +415,17 @@ class AgentSetup:
                 "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
                 if resolve_agent_teams_enabled(default=True)
                 else "0",
+                # Force the SDK's INTERNAL haiku-tier preflight calls
+                # (system-prompt cache management, compaction routing,
+                # tool selection classifier) onto our resolved haiku
+                # model — currently glm-5-turbo, NOT the flaky
+                # glm-4.5-air lane that wedged the atom-poem run for
+                # 12+ minutes. Same idea for sonnet/opus so the SDK
+                # picks up our central mappings without depending on
+                # production env vars being set externally.
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL": resolve_haiku(),
+                "ANTHROPIC_DEFAULT_SONNET_MODEL": resolve_sonnet(),
+                "ANTHROPIC_DEFAULT_OPUS_MODEL": resolve_claude_code_model(default="opus"),
                 "UA_ENABLE_SDK_TYPED_TASK_EVENTS": os.getenv("UA_ENABLE_SDK_TYPED_TASK_EVENTS", "0"),
                 "UA_ENABLE_SDK_SESSION_HISTORY": os.getenv("UA_ENABLE_SDK_SESSION_HISTORY", "0"),
                 "UA_ENABLE_DYNAMIC_MCP": os.getenv("UA_ENABLE_DYNAMIC_MCP", "0"),

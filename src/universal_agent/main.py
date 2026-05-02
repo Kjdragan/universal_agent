@@ -8667,8 +8667,17 @@ async def setup_session(
     except Exception as exc:  # pragma: no cover — defensive
         print(f"⚠️  Link MCP registration skipped: {exc}")
 
+    # Local imports so we can also resolve the haiku/sonnet/opus
+    # mappings into env hints below (SDK preflight uses them).
+    from universal_agent.utils.model_resolution import resolve_haiku, resolve_sonnet
     options = ClaudeAgentOptions(
-        model=resolve_claude_code_model(default="opus"),
+        # Global daemon model is sonnet (glm-5-turbo). The atom-poem
+        # incident showed the SDK's internal haiku-tier preflight
+        # (system-prompt cache, compaction routing) was wedging the
+        # whole turn on glm-4.5-air; the per-agent YAML still
+        # overrides this for opus-tier subagents that need flagship
+        # power (research-specialist, code-writer, etc.).
+        model=resolve_claude_code_model(default="sonnet"),
         agents=__load_programmatic_agents(src_dir),
         add_dirs=[os.path.join(src_dir, ".claude")],
         setting_sources=["project"],  # Enable loading agents from .claude/agents/
@@ -8682,6 +8691,13 @@ async def setup_session(
             "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
             if resolve_agent_teams_enabled(default=True)
             else "0",
+            # Pin the SDK's internal tier→model resolution to OUR
+            # central mapping. Without this, the SDK's preflight
+            # haiku call landed on glm-4.5-air (the flaky lane) and
+            # blocked main-model work for ~6 min per failed attempt.
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": resolve_haiku(),
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": resolve_sonnet(),
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": resolve_claude_code_model(default="opus"),
             "UA_ENABLE_SDK_TYPED_TASK_EVENTS": os.getenv(
                 "UA_ENABLE_SDK_TYPED_TASK_EVENTS", "0"
             ),

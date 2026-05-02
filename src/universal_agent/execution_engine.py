@@ -36,6 +36,10 @@ from universal_agent.memory.paths import (
 )
 from universal_agent.runtime_env import ensure_runtime_path
 from universal_agent.timeout_policy import process_turn_timeout_seconds
+from universal_agent.utils.model_resolution import (
+    ZAI_MODEL_MAP,
+    model_call_timeout_seconds,
+)
 
 try:
     import logfire
@@ -833,7 +837,43 @@ class ProcessTurnAdapter:
                 ))
         
         engine_task = asyncio.create_task(run_engine())
-        max_runtime_s = process_turn_timeout_seconds()
+
+        # Resolve the wall-clock cap for this turn. Priority order:
+        #   1. Explicit UA_PROCESS_TURN_TIMEOUT_SECONDS env (legacy override).
+        #   2. Tier-aware default keyed off the configured agent model
+        #      (haiku=120s, sonnet=180s, opus=300s).
+        #   3. No cap (0).
+        #
+        # The atom-poem stuck task showed why an unbounded turn is a UX
+        # disaster: a single failing inference call sat on the wire for
+        # 365s before erroring out, and the dispatcher's natural retry
+        # cadence couldn't kick in until it released. With a tier-aware
+        # cap the turn aborts cleanly, the dispatcher's stuck-assignment
+        # sweep (todo_dispatch_service.py) catches it, the task reopens,
+        # and the next dispatch tick re-runs in ~10s.
+        legacy_override_s = process_turn_timeout_seconds()
+        if legacy_override_s > 0:
+            max_runtime_s = legacy_override_s
+        else:
+            configured_model = ""
+            opt_obj = getattr(self, "_options", None)
+            if opt_obj is not None:
+                configured_model = str(getattr(opt_obj, "model", "") or "").strip()
+            tier_for_cap = "sonnet"  # safe default
+            for tier_name, mapped in ZAI_MODEL_MAP.items():
+                if configured_model and (
+                    configured_model == mapped or configured_model.startswith(mapped)
+                ):
+                    tier_for_cap = tier_name
+                    break
+            max_runtime_s = model_call_timeout_seconds(tier_for_cap)
+            if max_runtime_s > 0:
+                logger.info(
+                    "ProcessTurnAdapter wall-clock cap: %.0fs (tier=%s, model=%r)",
+                    max_runtime_s,
+                    tier_for_cap,
+                    configured_model or "<unknown>",
+                )
         deadline = (time.time() + max_runtime_s) if max_runtime_s > 0 else None
         
         # Yield events as they come in
