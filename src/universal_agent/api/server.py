@@ -577,6 +577,20 @@ async def _enforce_session_owner(session_id: str, owner_id: str, auth_required: 
         return
     if not _gateway_url():
         return
+    # Daemon sessions (e.g. ``daemon_simone_todo``) are SHARED runtimes
+    # where many tasks from many dashboard owners run sequentially. The
+    # gateway's `create_session` clobbers the persistent
+    # ``user_id="daemon"`` with whichever owner most recently dispatched
+    # a task (gateway.py:510-522). That makes per-owner ownership checks
+    # meaningless — the stored owner is just "the last dispatcher", not
+    # "the resource's owner". Bypass the check entirely for daemon_*
+    # session ids when the requester is the primary dashboard owner;
+    # this is the same bypass pattern already used for hook/cron
+    # sessions further down.
+    if session_id.startswith("daemon_") and hmac.compare_digest(
+        owner_id, _normalize_owner_id(None)
+    ):
+        return
     session_owner = await _fetch_gateway_session_owner(session_id)
     if session_owner and hmac.compare_digest(session_owner, owner_id):
         return

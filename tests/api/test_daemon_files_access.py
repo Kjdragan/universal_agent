@@ -4,13 +4,32 @@ resolve `daemon_*` ids to their actual `run_{session_id}_*` workspace.
 Both behaviors are required by the Task Hub Workspace button. Without
 them, clicking Workspace on a Simone-todo task showed:
 
-  - HTTP 403 from /api/files/daemon_simone_todo/{path}  (owner not
-    whitelisted; daemons set user_id="daemon" in
-    services/daemon_sessions.py:97 but the dashboard owner is the
-    primary user)
-  - Empty file panel (no daemon-glob fallback — the bare directory
-    `WORKSPACES_DIR/daemon_simone_todo` typically doesn't exist; the
-    actual workspace lives at `run_daemon_simone_todo_<ts>_<uuid>`)
+  - HTTP 403 from /api/files/daemon_simone_todo/{path}
+  - Empty file panel
+  - WS attached but every durable-file fetch failed
+
+Two layered root causes were uncovered (the first hid the second):
+
+  1. `gateway.create_session(session_id="daemon_simone_todo",
+     user_id=<dispatcher>)` overwrites the daemon's persistent
+     `user_id="daemon"` with whatever Composio user id the dispatcher
+     passed (gateway.py:510-522). After the first task runs, the
+     stored "session owner" is the dispatcher's Composio id, not
+     "daemon". `_is_system_session_owner` doesn't match that, so the
+     owner-mismatch 403 fires.
+
+  2. Even if the owner check passed, `list_files`/`get_file` resolved
+     the workspace as `WORKSPACES_DIR/daemon_simone_todo` directly —
+     a path that typically doesn't exist. The actual workspace lives
+     at `run_daemon_simone_todo_<ts>_<uuid>`.
+
+Fixes:
+  - `_enforce_session_owner` bypasses the owner check entirely for
+    `daemon_*` session ids when the requester is the primary
+    dashboard owner. Daemon sessions are SHARED runtimes — owner
+    semantics don't apply.
+  - `_resolve_workspace_for_session()` glob-resolves
+    `daemon_simone_todo` → most-recent `run_daemon_simone_todo_*`.
 """
 from __future__ import annotations
 
@@ -22,11 +41,46 @@ from universal_agent.api import server as api_server
 
 
 def test_daemon_user_id_is_treated_as_system_owner():
-    """`_enforce_session_owner` must not 403 when the session belongs
-    to the daemon executor. The whitelist on `_SYSTEM_SESSION_OWNERS`
-    is the gate."""
+    """Defense-in-depth: even though daemon sessions get their stored
+    user_id clobbered by the dispatcher's Composio id at runtime, if
+    the persistent ``user_id="daemon"`` ever does survive, the
+    whitelist still recognizes it as a system owner."""
     assert "daemon" in api_server._SYSTEM_SESSION_OWNERS
     assert api_server._is_system_session_owner("daemon") is True
+
+
+@pytest.mark.asyncio
+async def test_enforce_session_owner_bypasses_daemon_session_check(monkeypatch):
+    """The actual production root cause: gateway.create_session
+    overwrites daemon_simone_todo's stored user_id with the
+    dispatcher's Composio id (gateway.py:510-522). The owner-mismatch
+    check then 403s every dashboard view of a daemon session.
+
+    `_enforce_session_owner` must short-circuit for daemon_* session
+    ids when the requester is the primary dashboard owner, BEFORE
+    fetching the (irrelevant) gateway-stored owner."""
+    # Force a value for `_gateway_url()` so the early `if not _gateway_url(): return`
+    # bypass doesn't fire — we want to exercise the real check.
+    monkeypatch.setattr(api_server, "_gateway_url", lambda: "http://fake-gateway")
+
+    # If the bypass is missing, this fetcher would be called and would
+    # report a clobbered Composio id, triggering the 403. Fail loudly
+    # if we ever reach it.
+    async def _should_not_be_called(session_id):
+        raise AssertionError(
+            f"_fetch_gateway_session_owner was called for {session_id!r}; "
+            "daemon_* sessions must short-circuit before the gateway probe."
+        )
+
+    monkeypatch.setattr(
+        api_server, "_fetch_gateway_session_owner", _should_not_be_called
+    )
+
+    # Primary dashboard owner viewing a daemon session: must NOT raise.
+    primary = api_server._normalize_owner_id(None)
+    await api_server._enforce_session_owner(
+        "daemon_simone_todo", primary, auth_required=True
+    )
 
 
 def test_resolve_workspace_picks_latest_daemon_run_dir(tmp_path, monkeypatch):
