@@ -13,7 +13,7 @@ from typing import Any, Dict
 
 import litellm
 
-from universal_agent.utils.model_resolution import resolve_sonnet
+from universal_agent.utils.model_resolution import resolve_opus
 
 logger = logging.getLogger(__name__)
 
@@ -80,8 +80,15 @@ async def evaluate_health_snapshot(raw_report_dict: dict[str, Any]) -> Dict[str,
 
     lessons_learned = _get_lessons_learned_content()
     prompt = _build_evaluation_prompt(raw_report_text, lessons_learned)
-    
-    model = resolve_sonnet()
+
+    # Promoted to opus tier per the post-atom-poem audit. This evaluator
+    # is the brain that decides which morning-report items get ignored,
+    # routed to Simone as directives, or escalated to a human. Wrong
+    # categorization here propagates to humans (false escalations =
+    # noise; missed escalations = real-world misses), so the per-call
+    # cost delta from sonnet → opus (~$0.05 → ~$0.30 estimated) is
+    # justified by output quality.
+    model = resolve_opus()
     try:
         response = await litellm.acompletion(
             model=model,

@@ -441,7 +441,15 @@ async def synthesize_readout(evidence: dict[str, Any]) -> tuple[dict[str, Any], 
     except Exception as exc:
         return fallback_readout(evidence, error=f"anthropic package unavailable: {exc}"), None
 
-    model = os.getenv("UA_MISSION_CONTROL_COS_MODEL") or resolve_model("sonnet")
+    # Promoted to opus tier per the post-atom-poem audit. Mission
+    # Control "Chief of Staff" synthesizes priorities and recommendations
+    # across many simultaneous signals (CSI, Task Hub, supervisors,
+    # heartbeat findings) and is the canonical human-facing
+    # operational summary. Strategic synthesis quality matters more
+    # than per-call cost here; per-tier env override
+    # (UA_MISSION_CONTROL_COS_MODEL) still wins if the operator wants
+    # to dial back.
+    model = os.getenv("UA_MISSION_CONTROL_COS_MODEL") or resolve_model("opus")
     client_kwargs: dict[str, Any] = {
         "api_key": api_key,
         "max_retries": 0,
