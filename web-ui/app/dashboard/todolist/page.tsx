@@ -1192,11 +1192,27 @@ export default function ToDoListDashboardPage() {
               })()}
             </h3>
             {item.description && <p className="mt-1 text-[11px] text-kcd-text-muted leading-snug line-clamp-2">{item.description}</p>}
-            {(item.last_assignment?.result_summary || item.metadata?.dispatch?.last_disposition_reason) && (
-              <p className="mt-1.5 text-[11px] italic text-kcd-text-dim border-l-2 border-white/10 pl-2 line-clamp-2">
-                {item.last_assignment?.result_summary || item.metadata?.dispatch?.last_disposition_reason}
-              </p>
-            )}
+            {(() => {
+              const raw = item.last_assignment?.result_summary || item.metadata?.dispatch?.last_disposition_reason || "";
+              if (!raw) return null;
+              // Suppress internal auto-disposition error text on completed cards
+              if (raw.startsWith("auto_disposition:") || raw.startsWith("todo_dispatch_failed:")) {
+                const reason = item.metadata?.dispatch?.last_disposition_reason || "";
+                if (reason === "todo_self_reviewed_after_delivery") {
+                  return (
+                    <p className="mt-1.5 text-[11px] italic text-kcd-text-dim border-l-2 border-white/10 pl-2 line-clamp-2">
+                      ✓ Completed — delivery verified
+                    </p>
+                  );
+                }
+                return null; // Hide raw error text for other auto-disposition cases
+              }
+              return (
+                <p className="mt-1.5 text-[11px] italic text-kcd-text-dim border-l-2 border-white/10 pl-2 line-clamp-2">
+                  {raw}
+                </p>
+              );
+            })()}
           </div>
           <div className={`font-mono text-[10px] font-bold shrink-0 text-right ${pCls}`}>{priorityText(item.priority)}</div>
         </div>

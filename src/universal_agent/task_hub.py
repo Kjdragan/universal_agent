@@ -2516,6 +2516,17 @@ def finalize_assignments(
                 """,
                 (TASK_STATUS_COMPLETED, "completed", completion_token, _json_dumps(metadata), now_iso, task_id),
             )
+            # Override the assignment's error result_summary (set earlier in
+            # this function) with a clean message so the completed card in the
+            # UI doesn't display raw auto-disposition error text.
+            conn.execute(
+                """
+                UPDATE task_hub_assignments
+                SET state='completed', result_summary=?
+                WHERE assignment_id=?
+                """,
+                ("Completed — delivery verified automatically", assignment_id),
+            )
             completed += 1
             logger.info(
                 "Task Hub ToDo finalize auto-completed task %s after verified final delivery",
