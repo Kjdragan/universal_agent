@@ -58,8 +58,12 @@ export function resolveTaskWorkspaceTarget(
   } else if (runId) {
     target.runId = runId;
   }
-  if (workspaceName && !workspaceName.includes("/")) {
-    target.workspaceName = workspaceName;
-  }
+  // workspaceName is NOT propagated as a navigation identity. The backend
+  // resolver treats it as a basename hint at best, and the URL contract
+  // (`/?session_id=...&run_id=...`) doesn't carry it. Adding it here just
+  // pollutes the resolve payload and pushes the resolver toward the wrong
+  // workspace branch when sessionId/runId are already present. Tests pin
+  // this contract explicitly.
+  void workspaceName;
   return target;
 }
