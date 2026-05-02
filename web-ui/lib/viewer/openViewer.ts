@@ -4,6 +4,15 @@
 // call openViewer() instead of building viewer URLs locally. This is
 // the contract that ends the per-producer URL drift documented in
 // docs/three_panel_viewer_track_b_spec.md.
+//
+// Navigation target: `app/page.tsx` (the live three-panel UI). That page
+// already implements both modes — live attach via WebSocket and
+// rehydration of completed sessions via trace.json + run.log
+// (extractHistoryFromTraceJson). The earlier /dashboard/viewer/... route
+// rendered a strictly inferior view and was removed. The /api/viewer/resolve
+// call below still runs server-side because it's the right place to
+// normalize the various caller hints (run_id-only, workspace_name, etc.)
+// into a canonical {session_id, run_id} pair.
 
 import { CHAT_WINDOW_NAME } from "@/lib/chatWindow";
 import type { ResolveInput, SessionViewTarget } from "@/lib/viewer/types";
@@ -90,7 +99,17 @@ export async function openViewer(options: OpenViewerOptions): Promise<OpenViewer
     return result;
   }
 
-  const url = new URL(result.target.viewer_href, window.location.origin);
+  // Build a legacy `/?session_id=...&run_id=...` URL. `app/page.tsx` reads
+  // these query params (see `setRequestedSessionIdFromUrl` / `setRequestedRunIdFromUrl`)
+  // and either attaches live or runs the rehydration block — same UI either way.
+  const target = result.target;
+  const sid = (target.session_id || "").trim() ||
+    (target.target_kind === "session" ? target.target_id : "");
+  const rid = (target.run_id || "").trim() ||
+    (target.target_kind === "run" ? target.target_id : "");
+  const url = new URL("/", window.location.origin);
+  if (sid) url.searchParams.set("session_id", sid);
+  if (rid) url.searchParams.set("run_id", rid);
   if (options.attachMode === "tail") {
     url.searchParams.set("attach", "tail");
   }

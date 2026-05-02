@@ -89,7 +89,7 @@ describe("openViewer", () => {
     vi.restoreAllMocks();
   });
 
-  it("opens the resolved viewer_href with attachMode + role params", async () => {
+  it("opens the legacy app/page.tsx URL with session_id/run_id query params", async () => {
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
       status: 200,
       json: async () => FAKE_TARGET,
@@ -100,9 +100,29 @@ describe("openViewer", () => {
       role: "viewer",
     });
     const opened = (window.open as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(opened).toContain("/dashboard/viewer/run/run_abc");
+    // Legacy three-panel UI lives at `/`. We pass session_id+run_id via
+    // query so app/page.tsx can rehydrate via trace.json + run.log.
+    expect(opened).toContain("run_id=run_abc");
+    expect(opened).not.toContain("/dashboard/viewer/");
     expect(opened).toContain("attach=tail");
     expect(opened).toContain("role=viewer");
+  });
+
+  it("includes session_id when the resolver returns one", async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: 200,
+      json: async () => ({
+        ...FAKE_TARGET,
+        target_kind: "session",
+        target_id: "daemon_simone_todo",
+        session_id: "daemon_simone_todo",
+        run_id: "run_xyz",
+      }),
+    });
+    await openViewer({ session_id: "daemon_simone_todo" });
+    const opened = (window.open as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(opened).toContain("session_id=daemon_simone_todo");
+    expect(opened).toContain("run_id=run_xyz");
   });
 
   it("does not call window.open when not in browser context", async () => {

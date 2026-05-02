@@ -2,8 +2,10 @@
 
 Mounts the viewer router on a minimal FastAPI app and exercises:
   - POST /api/viewer/resolve with each input shape (200 / 404 / 400).
-  - GET /api/viewer/hydrate happy path + 404 for unknown target.
   - Response includes the viewer_href and target dict.
+
+The earlier `/api/viewer/hydrate` endpoint was removed; rehydration now
+happens client-side in `app/page.tsx` via `extractHistoryFromTraceJson`.
 """
 
 from __future__ import annotations
@@ -124,45 +126,3 @@ def test_resolve_by_daemon_session_id(app_client):
     assert body["is_live_session"] is True
 
 
-def test_hydrate_404_when_unknown(app_client):
-    client, _, _ = app_client
-    res = client.get(
-        "/api/viewer/hydrate?target_kind=run&target_id=run_unknown"
-    )
-    assert res.status_code == 404
-
-
-def test_hydrate_returns_full_payload(app_client):
-    client, fake, ws_root = app_client
-    import json
-
-    ws = ws_root / "run_full"
-    ws.mkdir()
-    fake.runs["run_full"] = {
-        "run_id": "run_full",
-        "workspace_dir": str(ws),
-        "provider_session_id": None,
-    }
-    (ws / "trace.json").write_text(
-        json.dumps({"messages": [{"role": "user", "content": "hi"}]})
-    )
-    (ws / "run.log").write_text("INFO: started\n")
-    (ws / "run_checkpoint.json").write_text("{}")
-
-    res = client.get(
-        "/api/viewer/hydrate?target_kind=run&target_id=run_full"
-    )
-    assert res.status_code == 200
-    body = res.json()
-    assert body["target"]["target_id"] == "run_full"
-    assert len(body["history"]) == 1
-    assert body["history"][0]["content"] == "hi"
-    assert len(body["logs"]) >= 1
-    assert body["readiness"]["state"] == "ready"
-    assert body["workspace_root"] == str(ws)
-
-
-def test_hydrate_validates_target_kind(app_client):
-    client, _, _ = app_client
-    res = client.get("/api/viewer/hydrate?target_kind=invalid&target_id=x")
-    assert res.status_code == 422

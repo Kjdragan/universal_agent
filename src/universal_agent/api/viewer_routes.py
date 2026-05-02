@@ -1,14 +1,19 @@
 """FastAPI router for the centralized three-panel viewer (Track B).
 
-Two endpoints:
+One endpoint:
 
   POST /api/viewer/resolve   — any identity hints → SessionViewTarget
-  GET  /api/viewer/hydrate   — full hydration payload for the new route
 
 Producers (Task Hub, Sessions, Calendar, Proactive, Chat) call /resolve
-to get the canonical viewer target including the `viewer_href` they
-should navigate to. The viewer route then calls /hydrate on mount and
-on each readiness poll.
+to normalize the various hint shapes (session_id-only, run_id-only,
+workspace_name, ...) into a canonical {session_id, run_id, workspace_dir}
+target. The web-ui then navigates to the live three-panel UI in
+`app/page.tsx?session_id=...&run_id=...`, which already handles both
+live attach (WebSocket) and rehydration (trace.json + run.log).
+
+The earlier `/api/viewer/hydrate` endpoint and its companion
+`/dashboard/viewer/[targetKind]/[targetId]/page.tsx` route rendered a
+strictly inferior version of the three-panel view; both were removed.
 """
 
 from __future__ import annotations
@@ -16,22 +21,15 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from universal_agent.viewer import (
-    SessionViewTarget,
-    hydrate,
-    resolve_session_view_target,
-)
+from universal_agent.viewer import resolve_session_view_target
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-# ── Models ───────────────────────────────────────────────────────────────────
 
 
 class ResolveBody(BaseModel):
@@ -41,17 +39,9 @@ class ResolveBody(BaseModel):
     workspace_name: Optional[str] = None
 
 
-# ── Routes ───────────────────────────────────────────────────────────────────
-
-
 @router.post("/api/viewer/resolve")
 async def viewer_resolve(body: ResolveBody) -> JSONResponse:
-    """Resolve any combination of identity hints to a canonical SessionViewTarget.
-
-    UI producers MUST call this and use the returned `viewer_href` rather
-    than building viewer URLs locally — that's the contract that ends
-    the per-producer URL-building drift.
-    """
+    """Resolve any combination of identity hints to a canonical SessionViewTarget."""
     if not any(
         (
             body.session_id,
@@ -75,9 +65,7 @@ async def viewer_resolve(body: ResolveBody) -> JSONResponse:
     )
     if target is None:
         # Surface a per-branch diagnostic trace so the network tab tells us
-        # exactly why this hint set didn't resolve. Operators can read it to
-        # see whether the catalog is missing rows, the workspaces root is
-        # wrong, the session id has an unexpected prefix, etc.
+        # exactly why this hint set didn't resolve.
         logger.warning(
             "Viewer resolver miss: hints=%s trace=%s",
             body.model_dump(exclude_none=True),
@@ -97,40 +85,6 @@ async def viewer_resolve(body: ResolveBody) -> JSONResponse:
     return JSONResponse(content=target.to_dict())
 
 
-@router.get("/api/viewer/hydrate")
-async def viewer_hydrate(
-    target_kind: str = Query(..., pattern="^(run|session)$"),
-    target_id: str = Query(..., min_length=1),
-    history_limit: int = Query(500, ge=1, le=5000),
-    logs_limit: int = Query(1000, ge=1, le=10000),
-) -> JSONResponse:
-    """Server-assembled three-panel payload for the viewer route.
-
-    Resolves first (so callers can hand us anchor IDs without separately
-    POSTing /resolve), then hydrates. The viewer route polls this every
-    2s while readiness=pending; once ready it falls back to the existing
-    chat websocket for live updates.
-    """
-    if target_kind == "run":
-        target = resolve_session_view_target(run_id=target_id)
-    else:
-        target = resolve_session_view_target(session_id=target_id)
-
-    if target is None:
-        return JSONResponse(
-            status_code=404,
-            content={
-                "detail": {
-                    "code": "viewer_target_not_found",
-                    "message": f"Unknown {target_kind}: {target_id}",
-                }
-            },
-        )
-
-    result = hydrate(target, history_limit=history_limit, logs_limit=logs_limit)
-    return JSONResponse(content=result.to_dict())
-
-
 @router.get("/api/viewer/health")
 async def viewer_health() -> dict[str, Any]:
     """Sanity check + version probe for the viewer subsystem."""
@@ -139,6 +93,5 @@ async def viewer_health() -> dict[str, Any]:
         "subsystem": "viewer",
         "endpoints": [
             "POST /api/viewer/resolve",
-            "GET /api/viewer/hydrate",
         ],
     }

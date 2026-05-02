@@ -1427,9 +1427,10 @@ try:
 except Exception as exc:  # pragma: no cover — defensive
     logger.warning("Link routes registration failed: %s", exc)
 
-# Three-panel viewer router (Track B). Mounts /api/viewer/resolve + /hydrate.
-# Centralizes session/run/workspace resolution and panel hydration so UI
-# producers no longer build viewer URLs locally.
+# Three-panel viewer router (Track B). Mounts /api/viewer/resolve.
+# Centralizes session/run/workspace resolution so UI producers no longer
+# build viewer URLs locally; rehydration of the panels happens
+# client-side in app/page.tsx.
 try:
     from universal_agent.api.viewer_routes import router as viewer_router
 
