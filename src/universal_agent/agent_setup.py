@@ -398,14 +398,17 @@ class AgentSetup:
             resolve_agent_teams_enabled,
             resolve_claude_code_model,
             resolve_haiku,
-            resolve_sonnet,
+            resolve_model,
         )
 
         return ClaudeAgentOptions(
-            # Global daemon model is sonnet (glm-5-turbo) per the
-            # post-atom-poem operational decision; explicit heavy-tier
-            # subagents still override this via their own YAML.
-            model=resolve_claude_code_model(default="sonnet"),
+            # Global daemon model is OPUS (glm-5.1). The apparent
+            # jankiness pre-fix was the SDK's haiku-tier preflight
+            # on the flaky glm-4.5-air lane (now remapped at the
+            # Claude Code layer); main-agent reasoning quality on
+            # opus has been good throughout. Subagents that prefer
+            # sonnet still get it via their .claude/agents/*.md YAML.
+            model=resolve_claude_code_model(default="opus"),
             add_dirs=[os.path.join(self.src_dir, ".claude")],
             setting_sources=["project"],  # Enable loading agents from .claude/agents/
             disallowed_tools=disallowed_tools,
@@ -424,7 +427,7 @@ class AgentSetup:
                 # picks up our central mappings without depending on
                 # production env vars being set externally.
                 "ANTHROPIC_DEFAULT_HAIKU_MODEL": resolve_haiku(),
-                "ANTHROPIC_DEFAULT_SONNET_MODEL": resolve_sonnet(),
+                "ANTHROPIC_DEFAULT_SONNET_MODEL": resolve_model("sonnet"),
                 "ANTHROPIC_DEFAULT_OPUS_MODEL": resolve_claude_code_model(default="opus"),
                 "UA_ENABLE_SDK_TYPED_TASK_EVENTS": os.getenv("UA_ENABLE_SDK_TYPED_TASK_EVENTS", "0"),
                 "UA_ENABLE_SDK_SESSION_HISTORY": os.getenv("UA_ENABLE_SDK_SESSION_HISTORY", "0"),

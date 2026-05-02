@@ -98,7 +98,7 @@ async def decompose_with_llm(
         # results. Worth flagship for a 1024-token structured call.
         response = await client.messages.create(
             model=model or resolve_opus(),
-            max_tokens=1024,
+            max_tokens=2048,  # doubled from 1024 per audit — give the decomposer headroom for richer subtask plans
             system=_DECOMPOSE_SYSTEM,
             messages=[{"role": "user", "content": user_msg}],
         )

@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .evaluation_policy import get_policy_summary, resolve_evaluation_policy
 from .state import Artifact, ArtifactType, CompletionConfidence, Task
-from universal_agent.utils.model_resolution import resolve_sonnet
+from universal_agent.utils.model_resolution import resolve_opus
 
 
 @dataclass
@@ -237,7 +237,7 @@ class LLMJudgeEvaluator(Evaluator):
 
     def __init__(self, llm_client: Any, model: Optional[str] = None):
         self.llm_client = llm_client
-        self.model = model or resolve_sonnet()
+        self.model = model or resolve_opus()
 
     async def evaluate_async(
         self, task: Task, artifacts: List[Artifact], agent_output: str, workspace_path: Path

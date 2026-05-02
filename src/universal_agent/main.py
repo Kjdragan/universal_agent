@@ -981,8 +981,8 @@ _LETTA_SUBAGENT_ENABLED = os.getenv("UA_LETTA_SUBAGENT_MEMORY", "0").lower() in 
 
 
 def _resolve_default_anthropic_model() -> str:
-    from universal_agent.utils.model_resolution import resolve_sonnet
-    return resolve_sonnet()
+    from universal_agent.utils.model_resolution import resolve_opus
+    return resolve_opus()
 
 
 def _resolve_letta_model() -> str:
@@ -8669,15 +8669,19 @@ async def setup_session(
 
     # Local imports so we can also resolve the haiku/sonnet/opus
     # mappings into env hints below (SDK preflight uses them).
-    from universal_agent.utils.model_resolution import resolve_haiku, resolve_sonnet
+    from universal_agent.utils.model_resolution import (
+        resolve_haiku,
+        resolve_model,
+    )
     options = ClaudeAgentOptions(
-        # Global daemon model is sonnet (glm-5-turbo). The atom-poem
-        # incident showed the SDK's internal haiku-tier preflight
-        # (system-prompt cache, compaction routing) was wedging the
-        # whole turn on glm-4.5-air; the per-agent YAML still
-        # overrides this for opus-tier subagents that need flagship
-        # power (research-specialist, code-writer, etc.).
-        model=resolve_claude_code_model(default="sonnet"),
+        # Global daemon model is OPUS (glm-5.1). User direction post
+        # haiku-flake fix: the apparent jankiness was the SDK's
+        # internal haiku preflight on the flaky glm-4.5-air lane,
+        # not the main agent model. Now that haiku is remapped at
+        # the Claude Code level (haiku → glm-5-turbo), there's no
+        # cost or reliability reason to hold the daemon at sonnet
+        # — opus is the right default for all task execution paths.
+        model=resolve_claude_code_model(default="opus"),
         agents=__load_programmatic_agents(src_dir),
         add_dirs=[os.path.join(src_dir, ".claude")],
         setting_sources=["project"],  # Enable loading agents from .claude/agents/
@@ -8695,8 +8699,12 @@ async def setup_session(
             # central mapping. Without this, the SDK's preflight
             # haiku call landed on glm-4.5-air (the flaky lane) and
             # blocked main-model work for ~6 min per failed attempt.
+            # SDK env hints map each tier name to its actual model.
+            # The application code defaults to opus everywhere now,
+            # but if an .claude/agents/*.md subagent declares
+            # `model: sonnet` it should still receive the real sonnet.
             "ANTHROPIC_DEFAULT_HAIKU_MODEL": resolve_haiku(),
-            "ANTHROPIC_DEFAULT_SONNET_MODEL": resolve_sonnet(),
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": resolve_model("sonnet"),
             "ANTHROPIC_DEFAULT_OPUS_MODEL": resolve_claude_code_model(default="opus"),
             "UA_ENABLE_SDK_TYPED_TASK_EVENTS": os.getenv(
                 "UA_ENABLE_SDK_TYPED_TASK_EVENTS", "0"

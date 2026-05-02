@@ -464,7 +464,7 @@ async def synthesize_readout(evidence: dict[str, Any]) -> tuple[dict[str, Any], 
     client = AsyncAnthropic(**client_kwargs)
     limiter = ZAIRateLimiter.get_instance()
     max_retries = int(os.getenv("UA_MISSION_CONTROL_COS_MAX_RETRIES", "3"))
-    max_tokens = int(os.getenv("UA_MISSION_CONTROL_COS_MAX_TOKENS", "9000"))
+    max_tokens = int(os.getenv("UA_MISSION_CONTROL_COS_MAX_TOKENS", "18000"))  # doubled from 9000 per audit
     prompt = _llm_prompt(evidence)
     last_error: Exception | None = None
 

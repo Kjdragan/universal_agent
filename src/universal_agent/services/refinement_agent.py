@@ -21,7 +21,7 @@ import logging
 import os
 from typing import Any, Optional
 
-from universal_agent.utils.model_resolution import resolve_sonnet
+from universal_agent.utils.model_resolution import resolve_opus
 
 logger = logging.getLogger(__name__)
 
@@ -206,8 +206,8 @@ async def refine_with_llm(
 
     try:
         response = await client.messages.create(
-            model=model or resolve_sonnet(),
-            max_tokens=1024,
+            model=model or resolve_opus(),
+            max_tokens=2048,  # doubled from 1024 per audit — refinement output benefits from headroom
             system=system_msg,
             messages=[{"role": "user", "content": user_msg}],
         )

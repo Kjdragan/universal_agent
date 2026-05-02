@@ -19,7 +19,7 @@ import uuid
 
 from .evaluation_policy import TEMPLATE_EVALUATION_POLICIES
 from .state import Task, TaskStatus
-from universal_agent.utils.model_resolution import resolve_sonnet
+from universal_agent.utils.model_resolution import resolve_opus
 
 DECOMPOSITION_TEMPLATES = {
     "research_report": {
@@ -296,7 +296,7 @@ class LLMDecomposer(Decomposer):
 
     def __init__(self, llm_client: Any, model: Optional[str] = None):
         self.llm_client = llm_client
-        self.model = model or resolve_sonnet()
+        self.model = model or resolve_opus()
 
     def can_handle(self, request: str) -> bool:
         return True

@@ -12,7 +12,7 @@ import os
 import re
 from typing import Any, Optional
 
-from universal_agent.utils.model_resolution import resolve_sonnet
+from universal_agent.utils.model_resolution import resolve_opus
 
 logger = logging.getLogger(__name__)
 
@@ -49,13 +49,13 @@ def _call_llm(
     system: str,
     user: str,
     model: Optional[str] = None,
-    max_tokens: int = 1024,
+    max_tokens: int = 2048,  # doubled from 1024 per audit
 ) -> str:
     """Make a synchronous LLM call and return the raw text response."""
     client = _get_anthropic_client()
 
     response = client.messages.create(
-        model=model or resolve_sonnet(),
+        model=model or resolve_opus(),
         max_tokens=max_tokens,
         system=system,
         messages=[{"role": "user", "content": user}],

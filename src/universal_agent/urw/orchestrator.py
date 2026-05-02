@@ -29,7 +29,7 @@ from .state import (
     TaskStatus,
     URWStateManager,
 )
-from universal_agent.utils.model_resolution import resolve_sonnet
+from universal_agent.utils.model_resolution import resolve_opus
 
 
 @dataclass
@@ -58,7 +58,7 @@ class URWConfig:
     auto_decompose_failed_tasks: bool = True
 
     llm_model: str = field(
-        default_factory=resolve_sonnet
+        default_factory=resolve_opus
     )
 
     verbose: bool = True

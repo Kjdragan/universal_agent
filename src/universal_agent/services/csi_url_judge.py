@@ -23,7 +23,7 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import BaseModel, HttpUrl, field_validator
 
-from universal_agent.utils.model_resolution import resolve_sonnet
+from universal_agent.utils.model_resolution import resolve_opus
 
 logger = logging.getLogger(__name__)
 
@@ -280,7 +280,7 @@ def _call_llm_structured(*, system: str, user: str, tool: dict[str, Any], max_re
     for attempt in range(max_retries):
         try:
             response = client.messages.create(
-                model=resolve_sonnet(),
+                model=resolve_opus(),
                 max_tokens=1000,
                 system=system,
                 messages=[{"role": "user", "content": user}],

@@ -25156,7 +25156,7 @@ async def vision_describe(request: VisionDescribeRequest):
     if not api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured for vision tasks")
 
-    model = resolve_sonnet()
+    model = resolve_opus()
 
     try:
         base64_data = request.image_base64

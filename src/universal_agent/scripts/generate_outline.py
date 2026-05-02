@@ -10,12 +10,12 @@ from pydantic import BaseModel, Field
 
 from universal_agent.rate_limiter import ZAIRateLimiter
 from universal_agent.utils.json_utils import extract_json_payload
-from universal_agent.utils.model_resolution import resolve_sonnet
+from universal_agent.utils.model_resolution import resolve_opus
 
 # Configuration
 API_KEY = os.getenv("ANTHROPIC_AUTH_TOKEN") or os.getenv("ZAI_API_KEY")
 BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic")
-MODEL = resolve_sonnet()
+MODEL = resolve_opus()
 
 class OutlineSection(BaseModel):
     id: str = Field(..., description="Unique slug like '01_executive_summary'")

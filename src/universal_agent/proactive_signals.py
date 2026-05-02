@@ -739,7 +739,7 @@ async def distill_feedback_to_rules(card_dict: dict[str, Any], feedback_text: st
 
     import litellm
 
-    from universal_agent.utils.model_resolution import resolve_sonnet
+    from universal_agent.utils.model_resolution import resolve_opus
 
     feedback_tags = feedback_tags or []
     logger = logging.getLogger(__name__)
@@ -778,13 +778,13 @@ User's Raw Feedback Text:
 
 Respond with ONLY the markdown content for the updated rules file. Do not include introductory or concluding conversation. Maintain the existing markdown headers.
 """
-    model = resolve_sonnet()
+    model = resolve_opus()
     try:
         response = await litellm.acompletion(
             model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
-            max_tokens=2500,
+            max_tokens=5000,  # doubled from 2500 per audit
         )
         new_rules = response.choices[0].message.content.strip()
         if new_rules.startswith("```md"):

@@ -127,7 +127,7 @@ async def _generate_digest_content(full_prompt: str) -> str:
     if not api_key:
         raise RuntimeError("No ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or ZAI_API_KEY configured")
 
-    model = os.getenv("UA_YOUTUBE_DIGEST_MODEL") or resolve_model("sonnet")
+    model = os.getenv("UA_YOUTUBE_DIGEST_MODEL") or resolve_model("opus")
     client_kwargs: dict[str, Any] = {
         "api_key": api_key,
         "max_retries": 0,

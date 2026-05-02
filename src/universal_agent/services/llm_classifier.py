@@ -19,7 +19,7 @@ import logging
 import os
 from typing import Any, Optional
 
-from universal_agent.utils.model_resolution import resolve_sonnet
+from universal_agent.utils.model_resolution import resolve_opus
 
 logger = logging.getLogger(__name__)
 
@@ -54,13 +54,13 @@ async def _call_llm(
     system: str,
     user: str,
     model: Optional[str] = None,
-    max_tokens: int = 512,
+    max_tokens: int = 1024,  # doubled from 512 per audit
 ) -> str:
     """Make an LLM call and return the raw text response."""
     client = await _get_anthropic_client()
 
     response = await client.messages.create(
-        model=model or resolve_sonnet(),
+        model=model or resolve_opus(),
         max_tokens=max_tokens,
         system=system,
         messages=[{"role": "user", "content": user}],
@@ -470,7 +470,7 @@ async def extract_due_at(
         raw = await _call_llm(
             system=system_prompt,
             user=user_msg,
-            max_tokens=256,
+            max_tokens=512,  # doubled from 256 per audit
         )
         result = _parse_json_response(raw)
 
@@ -554,7 +554,7 @@ async def extract_disjointed_tasks(
         raw = await _call_llm(
             system=_DISJOINTED_TASK_SYSTEM,
             user=user_msg,
-            max_tokens=1024,
+            max_tokens=2048,  # doubled from 1024 per audit
         )
         result = _parse_json_response(raw)
 

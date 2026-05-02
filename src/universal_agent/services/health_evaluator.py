@@ -94,7 +94,7 @@ async def evaluate_health_snapshot(raw_report_dict: dict[str, Any]) -> Dict[str,
             model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
-            max_tokens=1000,
+            max_tokens=2000,  # doubled from 1000 per audit — escalation reasoning needs space to enumerate directives + rationale
         )
         
         raw_output = response.choices[0].message.content.strip()

@@ -33,7 +33,7 @@ from universal_agent.services.proactive_artifacts import (
     make_artifact_id,
     upsert_artifact,
 )
-from universal_agent.utils.model_resolution import resolve_sonnet
+from universal_agent.utils.model_resolution import resolve_opus
 
 DEFAULT_HANDLE = "ClaudeDevs"
 DEFAULT_HANDLES = ["ClaudeDevs", "bcherny"]
@@ -663,7 +663,7 @@ def _llm_assisted_classification(*, text: str, links: list[str], heuristic: dict
         f"Heuristic suggestion:\n{json.dumps({k: heuristic[k] for k in ('tier', 'action_type', 'content_kind')}, ensure_ascii=True)}"
     )
     try:
-        raw = _call_sync_llm(system=_TIER_CLASSIFIER_SYSTEM, user=user, max_tokens=300)
+        raw = _call_sync_llm(system=_TIER_CLASSIFIER_SYSTEM, user=user, max_tokens=600)  # doubled from 300 per audit
         parsed = _parse_json_object(raw)
         tier = int(parsed.get("tier") or 0)
         action_type = str(parsed.get("action_type") or "").strip()
@@ -1153,7 +1153,7 @@ def _has_llm_key() -> bool:
     )
 
 
-def _call_sync_llm(*, system: str, user: str, max_tokens: int = 300) -> str:
+def _call_sync_llm(*, system: str, user: str, max_tokens: int = 600) -> str:  # doubled from 300 per audit
     from anthropic import Anthropic
 
     api_key = (
@@ -1169,7 +1169,7 @@ def _call_sync_llm(*, system: str, user: str, max_tokens: int = 300) -> str:
         client_kwargs["base_url"] = base_url
     client = Anthropic(**client_kwargs)
     response = client.messages.create(
-        model=resolve_sonnet(),
+        model=resolve_opus(),
         max_tokens=max_tokens,
         system=system,
         messages=[{"role": "user", "content": user}],

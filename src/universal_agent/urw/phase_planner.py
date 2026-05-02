@@ -19,7 +19,7 @@ import os
 from typing import Any, Dict, List, Optional, Set
 
 from .state import Task, TaskStatus
-from universal_agent.utils.model_resolution import resolve_sonnet
+from universal_agent.utils.model_resolution import resolve_opus
 
 
 class PhaseStatus(Enum):
@@ -157,7 +157,7 @@ class PhasePlanner:
         self.max_tasks_per_phase = max_tasks_per_phase or self.DEFAULT_MAX_TASKS_PER_PHASE
         self.llm_client = llm_client
         self.use_llm_assessment = use_llm_assessment and llm_client is not None
-        self.llm_model = llm_model or resolve_sonnet()
+        self.llm_model = llm_model or resolve_opus()
 
     
     def plan_phases(

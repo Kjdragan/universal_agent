@@ -9,11 +9,11 @@ from typing import Dict, List, Optional, Tuple
 from anthropic import AsyncAnthropic
 
 from universal_agent.rate_limiter import ZAIRateLimiter
-from universal_agent.utils.model_resolution import resolve_sonnet
+from universal_agent.utils.model_resolution import resolve_opus
 
 API_KEY = os.getenv("ANTHROPIC_AUTH_TOKEN") or os.getenv("ZAI_API_KEY")
 BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic")
-MODEL = resolve_sonnet()
+MODEL = resolve_opus()
 
 def strip_wrapping_code_fence(text: str) -> str:
     stripped = text.strip()
@@ -195,7 +195,7 @@ async def cleanup_report_async(workspace_path: Path) -> str:
             try:
                 resp = await client.messages.create(
                     model=MODEL,
-                    max_tokens=8192,
+                    max_tokens=16384,  # doubled from 8192 per audit
                     messages=[{"role": "user", "content": prompt}],
                 )
                 await limiter.record_success()
