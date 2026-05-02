@@ -196,16 +196,42 @@ def _collect_evidence_bundle(
     reason: str,
     workspace_dir: str,
 ) -> dict[str, Any]:
-    """Gather workspace artifacts, transcript tail, and run log into an evidence dict."""
+    """Gather workspace artifacts, transcript tail, and run log into an evidence dict.
+
+    When the ephemeral workspace has been cleaned up (common for VP-delegated
+    work), fall back to the persistent packet directory recorded in the task
+    metadata.  The packet dir survives workspace cleanup and contains digest,
+    knowledge-base updates, and implementation opportunity files that serve as
+    concrete evidence of completed work.
+    """
     workspace = Path(workspace_dir).expanduser() if workspace_dir else None
+    workspace_exists = bool(workspace and workspace.exists())
+
+    # Primary evidence: ephemeral workspace
+    work_products = _list_work_products(workspace) if workspace_exists else []
+    transcript_tail = _read_tail(workspace / "transcript.md") if workspace_exists else ""
+    run_log_tail = _read_tail(workspace / "run.log") if workspace_exists else ""
+
+    # Fallback evidence: persistent packet directory from task metadata
+    packet_dir_str = str((task.get("metadata") or {}).get("packet_dir") or "").strip()
+    packet_dir = Path(packet_dir_str) if packet_dir_str else None
+    packet_exists = bool(packet_dir and packet_dir.exists())
+    if not work_products and packet_exists:
+        work_products = _list_packet_artifacts(packet_dir)
+    if not transcript_tail and packet_exists:
+        # The digest.md in packet dir is the closest analogue to a transcript
+        transcript_tail = _read_tail(packet_dir / "digest.md")
+
     return {
         "action": str(action or "").strip().lower(),
         "reason": str(reason or "").strip(),
         "workspace_dir": workspace_dir,
-        "work_products": _list_work_products(workspace),
-        "transcript_tail": _read_tail(workspace / "transcript.md") if workspace else "",
-        "run_log_tail": _read_tail(workspace / "run.log") if workspace else "",
-        "workspace_exists": bool(workspace and workspace.exists()),
+        "work_products": work_products,
+        "transcript_tail": transcript_tail,
+        "run_log_tail": run_log_tail,
+        "workspace_exists": workspace_exists,
+        "packet_dir": packet_dir_str,
+        "packet_exists": packet_exists,
     }
 
 
@@ -348,8 +374,14 @@ def _call_llm_recap_evaluator(
     reason: str,
     evidence: dict[str, Any],
 ) -> dict[str, Any]:
-    """Call an LLM to evaluate the recap and return the parsed JSON response."""
-    import litellm
+    """Call an LLM to evaluate the recap and return the parsed JSON response.
+
+    Uses the Anthropic SDK (same pattern as llm_classifier.py) which correctly
+    handles Z.AI model routing for glm-5.1 / glm-5-turbo model identifiers.
+    The previous litellm.completion() call failed because litellm requires an
+    explicit provider prefix (e.g., 'openai/glm-5.1') for non-standard models.
+    """
+    from anthropic import Anthropic
 
     model = (os.getenv("UA_PROACTIVE_RECAP_LLM_MODEL") or "").strip() or resolve_opus()
     prompt = _build_llm_recap_prompt(
@@ -359,14 +391,34 @@ def _call_llm_recap_evaluator(
         reason=reason,
         evidence=evidence,
     )
-    response = litellm.completion(
+
+    api_key = (
+        os.getenv("ANTHROPIC_API_KEY")
+        or os.getenv("ANTHROPIC_AUTH_TOKEN")
+        or os.getenv("ZAI_API_KEY")
+        or ""
+    ).strip()
+    if not api_key:
+        raise RuntimeError("No Anthropic/ZAI API key available for recap LLM")
+
+    client_kwargs: dict[str, Any] = {"api_key": api_key, "timeout": float(LLM_TIMEOUT_SECONDS)}
+    base_url = (os.getenv("ANTHROPIC_BASE_URL") or "").strip()
+    if base_url:
+        client_kwargs["base_url"] = base_url
+
+    client = Anthropic(**client_kwargs)
+    response = client.messages.create(
         model=model,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.0,
         max_tokens=900,
-        timeout=LLM_TIMEOUT_SECONDS,
+        messages=[{"role": "user", "content": prompt}],
     )
-    raw_text = str(response.choices[0].message.content or "").strip()
+
+    raw_text = ""
+    for block in response.content:
+        if hasattr(block, "text"):
+            raw_text += block.text
+    raw_text = raw_text.strip()
+
     parsed = _loads_json_object(raw_text)
     parsed["raw_model_output"] = {
         "evaluator": "llm_recap_v1",
@@ -590,6 +642,34 @@ def _list_work_products(workspace: Optional[Path]) -> list[str]:
         for path in sorted(root.rglob("*")):
             if path.is_file():
                 out.append(str(path.relative_to(workspace)))
+                if len(out) >= MAX_WORK_PRODUCTS:
+                    break
+    except Exception:
+        return out
+    return out
+
+
+def _list_packet_artifacts(packet_dir: Optional[Path]) -> list[str]:
+    """List evidence files in the persistent packet directory.
+
+    Packet directories survive workspace cleanup and contain digests,
+    knowledge-base updates, and implementation opportunity files that
+    serve as concrete evidence of completed proactive work.
+    """
+    if not packet_dir or not packet_dir.exists():
+        return []
+    # Only count files that represent actual work output, not raw data dumps
+    _EVIDENCE_SUFFIXES = {".md", ".py", ".txt", ".json", ".html", ".pdf"}
+    _RAW_DATA_NAMES = {"raw_posts.json", "raw_user.json", "new_posts.json", "manifest.json"}
+    out: list[str] = []
+    try:
+        for path in sorted(packet_dir.rglob("*")):
+            if not path.is_file():
+                continue
+            if path.name in _RAW_DATA_NAMES:
+                continue
+            if path.suffix.lower() in _EVIDENCE_SUFFIXES:
+                out.append(f"packet:{path.relative_to(packet_dir)}")
                 if len(out) >= MAX_WORK_PRODUCTS:
                     break
     except Exception:

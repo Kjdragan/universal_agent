@@ -750,6 +750,34 @@ def register_packet_artifact(
     return str(artifact.get("artifact_id") or "")
 
 
+
+def _extract_title_snippet(text: str, max_len: int = 80) -> str:
+    """Extract a concise, descriptive snippet from a post's text for task titles.
+
+    Strips emoji, URLs, and whitespace, returning the first meaningful line
+    (e.g., 'MedKit by Bedirhan Keskin from Türkiye') truncated to max_len.
+    """
+    import re
+
+    if not text or not text.strip():
+        return ""
+    # Strip URLs
+    cleaned = re.sub(r"https?://\S+", "", text).strip()
+    # Strip emoji (common Unicode emoji ranges)
+    cleaned = re.sub(
+        r"[\U0001F300-\U0001F9FF\U00002702-\U000027B0\U0000FE00-\U0000FE0F"
+        r"\U0001FA00-\U0001FAFF\U00002600-\U000026FF\U0000200D]+",
+        "",
+        cleaned,
+    )
+    # Take first non-empty line
+    for line in cleaned.splitlines():
+        line = line.strip()
+        if len(line) >= 10:
+            return line[:max_len].rstrip(" .-,;:")
+    return cleaned[:max_len].strip().rstrip(" .-,;:") if cleaned.strip() else ""
+
+
 def queue_follow_up_tasks(
     conn: sqlite3.Connection,
     *,
@@ -768,11 +796,13 @@ def queue_follow_up_tasks(
             continue
         source_kind = SOURCE_KIND_DEMO_TASK if tier == 3 else SOURCE_KIND_KB_UPDATE
         task_id = f"{source_kind}:{hashlib.sha256(post_id.encode()).hexdigest()[:16]}"
-        title = (
-            f"Build Claude Code demo from @{handle} update"
-            if tier == 3
-            else f"Analyze strategic Claude Code update from @{handle}"
-        )
+        # Extract a descriptive snippet from the post text to differentiate
+        # tasks in the proactive history panel (avoids 7 identical titles).
+        post_snippet = _extract_title_snippet(str(action.get("text") or ""))
+        if tier == 3:
+            title = f"Build demo: {post_snippet}" if post_snippet else f"Build Claude Code demo from @{handle} update"
+        else:
+            title = f"Analyze: {post_snippet}" if post_snippet else f"Analyze strategic Claude Code update from @{handle}"
         task_hub.upsert_item(
             conn,
             {
