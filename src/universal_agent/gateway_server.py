@@ -13419,14 +13419,25 @@ async def _cancel_session_execution(session_id: str, reason: str, run_id: Option
         },
     )
 
-    _add_notification(
-        kind="cancelled",
-        title="Session Cancelled",
-        message=reason,
-        session_id=session_id,
-        severity="warning",
-        metadata={"source": "ops"},
-    )
+    # Routine daemon idle-reaping is part of the heartbeat lifecycle: the
+    # session sits idle between ticks and gets cancelled by
+    # _heartbeat_session_timeout_callback when it exceeds the idle
+    # threshold. The next tick creates a fresh session. Surfacing every
+    # one of those reaps as an alarming "Session Cancelled · warning"
+    # notification on the dashboard turns normal operational rhythm into
+    # visible noise. Skip the notification for `daemon_idle_timeout`
+    # reasons; real cancellations (errors, ops-triggered, mid-run aborts)
+    # still get surfaced.
+    is_routine_daemon_reap = str(reason or "").startswith("daemon_idle_timeout")
+    if not is_routine_daemon_reap:
+        _add_notification(
+            kind="cancelled",
+            title="Session Cancelled",
+            message=reason,
+            session_id=session_id,
+            severity="warning",
+            metadata={"source": "ops"},
+        )
 
     return {
         "status": "cancel_requested",

@@ -314,6 +314,21 @@ def _build_heartbeat_environment_context(workspace_dir: str) -> str:
         "### Health Check Efficiency",
         "- Combine multiple shell health checks into a single compound Bash command where possible.",
         "- Example: `uptime && echo '---' && free -h && echo '---' && df -h /`",
+        "",
+        "### Runtime Quirks (avoid round-trip waste)",
+        "- Use `python3` (NOT `python`) — the `python` symlink isn't on PATH and you'll get `command not found`.",
+        "- Task Hub DB: `/opt/universal_agent/AGENT_RUN_WORKSPACES/task_hub.db`",
+        "  Primary table: `task_hub_items` — DO NOT use `id` (no such column).",
+        "  Columns: `task_id` (PRIMARY KEY), `source_kind`, `source_ref`, `title`,",
+        "  `description`, `project_key`, `priority`, `due_at`, `labels_json`, `status`,",
+        "  `must_complete`, `agent_ready`, `score`, `score_confidence`, `stale_state`,",
+        "  `seizure_state`, `mirror_status`, `metadata_json`, `created_at`, `updated_at`,",
+        "  `trigger_type`, `refinement_stage`, `refinement_history_json`, `completion_token`.",
+        "  Labels live in `labels_json` (JSON-encoded array).",
+        "- The gateway-error grep on this service's own journal will match Simone's prior",
+        "  Bash command lines (they contain the words error/exception). Filter with",
+        "  e.g. `grep -v \"python\\[\" | grep -ciE 'error|exception|locked'` to drop",
+        "  the heartbeat's own audit trail before counting.",
     ]
     return "\n".join(lines)
 
