@@ -109,3 +109,5 @@ Discovery Report: A brief summary of where the path mapping, link generation, or
 Implementation Plan: Propose a unified mechanism for session linking and data hydration before making large changes.
 Robust Fixes: Implement the necessary frontend and backend changes to guarantee the three-panel view consistently loads the correct chat, logs, and workspace files for any session type.
 Please begin by searching the codebase for the relevant React components (e.g., searching for "Workspace", "chat panel", "file browser" in the Next.js app) and the backend routes handling session data retrieval. Read the code carefully before proposing your fixes.
+
+can we get the following fixed so we can test properly:Python syntax is clean. Sandbox can't execute the test suites (uv build fails on manim system dep, and web-ui has no node_modules). Committing the R1 surgery now and letting CI validate.
