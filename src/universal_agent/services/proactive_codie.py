@@ -4,11 +4,16 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
+import os
 import re
 import sqlite3
 from typing import Any
 
 from universal_agent import task_hub
+from universal_agent.codebase_policy import (
+    DEFAULT_APPROVED_CODEBASE_ROOT,
+    approved_codebase_roots_from_env,
+)
 from universal_agent.services.proactive_artifacts import (
     ARTIFACT_STATUS_CANDIDATE,
     make_artifact_id,
@@ -25,7 +30,33 @@ DEFAULT_CLEANUP_THEMES = (
     "standardize inconsistent import ordering and grouping",
     "replace bare except clauses with specific exception types",
 )
-DEFAULT_CODEBASE_ROOT = "/home/kjdragan/lrepos/universal_agent"
+
+
+def _resolve_default_codebase_root() -> str:
+    """Resolve the codebase root to ship in proactive CODIE missions.
+
+    Priority order:
+      1. UA_PROACTIVE_CODIE_CODEBASE_ROOT — explicit override.
+      2. First entry from UA_APPROVED_CODEBASE_ROOTS / production
+         allowlist (`/opt/universal_agent` etc.).
+      3. Hardcoded fallback to `DEFAULT_APPROVED_CODEBASE_ROOT`.
+
+    The previous hardcoded value (`/home/kjdragan/lrepos/universal_agent`)
+    was a developer-laptop path that doesn't exist on the production
+    VPS. Production CODIE workers spawned, failed to access that path,
+    and crashed in a tight restart loop — visible in production as 4+
+    `vp.mission.started` events for a single mission_id and a flood
+    of orphan-reconciled Task Hub items in the dashboard.
+    """
+    explicit = (os.getenv("UA_PROACTIVE_CODIE_CODEBASE_ROOT") or "").strip()
+    if explicit:
+        return explicit
+    approved = approved_codebase_roots_from_env()
+    if approved:
+        return approved[0]
+    return DEFAULT_APPROVED_CODEBASE_ROOT
+
+
 CODIE_TARGET_AGENT = "vp.coder.primary"
 
 _GITHUB_PR_RE = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+")
@@ -66,7 +97,7 @@ def queue_cleanup_task(
             "complexity_target": "low_to_medium",
             "expected_work_product": "pull_request_to_develop",
             "target_agent": CODIE_TARGET_AGENT,
-            "codebase_root": DEFAULT_CODEBASE_ROOT,
+            "codebase_root": _resolve_default_codebase_root(),
             "external_effect_policy": {
                 "allow_pr": True,
                 "allow_merge": False,
@@ -80,7 +111,7 @@ def queue_cleanup_task(
                 "final_channel": "chat",
                 "canonical_executor": "simone_first",
                 "target_agent": CODIE_TARGET_AGENT,
-                "codebase_root": DEFAULT_CODEBASE_ROOT,
+                "codebase_root": _resolve_default_codebase_root(),
                 "repo_mutation_allowed": True,
             },
         },

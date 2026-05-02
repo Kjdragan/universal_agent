@@ -96,3 +96,58 @@ def test_register_pr_artifact_from_text_detects_github_pr_url(tmp_path):
     assert artifact is not None
     assert artifact["artifact_uri"].endswith("/pull/456")
     assert artifact["metadata"]["theme"] == "cleanup"
+
+
+def test_queue_cleanup_task_uses_production_codebase_root_not_laptop_path(
+    tmp_path, monkeypatch
+):
+    """Regression guard for the CODIE worker restart-loop incident:
+    proactive cleanup tasks must NOT ship the developer's laptop path
+    (`/home/kjdragan/lrepos/universal_agent`) as `codebase_root`. The
+    production VPS doesn't have that path, so CODIE workers spawned,
+    failed to access it, crashed, and restarted — producing a flood
+    of orphan-reconciled vp-mission Task Hub items.
+
+    Default must resolve to the production root (DEFAULT_APPROVED_CODEBASE_ROOT
+    or first entry from UA_APPROVED_CODEBASE_ROOTS), with an explicit
+    UA_PROACTIVE_CODIE_CODEBASE_ROOT env override winning when set.
+    """
+    monkeypatch.delenv("UA_PROACTIVE_CODIE_CODEBASE_ROOT", raising=False)
+    monkeypatch.delenv("UA_APPROVED_CODEBASE_ROOTS", raising=False)
+
+    db_path = tmp_path / "activity.db"
+    with _connect(db_path) as conn:
+        result = queue_cleanup_task(
+            conn,
+            theme="add type hints to untyped public function signatures",
+        )
+
+    metadata = result["task"]["metadata"]
+    codebase_root = metadata["codebase_root"]
+    workflow_root = metadata["workflow_manifest"]["codebase_root"]
+
+    # Both fields must resolve to the prod root, not the laptop path.
+    assert codebase_root == "/opt/universal_agent", (
+        f"Expected production root, got {codebase_root!r} — "
+        "this is the bug that caused 4-restart CODIE worker loops."
+    )
+    assert workflow_root == "/opt/universal_agent"
+    assert "kjdragan" not in codebase_root
+    assert "lrepos" not in codebase_root
+
+
+def test_queue_cleanup_task_respects_explicit_env_override(
+    tmp_path, monkeypatch
+):
+    """UA_PROACTIVE_CODIE_CODEBASE_ROOT lets ops repoint without code change."""
+    custom_root = "/srv/custom-codie-target"
+    monkeypatch.setenv("UA_PROACTIVE_CODIE_CODEBASE_ROOT", custom_root)
+
+    db_path = tmp_path / "activity.db"
+    with _connect(db_path) as conn:
+        result = queue_cleanup_task(
+            conn,
+            theme="add type hints to untyped public function signatures",
+        )
+
+    assert result["task"]["metadata"]["codebase_root"] == custom_root
