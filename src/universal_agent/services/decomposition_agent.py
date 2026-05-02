@@ -16,7 +16,7 @@ import logging
 import os
 from typing import Any, Optional
 
-from universal_agent.utils.model_resolution import resolve_sonnet
+from universal_agent.utils.model_resolution import resolve_opus
 
 logger = logging.getLogger(__name__)
 
@@ -91,8 +91,13 @@ async def decompose_with_llm(
     user_msg = _DECOMPOSE_USER.format(title=title, description=description or "(none)")
 
     try:
+        # Promoted to opus tier per user direction. Decomposition shapes
+        # how every downstream subagent interprets the goal — a poor
+        # split (wrong granularity, misordered dependencies, missing
+        # subtasks) cascades into wasted execution and incorrect
+        # results. Worth flagship for a 1024-token structured call.
         response = await client.messages.create(
-            model=model or resolve_sonnet(),
+            model=model or resolve_opus(),
             max_tokens=1024,
             system=_DECOMPOSE_SYSTEM,
             messages=[{"role": "user", "content": user_msg}],
