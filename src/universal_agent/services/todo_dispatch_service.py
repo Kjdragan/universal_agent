@@ -922,7 +922,7 @@ class ToDoDispatchService:
                                     if item and str(item.get("status") or "") == task_hub.TASK_STATUS_COMPLETED:
                                         metadata = dict(item.get("metadata") or {})
                                         dispatch_meta = dict(metadata.get("dispatch") or {})
-                                        
+
                                         # If it exists, ensure the completion lineage holds it.
                                         if not dispatch_meta.get("last_workspace_dir"):
                                             dispatch_meta["last_workspace_dir"] = wdir
@@ -936,6 +936,79 @@ class ToDoDispatchService:
                                             conn.commit()
                     except Exception as attach_e:
                         logger.error("Failed to attach completed workspace link for %s: %s", session.session_id, attach_e)
+
+                # ── Stuck-assignment sweep ──────────────────────────
+                # If the agent's run finished but it never called
+                # `task_hub_task_action(...)` to disposition some of
+                # the assignments we claimed, those tasks remain
+                # stuck IN PROGRESS forever. Common causes: Anthropic
+                # API 400 on the very first inference (zero tool
+                # calls fired), agent crashed mid-run, or the agent
+                # got confused and ended its turn without dispositioning.
+                #
+                # After execution_callback returns we KNOW the run is
+                # over. Sweep every claimed task: if it's still in
+                # `in_progress`, finalize the assignment as failed
+                # and reopen it so the dispatcher can retry it next
+                # tick instead of leaving the user staring at a stuck
+                # PROCESSING card.
+                stuck_assignments: list[str] = []
+                stuck_task_ids: list[str] = []
+                if task_ids and claimed_assignment_ids:
+                    try:
+                        with connect_runtime_db(activity_db_path) as conn:
+                            for t_id, a_id in zip(task_ids, claimed_assignment_ids):
+                                item = task_hub.get_item(conn, t_id)
+                                if not item:
+                                    continue
+                                status = str(item.get("status") or "").strip()
+                                if status == task_hub.TASK_STATUS_IN_PROGRESS:
+                                    stuck_assignments.append(a_id)
+                                    stuck_task_ids.append(t_id)
+                    except Exception:
+                        logger.exception(
+                            "Stuck-assignment scan failed for %s",
+                            session.session_id,
+                        )
+
+                if stuck_assignments:
+                    logger.warning(
+                        "Auto-blocking %d undispositioned assignment(s) after %s "
+                        "run completed (tasks=%s). Likely cause: API error or "
+                        "agent ended turn without calling task_hub_task_action.",
+                        len(stuck_assignments),
+                        session.session_id,
+                        stuck_task_ids,
+                    )
+                    try:
+                        with connect_runtime_db(activity_db_path) as conn:
+                            task_hub.finalize_assignments(
+                                conn,
+                                assignment_ids=stuck_assignments,
+                                state="failed",
+                                result_summary=(
+                                    "auto_disposition: agent run ended without "
+                                    "calling task_hub_task_action (likely API "
+                                    "error or 0-tool-call run). Task reopened "
+                                    "for retry."
+                                ),
+                                reopen_in_progress=True,
+                                policy="todo",
+                            )
+                        if self.event_callback:
+                            self.event_callback({
+                                "type": "todo_dispatch_auto_blocked",
+                                "session_id": session.session_id,
+                                "timestamp": _event_timestamp(),
+                                "assignment_ids": stuck_assignments,
+                                "task_ids": stuck_task_ids,
+                                "reason": "no_disposition_after_run",
+                            })
+                    except Exception:
+                        logger.exception(
+                            "Failed to auto-block stuck assignments for %s",
+                            session.session_id,
+                        )
             else:
                 raise RuntimeError("todo dispatch execution callback is not configured")
                 

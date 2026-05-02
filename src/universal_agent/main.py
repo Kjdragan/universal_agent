@@ -7237,6 +7237,22 @@ async def run_conversation(
                                     **_maybe_full_payload_fields("text", block.text),
                                 )
 
+                                # R1.5: persist the assistant turn into
+                                # trace.json so a completed daemon-executed
+                                # task rehydrates with full chat fidelity.
+                                if isinstance(_ctx.trace, dict):
+                                    _ctx.trace.setdefault("messages", []).append(
+                                        {
+                                            "role": "assistant",
+                                            "author": _current_author,
+                                            "content": block.text,
+                                            "ts": datetime.now().isoformat(),
+                                            "time_offset": round(
+                                                time.time() - _ctx.start_ts, 3
+                                            ),
+                                        }
+                                    )
+
                             elif isinstance(block, ThinkingBlock):
                                 # Emit thinking event with author attribution
                                 hook_events.emit_thinking_event(
@@ -7259,6 +7275,23 @@ async def run_conversation(
                                     step_id=step_id,
                                     iteration=iteration,
                                 )
+
+                                # R1.5: persist the FULL thinking content
+                                # (live wire events + logfire only see [:1000]).
+                                # The chat panel renders these as collapsible
+                                # Thinking Process blocks via messageType="thought".
+                                if isinstance(_ctx.trace, dict):
+                                    _ctx.trace.setdefault("messages", []).append(
+                                        {
+                                            "role": "assistant_thinking",
+                                            "author": _current_author,
+                                            "content": block.thinking,
+                                            "ts": datetime.now().isoformat(),
+                                            "time_offset": round(
+                                                time.time() - _ctx.start_ts, 3
+                                            ),
+                                        }
+                                    )
 
                 elif isinstance(msg, (UserMessage, ToolResultBlock)):
                     # Handle both UserMessage (legacy) and ToolResultBlock (new SDK)
@@ -7287,6 +7320,11 @@ async def run_conversation(
                                 block_content = getattr(block, "content", "")
                                 content_str = str(block_content)
 
+                                # R1.5 parity with agent_core: bump cap
+                                # to 8KB so the rehydrated <CombinedActivityLog>
+                                # Result card shows enough of the response
+                                # body to be useful (1KB cuts off most JSON
+                                # tool outputs at the metadata header).
                                 result_record = {
                                     "run_id": _ctx.run_id,
                                     "step_id": step_id,
@@ -7296,8 +7334,8 @@ async def run_conversation(
                                     ),
                                     "is_error": is_error,
                                     "content_size_bytes": len(content_str),
-                                    "content_preview": content_str[:1000]
-                                    if len(content_str) > 1000
+                                    "content_preview": content_str[:8000]
+                                    if len(content_str) > 8000
                                     else content_str,
                                 }
                                 if _ctx.tool_ledger and tool_use_id:
@@ -8686,6 +8724,13 @@ async def setup_session(
         "total_duration_seconds": None,
         "tool_calls": [],
         "tool_results": [],
+        # `messages`: full chat-replay record persisted alongside tool
+        # events so a completed daemon-executed task rehydrates with the
+        # same level of detail as the live UI (user query, assistant
+        # turns, thinking blocks). Mirrors the same R1.5 schema added
+        # to agent_core.py — daemon runs go through this `process_turn`
+        # path instead, so both code paths must persist messages[].
+        "messages": [],
         "iterations": [],
         "token_usage": {"input": 0, "output": 0, "total": 0},
         "compact_boundary_events": [],
@@ -8917,6 +8962,18 @@ async def process_turn(
     _ctx.trace["query"] = user_input
     _ctx.trace["start_time"] = datetime.now().isoformat()
     _ctx.start_ts = time.time()
+    # Persist the user turn as the first chat-replay message so daemon
+    # rehydration via extractHistoryFromTraceJson reconstructs the
+    # conversation in time order. Mirrors agent_core.py's R1.5 hook.
+    if isinstance(_ctx.trace, dict):
+        _ctx.trace.setdefault("messages", []).append(
+            {
+                "role": "user",
+                "content": user_input,
+                "ts": _ctx.trace["start_time"],
+                "time_offset": 0.0,
+            }
+        )
     _ctx.tool_execution_start_times.clear()
     _ctx.tool_execution_stream_start_times.clear()
     _ctx.tool_execution_emitted_ids.clear()

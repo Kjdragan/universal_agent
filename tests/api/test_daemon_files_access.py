@@ -82,6 +82,15 @@ async def test_enforce_session_owner_bypasses_daemon_session_check(monkeypatch):
         "daemon_simone_todo", primary, auth_required=True
     )
 
+    # Same bypass must apply for the per-run daemon workspace name —
+    # the Sessions tab's Rehydrate button uses the workspace dir basename
+    # as session_id, hitting the same auth path.
+    await api_server._enforce_session_owner(
+        "run_daemon_simone_todo_20260502_044233_ab02ffe1",
+        primary,
+        auth_required=True,
+    )
+
 
 def test_resolve_workspace_picks_latest_daemon_run_dir(tmp_path, monkeypatch):
     """For a session id like `daemon_simone_todo`, the resolver must

@@ -587,9 +587,16 @@ async def _enforce_session_owner(session_id: str, owner_id: str, auth_required: 
     # session ids when the requester is the primary dashboard owner;
     # this is the same bypass pattern already used for hook/cron
     # sessions further down.
-    if session_id.startswith("daemon_") and hmac.compare_digest(
-        owner_id, _normalize_owner_id(None)
-    ):
+    #
+    # `run_daemon_*` is the per-run workspace name of the same shared
+    # daemon (e.g. `run_daemon_simone_todo_20260502_044233_ab02ffe1`).
+    # The Sessions tab's Rehydrate button uses the workspace name as
+    # the session_id, so it hits the same auth path. Same shared-resource
+    # rationale → same bypass.
+    if (
+        session_id.startswith("daemon_")
+        or session_id.startswith("run_daemon_")
+    ) and hmac.compare_digest(owner_id, _normalize_owner_id(None)):
         return
     session_owner = await _fetch_gateway_session_owner(session_id)
     if session_owner and hmac.compare_digest(session_owner, owner_id):
