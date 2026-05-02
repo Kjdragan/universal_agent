@@ -1054,16 +1054,20 @@ export default function ToDoListDashboardPage() {
               if (!target) return null;
               return (
                 <button onClick={() => {
-                  // Track B: navigate via the centralized viewer resolver
-                  // instead of building the URL with chatWindow.ts. The
-                  // local resolveTaskWorkspaceTarget call is kept only as
-                  // a render-gate (no identity = no button) and will be
-                  // removed in Commit 8 once all producers are migrated.
+                  // Workspace button on a Task Hub card is a REHYDRATE
+                  // request: the task may be completed, paused, or
+                  // mid-flight, but the user wants the canonical
+                  // three-panel view of its trace. Do NOT pass
+                  // attachMode:"tail" — that forces the ops-tail HTTP
+                  // endpoint, which returns flat log lines that render
+                  // as LogRows instead of the structured ToolRow cards
+                  // (Input/Result collapsibles). The default mode lets
+                  // app/page.tsx pull durable run.log + trace.json,
+                  // populating tool calls, assistant turns, thinking
+                  // blocks via extractHistoryFromTraceJson.
                   void openViewer({
                     session_id: target.sessionId,
                     run_id: target.runId,
-                    workspace_name: target.workspaceName,
-                    attachMode: "tail",
                     role: "viewer",
                   });
                 }}
@@ -1233,11 +1237,11 @@ export default function ToDoListDashboardPage() {
             return (
               <button onClick={(e) => {
                 e.stopPropagation();
+                // Rehydrate, not tail — see the inline rationale on the
+                // sibling Workspace button above.
                 void openViewer({
                   session_id: target.sessionId,
                   run_id: target.runId,
-                  workspace_name: target.workspaceName,
-                  attachMode: "tail",
                   role: "viewer",
                 });
               }}
@@ -1517,11 +1521,11 @@ export default function ToDoListDashboardPage() {
                       return (
                         <button
                           onClick={() => {
+                            // Rehydrate, not tail — same rationale as the
+                            // primary Workspace button above.
                             void openViewer({
                               session_id: target.sessionId,
                               run_id: target.runId,
-                              workspace_name: target.workspaceName,
-                              attachMode: "tail",
                               role: "viewer",
                             });
                           }}
