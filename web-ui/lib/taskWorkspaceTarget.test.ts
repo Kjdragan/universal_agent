@@ -12,7 +12,7 @@ describe("resolveTaskWorkspaceTarget", () => {
           session_id: "daemon_simone_todo",
         },
       }),
-    ).toEqual({ sessionId: "daemon_simone_todo", runId: "run_abc123" });
+    ).toEqual({ sessionId: "daemon_simone_todo" });
   });
 
   it("falls back through canonical and assigned session ids", () => {
@@ -62,7 +62,7 @@ describe("resolveTaskWorkspaceTarget", () => {
         links: { session_id: "daemon_simone_todo" },
         canonical_execution_run_id: "run_xyz",
       }),
-    ).toEqual({ sessionId: "daemon_simone_todo", runId: "run_xyz" });
+    ).toEqual({ sessionId: "daemon_simone_todo" });
 
     expect(
       resolveTaskWorkspaceTarget({
@@ -75,5 +75,25 @@ describe("resolveTaskWorkspaceTarget", () => {
         assigned_session_id: "daemon_atlas_todo",
       }),
     ).toEqual({ sessionId: "daemon_atlas_todo" });
+  });
+
+  // ── Daemon-task split regression guard ────────────────────────────────────
+  // Simone-todo / daemon-executed tasks carry BOTH a session_id (the daemon
+  // executor's persistent workspace, where the agent actually wrote logs +
+  // produced work_products/) and a run_id (the per-task run record's
+  // metadata-only workspace: manifest, activity journal, attempts/). Users
+  // clicking "Workspace" want to see the agent's actual work.
+  //
+  // The backend resolver tries run_id FIRST and stops there — so passing
+  // both makes the empty run-metadata workspace win. To get the daemon's
+  // full session workspace, we must drop run_id from the payload when
+  // session_id is present.
+  it("drops runId when sessionId is present (daemon task content fix)", () => {
+    expect(
+      resolveTaskWorkspaceTarget({
+        links: { session_id: "daemon_simone_todo" },
+        canonical_execution_run_id: "run_d4f966853f82",
+      }),
+    ).toEqual({ sessionId: "daemon_simone_todo" });
   });
 });

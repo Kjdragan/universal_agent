@@ -41,8 +41,23 @@ export function resolveTaskWorkspaceTarget(
   }
 
   const target: TaskWorkspaceTarget = {};
-  if (sessionId) target.sessionId = sessionId;
-  if (runId) target.runId = runId;
+  // For Simone-todo / daemon-executed tasks, the Task Hub card carries BOTH
+  // a session_id (the daemon executor's persistent session) AND a run_id
+  // (the per-task run record). The session workspace contains the actual
+  // chat history, logs, and work_products/. The run workspace is just
+  // metadata (manifest, activity journal, attempts/). Users clicking the
+  // Workspace button want to see the agent's actual work, not the run
+  // metadata. So when both identities exist, prefer the session — drop
+  // run_id from the payload so the backend resolver picks the daemon's
+  // session workspace via daemon-glob fallback.
+  //
+  // run_id is still passed when there's no session_id (archived run-only
+  // entries from the run catalog).
+  if (sessionId) {
+    target.sessionId = sessionId;
+  } else if (runId) {
+    target.runId = runId;
+  }
   if (workspaceName && !workspaceName.includes("/")) {
     target.workspaceName = workspaceName;
   }
