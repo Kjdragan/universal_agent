@@ -226,6 +226,22 @@ def get_card(conn: sqlite3.Connection, card_id: str) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def live_card_exists_for_subject(
+    conn: sqlite3.Connection, subject_kind: str, subject_id: str
+) -> bool:
+    """True iff a card exists for this subject in current_state='live'.
+
+    Used by the sweeper's invariant check: a non-green tile must have a
+    corresponding live infrastructure card. Cheap PK lookup.
+    """
+    card_id = make_card_id(subject_kind, subject_id)
+    row = conn.execute(
+        "SELECT 1 FROM mission_control_cards WHERE card_id = ? AND current_state = 'live'",
+        (card_id,),
+    ).fetchone()
+    return row is not None
+
+
 def list_live_cards(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     rows = conn.execute(
         """

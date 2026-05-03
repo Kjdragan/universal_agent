@@ -760,3 +760,58 @@ def test_sweeper_does_not_create_card_for_first_appearance_green(
         assert csi_cards == [], "green CSI tile must not produce a card"
     finally:
         conn.close()
+
+
+# ── Phase 1.2 invariant: non-green tile without live card always backfills
+
+def test_sweeper_backfills_card_for_non_green_tile_with_missing_card(
+    monkeypatch, activity_db, tmp_path
+):
+    """Production smoke after Phase 1.1 revealed that pre-existing tile
+    rows from Phase 1B's buggy run never produced cards even after the
+    fix — because they had no transition AND were not first-appearance.
+
+    Phase 1.2 fix: the invariant is `non-green tile <=> live infra card
+    exists`. If the invariant is violated (tile is yellow/red but no
+    live card for it), backfill on the next sweep regardless of
+    transition/first-appearance status.
+    """
+    monkeypatch.setenv("UA_MC_PHASE_1_ENABLED", "1")
+    sweeper = _FixtureSweeper(activity_db, tmp_path / "mc.db")
+    # First tick creates tile rows AND first-appearance cards
+    sweeper.tick()
+
+    # Manually retire the CSI infrastructure card to simulate the
+    # Phase 1B-with-pre-Phase-1.1 state (tile row exists, card missing).
+    conn = open_store(tmp_path / "mc.db")
+    try:
+        from universal_agent.services.mission_control_cards import make_card_id
+        csi_card_id = make_card_id("infrastructure", "infra:csi_ingester")
+        retire_card(conn, csi_card_id)
+        live_csi = [c for c in list_live_cards(conn) if c["subject_id"] == "infra:csi_ingester"]
+        assert live_csi == [], "card should be retired now"
+    finally:
+        conn.close()
+
+    # Next tick should backfill the missing card even though no transition
+    # or first-appearance event occurred. Tile signature is unchanged,
+    # but the invariant check fires regardless.
+    # Force the signature to differ so the persist path runs (otherwise
+    # the early-return short-circuits everything).
+    activity_db.execute("UPDATE activity_events SET created_at = created_at")  # no-op
+    sweeper.tick()
+
+    conn = open_store(tmp_path / "mc.db")
+    try:
+        live_csi = [c for c in list_live_cards(conn) if c["subject_id"] == "infra:csi_ingester"]
+        # Backfill should resurrect a live card. recurrence_count should
+        # be 2 (was 1, retired, revived).
+        assert len(live_csi) == 1, "backfill should recreate the missing card"
+        assert live_csi[0]["recurrence_count"] >= 2, (
+            f"revived card should bump recurrence_count, got {live_csi[0]['recurrence_count']}"
+        )
+        assert "Backfilling" in live_csi[0]["narrative"] or live_csi[0]["narrative"], (
+            "narrative should reflect backfill trigger"
+        )
+    finally:
+        conn.close()

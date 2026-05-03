@@ -35,6 +35,7 @@ from universal_agent.services.mission_control_cards import (
     SEVERITY_WATCHING,
     SUBJECT_INFRASTRUCTURE,
     CardUpsert,
+    live_card_exists_for_subject,
     upsert_card,
 )
 from universal_agent.services.mission_control_db import is_phase_enabled, open_store
@@ -209,34 +210,39 @@ class MissionControlSweeper:
                     result.tier0_transitions.append(
                         f"{tile.name}:{outcome['prior_color']}->{state.color}"
                     )
-                # Card creation fires on:
-                #   1. transition_to_non_green (was green/unknown, now yellow/red), OR
-                #   2. first_appearance_non_green (no prior row, opens at yellow/red)
-                # The latter is critical: a freshly-restarted gateway with a
-                # red tile on its first tick must still produce a card.
-                # `upsert_card` is idempotent on subject_id, so re-firing on
-                # subsequent same-color sweeps is safe but unnecessary — we
-                # gate so identical re-syntheses don't bloat history.
-                needs_card = (
-                    state.color in {COLOR_YELLOW, COLOR_RED}
-                    and (
-                        outcome.get("first_appearance")
-                        or (outcome.get("transitioned")
-                            and outcome.get("prior_color") not in {COLOR_YELLOW, COLOR_RED})
-                        or (outcome.get("transitioned")
-                            and outcome.get("prior_color") in {COLOR_YELLOW, COLOR_RED}
-                            and outcome["prior_color"] != state.color)
+
+                # Invariant: a non-green tile MUST have a corresponding live
+                # infrastructure card. Conditions for creating/refreshing the
+                # card on this sweep:
+                #   - color is yellow/red, AND
+                #   - either (a) no live card exists for this subject (covers
+                #     fresh boot, prior buggy run, manually-retired card), or
+                #     (b) the tile transitioned to a non-green color (to
+                #     refresh narrative + push prior into history).
+                # Identical-color sweeps with an existing live card do nothing
+                # to avoid bloating synthesis_history with duplicate entries.
+                if state.color in {COLOR_YELLOW, COLOR_RED}:
+                    has_live_card = live_card_exists_for_subject(
+                        mc_conn, SUBJECT_INFRASTRUCTURE, f"infra:{tile.name}"
                     )
-                )
-                if needs_card:
-                    try:
-                        self._auto_create_infrastructure_card(
-                            mc_conn, tile, state,
-                            trigger="first_appearance" if outcome.get("first_appearance") else "transition",
-                        )
-                    except Exception as exc:
-                        logger.exception("auto-card creation failed for %s", tile.name)
-                        result.errors.append(f"auto-card {tile.name}: {exc}")
+                    is_color_transition = (
+                        outcome.get("transitioned")
+                        and outcome.get("prior_color") != state.color
+                    )
+                    if not has_live_card or is_color_transition:
+                        if outcome.get("first_appearance"):
+                            trigger = "first_appearance"
+                        elif not has_live_card:
+                            trigger = "missing_card_backfill"
+                        else:
+                            trigger = "transition"
+                        try:
+                            self._auto_create_infrastructure_card(
+                                mc_conn, tile, state, trigger=trigger,
+                            )
+                        except Exception as exc:
+                            logger.exception("auto-card creation failed for %s", tile.name)
+                            result.errors.append(f"auto-card {tile.name}: {exc}")
         finally:
             data_conn.close()
             mc_conn.close()
@@ -380,6 +386,12 @@ class MissionControlSweeper:
             opener = (
                 f"Tile `{tile.name}` ({tile.display_name}) first observed at "
                 f"`{state.color}` on this sweeper boot."
+            )
+        elif trigger == "missing_card_backfill":
+            opener = (
+                f"Tile `{tile.name}` ({tile.display_name}) is `{state.color}` and "
+                "had no corresponding live card. Backfilling now to satisfy the "
+                "non-green-tile-implies-live-card invariant."
             )
         else:
             opener = (
