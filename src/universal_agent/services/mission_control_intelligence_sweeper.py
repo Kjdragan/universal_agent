@@ -21,13 +21,32 @@ See docs/02_Subsystems/Mission_Control_Intelligence_System.md §2.2 and §9.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from universal_agent.services.mission_control_db import is_phase_enabled
+from universal_agent.services.mission_control_cards import (
+    SEVERITY_CRITICAL,
+    SEVERITY_INFORMATIONAL,
+    SEVERITY_WARNING,
+    SEVERITY_WATCHING,
+    SUBJECT_INFRASTRUCTURE,
+    CardUpsert,
+    upsert_card,
+)
+from universal_agent.services.mission_control_db import is_phase_enabled, open_store
+from universal_agent.services.mission_control_tiles import (
+    COLOR_GREEN,
+    COLOR_RED,
+    COLOR_UNKNOWN,
+    COLOR_YELLOW,
+    Tile,
+    TileState,
+    all_tiles,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -150,11 +169,55 @@ class MissionControlSweeper:
             result.finished_at_utc = _utc_now_iso()
         return result
 
-    # ── Tier handlers (skeletons; Phase 1+ fills these in) ─────────────
+    # ── Tier handlers ──────────────────────────────────────────────────
 
     def _run_tier0(self, result: SweepResult) -> None:
-        """Tier-0 watermark check. Phase 1 fills this in."""
+        """Tier-0 sweep: poll tiles, persist state, detect transitions,
+        auto-create infrastructure cards on yellow/red transitions.
+
+        Errors inside an individual tile are caught and recorded in
+        `result.errors` so a buggy tile cannot take out the whole tier-0
+        cycle. State and transition writes happen inside a single MC
+        store connection per sweep, so concurrent reads from the gateway
+        always see a consistent snapshot.
+        """
         result.tier0_checked = True
+        try:
+            mc_conn = open_store()
+        except Exception as exc:  # store init failure is fatal for tier-0
+            result.errors.append(f"open_store failed: {exc}")
+            return
+
+        try:
+            data_conn = self._open_activity_db()
+        except Exception as exc:
+            result.errors.append(f"activity DB open failed: {exc}")
+            mc_conn.close()
+            return
+
+        try:
+            for tile in all_tiles():
+                try:
+                    state = tile.compute_state(data_conn)
+                except Exception as exc:
+                    logger.exception("tile %s compute_state failed", tile.name)
+                    result.errors.append(f"tile {tile.name}: {exc}")
+                    continue
+
+                transition = self._persist_tile_state(mc_conn, tile, state)
+                if transition:
+                    result.tier0_transitions.append(
+                        f"{tile.name}:{transition['prior_color']}->{state.color}"
+                    )
+                    if state.color in {COLOR_YELLOW, COLOR_RED} and is_phase_enabled(1):
+                        try:
+                            self._auto_create_infrastructure_card(mc_conn, tile, state)
+                        except Exception as exc:
+                            logger.exception("auto-card creation failed for %s", tile.name)
+                            result.errors.append(f"auto-card {tile.name}: {exc}")
+        finally:
+            data_conn.close()
+            mc_conn.close()
 
     def _run_tier1(self, result: SweepResult) -> None:
         """Tier-1 LLM card-discovery pass. Phase 2 fills this in."""
@@ -163,6 +226,150 @@ class MissionControlSweeper:
     def _run_tier2(self, result: SweepResult) -> None:
         """Tier-2 page synthesis. Phase 3 fills this in."""
         result.tier2_evaluated = True
+
+    # ── Tier-0 helpers ─────────────────────────────────────────────────
+
+    def _open_activity_db(self):  # type: ignore[no-untyped-def]
+        """Open a connection to the activity / task_hub DB.
+
+        Indirection so tests can override with a fixture-backed
+        connection. Default implementation uses the standard runtime DB
+        helper.
+        """
+        from universal_agent.durable.db import (
+            connect_runtime_db,
+            get_activity_db_path,
+        )
+
+        return connect_runtime_db(get_activity_db_path())
+
+    def _persist_tile_state(
+        self, conn, tile: Tile, state: TileState
+    ) -> dict[str, Any] | None:
+        """Write the new tile state. Returns a transition dict iff the
+        color actually changed since the last persisted state.
+        """
+        existing = conn.execute(
+            """
+            SELECT current_state, last_signature, state_since
+            FROM mission_control_tile_states
+            WHERE tile_id = ?
+            """,
+            (tile.name,),
+        ).fetchone()
+        now = _utc_now_iso()
+        prior_color = existing["current_state"] if existing else None
+        prior_signature = existing["last_signature"] if existing else None
+        prior_since = existing["state_since"] if existing else None
+
+        # If signature unchanged, just bump last_checked_at and bail.
+        if existing is not None and prior_signature == state.signature:
+            conn.execute(
+                """
+                UPDATE mission_control_tile_states
+                SET last_checked_at = ?
+                WHERE tile_id = ?
+                """,
+                (now, tile.name),
+            )
+            return None
+
+        transitioned = prior_color is not None and prior_color != state.color
+        state_since = now if (prior_color != state.color) else (prior_since or now)
+        evidence_json = self._dump_json(state.evidence)
+
+        if existing is None:
+            conn.execute(
+                """
+                INSERT INTO mission_control_tile_states (
+                    tile_id, current_state, state_since, last_signature,
+                    last_checked_at, evidence_payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (tile.name, state.color, state_since, state.signature, now, evidence_json),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE mission_control_tile_states
+                SET current_state = ?,
+                    state_since = ?,
+                    last_signature = ?,
+                    last_checked_at = ?,
+                    evidence_payload_json = ?
+                WHERE tile_id = ?
+                """,
+                (state.color, state_since, state.signature, now, evidence_json, tile.name),
+            )
+        if transitioned:
+            return {"prior_color": prior_color, "new_color": state.color}
+        return None
+
+    def _auto_create_infrastructure_card(
+        self, conn, tile: Tile, state: TileState
+    ) -> None:
+        """Create or revive the infrastructure-kind tier-1 card paired
+        with this tile. Phase 1 uses the tile's mechanical status as
+        narrative; Phase 5's diagnostic mission and Phase 2's tier-1
+        discovery pass enrich it later.
+        """
+        severity = self._severity_for_color(state.color)
+        narrative = (
+            f"Tile `{tile.name}` ({tile.display_name}) transitioned to "
+            f"`{state.color}`. Mechanical status:\n  {state.one_line_status}\n\n"
+            "Phase 1 produced this card mechanically from the tile transition. "
+            "Phase 2 tier-1 LLM discovery and Phase 5 auto-diagnostic missions "
+            "will enrich the narrative on subsequent sweeps."
+        )
+        why_it_matters = (
+            "Infrastructure tile transitions are the operator's first signal that "
+            "a subsystem changed state. The auto-created card guarantees a deep-dive "
+            "exists wherever a tile alarms — even before LLM enrichment runs."
+        )
+        upsert_card(
+            conn,
+            CardUpsert(
+                subject_kind=SUBJECT_INFRASTRUCTURE,
+                subject_id=f"infra:{tile.name}",
+                severity=severity,
+                title=f"{tile.display_name}: {state.one_line_status}",
+                narrative=narrative,
+                why_it_matters=why_it_matters,
+                tags=["infrastructure", tile.name, state.color],
+                evidence_refs=[
+                    {
+                        "kind": "tile",
+                        "id": tile.name,
+                        "uri": f"/dashboard/mission-control#tile-{tile.name}",
+                        "label": f"{tile.display_name} tile",
+                    }
+                ],
+                evidence_payload=state.evidence,
+                synthesis_model=None,  # not LLM-synthesized in Phase 1
+                evidence_signature=state.signature,
+            ),
+        )
+
+    @staticmethod
+    def _severity_for_color(color: str) -> str:
+        if color == COLOR_RED:
+            return SEVERITY_CRITICAL
+        if color == COLOR_YELLOW:
+            return SEVERITY_WARNING
+        if color == COLOR_UNKNOWN:
+            return SEVERITY_WATCHING
+        if color == COLOR_GREEN:
+            return SEVERITY_INFORMATIONAL
+        return SEVERITY_INFORMATIONAL
+
+    @staticmethod
+    def _dump_json(value: Any) -> str | None:
+        if value is None:
+            return None
+        try:
+            return json.dumps(value, default=str)
+        except (TypeError, ValueError):
+            return json.dumps({"unserializable": str(value)})
 
 
 # Module-level singleton so the gateway can grab a stable handle. The
