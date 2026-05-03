@@ -989,6 +989,14 @@ class HeartbeatService:
         )
         self.running = False
         self.task: Optional[asyncio.Task] = None
+        # Last time we emitted a `heartbeat_tick` row to the activity DB.
+        # Rate-limited so we don't flood activity_events at scheduler-tick cadence
+        # (loop ticks every 1-30s; we emit at most once per UA_HEARTBEAT_TICK_EMIT_INTERVAL_S,
+        # default 60s — well under the Mission Control Heartbeat tile's 90s expected interval).
+        self._last_tick_emit_at: float = 0.0
+        self._tick_emit_interval_s: float = float(
+            _parse_int(os.getenv("UA_HEARTBEAT_TICK_EMIT_INTERVAL_S"), 60)
+        )
         self.active_sessions: Dict[str, GatewaySession] = {}
         # Simple tracking of busy sessions (primitive lock)
         self.busy_sessions: set[str] = set()
@@ -1046,6 +1054,64 @@ class HeartbeatService:
             self.event_sink(payload)
         except Exception as exc:
             logger.warning("Heartbeat event sink failed: %s", exc)
+
+    def _emit_heartbeat_tick_activity_event(self, active_sessions: int) -> None:
+        """Write a low-severity ``heartbeat_tick`` row to the activity DB.
+
+        Provides the Mission Control Heartbeat Daemon tile (and the Gateway tile,
+        which uses any-recent-activity_events as a liveness proxy) with a real
+        per-tick liveness signal, instead of relying on alarm-only heartbeat-source
+        rows that go silent on a healthy system.
+
+        Hidden by default on /dashboard/events via
+        ``mission_control_event_titles.hide_by_default`` (severity=info, source=heartbeat,
+        no findings, no investigation/review in kind). Operator can reveal via "Show All".
+        """
+        try:
+            now = time.time()
+            now_iso = datetime.now(timezone.utc).isoformat()
+            row_id = f"heartbeat_tick_{int(now * 1000)}"
+            metadata = {
+                "active_sessions": int(active_sessions),
+                "tick_interval_s": float(self.default_schedule.every_seconds),
+                "scope": str(self.heartbeat_scope or "global"),
+            }
+            with connect_runtime_db(get_activity_db_path()) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO activity_events (
+                        id, event_class, source_domain, kind, title, summary, full_message,
+                        severity, status, requires_action, session_id, created_at, updated_at,
+                        entity_ref_json, actions_json, metadata_json, channels_json, email_targets_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        row_id,
+                        "tick",
+                        "heartbeat",
+                        "heartbeat_tick",
+                        "Heartbeat tick",
+                        f"daemon alive · {int(active_sessions)} active session(s)",
+                        "",
+                        "info",
+                        "new",
+                        0,
+                        None,
+                        now_iso,
+                        now_iso,
+                        "{}",
+                        "[]",
+                        json.dumps(metadata),
+                        "[]",
+                        "[]",
+                    ),
+                )
+                conn.commit()
+        except Exception as exc:
+            # Tick emission must never crash the scheduler loop. If the
+            # activity DB is locked or unavailable, log debug and move on —
+            # the next tick will try again.
+            logger.debug("heartbeat_tick activity emission skipped: %s", exc)
 
     def _clear_retry_state(self, state: HeartbeatState) -> None:
         state.retry_attempt = 0
@@ -1361,11 +1427,19 @@ class HeartbeatService:
             try:
                 # We use a simple 10s tick for the MVP; production would use a heap
                 start_time = time.time()
-                
+
                 count = len(self.active_sessions)
                 if count > 0:
                     logger.debug(f"Heartbeat tick: {count} active sessions")
                     # import sys; sys.stderr.write(f"DEBUG: TICK {count}\n") # Removed noisy debug
+
+                # Emit a low-severity `heartbeat_tick` row so Mission Control's
+                # Heartbeat Daemon tile sees a true liveness signal even on
+                # quiet systems where Simone investigations don't fire. Rate-
+                # limited via _tick_emit_interval_s (default 60s).
+                if start_time - self._last_tick_emit_at >= self._tick_emit_interval_s:
+                    self._emit_heartbeat_tick_activity_event(count)
+                    self._last_tick_emit_at = start_time
                 
                 # Use list snapshot to avoid runtime errors
                 for session_id, session in list(self.active_sessions.items()):
