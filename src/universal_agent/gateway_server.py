@@ -23245,6 +23245,24 @@ async def dashboard_mission_control_diagnostics():
                 tier1_meta["evidence_payload"] = None
             tier1_meta.pop("evidence_payload_json", None)
 
+        # Phase 3.5: surface tier-2 meta-row alongside tier-1 so operators
+        # can see the cascade is firing AND inspect the last COS attempt.
+        tier2_row = conn.execute(
+            "SELECT * FROM mission_control_tile_states WHERE tile_id = ?",
+            ("__tier2_meta__",),
+        ).fetchone()
+        tier2_meta: Optional[dict[str, Any]] = None
+        if tier2_row is not None:
+            tier2_meta = dict(tier2_row)
+            try:
+                tier2_meta["evidence_payload"] = (
+                    json.loads(tier2_meta["evidence_payload_json"])
+                    if tier2_meta.get("evidence_payload_json") else None
+                )
+            except Exception:
+                tier2_meta["evidence_payload"] = None
+            tier2_meta.pop("evidence_payload_json", None)
+
         # Card counts by subject_kind to see distribution
         rows = conn.execute(
             """
@@ -23271,6 +23289,7 @@ async def dashboard_mission_control_diagnostics():
         "phase_flags": phase_flags,
         "raw_env": raw_env,
         "tier1_meta": tier1_meta,
+        "tier2_meta": tier2_meta,
         "card_counts": card_counts,
         "canonical_tile_rows": int(canonical_tile_count or 0),
     }

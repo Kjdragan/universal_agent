@@ -1586,6 +1586,28 @@ function CardItem({
   const sev = severityBadge(card.severity);
   const thumbs = card.operator_feedback?.thumbs ?? null;
   const commentCount = card.operator_feedback?.comments?.length ?? 0;
+  // F#6: stamp last_viewed_at once per card_id per session. The endpoint
+  // accepts repeated calls (overwrite-by-viewer); we suppress per render
+  // to avoid DOS-ing ourselves on every poll. localStorage persists the
+  // set across page reloads so we don't re-stamp every refresh.
+  useEffect(() => {
+    if (typeof window === "undefined" || !card.card_id) return;
+    const STORAGE_KEY = "ua.mc.cards.viewed.v1";
+    let viewed: Record<string, string> = {};
+    try {
+      viewed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "{}");
+    } catch { /* ignore */ }
+    const lastSynth = card.last_synthesized_at || "";
+    if (viewed[card.card_id] === lastSynth) return; // already stamped this revision
+    viewed[card.card_id] = lastSynth;
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(viewed));
+    } catch { /* ignore */ }
+    // Fire-and-forget; failures are non-fatal
+    void fetch(`${API_BASE}/api/v1/dashboard/mission-control/cards/${encodeURIComponent(card.card_id)}/view`, {
+      method: "POST",
+    }).catch(() => { /* swallow */ });
+  }, [card.card_id, card.last_synthesized_at]);
   return (
     <div className={`rounded-lg border border-border/50 bg-card/25 p-3 ${dimmed ? "opacity-60" : ""}`}>
       <div className="mb-1 flex flex-wrap items-start justify-between gap-2">

@@ -267,8 +267,15 @@ class MissionControlSweeper:
     async def run_async_tiers(self, result: SweepResult) -> None:
         """Run tier-1 + tier-2 LLM passes. Called by `run_sweeper_loop`
         AFTER the sync `tick()` returns. Gated by phase flags AND by
-        bundle-signature change so we don't burn glm-4.7 calls when
-        nothing operationally meaningful has moved.
+        bundle-signature/cadence so we don't burn glm-4.7/opus calls
+        when nothing operationally meaningful has moved.
+
+        Cascade contract (Phase 3.5):
+          - tier-1 fires first; on success, tier-2 sees the new cards
+            on the SAME sweep tick. No 30-min lag.
+          - tier-2 fires when tier-0 transitioned this sweep, OR tier-1
+            produced new cards this sweep, OR ceiling exceeded since
+            last tier-2 run. Never more often than the floor.
         """
         if is_phase_enabled(2):
             try:
@@ -276,7 +283,14 @@ class MissionControlSweeper:
             except Exception as exc:
                 logger.exception("Tier-1 async pass failed")
                 result.errors.append(f"tier1: {exc}")
-        # Phase 3 (tier-2 page synthesis on top of tier-1) lands later.
+        # Tier-2 runs unconditionally (no separate phase flag) because
+        # the existing Chief-of-Staff service has been live since before
+        # Phase 0; we're just adding sweeper-driven cadence on top.
+        try:
+            await self._run_tier2_async(result)
+        except Exception as exc:
+            logger.exception("Tier-2 async pass failed")
+            result.errors.append(f"tier2: {exc}")
 
     async def _run_tier1_async(self, result: SweepResult) -> None:
         """Tier-1 LLM card-discovery pass.
@@ -472,6 +486,230 @@ class MissionControlSweeper:
         if prior_sig != new_sig and age_s < floor_seconds:
             return f"signature_changed_but_rate_limited (age={int(age_s)}s, floor={int(floor_seconds)}s)"
         return None
+
+    # ── Tier-2 (Chief-of-Staff) cascade — Phase 3.5 ────────────────────
+
+    async def _run_tier2_async(self, result: SweepResult) -> None:
+        """Tier-2 sweep: refresh the Chief-of-Staff readout when state has
+        meaningfully moved.
+
+        Cascade triggers (any one fires it):
+          - tier-0 transitioned this sweep (color flip on a tile)
+          - tier-1 produced new cards this sweep (`tier1_synthesized`)
+          - last tier-2 run > ceiling_seconds ago (idle-system refresh)
+
+        Floor: never more than once every floor_seconds. Even if a
+        cascade trigger fires, we honor the floor to protect the LLM
+        lane from bursting.
+
+        Always-writes a `__tier2_meta__` row so the diagnostics
+        endpoint can show last attempt status — same pattern as tier-1.
+        """
+        from universal_agent.services.mission_control_db import open_store
+
+        try:
+            mc_conn = open_store()
+        except Exception as exc:
+            result.errors.append(f"tier2 open_store failed: {exc}")
+            return
+
+        try:
+            # Read prior tier-2 attempt timestamp
+            meta_row = mc_conn.execute(
+                "SELECT state_since FROM mission_control_tile_states WHERE tile_id = ?",
+                ("__tier2_meta__",),
+            ).fetchone()
+            prior_synth_iso = meta_row["state_since"] if meta_row else None
+
+            cascade_reason = self._tier2_cascade_reason(result)
+            skip_reason = self._tier2_skip_reason(
+                cascade_reason=cascade_reason,
+                prior_synth_iso=prior_synth_iso,
+                floor_seconds=self.config.tier2_floor_seconds,
+                ceiling_seconds=self.config.tier2_ceiling_seconds,
+            )
+            if skip_reason:
+                self._write_tier2_meta(
+                    mc_conn,
+                    annotation=f"tier2 skipped: {skip_reason}",
+                    payload={"cascade_reason": cascade_reason},
+                )
+                logger.debug("Tier-2 skipped: %s", skip_reason)
+                return
+
+            # Run the existing Chief-of-Staff service. It already does:
+            # collect_evidence_bundle() (which Phase 3 made card-aware),
+            # synthesize_readout() against the configured COS model,
+            # persist_readout() to the durable store. We just drive it
+            # from the sweeper instead of an HTTP click.
+            try:
+                from universal_agent.services.mission_control_chief_of_staff import (
+                    generate_and_store_readout,
+                )
+            except Exception as exc:
+                self._write_tier2_meta(
+                    mc_conn,
+                    annotation=f"tier2 init failed: COS import: {exc}",
+                    payload={"cascade_reason": cascade_reason},
+                )
+                result.errors.append(f"tier2 import failed: {exc}")
+                return
+
+            try:
+                readout = await generate_and_store_readout()
+            except Exception as exc:
+                annotation = f"tier2 COS raised: {type(exc).__name__}: {exc}"
+                logger.exception("Tier-2 COS raised")
+                result.errors.append(annotation)
+                self._write_tier2_meta(
+                    mc_conn,
+                    annotation=annotation,
+                    payload={"cascade_reason": cascade_reason},
+                )
+                return
+
+            result.tier2_synthesized = True
+            headline = ""
+            model_used = None
+            if isinstance(readout, dict):
+                headline = str(readout.get("headline") or "")[:160]
+                model_used = readout.get("model")
+            self._write_tier2_meta(
+                mc_conn,
+                annotation=(
+                    f"tier2 ok: cascade={cascade_reason} model={model_used} "
+                    f"headline={headline!r}"
+                )[:600],
+                payload={
+                    "cascade_reason": cascade_reason,
+                    "model": model_used,
+                    "headline": headline,
+                },
+            )
+            logger.info(
+                "🛰️  Tier-2 readout refreshed (cascade=%s, model=%s)",
+                cascade_reason, model_used,
+            )
+        finally:
+            try:
+                mc_conn.close()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _tier2_cascade_reason(result: SweepResult) -> str:
+        """Identify which cascade signal (if any) should drive a tier-2
+        refresh THIS sweep. Returns a human-readable reason string.
+
+        Order of precedence:
+          1. Tier-0 color transitions (always interesting)
+          2. Tier-1 synthesis success (new cards)
+          3. Empty string = no cascade trigger; tier-2 should only run
+             on the ceiling fallback.
+        """
+        if result.tier0_transitions:
+            n = len(result.tier0_transitions)
+            return f"tier0_transitions:{n}"
+        if result.tier1_synthesized:
+            return "tier1_synthesized"
+        return ""  # no cascade — only ceiling-driven refresh would fire
+
+    @staticmethod
+    def _tier2_skip_reason(
+        cascade_reason: str,
+        prior_synth_iso: str | None,
+        floor_seconds: float,
+        ceiling_seconds: float,
+    ) -> str | None:
+        """Decide whether to skip this tier-2 pass.
+
+        Logic:
+          - First run ever (no prior_synth_iso): always run.
+          - Within floor: skip even on cascade — protect lane from
+            bursting.
+          - Past ceiling: always run (idle-system refresh keeps
+            readout from staling).
+          - Otherwise: run iff cascade_reason is non-empty.
+        """
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+        last_synth = None
+        if prior_synth_iso:
+            try:
+                last_synth = datetime.fromisoformat(
+                    prior_synth_iso.replace("Z", "+00:00")
+                )
+                if last_synth.tzinfo is None:
+                    last_synth = last_synth.replace(tzinfo=timezone.utc)
+            except ValueError:
+                last_synth = None
+        age_s = (now - last_synth).total_seconds() if last_synth else float("inf")
+
+        # First-run: always go
+        if last_synth is None:
+            return None
+
+        # Floor: never more than once per floor_seconds
+        if age_s < floor_seconds:
+            return (
+                f"floor_protection (age={int(age_s)}s, "
+                f"floor={int(floor_seconds)}s)"
+            )
+
+        # Ceiling: always refresh past it, regardless of cascade
+        if age_s >= ceiling_seconds:
+            return None
+
+        # In the floor..ceiling window: only run on cascade
+        if not cascade_reason:
+            return (
+                f"no_cascade_signal (age={int(age_s)}s, "
+                f"waiting_for_transition_or_tier1_success)"
+            )
+        return None
+
+    @staticmethod
+    def _write_tier2_meta(
+        conn,
+        *,
+        annotation: str,
+        payload: dict[str, Any] | None,
+    ) -> None:
+        """Always-callable meta-row writer for tier-2 attempt outcomes.
+
+        Mirrors `_write_tier1_meta` but for the `__tier2_meta__`
+        sentinel row. Catches its own exceptions so a meta-write
+        failure can never mask the real tier-2 outcome.
+        """
+        now_iso = _utc_now_iso()
+        try:
+            conn.execute(
+                """
+                INSERT INTO mission_control_tile_states (
+                    tile_id, current_state, state_since,
+                    last_signature, last_checked_at, last_annotation_at,
+                    current_annotation, evidence_payload_json
+                ) VALUES (?, 'unknown', ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(tile_id) DO UPDATE SET
+                    state_since = excluded.state_since,
+                    last_checked_at = excluded.last_checked_at,
+                    last_annotation_at = excluded.last_annotation_at,
+                    current_annotation = excluded.current_annotation,
+                    evidence_payload_json = excluded.evidence_payload_json
+                """,
+                (
+                    "__tier2_meta__",
+                    now_iso,
+                    "",
+                    now_iso,
+                    now_iso,
+                    annotation,
+                    json.dumps(payload, default=str) if payload is not None else None,
+                ),
+            )
+        except Exception:
+            logger.exception("Tier-2 meta-row write failed")
 
     # ── Tier-0 helpers ─────────────────────────────────────────────────
 
