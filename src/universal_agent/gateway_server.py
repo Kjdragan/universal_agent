@@ -7722,6 +7722,15 @@ def _emit_cron_event(payload: dict) -> None:
             severity = "info"
             kind = "autonomous_run_completed" if is_autonomous else "cron_run_success"
             message = f"{command}"
+        elif run_status == "cancelled":
+            # Cancellations happen on every deploy/restart for any job
+            # that was in-flight at shutdown. They are NOT failures —
+            # surface them as info-severity so the dashboard doesn't
+            # paint a red "Cron Run Failed" card on every release.
+            title = "Chron Run Cancelled (service restart)"
+            severity = "info"
+            kind = "cron_run_cancelled"
+            message = f"{command} | cancelled mid-run (likely deploy restart)"
         else:
             title = "Autonomous Task Failed" if is_autonomous else "Chron Run Failed"
             severity = "error"

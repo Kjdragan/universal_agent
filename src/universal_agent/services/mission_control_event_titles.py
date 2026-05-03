@@ -420,6 +420,12 @@ def hide_by_default(event: dict[str, Any]) -> bool:
         if not artifact_count:
             return True
 
+    # Hide: cron runs cancelled by service restart. These fire on every
+    # deploy for any in-flight job and are operational noise, not real
+    # incidents. Operator can toggle "Show All" if investigating restarts.
+    if kind == "cron_run_cancelled":
+        return True
+
     # Default: show
     return False
 

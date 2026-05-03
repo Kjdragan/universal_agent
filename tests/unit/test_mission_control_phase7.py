@@ -270,6 +270,17 @@ def test_autonomous_run_no_artifacts_hidden():
     )) is True
 
 
+def test_cron_run_cancelled_hidden_by_default():
+    """Cancellations fire on every deploy/restart for in-flight jobs.
+    They are operational noise — hide unless operator opts in."""
+    assert hide_by_default(_ev(
+        kind="cron_run_cancelled",
+        source_domain="cron",
+        severity="info",
+        metadata={"status": "cancelled"},
+    )) is True
+
+
 # ── End-to-end annotation ──────────────────────────────────────────────
 
 

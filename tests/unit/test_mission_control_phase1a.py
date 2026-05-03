@@ -181,10 +181,34 @@ def test_csi_ingester_tile_green_on_recent_event(activity_db):
     assert state.evidence["events_24h"] == 1
 
 
+def test_csi_ingester_tile_green_within_polling_cycle(activity_db):
+    """Production CSI source polls twice daily (cron 0 8,16 * * * America/Chicago).
+    A 5-hour gap is normal — well within the 8-hour polling window. The tile must
+    NOT alarm yellow during a normal between-poll silence.
+    """
+    _insert_event(activity_db, id="csi1", source_domain="csi",
+                  created_at=_iso_hours_ago(5))
+    state = CsiIngesterTile().compute_state(activity_db)
+    assert state.color == COLOR_GREEN, (
+        f"5h since last poll is normal for twice-daily source; got {state.color}"
+    )
+
+
 def test_csi_ingester_tile_yellow_on_stale(activity_db):
-    _insert_event(activity_db, id="csi1", source_domain="csi", created_at=_iso_hours_ago(3))
+    """Threshold tuned for twice-daily polling: 14h gap means we missed at least
+    one expected poll cycle and should signal yellow."""
+    _insert_event(activity_db, id="csi1", source_domain="csi",
+                  created_at=_iso_hours_ago(14))
     state = CsiIngesterTile().compute_state(activity_db)
     assert state.color == COLOR_YELLOW
+
+
+def test_csi_ingester_tile_red_when_polling_cadence_exceeded(activity_db):
+    """30+ hours since last event = at least 2 expected polls missed = red."""
+    _insert_event(activity_db, id="csi1", source_domain="csi",
+                  created_at=_iso_hours_ago(30))
+    state = CsiIngesterTile().compute_state(activity_db)
+    assert state.color == COLOR_RED
 
 
 def test_csi_ingester_tile_red_when_no_recent_events(activity_db):

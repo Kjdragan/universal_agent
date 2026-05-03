@@ -246,9 +246,14 @@ class CsiIngesterTile(Tile):
         return "A"
 
     def compute_state(self, conn: sqlite3.Connection) -> TileState:
-        # CSI events have source_domain='csi'. We measure freshness:
-        # green = event in last hour, yellow = none in 6h (service
-        # presumed alive but not producing), red = none in 24h.
+        # CSI is a TWICE-DAILY scheduled job (cron 0 8,16 America/Chicago
+        # = ~13:00 / 21:00 UTC). Expected gap between events is ~8-12h,
+        # so we tune the freshness traffic-light to match cadence rather
+        # than hourly polling:
+        #   green  = within one full polling window  (≤ 12h)
+        #   yellow = missed exactly one cycle        (12h < age ≤ 25h)
+        #   red    = missed ≥ 2 cycles               (> 25h)
+        # SQL window is 48h so the 24-25h yellow zone resolves correctly.
         try:
             row = conn.execute(
                 """
@@ -256,7 +261,7 @@ class CsiIngesterTile(Tile):
                        COUNT(*) AS events_24h
                 FROM activity_events
                 WHERE source_domain = 'csi'
-                  AND created_at > datetime('now','-24 hours')
+                  AND created_at > datetime('now','-48 hours')
                 """
             ).fetchone()
         except sqlite3.OperationalError as exc:
@@ -273,20 +278,20 @@ class CsiIngesterTile(Tile):
         if last_dt is None:
             return TileState(
                 color=COLOR_RED,
-                one_line_status="no CSI events in last 24h",
+                one_line_status="no CSI events in last 48h",
                 evidence={"events_24h": 0, "last_event_iso": None},
             )
 
         age_s = (_utc_now() - last_dt).total_seconds()
-        if age_s <= 3600:
+        if age_s <= 43200:  # 12h — within one polling window
             color = COLOR_GREEN
-            status = f"{events_24h} events in 24h, last {int(age_s/60)}m ago"
-        elif age_s <= 21600:  # 6h
+            status = f"{events_24h} events recent, last {int(age_s/60)}m ago"
+        elif age_s <= 90000:  # 25h — missed one cycle
             color = COLOR_YELLOW
-            status = f"no CSI events in {int(age_s/60)}m"
-        else:
+            status = f"no CSI events in {int(age_s/3600)}h (missed 1 cycle)"
+        else:  # > 25h — missed ≥ 2 cycles
             color = COLOR_RED
-            status = f"no CSI events in {int(age_s/3600)}h"
+            status = f"no CSI events in {int(age_s/3600)}h (missed ≥2 cycles)"
         return TileState(
             color=color,
             one_line_status=status,
