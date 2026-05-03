@@ -895,6 +895,16 @@ def rebuild_dispatch_queue(conn: sqlite3.Connection) -> dict[str, Any]:
             if reason.startswith("heartbeat_") or reason.startswith("todo_retry"):
                 eligible = False
 
+        # Prevent re-dispatch of tasks that have exhausted todo retries.
+        # Covers race conditions where finalize_assignments reopens an exhausted
+        # task to open/needs_review before the agent's block action commits.
+        if eligible and status in {TASK_STATUS_OPEN, TASK_STATUS_REVIEW}:
+            _dispatch_meta = dict(dict(item.get("metadata") or {}).get("dispatch") or {})
+            _retry_count = _safe_int(_dispatch_meta.get("todo_retry_count"), 0)
+            _retry_limit = _safe_int(_dispatch_meta.get("todo_retry_limit"), 3)
+            if _retry_count >= _retry_limit:
+                eligible = False
+
         # Only record evaluations for tasks in potentially-dispatchable states.
         # Tasks in blocked/in_progress/delegated/scheduled always defer — recording
         # that on every rebuild just creates noise (120+ identical rows per task).
@@ -2217,17 +2227,32 @@ def reconcile_task_lifecycle(
             )
             reviewed += 1
         else:
-            dispatch_meta["last_disposition"] = TASK_STATUS_OPEN
-            dispatch_meta["last_disposition_reason"] = "reconciled_orphaned_in_progress"
-            conn.execute(
-                """
-                UPDATE task_hub_items
-                SET status=?, seizure_state=?, metadata_json=?, updated_at=?
-                WHERE task_id=?
-                """,
-                (TASK_STATUS_OPEN, "unseized", _json_dumps(metadata), now_iso, task_id),
-            )
-            reopened += 1
+            _retry_count = _safe_int(dispatch_meta.get("todo_retry_count"), 0)
+            _retry_limit = _safe_int(dispatch_meta.get("todo_retry_limit"), 3)
+            if _retry_count >= _retry_limit:
+                dispatch_meta["last_disposition"] = TASK_STATUS_REVIEW
+                dispatch_meta["last_disposition_reason"] = "reconciled_orphaned_retry_exhausted"
+                conn.execute(
+                    """
+                    UPDATE task_hub_items
+                    SET status=?, seizure_state=?, metadata_json=?, updated_at=?
+                    WHERE task_id=?
+                    """,
+                    (TASK_STATUS_REVIEW, "unseized", _json_dumps(metadata), now_iso, task_id),
+                )
+                reviewed += 1
+            else:
+                dispatch_meta["last_disposition"] = TASK_STATUS_OPEN
+                dispatch_meta["last_disposition_reason"] = "reconciled_orphaned_in_progress"
+                conn.execute(
+                    """
+                    UPDATE task_hub_items
+                    SET status=?, seizure_state=?, metadata_json=?, updated_at=?
+                    WHERE task_id=?
+                    """,
+                    (TASK_STATUS_OPEN, "unseized", _json_dumps(metadata), now_iso, task_id),
+                )
+                reopened += 1
 
     completed_rows = conn.execute(
         """
