@@ -248,12 +248,187 @@ class MissionControlSweeper:
             mc_conn.close()
 
     def _run_tier1(self, result: SweepResult) -> None:
-        """Tier-1 LLM card-discovery pass. Phase 2 fills this in."""
+        """Sync marker — sets `tier1_evaluated=True` so the gating
+        contract is observable in `tick()` results. The actual LLM work
+        happens in `_run_tier1_async` which the gateway loop awaits
+        AFTER calling `tick()`. We split sync/async to avoid forcing
+        every existing tick() caller (incl. tests) to deal with
+        coroutines.
+        """
         result.tier1_evaluated = True
 
     def _run_tier2(self, result: SweepResult) -> None:
-        """Tier-2 page synthesis. Phase 3 fills this in."""
+        """Sync marker; real tier-2 synthesis lands in
+        `_run_tier2_async` (Phase 3)."""
         result.tier2_evaluated = True
+
+    # ── Async tiers (LLM-driven; gateway loop awaits these) ────────────
+
+    async def run_async_tiers(self, result: SweepResult) -> None:
+        """Run tier-1 + tier-2 LLM passes. Called by `run_sweeper_loop`
+        AFTER the sync `tick()` returns. Gated by phase flags AND by
+        bundle-signature change so we don't burn glm-4.7 calls when
+        nothing operationally meaningful has moved.
+        """
+        if is_phase_enabled(2):
+            try:
+                await self._run_tier1_async(result)
+            except Exception as exc:
+                logger.exception("Tier-1 async pass failed")
+                result.errors.append(f"tier1: {exc}")
+        # Phase 3 (tier-2 page synthesis on top of tier-1) lands later.
+
+    async def _run_tier1_async(self, result: SweepResult) -> None:
+        """Tier-1 LLM card-discovery pass.
+
+        Steps:
+          1. Open MC + activity DB connections.
+          2. Collect tier-1 evidence (no truncation).
+          3. Compute bundle signature.
+          4. Check signature/age against persisted state — skip the LLM
+             call if signature unchanged AND last call < 30 min ago.
+          5. Call glm-4.7 lane via discover_tier1_cards.
+          6. Apply discovery: upsert new/updated cards, retire
+             unmarked LLM-discovered subjects (tier-0 owned cards stay).
+          7. Persist the new signature + last-call timestamp.
+
+        Defensive: any exception localizes to result.errors. Cards are
+        written one-by-one inside apply_tier1_discovery so a single
+        bad card doesn't lose the whole pass.
+        """
+        from universal_agent.services.mission_control_db import open_store
+        from universal_agent.services.mission_control_tier1 import (
+            apply_tier1_discovery,
+            collect_tier1_evidence,
+            discover_tier1_cards,
+            evidence_signature,
+        )
+
+        try:
+            mc_conn = open_store()
+        except Exception as exc:
+            result.errors.append(f"tier1 open_store failed: {exc}")
+            return
+        try:
+            data_conn = self._open_activity_db()
+        except Exception as exc:
+            result.errors.append(f"tier1 activity DB open failed: {exc}")
+            mc_conn.close()
+            return
+
+        try:
+            evidence = collect_tier1_evidence(data_conn, mc_conn)
+        finally:
+            data_conn.close()
+
+        sig = evidence_signature(evidence)
+        meta_row = mc_conn.execute(
+            "SELECT current_state, last_signature, last_synthesized_at FROM mission_control_tile_states "
+            "WHERE tile_id = ?",
+            ("__tier1_meta__",),
+        ).fetchone()
+        prior_sig = meta_row["last_signature"] if meta_row else None
+        prior_synth_iso = meta_row["last_synthesized_at"] if meta_row else None
+        ceiling_seconds = self.config.tier1_ceiling_seconds
+        floor_seconds = self.config.tier1_floor_seconds
+
+        skip_reason = self._tier1_skip_reason(prior_sig, sig, prior_synth_iso, floor_seconds, ceiling_seconds)
+        if skip_reason:
+            mc_conn.execute(
+                """
+                INSERT INTO mission_control_tile_states (
+                    tile_id, current_state, state_since, last_signature,
+                    last_checked_at, current_annotation, evidence_payload_json
+                ) VALUES (?, 'unknown', ?, ?, ?, ?, NULL)
+                ON CONFLICT(tile_id) DO UPDATE SET
+                    last_checked_at = excluded.last_checked_at,
+                    last_signature = excluded.last_signature
+                """,
+                ("__tier1_meta__", _utc_now_iso(), sig, _utc_now_iso(), f"tier1 skipped: {skip_reason}"),
+            )
+            mc_conn.close()
+            logger.debug("Tier-1 skipped: %s", skip_reason)
+            return
+
+        try:
+            upserts, model_used = await discover_tier1_cards(evidence)
+            summary = apply_tier1_discovery(mc_conn, upserts)
+            result.tier1_synthesized = True
+            now_iso = _utc_now_iso()
+            mc_conn.execute(
+                """
+                INSERT INTO mission_control_tile_states (
+                    tile_id, current_state, state_since, last_signature,
+                    last_checked_at, last_annotation_at,
+                    current_annotation, evidence_payload_json
+                ) VALUES (?, 'unknown', ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(tile_id) DO UPDATE SET
+                    last_signature = excluded.last_signature,
+                    last_checked_at = excluded.last_checked_at,
+                    last_annotation_at = excluded.last_annotation_at,
+                    current_annotation = excluded.current_annotation,
+                    evidence_payload_json = excluded.evidence_payload_json
+                """,
+                (
+                    "__tier1_meta__",
+                    now_iso,
+                    sig,
+                    now_iso,
+                    now_iso,
+                    f"tier1 ok: created/updated={len(summary['created_or_updated'])} retired={len(summary['retired'])} model={model_used}",
+                    json.dumps({
+                        "model": model_used,
+                        "summary": summary,
+                        "evidence_counts": evidence.get("counts"),
+                    }, default=str),
+                ),
+            )
+            logger.info(
+                "🛰️  Tier-1: created/updated=%d retired=%d errors=%d model=%s",
+                len(summary["created_or_updated"]),
+                len(summary["retired"]),
+                len(summary["errors"]),
+                model_used,
+            )
+        except Exception as exc:
+            logger.exception("Tier-1 LLM discovery failed")
+            result.errors.append(f"tier1 discovery: {exc}")
+        finally:
+            mc_conn.close()
+
+    @staticmethod
+    def _tier1_skip_reason(
+        prior_sig: str | None,
+        new_sig: str,
+        prior_synth_iso: str | None,
+        floor_seconds: float,
+        ceiling_seconds: float,
+    ) -> str | None:
+        """Decide whether to skip this tier-1 pass.
+
+        Skip when:
+          - signature unchanged AND last call within ceiling window
+          - signature changed BUT last call within floor window
+            (rate-limit; defer to next sweep)
+        """
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+        last_synth = None
+        if prior_synth_iso:
+            try:
+                last_synth = datetime.fromisoformat(prior_synth_iso.replace("Z", "+00:00"))
+                if last_synth.tzinfo is None:
+                    last_synth = last_synth.replace(tzinfo=timezone.utc)
+            except ValueError:
+                last_synth = None
+        age_s = (now - last_synth).total_seconds() if last_synth else float("inf")
+
+        if prior_sig == new_sig and age_s < ceiling_seconds:
+            return f"signature_unchanged (age={int(age_s)}s, ceiling={int(ceiling_seconds)}s)"
+        if prior_sig != new_sig and age_s < floor_seconds:
+            return f"signature_changed_but_rate_limited (age={int(age_s)}s, floor={int(floor_seconds)}s)"
+        return None
 
     # ── Tier-0 helpers ─────────────────────────────────────────────────
 
@@ -522,12 +697,22 @@ async def run_sweeper_loop(stop_event: "Any") -> None:
             break
         try:
             result = sweeper.tick()
+            if result.skipped_reason is None:
+                # Now run the LLM-driven async tiers (tier-1, tier-2).
+                # tick() handled tier-0 synchronously; the async pass
+                # uses the dedicated glm-4.7 lane and is bundle-signature
+                # gated to keep cost minimal.
+                try:
+                    await sweeper.run_async_tiers(result)
+                except Exception:
+                    logger.exception("Mission Control async tiers raised — loop continues")
             if result.skipped_reason is None and (
-                result.tier0_transitions or result.errors
+                result.tier0_transitions or result.errors or result.tier1_synthesized
             ):
                 logger.info(
-                    "🛰️  MC sweep: transitions=%s errors=%s",
+                    "🛰️  MC sweep: transitions=%s tier1=%s errors=%s",
                     result.tier0_transitions,
+                    result.tier1_synthesized,
                     result.errors,
                 )
         except Exception:

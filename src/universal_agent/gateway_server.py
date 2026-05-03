@@ -23090,6 +23090,80 @@ async def dashboard_mission_control_cards(limit: int = 50):
     }
 
 
+# ── Mission Control card feedback endpoints (Phase 2) ───────────────────
+
+
+class _MCFeedbackThumbsBody(BaseModel):
+    direction: Optional[str] = None  # "up" | "down" | null
+
+
+class _MCFeedbackSnoozeBody(BaseModel):
+    duration: str  # "1h" | "4h" | "1d" | "1w"
+
+
+class _MCFeedbackCommentBody(BaseModel):
+    text: str
+
+
+def _mc_card_feedback_dispatch(card_id: str, op):
+    """Open the MC store, run the mutation `op(conn, card_id)`, return
+    a small JSON response. Centralizes error handling for the four
+    feedback endpoints below.
+    """
+    try:
+        from universal_agent.services.mission_control_db import open_store as _mc_open
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"mission control store unavailable: {exc}")
+    try:
+        conn = _mc_open()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"mission control store open failed: {exc}")
+    try:
+        result = op(conn, card_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"feedback op failed: {exc}")
+    finally:
+        conn.close()
+    return {"status": "ok", "card_id": card_id, "result": result}
+
+
+@app.post("/api/v1/dashboard/mission-control/cards/{card_id}/thumbs")
+async def dashboard_mission_control_card_thumbs(card_id: str, body: _MCFeedbackThumbsBody):
+    """Set thumbs feedback on a card. direction in {"up","down",null}."""
+    from universal_agent.services.mission_control_cards import set_card_thumbs as _mc_set_thumbs
+
+    return _mc_card_feedback_dispatch(card_id, lambda c, cid: _mc_set_thumbs(c, cid, body.direction))
+
+
+@app.post("/api/v1/dashboard/mission-control/cards/{card_id}/snooze")
+async def dashboard_mission_control_card_snooze(card_id: str, body: _MCFeedbackSnoozeBody):
+    """Snooze a card for {1h,4h,1d,1w}. Card auto-revives on expiry."""
+    from universal_agent.services.mission_control_cards import snooze_card as _mc_snooze
+
+    return _mc_card_feedback_dispatch(card_id, lambda c, cid: _mc_snooze(c, cid, body.duration))
+
+
+@app.post("/api/v1/dashboard/mission-control/cards/{card_id}/comment")
+async def dashboard_mission_control_card_comment(card_id: str, body: _MCFeedbackCommentBody):
+    """Append a durable operator comment to a card. Comments are
+    timestamped, never truncated, and feed back into future LLM
+    synthesis on the same subject_id."""
+    from universal_agent.services.mission_control_cards import add_card_comment as _mc_comment
+
+    return _mc_card_feedback_dispatch(card_id, lambda c, cid: _mc_comment(c, cid, body.text))
+
+
+@app.post("/api/v1/dashboard/mission-control/cards/{card_id}/view")
+async def dashboard_mission_control_card_view(card_id: str):
+    """Stamp last_viewed_at for the operator (Phase 2 F#6). Used by the
+    UI when a card opens / is rendered above-the-fold."""
+    from universal_agent.services.mission_control_cards import mark_card_viewed as _mc_view
+
+    return _mc_card_feedback_dispatch(card_id, lambda c, cid: _mc_view(c, cid))
+
+
 @app.post("/api/v1/dashboard/chief-of-staff/refresh")
 async def dashboard_chief_of_staff_refresh(include_evidence: bool = False):
     """Generate and store a fresh Chief-of-Staff readout now."""

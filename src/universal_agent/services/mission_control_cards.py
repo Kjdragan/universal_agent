@@ -20,7 +20,7 @@ import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 CARD_STATE_LIVE = "live"
@@ -240,6 +240,143 @@ def live_card_exists_for_subject(
         (card_id,),
     ).fetchone()
     return row is not None
+
+
+# ── Operator feedback mutations (Phase 2) ────────────────────────────────
+
+VALID_THUMBS = {"up", "down", None}
+VALID_SNOOZE_DURATIONS = {"1h", "4h", "1d", "1w"}
+_SNOOZE_SECONDS = {"1h": 3600, "4h": 14400, "1d": 86400, "1w": 604800}
+
+
+def _load_operator_feedback(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    try:
+        parsed = json.loads(raw or "{}")
+    except (TypeError, json.JSONDecodeError):
+        parsed = {}
+    if not isinstance(parsed, dict):
+        parsed = {}
+    parsed.setdefault("thumbs", None)
+    parsed.setdefault("snoozed_until", None)
+    parsed.setdefault("comments", [])
+    if not isinstance(parsed["comments"], list):
+        parsed["comments"] = []
+    return parsed
+
+
+def set_card_thumbs(
+    conn: sqlite3.Connection, card_id: str, direction: str | None
+) -> dict[str, Any]:
+    """Set the thumbs feedback signal on a card.
+
+    direction = "up" / "down" / None (clears).
+
+    Phase 2 contract: thumbs aggregate as a lightweight reinforcement
+    signal that gets fed back into Chief-of-Staff prompt context. We
+    persist immediately; consumers read the latest value.
+    """
+    if direction not in VALID_THUMBS:
+        raise ValueError(f"thumbs must be one of ['up', 'down', None], got {direction!r}")
+    row = conn.execute(
+        "SELECT operator_feedback_json FROM mission_control_cards WHERE card_id = ?",
+        (card_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"card not found: {card_id}")
+    feedback = _load_operator_feedback(row["operator_feedback_json"])
+    feedback["thumbs"] = direction
+    conn.execute(
+        "UPDATE mission_control_cards SET operator_feedback_json = ? WHERE card_id = ?",
+        (json.dumps(feedback), card_id),
+    )
+    return feedback
+
+
+def snooze_card(
+    conn: sqlite3.Connection, card_id: str, duration: str
+) -> dict[str, Any]:
+    """Snooze a card for a fixed duration. Auto-revives on expiry
+    (consumers compare snoozed_until to now and treat the card as
+    visible-again when the timestamp has passed).
+    """
+    if duration not in VALID_SNOOZE_DURATIONS:
+        raise ValueError(
+            f"duration must be one of {sorted(VALID_SNOOZE_DURATIONS)!s}, got {duration!r}"
+        )
+    row = conn.execute(
+        "SELECT operator_feedback_json FROM mission_control_cards WHERE card_id = ?",
+        (card_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"card not found: {card_id}")
+    feedback = _load_operator_feedback(row["operator_feedback_json"])
+    expiry = datetime.now(timezone.utc) + timedelta(seconds=_SNOOZE_SECONDS[duration])
+    feedback["snoozed_until"] = expiry.isoformat()
+    conn.execute(
+        "UPDATE mission_control_cards SET operator_feedback_json = ? WHERE card_id = ?",
+        (json.dumps(feedback), card_id),
+    )
+    return feedback
+
+
+def add_card_comment(
+    conn: sqlite3.Connection, card_id: str, text: str
+) -> dict[str, Any]:
+    """Append a timestamped operator comment to a card.
+
+    Comments are first-class memory: never overwritten, never truncated
+    here. They feed back into future LLM synthesis prompts so the
+    operator's voice shapes the system's read of similar situations.
+    """
+    cleaned = (text or "").strip()
+    if not cleaned:
+        raise ValueError("comment text must be non-empty")
+    row = conn.execute(
+        "SELECT operator_feedback_json FROM mission_control_cards WHERE card_id = ?",
+        (card_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"card not found: {card_id}")
+    feedback = _load_operator_feedback(row["operator_feedback_json"])
+    feedback["comments"].append({
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "text": cleaned,
+    })
+    conn.execute(
+        "UPDATE mission_control_cards SET operator_feedback_json = ? WHERE card_id = ?",
+        (json.dumps(feedback), card_id),
+    )
+    return feedback
+
+
+def mark_card_viewed(
+    conn: sqlite3.Connection, card_id: str, viewer: str = "operator"
+) -> dict[str, Any]:
+    """Stamp last_viewed_at for a per-user view tracker (F#6).
+
+    Phase 2 ships single-operator support; the JSON column is
+    structured per-user so multi-operator support is a no-op upgrade.
+    """
+    row = conn.execute(
+        "SELECT last_viewed_at_json FROM mission_control_cards WHERE card_id = ?",
+        (card_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"card not found: {card_id}")
+    try:
+        viewed = json.loads(row["last_viewed_at_json"] or "{}")
+        if not isinstance(viewed, dict):
+            viewed = {}
+    except (TypeError, json.JSONDecodeError):
+        viewed = {}
+    viewed[str(viewer or "operator")] = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "UPDATE mission_control_cards SET last_viewed_at_json = ? WHERE card_id = ?",
+        (json.dumps(viewed), card_id),
+    )
+    return viewed
 
 
 def list_live_cards(conn: sqlite3.Connection) -> list[dict[str, Any]]:
