@@ -319,8 +319,8 @@ Each phase ships behind a feature flag (`UA_MC_PHASE_N_ENABLED`). All work on `f
 | Phase | Scope | Visible change | Risk | Status |
 |---|---|---|---|---|
 | 0 | Foundations: tables, sweeper skeleton, model designation, no-truncation refactor | None (backend only) | Low | **Done (5ff03cce, deployed)** |
-| 1 | Tier-0 tile strip + tile-card auto-coupling | Tile strip appears at top of MC | Low | **Done (Phase 1A: e58f825b deployed; Phase 1B: d98625c4 deployed; production env enabled 2026-05-03)** |
-| 2 | Tier-1 narrative cards + feedback UI (incl. F#5 snooze auto-revival, F#6 last_viewed_at) | Cards replace Operator Brief content | Medium | Not started |
+| 1 | Tier-0 tile strip + tile-card auto-coupling | Tile strip appears at top of MC | Low | **Done (Phase 1A: e58f825b deployed; Phase 1B: d98625c4 deployed; production env enabled 2026-05-03; first-appearance/backfill fixes 43bd8a37 + f3aa9600 deployed)** |
+| 2 | Tier-1 narrative cards + feedback UI (incl. F#5 snooze auto-revival, F#6 last_viewed_at) | Cards replace Operator Brief content | Medium | **Done in code (backend 2ebc2aff + frontend 8520063b on feature/latest2). NOT YET ENABLED in production — UA_MC_PHASE_2_ENABLED needs to be set to 1 in Infisical before sweeper starts the tier-1 LLM pass.** |
 | 3 | Tier-2 synthesis with ledger feedback | Chief-of-Staff sees recurrence + retired-card history | Low | Not started |
 | 4 | Action buttons (Generate Prompt + Send to Codie) | Manual action loop unlocked | Medium | Not started |
 | 5 | Auto-remediation Class A (incl. F#9 templates, F#10 auto-rollback) | Three starter Class A actions live behind kill switch | High → 1-week observation period with `UA_MC_AUTO_REMEDIATION=0`, flip after gates confirmed | Not started |
@@ -399,3 +399,6 @@ Tracked but explicitly **not** in v1 scope:
 - **2026-05-03** — Phase 1A (`e58f825b`) shipped: tile abstractions, 9 tile classes, sweeper tier-0 logic, auto-card creation. Backend only; sweeper still gated.
 - **2026-05-03** — Phase 1B (`d98625c4`) shipped: sweeper background-task wiring, `/api/v1/dashboard/mission-control/{tiles,cards}` endpoints, `TileStripPanel` frontend component. Code in production but dormant pending env flip.
 - **2026-05-03** — Production env vars set via Infisical: `UA_MC_PHASE_1_ENABLED=1`, `UA_MISSION_CONTROL_MODEL=glm-4.7`, `UA_MISSION_CONTROL_SWEEPER_INTERVAL_S=60`, `UA_MC_AUTO_REMEDIATION=0`. This commit triggers the deploy that reads the new env on gateway startup.
+- **2026-05-03** — Phase 1 production smoke test surfaced the heartbeat-daemon-silent-since-2026-05-01-23:45-UTC issue (~26h gap). Documented in `docs/03_Operations/INCIDENT_2026-05-03_heartbeat_silence.md`. Mission Control Phase 1 working AS DESIGNED — surfaced a pre-existing operational issue that had been hiding in plain sight.
+- **2026-05-03** — Phase 1.1 first-appearance card fix (`43bd8a37`) and Phase 1.2 backfill invariant fix (`f3aa9600`) shipped after smoke testing revealed the original Phase 1 only created cards on color transitions, not on tile-row first appearance or for tiles with no live card.
+- **2026-05-03** — Phase 2 backend (`2ebc2aff`) and frontend (`8520063b`) committed to `feature/latest2`. NOT yet activated; awaiting `UA_MC_PHASE_2_ENABLED=1` env flip after operator review.
