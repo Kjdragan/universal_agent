@@ -95,6 +95,50 @@ def resolve_claude_code_model(default: str = "sonnet") -> str:
     return resolve_model(default)
 
 
+# ── Mission Control Intelligence dedicated model lane ────────────────────
+# The Mission Control intelligence system (tier-0 annotations, tier-1 card
+# discovery, tier-2 page synthesis, event-title template generation) runs
+# on its OWN model lane to avoid consuming Opus/Sonnet concurrency budget.
+#
+# Default: glm-4.7 — a fast, high-concurrency Z.AI direct model identifier
+# documented in docs/ZAI_OPENAI_COMPATIBLE_SETUP.md. Bypasses ZAI_MODEL_MAP
+# entirely; the value is passed through to AsyncAnthropic(model=...) as-is.
+#
+# Documented fallback if the lane gets flaky: glm-5-turbo.
+MISSION_CONTROL_DEFAULT_MODEL = "glm-4.7"
+MISSION_CONTROL_FALLBACK_MODEL = "glm-5-turbo"
+
+
+def resolve_mission_control_model() -> str:
+    """Resolve the dedicated Mission Control intelligence-lane model.
+
+    Precedence:
+      1) UA_MISSION_CONTROL_MODEL env override
+      2) MISSION_CONTROL_DEFAULT_MODEL (glm-4.7)
+
+    Does NOT pass through ZAI_MODEL_MAP — Mission Control deliberately
+    sidesteps the haiku/sonnet/opus tier collapse so its compute does
+    not contend with the application's main agent calls.
+    """
+    override = (os.getenv("UA_MISSION_CONTROL_MODEL") or "").strip()
+    return override or MISSION_CONTROL_DEFAULT_MODEL
+
+
+def mission_control_call_timeout_seconds() -> float:
+    """Wall-clock cap for a single Mission Control LLM call.
+
+    Override via UA_MISSION_CONTROL_CALL_TIMEOUT_SECONDS. Default 180s —
+    matches the existing Chief-of-Staff timeout. 0.0 disables the cap.
+    """
+    raw = os.getenv("UA_MISSION_CONTROL_CALL_TIMEOUT_SECONDS")
+    if raw is not None:
+        try:
+            return max(0.0, float(raw.strip()))
+        except ValueError:
+            pass
+    return 180.0
+
+
 # ── Per-tier wall-clock timeouts ──────────────────────────────────────
 # A single SDK turn can legitimately take a long time on opus (deep
 # reports, multi-step research). On the cheap tiers a turn that takes
