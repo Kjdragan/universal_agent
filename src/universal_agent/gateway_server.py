@@ -23093,6 +23093,96 @@ async def dashboard_mission_control_cards(limit: int = 50):
 # ── Mission Control card feedback endpoints (Phase 2) ───────────────────
 
 
+@app.get("/api/v1/dashboard/mission-control/diagnostics")
+async def dashboard_mission_control_diagnostics():
+    """Operator-visible diagnostics for the Mission Control sweeper.
+
+    Exposes per-phase enable state (so operators can verify env reached
+    the running process), tier-1 meta-row (signature, last attempt
+    timestamp, annotation describing what happened on the last pass),
+    and card counts per kind. Critical for diagnosing "I set the env
+    but tier-1 isn't firing" without VPS log access.
+    """
+    try:
+        from universal_agent.services.mission_control_db import is_phase_enabled as _mc_phase
+        from universal_agent.services.mission_control_db import open_store as _mc_open
+    except Exception as exc:
+        return {"status": "error", "error": f"mission control imports unavailable: {exc}"}
+
+    phase_flags = {str(p): _mc_phase(p) for p in range(0, 9)}
+
+    raw_env: dict[str, str] = {}
+    for key in (
+        "UA_MC_PHASE_1_ENABLED",
+        "UA_MC_PHASE_2_ENABLED",
+        "UA_MC_PHASE_3_ENABLED",
+        "UA_MISSION_CONTROL_MODEL",
+        "UA_MISSION_CONTROL_SWEEPER_INTERVAL_S",
+        "UA_MC_AUTO_REMEDIATION",
+    ):
+        raw_env[key] = os.getenv(key, "<unset>")
+
+    try:
+        conn = _mc_open()
+    except Exception as exc:
+        return {
+            "status": "error",
+            "error": f"mission control store unavailable: {exc}",
+            "phase_flags": phase_flags,
+            "raw_env": raw_env,
+        }
+
+    try:
+        # Tier-1 meta-row written by the sweeper on every tier-1 attempt
+        # (whether it ran the LLM or skipped). Holds last_signature,
+        # last_checked_at, last_annotation describing the outcome.
+        meta_row = conn.execute(
+            "SELECT * FROM mission_control_tile_states WHERE tile_id = ?",
+            ("__tier1_meta__",),
+        ).fetchone()
+        tier1_meta: Optional[dict[str, Any]] = None
+        if meta_row is not None:
+            tier1_meta = dict(meta_row)
+            try:
+                tier1_meta["evidence_payload"] = (
+                    json.loads(tier1_meta["evidence_payload_json"])
+                    if tier1_meta.get("evidence_payload_json") else None
+                )
+            except Exception:
+                tier1_meta["evidence_payload"] = None
+            tier1_meta.pop("evidence_payload_json", None)
+
+        # Card counts by subject_kind to see distribution
+        rows = conn.execute(
+            """
+            SELECT subject_kind, current_state, COUNT(*) AS n
+            FROM mission_control_cards
+            GROUP BY subject_kind, current_state
+            """
+        ).fetchall()
+        card_counts: dict[str, dict[str, int]] = {}
+        for r in rows:
+            card_counts.setdefault(r["subject_kind"], {})[r["current_state"]] = int(r["n"])
+
+        # Tile state row count (sanity check on sweeper liveness)
+        canonical_tile_count = conn.execute(
+            "SELECT COUNT(*) AS n FROM mission_control_tile_states WHERE tile_id != ?",
+            ("__tier1_meta__",),
+        ).fetchone()["n"]
+    finally:
+        conn.close()
+
+    return {
+        "status": "ok",
+        "generated_at": _utc_now_iso(),
+        "phase_flags": phase_flags,
+        "raw_env": raw_env,
+        "tier1_meta": tier1_meta,
+        "card_counts": card_counts,
+        "canonical_tile_rows": int(canonical_tile_count or 0),
+    }
+
+
 class _MCFeedbackThumbsBody(BaseModel):
     direction: Optional[str] = None  # "up" | "down" | null
 
