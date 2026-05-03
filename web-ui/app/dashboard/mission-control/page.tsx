@@ -88,6 +88,26 @@ type ChiefOfStaffPayload = {
   journal?: Array<{ id: string; generated_at_utc: string; summary: string; readout_id: string }>;
 };
 
+// Mission Control tier-0 tile strip (Phase 1B). Tiles come from
+// /api/v1/dashboard/mission-control/tiles, written by the backend
+// sweeper. Color vocabulary mirrors the schema CHECK constraint.
+type MissionControlTile = {
+  tile_id: string;
+  display_name: string;
+  current_state: "green" | "yellow" | "red" | "unknown";
+  one_line_status: string;
+  state_since?: string | null;
+  last_checked_at?: string | null;
+  evidence_payload?: Record<string, unknown>;
+  auto_action_class?: "A" | "B" | "C" | null;
+};
+
+type MissionControlTilesPayload = {
+  status: string;
+  generated_at?: string;
+  tiles: MissionControlTile[];
+};
+
 // Helper functions
 function formatTs(ts?: string | null): string {
   if (!ts) return "";
@@ -947,6 +967,180 @@ function OperatorBriefPanel() {
   );
 }
 
+// ── Tier-0 tile strip (Phase 1B) ─────────────────────────────────────
+// Compact at-a-glance health row of nine traffic-light tiles. Each
+// tile expands on click to show evidence + auto-action class. Default
+// renders as a single horizontal row; on narrow viewports it wraps.
+//
+// Implementation contract (per docs/02_Subsystems/Mission_Control_
+// Intelligence_System.md §4): a tile's color comes from cheap
+// Python-side queries; the LLM only enriches yellow/red transitions
+// (Phase 5+). For Phase 1B the `one_line_status` is the mechanical
+// status string; LLM enrichment overlays it later.
+
+function tileColorClasses(state: string): { dot: string; ring: string; bg: string } {
+  switch ((state || "").toLowerCase()) {
+    case "green":
+      return {
+        dot: "bg-primary",
+        ring: "ring-primary/30",
+        bg: "bg-primary/5",
+      };
+    case "yellow":
+      return {
+        dot: "bg-accent",
+        ring: "ring-accent/40",
+        bg: "bg-accent/10",
+      };
+    case "red":
+      return {
+        dot: "bg-red-400",
+        ring: "ring-red-400/40",
+        bg: "bg-red-500/10",
+      };
+    default:
+      return {
+        dot: "bg-muted-foreground/60",
+        ring: "ring-border",
+        bg: "bg-card/40",
+      };
+  }
+}
+
+function TileStripPanel() {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<MissionControlTilesPayload | null>(null);
+  const [expandedTileId, setExpandedTileId] = useState<string | null>(null);
+  const { refreshKey } = useContext(RefreshContext);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/dashboard/mission-control/tiles`, {
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`Failed to load: ${res.status}`);
+      setData((await res.json()) as MissionControlTilesPayload);
+    } catch (err: any) {
+      setError(err?.message || "Failed to load Mission Control tiles");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void load();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [load, refreshKey]);
+
+  if (loading && !data) {
+    return (
+      <div className="rounded-none border border-white/10 bg-[#0b1326]/70 p-3 backdrop-blur-md">
+        <div className="grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-9">
+          {Array.from({ length: 9 }).map((_, i) => (
+            <Skeleton key={i} className="h-12 w-full" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const tiles = data?.tiles ?? [];
+
+  return (
+    <div className="rounded-none border border-white/10 bg-[#0b1326]/70 p-3 backdrop-blur-md">
+      {error && (
+        <div className="mb-2 rounded border border-red-500/25 bg-red-500/10 p-2 text-xs text-red-300">
+          {error}
+        </div>
+      )}
+      <div className="grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-9">
+        {tiles.map((tile) => {
+          const cls = tileColorClasses(tile.current_state);
+          const expanded = expandedTileId === tile.tile_id;
+          return (
+            <button
+              key={tile.tile_id}
+              onClick={() => setExpandedTileId(expanded ? null : tile.tile_id)}
+              className={`min-w-0 rounded-md border border-border/40 ${cls.bg} px-2 py-2 text-left transition-colors hover:border-border ring-1 ${cls.ring}`}
+              title={tile.one_line_status}
+            >
+              <div className="flex items-center gap-1.5">
+                <span className={`inline-block h-2 w-2 flex-shrink-0 rounded-full ${cls.dot}`} />
+                <span className="truncate text-[11px] font-medium text-foreground/85">
+                  {tile.display_name}
+                </span>
+              </div>
+              <p className="mt-0.5 truncate text-[10px] leading-tight text-muted-foreground">
+                {tile.one_line_status || "no data yet"}
+              </p>
+            </button>
+          );
+        })}
+      </div>
+      {expandedTileId && (
+        <ExpandedTileDetail
+          tile={tiles.find((t) => t.tile_id === expandedTileId)}
+          onClose={() => setExpandedTileId(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function ExpandedTileDetail({
+  tile,
+  onClose,
+}: {
+  tile?: MissionControlTile;
+  onClose: () => void;
+}) {
+  if (!tile) return null;
+  const cls = tileColorClasses(tile.current_state);
+  return (
+    <div className={`mt-3 rounded border border-border/50 ${cls.bg} p-3`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-foreground/90">
+            {tile.display_name} — <span className="capitalize">{tile.current_state}</span>
+          </p>
+          <p className="mt-1 text-xs text-foreground/80">{tile.one_line_status}</p>
+          <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-muted-foreground">
+            {tile.state_since && <span>state since {tile.state_since}</span>}
+            {tile.last_checked_at && <span>checked {tile.last_checked_at}</span>}
+            {tile.auto_action_class && (
+              <span>auto-action class: {tile.auto_action_class}</span>
+            )}
+          </div>
+          {tile.evidence_payload && Object.keys(tile.evidence_payload).length > 0 && (
+            <details className="mt-2">
+              <summary className="cursor-pointer text-[11px] text-primary/80">
+                Evidence
+              </summary>
+              <pre className="mt-1 max-h-64 overflow-y-auto whitespace-pre-wrap rounded border border-border/40 bg-background/50 p-2 text-[10px] leading-relaxed text-muted-foreground">
+                {JSON.stringify(tile.evidence_payload, null, 2)}
+              </pre>
+            </details>
+          )}
+        </div>
+        <button
+          onClick={onClose}
+          className="rounded border border-border bg-background/40 px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-card/60 hover:text-foreground/80"
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function OperatingPosturePanel() {
   const links = [
     { href: "/dashboard/events", label: "Event Log", detail: "Raw notifications, diagnostics, and source events", icon: Bell },
@@ -1069,6 +1263,9 @@ export default function MissionControlPage() {
             </button>
           </div>
         </div>
+
+        {/* Tier-0 health strip — Phase 1B */}
+        <TileStripPanel />
 
         <div className="grid min-w-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1.8fr)_minmax(280px,0.8fr)]">
           <div className="flex min-w-0 flex-col gap-4">

@@ -2710,6 +2710,9 @@ _factory_staleness_task: Optional[asyncio.Task] = None
 _factory_staleness_stop: Optional[asyncio.Event] = None
 _hq_self_heartbeat_task: Optional[asyncio.Task] = None
 _hq_self_heartbeat_stop: Optional[asyncio.Event] = None
+# Mission Control intelligence sweeper (Phase 1B+)
+_mission_control_sweeper_task: Optional[asyncio.Task] = None
+_mission_control_sweeper_stop: Optional[asyncio.Event] = None
 _continuity_active_alerts: set[str] = set()
 _continuity_metric_events: deque[dict[str, Any]] = deque(
     maxlen=max(1000, int(os.getenv("UA_CONTINUITY_EVENT_MAXLEN", "20000") or 20000))
@@ -14437,6 +14440,31 @@ async def lifespan(app: FastAPI):
     )
     logger.info("💓 HQ self-heartbeat enabled (interval=60s)")
 
+    # --- Mission Control intelligence sweeper (Phase 1B+) ---
+    # Gated by UA_MC_PHASE_1_ENABLED. When the flag is off, the sweeper's
+    # tick() short-circuits anyway, but we skip starting the loop entirely
+    # to avoid the per-minute log noise during the rollout window.
+    try:
+        from universal_agent.services.mission_control_db import is_phase_enabled as _mc_is_phase_enabled
+        from universal_agent.services.mission_control_intelligence_sweeper import (
+            run_sweeper_loop as _mc_run_sweeper_loop,
+        )
+    except Exception:
+        logger.exception("Mission Control sweeper imports failed; skipping")
+    else:
+        global _mission_control_sweeper_task, _mission_control_sweeper_stop
+        if _mc_is_phase_enabled(1):
+            _mission_control_sweeper_stop = asyncio.Event()
+            _mission_control_sweeper_task = asyncio.create_task(
+                _run_after_deployment_window(
+                    "mission_control_sweeper",
+                    lambda: _mc_run_sweeper_loop(_mission_control_sweeper_stop),
+                )
+            )
+            logger.info("🛰️  Mission Control sweeper enabled (UA_MC_PHASE_1_ENABLED=1)")
+        else:
+            logger.info("⏸️  Mission Control sweeper disabled (UA_MC_PHASE_1_ENABLED unset)")
+
     yield
     
     # Cleanup
@@ -14462,6 +14490,13 @@ async def lifespan(app: FastAPI):
     if _hq_self_heartbeat_task is not None:
         try:
             await _hq_self_heartbeat_task
+        except Exception:
+            pass
+    if _mission_control_sweeper_stop is not None:
+        _mission_control_sweeper_stop.set()
+    if _mission_control_sweeper_task is not None:
+        try:
+            await _mission_control_sweeper_task
         except Exception:
             pass
     if _yt_playlist_watcher:
@@ -22912,6 +22947,146 @@ async def dashboard_chief_of_staff(include_evidence: bool = False, journal_limit
         "journal": journal,
         "refresh_endpoint": "/api/v1/dashboard/chief-of-staff/refresh",
         "source": "mission_control_chief_of_staff",
+    }
+
+
+@app.get("/api/v1/dashboard/mission-control/tiles")
+async def dashboard_mission_control_tiles():
+    """Return all tier-0 tile states for the Mission Control strip.
+
+    Phase 1B endpoint. Reads from `mission_control_tile_states` (written
+    by the sweeper). Stable display order matches `all_tiles()` so the
+    frontend doesn't need to sort. Returns an empty list if the
+    sweeper has never run (Phase 1 flag off / first boot before tick).
+    """
+    try:
+        from universal_agent.services.mission_control_db import open_store as _mc_open
+        from universal_agent.services.mission_control_tiles import all_tiles as _mc_all_tiles
+    except Exception as exc:
+        return {
+            "status": "error",
+            "error": f"mission control imports unavailable: {exc}",
+            "tiles": [],
+        }
+
+    tile_order = [t.name for t in _mc_all_tiles()]
+    display_names = {t.name: t.display_name for t in _mc_all_tiles()}
+    auto_action_classes = {t.name: t.auto_action_class() for t in _mc_all_tiles()}
+
+    try:
+        conn = _mc_open()
+    except Exception as exc:
+        return {
+            "status": "error",
+            "error": f"mission control store unavailable: {exc}",
+            "tiles": [],
+        }
+
+    try:
+        rows = conn.execute(
+            "SELECT * FROM mission_control_tile_states"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    state_by_id = {row["tile_id"]: dict(row) for row in rows}
+    tiles_payload: list[dict[str, Any]] = []
+    for tile_name in tile_order:
+        row = state_by_id.get(tile_name)
+        if row is None:
+            tiles_payload.append({
+                "tile_id": tile_name,
+                "display_name": display_names[tile_name],
+                "current_state": "unknown",
+                "one_line_status": "no data yet",
+                "state_since": None,
+                "last_checked_at": None,
+                "evidence_payload": {},
+                "auto_action_class": auto_action_classes[tile_name],
+            })
+            continue
+        evidence_raw = row.get("evidence_payload_json")
+        try:
+            evidence = json.loads(evidence_raw) if evidence_raw else {}
+        except Exception:
+            evidence = {}
+        # The one-line status was captured as part of the state's
+        # internal evidence — we surface it as a top-level field for the
+        # frontend.
+        one_line_status = (
+            row.get("current_annotation")
+            or evidence.get("one_line_status")
+            or evidence.get("status")
+            or ""
+        )
+        tiles_payload.append({
+            "tile_id": tile_name,
+            "display_name": display_names[tile_name],
+            "current_state": row.get("current_state", "unknown"),
+            "one_line_status": one_line_status if isinstance(one_line_status, str) else str(one_line_status),
+            "state_since": row.get("state_since"),
+            "last_checked_at": row.get("last_checked_at"),
+            "evidence_payload": evidence,
+            "auto_action_class": auto_action_classes[tile_name],
+        })
+    return {
+        "status": "ok",
+        "generated_at": _utc_now_iso(),
+        "tiles": tiles_payload,
+        "source": "mission_control_intelligence_sweeper",
+    }
+
+
+@app.get("/api/v1/dashboard/mission-control/cards")
+async def dashboard_mission_control_cards(limit: int = 50):
+    """Return live tier-1 cards for the Mission Control card grid.
+
+    Phase 1B endpoint. Phase 1 only writes infrastructure-kind cards
+    (auto-created on tile yellow/red transitions); Phase 2's tier-1 LLM
+    discovery pass adds the broader card population. The endpoint shape
+    is final — Phase 2 just produces more cards.
+    """
+    try:
+        from universal_agent.services.mission_control_cards import list_live_cards as _mc_list_live
+        from universal_agent.services.mission_control_db import open_store as _mc_open
+    except Exception as exc:
+        return {"status": "error", "error": f"mission control imports unavailable: {exc}", "cards": []}
+
+    try:
+        conn = _mc_open()
+    except Exception as exc:
+        return {"status": "error", "error": f"mission control store unavailable: {exc}", "cards": []}
+
+    try:
+        cards = _mc_list_live(conn)[: max(1, min(int(limit), 200))]
+    finally:
+        conn.close()
+
+    # Hydrate JSON columns for the frontend so it doesn't have to parse them.
+    hydrated: list[dict[str, Any]] = []
+    for card in cards:
+        out = dict(card)
+        for json_field in (
+            "tags_json",
+            "evidence_refs_json",
+            "evidence_payload_json",
+            "synthesis_history_json",
+            "dispatch_history_json",
+            "operator_feedback_json",
+            "last_viewed_at_json",
+        ):
+            raw = out.pop(json_field, None)
+            short = json_field[:-5]  # strip "_json"
+            try:
+                out[short] = json.loads(raw) if raw else None
+            except Exception:
+                out[short] = None
+        hydrated.append(out)
+    return {
+        "status": "ok",
+        "generated_at": _utc_now_iso(),
+        "cards": hydrated,
+        "source": "mission_control_cards",
     }
 
 

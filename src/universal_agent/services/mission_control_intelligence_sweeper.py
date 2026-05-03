@@ -283,12 +283,23 @@ class MissionControlSweeper:
                 """
                 INSERT INTO mission_control_tile_states (
                     tile_id, current_state, state_since, last_signature,
-                    last_checked_at, evidence_payload_json
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    last_checked_at, current_annotation, evidence_payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (tile.name, state.color, state_since, state.signature, now, evidence_json),
+                (tile.name, state.color, state_since, state.signature, now,
+                 state.one_line_status, evidence_json),
             )
         else:
+            # current_annotation is the operator-facing one-line status.
+            # Phase 1 writes the mechanical status; Phase 5 auto-diagnostic
+            # LLM passes will overwrite with richer prose. We do NOT
+            # overwrite current_annotation if a richer annotation was
+            # written by a Phase 5+ pass since the last poll — preserving
+            # LLM enrichment across mechanical re-polls.
+            existing_annotation = existing["current_annotation"] if "current_annotation" in existing.keys() else None
+            annotation_to_write = state.one_line_status
+            if existing_annotation and existing["last_annotation_at"] and existing["current_state"] == state.color:
+                annotation_to_write = existing_annotation
             conn.execute(
                 """
                 UPDATE mission_control_tile_states
@@ -296,10 +307,12 @@ class MissionControlSweeper:
                     state_since = ?,
                     last_signature = ?,
                     last_checked_at = ?,
+                    current_annotation = ?,
                     evidence_payload_json = ?
                 WHERE tile_id = ?
                 """,
-                (state.color, state_since, state.signature, now, evidence_json, tile.name),
+                (state.color, state_since, state.signature, now,
+                 annotation_to_write, evidence_json, tile.name),
             )
         if transitioned:
             return {"prior_color": prior_color, "new_color": state.color}
@@ -403,3 +416,50 @@ def _config_summary(cfg: SweeperConfig) -> dict[str, Any]:
         "lane_concurrency": cfg.lane_concurrency,
         "auto_remediation_enabled": cfg.auto_remediation_enabled,
     }
+
+
+# ── Async loop wrapper for gateway lifespan ────────────────────────────
+
+
+async def run_sweeper_loop(stop_event: "Any") -> None:
+    """Background-task body for the gateway's `lifespan` startup hook.
+
+    Awaits `stop_event.wait()` with a timeout equal to the configured
+    sweeper interval. On every interval expiry it calls `tick()` once.
+    Exits cleanly when `stop_event` is set so graceful shutdown works.
+
+    The loop is itself defensive: any exception inside `tick()` (which
+    should be rare since `tick()` already contains its handlers) is
+    caught and logged so the loop keeps running.
+    """
+    import asyncio
+
+    sweeper = get_sweeper()
+    # Floor at 0.01s rather than 1.0s so unit tests can drive the loop
+    # at sub-second cadence; production always sets a real interval via
+    # UA_MISSION_CONTROL_SWEEPER_INTERVAL_S (default 60s).
+    interval = max(0.01, sweeper.config.interval_seconds)
+    logger.info(
+        "🛰️  Mission Control sweeper loop starting (interval=%.1fs, model_lane=glm-4.7)",
+        interval,
+    )
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval)
+        except asyncio.TimeoutError:
+            pass
+        if stop_event.is_set():
+            break
+        try:
+            result = sweeper.tick()
+            if result.skipped_reason is None and (
+                result.tier0_transitions or result.errors
+            ):
+                logger.info(
+                    "🛰️  MC sweep: transitions=%s errors=%s",
+                    result.tier0_transitions,
+                    result.errors,
+                )
+        except Exception:
+            logger.exception("Mission Control sweeper tick raised — loop continues")
+    logger.info("🛰️  Mission Control sweeper loop stopped")
