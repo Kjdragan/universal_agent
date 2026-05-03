@@ -33,6 +33,12 @@ type ActivityEvent = {
   entity_ref?: Record<string, unknown>;
   actions?: ActivityAction[];
   metadata?: Record<string, unknown>;
+  // Phase 7: server-annotated smart title + visibility hint. Frontend
+  // prefers smart_title over title when present; uses hide_by_default
+  // to drive the default operator filter.
+  smart_title?: string;
+  hide_by_default?: boolean;
+  title_template_source?: string;  // "code" | "fallback" | model name
 };
 
 type ActivityAuditRow = {
@@ -317,6 +323,36 @@ export default function DashboardEventsPage() {
     }
     return false;
   });
+  // Phase 7: "Show All Activity" toggle. Default OFF (hide routine
+  // green/info noise). Sticky-per-user via localStorage with a 7-day
+  // soft expiry — past 7 days the value resets to false so debugging
+  // sessions don't permanently bloat the operator's default view.
+  const [showAllActivity, setShowAllActivity] = useState(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const c = JSON.parse(window.localStorage.getItem(FILTER_PREFS_KEY) || "{}");
+        const flag = Boolean(c.events_show_all_activity);
+        const stamp = String(c.events_show_all_activity_set_at || "");
+        if (flag && stamp) {
+          const setAt = Date.parse(stamp);
+          if (!isNaN(setAt) && (Date.now() - setAt) < 7 * 24 * 60 * 60 * 1000) {
+            return true;
+          }
+        }
+      } catch { /* */ }
+    }
+    return false;
+  });
+  // Persist Show All toggle when it changes
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const cur = JSON.parse(window.localStorage.getItem(FILTER_PREFS_KEY) || "{}");
+      cur.events_show_all_activity = showAllActivity;
+      cur.events_show_all_activity_set_at = showAllActivity ? new Date().toISOString() : "";
+      window.localStorage.setItem(FILTER_PREFS_KEY, JSON.stringify(cur));
+    } catch { /* */ }
+  }, [showAllActivity]);
   const [handoffOpen, setHandoffOpen] = useState(false);
   const [handoffInstruction, setHandoffInstruction] = useState("");
   const [handoffBusy, setHandoffBusy] = useState(false);
@@ -475,8 +511,15 @@ export default function DashboardEventsPage() {
         return true;
       });
     }
+    // Phase 7: smart-default filter — hide routine green/info noise
+    // unless operator explicitly toggles "Show All Activity". The
+    // backend annotates each event with hide_by_default; the frontend
+    // honors it here.
+    if (!showAllActivity) {
+      result = result.filter((item) => !(item.hide_by_default ?? false));
+    }
     return result;
-  }, [items, hideTransient, checkedSources, _TRANSIENT_PATTERNS]);
+  }, [items, hideTransient, checkedSources, _TRANSIENT_PATTERNS, showAllActivity]);
 
   const [copyBusy, setCopyBusy] = useState(false);
 
@@ -1301,6 +1344,20 @@ export default function DashboardEventsPage() {
             />
             Hide transient
           </label>
+          {/* Phase 7: smart-default filter toggle. OFF = operator view */}
+          {/* (hide routine green/info noise); ON = full firehose for debug. */}
+          {/* Sticky 7 days; auto-resets so debug sessions don't bloat default. */}
+          <label
+            className="inline-flex items-center gap-1 rounded border border-primary/30 bg-primary/10 px-2 py-1 text-[12px] text-primary/85"
+            title="When OFF (default), routine heartbeat ticks and unchanged cron syncs are hidden. Toggle ON to see the full firehose; reverts after 7 days."
+          >
+            <input
+              type="checkbox"
+              checked={showAllActivity}
+              onChange={(event) => setShowAllActivity(event.target.checked)}
+            />
+            Show All Activity
+          </label>
         </div>
 
         <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -1421,7 +1478,7 @@ export default function DashboardEventsPage() {
                       {timeAgo(item.created_at_utc)}
                     </span>
                   </div>
-                  <div className="text-sm font-medium text-foreground">{item.title}</div>
+                  <div className="text-sm font-medium text-foreground">{item.smart_title || item.title}</div>
                   <div className="mt-1 text-xs text-muted-foreground line-clamp-2">{item.summary || item.full_message}</div>
                 </button>
                 <button

@@ -22597,7 +22597,7 @@ async def dashboard_events(
         )
     if events:
         return {
-            "events": events,
+            "events": _mc_annotate_event_list(events),
             "source": "activity_store",
             "window_days_default": _activity_events_default_window_days,
             "next_cursor": next_cursor,
@@ -22668,11 +22668,104 @@ async def dashboard_events(
             str(tail.get("id") or ""),
         )
     return {
-        "events": fallback,
+        "events": _mc_annotate_event_list(fallback),
         "source": "in_memory",
         "next_cursor": next_cursor,
         "has_more": has_more,
     }
+
+
+# ── Phase 7: smart-title + hide_by_default annotation ──────────────────
+
+
+def _mc_annotate_event_list(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Annotate each event with `smart_title` and `hide_by_default`.
+
+    Pure-cache path: reads cached templates from event_title_templates;
+    falls back to a code-side template if nothing cached. NEVER
+    triggers an inline LLM call — that's done by a separate background
+    pass so the events endpoint stays fast.
+
+    Defensive: if MC store can't be opened (Phase 0 not deployed yet,
+    schema race, etc.), returns events unchanged so the endpoint never
+    breaks because of Phase 7 annotation issues.
+    """
+    if not events:
+        return events
+    try:
+        from universal_agent.services.mission_control_db import open_store as _mc_open
+        from universal_agent.services.mission_control_event_titles import annotate_event
+    except Exception:
+        return events
+    try:
+        conn = _mc_open()
+    except Exception:
+        return events
+    try:
+        annotated: list[dict[str, Any]] = []
+        for ev in events:
+            try:
+                annotated.append(annotate_event(conn, ev))
+            except Exception:
+                # One bad event shouldn't break the whole list
+                annotated.append(ev)
+        return annotated
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+@app.post("/api/v1/dashboard/events/templates/generate")
+async def dashboard_events_template_generate(
+    body: dict[str, Any],
+):
+    """Lazy-generate a title template for a (kind, metadata_shape) pair.
+
+    Body shape: `{ "sample_event": <full event dict from /events> }`.
+    The endpoint computes the metadata-shape signature for the sample,
+    fires the dedicated glm-4.7 lane to design a title template, and
+    upserts the result into `event_title_templates`. Subsequent
+    annotation passes pick up the new template automatically.
+
+    Operator workflow: open Events page, find an event whose smart_title
+    looks weak (still says "Autonomous Task Completed"), and trigger
+    template generation for that kind. One LLM call per kind+shape;
+    every future event of the same shape uses the cached template
+    deterministically.
+    """
+    try:
+        from universal_agent.services.mission_control_db import open_store as _mc_open
+        from universal_agent.services.mission_control_event_titles import (
+            generate_template_via_llm,
+            metadata_shape_signature,
+            store_template,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"event title imports unavailable: {exc}")
+
+    sample = body.get("sample_event") if isinstance(body, dict) else None
+    if not isinstance(sample, dict):
+        raise HTTPException(status_code=400, detail="body must include sample_event dict")
+    kind = str(sample.get("kind") or "").strip()
+    if not kind:
+        raise HTTPException(status_code=400, detail="sample_event.kind missing")
+    shape_sig = metadata_shape_signature(sample.get("metadata"))
+
+    template_text, model = await generate_template_via_llm(sample)
+    try:
+        conn = _mc_open()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"mission control store unavailable: {exc}")
+    try:
+        stored = store_template(
+            conn, event_kind=kind, shape_sig=shape_sig,
+            title_template=template_text, generated_by_model=model,
+        )
+    finally:
+        conn.close()
+    return {"status": "ok", "template": stored}
 
 
 def _dashboard_situation_priority(
