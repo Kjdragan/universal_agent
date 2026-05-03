@@ -318,8 +318,8 @@ Each phase ships behind a feature flag (`UA_MC_PHASE_N_ENABLED`). All work on `f
 
 | Phase | Scope | Visible change | Risk | Status |
 |---|---|---|---|---|
-| 0 | Foundations: tables, sweeper skeleton, model designation, no-truncation refactor | None (backend only) | Low | Not started |
-| 1 | Tier-0 tile strip + tile-card auto-coupling | Tile strip appears at top of MC | Low | Not started |
+| 0 | Foundations: tables, sweeper skeleton, model designation, no-truncation refactor | None (backend only) | Low | **Done (5ff03cce, deployed)** |
+| 1 | Tier-0 tile strip + tile-card auto-coupling | Tile strip appears at top of MC | Low | **Done (Phase 1A: e58f825b deployed; Phase 1B: d98625c4 deployed; production env enabled 2026-05-03)** |
 | 2 | Tier-1 narrative cards + feedback UI (incl. F#5 snooze auto-revival, F#6 last_viewed_at) | Cards replace Operator Brief content | Medium | Not started |
 | 3 | Tier-2 synthesis with ledger feedback | Chief-of-Staff sees recurrence + retired-card history | Low | Not started |
 | 4 | Action buttons (Generate Prompt + Send to Codie) | Manual action loop unlocked | Medium | Not started |
@@ -395,3 +395,7 @@ Tracked but explicitly **not** in v1 scope:
 ## 13. Update Log
 
 - **2026-05-03** — Initial implementation plan locked after design grilling. Phase 0 ready to start. Document is a living plan; update phase status, follow-up promotions/deferrals, and configuration surface as work lands.
+- **2026-05-03** — Phase 0 (`5ff03cce`) shipped to production. Foundations only; no operator-visible behavior change.
+- **2026-05-03** — Phase 1A (`e58f825b`) shipped: tile abstractions, 9 tile classes, sweeper tier-0 logic, auto-card creation. Backend only; sweeper still gated.
+- **2026-05-03** — Phase 1B (`d98625c4`) shipped: sweeper background-task wiring, `/api/v1/dashboard/mission-control/{tiles,cards}` endpoints, `TileStripPanel` frontend component. Code in production but dormant pending env flip.
+- **2026-05-03** — Production env vars set via Infisical: `UA_MC_PHASE_1_ENABLED=1`, `UA_MISSION_CONTROL_MODEL=glm-4.7`, `UA_MISSION_CONTROL_SWEEPER_INTERVAL_S=60`, `UA_MC_AUTO_REMEDIATION=0`. This commit triggers the deploy that reads the new env on gateway startup.
