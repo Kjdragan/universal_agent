@@ -151,7 +151,7 @@ Table `event_title_templates` (Phase 7):
 |---|---|---|---|---|
 | Gateway | health endpoint OK in last 60s | last health >60s old | health failed or >5 min stale | none |
 | Database | task_hub + activity DBs respond <100ms | response 100ms–1s, or one DB failed | both DBs failing or >1s | none |
-| CSI Ingester | events ingested in last hour | no events in last 6h, service active | no events in last 24h or service inactive | A — restart service |
+| CSI Ingester | last event ≤ 12h ago (within one polling window) | last event 12–25h ago (missed ≥1 cycle) | last event > 25h ago or none in 48h (missed ≥2 cycles) | A — restart service |
 | Cron Pipelines | all scheduled jobs ran on time in last 24h | one job failed once | ≥2 distinct jobs failing or same job ≥3 times | B — diagnostic only |
 | Heartbeat Daemon | tick within last 2× expected interval | one missed tick | ≥3 missed ticks or daemon dead | A — recycle daemon |
 | Task Hub Pressure | <10 in_progress, no stuck claims | 10–25 in_progress or 1 stuck claim >15 min | >25 or ≥3 stuck claims | A — stuck claim sweep |
@@ -166,6 +166,8 @@ Each tile is a small Python class implementing:
 - `transition_thresholds()` — returns the green/yellow/red boundaries (env-overridable)
 - `llm_annotation_prompt()` — only invoked on yellow/red transition
 - `auto_action_class()` — returns `A`, `B`, or `None`
+
+**Threshold-tuning principle (added 2026-05-03 after CSI red-tile incident):** tile thresholds must reflect the *actual production cadence* of the underlying signal, not a generic "fresh" assumption. CSI is a twice-daily scheduled job (cron `0 8,16 * * * America/Chicago` → ~13:00/21:00 UTC), so the green window is one full polling interval (12h), yellow is one missed cycle (12–25h), red is ≥2 missed cycles (>25h). When you add a new tile, document the upstream cadence in code comments and pick green/yellow/red from it — otherwise the tile will alarm during normal operation and operators will learn to ignore it.
 
 ---
 
@@ -300,6 +302,7 @@ Becomes the evidence-grade view, not the operator's primary surface. Stays in si
 - Routine `autonomous_run_completed` for cron syncs with `metadata.changed=false`
 - `mission_complete` events older than 1h that produced no new artifacts
 - Repeated successful cron runs (only most recent green per `job_id` per day shows; older greens collapse under "N prior successful runs · expand")
+- `cron_run_cancelled` events (in-flight cron tasks cancelled by service restart — these fire on every deploy and are operational noise, not failures)
 
 Default filter shows:
 - Anything `severity ≥ warning`
@@ -405,3 +408,6 @@ Tracked but explicitly **not** in v1 scope:
 - **2026-05-03** — `UA_MC_PHASE_2_ENABLED=1` set in Infisical production environment (operator action via UI). Gateway needs restart to pull the new env value into `os.environ` (the runtime bootstrap reads Infisical once at startup and doesn't auto-refresh). This commit triggers the deploy/restart that activates tier-1 LLM card discovery.
 - **2026-05-03** — Phase 2 activation confirmed via `/api/v1/dashboard/mission-control/diagnostics` after deploy. Tier-1 produced 3 LLM-discovered cards on first pass: 1 task warning (CODIE proactive cleanup blocked), 1 task informational (quarantined email), 1 artifact success (Karpathy YouTube tutorial ready). All using glm-4.7 model. Self-imposed 3-min floor + 30-min ceiling cadence working as designed; no upstream 429s observed.
 - **2026-05-03** — Phase 4 backend + frontend (`089b4ebc`) committed: Generate Prompt + Send to Codie action buttons on every tier-1 card. Backend endpoints support a two-stage confirmation protocol for Codie dispatch (preview → confirm). Audit trail flows into both the long-form `mission_control_dispatch_history` table and the card's in-mirror summary list. Ready to ship; activates on next deploy without any env change.
+- **2026-05-03** — Two production noise fixes (`257808c1`):
+  - **CSI tile threshold tuning**: `CsiIngesterTile` was hourly-tuned (green ≤1h, yellow ≤6h, red >6h) while CSI is actually a twice-daily cron. Tile sat in red ~22h/day on a healthy system. Retuned to green ≤12h, yellow ≤25h, red >25h with SQL window widened to 48h. See "Threshold-tuning principle" added to §4.
+  - **Cron `asyncio.CancelledError` handler**: Python 3.8+ made `CancelledError` a `BaseException`, so `except Exception` in `cron_service._run_job` did not catch it. Every gateway restart cancelled in-flight cron tasks; the run record was never finalized; the recovery sweep on next startup emitted phantom "Cron Run Failed" notifications that surfaced as red cards. Now caught explicitly: `record.status='cancelled'`, gateway emits info-severity `cron_run_cancelled`, hidden by default in `/dashboard/events`. Operator can reveal via Show All Activity.
