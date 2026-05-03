@@ -1202,6 +1202,24 @@ function severityBadge(severity: string): { label: string; cls: string } {
   }
 }
 
+type GeneratedPromptResponse = {
+  status: string;
+  card_id: string;
+  prompt_text: string;
+  prompt_text_chars: number;
+  subject_kind: string;
+  subject_id: string;
+};
+
+type DispatchToCodieResponse = {
+  status: string;  // "preview" or "ok"
+  card_id: string;
+  task_id?: string;
+  task_status?: string;
+  prompt_text?: string;
+  prompt_text_chars?: number;
+};
+
 function CardGridPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1209,6 +1227,10 @@ function CardGridPanel() {
   const [showSnoozed, setShowSnoozed] = useState(false);
   const [commentingCardId, setCommentingCardId] = useState<string | null>(null);
   const [commentDraft, setCommentDraft] = useState("");
+  // Phase 4 action-button state
+  const [promptModal, setPromptModal] = useState<GeneratedPromptResponse | null>(null);
+  const [codieModal, setCodieModal] = useState<{ cardId: string; preview: DispatchToCodieResponse | null; steering: string; sending: boolean } | null>(null);
+  const [actionPending, setActionPending] = useState<string | null>(null);
   const { refreshKey } = useContext(RefreshContext);
 
   const load = useCallback(async () => {
@@ -1252,6 +1274,75 @@ function CardGridPanel() {
     setCommentDraft("");
     setCommentingCardId(null);
   }, [commentingCardId, commentDraft, sendFeedback]);
+
+  // Phase 4: Generate Prompt (zero side effects)
+  const generatePrompt = useCallback(async (cardId: string) => {
+    setActionPending(cardId);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/v1/dashboard/mission-control/cards/${encodeURIComponent(cardId)}/generate-prompt`,
+        { method: "POST" },
+      );
+      if (!res.ok) throw new Error(`generate-prompt ${res.status}`);
+      const payload = (await res.json()) as GeneratedPromptResponse;
+      setPromptModal(payload);
+    } catch (err: any) {
+      console.error("MC generate-prompt failed", err);
+      alert(`Generate prompt failed: ${err?.message || err}`);
+    } finally {
+      setActionPending(null);
+    }
+  }, []);
+
+  // Phase 4: Send to Codie — opens preview flyout first
+  const openCodieFlyout = useCallback(async (cardId: string) => {
+    setActionPending(cardId);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/v1/dashboard/mission-control/cards/${encodeURIComponent(cardId)}/dispatch-to-codie`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ confirm: false }),
+        },
+      );
+      if (!res.ok) throw new Error(`preview ${res.status}`);
+      const preview = (await res.json()) as DispatchToCodieResponse;
+      setCodieModal({ cardId, preview, steering: "", sending: false });
+    } catch (err: any) {
+      console.error("MC dispatch preview failed", err);
+      alert(`Codie dispatch preview failed: ${err?.message || err}`);
+    } finally {
+      setActionPending(null);
+    }
+  }, []);
+
+  const confirmCodieDispatch = useCallback(async () => {
+    if (!codieModal) return;
+    setCodieModal({ ...codieModal, sending: true });
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/v1/dashboard/mission-control/cards/${encodeURIComponent(codieModal.cardId)}/dispatch-to-codie`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            confirm: true,
+            operator_steering_text: codieModal.steering.trim() || null,
+          }),
+        },
+      );
+      if (!res.ok) throw new Error(`dispatch ${res.status}`);
+      const result = (await res.json()) as DispatchToCodieResponse;
+      alert(`✓ Dispatched to Codie. Task ID: ${result.task_id}`);
+      setCodieModal(null);
+      void load();
+    } catch (err: any) {
+      console.error("MC dispatch failed", err);
+      alert(`Codie dispatch failed: ${err?.message || err}`);
+      setCodieModal(codieModal ? { ...codieModal, sending: false } : null);
+    }
+  }, [codieModal, load]);
 
   if (loading && !data) {
     return (
@@ -1309,6 +1400,9 @@ function CardGridPanel() {
             onThumbs={(direction) => sendFeedback(card.card_id, "thumbs", { direction })}
             onSnooze={(duration) => sendFeedback(card.card_id, "snooze", { duration })}
             onOpenComment={() => { setCommentingCardId(card.card_id); setCommentDraft(""); }}
+            onGeneratePrompt={() => generatePrompt(card.card_id)}
+            onSendToCodie={() => openCodieFlyout(card.card_id)}
+            actionPending={actionPending === card.card_id}
           />
         ))}
       </div>
@@ -1323,9 +1417,100 @@ function CardGridPanel() {
               onThumbs={(direction) => sendFeedback(card.card_id, "thumbs", { direction })}
               onSnooze={(duration) => sendFeedback(card.card_id, "snooze", { duration })}
               onOpenComment={() => { setCommentingCardId(card.card_id); setCommentDraft(""); }}
+              onGeneratePrompt={() => generatePrompt(card.card_id)}
+              onSendToCodie={() => openCodieFlyout(card.card_id)}
+              actionPending={actionPending === card.card_id}
               dimmed
             />
           ))}
+        </div>
+      )}
+
+      {/* Phase 4: Generate Prompt copy modal — zero side effects, just text */}
+      {promptModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-3xl rounded-lg border border-primary/30 bg-[#0b1326] p-5">
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-foreground/90">Investigation prompt ready</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Subject: <span className="text-foreground/80">{promptModal.subject_kind}</span>{' '}
+                  · {promptModal.prompt_text_chars} chars · zero side effects
+                </p>
+              </div>
+              <button
+                onClick={() => { void navigator.clipboard.writeText(promptModal.prompt_text); }}
+                className="rounded border border-primary/30 bg-primary/10 px-3 py-1 text-xs text-primary hover:bg-primary/20"
+              >
+                Copy
+              </button>
+            </div>
+            <pre className="mb-3 max-h-[60vh] overflow-y-auto whitespace-pre-wrap rounded border border-border/60 bg-background/60 p-3 text-[11px] leading-relaxed text-foreground/80">
+              {promptModal.prompt_text}
+            </pre>
+            <div className="flex justify-end">
+              <button
+                onClick={() => setPromptModal(null)}
+                className="rounded border border-border bg-card/40 px-3 py-1 text-xs text-muted-foreground hover:bg-card/60"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Phase 4: Send to Codie confirmation flyout */}
+      {codieModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-3xl rounded-lg border border-accent/40 bg-[#0b1326] p-5">
+            <div className="mb-3">
+              <p className="text-sm font-medium text-foreground/90">Send to Codie?</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Will create a Task Hub item with target_agent=vp.coder.primary.
+                Codie will open a PR for review (no merge, no main push, no deploy).
+                Auto-stamps thumbs-up on this card.
+              </p>
+            </div>
+            <details className="mb-3">
+              <summary className="cursor-pointer text-[11px] text-primary/80">
+                Show prompt that will be sent ({codieModal.preview?.prompt_text_chars ?? 0} chars)
+              </summary>
+              <pre className="mt-2 max-h-64 overflow-y-auto whitespace-pre-wrap rounded border border-border/60 bg-background/60 p-3 text-[10px] leading-relaxed text-muted-foreground">
+                {codieModal.preview?.prompt_text || "(preview unavailable)"}
+              </pre>
+            </details>
+            <p className="mb-1 text-xs text-foreground/85">
+              Operator steering (optional, append-only):
+            </p>
+            <p className="mb-2 text-[10px] text-muted-foreground">
+              This text will be appended to the prompt verbatim AND mirrored
+              into this card's comment thread for the audit trail.
+            </p>
+            <textarea
+              value={codieModal.steering}
+              onChange={(e) => setCodieModal({ ...codieModal, steering: e.target.value })}
+              className="h-20 w-full resize-y rounded border border-border bg-background/60 p-2 text-sm text-foreground placeholder:text-muted-foreground"
+              placeholder="e.g. Focus on the proxy auth path; Codie should also update the runbook."
+              disabled={codieModal.sending}
+            />
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                onClick={() => setCodieModal(null)}
+                disabled={codieModal.sending}
+                className="rounded border border-border bg-card/40 px-3 py-1 text-xs text-muted-foreground hover:bg-card/60 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmCodieDispatch}
+                disabled={codieModal.sending}
+                className="rounded border border-accent/40 bg-accent/15 px-3 py-1 text-xs text-accent hover:bg-accent/25 disabled:opacity-50"
+              >
+                {codieModal.sending ? "Sending..." : "Send to Codie"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1384,12 +1569,18 @@ function CardItem({
   onThumbs,
   onSnooze,
   onOpenComment,
+  onGeneratePrompt,
+  onSendToCodie,
+  actionPending = false,
   dimmed = false,
 }: {
   card: MissionControlCard;
   onThumbs: (d: "up" | "down" | null) => void;
   onSnooze: (d: "1h" | "4h" | "1d" | "1w") => void;
   onOpenComment: () => void;
+  onGeneratePrompt?: () => void;
+  onSendToCodie?: () => void;
+  actionPending?: boolean;
   dimmed?: boolean;
 }) {
   const sev = severityBadge(card.severity);
@@ -1476,6 +1667,31 @@ function CardItem({
               </span>
             )
           ))}
+        </div>
+      )}
+
+      {(onGeneratePrompt || onSendToCodie) && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {onGeneratePrompt && (
+            <button
+              onClick={onGeneratePrompt}
+              disabled={actionPending}
+              className="inline-flex items-center gap-1 rounded border border-primary/30 bg-primary/10 px-2 py-1 text-[11px] text-primary/85 hover:bg-primary/20 disabled:opacity-50"
+              title="Generate a copyable investigation prompt for an external AI coder. Zero side effects."
+            >
+              📋 Generate Prompt
+            </button>
+          )}
+          {onSendToCodie && (
+            <button
+              onClick={onSendToCodie}
+              disabled={actionPending}
+              className="inline-flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent hover:bg-accent/20 disabled:opacity-50"
+              title="Dispatch this card's investigation prompt to Codie (vp.coder.primary). Opens a confirmation flyout."
+            >
+              🚀 Send to Codie
+            </button>
+          )}
         </div>
       )}
 

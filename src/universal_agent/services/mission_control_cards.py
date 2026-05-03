@@ -379,6 +379,105 @@ def mark_card_viewed(
     return viewed
 
 
+# ── Dispatch history mutations (Phase 4) ─────────────────────────────────
+
+VALID_DISPATCH_ACTIONS = {"prompt_generated_for_external", "dispatched_to_codie"}
+
+
+def append_dispatch_history(
+    conn: sqlite3.Connection,
+    *,
+    card_id: str,
+    action: str,
+    prompt_text: str,
+    operator_steering_text: str | None = None,
+    task_id: str | None = None,
+) -> dict[str, Any]:
+    """Append an entry to a card's dispatch history (Phase 4).
+
+    Two action shapes per the schema CHECK constraint:
+      - prompt_generated_for_external: operator copy-pasted the prompt
+        to an external AI coder. No task_id; no Task Hub state change.
+      - dispatched_to_codie: operator sent the prompt to Codie via
+        Task Hub. task_id captures the new Task Hub item id.
+
+    The append also writes into mission_control_dispatch_history (the
+    long-form audit log) AND mirrors a summary into the card's
+    dispatch_history_json JSON column for fast read-side rendering.
+    """
+    if action not in VALID_DISPATCH_ACTIONS:
+        raise ValueError(
+            f"action must be one of {sorted(VALID_DISPATCH_ACTIONS)!s}, got {action!r}"
+        )
+    if not (prompt_text or "").strip():
+        raise ValueError("prompt_text must be non-empty")
+
+    row = conn.execute(
+        "SELECT dispatch_history_json FROM mission_control_cards WHERE card_id = ?",
+        (card_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"card not found: {card_id}")
+
+    now = datetime.now(timezone.utc).isoformat()
+    dispatch_id = "disp_" + hashlib.sha256(
+        f"{card_id}|{action}|{now}".encode("utf-8")
+    ).hexdigest()[:24]
+
+    # Long-form audit row
+    conn.execute(
+        """
+        INSERT INTO mission_control_dispatch_history
+            (dispatch_id, card_id, action, ts, prompt_text, operator_steering_text, task_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (dispatch_id, card_id, action, now, prompt_text,
+         operator_steering_text, task_id),
+    )
+
+    # Card-side mirror (summary entries; full prompt stays in the long-form
+    # table). Cap the in-card list at 20 entries so it doesn't bloat;
+    # earlier entries remain queryable in mission_control_dispatch_history.
+    try:
+        history = json.loads(row["dispatch_history_json"] or "[]")
+        if not isinstance(history, list):
+            history = []
+    except (TypeError, json.JSONDecodeError):
+        history = []
+    summary_entry = {
+        "dispatch_id": dispatch_id,
+        "ts": now,
+        "action": action,
+        "prompt_text_chars": len(prompt_text),
+        "task_id": task_id,
+        "operator_steering_text": operator_steering_text,
+    }
+    history.insert(0, summary_entry)
+    history = history[:20]
+    conn.execute(
+        "UPDATE mission_control_cards SET dispatch_history_json = ? WHERE card_id = ?",
+        (json.dumps(history), card_id),
+    )
+    return {"dispatch_id": dispatch_id, "ts": now, "action": action,
+            "task_id": task_id}
+
+
+def list_dispatch_history(
+    conn: sqlite3.Connection, card_id: str, *, limit: int = 50
+) -> list[dict[str, Any]]:
+    """Return the long-form dispatch history for a card, newest first."""
+    rows = conn.execute(
+        """
+        SELECT * FROM mission_control_dispatch_history
+        WHERE card_id = ?
+        ORDER BY ts DESC
+        LIMIT ?
+        """,
+        (card_id, max(1, min(int(limit), 200))),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def list_live_cards(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     rows = conn.execute(
         """

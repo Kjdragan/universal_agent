@@ -23292,6 +23292,249 @@ async def dashboard_mission_control_card_view(card_id: str):
     return _mc_card_feedback_dispatch(card_id, lambda c, cid: _mc_view(c, cid))
 
 
+# ── Mission Control action buttons (Phase 4) ────────────────────────────
+
+
+def _mc_load_card_for_action(card_id: str) -> dict[str, Any]:
+    """Load a card and hydrate its JSON columns. Used by both
+    Generate-Prompt and Send-to-Codie endpoints."""
+    from universal_agent.services.mission_control_cards import get_card as _mc_get_card
+    from universal_agent.services.mission_control_db import open_store as _mc_open
+
+    conn = _mc_open()
+    try:
+        card = _mc_get_card(conn, card_id)
+    finally:
+        conn.close()
+    if not card:
+        raise HTTPException(status_code=404, detail=f"card not found: {card_id}")
+    # Hydrate JSON columns the prompt builder reads.
+    for col in ("evidence_refs_json", "evidence_payload_json",
+                "synthesis_history_json", "tags_json"):
+        raw = card.get(col)
+        short = col[:-5]
+        try:
+            card[short] = json.loads(raw) if raw else None
+        except Exception:
+            card[short] = None
+    return card
+
+
+@app.post("/api/v1/dashboard/mission-control/cards/{card_id}/generate-prompt")
+async def dashboard_mission_control_generate_prompt(card_id: str):
+    """Build a copyable investigation prompt for an external AI coder.
+
+    Zero side effects on Task Hub. Records the generation in
+    dispatch_history (so the audit trail captures every prompt the
+    operator has produced for this card) but does NOT create any task
+    or trigger any agent work.
+    """
+    try:
+        from universal_agent.services.mission_control_cards import (
+            append_dispatch_history as _mc_append_dispatch,
+        )
+        from universal_agent.services.mission_control_db import open_store as _mc_open
+        from universal_agent.services.mission_control_prompts import build_prompt
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"prompt builder imports unavailable: {exc}")
+
+    card = _mc_load_card_for_action(card_id)
+    try:
+        generated = build_prompt(card, delivery_mode="external_ai_coder")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    # Audit-log the generation
+    conn = _mc_open()
+    try:
+        try:
+            _mc_append_dispatch(
+                conn,
+                card_id=card_id,
+                action="prompt_generated_for_external",
+                prompt_text=generated.text,
+            )
+        except Exception:
+            logger.exception("Generate-prompt audit log failed (non-fatal)")
+    finally:
+        conn.close()
+
+    return {
+        "status": "ok",
+        "card_id": card_id,
+        "delivery_mode": generated.delivery_mode,
+        "subject_kind": generated.subject_kind,
+        "subject_id": generated.subject_id,
+        "generated_at": generated.generated_at_utc,
+        "prompt_text": generated.text,
+        "prompt_text_chars": len(generated.text),
+    }
+
+
+class _MCDispatchToCodieBody(BaseModel):
+    operator_steering_text: Optional[str] = None
+    confirm: bool = False
+
+
+@app.post("/api/v1/dashboard/mission-control/cards/{card_id}/dispatch-to-codie")
+async def dashboard_mission_control_dispatch_to_codie(
+    card_id: str, body: _MCDispatchToCodieBody
+):
+    """Dispatch a card's investigation prompt to Codie via Task Hub.
+
+    Real side effect: creates a Task Hub item with target_agent =
+    vp.coder.primary, status=open, source_kind=mission_control_card_dispatch.
+    The existing dispatch path picks it up on the next sweep.
+
+    Operator must pass `confirm: true` in the body to actually create
+    the task — preserves the "confirmation flyout" semantic from the
+    Phase 4 design without requiring a separate dry-run endpoint. With
+    `confirm: false`, the endpoint returns the prompt text the user
+    would dispatch (so the UI can show it in the flyout for review)
+    without creating any task.
+    """
+    try:
+        from universal_agent.services.mission_control_cards import (
+            add_card_comment as _mc_comment,
+            append_dispatch_history as _mc_append_dispatch,
+            set_card_thumbs as _mc_thumbs,
+        )
+        from universal_agent.services.mission_control_db import open_store as _mc_open
+        from universal_agent.services.mission_control_prompts import build_prompt
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"prompt builder imports unavailable: {exc}")
+
+    card = _mc_load_card_for_action(card_id)
+    try:
+        generated = build_prompt(
+            card,
+            delivery_mode="codie",
+            operator_steering_text=body.operator_steering_text,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if not body.confirm:
+        # Dry-run: show the operator what would be sent without acting.
+        return {
+            "status": "preview",
+            "card_id": card_id,
+            "delivery_mode": "codie",
+            "subject_kind": generated.subject_kind,
+            "subject_id": generated.subject_id,
+            "generated_at": generated.generated_at_utc,
+            "prompt_text": generated.text,
+            "prompt_text_chars": len(generated.text),
+            "would_create_task_kind": "mission_control_card_dispatch",
+            "would_set_thumbs_up": True,
+        }
+
+    # Confirm=true path: create Task Hub item, stamp thumbs-up, mirror
+    # operator steering text into card comments, and audit-log the
+    # dispatch.
+    try:
+        from universal_agent.services.proactive_task_builder import queue_proactive_task
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"task hub helpers unavailable: {exc}")
+
+    task_id = f"mc-dispatch:{card_id}:{int(_utc_now_ms())}"
+    title = f"Mission Control dispatch: {card.get('title', '(no title)')[:140]}"
+    description = generated.text
+
+    # Open the activity DB to enqueue, the MC store for audit trail.
+    activity_path = _activity_db_path() if "_activity_db_path" in globals() else None
+    try:
+        from universal_agent.durable.db import (
+            connect_runtime_db,
+            get_activity_db_path,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"task hub db helpers unavailable: {exc}")
+
+    activity_path = activity_path or get_activity_db_path()
+    try:
+        with connect_runtime_db(activity_path) as task_conn:
+            queued = queue_proactive_task(
+                task_conn,
+                task_id=task_id,
+                source_kind="mission_control_card_dispatch",
+                source_ref=card_id,
+                title=title,
+                description=description,
+                priority=3,
+                labels=["agent-ready", "mission-control-dispatch", card.get("subject_kind", "task")],
+                metadata={
+                    "source": "mission_control_card_dispatch",
+                    "mission_control_card_id": card_id,
+                    "subject_kind": generated.subject_kind,
+                    "subject_id": generated.subject_id,
+                    "target_agent": "vp.coder.primary",
+                    "external_effect_policy": {
+                        "allow_pr": True,
+                        "allow_merge": False,
+                        "allow_main_push": False,
+                        "allow_deploy": False,
+                    },
+                    "workflow_manifest": {
+                        "workflow_kind": "code_change",
+                        "delivery_mode": "interactive_chat",
+                        "final_channel": "chat",
+                        "canonical_executor": "simone_first",
+                        "target_agent": "vp.coder.primary",
+                    },
+                },
+            )
+    except Exception as exc:
+        logger.exception("dispatch-to-codie task creation failed")
+        raise HTTPException(status_code=500, detail=f"task creation failed: {exc}")
+
+    # Audit-log + auto-thumbs-up + comment-mirror on the MC card.
+    mc_conn = None
+    try:
+        mc_conn = _mc_open()
+        try:
+            _mc_append_dispatch(
+                mc_conn,
+                card_id=card_id,
+                action="dispatched_to_codie",
+                prompt_text=generated.text,
+                operator_steering_text=body.operator_steering_text,
+                task_id=task_id,
+            )
+        except Exception:
+            logger.exception("dispatch audit log failed")
+        try:
+            _mc_thumbs(mc_conn, card_id, "up")
+        except Exception:
+            logger.exception("auto-thumbs-up failed")
+        if body.operator_steering_text and body.operator_steering_text.strip():
+            try:
+                _mc_comment(mc_conn, card_id,
+                            f"[dispatched to codie] {body.operator_steering_text.strip()}")
+            except Exception:
+                logger.exception("steering-text comment mirror failed")
+    finally:
+        if mc_conn is not None:
+            mc_conn.close()
+
+    return {
+        "status": "ok",
+        "card_id": card_id,
+        "task_id": task_id,
+        "task_status": queued.get("status") if isinstance(queued, dict) else "open",
+        "subject_kind": generated.subject_kind,
+        "subject_id": generated.subject_id,
+        "generated_at": generated.generated_at_utc,
+        "prompt_text_chars": len(generated.text),
+    }
+
+
+def _utc_now_ms() -> int:
+    """Millisecond unix epoch (used for task_id uniqueness)."""
+    from datetime import datetime, timezone
+    return int(datetime.now(timezone.utc).timestamp() * 1000)
+
+
 @app.post("/api/v1/dashboard/chief-of-staff/refresh")
 async def dashboard_chief_of_staff_refresh(include_evidence: bool = False):
     """Generate and store a fresh Chief-of-Staff readout now."""
