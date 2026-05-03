@@ -6,6 +6,11 @@ description: Run the commit changes through to production and deploy CI CD
 
 This workflow automates the canonical deployment path for the Universal Agent repository. It commits all pending changes on your current branch, merges them into `develop`, fast-forwards `main` with `develop`, and pushes to GitHub to trigger the automated CI/CD deployment workflow.
 
+## Notes for the Ship Operator (Pre-push Hygiene)
+If you are the agent running `/ship` (you may be reading this in a different session than the AI Coder who produced the commits), apply the same pre-push hygiene before promoting:
+Never assume the local working copy is current. Always re-fetch and rebase first. This eliminates the failure mode where the operator's stale checkout collides with a remote commit a coder just pushed.
+If `/ship` fails on push with a non-fast-forward / 403 rejection, the recovery is the same: `git pull --rebase origin <branch>` and re-run the failed step. Never `git push --force`.
+
 // turbo-all
 
 ## Execute Full Deployment Pipeline
@@ -25,9 +30,23 @@ if [ "$CURRENT_BRANCH" = "main" ] || [ "$CURRENT_BRANCH" = "develop" ]; then
     exit 1
 fi
 
-# 2. Commit and push current branch
+# 2. Commit and sync current branch
 git add .
 git commit -m "chore: deployment auto-commit via /ship" || echo "No pending changes to commit."
+
+echo "🔄 Fetching remote state to check for parallel activity..."
+git fetch origin $CURRENT_BRANCH develop main
+
+LOCAL_SHA=$(git rev-parse @)
+REMOTE_SHA=$(git rev-parse @{u} 2>/dev/null || echo "no_remote")
+
+if [ "$LOCAL_SHA" != "$REMOTE_SHA" ] && [ "$REMOTE_SHA" != "no_remote" ]; then
+    echo "⚠️ Remote changes detected (potential Claude Code activity). Performing pre-flight rebase..."
+    git pull --rebase origin $CURRENT_BRANCH
+else
+    echo "✅ Local branch is up to date. Proceeding with standard push..."
+fi
+
 git push origin $CURRENT_BRANCH
 
 # 3. Merge into develop
