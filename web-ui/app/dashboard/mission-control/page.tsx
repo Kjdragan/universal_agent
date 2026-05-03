@@ -1022,15 +1022,15 @@ function tileColorClasses(state: string): { dot: string; ring: string; bg: strin
   switch ((state || "").toLowerCase()) {
     case "green":
       return {
-        dot: "bg-primary",
-        ring: "ring-primary/30",
-        bg: "bg-primary/5",
+        dot: "bg-emerald-400",
+        ring: "ring-emerald-500/30",
+        bg: "bg-emerald-500/10",
       };
     case "yellow":
       return {
-        dot: "bg-accent",
-        ring: "ring-accent/40",
-        bg: "bg-accent/10",
+        dot: "bg-amber-400",
+        ring: "ring-amber-500/40",
+        bg: "bg-amber-500/10",
       };
     case "red":
       return {
@@ -1044,6 +1044,22 @@ function tileColorClasses(state: string): { dot: string; ring: string; bg: strin
         ring: "ring-border",
         bg: "bg-card/40",
       };
+  }
+}
+
+// Operator-facing label for a tile's mechanical color state. The
+// backend keeps the literal `green/yellow/red` values (stable for SQL,
+// metrics, and tests); the UI translates them to plain-language status.
+function tileStateLabel(state: string): string {
+  switch ((state || "").toLowerCase()) {
+    case "green":
+      return "healthy";
+    case "yellow":
+      return "degraded";
+    case "red":
+      return "critical";
+    default:
+      return "unknown";
   }
 }
 
@@ -1110,7 +1126,7 @@ function TileStripPanel() {
               key={tile.tile_id}
               onClick={() => setExpandedTileId(expanded ? null : tile.tile_id)}
               className={`min-w-0 rounded-md border border-border/40 ${cls.bg} px-2 py-2 text-left transition-colors hover:border-border ring-1 ${cls.ring}`}
-              title={tile.one_line_status}
+              title={`${tile.display_name} — ${tileStateLabel(tile.current_state)}${tile.one_line_status ? ` · ${tile.one_line_status}` : ""}`}
             >
               <div className="flex items-center gap-1.5">
                 <span className={`inline-block h-2 w-2 flex-shrink-0 rounded-full ${cls.dot}`} />
@@ -1149,7 +1165,7 @@ function ExpandedTileDetail({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold text-foreground/90">
-            {tile.display_name} — <span className="capitalize">{tile.current_state}</span>
+            {tile.display_name} — <span className="capitalize">{tileStateLabel(tile.current_state)}</span>
           </p>
           <p className="mt-1 text-xs text-foreground/80">{tile.one_line_status}</p>
           <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-muted-foreground">
