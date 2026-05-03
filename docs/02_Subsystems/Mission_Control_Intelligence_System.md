@@ -325,7 +325,7 @@ Each phase ships behind a feature flag (`UA_MC_PHASE_N_ENABLED`). All work on `f
 | 4 | Action buttons (Generate Prompt + Send to Codie) | Manual action loop unlocked | Medium | **Done in code (089b4ebc on feature/latest2). Ready to ship — no env flip needed; buttons activate as soon as the new gateway code is live.** |
 | 5 | Auto-remediation Class A (incl. F#9 templates, F#10 auto-rollback) | Three starter Class A actions live behind kill switch | High → 1-week observation period with `UA_MC_AUTO_REMEDIATION=0`, flip after gates confirmed | Not started |
 | 6 | Knowledge Ledger surface | `/dashboard/mission-control/ledger` route | Low | Not started |
-| 7 | Events page rebuild — smart titles + smart filter + sidebar reorder | Events page becomes scannable | Medium | Not started |
+| 7 | Events page rebuild — smart titles + smart filter + sidebar reorder | Events page becomes scannable | Medium | **Done in code (b643782e on feature/latest2). Smart titles use cached LLM templates per (kind, metadata_shape) with code-only fallback; hide_by_default filter active by default; Show All Activity toggle sticky 7d via localStorage. Sidebar already correctly ordered.** |
 | 8 | Cleanup: delete Operator Brief panel, deprecate `/api/v1/dashboard/situations`, docs | Removal of dead surfaces | Low | Not started |
 
 **Estimated focus time:** Phase 0 ~1d, Phase 1 ~2d, Phase 2 ~3d, Phase 3 ~1d, Phase 4 ~2d, Phase 5 ~2d, Phase 6 ~1.5d, Phase 7 ~2d, Phase 8 ~0.5d. Total ~15 days of focused work, not calendar time.
