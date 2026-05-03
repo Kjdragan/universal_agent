@@ -108,6 +108,46 @@ type MissionControlTilesPayload = {
   tiles: MissionControlTile[];
 };
 
+// Tier-1 narrative card payload (Phase 2). The /cards endpoint hydrates
+// JSON columns server-side, so consumers get parsed objects.
+type MissionControlCardEvidenceRef = {
+  kind?: string;
+  id?: string;
+  uri?: string;
+  label?: string;
+};
+
+type MissionControlCardComment = { ts?: string; text?: string };
+
+type MissionControlCard = {
+  card_id: string;
+  subject_kind: string;
+  subject_id: string;
+  current_state: string;
+  severity: "critical" | "warning" | "watching" | "informational" | "success" | string;
+  title: string;
+  narrative: string;
+  why_it_matters: string;
+  recommended_next_step?: string | null;
+  tags?: string[];
+  evidence_refs?: MissionControlCardEvidenceRef[];
+  recurrence_count?: number;
+  first_observed_at?: string;
+  last_synthesized_at?: string;
+  synthesis_model?: string;
+  operator_feedback?: {
+    thumbs?: "up" | "down" | null;
+    snoozed_until?: string | null;
+    comments?: MissionControlCardComment[];
+  } | null;
+  last_viewed_at?: Record<string, string> | null;
+};
+
+type MissionControlCardsPayload = {
+  status: string;
+  cards: MissionControlCard[];
+};
+
 // Helper functions
 function formatTs(ts?: string | null): string {
   if (!ts) return "";
@@ -1141,6 +1181,340 @@ function ExpandedTileDetail({
   );
 }
 
+// ── Tier-1 narrative cards (Phase 2) ────────────────────────────────────
+// LLM-discovered cards keyed on stable subject entities. Cards retire
+// into the Knowledge Ledger when no longer relevant; revival preserves
+// card_id continuity. Operator feedback (thumbs/snooze/comment) shapes
+// future synthesis.
+
+function severityBadge(severity: string): { label: string; cls: string } {
+  switch ((severity || "").toLowerCase()) {
+    case "critical":
+      return { label: "critical", cls: "bg-red-500/15 text-red-300 border-red-500/30" };
+    case "warning":
+      return { label: "warning", cls: "bg-accent/15 text-accent border-accent/30" };
+    case "watching":
+      return { label: "watching", cls: "bg-primary/15 text-primary border-primary/30" };
+    case "success":
+      return { label: "success", cls: "bg-primary/10 text-primary border-primary/20" };
+    default:
+      return { label: severity || "informational", cls: "bg-card/40 text-muted-foreground border-border" };
+  }
+}
+
+function CardGridPanel() {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<MissionControlCardsPayload | null>(null);
+  const [showSnoozed, setShowSnoozed] = useState(false);
+  const [commentingCardId, setCommentingCardId] = useState<string | null>(null);
+  const [commentDraft, setCommentDraft] = useState("");
+  const { refreshKey } = useContext(RefreshContext);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/dashboard/mission-control/cards?limit=50`, {
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`Failed to load cards: ${res.status}`);
+      setData((await res.json()) as MissionControlCardsPayload);
+    } catch (err: any) {
+      setError(err?.message || "Failed to load Mission Control cards");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) void load(); });
+    return () => { cancelled = true; };
+  }, [load, refreshKey]);
+
+  const sendFeedback = useCallback(async (cardId: string, path: string, body: any) => {
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/v1/dashboard/mission-control/cards/${encodeURIComponent(cardId)}/${path}`,
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
+      );
+      if (!res.ok) throw new Error(`${path} failed: ${res.status}`);
+      void load();  // refresh card state
+    } catch (err: any) {
+      console.error("MC feedback failed", err);
+    }
+  }, [load]);
+
+  const submitComment = useCallback(async () => {
+    if (!commentingCardId || !commentDraft.trim()) return;
+    await sendFeedback(commentingCardId, "comment", { text: commentDraft.trim() });
+    setCommentDraft("");
+    setCommentingCardId(null);
+  }, [commentingCardId, commentDraft, sendFeedback]);
+
+  if (loading && !data) {
+    return (
+      <div className="rounded-none border border-white/10 bg-[#0b1326]/70 p-4 backdrop-blur-md">
+        <Skeleton className="h-6 w-1/3" />
+        <Skeleton className="mt-3 h-24 w-full" />
+      </div>
+    );
+  }
+
+  const allCards = data?.cards ?? [];
+  const nowIso = new Date().toISOString();
+  const isSnoozed = (c: MissionControlCard) => {
+    const until = c.operator_feedback?.snoozed_until;
+    return Boolean(until && until > nowIso);
+  };
+  const visibleCards = allCards.filter((c) => !isSnoozed(c));
+  const snoozedCards = allCards.filter(isSnoozed);
+
+  return (
+    <div className="min-w-0 rounded-none border border-white/10 bg-[#0b1326]/70 p-4 backdrop-blur-md">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Lightbulb className="h-4 w-4 text-accent" />
+          <h2 className="text-sm font-medium text-foreground/85">
+            Intelligence Cards <span className="text-muted-foreground">({visibleCards.length})</span>
+          </h2>
+        </div>
+        {snoozedCards.length > 0 && (
+          <button
+            onClick={() => setShowSnoozed((s) => !s)}
+            className="rounded border border-border/50 bg-card/30 px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-card/60 hover:text-foreground/80"
+          >
+            {showSnoozed ? "Hide" : "Show"} {snoozedCards.length} snoozed
+          </button>
+        )}
+      </div>
+
+      {error && (
+        <div className="mb-3 rounded border border-red-500/25 bg-red-500/10 p-2 text-xs text-red-300">{error}</div>
+      )}
+
+      {visibleCards.length === 0 && snoozedCards.length === 0 && (
+        <p className="text-sm text-muted-foreground">
+          All quiet. The sweeper has not surfaced any tier-1 cards on the most recent pass.
+          {' '}This is normal for a healthy idle system.
+        </p>
+      )}
+
+      <div className="space-y-3">
+        {visibleCards.map((card) => (
+          <CardItem
+            key={card.card_id}
+            card={card}
+            onThumbs={(direction) => sendFeedback(card.card_id, "thumbs", { direction })}
+            onSnooze={(duration) => sendFeedback(card.card_id, "snooze", { duration })}
+            onOpenComment={() => { setCommentingCardId(card.card_id); setCommentDraft(""); }}
+          />
+        ))}
+      </div>
+
+      {showSnoozed && snoozedCards.length > 0 && (
+        <div className="mt-4 space-y-3 border-t border-border/40 pt-3">
+          <p className="text-xs text-muted-foreground">Snoozed (auto-revive on expiry)</p>
+          {snoozedCards.map((card) => (
+            <CardItem
+              key={card.card_id}
+              card={card}
+              onThumbs={(direction) => sendFeedback(card.card_id, "thumbs", { direction })}
+              onSnooze={(duration) => sendFeedback(card.card_id, "snooze", { duration })}
+              onOpenComment={() => { setCommentingCardId(card.card_id); setCommentDraft(""); }}
+              dimmed
+            />
+          ))}
+        </div>
+      )}
+
+      {commentingCardId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-2xl rounded-lg border border-border bg-[#0b1326] p-5">
+            <p className="mb-2 text-sm font-medium text-foreground/90">Add comment</p>
+            <p className="mb-3 text-xs text-muted-foreground">
+              Comments persist forever and feed back into future LLM synthesis on the same subject.
+            </p>
+            {(() => {
+              const card = allCards.find((c) => c.card_id === commentingCardId);
+              const prior = card?.operator_feedback?.comments ?? [];
+              if (prior.length === 0) return null;
+              return (
+                <div className="mb-3 max-h-32 overflow-y-auto rounded border border-border/40 bg-background/40 p-2">
+                  {prior.map((c, i) => (
+                    <div key={i} className="mb-1 last:mb-0">
+                      <span className="text-[10px] text-muted-foreground">{c.ts}</span>
+                      <p className="text-xs text-foreground/85">{c.text}</p>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+            <textarea
+              value={commentDraft}
+              onChange={(e) => setCommentDraft(e.target.value)}
+              className="h-24 w-full resize-y rounded border border-border bg-background/60 p-2 text-sm text-foreground placeholder:text-muted-foreground"
+              placeholder="What do you want this card's history to remember?"
+            />
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                onClick={() => { setCommentingCardId(null); setCommentDraft(""); }}
+                className="rounded border border-border bg-card/40 px-3 py-1 text-xs text-muted-foreground hover:bg-card/60"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitComment}
+                disabled={!commentDraft.trim()}
+                className="rounded border border-primary/30 bg-primary/10 px-3 py-1 text-xs text-primary hover:bg-primary/20 disabled:opacity-50"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CardItem({
+  card,
+  onThumbs,
+  onSnooze,
+  onOpenComment,
+  dimmed = false,
+}: {
+  card: MissionControlCard;
+  onThumbs: (d: "up" | "down" | null) => void;
+  onSnooze: (d: "1h" | "4h" | "1d" | "1w") => void;
+  onOpenComment: () => void;
+  dimmed?: boolean;
+}) {
+  const sev = severityBadge(card.severity);
+  const thumbs = card.operator_feedback?.thumbs ?? null;
+  const commentCount = card.operator_feedback?.comments?.length ?? 0;
+  return (
+    <div className={`rounded-lg border border-border/50 bg-card/25 p-3 ${dimmed ? "opacity-60" : ""}`}>
+      <div className="mb-1 flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-foreground/90">{card.title}</p>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            <span className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] ${sev.cls}`}>
+              {sev.label}
+            </span>
+            <span className="rounded bg-card/60 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+              {card.subject_kind}
+            </span>
+            {(card.recurrence_count ?? 1) > 1 && (
+              <span className="rounded bg-accent/10 px-1.5 py-0.5 text-[10px] text-accent">
+                seen {card.recurrence_count}x
+              </span>
+            )}
+            {(card.tags ?? []).slice(0, 4).map((tag) => (
+              <span key={tag} className="rounded bg-background/40 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                {tag}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => onThumbs(thumbs === "up" ? null : "up")}
+            className={`rounded border px-1.5 py-0.5 text-xs ${thumbs === "up" ? "border-primary/40 bg-primary/15 text-primary" : "border-border bg-card/30 text-muted-foreground hover:bg-card/60"}`}
+            title="More of this"
+          >
+            👍
+          </button>
+          <button
+            onClick={() => onThumbs(thumbs === "down" ? null : "down")}
+            className={`rounded border px-1.5 py-0.5 text-xs ${thumbs === "down" ? "border-red-500/30 bg-red-500/15 text-red-300" : "border-border bg-card/30 text-muted-foreground hover:bg-card/60"}`}
+            title="Less of this"
+          >
+            👎
+          </button>
+          <SnoozeMenu onSnooze={onSnooze} />
+          <button
+            onClick={onOpenComment}
+            className="rounded border border-border bg-card/30 px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-card/60"
+            title="Comment"
+          >
+            💬{commentCount > 0 ? ` ${commentCount}` : ""}
+          </button>
+        </div>
+      </div>
+
+      <p className="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-foreground/85">
+        {card.narrative}
+      </p>
+      {card.why_it_matters && (
+        <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+          <span className="text-foreground/70">Why it matters:</span> {card.why_it_matters}
+        </p>
+      )}
+      {card.recommended_next_step && (
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+          <span className="text-foreground/70">Next:</span> {card.recommended_next_step}
+        </p>
+      )}
+
+      {(card.evidence_refs ?? []).length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {(card.evidence_refs ?? []).map((ref, i) => (
+            ref.uri ? (
+              <a
+                key={`${ref.kind}-${i}`}
+                href={ref.uri}
+                className="rounded border border-primary/25 bg-primary/10 px-2 py-0.5 text-[10px] text-primary/85 hover:bg-primary/20"
+              >
+                {ref.label || `${ref.kind} ${ref.id}`}
+              </a>
+            ) : (
+              <span key={`${ref.kind}-${i}`} className="rounded bg-background/40 px-2 py-0.5 text-[10px] text-muted-foreground">
+                {ref.label || `${ref.kind} ${ref.id}`}
+              </span>
+            )
+          ))}
+        </div>
+      )}
+
+      <div className="mt-2 text-[10px] text-muted-foreground">
+        {card.last_synthesized_at && <>synth {card.last_synthesized_at} · </>}
+        {card.synthesis_model && <>{card.synthesis_model}</>}
+      </div>
+    </div>
+  );
+}
+
+function SnoozeMenu({ onSnooze }: { onSnooze: (d: "1h" | "4h" | "1d" | "1w") => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="rounded border border-border bg-card/30 px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-card/60"
+        title="Snooze"
+      >
+        ⏰
+      </button>
+      {open && (
+        <div className="absolute right-0 top-7 z-10 flex flex-col rounded border border-border bg-[#0b1326] p-1 shadow-lg">
+          {(["1h", "4h", "1d", "1w"] as const).map((d) => (
+            <button
+              key={d}
+              onClick={() => { onSnooze(d); setOpen(false); }}
+              className="rounded px-2 py-0.5 text-left text-[11px] text-muted-foreground hover:bg-card/60 hover:text-foreground"
+            >
+              {d}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function OperatingPosturePanel() {
   const links = [
     { href: "/dashboard/events", label: "Event Log", detail: "Raw notifications, diagnostics, and source events", icon: Bell },
@@ -1270,6 +1644,8 @@ export default function MissionControlPage() {
         <div className="grid min-w-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1.8fr)_minmax(280px,0.8fr)]">
           <div className="flex min-w-0 flex-col gap-4">
             <ChiefOfStaffReadoutPanel />
+            {/* Phase 2: tier-1 LLM-discovered narrative cards */}
+            <CardGridPanel />
             <OperatorBriefPanel />
             <ActiveTasksPanel />
           </div>
