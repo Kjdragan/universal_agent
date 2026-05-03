@@ -281,20 +281,11 @@ class MissionControlSweeper:
     async def _run_tier1_async(self, result: SweepResult) -> None:
         """Tier-1 LLM card-discovery pass.
 
-        Steps:
-          1. Open MC + activity DB connections.
-          2. Collect tier-1 evidence (no truncation).
-          3. Compute bundle signature.
-          4. Check signature/age against persisted state — skip the LLM
-             call if signature unchanged AND last call < 30 min ago.
-          5. Call glm-4.7 lane via discover_tier1_cards.
-          6. Apply discovery: upsert new/updated cards, retire
-             unmarked LLM-discovered subjects (tier-0 owned cards stay).
-          7. Persist the new signature + last-call timestamp.
-
-        Defensive: any exception localizes to result.errors. Cards are
-        written one-by-one inside apply_tier1_discovery so a single
-        bad card doesn't lose the whole pass.
+        Always-writes a `__tier1_meta__` row at the end (success, skip,
+        OR exception path) so the diagnostics endpoint can show exactly
+        what happened on the last attempt. Without this, a silent
+        exception leaves operators staring at `tier1_meta: null` with
+        no way to diagnose.
         """
         from universal_agent.services.mission_control_db import open_store
         from universal_agent.services.mission_control_tier1 import (
@@ -304,58 +295,123 @@ class MissionControlSweeper:
             evidence_signature,
         )
 
+        last_attempt_summary = "tier1 not attempted (init failure)"
+        last_evidence_payload: dict[str, Any] | None = None
+        last_signature: str | None = None
+
         try:
             mc_conn = open_store()
         except Exception as exc:
             result.errors.append(f"tier1 open_store failed: {exc}")
-            return
-        try:
-            data_conn = self._open_activity_db()
-        except Exception as exc:
-            result.errors.append(f"tier1 activity DB open failed: {exc}")
-            mc_conn.close()
-            return
+            return  # can't write meta row without a connection
 
         try:
-            evidence = collect_tier1_evidence(data_conn, mc_conn)
-        finally:
-            data_conn.close()
+            try:
+                data_conn = self._open_activity_db()
+            except Exception as exc:
+                last_attempt_summary = f"tier1 init failed: activity DB open: {exc}"
+                result.errors.append(f"tier1 activity DB open failed: {exc}")
+                self._write_tier1_meta(mc_conn, signature=None, annotation=last_attempt_summary, payload=None)
+                return
 
-        sig = evidence_signature(evidence)
-        meta_row = mc_conn.execute(
-            "SELECT current_state, last_signature, last_synthesized_at FROM mission_control_tile_states "
-            "WHERE tile_id = ?",
-            ("__tier1_meta__",),
-        ).fetchone()
-        prior_sig = meta_row["last_signature"] if meta_row else None
-        prior_synth_iso = meta_row["last_synthesized_at"] if meta_row else None
-        ceiling_seconds = self.config.tier1_ceiling_seconds
-        floor_seconds = self.config.tier1_floor_seconds
+            try:
+                evidence = collect_tier1_evidence(data_conn, mc_conn)
+            except Exception as exc:
+                last_attempt_summary = f"tier1 init failed: evidence collection: {exc}"
+                result.errors.append(f"tier1 evidence collection failed: {exc}")
+                data_conn.close()
+                self._write_tier1_meta(mc_conn, signature=None, annotation=last_attempt_summary, payload=None)
+                return
+            finally:
+                try:
+                    data_conn.close()
+                except Exception:
+                    pass
 
-        skip_reason = self._tier1_skip_reason(prior_sig, sig, prior_synth_iso, floor_seconds, ceiling_seconds)
-        if skip_reason:
-            mc_conn.execute(
-                """
-                INSERT INTO mission_control_tile_states (
-                    tile_id, current_state, state_since, last_signature,
-                    last_checked_at, current_annotation, evidence_payload_json
-                ) VALUES (?, 'unknown', ?, ?, ?, ?, NULL)
-                ON CONFLICT(tile_id) DO UPDATE SET
-                    last_checked_at = excluded.last_checked_at,
-                    last_signature = excluded.last_signature
-                """,
-                ("__tier1_meta__", _utc_now_iso(), sig, _utc_now_iso(), f"tier1 skipped: {skip_reason}"),
+            sig = evidence_signature(evidence)
+            last_signature = sig
+            last_evidence_payload = {
+                "evidence_counts": evidence.get("counts"),
+            }
+
+            meta_row = mc_conn.execute(
+                "SELECT current_state, last_signature, state_since FROM mission_control_tile_states "
+                "WHERE tile_id = ?",
+                ("__tier1_meta__",),
+            ).fetchone()
+            prior_sig = meta_row["last_signature"] if meta_row else None
+            # state_since is the only ts column we set per write; treat it
+            # as last-synthesis time for the floor/ceiling check
+            prior_synth_iso = meta_row["state_since"] if meta_row else None
+            ceiling_seconds = self.config.tier1_ceiling_seconds
+            floor_seconds = self.config.tier1_floor_seconds
+
+            skip_reason = self._tier1_skip_reason(
+                prior_sig, sig, prior_synth_iso, floor_seconds, ceiling_seconds
             )
-            mc_conn.close()
-            logger.debug("Tier-1 skipped: %s", skip_reason)
-            return
+            if skip_reason:
+                last_attempt_summary = f"tier1 skipped: {skip_reason}"
+                self._write_tier1_meta(mc_conn, signature=sig, annotation=last_attempt_summary,
+                                       payload=last_evidence_payload)
+                logger.debug("Tier-1 skipped: %s", skip_reason)
+                return
 
-        try:
-            upserts, model_used = await discover_tier1_cards(evidence)
-            summary = apply_tier1_discovery(mc_conn, upserts)
+            try:
+                upserts, model_used = await discover_tier1_cards(evidence)
+            except Exception as exc:
+                last_attempt_summary = f"tier1 LLM discover_tier1_cards raised: {type(exc).__name__}: {exc}"
+                result.errors.append(last_attempt_summary)
+                logger.exception("Tier-1 discover raised")
+                self._write_tier1_meta(mc_conn, signature=sig, annotation=last_attempt_summary,
+                                       payload=last_evidence_payload)
+                return
+
+            try:
+                summary = apply_tier1_discovery(mc_conn, upserts)
+            except Exception as exc:
+                last_attempt_summary = f"tier1 apply_tier1_discovery raised: {type(exc).__name__}: {exc}"
+                result.errors.append(last_attempt_summary)
+                logger.exception("Tier-1 apply raised")
+                self._write_tier1_meta(mc_conn, signature=sig, annotation=last_attempt_summary,
+                                       payload={"model": model_used, "upsert_count": len(upserts), **(last_evidence_payload or {})})
+                return
+
             result.tier1_synthesized = True
-            now_iso = _utc_now_iso()
-            mc_conn.execute(
+            last_attempt_summary = (
+                f"tier1 ok: created/updated={len(summary['created_or_updated'])} "
+                f"retired={len(summary['retired'])} errors={len(summary['errors'])} model={model_used}"
+            )
+            full_payload = {
+                "model": model_used,
+                "summary": summary,
+                "evidence_counts": evidence.get("counts"),
+            }
+            self._write_tier1_meta(mc_conn, signature=sig, annotation=last_attempt_summary, payload=full_payload)
+            logger.info("🛰️  %s", last_attempt_summary)
+        finally:
+            try:
+                mc_conn.close()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _write_tier1_meta(
+        conn,
+        *,
+        signature: str | None,
+        annotation: str,
+        payload: dict[str, Any] | None,
+    ) -> None:
+        """Always-callable meta-row writer for tier-1 attempt outcomes.
+
+        Records to mission_control_tile_states under tile_id='__tier1_meta__'
+        so the diagnostics endpoint can surface the last attempt's status,
+        signature, and payload. Catches its own exceptions so a meta-write
+        failure cannot mask the real tier-1 outcome.
+        """
+        now_iso = _utc_now_iso()
+        try:
+            conn.execute(
                 """
                 INSERT INTO mission_control_tile_states (
                     tile_id, current_state, state_since, last_signature,
@@ -363,6 +419,7 @@ class MissionControlSweeper:
                     current_annotation, evidence_payload_json
                 ) VALUES (?, 'unknown', ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(tile_id) DO UPDATE SET
+                    state_since = excluded.state_since,
                     last_signature = excluded.last_signature,
                     last_checked_at = excluded.last_checked_at,
                     last_annotation_at = excluded.last_annotation_at,
@@ -372,29 +429,15 @@ class MissionControlSweeper:
                 (
                     "__tier1_meta__",
                     now_iso,
-                    sig,
+                    signature or "",
                     now_iso,
                     now_iso,
-                    f"tier1 ok: created/updated={len(summary['created_or_updated'])} retired={len(summary['retired'])} model={model_used}",
-                    json.dumps({
-                        "model": model_used,
-                        "summary": summary,
-                        "evidence_counts": evidence.get("counts"),
-                    }, default=str),
+                    annotation,
+                    json.dumps(payload, default=str) if payload is not None else None,
                 ),
             )
-            logger.info(
-                "🛰️  Tier-1: created/updated=%d retired=%d errors=%d model=%s",
-                len(summary["created_or_updated"]),
-                len(summary["retired"]),
-                len(summary["errors"]),
-                model_used,
-            )
-        except Exception as exc:
-            logger.exception("Tier-1 LLM discovery failed")
-            result.errors.append(f"tier1 discovery: {exc}")
-        finally:
-            mc_conn.close()
+        except Exception:
+            logger.exception("Tier-1 meta-row write failed")
 
     @staticmethod
     def _tier1_skip_reason(

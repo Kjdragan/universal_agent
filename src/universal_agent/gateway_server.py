@@ -23183,6 +23183,44 @@ async def dashboard_mission_control_diagnostics():
     }
 
 
+@app.post("/api/v1/dashboard/mission-control/diagnostics/tier1-now")
+async def dashboard_mission_control_tier1_now():
+    """Synchronously force-run a tier-1 sweep and return the outcome.
+
+    Operator debug aid: when /diagnostics shows tier1_meta=null but the
+    phase flag is on, hitting this endpoint forces _run_tier1_async to
+    execute immediately so we can see the actual error path. Same code
+    path as the background sweeper, just driven by an HTTP request.
+
+    The endpoint always succeeds with status=ok if the sweeper ran
+    (regardless of tier-1 success/failure) — caller inspects the
+    embedded result.errors to diagnose. Read tier1_meta from the regular
+    diagnostics endpoint after this completes.
+    """
+    try:
+        from universal_agent.services.mission_control_intelligence_sweeper import (
+            SweepResult,
+            get_sweeper,
+        )
+    except Exception as exc:
+        return {"status": "error", "error": f"sweeper imports unavailable: {exc}"}
+
+    sweeper = get_sweeper()
+    started = _utc_now_iso()
+    result = SweepResult(started_at_utc=started, finished_at_utc=started)
+    try:
+        await sweeper._run_tier1_async(result)
+    except Exception as exc:
+        result.errors.append(f"_run_tier1_async raised at top level: {type(exc).__name__}: {exc}")
+    return {
+        "status": "ok",
+        "generated_at": _utc_now_iso(),
+        "tier1_synthesized": result.tier1_synthesized,
+        "errors": result.errors,
+        "transitions": result.tier0_transitions,
+    }
+
+
 class _MCFeedbackThumbsBody(BaseModel):
     direction: Optional[str] = None  # "up" | "down" | null
 
