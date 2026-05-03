@@ -184,7 +184,11 @@ class GatewayTile(Tile):
                 evidence={"last_event": last_event},
             )
         age_s = (_utc_now() - last_dt).total_seconds()
-        if age_s <= 60:
+        # Green threshold is 2x the heartbeat_tick emit interval (default 60s)
+        # so the tile stays green between ticks instead of oscillating to
+        # yellow at the boundary. Yellow at >2x means we missed a tick;
+        # red at >5x means the gateway is genuinely silent.
+        if age_s <= 120:
             color = COLOR_GREEN
             status = f"active, last event {int(age_s)}s ago"
         elif age_s <= 300:
