@@ -14,7 +14,7 @@ STATUS_PENDING = "pending"
 STATUS_RUNNING = "running"
 STATUS_COMPLETED = "completed"
 STATUS_FAILED = "failed"
-STATUS_WAITING_ON_HUMAN = "waiting_on_human"
+STATUS_WAITING_ON_HUMAN = "waiting_for_human"  # DB-compatible value; see tests/test_status_constants.py
 STATUS_SUCCESS = "success"
 STATUS_ERROR = "error"
 

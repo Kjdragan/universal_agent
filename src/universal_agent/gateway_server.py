@@ -9012,6 +9012,8 @@ def _merge_activity_actions(*action_sets: list[dict[str, Any]]) -> list[dict[str
 
 def _runtime_db_connect() -> sqlite3.Connection:
     """Return the main runtime_state.db connection held by the gateway."""
+    import universal_agent.main as main_module
+
     conn = getattr(main_module, "runtime_db_conn", None)
     if conn is None:
         raise RuntimeError("runtime_db_conn not initialized")

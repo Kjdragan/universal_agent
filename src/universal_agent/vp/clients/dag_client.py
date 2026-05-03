@@ -121,13 +121,13 @@ class DagClient(VpClient):
                     "dag_context": state.context,
                 },
             )
-        elif state.status == "waiting_on_human":
+        elif state.status == "waiting_for_human":
             return MissionOutcome(
                 status="completed",
                 result_ref=result_ref,
                 message=f"DAG paused at human gate: {state.current_node}",
                 payload={
-                    "dag_status": "waiting_on_human",
+                    "dag_status": "waiting_for_human",
                     "dag_current_node": state.current_node,
                     "dag_history": state.history,
                     "dag_context": state.context,
