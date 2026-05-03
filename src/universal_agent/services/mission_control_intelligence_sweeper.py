@@ -204,17 +204,39 @@ class MissionControlSweeper:
                     result.errors.append(f"tile {tile.name}: {exc}")
                     continue
 
-                transition = self._persist_tile_state(mc_conn, tile, state)
-                if transition:
+                outcome = self._persist_tile_state(mc_conn, tile, state)
+                if outcome.get("transitioned"):
                     result.tier0_transitions.append(
-                        f"{tile.name}:{transition['prior_color']}->{state.color}"
+                        f"{tile.name}:{outcome['prior_color']}->{state.color}"
                     )
-                    if state.color in {COLOR_YELLOW, COLOR_RED} and is_phase_enabled(1):
-                        try:
-                            self._auto_create_infrastructure_card(mc_conn, tile, state)
-                        except Exception as exc:
-                            logger.exception("auto-card creation failed for %s", tile.name)
-                            result.errors.append(f"auto-card {tile.name}: {exc}")
+                # Card creation fires on:
+                #   1. transition_to_non_green (was green/unknown, now yellow/red), OR
+                #   2. first_appearance_non_green (no prior row, opens at yellow/red)
+                # The latter is critical: a freshly-restarted gateway with a
+                # red tile on its first tick must still produce a card.
+                # `upsert_card` is idempotent on subject_id, so re-firing on
+                # subsequent same-color sweeps is safe but unnecessary — we
+                # gate so identical re-syntheses don't bloat history.
+                needs_card = (
+                    state.color in {COLOR_YELLOW, COLOR_RED}
+                    and (
+                        outcome.get("first_appearance")
+                        or (outcome.get("transitioned")
+                            and outcome.get("prior_color") not in {COLOR_YELLOW, COLOR_RED})
+                        or (outcome.get("transitioned")
+                            and outcome.get("prior_color") in {COLOR_YELLOW, COLOR_RED}
+                            and outcome["prior_color"] != state.color)
+                    )
+                )
+                if needs_card:
+                    try:
+                        self._auto_create_infrastructure_card(
+                            mc_conn, tile, state,
+                            trigger="first_appearance" if outcome.get("first_appearance") else "transition",
+                        )
+                    except Exception as exc:
+                        logger.exception("auto-card creation failed for %s", tile.name)
+                        result.errors.append(f"auto-card {tile.name}: {exc}")
         finally:
             data_conn.close()
             mc_conn.close()
@@ -245,9 +267,21 @@ class MissionControlSweeper:
 
     def _persist_tile_state(
         self, conn, tile: Tile, state: TileState
-    ) -> dict[str, Any] | None:
-        """Write the new tile state. Returns a transition dict iff the
-        color actually changed since the last persisted state.
+    ) -> dict[str, Any]:
+        """Write the new tile state. Returns an outcome dict describing
+        what just happened so the caller can decide whether to fire
+        downstream effects (card creation, transition logging).
+
+        Outcome keys:
+          - signature_unchanged: bool — true when no real state change
+            since the last poll; only `last_checked_at` was bumped.
+          - first_appearance: bool — true when this tile had no prior
+            row at all (sweeper's first encounter with the tile, or DB
+            wipe). Critical: a freshly-booted gateway with a red tile
+            on its first tick must still emit a card, so this is the
+            signal to do that.
+          - transitioned: bool — true when the color actually changed.
+          - prior_color: previous color, or None on first_appearance.
         """
         existing = conn.execute(
             """
@@ -272,8 +306,14 @@ class MissionControlSweeper:
                 """,
                 (now, tile.name),
             )
-            return None
+            return {
+                "signature_unchanged": True,
+                "first_appearance": False,
+                "transitioned": False,
+                "prior_color": prior_color,
+            }
 
+        first_appearance = existing is None
         transitioned = prior_color is not None and prior_color != state.color
         state_since = now if (prior_color != state.color) else (prior_since or now)
         evidence_json = self._dump_json(state.evidence)
@@ -314,23 +354,41 @@ class MissionControlSweeper:
                 (state.color, state_since, state.signature, now,
                  annotation_to_write, evidence_json, tile.name),
             )
-        if transitioned:
-            return {"prior_color": prior_color, "new_color": state.color}
-        return None
+        return {
+            "signature_unchanged": False,
+            "first_appearance": first_appearance,
+            "transitioned": transitioned,
+            "prior_color": prior_color,
+        }
 
     def _auto_create_infrastructure_card(
-        self, conn, tile: Tile, state: TileState
+        self, conn, tile: Tile, state: TileState, *, trigger: str = "transition"
     ) -> None:
         """Create or revive the infrastructure-kind tier-1 card paired
         with this tile. Phase 1 uses the tile's mechanical status as
         narrative; Phase 5's diagnostic mission and Phase 2's tier-1
         discovery pass enrich it later.
+
+        `trigger` is one of:
+          - "transition"        — tile changed color (was different, now non-green)
+          - "first_appearance"  — tile had no prior row and opens at non-green
+        Phrased differently in narrative so the card audit trail is
+        accurate after the fact.
         """
         severity = self._severity_for_color(state.color)
+        if trigger == "first_appearance":
+            opener = (
+                f"Tile `{tile.name}` ({tile.display_name}) first observed at "
+                f"`{state.color}` on this sweeper boot."
+            )
+        else:
+            opener = (
+                f"Tile `{tile.name}` ({tile.display_name}) transitioned to "
+                f"`{state.color}`."
+            )
         narrative = (
-            f"Tile `{tile.name}` ({tile.display_name}) transitioned to "
-            f"`{state.color}`. Mechanical status:\n  {state.one_line_status}\n\n"
-            "Phase 1 produced this card mechanically from the tile transition. "
+            f"{opener} Mechanical status:\n  {state.one_line_status}\n\n"
+            "Phase 1 produced this card mechanically from the tile state. "
             "Phase 2 tier-1 LLM discovery and Phase 5 auto-diagnostic missions "
             "will enrich the narrative on subsequent sweeps."
         )

@@ -670,3 +670,93 @@ def test_severity_mapping_for_tile_colors():
     assert map_fn(COLOR_YELLOW) == "warning"
     assert map_fn(COLOR_UNKNOWN) == "watching"
     assert map_fn(COLOR_GREEN) == "informational"
+
+
+# ── Phase 1.1 regression: first-appearance non-green tile must create a card
+
+def test_sweeper_creates_card_on_first_appearance_red_tile(monkeypatch, activity_db, tmp_path):
+    """Production smoke test on Phase 1B revealed that a freshly-booted
+    sweeper with a red tile on its first tick produced ZERO cards because
+    the prior code only fired card creation on color transitions.
+    A fresh boot has no `prior_color`, so 'transition' was always False.
+
+    This test pins the corrected behavior: first-appearance non-green
+    tiles must produce an `infrastructure` card immediately, without
+    needing a second tick to "transition into" their state.
+    """
+    monkeypatch.setenv("UA_MC_PHASE_1_ENABLED", "1")
+    # CSI tile starts RED because no CSI events exist in the fixture DB
+    sweeper = _FixtureSweeper(activity_db, tmp_path / "mc.db")
+    result = sweeper.tick()
+    assert result.errors == []
+
+    conn = open_store(tmp_path / "mc.db")
+    try:
+        cards = list_live_cards(conn)
+        infra_subjects = {c["subject_id"] for c in cards if c["subject_kind"] == "infrastructure"}
+        # CSI ingester is red on first tick (no events in 24h) — must create
+        # its infrastructure card immediately.
+        assert "infra:csi_ingester" in infra_subjects, (
+            f"first-appearance CSI red tile should have created a card; "
+            f"got infra subjects={sorted(infra_subjects)}"
+        )
+        # The card narrative should reflect first-appearance phrasing,
+        # not transition phrasing.
+        csi_card = next(c for c in cards if c["subject_id"] == "infra:csi_ingester")
+        assert "first observed" in csi_card["narrative"], (
+            f"first-appearance card narrative should say 'first observed', got: "
+            f"{csi_card['narrative'][:200]!r}"
+        )
+    finally:
+        conn.close()
+
+
+def test_sweeper_does_not_duplicate_cards_on_repeated_same_color_ticks(
+    monkeypatch, activity_db, tmp_path
+):
+    """Idempotency contract: a tile that stays red across many sweeps must
+    not produce a flurry of duplicate cards. The card_id is a stable hash
+    of (subject_kind, subject_id), so upserts collapse to the same row,
+    but we must not spuriously bloat synthesis_history when nothing
+    changed."""
+    monkeypatch.setenv("UA_MC_PHASE_1_ENABLED", "1")
+    sweeper = _FixtureSweeper(activity_db, tmp_path / "mc.db")
+    sweeper.tick()  # first appearance: should create card
+    sweeper.tick()  # second tick, same color: should not bloat history
+    sweeper.tick()  # third tick, same color
+
+    conn = open_store(tmp_path / "mc.db")
+    try:
+        cards = list_live_cards(conn)
+        csi = [c for c in cards if c["subject_id"] == "infra:csi_ingester"]
+        assert len(csi) == 1, "card should not be duplicated"
+        history = json.loads(csi[0]["synthesis_history_json"])
+        # Signature-unchanged ticks short-circuit before persist runs and
+        # before card upsert runs, so history should be empty (no prior
+        # synthesis to push) after three identical ticks.
+        assert len(history) == 0, (
+            f"history should not bloat across identical-color sweeps; got {len(history)}"
+        )
+    finally:
+        conn.close()
+
+
+def test_sweeper_does_not_create_card_for_first_appearance_green(
+    monkeypatch, activity_db, tmp_path
+):
+    """Green tiles never warrant infrastructure cards — only yellow/red
+    do. Verify by inserting a recent CSI event so CSI is green, then
+    confirming no infra card lands."""
+    _insert_event(activity_db, id="csi-fresh", source_domain="csi",
+                  created_at=_iso_minutes_ago(1))
+    monkeypatch.setenv("UA_MC_PHASE_1_ENABLED", "1")
+    sweeper = _FixtureSweeper(activity_db, tmp_path / "mc.db")
+    sweeper.tick()
+
+    conn = open_store(tmp_path / "mc.db")
+    try:
+        cards = list_live_cards(conn)
+        csi_cards = [c for c in cards if c["subject_id"] == "infra:csi_ingester"]
+        assert csi_cards == [], "green CSI tile must not produce a card"
+    finally:
+        conn.close()
