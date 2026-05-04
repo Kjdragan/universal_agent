@@ -446,6 +446,13 @@ PAPER_TO_PODCAST_DEFAULT_TIMEZONE = (
     or (os.getenv("UA_DEFAULT_TIMEZONE") or "").strip()
     or "America/Chicago"
 )
+YOUTUBE_DAILY_DIGEST_JOB_KEY = "youtube_daily_digest"
+YOUTUBE_DAILY_DIGEST_DEFAULT_CRON = "0 8 * * *"  # 8 AM Central daily
+YOUTUBE_DAILY_DIGEST_DEFAULT_TIMEZONE = (
+    (os.getenv("UA_YOUTUBE_DAILY_DIGEST_TIMEZONE") or "").strip()
+    or (os.getenv("UA_DEFAULT_TIMEZONE") or "").strip()
+    or "America/Chicago"
+)
 CODIE_PROACTIVE_CLEANUP_JOB_KEY = "codie_proactive_cleanup"
 CODIE_PROACTIVE_CLEANUP_DEFAULT_CRON = "30 1 * * *"
 CODIE_PROACTIVE_CLEANUP_DEFAULT_TIMEZONE = (
@@ -14088,6 +14095,7 @@ async def lifespan(app: FastAPI):
             _ensure_csi_convergence_cron_job()
             _ensure_claude_code_intel_cron_job()
             _ensure_paper_to_podcast_cron_job()
+            _ensure_youtube_daily_digest_cron_job()
         except Exception as exc:
             logger.warning("Failed ensuring autonomous cron jobs: %s", exc)
     else:
@@ -17715,6 +17723,65 @@ def _ensure_paper_to_podcast_cron_job() -> Optional[dict[str, Any]]:
         workspace_dir=workspace_dir,
         command=_paper_to_podcast_command(),
         description="Daily paper-to-podcast: search ArXiv for a rotating AI topic, generate podcast/quiz/flashcards via NotebookLM, and email results.",
+        cron_expr=cron_expr,
+        timezone=timezone_name,
+        enabled=True,
+        catch_up_on_restart=True,
+        metadata=metadata,
+    )
+    return job.to_dict() if hasattr(job, "to_dict") else {"job_id": str(getattr(job, "job_id", ""))}
+
+
+def _youtube_daily_digest_enabled() -> bool:
+    return os.getenv("UA_YOUTUBE_DAILY_DIGEST_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _ensure_youtube_daily_digest_cron_job() -> Optional[dict[str, Any]]:
+    """Idempotently register the Daily YouTube Digest cron job at gateway boot.
+
+    Mirrors `_ensure_paper_to_podcast_cron_job` so the digest survives
+    deploys / fresh state instead of relying on a hand-seeded
+    `workspaces/cron_jobs.json`.  `catch_up_on_restart=True` so a missed
+    8 AM window is backfilled instead of silently skipped.
+    """
+    if not _cron_service or not _youtube_daily_digest_enabled():
+        return None
+    cron_expr = (
+        os.getenv("UA_YOUTUBE_DAILY_DIGEST_CRON", YOUTUBE_DAILY_DIGEST_DEFAULT_CRON).strip()
+        or YOUTUBE_DAILY_DIGEST_DEFAULT_CRON
+    )
+    timezone_name = (
+        os.getenv("UA_YOUTUBE_DAILY_DIGEST_TIMEZONE", YOUTUBE_DAILY_DIGEST_DEFAULT_TIMEZONE).strip()
+        or YOUTUBE_DAILY_DIGEST_DEFAULT_TIMEZONE
+    )
+    workspace_dir = str(WORKSPACES_DIR / "cron_daily_youtube_digest")
+    metadata = {
+        "system_job": YOUTUBE_DAILY_DIGEST_JOB_KEY,
+        "autonomous": True,
+        "source": "system",
+        "session_id": "cron_daily_youtube_digest",
+        "script": "universal_agent.scripts.youtube_daily_digest",
+    }
+    updates = {
+        "user_id": "cron_system",
+        "workspace_dir": workspace_dir,
+        "command": "!script universal_agent.scripts.youtube_daily_digest",
+        "description": "Daily YouTube Digest: ingest day-specific playlist, synthesize via LLM, email summary, mark videos processed.",
+        "cron_expr": cron_expr,
+        "timezone": timezone_name,
+        "enabled": True,
+        "catch_up_on_restart": True,
+        "metadata": metadata,
+    }
+    existing = _find_cron_job_by_system_job(YOUTUBE_DAILY_DIGEST_JOB_KEY)
+    if existing is not None:
+        updated = _cron_service.update_job(str(getattr(existing, "job_id", "")), updates)
+        return updated.to_dict() if hasattr(updated, "to_dict") else {"job_id": str(getattr(updated, "job_id", ""))}
+    job = _cron_service.add_job(
+        user_id="cron_system",
+        workspace_dir=workspace_dir,
+        command="!script universal_agent.scripts.youtube_daily_digest",
+        description="Daily YouTube Digest: ingest day-specific playlist, synthesize via LLM, email summary, mark videos processed.",
         cron_expr=cron_expr,
         timezone=timezone_name,
         enabled=True,
