@@ -94,3 +94,56 @@ Once the heartbeat is restored AND the new Phase 2 tier-1 LLM-discovered cards a
 
 - 2026-05-03 ~02:00 UTC: Issue detected during Mission Control Phase 1 smoke testing.
 - _Awaiting operator log-grep + likely service restart._
+
+---
+
+## Resolution (2026-05-04)
+
+**Status: RESOLVED.** The immediate symptom (heartbeat tile reading red) was
+resolved when the operator restarted the gateway service. The architectural
+hole that allowed the silence to go undetected for 26+ hours is now closed.
+
+### Why this won't recur silently
+
+Phase 4 of the proactive-robustness plan (commit `168f5288` —
+`feat(observability): surface background-task and service-startup failures`)
+closed the architectural hole that allowed the original silence to vanish into
+asyncio without operator-visible signal:
+
+- `_spawn_background_task` (gateway_server.py:8472) now installs an
+  `add_done_callback` on every spawned task. If the task raises a non-cancel
+  exception, a `kind=background_task_failed` notification fires immediately
+  with the task name in metadata. The next time heartbeat (or any other
+  background task) dies for any reason, the dashboard goes red within seconds
+  AND the F3 dispatcher (commit `dd3f2fa8`) emails + Telegrams the alert
+  out-of-band.
+- `_run_after_deployment_window` (gateway_server.py:13808) now wraps the
+  inner coroutine in try/except. A startup-time failure (the leading
+  hypothesis for this incident) emits a `kind=service_startup_failed`
+  notification with `metadata.component` naming the service that failed to
+  start.
+
+Both kinds are in `_HEALTH_ALERT_NOTIFICATION_KINDS`, so a flapping startup
+collapses to one live row instead of stacking.
+
+### Diagnostic tooling for ad-hoc liveness checks
+
+`scripts/check_heartbeat_liveness.py` (new, commit landing alongside this
+note) reads the dashboard overview's heartbeat block and exits non-zero
+when:
+- `latest_last_run_epoch is None` (the original silence shape — exit 2).
+- Last tick is older than 2x the configured interval (exit 3).
+- Dashboard API itself returned an error (exit 1).
+
+Run on the VPS at any time: `python scripts/check_heartbeat_liveness.py`.
+
+For end-to-end alerting verification, `scripts/probe_notification_dispatch.py`
+(also new, commit `63785cdb`) posts a synthetic high-severity notification
+and confirms the email + Telegram dispatch path delivers within 90s.
+
+### Closed by
+
+- Phase 4 commit `168f5288` (background-task / service-startup notifications).
+- F3 commit `dd3f2fa8` (async email/Telegram dispatcher).
+- G5 commits (this note + the new diagnostic script).
+- G1 commit `63785cdb` (synthetic-notification probe).

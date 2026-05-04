@@ -35,6 +35,8 @@ from typing import Any
 from urllib import error, request
 import uuid
 
+import markdown
+
 # Fix python path for local execution if needed
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -952,7 +954,6 @@ def process_daily_digest(
             mail = AgentMailService()
             await mail.startup()
             try:
-                import markdown
                 html_content = markdown.markdown(full_content, extensions=["extra", "nl2br"])
                 await mail.send_email(
                     to=email_to,
