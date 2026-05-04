@@ -498,3 +498,104 @@ def list_live_cards(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         """
     ).fetchall()
     return [dict(row) for row in rows]
+
+
+def list_ledger_cards(
+    conn: sqlite3.Connection,
+    *,
+    subject_kind: str | None = None,
+    min_recurrence: int = 0,
+    state: str | None = None,
+    since_iso: str | None = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """Return retired + archived cards (the Knowledge Ledger view).
+
+    Phase 6 deliverable. Mirrors ``list_live_cards`` semantics for the
+    inactive corpus.
+
+    Filters (all optional):
+      * ``subject_kind`` — restrict to one subject_kind (e.g. ``'failure_pattern'``).
+      * ``min_recurrence`` — only cards with ``recurrence_count >= N`` (useful
+        for "things that recur").
+      * ``state`` — ``'retired'`` or ``'archived'``; default both.
+      * ``since_iso`` — only cards last synthesized at or after this UTC ISO ts.
+      * ``limit`` — hard cap (default 200; clamped 1..2000).
+    """
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if state in {CARD_STATE_RETIRED, CARD_STATE_ARCHIVED}:
+        clauses.append("current_state = ?")
+        params.append(state)
+    else:
+        clauses.append("current_state IN (?, ?)")
+        params.extend([CARD_STATE_RETIRED, CARD_STATE_ARCHIVED])
+
+    if subject_kind:
+        clauses.append("subject_kind = ?")
+        params.append(str(subject_kind))
+
+    if min_recurrence and int(min_recurrence) > 0:
+        clauses.append("recurrence_count >= ?")
+        params.append(int(min_recurrence))
+
+    if since_iso:
+        clauses.append("last_synthesized_at >= ?")
+        params.append(str(since_iso))
+
+    where_sql = " AND ".join(clauses) if clauses else "1=1"
+    bounded_limit = max(1, min(int(limit), 2000))
+
+    rows = conn.execute(
+        f"""
+        SELECT *
+        FROM mission_control_cards
+        WHERE {where_sql}
+        ORDER BY
+          recurrence_count DESC,
+          last_synthesized_at DESC,
+          first_observed_at DESC
+        LIMIT ?
+        """,
+        (*params, bounded_limit),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def ledger_summary(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Compact stats for the ledger landing header (totals, recurrence buckets)."""
+    counts = {row["state"]: int(row["n"]) for row in conn.execute(
+        """
+        SELECT current_state AS state, COUNT(*) AS n
+        FROM mission_control_cards
+        WHERE current_state IN (?, ?)
+        GROUP BY current_state
+        """,
+        (CARD_STATE_RETIRED, CARD_STATE_ARCHIVED),
+    ).fetchall()}
+
+    recurring_row = conn.execute(
+        """
+        SELECT COUNT(*) AS n
+        FROM mission_control_cards
+        WHERE current_state IN (?, ?) AND recurrence_count >= 2
+        """,
+        (CARD_STATE_RETIRED, CARD_STATE_ARCHIVED),
+    ).fetchone()
+
+    last_retired_row = conn.execute(
+        """
+        SELECT MAX(last_synthesized_at) AS ts
+        FROM mission_control_cards
+        WHERE current_state = ?
+        """,
+        (CARD_STATE_RETIRED,),
+    ).fetchone()
+
+    return {
+        "retired_count": int(counts.get(CARD_STATE_RETIRED, 0)),
+        "archived_count": int(counts.get(CARD_STATE_ARCHIVED, 0)),
+        "recurring_count": int(recurring_row["n"] or 0) if recurring_row else 0,
+        "most_recent_retired_iso": (last_retired_row["ts"] if last_retired_row else None),
+    }

@@ -1163,9 +1163,33 @@ class CronService:
                                     else:
                                         record.output_preview = "AUTH REQUIRED: open the Composio connect link shown in the run logs."
                                 elif errors:
-                                    record.status = "error"
-                                    record.error = errors[0]
-                                    record.output_preview = ((getattr(result, "response_text", "") or "")[:400]) or record.error[:400]
+                                    # Classification policy:
+                                    #   errors + response_text  -> success_with_warnings (the agent
+                                    #     produced a final answer despite tool/sandbox hiccups
+                                    #     it recovered from; e.g. transient sandbox-violation
+                                    #     attempts, retry-and-recover sequences). Logged as warning,
+                                    #     not failed, so a clean cron tile reflects truth.
+                                    #   errors + no response_text -> real error
+                                    response_text = (getattr(result, "response_text", "") or "").strip()
+                                    if response_text:
+                                        record.status = "success"
+                                        record.output_preview = response_text[:400]
+                                        # Carry the warnings on the record so they're visible in the
+                                        # Web UI's run detail and the activity_event metadata, even
+                                        # though we don't fail the run.
+                                        record.error = (
+                                            f"completed with {len(errors)} tool warning(s); first: {errors[0][:200]}"
+                                        )
+                                        logger.warning(
+                                            "Chron job %s succeeded with %d tool warning(s): %s",
+                                            job.job_id,
+                                            len(errors),
+                                            errors[0][:200],
+                                        )
+                                    else:
+                                        record.status = "error"
+                                        record.error = errors[0]
+                                        record.output_preview = record.error[:400]
                                 else:
                                     record.status = "success"
                                     record.output_preview = (getattr(result, "response_text", "") or "")[:400]

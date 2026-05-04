@@ -23210,6 +23210,85 @@ async def dashboard_mission_control_cards(limit: int = 50):
     }
 
 
+@app.get("/api/v1/dashboard/mission-control/ledger")
+async def dashboard_mission_control_ledger(
+    limit: int = 200,
+    subject_kind: str | None = None,
+    min_recurrence: int = 0,
+    state: str | None = None,
+    since_iso: str | None = None,
+):
+    """Phase 6 — Knowledge Ledger feed.
+
+    Returns retired + archived tier-1 cards (the durable history) plus a
+    compact summary header. Filters: ``subject_kind``, ``min_recurrence``
+    (recurrence_count >= N), ``state`` (`retired` or `archived`; default
+    both), ``since_iso`` (ISO ts).
+    """
+    try:
+        from universal_agent.services.mission_control_cards import (
+            ledger_summary as _mc_ledger_summary,
+            list_ledger_cards as _mc_list_ledger,
+        )
+        from universal_agent.services.mission_control_db import open_store as _mc_open
+    except Exception as exc:
+        return {"status": "error", "error": f"mission control imports unavailable: {exc}", "cards": [], "summary": {}}
+
+    try:
+        conn = _mc_open()
+    except Exception as exc:
+        return {"status": "error", "error": f"mission control store unavailable: {exc}", "cards": [], "summary": {}}
+
+    try:
+        summary = _mc_ledger_summary(conn)
+        cards = _mc_list_ledger(
+            conn,
+            subject_kind=subject_kind,
+            min_recurrence=int(min_recurrence or 0),
+            state=state,
+            since_iso=since_iso,
+            limit=int(limit),
+        )
+    finally:
+        conn.close()
+
+    # Hydrate JSON columns to match the live-cards endpoint shape.
+    hydrated: list[dict[str, Any]] = []
+    for card in cards:
+        out = dict(card)
+        for json_field in (
+            "tags_json",
+            "evidence_refs_json",
+            "evidence_payload_json",
+            "synthesis_history_json",
+            "dispatch_history_json",
+            "operator_feedback_json",
+            "last_viewed_at_json",
+        ):
+            raw = out.pop(json_field, None)
+            short = json_field[:-5]
+            try:
+                out[short] = json.loads(raw) if raw else None
+            except Exception:
+                out[short] = None
+        hydrated.append(out)
+
+    return {
+        "status": "ok",
+        "generated_at": _utc_now_iso(),
+        "summary": summary,
+        "cards": hydrated,
+        "filters": {
+            "subject_kind": subject_kind,
+            "min_recurrence": int(min_recurrence or 0),
+            "state": state,
+            "since_iso": since_iso,
+            "limit": int(limit),
+        },
+        "source": "mission_control_ledger",
+    }
+
+
 # ── Mission Control card feedback endpoints (Phase 2) ───────────────────
 
 
