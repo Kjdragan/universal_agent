@@ -8654,8 +8654,8 @@ async def setup_session(
     # before the MCP subprocess starts. Health probe runs once after registration
     # so misconfigurations surface in startup logs immediately.
     try:
-        from universal_agent.tools.link_bridge import build_link_mcp_server_config
         from universal_agent.services.link_health import run_link_health_probe
+        from universal_agent.tools.link_bridge import build_link_mcp_server_config
 
         link_mcp_config = build_link_mcp_server_config()
         if link_mcp_config is not None:

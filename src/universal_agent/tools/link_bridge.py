@@ -29,17 +29,17 @@ Guardrails (in order, fail-closed):
 from __future__ import annotations
 
 import base64
+from datetime import datetime, timezone
 import json
 import logging
 import os
+from pathlib import Path
 import shutil
 import subprocess
 import time
-import uuid
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Iterable, Optional
 from urllib.parse import urlparse
+import uuid
 
 from universal_agent import feature_flags
 

@@ -7,8 +7,8 @@ proactive_codie, proactive_tutorial_builds, and proactive_convergence.
 from __future__ import annotations
 
 import logging
-from typing import Any
 import sqlite3
+from typing import Any
 
 from universal_agent import task_hub
 

@@ -29,13 +29,13 @@ See docs/02_Subsystems/Mission_Control_Intelligence_System.md §2 + §3.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import hashlib
 import json
 import logging
 import os
-import sqlite3
-from datetime import datetime, timezone
 from pathlib import Path
+import sqlite3
 from typing import Any
 
 from universal_agent.services.mission_control_cards import (

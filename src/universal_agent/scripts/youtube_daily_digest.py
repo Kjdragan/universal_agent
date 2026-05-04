@@ -21,19 +21,19 @@ Playlist IDs are stored in Infisical as <DAY>_YT_PLAYLIST:
 
 from __future__ import annotations
 
+import asyncio
+from datetime import datetime, timezone
 import json
 import logging
 import os
+from pathlib import Path
 import re
 import sqlite3
 import sys
 import threading
-import uuid
-import asyncio
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 from urllib import error, request
+import uuid
 
 # Fix python path for local execution if needed
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -44,11 +44,11 @@ from universal_agent.infisical_loader import initialize_runtime_secrets
 from universal_agent.rate_limiter import ZAIRateLimiter
 from universal_agent.services.agentmail_service import AgentMailService
 from universal_agent.services.youtube_playlist_manager import (
+    YouTubeAPIError,
+    YouTubeOAuthError,
     add_playlist_item,
     get_playlist_items,
     remove_playlist_item,
-    YouTubeAPIError,
-    YouTubeOAuthError,
 )
 from universal_agent.utils.model_resolution import resolve_model
 from universal_agent.youtube_ingest import ingest_youtube_transcript

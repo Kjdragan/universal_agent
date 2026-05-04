@@ -22,13 +22,12 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 import secrets
 import time
-from pathlib import Path
 from typing import Any, Optional
 
 from universal_agent import feature_flags
-
 
 _DEFAULT_TTL_SECONDS = 900  # 15 minutes
 
