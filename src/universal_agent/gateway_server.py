@@ -14529,6 +14529,60 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("Failed starting idle dispatch loop")
 
+    # --- Notification Dispatcher (out-of-band email/Telegram delivery) ---
+    if _notification_dispatcher_enabled():
+        try:
+            from universal_agent.services.notification_dispatcher import NotificationDispatcher
+            from universal_agent.services.telegram_send import telegram_send_async
+
+            async def _send_email_for_notification(*, to: str, subject: str, text: str, html: str) -> Any:
+                if _agentmail_service is None:
+                    raise RuntimeError("AgentMail service not initialised")
+                return await _agentmail_service.send_email(
+                    to=to,
+                    subject=subject,
+                    text=text,
+                    html=html,
+                    force_send=True,
+                    require_approval=False,
+                )
+
+            async def _send_telegram_for_notification(*, chat_id: Any, text: str) -> Any:
+                ok, err = await telegram_send_async(chat_id=chat_id, text=text)
+                if not ok:
+                    raise RuntimeError(f"telegram_send_async failed: {err}")
+                return ok
+
+            _notification_dispatcher = NotificationDispatcher(
+                get_pending_rows=lambda: _list_undelivered_high_severity_notifications(
+                    limit=int(os.getenv("UA_NOTIFICATION_DISPATCHER_BATCH_LIMIT", "50") or 50)
+                ),
+                mark_delivered=_mark_notification_delivered,
+                send_email=_send_email_for_notification,
+                send_telegram=_send_telegram_for_notification,
+                email_targets=_notification_targets().get("email_targets", []),
+                telegram_chat_id=os.getenv("UA_TELEGRAM_NOTIFICATION_CHAT_ID")
+                    or os.getenv("TELEGRAM_CHAT_ID"),
+                cooldown_seconds=float(os.getenv("UA_NOTIFICATION_DISPATCHER_COOLDOWN_SECONDS", "300") or 300),
+            )
+
+            interval = float(os.getenv("UA_NOTIFICATION_DISPATCHER_INTERVAL_SECONDS", "30") or 30)
+
+            async def _start_notification_dispatcher() -> None:
+                logger.info(
+                    "🔔 Notification dispatcher started (interval=%.0fs cooldown=%.0fs)",
+                    interval,
+                    _notification_dispatcher._cooldown_seconds,
+                )
+                await _notification_dispatcher.run_loop(interval)
+
+            _spawn_background_task(
+                _run_after_deployment_window("notification_dispatcher", _start_notification_dispatcher),
+                task_name="notification_dispatcher_startup",
+            )
+        except Exception:
+            logger.exception("Failed starting notification dispatcher")
+
     # --- Scheduled dispatch timer (Phase 2 — multi-trigger dispatch) ---
     _scheduled_dispatch_stop = asyncio.Event()
 
@@ -18101,6 +18155,82 @@ def _ensure_proactive_artifact_digest_cron_job() -> Optional[dict[str, Any]]:
         cron_env_var="UA_PROACTIVE_ARTIFACT_DIGEST_CRON",
         timezone_env_var="UA_PROACTIVE_ARTIFACT_DIGEST_TIMEZONE",
     )
+
+
+def _notification_dispatcher_enabled() -> bool:
+    """Master switch for the out-of-band email/Telegram delivery loop.
+
+    Defaults ON — the user explicitly wants high-severity proactive
+    alerts delivered via email/Telegram so they don't have to keep the
+    dashboard open.  Set `UA_NOTIFICATION_DISPATCHER_ENABLED=0` to
+    disable (e.g. during incident remediation to avoid alert storms).
+    """
+    return os.getenv("UA_NOTIFICATION_DISPATCHER_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _list_undelivered_high_severity_notifications(limit: int = 50) -> list[dict[str, Any]]:
+    """Return recent error/warning notifications eligible for out-of-band
+    delivery (email/Telegram).  Source for `NotificationDispatcher`.
+
+    Filters at the SQL layer for performance; the dispatcher applies
+    further per-row delivery-state and cooldown checks before sending.
+    """
+    conn = _activity_connect()
+    try:
+        _ensure_activity_schema(conn)
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM activity_events
+            WHERE event_class = 'notification'
+              AND severity IN ('error', 'warning')
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (max(1, int(limit)),),
+        ).fetchall()
+        return [_activity_row_to_notification(row) for row in rows]
+    except Exception:
+        logger.exception("notification_dispatcher: failed to read undelivered rows")
+        return []
+    finally:
+        conn.close()
+
+
+def _mark_notification_delivered(event_id: str, channel: str) -> None:
+    """Stamp `metadata.delivery.<channel>.delivered_at` on a notification
+    row so the dispatcher does not re-blast it on the next tick.  Uses
+    SQLite's `json_set` to avoid round-tripping the full record."""
+    sid = str(event_id or "").strip()
+    ch = str(channel or "").strip().lower()
+    if not sid or not ch:
+        return
+    now_iso = _utc_now_iso()
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            _ensure_activity_schema(conn)
+            conn.execute(
+                """
+                UPDATE activity_events
+                SET metadata_json = json_set(
+                        COALESCE(metadata_json, '{}'),
+                        '$.delivery.' || ?,
+                        json_object('delivered_at', ?)
+                    ),
+                    updated_at = updated_at
+                WHERE id = ?
+                """,
+                (ch, now_iso, sid),
+            )
+            conn.commit()
+        except Exception:
+            logger.exception(
+                "notification_dispatcher: failed to mark id=%s channel=%s delivered",
+                sid, ch,
+            )
+        finally:
+            conn.close()
 
 
 def _csi_convergence_cron_enabled() -> bool:
