@@ -7,9 +7,9 @@ Task Hub follow-up only for posts that look implementation-worthy.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import hmac
 import json
@@ -17,7 +17,6 @@ import logging
 import os
 from pathlib import Path
 import re
-import shutil
 import sqlite3
 import time
 from typing import Any
@@ -273,7 +272,10 @@ def run_sync(
             # --- 1. Concurrent URL Enrichment ---
             if url_enrichment_enabled:
                 try:
-                    from universal_agent.services.csi_url_judge import enrich_urls, build_linked_context
+                    from universal_agent.services.csi_url_judge import (
+                        build_linked_context,
+                        enrich_urls,
+                    )
                     enrich_dir = packet_dir / "url_enrichment"
                     
                     def enrich_post(post: dict[str, Any]) -> tuple[str, str | None]:

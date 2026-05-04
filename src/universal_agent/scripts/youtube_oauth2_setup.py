@@ -16,24 +16,26 @@ from __future__ import annotations
 import http.server
 import json
 import os
+from pathlib import Path
 import sys
 import threading
 import urllib.parse
 import webbrowser
-from pathlib import Path
 
 import httpx
 
 # Fix python path for local execution
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from universal_agent.infisical_loader import upsert_infisical_secret
-
 # ── OAuth Client credentials loaded from Infisical ─────────────────────
 # These are stored as YOUTUBE_OAUTH_CLIENT_ID and YOUTUBE_OAUTH_CLIENT_SECRET
 # in the Infisical secret store.  Run `initialize_runtime_secrets()` or
 # ensure these env vars are populated before executing this script.
-from universal_agent.infisical_loader import initialize_runtime_secrets as _init_secrets
+from universal_agent.infisical_loader import (
+    initialize_runtime_secrets as _init_secrets,
+    upsert_infisical_secret,
+)
+
 _init_secrets()
 
 CLIENT_ID = os.environ.get("YOUTUBE_OAUTH_CLIENT_ID", "").strip()

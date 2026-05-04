@@ -139,7 +139,10 @@ def run(
     conn.row_factory = sqlite3.Row
     try:
         tasks = task_hub.list_proactive_work_tasks(conn, limit=limit)
-        from universal_agent.services.proactive_work_recap import get_recap_for_task, upsert_recap_for_task
+        from universal_agent.services.proactive_work_recap import (
+            get_recap_for_task,
+            upsert_recap_for_task,
+        )
 
         classifications: list[dict[str, Any]] = []
         backfilled: list[str] = []
