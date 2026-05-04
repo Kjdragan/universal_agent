@@ -56,7 +56,6 @@ dependencies = [
     "matplotlib>=3.10.8",
     "fpdf2>=2.8.5",
     "remotion-lambda>=4.0.409",
-    "manim>=0.19.2",
     "watchdog>=6.0.0",
     "json-repair>=0.55.1",
     "json5>=0.13.0",
@@ -110,6 +109,16 @@ dev = [
     "pytest>=9.0.2",
     "pytest-asyncio>=0.23.8",
     "ruff>=0.15.12",
+]
+# Manim is only used by the manim_skill (.claude/skills/manim_skill/),
+# which runs the `manim` CLI directly — nothing in src/ imports it.
+# Its transitive C-extension `manimpango` requires `libpangocairo-1.0-dev`
+# system headers to build from source on Linux (no manylinux wheels), so
+# keeping it in the default dependency set blocks `uv sync` in any sandbox
+# / CI environment without those dev libs installed.  Move it to an opt-in
+# group: `uv sync --group manim` when actually using the skill.
+manim = [
+    "manim>=0.19.2",
 ]
 
 [tool.pytest.ini_options]
