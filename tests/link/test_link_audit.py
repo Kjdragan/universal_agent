@@ -75,7 +75,7 @@ def test_create_writes_audit_entry(isolated_audit, monkeypatch):
     assert entry["amount_cents"] == 3500
     assert entry["merchant_url"] == "https://press.stripe.com"
     assert entry["guardrail_blocked"] is None
-    assert entry["mode"] == "test"
+    assert entry["mode"] == "stub"  # UA_LINK_FORCE_STUB=1 → stub mode
     assert entry["audit_id"].startswith("audit_")
     assert "ts" in entry
     assert "ts_iso" in entry

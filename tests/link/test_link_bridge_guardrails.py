@@ -366,7 +366,7 @@ def test_create_returns_stub_payload_with_audit_id(isolated_audit, link_enabled)
     assert result["data"]["_stub"] is True
     assert result["data"]["id"].startswith("lsrq_stub_")
     assert result["audit_id"].startswith("audit_")
-    assert result["mode"] == "test"  # link_enabled fixture activates non-live test mode
+    assert result["mode"] == "stub"  # link_enabled fixture sets UA_LINK_FORCE_STUB=1 → stub
     assert result["error"] is None
 
 
@@ -417,7 +417,7 @@ def test_bridge_status_reports_test_when_enabled(isolated_audit, link_enabled):
     assert status["enabled"] is True
     assert status["live_mode"] is False
     assert status["test_mode"] is True
-    assert status["mode"] == "test"
+    assert status["mode"] == "stub"  # link_enabled fixture sets UA_LINK_FORCE_STUB=1 → stub
 
 
 def test_bridge_status_live_requires_both_gates(isolated_audit, monkeypatch):
