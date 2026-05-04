@@ -22956,14 +22956,30 @@ def _dashboard_situation_from_task(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-@app.get("/api/v1/dashboard/situations")
+@app.get("/api/v1/dashboard/situations", deprecated=True)
 async def dashboard_situations(limit: int = 12):
-    """Return the Mission Control operator brief read model.
+    """**DEPRECATED** — superseded by Mission Control tier-0 tiles + tier-1 intelligence cards.
 
-    Raw events remain available on /api/v1/dashboard/events. This endpoint
-    derives a compact operator-awareness view from existing Task Hub and event
-    records so the UI can show situations instead of raw notification noise.
+    The Operator Brief panel that consumed this endpoint was deleted from the
+    Mission Control page in Phase 8 (2026-05-04). The endpoint remains
+    functional for one release cycle to give external/cached UI clients time
+    to switch over, after which it should be removed entirely.
+
+    New consumers should use:
+      - GET /api/v1/dashboard/mission-control/tiles  (tier-0 health)
+      - GET /api/v1/dashboard/mission-control/cards  (tier-1 narrative cards)
+      - GET /api/v1/dashboard/chief-of-staff         (tier-2 synthesis)
+
+    Original docstring (preserved for archive):
+        Return the Mission Control operator brief read model. Raw events remain
+        available on /api/v1/dashboard/events. This endpoint derives a compact
+        operator-awareness view from existing Task Hub and event records so the
+        UI can show situations instead of raw notification noise.
     """
+    logger.warning(
+        "dashboard_situations called -- this endpoint is deprecated and will be removed; "
+        "callers should switch to /api/v1/dashboard/mission-control/{tiles,cards} + /chief-of-staff"
+    )
     bounded_limit = max(1, min(int(limit), 50))
     situations: list[dict[str, Any]] = []
     seen: set[str] = set()
