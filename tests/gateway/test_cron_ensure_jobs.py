@@ -298,3 +298,33 @@ def test_ensure_proactive_cron_jobs_respect_disable_flag(monkeypatch, ensure_att
 
     assert result is None
     assert cron_stub.jobs == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# F2: required_secrets adoption.  Helpers whose backing scripts hard-fail
+# on a missing env var must declare those keys in metadata so the Phase 5
+# pre-flight check can surface them as a kind-upserted cron_run_failed
+# notification before the run starts and exits ungracefully.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_ensure_morning_briefing_declares_ua_ops_token_required(monkeypatch):
+    """`briefings_agent.py:23-26` does `sys.exit(1)` when UA_OPS_TOKEN
+    is missing, with a generic stderr line.  Declaring the secret in
+    metadata lets the cron pre-flight check fail the run with a
+    structured `Missing required secrets: UA_OPS_TOKEN` message that
+    surfaces as a dashboard notification — operator sees exactly what
+    needs provisioning instead of `Script exited with 1`."""
+    cron_stub = _CronBootstrapStub()
+    monkeypatch.setattr(gateway_server, "_cron_service", cron_stub)
+    monkeypatch.setenv("UA_MORNING_BRIEFING_ENABLED", "1")
+
+    gateway_server._ensure_morning_briefing_cron_job()
+
+    assert len(cron_stub.jobs) == 1
+    job = cron_stub.jobs[0]
+    required = job.metadata.get("required_secrets") or []
+    assert "UA_OPS_TOKEN" in required, (
+        f"morning_briefing helper must declare UA_OPS_TOKEN in required_secrets; "
+        f"current metadata: {job.metadata!r}"
+    )

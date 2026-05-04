@@ -894,121 +894,20 @@ def test_process_heartbeat_investigation_notification_includes_origin_findings_h
     )
 
 
-def test_generate_daily_briefing_includes_non_cron_artifacts_section(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(gateway_server, "_notifications", [])
-    monkeypatch.setattr(gateway_server, "ARTIFACTS_DIR", tmp_path / "artifacts")
-    monkeypatch.setattr(gateway_server, "_cron_service", None)
-
-    gateway_server._add_notification(
-        kind="autonomous_heartbeat_completed",
-        title="Autonomous Heartbeat Activity Completed",
-        message="heartbeat completed independent work",
-        severity="info",
-        metadata={
-            "source": "heartbeat",
-            "heartbeat_artifacts": [
-                {
-                    "scope": "workspaces",
-                    "relative_path": "session_abc/work_products/summary.md",
-                    "storage_href": "/storage?tab=explorer&scope=workspaces&path=session_abc%2Fwork_products%2Fsummary.md",
-                    "api_url": "",
-                }
-            ],
-        },
-    )
-
-    payload = gateway_server._generate_autonomous_daily_briefing_artifact(now_ts=time.time())
-    markdown_path = gateway_server.ARTIFACTS_DIR / payload["markdown"]["relative_path"]
-    markdown = markdown_path.read_text(encoding="utf-8")
-    assert "## Non-Cron Autonomous Artifact Outputs" in markdown
-    assert "scope=workspaces" in markdown
-    assert payload["counts"]["non_cron_artifacts"] == 1
-
-
-def test_generate_daily_briefing_backfills_from_persisted_cron_runs(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(gateway_server, "_notifications", [])
-    monkeypatch.setattr(gateway_server, "ARTIFACTS_DIR", tmp_path / "artifacts")
-    cron = CronService(_StubGateway(), tmp_path / "workspaces")
-    monkeypatch.setattr(gateway_server, "_cron_service", cron)
-
-    cron_ws = tmp_path / "workspaces" / "cron_autonomous_backfill"
-    cron_ws.mkdir(parents=True, exist_ok=True)
-    job = cron.add_job(
-        user_id="cron_system",
-        workspace_dir=str(cron_ws),
-        command="sync Todoist backlog and publish summary",
-        every_raw="30m",
-        enabled=True,
-        metadata={"autonomous": True, "system_job": "todoist_sync"},
-    )
-
-    now_ts = time.time()
-    cron.store.append_run(
-        CronRunRecord(
-            run_id="run_backfill_1",
-            job_id=job.job_id,
-            status="success",
-            scheduled_at=now_ts - 5,
-            started_at=now_ts - 3,
-            finished_at=now_ts - 1,
-            error=None,
-            output_preview="sync complete",
-        )
-    )
-
-    payload = gateway_server._generate_autonomous_daily_briefing_artifact(now_ts=now_ts)
-    assert payload["counts"]["completed"] == 1
-    assert payload["counts"]["failed"] == 0
-
-    report_json = tmp_path / "artifacts" / "autonomous-briefings" / payload["day_slug"] / "briefing.json"
-    data = report_json.read_text(encoding="utf-8")
-    assert '"cron_backfill_applied": true' in data
-    assert '"sync Todoist backlog and publish summary"' in data
-
-
-def test_generate_daily_briefing_warns_when_only_self_run_exists(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(gateway_server, "_notifications", [])
-    monkeypatch.setattr(gateway_server, "ARTIFACTS_DIR", tmp_path / "artifacts")
-    cron = CronService(_StubGateway(), tmp_path / "workspaces")
-    monkeypatch.setattr(gateway_server, "_cron_service", cron)
-
-    cron_ws = tmp_path / "workspaces" / "cron_daily_briefing"
-    cron_ws.mkdir(parents=True, exist_ok=True)
-    job = cron.add_job(
-        user_id="cron_system",
-        workspace_dir=str(cron_ws),
-        command="daily briefing",
-        cron_expr="0 7 * * *",
-        timezone="UTC",
-        enabled=True,
-        metadata={
-            "autonomous": True,
-            "briefing": True,
-            "system_job": gateway_server.AUTONOMOUS_DAILY_BRIEFING_JOB_KEY,
-        },
-    )
-
-    now_ts = time.time()
-    cron.store.append_run(
-        CronRunRecord(
-            run_id="run_brief_self_1",
-            job_id=job.job_id,
-            status="success",
-            scheduled_at=now_ts - 5,
-            started_at=now_ts - 3,
-            finished_at=now_ts - 1,
-            error=None,
-            output_preview="briefing complete",
-        )
-    )
-
-    payload = gateway_server._generate_autonomous_daily_briefing_artifact(now_ts=now_ts)
-    assert payload["counts"]["completed"] == 0
-
-    report_md = tmp_path / "artifacts" / "autonomous-briefings" / payload["day_slug"] / "DAILY_BRIEFING.md"
-    markdown = report_md.read_text(encoding="utf-8")
-    assert "## Data Quality Warnings" in markdown
-    assert "Only the daily briefing cron job was observed in this window" in markdown
+# NOTE: Three tests for `_generate_autonomous_daily_briefing_artifact`
+# (test_generate_daily_briefing_includes_non_cron_artifacts_section,
+#  test_generate_daily_briefing_backfills_from_persisted_cron_runs,
+#  test_generate_daily_briefing_warns_when_only_self_run_exists) were
+# removed here.  The function they covered was intentionally deleted
+# in commit a401e4b4 (2026-04-09) — "fix(cron): resolve datetime
+# attribute error in NLP prompt UI and drop legacy morning briefing
+# components" — which removed 300 lines of legacy briefing code from
+# gateway_server.py.  The tests have been failing on every run since
+# that commit because nothing replaced the function (the autonomous
+# daily briefing is now an LLM-driven cron job via
+# `_ensure_autonomous_daily_briefing_job`, not an in-process artifact
+# generator).  The cron-job behaviour is exercised by
+# `tests/gateway/test_cron_ensure_jobs.py`.
 
 
 def test_storage_explorer_href_normalizes_file_path_to_parent_for_preview():
