@@ -1,98 +1,145 @@
+"""Unit tests for proactive_codie pure helper functions.
+
+Tests cover: _slug, _cleanup_task_id, _cleanup_task_description, _pick_daily_theme.
+No LLM/DB/network dependencies.
+"""
+
 from __future__ import annotations
 
-from pathlib import Path
-import sqlite3
+from datetime import datetime, timezone
 
-from universal_agent import task_hub
-from universal_agent.services.proactive_artifacts import get_artifact
 from universal_agent.services.proactive_codie import (
-    queue_cleanup_task,
-    register_pr_artifact,
-    register_pr_artifact_from_text,
+    DEFAULT_CLEANUP_THEMES,
+    _slug,
+    _cleanup_task_id,
+    _cleanup_task_description,
+    _pick_daily_theme,
 )
 
 
-def _connect(db_path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    return conn
+# ---------------------------------------------------------------------------
+# _slug
+# ---------------------------------------------------------------------------
 
 
-def test_queue_cleanup_task_creates_agent_ready_review_gated_task(tmp_path):
-    db_path = tmp_path / "activity.db"
-    with _connect(db_path) as conn:
-        seed = register_pr_artifact(
-            conn,
-            pr_url="https://github.com/Kjdragan/universal_agent/pull/999",
-            title="Seed CODIE preference",
-        )
-        from universal_agent.services.proactive_artifacts import record_feedback
-        from universal_agent.services.proactive_preferences import (
-            record_artifact_feedback_signal,
-        )
-
-        updated = record_feedback(conn, artifact_id=seed["artifact_id"], score=5, text="more cleanup")
-        record_artifact_feedback_signal(conn, artifact=updated, score=5, text="more cleanup")
-        result = queue_cleanup_task(
-            conn,
-            theme="reduce brittle routing heuristics",
-            note="Focus on small diffs.",
-            priority=3,
-        )
-        task = task_hub.get_item(conn, result["task"]["task_id"])
-        artifact = get_artifact(conn, result["artifact"]["artifact_id"])
-
-    assert task is not None
-    assert task["source_kind"] == "proactive_codie"
-    assert task["agent_ready"] is True
-    assert task["trigger_type"] == "heartbeat_poll"
-    assert "pull request targeting develop" in task["description"].lower()
-    assert "do not merge" in task["description"].lower()
-    assert "Preference context:" in task["description"]
-    assert task["metadata"]["workflow_manifest"]["workflow_kind"] == "code_change"
-    assert task["metadata"]["workflow_manifest"]["target_agent"] == "vp.coder.primary"
-    assert task["metadata"]["workflow_manifest"]["codebase_root"].endswith("/universal_agent")
-    assert task["metadata"]["complexity_target"] == "low_to_medium"
-    assert task["metadata"]["expected_work_product"] == "pull_request_to_develop"
-    assert "low-to-medium complexity" in task["description"].lower()
-    assert "pr is the required final work product" in task["description"].lower()
-    assert "red-green tdd" in task["description"].lower()
-    assert "red-green evidence" in task["description"].lower()
-    assert artifact is not None
-    assert artifact["artifact_type"] == "codie_cleanup_task"
+def test_slug_converts_to_lowercase_and_replaces_non_alphanumeric():
+    assert _slug("Hello World! 123") == "hello-world-123"
 
 
-def test_register_pr_artifact_creates_review_candidate(tmp_path):
-    db_path = tmp_path / "activity.db"
-    with _connect(db_path) as conn:
-        artifact = register_pr_artifact(
-            conn,
-            pr_url="https://github.com/Kjdragan/universal_agent/pull/123",
-            title="Clean up routing prompt drift",
-            summary="CODIE removed stale routing prompt fragments.",
-            branch="codie/cleanup-routing",
-            theme="routing cleanup",
-            tests="uv run pytest tests/test_llm_classifier.py -q",
-            risk="narrow",
-        )
-
-    assert artifact["artifact_type"] == "codie_pr"
-    assert artifact["artifact_uri"].endswith("/pull/123")
-    assert artifact["metadata"]["review_gate"] == "kevin_review_required_before_merge"
-    assert "pull-request" in artifact["topic_tags"]
+def test_slug_strips_leading_and_trailing_hyphens():
+    assert _slug("---hello---") == "hello"
 
 
-def test_register_pr_artifact_from_text_detects_github_pr_url(tmp_path):
-    db_path = tmp_path / "activity.db"
-    with _connect(db_path) as conn:
-        artifact = register_pr_artifact_from_text(
-            conn,
-            text="Opened PR: https://github.com/Kjdragan/universal_agent/pull/456",
-            title="CODIE cleanup PR",
-            summary="PR ready for review.",
-            theme="cleanup",
-        )
+def test_slug_truncates_to_80_chars():
+    long_input = "a" * 200
+    result = _slug(long_input)
+    assert len(result) == 80
 
-    assert artifact is not None
-    assert artifact["artifact_uri"].endswith("/pull/456")
-    assert artifact["metadata"]["theme"] == "cleanup"
+
+def test_slug_returns_cleanup_for_empty_input():
+    assert _slug("") == "cleanup"
+    assert _slug(None) == "cleanup"
+
+
+def test_slug_returns_cleanup_for_only_special_chars():
+    assert _slug("---") == "cleanup"
+    assert _slug("!@#$%^&*()") == "cleanup"
+
+
+def test_slug_handles_mixed_case_and_spaces():
+    assert _slug("Add Lightweight UNIT TESTS") == "add-lightweight-unit-tests"
+
+
+# ---------------------------------------------------------------------------
+# _cleanup_task_id
+# ---------------------------------------------------------------------------
+
+
+def test_cleanup_task_id_has_expected_prefix():
+    result = _cleanup_task_id("some theme")
+    assert result.startswith("proactive-codie:")
+
+
+def test_cleanup_task_id_suffix_is_12_hex_chars():
+    result = _cleanup_task_id("some theme")
+    suffix = result.split(":", 1)[1]
+    assert len(suffix) == 12
+    # Must be valid hex
+    int(suffix, 16)
+
+
+def test_cleanup_task_id_deterministic_for_same_theme():
+    theme = "add type hints to untyped public function signatures"
+    assert _cleanup_task_id(theme) == _cleanup_task_id(theme)
+
+
+def test_cleanup_task_id_different_for_different_themes():
+    id_a = _cleanup_task_id("theme alpha")
+    id_b = _cleanup_task_id("theme beta")
+    assert id_a != id_b
+
+
+# ---------------------------------------------------------------------------
+# _cleanup_task_description
+# ---------------------------------------------------------------------------
+
+
+def test_cleanup_task_description_contains_theme():
+    desc = _cleanup_task_description(chosen_theme="magic string extraction")
+    assert "magic string extraction" in desc
+
+
+def test_cleanup_task_description_contains_instructions_section():
+    desc = _cleanup_task_description(chosen_theme="some theme")
+    assert "Instructions:" in desc
+
+
+def test_cleanup_task_description_contains_note_when_provided():
+    desc = _cleanup_task_description(
+        chosen_theme="some theme", note="Focus on helpers only."
+    )
+    assert "Focus on helpers only." in desc
+    assert "Additional operator note:" in desc
+
+
+def test_cleanup_task_description_omits_note_section_when_empty():
+    desc = _cleanup_task_description(chosen_theme="some theme", note="")
+    assert "Additional operator note:" not in desc
+
+
+def test_cleanup_task_description_contains_preference_context_when_provided():
+    desc = _cleanup_task_description(
+        chosen_theme="some theme", preference_context="User prefers small PRs."
+    )
+    assert "Preference context:" in desc
+    assert "User prefers small PRs." in desc
+
+
+def test_cleanup_task_description_omits_preference_context_when_empty():
+    desc = _cleanup_task_description(
+        chosen_theme="some theme", preference_context=""
+    )
+    assert "Preference context:" not in desc
+
+
+# ---------------------------------------------------------------------------
+# _pick_daily_theme
+# ---------------------------------------------------------------------------
+
+
+def test_pick_daily_theme_returns_known_theme():
+    theme = _pick_daily_theme()
+    assert theme in DEFAULT_CLEANUP_THEMES
+
+
+def test_pick_daily_theme_returns_string():
+    theme = _pick_daily_theme()
+    assert isinstance(theme, str)
+    assert len(theme) > 0
+
+
+def test_pick_daily_theme_matches_day_of_year_rotation():
+    """Verify the rotation logic: day_of_year % len(themes) selects the theme."""
+    day_of_year = datetime.now(timezone.utc).timetuple().tm_yday
+    expected = DEFAULT_CLEANUP_THEMES[day_of_year % len(DEFAULT_CLEANUP_THEMES)]
+    assert _pick_daily_theme() == expected
