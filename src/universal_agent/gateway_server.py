@@ -447,7 +447,7 @@ PAPER_TO_PODCAST_DEFAULT_TIMEZONE = (
     or "America/Chicago"
 )
 YOUTUBE_DAILY_DIGEST_JOB_KEY = "youtube_daily_digest"
-YOUTUBE_DAILY_DIGEST_DEFAULT_CRON = "0 8 * * *"  # 8 AM Central daily
+YOUTUBE_DAILY_DIGEST_DEFAULT_CRON = "0 6 * * *"  # 6 AM Central daily
 YOUTUBE_DAILY_DIGEST_DEFAULT_TIMEZONE = (
     (os.getenv("UA_YOUTUBE_DAILY_DIGEST_TIMEZONE") or "").strip()
     or (os.getenv("UA_DEFAULT_TIMEZONE") or "").strip()

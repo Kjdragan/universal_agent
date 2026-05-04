@@ -28,7 +28,7 @@ async def main():
         logger.info(f"Cron job {JOB_ID} already exists. Updating...")
         job = jobs[JOB_ID]
         job.command = command
-        job.cron_expr = "0 8 * * *"  # 8:00 AM Daily
+        job.cron_expr = "0 6 * * *"  # 6:00 AM Daily
         job.timezone = "America/Chicago"
         job.model = None
         job.timeout_seconds = 3600  # Give it an hour for multiple transcripts
@@ -39,14 +39,14 @@ async def main():
             user_id="system",
             workspace_dir=str(workspaces_dir / f"cron_{JOB_ID}"),
             command=command,
-            cron_expr="0 8 * * *",
+            cron_expr="0 6 * * *",
             timezone="America/Chicago",
             timeout_seconds=3600,
         )
         jobs[JOB_ID] = job
 
     store.save_jobs(jobs.values())
-    logger.info(f"Successfully registered {JOB_ID}. Next runs will happen at 8:00 AM Central Time.")
+    logger.info(f"Successfully registered {JOB_ID}. Next runs will happen at 6:00 AM Central Time.")
 
 if __name__ == "__main__":
     asyncio.run(main())
