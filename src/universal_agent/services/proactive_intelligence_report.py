@@ -413,6 +413,46 @@ async def deliver_intelligence_report(
     except Exception as exc:
         logger.error("Failed to store intelligence report: %s", exc)
 
+    # Surface the report as an intelligence-grade activity event so the
+    # Mission Control tier-1 LLM can discover it as a card the operator
+    # actually wants to see ("Is there some proactive report that just
+    # came out?"). Best-effort — never let dashboard plumbing break the
+    # delivery pipeline.
+    if stored:
+        try:
+            from universal_agent.services.intelligence_emitter import (
+                SEVERITY_INFO,
+                emit_intelligence_event,
+            )
+            stats = report.get("stats", {}) if isinstance(report, dict) else {}
+            recs = report.get("recommendations") or report.get("analysis") or ""
+            rec_preview = (recs[:240] + "…") if isinstance(recs, str) and len(recs) > 240 else recs
+            emit_intelligence_event(
+                source_domain="proactive_report",
+                kind="intelligence_report_generated",
+                title=f"Intelligence report ready ({report.get('period', 'unknown')})",
+                summary=(
+                    f"Proactive report generated"
+                    + (f" — {len(recs.splitlines())} lines of analysis" if isinstance(recs, str) and recs else "")
+                    + (" (emailed)" if email_sent else "")
+                ),
+                severity=SEVERITY_INFO,
+                full_message=str(rec_preview) if rec_preview else None,
+                metadata={
+                    "report_id": report_id,
+                    "period": report.get("period", "unknown"),
+                    "timestamp": report.get("timestamp", ""),
+                    "email_sent": email_sent,
+                    "stats": stats,
+                },
+            )
+        except Exception as exc:  # never block delivery on instrumentation
+            logger.debug(
+                "proactive_intelligence_report: emit_intelligence_event "
+                "failed: %s",
+                exc,
+            )
+
     return {
         "report_id": report_id,
         "email_sent": email_sent,

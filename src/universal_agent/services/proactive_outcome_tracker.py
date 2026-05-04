@@ -214,7 +214,88 @@ def _record_outcome_impl(
     # Store an auditable recap for dashboard history (non-critical).
     _store_work_recap(conn, task=task, action=action, reason=reason)
 
+    # Surface positive completions as intelligence-grade activity events
+    # so the operator's Mission Control feed shows what the autonomous
+    # system actually accomplished, not just what's broken. Non-critical.
+    try:
+        _emit_outcome_intelligence(task=task, outcome=outcome, action=action)
+    except Exception as exc:
+        logger.debug("proactive outcome intelligence emit failed: %s", exc)
+
     return outcome
+
+
+def _emit_outcome_intelligence(
+    *,
+    task: dict[str, Any],
+    outcome: dict[str, Any],
+    action: str,
+) -> None:
+    """Translate a terminal proactive-task outcome into an
+    activity_events row Mission Control's tier-1 LLM can pick up.
+
+    Successes and approvals fire as `success`-severity intelligence
+    cards (the "we got something useful done" signal the operator
+    asked for). Failures and blocks fire as `warning` so the LLM still
+    surfaces them but doesn't escalate them as alarms.
+    """
+    from universal_agent.services.intelligence_emitter import (
+        SEVERITY_SUCCESS,
+        SEVERITY_WARNING,
+        emit_intelligence_event,
+    )
+
+    task_id = str(task.get("task_id") or "").strip()
+    title = str(task.get("title") or "").strip() or task_id or "proactive task"
+    source_kind = str(task.get("source_kind") or "proactive").strip()
+    duration_s = outcome.get("duration_seconds")
+
+    if action in ("complete", "approve"):
+        severity = SEVERITY_SUCCESS
+        kind = "proactive_task_completed"
+        headline = f"Proactive work landed: {title}"
+        bits = [f"Action `{action}`"]
+        if duration_s:
+            try:
+                bits.append(f"in {float(duration_s):.0f}s")
+            except Exception:
+                pass
+        if source_kind:
+            bits.append(f"(source: {source_kind})")
+        summary = " ".join(bits) + "."
+    elif action in FAILURE_ACTIONS:
+        severity = SEVERITY_WARNING
+        kind = "proactive_task_failed"
+        headline = f"Proactive work {action}ed: {title}"
+        summary = f"Terminal action `{action}` on proactive task `{task_id}`."
+    else:
+        # Other terminal states (cancel, dismiss, snooze) — info only.
+        # We still surface them so the operator can see autonomous
+        # decisions, but they're not noteworthy enough to ride the
+        # success or warning channels.
+        from universal_agent.services.intelligence_emitter import SEVERITY_INFO
+        severity = SEVERITY_INFO
+        kind = f"proactive_task_{action}"
+        headline = f"Proactive task {action}: {title}"
+        summary = f"Terminal action `{action}` on proactive task `{task_id}`."
+
+    emit_intelligence_event(
+        source_domain="proactive_task",
+        kind=kind,
+        title=headline,
+        summary=summary,
+        severity=severity,
+        full_message=str(outcome.get("reason") or "")[:1200] or None,
+        metadata={
+            "task_id": task_id,
+            "source_kind": source_kind,
+            "action": action,
+            "duration_seconds": duration_s,
+            "assignment_count": outcome.get("assignment_count"),
+            "agent_id": outcome.get("agent_id"),
+            "outcome_id": outcome.get("outcome_id"),
+        },
+    )
 
 
 def _store_work_recap(

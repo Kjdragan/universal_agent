@@ -785,6 +785,18 @@ class CronService:
                 attempt_id=workflow_attempt_id,
                 summary={"job_id": job.job_id, "status": "success"},
             )
+            # Surface the successful run as an intelligence-grade event
+            # so Mission Control tier-1 can discover it as a card. The
+            # operator wants to see "did we just run something useful?",
+            # not just failures. Defensive: never let instrumentation
+            # break the cron lifecycle.
+            try:
+                self._emit_cron_success_intelligence(job, record)
+            except Exception as exc:
+                logger.debug(
+                    "cron success intelligence emit failed for %s: %s",
+                    job.job_id, exc,
+                )
             return
         if record.status == "auth_required":
             admission_service.mark_needs_review(
@@ -1592,6 +1604,69 @@ class CronService:
             self.event_sink(payload)
         except Exception as exc:
             logger.warning("Chron event sink failed: %s", exc)
+
+    def _emit_cron_success_intelligence(self, job: "CronJob", record: "CronRunRecord") -> None:
+        """Write an intelligence-grade activity event for a successful
+        cron run so Mission Control tier-1 can discover "this useful
+        thing just happened" cards.
+
+        Most operator-relevant cron jobs are not noisy maintenance — they
+        are reconciliations, digests, reports, and ingestion runs that
+        produce real artifacts. Without this hook, those wins are
+        invisible to the dashboard. We pull the run's duration and any
+        artifact references off the record so the LLM has enough to
+        synthesize a useful narrative.
+
+        Heartbeat-style cron jobs (frequent, low-signal) opt OUT via
+        a metadata flag `mission_control_silent: true` so we don't
+        flood the dashboard.
+        """
+        metadata = job.metadata or {}
+        if metadata.get("mission_control_silent") is True:
+            return  # noisy job opted out of dashboard surfacing
+
+        from universal_agent.services.intelligence_emitter import (
+            SEVERITY_SUCCESS,
+            emit_intelligence_event,
+        )
+
+        duration_s: float | None = None
+        try:
+            if record.started_at and record.finished_at:
+                duration_s = max(0.0, float(record.finished_at) - float(record.started_at))
+        except Exception:
+            duration_s = None
+
+        artifact_path = ""
+        try:
+            artifact_path = str(record.output_path or "") or ""
+        except Exception:
+            artifact_path = ""
+
+        title = f"Cron `{job.job_id}` completed"
+        summary_bits = [f"Job `{job.job_id}` succeeded"]
+        if duration_s is not None:
+            summary_bits.append(f"in {duration_s:.1f}s")
+        if artifact_path:
+            summary_bits.append(f"→ {artifact_path}")
+        summary = " ".join(summary_bits) + "."
+
+        emit_intelligence_event(
+            source_domain="cron",
+            kind="cron_job_success",
+            title=title,
+            summary=summary,
+            severity=SEVERITY_SUCCESS,
+            metadata={
+                "job_id": job.job_id,
+                "duration_s": duration_s,
+                "artifact_path": artifact_path,
+                "scheduled_at": getattr(record, "scheduled_at", None),
+                "started_at": getattr(record, "started_at", None),
+                "finished_at": getattr(record, "finished_at", None),
+                "mode": metadata.get("mode") or "cron",
+            },
+        )
 
     def _emit_system_event(self, session_id: str, event: dict[str, Any]) -> None:
         """Enqueue a system event for the given session (surfaced in next heartbeat)."""

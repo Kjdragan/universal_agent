@@ -1195,50 +1195,108 @@ function CardGridPanel() {
   const visibleCards = allCards.filter((c) => !isSnoozed(c));
   const snoozedCards = allCards.filter(isSnoozed);
 
+  // Intelligence-first segmentation. The operator wants to see what the
+  // system DID — wins, completions, noteworthy artifacts, ideas — above
+  // the alarm rail. Without this split, a single yellow infrastructure
+  // card visually outweighs five real intelligence wins. Severity
+  // mapping mirrors the tier-1 LLM's vocabulary.
+  const SEV_INTEL = new Set(["success", "informational", "info", "watching"]);
+  const SEV_ALERT = new Set(["critical", "warning"]);
+  const isIntelCard = (c: MissionControlCard) => {
+    const sev = String(c.severity || "").toLowerCase();
+    if (SEV_INTEL.has(sev)) return true;
+    if (SEV_ALERT.has(sev)) return false;
+    // Unknown band: treat as intelligence so it's not lost in the
+    // alert rail. Better to over-show than to hide.
+    return true;
+  };
+  const intelCards = visibleCards.filter(isIntelCard);
+  const alertCards = visibleCards.filter((c) => !isIntelCard(c));
+
   return (
-    <div className="min-w-0 rounded-none border border-white/10 bg-[#0b1326]/70 p-4 backdrop-blur-md">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <Lightbulb className="h-4 w-4 text-accent" />
-          <h2 className="text-sm font-medium text-foreground/85">
-            Intelligence Cards <span className="text-muted-foreground">({visibleCards.length})</span>
-          </h2>
+    <div className="min-w-0 space-y-4">
+      {/* INTELLIGENCE — what the system did */}
+      <div className="rounded-none border border-white/10 bg-[#0b1326]/70 p-4 backdrop-blur-md">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-primary" />
+            <h2 className="text-sm font-medium text-foreground/85">
+              Intelligence — what landed{" "}
+              <span className="text-muted-foreground">({intelCards.length})</span>
+            </h2>
+          </div>
+          {snoozedCards.length > 0 && (
+            <button
+              onClick={() => setShowSnoozed((s) => !s)}
+              className="rounded border border-border/50 bg-card/30 px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-card/60 hover:text-foreground/80"
+            >
+              {showSnoozed ? "Hide" : "Show"} {snoozedCards.length} snoozed
+            </button>
+          )}
         </div>
-        {snoozedCards.length > 0 && (
-          <button
-            onClick={() => setShowSnoozed((s) => !s)}
-            className="rounded border border-border/50 bg-card/30 px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-card/60 hover:text-foreground/80"
-          >
-            {showSnoozed ? "Hide" : "Show"} {snoozedCards.length} snoozed
-          </button>
+
+        {error && (
+          <div className="mb-3 rounded border border-red-500/25 bg-red-500/10 p-2 text-xs text-red-300">{error}</div>
+        )}
+
+        {visibleCards.length === 0 && snoozedCards.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            All quiet. The system hasn&apos;t produced anything noteworthy in the last
+            tier-1 pass. This is normal for a calm system; refreshing Mission Control
+            forces a fresh discovery pass.
+          </p>
+        ) : intelCards.length === 0 ? (
+          <p className="text-xs text-muted-foreground">
+            No intelligence cards on the latest pass. Anything autonomous that produced
+            an artifact, sent a report, or completed a proactive task should appear here
+            as a card.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {intelCards.map((card) => (
+              <CardItem
+                key={card.card_id}
+                card={card}
+                onThumbs={(direction) => sendFeedback(card.card_id, "thumbs", { direction })}
+                onSnooze={(duration) => sendFeedback(card.card_id, "snooze", { duration })}
+                onOpenComment={() => { setCommentingCardId(card.card_id); setCommentDraft(""); }}
+                onGeneratePrompt={() => generatePrompt(card.card_id)}
+                onSendToCodie={() => openCodieFlyout(card.card_id)}
+              />
+            ))}
+          </div>
         )}
       </div>
 
-      {error && (
-        <div className="mb-3 rounded border border-red-500/25 bg-red-500/10 p-2 text-xs text-red-300">{error}</div>
-      )}
-
-      {visibleCards.length === 0 && snoozedCards.length === 0 && (
-        <p className="text-sm text-muted-foreground">
-          All quiet. The sweeper has not surfaced any tier-1 cards on the most recent pass.
-          {' '}This is normal for a healthy idle system.
-        </p>
-      )}
-
-      <div className="space-y-3">
-        {visibleCards.map((card) => (
-          <CardItem
-            key={card.card_id}
-            card={card}
-            onThumbs={(direction) => sendFeedback(card.card_id, "thumbs", { direction })}
-            onSnooze={(duration) => sendFeedback(card.card_id, "snooze", { duration })}
-            onOpenComment={() => { setCommentingCardId(card.card_id); setCommentDraft(""); }}
-            onGeneratePrompt={() => generatePrompt(card.card_id)}
-            onSendToCodie={() => openCodieFlyout(card.card_id)}
-            actionPending={actionPending === card.card_id}
-          />
-        ))}
+      {/* ALERTS — what needs attention. Only render the box if there
+          are cards in it; an empty alert section is not a feature. */}
+      {alertCards.length > 0 && (
+      <div className="rounded-none border border-amber-500/25 bg-[#1a1208]/60 p-4 backdrop-blur-md">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-amber-400" />
+            <h2 className="text-sm font-medium text-foreground/85">
+              Needs attention{" "}
+              <span className="text-muted-foreground">({alertCards.length})</span>
+            </h2>
+          </div>
+        </div>
+        <div className="space-y-3">
+          {alertCards.map((card) => (
+            <CardItem
+              key={card.card_id}
+              card={card}
+              onThumbs={(direction) => sendFeedback(card.card_id, "thumbs", { direction })}
+              onSnooze={(duration) => sendFeedback(card.card_id, "snooze", { duration })}
+              onOpenComment={() => { setCommentingCardId(card.card_id); setCommentDraft(""); }}
+              onGeneratePrompt={() => generatePrompt(card.card_id)}
+              onSendToCodie={() => openCodieFlyout(card.card_id)}
+              actionPending={actionPending === card.card_id}
+            />
+          ))}
+        </div>
       </div>
+      )}
 
       {showSnoozed && snoozedCards.length > 0 && (
         <div className="mt-4 space-y-3 border-t border-border/40 pt-3">
