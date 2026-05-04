@@ -415,10 +415,9 @@ If the work item genuinely cannot proceed, disposition it via `task_hub_task_act
 
 After finishing work, ALWAYS disposition every claimed work item via `task_hub_task_action` (`complete`, `review`, `block`, or `park`).
 
-### VP-Targeted Email Tasks:
-- When a task has `target_agent` in its workflow manifest metadata (e.g., "vp.coder.primary" or "vp.general.primary"),
-  the sender explicitly addressed that VP agent by name. Delegate to the named VP immediately via
-  `vp_dispatch_mission` without further triage — the routing decision has already been made by the sender.
+### VP-Targeted Tasks (target_agent):
+- When a work item shows `⚡ TARGET_AGENT=<vp_id>` (because the sender — user, dashboard "Dispatch Mission" box, or upstream pipeline — explicitly named that VP), `target_agent` is **authoritative and non-negotiable**. Delegate to that exact VP immediately via `vp_dispatch_mission` without further triage. Do NOT self-execute, do NOT re-evaluate, do NOT consult any LLM Routing Judgment for that item — `target_agent` overrides every other routing signal.
+- If both `⚡ TARGET_AGENT=...` and an `LLM Routing Judgment` line appear for the same item (legacy artifact only — current builds suppress the judgment when target_agent is set), ignore the `LLM Routing Judgment` entirely. `target_agent` wins.
 - After successfully delegating the mission via `vp_dispatch_mission`, you MUST disposition the original Task Hub work item as `complete` via `task_hub_task_action` with a note that it was delegated to the specific VP agent. This ensures the original task does not remain stuck "in progress".
 - In the VP mission briefing, instruct the VP to:
   (a) Reply to the sender from the VP inbox (vp.agents@agentmail.to)
@@ -535,19 +534,26 @@ def build_todo_execution_prompt(
                 "Repo-backed coding is authorized for this work item. Edit repo files under "
                 "`CURRENT_CODEBASE_ROOT`, but keep generated artifacts in `CURRENT_RUN_WORKSPACE`."
             )
-        routing = item.get("_routing") if isinstance(item.get("_routing"), dict) else {}
-        if routing:
-            label = "LLM Routing Judgment" if routing.get("method") == "llm" else "Routing Hint"
-            lines.append(f"{label}: {routing}")
-        # Surface target_agent when present — this is a strong routing signal
-        # from the sender explicitly naming a VP agent.
+        # target_agent is an explicit user-set routing directive (from the
+        # dashboard "Dispatch Mission" box or upstream pipeline). When present
+        # it overrides any LLM-derived routing judgment — Simone must delegate
+        # to the named VP without re-evaluating.
         target_agent = str(
             manifest.get("target_agent")
             or metadata.get("workflow_manifest", {}).get("target_agent")
             or ""
         ).strip()
+        routing = item.get("_routing") if isinstance(item.get("_routing"), dict) else {}
+        if routing and not target_agent:
+            label = "LLM Routing Judgment" if routing.get("method") == "llm" else "Routing Hint"
+            lines.append(f"{label}: {routing}")
         if target_agent:
-            lines.append(f"⚡ TARGET_AGENT={target_agent} (sender explicitly addressed this VP — delegate immediately)")
+            lines.append(
+                f"⚡ TARGET_AGENT={target_agent} — AUTHORITATIVE: delegate to this VP via "
+                f"`vp_dispatch_mission` immediately. Do NOT self-execute. Do NOT consult "
+                f"any LLM Routing Judgment. target_agent is the user's explicit choice and "
+                f"overrides every other routing signal."
+            )
         continuation = metadata.get("proactive_continuation") if isinstance(metadata.get("proactive_continuation"), dict) else {}
         if continuation:
             previous_workspace = str(continuation.get("previous_workspace_dir") or "").strip()
