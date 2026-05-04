@@ -14096,6 +14096,12 @@ async def lifespan(app: FastAPI):
             _ensure_claude_code_intel_cron_job()
             _ensure_paper_to_podcast_cron_job()
             _ensure_youtube_daily_digest_cron_job()
+            _ensure_nightly_wiki_cron_job()
+            _ensure_morning_briefing_cron_job()
+            _ensure_proactive_report_morning_cron_job()
+            _ensure_proactive_report_midday_cron_job()
+            _ensure_proactive_report_afternoon_cron_job()
+            _ensure_proactive_artifact_digest_cron_job()
         except Exception as exc:
             logger.warning("Failed ensuring autonomous cron jobs: %s", exc)
     else:
@@ -17789,6 +17795,165 @@ def _ensure_youtube_daily_digest_cron_job() -> Optional[dict[str, Any]]:
         metadata=metadata,
     )
     return job.to_dict() if hasattr(job, "to_dict") else {"job_id": str(getattr(job, "job_id", ""))}
+
+
+def _proactive_cron_enabled(env_var: str, default: str = "1") -> bool:
+    return os.getenv(env_var, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _register_system_cron_job(
+    *,
+    system_job: str,
+    default_cron: str,
+    default_timezone: str,
+    command: str,
+    description: str,
+    timeout_seconds: int,
+    enabled: bool,
+    cron_env_var: str | None = None,
+    timezone_env_var: str | None = None,
+) -> Optional[dict[str, Any]]:
+    """Idempotent boot-time helper for proactive cron jobs.
+
+    Looks up an existing job by `metadata.system_job`; updates if found,
+    adds if not.  Always sets `catch_up_on_restart=True` so missed runs
+    are backfilled on next gateway start instead of silently skipped.
+
+    Returns the job dict on success, or `None` when disabled or the
+    cron service is unavailable.
+    """
+    if not _cron_service or not enabled:
+        return None
+    cron_expr = (
+        os.getenv(cron_env_var, default_cron).strip()
+        if cron_env_var
+        else default_cron
+    ) or default_cron
+    timezone_name = (
+        os.getenv(timezone_env_var, default_timezone).strip()
+        if timezone_env_var
+        else default_timezone
+    ) or default_timezone
+    workspace_dir = str(WORKSPACES_DIR / f"cron_{system_job}")
+    metadata = {
+        "system_job": system_job,
+        "autonomous": True,
+        "source": "system",
+        "session_id": f"cron_{system_job}",
+    }
+    updates = {
+        "user_id": "cron_system",
+        "workspace_dir": workspace_dir,
+        "command": command,
+        "description": description,
+        "cron_expr": cron_expr,
+        "timezone": timezone_name,
+        "timeout_seconds": timeout_seconds,
+        "enabled": True,
+        "catch_up_on_restart": True,
+        "metadata": metadata,
+    }
+    existing = _find_cron_job_by_system_job(system_job)
+    if existing is not None:
+        updated = _cron_service.update_job(str(getattr(existing, "job_id", "")), updates)
+        return updated.to_dict() if hasattr(updated, "to_dict") else {"job_id": str(getattr(updated, "job_id", ""))}
+    job = _cron_service.add_job(
+        user_id="cron_system",
+        workspace_dir=workspace_dir,
+        command=command,
+        description=description,
+        cron_expr=cron_expr,
+        timezone=timezone_name,
+        timeout_seconds=timeout_seconds,
+        enabled=True,
+        catch_up_on_restart=True,
+        metadata=metadata,
+    )
+    return job.to_dict() if hasattr(job, "to_dict") else {"job_id": str(getattr(job, "job_id", ""))}
+
+
+def _ensure_nightly_wiki_cron_job() -> Optional[dict[str, Any]]:
+    return _register_system_cron_job(
+        system_job="nightly_wiki",
+        default_cron="15 3 * * *",
+        default_timezone="America/Chicago",
+        command="!script universal_agent.scripts.nightly_wiki_agent",
+        description="Proactive overnight wiki generation from pending CSI signal cards.",
+        timeout_seconds=1800,
+        enabled=_proactive_cron_enabled("UA_NIGHTLY_WIKI_ENABLED"),
+        cron_env_var="UA_NIGHTLY_WIKI_CRON",
+        timezone_env_var="UA_NIGHTLY_WIKI_TIMEZONE",
+    )
+
+
+def _ensure_morning_briefing_cron_job() -> Optional[dict[str, Any]]:
+    return _register_system_cron_job(
+        system_job="morning_briefing",
+        default_cron="30 6 * * *",
+        default_timezone="America/Chicago",
+        command="!script universal_agent.scripts.briefings_agent",
+        description="Daily morning briefing combining telemetry + nightly wiki output.",
+        timeout_seconds=900,
+        enabled=_proactive_cron_enabled("UA_MORNING_BRIEFING_ENABLED"),
+        cron_env_var="UA_MORNING_BRIEFING_CRON",
+        timezone_env_var="UA_MORNING_BRIEFING_TIMEZONE",
+    )
+
+
+def _ensure_proactive_report_morning_cron_job() -> Optional[dict[str, Any]]:
+    return _register_system_cron_job(
+        system_job="proactive_report_morning",
+        default_cron="0 7 * * *",
+        default_timezone="America/Chicago",
+        command="!script universal_agent.scripts.proactive_report_agent",
+        description="Morning proactive intelligence report — pipeline stats + LLM analysis.",
+        timeout_seconds=600,
+        enabled=_proactive_cron_enabled("UA_PROACTIVE_REPORTS_ENABLED"),
+        cron_env_var="UA_PROACTIVE_REPORT_MORNING_CRON",
+        timezone_env_var="UA_PROACTIVE_REPORTS_TIMEZONE",
+    )
+
+
+def _ensure_proactive_report_midday_cron_job() -> Optional[dict[str, Any]]:
+    return _register_system_cron_job(
+        system_job="proactive_report_midday",
+        default_cron="0 12 * * *",
+        default_timezone="America/Chicago",
+        command="!script universal_agent.scripts.proactive_report_agent",
+        description="Midday proactive intelligence report — pipeline stats + LLM analysis.",
+        timeout_seconds=600,
+        enabled=_proactive_cron_enabled("UA_PROACTIVE_REPORTS_ENABLED"),
+        cron_env_var="UA_PROACTIVE_REPORT_MIDDAY_CRON",
+        timezone_env_var="UA_PROACTIVE_REPORTS_TIMEZONE",
+    )
+
+
+def _ensure_proactive_report_afternoon_cron_job() -> Optional[dict[str, Any]]:
+    return _register_system_cron_job(
+        system_job="proactive_report_afternoon",
+        default_cron="0 16 * * *",
+        default_timezone="America/Chicago",
+        command="!script universal_agent.scripts.proactive_report_agent",
+        description="Afternoon proactive intelligence report — pipeline stats + LLM analysis.",
+        timeout_seconds=600,
+        enabled=_proactive_cron_enabled("UA_PROACTIVE_REPORTS_ENABLED"),
+        cron_env_var="UA_PROACTIVE_REPORT_AFTERNOON_CRON",
+        timezone_env_var="UA_PROACTIVE_REPORTS_TIMEZONE",
+    )
+
+
+def _ensure_proactive_artifact_digest_cron_job() -> Optional[dict[str, Any]]:
+    return _register_system_cron_job(
+        system_job="proactive_artifact_digest",
+        default_cron="0 8 * * *",
+        default_timezone="America/Chicago",
+        command="!script universal_agent.scripts.proactive_digest_agent",
+        description="Daily proactive artifact digest — surfaces unseen CODIE PRs, tutorial builds, and convergence insights via email.",
+        timeout_seconds=300,
+        enabled=_proactive_cron_enabled("UA_PROACTIVE_ARTIFACT_DIGEST_ENABLED"),
+        cron_env_var="UA_PROACTIVE_ARTIFACT_DIGEST_CRON",
+        timezone_env_var="UA_PROACTIVE_ARTIFACT_DIGEST_TIMEZONE",
+    )
 
 
 def _csi_convergence_cron_enabled() -> bool:

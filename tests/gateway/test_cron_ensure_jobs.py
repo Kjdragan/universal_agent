@@ -166,3 +166,135 @@ def test_ensure_youtube_daily_digest_cron_job_respects_env_overrides(monkeypatch
     job = cron_stub.jobs[0]
     assert job.cron_expr == "30 9 * * 1"
     assert job.timezone == "America/New_York"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 3: Same idempotent-boot pattern for the other hard-coded jobs.
+#   All four scripts (nightly_wiki_agent, briefings_agent,
+#   proactive_report_agent, proactive_digest_agent) live in cron_jobs.json
+#   today with no `_ensure_*` helper.  These tests pin the contract that
+#   each helper auto-registers its job with `catch_up_on_restart=True`
+#   and a unique `system_job` key.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "ensure_attr,system_job,enable_env,expected_cron,expected_command_substr",
+    [
+        (
+            "_ensure_nightly_wiki_cron_job",
+            "nightly_wiki",
+            "UA_NIGHTLY_WIKI_ENABLED",
+            "15 3 * * *",
+            "nightly_wiki_agent",
+        ),
+        (
+            "_ensure_morning_briefing_cron_job",
+            "morning_briefing",
+            "UA_MORNING_BRIEFING_ENABLED",
+            "30 6 * * *",
+            "briefings_agent",
+        ),
+        (
+            "_ensure_proactive_report_morning_cron_job",
+            "proactive_report_morning",
+            "UA_PROACTIVE_REPORTS_ENABLED",
+            "0 7 * * *",
+            "proactive_report_agent",
+        ),
+        (
+            "_ensure_proactive_report_midday_cron_job",
+            "proactive_report_midday",
+            "UA_PROACTIVE_REPORTS_ENABLED",
+            "0 12 * * *",
+            "proactive_report_agent",
+        ),
+        (
+            "_ensure_proactive_report_afternoon_cron_job",
+            "proactive_report_afternoon",
+            "UA_PROACTIVE_REPORTS_ENABLED",
+            "0 16 * * *",
+            "proactive_report_agent",
+        ),
+        (
+            "_ensure_proactive_artifact_digest_cron_job",
+            "proactive_artifact_digest",
+            "UA_PROACTIVE_ARTIFACT_DIGEST_ENABLED",
+            "0 8 * * *",
+            "proactive_digest_agent",
+        ),
+    ],
+)
+def test_ensure_proactive_cron_jobs_create_with_catch_up_enabled(
+    monkeypatch, ensure_attr, system_job, enable_env, expected_cron, expected_command_substr
+):
+    cron_stub = _CronBootstrapStub()
+    monkeypatch.setattr(gateway_server, "_cron_service", cron_stub)
+    monkeypatch.setenv(enable_env, "1")
+
+    helper = getattr(gateway_server, ensure_attr)
+    result = helper()
+
+    assert result is not None, f"{ensure_attr} must register the job"
+    assert len(cron_stub.jobs) == 1
+    job = cron_stub.jobs[0]
+    assert job.metadata["system_job"] == system_job
+    assert job.metadata.get("autonomous") is True
+    assert job.catch_up_on_restart is True, (
+        f"{ensure_attr}: catch_up_on_restart must be True so a missed run "
+        f"is backfilled on next gateway start (the seed file had this off)."
+    )
+    assert job.cron_expr == expected_cron
+    assert expected_command_substr in (job.command or "")
+
+
+@pytest.mark.parametrize(
+    "ensure_attr,system_job",
+    [
+        ("_ensure_nightly_wiki_cron_job", "nightly_wiki"),
+        ("_ensure_morning_briefing_cron_job", "morning_briefing"),
+        ("_ensure_proactive_report_morning_cron_job", "proactive_report_morning"),
+        ("_ensure_proactive_artifact_digest_cron_job", "proactive_artifact_digest"),
+    ],
+)
+def test_ensure_proactive_cron_jobs_update_existing(monkeypatch, ensure_attr, system_job):
+    """Subsequent boots must update the existing record (matched by
+    metadata.system_job) rather than stack duplicates."""
+    cron_stub = _CronBootstrapStub()
+    existing = SimpleNamespace(
+        job_id=f"legacy_{system_job}",
+        metadata={"system_job": system_job},
+        to_dict=lambda: {"job_id": f"legacy_{system_job}"},
+    )
+    cron_stub.jobs = [existing]
+    monkeypatch.setattr(gateway_server, "_cron_service", cron_stub)
+
+    helper = getattr(gateway_server, ensure_attr)
+    result = helper()
+
+    assert result is not None
+    assert len(cron_stub.updated) == 1
+    job_id, updates = cron_stub.updated[0]
+    assert job_id == f"legacy_{system_job}"
+    assert updates["catch_up_on_restart"] is True
+
+
+@pytest.mark.parametrize(
+    "ensure_attr,enable_env",
+    [
+        ("_ensure_nightly_wiki_cron_job", "UA_NIGHTLY_WIKI_ENABLED"),
+        ("_ensure_morning_briefing_cron_job", "UA_MORNING_BRIEFING_ENABLED"),
+        ("_ensure_proactive_report_morning_cron_job", "UA_PROACTIVE_REPORTS_ENABLED"),
+        ("_ensure_proactive_artifact_digest_cron_job", "UA_PROACTIVE_ARTIFACT_DIGEST_ENABLED"),
+    ],
+)
+def test_ensure_proactive_cron_jobs_respect_disable_flag(monkeypatch, ensure_attr, enable_env):
+    cron_stub = _CronBootstrapStub()
+    monkeypatch.setattr(gateway_server, "_cron_service", cron_stub)
+    monkeypatch.setenv(enable_env, "0")
+
+    helper = getattr(gateway_server, ensure_attr)
+    result = helper()
+
+    assert result is None
+    assert cron_stub.jobs == []
