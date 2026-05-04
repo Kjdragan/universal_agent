@@ -707,6 +707,37 @@ def _filter_unprocessed_items(items: list[dict], day_name: str) -> list[dict]:
     return filtered
 
 
+def _emit_proactive_delivery_failure(
+    *,
+    day_name: str,
+    date_str: str,
+    email_to: str | None,
+    error: str,
+) -> None:
+    """Log + signal a proactive_delivery_failed condition so the operator
+    can see that a digest run produced an artifact but failed to deliver
+    it.  The cron service captures stderr into `cron_runs.jsonl`'s
+    `output_preview`, which the gateway's `_emit_cron_event` fan-out
+    surfaces as a `cron_run_failed` notification (kind-upserted).
+
+    Best-effort posting to the gateway notification API is intentionally
+    deferred — the cron-error path already covers operator visibility,
+    and this helper stays free of network dependencies for testability.
+    """
+    msg = (
+        f"Daily YouTube Digest delivery FAILED for {day_name} ({date_str}) "
+        f"to {email_to}: {error}. Videos will NOT be marked processed; "
+        f"next scheduled run will retry the same playlist."
+    )
+    logger.error(msg)
+    try:
+        # Tagged stderr line so the cron-run output_preview captures it
+        # in a grep-friendly form for downstream surfacing.
+        print(f"::proactive_delivery_failed:: {msg}", file=sys.stderr, flush=True)
+    except Exception:
+        pass
+
+
 def _save_processed_videos(items: list[dict], day_name: str) -> None:
     db_path = _ingestion_db_path()
     conn = sqlite3.connect(str(db_path))
@@ -910,6 +941,11 @@ def process_daily_digest(
         video_titles=video_titles,
     )
 
+    # `email_to is None` is the intentional no-email mode (callers manage
+    # delivery elsewhere).  Anything else: attempt delivery, and gate the
+    # processed-videos DB write on success — otherwise a failed email
+    # would burn the videos with no retry path.
+    email_succeeded = email_to is None
     if email_to:
         logger.info("Sending email digest to %s...", email_to)
         async def _send():
@@ -931,11 +967,26 @@ def process_daily_digest(
         try:
             asyncio.run(_send())
             logger.info("Email sent successfully.")
+            email_succeeded = True
         except Exception as e:
             logger.error("Failed to send email: %s", e)
+            _emit_proactive_delivery_failure(
+                day_name=day_name,
+                date_str=date_str,
+                email_to=email_to,
+                error=str(e),
+            )
 
     if dry_run:
         logger.info("DRY RUN enabled. Skipping database state persistence.")
+        return
+
+    if not email_succeeded:
+        logger.error(
+            "Email delivery failed for %s; SKIPPING processed-videos DB write so "
+            "the next cron tick can retry the same videos.",
+            day_name,
+        )
         return
 
     logger.info("Saving state to processed_videos database...")
