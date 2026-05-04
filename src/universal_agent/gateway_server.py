@@ -2720,6 +2720,11 @@ _hq_self_heartbeat_stop: Optional[asyncio.Event] = None
 # Mission Control intelligence sweeper (Phase 1B+)
 _mission_control_sweeper_task: Optional[asyncio.Task] = None
 _mission_control_sweeper_stop: Optional[asyncio.Event] = None
+# Operator-driven mission control refresh: in-memory job tracker mirroring
+# `_tutorial_review_jobs`. Each entry walks queued → cards_running →
+# readout_running → completed (or failed). Capped FIFO at 32 entries.
+_mc_refresh_jobs: dict[str, dict[str, Any]] = {}
+_MC_REFRESH_JOB_RETENTION = 32
 _continuity_active_alerts: set[str] = set()
 _continuity_metric_events: deque[dict[str, Any]] = deque(
     maxlen=max(1000, int(os.getenv("UA_CONTINUITY_EVENT_MAXLEN", "20000") or 20000))
@@ -24329,18 +24334,159 @@ def _utc_now_ms() -> int:
     return int(datetime.now(timezone.utc).timestamp() * 1000)
 
 
-@app.post("/api/v1/dashboard/chief-of-staff/refresh")
-async def dashboard_chief_of_staff_refresh(include_evidence: bool = False):
-    """Generate and store a fresh Chief-of-Staff readout now."""
-    readout = await generate_mission_control_readout()
-    if not include_evidence:
-        readout.pop("evidence_bundle", None)
-    return {
-        "status": "ok",
-        "generated_at": _utc_now_iso(),
-        "readout": readout,
-        "source": "mission_control_chief_of_staff",
+# ── Operator-driven Mission Control refresh ───────────────────────────
+# Phase 1 of the async-refresh refactor. The dashboard's "Refresh Mission
+# Control" button POSTs here; the response is `202 + job_id` and the
+# frontend polls the GET endpoint below until the job reaches a terminal
+# state. The actual work runs in a background asyncio task that walks
+# tier-1 (cards) then tier-2 (readout) via `force_refresh_async`,
+# bypassing the natural sweeper's cadence gating. This sidesteps the
+# 30s Next.js proxy timeout that previously surfaced as 502 on slow
+# opus calls.
+
+
+def _get_mission_control_sweeper():
+    """Return the singleton Mission Control sweeper. Indirection point so
+    tests can monkeypatch a fake sweeper without spinning the real
+    background loop."""
+    from universal_agent.services.mission_control_intelligence_sweeper import get_sweeper
+    return get_sweeper()
+
+
+def _remember_mc_refresh_job(job: dict[str, Any]) -> None:
+    """Insert/replace a refresh job and enforce FIFO retention. Mirrors
+    `_remember_tutorial_review_job` so the in-memory tracker pattern is
+    consistent across the gateway."""
+    job_id = job.get("job_id")
+    if not job_id:
+        return
+    _mc_refresh_jobs[job_id] = job
+    # FIFO eviction once we exceed retention. dict preserves insertion
+    # order in Python 3.7+, so popping the first item evicts the oldest.
+    while len(_mc_refresh_jobs) > _MC_REFRESH_JOB_RETENTION:
+        oldest_key = next(iter(_mc_refresh_jobs))
+        if oldest_key == job_id:
+            # Edge case: re-inserting the only oldest entry (shouldn't
+            # happen with monotonic UUIDs, but guard anyway).
+            break
+        _mc_refresh_jobs.pop(oldest_key, None)
+
+
+async def _run_mc_refresh_job(job_id: str) -> None:
+    """Async worker that drives `sweeper.force_refresh_async` and walks
+    the in-memory job dict through every phase. Catches every exception
+    so a buggy sweeper never bubbles into the asyncio task wrapper
+    (where the error would only land in logs)."""
+    job = _mc_refresh_jobs.get(job_id)
+    if job is None:
+        return
+
+    def _on_progress(phase: str, payload: dict[str, Any]) -> None:
+        existing = _mc_refresh_jobs.get(job_id, {})
+        merged = {
+            **existing,
+            "status": phase,
+            "phase_started_at": payload.get("at"),
+        }
+        # Surface error/phase fields verbatim on the failed event so
+        # the GET endpoint exposes them without extra parsing on the
+        # frontend.
+        if phase == "failed":
+            merged["status"] = "failed"
+            merged["failed_phase"] = payload.get("phase")
+            merged["error"] = payload.get("error")
+        if phase == "completed":
+            merged["readout_id"] = payload.get("readout_id") or merged.get("readout_id")
+        _remember_mc_refresh_job(merged)
+
+    try:
+        sweeper = _get_mission_control_sweeper()
+        summary = await sweeper.force_refresh_async(progress=_on_progress)
+    except Exception as exc:
+        logger.exception("mission control refresh job %s crashed", job_id)
+        existing = _mc_refresh_jobs.get(job_id, {})
+        _remember_mc_refresh_job({
+            **existing,
+            "status": "failed",
+            "error": f"{type(exc).__name__}: {exc}",
+            "completed_at": _utc_now_iso(),
+        })
+        return
+
+    # On normal completion the callback already flipped status →
+    # completed/failed. Persist the full summary as well so the GET
+    # endpoint can show counts without an extra DB read.
+    existing = _mc_refresh_jobs.get(job_id, {})
+    final = {
+        **existing,
+        **{k: v for k, v in (summary or {}).items() if v is not None},
+        "completed_at": _utc_now_iso(),
     }
+    # Defensive: if the sweeper returned a status we didn't yet record
+    # via the callback (e.g. tier-1 returned without invoking progress),
+    # mirror it onto the dict.
+    if isinstance(summary, dict) and summary.get("status"):
+        final["status"] = summary["status"]
+    _remember_mc_refresh_job(final)
+
+
+@app.post("/api/v1/dashboard/mission-control/refresh", status_code=202)
+async def dashboard_mission_control_refresh():
+    """Kick off an async tier-1 + tier-2 refresh of Mission Control.
+
+    Returns immediately with `202 + job_id`. Poll the GET endpoint to
+    observe progress (queued → cards_running → readout_running →
+    completed | failed). This replaces the deprecated synchronous
+    `/api/v1/dashboard/chief-of-staff/refresh` that used to hold the
+    HTTP request open for the full LLM call (30-180s) and surfaced as
+    a 502 through the 30s Next.js proxy."""
+    job_id = uuid.uuid4().hex
+    record = {
+        "job_id": job_id,
+        "status": "queued",
+        "created_at": _utc_now_iso(),
+    }
+    _remember_mc_refresh_job(record)
+    asyncio.create_task(_run_mc_refresh_job(job_id))
+    return record
+
+
+@app.get("/api/v1/dashboard/mission-control/refresh/{job_id}")
+async def dashboard_mission_control_refresh_status(job_id: str):
+    """Return the current state of a refresh job. 404 if the job_id is
+    unknown — typically means the job was evicted by FIFO retention."""
+    job = _mc_refresh_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="unknown refresh job")
+    return job
+
+
+@app.post("/api/v1/dashboard/chief-of-staff/refresh")
+async def dashboard_chief_of_staff_refresh_deprecated():
+    """DEPRECATED — synchronous COS refresh used to hold the HTTP
+    request open for the full opus LLM call (timeout 180s × 3 retries),
+    which exceeded the 30s Next.js proxy timeout and surfaced as 502 in
+    the dashboard. Use the async `/api/v1/dashboard/mission-control/refresh`
+    endpoint instead.
+
+    Returns 410 Gone with a Link header pointing at the successor so any
+    stale caller (curl from an operator, an out-of-date frontend build)
+    gets an unambiguous migration signal."""
+    new_path = "/api/v1/dashboard/mission-control/refresh"
+    return JSONResponse(
+        status_code=410,
+        content={
+            "error": "deprecated",
+            "new_endpoint": new_path,
+            "detail": (
+                "POST /api/v1/dashboard/chief-of-staff/refresh has been "
+                "replaced by the async refresh endpoint. POST the new "
+                "endpoint to receive a job_id, then poll "
+                f"GET {new_path}/{{job_id}} for status."
+            ),
+        },
+        headers={"Link": f'<{new_path}>; rel="successor-version"'},
+    )
 
 
 @app.get("/api/v1/dashboard/events/stream")

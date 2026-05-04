@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 import json
 import logging
 import os
-from typing import Any
+from typing import Any, Callable
 
 from universal_agent.services.mission_control_cards import (
     SEVERITY_CRITICAL,
@@ -292,7 +292,100 @@ class MissionControlSweeper:
             logger.exception("Tier-2 async pass failed")
             result.errors.append(f"tier2: {exc}")
 
-    async def _run_tier1_async(self, result: SweepResult) -> None:
+    async def force_refresh_async(
+        self,
+        *,
+        progress: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
+        """Operator-driven full refresh: run tier-1 (cards) then tier-2
+        (Chief-of-Staff readout) NOW, bypassing the cadence gating
+        windows the natural sweeper loop honors.
+
+        Phases reported via the optional `progress` callback:
+          - "cards_running" — tier-1 LLM card-discovery has started
+          - "readout_running" — tier-1 finished; tier-2 synthesis started
+          - "completed" — tier-2 finished successfully
+          - "failed" — either phase raised; payload carries
+            `phase ∈ {"cards","readout"}` and a stringified `error`
+
+        Never raises. Returns a summary dict the gateway worker stores
+        in the in-memory job tracker so the dashboard can render it.
+
+        Tier-1 failure short-circuits — tier-2 is NOT run, because the
+        readout would synthesize from stale cards and re-stale the
+        operator-visible brief (the bug we are fixing).
+        """
+        from datetime import datetime, timezone
+
+        def _now_iso() -> str:
+            return datetime.now(timezone.utc).isoformat()
+
+        def _emit(_phase: str, **payload: Any) -> None:
+            if progress is None:
+                return
+            try:
+                progress(_phase, {"at": _now_iso(), **payload})
+            except Exception:
+                # A buggy callback must never break the refresh — just log.
+                logger.exception("force_refresh progress callback raised")
+
+        result = SweepResult(started_at_utc=_now_iso(), finished_at_utc=_now_iso())
+        summary: dict[str, Any] = {
+            "status": "running",
+            "tier1_synthesized": False,
+            "tier2_synthesized": False,
+            "started_at": result.started_at_utc,
+        }
+
+        # Phase 1: tier-1 (cards)
+        _emit("cards_running")
+        try:
+            await self._run_tier1_async(result, force=True)
+        except Exception as exc:
+            logger.exception("force_refresh: tier-1 raised")
+            err = f"{type(exc).__name__}: {exc}"
+            summary.update(
+                status="failed",
+                failed_phase="cards",
+                error=err,
+                finished_at=_now_iso(),
+            )
+            _emit("failed", phase="cards", error=err)
+            return summary
+        summary["tier1_synthesized"] = bool(result.tier1_synthesized)
+
+        # Phase 2: tier-2 (readout)
+        _emit("readout_running")
+        try:
+            await self._run_tier2_async(result, force=True)
+        except Exception as exc:
+            logger.exception("force_refresh: tier-2 raised")
+            err = f"{type(exc).__name__}: {exc}"
+            summary.update(
+                status="failed",
+                failed_phase="readout",
+                error=err,
+                finished_at=_now_iso(),
+            )
+            _emit("failed", phase="readout", error=err)
+            return summary
+        summary["tier2_synthesized"] = bool(result.tier2_synthesized)
+
+        summary.update(status="completed", finished_at=_now_iso())
+        # Surface the latest readout id (if any) so the UI can deep-link.
+        try:
+            from universal_agent.services.mission_control_chief_of_staff import (
+                get_latest_readout,
+            )
+            latest = get_latest_readout()
+            if isinstance(latest, dict):
+                summary["readout_id"] = latest.get("id")
+        except Exception:
+            logger.debug("force_refresh: latest readout lookup failed", exc_info=True)
+        _emit("completed", readout_id=summary.get("readout_id"))
+        return summary
+
+    async def _run_tier1_async(self, result: SweepResult, *, force: bool = False) -> None:
         """Tier-1 LLM card-discovery pass.
 
         Always-writes a `__tier1_meta__` row at the end (success, skip,
@@ -300,6 +393,10 @@ class MissionControlSweeper:
         what happened on the last attempt. Without this, a silent
         exception leaves operators staring at `tier1_meta: null` with
         no way to diagnose.
+
+        When `force=True` the floor/ceiling cadence gate is bypassed.
+        Used only by the operator-driven `force_refresh_async` path —
+        the natural sweeper loop always passes `force=False`.
         """
         from universal_agent.services.mission_control_db import open_store
         from universal_agent.services.mission_control_tier1 import (
@@ -360,8 +457,12 @@ class MissionControlSweeper:
             ceiling_seconds = self.config.tier1_ceiling_seconds
             floor_seconds = self.config.tier1_floor_seconds
 
-            skip_reason = self._tier1_skip_reason(
-                prior_sig, sig, prior_synth_iso, floor_seconds, ceiling_seconds
+            skip_reason = (
+                None
+                if force
+                else self._tier1_skip_reason(
+                    prior_sig, sig, prior_synth_iso, floor_seconds, ceiling_seconds
+                )
             )
             if skip_reason:
                 last_attempt_summary = f"tier1 skipped: {skip_reason}"
@@ -489,7 +590,7 @@ class MissionControlSweeper:
 
     # ── Tier-2 (Chief-of-Staff) cascade — Phase 3.5 ────────────────────
 
-    async def _run_tier2_async(self, result: SweepResult) -> None:
+    async def _run_tier2_async(self, result: SweepResult, *, force: bool = False) -> None:
         """Tier-2 sweep: refresh the Chief-of-Staff readout when state has
         meaningfully moved.
 
@@ -501,6 +602,9 @@ class MissionControlSweeper:
         Floor: never more than once every floor_seconds. Even if a
         cascade trigger fires, we honor the floor to protect the LLM
         lane from bursting.
+
+        When `force=True` the cascade + floor/ceiling gate is bypassed.
+        Used only by the operator-driven `force_refresh_async` path.
 
         Always-writes a `__tier2_meta__` row so the diagnostics
         endpoint can show last attempt status — same pattern as tier-1.
@@ -522,12 +626,16 @@ class MissionControlSweeper:
             prior_synth_iso = meta_row["state_since"] if meta_row else None
 
             cascade_reason = self._tier2_cascade_reason(result)
-            skip_reason = self._tier2_skip_reason(
-                cascade_reason=cascade_reason,
-                prior_synth_iso=prior_synth_iso,
-                floor_seconds=self.config.tier2_floor_seconds,
-                ceiling_seconds=self.config.tier2_ceiling_seconds,
-            )
+            if force:
+                cascade_reason = cascade_reason or "operator_force_refresh"
+                skip_reason = None
+            else:
+                skip_reason = self._tier2_skip_reason(
+                    cascade_reason=cascade_reason,
+                    prior_synth_iso=prior_synth_iso,
+                    floor_seconds=self.config.tier2_floor_seconds,
+                    ceiling_seconds=self.config.tier2_ceiling_seconds,
+                )
             if skip_reason:
                 self._write_tier2_meta(
                     mc_conn,
