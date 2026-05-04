@@ -8,6 +8,7 @@ import time
 from typing import Any
 
 from universal_agent.codebase_policy import normalize_codebase_access
+from universal_agent import feature_flags
 from universal_agent.ops_config import apply_merge_patch
 
 _MONEY_RE = re.compile(r"\b(pay|purchase|buy|checkout|wire|transfer|invoice|payment)\b", re.IGNORECASE)
@@ -236,11 +237,17 @@ def evaluate_request_against_policy(
     reasons: list[str] = []
 
     if hard_stops.get("no_payments") and "money_movement" in categories:
-        return {
-            "decision": "deny",
-            "categories": categories,
-            "reasons": ["Payments or money movement are blocked by policy."],
-        }
+        # When Stripe Link is enabled, payment requests are handled by Link's
+        # own multi-layer safety stack: bridge guardrails (caller allowlist,
+        # per-call cap, daily budget cap, merchant allowlist) plus user
+        # approval in the Link mobile app.  The gateway hard-deny only fires
+        # when Link is OFF — i.e. no authorized payment channel exists.
+        if not feature_flags.link_enabled():
+            return {
+                "decision": "deny",
+                "categories": categories,
+                "reasons": ["Payments or money movement are blocked by policy (no payment channel enabled)."],
+            }
 
     if hard_stops.get("block_public_posting") and "public_posting" in categories:
         return {
