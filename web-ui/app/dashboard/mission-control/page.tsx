@@ -1562,6 +1562,7 @@ function SnoozeMenu({ onSnooze }: { onSnooze: (d: "1h" | "4h" | "1d" | "1w") => 
 
 function OperatingPosturePanel() {
   const links = [
+    { href: "/dashboard/mission-control/ledger", label: "Knowledge Ledger", detail: "Durable card history — retired/archived cards, recurrence, comments", icon: FileText },
     { href: "/dashboard/events", label: "Event Log", detail: "Raw notifications, diagnostics, and source events", icon: Bell },
     { href: "/dashboard/todolist", label: "Task Hub", detail: "Durable missions, approvals, dispatch, and history", icon: Briefcase },
     { href: "/dashboard/csi", label: "CSI", detail: "Content and signal intelligence workbench", icon: BarChart3 },
