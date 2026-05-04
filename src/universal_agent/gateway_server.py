@@ -8350,7 +8350,10 @@ def _emit_heartbeat_event(payload: dict) -> None:
                     },
                 )
             if dispatch_allowed:
-                _spawn_background_task(_dispatch_heartbeat_to_simone(str(record.get("id") or "")))
+                _spawn_background_task(
+                    _dispatch_heartbeat_to_simone(str(record.get("id") or "")),
+                    task_name="dispatch_heartbeat_to_simone",
+                )
             else:
                 _update_notification_record(
                     str(record.get("id") or ""),
@@ -8476,13 +8479,74 @@ def _broadcast_system_event(session_id: str, event: dict) -> None:
     asyncio.create_task(manager.broadcast(session_id, payload))
 
 
-def _spawn_background_task(coro: Any) -> None:
+def _spawn_background_task(
+    coro: Any,
+    *,
+    task_name: str = "unnamed_background_task",
+) -> None:
+    """Schedule a coroutine on the running event loop and surface any
+    unexpected exception as a `background_task_failed` notification.
+
+    Closes the architectural hole exposed by the 2026-05-01 heartbeat
+    silence: the prior implementation was a naked `loop.create_task`
+    with no error callback, so a failing background task vanished into
+    the asyncio scheduler with zero operator-visible signal.  The
+    callback installed here filters `CancelledError` and
+    `KeyboardInterrupt` (legitimate shutdown signals from long-lived
+    loops like the YouTube playlist watcher and gws event listener) so
+    deploys do not paint the dashboard red.
+    """
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         asyncio.run(coro)
         return
-    loop.create_task(coro)
+    task = loop.create_task(coro)
+
+    def _on_done(t: "asyncio.Task[Any]") -> None:
+        try:
+            exc = t.exception()
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            return
+        if exc is None:
+            return
+        if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)):
+            return
+        try:
+            logger.error(
+                "Background task '%s' failed: %s",
+                task_name,
+                exc,
+                exc_info=exc,
+            )
+        except Exception:
+            pass
+        try:
+            _add_notification(
+                kind="background_task_failed",
+                title=f"Background task '{task_name}' failed",
+                message=f"{type(exc).__name__}: {str(exc)[:240]}",
+                severity="error",
+                requires_action=True,
+                metadata={
+                    "task_name": task_name,
+                    "exception_type": type(exc).__name__,
+                    "error": str(exc)[:240],
+                },
+            )
+        except Exception:
+            try:
+                logger.exception(
+                    "Failed to emit background_task_failed notification "
+                    "for task '%s'",
+                    task_name,
+                )
+            except Exception:
+                pass
+
+    task.add_done_callback(_on_done)
 
 
 def _vp_event_bridge_prime_cursor_to_latest() -> None:
@@ -11184,6 +11248,11 @@ _HEALTH_ALERT_NOTIFICATION_KINDS: frozenset[str] = frozenset({
     # is `kind`, so we further scope by per-kind metadata downstream.
     "cron_run_failed",
     "autonomous_run_failed",
+    # Background-task / service-startup failures (Phase 4): kind-upsert
+    # so a flapping startup or a repeatedly-failing long-lived task
+    # collapses to one live row instead of accumulating a wall of alerts.
+    "background_task_failed",
+    "service_startup_failed",
 })
 
 # Heartbeat mediation notification kinds that use classification-based upsert.
@@ -11518,7 +11587,8 @@ def _hook_notification_sink(payload: dict[str, Any]) -> None:
                     "session_id": str(notification.get("session_id") or payload.get("session_id") or "").strip() or None,
                     "metadata": metadata if isinstance(metadata, dict) else {},
                 }
-            )
+            ),
+            task_name="process_heartbeat_investigation_notification",
         )
 
 
@@ -13822,8 +13892,55 @@ async def _run_after_deployment_window(
     component: str,
     coro_factory: Callable[[], Awaitable[Any]],
 ) -> Any:
+    """Wait for the deployment window to close, then await the supplied
+    factory coroutine.  Any exception raised by the inner coroutine is
+    surfaced as a `service_startup_failed` notification (with the
+    component name) and then swallowed so the outer
+    `_spawn_background_task` callback does not double-fire a generic
+    `background_task_failed` alert for the same condition.
+
+    This is the architectural fix for the 2026-05-01 heartbeat silence
+    pattern: a startup failure now produces a kind-specific operator
+    alert within seconds instead of vanishing into asyncio.
+    """
     await _wait_for_deployment_window_to_close(component)
-    return await coro_factory()
+    try:
+        return await coro_factory()
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        try:
+            logger.error(
+                "Service '%s' failed to start: %s",
+                component,
+                exc,
+                exc_info=exc,
+            )
+        except Exception:
+            pass
+        try:
+            _add_notification(
+                kind="service_startup_failed",
+                title=f"Service '{component}' failed to start",
+                message=f"{type(exc).__name__}: {str(exc)[:240]}",
+                severity="error",
+                requires_action=True,
+                metadata={
+                    "component": component,
+                    "exception_type": type(exc).__name__,
+                    "error": str(exc)[:240],
+                },
+            )
+        except Exception:
+            try:
+                logger.exception(
+                    "Failed to emit service_startup_failed notification "
+                    "for component '%s'",
+                    component,
+                )
+            except Exception:
+                pass
+        return None
 
 
 # =============================================================================
@@ -13994,7 +14111,8 @@ async def lifespan(app: FastAPI):
 
         if _deployment_window_active():
             _spawn_background_task(
-                _run_after_deployment_window("heartbeat_service", _start_heartbeat_service)
+                _run_after_deployment_window("heartbeat_service", _start_heartbeat_service),
+                task_name="heartbeat_service_startup",
             )
         else:
             await _start_heartbeat_service()
@@ -14021,7 +14139,8 @@ async def lifespan(app: FastAPI):
 
         if _deployment_window_active():
             _spawn_background_task(
-                _run_after_deployment_window("todo_dispatch_service", _start_todo_dispatch_service)
+                _run_after_deployment_window("todo_dispatch_service", _start_todo_dispatch_service),
+                task_name="todo_dispatch_service_startup",
             )
         else:
             await _start_todo_dispatch_service()
@@ -14086,7 +14205,10 @@ async def lifespan(app: FastAPI):
             agent_event_sink=_cron_agent_event_sink,
         )
         if _deployment_window_active():
-            _spawn_background_task(_run_after_deployment_window("cron_service", _cron_service.start))
+            _spawn_background_task(
+                _run_after_deployment_window("cron_service", _cron_service.start),
+                task_name="cron_service_startup",
+            )
         else:
             await _cron_service.start()
         try:
@@ -14171,7 +14293,8 @@ async def lifespan(app: FastAPI):
         _run_after_deployment_window(
             "youtube_playlist_watcher",
             _startup_start_youtube_playlist_watcher,
-        )
+        ),
+        task_name="youtube_playlist_watcher_startup",
     )
 
     # --- gws Workspace Event Listener (Phase 5 — Gmail polling) ---
@@ -14187,7 +14310,8 @@ async def lifespan(app: FastAPI):
         notification_sink=_hook_notification_sink,
     )
     _spawn_background_task(
-        _run_after_deployment_window("gws_event_listener", _startup_start_gws_event_listener)
+        _run_after_deployment_window("gws_event_listener", _startup_start_gws_event_listener),
+        task_name="gws_event_listener_startup",
     )
 
     # --- AgentMail Service (Simone's native inbox) ---
@@ -14364,14 +14488,16 @@ async def lifespan(app: FastAPI):
         priority_dispatch_fn=_priority_dispatch_for_email,
     )
     _spawn_background_task(
-        _run_after_deployment_window("agentmail_service", _startup_start_agentmail_service)
+        _run_after_deployment_window("agentmail_service", _startup_start_agentmail_service),
+        task_name="agentmail_service_startup",
     )
 
     _spawn_background_task(
         _run_after_deployment_window(
             "interrupted_youtube_recovery",
             lambda: _startup_recover_interrupted_youtube_sessions(WORKSPACES_DIR),
-        )
+        ),
+        task_name="interrupted_youtube_recovery_startup",
     )
 
     if _scheduling_projection.enabled:
@@ -14396,7 +14522,8 @@ async def lifespan(app: FastAPI):
                     ),
                     todo_dispatch_service=_todo_dispatch_service,
                 ),
-            )
+            ),
+            task_name="idle_dispatch_loop_startup",
         )
         logger.info("🔄 Idle dispatch loop background task started")
     except Exception:
