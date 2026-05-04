@@ -35,6 +35,7 @@ import pytest
 from universal_agent.services.mission_control_db import open_store
 from universal_agent.services.mission_control_intelligence_sweeper import (
     MissionControlSweeper,
+    SweepResult,
     SweeperConfig,
 )
 
@@ -446,3 +447,237 @@ def test_get_mission_control_refresh_returns_job(monkeypatch):
     body = resp.json()
     assert body["job_id"] == "abc123"
     assert body["status"] == "cards_running"
+
+
+# ── Tier-0 green-retirement: stale infrastructure cards ────────────────
+
+
+@pytest.mark.asyncio
+async def test_tier0_retires_infrastructure_card_when_tile_returns_to_green(
+    tmp_path: Path, monkeypatch
+):
+    """Production bug seen 2026-05-04: the CSI Ingester tile flipped from
+    red back to green, but the auto-created "CSI Ingester Silent 48+
+    Hours" card stayed live. Brief synthesis kept reading it. Pin the
+    fix: when tier-0 sees a tile in green AND a live infra card exists
+    for that subject, retire the card on the same sweep.
+    """
+    db_path = tmp_path / "mc.db"
+    monkeypatch.setenv("UA_MISSION_CONTROL_INTEL_DB_PATH", str(db_path))
+    monkeypatch.setenv("UA_MC_PHASE_1_ENABLED", "1")
+
+    # Seed: prior tile state is RED for csi_ingester. A live infra card
+    # exists (created by an earlier sweep when the tile flipped red).
+    from universal_agent.services.mission_control_cards import (
+        CardUpsert,
+        SEVERITY_CRITICAL,
+        SUBJECT_INFRASTRUCTURE,
+        get_card,
+        live_card_exists_for_subject,
+        make_card_id,
+        upsert_card,
+    )
+    mc_conn = open_store(db_path)
+    try:
+        mc_conn.execute(
+            """
+            INSERT INTO mission_control_tile_states (
+                tile_id, current_state, state_since, last_signature,
+                last_checked_at, current_annotation
+            ) VALUES (?, 'red', ?, 'old-sig', ?, 'silent for 48h')
+            """,
+            (
+                "csi_ingester",
+                (datetime.now(timezone.utc) - timedelta(hours=50)).isoformat(),
+                (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat(),
+            ),
+        )
+        upsert_card(
+            mc_conn,
+            CardUpsert(
+                subject_kind=SUBJECT_INFRASTRUCTURE,
+                subject_id="infra:csi_ingester",
+                title="CSI Ingester Silent 48+ Hours",
+                narrative="Tile transitioned to red on May 3.",
+                why_it_matters="Operator first signal that a subsystem changed state.",
+                severity=SEVERITY_CRITICAL,
+                tags=["infrastructure", "csi"],
+                synthesis_model="synth",
+            ),
+        )
+        assert live_card_exists_for_subject(
+            mc_conn, SUBJECT_INFRASTRUCTURE, "infra:csi_ingester"
+        )
+    finally:
+        mc_conn.close()
+
+    # Force the CSI tile to compute as green for this sweep by patching
+    # its compute_state to return green directly (avoids needing real
+    # activity_events seeding).
+    from universal_agent.services import mission_control_tiles
+    from universal_agent.services.mission_control_tiles import (
+        COLOR_GREEN,
+        CsiIngesterTile,
+        TileState,
+    )
+
+    def green_state(self, conn):
+        return TileState(
+            color=COLOR_GREEN,
+            one_line_status="2 events recent, last 60s ago",
+            evidence={"events_24h": 2, "age_seconds": 60},
+        )
+
+    monkeypatch.setattr(CsiIngesterTile, "compute_state", green_state)
+
+    # Restrict tiles list to csi_ingester only so other tiles don't open
+    # their own DB connections we don't care about.
+    monkeypatch.setattr(
+        mission_control_tiles, "_ALL_TILE_CLASSES", [CsiIngesterTile]
+    )
+
+    sweeper = MissionControlSweeper(SweeperConfig())
+    result_obj = SweepResult(started_at_utc="x", finished_at_utc="x")
+    sweeper._run_tier0(result_obj)
+
+    # The transition red→green should be recorded.
+    assert any(
+        t.startswith("csi_ingester:red->green")
+        for t in result_obj.tier0_transitions
+    )
+
+    # The previously-live infra card MUST be retired now.
+    mc_conn = open_store(db_path)
+    try:
+        card = get_card(mc_conn, make_card_id(SUBJECT_INFRASTRUCTURE, "infra:csi_ingester"))
+        assert card is not None
+        assert card["current_state"] == "retired", (
+            f"expected card to be retired when tile flipped green, got "
+            f"current_state={card['current_state']}"
+        )
+        assert not live_card_exists_for_subject(
+            mc_conn, SUBJECT_INFRASTRUCTURE, "infra:csi_ingester"
+        )
+    finally:
+        mc_conn.close()
+
+
+@pytest.mark.asyncio
+async def test_tier0_keeps_yellow_or_red_infra_card_alive(
+    tmp_path: Path, monkeypatch
+):
+    """Negative case: a tile that stays yellow (or transitions to yellow)
+    must NOT retire its live infra card. Only the green-retirement path
+    is new; the existing non-green-implies-live-card invariant is
+    untouched."""
+    db_path = tmp_path / "mc.db"
+    monkeypatch.setenv("UA_MISSION_CONTROL_INTEL_DB_PATH", str(db_path))
+    monkeypatch.setenv("UA_MC_PHASE_1_ENABLED", "1")
+
+    from universal_agent.services.mission_control_cards import (
+        CardUpsert,
+        SEVERITY_WARNING,
+        SUBJECT_INFRASTRUCTURE,
+        live_card_exists_for_subject,
+        upsert_card,
+    )
+
+    mc_conn = open_store(db_path)
+    try:
+        mc_conn.execute(
+            """
+            INSERT INTO mission_control_tile_states (
+                tile_id, current_state, state_since, last_signature,
+                last_checked_at, current_annotation
+            ) VALUES ('cron_pipelines', 'yellow', ?, 'sig', ?, 'job failed once')
+            """,
+            (
+                (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(),
+                (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat(),
+            ),
+        )
+        upsert_card(
+            mc_conn,
+            CardUpsert(
+                subject_kind=SUBJECT_INFRASTRUCTURE,
+                subject_id="infra:cron_pipelines",
+                title="Cron Pipelines: 1 job failed",
+                narrative="One scheduled job failed once.",
+                why_it_matters="Operator first signal.",
+                severity=SEVERITY_WARNING,
+                tags=["infrastructure"],
+                synthesis_model="synth",
+            ),
+        )
+    finally:
+        mc_conn.close()
+
+    from universal_agent.services import mission_control_tiles
+    from universal_agent.services.mission_control_tiles import (
+        COLOR_YELLOW,
+        CronPipelinesTile,
+        TileState,
+    )
+
+    def still_yellow(self, conn):
+        return TileState(
+            color=COLOR_YELLOW,
+            one_line_status="1 job failed 1x in 24h",
+            evidence={"failures_by_job": {"x": 1}},
+        )
+
+    monkeypatch.setattr(CronPipelinesTile, "compute_state", still_yellow)
+    monkeypatch.setattr(
+        mission_control_tiles, "_ALL_TILE_CLASSES", [CronPipelinesTile]
+    )
+
+    sweeper = MissionControlSweeper(SweeperConfig())
+    sweeper._run_tier0(SweepResult(started_at_utc="x", finished_at_utc="x"))
+
+    mc_conn = open_store(db_path)
+    try:
+        assert live_card_exists_for_subject(
+            mc_conn, SUBJECT_INFRASTRUCTURE, "infra:cron_pipelines"
+        ), "yellow tile must keep its infra card live"
+    finally:
+        mc_conn.close()
+
+
+# ── force_refresh_async runs tier-0 to capture green-flips ─────────────
+
+
+@pytest.mark.asyncio
+async def test_force_refresh_runs_tier0_before_tier1(
+    tmp_path: Path, monkeypatch
+):
+    """Operator-driven refresh must run tier-0 FIRST. Otherwise tier-1
+    card-discovery sees stale infrastructure cards (an infra card from a
+    previous yellow/red state that no longer reflects the live tile)
+    and the brief synthesizes the same stale narrative again. Pinning
+    the call order locks in the production fix."""
+    monkeypatch.setenv("UA_MISSION_CONTROL_INTEL_DB_PATH", str(tmp_path / "mc.db"))
+
+    sequence: list[str] = []
+
+    def fake_tier0(self_, result):
+        sequence.append("tier0")
+        result.tier0_checked = True
+
+    async def fake_tier1(self_, result, *, force=False):
+        sequence.append("tier1")
+        result.tier1_synthesized = True
+
+    async def fake_tier2(self_, result, *, force=False):
+        sequence.append("tier2")
+        result.tier2_synthesized = True
+
+    monkeypatch.setattr(MissionControlSweeper, "_run_tier0", fake_tier0)
+    monkeypatch.setattr(MissionControlSweeper, "_run_tier1_async", fake_tier1)
+    monkeypatch.setattr(MissionControlSweeper, "_run_tier2_async", fake_tier2)
+
+    sweeper = MissionControlSweeper(SweeperConfig())
+    summary = await sweeper.force_refresh_async()
+
+    assert sequence == ["tier0", "tier1", "tier2"]
+    assert summary["status"] == "completed"
+

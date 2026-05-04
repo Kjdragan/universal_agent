@@ -36,6 +36,8 @@ from universal_agent.services.mission_control_cards import (
     SUBJECT_INFRASTRUCTURE,
     CardUpsert,
     live_card_exists_for_subject,
+    make_card_id,
+    retire_card,
     upsert_card,
 )
 from universal_agent.services.mission_control_db import is_phase_enabled, open_store
@@ -243,6 +245,32 @@ class MissionControlSweeper:
                         except Exception as exc:
                             logger.exception("auto-card creation failed for %s", tile.name)
                             result.errors.append(f"auto-card {tile.name}: {exc}")
+                # Mirror invariant: a GREEN tile MUST NOT have a stale live
+                # infra card from a prior yellow/red state. Without this
+                # retirement step, infra cards become immortal — production
+                # bug 2026-05-04 had a CSI Ingester "Silent 48+ Hours" card
+                # surviving long after the tile flipped back to green,
+                # which kept poisoning the Chief-of-Staff brief synthesis.
+                # Tier-1 explicitly skips infrastructure cards on retirement
+                # ("owned by tier-0"), so tier-0 has to do this itself.
+                elif state.color == COLOR_GREEN:
+                    if live_card_exists_for_subject(
+                        mc_conn, SUBJECT_INFRASTRUCTURE, f"infra:{tile.name}"
+                    ):
+                        try:
+                            retire_card(
+                                mc_conn,
+                                make_card_id(
+                                    SUBJECT_INFRASTRUCTURE, f"infra:{tile.name}"
+                                ),
+                            )
+                        except Exception as exc:
+                            logger.exception(
+                                "infra card retire failed for %s", tile.name
+                            )
+                            result.errors.append(
+                                f"retire-on-green {tile.name}: {exc}"
+                            )
         finally:
             data_conn.close()
             mc_conn.close()
@@ -332,10 +360,26 @@ class MissionControlSweeper:
         result = SweepResult(started_at_utc=_now_iso(), finished_at_utc=_now_iso())
         summary: dict[str, Any] = {
             "status": "running",
+            "tier0_checked": False,
             "tier1_synthesized": False,
             "tier2_synthesized": False,
             "started_at": result.started_at_utc,
         }
+
+        # Phase 0: tier-0 — recompute tile colors AND retire infra cards
+        # for tiles that have flipped back to green. Without this, tier-1
+        # would discover stale infra cards from a prior yellow/red state
+        # and tier-2 would synthesize a brief that contradicts the live
+        # tile strip. Production bug 2026-05-04. Failures here are
+        # non-fatal: we still try tier-1/tier-2 so the operator sees as
+        # much fresh state as possible.
+        try:
+            self._run_tier0(result)
+            summary["tier0_checked"] = True
+        except Exception as exc:
+            logger.exception("force_refresh: tier-0 raised")
+            # Surface as a soft failure — keep going to tier-1/tier-2.
+            result.errors.append(f"force_refresh_tier0: {exc}")
 
         # Phase 1: tier-1 (cards)
         _emit("cards_running")
