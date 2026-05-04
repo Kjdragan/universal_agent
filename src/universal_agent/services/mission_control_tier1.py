@@ -29,17 +29,15 @@ See docs/02_Subsystems/Mission_Control_Intelligence_System.md §2 + §3.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import hashlib
 import json
 import logging
 import os
 import sqlite3
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from universal_agent.services.mission_control_cards import (
-    CARD_STATE_LIVE,
     SEVERITY_CRITICAL,
     SEVERITY_INFORMATIONAL,
     SEVERITY_SUCCESS,

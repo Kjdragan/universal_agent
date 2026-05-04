@@ -390,8 +390,11 @@ class VpWorkerLoop:
 
         # Mark Task Hub item as in_progress when VP worker claims execution
         try:
-            from universal_agent.durable.db import get_activity_db_path, connect_runtime_db
             from universal_agent import task_hub
+            from universal_agent.durable.db import (
+                connect_runtime_db,
+                get_activity_db_path,
+            )
             th_conn = connect_runtime_db(get_activity_db_path())
             task_hub.ensure_schema(th_conn)
             task_hub.upsert_item(th_conn, {
@@ -444,8 +447,11 @@ class VpWorkerLoop:
 
         # Sync terminal status to Task Hub for Kanban board visibility
         try:
-            from universal_agent.durable.db import get_activity_db_path, connect_runtime_db
             from universal_agent import task_hub
+            from universal_agent.durable.db import (
+                connect_runtime_db,
+                get_activity_db_path,
+            )
             _th_status_map = {
                 "vp.mission.completed": task_hub.TASK_STATUS_COMPLETED,
                 "vp.mission.failed": task_hub.TASK_STATUS_OPEN,

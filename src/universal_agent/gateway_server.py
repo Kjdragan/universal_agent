@@ -14456,7 +14456,9 @@ async def lifespan(app: FastAPI):
     # tick() short-circuits anyway, but we skip starting the loop entirely
     # to avoid the per-minute log noise during the rollout window.
     try:
-        from universal_agent.services.mission_control_db import is_phase_enabled as _mc_is_phase_enabled
+        from universal_agent.services.mission_control_db import (
+            is_phase_enabled as _mc_is_phase_enabled,
+        )
         from universal_agent.services.mission_control_intelligence_sweeper import (
             run_sweeper_loop as _mc_run_sweeper_loop,
         )
@@ -23081,7 +23083,9 @@ async def dashboard_mission_control_tiles():
     """
     try:
         from universal_agent.services.mission_control_db import open_store as _mc_open
-        from universal_agent.services.mission_control_tiles import all_tiles as _mc_all_tiles
+        from universal_agent.services.mission_control_tiles import (
+            all_tiles as _mc_all_tiles,
+        )
     except Exception as exc:
         return {
             "status": "error",
@@ -23167,7 +23171,9 @@ async def dashboard_mission_control_cards(limit: int = 50):
     is final — Phase 2 just produces more cards.
     """
     try:
-        from universal_agent.services.mission_control_cards import list_live_cards as _mc_list_live
+        from universal_agent.services.mission_control_cards import (
+            list_live_cards as _mc_list_live,
+        )
         from universal_agent.services.mission_control_db import open_store as _mc_open
     except Exception as exc:
         return {"status": "error", "error": f"mission control imports unavailable: {exc}", "cards": []}
@@ -23303,8 +23309,10 @@ async def dashboard_mission_control_diagnostics():
     but tier-1 isn't firing" without VPS log access.
     """
     try:
-        from universal_agent.services.mission_control_db import is_phase_enabled as _mc_phase
-        from universal_agent.services.mission_control_db import open_store as _mc_open
+        from universal_agent.services.mission_control_db import (
+            is_phase_enabled as _mc_phase,
+            open_store as _mc_open,
+        )
     except Exception as exc:
         return {"status": "error", "error": f"mission control imports unavailable: {exc}"}
 
@@ -23478,7 +23486,9 @@ def _mc_card_feedback_dispatch(card_id: str, op):
 @app.post("/api/v1/dashboard/mission-control/cards/{card_id}/thumbs")
 async def dashboard_mission_control_card_thumbs(card_id: str, body: _MCFeedbackThumbsBody):
     """Set thumbs feedback on a card. direction in {"up","down",null}."""
-    from universal_agent.services.mission_control_cards import set_card_thumbs as _mc_set_thumbs
+    from universal_agent.services.mission_control_cards import (
+        set_card_thumbs as _mc_set_thumbs,
+    )
 
     return _mc_card_feedback_dispatch(card_id, lambda c, cid: _mc_set_thumbs(c, cid, body.direction))
 
@@ -23496,7 +23506,9 @@ async def dashboard_mission_control_card_comment(card_id: str, body: _MCFeedback
     """Append a durable operator comment to a card. Comments are
     timestamped, never truncated, and feed back into future LLM
     synthesis on the same subject_id."""
-    from universal_agent.services.mission_control_cards import add_card_comment as _mc_comment
+    from universal_agent.services.mission_control_cards import (
+        add_card_comment as _mc_comment,
+    )
 
     return _mc_card_feedback_dispatch(card_id, lambda c, cid: _mc_comment(c, cid, body.text))
 
@@ -23505,7 +23517,9 @@ async def dashboard_mission_control_card_comment(card_id: str, body: _MCFeedback
 async def dashboard_mission_control_card_view(card_id: str):
     """Stamp last_viewed_at for the operator (Phase 2 F#6). Used by the
     UI when a card opens / is rendered above-the-fold."""
-    from universal_agent.services.mission_control_cards import mark_card_viewed as _mc_view
+    from universal_agent.services.mission_control_cards import (
+        mark_card_viewed as _mc_view,
+    )
 
     return _mc_card_feedback_dispatch(card_id, lambda c, cid: _mc_view(c, cid))
 
