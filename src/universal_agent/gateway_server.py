@@ -17952,6 +17952,7 @@ def _register_system_cron_job(
     enabled: bool,
     cron_env_var: str | None = None,
     timezone_env_var: str | None = None,
+    required_secrets: list[str] | None = None,
 ) -> Optional[dict[str, Any]]:
     """Idempotent boot-time helper for proactive cron jobs.
 
@@ -17975,12 +17976,14 @@ def _register_system_cron_job(
         else default_timezone
     ) or default_timezone
     workspace_dir = str(WORKSPACES_DIR / f"cron_{system_job}")
-    metadata = {
+    metadata: dict[str, Any] = {
         "system_job": system_job,
         "autonomous": True,
         "source": "system",
         "session_id": f"cron_{system_job}",
     }
+    if required_secrets:
+        metadata["required_secrets"] = list(required_secrets)
     updates = {
         "user_id": "cron_system",
         "workspace_dir": workspace_dir,
@@ -18037,6 +18040,10 @@ def _ensure_morning_briefing_cron_job() -> Optional[dict[str, Any]]:
         enabled=_proactive_cron_enabled("UA_MORNING_BRIEFING_ENABLED"),
         cron_env_var="UA_MORNING_BRIEFING_CRON",
         timezone_env_var="UA_MORNING_BRIEFING_TIMEZONE",
+        # `briefings_agent.py:23-26` sys.exit(1) when this is unset.
+        # Declare it so the Phase 5 pre-flight surfaces a structured
+        # cron_run_failed notification instead of a generic exit code.
+        required_secrets=["UA_OPS_TOKEN"],
     )
 
 
