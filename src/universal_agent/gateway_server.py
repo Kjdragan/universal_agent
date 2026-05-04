@@ -6963,8 +6963,8 @@ def _prepare_tracked_chat_execution(
             claimed["_routing"] = {
                 "agent_id": "simone",
                 "confidence": "runtime_judgment",
-                "reason": "Direct chat requests enter Simone first; Simone should choose CODIE or ATLAS by task intent and VP capacity.",
-                "should_delegate": True,
+                "reason": "Direct chat-panel messages address Simone herself — execute inline using her own skills (AgentMail, Task Hub, web tools, etc.). Only delegate to CODIE/ATLAS when the user explicitly asks for it or the work clearly requires a VP-only capability.",
+                "should_delegate": False,
             }
             activity = task_hub.get_agent_activity(conn)
         finally:
