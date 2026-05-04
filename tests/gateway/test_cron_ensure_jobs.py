@@ -342,6 +342,29 @@ def test_ensure_autonomous_daily_briefing_explicit_opt_in_still_works(monkeypatc
     assert len(cron_stub.jobs) == 1
 
 
+def test_ensure_paper_to_podcast_declares_notebooklm_auth_cookie_required(monkeypatch):
+    """G3: paper_to_podcast cron command tells Simone to "create a
+    NotebookLM notebook, add papers as sources, generate audio
+    overview / quiz / flashcards."  All of that requires
+    `NOTEBOOKLM_AUTH_COOKIE_HEADER` (read in
+    `notebooklm_runtime.py:177`).  Declare it so a missing key
+    surfaces as a structured cron_run_failed notification at
+    pre-flight, not as a confusing mid-run NotebookLM-CLI error."""
+    cron_stub = _CronBootstrapStub()
+    monkeypatch.setattr(gateway_server, "_cron_service", cron_stub)
+    monkeypatch.setenv("UA_PAPER_TO_PODCAST_ENABLED", "1")
+
+    gateway_server._ensure_paper_to_podcast_cron_job()
+
+    assert len(cron_stub.jobs) == 1
+    job = cron_stub.jobs[0]
+    required = job.metadata.get("required_secrets") or []
+    assert "NOTEBOOKLM_AUTH_COOKIE_HEADER" in required, (
+        f"paper_to_podcast must declare NOTEBOOKLM_AUTH_COOKIE_HEADER in "
+        f"required_secrets; current metadata: {job.metadata!r}"
+    )
+
+
 def test_ensure_morning_briefing_declares_ua_ops_token_required(monkeypatch):
     """`briefings_agent.py:23-26` does `sys.exit(1)` when UA_OPS_TOKEN
     is missing, with a generic stderr line.  Declaring the secret in

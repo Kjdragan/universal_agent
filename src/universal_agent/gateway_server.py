@@ -17898,6 +17898,15 @@ def _ensure_paper_to_podcast_cron_job() -> Optional[dict[str, Any]]:
         "source": "system",
         "session_id": "cron_paper_to_podcast",
         "skill": "paper-to-podcast-tf",
+        # The paper-to-podcast skill creates a NotebookLM notebook,
+        # adds papers as sources, and generates audio/quiz/flashcards.
+        # All three depend on `NOTEBOOKLM_AUTH_COOKIE_HEADER` (read in
+        # `notebooklm_runtime.py:177`); without it, NotebookLM auth
+        # preflight fails and the run dies mid-flight with a
+        # confusing CLI error.  Declare here so the Phase 5 pre-flight
+        # surfaces a structured `cron_run_failed` notification before
+        # the run starts, naming the missing key.
+        "required_secrets": ["NOTEBOOKLM_AUTH_COOKIE_HEADER"],
     }
     updates = {
         "user_id": "cron_system",
