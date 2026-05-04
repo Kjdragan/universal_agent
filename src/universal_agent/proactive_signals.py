@@ -736,8 +736,9 @@ def _now_iso() -> str:
 async def distill_feedback_to_rules(card_dict: dict[str, Any], feedback_text: str, feedback_tags: list[str] = None) -> None:
     """Asynchronously evaluate raw feedback and update proactive generation rules."""
     import logging
+    import os
 
-    import litellm
+    from anthropic import AsyncAnthropic
 
     from universal_agent.utils.model_resolution import resolve_opus
 
@@ -780,13 +781,33 @@ Respond with ONLY the markdown content for the updated rules file. Do not includ
 """
     model = resolve_opus()
     try:
-        response = await litellm.acompletion(
+        api_key = (
+            os.getenv("ANTHROPIC_API_KEY")
+            or os.getenv("ANTHROPIC_AUTH_TOKEN")
+            or os.getenv("ZAI_API_KEY")
+            or ""
+        ).strip()
+        if not api_key:
+            raise RuntimeError("No Anthropic/ZAI API key available for feedback distiller")
+
+        client_kwargs: dict[str, Any] = {"api_key": api_key}
+        base_url = (os.getenv("ANTHROPIC_BASE_URL") or "").strip()
+        if base_url:
+            client_kwargs["base_url"] = base_url
+
+        client = AsyncAnthropic(**client_kwargs)
+        response = await client.messages.create(
             model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
             max_tokens=5000,  # doubled from 2500 per audit
+            messages=[{"role": "user", "content": prompt}],
         )
-        new_rules = response.choices[0].message.content.strip()
+
+        new_rules = ""
+        for block in response.content:
+            if hasattr(block, "text"):
+                new_rules += block.text
+        new_rules = new_rules.strip()
+
         if new_rules.startswith("```md"):
             new_rules = new_rules[5:]
         if new_rules.startswith("```markdown"):
@@ -801,3 +822,4 @@ Respond with ONLY the markdown content for the updated rules file. Do not includ
         logger.info("Successfully distilled feedback into generation_rules.md")
     except Exception as exc:
         logger.error(f"Failed to distill feedback: {exc}", exc_info=True)
+

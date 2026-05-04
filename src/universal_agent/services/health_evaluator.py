@@ -2,16 +2,16 @@
 health_evaluator.py — LLM-powered evaluator for the heartbeat proactive advisor cycle.
 
 This module intercepts the deterministic snapshot created by `build_morning_report()`,
-compares it against the `Health_Checks_Lessons_Learned.md` document, and distills 
-it into actionable, noise-free directives for Simone using standard `litellm` calls.
+compares it against the `Health_Checks_Lessons_Learned.md` document, and distills
+it into actionable, noise-free directives for Simone using the Anthropic SDK
+(routed via Z.AI's emulated Anthropic endpoint).
 """
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict
-
-import litellm
 
 from universal_agent.utils.model_resolution import resolve_opus
 
@@ -90,14 +90,34 @@ async def evaluate_health_snapshot(raw_report_dict: dict[str, Any]) -> Dict[str,
     # justified by output quality.
     model = resolve_opus()
     try:
-        response = await litellm.acompletion(
+        from anthropic import AsyncAnthropic
+
+        api_key = (
+            os.getenv("ANTHROPIC_API_KEY")
+            or os.getenv("ANTHROPIC_AUTH_TOKEN")
+            or os.getenv("ZAI_API_KEY")
+            or ""
+        ).strip()
+        if not api_key:
+            raise RuntimeError("No Anthropic/ZAI API key available for health evaluator")
+
+        client_kwargs: dict[str, Any] = {"api_key": api_key}
+        base_url = (os.getenv("ANTHROPIC_BASE_URL") or "").strip()
+        if base_url:
+            client_kwargs["base_url"] = base_url
+
+        client = AsyncAnthropic(**client_kwargs)
+        response = await client.messages.create(
             model=model,
+            max_tokens=2000,  # doubled from 1000 per audit — escalation reasoning needs space
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.0,
-            max_tokens=2000,  # doubled from 1000 per audit — escalation reasoning needs space to enumerate directives + rationale
         )
-        
-        raw_output = response.choices[0].message.content.strip()
+
+        raw_output = ""
+        for block in response.content:
+            if hasattr(block, "text"):
+                raw_output += block.text
+        raw_output = raw_output.strip()
         
         # Cleanup markdown formatting if the model still wrapped it
         if raw_output.startswith("```json"):

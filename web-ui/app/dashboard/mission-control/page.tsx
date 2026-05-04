@@ -88,6 +88,66 @@ type ChiefOfStaffPayload = {
   journal?: Array<{ id: string; generated_at_utc: string; summary: string; readout_id: string }>;
 };
 
+// Mission Control tier-0 tile strip (Phase 1B). Tiles come from
+// /api/v1/dashboard/mission-control/tiles, written by the backend
+// sweeper. Color vocabulary mirrors the schema CHECK constraint.
+type MissionControlTile = {
+  tile_id: string;
+  display_name: string;
+  current_state: "green" | "yellow" | "red" | "unknown";
+  one_line_status: string;
+  state_since?: string | null;
+  last_checked_at?: string | null;
+  evidence_payload?: Record<string, unknown>;
+  auto_action_class?: "A" | "B" | "C" | null;
+};
+
+type MissionControlTilesPayload = {
+  status: string;
+  generated_at?: string;
+  tiles: MissionControlTile[];
+};
+
+// Tier-1 narrative card payload (Phase 2). The /cards endpoint hydrates
+// JSON columns server-side, so consumers get parsed objects.
+type MissionControlCardEvidenceRef = {
+  kind?: string;
+  id?: string;
+  uri?: string;
+  label?: string;
+};
+
+type MissionControlCardComment = { ts?: string; text?: string };
+
+type MissionControlCard = {
+  card_id: string;
+  subject_kind: string;
+  subject_id: string;
+  current_state: string;
+  severity: "critical" | "warning" | "watching" | "informational" | "success" | string;
+  title: string;
+  narrative: string;
+  why_it_matters: string;
+  recommended_next_step?: string | null;
+  tags?: string[];
+  evidence_refs?: MissionControlCardEvidenceRef[];
+  recurrence_count?: number;
+  first_observed_at?: string;
+  last_synthesized_at?: string;
+  synthesis_model?: string;
+  operator_feedback?: {
+    thumbs?: "up" | "down" | null;
+    snoozed_until?: string | null;
+    comments?: MissionControlCardComment[];
+  } | null;
+  last_viewed_at?: Record<string, string> | null;
+};
+
+type MissionControlCardsPayload = {
+  status: string;
+  cards: MissionControlCard[];
+};
+
 // Helper functions
 function formatTs(ts?: string | null): string {
   if (!ts) return "";
@@ -947,6 +1007,768 @@ function OperatorBriefPanel() {
   );
 }
 
+// ── Tier-0 tile strip (Phase 1B) ─────────────────────────────────────
+// Compact at-a-glance health row of nine traffic-light tiles. Each
+// tile expands on click to show evidence + auto-action class. Default
+// renders as a single horizontal row; on narrow viewports it wraps.
+//
+// Implementation contract (per docs/02_Subsystems/Mission_Control_
+// Intelligence_System.md §4): a tile's color comes from cheap
+// Python-side queries; the LLM only enriches yellow/red transitions
+// (Phase 5+). For Phase 1B the `one_line_status` is the mechanical
+// status string; LLM enrichment overlays it later.
+
+function tileColorClasses(state: string): { dot: string; ring: string; bg: string } {
+  switch ((state || "").toLowerCase()) {
+    case "green":
+      return {
+        dot: "bg-emerald-400",
+        ring: "ring-emerald-500/30",
+        bg: "bg-emerald-500/10",
+      };
+    case "yellow":
+      return {
+        dot: "bg-amber-400",
+        ring: "ring-amber-500/40",
+        bg: "bg-amber-500/10",
+      };
+    case "red":
+      return {
+        dot: "bg-red-400",
+        ring: "ring-red-400/40",
+        bg: "bg-red-500/10",
+      };
+    default:
+      return {
+        dot: "bg-muted-foreground/60",
+        ring: "ring-border",
+        bg: "bg-card/40",
+      };
+  }
+}
+
+// Operator-facing label for a tile's mechanical color state. The
+// backend keeps the literal `green/yellow/red` values (stable for SQL,
+// metrics, and tests); the UI translates them to plain-language status.
+function tileStateLabel(state: string): string {
+  switch ((state || "").toLowerCase()) {
+    case "green":
+      return "healthy";
+    case "yellow":
+      return "degraded";
+    case "red":
+      return "critical";
+    default:
+      return "unknown";
+  }
+}
+
+function TileStripPanel() {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<MissionControlTilesPayload | null>(null);
+  const [expandedTileId, setExpandedTileId] = useState<string | null>(null);
+  const { refreshKey } = useContext(RefreshContext);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/dashboard/mission-control/tiles`, {
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`Failed to load: ${res.status}`);
+      setData((await res.json()) as MissionControlTilesPayload);
+    } catch (err: any) {
+      setError(err?.message || "Failed to load Mission Control tiles");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void load();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [load, refreshKey]);
+
+  if (loading && !data) {
+    return (
+      <div className="rounded-none border border-white/10 bg-[#0b1326]/70 p-3 backdrop-blur-md">
+        <div className="grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-9">
+          {Array.from({ length: 9 }).map((_, i) => (
+            <Skeleton key={i} className="h-12 w-full" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const tiles = data?.tiles ?? [];
+
+  return (
+    <div className="rounded-none border border-white/10 bg-[#0b1326]/70 p-3 backdrop-blur-md">
+      {error && (
+        <div className="mb-2 rounded border border-red-500/25 bg-red-500/10 p-2 text-xs text-red-300">
+          {error}
+        </div>
+      )}
+      <div className="grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-9">
+        {tiles.map((tile) => {
+          const cls = tileColorClasses(tile.current_state);
+          const expanded = expandedTileId === tile.tile_id;
+          return (
+            <button
+              key={tile.tile_id}
+              onClick={() => setExpandedTileId(expanded ? null : tile.tile_id)}
+              className={`min-w-0 rounded-md border border-border/40 ${cls.bg} px-2 py-2 text-left transition-colors hover:border-border ring-1 ${cls.ring}`}
+              title={`${tile.display_name} — ${tileStateLabel(tile.current_state)}${tile.one_line_status ? ` · ${tile.one_line_status}` : ""}`}
+            >
+              <div className="flex items-center gap-1.5">
+                <span className={`inline-block h-2 w-2 flex-shrink-0 rounded-full ${cls.dot}`} />
+                <span className="truncate text-[11px] font-medium text-foreground/85">
+                  {tile.display_name}
+                </span>
+              </div>
+              <p className="mt-0.5 truncate text-[10px] leading-tight text-muted-foreground">
+                {tile.one_line_status || "no data yet"}
+              </p>
+            </button>
+          );
+        })}
+      </div>
+      {expandedTileId && (
+        <ExpandedTileDetail
+          tile={tiles.find((t) => t.tile_id === expandedTileId)}
+          onClose={() => setExpandedTileId(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function ExpandedTileDetail({
+  tile,
+  onClose,
+}: {
+  tile?: MissionControlTile;
+  onClose: () => void;
+}) {
+  if (!tile) return null;
+  const cls = tileColorClasses(tile.current_state);
+  return (
+    <div className={`mt-3 rounded border border-border/50 ${cls.bg} p-3`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-foreground/90">
+            {tile.display_name} — <span className="capitalize">{tileStateLabel(tile.current_state)}</span>
+          </p>
+          <p className="mt-1 text-xs text-foreground/80">{tile.one_line_status}</p>
+          <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-muted-foreground">
+            {tile.state_since && <span>state since {tile.state_since}</span>}
+            {tile.last_checked_at && <span>checked {tile.last_checked_at}</span>}
+            {tile.auto_action_class && (
+              <span>auto-action class: {tile.auto_action_class}</span>
+            )}
+          </div>
+          {tile.evidence_payload && Object.keys(tile.evidence_payload).length > 0 && (
+            <details className="mt-2">
+              <summary className="cursor-pointer text-[11px] text-primary/80">
+                Evidence
+              </summary>
+              <pre className="mt-1 max-h-64 overflow-y-auto whitespace-pre-wrap rounded border border-border/40 bg-background/50 p-2 text-[10px] leading-relaxed text-muted-foreground">
+                {JSON.stringify(tile.evidence_payload, null, 2)}
+              </pre>
+            </details>
+          )}
+        </div>
+        <button
+          onClick={onClose}
+          className="rounded border border-border bg-background/40 px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-card/60 hover:text-foreground/80"
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Tier-1 narrative cards (Phase 2) ────────────────────────────────────
+// LLM-discovered cards keyed on stable subject entities. Cards retire
+// into the Knowledge Ledger when no longer relevant; revival preserves
+// card_id continuity. Operator feedback (thumbs/snooze/comment) shapes
+// future synthesis.
+
+function severityBadge(severity: string): { label: string; cls: string } {
+  switch ((severity || "").toLowerCase()) {
+    case "critical":
+      return { label: "critical", cls: "bg-red-500/15 text-red-300 border-red-500/30" };
+    case "warning":
+      return { label: "warning", cls: "bg-accent/15 text-accent border-accent/30" };
+    case "watching":
+      return { label: "watching", cls: "bg-primary/15 text-primary border-primary/30" };
+    case "success":
+      return { label: "success", cls: "bg-primary/10 text-primary border-primary/20" };
+    default:
+      return { label: severity || "informational", cls: "bg-card/40 text-muted-foreground border-border" };
+  }
+}
+
+type GeneratedPromptResponse = {
+  status: string;
+  card_id: string;
+  prompt_text: string;
+  prompt_text_chars: number;
+  subject_kind: string;
+  subject_id: string;
+};
+
+type DispatchToCodieResponse = {
+  status: string;  // "preview" or "ok"
+  card_id: string;
+  task_id?: string;
+  task_status?: string;
+  prompt_text?: string;
+  prompt_text_chars?: number;
+};
+
+function CardGridPanel() {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<MissionControlCardsPayload | null>(null);
+  const [showSnoozed, setShowSnoozed] = useState(false);
+  const [commentingCardId, setCommentingCardId] = useState<string | null>(null);
+  const [commentDraft, setCommentDraft] = useState("");
+  // Phase 4 action-button state
+  const [promptModal, setPromptModal] = useState<GeneratedPromptResponse | null>(null);
+  const [codieModal, setCodieModal] = useState<{ cardId: string; preview: DispatchToCodieResponse | null; steering: string; sending: boolean } | null>(null);
+  const [actionPending, setActionPending] = useState<string | null>(null);
+  const { refreshKey } = useContext(RefreshContext);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/dashboard/mission-control/cards?limit=50`, {
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`Failed to load cards: ${res.status}`);
+      setData((await res.json()) as MissionControlCardsPayload);
+    } catch (err: any) {
+      setError(err?.message || "Failed to load Mission Control cards");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) void load(); });
+    return () => { cancelled = true; };
+  }, [load, refreshKey]);
+
+  const sendFeedback = useCallback(async (cardId: string, path: string, body: any) => {
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/v1/dashboard/mission-control/cards/${encodeURIComponent(cardId)}/${path}`,
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
+      );
+      if (!res.ok) throw new Error(`${path} failed: ${res.status}`);
+      void load();  // refresh card state
+    } catch (err: any) {
+      console.error("MC feedback failed", err);
+    }
+  }, [load]);
+
+  const submitComment = useCallback(async () => {
+    if (!commentingCardId || !commentDraft.trim()) return;
+    await sendFeedback(commentingCardId, "comment", { text: commentDraft.trim() });
+    setCommentDraft("");
+    setCommentingCardId(null);
+  }, [commentingCardId, commentDraft, sendFeedback]);
+
+  // Phase 4: Generate Prompt (zero side effects)
+  const generatePrompt = useCallback(async (cardId: string) => {
+    setActionPending(cardId);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/v1/dashboard/mission-control/cards/${encodeURIComponent(cardId)}/generate-prompt`,
+        { method: "POST" },
+      );
+      if (!res.ok) throw new Error(`generate-prompt ${res.status}`);
+      const payload = (await res.json()) as GeneratedPromptResponse;
+      setPromptModal(payload);
+    } catch (err: any) {
+      console.error("MC generate-prompt failed", err);
+      alert(`Generate prompt failed: ${err?.message || err}`);
+    } finally {
+      setActionPending(null);
+    }
+  }, []);
+
+  // Phase 4: Send to Codie — opens preview flyout first
+  const openCodieFlyout = useCallback(async (cardId: string) => {
+    setActionPending(cardId);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/v1/dashboard/mission-control/cards/${encodeURIComponent(cardId)}/dispatch-to-codie`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ confirm: false }),
+        },
+      );
+      if (!res.ok) throw new Error(`preview ${res.status}`);
+      const preview = (await res.json()) as DispatchToCodieResponse;
+      setCodieModal({ cardId, preview, steering: "", sending: false });
+    } catch (err: any) {
+      console.error("MC dispatch preview failed", err);
+      alert(`Codie dispatch preview failed: ${err?.message || err}`);
+    } finally {
+      setActionPending(null);
+    }
+  }, []);
+
+  const confirmCodieDispatch = useCallback(async () => {
+    if (!codieModal) return;
+    setCodieModal({ ...codieModal, sending: true });
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/v1/dashboard/mission-control/cards/${encodeURIComponent(codieModal.cardId)}/dispatch-to-codie`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            confirm: true,
+            operator_steering_text: codieModal.steering.trim() || null,
+          }),
+        },
+      );
+      if (!res.ok) throw new Error(`dispatch ${res.status}`);
+      const result = (await res.json()) as DispatchToCodieResponse;
+      alert(`✓ Dispatched to Codie. Task ID: ${result.task_id}`);
+      setCodieModal(null);
+      void load();
+    } catch (err: any) {
+      console.error("MC dispatch failed", err);
+      alert(`Codie dispatch failed: ${err?.message || err}`);
+      setCodieModal(codieModal ? { ...codieModal, sending: false } : null);
+    }
+  }, [codieModal, load]);
+
+  if (loading && !data) {
+    return (
+      <div className="rounded-none border border-white/10 bg-[#0b1326]/70 p-4 backdrop-blur-md">
+        <Skeleton className="h-6 w-1/3" />
+        <Skeleton className="mt-3 h-24 w-full" />
+      </div>
+    );
+  }
+
+  const allCards = data?.cards ?? [];
+  const nowIso = new Date().toISOString();
+  const isSnoozed = (c: MissionControlCard) => {
+    const until = c.operator_feedback?.snoozed_until;
+    return Boolean(until && until > nowIso);
+  };
+  const visibleCards = allCards.filter((c) => !isSnoozed(c));
+  const snoozedCards = allCards.filter(isSnoozed);
+
+  return (
+    <div className="min-w-0 rounded-none border border-white/10 bg-[#0b1326]/70 p-4 backdrop-blur-md">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Lightbulb className="h-4 w-4 text-accent" />
+          <h2 className="text-sm font-medium text-foreground/85">
+            Intelligence Cards <span className="text-muted-foreground">({visibleCards.length})</span>
+          </h2>
+        </div>
+        {snoozedCards.length > 0 && (
+          <button
+            onClick={() => setShowSnoozed((s) => !s)}
+            className="rounded border border-border/50 bg-card/30 px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-card/60 hover:text-foreground/80"
+          >
+            {showSnoozed ? "Hide" : "Show"} {snoozedCards.length} snoozed
+          </button>
+        )}
+      </div>
+
+      {error && (
+        <div className="mb-3 rounded border border-red-500/25 bg-red-500/10 p-2 text-xs text-red-300">{error}</div>
+      )}
+
+      {visibleCards.length === 0 && snoozedCards.length === 0 && (
+        <p className="text-sm text-muted-foreground">
+          All quiet. The sweeper has not surfaced any tier-1 cards on the most recent pass.
+          {' '}This is normal for a healthy idle system.
+        </p>
+      )}
+
+      <div className="space-y-3">
+        {visibleCards.map((card) => (
+          <CardItem
+            key={card.card_id}
+            card={card}
+            onThumbs={(direction) => sendFeedback(card.card_id, "thumbs", { direction })}
+            onSnooze={(duration) => sendFeedback(card.card_id, "snooze", { duration })}
+            onOpenComment={() => { setCommentingCardId(card.card_id); setCommentDraft(""); }}
+            onGeneratePrompt={() => generatePrompt(card.card_id)}
+            onSendToCodie={() => openCodieFlyout(card.card_id)}
+            actionPending={actionPending === card.card_id}
+          />
+        ))}
+      </div>
+
+      {showSnoozed && snoozedCards.length > 0 && (
+        <div className="mt-4 space-y-3 border-t border-border/40 pt-3">
+          <p className="text-xs text-muted-foreground">Snoozed (auto-revive on expiry)</p>
+          {snoozedCards.map((card) => (
+            <CardItem
+              key={card.card_id}
+              card={card}
+              onThumbs={(direction) => sendFeedback(card.card_id, "thumbs", { direction })}
+              onSnooze={(duration) => sendFeedback(card.card_id, "snooze", { duration })}
+              onOpenComment={() => { setCommentingCardId(card.card_id); setCommentDraft(""); }}
+              onGeneratePrompt={() => generatePrompt(card.card_id)}
+              onSendToCodie={() => openCodieFlyout(card.card_id)}
+              actionPending={actionPending === card.card_id}
+              dimmed
+            />
+          ))}
+        </div>
+      )}
+
+      {/* Phase 4: Generate Prompt copy modal — zero side effects, just text */}
+      {promptModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-3xl rounded-lg border border-primary/30 bg-[#0b1326] p-5">
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-foreground/90">Investigation prompt ready</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Subject: <span className="text-foreground/80">{promptModal.subject_kind}</span>{' '}
+                  · {promptModal.prompt_text_chars} chars · zero side effects
+                </p>
+              </div>
+              <button
+                onClick={() => { void navigator.clipboard.writeText(promptModal.prompt_text); }}
+                className="rounded border border-primary/30 bg-primary/10 px-3 py-1 text-xs text-primary hover:bg-primary/20"
+              >
+                Copy
+              </button>
+            </div>
+            <pre className="mb-3 max-h-[60vh] overflow-y-auto whitespace-pre-wrap rounded border border-border/60 bg-background/60 p-3 text-[11px] leading-relaxed text-foreground/80">
+              {promptModal.prompt_text}
+            </pre>
+            <div className="flex justify-end">
+              <button
+                onClick={() => setPromptModal(null)}
+                className="rounded border border-border bg-card/40 px-3 py-1 text-xs text-muted-foreground hover:bg-card/60"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Phase 4: Send to Codie confirmation flyout */}
+      {codieModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-3xl rounded-lg border border-accent/40 bg-[#0b1326] p-5">
+            <div className="mb-3">
+              <p className="text-sm font-medium text-foreground/90">Send to Codie?</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Will create a Task Hub item with target_agent=vp.coder.primary.
+                Codie will open a PR for review (no merge, no main push, no deploy).
+                Auto-stamps thumbs-up on this card.
+              </p>
+            </div>
+            <details className="mb-3">
+              <summary className="cursor-pointer text-[11px] text-primary/80">
+                Show prompt that will be sent ({codieModal.preview?.prompt_text_chars ?? 0} chars)
+              </summary>
+              <pre className="mt-2 max-h-64 overflow-y-auto whitespace-pre-wrap rounded border border-border/60 bg-background/60 p-3 text-[10px] leading-relaxed text-muted-foreground">
+                {codieModal.preview?.prompt_text || "(preview unavailable)"}
+              </pre>
+            </details>
+            <p className="mb-1 text-xs text-foreground/85">
+              Operator steering (optional, append-only):
+            </p>
+            <p className="mb-2 text-[10px] text-muted-foreground">
+              This text will be appended to the prompt verbatim AND mirrored
+              into this card's comment thread for the audit trail.
+            </p>
+            <textarea
+              value={codieModal.steering}
+              onChange={(e) => setCodieModal({ ...codieModal, steering: e.target.value })}
+              className="h-20 w-full resize-y rounded border border-border bg-background/60 p-2 text-sm text-foreground placeholder:text-muted-foreground"
+              placeholder="e.g. Focus on the proxy auth path; Codie should also update the runbook."
+              disabled={codieModal.sending}
+            />
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                onClick={() => setCodieModal(null)}
+                disabled={codieModal.sending}
+                className="rounded border border-border bg-card/40 px-3 py-1 text-xs text-muted-foreground hover:bg-card/60 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmCodieDispatch}
+                disabled={codieModal.sending}
+                className="rounded border border-accent/40 bg-accent/15 px-3 py-1 text-xs text-accent hover:bg-accent/25 disabled:opacity-50"
+              >
+                {codieModal.sending ? "Sending..." : "Send to Codie"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {commentingCardId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-2xl rounded-lg border border-border bg-[#0b1326] p-5">
+            <p className="mb-2 text-sm font-medium text-foreground/90">Add comment</p>
+            <p className="mb-3 text-xs text-muted-foreground">
+              Comments persist forever and feed back into future LLM synthesis on the same subject.
+            </p>
+            {(() => {
+              const card = allCards.find((c) => c.card_id === commentingCardId);
+              const prior = card?.operator_feedback?.comments ?? [];
+              if (prior.length === 0) return null;
+              return (
+                <div className="mb-3 max-h-32 overflow-y-auto rounded border border-border/40 bg-background/40 p-2">
+                  {prior.map((c, i) => (
+                    <div key={i} className="mb-1 last:mb-0">
+                      <span className="text-[10px] text-muted-foreground">{c.ts}</span>
+                      <p className="text-xs text-foreground/85">{c.text}</p>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+            <textarea
+              value={commentDraft}
+              onChange={(e) => setCommentDraft(e.target.value)}
+              className="h-24 w-full resize-y rounded border border-border bg-background/60 p-2 text-sm text-foreground placeholder:text-muted-foreground"
+              placeholder="What do you want this card's history to remember?"
+            />
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                onClick={() => { setCommentingCardId(null); setCommentDraft(""); }}
+                className="rounded border border-border bg-card/40 px-3 py-1 text-xs text-muted-foreground hover:bg-card/60"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitComment}
+                disabled={!commentDraft.trim()}
+                className="rounded border border-primary/30 bg-primary/10 px-3 py-1 text-xs text-primary hover:bg-primary/20 disabled:opacity-50"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CardItem({
+  card,
+  onThumbs,
+  onSnooze,
+  onOpenComment,
+  onGeneratePrompt,
+  onSendToCodie,
+  actionPending = false,
+  dimmed = false,
+}: {
+  card: MissionControlCard;
+  onThumbs: (d: "up" | "down" | null) => void;
+  onSnooze: (d: "1h" | "4h" | "1d" | "1w") => void;
+  onOpenComment: () => void;
+  onGeneratePrompt?: () => void;
+  onSendToCodie?: () => void;
+  actionPending?: boolean;
+  dimmed?: boolean;
+}) {
+  const sev = severityBadge(card.severity);
+  const thumbs = card.operator_feedback?.thumbs ?? null;
+  const commentCount = card.operator_feedback?.comments?.length ?? 0;
+  // F#6: stamp last_viewed_at once per card_id per session. The endpoint
+  // accepts repeated calls (overwrite-by-viewer); we suppress per render
+  // to avoid DOS-ing ourselves on every poll. localStorage persists the
+  // set across page reloads so we don't re-stamp every refresh.
+  useEffect(() => {
+    if (typeof window === "undefined" || !card.card_id) return;
+    const STORAGE_KEY = "ua.mc.cards.viewed.v1";
+    let viewed: Record<string, string> = {};
+    try {
+      viewed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "{}");
+    } catch { /* ignore */ }
+    const lastSynth = card.last_synthesized_at || "";
+    if (viewed[card.card_id] === lastSynth) return; // already stamped this revision
+    viewed[card.card_id] = lastSynth;
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(viewed));
+    } catch { /* ignore */ }
+    // Fire-and-forget; failures are non-fatal
+    void fetch(`${API_BASE}/api/v1/dashboard/mission-control/cards/${encodeURIComponent(card.card_id)}/view`, {
+      method: "POST",
+    }).catch(() => { /* swallow */ });
+  }, [card.card_id, card.last_synthesized_at]);
+  return (
+    <div className={`rounded-lg border border-border/50 bg-card/25 p-3 ${dimmed ? "opacity-60" : ""}`}>
+      <div className="mb-1 flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-foreground/90">{card.title}</p>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            <span className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] ${sev.cls}`}>
+              {sev.label}
+            </span>
+            <span className="rounded bg-card/60 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+              {card.subject_kind}
+            </span>
+            {(card.recurrence_count ?? 1) > 1 && (
+              <span className="rounded bg-accent/10 px-1.5 py-0.5 text-[10px] text-accent">
+                seen {card.recurrence_count}x
+              </span>
+            )}
+            {(card.tags ?? []).slice(0, 4).map((tag) => (
+              <span key={tag} className="rounded bg-background/40 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                {tag}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => onThumbs(thumbs === "up" ? null : "up")}
+            className={`rounded border px-1.5 py-0.5 text-xs ${thumbs === "up" ? "border-primary/40 bg-primary/15 text-primary" : "border-border bg-card/30 text-muted-foreground hover:bg-card/60"}`}
+            title="More of this"
+          >
+            👍
+          </button>
+          <button
+            onClick={() => onThumbs(thumbs === "down" ? null : "down")}
+            className={`rounded border px-1.5 py-0.5 text-xs ${thumbs === "down" ? "border-red-500/30 bg-red-500/15 text-red-300" : "border-border bg-card/30 text-muted-foreground hover:bg-card/60"}`}
+            title="Less of this"
+          >
+            👎
+          </button>
+          <SnoozeMenu onSnooze={onSnooze} />
+          <button
+            onClick={onOpenComment}
+            className="rounded border border-border bg-card/30 px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-card/60"
+            title="Comment"
+          >
+            💬{commentCount > 0 ? ` ${commentCount}` : ""}
+          </button>
+        </div>
+      </div>
+
+      <p className="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-foreground/85">
+        {card.narrative}
+      </p>
+      {card.why_it_matters && (
+        <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+          <span className="text-foreground/70">Why it matters:</span> {card.why_it_matters}
+        </p>
+      )}
+      {card.recommended_next_step && (
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+          <span className="text-foreground/70">Next:</span> {card.recommended_next_step}
+        </p>
+      )}
+
+      {(card.evidence_refs ?? []).length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {(card.evidence_refs ?? []).map((ref, i) => (
+            ref.uri ? (
+              <a
+                key={`${ref.kind}-${i}`}
+                href={ref.uri}
+                className="rounded border border-primary/25 bg-primary/10 px-2 py-0.5 text-[10px] text-primary/85 hover:bg-primary/20"
+              >
+                {ref.label || `${ref.kind} ${ref.id}`}
+              </a>
+            ) : (
+              <span key={`${ref.kind}-${i}`} className="rounded bg-background/40 px-2 py-0.5 text-[10px] text-muted-foreground">
+                {ref.label || `${ref.kind} ${ref.id}`}
+              </span>
+            )
+          ))}
+        </div>
+      )}
+
+      {(onGeneratePrompt || onSendToCodie) && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {onGeneratePrompt && (
+            <button
+              onClick={onGeneratePrompt}
+              disabled={actionPending}
+              className="inline-flex items-center gap-1 rounded border border-primary/30 bg-primary/10 px-2 py-1 text-[11px] text-primary/85 hover:bg-primary/20 disabled:opacity-50"
+              title="Generate a copyable investigation prompt for an external AI coder. Zero side effects."
+            >
+              📋 Generate Prompt
+            </button>
+          )}
+          {onSendToCodie && (
+            <button
+              onClick={onSendToCodie}
+              disabled={actionPending}
+              className="inline-flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent hover:bg-accent/20 disabled:opacity-50"
+              title="Dispatch this card's investigation prompt to Codie (vp.coder.primary). Opens a confirmation flyout."
+            >
+              🚀 Send to Codie
+            </button>
+          )}
+        </div>
+      )}
+
+      <div className="mt-2 text-[10px] text-muted-foreground">
+        {card.last_synthesized_at && <>synth {card.last_synthesized_at} · </>}
+        {card.synthesis_model && <>{card.synthesis_model}</>}
+      </div>
+    </div>
+  );
+}
+
+function SnoozeMenu({ onSnooze }: { onSnooze: (d: "1h" | "4h" | "1d" | "1w") => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="rounded border border-border bg-card/30 px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-card/60"
+        title="Snooze"
+      >
+        ⏰
+      </button>
+      {open && (
+        <div className="absolute right-0 top-7 z-10 flex flex-col rounded border border-border bg-[#0b1326] p-1 shadow-lg">
+          {(["1h", "4h", "1d", "1w"] as const).map((d) => (
+            <button
+              key={d}
+              onClick={() => { onSnooze(d); setOpen(false); }}
+              className="rounded px-2 py-0.5 text-left text-[11px] text-muted-foreground hover:bg-card/60 hover:text-foreground"
+            >
+              {d}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function OperatingPosturePanel() {
   const links = [
     { href: "/dashboard/events", label: "Event Log", detail: "Raw notifications, diagnostics, and source events", icon: Bell },
@@ -1070,9 +1892,14 @@ export default function MissionControlPage() {
           </div>
         </div>
 
+        {/* Tier-0 health strip — Phase 1B */}
+        <TileStripPanel />
+
         <div className="grid min-w-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1.8fr)_minmax(280px,0.8fr)]">
           <div className="flex min-w-0 flex-col gap-4">
             <ChiefOfStaffReadoutPanel />
+            {/* Phase 2: tier-1 LLM-discovered narrative cards */}
+            <CardGridPanel />
             <OperatorBriefPanel />
             <ActiveTasksPanel />
           </div>

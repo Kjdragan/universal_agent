@@ -67,6 +67,7 @@ type AgentQueueItem = {
       last_assignment_ended_at?: string | null;
       last_provider_session_id?: string | null;
       last_disposition_reason?: string | null;
+      todo_retry_count?: number | string | null;
     };
   };
 };
@@ -857,8 +858,24 @@ export default function ToDoListDashboardPage() {
     const isSecurityAlert = itemLabels.includes("external-untriaged") || itemLabels.includes("security-untriaged");
     const isQuarantined = itemLabels.includes("quarantined");
     const senderEmail = String(item.metadata?.sender_email || "");
+    // The dispatcher's exception handler at todo_dispatch_service.py:942-965
+    // correctly marks an assignment as `failed` + reopens for retry whenever
+    // *anything* between claim and successful execution_callback raises
+    // (transient WebSocket hiccup, lock contention, network blip). On the
+    // next dispatcher tick the task is re-claimed and usually succeeds —
+    // standard self-healing. The data state is correct.
+    //
+    // What was wrong was the UI: it flashed the loud red "REOPENED · Last
+    // run failed" tag on every first-cycle transient failure, so a brand-new
+    // task that succeeded on retry looked alarming. Now the tag only fires
+    // after MULTIPLE attempts have failed (retry_count > 1) — that's a
+    // genuinely-stuck retry loop the user should investigate. A first-cycle
+    // transient that auto-recovered is no longer surfaced as a failure.
+    const todoRetryCount = Number(lastDispatch?.todo_retry_count || 0);
     const wasReopenedAfterFailure =
-      boardLane === "not_assigned" && String(lastDispatch?.last_assignment_state || "").toLowerCase() === "failed";
+      boardLane === "not_assigned" &&
+      String(lastDispatch?.last_assignment_state || "").toLowerCase() === "failed" &&
+      todoRetryCount > 1;
       
     // Pre-calculate href for navigation (title and human review badge)
     const taskHref = taskSourceUrl(item.task_id, item.source_kind, item.url, item.source_ref);
@@ -1175,11 +1192,27 @@ export default function ToDoListDashboardPage() {
               })()}
             </h3>
             {item.description && <p className="mt-1 text-[11px] text-kcd-text-muted leading-snug line-clamp-2">{item.description}</p>}
-            {(item.last_assignment?.result_summary || item.metadata?.dispatch?.last_disposition_reason) && (
-              <p className="mt-1.5 text-[11px] italic text-kcd-text-dim border-l-2 border-white/10 pl-2 line-clamp-2">
-                {item.last_assignment?.result_summary || item.metadata?.dispatch?.last_disposition_reason}
-              </p>
-            )}
+            {(() => {
+              const raw = item.last_assignment?.result_summary || item.metadata?.dispatch?.last_disposition_reason || "";
+              if (!raw) return null;
+              // Suppress internal auto-disposition error text on completed cards
+              if (raw.startsWith("auto_disposition:") || raw.startsWith("todo_dispatch_failed:")) {
+                const reason = item.metadata?.dispatch?.last_disposition_reason || "";
+                if (reason === "todo_self_reviewed_after_delivery") {
+                  return (
+                    <p className="mt-1.5 text-[11px] italic text-kcd-text-dim border-l-2 border-white/10 pl-2 line-clamp-2">
+                      ✓ Completed — delivery verified
+                    </p>
+                  );
+                }
+                return null; // Hide raw error text for other auto-disposition cases
+              }
+              return (
+                <p className="mt-1.5 text-[11px] italic text-kcd-text-dim border-l-2 border-white/10 pl-2 line-clamp-2">
+                  {raw}
+                </p>
+              );
+            })()}
           </div>
           <div className={`font-mono text-[10px] font-bold shrink-0 text-right ${pCls}`}>{priorityText(item.priority)}</div>
         </div>

@@ -1202,6 +1202,30 @@ class CronService:
                                 await asyncio.sleep(delay_seconds)
                                 continue
                             raise
+            except asyncio.CancelledError:
+                # Service shutdown / deploy restart cancels in-flight cron
+                # tasks. Without this branch, CancelledError (BaseException
+                # subclass in Py3.8+) bypasses the generic Exception handler
+                # below — the run was never finalized, and on next startup
+                # the recovery sweep emits a phantom "Cron Run Failed". Mark
+                # explicitly cancelled and re-raise so cancellation completes.
+                record.status = "cancelled"
+                record.finished_at = time.time()
+                record.error = "cancelled (likely service restart)"
+                logger.info("Chron job %s cancelled mid-run", job.job_id)
+                self._finalize_workflow_attempt(
+                    job=job,
+                    record=record,
+                    scheduled_at=scheduled_at,
+                    reason=reason,
+                    dispatch_key=dispatch_key,
+                    workflow_run_id=workflow_run_id,
+                    workflow_attempt_id=workflow_attempt_id,
+                    failure_reason=record.error,
+                    failure_class="cancelled",
+                    retryable=False,
+                )
+                raise
             except asyncio.TimeoutError:
                 record.status = "error"
                 record.finished_at = time.time()

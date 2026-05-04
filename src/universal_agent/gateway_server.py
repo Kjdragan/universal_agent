@@ -2710,6 +2710,9 @@ _factory_staleness_task: Optional[asyncio.Task] = None
 _factory_staleness_stop: Optional[asyncio.Event] = None
 _hq_self_heartbeat_task: Optional[asyncio.Task] = None
 _hq_self_heartbeat_stop: Optional[asyncio.Event] = None
+# Mission Control intelligence sweeper (Phase 1B+)
+_mission_control_sweeper_task: Optional[asyncio.Task] = None
+_mission_control_sweeper_stop: Optional[asyncio.Event] = None
 _continuity_active_alerts: set[str] = set()
 _continuity_metric_events: deque[dict[str, Any]] = deque(
     maxlen=max(1000, int(os.getenv("UA_CONTINUITY_EVENT_MAXLEN", "20000") or 20000))
@@ -7719,6 +7722,15 @@ def _emit_cron_event(payload: dict) -> None:
             severity = "info"
             kind = "autonomous_run_completed" if is_autonomous else "cron_run_success"
             message = f"{command}"
+        elif run_status == "cancelled":
+            # Cancellations happen on every deploy/restart for any job
+            # that was in-flight at shutdown. They are NOT failures —
+            # surface them as info-severity so the dashboard doesn't
+            # paint a red "Cron Run Failed" card on every release.
+            title = "Chron Run Cancelled (service restart)"
+            severity = "info"
+            kind = "cron_run_cancelled"
+            message = f"{command} | cancelled mid-run (likely deploy restart)"
         else:
             title = "Autonomous Task Failed" if is_autonomous else "Chron Run Failed"
             severity = "error"
@@ -9000,6 +9012,8 @@ def _merge_activity_actions(*action_sets: list[dict[str, Any]]) -> list[dict[str
 
 def _runtime_db_connect() -> sqlite3.Connection:
     """Return the main runtime_state.db connection held by the gateway."""
+    import universal_agent.main as main_module
+
     conn = getattr(main_module, "runtime_db_conn", None)
     if conn is None:
         raise RuntimeError("runtime_db_conn not initialized")
@@ -13419,14 +13433,25 @@ async def _cancel_session_execution(session_id: str, reason: str, run_id: Option
         },
     )
 
-    _add_notification(
-        kind="cancelled",
-        title="Session Cancelled",
-        message=reason,
-        session_id=session_id,
-        severity="warning",
-        metadata={"source": "ops"},
-    )
+    # Routine daemon idle-reaping is part of the heartbeat lifecycle: the
+    # session sits idle between ticks and gets cancelled by
+    # _heartbeat_session_timeout_callback when it exceeds the idle
+    # threshold. The next tick creates a fresh session. Surfacing every
+    # one of those reaps as an alarming "Session Cancelled · warning"
+    # notification on the dashboard turns normal operational rhythm into
+    # visible noise. Skip the notification for `daemon_idle_timeout`
+    # reasons; real cancellations (errors, ops-triggered, mid-run aborts)
+    # still get surfaced.
+    is_routine_daemon_reap = str(reason or "").startswith("daemon_idle_timeout")
+    if not is_routine_daemon_reap:
+        _add_notification(
+            kind="cancelled",
+            title="Session Cancelled",
+            message=reason,
+            session_id=session_id,
+            severity="warning",
+            metadata={"source": "ops"},
+        )
 
     return {
         "status": "cancel_requested",
@@ -14426,6 +14451,31 @@ async def lifespan(app: FastAPI):
     )
     logger.info("💓 HQ self-heartbeat enabled (interval=60s)")
 
+    # --- Mission Control intelligence sweeper (Phase 1B+) ---
+    # Gated by UA_MC_PHASE_1_ENABLED. When the flag is off, the sweeper's
+    # tick() short-circuits anyway, but we skip starting the loop entirely
+    # to avoid the per-minute log noise during the rollout window.
+    try:
+        from universal_agent.services.mission_control_db import is_phase_enabled as _mc_is_phase_enabled
+        from universal_agent.services.mission_control_intelligence_sweeper import (
+            run_sweeper_loop as _mc_run_sweeper_loop,
+        )
+    except Exception:
+        logger.exception("Mission Control sweeper imports failed; skipping")
+    else:
+        global _mission_control_sweeper_task, _mission_control_sweeper_stop
+        if _mc_is_phase_enabled(1):
+            _mission_control_sweeper_stop = asyncio.Event()
+            _mission_control_sweeper_task = asyncio.create_task(
+                _run_after_deployment_window(
+                    "mission_control_sweeper",
+                    lambda: _mc_run_sweeper_loop(_mission_control_sweeper_stop),
+                )
+            )
+            logger.info("🛰️  Mission Control sweeper enabled (UA_MC_PHASE_1_ENABLED=1)")
+        else:
+            logger.info("⏸️  Mission Control sweeper disabled (UA_MC_PHASE_1_ENABLED unset)")
+
     yield
     
     # Cleanup
@@ -14451,6 +14501,13 @@ async def lifespan(app: FastAPI):
     if _hq_self_heartbeat_task is not None:
         try:
             await _hq_self_heartbeat_task
+        except Exception:
+            pass
+    if _mission_control_sweeper_stop is not None:
+        _mission_control_sweeper_stop.set()
+    if _mission_control_sweeper_task is not None:
+        try:
+            await _mission_control_sweeper_task
         except Exception:
             pass
     if _yt_playlist_watcher:
@@ -22551,7 +22608,7 @@ async def dashboard_events(
         )
     if events:
         return {
-            "events": events,
+            "events": _mc_annotate_event_list(events),
             "source": "activity_store",
             "window_days_default": _activity_events_default_window_days,
             "next_cursor": next_cursor,
@@ -22622,11 +22679,104 @@ async def dashboard_events(
             str(tail.get("id") or ""),
         )
     return {
-        "events": fallback,
+        "events": _mc_annotate_event_list(fallback),
         "source": "in_memory",
         "next_cursor": next_cursor,
         "has_more": has_more,
     }
+
+
+# ── Phase 7: smart-title + hide_by_default annotation ──────────────────
+
+
+def _mc_annotate_event_list(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Annotate each event with `smart_title` and `hide_by_default`.
+
+    Pure-cache path: reads cached templates from event_title_templates;
+    falls back to a code-side template if nothing cached. NEVER
+    triggers an inline LLM call — that's done by a separate background
+    pass so the events endpoint stays fast.
+
+    Defensive: if MC store can't be opened (Phase 0 not deployed yet,
+    schema race, etc.), returns events unchanged so the endpoint never
+    breaks because of Phase 7 annotation issues.
+    """
+    if not events:
+        return events
+    try:
+        from universal_agent.services.mission_control_db import open_store as _mc_open
+        from universal_agent.services.mission_control_event_titles import annotate_event
+    except Exception:
+        return events
+    try:
+        conn = _mc_open()
+    except Exception:
+        return events
+    try:
+        annotated: list[dict[str, Any]] = []
+        for ev in events:
+            try:
+                annotated.append(annotate_event(conn, ev))
+            except Exception:
+                # One bad event shouldn't break the whole list
+                annotated.append(ev)
+        return annotated
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+@app.post("/api/v1/dashboard/events/templates/generate")
+async def dashboard_events_template_generate(
+    body: dict[str, Any],
+):
+    """Lazy-generate a title template for a (kind, metadata_shape) pair.
+
+    Body shape: `{ "sample_event": <full event dict from /events> }`.
+    The endpoint computes the metadata-shape signature for the sample,
+    fires the dedicated glm-4.7 lane to design a title template, and
+    upserts the result into `event_title_templates`. Subsequent
+    annotation passes pick up the new template automatically.
+
+    Operator workflow: open Events page, find an event whose smart_title
+    looks weak (still says "Autonomous Task Completed"), and trigger
+    template generation for that kind. One LLM call per kind+shape;
+    every future event of the same shape uses the cached template
+    deterministically.
+    """
+    try:
+        from universal_agent.services.mission_control_db import open_store as _mc_open
+        from universal_agent.services.mission_control_event_titles import (
+            generate_template_via_llm,
+            metadata_shape_signature,
+            store_template,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"event title imports unavailable: {exc}")
+
+    sample = body.get("sample_event") if isinstance(body, dict) else None
+    if not isinstance(sample, dict):
+        raise HTTPException(status_code=400, detail="body must include sample_event dict")
+    kind = str(sample.get("kind") or "").strip()
+    if not kind:
+        raise HTTPException(status_code=400, detail="sample_event.kind missing")
+    shape_sig = metadata_shape_signature(sample.get("metadata"))
+
+    template_text, model = await generate_template_via_llm(sample)
+    try:
+        conn = _mc_open()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"mission control store unavailable: {exc}")
+    try:
+        stored = store_template(
+            conn, event_kind=kind, shape_sig=shape_sig,
+            title_template=template_text, generated_by_model=model,
+        )
+    finally:
+        conn.close()
+    return {"status": "ok", "template": stored}
 
 
 def _dashboard_situation_priority(
@@ -22902,6 +23052,610 @@ async def dashboard_chief_of_staff(include_evidence: bool = False, journal_limit
         "refresh_endpoint": "/api/v1/dashboard/chief-of-staff/refresh",
         "source": "mission_control_chief_of_staff",
     }
+
+
+@app.get("/api/v1/dashboard/mission-control/tiles")
+async def dashboard_mission_control_tiles():
+    """Return all tier-0 tile states for the Mission Control strip.
+
+    Phase 1B endpoint. Reads from `mission_control_tile_states` (written
+    by the sweeper). Stable display order matches `all_tiles()` so the
+    frontend doesn't need to sort. Returns an empty list if the
+    sweeper has never run (Phase 1 flag off / first boot before tick).
+    """
+    try:
+        from universal_agent.services.mission_control_db import open_store as _mc_open
+        from universal_agent.services.mission_control_tiles import all_tiles as _mc_all_tiles
+    except Exception as exc:
+        return {
+            "status": "error",
+            "error": f"mission control imports unavailable: {exc}",
+            "tiles": [],
+        }
+
+    tile_order = [t.name for t in _mc_all_tiles()]
+    display_names = {t.name: t.display_name for t in _mc_all_tiles()}
+    auto_action_classes = {t.name: t.auto_action_class() for t in _mc_all_tiles()}
+
+    try:
+        conn = _mc_open()
+    except Exception as exc:
+        return {
+            "status": "error",
+            "error": f"mission control store unavailable: {exc}",
+            "tiles": [],
+        }
+
+    try:
+        rows = conn.execute(
+            "SELECT * FROM mission_control_tile_states"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    state_by_id = {row["tile_id"]: dict(row) for row in rows}
+    tiles_payload: list[dict[str, Any]] = []
+    for tile_name in tile_order:
+        row = state_by_id.get(tile_name)
+        if row is None:
+            tiles_payload.append({
+                "tile_id": tile_name,
+                "display_name": display_names[tile_name],
+                "current_state": "unknown",
+                "one_line_status": "no data yet",
+                "state_since": None,
+                "last_checked_at": None,
+                "evidence_payload": {},
+                "auto_action_class": auto_action_classes[tile_name],
+            })
+            continue
+        evidence_raw = row.get("evidence_payload_json")
+        try:
+            evidence = json.loads(evidence_raw) if evidence_raw else {}
+        except Exception:
+            evidence = {}
+        # The one-line status was captured as part of the state's
+        # internal evidence — we surface it as a top-level field for the
+        # frontend.
+        one_line_status = (
+            row.get("current_annotation")
+            or evidence.get("one_line_status")
+            or evidence.get("status")
+            or ""
+        )
+        tiles_payload.append({
+            "tile_id": tile_name,
+            "display_name": display_names[tile_name],
+            "current_state": row.get("current_state", "unknown"),
+            "one_line_status": one_line_status if isinstance(one_line_status, str) else str(one_line_status),
+            "state_since": row.get("state_since"),
+            "last_checked_at": row.get("last_checked_at"),
+            "evidence_payload": evidence,
+            "auto_action_class": auto_action_classes[tile_name],
+        })
+    return {
+        "status": "ok",
+        "generated_at": _utc_now_iso(),
+        "tiles": tiles_payload,
+        "source": "mission_control_intelligence_sweeper",
+    }
+
+
+@app.get("/api/v1/dashboard/mission-control/cards")
+async def dashboard_mission_control_cards(limit: int = 50):
+    """Return live tier-1 cards for the Mission Control card grid.
+
+    Phase 1B endpoint. Phase 1 only writes infrastructure-kind cards
+    (auto-created on tile yellow/red transitions); Phase 2's tier-1 LLM
+    discovery pass adds the broader card population. The endpoint shape
+    is final — Phase 2 just produces more cards.
+    """
+    try:
+        from universal_agent.services.mission_control_cards import list_live_cards as _mc_list_live
+        from universal_agent.services.mission_control_db import open_store as _mc_open
+    except Exception as exc:
+        return {"status": "error", "error": f"mission control imports unavailable: {exc}", "cards": []}
+
+    try:
+        conn = _mc_open()
+    except Exception as exc:
+        return {"status": "error", "error": f"mission control store unavailable: {exc}", "cards": []}
+
+    try:
+        cards = _mc_list_live(conn)[: max(1, min(int(limit), 200))]
+    finally:
+        conn.close()
+
+    # Hydrate JSON columns for the frontend so it doesn't have to parse them.
+    hydrated: list[dict[str, Any]] = []
+    for card in cards:
+        out = dict(card)
+        for json_field in (
+            "tags_json",
+            "evidence_refs_json",
+            "evidence_payload_json",
+            "synthesis_history_json",
+            "dispatch_history_json",
+            "operator_feedback_json",
+            "last_viewed_at_json",
+        ):
+            raw = out.pop(json_field, None)
+            short = json_field[:-5]  # strip "_json"
+            try:
+                out[short] = json.loads(raw) if raw else None
+            except Exception:
+                out[short] = None
+        hydrated.append(out)
+    return {
+        "status": "ok",
+        "generated_at": _utc_now_iso(),
+        "cards": hydrated,
+        "source": "mission_control_cards",
+    }
+
+
+# ── Mission Control card feedback endpoints (Phase 2) ───────────────────
+
+
+@app.get("/api/v1/dashboard/mission-control/diagnostics")
+async def dashboard_mission_control_diagnostics():
+    """Operator-visible diagnostics for the Mission Control sweeper.
+
+    Exposes per-phase enable state (so operators can verify env reached
+    the running process), tier-1 meta-row (signature, last attempt
+    timestamp, annotation describing what happened on the last pass),
+    and card counts per kind. Critical for diagnosing "I set the env
+    but tier-1 isn't firing" without VPS log access.
+    """
+    try:
+        from universal_agent.services.mission_control_db import is_phase_enabled as _mc_phase
+        from universal_agent.services.mission_control_db import open_store as _mc_open
+    except Exception as exc:
+        return {"status": "error", "error": f"mission control imports unavailable: {exc}"}
+
+    phase_flags = {str(p): _mc_phase(p) for p in range(0, 9)}
+
+    raw_env: dict[str, str] = {}
+    for key in (
+        "UA_MC_PHASE_1_ENABLED",
+        "UA_MC_PHASE_2_ENABLED",
+        "UA_MC_PHASE_3_ENABLED",
+        "UA_MISSION_CONTROL_MODEL",
+        "UA_MISSION_CONTROL_SWEEPER_INTERVAL_S",
+        "UA_MC_AUTO_REMEDIATION",
+    ):
+        raw_env[key] = os.getenv(key, "<unset>")
+
+    try:
+        conn = _mc_open()
+    except Exception as exc:
+        return {
+            "status": "error",
+            "error": f"mission control store unavailable: {exc}",
+            "phase_flags": phase_flags,
+            "raw_env": raw_env,
+        }
+
+    try:
+        # Tier-1 meta-row written by the sweeper on every tier-1 attempt
+        # (whether it ran the LLM or skipped). Holds last_signature,
+        # last_checked_at, last_annotation describing the outcome.
+        meta_row = conn.execute(
+            "SELECT * FROM mission_control_tile_states WHERE tile_id = ?",
+            ("__tier1_meta__",),
+        ).fetchone()
+        tier1_meta: Optional[dict[str, Any]] = None
+        if meta_row is not None:
+            tier1_meta = dict(meta_row)
+            try:
+                tier1_meta["evidence_payload"] = (
+                    json.loads(tier1_meta["evidence_payload_json"])
+                    if tier1_meta.get("evidence_payload_json") else None
+                )
+            except Exception:
+                tier1_meta["evidence_payload"] = None
+            tier1_meta.pop("evidence_payload_json", None)
+
+        # Phase 3.5: surface tier-2 meta-row alongside tier-1 so operators
+        # can see the cascade is firing AND inspect the last COS attempt.
+        tier2_row = conn.execute(
+            "SELECT * FROM mission_control_tile_states WHERE tile_id = ?",
+            ("__tier2_meta__",),
+        ).fetchone()
+        tier2_meta: Optional[dict[str, Any]] = None
+        if tier2_row is not None:
+            tier2_meta = dict(tier2_row)
+            try:
+                tier2_meta["evidence_payload"] = (
+                    json.loads(tier2_meta["evidence_payload_json"])
+                    if tier2_meta.get("evidence_payload_json") else None
+                )
+            except Exception:
+                tier2_meta["evidence_payload"] = None
+            tier2_meta.pop("evidence_payload_json", None)
+
+        # Card counts by subject_kind to see distribution
+        rows = conn.execute(
+            """
+            SELECT subject_kind, current_state, COUNT(*) AS n
+            FROM mission_control_cards
+            GROUP BY subject_kind, current_state
+            """
+        ).fetchall()
+        card_counts: dict[str, dict[str, int]] = {}
+        for r in rows:
+            card_counts.setdefault(r["subject_kind"], {})[r["current_state"]] = int(r["n"])
+
+        # Tile state row count (sanity check on sweeper liveness)
+        canonical_tile_count = conn.execute(
+            "SELECT COUNT(*) AS n FROM mission_control_tile_states WHERE tile_id != ?",
+            ("__tier1_meta__",),
+        ).fetchone()["n"]
+    finally:
+        conn.close()
+
+    return {
+        "status": "ok",
+        "generated_at": _utc_now_iso(),
+        "phase_flags": phase_flags,
+        "raw_env": raw_env,
+        "tier1_meta": tier1_meta,
+        "tier2_meta": tier2_meta,
+        "card_counts": card_counts,
+        "canonical_tile_rows": int(canonical_tile_count or 0),
+    }
+
+
+@app.post("/api/v1/dashboard/mission-control/diagnostics/tier1-now")
+async def dashboard_mission_control_tier1_now():
+    """Synchronously force-run a tier-1 sweep and return the outcome.
+
+    Operator debug aid: when /diagnostics shows tier1_meta=null but the
+    phase flag is on, hitting this endpoint forces _run_tier1_async to
+    execute immediately so we can see the actual error path. Same code
+    path as the background sweeper, just driven by an HTTP request.
+
+    The endpoint always succeeds with status=ok if the sweeper ran
+    (regardless of tier-1 success/failure) — caller inspects the
+    embedded result.errors to diagnose. Read tier1_meta from the regular
+    diagnostics endpoint after this completes.
+    """
+    try:
+        from universal_agent.services.mission_control_intelligence_sweeper import (
+            SweepResult,
+            get_sweeper,
+        )
+    except Exception as exc:
+        return {"status": "error", "error": f"sweeper imports unavailable: {exc}"}
+
+    sweeper = get_sweeper()
+    started = _utc_now_iso()
+    result = SweepResult(started_at_utc=started, finished_at_utc=started)
+    try:
+        await sweeper._run_tier1_async(result)
+    except Exception as exc:
+        result.errors.append(f"_run_tier1_async raised at top level: {type(exc).__name__}: {exc}")
+    return {
+        "status": "ok",
+        "generated_at": _utc_now_iso(),
+        "tier1_synthesized": result.tier1_synthesized,
+        "errors": result.errors,
+        "transitions": result.tier0_transitions,
+    }
+
+
+class _MCFeedbackThumbsBody(BaseModel):
+    direction: Optional[str] = None  # "up" | "down" | null
+
+
+class _MCFeedbackSnoozeBody(BaseModel):
+    duration: str  # "1h" | "4h" | "1d" | "1w"
+
+
+class _MCFeedbackCommentBody(BaseModel):
+    text: str
+
+
+def _mc_card_feedback_dispatch(card_id: str, op):
+    """Open the MC store, run the mutation `op(conn, card_id)`, return
+    a small JSON response. Centralizes error handling for the four
+    feedback endpoints below.
+    """
+    try:
+        from universal_agent.services.mission_control_db import open_store as _mc_open
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"mission control store unavailable: {exc}")
+    try:
+        conn = _mc_open()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"mission control store open failed: {exc}")
+    try:
+        result = op(conn, card_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"feedback op failed: {exc}")
+    finally:
+        conn.close()
+    return {"status": "ok", "card_id": card_id, "result": result}
+
+
+@app.post("/api/v1/dashboard/mission-control/cards/{card_id}/thumbs")
+async def dashboard_mission_control_card_thumbs(card_id: str, body: _MCFeedbackThumbsBody):
+    """Set thumbs feedback on a card. direction in {"up","down",null}."""
+    from universal_agent.services.mission_control_cards import set_card_thumbs as _mc_set_thumbs
+
+    return _mc_card_feedback_dispatch(card_id, lambda c, cid: _mc_set_thumbs(c, cid, body.direction))
+
+
+@app.post("/api/v1/dashboard/mission-control/cards/{card_id}/snooze")
+async def dashboard_mission_control_card_snooze(card_id: str, body: _MCFeedbackSnoozeBody):
+    """Snooze a card for {1h,4h,1d,1w}. Card auto-revives on expiry."""
+    from universal_agent.services.mission_control_cards import snooze_card as _mc_snooze
+
+    return _mc_card_feedback_dispatch(card_id, lambda c, cid: _mc_snooze(c, cid, body.duration))
+
+
+@app.post("/api/v1/dashboard/mission-control/cards/{card_id}/comment")
+async def dashboard_mission_control_card_comment(card_id: str, body: _MCFeedbackCommentBody):
+    """Append a durable operator comment to a card. Comments are
+    timestamped, never truncated, and feed back into future LLM
+    synthesis on the same subject_id."""
+    from universal_agent.services.mission_control_cards import add_card_comment as _mc_comment
+
+    return _mc_card_feedback_dispatch(card_id, lambda c, cid: _mc_comment(c, cid, body.text))
+
+
+@app.post("/api/v1/dashboard/mission-control/cards/{card_id}/view")
+async def dashboard_mission_control_card_view(card_id: str):
+    """Stamp last_viewed_at for the operator (Phase 2 F#6). Used by the
+    UI when a card opens / is rendered above-the-fold."""
+    from universal_agent.services.mission_control_cards import mark_card_viewed as _mc_view
+
+    return _mc_card_feedback_dispatch(card_id, lambda c, cid: _mc_view(c, cid))
+
+
+# ── Mission Control action buttons (Phase 4) ────────────────────────────
+
+
+def _mc_load_card_for_action(card_id: str) -> dict[str, Any]:
+    """Load a card and hydrate its JSON columns. Used by both
+    Generate-Prompt and Send-to-Codie endpoints."""
+    from universal_agent.services.mission_control_cards import get_card as _mc_get_card
+    from universal_agent.services.mission_control_db import open_store as _mc_open
+
+    conn = _mc_open()
+    try:
+        card = _mc_get_card(conn, card_id)
+    finally:
+        conn.close()
+    if not card:
+        raise HTTPException(status_code=404, detail=f"card not found: {card_id}")
+    # Hydrate JSON columns the prompt builder reads.
+    for col in ("evidence_refs_json", "evidence_payload_json",
+                "synthesis_history_json", "tags_json"):
+        raw = card.get(col)
+        short = col[:-5]
+        try:
+            card[short] = json.loads(raw) if raw else None
+        except Exception:
+            card[short] = None
+    return card
+
+
+@app.post("/api/v1/dashboard/mission-control/cards/{card_id}/generate-prompt")
+async def dashboard_mission_control_generate_prompt(card_id: str):
+    """Build a copyable investigation prompt for an external AI coder.
+
+    Zero side effects on Task Hub. Records the generation in
+    dispatch_history (so the audit trail captures every prompt the
+    operator has produced for this card) but does NOT create any task
+    or trigger any agent work.
+    """
+    try:
+        from universal_agent.services.mission_control_cards import (
+            append_dispatch_history as _mc_append_dispatch,
+        )
+        from universal_agent.services.mission_control_db import open_store as _mc_open
+        from universal_agent.services.mission_control_prompts import build_prompt
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"prompt builder imports unavailable: {exc}")
+
+    card = _mc_load_card_for_action(card_id)
+    try:
+        generated = build_prompt(card, delivery_mode="external_ai_coder")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    # Audit-log the generation
+    conn = _mc_open()
+    try:
+        try:
+            _mc_append_dispatch(
+                conn,
+                card_id=card_id,
+                action="prompt_generated_for_external",
+                prompt_text=generated.text,
+            )
+        except Exception:
+            logger.exception("Generate-prompt audit log failed (non-fatal)")
+    finally:
+        conn.close()
+
+    return {
+        "status": "ok",
+        "card_id": card_id,
+        "delivery_mode": generated.delivery_mode,
+        "subject_kind": generated.subject_kind,
+        "subject_id": generated.subject_id,
+        "generated_at": generated.generated_at_utc,
+        "prompt_text": generated.text,
+        "prompt_text_chars": len(generated.text),
+    }
+
+
+class _MCDispatchToCodieBody(BaseModel):
+    operator_steering_text: Optional[str] = None
+    confirm: bool = False
+
+
+@app.post("/api/v1/dashboard/mission-control/cards/{card_id}/dispatch-to-codie")
+async def dashboard_mission_control_dispatch_to_codie(
+    card_id: str, body: _MCDispatchToCodieBody
+):
+    """Dispatch a card's investigation prompt to Codie via Task Hub.
+
+    Real side effect: creates a Task Hub item with target_agent =
+    vp.coder.primary, status=open, source_kind=mission_control_card_dispatch.
+    The existing dispatch path picks it up on the next sweep.
+
+    Operator must pass `confirm: true` in the body to actually create
+    the task — preserves the "confirmation flyout" semantic from the
+    Phase 4 design without requiring a separate dry-run endpoint. With
+    `confirm: false`, the endpoint returns the prompt text the user
+    would dispatch (so the UI can show it in the flyout for review)
+    without creating any task.
+    """
+    try:
+        from universal_agent.services.mission_control_cards import (
+            add_card_comment as _mc_comment,
+            append_dispatch_history as _mc_append_dispatch,
+            set_card_thumbs as _mc_thumbs,
+        )
+        from universal_agent.services.mission_control_db import open_store as _mc_open
+        from universal_agent.services.mission_control_prompts import build_prompt
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"prompt builder imports unavailable: {exc}")
+
+    card = _mc_load_card_for_action(card_id)
+    try:
+        generated = build_prompt(
+            card,
+            delivery_mode="codie",
+            operator_steering_text=body.operator_steering_text,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if not body.confirm:
+        # Dry-run: show the operator what would be sent without acting.
+        return {
+            "status": "preview",
+            "card_id": card_id,
+            "delivery_mode": "codie",
+            "subject_kind": generated.subject_kind,
+            "subject_id": generated.subject_id,
+            "generated_at": generated.generated_at_utc,
+            "prompt_text": generated.text,
+            "prompt_text_chars": len(generated.text),
+            "would_create_task_kind": "mission_control_card_dispatch",
+            "would_set_thumbs_up": True,
+        }
+
+    # Confirm=true path: create Task Hub item, stamp thumbs-up, mirror
+    # operator steering text into card comments, and audit-log the
+    # dispatch.
+    try:
+        from universal_agent.services.proactive_task_builder import queue_proactive_task
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"task hub helpers unavailable: {exc}")
+
+    task_id = f"mc-dispatch:{card_id}:{int(_utc_now_ms())}"
+    title = f"Mission Control dispatch: {card.get('title', '(no title)')[:140]}"
+    description = generated.text
+
+    # Open the activity DB to enqueue, the MC store for audit trail.
+    activity_path = _activity_db_path() if "_activity_db_path" in globals() else None
+    try:
+        from universal_agent.durable.db import (
+            connect_runtime_db,
+            get_activity_db_path,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"task hub db helpers unavailable: {exc}")
+
+    activity_path = activity_path or get_activity_db_path()
+    try:
+        with connect_runtime_db(activity_path) as task_conn:
+            queued = queue_proactive_task(
+                task_conn,
+                task_id=task_id,
+                source_kind="mission_control_card_dispatch",
+                source_ref=card_id,
+                title=title,
+                description=description,
+                priority=3,
+                labels=["agent-ready", "mission-control-dispatch", card.get("subject_kind", "task")],
+                metadata={
+                    "source": "mission_control_card_dispatch",
+                    "mission_control_card_id": card_id,
+                    "subject_kind": generated.subject_kind,
+                    "subject_id": generated.subject_id,
+                    "target_agent": "vp.coder.primary",
+                    "external_effect_policy": {
+                        "allow_pr": True,
+                        "allow_merge": False,
+                        "allow_main_push": False,
+                        "allow_deploy": False,
+                    },
+                    "workflow_manifest": {
+                        "workflow_kind": "code_change",
+                        "delivery_mode": "interactive_chat",
+                        "final_channel": "chat",
+                        "canonical_executor": "simone_first",
+                        "target_agent": "vp.coder.primary",
+                    },
+                },
+            )
+    except Exception as exc:
+        logger.exception("dispatch-to-codie task creation failed")
+        raise HTTPException(status_code=500, detail=f"task creation failed: {exc}")
+
+    # Audit-log + auto-thumbs-up + comment-mirror on the MC card.
+    mc_conn = None
+    try:
+        mc_conn = _mc_open()
+        try:
+            _mc_append_dispatch(
+                mc_conn,
+                card_id=card_id,
+                action="dispatched_to_codie",
+                prompt_text=generated.text,
+                operator_steering_text=body.operator_steering_text,
+                task_id=task_id,
+            )
+        except Exception:
+            logger.exception("dispatch audit log failed")
+        try:
+            _mc_thumbs(mc_conn, card_id, "up")
+        except Exception:
+            logger.exception("auto-thumbs-up failed")
+        if body.operator_steering_text and body.operator_steering_text.strip():
+            try:
+                _mc_comment(mc_conn, card_id,
+                            f"[dispatched to codie] {body.operator_steering_text.strip()}")
+            except Exception:
+                logger.exception("steering-text comment mirror failed")
+    finally:
+        if mc_conn is not None:
+            mc_conn.close()
+
+    return {
+        "status": "ok",
+        "card_id": card_id,
+        "task_id": task_id,
+        "task_status": queued.get("status") if isinstance(queued, dict) else "open",
+        "subject_kind": generated.subject_kind,
+        "subject_id": generated.subject_id,
+        "generated_at": generated.generated_at_utc,
+        "prompt_text_chars": len(generated.text),
+    }
+
+
+def _utc_now_ms() -> int:
+    """Millisecond unix epoch (used for task_id uniqueness)."""
+    from datetime import datetime, timezone
+    return int(datetime.now(timezone.utc).timestamp() * 1000)
 
 
 @app.post("/api/v1/dashboard/chief-of-staff/refresh")

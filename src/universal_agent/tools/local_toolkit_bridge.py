@@ -205,7 +205,14 @@ async def append_to_file_wrapper(args: dict[str, Any]) -> dict[str, Any]:
 
 @tool(
     name="write_text_file",
-    description="Write a UTF-8 text file under CURRENT_RUN_WORKSPACE (CURRENT_SESSION_WORKSPACE is the legacy alias) or UA_ARTIFACTS_DIR (in-process).",
+    description=(
+        "Write a UTF-8 text file under CURRENT_RUN_WORKSPACE "
+        "(CURRENT_SESSION_WORKSPACE is the legacy alias) or UA_ARTIFACTS_DIR. "
+        "Relative paths resolve against CURRENT_RUN_WORKSPACE — e.g. "
+        "`work_products/foo.html` writes to "
+        "`<CURRENT_RUN_WORKSPACE>/work_products/foo.html`. Absolute paths "
+        "must already fall inside the workspace or artifacts root."
+    ),
     input_schema={"path": str, "content": str, "overwrite": bool},
 )
 async def write_text_file_wrapper(args: dict[str, Any]) -> dict[str, Any]:

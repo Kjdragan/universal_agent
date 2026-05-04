@@ -75,6 +75,46 @@ def test_emit_cron_event_adds_completion_notification(tmp_path: Path, monkeypatc
     assert latest["metadata"]["status"] == "success"
 
 
+def test_emit_cron_event_cancelled_status_is_info_not_error(tmp_path: Path, monkeypatch):
+    """Cancellations fire on every deploy/restart for in-flight jobs.
+    They are operational noise, NOT failures — surface as info-severity
+    cron_run_cancelled so the dashboard does not paint a red 'Cron Run
+    Failed' card on every release."""
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    monkeypatch.setattr(gateway_server, "_cron_service", CronService(_StubGateway(), tmp_path))
+
+    cron_ws = tmp_path / "cron_cancel_workspace"
+    cron_ws.mkdir(parents=True, exist_ok=True)
+    job = gateway_server._cron_service.add_job(
+        user_id="calendar_owner",
+        workspace_dir=str(cron_ws),
+        command="cancel demo",
+        every_raw="30m",
+        enabled=True,
+    )
+
+    gateway_server._emit_cron_event(
+        {
+            "type": "cron_run_completed",
+            "run": {
+                "run_id": "run_cancel_1",
+                "job_id": job.job_id,
+                "status": "cancelled",
+                "scheduled_at": time.time(),
+                "started_at": time.time(),
+                "finished_at": time.time(),
+                "error": "cancelled (likely service restart)",
+            },
+        }
+    )
+
+    latest = gateway_server._notifications[-1]
+    assert latest["kind"] == "cron_run_cancelled"
+    assert latest["severity"] == "info"
+    assert "Cancelled" in latest["title"]
+    assert "service restart" in latest["title"].lower() or "restart" in latest["message"].lower()
+
+
 def test_emit_cron_event_labels_autonomous_runs(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(gateway_server, "_notifications", [])
     monkeypatch.setattr(gateway_server, "_cron_service", CronService(_StubGateway(), tmp_path))
