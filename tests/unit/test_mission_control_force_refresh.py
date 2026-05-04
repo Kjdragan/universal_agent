@@ -681,3 +681,199 @@ async def test_force_refresh_runs_tier0_before_tier1(
     assert sequence == ["tier0", "tier1", "tier2"]
     assert summary["status"] == "completed"
 
+
+# ── Tile-query coverage: cron tile counts retry-queued failures ────────
+
+
+def test_cron_tile_counts_retry_queued_warnings_as_failures(tmp_path, monkeypatch):
+    """Production bug 2026-05-04: dashboard showed Cron Pipelines yellow
+    with "1 job failed 1x" while the brief reported TWO jobs failing.
+    Root cause: a retry-queued cron failure emits `severity='warning'`
+    (gateway_server.py:7723-7731), but the tile filters on
+    `severity='error'` only — so a job stuck on retry attempt 2 of 3
+    is invisible to the tile.
+
+    Fix: tile now counts both `severity='error'` and `severity='warning'`
+    rows whose `kind` indicates a cron failure (cron_run_failed,
+    cron_run_retry_queued, autonomous_run_failed)."""
+    import sqlite3 as _sqlite3
+
+    db = tmp_path / "act.db"
+    monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str(db))
+
+    # Seed: one error-severity (youtube_daily_digest, missing secrets)
+    # and one warning-severity (nightly_wiki, retry queued). Two distinct
+    # job_ids → tile MUST flip RED (>=2 distinct failing jobs).
+    conn = _sqlite3.connect(str(db))
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS activity_events (
+                id TEXT PRIMARY KEY, event_class TEXT NOT NULL DEFAULT 'notification',
+                source_domain TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL,
+                summary TEXT NOT NULL, full_message TEXT NOT NULL, severity TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'new', requires_action INTEGER NOT NULL DEFAULT 0,
+                session_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                entity_ref_json TEXT NOT NULL DEFAULT '{}',
+                actions_json TEXT NOT NULL DEFAULT '[]',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                channels_json TEXT NOT NULL DEFAULT '[]',
+                email_targets_json TEXT NOT NULL DEFAULT '[]'
+            );
+            """
+        )
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        rows = [
+            ("e1", "cron", "cron_run_failed", "yt-fail", "missing secrets", "...",
+             "error", '{"job_id":"youtube_daily_digest"}'),
+            ("e2", "cron", "cron_run_retry_queued", "wiki-retry-1", "exit code 1", "...",
+             "warning", '{"job_id":"nightly_wiki"}'),
+            ("e3", "cron", "cron_run_retry_queued", "wiki-retry-2", "exit code 1", "...",
+             "warning", '{"job_id":"nightly_wiki"}'),
+        ]
+        for r in rows:
+            conn.execute(
+                """INSERT INTO activity_events (
+                    id, source_domain, kind, title, summary, full_message,
+                    severity, metadata_json, created_at, updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (*r, now, now),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    from universal_agent.services.mission_control_tiles import CronPipelinesTile
+
+    tile = CronPipelinesTile()
+    conn = _sqlite3.connect(str(db))
+    conn.row_factory = _sqlite3.Row
+    try:
+        state = tile.compute_state(conn)
+    finally:
+        conn.close()
+
+    # Two distinct failing jobs → tile must be RED.
+    assert state.color == "red", (
+        f"expected red (2 distinct failing jobs); got {state.color} "
+        f"with status: {state.one_line_status}"
+    )
+    assert "2" in state.one_line_status  # mentions count
+
+
+# ── Proactive tile: widen source_kind matcher ──────────────────────────
+
+
+def test_proactive_tile_counts_canonical_proactive_sources(tmp_path, monkeypatch):
+    """Production bug 2026-05-04: Proactive Pipeline tile was yellow
+    with "no proactive completions in 48h" even though the brief said
+    CODIE just landed PR #146 today. Root cause: tile used
+    `source_kind LIKE 'proactive_%'` which only matches 3 of the 13
+    canonical PROACTIVE_SOURCES. Tutorial builds, CSI tasks, convergence
+    detection, etc — all proactive work — were silently invisible.
+
+    Fix: tile now uses the canonical PROACTIVE_SOURCES set from
+    proactive_outcome_tracker (the same set task_hub uses to decide
+    which terminal actions get outcome tracking)."""
+    import sqlite3 as _sqlite3
+
+    db = tmp_path / "act.db"
+    monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str(db))
+
+    # Seed task_hub with a tutorial_build completion. Old tile would
+    # miss it (LIKE 'proactive_%' fails); new tile must count it.
+    from universal_agent import task_hub
+    conn = _sqlite3.connect(str(db))
+    conn.row_factory = _sqlite3.Row
+    try:
+        task_hub.ensure_schema(conn)
+        task_hub.upsert_item(
+            conn,
+            {
+                "task_id": "tut-1",
+                "source_kind": "tutorial_build",
+                "source_ref": "ref-tut-1",
+                "title": "Tutorial built",
+                "description": "—",
+                "project_key": "p",
+                "priority": 1,
+            },
+        )
+        # Mark it completed via direct SQL to bypass the verification
+        # plumbing — we just need the row in completed state for the tile.
+        from datetime import datetime, timezone
+        conn.execute(
+            "UPDATE task_hub_items SET status='completed', updated_at=? WHERE task_id=?",
+            (datetime.now(timezone.utc).isoformat(), "tut-1"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    from universal_agent.services.mission_control_tiles import ProactivePipelineTile
+
+    tile = ProactivePipelineTile()
+    conn = _sqlite3.connect(str(db))
+    conn.row_factory = _sqlite3.Row
+    try:
+        state = tile.compute_state(conn)
+    finally:
+        conn.close()
+
+    # Tutorial_build IS a canonical proactive source — completion must
+    # flip the tile to GREEN (>=1 completion in 48h, no recent failures).
+    assert state.color == "green", (
+        f"tutorial_build completion must count as proactive activity; "
+        f"got {state.color}: {state.one_line_status}"
+    )
+
+
+def test_proactive_tile_excludes_non_proactive_sources(tmp_path, monkeypatch):
+    """Negative case: a manually-created task completion must NOT count
+    as proactive activity. Otherwise the tile would always be green and
+    convey nothing about the proactive pipeline specifically."""
+    import sqlite3 as _sqlite3
+
+    db = tmp_path / "act.db"
+    monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str(db))
+
+    from universal_agent import task_hub
+    conn = _sqlite3.connect(str(db))
+    conn.row_factory = _sqlite3.Row
+    try:
+        task_hub.ensure_schema(conn)
+        task_hub.upsert_item(
+            conn,
+            {
+                "task_id": "manual-1",
+                "source_kind": "manual",
+                "source_ref": "ref-man-1",
+                "title": "Manual task",
+                "description": "—",
+                "project_key": "p",
+                "priority": 1,
+            },
+        )
+        from datetime import datetime, timezone
+        conn.execute(
+            "UPDATE task_hub_items SET status='completed', updated_at=? WHERE task_id=?",
+            (datetime.now(timezone.utc).isoformat(), "manual-1"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    from universal_agent.services.mission_control_tiles import ProactivePipelineTile
+    tile = ProactivePipelineTile()
+    conn = _sqlite3.connect(str(db))
+    conn.row_factory = _sqlite3.Row
+    try:
+        state = tile.compute_state(conn)
+    finally:
+        conn.close()
+
+    # No proactive completions → yellow
+    assert state.color == "yellow"
+    assert "no proactive completions" in state.one_line_status.lower()
+

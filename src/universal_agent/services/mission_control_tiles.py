@@ -318,6 +318,12 @@ class CronPipelinesTile(Tile):
         # We count cron failures in last 24h grouped by job. Yellow = one
         # job failed once. Red = >=2 distinct jobs failing OR same job
         # failed >=3 times.
+        #
+        # IMPORTANT: a job in retry-queued state emits `severity='warning'`
+        # (gateway_server.py:7723-7731 path), NOT 'error'. We count BOTH
+        # severities here so a cron stuck on retry attempt N of 3 isn't
+        # silently invisible to the tile. Filtering by `kind` keeps us
+        # from sweeping in non-cron warnings.
         try:
             rows = conn.execute(
                 """
@@ -326,7 +332,12 @@ class CronPipelinesTile(Tile):
                     COUNT(*) AS failures
                 FROM activity_events
                 WHERE source_domain = 'cron'
-                  AND severity = 'error'
+                  AND severity IN ('error', 'warning')
+                  AND kind IN (
+                    'cron_run_failed',
+                    'autonomous_run_failed',
+                    'cron_run_retry_queued'
+                  )
                   AND created_at > datetime('now','-24 hours')
                 GROUP BY job_id
                 """
@@ -533,33 +544,86 @@ class ProactivePipelineTile(Tile):
         return "B"
 
     def compute_state(self, conn: sqlite3.Connection) -> TileState:
+        # IMPORTANT: use the canonical PROACTIVE_SOURCES set from
+        # `proactive_outcome_tracker` rather than `LIKE 'proactive_%'`.
+        # The LIKE pattern only catches 3 of the 13 actual proactive
+        # source_kinds (proactive_signal, proactive_codie,
+        # proactive_feedback_continuation). Tutorial builds, CSI tasks,
+        # convergence detection, insight detection, brainstorm, and
+        # calendar-bridge work all use source_kinds that do NOT start
+        # with `proactive_` and were silently invisible to this tile —
+        # which is why CODIE landing PR #146 didn't flip the tile green.
         try:
-            row = conn.execute(
-                """
-                SELECT
-                  COUNT(*) AS completions_48h,
-                  MAX(updated_at) AS last_completion
-                FROM task_hub_items
-                WHERE source_kind LIKE 'proactive_%'
-                  AND status = 'completed'
-                  AND updated_at > datetime('now','-48 hours')
-                """
-            ).fetchone()
-            failures_row = conn.execute(
-                """
-                SELECT COUNT(*) AS recent_failures
-                FROM task_hub_items
-                WHERE source_kind LIKE 'proactive_%'
-                  AND status IN ('failed','blocked')
-                  AND updated_at > datetime('now','-24 hours')
-                """
-            ).fetchone()
-        except sqlite3.OperationalError as exc:
-            return TileState(
-                color=COLOR_UNKNOWN,
-                one_line_status=f"task_hub query failed: {exc}",
-                evidence={"error": str(exc)},
+            from universal_agent.services.proactive_outcome_tracker import (
+                PROACTIVE_SOURCES,
             )
+            sources = sorted(PROACTIVE_SOURCES)
+        except Exception:
+            # Defensive fallback to the prior behavior so a circular-
+            # import or service-init failure doesn't make the tile go
+            # unknown across the dashboard.
+            sources = []
+
+        if sources:
+            placeholders = ",".join("?" for _ in sources)
+            try:
+                row = conn.execute(
+                    f"""
+                    SELECT
+                      COUNT(*) AS completions_48h,
+                      MAX(updated_at) AS last_completion
+                    FROM task_hub_items
+                    WHERE source_kind IN ({placeholders})
+                      AND status = 'completed'
+                      AND updated_at > datetime('now','-48 hours')
+                    """,
+                    sources,
+                ).fetchone()
+                failures_row = conn.execute(
+                    f"""
+                    SELECT COUNT(*) AS recent_failures
+                    FROM task_hub_items
+                    WHERE source_kind IN ({placeholders})
+                      AND status IN ('failed','blocked')
+                      AND updated_at > datetime('now','-24 hours')
+                    """,
+                    sources,
+                ).fetchone()
+            except sqlite3.OperationalError as exc:
+                return TileState(
+                    color=COLOR_UNKNOWN,
+                    one_line_status=f"task_hub query failed: {exc}",
+                    evidence={"error": str(exc)},
+                )
+        else:
+            # Fallback if the canonical set couldn't be imported.
+            try:
+                row = conn.execute(
+                    """
+                    SELECT
+                      COUNT(*) AS completions_48h,
+                      MAX(updated_at) AS last_completion
+                    FROM task_hub_items
+                    WHERE source_kind LIKE 'proactive_%'
+                      AND status = 'completed'
+                      AND updated_at > datetime('now','-48 hours')
+                    """
+                ).fetchone()
+                failures_row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS recent_failures
+                    FROM task_hub_items
+                    WHERE source_kind LIKE 'proactive_%'
+                      AND status IN ('failed','blocked')
+                      AND updated_at > datetime('now','-24 hours')
+                    """
+                ).fetchone()
+            except sqlite3.OperationalError as exc:
+                return TileState(
+                    color=COLOR_UNKNOWN,
+                    one_line_status=f"task_hub query failed: {exc}",
+                    evidence={"error": str(exc)},
+                )
 
         completions = int(row["completions_48h"] or 0) if row else 0
         last_completion = row["last_completion"] if row else None
