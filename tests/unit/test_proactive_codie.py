@@ -86,6 +86,70 @@ def test_queue_cleanup_task_creates_agent_ready_review_gated_task(tmp_path):
     assert artifact["artifact_type"] == "codie_cleanup_task"
 
 
+def test_queue_cleanup_task_external_effect_policy_pins_hard_constraints(tmp_path):
+    """The external_effect_policy on every CODIE-dispatched task must
+    encode the eight hard-constraint categories from CODIE_SOUL.md.
+    These are prompt-level (CODIE refuses based on the metadata it
+    sees in the dispatched mission), so the contract is: the metadata
+    is delivered, full stop.
+
+    Removing any of these without an explicit policy decision is a
+    regression — re-add the key to the policy AND update CODIE_SOUL.md
+    in the same change.
+    """
+    db_path = tmp_path / "activity.db"
+    with _connect(db_path) as conn:
+        result = queue_cleanup_task(conn, theme="add type hints", priority=2)
+        task = task_hub.get_item(conn, result["task"]["task_id"])
+
+    policy = task["metadata"]["external_effect_policy"]
+    # Original four — PR allowed, deploy/merge/main-push denied.
+    assert policy["allow_pr"] is True
+    assert policy["allow_merge"] is False
+    assert policy["allow_main_push"] is False
+    assert policy["allow_deploy"] is False
+    # New explicit hard constraints (per Kevin's directive).
+    assert policy["allow_payments"] is False, "no financial transactions"
+    assert policy["allow_public_communications"] is False, "no public posting"
+    assert policy["allow_destructive_ops"] is False, "no rm -rf, force-push, --no-verify"
+    assert policy["allow_secret_mutation"] is False, "no Infisical / .env writes"
+    assert policy["allow_major_dep_bump"] is False, "no x.y.z → x+1.0.0 bumps without ask"
+    assert policy["allow_control_plane_edits"] is False, "no Simone-prompt / heartbeat / cron core / vp/ edits"
+
+
+def test_codie_soul_md_documents_hard_constraints():
+    """CODIE_SOUL.md is CODIE's identity prompt — pin the hard-constraint
+    section so prompt-level enforcement matches the metadata-level
+    enforcement in external_effect_policy."""
+    soul_path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "universal_agent"
+        / "prompt_assets"
+        / "CODIE_SOUL.md"
+    )
+    text = soul_path.read_text(encoding="utf-8")
+
+    assert "HARD CONSTRAINTS" in text, "section heading must exist"
+    # Each constraint category — search loosely so wording can evolve
+    # without breaking the test, but the concept must be present.
+    required_phrases = [
+        "financial transactions",
+        "public-facing communications",
+        "destructive actions",
+        "production deploy",
+        "secret",
+        "major version dependency",
+        "control-plane",
+        "big-bang refactors",
+    ]
+    missing = [p for p in required_phrases if p.lower() not in text.lower()]
+    assert not missing, f"CODIE_SOUL.md must document constraints: {missing}"
+
+    # Autonomy framing — CODIE operates by default without Simone.
+    assert "AUTONOMY BY DEFAULT" in text or "autonomous-by-default" in text.lower()
+
+
 def test_register_pr_artifact_creates_review_candidate(tmp_path):
     db_path = tmp_path / "activity.db"
     with _connect(db_path) as conn:

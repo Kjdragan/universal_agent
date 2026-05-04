@@ -103,6 +103,14 @@ def queue_cleanup_task(
                 "allow_merge": False,
                 "allow_main_push": False,
                 "allow_deploy": False,
+                # Hard constraints — CODIE must refuse, no exceptions.
+                # Mirrors the explicit list in CODIE_SOUL.md.
+                "allow_payments": False,
+                "allow_public_communications": False,
+                "allow_destructive_ops": False,
+                "allow_secret_mutation": False,
+                "allow_major_dep_bump": False,
+                "allow_control_plane_edits": False,
             },
             "workflow_manifest": {
                 "workflow_kind": "code_change",
