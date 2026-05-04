@@ -17691,7 +17691,16 @@ def _proactive_review_recipient(fallback: str = "") -> str:
 
 
 def _autonomous_daily_briefing_enabled() -> bool:
-    return os.getenv("UA_AUTONOMOUS_DAILY_BRIEFING_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+    """Default-OFF as of G2 — `morning_briefing` (6:30 AM, runs the
+    `briefings_agent.py` script which gathers telemetry + nightly-wiki
+    content and dispatches via VP) is the canonical autonomous-briefing
+    path.  This LLM-prompt-only job runs at 7:00 AM and writes to the
+    same `autonomous-briefings/{today}/DAILY_BRIEFING.md` artifact,
+    overwriting the more sophisticated morning_briefing output 30
+    minutes later.  Operators who explicitly want the second pass can
+    opt in via `UA_AUTONOMOUS_DAILY_BRIEFING_ENABLED=1`.
+    """
+    return os.getenv("UA_AUTONOMOUS_DAILY_BRIEFING_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _autonomous_daily_briefing_command() -> str:

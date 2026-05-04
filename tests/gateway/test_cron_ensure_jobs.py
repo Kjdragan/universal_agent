@@ -308,6 +308,40 @@ def test_ensure_proactive_cron_jobs_respect_disable_flag(monkeypatch, ensure_att
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def test_ensure_autonomous_daily_briefing_disabled_by_default(monkeypatch):
+    """G2: autonomous_daily_briefing (7:00 AM) overlaps morning_briefing
+    (6:30 AM) — both write to the same DAILY_BRIEFING.md path so the
+    second one stomps the first.  Default is now OFF; opt-in via
+    `UA_AUTONOMOUS_DAILY_BRIEFING_ENABLED=1` if the operator explicitly
+    wants the second pass."""
+    cron_stub = _CronBootstrapStub()
+    monkeypatch.setattr(gateway_server, "_cron_service", cron_stub)
+    monkeypatch.delenv("UA_AUTONOMOUS_DAILY_BRIEFING_ENABLED", raising=False)
+
+    result = gateway_server._ensure_autonomous_daily_briefing_job()
+
+    assert result is None, (
+        "When the env flag is unset, the helper must return None and "
+        "register no job — protects against the briefing-artifact stomp "
+        "with morning_briefing."
+    )
+    assert cron_stub.jobs == []
+
+
+def test_ensure_autonomous_daily_briefing_explicit_opt_in_still_works(monkeypatch):
+    """Operators who explicitly opt in (env=1) get the legacy
+    autonomous_daily_briefing job back.  Confirms G2 only flips the
+    default — explicit opt-in preserves the original behaviour."""
+    cron_stub = _CronBootstrapStub()
+    monkeypatch.setattr(gateway_server, "_cron_service", cron_stub)
+    monkeypatch.setenv("UA_AUTONOMOUS_DAILY_BRIEFING_ENABLED", "1")
+
+    result = gateway_server._ensure_autonomous_daily_briefing_job()
+
+    assert result is not None
+    assert len(cron_stub.jobs) == 1
+
+
 def test_ensure_morning_briefing_declares_ua_ops_token_required(monkeypatch):
     """`briefings_agent.py:23-26` does `sys.exit(1)` when UA_OPS_TOKEN
     is missing, with a generic stderr line.  Declaring the secret in
