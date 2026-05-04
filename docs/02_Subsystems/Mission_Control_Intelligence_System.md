@@ -1,9 +1,51 @@
 # Mission Control Intelligence System
 
-> **Status:** Implementation plan locked 2026-05-03. Phase 0 not yet started.
+> **Status:** Phases 0–4, 6, 7, 8 shipped to production. Phase 5 (auto-remediation) intentionally deferred per the 1-week observation gate. **Mission Control is functionally complete and live as of 2026-05-04.**
 > **Owner:** Universal Agent core team.
 > **Living document:** Update phase status as work lands. Update v2 follow-up list as items move in or out of v1.
-> **Companion doc:** [Task Hub Dashboard §5.1A](./Task_Hub_Dashboard.md#51a-mission-control-chief-of-staff-readout) — describes the existing Chief-of-Staff readout layer that this system extends.
+> **Companion doc:** [Task Hub Dashboard §5.1A](./Task_Hub_Dashboard.md#51a-mission-control-chief-of-staff-readout) — describes the original Chief-of-Staff readout layer that this system extends.
+
+---
+
+## 0. Status snapshot (2026-05-04)
+
+A consolidated view of where Mission Control stands so future readers don't have to read 50+ Update-Log entries to understand the current state. The Update Log (§13) remains the chronological record.
+
+**What's running in production:**
+
+| Surface | State | Notes |
+|---|---|---|
+| Tier-0 tile strip | ✅ Live, all 9 tiles green | Sweeper polls every 60s; per-tile thresholds tuned to actual production cadence (CSI 12h, Gateway 120s, Heartbeat 90s). Heartbeat tile gets a true liveness signal via `heartbeat_tick` info events emitted from `heartbeat_service._scheduler_loop` once per `UA_HEARTBEAT_TICK_EMIT_INTERVAL_S` (default 60s). |
+| Tier-1 narrative cards | ✅ Live | LLM-discovered cards with severity / recurrence sorting, per-card 👍 👎 snooze 💬 controls, Generate-Prompt + Send-to-Codie action buttons. Cards retire to the Knowledge Ledger when no longer relevant. |
+| Tier-2 Chief-of-Staff readout | ✅ Live | Reads tier-0 transitions + tier-1 live cards + Knowledge Ledger context (recurring subjects, recently retired cards). |
+| Knowledge Ledger | ✅ Live at `/dashboard/mission-control/ledger` | Filter by subject_kind / recurrence ≥ N / state. Per-card detail panel with full synthesis history, comments, dispatch history, evidence refs. |
+| Smart event titles + hide-by-default filter | ✅ Live | `/dashboard/events` page uses cached LLM templates per `(kind, metadata_shape_signature)`; `hide_by_default` rule keeps routine green/info noise off the operator's primary view. |
+| Operator Brief panel (legacy) | ❌ Removed (Phase 8) | Subsumed by tier-1 cards. `/api/v1/dashboard/situations` endpoint marked `deprecated=True` with runtime warning log; remains functional one release cycle for cached UI clients. |
+
+**What's deferred (intentional):**
+
+- **Phase 5 — Auto-remediation Class A.** Not started. The plan calls for ≥1 week of clean steady-state observation before flipping `UA_MC_AUTO_REMEDIATION=1`, so we have real incident patterns to remediate against rather than guesses. With ~24h of green-tile observation as of this snapshot, we wait. When ready: ship the `mission_control_remediation_actions.py` registry with the three starter actions (csi-ingester restart, heartbeat daemon recycle, stuck task_hub claim sweep), behind per-action env flags + a global circuit breaker.
+
+**What's recoverable but not currently active:**
+
+- **The `/api/v1/dashboard/situations` endpoint** can be removed entirely after one release cycle — it's marked deprecated and warned in logs, so any external/cached UI clients will surface themselves before the removal lands.
+- **F#3 / F#4 (cross-card comment search, Knowledge Ledger bulk operations)** are listed in §11 v2 follow-ups; Phase 6 ledger surface gets the foundational read path; bulk ops can be layered on later.
+
+**Code anchors (where the moving parts live):**
+
+- Sweeper loop: `src/universal_agent/services/mission_control_intelligence_sweeper.py`
+- Tile classes: `src/universal_agent/services/mission_control_tiles.py` (one per tile, ~200-line module total)
+- Cards (CRUD, retirement, ledger, feedback): `src/universal_agent/services/mission_control_cards.py`
+- Tier-2 Chief-of-Staff: `src/universal_agent/services/mission_control_chief_of_staff.py`
+- Tier-1 LLM discovery: `src/universal_agent/services/mission_control_tier1.py`
+- Smart titles: `src/universal_agent/services/mission_control_event_titles.py`
+- Gateway endpoints: `src/universal_agent/gateway_server.py` — search for `dashboard_mission_control_*`
+- Frontend page: `web-ui/app/dashboard/mission-control/page.tsx`
+- Frontend ledger page: `web-ui/app/dashboard/mission-control/ledger/page.tsx`
+
+**Operator runbook in one paragraph:**
+
+Open `/dashboard/mission-control`. Red tile → click to expand evidence + LLM annotation. Tier-1 card needs action → click "Generate Prompt" for a copy-pastable investigation prompt, or "Send to Codie" to dispatch an immediate VP-coder mission with a confirmation flyout. Comment threads on cards are durable and feed back into future LLM synthesis. Snooze a card if it's noise; thumbs-down to deprioritize similar future cards. Knowledge Ledger (footer link in Deep Dives) shows what we've seen retire, with recurrence counts so you can spot patterns.
 
 ---
 
