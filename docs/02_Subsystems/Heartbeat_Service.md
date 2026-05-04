@@ -82,6 +82,7 @@ The heartbeat is highly configurable via environment variables.
 | `UA_HEARTBEAT_MAX_ACTIONABLE` | 50 | Maximum actionable items to surface in a single run. |
 | `UA_HEARTBEAT_MAX_SYSTEM_EVENTS` | 25 | Maximum system events to include per heartbeat. |
 | `UA_HEARTBEAT_INVESTIGATION_ONLY` | None | If set, heartbeat runs in investigation-only mode (no mutations). |
+| `UA_HEARTBEAT_TICK_EMIT_INTERVAL_S` | 60 | Interval (seconds) for emitting low-severity `heartbeat_tick` activity events. Provides the Mission Control Heartbeat Daemon tile with a liveness signal even on quiet systems. Hidden from the default Events feed. |
 
 ### Task-Focused Mode
 
@@ -119,6 +120,8 @@ Heartbeat scheduling includes a persisted retry queue in `heartbeat_state.json`.
 ## 5. Visibility (Stealth Mode)
 
 The agent can perform "stealth heartbeats" where its thoughts are logged internally but not displayed to the user. Heartbeat execution broadcasts agent events onto the gateway session stream when a UI is connected.
+
+For Mission Control dashboard liveness, the scheduler loop emits a low-severity `heartbeat_tick` activity event at the interval configured by `UA_HEARTBEAT_TICK_EMIT_INTERVAL_S` (see Limits & Tuning). These tick events are hidden from the default Events feed but provide a real liveness signal for the Heartbeat Daemon tile and the Gateway tile (which uses any-recent `activity_events` as a liveness proxy).
 
 ## 6. Heartbeat Findings Contract
 
