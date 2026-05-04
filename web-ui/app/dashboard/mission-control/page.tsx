@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Activity, AlertTriangle, ArrowRight, BarChart3, Bell, Briefcase, CheckCircle, ClipboardList, Clock, FileText, Lightbulb, Loader2, RefreshCw, Sparkles, Timer, Trash2, XCircle } from "lucide-react";
+import { Activity, AlertTriangle, ArrowRight, BarChart3, Bell, Briefcase, CheckCircle, Clock, FileText, Lightbulb, Loader2, RefreshCw, Sparkles, Timer, Trash2, XCircle } from "lucide-react";
 import { formatDistanceToNow, parseISO } from "date-fns";
 
 const API_BASE = "/api/dashboard/gateway";
@@ -797,215 +797,6 @@ function ChiefOfStaffReadoutPanel() {
   );
 }
 
-type DashboardSituation = {
-  id: string;
-  kind?: string;
-  title?: string;
-  summary?: string;
-  priority?: "high" | "medium" | "low" | string;
-  status?: string;
-  requires_action?: boolean;
-  tags?: string[];
-  created_at_utc?: string;
-  updated_at_utc?: string;
-  source_domain?: string;
-  primary_href?: string;
-  knowledge_block?: {
-    source?: string;
-    event_ids?: string[];
-    task_ids?: string[];
-    session_id?: string | null;
-    recommended_action?: string;
-    handoff_prompt?: string;
-    evidence?: Record<string, unknown>;
-  };
-};
-
-function situationPriorityBadge(priority?: string): { color: string; label: string; icon: ReactNode } {
-  const p = (priority || "low").toLowerCase();
-  if (p === "high") {
-    return { color: "bg-red-500/10 text-red-300 border-red-500/25", label: "high", icon: <AlertTriangle className="h-3.5 w-3.5" /> };
-  }
-  if (p === "medium") {
-    return { color: "bg-accent/10 text-accent border-accent/25", label: "medium", icon: <Clock className="h-3.5 w-3.5" /> };
-  }
-  return { color: "bg-primary/10 text-primary border-primary/25", label: "low", icon: <CheckCircle className="h-3.5 w-3.5" /> };
-}
-
-// Operator Brief Panel — curated situation cards backed by /api/v1/dashboard/situations.
-function OperatorBriefPanel() {
-  const [loading, setLoading] = useState(true);
-  const { refreshKey } = useContext(RefreshContext);
-  const [error, setError] = useState<string | null>(null);
-  const [situations, setSituations] = useState<DashboardSituation[]>([]);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(`${API_BASE}/api/v1/dashboard/situations?limit=10`, {
-        cache: "no-store",
-      });
-      if (!res.ok) throw new Error(`Failed to load: ${res.status}`);
-      const json = await res.json();
-      const items: DashboardSituation[] = Array.isArray(json.situations) ? json.situations : [];
-      setSituations(items);
-    } catch (err: any) {
-      setError(err.message || "Failed to load operator brief");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    queueMicrotask(() => {
-      if (!cancelled) void load();
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [load, refreshKey]);
-
-  if (loading) {
-    return (
-      <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
-        <div className="mb-4 flex items-center gap-2">
-          <ClipboardList className="h-4 w-4 text-muted-foreground" />
-          <h2 className="text-sm font-medium text-foreground/80">Operator Brief</h2>
-        </div>
-        <div className="space-y-3">
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="space-y-2">
-              <Skeleton className="h-4 w-3/4" />
-              <Skeleton className="h-3 w-1/2" />
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
-        <div className="mb-4 flex items-center gap-2">
-          <ClipboardList className="h-4 w-4 text-muted-foreground" />
-          <h2 className="text-sm font-medium text-foreground/80">Operator Brief</h2>
-        </div>
-        <div className="flex flex-col items-center justify-center py-6 text-center">
-          <XCircle className="mb-2 h-8 w-8 text-red-400" />
-          <p className="text-sm text-muted-foreground">{error}</p>
-          <button
-            onClick={load}
-            className="mt-3 flex items-center gap-1 rounded bg-card/50 px-3 py-1.5 text-xs text-foreground/80 hover:bg-muted"
-          >
-            <RefreshCw className="h-3 w-3" />
-            Retry
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-w-0 rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <ClipboardList className="h-4 w-4 text-muted-foreground" />
-          <h2 className="text-sm font-medium text-foreground/80">Operator Brief</h2>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">{situations.length} situation{situations.length === 1 ? "" : "s"}</span>
-          <Link
-            href="/dashboard/events"
-            className="inline-flex items-center gap-1 rounded border border-border bg-card px-2 py-0.5 text-xs text-muted-foreground hover:bg-card/50 hover:text-foreground/80"
-          >
-            Event Log
-            <ArrowRight className="h-3 w-3" />
-          </Link>
-        </div>
-      </div>
-
-      {situations.length === 0 ? (
-        <div className="flex flex-1 items-center justify-center py-8">
-          <p className="text-sm text-muted-foreground">No operator-relevant situations right now.</p>
-        </div>
-      ) : (
-        <div className="max-h-[30rem] space-y-3 overflow-y-auto pr-1">
-          {situations.map((situation) => {
-            const badge = situationPriorityBadge(situation.priority);
-            const kb = situation.knowledge_block || {};
-            return (
-              <div
-                key={situation.id}
-                className="min-w-0 overflow-hidden rounded-lg border border-border/50 bg-card/30 p-3"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    <p className="break-words text-sm font-medium text-foreground leading-snug">{situation.title || "Situation"}</p>
-                    {situation.summary && (
-                      <p className="mt-0.5 break-words text-xs text-muted-foreground leading-snug line-clamp-2">
-                        {situation.summary}
-                      </p>
-                    )}
-                  </div>
-                  <span className={`inline-flex flex-shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-xs ${badge.color}`}>
-                    {badge.icon}
-                    {badge.label}
-                  </span>
-                </div>
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  {(situation.tags || []).slice(0, 6).map((tag) => (
-                    <span key={tag} className="rounded bg-card/50 px-1.5 py-0.5 text-xs text-muted-foreground">
-                      {tag}
-                    </span>
-                  ))}
-                  {situation.status && (
-                    <span className="text-xs text-muted-foreground">{situation.status}</span>
-                  )}
-                  <span className="text-xs text-muted-foreground">
-                    {formatTs(situation.updated_at_utc || situation.created_at_utc)}
-                  </span>
-                </div>
-                {kb.recommended_action && (
-                  <p className="mt-2 text-xs text-foreground/75">
-                    <span className="text-muted-foreground">Recommended:</span> {kb.recommended_action}
-                  </p>
-                )}
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  {situation.primary_href && (
-                    <Link
-                      href={situation.primary_href}
-                      className="inline-flex items-center gap-1 rounded border border-primary/30 bg-primary/10 px-2 py-1 text-[11px] text-primary/80 hover:bg-primary/20"
-                    >
-                      Open Source
-                      <ArrowRight className="h-3 w-3" />
-                    </Link>
-                  )}
-                  <details className="group">
-                    <summary className="inline-flex cursor-pointer items-center gap-1 rounded border border-border bg-background/40 px-2 py-1 text-[11px] text-foreground/80 hover:bg-card/60">
-                      <FileText className="h-3 w-3" />
-                      Knowledge Block
-                    </summary>
-                    <div className="mt-2 max-h-48 overflow-y-auto rounded border border-border/60 bg-background/60 p-2 text-[11px] leading-relaxed text-muted-foreground">
-                      {kb.task_ids && kb.task_ids.length > 0 && <p>Tasks: {kb.task_ids.join(", ")}</p>}
-                      {kb.event_ids && kb.event_ids.length > 0 && <p>Events: {kb.event_ids.join(", ")}</p>}
-                      {kb.session_id && <p>Session: {kb.session_id}</p>}
-                      {kb.handoff_prompt && (
-                        <pre className="mt-2 whitespace-pre-wrap font-mono text-[10px] text-foreground/70">{kb.handoff_prompt}</pre>
-                      )}
-                    </div>
-                  </details>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ── Tier-0 tile strip (Phase 1B) ─────────────────────────────────────
 // Compact at-a-glance health row of nine traffic-light tiles. Each
@@ -1812,7 +1603,8 @@ function OperatingPosturePanel() {
  *
  * Chief-of-Staff-first operator intelligence surface:
  * - Chief-of-Staff Readout: durable LLM synthesis from bounded evidence
- * - Operator Brief: supporting curated situations with knowledge blocks
+ * - Tile Strip: nine traffic-light health tiles (Tier-0)
+ * - Intelligence Cards: tier-1 narrative cards with feedback + action buttons
  * - Current Work: recent durable Task Hub missions
  * - Operating Posture: compact health and navigation to deeper tools
  */
@@ -1900,7 +1692,6 @@ export default function MissionControlPage() {
             <ChiefOfStaffReadoutPanel />
             {/* Phase 2: tier-1 LLM-discovered narrative cards */}
             <CardGridPanel />
-            <OperatorBriefPanel />
             <ActiveTasksPanel />
           </div>
           <OperatingPosturePanel />
