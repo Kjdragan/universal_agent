@@ -151,6 +151,98 @@ def test_emit_cron_event_labels_autonomous_runs(tmp_path: Path, monkeypatch):
     assert latest["metadata"]["autonomous"] is True
 
 
+def test_cron_run_failed_kind_upserts_to_single_row(tmp_path: Path, monkeypatch):
+    """Three failed runs of the same job should leave exactly one live
+    `cron_run_failed` notification (kind-level upsert), not three stacked
+    rows.  Without `cron_run_failed` in `_HEALTH_ALERT_NOTIFICATION_KINDS`,
+    a flapping cron job drowns the dashboard with duplicate alerts."""
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    monkeypatch.setattr(gateway_server, "_cron_service", CronService(_StubGateway(), tmp_path))
+
+    cron_ws = tmp_path / "cron_failed_upsert_workspace"
+    cron_ws.mkdir(parents=True, exist_ok=True)
+    job = gateway_server._cron_service.add_job(
+        user_id="calendar_owner",
+        workspace_dir=str(cron_ws),
+        command="failing demo",
+        every_raw="30m",
+        enabled=True,
+    )
+
+    for attempt in range(1, 4):
+        gateway_server._emit_cron_event(
+            {
+                "type": "cron_run_completed",
+                "run": {
+                    "run_id": f"run_failed_{attempt}",
+                    "job_id": job.job_id,
+                    "status": "failed",
+                    "scheduled_at": time.time(),
+                    "started_at": time.time(),
+                    "finished_at": time.time(),
+                    "error": f"attempt {attempt} failed",
+                },
+            }
+        )
+
+    failed_rows = [
+        item for item in gateway_server._notifications
+        if str(item.get("kind") or "").strip().lower() == "cron_run_failed"
+        and str(item.get("status") or "new") != "dismissed"
+    ]
+    assert len(failed_rows) == 1, (
+        f"Expected exactly one live cron_run_failed notification (kind-upsert); "
+        f"got {len(failed_rows)}.  This means cron_run_failed is missing from "
+        f"_HEALTH_ALERT_NOTIFICATION_KINDS and a flapping job will stack duplicates."
+    )
+    latest = failed_rows[0]
+    assert latest["metadata"]["job_id"] == job.job_id
+    # Metadata from the most-recent attempt should win after upsert.
+    assert "attempt 3 failed" in (latest.get("metadata", {}).get("error") or "")
+
+
+def test_autonomous_run_failed_kind_upserts_to_single_row(tmp_path: Path, monkeypatch):
+    """Same kind-upsert guarantee for autonomous (system_job) cron failures."""
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    monkeypatch.setattr(gateway_server, "_cron_service", CronService(_StubGateway(), tmp_path))
+
+    cron_ws = tmp_path / "cron_autonomous_failed_upsert_workspace"
+    cron_ws.mkdir(parents=True, exist_ok=True)
+    job = gateway_server._cron_service.add_job(
+        user_id="cron_system",
+        workspace_dir=str(cron_ws),
+        command="autonomous fail demo",
+        every_raw="30m",
+        enabled=True,
+        metadata={"autonomous": True, "system_job": "demo_autonomous"},
+    )
+
+    for attempt in range(1, 4):
+        gateway_server._emit_cron_event(
+            {
+                "type": "cron_run_completed",
+                "run": {
+                    "run_id": f"run_auto_failed_{attempt}",
+                    "job_id": job.job_id,
+                    "status": "failed",
+                    "scheduled_at": time.time(),
+                    "started_at": time.time(),
+                    "finished_at": time.time(),
+                    "error": f"autonomous attempt {attempt} failed",
+                },
+            }
+        )
+
+    failed_rows = [
+        item for item in gateway_server._notifications
+        if str(item.get("kind") or "").strip().lower() == "autonomous_run_failed"
+        and str(item.get("status") or "new") != "dismissed"
+    ]
+    assert len(failed_rows) == 1, (
+        f"Expected exactly one live autonomous_run_failed notification; got {len(failed_rows)}."
+    )
+
+
 def test_emit_cron_event_adds_retry_notification_with_workflow_metadata(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(gateway_server, "_notifications", [])
     monkeypatch.setattr(gateway_server, "_cron_service", CronService(_StubGateway(), tmp_path))

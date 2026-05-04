@@ -11171,6 +11171,12 @@ def _activity_upsert_digest_notification(
 _HEALTH_ALERT_NOTIFICATION_KINDS: frozenset[str] = frozenset({
     "youtube_ingest_proxy_alert",
     "hook_dispatch_queue_overflow",
+    # Cron failure kinds: a flapping job (e.g. one that fails every 8 AM
+    # because a required secret is missing) must collapse to ONE live
+    # alert per job_id, not stack a new row per attempt.  The upsert key
+    # is `kind`, so we further scope by per-kind metadata downstream.
+    "cron_run_failed",
+    "autonomous_run_failed",
 })
 
 # Heartbeat mediation notification kinds that use classification-based upsert.
