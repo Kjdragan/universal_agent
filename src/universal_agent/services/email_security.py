@@ -24,7 +24,7 @@ import json
 import logging
 import re
 import sqlite3
-from typing import Any, Optional, Sequence
+from typing import Any, Sequence
 
 logger = logging.getLogger(__name__)
 

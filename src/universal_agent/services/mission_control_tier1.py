@@ -34,12 +34,10 @@ import hashlib
 import json
 import logging
 import os
-from pathlib import Path
 import sqlite3
 from typing import Any
 
 from universal_agent.services.mission_control_cards import (
-    CARD_STATE_LIVE,
     SEVERITY_CRITICAL,
     SEVERITY_INFORMATIONAL,
     SEVERITY_SUCCESS,

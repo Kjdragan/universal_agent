@@ -17,7 +17,6 @@ import logging
 import os
 from pathlib import Path
 import re
-import shutil
 import sqlite3
 import time
 from typing import Any

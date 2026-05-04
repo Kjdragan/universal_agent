@@ -1830,7 +1830,6 @@ class AgentMailService:
         """
         try:
             from universal_agent.services.priority_classifier import (
-                TaskPriority,
                 classify_email_priority,
             )
 
