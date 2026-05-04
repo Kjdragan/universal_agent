@@ -7,6 +7,13 @@ tasks. This file covers the rest — manually-created Kanban cards,
 cron-spawned tasks, mission-spawned tasks. Without this hook, operator
 completions on the Kanban board produced no signal the dashboard could
 surface.
+
+Tests run with UA_PROACTIVE_OUTCOME_MEMORY=false and
+UA_PROACTIVE_AUTO_INVESTIGATE=false so we don't pollute the real
+MEMORY.md / memory/index.json files when exercising the proactive
+outcome path. (perform_task_action -> record_proactive_outcome ->
+_write_outcome_to_memory writes to the repo-level memory dir by
+default; in production that's correct, in tests it leaks state.)
 """
 from __future__ import annotations
 
@@ -16,6 +23,12 @@ from pathlib import Path
 import pytest
 
 from universal_agent import task_hub
+
+
+@pytest.fixture(autouse=True)
+def _isolate_proactive_outcome_side_effects(monkeypatch):
+    monkeypatch.setenv("UA_PROACTIVE_OUTCOME_MEMORY", "false")
+    monkeypatch.setenv("UA_PROACTIVE_AUTO_INVESTIGATE", "false")
 
 
 def _conn() -> sqlite3.Connection:
