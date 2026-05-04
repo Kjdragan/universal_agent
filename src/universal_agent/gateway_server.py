@@ -14224,6 +14224,7 @@ async def lifespan(app: FastAPI):
             _ensure_proactive_report_midday_cron_job()
             _ensure_proactive_report_afternoon_cron_job()
             _ensure_proactive_artifact_digest_cron_job()
+            _ensure_vp_coder_workspace_pruning_cron_job()
         except Exception as exc:
             logger.warning("Failed ensuring autonomous cron jobs: %s", exc)
     else:
@@ -17805,6 +17806,27 @@ def _ensure_codie_proactive_cleanup_cron_job() -> Optional[dict[str, Any]]:
     return job.to_dict() if hasattr(job, "to_dict") else {"job_id": str(getattr(job, "job_id", ""))}
 
 
+def _ensure_vp_coder_workspace_pruning_cron_job() -> Optional[dict[str, Any]]:
+    """Weekly pruning of external VP-coder workspace subdirectories.
+
+    The session reaper at startup handles main AGENT_RUN_WORKSPACES.
+    External VP-coder workspaces under UA_VP_CODER_WORKSPACE_ROOT have
+    no scheduled cleanup — they accumulated to 55 subdirs / 64% disk
+    before this job was added.  Runs Sunday 04:00 CT by default.
+    """
+    return _register_system_cron_job(
+        system_job="vp_coder_workspace_pruning",
+        default_cron="0 4 * * 0",
+        default_timezone="America/Chicago",
+        command="!script universal_agent.scripts.vp_coder_workspace_pruner",
+        description="Weekly pruning of stale VP-coder workspace subdirectories (default: archive after 7 days).",
+        timeout_seconds=600,
+        enabled=_proactive_cron_enabled("UA_VP_CODER_WORKSPACE_PRUNING_ENABLED"),
+        cron_env_var="UA_VP_CODER_WORKSPACE_PRUNING_CRON",
+        timezone_env_var="UA_VP_CODER_WORKSPACE_PRUNING_TIMEZONE",
+    )
+
+
 def _ensure_autonomous_daily_briefing_job() -> Optional[dict[str, Any]]:
     if not _cron_service or not _autonomous_daily_briefing_enabled():
         return None
@@ -18098,6 +18120,13 @@ def _ensure_nightly_wiki_cron_job() -> Optional[dict[str, Any]]:
         enabled=_proactive_cron_enabled("UA_NIGHTLY_WIKI_ENABLED"),
         cron_env_var="UA_NIGHTLY_WIKI_CRON",
         timezone_env_var="UA_NIGHTLY_WIKI_TIMEZONE",
+        # The script delegates to vp.general.primary which uses `nlm`
+        # against NotebookLM; auth depends on NOTEBOOKLM_AUTH_COOKIE_HEADER
+        # (notebooklm_runtime.py:177).  Without it the run dies with a
+        # generic exit 1 — same failure shape as paper_to_podcast pre-G3.
+        # Declare here so Phase 5 pre-flight surfaces a structured
+        # cron_run_failed naming the missing key.
+        required_secrets=["NOTEBOOKLM_AUTH_COOKIE_HEADER"],
     )
 
 

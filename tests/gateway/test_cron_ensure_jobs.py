@@ -385,3 +385,62 @@ def test_ensure_morning_briefing_declares_ua_ops_token_required(monkeypatch):
         f"morning_briefing helper must declare UA_OPS_TOKEN in required_secrets; "
         f"current metadata: {job.metadata!r}"
     )
+
+
+def test_ensure_nightly_wiki_declares_notebooklm_auth_cookie_required(monkeypatch):
+    """nightly_wiki delegates to vp.general.primary which uses `nlm`
+    against NotebookLM; auth depends on NOTEBOOKLM_AUTH_COOKIE_HEADER.
+    Without it the dispatch returns 0 cards or the VP exits 1, which
+    showed up as the "Script exited with 1" retry storm.  Declare the
+    secret so Phase 5 surfaces a structured cron_run_failed before the
+    run starts — same shape as paper_to_podcast (G3).
+    """
+    cron_stub = _CronBootstrapStub()
+    monkeypatch.setattr(gateway_server, "_cron_service", cron_stub)
+    monkeypatch.setenv("UA_NIGHTLY_WIKI_ENABLED", "1")
+
+    gateway_server._ensure_nightly_wiki_cron_job()
+
+    assert len(cron_stub.jobs) == 1
+    job = cron_stub.jobs[0]
+    required = job.metadata.get("required_secrets") or []
+    assert "NOTEBOOKLM_AUTH_COOKIE_HEADER" in required, (
+        f"nightly_wiki must declare NOTEBOOKLM_AUTH_COOKIE_HEADER in "
+        f"required_secrets; current metadata: {job.metadata!r}"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# VP-coder workspace pruning — disk-pressure relief.  External CODIE worker
+# workspaces under UA_VP_CODER_WORKSPACE_ROOT have no scheduled cleanup;
+# they accumulated to 55 subdirs / 64% disk.  This helper schedules a
+# weekly archive sweep mirroring the session reaper's pattern.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_ensure_vp_coder_workspace_pruning_creates_new(monkeypatch):
+    cron_stub = _CronBootstrapStub()
+    monkeypatch.setattr(gateway_server, "_cron_service", cron_stub)
+    monkeypatch.delenv("UA_VP_CODER_WORKSPACE_PRUNING_ENABLED", raising=False)
+    monkeypatch.delenv("UA_VP_CODER_WORKSPACE_PRUNING_CRON", raising=False)
+
+    result = gateway_server._ensure_vp_coder_workspace_pruning_cron_job()
+
+    assert result is not None
+    assert len(cron_stub.jobs) == 1
+    job = cron_stub.jobs[0]
+    assert job.metadata["system_job"] == "vp_coder_workspace_pruning"
+    assert "vp_coder_workspace_pruner" in (job.command or "")
+    # Default: weekly Sunday 04:00 CT.
+    assert job.cron_expr == "0 4 * * 0"
+
+
+def test_ensure_vp_coder_workspace_pruning_respects_disable_flag(monkeypatch):
+    cron_stub = _CronBootstrapStub()
+    monkeypatch.setattr(gateway_server, "_cron_service", cron_stub)
+    monkeypatch.setenv("UA_VP_CODER_WORKSPACE_PRUNING_ENABLED", "0")
+
+    result = gateway_server._ensure_vp_coder_workspace_pruning_cron_job()
+
+    assert result is None
+    assert cron_stub.jobs == []
