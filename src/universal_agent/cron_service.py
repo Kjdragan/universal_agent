@@ -893,6 +893,27 @@ class CronService:
                     )
             await asyncio.sleep(1)
 
+    @staticmethod
+    def _find_missing_required_secrets(job: CronJob) -> list[str]:
+        """Return the names of any env vars declared in
+        `job.metadata["required_secrets"]` that resolve to an empty value.
+        Jobs that don't declare required_secrets are skipped (return [])."""
+        metadata = getattr(job, "metadata", None)
+        if not isinstance(metadata, dict):
+            return []
+        required = metadata.get("required_secrets")
+        if not isinstance(required, (list, tuple)):
+            return []
+        missing: list[str] = []
+        for raw in required:
+            name = str(raw or "").strip()
+            if not name:
+                continue
+            value = os.getenv(name, "").strip()
+            if not value:
+                missing.append(name)
+        return missing
+
     async def _run_job(
         self,
         job: CronJob,
@@ -969,6 +990,46 @@ class CronService:
                 dispatch_key=dispatch_key,
             )
             self._emit_event({"type": "cron_run_started", "run": record.to_dict(), "reason": reason})
+
+            # ── Phase 5: pre-flight required-secrets check ─────────────
+            # Each `_ensure_*_cron_job` may declare `metadata.required_secrets`
+            # listing the env-var names the job needs to function (e.g. the
+            # YouTube digest needs `<DAY>_YT_PLAYLIST`).  Verify them here
+            # so a missing-key failure surfaces as a structured cron_run_failed
+            # notification instead of the script firing-and-dying with no
+            # operator-visible cause.
+            missing_secrets = self._find_missing_required_secrets(job)
+            if missing_secrets:
+                record.status = "error"
+                record.finished_at = time.time()
+                record.error = (
+                    f"Missing required secrets: {', '.join(missing_secrets)}. "
+                    f"Configure these env vars (or Infisical entries) before "
+                    f"the next scheduled run."
+                )
+                record.output_preview = record.error
+                self.store.append_run(record)
+                self._emit_event({
+                    "type": "cron_run_completed",
+                    "run": record.to_dict(),
+                    "reason": reason,
+                })
+                self._finalize_workflow_attempt(
+                    job=job,
+                    record=record,
+                    scheduled_at=scheduled_at,
+                    reason=reason,
+                    dispatch_key=dispatch_key,
+                    workflow_run_id=workflow_run_id,
+                    workflow_attempt_id=workflow_attempt_id,
+                    failure_reason=record.error,
+                    failure_class="missing_required_secrets",
+                    retryable=False,
+                )
+                self.running_jobs.discard(job.job_id)
+                self.running_job_scheduled_at.pop(job.job_id, None)
+                return record
+
             timeout_seconds = self._resolve_job_timeout_seconds(job)
             scheduled_marker = float(scheduled_at) if scheduled_at is not None else float(record.started_at)
             self.running_job_scheduled_at[job.job_id] = scheduled_marker

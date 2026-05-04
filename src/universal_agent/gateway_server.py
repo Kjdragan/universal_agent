@@ -17894,6 +17894,19 @@ def _ensure_youtube_daily_digest_cron_job() -> Optional[dict[str, Any]]:
         "source": "system",
         "session_id": "cron_daily_youtube_digest",
         "script": "universal_agent.scripts.youtube_daily_digest",
+        # Phase 5: declare the env vars the digest needs.  The cron service
+        # pre-flight check fails the run with a structured cron_run_failed
+        # notification if any are unset — operator sees a kind-upserted
+        # dashboard alert listing the missing keys before 8 AM hits.
+        "required_secrets": [
+            "MONDAY_YT_PLAYLIST",
+            "TUESDAY_YT_PLAYLIST",
+            "WEDNESDAY_YT_PLAYLIST",
+            "THURSDAY_YT_PLAYLIST",
+            "FRIDAY_YT_PLAYLIST",
+            "SATURDAY_YT_PLAYLIST",
+            "SUNDAY_YT_PLAYLIST",
+        ],
     }
     updates = {
         "user_id": "cron_system",
