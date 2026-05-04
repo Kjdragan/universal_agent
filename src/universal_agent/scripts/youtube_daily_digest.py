@@ -22,7 +22,7 @@ Playlist IDs are stored in Infisical as <DAY>_YT_PLAYLIST:
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 import os
@@ -766,12 +766,21 @@ def process_daily_digest(
 ):
     initialize_runtime_secrets()
 
-    day_name = day_override.upper() if day_override else DAYS[datetime.now().weekday()]
+    # The cron fires the morning AFTER the user's content collection.
+    # The user maintains 7 playlists named "<Day> Digest" — content
+    # queued throughout Monday lives in "Monday Digest" and is summarised
+    # by Tuesday's 8 AM run.  So Tuesday's run reads YESTERDAY's playlist:
+    # MONDAY_YT_PLAYLIST.  `day_override` still uses the literal value the
+    # operator passed (no shift), so manual reruns target an exact day.
+    if day_override:
+        day_name = day_override.upper()
+    else:
+        day_name = DAYS[(datetime.now() - timedelta(days=1)).weekday()]
     playlist_id_var = f"{day_name}_YT_PLAYLIST"
     playlist_id = os.getenv(playlist_id_var)
 
     if not playlist_id:
-        logger.warning("No playlist configured for today: %s (%s is not set)", day_name, playlist_id_var)
+        logger.warning("No playlist configured for content day: %s (%s is not set)", day_name, playlist_id_var)
         return
 
     logger.info("Starting Daily Digest for %s (Playlist: %s)", day_name, playlist_id)
@@ -1019,7 +1028,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.repopulate:
-        day_upper = (args.day or DAYS[datetime.now().weekday()]).upper()
+        # Same yesterday-shift as process_daily_digest: when no explicit
+        # --day is passed, repopulate the previous day's content (which
+        # this morning's run is summarising).
+        day_upper = (args.day or DAYS[(datetime.now() - timedelta(days=1)).weekday()]).upper()
         if day_upper not in DAYS:
             logger.error("Invalid day: %s. Must be one of %s", args.day, DAYS)
             sys.exit(1)
