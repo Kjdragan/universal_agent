@@ -16,11 +16,11 @@ See docs/02_Subsystems/Mission_Control_Intelligence_System.md §3.2.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import sqlite3
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
 from typing import Any
 
 CARD_STATE_LIVE = "live"

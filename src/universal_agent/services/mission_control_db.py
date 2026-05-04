@@ -22,8 +22,8 @@ See docs/02_Subsystems/Mission_Control_Intelligence_System.md §3.
 from __future__ import annotations
 
 import os
-import sqlite3
 from pathlib import Path
+import sqlite3
 
 from universal_agent.durable.db import get_sqlite_busy_timeout_ms
 

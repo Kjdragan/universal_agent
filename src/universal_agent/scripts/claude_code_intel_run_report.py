@@ -15,7 +15,11 @@ from typing import Any
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
 from universal_agent.infisical_loader import initialize_runtime_secrets
 from universal_agent.services.agentmail_service import AgentMailService
-from universal_agent.services.claude_code_intel import ClaudeCodeIntelConfig, emit_csi_activity_event, run_sync
+from universal_agent.services.claude_code_intel import (
+    ClaudeCodeIntelConfig,
+    emit_csi_activity_event,
+    run_sync,
+)
 from universal_agent.services.claude_code_intel_operator_report import (
     build_operator_email,
     build_operator_report,

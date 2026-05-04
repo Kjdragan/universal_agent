@@ -1830,7 +1830,6 @@ class AgentMailService:
         """
         try:
             from universal_agent.services.priority_classifier import (
-                TaskPriority,
                 classify_email_priority,
             )
 
@@ -2516,7 +2515,9 @@ class AgentMailService:
 
         # ③ Record quarantine in sender reputation
         try:
-            from universal_agent.services.email_security import record_sender_quarantined
+            from universal_agent.services.email_security import (
+                record_sender_quarantined,
+            )
 
             _rep_conn = connect_runtime_db(get_activity_db_path())
             threats = []

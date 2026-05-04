@@ -22,12 +22,12 @@ See docs/02_Subsystems/Mission_Control_Intelligence_System.md §4.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
 import sqlite3
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Any
 
 # Tile color vocabulary lives at the column-check level in

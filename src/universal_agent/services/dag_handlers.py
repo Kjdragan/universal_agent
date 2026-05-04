@@ -15,7 +15,7 @@ import logging
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict
 
-from universal_agent.services.dag_runner import DagState, STATUS_FAILED, STATUS_SUCCESS
+from universal_agent.services.dag_runner import STATUS_FAILED, STATUS_SUCCESS, DagState
 
 logger = logging.getLogger(__name__)
 

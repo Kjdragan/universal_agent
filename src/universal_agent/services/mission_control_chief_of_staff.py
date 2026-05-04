@@ -7,10 +7,10 @@ fallback reporting; it does not try to score or invent operational themes.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import logging
 import os
-from datetime import datetime, timezone
 from pathlib import Path
 import sqlite3
 from typing import Any
