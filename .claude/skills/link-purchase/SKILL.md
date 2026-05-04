@@ -3,6 +3,7 @@ name: link-purchase
 description: Use this skill when the user gives an explicit, parseable purchase intent — e.g. "buy X from Y for $Z", "pay $N to merchant.com", "complete the checkout at <url>". Generates a Link spend request, surfaces the Link approval URL for the user to tap-approve in the Link app, and handles the post-approval flow. NEVER triggers from offhand mentions like "I should buy that someday". The user must specify a merchant, amount, and what's being bought.
 allowed-tools:
   - mcp__link__*
+  - browser_subagent
 license: Internal
 version: 0.1.0
 metadata:
@@ -108,9 +109,11 @@ details page). The skill should:
 1. Stop polling.
 2. Tell the user: "Approved. Check your email or Mission Control for the
    one-shot card link." Card details are NEVER shown in chat.
-3. If `UA_LINK_AUTO_CHECKOUT=1`, the `agent_purchaser` sub-agent will pick
-   up checkout. Otherwise the user completes the merchant's checkout form
-   themselves via the signed URL.
+3. If `UA_LINK_AUTO_CHECKOUT=1` or you are instructed to complete the checkout yourself:
+   - **CRITICAL RULE:** You MUST exclusively use the native `browser_subagent` tool to perform the checkout.
+   - **NEVER** use raw `bash` commands to run CLI browser wrappers (e.g., `npx agent-browser` or Playwright CLIs). CLI wrappers will crash due to system AppArmor sandbox restrictions and create zombie processes.
+   - Simply call `browser_subagent` with a detailed task description (e.g., "Navigate to press.stripe.com, find a $1 item, add it to the cart, and checkout using these card details").
+4. Otherwise, the user completes the merchant's checkout form themselves via the signed URL.
 
 ## Constraints
 
