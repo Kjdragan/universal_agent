@@ -3317,6 +3317,80 @@ def get_refinement_state(
     }
 
 
+def _emit_kanban_terminal_intelligence(
+    *,
+    item: dict[str, Any],
+    action: str,
+    reason: str,
+    agent_id: str,
+) -> None:
+    """Surface a non-proactive Kanban terminal action as an
+    intelligence-grade activity event so Mission Control's tier-1 LLM
+    discovers it as a card.
+
+    The proactive_outcome_tracker handles proactive-sourced tasks. This
+    fills the gap for the rest: manually-created Kanban cards, cron-
+    spawned tasks, mission-spawned tasks, etc. Without this hook, an
+    operator completing a task on the Kanban board produced nothing
+    tier-1 could surface — even though that's exactly the kind of
+    "what landed today" intelligence the operator wants.
+
+    Severity bands match the proactive path so cards from both sources
+    speak the same language to the LLM.
+    """
+    from universal_agent.services.intelligence_emitter import (
+        SEVERITY_INFO,
+        SEVERITY_SUCCESS,
+        SEVERITY_WARNING,
+        emit_intelligence_event,
+    )
+
+    task_id = str(item.get("task_id") or "").strip()
+    title = str(item.get("title") or "").strip() or task_id or "task"
+    source_kind = str(item.get("source_kind") or "manual").strip()
+    project_key = str(item.get("project_key") or "").strip()
+
+    if action in ("complete", "approve"):
+        severity = SEVERITY_SUCCESS
+        kind = "task_completed"
+        headline = f"Task completed: {title}"
+        bits = [f"Action `{action}`"]
+        if source_kind:
+            bits.append(f"(source: {source_kind})")
+        if project_key:
+            bits.append(f"in project `{project_key}`")
+        summary = " ".join(bits) + "."
+    elif action in {"block", "review"}:
+        severity = SEVERITY_WARNING
+        kind = f"task_{action}"
+        headline = f"Task {action}ed: {title}"
+        summary = f"Operator marked task `{task_id}` as `{action}`."
+    else:
+        # park, etc.
+        severity = SEVERITY_INFO
+        kind = f"task_{action}"
+        headline = f"Task {action}: {title}"
+        summary = f"Operator action `{action}` on task `{task_id}`."
+
+    emit_intelligence_event(
+        source_domain="task_hub",
+        kind=kind,
+        title=headline,
+        summary=summary,
+        severity=severity,
+        full_message=reason[:1200] if reason else None,
+        metadata={
+            "task_id": task_id,
+            "source_kind": source_kind,
+            "project_key": project_key,
+            "action": action,
+            "agent_id": agent_id,
+            "priority": item.get("priority"),
+            "labels": item.get("labels") or [],
+        },
+    )
+
+
 def perform_task_action(
     conn: sqlite3.Connection,
     *,
@@ -3568,6 +3642,31 @@ def perform_task_action(
         except Exception as _outcome_exc:
             logger.warning(
                 "Proactive outcome recording failed for %s: %s", task_id, _outcome_exc
+            )
+
+        # Mission Control intelligence emit for NON-proactive terminal
+        # actions. The proactive path above already emits via
+        # proactive_outcome_tracker._emit_outcome_intelligence; mirror
+        # that coverage to operator-driven Kanban completions on
+        # manually-created or cron-spawned tasks so the dashboard shows
+        # what the operator actually got done. Defensive — never let
+        # instrumentation break the action lifecycle.
+        try:
+            from universal_agent.services.proactive_outcome_tracker import (
+                PROACTIVE_SOURCES,
+            )
+            source_kind = str(item.get("source_kind") or "").strip().lower()
+            if source_kind not in PROACTIVE_SOURCES:
+                _emit_kanban_terminal_intelligence(
+                    item=item,
+                    action=action_norm,
+                    reason=reason_text,
+                    agent_id=agent_id,
+                )
+        except Exception as _emit_exc:
+            logger.debug(
+                "Kanban terminal intelligence emit failed for %s: %s",
+                task_id, _emit_exc,
             )
 
     rebuild_dispatch_queue(conn)
