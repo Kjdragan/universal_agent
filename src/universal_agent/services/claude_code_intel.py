@@ -137,24 +137,87 @@ class ClaudeCodeIntelConfig:
     queue_task_hub: bool = True
     request_timeout_seconds: float = 20.0
     artifacts_root: Path | None = None
+    lane_slug: str = "claude-code-intelligence"
 
     @classmethod
     def from_env(cls) -> "ClaudeCodeIntelConfig":
+        # Resolution order for handle:
+        #   1. Explicit env UA_CLAUDE_CODE_INTEL_X_HANDLE
+        #   2. First handle from intel_lanes.yaml for the active lane
+        #   3. DEFAULT_HANDLE constant (defensive)
+        # Env override preserves v1 behavior; lane fallback is the PR 17
+        # generalization so swapping lane config swaps handles without
+        # touching env.
+        env_handle = (os.getenv("UA_CLAUDE_CODE_INTEL_X_HANDLE") or "").strip().lstrip("@")
+        lane_slug = (os.getenv("UA_CLAUDE_CODE_INTEL_LANE_SLUG") or "claude-code-intelligence").strip()
+        handle = env_handle or _first_handle_from_lane(lane_slug) or DEFAULT_HANDLE
         return cls(
-            handle=(os.getenv("UA_CLAUDE_CODE_INTEL_X_HANDLE") or DEFAULT_HANDLE).strip().lstrip("@") or DEFAULT_HANDLE,
+            handle=handle or DEFAULT_HANDLE,
             max_results=_bounded_int(os.getenv("UA_CLAUDE_CODE_INTEL_MAX_RESULTS"), DEFAULT_MAX_RESULTS, low=5, high=100),
             queue_task_hub=str(os.getenv("UA_CLAUDE_CODE_INTEL_QUEUE_TASKS", "1")).strip().lower() in _TRUTHY,
             request_timeout_seconds=float(os.getenv("UA_CLAUDE_CODE_INTEL_TIMEOUT_SECONDS", "20") or 20),
+            lane_slug=lane_slug,
+        )
+
+    @classmethod
+    def from_lane(cls, lane_slug: str = "claude-code-intelligence") -> "ClaudeCodeIntelConfig":
+        """Build config from a lane slug only — bypasses env for tests/explicit lane runs."""
+        handle = _first_handle_from_lane(lane_slug) or DEFAULT_HANDLE
+        return cls(
+            handle=handle,
+            max_results=DEFAULT_MAX_RESULTS,
+            queue_task_hub=True,
+            request_timeout_seconds=20.0,
+            lane_slug=lane_slug,
         )
 
     @classmethod
     def all_handles_from_env(cls) -> list[str]:
-        """Return all configured handles from env or default list."""
+        """Return all configured handles. Resolution order:
+
+        1. Explicit env UA_CLAUDE_CODE_INTEL_X_HANDLES (comma-separated)
+        2. intel_lanes.yaml handles for the active lane
+        3. DEFAULT_HANDLES constant (defensive)
+
+        Existing callers stay env-driven; lane fallback only fires when the
+        env var is unset.
+        """
         env_val = str(os.getenv("UA_CLAUDE_CODE_INTEL_X_HANDLES") or "").strip()
         if env_val:
             handles = [h.strip().lstrip("@") for h in env_val.split(",") if h.strip()]
             return handles or list(DEFAULT_HANDLES)
+        lane_slug = (os.getenv("UA_CLAUDE_CODE_INTEL_LANE_SLUG") or "claude-code-intelligence").strip()
+        lane_handles = _all_handles_from_lane(lane_slug)
+        if lane_handles:
+            return lane_handles
         return list(DEFAULT_HANDLES)
+
+
+def _first_handle_from_lane(lane_slug: str) -> str:
+    """Return the first handle declared for `lane_slug`. Empty string on failure.
+
+    Defensive: never raises. PR 11's intel_lanes loader has its own caching,
+    so calling this on every from_env() is cheap.
+    """
+    try:
+        from universal_agent.services.intel_lanes import get_lane
+
+        lane = get_lane(lane_slug)
+    except Exception:
+        return ""
+    handles = list(lane.handles or [])
+    return str(handles[0]).strip() if handles else ""
+
+
+def _all_handles_from_lane(lane_slug: str) -> list[str]:
+    """Return every handle declared for `lane_slug`. Empty list on failure."""
+    try:
+        from universal_agent.services.intel_lanes import get_lane
+
+        lane = get_lane(lane_slug)
+    except Exception:
+        return []
+    return [str(h).strip() for h in (lane.handles or []) if str(h).strip()]
 
 
 @dataclass
