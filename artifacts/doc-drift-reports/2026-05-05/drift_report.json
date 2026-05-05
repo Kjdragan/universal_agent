@@ -1,0 +1,117 @@
+{
+  "report_date": "2026-05-05",
+  "generated_at": "2026-05-05T10:13:26.424546+00:00",
+  "total_issues": 14,
+  "issues_by_severity": {
+    "P0": 0,
+    "P1": 1,
+    "P2": 13
+  },
+  "git_summary": {
+    "files_changed": 63,
+    "areas_affected": [
+      "src/universal_agent/cron_service",
+      "src/universal_agent/gateway_server"
+    ]
+  },
+  "issues": [
+    {
+      "category": "glossary_candidate",
+      "severity": "P2",
+      "file": "docs/Glossary.md",
+      "description": "Term 'claude code' appears 9 times in recent changes but is not in the glossary",
+      "suggested_action": "Consider adding 'claude code' to docs/Glossary.md if it's project-specific terminology"
+    },
+    {
+      "category": "glossary_candidate",
+      "severity": "P2",
+      "file": "docs/Glossary.md",
+      "description": "Term 'every phase' appears 3 times in recent changes but is not in the glossary",
+      "suggested_action": "Consider adding 'every phase' to docs/Glossary.md if it's project-specific terminology"
+    },
+    {
+      "category": "glossary_candidate",
+      "severity": "P2",
+      "file": "docs/Glossary.md",
+      "description": "Term 'sdk' appears 6 times in recent changes but is not in the glossary",
+      "suggested_action": "Consider adding 'sdk' to docs/Glossary.md if it's project-specific terminology"
+    },
+    {
+      "category": "glossary_candidate",
+      "severity": "P2",
+      "file": "docs/Glossary.md",
+      "description": "Term 'llm' appears 11 times in recent changes but is not in the glossary",
+      "suggested_action": "Consider adding 'llm' to docs/Glossary.md if it's project-specific terminology"
+    },
+    {
+      "category": "glossary_candidate",
+      "severity": "P2",
+      "file": "docs/Glossary.md",
+      "description": "Term 'brief' appears 6 times in recent changes but is not in the glossary",
+      "suggested_action": "Consider adding 'brief' to docs/Glossary.md if it's project-specific terminology"
+    },
+    {
+      "category": "glossary_candidate",
+      "severity": "P2",
+      "file": "docs/Glossary.md",
+      "description": "Term 'yyyy' appears 4 times in recent changes but is not in the glossary",
+      "suggested_action": "Consider adding 'yyyy' to docs/Glossary.md if it's project-specific terminology"
+    },
+    {
+      "category": "glossary_candidate",
+      "severity": "P2",
+      "file": "docs/Glossary.md",
+      "description": "Term 'extend' appears 7 times in recent changes but is not in the glossary",
+      "suggested_action": "Consider adding 'extend' to docs/Glossary.md if it's project-specific terminology"
+    },
+    {
+      "category": "glossary_candidate",
+      "severity": "P2",
+      "file": "docs/Glossary.md",
+      "description": "Term 'revise' appears 9 times in recent changes but is not in the glossary",
+      "suggested_action": "Consider adding 'revise' to docs/Glossary.md if it's project-specific terminology"
+    },
+    {
+      "category": "glossary_candidate",
+      "severity": "P2",
+      "file": "docs/Glossary.md",
+      "description": "Term 'vps' appears 8 times in recent changes but is not in the glossary",
+      "suggested_action": "Consider adding 'vps' to docs/Glossary.md if it's project-specific terminology"
+    },
+    {
+      "category": "glossary_candidate",
+      "severity": "P2",
+      "file": "docs/Glossary.md",
+      "description": "Term 'zai' appears 14 times in recent changes but is not in the glossary",
+      "suggested_action": "Consider adding 'zai' to docs/Glossary.md if it's project-specific terminology"
+    },
+    {
+      "category": "glossary_candidate",
+      "severity": "P2",
+      "file": "docs/Glossary.md",
+      "description": "Term 'api' appears 7 times in recent changes but is not in the glossary",
+      "suggested_action": "Consider adding 'api' to docs/Glossary.md if it's project-specific terminology"
+    },
+    {
+      "category": "glossary_candidate",
+      "severity": "P2",
+      "file": "docs/Glossary.md",
+      "description": "Term 'must' appears 4 times in recent changes but is not in the glossary",
+      "suggested_action": "Consider adding 'must' to docs/Glossary.md if it's project-specific terminology"
+    },
+    {
+      "category": "agentic_drift",
+      "severity": "P1",
+      "file": "AGENTS.md / .agents/",
+      "description": "Agent code changed (src/universal_agent/scripts/schedule_youtube_digest.py, src/universal_agent/scripts/youtube_daily_digest.py, src/universal_agent/scripts/youtube_provision_digest_playlists.py, src/universal_agent/scripts/vp_coder_workspace_pruner.py, src/universal_agent/scripts/youtube_daily_digest.py) but no agentic config files (AGENTS.md, workflows, skills) were updated",
+      "suggested_action": "Review whether AGENTS.md, workflow files, or SKILL.md files need updates to reflect the code changes"
+    },
+    {
+      "category": "code_doc_drift",
+      "severity": "P2",
+      "file": "src/universal_agent/gateway_server",
+      "description": "Code in `src/universal_agent/gateway_server` changed (5 files) but related doc areas (02_Flows/, 04_API_Reference/) were not updated",
+      "suggested_action": "Review docs in 02_Flows/, 04_API_Reference/ to verify they still accurately describe the code in src/universal_agent/gateway_server"
+    }
+  ]
+}
