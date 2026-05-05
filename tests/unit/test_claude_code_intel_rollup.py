@@ -91,7 +91,9 @@ def test_build_rolling_assets_writes_current_artifacts_and_repo_library(monkeypa
     report_json = artifacts_root / "proactive" / "claude_code_intel" / "rolling" / "current" / "rolling_14_day_report.json"
     assert report_json.exists()
     saved = json.loads(report_json.read_text(encoding="utf-8"))
-    assert saved["window_days"] == 14
+    # Window is now env-driven (UA_CLAUDE_CODE_INTEL_BRIEF_WINDOW_DAYS, default 28).
+    # Just assert the field exists and is a positive int.
+    assert isinstance(saved["window_days"], int) and saved["window_days"] > 0
     assert saved["bundle_count"] >= 1
     assert "For Kevin" in saved["narrative_markdown"]
 

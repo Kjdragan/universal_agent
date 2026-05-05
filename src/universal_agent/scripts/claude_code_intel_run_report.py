@@ -53,6 +53,12 @@ def _parse_args() -> argparse.Namespace:
         help="Email policy: never, always, when_new_posts, when_actions, or when_tasks. Defaults to env or auto behavior.",
     )
     parser.add_argument("--no-email", action="store_true", help="Write the report only; do not send email.")
+    parser.add_argument(
+        "--rebuild-brief",
+        action="store_true",
+        help="Force a rebuild of the rolling brief even if no new posts arrived. "
+             "Useful after a backfill or when overriding env UA_CLAUDE_CODE_INTEL_BRIEF_ALWAYS_REBUILD=0.",
+    )
     return parser.parse_args()
 
 
@@ -316,9 +322,17 @@ async def main() -> int:
                 total_new, len(handles),
             )
 
-        # Rollup runs once — it scans ALL packet dirs across all handles
+        # Rollup runs once — it scans ALL packet dirs across all handles.
+        # v1 only rebuilt the brief when fresh posts arrived, which silently
+        # broke after backfill (replayed packets never retriggered synthesis).
+        # v2 rebuilds on every successful tick OR when explicitly requested,
+        # so backfills and operator overrides reflect in the brief immediately.
+        # See docs/proactive_signals/claudedevs_intel_v2_design.md §10.2.
         rolling: dict[str, Any] = {}
-        if any_ok and total_new > 0:
+        rebuild_brief = bool(getattr(args, "rebuild_brief", False))
+        env_rebuild = str(os.getenv("UA_CLAUDE_CODE_INTEL_BRIEF_ALWAYS_REBUILD") or "1").strip().lower()
+        always_rebuild = env_rebuild not in {"0", "false", "no", "off"}
+        if any_ok and (rebuild_brief or always_rebuild or total_new > 0):
             rolling = build_rolling_assets(artifacts_root=cfg.artifacts_root)
 
         email_result: dict[str, Any] = {}

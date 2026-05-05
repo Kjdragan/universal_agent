@@ -4,6 +4,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 import json
 import logging
+import os
 from pathlib import Path
 import re
 from typing import Any
@@ -19,8 +20,23 @@ from universal_agent.services.claude_code_intel import (
     resolve_lane_root,
 )
 
-ROLLING_WINDOW_DAYS = 14
-MAX_ACTION_CONTEXTS = 18
+
+def _env_int(name: str, default: int) -> int:
+    raw = str(os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+# v1 hard-coded a 14-day window with an 18-item cap, which silently truncated
+# any backfill or burst of activity. v2 widens both with env overrides. See
+# docs/proactive_signals/claudedevs_intel_v2_design.md §10.
+ROLLING_WINDOW_DAYS = _env_int("UA_CLAUDE_CODE_INTEL_BRIEF_WINDOW_DAYS", 28)
+MAX_ACTION_CONTEXTS = _env_int("UA_CLAUDE_CODE_INTEL_BRIEF_MAX_CONTEXTS", 500)
 MIN_SYNTHESIS_TIER = 2  # Tier 1 digests stay in packets but never become bundles
 
 _ROLLUP_SYSTEM = """\
