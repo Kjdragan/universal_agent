@@ -31,6 +31,12 @@
       "sourceType": "git",
       "computedHash": "bca33ec7db2d49d70c9b4eb058a6a3670e362b8d90ce8acb40a8cec4791ab7f8"
     },
+    "extract-design": {
+      "source": "Manavarya09/design-extract",
+      "sourceType": "github",
+      "skillPath": "skills/extract-design/SKILL.md",
+      "computedHash": "a20e0950c9d1dde2047af456319416281ac4e655862f09506328ee7faca5ea91"
+    },
     "json-canvas": {
       "source": "git@github.com:kepano/obsidian-skills.git",
       "sourceType": "git",
