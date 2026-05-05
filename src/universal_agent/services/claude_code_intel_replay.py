@@ -57,6 +57,16 @@ def resolve_lane_root(artifacts_root: Path | None = None) -> Path:
 
 
 def resolve_external_vault_root(artifacts_root: Path | None = None) -> Path:
+    """Resolve the Claude Code intel vault root.
+
+    Honors the env override UA_CSI_VAULT_PATH_OVERRIDE so the backfill
+    script (PR 12) can route replay writes into a parallel vault for
+    staged migration without touching the canonical one. When the env
+    var is unset, behavior matches v1 (slug under artifacts_root).
+    """
+    override = str(os.getenv("UA_CSI_VAULT_PATH_OVERRIDE") or "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
     return (artifacts_root or resolve_artifacts_dir()) / "knowledge-vaults" / KB_SLUG
 
 
