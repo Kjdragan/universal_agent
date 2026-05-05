@@ -45,7 +45,7 @@ COMMON_MD_EXCLUDES = {"AGENTS.md", "index.md", "log.md", "overview.md"}
 SYNC_STATE_FILENAME = "sync_state.json"
 SYNC_PROGRESS_FILENAME = "sync_progress.json"
 SYNC_PROGRESS_MARKDOWN_FILENAME = "sync_progress.md"
-EXTERNAL_DIRS = ("raw", "sources", "entities", "concepts", "analyses", "assets", "lint")
+EXTERNAL_DIRS = ("raw", "sources", "entities", "concepts", "analyses", "assets", "lint", "_history")
 INTERNAL_DIRS = (
     "evidence/memory",
     "evidence/sessions",
@@ -745,6 +745,309 @@ def wiki_ingest_external_source(
         "entities": entities,
         "concepts": concepts,
         "summary": summary
+    }
+
+
+# ── Memex update primitives (PR 2 of v2 plan) ────────────────────────────────
+#
+# These primitives let an ingest pipeline decide CREATE / EXTEND / REVISE on
+# entity and concept pages without ever touching `raw/` or `sources/`. The
+# expected per-ingest distribution under normal operation is roughly
+# 80% CREATE / 15% EXTEND / 5% REVISE — REVISE should be rare because new
+# Anthropic announcements typically introduce *new* features rather than
+# overturning prior claims.
+#
+# `_history/` snapshots and structured change-log entries are produced on
+# every REVISE so corruption is auditable and rollback is one cp away.
+#
+# See docs/proactive_signals/claudedevs_intel_v2_design.md §4.
+
+ACTION_CREATE = "CREATE"
+ACTION_EXTEND = "EXTEND"
+ACTION_REVISE = "REVISE"
+MEMEX_ACTIONS = (ACTION_CREATE, ACTION_EXTEND, ACTION_REVISE)
+
+# Entity and concept categories live under these directory names.
+MEMEX_KIND_TO_DIR = {
+    "entity": "entities",
+    "concept": "concepts",
+}
+
+
+def _memex_kind_dir(kind: str) -> str:
+    key = str(kind or "").strip().lower()
+    if key not in MEMEX_KIND_TO_DIR:
+        raise ValueError(f"unsupported memex kind: {kind!r} (expected 'entity' or 'concept')")
+    return MEMEX_KIND_TO_DIR[key]
+
+
+def _memex_page_path(vault_path: Path, kind: str, name: str) -> Path:
+    """Resolve the canonical page path for an entity/concept name."""
+    directory = _memex_kind_dir(kind)
+    slug = _slugify(str(name or "").strip(), fallback="page")
+    return vault_path / directory / f"{slug}.md"
+
+
+def memex_page_exists(vault_path: Path, kind: str, name: str) -> bool:
+    """Return True if the entity/concept page already exists in the vault."""
+    return _memex_page_path(vault_path, kind, name).exists()
+
+
+def _memex_history_dir(vault_path: Path, kind: str, name: str) -> Path:
+    """Per-page history directory under `_history/<kind>/<slug>/`."""
+    directory = _memex_kind_dir(kind)
+    slug = _slugify(str(name or "").strip(), fallback="page")
+    return vault_path / "_history" / directory / slug
+
+
+def _memex_history_filename() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S") + ".md"
+
+
+def memex_snapshot_to_history(vault_path: Path, kind: str, name: str) -> Path | None:
+    """Copy the current page (if any) into `_history/`. Returns the snapshot path or None."""
+    page_path = _memex_page_path(vault_path, kind, name)
+    if not page_path.exists():
+        return None
+    history_dir = _memex_history_dir(vault_path, kind, name)
+    history_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_path = history_dir / _memex_history_filename()
+    snapshot_path.write_text(page_path.read_text(encoding="utf-8"), encoding="utf-8")
+    return snapshot_path
+
+
+def memex_create_page(
+    vault_path: Path,
+    kind: str,
+    name: str,
+    body: str,
+    *,
+    source_id: str = "",
+    source_title: str = "",
+    tags: list[str] | None = None,
+    confidence: str = "medium",
+) -> Path:
+    """Write a new entity/concept page. Errors if the page already exists."""
+    page_path = _memex_page_path(vault_path, kind, name)
+    if page_path.exists():
+        raise FileExistsError(f"memex_create called on existing page: {page_path}")
+    page_path.parent.mkdir(parents=True, exist_ok=True)
+    title = str(name or "").strip() or page_path.stem
+    meta = _default_page_meta(
+        title,
+        kind,
+        provenance_kind="memex_create",
+        provenance_refs=[source_id] if source_id else [],
+        source_ids=[source_id] if source_id else [],
+        tags=list(tags or []),
+        confidence=confidence,
+    )
+    if source_title:
+        meta["summary"] = source_title
+    _write_page(page_path, meta, body.rstrip() + "\n")
+    return page_path
+
+
+def memex_extend_page(
+    vault_path: Path,
+    kind: str,
+    name: str,
+    addition: str,
+    *,
+    source_id: str = "",
+    source_title: str = "",
+    section_label: str = "",
+) -> Path:
+    """Append a dated section to an existing entity/concept page.
+
+    Old content is untouched. Frontmatter `source_ids` and `provenance_refs`
+    accumulate the new source.
+    """
+    page_path = _memex_page_path(vault_path, kind, name)
+    if not page_path.exists():
+        raise FileNotFoundError(f"memex_extend called on missing page: {page_path}")
+
+    meta, body = _frontmatter_and_body(page_path)
+    if source_id and source_id not in (meta.get("source_ids") or []):
+        meta["source_ids"] = list(meta.get("source_ids") or []) + [source_id]
+    if source_id and source_id not in (meta.get("provenance_refs") or []):
+        meta["provenance_refs"] = list(meta.get("provenance_refs") or []) + [source_id]
+    meta.setdefault("kind", kind)
+    meta.setdefault("title", str(name or "").strip() or page_path.stem)
+
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    label = section_label.strip() or (source_title.strip() or "update")
+    new_section = (
+        f"\n\n## [{today}] {label}\n\n"
+        f"{addition.rstrip()}\n"
+    )
+    new_body = body.rstrip() + new_section
+    _write_page(page_path, meta, new_body.rstrip() + "\n")
+    return page_path
+
+
+def memex_revise_page(
+    vault_path: Path,
+    kind: str,
+    name: str,
+    new_body: str,
+    *,
+    source_id: str = "",
+    source_title: str = "",
+    reason: str,
+    confidence: str = "medium",
+) -> tuple[Path, Path | None]:
+    """Snapshot + rewrite an entity/concept page.
+
+    REVISE is the only memex action that overwrites prior content. The old
+    page is copied into `_history/` before the rewrite. Returns
+    (page_path, snapshot_path).
+    """
+    if not reason or not str(reason).strip():
+        raise ValueError("memex_revise requires an explicit reason for the audit log")
+    page_path = _memex_page_path(vault_path, kind, name)
+    snapshot_path = memex_snapshot_to_history(vault_path, kind, name)
+
+    meta = {}
+    if page_path.exists():
+        meta, _ = _frontmatter_and_body(page_path)
+    if source_id and source_id not in (meta.get("source_ids") or []):
+        meta["source_ids"] = list(meta.get("source_ids") or []) + [source_id]
+    if source_id and source_id not in (meta.get("provenance_refs") or []):
+        meta["provenance_refs"] = list(meta.get("provenance_refs") or []) + [source_id]
+    meta.setdefault("title", str(name or "").strip() or page_path.stem)
+    meta.setdefault("kind", kind)
+    meta.setdefault("tags", [])
+    meta["confidence"] = confidence
+    meta["last_revision_reason"] = str(reason).strip()
+    if source_title:
+        meta["summary"] = source_title
+
+    _write_page(page_path, meta, new_body.rstrip() + "\n")
+    return page_path, snapshot_path
+
+
+def memex_append_change_log(
+    vault_path: Path,
+    *,
+    action: str,
+    page_rel_path: str,
+    reason: str,
+    source_ids: list[str] | None = None,
+    confidence: str = "medium",
+) -> Path:
+    """Append one structured entry to the vault's `log.md`.
+
+    Format:
+        ## [<iso>] <page_rel_path> <ACTION>
+        reason: <reason>
+        confidence: <confidence>
+        sources: [<id1>, <id2>, ...]
+    """
+    if action not in MEMEX_ACTIONS:
+        raise ValueError(f"unknown memex action: {action!r}")
+    log_path = vault_path / "log.md"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    if not log_path.exists():
+        log_path.write_text("# Vault Log\n", encoding="utf-8")
+
+    iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    sources = list(source_ids or [])
+    sources_repr = "[" + ", ".join(json.dumps(s) for s in sources) + "]"
+    entry = (
+        f"\n## [{iso}] {page_rel_path} {action}\n"
+        f"reason: {str(reason).strip() or '(none provided)'}\n"
+        f"confidence: {confidence}\n"
+        f"sources: {sources_repr}\n"
+    )
+    with log_path.open("a", encoding="utf-8") as handle:
+        handle.write(entry)
+    return log_path
+
+
+def memex_apply_action(
+    vault_path: Path,
+    *,
+    action: str,
+    kind: str,
+    name: str,
+    body: str,
+    source_id: str = "",
+    source_title: str = "",
+    reason: str = "",
+    tags: list[str] | None = None,
+    confidence: str = "medium",
+    section_label: str = "",
+) -> dict[str, Any]:
+    """Dispatch to memex_create/extend/revise based on `action`.
+
+    Returns a dict describing what happened so callers can log/audit:
+        {
+          "action": "CREATE",
+          "page_path": "...",
+          "page_rel_path": "entities/skills.md",
+          "snapshot_path": None,
+          "reason": "...",
+        }
+
+    Always appends a structured entry to `log.md` so the audit trail is
+    consistent with the docs/proactive_signals/claudedevs_intel_v2_design.md
+    §4.3 contract.
+    """
+    if action not in MEMEX_ACTIONS:
+        raise ValueError(f"unknown memex action: {action!r}")
+
+    page_path: Path
+    snapshot_path: Path | None = None
+
+    if action == ACTION_CREATE:
+        page_path = memex_create_page(
+            vault_path,
+            kind,
+            name,
+            body,
+            source_id=source_id,
+            source_title=source_title,
+            tags=tags,
+            confidence=confidence,
+        )
+    elif action == ACTION_EXTEND:
+        page_path = memex_extend_page(
+            vault_path,
+            kind,
+            name,
+            body,
+            source_id=source_id,
+            source_title=source_title,
+            section_label=section_label,
+        )
+    else:  # ACTION_REVISE
+        page_path, snapshot_path = memex_revise_page(
+            vault_path,
+            kind,
+            name,
+            body,
+            source_id=source_id,
+            source_title=source_title,
+            reason=reason or "(no reason supplied — reviewer should fill in)",
+            confidence=confidence,
+        )
+
+    rel = _relative(page_path, vault_path)
+    memex_append_change_log(
+        vault_path,
+        action=action,
+        page_rel_path=rel,
+        reason=reason or section_label or source_title or "",
+        source_ids=[source_id] if source_id else [],
+        confidence=confidence,
+    )
+    return {
+        "action": action,
+        "page_path": str(page_path),
+        "page_rel_path": rel,
+        "snapshot_path": str(snapshot_path) if snapshot_path else None,
+        "reason": reason or section_label or source_title or "",
     }
 
 
