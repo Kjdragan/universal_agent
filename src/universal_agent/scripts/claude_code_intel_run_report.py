@@ -335,6 +335,47 @@ async def main() -> int:
         if any_ok and (rebuild_brief or always_rebuild or total_new > 0):
             rolling = build_rolling_assets(artifacts_root=cfg.artifacts_root)
 
+        # Auto-trigger the upgrade actuator (PR 6c) when this tick contained
+        # any release_announcement actions for Anthropic-adjacent packages.
+        # PR 6a tagged the actions; PR 6b built the actuator; this is the
+        # wire-up. Off via UA_CSI_AUTO_UPGRADE_ON_RELEASE=0.
+        auto_upgrade_summary: dict[str, Any] = {}
+        try:
+            from universal_agent.services.release_auto_trigger import (
+                auto_apply_release_triggers,
+                extract_release_triggers,
+                summarize_auto_upgrade_results,
+            )
+
+            all_triggers = []
+            for handle_payload in all_results:
+                if not handle_payload.get("ok"):
+                    continue
+                handle_name = str(handle_payload.get("handle") or "")
+                handle_actions = []
+                for action in handle_payload.get("post_process", {}).get("actions") or []:
+                    if isinstance(action, dict):
+                        handle_actions.append(action)
+                # Fall back to packet actions when post_process didn't expose them.
+                if not handle_actions and handle_payload.get("packet_dir"):
+                    pkt_actions_path = Path(handle_payload["packet_dir"]) / "actions.json"
+                    if pkt_actions_path.exists():
+                        try:
+                            handle_actions = json.loads(pkt_actions_path.read_text(encoding="utf-8"))
+                        except Exception:
+                            handle_actions = []
+                triggers = extract_release_triggers(handle_actions, handle=handle_name)
+                all_triggers.extend(triggers)
+            if all_triggers:
+                logger.info(
+                    "📦 PR 6c: detected %d Anthropic-adjacent release announcement(s); firing actuator",
+                    len(all_triggers),
+                )
+                auto_upgrade_results = auto_apply_release_triggers(all_triggers)
+                auto_upgrade_summary = summarize_auto_upgrade_results(auto_upgrade_results)
+        except Exception:
+            logger.exception("PR 6c auto-trigger raised; release auto-upgrade skipped this tick")
+
         email_result: dict[str, Any] = {}
         email_to = _resolved_email_target(args)
         email_policy = _resolved_email_policy(args)
@@ -355,6 +396,7 @@ async def main() -> int:
                 },
                 "rolling": rolling,
                 "email_result": email_result,
+                "auto_upgrade": auto_upgrade_summary,
             },
             indent=2,
             ensure_ascii=True,
