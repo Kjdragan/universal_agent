@@ -17,8 +17,10 @@ async def main():
     initialize_runtime_secrets(profile="local_workstation")
     logging.basicConfig(level=logging.INFO)
     
-    # Ensure artifacts directory for wikis exists
-    artifacts_dir = os.getenv("UA_ARTIFACTS_DIR", "").strip() or "/home/kjdragan/lrepos/universal_agent/artifacts"
+    # Ensure artifacts directory for wikis exists — use the canonical resolver
+    # that works on both desktop and VPS (resolves relative to repo root).
+    from universal_agent.artifacts import resolve_artifacts_dir
+    artifacts_dir = str(resolve_artifacts_dir())
     wiki_artifacts_dir = os.path.join(artifacts_dir, "nightly_wikis")
     os.makedirs(wiki_artifacts_dir, exist_ok=True)
     

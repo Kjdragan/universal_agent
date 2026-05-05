@@ -24091,6 +24091,24 @@ async def dashboard_mission_control_card_view(card_id: str):
     return _mc_card_feedback_dispatch(card_id, lambda c, cid: _mc_view(c, cid))
 
 
+@app.post("/api/v1/dashboard/mission-control/cards/{card_id}/dismiss")
+async def dashboard_mission_control_card_dismiss(card_id: str):
+    """Operator-dismiss a card by retiring it from the live grid.
+
+    The card moves to current_state='retired' and disappears from the
+    live card feed. It remains fully intact in the Knowledge Ledger for
+    historical reference and will revive (with incremented
+    recurrence_count) if the same subject_id is re-discovered by the
+    tier-1 sweep — preserving narrative continuity.
+
+    This is the operator's "I've seen this / dealt with it" action."""
+    from universal_agent.services.mission_control_cards import (
+        retire_card as _mc_retire,
+    )
+
+    return _mc_card_feedback_dispatch(card_id, lambda c, cid: (_mc_retire(c, cid), "retired")[1])
+
+
 # ── Mission Control action buttons (Phase 4) ────────────────────────────
 
 

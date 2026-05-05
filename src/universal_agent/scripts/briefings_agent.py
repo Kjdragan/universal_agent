@@ -38,7 +38,8 @@ async def main():
         logger.error(f"Failed to fetch telemetry from gateway: {exc}")
         sys.exit(1)
         
-    artifacts_dir = os.getenv("UA_ARTIFACTS_DIR", "").strip() or "/home/kjdragan/lrepos/universal_agent/artifacts"
+    from universal_agent.artifacts import resolve_artifacts_dir
+    artifacts_dir = str(resolve_artifacts_dir())
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     
     telemetry_json = json.dumps(briefing_data, indent=2)
