@@ -105,6 +105,41 @@ def replay_packet(
         actions=actions,
         linked_source_entries=linked_source_entries,
     )
+
+    # Research grounding pass (PR 16) — run AFTER linked-source expansion so
+    # the trigger logic can see what was already fetched, but BEFORE the
+    # vault ingest so the Memex pass (PR 15) sees grounded sources alongside
+    # the originally-linked ones. Off switch:
+    # UA_CSI_RESEARCH_GROUNDING_WIRING_ENABLED=0.
+    grounding_entries: list[dict[str, Any]] = []
+    if str(os.getenv("UA_CSI_RESEARCH_GROUNDING_WIRING_ENABLED") or "1").strip().lower() not in {"0", "false", "no", "off"}:
+        try:
+            grounding_entries = apply_research_grounding_pass(
+                packet_dir=packet_dir,
+                actions=actions,
+                linked_source_entries=linked_source_entries,
+                vault_root=resolve_external_vault_root(config.artifacts_root),
+            )
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "research grounding pass failed; replay continues with linked sources only"
+            )
+    # Capture original-link counts BEFORE merging grounded entries so the
+    # result.linked_source_count semantics stay stable for existing callers
+    # that distinguish post-linked sources from research-grounded additions.
+    original_linked_count = len(linked_source_entries)
+    original_linked_fetched_count = sum(
+        1 for entry in linked_source_entries if str(entry.get("fetch_status") or "") == "fetched"
+    )
+    grounded_count = len(grounding_entries)
+    grounded_fetched_count = sum(
+        1 for entry in grounding_entries if str(entry.get("fetch_status") or "") == "fetched"
+    )
+    if grounding_entries:
+        linked_source_entries = list(linked_source_entries) + grounding_entries
+
     implementation_opportunities_path = write_implementation_opportunities(packet_dir=packet_dir, actions=actions)
     vault_result = ingest_packet_into_external_vault(
         packet_dir=packet_dir,
@@ -135,8 +170,13 @@ def replay_packet(
         "queued_task_count": queued_task_count,
         "packet_artifact_id": packet_artifact_id,
         "linked_sources_path": str(linked_sources_path),
-        "linked_source_count": len(linked_source_entries),
-        "linked_source_fetched_count": sum(1 for entry in linked_source_entries if str(entry.get("fetch_status") or "") == "fetched"),
+        # linked_source_count tracks ORIGINAL post-linked sources only
+        # (preserves v1 semantics). Grounded sources from PR 16 are
+        # surfaced separately as grounded_source_count.
+        "linked_source_count": original_linked_count,
+        "linked_source_fetched_count": original_linked_fetched_count,
+        "grounded_source_count": grounded_count,
+        "grounded_source_fetched_count": grounded_fetched_count,
         "implementation_opportunities_path": str(implementation_opportunities_path),
         "candidate_ledger_path": ledger_entries["packet_ledger_path"],
         "lane_ledger_path": ledger_entries["lane_ledger_path"],
@@ -327,6 +367,153 @@ def write_implementation_opportunities(*, packet_dir: Path, actions: list[dict[s
     path = packet_dir / "implementation_opportunities.md"
     path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
     return path
+
+
+# ── Research grounding wiring (PR 16) ───────────────────────────────────────
+#
+# After standard linked-source expansion, walk every tier-2+ action and ask
+# the research grounding subagent (PR 3) whether it should fetch additional
+# official-docs-first sources. Triggers per design doc §6.3:
+#   - NO_LINKS — tweet had no fetchable URLs at all
+#   - THIN_LINKED_SOURCES — classifier flagged the linked content as thin
+#   - UNKNOWN_TERM — tweet mentions a feature/SDK term not yet in the vault
+#
+# Successful research fetches are persisted under
+#   packet_dir/research_grounding/<post_id>/<hash>.md
+# and emitted as linked_source_entries-shaped dicts so the existing Memex
+# pass and candidate-ledger writers consume them identically to the
+# originally-linked sources.
+
+def _existing_entity_names(vault_root: Path) -> set[str]:
+    """Read every entity page slug from the vault. Returns lowercased names.
+
+    Best-effort — returns empty set if the vault doesn't exist yet so the
+    UNKNOWN_TERM trigger doesn't fail closed on the first ingest.
+    """
+    entities_dir = vault_root / "entities"
+    if not entities_dir.exists():
+        return set()
+    out: set[str] = set()
+    for path in entities_dir.glob("*.md"):
+        out.add(path.stem.lower())
+    return out
+
+
+def apply_research_grounding_pass(
+    *,
+    packet_dir: Path,
+    actions: list[dict[str, Any]],
+    linked_source_entries: list[dict[str, Any]],
+    vault_root: Path,
+) -> list[dict[str, Any]]:
+    """For every qualifying action, fetch additional grounded sources.
+
+    Returns linked_source_entries-shaped dicts so callers can extend the
+    existing list without changing downstream consumers. Never raises on
+    per-action failure — collects errors as skipped entries.
+    """
+    # Lazy-import so the replay module doesn't pull research_grounding's
+    # transitive deps (csi_url_judge, intel_lanes) when grounding is off.
+    from universal_agent.services.research_grounding import (
+        build_research_request,
+        execute_research,
+    )
+
+    existing_entity_names = _existing_entity_names(vault_root)
+
+    # Pre-index linked sources per post so we can reason about per-post
+    # link coverage when computing the THIN_LINKED_SOURCES signal.
+    linked_count_by_post: dict[str, int] = {}
+    for entry in linked_source_entries:
+        post_id = str(entry.get("post_id") or "").strip()
+        if str(entry.get("fetch_status") or "") == "fetched":
+            linked_count_by_post[post_id] = linked_count_by_post.get(post_id, 0) + 1
+
+    grounding_root = packet_dir / "research_grounding"
+    out: list[dict[str, Any]] = []
+
+    for action in actions:
+        post_id = str(action.get("post_id") or "").strip()
+        # The classifier_result contract expected by build_research_request
+        # is a dict with 'linked_sources_thin' bool. We approximate it from
+        # the action's linked-source coverage: thin if zero successful
+        # linked-source fetches even though links existed.
+        link_count = linked_count_by_post.get(post_id, 0)
+        link_count_in_action = len(action.get("links") or [])
+        classifier_result = {
+            "tier": int(action.get("tier") or 0),
+            "linked_sources_thin": link_count == 0 and link_count_in_action > 0,
+        }
+
+        try:
+            request = build_research_request(
+                post={
+                    "id": post_id,
+                    "tier": int(action.get("tier") or 0),
+                    "links": list(action.get("links") or []),
+                    "text": str(action.get("text") or ""),
+                },
+                classifier_result=classifier_result,
+                existing_entity_names=existing_entity_names,
+            )
+        except Exception as exc:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "research grounding request build failed for post %s: %s", post_id, exc
+            )
+            continue
+
+        if request is None:
+            continue
+
+        try:
+            result = execute_research(
+                request,
+                output_dir=grounding_root / post_id,
+                timeout=20,
+            )
+        except Exception as exc:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "research grounding execution failed for post %s: %s", post_id, exc
+            )
+            continue
+
+        for source in result.sources:
+            entry = {
+                "url": source.url,
+                "post_id": post_id,
+                "tier": int(action.get("tier") or 0),
+                "action_type": str(action.get("action_type") or "").strip(),
+                "fetch_status": "fetched" if source.fetched else "skipped",
+                "source_path": source.content_path,
+                "analysis_path": "",
+                "metadata_path": "",
+                "title": f"Grounded source ({source.domain})",
+                "provenance_kind": "research_grounded",
+                "research_request_reasons": [r.value for r in request.reasons],
+                "allowlist_rank": source.allowlist_rank,
+                "skip_reason": source.skip_reason,
+            }
+            out.append(entry)
+
+    if out:
+        # Persist the grounding entries alongside the originals so a
+        # downstream re-replay can see what was previously fetched.
+        try:
+            grounding_path = packet_dir / "research_grounding.json"
+            grounding_path.write_text(
+                json.dumps(out, indent=2, ensure_ascii=True, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception("failed persisting research_grounding.json")
+
+    return out
 
 
 # ── Memex extraction (PR 15) ────────────────────────────────────────────────
@@ -645,11 +832,22 @@ def ingest_packet_into_external_vault(
     for entry in linked_source_entries:
         if str(entry.get("fetch_status") or "") != "fetched":
             continue
-        source_path = Path(str(entry.get("source_path") or ""))
-        if not source_path.exists():
+        # Defensive: empty-string source_path → Path(".") which "exists"
+        # as the cwd. Reject loud rather than try to read the directory.
+        source_path_raw = str(entry.get("source_path") or "").strip()
+        if not source_path_raw:
             continue
-        metadata_path = Path(str(entry.get("metadata_path") or ""))
-        metadata = _load_json(metadata_path) if metadata_path.exists() else {}
+        source_path = Path(source_path_raw)
+        if not source_path.exists() or not source_path.is_file():
+            continue
+        # Same defensiveness for metadata_path (PR 16 grounded entries
+        # legitimately have no metadata file).
+        metadata_path_raw = str(entry.get("metadata_path") or "").strip()
+        metadata: dict[str, Any] = {}
+        if metadata_path_raw:
+            metadata_path = Path(metadata_path_raw)
+            if metadata_path.exists() and metadata_path.is_file():
+                metadata = _load_json(metadata_path) or {}
         canonical_target = str(metadata.get("final_url") or entry.get("url") or "").strip()
         if canonical_target and canonical_target in linked_result_by_target:
             linked_pages_by_post_id.setdefault(str(entry.get("post_id") or "").strip(), []).append(linked_result_by_target[canonical_target])

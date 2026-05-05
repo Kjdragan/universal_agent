@@ -30,6 +30,12 @@ Mistaking one for the other is the #1 source of confusion. Before debugging anyt
 
 Operational runbook: [`docs/operations/demo_workspace_provisioning.md`](docs/operations/demo_workspace_provisioning.md).
 
+## ClaudeDevs Intelligence v2 — Active Implementation Plan
+The ClaudeDevs X intel pipeline is undergoing a v2 rebuild. Two living docs track it:
+
+- **Design (what we're building):** [`docs/proactive_signals/claudedevs_intel_v2_design.md`](docs/proactive_signals/claudedevs_intel_v2_design.md) — the original 13-PR design with vault-as-canonical-product, append-dominant Memex maintenance, Phase 0–5 pipeline, Simone↔Cody orchestration.
+- **Plan (what's left):** [`docs/proactive_signals/claudedevs_intel_v2_remaining_work.md`](docs/proactive_signals/claudedevs_intel_v2_remaining_work.md) — reconciled execution catalog. Cross-references original design § 16 PRs to the actual reconciled PRs (some shipped scaffolding only; their wiring is tracked separately). Lists what's shipped vs what's left across four phases. Updated after every ship — read this first when picking up the work.
+
 ## Working Rules
 - Keep changes small and targeted.
 - Do not commit secrets, credentials, or local state files.
