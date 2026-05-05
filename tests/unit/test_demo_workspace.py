@@ -98,7 +98,55 @@ def test_provision_smoke_workspace_uses_dedicated_dir(tmp_path: Path):
     assert result.is_smoke is True
     assert (result.workspace_dir / "smoke.py").exists()
     assert (result.workspace_dir / "README.md").exists()
+    assert (result.workspace_dir / "pyproject.toml").exists(), (
+        "pyproject.toml ships with the smoke template so `uv run python smoke.py` works "
+        "without a manual `uv venv` dance"
+    )
     assert result.settings_path.exists()
+
+
+def test_smoke_workspace_pyproject_has_no_dependencies(tmp_path: Path):
+    """The CLI-driven smoke must not pull in the anthropic SDK.
+
+    The smoke shells out to the `claude` CLI; the SDK uses a different
+    auth mechanism that doesn't see the Max plan OAuth session, so
+    bundling it into the smoke would suggest a working SDK demo path
+    that doesn't actually exist without an explicit ANTHROPIC_API_KEY.
+    """
+    result = provision_smoke_workspace(root=tmp_path)
+    pyproject = (result.workspace_dir / "pyproject.toml").read_text(encoding="utf-8")
+    # Grep is enough — keeps test independent of toml parser availability.
+    assert "dependencies = []" in pyproject, (
+        "smoke pyproject.toml must declare an empty dependencies list — the "
+        "smoke is CLI-driven and any SDK dep would imply the wrong auth model"
+    )
+
+
+def test_smoke_workspace_smoke_py_does_not_import_anthropic_sdk(tmp_path: Path):
+    """The smoke must not import the Anthropic SDK.
+
+    Importing it (even guarded by try/except) signals to readers that the
+    SDK path is the validation target. Our actual validation target is
+    the CLI path, which uses Max plan OAuth.
+    """
+    result = provision_smoke_workspace(root=tmp_path)
+    smoke = (result.workspace_dir / "smoke.py").read_text(encoding="utf-8")
+    assert "from anthropic" not in smoke and "import anthropic" not in smoke, (
+        "smoke.py must not import the anthropic SDK — see PR 7b discussion: "
+        "the SDK doesn't read the Max plan OAuth session so this would test "
+        "the wrong code path."
+    )
+
+
+def test_smoke_workspace_smoke_py_uses_subprocess_for_claude_cli(tmp_path: Path):
+    """The smoke must shell out to the claude CLI, not invoke a Python client."""
+    result = provision_smoke_workspace(root=tmp_path)
+    smoke = (result.workspace_dir / "smoke.py").read_text(encoding="utf-8")
+    assert "subprocess" in smoke
+    assert "claude" in smoke.lower()
+    # And it must have a sane wall-time guard so a hanging CLI doesn't pin
+    # the smoke forever.
+    assert "timeout" in smoke.lower()
 
 
 def test_smoke_workspace_settings_are_vanilla(tmp_path: Path):

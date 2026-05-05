@@ -99,9 +99,12 @@ settings). Running it from a directory that inherits `~/.claude/settings.json`'s
 
 ## Step 4 — Run the smoke demo
 
+The smoke is **CLI-driven** (it shells out to `claude -p "..."`) — no
+Python SDK install needed. The bundled `pyproject.toml` is intentionally
+empty of dependencies so this just works:
+
 ```bash
 cd /opt/ua_demos/_smoke
-uv pip install anthropic   # demo-local dep
 uv run python smoke.py
 ```
 
@@ -111,10 +114,10 @@ Expected output (on success):
 {
   "ok": true,
   "endpoint": "https://api.anthropic.com",
-  "model": "claude-haiku-4-5-20251001",
-  "stop_reason": "end_turn",
   "live_call": "completed",
-  "response_excerpt": "OK"
+  "response_excerpt": "OK",
+  "matched_expected_token": true,
+  "host": "srv1360701"
 }
 ```
 
@@ -130,6 +133,59 @@ uv run python smoke.py
 Best practice for the VPS: run Cody's demo subprocesses with a clean
 environment (e.g., a dedicated systemd service unit with `Environment=`
 explicitly set, NOT inheriting the operator shell).
+
+### Why the smoke is CLI-driven, not SDK-driven
+
+This is critical to understand. The Claude Code CLI (`claude`) and the
+Anthropic Python SDK (`from anthropic import Anthropic`) use **two
+different authentication mechanisms**:
+
+| Path | Auth source | What it tests |
+|---|---|---|
+| Claude Code CLI | Max plan OAuth session (set up by `claude /login`) | What Cody actually uses for demos |
+| Anthropic Python SDK | `ANTHROPIC_API_KEY` env var only | A separate, distinct path that needs a different credential |
+
+A successful `claude /login` does NOT make `Anthropic()` work in
+Python — the SDK doesn't read the OAuth session. So validating the
+demo execution path means invoking the CLI and checking the response,
+not constructing an SDK client.
+
+If you ever want to verify the endpoint manually beyond what the smoke
+reports, this two-terminal trick gives bulletproof proof:
+
+Terminal 1:
+
+```bash
+cd /opt/ua_demos/_smoke
+claude -p "Write a 200-word story about a cat. Take your time."
+```
+
+Terminal 2 (while terminal 1 is still running):
+
+```bash
+ss -t state established | grep -E 'anthropic|z\.ai'
+```
+
+You should see a TCP connection to `api.anthropic.com` and **nothing**
+to `api.z.ai`. If you see ZAI, the project-local settings precedence
+isn't taking effect.
+
+### Demos that need the Python SDK
+
+A small minority of demos may want to exercise the Anthropic SDK directly
+(e.g., to demonstrate prompt caching, the Memory Tool API surface, etc.).
+These are **category-2 demos** and need different setup than the default
+Claude Code feature demos:
+
+1. The demo's own `pyproject.toml` adds `anthropic` as a dependency.
+2. The workspace env carries an `ANTHROPIC_API_KEY` — **not** the same
+   thing as the Max plan OAuth session. Get this from
+   `console.anthropic.com` under the Max plan account.
+3. The demo's `manifest.json.endpoint_hit` should still resolve to
+   `api.anthropic.com` — the API key is the auth, not a different endpoint.
+
+See [Demo Execution Environments](../06_Deployment_And_Environments/09_Demo_Execution_Environments.md)
+for the full CLI-vs-SDK distinction and which type of demo to use when.
 
 ---
 
@@ -167,5 +223,8 @@ Once the smoke workspace is provisioned and OAuth is set up:
 |---|---|---|
 | `provision_smoke_workspace` raises `ValueError: settings.json carries pollution markers` | Scaffold template was edited and re-introduced an env/hooks/plugins key | Remove the offending key from `src/universal_agent/templates/_smoke_demo/.claude/settings.json` and redeploy |
 | `smoke.py` exits with code 2 (`endpoint_mismatch`) | `ANTHROPIC_BASE_URL` set in shell environment | `unset ANTHROPIC_BASE_URL`; consider running Cody as a systemd service with explicit env |
-| `smoke.py` exits with code 1, error mentions auth | Max plan OAuth session expired or never set up | Re-run step 3 |
-| `claude` not found | Claude Code CLI not installed on VPS | `npm install -g @anthropic-ai/claude-code` (or whatever upgrade path PR 6b ends up using) |
+| `smoke.py` exits with code 1, `live_call: failed`, stderr mentions auth | Max plan OAuth session expired or never set up | Re-run step 3 from inside `/opt/ua_demos/_smoke/` |
+| `smoke.py` exits with code 1, `live_call: skipped_claude_cli_not_installed` | Claude Code CLI not installed on VPS | `npm install -g @anthropic-ai/claude-code` (or whatever upgrade path PR 6b ends up using) |
+| `smoke.py` exits with code 1, `live_call: timeout` | Network issue or `claude` is hanging | Try `claude -p "test"` manually; check VPS network egress |
+| `uv run python smoke.py` complains "No virtual environment found" | The smoke template was deployed before PR 7b shipped the bundled `pyproject.toml` | Re-deploy or manually `cd /opt/ua_demos/_smoke && uv venv && uv pip install -r /dev/null` |
+| `Anthropic()` constructor in some demo Python file raises `Could not resolve authentication method` | Trying to use the Python SDK with the Max plan OAuth session, which the SDK ignores | Either rewrite the demo to shell out to `claude` (preferred for Claude Code feature demos), OR add an `ANTHROPIC_API_KEY` from `console.anthropic.com` to the workspace env (for SDK feature demos) |

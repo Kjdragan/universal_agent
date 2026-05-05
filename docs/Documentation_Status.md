@@ -32,7 +32,7 @@ This file and `docs/README.md` serve as the **authoritative indexes** for all pr
 | URW_Orchestration.md | Multi-phase tasks |
 | LLM_Wiki_System.md | **Canonical source of truth** — shared wiki engine, external knowledge vault, derived internal memory vault, runtime surfaces, provenance, and integrity/query workflows |
 | Discord_Intelligence_System.md | **Canonical source of truth** — architecture for the Discord intelligence and C&C operations, dual-token architecture, 4-stage message processing pipeline (ingestion → signal detection → LLM relevance filter → triage), Phase 5 store-but-hide relevance filter with cross-channel batching and concurrent Haiku-class workers, dashboard signal toggle, configuration reference, and operational runbook |
-| ClaudeDevs_X_Intelligence_System.md | **Canonical subsystem reference** — official X API ClaudeDevs lane, packet generation, replay/backfill, linked-source expansion, external Claude Code vault population, candidate ledgering, delivery verification, historical cron cleanup, and the operator skill/report surface |
+| ClaudeDevs_X_Intelligence_System.md | **Canonical subsystem reference** — official X API ClaudeDevs lane, packet generation, replay/backfill, linked-source expansion, external Claude Code vault population, candidate ledgering, delivery verification, historical cron cleanup, and the operator skill/report surface. **v2 (2026-05) extends with:** lifted truncation caps (PR 1), 28-day brief + decoupled rebuild (PR 4), full-corpus capability library (PR 5), wiki Memex primitives CREATE/EXTEND/REVISE (PR 2), research grounding subagent (PR 3), multi-lane config (PR 11), Phase 0 dependency-currency observation (PR 6a), demo workspace scaffolding (PR 7). See [v2 design doc](proactive_signals/claudedevs_intel_v2_design.md), [demo workspace runbook](operations/demo_workspace_provisioning.md), [demo execution environments](06_Deployment_And_Environments/09_Demo_Execution_Environments.md). |
 
 ## Architecture (01_Architecture/)
 
@@ -144,6 +144,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 06 | Production deploy incident |
 | 07 | Stage-based Infisical and machine bootstrap migration plan |
 | 08 | VPS deployment profile stuck at `local_workstation` — final incident record covering the wrong-host false lead and the gateway env-sanitization fix |
+| 09 | **Demo Execution Environments** — canonical reference for the dual-environment architecture (UA repo with ZAI-mapped settings vs `/opt/ua_demos/` with Anthropic-native vanilla settings + Max plan OAuth). Explains where each lives on the VPS, how Claude Code picks its environment, common pitfalls and failure modes, dependency-currency smoke matrix across both profiles, and the generalization path for future lanes (Codex, Gemini). |
 
 ## Run Reviews (03_Run_Reviews/)
 
@@ -187,6 +188,19 @@ These are the authoritative references for each subsystem. When any other docume
 | Doc | Subject |
 |-----|---------|
 | todolist-task-pipeline-audit-2026-03-11.md | Historical audit of the early `/dashboard/todolist` pipeline before the dedicated ToDo dispatcher refactor |
+
+## Operations (operations/)
+
+| Doc | Subject |
+|-----|---------|
+| demo_workspace_provisioning.md | **Operator runbook** — one-time setup of `/opt/ua_demos/` on the VPS for Phase 3 demo execution: directory creation, smoke workspace provisioning, Max plan `claude /login` (must be run from inside the demo workspace, not from a ZAI-mapped dir), smoke test verification, troubleshooting table for endpoint mismatch / auth failure / pollution markers |
+
+## Proactive Signals (proactive_signals/)
+
+| Doc | Subject |
+|-----|---------|
+| generation_rules.md | Rules governing proactive signal generation |
+| claudedevs_intel_v2_design.md | **Canonical v2 design** — full ClaudeDevs X Intel v2 architecture: vault as canonical product, append-dominant Memex maintenance, Phase 0 dependency currency, Phase 1 deep doc absorption + research grounding, Phase 2/4 Simone orchestration with multi-loop iteration, Phase 3 Cody implementation in vanilla Anthropic-native environment, Phase 5 skill memorialization, parallel-vault backfill plan, generalization to Codex/Gemini lanes, 13-PR implementation sequence |
 
 ## Handoffs
 

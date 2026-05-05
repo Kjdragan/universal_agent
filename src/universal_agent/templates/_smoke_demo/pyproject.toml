@@ -1,0 +1,22 @@
+# Phase 0 smoke demo — minimal project metadata so `uv run python smoke.py`
+# works inside /opt/ua_demos/_smoke/ without a manual `uv venv` dance.
+#
+# The smoke is CLI-driven (shells out to `claude -p "..."`) and intentionally
+# has zero Python dependencies. It validates that the Max plan OAuth session
+# established by `claude /login` from inside this directory actually works.
+#
+# Demos that need the Python SDK (the rare category-2 demos that exercise
+# Anthropic API features directly rather than Claude Code features) should
+# add `anthropic` to their own pyproject.toml AND provision an
+# ANTHROPIC_API_KEY in their workspace env, since the SDK doesn't read the
+# CLI's OAuth session.
+#
+# See docs/06_Deployment_And_Environments/09_Demo_Execution_Environments.md
+# for the full CLI-vs-SDK distinction.
+
+[project]
+name = "ua-demos-smoke"
+version = "0.1.0"
+description = "Phase 0 smoke demo — verifies Claude Code CLI works against api.anthropic.com via Max plan OAuth"
+requires-python = ">=3.10"
+dependencies = []
