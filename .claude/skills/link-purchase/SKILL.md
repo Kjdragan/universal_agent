@@ -39,8 +39,10 @@ Examples that should NOT trigger:
 - "What's a good gift for my brother?"
 - "How much does X cost?"
 
-When in doubt, ask the user to confirm: merchant URL, exact amount,
-one-sentence description.
+**CRITICAL:** If the user does not provide the exact merchant, exact amount, AND exact item description, you MUST immediately ask them for the missing details. 
+- **DO NOT** attempt to browse the web or use any search tools to find items for them. 
+- **DO NOT** guess the items. 
+You are only authorized to proceed with the confirmation flow for fully-specified requests.
 
 ## Required confirmation flow
 
