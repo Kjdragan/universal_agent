@@ -1,0 +1,122 @@
+# Intelligence lane configuration.
+#
+# Each lane defines a "what to watch and where to put it" recipe for the
+# proactive intelligence pipeline. Phase 0 (dependency currency), Phase 1
+# (discovery+research), Phase 2 (briefing), Phase 3 (demo build), and
+# Phase 4 (review) all read from a single lane config so adding a new
+# topic (e.g., OpenAI Codex, Gemini) is configuration, not new code.
+#
+# See docs/proactive_signals/claudedevs_intel_v2_design.md §13.
+#
+# Schema is enforced by services.intel_lanes:LaneConfig (Pydantic).
+# Unknown keys are rejected so typos surface immediately.
+
+version: 1
+
+lanes:
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Claude Code / Claude Agent SDK intelligence
+  # The original lane. Drives @ClaudeDevs + @bcherny polling, official-doc
+  # research grounding, and the Anthropic-native demo execution path.
+  # ──────────────────────────────────────────────────────────────────────────
+  claude-code-intelligence:
+    enabled: true
+    title: "Claude Code Intelligence"
+    description: |
+      Tracks Claude Code, Claude Agent SDK, and adjacent Anthropic releases
+      via X handles. Builds a durable knowledge vault, a 28-day rolling
+      brief, and a capability library with runnable demo references.
+
+    handles:
+      - ClaudeDevs
+      - bcherny
+
+    # Research grounding allowlist. Priority order: lower index = higher trust.
+    # The grounding subagent fetches official sources first and only falls
+    # back to general web when the official lookup yields nothing.
+    research_allowlist:
+      - "docs.anthropic.com"
+      - "github.com/anthropics"
+      - "anthropic.com/news"
+      - "anthropic.com/engineering"
+      - "support.anthropic.com"
+
+    # Storage roots. Paths are relative to UA_ARTIFACTS_DIR for vault and
+    # to the repo root for the capability library.
+    vault_slug: "claude-code-intelligence"
+    capability_library_slug: "claude_code_intel"
+
+    # Cron schedule. Twice daily America/Chicago is the existing cadence.
+    cron_expr: "0 8,16 * * *"
+    cron_timezone: "America/Chicago"
+
+    # Demo execution profile. anthropic_native uses the vanilla
+    # ~/.claude-anthropic config and the Max plan login, breaking out of
+    # the default ZAI mapping for new-feature demos.
+    demo_endpoint_profile: "anthropic_native"
+
+    # Anthropic-adjacent packages tracked by the Phase 0 dependency
+    # currency layer. Listed for documentation; the upgrade worker reads
+    # this list to know what to keep current.
+    tracked_packages:
+      - "claude-code"           # CLI, npm
+      - "claude-agent-sdk"      # Python
+      - "@anthropic-ai/claude-agent-sdk"  # TypeScript
+      - "anthropic"             # Python SDK
+      - "@anthropic-ai/sdk"     # TypeScript SDK
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Future lanes — disabled until enabled explicitly.
+  # Kept here as templates so adding a new lane is a 5-line edit.
+  # ──────────────────────────────────────────────────────────────────────────
+
+  openai-codex-intelligence:
+    enabled: false
+    title: "OpenAI Codex Intelligence"
+    description: |
+      Tracks OpenAI Codex, the OpenAI Agents SDK, and adjacent releases
+      via X handles. Out of scope for v1 implementation — config exists
+      so the structure is in place when we generalize the pipeline.
+    handles:
+      - OpenAIDevs
+      - OpenAI
+      - sama
+    research_allowlist:
+      - "platform.openai.com/docs"
+      - "github.com/openai"
+      - "openai.com/blog"
+      - "openai.com/index"
+    vault_slug: "openai-codex-intelligence"
+    capability_library_slug: "openai_codex_intel"
+    cron_expr: "0 9,17 * * *"
+    cron_timezone: "America/Chicago"
+    demo_endpoint_profile: "openai_native"
+    tracked_packages:
+      - "openai"
+      - "openai-agents"
+      - "@openai/agents"
+
+  gemini-intelligence:
+    enabled: false
+    title: "Gemini Intelligence"
+    description: |
+      Tracks Google Gemini API and Vertex AI agentic releases.
+      Out of scope for v1 implementation.
+    handles:
+      - GoogleDeepMind
+      - GoogleAI
+    research_allowlist:
+      - "ai.google.dev"
+      - "developers.googleblog.com"
+      - "github.com/google-gemini"
+      - "github.com/google"
+      - "cloud.google.com/vertex-ai"
+    vault_slug: "gemini-intelligence"
+    capability_library_slug: "gemini_intel"
+    cron_expr: "0 10,18 * * *"
+    cron_timezone: "America/Chicago"
+    demo_endpoint_profile: "gemini_native"
+    tracked_packages:
+      - "google-genai"
+      - "@google/genai"
