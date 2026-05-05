@@ -1,42 +1,128 @@
-"""Phase 0 smoke demo — verify the dual-environment setup actually works.
+"""Phase 0 smoke demo — verify the dual-environment setup works end-to-end.
+
+Validates that running `claude` from inside this workspace exercises real
+Anthropic endpoints via the Max plan OAuth session, not the ZAI mapping
+that pollutes UA's normal `~/.claude/settings.json`.
+
+This smoke is CLI-driven, not SDK-driven, because:
+
+1. Cody's actual demo work runs the `claude` CLI (she IS a Claude Code
+   instance). The CLI uses the Max plan OAuth session.
+2. The Anthropic Python SDK uses a *different* auth mechanism — it reads
+   `ANTHROPIC_API_KEY` env vars and ignores the OAuth session entirely.
+   A successful `claude /login` does NOT make `Anthropic()` work in
+   Python without an extra env var.
+
+So validating the demo execution path means invoking the CLI and checking
+the response, not constructing an SDK client.
 
 Two checks, in order:
 
-1. Hits the `anthropic` SDK with NO env override and confirms the response
-   came back from `api.anthropic.com`. This validates the Max plan OAuth
-   session that `claude /login` provisioned on the VPS.
+1. The subprocess inherits no `ANTHROPIC_BASE_URL` override — i.e., no
+   stray env var from the parent shell that would redirect to ZAI.
+2. The `claude` CLI runs from inside this workspace, the project-local
+   `.claude/settings.json` (vanilla — no env block) takes precedence over
+   the polluted user-global one, and a one-shot prompt completes against
+   the real API.
 
-2. Reads /etc/hostname (or USER) so we have at least one piece of evidence
-   the demo subprocess actually executed.
+Exit codes:
+  0 — both checks passed (CLI returned a sensible response)
+  1 — claude CLI failed (binary missing, OAuth expired, or API error)
+  2 — endpoint mismatch: ANTHROPIC_BASE_URL is set in the parent env
 
-Exit code 0 = both checks pass.
-Exit code 1 = anthropic call failed.
-Exit code 2 = endpoint mismatch (request was redirected somewhere other than
-              api.anthropic.com — usually means a stray ANTHROPIC_BASE_URL
-              env var leaked in).
-
-Cody's `cody-implements-from-brief` skill will run a similar shape for every
-real demo: invoke the SDK, capture which endpoint actually served the
-response, fail loud on a mismatch.
+Usage:
+    cd /opt/ua_demos/_smoke
+    uv run python smoke.py
 """
 
 from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess as sp
 import sys
 from pathlib import Path
 
 
-def _capture_endpoint() -> str:
-    """Determine which endpoint the anthropic SDK is configured to hit.
+SMOKE_PROMPT = "Reply with exactly the word OK and nothing else."
+SMOKE_EXPECTED_TOKEN = "OK"
+SMOKE_TIMEOUT_SECONDS = 60
 
-    Returns the BASE URL used by the next API request.
+
+def _capture_endpoint() -> str:
+    """Determine which endpoint the demo would actually hit.
+
+    The Claude Code CLI obeys `ANTHROPIC_BASE_URL` as an override even when
+    a project-local settings.json says otherwise (env vars beat config in
+    most CLI tools). So a stray env var from the parent shell is the most
+    common false-success failure mode — catch it loud here.
     """
     base = os.getenv("ANTHROPIC_BASE_URL", "").strip()
     if base:
         return base
     return "https://api.anthropic.com"
+
+
+def _claude_binary() -> str | None:
+    """Locate the claude CLI. Returns None if not on PATH."""
+    return shutil.which("claude")
+
+
+def _run_cli_smoke() -> dict[str, object]:
+    """Invoke `claude -p "..."` and capture the reply."""
+    binary = _claude_binary()
+    if binary is None:
+        return {
+            "ok": False,
+            "live_call": "skipped_claude_cli_not_installed",
+            "remediation": (
+                "claude CLI not on PATH. Install via npm i -g @anthropic-ai/claude-code "
+                "or per the Phase 0 dependency-currency upgrade pipeline."
+            ),
+        }
+    try:
+        completed = sp.run(
+            [binary, "-p", SMOKE_PROMPT],
+            cwd=Path(__file__).resolve().parent,
+            capture_output=True,
+            text=True,
+            timeout=SMOKE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except sp.TimeoutExpired:
+        return {
+            "ok": False,
+            "live_call": "timeout",
+            "timeout_seconds": SMOKE_TIMEOUT_SECONDS,
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "live_call": "subprocess_error",
+            "error_type": type(exc).__name__,
+            "error": str(exc)[:400],
+        }
+
+    stdout = (completed.stdout or "").strip()
+    stderr_excerpt = (completed.stderr or "").strip()[:600]
+
+    if completed.returncode != 0:
+        return {
+            "ok": False,
+            "live_call": "failed",
+            "return_code": completed.returncode,
+            "stdout_excerpt": stdout[:200],
+            "stderr_excerpt": stderr_excerpt,
+        }
+
+    contains_token = SMOKE_EXPECTED_TOKEN in stdout.upper()
+    return {
+        "ok": contains_token,
+        "live_call": "completed",
+        "response_excerpt": stdout[:200],
+        "matched_expected_token": contains_token,
+    }
 
 
 def main() -> int:
@@ -51,9 +137,10 @@ def main() -> int:
                     "endpoint": endpoint,
                     "expected_substring": expected_host,
                     "remediation": (
-                        "An ANTHROPIC_BASE_URL is set in this subprocess. "
+                        "ANTHROPIC_BASE_URL is set in this subprocess. "
                         "The demo workspace must inherit a clean environment — "
-                        "unset ANTHROPIC_BASE_URL before launching."
+                        "unset ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, and "
+                        "ANTHROPIC_DEFAULT_*_MODEL before launching."
                     ),
                 },
                 indent=2,
@@ -62,68 +149,17 @@ def main() -> int:
         )
         return 2
 
-    # Best-effort live check. Skipped when the SDK isn't installed or no
-    # session is available — this script must work as a structural smoke
-    # without external dependencies hard-required.
-    try:
-        from anthropic import Anthropic  # type: ignore[import-not-found]
-    except ImportError:
-        print(
-            json.dumps(
-                {
-                    "ok": True,
-                    "endpoint": endpoint,
-                    "live_call": "skipped_anthropic_sdk_not_installed",
-                    "host": Path("/etc/hostname").read_text(encoding="utf-8").strip()
-                    if Path("/etc/hostname").exists()
-                    else os.getenv("USER", ""),
-                },
-                indent=2,
-            )
-        )
-        return 0
+    cli = _run_cli_smoke()
+    cli["endpoint"] = endpoint
+    cli["host"] = (
+        Path("/etc/hostname").read_text(encoding="utf-8").strip()
+        if Path("/etc/hostname").exists()
+        else os.getenv("USER", "")
+    )
 
-    try:
-        client = Anthropic()
-        response = client.messages.create(
-            model=os.getenv("ANTHROPIC_DEFAULT_SMOKE_MODEL", "claude-haiku-4-5-20251001"),
-            max_tokens=64,
-            messages=[{"role": "user", "content": "Reply with exactly the word OK."}],
-        )
-        text_blocks = [
-            getattr(b, "text", "") for b in (response.content or []) if hasattr(b, "text")
-        ]
-        body = "".join(text_blocks).strip()
-        ok = body.upper().startswith("OK")
-        print(
-            json.dumps(
-                {
-                    "ok": ok,
-                    "endpoint": endpoint,
-                    "model": getattr(response, "model", ""),
-                    "stop_reason": getattr(response, "stop_reason", ""),
-                    "live_call": "completed",
-                    "response_excerpt": body[:120],
-                },
-                indent=2,
-            )
-        )
-        return 0 if ok else 1
-    except Exception as exc:
-        print(
-            json.dumps(
-                {
-                    "ok": False,
-                    "endpoint": endpoint,
-                    "live_call": "failed",
-                    "error_type": type(exc).__name__,
-                    "error": str(exc)[:400],
-                },
-                indent=2,
-            ),
-            file=sys.stderr,
-        )
-        return 1
+    out_stream = sys.stdout if cli.get("ok") else sys.stderr
+    print(json.dumps(cli, indent=2), file=out_stream)
+    return 0 if cli.get("ok") else 1
 
 
 if __name__ == "__main__":
