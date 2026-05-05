@@ -159,7 +159,7 @@ Implementation update as of 2026-04-30:
 Scope:
 
 1. Build an intelligence digest composer that reads artifact inventory, proactive signal cards, tutorial notifications, CODIE PR artifacts, and wiki entries.
-2. Send daily digest email when meaningful work was produced. **Status (2026-04-27):** Automated via `proactive_digest_agent.py` cron job at 8 AM CT daily. Previously, digest could only be sent through the dashboard API endpoint manually.
+2. Send daily digest email when meaningful work was produced. **Status (2026-04-27):** Automated via `proactive_digest_agent.py` cron job at 6 AM CT daily. Previously, digest could only be sent through the dashboard API endpoint manually.
 3. Send individual review emails for high-ranked candidates.
 4. Do not impose a hard low email cap. Instead, use clear review framing and batch lower-ranked items.
 5. Include source, why surfaced, final product, and exact review request in every email.
