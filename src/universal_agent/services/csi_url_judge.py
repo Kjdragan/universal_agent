@@ -27,6 +27,29 @@ from universal_agent.utils.model_resolution import resolve_opus
 
 logger = logging.getLogger(__name__)
 
+
+# ── Tunable limits (env-configurable) ────────────────────────────────────────
+# These caps were previously hard-coded at 20K storage / 3K analysis context /
+# 3-fetch per post, which collapsed long official docs into excerpts before the
+# downstream classifier ever saw them. v2 raises them so the analysis pass
+# reads the full source. See docs/proactive_signals/claudedevs_intel_v2_design.md
+# §6.2.
+
+def _env_int(name: str, default: int) -> int:
+    raw = str(os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+DOC_STORAGE_MAX_CHARS = _env_int("UA_CSI_DOC_STORAGE_MAX_CHARS", 200_000)
+DEFAULT_MAX_FETCH = _env_int("UA_CSI_MAX_FETCH_PER_POST", 10)
+
+
 # ── Pydantic Models ──────────────────────────────────────────────────────────
 
 UrlCategory = Literal[
@@ -470,8 +493,9 @@ def _fetch_with_defuddle(url: str, output_path: Path, timeout: int) -> dict[str,
             except json.JSONDecodeError:
                 content = result.stdout
 
-            if len(content) > 20000:
-                content = content[:20000] + "\n\n... [Content truncated at 20000 chars]"
+            cap = DOC_STORAGE_MAX_CHARS
+            if len(content) > cap:
+                content = content[:cap] + f"\n\n... [Content truncated at {cap} chars]"
 
             output_path.write_text(f"# Source: {url}\n\n{content}", encoding="utf-8")
             return {"ok": True, "path": str(output_path), "method": "defuddle", "chars": len(content)}
@@ -492,8 +516,9 @@ def _fetch_with_httpx(url: str, output_path: Path, timeout: int) -> dict[str, An
             })
             if resp.status_code == 200:
                 text = resp.text
-                if len(text) > 20000:
-                    text = text[:20000] + "\n\n... [Content truncated at 20000 chars]"
+                cap = DOC_STORAGE_MAX_CHARS
+                if len(text) > cap:
+                    text = text[:cap] + f"\n\n... [Content truncated at {cap} chars]"
                 output_path.write_text(f"# Source: {url}\n\n{text}", encoding="utf-8")
                 return {"ok": True, "path": str(output_path), "method": "httpx", "chars": len(text)}
             return {"ok": False, "error": f"HTTP {resp.status_code}"}
@@ -525,8 +550,9 @@ def _fetch_github_repo(url: str, output_dir: Path, timeout: int) -> dict[str, An
                 resp = client.get(raw_url)
             if resp.status_code == 200:
                 content = resp.text
-                if len(content) > 20000:
-                    content = content[:20000] + "\n\n... [Content truncated at 20000 chars]"
+                cap = DOC_STORAGE_MAX_CHARS
+                if len(content) > cap:
+                    content = content[:cap] + f"\n\n... [Content truncated at {cap} chars]"
 
                 # Also get repo metadata
                 api_url = f"https://api.github.com/repos/{owner}/{repo}"
@@ -589,16 +615,21 @@ def enrich_urls(
     context: str,
     output_dir: Path,
     *,
-    max_fetch: int = 5,
+    max_fetch: int | None = None,
     timeout: int = 15,
 ) -> list[EnrichmentRecord]:
     """Full 3-pass pipeline: pre-filter → LLM judge → selective fetch.
 
     Returns list of EnrichmentRecords with fetch status, content paths,
     and categories for downstream classification.
+
+    `max_fetch` defaults to `DEFAULT_MAX_FETCH` (env `UA_CSI_MAX_FETCH_PER_POST`,
+    default 10). Pass an explicit int to override per call.
     """
     if not urls:
         return []
+    if max_fetch is None:
+        max_fetch = DEFAULT_MAX_FETCH
 
     # Pass 1: fast pre-filter
     candidates, discarded = pre_filter_urls(urls)
@@ -646,11 +677,21 @@ def enrich_urls(
     return all_records
 
 
-def build_linked_context(records: list[EnrichmentRecord], *, max_content_chars: int = 3000) -> str:
+def build_linked_context(
+    records: list[EnrichmentRecord],
+    *,
+    max_content_chars: int | None = None,
+) -> str:
     """Build a linked_context string from enrichment records for classify_post().
 
     Reads fetched content files and assembles a structured context string
     that the tier classifier can use for informed decisions.
+
+    `max_content_chars=None` (default) returns the full fetched document.
+    Pass a positive int to truncate per-source. v1 hard-coded 3,000 here,
+    which collapsed long official docs into excerpts before the classifier
+    ever saw them. v2 defaults to no truncation so the classifier reads what
+    the storage layer actually fetched.
     """
     parts: list[str] = []
     for record in records:
@@ -658,11 +699,16 @@ def build_linked_context(records: list[EnrichmentRecord], *, max_content_chars: 
             content_path = Path(record.content_path)
             if content_path.exists():
                 content = content_path.read_text(encoding="utf-8", errors="replace")
-                excerpt = content[:max_content_chars]
+                if max_content_chars is not None and max_content_chars > 0:
+                    excerpt = content[:max_content_chars]
+                    label = "content_excerpt"
+                else:
+                    excerpt = content
+                    label = "content"
                 parts.append(
                     f"source_type={record.category} | "
                     f"url={record.url} | "
-                    f"content_excerpt={excerpt}"
+                    f"{label}={excerpt}"
                 )
         elif record.category and record.category != "social_noise":
             # Even unfetched URLs provide signal via their category
