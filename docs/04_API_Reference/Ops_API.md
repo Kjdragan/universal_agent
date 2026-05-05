@@ -590,7 +590,51 @@ Feedback triggers background rule distillation when feedback text or tags are pr
 | `/api/v1/dashboard/supervisors/{id}/run` | POST | Trigger supervisor run |
 | `/api/v1/dashboard/supervisors/{id}/runs` | GET | List supervisor run history |
 
-## 24. AgentMail Extended Ops
+## 24. Dashboard Mission Control
+
+Mission Control provides a three-tier operating picture: tier-0 health tiles, tier-1 LLM narrative cards, and a tier-2 Chief-of-Staff readout with Knowledge Ledger. Canonical subsystem doc: `02_Subsystems/Mission_Control_Intelligence_System.md`.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/dashboard/mission-control/tiles` | GET | Tier-0 tile strip states (health, queues, services) |
+| `/api/v1/dashboard/mission-control/cards` | GET | Tier-1 live narrative cards (auto-created on tile transitions + LLM discovery) |
+| `/api/v1/dashboard/mission-control/ledger` | GET | Knowledge Ledger feed (retired/archived cards with recurrence tracking) |
+| `/api/v1/dashboard/mission-control/diagnostics` | GET | Operator-visible sweeper diagnostics |
+| `/api/v1/dashboard/mission-control/refresh` | POST | Kick off async tier-1 + tier-2 refresh; returns `202 + job_id` immediately |
+| `/api/v1/dashboard/mission-control/refresh/{job_id}` | GET | Poll refresh job status (`queued` → `cards_running` → `readout_running` → `completed` or `failed`) |
+| `/api/v1/dashboard/chief-of-staff` | GET | Latest durable Chief-of-Staff readout + journal entries |
+| `/api/v1/dashboard/chief-of-staff/refresh` | POST | **DEPRECATED** — returns `410 Gone`. Use `/api/v1/dashboard/mission-control/refresh` instead |
+
+### Mission Control Query Parameters (cards)
+
+| Param | Default | Description |
+|-------|---------|-------------|
+| `limit` | `50` | Maximum cards to return |
+
+### Mission Control Query Parameters (ledger)
+
+| Param | Default | Description |
+|-------|---------|-------------|
+| `limit` | `200` | Maximum ledger entries to return |
+| `subject_kind` | `null` | Filter by subject kind |
+| `min_recurrence` | `0` | Minimum recurrence count filter |
+| `state` | `null` | Filter by entry state |
+| `since_iso` | `null` | Filter entries after ISO timestamp |
+
+### Chief-of-Staff Query Parameters
+
+| Param | Default | Description |
+|-------|---------|-------------|
+| `include_evidence` | `false` | Include raw evidence blocks in readout |
+| `journal_limit` | `8` | Maximum journal entries to return |
+
+Related implementation:
+- `src/universal_agent/gateway_server.py` — Dashboard API endpoints
+- `src/universal_agent/services/mission_control_tiles.py` — Tier-0 tile sweeper
+- `src/universal_agent/services/mission_control_cards.py` — Tier-1 card management
+- `src/universal_agent/services/mission_control_db.py` — Shared SQLite store
+
+## 25. AgentMail Extended Ops
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -607,7 +651,7 @@ Feedback triggers background rule distillation when feedback text or tags are pr
 | `/api/v1/ops/agentmail/inbox-queue/{id}/retry-now` | POST | Retry a queued inbox item |
 | `/api/v1/ops/agentmail/messages` | GET | List AgentMail messages |
 
-## 25. Calendar and Scheduling
+## 26. Calendar and Scheduling
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -619,7 +663,7 @@ Feedback triggers background rule distillation when feedback text or tags are pr
 | `/api/v1/ops/scheduling/events` | GET | List scheduling events |
 | `/api/v1/ops/scheduling/stream` | GET | Stream scheduling events (SSE) |
 
-## 26. Skills and Models
+## 27. Skills and Models
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -628,7 +672,7 @@ Feedback triggers background rule distillation when feedback text or tags are pr
 | `/api/v1/ops/skills/{key}/doc` | GET | Get skill documentation |
 | `/api/v1/ops/models` | GET | List available models |
 
-## 27. Channels, Presence, and System Events
+## 28. Channels, Presence, and System Events
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -639,7 +683,7 @@ Feedback triggers background rule distillation when feedback text or tags are pr
 | `/api/v1/system/events` | GET | Get system events |
 | `/api/v1/system/event` | POST | Post system event |
 
-## 28. Additional Metrics and Budget
+## 29. Additional Metrics and Budget
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -651,14 +695,14 @@ Feedback triggers background rule distillation when feedback text or tags are pr
 | `/api/v1/ops/session-budget/status` | GET | Current session token budget status |
 | `/api/v1/ops/session-budget/heavy-mode` | POST | Toggle heavy execution mode |
 
-## 29. Factory Live Chrome
+## 30. Factory Live Chrome
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/v1/factory/live-chrome/status` | GET | Live Chrome tunnel status |
 | `/api/v1/factory/live-chrome/status` | POST | Start/stop Live Chrome tunnel |
 
-## 30. Heartbeat and Telemetry
+## 31. Heartbeat and Telemetry
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -667,7 +711,7 @@ Feedback triggers background rule distillation when feedback text or tags are pr
 | `/api/v1/ops/telemetry/briefing` | POST | Generate telemetry briefing |
 | `/api/v1/ops/system-health` | GET | System health overview |
 
-## 31. Artifacts and File Browsing
+## 32. Artifacts and File Browsing
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -677,13 +721,13 @@ Feedback triggers background rule distillation when feedback text or tags are pr
 | `/api/files/{session_id}/{path}` | GET | Get file contents from a session |
 | `/api/v1/sessions/{id}/upload` | POST | Upload file to session workspace |
 
-## 32. Vision
+## 33. Vision
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/v1/vision/describe` | POST | Describe an image using vision model |
 
-## 33. Environment Variables
+## 34. Environment Variables
 
 Key environment variables controlling gateway behavior:
 
@@ -699,7 +743,7 @@ Key environment variables controlling gateway behavior:
 | `UA_ACTIVITY_NOTIFICATION_AUTO_READ_HOURS` | `24` | Hours after which non-actionable info/success notifications are auto-marked as read |
 | `UA_CODIE_PROACTIVE_CLEANUP_TIMEZONE` | `America/Chicago` | Timezone for CODIE proactive cleanup cron job |
 
-## 34. Error Responses
+## 35. Error Responses
 
 All endpoints return standard HTTP status codes:
 
@@ -720,7 +764,7 @@ Error response body:
 }
 ```
 
-## 35. Source Files
+## 36. Source Files
 
 Primary implementation:
 - `src/universal_agent/gateway_server.py` — Main FastAPI application
@@ -732,7 +776,7 @@ Related services:
 - `src/universal_agent/hooks_service.py` — Hooks processing
 - `src/universal_agent/timeout_policy.py` — WebSocket timeouts
 
-## 36. Related Documentation
+## 37. Related Documentation
 
 - `docs/02_Flows/07_WebSocket_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md` — WebSocket details
 - `docs/02_Flows/08_Gateway_And_Web_UI_Auth_And_Session_Security_Source_Of_Truth_2026-03-06.md` — Auth flows

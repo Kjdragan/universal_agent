@@ -3,7 +3,7 @@
 > **Canonical source-of-truth** for the YouTube Tutorial Pipeline. All other
 > tutorial-related documentation should reference this file.
 >
-> **Last updated:** 2026-04-30 — Daily YouTube Digest now ranks videos, saves tutorial-candidate decisions, and can auto-dispatch the top code implementation prospects while preserving repopulate pockets.
+> **Last updated:** 2026-05-05 — Added yesterday-shift day mapping, email delivery safeguard, playlist provisioning utility, cron registration script, and VP coder workspace pruner documentation.
 
 ## 1. Pipeline Overview
 
@@ -37,6 +37,19 @@ It fetches the playlist (costing 1 API unit) and deduplicates videos against `yo
 Digest synthesis uses the repository's Anthropic-compatible ZAI inference path, defaulting to `glm-5-turbo` via `resolve_model("sonnet")` unless `UA_YOUTUBE_DIGEST_MODEL` overrides it.
 
 The digest LLM now produces both human-readable markdown and a structured `youtube_digest_decisions` block. The code normalizes that block, sorts videos by `value_score`, saves a candidate artifact, and dispatches the highest-value `code_implementation_prospect=true` videos to the YouTube tutorial pipeline. The machine-readable decision block is stripped from the human-facing digest/email; the email instead includes a compact "YouTube Tutorial Pipeline Dispatch" section listing selected videos and hook acceptance status.
+
+**Yesterday-shift day mapping.** The cron fires the morning *after* content collection. Tuesday's run reads `MONDAY_YT_PLAYLIST` (yesterday's playlist), not Tuesday's. The script computes `DAYS[(now - 1 day).weekday()]` automatically. Manual reruns via `--day` bypass this shift and target the exact day specified.
+
+**Email delivery safeguard.** When email delivery is enabled (`--email-to`), the processed-videos database write is gated on successful delivery. If the email send fails, the script emits a `proactive_delivery_failed` stderr tag (captured by the cron service into `cron_runs.jsonl`) and **skips** the DB write, so the next scheduled run will retry the same videos. This prevents burning videos with no delivery path.
+
+**Playlist provisioning.** `youtube_provision_digest_playlists.py` is a one-shot utility that discovers the user's "\<Day\> Digest" playlists via the YouTube Data API and upserts their IDs to Infisical as `\<DAY\>_YT_PLAYLIST`. Run it once after creating the 7 day-named playlists:
+
+```bash
+PYTHONPATH=src uv run python -m universal_agent.scripts.youtube_provision_digest_playlists
+# add --dry-run to preview without writing to Infisical
+```
+
+**Cron registration.** `schedule_youtube_digest.py` registers (or updates) the `daily_youtube_digest` cron job. The gateway's `_ensure_youtube_daily_digest_cron_job()` helper calls this at boot, so manual invocation is rarely needed. The job runs at 06:00 America/Chicago with a 1-hour timeout.
 
 > [!WARNING]
 > **Testing Status (2026-04-30)**: The transition to the SQLite Database state model has been fully implemented in the codebase, and the python deduplication logic has been verified via unit mocks. However, **end-to-end testing with actual YouTube data has not been finalized yet due to Google Cloud Project API quota limitations** hit during development. Full live validation is scheduled to resume tomorrow when the quota resets.
@@ -332,6 +345,9 @@ Optional video/vision analysis in `youtube-tutorial-creation` is gated to `conce
 | `src/universal_agent/youtube_ingest.py` | Transcript fetching via rotating residential proxy (Webshare or DataImpulse) |
 | `src/universal_agent/youtube_mode_utils.py` | Shared concept-only vs code-worthy mode inference used by CSI signal ingest, hooks, gateway tutorial indexing, and playlist watching |
 | `src/universal_agent/scripts/youtube_daily_digest.py` | Daily playlist digest, ranked tutorial-candidate decisions, and bounded code-prospect dispatch |
+| `src/universal_agent/scripts/youtube_provision_digest_playlists.py` | One-shot utility: discovers "\<Day\> Digest" playlists via YouTube Data API and upserts IDs to Infisical |
+| `src/universal_agent/scripts/schedule_youtube_digest.py` | Registers/updates the `daily_youtube_digest` cron job (called by gateway boot helper) |
+| `src/universal_agent/scripts/vp_coder_workspace_pruner.py` | Weekly archive of stale VP-coder workspace subdirectories (7-day default retention) |
 | `src/universal_agent/services/youtube_playlist_watcher.py` | Playlist polling |
 | `src/universal_agent/services/tutorial_telegram_notifier.py` | Telegram notification sink with per-video dedup |
 | `web-ui/app/dashboard/page.tsx` | Main dashboard with notification dedup |

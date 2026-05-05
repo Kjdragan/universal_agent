@@ -199,7 +199,9 @@ The dashboard consumes the following backend REST endpoints from `gateway_server
 | `/api/v1/dashboard/todolist/tasks/{task_id}/history` | GET | Assignment/evaluation trail, email mapping, transcript/run-log links, and canonical execution forensics |
 | `/api/v1/dashboard/todolist/morning-report` | GET | Deterministic morning report snapshot |
 | `/api/v1/dashboard/chief-of-staff` | GET | Latest durable Mission Control Chief-of-Staff readout plus recent journal entries |
-| `/api/v1/dashboard/chief-of-staff/refresh` | POST | Generate a fresh Chief-of-Staff pass from bounded evidence through the Anthropic-compatible ZAI inference path |
+| `/api/v1/dashboard/mission-control/refresh` | POST | Kick off an async tier-1 + tier-2 Mission Control refresh; returns `202 + job_id` immediately |
+| `/api/v1/dashboard/mission-control/refresh/{job_id}` | GET | Poll refresh job status (`queued` -> `cards_running` -> `readout_running` -> `completed` or `failed`) |
+| `/api/v1/dashboard/chief-of-staff/refresh` | POST | **DEPRECATED** — returns `410 Gone`. Use `/api/v1/dashboard/mission-control/refresh` instead |
 | `/api/v1/dashboard/situations` | GET | Mission Control Operator Brief read model: curated situation cards with compact titles, recommended next action, tags, and expandable knowledge blocks |
 
 Read endpoints must not rebuild the Task Hub dispatch queue. They read the latest stored queue snapshot so sidebar navigation and polling do not perform expensive scoring/write work while holding the activity-store lock. Use `/api/v1/dashboard/todolist/dispatch-queue/rebuild` or dispatcher/write paths when a queue rebuild is intentionally required.
@@ -216,8 +218,8 @@ The design follows the repository LLM-native intelligence contract: code collect
 
 Code-verified anchors:
 - The frontend fetches `/api/v1/dashboard/chief-of-staff` and renders the readout in `ChiefOfStaffReadoutPanel`. Source: file:///home/kjdragan/lrepos/universal_agent/web-ui/app/dashboard/mission-control/page.tsx#L517
-- The frontend can trigger a backend refresh through `/api/v1/dashboard/chief-of-staff/refresh`. Source: file:///home/kjdragan/lrepos/universal_agent/web-ui/app/dashboard/mission-control/page.tsx#L542
-- The gateway exposes the latest readout and refresh endpoints in `dashboard_chief_of_staff` and `dashboard_chief_of_staff_refresh`. Source: file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/gateway_server.py#L22867
+- The frontend triggers an async refresh through `POST /api/v1/dashboard/mission-control/refresh` (returns `202 + job_id`) and polls `GET /api/v1/dashboard/mission-control/refresh/{job_id}` for progress. The old sync `/api/v1/dashboard/chief-of-staff/refresh` now returns `410 Gone`. Source: file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/gateway_server.py
+- The gateway exposes the latest readout via `dashboard_chief_of_staff`, async refresh via `dashboard_mission_control_refresh` + `dashboard_mission_control_refresh_status`, and the deprecated sync refresh via `dashboard_chief_of_staff_refresh_deprecated` (returns `410`). Source: file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/gateway_server.py
 - The service gathers bounded evidence in `collect_evidence_bundle`. Source: file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/mission_control_chief_of_staff.py#L313
 - The service delegates meaning-making to the LLM in `synthesize_readout` and stores durable readouts in `persist_readout`. Source: file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/services/mission_control_chief_of_staff.py#L430
 - The frontend still fetches `/api/v1/dashboard/situations?limit=10` and renders supporting situation cards in `OperatorBriefPanel`. Source: file:///home/kjdragan/lrepos/universal_agent/web-ui/app/dashboard/mission-control/page.tsx#L528
