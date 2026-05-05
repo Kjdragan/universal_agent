@@ -1,0 +1,8 @@
+{
+  "_comment": "VANILLA Claude Code settings for UA demo workspaces. Intentionally empty of env overrides, hooks, plugins, and experimental flags so demos exercise real Anthropic endpoints with the Max plan OAuth session. Do NOT add ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, or ANTHROPIC_DEFAULT_*_MODEL here — that defeats the entire purpose of /opt/ua_demos/. See docs/proactive_signals/claudedevs_intel_v2_design.md §8.",
+  "effortLevel": "high",
+  "autoUpdatesChannel": "latest",
+  "permissions": {
+    "allow": []
+  }
+}

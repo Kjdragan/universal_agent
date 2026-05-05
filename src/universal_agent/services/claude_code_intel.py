@@ -116,11 +116,17 @@ Important:
 Return ONLY JSON:
 {
   "tier": 1 | 2 | 3 | 4,
-  "action_type": "digest" | "kb_update" | "demo_task" | "strategic_follow_up",
+  "action_type": "digest" | "kb_update" | "demo_task" | "strategic_follow_up" | "release_announcement",
   "content_kind": "community_event" | "docs_reference" | "product_capability" | "migration_risk" | "code_example" | "usage_tip" | "generic_update",
   "confidence": "high" | "medium" | "low",
   "reasoning": "short explanation"
 }
+
+Use `release_announcement` when the post announces a new version of an Anthropic-adjacent
+package (claude-code, claude-agent-sdk, anthropic SDK, @anthropic-ai/sdk). These are
+operationally critical because the Phase 0 dependency-currency layer keys off them.
+Deterministic detection runs anyway, so even if you're unsure, prefer the next-best
+action_type and let the deterministic check upgrade it if warranted.
 """
 
 
@@ -580,9 +586,29 @@ def classify_post(post: dict[str, Any], *, handle: str = DEFAULT_HANDLE, linked_
     )
     tier = int(llm_result.get("tier") or heuristic["tier"])
     action_type = str(llm_result.get("action_type") or heuristic["action_type"] or "digest").strip()
-    if action_type not in {"digest", "kb_update", "demo_task", "strategic_follow_up"}:
+    if action_type not in {"digest", "kb_update", "demo_task", "strategic_follow_up", "release_announcement"}:
         action_type = heuristic["action_type"]
-    return {
+
+    # Deterministic release-announcement detection (PR 6a). If a recognized
+    # Anthropic-adjacent package name + version pair appears in the post or
+    # links, override the LLM/heuristic action_type and attach a structured
+    # release_info payload that the Phase 0 upgrade worker can consume. The
+    # LLM is allowed to miss this; deterministic detection wins.
+    release_info: dict[str, Any] | None = None
+    try:
+        from universal_agent.services.dependency_currency import detect_release_announcement
+
+        release_info = detect_release_announcement(text=text, links=links)
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.debug("release-announcement detection skipped: %s", exc)
+    if release_info:
+        action_type = "release_announcement"
+        # Release announcements are at least tier 2 — they're operationally
+        # critical even when the post itself is brief.
+        if tier < 2:
+            tier = 2
+
+    result = {
         "post_id": post_id,
         "url": f"https://x.com/{handle.strip().lstrip('@') or DEFAULT_HANDLE}/status/{post_id}" if post_id else "",
         "created_at": str(post.get("created_at") or ""),
@@ -601,6 +627,9 @@ def classify_post(post: dict[str, Any], *, handle: str = DEFAULT_HANDLE, linked_
             "heuristic_action_type": str(heuristic["action_type"]),
         },
     }
+    if release_info:
+        result["release_info"] = release_info
+    return result
 
 
 def _heuristic_classification(*, text: str, lowered: str, links: list[str], linked_context: str = "") -> dict[str, Any]:
@@ -670,7 +699,7 @@ def _llm_assisted_classification(*, text: str, links: list[str], heuristic: dict
         action_type = str(parsed.get("action_type") or "").strip()
         if tier not in {1, 2, 3, 4}:
             return {"method": "heuristic"}
-        if action_type not in {"digest", "kb_update", "demo_task", "strategic_follow_up"}:
+        if action_type not in {"digest", "kb_update", "demo_task", "strategic_follow_up", "release_announcement"}:
             return {"method": "heuristic"}
         return {
             "method": "llm",
@@ -697,6 +726,14 @@ def extract_links(post: dict[str, Any]) -> list[str]:
                 if value:
                     links.append(value)
                     break
+    # Flat post["links"] list — used by replay/backfill paths and tests where
+    # the X API entities envelope isn't reconstructed.
+    flat = post.get("links")
+    if isinstance(flat, list):
+        for item in flat:
+            value = str(item or "").strip()
+            if value:
+                links.append(value)
     links.extend(_URL_RE.findall(str(post.get("text") or "")))
     deduped: list[str] = []
     seen: set[str] = set()
