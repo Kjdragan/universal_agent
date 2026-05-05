@@ -44,6 +44,19 @@ The system can now:
 26. Enrich linked URLs during live sync via a three-pass pipeline (regex pre-filter → Anthropic LLM judge → selective fetch) before post classification, providing actual linked content to the tier classifier for informed tier decisions.
 27. Feature-gate URL enrichment via `UA_CSI_URL_ENRICHMENT_ENABLED` env var (default: `1`/on) for safe production rollout.
 
+### v2 capability additions (PRs 1, 2, 3, 4, 5, 6a, 7, 11 — 2026-05)
+
+The v2 work documented in [`docs/proactive_signals/claudedevs_intel_v2_design.md`](../proactive_signals/claudedevs_intel_v2_design.md) lifts the v1 truncation caps, decouples brief regeneration from new-post arrivals, adds Memex update primitives, ships a research grounding subagent, scaffolds the demo execution environment, and stands up a Phase 0 dependency-currency observation layer.
+
+28. Read full official documentation (no 3K excerpt cap) into the classifier via `csi_url_judge`. Three env-driven knobs replaced the hard-coded caps: `UA_CSI_DOC_STORAGE_MAX_CHARS` (default 200K, was 20K), `UA_CSI_MAX_FETCH_PER_POST` (default 10, was 3), and `build_linked_context(max_content_chars=None)` no longer truncates per source.
+29. Synthesize the rolling builder brief over a configurable window (`UA_CLAUDE_CODE_INTEL_BRIEF_WINDOW_DAYS`, default **28**, was 14) with no 18-item cap (`UA_CLAUDE_CODE_INTEL_BRIEF_MAX_CONTEXTS`, default 500). The brief now rebuilds on every successful tick (`UA_CLAUDE_CODE_INTEL_BRIEF_ALWAYS_REBUILD=1`) so backfills surface immediately. New `--rebuild-brief` CLI flag on `claude_code_intel_run_report.py` for explicit operator override.
+30. Synthesize the capability library over the **full corpus**, not a windowed slice. `UA_CSI_LIBRARY_FULL_CORPUS=1` (default) runs a separate library synthesis using `_load_action_contexts(window_days=None)`. Library `index.json` records `source_mode: full_corpus` and `source_action_count`. Brief stays windowed.
+31. Memex update primitives in `wiki/core.py`: `memex_create_page`, `memex_extend_page`, `memex_revise_page`, plus `memex_apply_action` dispatcher. CREATE refuses to overwrite. EXTEND appends a dated section. REVISE snapshots to `_history/<kind>/<slug>/<iso>.md` and requires an explicit `reason` for the audit log. `memex_append_change_log` writes structured `## [<iso>] <page> <ACTION>` entries to `log.md`. Source pages remain immutable; only entity/concept/analyses pages are mutable.
+32. Research grounding subagent (`services/research_grounding.py`). Tier ≥ 2 gate (`UA_CSI_RESEARCH_TIER_GATE`). Four trigger reasons: NO_LINKS, THIN_LINKED_SOURCES, UNKNOWN_TERM, OPERATOR_FORCE. Allowlist priority ranking via `allowlist_rank()` reads from `intel_lanes.yaml`. No-invention contract: empty allowlist or zero candidates returns `ResearchResult` with `skipped_reason`, never a fabricated source. Reuses `csi_url_judge.fetch_url_content` so storage caps apply uniformly.
+33. Multi-lane configuration scaffolding (`config/intel_lanes.yaml` + `services/intel_lanes.py`). Pydantic-validated `LaneConfig` with strict unknown-key rejection. Default lane `claude-code-intelligence` (enabled). Templates `openai-codex-intelligence` and `gemini-intelligence` ship disabled. `get_lane(slug)`, `enabled_lanes()`, `all_lanes()` accessors with cache.
+34. Phase 0 dependency-currency observation (`services/dependency_currency.py` + `scripts/dependency_currency_sweep.py`). Parses `uv pip list --outdated`, `npm outdated --json`, and `claude --version`. Writes `infrastructure/installed_versions.md`, `infrastructure/version_drift.md`, `infrastructure/release_timeline.md`, and `infrastructure/upgrade_failures/<ts>_<pkg>.md`. Anthropic-adjacent allowlist: `claude-code`, `claude-agent-sdk`, `anthropic`, `@anthropic-ai/sdk`, `@anthropic-ai/claude-agent-sdk`. Deterministic release-announcement detection wired into `classify_post` as a new `action_type: release_announcement` with structured `release_info` payload (package, version, is_anthropic_adjacent). Tier floor of 2 enforced for release announcements.
+35. Demo execution environment scaffolding (`services/demo_workspace.py` + `templates/ua_demos_scaffold/` + `templates/_smoke_demo/`). Provisions `/opt/ua_demos/<demo-id>/` with vanilla project-local `.claude/settings.json` (no env, no hooks, no plugins, no extraKnownMarketplaces, no plansDirectory). `verify_vanilla_settings()` is the safety net: refuses to declare a workspace ready if any of `POLLUTION_INDICATORS` leaked back in. Slug-safe; refuses `..`. Smoke demo at `/opt/ua_demos/_smoke/` exits with code 2 on endpoint mismatch (catches `ANTHROPIC_BASE_URL` env leakage). Requires one-time operator setup: `mkdir -p /opt/ua_demos` + `claude /login` with the Max plan account. See [Demo Workspace Provisioning Runbook](../operations/demo_workspace_provisioning.md).
+
 ## Canonical Paths
 
 | Surface | Path |
@@ -62,6 +75,12 @@ The system can now:
 | Dashboard route | `web-ui/app/dashboard/claude-code-intel/page.tsx` |
 | Dashboard API (read) | `GET /api/v1/dashboard/claude-code-intel` |
 | Dashboard API (trigger) | `POST /api/v1/dashboard/claude-code-intel/trigger` |
+| Lane config (v2) | `src/universal_agent/config/intel_lanes.yaml` |
+| Vault `_history/` snapshots (v2) | `UA_ARTIFACTS_DIR/knowledge-vaults/<vault_slug>/_history/<kind>/<slug>/<iso>.md` |
+| Phase 0 infrastructure pages (v2) | `UA_ARTIFACTS_DIR/knowledge-vaults/<vault_slug>/infrastructure/` |
+| Demo workspace root (v2) | `/opt/ua_demos/<demo-id>/` (env override `UA_DEMOS_ROOT`) |
+| Smoke demo workspace (v2) | `/opt/ua_demos/_smoke/` |
+| Dependency-currency CLI (v2) | `src/universal_agent/scripts/dependency_currency_sweep.py` |
 
 ## Runtime Flow
 
@@ -369,6 +388,14 @@ Each bundle preserves:
 | [`claude_code_intel_run_report.py`](../../src/universal_agent/scripts/claude_code_intel_run_report.py) | Operator run + summary + email entry point |
 | [`x_oauth2_bootstrap.py`](../../src/universal_agent/scripts/x_oauth2_bootstrap.py) | OAuth2 bootstrap and token refresh |
 | [`claude_code_intel_cleanup_workspace.py`](../../src/universal_agent/scripts/claude_code_intel_cleanup_workspace.py) | Historical workspace cleanup utility |
+| [`claude_code_intel_rollup.py`](../../src/universal_agent/services/claude_code_intel_rollup.py) | v2: 28-day windowed brief + full-corpus capability library synthesis |
+| [`research_grounding.py`](../../src/universal_agent/services/research_grounding.py) | v2: official-docs-first research subagent with allowlist enforcement |
+| [`intel_lanes.py`](../../src/universal_agent/services/intel_lanes.py) | v2: multi-lane config loader (Pydantic-validated) |
+| [`config/intel_lanes.yaml`](../../src/universal_agent/config/intel_lanes.yaml) | v2: lane definitions (Claude Code enabled; Codex/Gemini disabled templates) |
+| [`dependency_currency.py`](../../src/universal_agent/services/dependency_currency.py) | v2: drift parsers + vault infrastructure writers + release-announcement detection |
+| [`dependency_currency_sweep.py`](../../src/universal_agent/scripts/dependency_currency_sweep.py) | v2: Phase 0 daily drift CLI |
+| [`demo_workspace.py`](../../src/universal_agent/services/demo_workspace.py) | v2: Phase 3 demo workspace provisioner with vanilla-settings safety net |
+| [`wiki/core.py`](../../src/universal_agent/wiki/core.py) | v2: Memex update primitives (`memex_create_page`, `memex_extend_page`, `memex_revise_page`, `memex_apply_action`, `memex_append_change_log`) |
 
 ## What Is Still Incomplete
 
@@ -385,3 +412,6 @@ The subsystem is now functionally real, but a few refinements remain:
 - [ClaudeDevs X Intel Implementation Plan](../03_Operations/122_ClaudeDevs_X_Intel_Implementation_Plan_2026-04-21.md)
 - [LLM Wiki System](LLM_Wiki_System.md)
 - [Proactive Pipeline](Proactive_Pipeline.md)
+- **v2 Design Doc:** [ClaudeDevs X Intel v2 Design](../proactive_signals/claudedevs_intel_v2_design.md) — full v2 architecture (Phase 0–5, Memex update model, demo execution contract, backfill plan)
+- **v2 Operational Runbook:** [Demo Workspace Provisioning](../operations/demo_workspace_provisioning.md) — one-time `/opt/ua_demos/` setup + `claude /login` with Max plan
+- **v2 Environments Map:** [Demo Execution Environments](../06_Deployment_And_Environments/09_Demo_Execution_Environments.md) — how the UA repo (ZAI-mapped) and `/opt/ua_demos/` (Anthropic-native) coexist on the VPS
