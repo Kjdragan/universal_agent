@@ -42,7 +42,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from universal_agent.activity_db import get_activity_db_path
+from universal_agent.durable.db import get_activity_db_path
 from universal_agent.infisical_loader import initialize_runtime_secrets
 from universal_agent.services.backfill_v2 import (
     BackfillStats,
