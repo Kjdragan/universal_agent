@@ -19,6 +19,18 @@ The canonical deployment contract is maintained in `docs/deployment/`, not in ol
 - `docs/deployment/infisical_factories.md`
 - `docs/deployment/secrets_and_environments.md` — **Canonical guide for Infisical secrets and environment management**
 
+## ⚠️ Dual Claude Environments on the VPS (READ BEFORE TOUCHING CLAUDE)
+
+UA runs **two separate Claude environments side-by-side** on the production VPS:
+
+- **ZAI-mapped (default)** — cheap GLM models, used for all routine UA work.
+- **Anthropic-native (`/opt/ua_demos/` only)** — real Claude models via Max plan OAuth, used only for Phase 3 demo execution.
+
+Mistaking one for the other is the #1 source of confusion in this system. Before doing anything Claude-related on the VPS, read:
+
+- **[Demo Execution Environments](06_Deployment_And_Environments/09_Demo_Execution_Environments.md)** — canonical reference. Includes the [decision tree](06_Deployment_And_Environments/09_Demo_Execution_Environments.md#decision-tree-which-environment-do-i-need), the [CLI-vs-SDK auth wrinkle](06_Deployment_And_Environments/09_Demo_Execution_Environments.md#the-cli-vs-sdk-auth-wrinkle-read-this-it-bit-us), and the troubleshooting matrix.
+- **[Demo Workspace Provisioning Runbook](operations/demo_workspace_provisioning.md)** — one-time VPS setup steps.
+
 ## Development
 
 - **[Local Development Guide](development/LOCAL_DEV.md)**: How to run Universal Agent on your desktop at `http://localhost:3000` — prerequisites, one-time setup, daily workflow, architecture, troubleshooting.
