@@ -4,6 +4,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 import json
 import logging
+import os
 from pathlib import Path
 import re
 from typing import Any
@@ -19,8 +20,23 @@ from universal_agent.services.claude_code_intel import (
     resolve_lane_root,
 )
 
-ROLLING_WINDOW_DAYS = 14
-MAX_ACTION_CONTEXTS = 18
+
+def _env_int(name: str, default: int) -> int:
+    raw = str(os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+# v1 hard-coded a 14-day window with an 18-item cap, which silently truncated
+# any backfill or burst of activity. v2 widens both with env overrides. See
+# docs/proactive_signals/claudedevs_intel_v2_design.md §10.
+ROLLING_WINDOW_DAYS = _env_int("UA_CLAUDE_CODE_INTEL_BRIEF_WINDOW_DAYS", 28)
+MAX_ACTION_CONTEXTS = _env_int("UA_CLAUDE_CODE_INTEL_BRIEF_MAX_CONTEXTS", 500)
 MIN_SYNTHESIS_TIER = 2  # Tier 1 digests stay in packets but never become bundles
 
 _ROLLUP_SYSTEM = """\
@@ -179,12 +195,32 @@ def _why_canonical(source_type: str, domain: str) -> str:
     return "best available linked technical reference for the capability"
 
 
-def _load_recent_action_contexts(*, artifacts_root: Path | None = None, window_days: int = ROLLING_WINDOW_DAYS) -> list[dict[str, Any]]:
+def _load_action_contexts(
+    *,
+    artifacts_root: Path | None = None,
+    window_days: int | None = ROLLING_WINDOW_DAYS,
+    max_contexts: int | None = None,
+) -> list[dict[str, Any]]:
+    """Generalized action-context loader.
+
+    `window_days=None` returns ALL contexts in the packet history with no
+    time filter — used by the capability library, which synthesizes from
+    the full corpus, not a 28-day slice. See design doc §11.
+
+    `window_days=<int>` keeps the v1 behavior: only packets newer than
+    `now - window_days` qualify. Used by the rolling brief.
+
+    `max_contexts` defaults to `MAX_ACTION_CONTEXTS` (env-driven) and acts as
+    a safety cap so the LLM call never receives an unbounded payload.
+    """
     packet_root = resolve_lane_root(artifacts_root) / "packets"
     if not packet_root.exists():
         return []
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, int(window_days or ROLLING_WINDOW_DAYS)))
+    if window_days is None:
+        cutoff = None
+    else:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, int(window_days or ROLLING_WINDOW_DAYS)))
     contexts: list[dict[str, Any]] = []
     seen_posts: set[str] = set()
 
@@ -201,7 +237,9 @@ def _load_recent_action_contexts(*, artifacts_root: Path | None = None, window_d
         manifest = _safe_json(packet_dir / "manifest.json", {})
         generated_at = str(manifest.get("generated_at") or "")
         generated_dt = _parse_iso(generated_at)
-        if generated_dt is None or generated_dt < cutoff:
+        if generated_dt is None:
+            continue
+        if cutoff is not None and generated_dt < cutoff:
             continue
 
         actions = _safe_json(packet_dir / "actions.json", [])
@@ -265,7 +303,20 @@ def _load_recent_action_contexts(*, artifacts_root: Path | None = None, window_d
             )
 
     contexts.sort(key=lambda item: (str(item.get("generated_at") or ""), int(item.get("tier") or 0)), reverse=True)
-    return contexts[:MAX_ACTION_CONTEXTS]
+    cap = max_contexts if max_contexts is not None else MAX_ACTION_CONTEXTS
+    return contexts[:cap]
+
+
+def _load_recent_action_contexts(
+    *,
+    artifacts_root: Path | None = None,
+    window_days: int = ROLLING_WINDOW_DAYS,
+) -> list[dict[str, Any]]:
+    """Backward-compat wrapper kept for callers using the v1 name."""
+    return _load_action_contexts(
+        artifacts_root=artifacts_root,
+        window_days=window_days,
+    )
 
 
 def _fallback_narrative(contexts: list[dict[str, Any]], *, window_days: int) -> str:
@@ -680,20 +731,78 @@ def _materialize_repo_library(*, synthesis: dict[str, Any]) -> dict[str, Any]:
             }
         )
 
+    index_payload = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "bundles": bundle_index,
+        "source_mode": str(synthesis.get("source_mode") or "windowed"),
+        "source_action_count": int(synthesis.get("source_action_count") or 0),
+    }
     (current_root / "index.json").write_text(
-        json.dumps({"generated_at": datetime.now(timezone.utc).isoformat(), "bundles": bundle_index}, indent=2, ensure_ascii=True, sort_keys=True) + "\n",
+        json.dumps(index_payload, indent=2, ensure_ascii=True, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     return {"root": str(library_root), "current_root": str(current_root), "bundle_count": len(bundle_index)}
 
 
+def _library_full_corpus_enabled() -> bool:
+    """Env switch for the full-corpus capability library (default ON in v2).
+
+    Set UA_CSI_LIBRARY_FULL_CORPUS=0 to fall back to v1 behavior (library uses
+    the same windowed synthesis as the brief). Off-switch exists in case the
+    full-corpus path causes problems in production; default ON delivers the
+    v2 design intent.
+    """
+    raw = str(os.getenv("UA_CSI_LIBRARY_FULL_CORPUS") or "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
 def build_rolling_assets(*, artifacts_root: Path | None = None, window_days: int = ROLLING_WINDOW_DAYS) -> dict[str, Any]:
+    """Build the rolling brief AND the capability library.
+
+    The brief is synthesized over the windowed corpus (default 28 days, env
+    UA_CLAUDE_CODE_INTEL_BRIEF_WINDOW_DAYS). The capability library is
+    synthesized over the FULL corpus (env UA_CSI_LIBRARY_FULL_CORPUS=1,
+    default ON) so durable agent-actionable bundles aren't bound to recency.
+    See design doc §10–§11.
+    """
     lane_root = resolve_lane_root(artifacts_root)
     lane_root.mkdir(parents=True, exist_ok=True)
-    contexts = _load_recent_action_contexts(artifacts_root=artifacts_root, window_days=window_days)
+
+    # Brief: windowed synthesis (existing behavior).
+    contexts = _load_action_contexts(artifacts_root=artifacts_root, window_days=window_days)
     synthesis = _llm_synthesis(contexts, window_days=window_days)
     artifact_outputs = _write_current_and_history(synthesis=synthesis, artifacts_root=lane_root.parent.parent)
-    repo_outputs = _materialize_repo_library(synthesis=synthesis)
+
+    # Capability library: full-corpus synthesis when enabled.
+    if _library_full_corpus_enabled():
+        full_contexts = _load_action_contexts(
+            artifacts_root=artifacts_root,
+            window_days=None,
+        )
+        # Effective window for the prompt is the actual span of the corpus.
+        if full_contexts:
+            iso_dates = [str(c.get("generated_at") or "") for c in full_contexts]
+            iso_dates = [d for d in iso_dates if d]
+            if iso_dates:
+                oldest = _parse_iso(min(iso_dates))
+                newest = _parse_iso(max(iso_dates))
+                if oldest is not None and newest is not None:
+                    effective_window = max(1, (newest - oldest).days or 1)
+                else:
+                    effective_window = window_days
+            else:
+                effective_window = window_days
+        else:
+            effective_window = window_days
+        library_synthesis = _llm_synthesis(full_contexts, window_days=effective_window)
+        library_synthesis["source_mode"] = "full_corpus"
+        library_synthesis["source_action_count"] = len(full_contexts)
+    else:
+        library_synthesis = synthesis
+        library_synthesis["source_mode"] = "windowed"
+        library_synthesis["source_action_count"] = len(contexts)
+
+    repo_outputs = _materialize_repo_library(synthesis=library_synthesis)
     current_json_path = Path(artifact_outputs["report_json_path"])
     current_payload = _safe_json(current_json_path, {})
     current_payload.update(
@@ -701,6 +810,8 @@ def build_rolling_assets(*, artifacts_root: Path | None = None, window_days: int
             "artifact_outputs": artifact_outputs,
             "repo_outputs": repo_outputs,
             "source_action_count": len(contexts),
+            "library_source_mode": str(library_synthesis.get("source_mode") or "windowed"),
+            "library_source_action_count": int(library_synthesis.get("source_action_count") or 0),
         }
     )
     current_json_path.write_text(json.dumps(current_payload, indent=2, ensure_ascii=True, sort_keys=True) + "\n", encoding="utf-8")

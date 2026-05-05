@@ -288,7 +288,6 @@ def run_sync(
                                 urls=post_links,
                                 context=str(post.get("text") or "")[:2000],
                                 output_dir=enrich_dir / post_id,
-                                max_fetch=3,
                                 timeout=15,
                             )
                             linked_ctx = build_linked_context(records)
