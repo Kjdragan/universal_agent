@@ -1064,6 +1064,7 @@ function CardGridPanel() {
   const [promptModal, setPromptModal] = useState<GeneratedPromptResponse | null>(null);
   const [codieModal, setCodieModal] = useState<{ cardId: string; preview: DispatchToCodieResponse | null; steering: string; sending: boolean } | null>(null);
   const [actionPending, setActionPending] = useState<string | null>(null);
+  const [dismissingCardId, setDismissingCardId] = useState<string | null>(null);
   const { refreshKey } = useContext(RefreshContext);
 
   const load = useCallback(async () => {
@@ -1098,6 +1099,22 @@ function CardGridPanel() {
       void load();  // refresh card state
     } catch (err: any) {
       console.error("MC feedback failed", err);
+    }
+  }, [load]);
+
+  const dismissCard = useCallback(async (cardId: string) => {
+    setDismissingCardId(cardId);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/v1/dashboard/mission-control/cards/${encodeURIComponent(cardId)}/dismiss`,
+        { method: "POST" },
+      );
+      if (!res.ok) throw new Error(`dismiss failed: ${res.status}`);
+      void load();  // refresh to remove dismissed card
+    } catch (err: any) {
+      console.error("MC dismiss failed", err);
+    } finally {
+      setDismissingCardId(null);
     }
   }, [load]);
 
@@ -1262,6 +1279,8 @@ function CardGridPanel() {
                 onOpenComment={() => { setCommentingCardId(card.card_id); setCommentDraft(""); }}
                 onGeneratePrompt={() => generatePrompt(card.card_id)}
                 onSendToCodie={() => openCodieFlyout(card.card_id)}
+                onDismiss={() => dismissCard(card.card_id)}
+                isDismissing={dismissingCardId === card.card_id}
               />
             ))}
           </div>
@@ -1291,6 +1310,8 @@ function CardGridPanel() {
               onOpenComment={() => { setCommentingCardId(card.card_id); setCommentDraft(""); }}
               onGeneratePrompt={() => generatePrompt(card.card_id)}
               onSendToCodie={() => openCodieFlyout(card.card_id)}
+              onDismiss={() => dismissCard(card.card_id)}
+              isDismissing={dismissingCardId === card.card_id}
               actionPending={actionPending === card.card_id}
             />
           ))}
@@ -1310,6 +1331,8 @@ function CardGridPanel() {
               onOpenComment={() => { setCommentingCardId(card.card_id); setCommentDraft(""); }}
               onGeneratePrompt={() => generatePrompt(card.card_id)}
               onSendToCodie={() => openCodieFlyout(card.card_id)}
+              onDismiss={() => dismissCard(card.card_id)}
+              isDismissing={dismissingCardId === card.card_id}
               actionPending={actionPending === card.card_id}
               dimmed
             />
@@ -1462,6 +1485,8 @@ function CardItem({
   onOpenComment,
   onGeneratePrompt,
   onSendToCodie,
+  onDismiss,
+  isDismissing = false,
   actionPending = false,
   dimmed = false,
 }: {
@@ -1471,6 +1496,8 @@ function CardItem({
   onOpenComment: () => void;
   onGeneratePrompt?: () => void;
   onSendToCodie?: () => void;
+  onDismiss?: () => void;
+  isDismissing?: boolean;
   actionPending?: boolean;
   dimmed?: boolean;
 }) {
@@ -1499,11 +1526,46 @@ function CardItem({
       method: "POST",
     }).catch(() => { /* swallow */ });
   }, [card.card_id, card.last_synthesized_at]);
+  // Compact timestamp for card generation time
+  const cardTimestamp = card.last_synthesized_at || card.first_observed_at;
+  const compactTime = cardTimestamp ? (() => {
+    try {
+      const d = parseISO(cardTimestamp);
+      const now = new Date();
+      const diffMs = now.getTime() - d.getTime();
+      const diffMins = Math.floor(diffMs / 60000);
+      if (diffMins < 1) return "just now";
+      if (diffMins < 60) return `${diffMins}m ago`;
+      const diffHrs = Math.floor(diffMins / 60);
+      if (diffHrs < 24) return `${diffHrs}h ago`;
+      const diffDays = Math.floor(diffHrs / 24);
+      if (diffDays < 7) return `${diffDays}d ago`;
+      return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    } catch { return ""; }
+  })() : null;
+
   return (
-    <div className={`rounded-lg border border-border/50 bg-card/25 p-3 ${dimmed ? "opacity-60" : ""}`}>
+    <div className={`group relative rounded-lg border border-border/50 bg-card/25 p-3 transition-colors hover:border-border/70 ${dimmed ? "opacity-60" : ""} ${isDismissing ? "opacity-40 pointer-events-none" : ""}`}>
+      {/* Hover dismiss button — top-right corner */}
+      {onDismiss && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onDismiss(); }}
+          className="absolute right-1.5 top-1.5 z-10 rounded-md border border-border/50 bg-background/80 p-1 text-muted-foreground opacity-0 backdrop-blur-sm transition-all hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-400 group-hover:opacity-100"
+          title="Dismiss — retire this card from the live grid (preserved in Knowledge Ledger)"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
+      )}
       <div className="mb-1 flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-foreground/90">{card.title}</p>
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-semibold text-foreground/90">{card.title}</p>
+            {compactTime && (
+              <span className="flex-shrink-0 text-[10px] text-muted-foreground/60" title={cardTimestamp || ""}>
+                {compactTime}
+              </span>
+            )}
+          </div>
           <div className="mt-1 flex flex-wrap gap-1.5">
             <span className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] ${sev.cls}`}>
               {sev.label}
@@ -1609,7 +1671,6 @@ function CardItem({
       )}
 
       <div className="mt-2 text-[10px] text-muted-foreground">
-        {card.last_synthesized_at && <>synth {card.last_synthesized_at} · </>}
         {card.synthesis_model && <>{card.synthesis_model}</>}
       </div>
     </div>
