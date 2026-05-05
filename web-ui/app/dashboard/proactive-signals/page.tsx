@@ -88,16 +88,7 @@ export default function ProactiveSignalsPage() {
     }
     return "all";
   });
-  const [status, setStatus] = useState<(typeof STATUS_FILTERS)[number]>(() => {
-    if (typeof window !== "undefined") {
-      try {
-        const cached = JSON.parse(window.localStorage.getItem(FILTER_PREFS_KEY) || "{}");
-        const s = String(cached.status || "");
-        if ((STATUS_FILTERS as readonly string[]).includes(s)) return s as (typeof STATUS_FILTERS)[number];
-      } catch { /* ignore */ }
-    }
-    return "all";
-  });
+  const [status, setStatus] = useState<(typeof STATUS_FILTERS)[number]>("all");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState("");
