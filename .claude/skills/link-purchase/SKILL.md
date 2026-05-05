@@ -96,10 +96,9 @@ To trigger the approval push notification and poll for the card details to be se
 npx @stripe/link-cli spend-request request-approval lsrq_001 && \
 npx @stripe/link-cli spend-request retrieve lsrq_001 \
   --include card \
-  --output-file /tmp/link-card.json \
   --format json \
   --interval 2 \
-  --max-attempts 150
+  --max-attempts 150 > /tmp/link-card.json
 ```
 
 * While it polls, tell the user to approve the request in the Link app.
