@@ -1,20 +1,429 @@
 # ClaudeDevs X Intelligence System
 
+> **Status as of 2026-05-05:** v2 architecture is feature-complete in production
+> across 17 PRs. This doc is the canonical reference for how the system is
+> ARCHITECTED and how to OPERATE it. For the original v2 design rationale
+> (the "why"), see
+> [`../proactive_signals/claudedevs_intel_v2_design.md`](../proactive_signals/claudedevs_intel_v2_design.md).
+> For PR-by-PR execution history, see
+> [`../proactive_signals/claudedevs_intel_v2_remaining_work.md`](../proactive_signals/claudedevs_intel_v2_remaining_work.md).
+
 ## Purpose
 
-This subsystem turns multiple Claude Code–related X accounts (currently `@ClaudeDevs` and `@bcherny`) into a durable intelligence lane for Universal Agent.
+This subsystem turns multiple Claude Code–related X accounts (currently
+`@ClaudeDevs` and `@bcherny`) into a durable intelligence pipeline that:
 
-It exists to keep the project current on Claude Code changes that are newer than model training cutoffs, then convert those changes into:
+1. **Discovers** new Claude Code / Anthropic SDK features faster than model
+   training cutoffs
+2. **Captures** them as durable knowledge in a vault that grows over time
+3. **Demonstrates** them as runnable reference implementations clients can lift
+4. **Keeps the VPS current** by auto-applying the SDK upgrades the announcements imply
 
-- durable packet artifacts
-- a Claude Code external knowledge vault
-- candidate ledgers tying posts to work and outcomes
-- Task Hub follow-up for higher-value updates
-- reviewable analyses, migration notes, and implementation plans
+---
 
-## Current Capability
+## v2 Production Architecture (current state)
 
-The system can now:
+The system runs as a **6-phase pipeline**, with Phases 0 + 1 on cron and the
+rest operator/Cody/Simone-driven on-demand.
+
+```mermaid
+flowchart TD
+    Cron["claude_code_intel_sync<br/>cron 0 8,16 * * * America/Chicago"]
+    Cron --> Phase1
+    Phase0["Phase 0 — Dependency Currency<br/>continuous"]
+
+    subgraph Phase1 ["Phase 1 — Discovery & Research (cron, 2x/day)"]
+        Poll["Poll @ClaudeDevs + @bcherny via X API"]
+        Enrich["Three-pass URL enrichment<br/>(no 3K cap — full doc absorption)"]
+        Classify["LLM classifier<br/>+ release_announcement detection"]
+        Research["Research grounding fallback<br/>when sources thin or terms unknown"]
+        Memex["Memex CREATE/EXTEND/REVISE<br/>on entity & concept pages"]
+        Brief["Rebuild 28-day brief +<br/>full-corpus capability library"]
+        Trigger["release_announcement detected?<br/>→ Phase 0 actuator"]
+
+        Poll --> Enrich --> Classify --> Research --> Memex --> Brief
+        Classify --> Trigger
+    end
+
+    Phase1 --> Phase2
+
+    subgraph Phase0 ["Phase 0 — Dependency Currency"]
+        Sweep["Daily sweep:<br/>uv pip list --outdated +<br/>npm outdated + claude --version"]
+        Detect["release_announcement classifier"]
+        Actuator["Upgrade actuator:<br/>bump pyproject → uv sync →<br/>ZAI smoke + Anthropic-native smoke"]
+        Email["Email Kevin: success or rollback"]
+
+        Sweep --> Actuator
+        Detect --> Actuator
+        Actuator --> Email
+    end
+
+    Trigger --> Phase0
+
+    subgraph Phase2 ["Phase 2 — Briefing (Simone, heartbeat)"]
+        Pick["Simone reads vault entity pages<br/>flagged briefing_status: pending"]
+        Scaffold["cody-scaffold-builder:<br/>provision /opt/ua_demos/&lt;demo-id&gt;/<br/>copy SOURCES, write BRIEF/ACCEPTANCE"]
+        Dispatch["cody-task-dispatcher:<br/>queue cody_demo_task<br/>(persistent queue)"]
+
+        Pick --> Scaffold --> Dispatch
+    end
+
+    Phase2 --> Phase3
+
+    subgraph Phase3 ["Phase 3 — Implementation (Cody)"]
+        Read["Cody reads BRIEF/ACCEPTANCE/SOURCES"]
+        Build["Build demo via vanilla Claude Code<br/>(env-scrubbed, project-local settings)"]
+        Manifest["Write manifest.json<br/>(endpoint_hit, versions, status)"]
+
+        Read --> Build --> Manifest
+    end
+
+    Phase3 --> Phase4
+
+    subgraph Phase4 ["Phase 4 — Review (Simone, multi-loop)"]
+        Eval["cody-work-evaluator:<br/>EvaluationReport"]
+        Verdict{"Verdict?"}
+        Pass["complete + vault-demo-attach"]
+        Iter["FEEDBACK.md +<br/>reissue_cody_demo_task"]
+        Defer["park with reason"]
+
+        Eval --> Verdict
+        Verdict -->|pass| Pass
+        Verdict -->|iterate| Iter
+        Verdict -->|defer| Defer
+        Iter --> Phase3
+    end
+
+    Phase4 --> Phase5
+
+    subgraph Phase5 ["Phase 5 — Memorialize (occasional)"]
+        Promote["Pattern proven across 3-4 demos<br/>→ promote to UA skill"]
+    end
+```
+
+### What lives where (architecture-to-code map)
+
+| Phase | Concern | Code |
+|---|---|---|
+| 0 | Daily drift sweep | [`services/dependency_currency.py`](../../src/universal_agent/services/dependency_currency.py), [`scripts/dependency_currency_sweep.py`](../../src/universal_agent/scripts/dependency_currency_sweep.py) |
+| 0 | Upgrade actuator | [`services/dependency_upgrade.py`](../../src/universal_agent/services/dependency_upgrade.py), [`scripts/dependency_upgrade.py`](../../src/universal_agent/scripts/dependency_upgrade.py) |
+| 0 | Auto-trigger from release tweets | [`services/release_auto_trigger.py`](../../src/universal_agent/services/release_auto_trigger.py) |
+| 1 | Polling + checkpointing | [`services/claude_code_intel.py`](../../src/universal_agent/services/claude_code_intel.py) |
+| 1 | URL enrichment (no 3K cap) | [`services/csi_url_judge.py`](../../src/universal_agent/services/csi_url_judge.py) |
+| 1 | Release-announcement detection | [`services/dependency_currency.detect_release_announcement`](../../src/universal_agent/services/dependency_currency.py) wired into `classify_post` |
+| 1 | Research grounding fallback | [`services/research_grounding.py`](../../src/universal_agent/services/research_grounding.py) |
+| 1 | Replay + Memex pass | [`services/claude_code_intel_replay.py`](../../src/universal_agent/services/claude_code_intel_replay.py) (calls into [`wiki/core.py`](../../src/universal_agent/wiki/core.py) memex primitives) |
+| 1 | Brief + capability library | [`services/claude_code_intel_rollup.py`](../../src/universal_agent/services/claude_code_intel_rollup.py) |
+| 1 | Cron orchestration + email | [`scripts/claude_code_intel_run_report.py`](../../src/universal_agent/scripts/claude_code_intel_run_report.py) |
+| 2 | Vault entity → demo workspace | [`services/cody_scaffold.py`](../../src/universal_agent/services/cody_scaffold.py), skill: `.claude/skills/cody-scaffold-builder/` |
+| 2 | Demo workspace provisioning | [`services/demo_workspace.py`](../../src/universal_agent/services/demo_workspace.py), templates: `src/universal_agent/templates/ua_demos_scaffold/` |
+| 2 | Task Hub dispatch | [`services/cody_dispatch.py`](../../src/universal_agent/services/cody_dispatch.py), skill: `.claude/skills/cody-task-dispatcher/` |
+| 3 | Cody implementation contract | [`services/cody_implementation.py`](../../src/universal_agent/services/cody_implementation.py), skill: `.claude/skills/cody-implements-from-brief/` |
+| 3 | Smoke demo (gates Phase 0 upgrades) | `src/universal_agent/templates/_smoke_demo/` |
+| 4 | Monitor / Evaluate / Attach | [`services/cody_evaluation.py`](../../src/universal_agent/services/cody_evaluation.py), skills: `.claude/skills/cody-progress-monitor/`, `cody-work-evaluator/`, `vault-demo-attach/` |
+| Ops | Vault contradictions sweep | [`services/vault_lint_contradictions.py`](../../src/universal_agent/services/vault_lint_contradictions.py), [`scripts/vault_contradiction_lint.py`](../../src/universal_agent/scripts/vault_contradiction_lint.py) |
+| Ops | Backfill (parallel-vault staging) | [`services/backfill_v2.py`](../../src/universal_agent/services/backfill_v2.py), [`scripts/claude_code_intel_backfill_v2.py`](../../src/universal_agent/scripts/claude_code_intel_backfill_v2.py) |
+| Multi-lane | Lane config + accessor | [`config/intel_lanes.yaml`](../../src/universal_agent/config/intel_lanes.yaml), [`services/intel_lanes.py`](../../src/universal_agent/services/intel_lanes.py) |
+
+### Critical architectural invariants
+
+1. **The vault is the canonical product.** Brief, capability library, demos
+   are derivative views.
+2. **Append-dominant Memex.** ~80% CREATE, ~15% EXTEND, ~5% REVISE. `raw/`
+   and `sources/` are immutable; only `entities/`, `concepts/`, `analyses/`
+   are mutable. REVISE snapshots to `_history/` before rewriting.
+3. **Dual-environment safety.** UA's normal ZAI mapping handles all routine
+   work; demos under `/opt/ua_demos/` use vanilla Claude Code + Max plan
+   OAuth. Never mix. See
+   [`../06_Deployment_And_Environments/09_Demo_Execution_Environments.md`](../06_Deployment_And_Environments/09_Demo_Execution_Environments.md).
+4. **Persistent demo queue.** Cody picks up `cody_demo_task` items
+   indefinitely; never times out, never gives up.
+5. **No invention.** Cody documents gaps in `BUILD_NOTES.md` instead of
+   guessing at API surface. Hard rule.
+6. **Auto-rollback on smoke failure.** Phase 0 upgrades fail safe — both
+   ZAI and Anthropic-native smokes must pass; either failure rolls back
+   `pyproject.toml` and emails Kevin with the failure detail.
+
+---
+
+## What to expect after ship — operational guide
+
+### The emails are the primary signal
+
+Three subjects to know:
+
+#### 1. Routine cron summary (twice daily, ~8 AM and 4 PM CT)
+
+```
+[ClaudeDevs X Intel] @ClaudeDevs sync (X new / Y actions)
+```
+
+Existing email from v1, still arrives. **What changed in v2:** the vault now
+actually accretes entity pages (PR 15) and the brief/capability library
+auto-regenerate every tick (PR 4 + 5). Email shape is the same.
+
+- **Healthy signal:** email arrives at every tick, even when "0 new posts" —
+  per-handle checkpoint working correctly, NOT a failure.
+- **First worry:** if these stop arriving for >24 hours, cron broke or X API broke.
+
+#### 2. Phase 0 upgrade email (NEW — fires on release detection)
+
+When `@ClaudeDevs` announces a versioned release of an Anthropic-adjacent package:
+
+```
+[Phase 0 upgrade] OK — claude-agent-sdk 0.1.66 → 0.1.73
+```
+
+or on failure:
+
+```
+[Phase 0 upgrade] FAIL — anthropic 0.99.0
+```
+
+- **OK email = SUCCESS:** both smokes passed, bumped `pyproject.toml` is in
+  the working tree on `feature/latest2` waiting for `/ship`. Email body has
+  the diff for review.
+- **FAIL email = SYSTEM DID THE RIGHT THING:** smoke caught a regression,
+  actuator rolled back, working tree unchanged. "What broke" section in the
+  email shows which smoke failed and why.
+- **NO email after a release tweet you saw:** classifier missed it (rare)
+  OR cron hasn't run yet — wait for the next tick.
+
+#### 3. Cody demo notifications (LATER — Phase 3 is operator-initiated)
+
+Doesn't fire automatically. When you eventually trigger the first demo via
+the Simone scaffold-builder skill, you'll see Task Hub activity and the
+demo workspace will populate under `/opt/ua_demos/`.
+
+### Where to look on disk (when you want to dig deeper)
+
+On the VPS:
+
+```bash
+# Did the latest cron tick produce a packet?
+ls -lt /opt/universal_agent/artifacts/proactive/claude_code_intel/packets/$(date +%Y-%m-%d)/
+
+# Are entity pages accreting in the vault? (NEW from PR 15 — was empty in v1)
+ls /opt/universal_agent/artifacts/knowledge-vaults/claude-code-intelligence/entities/
+
+# What did the latest tick write to the change log?
+tail -50 /opt/universal_agent/artifacts/knowledge-vaults/claude-code-intelligence/log.md
+
+# Phase 0 infrastructure pages (NEW from PR 6a)
+cat /opt/universal_agent/artifacts/knowledge-vaults/claude-code-intelligence/infrastructure/installed_versions.md
+cat /opt/universal_agent/artifacts/knowledge-vaults/claude-code-intelligence/infrastructure/version_drift.md
+
+# Did an auto-upgrade fail? (rollback records)
+ls /opt/universal_agent/artifacts/knowledge-vaults/claude-code-intelligence/infrastructure/upgrade_failures/
+
+# Latest brief
+cat /opt/universal_agent/artifacts/proactive/claude_code_intel/rolling/current/rolling_14_day_report.md
+# (filename misleading — actually 28-day brief now per PR 4)
+```
+
+### Mission Control dashboard
+
+The existing dashboard at `/dashboard/claude-code-intel/` shows v1-shape
+surfaces (packets, brief, capability bundles, vault page search). All of
+that still works. **The new v2-specific signals are NOT yet surfaced in
+the dashboard** — they live in:
+
+- The operator emails (Phase 0 upgrade emails are entirely email-only)
+- The vault `log.md` change log
+- The vault `infrastructure/` pages
+- The packet `manifest.json` and `replay_summary.json`
+
+Wiring v2 signals (Memex action counts, grounded source counts, auto-upgrade
+history) into the dashboard is a follow-up PR — non-blocking for the core
+pipeline. If you want it, that's a clean ~150-line addition.
+
+### A practical "first week" watching schedule
+
+**Day 1 after ship:**
+- After the next cron tick (~8 AM or 4 PM CT): check email for the standard
+  `[ClaudeDevs X Intel]` summary. Should arrive even with 0 actions.
+- SSH to the VPS:
+  ```bash
+  ls /opt/universal_agent/artifacts/knowledge-vaults/claude-code-intelligence/entities/
+  ```
+  If empty, PR 15 Memex wiring isn't firing. If has any `.md` files, v2
+  ingest is producing entity pages.
+
+**Day 2-3:**
+- Watch the brief regeneration. Each cron tick should rebuild
+  `current/rolling_14_day_report.md` (filename misleading per PR 4 — actually
+  28-day brief). Mission Control's claude-code-intel route should show the
+  latest brief. If timestamp stops moving, rebuild trigger broke.
+
+**Day 4-7:**
+- Watch your inbox for any `[Phase 0 upgrade]` email. Fires the moment
+  `@ClaudeDevs` tweets a versioned release of an Anthropic-adjacent package.
+  Expected cadence: every couple weeks. **OK = good. FAIL = also good
+  (caught a regression). NO email after a release tweet = real signal
+  something didn't fire.**
+
+### What "good" looks like in one sentence
+
+**Within 7 days of ship, you should have at least one entity page in
+`vault/entities/`, a brief that's been regenerated multiple times, and
+either an `installed_versions.md` matching what's actually deployed OR a
+Phase 0 upgrade email (success or failure) in your inbox.**
+
+If all three are happening, v2 is working as designed. If any are missing
+after a week, something needs investigation.
+
+### 48-hour audit checkpoint (run this 2 days after ship)
+
+This is a concrete checklist to walk through after the system has had ~4
+cron ticks (twice-daily × 2 days). Use it to verify v2 is doing what this
+doc says it should.
+
+#### Email inbox — has the cron been firing?
+
+- [ ] At least 4 `[ClaudeDevs X Intel] @ClaudeDevs sync (...)` emails
+      (one per cron tick). If fewer, cron may have skipped.
+- [ ] At least one tick shows `new posts: > 0` (otherwise the X API
+      query is degenerate or @ClaudeDevs went silent — the latter is
+      possible but unusual for 48 hours).
+- [ ] If `@ClaudeDevs` tweeted a release in this window: a corresponding
+      `[Phase 0 upgrade]` email arrived. If yes, **the v2 auto-trigger
+      worked end-to-end for the first time** — that's the headline
+      success signal.
+
+#### Vault on disk — is it accreting?
+
+```bash
+ssh ua@vps
+cd /opt/universal_agent
+ls artifacts/knowledge-vaults/claude-code-intelligence/entities/ | wc -l
+# Should be > 0 if any post in the last 48 hours mentioned a new feature.
+# An empty entities/ directory after 4 ticks is a smell — check log.md.
+
+tail -30 artifacts/knowledge-vaults/claude-code-intelligence/log.md
+# Should show CREATE entries from PR 15 Memex pass.
+# Format: ## [<iso>] entities/<slug>.md CREATE / EXTEND / REVISE
+```
+
+#### Phase 0 infrastructure pages — are they populating?
+
+```bash
+cat artifacts/knowledge-vaults/claude-code-intelligence/infrastructure/installed_versions.md
+# Should list installed versions of claude-code, claude-agent-sdk, anthropic, etc.
+
+cat artifacts/knowledge-vaults/claude-code-intelligence/infrastructure/version_drift.md
+# May show drift; that's informational, not a problem unless it's wrong.
+```
+
+If both files exist with current dates, Phase 0 sweep is running.
+
+#### Brief — is it regenerating?
+
+```bash
+ls -lh artifacts/proactive/claude_code_intel/rolling/current/rolling_14_day_report.md
+# mtime should be the latest cron tick timestamp.
+# If mtime is older than 24 hours, brief regeneration is broken.
+
+head -20 artifacts/proactive/claude_code_intel/rolling/current/rolling_14_day_report.md
+# Should mention recent (last 28 days) feature names.
+```
+
+#### Capability library — is it full-corpus?
+
+```bash
+cat agent_capability_library/claude_code_intel/current/index.json | python3 -m json.tool
+# Should show "source_mode": "full_corpus" and "source_action_count" > 0.
+# If source_mode says "windowed", PR 5 is disabled or broken.
+```
+
+#### Decision points after the audit
+
+- **All checkpoints pass:** the v2 system is working as designed. Move on
+  to Phase 3 demo orchestration when ready (operator-supervised first run).
+- **Email arriving but vault empty:** Memex wiring (PR 15) failed to land
+  or has a bug. Tell me; I'll diagnose.
+- **No emails arriving at all:** check Logfire and the `cron_claude_code_intel_sync`
+  workspace under `AGENT_RUN_WORKSPACES/`. Cron service or X API is the issue.
+- **`[Phase 0 upgrade] FAIL` appeared:** READ THE EMAIL. The "What broke"
+  section tells you which smoke caught what regression. The actuator
+  rolled back automatically — your `pyproject.toml` is unchanged. Decide
+  whether the failure is real (Anthropic shipped a breaking change) or
+  spurious (env-leak in the smoke setup).
+
+### Three escape hatches (verified by unit tests)
+
+### Failure-symptom diagnosis
+
+| Symptom | Likely cause | Where to look |
+|---|---|---|
+| No `[ClaudeDevs X Intel]` emails for 24+ hours | Cron broke OR X API broke | Logfire traces, gateway_server logs |
+| Emails arrive but always show 0 actions | URL enrichment OR classifier broken | Latest packet's `actions.json` |
+| `vault/entities/` stays empty | PR 15 Memex wiring broken | `vault/log.md` for CREATE entries; if log.md not growing, Memex pass isn't running |
+| `[Phase 0 upgrade]` shows endpoint_mismatch in smoke output | env-leak in actuator's smoke subprocess | `/opt/ua_demos/_smoke/` env; check that ANTHROPIC_AUTH_TOKEN isn't being inherited |
+| `[Phase 0 upgrade]` shows uv sync failed | New package version has a real conflict | Email's stderr excerpt = the actual `uv sync` error |
+| No vault entity page after a major release tweet | Memex extraction missed the feature term | Check `actions.json` for the post; check `release_info` was populated |
+
+### Three escape hatches (verified by unit tests)
+
+If anything goes sideways:
+
+1. **`UA_CSI_AUTO_UPGRADE_ON_RELEASE=0`** — disables PR 6c auto-trigger,
+   reverts to manual upgrade only.
+2. **`manifest.endpoint_hit` verification** in Cody's evaluator (PR 10) —
+   automatically catches env-leak when a demo accidentally hits ZAI.
+3. **`backfill --revert-swap`** — rolls back a bad backfill swap; archive
+   becomes canonical, current canonical parks at `<name>-rolledback/`.
+
+---
+
+## Operational quick-reference
+
+### Common commands (run on VPS)
+
+```bash
+# Manual cron tick (don't normally need to do this — cron handles it)
+cd /opt/universal_agent
+PYTHONPATH=src uv run python -m universal_agent.scripts.claude_code_intel_run_report
+
+# Force the brief to rebuild even if no new posts
+PYTHONPATH=src uv run python -m universal_agent.scripts.claude_code_intel_run_report --rebuild-brief
+
+# Phase 0 drift sweep (read-only — no side effects)
+PYTHONPATH=src uv run python -m universal_agent.scripts.dependency_currency_sweep
+
+# Manual Phase 0 upgrade (operator-supervised)
+PYTHONPATH=src uv run python -m universal_agent.scripts.dependency_upgrade \
+    --package claude-agent-sdk --target-version 0.5.1 --dry-run
+# Drop --dry-run to actually apply
+
+# Backfill historical packets (operator-supervised first run)
+PYTHONPATH=src uv run python -m universal_agent.scripts.claude_code_intel_backfill_v2 --dry-run
+# Then without --dry-run for the actual replay
+# Then --diff-only to inspect
+# Then --swap-only to atomic-rename, OR --revert-swap to roll back
+
+# Vault contradictions lint (monthly, when ready to wire to cron)
+PYTHONPATH=src uv run python -m universal_agent.scripts.vault_contradiction_lint
+```
+
+### When you want to add another lane (Codex, Gemini, etc.)
+
+See [`../proactive_signals/intel_lane_templates.md`](../proactive_signals/intel_lane_templates.md)
+for the step-by-step guide. The short version: edit
+[`config/intel_lanes.yaml`](../../src/universal_agent/config/intel_lanes.yaml)
+to flip `enabled: true`, provision the vault dir, add the lane's API
+secret to Infisical, run a manual sync to validate, then wire cron.
+
+---
+
+## Legacy v1 capability detail
+
+The numbered list below catalogs the system's accumulated capabilities
+chronologically. Useful as a reference for "when did X land," but the
+architecture overview above is the authoritative read for current state.
+
+### v1 capabilities (1-27, shipped before 2026-05)
+
+The system can:
 
 1. Poll multiple configured X handles (`@ClaudeDevs`, `@bcherny`) via the official X API, with per-handle state tracking.
 2. Write durable packets under `artifacts/proactive/claude_code_intel/packets/`.
