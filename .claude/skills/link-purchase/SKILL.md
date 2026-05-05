@@ -64,7 +64,13 @@ Use the `run_command` tool to execute `npx @stripe/link-cli` commands. Do NOT us
 
 ### 1. Create a spend request
 
-Create the spend request using the CLI:
+First, fetch the default payment method ID:
+```bash
+npx @stripe/link-cli payment-methods list --format json
+```
+Extract the `id` from the payment method where `"is_default": true`.
+
+Then, create the spend request using the CLI:
 ```bash
 npx @stripe/link-cli spend-request create \
   --merchant-name "Stripe Press" \
@@ -73,13 +79,14 @@ npx @stripe/link-cli spend-request create \
   --amount 3500 \
   --line-item "name:Working in Public,unit_amount:3500,quantity:1" \
   --total "type:total,display_text:Total,amount:3500" \
+  --payment-method-id "<default_payment_method_id>" \
   --test \
   --format json
 ```
 
-*Note: The `--test` flag generates a test virtual card (4242...). If the user explicitly disables test mode, retrieve a payment method ID using `npx @stripe/link-cli payment-methods list --format json` and pass `--payment-method-id <id>` instead.*
+*Note: The `--test` flag generates a test virtual card (4242...). You MUST provide a valid `--payment-method-id` even in test mode. Make sure the `--context` is at least 100 characters long.*
 
-Extract the spend request ID (`lsrq_...`) from the JSON output. 
+Extract the spend request ID (`lsrq_...`) from the JSON output.
 
 ### 2. Request approval and securely retrieve card details
 
