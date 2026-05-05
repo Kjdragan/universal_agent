@@ -48,12 +48,42 @@ POLLUTION_INDICATORS = (
 )
 
 
+# Endpoint profile vocabulary (PR 14). The provisioner accepts and records
+# the profile so downstream tooling (Cody's run_in_workspace, manifest
+# verification, future YouTube tutorial routing) knows which cloud auth
+# the demo is supposed to exercise. The settings.json shape is identical
+# across profiles — vanilla — because the differentiator is which API key
+# gets injected at runtime, not the settings file.
+ENDPOINT_PROFILE_ANTHROPIC = "anthropic_native"
+ENDPOINT_PROFILE_GEMINI = "gemini_native"
+ENDPOINT_PROFILE_OPENAI = "openai_native"
+ENDPOINT_PROFILE_NONE = "none"
+VALID_ENDPOINT_PROFILES = (
+    ENDPOINT_PROFILE_ANTHROPIC,
+    ENDPOINT_PROFILE_GEMINI,
+    ENDPOINT_PROFILE_OPENAI,
+    ENDPOINT_PROFILE_NONE,
+)
+
+
+# Per-profile expected env var. Cody's runtime layer can use this to
+# verify the right credential is present before launching the demo and
+# to fail loud if the wrong cloud's key is set.
+PROFILE_REQUIRED_ENV: dict[str, str] = {
+    ENDPOINT_PROFILE_ANTHROPIC: "",  # OAuth via `claude /login`, not env-var
+    ENDPOINT_PROFILE_GEMINI: "GEMINI_API_KEY",
+    ENDPOINT_PROFILE_OPENAI: "OPENAI_API_KEY",
+    ENDPOINT_PROFILE_NONE: "",
+}
+
+
 @dataclass(frozen=True)
 class WorkspaceProvisionResult:
     workspace_dir: Path
     settings_path: Path
     files_written: tuple[Path, ...]
     is_smoke: bool
+    endpoint_profile: str = ENDPOINT_PROFILE_ANTHROPIC
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -61,6 +91,7 @@ class WorkspaceProvisionResult:
             "settings_path": str(self.settings_path),
             "files_written": [str(p) for p in self.files_written],
             "is_smoke": self.is_smoke,
+            "endpoint_profile": self.endpoint_profile,
         }
 
 
@@ -132,12 +163,26 @@ def provision_demo_workspace(
     *,
     root: Path | None = None,
     overwrite: bool = False,
+    endpoint_profile: str = ENDPOINT_PROFILE_ANTHROPIC,
 ) -> WorkspaceProvisionResult:
     """Create a new demo workspace under demos_root() / demo_id.
 
     Refuses to overwrite an existing workspace unless `overwrite=True`.
     Verifies the copied .claude/settings.json is vanilla after copy.
+
+    `endpoint_profile` (PR 14) declares which cloud the demo is supposed
+    to exercise. Default `anthropic_native` preserves v1 behavior. Other
+    valid values: `gemini_native`, `openai_native`, `none`. The settings
+    file shape is the same across profiles; the profile is recorded in
+    a marker file (`.endpoint_profile`) so downstream tooling can pick
+    the right credential at runtime.
     """
+    profile = (endpoint_profile or "").strip().lower() or ENDPOINT_PROFILE_ANTHROPIC
+    if profile not in VALID_ENDPOINT_PROFILES:
+        raise ValueError(
+            f"unknown endpoint_profile {profile!r}; expected one of {VALID_ENDPOINT_PROFILES}"
+        )
+
     target = workspace_path(demo_id, root=root)
     if target.exists():
         if not overwrite:
@@ -149,12 +194,90 @@ def provision_demo_workspace(
     written = _copy_template(SCAFFOLD_TEMPLATE_DIR, target)
     settings_path = target / ".claude" / "settings.json"
     verify_vanilla_settings(settings_path)
+
+    # Record the endpoint profile so downstream tooling (Cody, evaluator,
+    # manifest writer) can read it without re-deriving from briefing prose.
+    profile_marker = target / ".endpoint_profile"
+    profile_marker.write_text(profile + "\n", encoding="utf-8")
+    written.append(profile_marker)
+
     return WorkspaceProvisionResult(
         workspace_dir=target,
         settings_path=settings_path,
         files_written=tuple(written),
         is_smoke=False,
+        endpoint_profile=profile,
     )
+
+
+def read_endpoint_profile(workspace_dir: Path) -> str:
+    """Read the endpoint profile marker. Returns 'anthropic_native' if missing.
+
+    Defensive default — workspaces provisioned before PR 14 don't have the
+    marker, and the v2 design treats anthropic_native as the canonical
+    profile for ClaudeDevs intel demos.
+    """
+    marker = workspace_dir / ".endpoint_profile"
+    if not marker.exists():
+        return ENDPOINT_PROFILE_ANTHROPIC
+    raw = marker.read_text(encoding="utf-8").strip()
+    return raw if raw in VALID_ENDPOINT_PROFILES else ENDPOINT_PROFILE_ANTHROPIC
+
+
+# ── Topic-based profile detection (PR 14) ───────────────────────────────────
+#
+# Used by the YouTube tutorial pipeline to pick the right endpoint profile
+# for a tutorial it's about to scaffold. Heuristic — keyword matches against
+# the tutorial title / description / linked URLs.
+#
+# Conservative ordering: a tutorial that mentions both Claude and Gemini
+# (rare but possible — comparison content) returns the FIRST detected
+# profile in priority order: anthropic > openai > gemini. The caller can
+# override.
+
+_PROFILE_KEYWORDS: dict[str, tuple[str, ...]] = {
+    ENDPOINT_PROFILE_ANTHROPIC: (
+        "claude",
+        "anthropic",
+        "claude-code",
+        "claude code",
+        "claude agent sdk",
+        "claude-agent-sdk",
+        "@anthropic-ai",
+    ),
+    ENDPOINT_PROFILE_OPENAI: (
+        "openai",
+        "gpt-4",
+        "gpt-5",
+        "openai agents",
+        "openai-agents",
+        "@openai/agents",
+        "codex cli",
+    ),
+    ENDPOINT_PROFILE_GEMINI: (
+        "gemini",
+        "google-genai",
+        "vertex ai",
+        "google deepmind",
+    ),
+}
+
+
+def detect_endpoint_profile(*, text: str = "", links: list[str] | None = None) -> str:
+    """Return the endpoint profile a tutorial about `text` should use.
+
+    Returns `none` when no profile-specific keywords are found — that's
+    the right default for tutorials about generic Python, web frameworks,
+    or other content where no cloud-specific auth is needed.
+    """
+    haystack = (text or "").lower() + " " + " ".join((links or [])).lower()
+    if not haystack.strip():
+        return ENDPOINT_PROFILE_NONE
+    for profile in (ENDPOINT_PROFILE_ANTHROPIC, ENDPOINT_PROFILE_OPENAI, ENDPOINT_PROFILE_GEMINI):
+        for keyword in _PROFILE_KEYWORDS[profile]:
+            if keyword in haystack:
+                return profile
+    return ENDPOINT_PROFILE_NONE
 
 
 def provision_smoke_workspace(*, root: Path | None = None) -> WorkspaceProvisionResult:
