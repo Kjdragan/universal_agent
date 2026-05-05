@@ -1,0 +1,8 @@
+{
+  "_comment": "Vanilla settings for the Phase 0 smoke demo. Do not modify.",
+  "effortLevel": "high",
+  "autoUpdatesChannel": "latest",
+  "permissions": {
+    "allow": []
+  }
+}
