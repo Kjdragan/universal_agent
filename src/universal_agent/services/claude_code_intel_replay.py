@@ -32,7 +32,14 @@ from universal_agent.services.claude_code_intel import (
     queue_follow_up_tasks,
     register_packet_artifact,
 )
-from universal_agent.wiki.core import ensure_vault, wiki_ingest_external_source
+from universal_agent.wiki.core import (
+    ACTION_CREATE,
+    ACTION_EXTEND,
+    ensure_vault,
+    memex_apply_action,
+    memex_page_exists,
+    wiki_ingest_external_source,
+)
 
 
 @dataclass(frozen=True)
@@ -322,6 +329,249 @@ def write_implementation_opportunities(*, packet_dir: Path, actions: list[dict[s
     return path
 
 
+# ── Memex extraction (PR 15) ────────────────────────────────────────────────
+#
+# After every replay, decide which entity/concept pages to CREATE or EXTEND
+# from each action. CREATE is the dominant case (~80% per design doc §4.2);
+# EXTEND fires when the page already exists. REVISE (~5%) requires LLM
+# judgment about supersedes and is intentionally NOT wired here — it can
+# layer on as a follow-up PR once we have data on how often it actually
+# matters.
+#
+# Source-of-name precedence (deterministic, no LLM call):
+#   1. release_info.package — when the action is a release_announcement
+#      (PR 6a), the package name itself is an entity.
+#   2. CamelCase / snake_case feature terms in action.text — same heuristic
+#      research_grounding uses.
+#   3. Skipped: anything from linked source titles. Future enhancement.
+
+# Lifted from research_grounding._TERM_PATTERN so we extract the same
+# named-feature shapes consistently across the v2 pipeline.
+_MEMEX_TERM_PATTERN = re.compile(
+    r"\b([A-Z][a-zA-Z0-9_]{2,}|[a-z][a-zA-Z0-9_]+_[a-zA-Z0-9_]+)\b"
+)
+_MEMEX_TERM_STOPWORDS = frozenset(
+    {
+        "claude",
+        "anthropic",
+        "agents",
+        "agent",
+        "tool",
+        "tools",
+        "this",
+        "that",
+        "with",
+        "from",
+        "into",
+        "what",
+        "when",
+        "have",
+        "been",
+        "more",
+        "https",
+        "http",
+        "url",
+        "post",
+        "github",
+        "discord",
+        "twitter",
+        "reddit",
+        "demo",
+        "demos",
+        "build",
+        "release",
+        "released",
+        "today",
+        "support",
+        "supports",
+    }
+)
+
+
+def _memex_candidates_for_action(action: dict[str, Any]) -> list[tuple[str, str]]:
+    """Return [(kind, name)] candidates for one action.
+
+    Conservative: returns at most a handful per action so the Memex pass
+    doesn't explode into dozens of pages per tweet.
+    """
+    candidates: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def _add(kind: str, name: str) -> None:
+        cleaned = str(name or "").strip()
+        if not cleaned:
+            return
+        key = (kind, cleaned.lower())
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append((kind, cleaned))
+
+    # 1. Release announcements: the package itself is an entity.
+    release_info = action.get("release_info") if isinstance(action.get("release_info"), dict) else None
+    if release_info and release_info.get("package"):
+        _add("entity", str(release_info["package"]))
+
+    # 2. CamelCase / snake_case terms in the action's text. Cap to first 5.
+    text = str(action.get("text") or "")
+    if text:
+        terms_found = 0
+        for raw in _MEMEX_TERM_PATTERN.findall(text):
+            if len(raw) < 3:
+                continue
+            if raw.lower() in _MEMEX_TERM_STOPWORDS:
+                continue
+            _add("entity", raw)
+            terms_found += 1
+            if terms_found >= 5:
+                break
+
+    return candidates
+
+
+def _memex_body_for_create(
+    *,
+    handle: str,
+    action: dict[str, Any],
+    linked_for_post: list[dict[str, Any]],
+) -> str:
+    """Synthesize a minimal entity-page body from action + linked sources."""
+    title = str(action.get("post_id") or "").strip()
+    text = str(action.get("text") or "").strip()
+    classifier = action.get("classifier") if isinstance(action.get("classifier"), dict) else {}
+    reasoning = str(classifier.get("reasoning") or "").strip()
+    post_url = str(action.get("url") or "").strip()
+    parts: list[str] = ["## Discovery context", ""]
+    parts.append(f"- handle: `@{handle}`")
+    if post_url:
+        parts.append(f"- post: {post_url}")
+    if title:
+        parts.append(f"- post_id: `{title}`")
+    parts.append("")
+    if text:
+        parts.extend(["### Tweet text", "", text, ""])
+    if reasoning:
+        parts.extend(["### Classifier rationale", "", reasoning, ""])
+    if linked_for_post:
+        parts.extend(["### Linked official sources", ""])
+        for entry in linked_for_post[:6]:
+            url = str(entry.get("url") or "").strip()
+            t = str(entry.get("title") or "").strip() or url or "source"
+            if url:
+                parts.append(f"- [{t}]({url})")
+            else:
+                parts.append(f"- {t}")
+        parts.append("")
+    return "\n".join(parts).rstrip() + "\n"
+
+
+def _memex_body_for_extend(
+    *,
+    action: dict[str, Any],
+    linked_for_post: list[dict[str, Any]],
+) -> str:
+    """Body for an EXTEND — short, dated section appended to existing page."""
+    text = str(action.get("text") or "").strip()
+    parts: list[str] = []
+    if text:
+        parts.append(text)
+    if linked_for_post:
+        parts.append("")
+        parts.append("Newly linked sources:")
+        for entry in linked_for_post[:6]:
+            url = str(entry.get("url") or "").strip()
+            t = str(entry.get("title") or "").strip() or url or "source"
+            if url:
+                parts.append(f"- [{t}]({url})")
+            else:
+                parts.append(f"- {t}")
+    return "\n".join(parts).rstrip() + "\n"
+
+
+def apply_memex_pass(
+    *,
+    vault_path: Path,
+    handle: str,
+    actions: list[dict[str, Any]],
+    linked_source_entries: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Walk every action; CREATE or EXTEND entity/concept pages as needed.
+
+    Returns a list of action records suitable for inclusion in the candidate
+    ledger. Never raises on per-action failure — surfaces the error in the
+    record so the downstream pipeline can keep working.
+    """
+    results: list[dict[str, Any]] = []
+
+    # Pre-index linked sources by post_id so each action gets only its own.
+    linked_by_post: dict[str, list[dict[str, Any]]] = {}
+    for entry in linked_source_entries:
+        if str(entry.get("fetch_status") or "") != "fetched":
+            continue
+        post_id = str(entry.get("post_id") or "").strip()
+        if post_id:
+            linked_by_post.setdefault(post_id, []).append(entry)
+
+    for action in actions:
+        post_id = str(action.get("post_id") or "").strip()
+        candidates = _memex_candidates_for_action(action)
+        if not candidates:
+            continue
+        linked_for_post = linked_by_post.get(post_id, [])
+        source_id = f"x_post_{post_id}" if post_id else "x_post"
+        source_title = f"ClaudeDevs post {post_id}" if post_id else "ClaudeDevs post"
+
+        for kind, name in candidates:
+            try:
+                if memex_page_exists(vault_path, kind, name):
+                    body = _memex_body_for_extend(
+                        action=action,
+                        linked_for_post=linked_for_post,
+                    )
+                    result = memex_apply_action(
+                        vault_path,
+                        action=ACTION_EXTEND,
+                        kind=kind,
+                        name=name,
+                        body=body,
+                        source_id=source_id,
+                        source_title=source_title,
+                        section_label=f"Update from @{handle}: post {post_id}",
+                    )
+                else:
+                    body = _memex_body_for_create(
+                        handle=handle,
+                        action=action,
+                        linked_for_post=linked_for_post,
+                    )
+                    result = memex_apply_action(
+                        vault_path,
+                        action=ACTION_CREATE,
+                        kind=kind,
+                        name=name,
+                        body=body,
+                        source_id=source_id,
+                        source_title=source_title,
+                        tags=["claude-code", "claude-devs", str(action.get("action_type") or "")],
+                    )
+                result["post_id"] = post_id
+                result["entity_name"] = name
+                result["entity_kind"] = kind
+                results.append(result)
+            except Exception as exc:
+                results.append(
+                    {
+                        "action": "ERROR",
+                        "post_id": post_id,
+                        "entity_name": name,
+                        "entity_kind": kind,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc)[:300],
+                    }
+                )
+    return results
+
+
 def ingest_packet_into_external_vault(
     *,
     packet_dir: Path,
@@ -423,6 +673,29 @@ def ingest_packet_into_external_vault(
                 linked_result_by_target[canonical_target] = page_path
 
     email_evidence_ids = _collect_email_evidence_ids(work_product_dir)
+
+    # Memex pass (PR 15) — CREATE/EXTEND entity/concept pages from each
+    # action. Runs AFTER the source-page writes so the immutable raw and
+    # source layers are already in place when entity pages reference them.
+    # Disabled via UA_CSI_MEMEX_WIRING_ENABLED=0 if it ever needs an
+    # emergency off switch in production.
+    memex_actions: list[dict[str, Any]] = []
+    if str(os.getenv("UA_CSI_MEMEX_WIRING_ENABLED") or "1").strip().lower() not in {"0", "false", "no", "off"}:
+        try:
+            memex_actions = apply_memex_pass(
+                vault_path=context.path,
+                handle=handle,
+                actions=actions,
+                linked_source_entries=linked_source_entries,
+            )
+        except Exception:
+            # Memex failure must never block the source-page writes that
+            # already succeeded. Surface in the return; downstream callers
+            # can log it.
+            import logging
+
+            logging.getLogger(__name__).exception("apply_memex_pass failed; vault sources still written")
+
     return {
         "vault_path": str(context.path),
         "pages": pages,
@@ -430,6 +703,7 @@ def ingest_packet_into_external_vault(
         "linked_pages_by_post_id": linked_pages_by_post_id,
         "work_product_pages": work_product_pages,
         "email_evidence_ids": email_evidence_ids,
+        "memex_actions": memex_actions,
     }
 def reconcile_packet_candidate_ledger(
     *,
