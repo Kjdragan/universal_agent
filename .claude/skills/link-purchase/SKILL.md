@@ -50,6 +50,8 @@ I'm about to create a Link spend request:
   Items:    <line items>
   Context:  <why we're buying this; the user reads this when approving>
 
+**Note:** Since this is a test request, Link will still display your real bank account/card on the approval screen, but NO real money will be charged. It will generate a test 4242 virtual card.
+
 Confirm "yes" to create the request, or tell me what to change.
 ```
 
