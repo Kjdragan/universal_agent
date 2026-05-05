@@ -110,7 +110,7 @@ export default function ProactiveSignalsPage() {
     setLoading(true);
     setError("");
     try {
-      const params = new URLSearchParams({ source, status, limit: "120" });
+      const params = new URLSearchParams({ source, status, limit: "120", sync: "background" });
       const res = await fetch(`${API_BASE}/api/v1/dashboard/proactive-signals?${params.toString()}`, { cache: "no-store" });
       if (!res.ok) throw new Error(`Load failed (${res.status})`);
       const data = await res.json();
