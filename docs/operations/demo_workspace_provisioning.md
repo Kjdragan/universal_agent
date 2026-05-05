@@ -1,5 +1,17 @@
 # Demo Workspace Provisioning Runbook
 
+> ⚠️ **BEFORE YOU TOUCH ANY CLAUDE COMMAND ON THE VPS** ⚠️
+>
+> UA runs **two separate Claude environments side by side** on the VPS — a
+> ZAI-mapped one (cheap GLM models, default for everything) and an
+> Anthropic-native one (real Claude, demos only, in `/opt/ua_demos/`).
+> Mistaking one for the other is the #1 source of confusion in this system.
+>
+> Read **[Demo Execution Environments](../06_Deployment_And_Environments/09_Demo_Execution_Environments.md)**
+> first. Especially the [decision tree](../06_Deployment_And_Environments/09_Demo_Execution_Environments.md#decision-tree-which-environment-do-i-need)
+> and the [CLI vs SDK auth wrinkle](../06_Deployment_And_Environments/09_Demo_Execution_Environments.md#the-cli-vs-sdk-auth-wrinkle-read-this-it-bit-us).
+> Then come back here for the actual setup steps.
+
 > **Audience:** Ship operator / Kevin
 > **Purpose:** One-time setup so Phase 3 (Cody implementation) can run on the VPS
 > **Scope:** `/opt/ua_demos/` provisioning + Max plan OAuth login

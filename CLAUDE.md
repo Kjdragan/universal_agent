@@ -20,6 +20,16 @@ It includes:
 - **Read [`docs/deployment/ai_coder_instructions.md`](docs/deployment/ai_coder_instructions.md) before your first commit.** It defines the branch discipline, commit conventions, and `/ship` handoff protocol that all AI coders must follow.
 - TL;DR: Work on `feature/latest2`. Push there. Never touch `develop` or `main`. Someone else runs `/ship`.
 
+## Claude Execution Environments (MUST READ before touching anything Claude-related)
+UA runs **TWO separate Claude environments side-by-side on the VPS**:
+
+1. **ZAI-mapped (default everywhere except `/opt/ua_demos/`)** — cheap GLM models via the ZAI proxy. Used for all routine UA work, Cody's normal coding tasks, the ClaudeDevs intel cron, Simone heartbeats, etc.
+2. **Anthropic-native (only inside `/opt/ua_demos/<demo-id>/`)** — real Claude models (Opus/Sonnet/Haiku) via the Max plan OAuth session. Used **only** for Phase 3 demo execution where the demo needs to exercise brand-new Anthropic features that the ZAI proxy may not have yet.
+
+Mistaking one for the other is the #1 source of confusion. Before debugging anything Claude-related, **read [`docs/06_Deployment_And_Environments/09_Demo_Execution_Environments.md`](docs/06_Deployment_And_Environments/09_Demo_Execution_Environments.md)** — especially the decision tree and the CLI-vs-SDK auth wrinkle.
+
+Operational runbook: [`docs/operations/demo_workspace_provisioning.md`](docs/operations/demo_workspace_provisioning.md).
+
 ## Working Rules
 - Keep changes small and targeted.
 - Do not commit secrets, credentials, or local state files.
