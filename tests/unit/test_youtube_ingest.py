@@ -409,40 +409,63 @@ def test_run_extract_does_not_fall_back_to_no_proxy_by_default(monkeypatch) -> N
 
 
 def test_require_proxy_blocks_when_no_credentials(monkeypatch) -> None:
-    """require_proxy=True with no proxy creds → immediate hard failure."""
-    monkeypatch.delenv("PROXY_USERNAME", raising=False)
-    monkeypatch.delenv("PROXY_PASSWORD", raising=False)
-    monkeypatch.delenv("WEBSHARE_PROXY_USER", raising=False)
-    monkeypatch.delenv("WEBSHARE_PROXY_PASS", raising=False)
+    """require_proxy=True with no proxy creds → immediate hard failure.
 
+    Provider router (`_build_proxy_config`) defaults to dataimpulse; covering
+    both provider branches by parametrizing PROXY_PROVIDER.
+    """
+    # Clear ALL provider creds so neither builder can succeed.
+    for var in (
+        "PROXY_USERNAME", "PROXY_PASSWORD",
+        "WEBSHARE_PROXY_USER", "WEBSHARE_PROXY_PASS",
+        "DATAIMPULSE_PROXY_USER", "DATAIMPULSE_PROXY_PASS",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+    # Default provider (dataimpulse) — error message should mention
+    # DATAIMPULSE_PROXY_USER as the env var to set.
+    monkeypatch.delenv("PROXY_PROVIDER", raising=False)
     out = youtube_ingest.ingest_youtube_transcript(
         video_url="https://www.youtube.com/watch?v=dxlyCPGCvy8",
         video_id=None,
         require_proxy=True,
     )
-
     assert out["ok"] is False
     assert out["error"] == "proxy_not_configured"
     assert out["failure_class"] == "proxy_not_configured"
     assert out["proxy_mode"] == "disabled"
     assert "PROXY NOT CONFIGURED" in out["detail"]
-    assert "PROXY_USERNAME" in out["detail"]
+    assert "DATAIMPULSE_PROXY_USER" in out["detail"]
     assert out["attempts"] == []
+
+    # Webshare provider branch — error message should mention PROXY_USERNAME.
+    monkeypatch.setenv("PROXY_PROVIDER", "webshare")
+    out2 = youtube_ingest.ingest_youtube_transcript(
+        video_url="https://www.youtube.com/watch?v=dxlyCPGCvy8",
+        video_id=None,
+        require_proxy=True,
+    )
+    assert out2["ok"] is False
+    assert out2["error"] == "proxy_not_configured"
+    assert "PROXY_USERNAME" in out2["detail"]
 
 
 def test_require_proxy_blocks_when_module_unavailable(monkeypatch) -> None:
-    """require_proxy=True with creds but missing proxies module → hard failure."""
+    """require_proxy=True with creds but missing proxies module → hard failure.
+
+    Patches the provider-router entry point (`_build_proxy_config`) so this
+    test stays correct regardless of which provider is the current default.
+    """
     monkeypatch.setenv("PROXY_USERNAME", "user")
     monkeypatch.setenv("PROXY_PASSWORD", "pass")
+    monkeypatch.setenv("DATAIMPULSE_PROXY_USER", "user")
+    monkeypatch.setenv("DATAIMPULSE_PROXY_PASS", "pass")
     monkeypatch.delitem(sys.modules, "youtube_transcript_api.proxies", raising=False)
-
-    # Force module import to fail
-    original_build = youtube_ingest._build_webshare_proxy_config
 
     def _mock_build():
         return None, "module_unavailable"
 
-    monkeypatch.setattr(youtube_ingest, "_build_webshare_proxy_config", _mock_build)
+    monkeypatch.setattr(youtube_ingest, "_build_proxy_config", _mock_build)
 
     out = youtube_ingest.ingest_youtube_transcript(
         video_url="https://www.youtube.com/watch?v=dxlyCPGCvy8",
@@ -487,17 +510,21 @@ def test_require_proxy_false_allows_no_proxy(monkeypatch) -> None:
 
 
 def test_require_proxy_true_proceeds_with_valid_proxy(monkeypatch) -> None:
-    """require_proxy=True with valid proxy creds → proceeds normally."""
+    """require_proxy=True with valid proxy creds → proceeds normally.
+
+    Patches the provider-router entry point (`_build_proxy_config`) so the
+    test pins the proxy_mode it expects (`webshare`) without depending on
+    which provider is currently the default.
+    """
     class FakeProxyConfig:
         def __init__(self, **kwargs):
             self.url = "http://proxy.example"
 
-    monkeypatch.setenv("PROXY_USERNAME", "proxy-user")
-    monkeypatch.setenv("PROXY_PASSWORD", "proxy-pass")
-    monkeypatch.setitem(
-        sys.modules,
-        "youtube_transcript_api.proxies",
-        types.SimpleNamespace(WebshareProxyConfig=FakeProxyConfig),
+    fake_proxy = FakeProxyConfig()
+    monkeypatch.setattr(
+        youtube_ingest,
+        "_build_proxy_config",
+        lambda: (fake_proxy, "webshare"),
     )
     monkeypatch.setattr(
         youtube_ingest,
