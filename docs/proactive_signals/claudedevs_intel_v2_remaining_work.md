@@ -1,9 +1,10 @@
 # ClaudeDevs Intel v2 — Remaining Work Plan
 
 > **Status:** Living document. Updated after each PR ships.
-> **Last updated:** 2026-05-05 (after PR 6b ship at SHA `564189c6`)
+> **Last updated:** 2026-05-06 (after Phase 2 producer wired + trust_source bypass + catch_up_on_restart shipped via session-end /ship)
 > **Owner:** AI Coder on `feature/latest2`, with operator gates for `/ship` cycles
 > **Companion:** [`claudedevs_intel_v2_design.md`](claudedevs_intel_v2_design.md) (the original 13-PR design doc)
+> **🚨 Read first if returning after a session break:** [`csi_v2_next_session_priorities_2026-05-06.md`](csi_v2_next_session_priorities_2026-05-06.md) — the unambiguous "do this next" list.
 
 ---
 
@@ -41,7 +42,21 @@ is the reconciled execution view.
 | docs (1st) | `54e4226` | CSI canonical doc v2 update + new dual-environment reference + index registration |
 | docs (2nd) | `b1cf9f7` | "READ FIRST" callouts in `CLAUDE.md`, `docs/README.md`, runbook |
 
-**Production SHA at time of writing:** `564189c6` on `main`.
+**Production SHA at time of writing:** post-`08c49fa` ship cycle on `main` (5 ship cycles on 2026-05-06 alone).
+
+### Shipped 2026-05-06 (this session, post-shakedown)
+
+| Commit | Subject |
+|---|---|
+| `cc14d94` | feat(csi): add 22:00 Central poll to ClaudeDevs intel cron (3x daily) |
+| `09d7ee2` | fix(csi): enable `catch_up_on_restart` so future deploys backfill missed cron windows |
+| `185e552` | fix(csi): `trust_source` bypass for linked-doc fetch + `claude.com` allowlist widening |
+| `c312ea8` / `7e2aa71` / `0b22877` | docs: Production Verification Rules in `CLAUDE.md` (3 commits incl. corrections) |
+| `f38075d` | docs: Pre-Implementation Reading rules in `CLAUDE.md` |
+| `5682fc5` | feat(csi): tier-3 actions enqueue `cody_scaffold_request` instead of direct `claude_code_demo_task` (Phase 2 producer wiring) |
+| `6dc6f51` / `20bf032` | YouTube digest proxy retry + stale `require_proxy` test cleanup |
+
+**Phase 2 producer is shipped and live on production.** It is correctly idle as of 2026-05-06 evening because the most recent CSI poll contained only tier-1 informational posts. Verification of Phase 2/3 end-to-end is the top item for next session — see `csi_v2_next_session_priorities_2026-05-06.md`.
 
 ---
 
@@ -60,7 +75,7 @@ mapping so nothing is lost:
 | PR 5 — Capability library full-corpus mode | PR 5 | ✅ shipped (`86b4fdb`) |
 | PR 6 — Phase 0 dependency currency (sweep + actuator + email) | PR 6a (sweep) + PR 6b (actuator) + **PR 6c** (auto-trigger) | ⚠️ 6a/6b shipped (`326da0d` / `c31e1b5`); **auto-trigger pending as PR 6c** |
 | PR 7 — Demo execution environment (provision + smoke) | PR 7 + PR 7b (CLI fix) | ✅ shipped (`831db36` / `31f5253`) |
-| PR 8 — Simone Phase 2 skills | PR 8 | ⬜ pending |
+| PR 8 — Simone Phase 2 skills | PR 8 (skills) + 2026-05-06 producer | ⚠️ skills shipped earlier; producer wired in `5682fc5` (2026-05-06); **end-to-end verification still pending first organic tier-3 post on prod** |
 | PR 9 — Cody Phase 3 skill | PR 9 | ⬜ pending |
 | PR 10 — Simone Phase 4 skills | PR 10 | ⬜ pending |
 | PR 11 — Lanes config (scaffolding + refactor existing paths to read it) | PR 11 (scaffolding) + **PR 17** (wiring) | ⚠️ scaffolding shipped (`c96c8a5`); **wiring pending as PR 17** |
@@ -142,22 +157,12 @@ This is the headline value of v2 — the autonomous demo build pipeline. All
 three PRs depend on Phase A landing first so the vault has the entity pages
 and grounded sources Simone needs.
 
-#### PR 8 — Simone Phase 2 skills (`cody-scaffold-builder`, `cody-task-dispatcher`)
-- **Need:** Convert a vault entity page into a fully populated demo workspace
-  + queue a Cody task.
-- **Scope:** Two new skills under `.claude/skills/`:
-  - `cody-scaffold-builder` reads `vault/entities/<feature>.md`, copies
-    relevant `vault/raw/` docs into `/opt/ua_demos/<demo-id>/SOURCES/`,
-    authors `BRIEF.md` / `ACCEPTANCE.md` / `business_relevance.md` from
-    the entity page + linked sources, calls `provision_demo_workspace`
-    (which already exists from PR 7).
-  - `cody-task-dispatcher` enqueues a `cody_demo_task` Task Hub item
-    with the workspace path, persistent-queue policy.
-- **Risk:** Medium — depends on Task Hub conventions for queue policy and
-  Cody task payloads.
-- **Tests:** End-to-end with a fake entity page; assert workspace populated;
-  assert task queued with right shape.
-- **Estimate:** Large (~600 lines + tests + skill definitions).
+#### PR 8 — Simone Phase 2 skills (`cody-scaffold-builder`, `cody-task-dispatcher`) + producer wiring (`5682fc5`)
+- **Skills (originally PR 8):** ✅ shipped — both `cody-scaffold-builder` and `cody-task-dispatcher` are on disk and idempotent.
+- **Producer wiring (added 2026-05-06):** ✅ shipped in `5682fc5`. `claude_code_intel.queue_follow_up_tasks` now writes a new `cody_scaffold_request` Task Hub source_kind for tier-3 actions instead of the legacy direct-to-Cody enqueue. Task Hub's existing `dispatch_sweep` + `route_all_to_simone` automatically claim and route these to Simone — no `HEARTBEAT.md` edits required (a near-miss that was almost shipped before the operator pointed out it was redundant; documented in `CLAUDE.md` Pre-Implementation Reading rules).
+- **Emergency fallback:** `UA_CSI_DIRECT_DEMO_FALLBACK=1` re-enables the legacy direct-to-Cody enqueue if the scaffold path misbehaves and Cody starts starving. Default off.
+- **What's still pending:** end-to-end verification on production. Phase 2 producer is correctly idle as of 2026-05-06 evening because the most recent CSI fire contained only tier-1 informational posts (sample: "Code with Claude is happening now! ...keynote schedule..."). First organic tier-3 post should arrive within 12-48h of the conference; that fire will produce the first real `cody_scaffold_request` row.
+- **Verification rule applied:** per `CLAUDE.md` Production Verification Rules §2, this PR is **not "complete"** until a real `/opt/ua_demos/<entity>__<id>/manifest.json` exists. Until then, treat as "wired pending positive evidence."
 
 #### PR 9 — Cody Phase 3 skill (`cody-implements-from-brief`)
 - **Need:** Cody's contract for actually building the demo inside the workspace.

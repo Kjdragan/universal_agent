@@ -1,58 +1,98 @@
 # SHIP_HANDOFF
 
-**Summary of changes made:**
-YouTube daily digest: retry transcript fetch on residential-proxy bad-IP, plus richer failure logging.
+**Status:** Phase 2 producer shipped 2026-05-06. CSI tier-3 actions now produce `cody_scaffold_request` rows, routed to Simone for Phase 2 scaffolding.
 
-**What ships:**
-- `_run_youtube_transcript_api_extract` now retries up to 3 times through the proxy on transient failures (controlled by `UA_YOUTUBE_TRANSCRIPT_PROXY_RETRIES`, default 3). Each retry opens a new connection and gets a fresh egress IP from the rotating residential pool, so a single bad IP no longer poisons the whole fetch.
-- The old "fall back to no-proxy" behavior is removed by default — from a VPS datacenter IP it's a guaranteed wasted attempt that obscures the real failure. Re-enable for local residential testing via `UA_YOUTUBE_TRANSCRIPT_NOPROXY_FALLBACK=1`.
-- `youtube_daily_digest` now logs `failure_class` and `detail` on every transcript failure, not just the generic `error` name. Future post-mortems won't need a separate probe to figure out why a fetch failed.
-- Two new unit tests in `tests/unit/test_youtube_ingest.py` pin the retry loop and the no-fallback default.
+---
 
-**Expected impact:** with default N=3 retries and an empirical ~20% bad-IP rate on Webshare/DataImpulse pools, single-video failure probability drops from ~20% to ~0.8%. On an 18-video playlist, mean failures per run drop from ~3.6 to ~0.14.
+## Latest cycle: Phase 2 producer change
 
-**Latest commits ready for /ship (in order):**
-- `6dc6f51` — fix(youtube-digest): retry transcript fetch on residential-proxy bad-IP
-- `05021fe` — docs: handoff note for transcript proxy-retry fix
-- `20bf032` — test(youtube-ingest): un-stale 3 require_proxy tests against PROXY_PROVIDER router
-- `f20bb2c` — docs: record stale-test fix in handoff
-- `09d7ee2` — fix(csi): enable catch_up_on_restart for claude_code_intel_sync
+**SHA:** `5682fc5` — feat(csi): tier-3 actions enqueue cody_scaffold_request, not direct demo task
+**Plus:** `f38075d` — docs: add Pre-Implementation Reading rules to CLAUDE.md
 
-**Critical post-deploy step for `09d7ee2`:** the live job's `next_run_at` is stuck at `null` (this is the bug we're fixing — every gateway restart since pre-deploy has missed it). After the deploy lands, fire the job once manually so the post-fire `schedule_next()` re-establishes the cadence:
+**What changed for the system:**
+- `claude_code_intel.queue_follow_up_tasks` writes `cody_scaffold_request` (not `claude_code_demo_task`) for tier 3
+- Task Hub's existing `dispatch_sweep` + Simone-first routing claim and route automatically — no HEARTBEAT.md edits needed
+- `intended_task_identity` in replay updated to mirror the new routing (parallel-constant lockstep)
+- 3 new tests + 1 updated existing test, 67/67 CSI tests green
+- `UA_CSI_DIRECT_DEMO_FALLBACK=1` is the emergency lever to re-enable the legacy direct-to-Cody enqueue if Simone's scaffold pipeline is broken; off by default
 
+**Operator-visible impact:** the next tier-3 CSI fire produces a `cody_scaffold_request` row visible in Mission Control, Simone's next heartbeat claims it, runs cody-scaffold-builder, and a new `/opt/ua_demos/<entity-slug>__<short-id>/` workspace appears.
+
+---
+
+## Smoke test plan (Phase 2 → Phase 3 first end-to-end run)
+
+**Sequence:** wait ~5 min for deploy, trigger a manual CSI fire, wait ~30 min for Simone's heartbeat, then check three places.
+
+**Step 1 — manual CSI fire:**
 ```
 ssh ua@uaonvps 'curl -s -X POST http://localhost:8002/api/v1/cron/jobs/claude_code_intel_sync/run | python3 -m json.tool'
 ```
 
-Then verify the schedule is alive:
-
+**Step 2 — verify scaffold request landed in Task Hub:**
 ```
-ssh ua@uaonvps 'curl -s http://localhost:8002/api/v1/cron/jobs/claude_code_intel_sync | python3 -m json.tool | grep -E "cron_expr|last_run_at|next_run_at"'
+ssh ua@uaonvps 'sqlite3 /opt/universal_agent/AGENT_RUN_WORKSPACES/task_hub.db "SELECT task_id, status, datetime(created_at, '\''unixepoch'\'') AS created, title FROM task_hub_items WHERE source_kind = '\''cody_scaffold_request'\'' ORDER BY created_at DESC LIMIT 10;"'
 ```
 
-`next_run_at` should now show a future timestamp (the next 08/16/22 Central window). After that, the regular scheduler tick takes over and any future deploy that lands on a window gets backfilled within 24h instead of silently dropped.
+Expected: at least one row with status=`open` (or `in_progress` if Simone has already claimed) and a "Scaffold demo: ..." title.
 
-**Post-deploy smoke test:**
-1. SSH to VPS and run a manual digest dry-run against a populated day:
-   ```
-   ssh ua@uaonvps 'cd /opt/universal_agent && PYTHONPATH=src uv run python -m universal_agent.scripts.youtube_daily_digest --day TUESDAY --dry-run'
-   ```
-2. Compare ingestion failure count vs. last run — should be near zero on videos that have transcripts at all. Videos that legitimately lack captions will still go metadata-only (correct behavior).
-3. The next normal 6 AM Central cron tick will exercise the new retry logic against whichever day's playlist has fresh content.
+**Step 3 — after Simone's next heartbeat (~30 min cadence), check `/opt/ua_demos/`:**
+```
+ssh ua@uaonvps 'ls -la /opt/ua_demos/ && find /opt/ua_demos -maxdepth 2 -name "manifest.json" -o -name "BRIEF.md" 2>/dev/null'
+```
 
-**Known risks:**
-- A pathological all-bad-IP pool would now take up to 3× the time per failed video before giving up. Bounded by per-script timeout; not expected in practice.
-- The removed no-proxy fallback was effectively a no-op on the VPS anyway (datacenter IPs are blocked), so nothing observable changes for production. Local-residential testers who relied on the implicit fallback should set `UA_YOUTUBE_TRANSCRIPT_NOPROXY_FALLBACK=1`.
+Expected: a new directory (other than `_smoke`) containing BRIEF.md, ACCEPTANCE.md, business_relevance.md, SOURCES/. This is **the artifact that proves Phase 2/3 is end-to-end functional** per CLAUDE.md verification rule #2.
 
-**Pre-existing test failures (now FIXED in 20bf032):**
-- `test_require_proxy_blocks_when_no_credentials`
-- `test_require_proxy_blocks_when_module_unavailable`
-- `test_require_proxy_true_proceeds_with_valid_proxy`
-
-All three were stale (not deprecated): written before `_build_proxy_config` was added as the provider router. They patched/asserted Webshare-only behavior; production now defaults to DataImpulse with Webshare as alternative. Updated to either parametrize over both providers or patch the router entry point. `tests/unit/test_youtube_ingest.py` is now 24/24 green.
+**If Step 3 still shows only `_smoke` after 60 min:** the producer is working but Simone isn't claiming. Check her recent heartbeat session for the cody_scaffold_request task and any error. Likely paths to investigate: skill invocation failure, vault entity not found for the post_id, or task got claimed but skill threw.
 
 ---
 
-**Earlier in this branch (already merged via /ship Run #98):**
-- `cc14d94` — feat(csi): add 22:00 Central poll to ClaudeDevs intel cron
-- `20d58fe` — docs: handoff note for 22:00 cron schedule change
+## Scheduled-check (run-this-in-an-hour)
+
+Schedule a one-shot smoke check 1 hour from now so you don't have to remember:
+
+```
+ssh ua@uaonvps 'cat > /tmp/csi_smoke.sh <<"BASH"
+#!/bin/bash
+exec > /tmp/csi_smoke_result.log 2>&1
+echo "=== Phase 2 smoke test starting at $(date -u) ==="
+echo
+echo "=== Trigger manual CSI fire ==="
+curl -s -X POST http://localhost:8002/api/v1/cron/jobs/claude_code_intel_sync/run | python3 -m json.tool
+echo
+echo "=== Wait 30 min for Simone heartbeat ==="
+sleep 1800
+echo
+echo "=== Task Hub: cody_scaffold_request rows ==="
+sqlite3 /opt/universal_agent/AGENT_RUN_WORKSPACES/task_hub.db "SELECT task_id, status, datetime(created_at, '\''unixepoch'\'') AS created, title FROM task_hub_items WHERE source_kind = '\''cody_scaffold_request'\'' ORDER BY created_at DESC LIMIT 10;"
+echo
+echo "=== /opt/ua_demos/ listing ==="
+ls -la /opt/ua_demos/
+echo
+echo "=== BRIEF/ACCEPTANCE files in any new workspace ==="
+find /opt/ua_demos -maxdepth 2 -name "BRIEF.md" -o -name "ACCEPTANCE.md" -o -name "manifest.json" 2>/dev/null
+echo
+echo "=== Done at $(date -u) ==="
+BASH
+chmod +x /tmp/csi_smoke.sh
+nohup bash -c "sleep 3600 && /tmp/csi_smoke.sh" >/tmp/csi_smoke.bg.log 2>&1 &
+echo "Scheduled. Output will appear at /tmp/csi_smoke_result.log on VPS in ~1 hour 30 min."'
+```
+
+**To pull the result tomorrow morning:**
+```
+ssh ua@uaonvps 'cat /tmp/csi_smoke_result.log'
+```
+
+If Step 2 shows scaffold rows AND Step 3 shows a new `/opt/ua_demos/<entity-slug>__*/` directory with BRIEF.md, the v2 system is end-to-end on production for the first time.
+
+---
+
+## Earlier in this branch (already shipped via prior /ship runs)
+
+- `c312ea8`, `7e2aa71`, `0b22877` — Production Verification Rules in CLAUDE.md (with corrections)
+- `f38075d` — Pre-Implementation Reading rules in CLAUDE.md
+- `185e552` — trust_source bypass + claude.com allowlist widening
+- `09d7ee2` — `catch_up_on_restart=True` for claude_code_intel_sync
+- `6dc6f51`, `20bf032` — YouTube digest proxy retry + stale test cleanup
+- `cc14d94` — 22:00 Central poll added to claude_code_intel_sync cron
