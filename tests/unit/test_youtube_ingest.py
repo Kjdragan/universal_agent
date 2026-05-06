@@ -322,6 +322,92 @@ def test_run_extract_uses_webshare_proxy_when_env_present(monkeypatch) -> None:
     assert "proxy_config" in captured["init_kwargs"]
 
 
+def test_run_extract_retries_with_fresh_proxy_on_transient_failure(monkeypatch) -> None:
+    """First proxy attempt fails → fresh YouTubeTranscriptApi() reconnect → success.
+
+    This locks in the residential-proxy bad-IP retry behavior. Each new
+    YouTubeTranscriptApi() opens a new proxy connection and lands on a
+    different egress IP, so a single bad IP must NOT poison the whole
+    fetch — we retry up to UA_YOUTUBE_TRANSCRIPT_PROXY_RETRIES times.
+    """
+    construction_log: list[dict[str, object]] = []
+    fetch_calls: list[int] = [0]
+
+    class FakeFetched:
+        snippets = [types.SimpleNamespace(text="hello"), types.SimpleNamespace(text="world")]
+
+    class FakeProxyConfig:
+        def __init__(self, **kwargs):
+            self.url = "http://proxy.example"
+
+    class FakeApi:
+        def __init__(self, **kwargs):
+            construction_log.append(kwargs)
+
+        def fetch(self, video_id: str, languages=None):
+            fetch_calls[0] += 1
+            if fetch_calls[0] == 1:
+                raise RuntimeError("simulated bad-IP block on first attempt")
+            return FakeFetched()
+
+    monkeypatch.setenv("UA_YOUTUBE_TRANSCRIPT_PROXY_RETRIES", "3")
+    monkeypatch.delenv("UA_YOUTUBE_TRANSCRIPT_NOPROXY_FALLBACK", raising=False)
+    monkeypatch.setitem(sys.modules, "youtube_transcript_api", types.SimpleNamespace(YouTubeTranscriptApi=FakeApi))
+
+    out = youtube_ingest._run_youtube_transcript_api_extract(
+        "dxlyCPGCvy8",
+        proxy_config=FakeProxyConfig(),
+        proxy_mode="webshare",
+    )
+
+    assert out["ok"] is True
+    assert out["proxy_mode"] == "webshare"
+    assert fetch_calls[0] == 2
+    assert len(construction_log) == 2
+    assert "proxy_config" in construction_log[0]
+    assert "proxy_config" in construction_log[1]
+
+
+def test_run_extract_does_not_fall_back_to_no_proxy_by_default(monkeypatch) -> None:
+    """All proxy attempts fail → return failure, do NOT silently retry without proxy.
+
+    Datacenter no-proxy attempts are guaranteed to be blocked by YouTube,
+    so falling back to no-proxy from a VPS just hides the real error and
+    burns a video unnecessarily. Opt-in only via
+    UA_YOUTUBE_TRANSCRIPT_NOPROXY_FALLBACK=1.
+    """
+    construction_log: list[dict[str, object]] = []
+
+    class FakeProxyConfig:
+        def __init__(self, **kwargs):
+            self.url = "http://proxy.example"
+
+    class FakeApi:
+        def __init__(self, **kwargs):
+            construction_log.append(kwargs)
+
+        def fetch(self, video_id: str, languages=None):
+            raise RuntimeError("RequestBlocked simulated on every IP")
+
+    monkeypatch.setenv("UA_YOUTUBE_TRANSCRIPT_PROXY_RETRIES", "3")
+    monkeypatch.delenv("UA_YOUTUBE_TRANSCRIPT_NOPROXY_FALLBACK", raising=False)
+    monkeypatch.setitem(sys.modules, "youtube_transcript_api", types.SimpleNamespace(YouTubeTranscriptApi=FakeApi))
+
+    out = youtube_ingest._run_youtube_transcript_api_extract(
+        "dxlyCPGCvy8",
+        proxy_config=FakeProxyConfig(),
+        proxy_mode="webshare",
+    )
+
+    assert out["ok"] is False
+    assert out["error"] == "youtube_transcript_api_failed"
+    assert out["failure_class"] == "request_blocked"
+    # Three attempts, all through the proxy. None without.
+    assert len(construction_log) == 3
+    for kwargs in construction_log:
+        assert "proxy_config" in kwargs
+
+
 def test_require_proxy_blocks_when_no_credentials(monkeypatch) -> None:
     """require_proxy=True with no proxy creds → immediate hard failure."""
     monkeypatch.delenv("PROXY_USERNAME", raising=False)
