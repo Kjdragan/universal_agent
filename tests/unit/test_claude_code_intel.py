@@ -157,7 +157,13 @@ def test_run_sync_dedupes_seen_post_ids(tmp_path: Path) -> None:
     assert second.new_post_count == 0
 
 
-def test_run_sync_queues_task_hub_for_tier_three(tmp_path: Path) -> None:
+def test_run_sync_queues_scaffold_request_for_tier_three(tmp_path: Path, monkeypatch) -> None:
+    """Tier-3 actions enqueue a `cody_scaffold_request` for Simone (Phase 2),
+    NOT the legacy `claude_code_demo_task` directly to Cody. Simone runs
+    cody-scaffold-builder, refines templates, then dispatches the demo task
+    to Cody as her downstream output.
+    """
+    monkeypatch.delenv("UA_CSI_DIRECT_DEMO_FALLBACK", raising=False)  # ensure off
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     posts = [
@@ -177,8 +183,68 @@ def test_run_sync_queues_task_hub_for_tier_three(tmp_path: Path) -> None:
     rows = conn.execute("SELECT * FROM task_hub_items WHERE source_ref = '301'").fetchall()
     assert len(rows) == 1
     item = task_hub.hydrate_item(dict(rows[0]))
-    assert item["source_kind"] == "claude_code_demo_task"
+    # NEW: Phase 2 routing — Simone scaffolds first, then dispatches to Cody.
+    assert item["source_kind"] == "cody_scaffold_request"
+    assert "simone-scaffold" in item["labels"]
     assert "claude-code-intel" in item["labels"]
+    assert item["title"].lower().startswith("scaffold demo")
+
+
+def test_run_sync_direct_demo_fallback_also_enqueues_legacy_task(tmp_path: Path, monkeypatch) -> None:
+    """With UA_CSI_DIRECT_DEMO_FALLBACK=1, tier-3 actions ALSO enqueue the
+    legacy `claude_code_demo_task` so Cody can pick it up directly even if
+    Simone's scaffold pipeline is broken. Off by default; emergency lever only.
+    """
+    monkeypatch.setenv("UA_CSI_DIRECT_DEMO_FALLBACK", "1")
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    posts = [
+        {
+            "id": "302",
+            "text": "New Claude Code SDK API feature with demo repo and workflow example",
+            "created_at": "2026-04-19T12:00:00.000Z",
+            "entities": {"urls": [{"expanded_url": "https://github.com/example/demo"}]},
+        }
+    ]
+
+    run_sync(config=_config(tmp_path), bearer_token="token", conn=conn, client=_client_for_posts(posts))
+
+    task_hub.ensure_schema(conn)
+    rows = conn.execute("SELECT * FROM task_hub_items WHERE source_ref = '302' ORDER BY source_kind").fetchall()
+    kinds = {row["source_kind"] for row in rows}
+    assert kinds == {"claude_code_demo_task", "cody_scaffold_request"}, (
+        f"fallback should produce both rows; got {kinds}"
+    )
+
+
+def test_run_sync_scaffold_request_is_idempotent_across_runs(tmp_path: Path, monkeypatch) -> None:
+    """Re-running the same packet must not duplicate the scaffold task.
+    task_id derived from sha(post_id) + source_kind keeps the row stable.
+    """
+    monkeypatch.delenv("UA_CSI_DIRECT_DEMO_FALLBACK", raising=False)
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    posts = [
+        {
+            "id": "303",
+            "text": "New Claude Code SDK API feature with demo repo and workflow example",
+            "created_at": "2026-04-19T12:00:00.000Z",
+            "entities": {"urls": [{"expanded_url": "https://github.com/example/demo"}]},
+        }
+    ]
+
+    # First run
+    run_sync(config=_config(tmp_path), bearer_token="token", conn=conn, client=_client_for_posts(posts))
+    # Replay with the SAME post_id (state cleared so the post counts as "new" again)
+    state_path = tmp_path / "proactive" / "claude_code_intel" / "ClaudeDevs" / "state.json"
+    if state_path.exists():
+        state_path.unlink()
+    run_sync(config=_config(tmp_path), bearer_token="token", conn=conn, client=_client_for_posts(posts))
+
+    rows = conn.execute(
+        "SELECT * FROM task_hub_items WHERE source_ref = '303' AND source_kind = 'cody_scaffold_request'"
+    ).fetchall()
+    assert len(rows) == 1, f"expected 1 row after re-run; upsert should dedupe by task_id"
 
 
 def test_run_sync_writes_failure_packet_when_token_missing(monkeypatch, tmp_path: Path) -> None:
