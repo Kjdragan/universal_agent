@@ -42,6 +42,31 @@ The ClaudeDevs X intel pipeline is undergoing a v2 rebuild. Two living docs trac
 - Prefer root-cause fixes over temporary workarounds.
 - Update docs when behavior or operations change.
 
+## Production Verification Rules — DO NOT SKIP
+
+**Why this section exists.** Between 2026-04-15 and 2026-05-06 the v2 ClaudeDevs intel rebuild shipped 17 PRs with 439 passing unit tests and a "shakedown log" that declared the system green. After all of that, an operator pulled production state and found: (a) Simone and Cody agents were never deployed (no `simone.md` / `cody.md` in `.claude/agents/` on the VPS), (b) `/opt/ua_demos/` had only the smoke workspace — Phase 2/3 had never executed end-to-end, (c) the linked-doc fetcher was silently dropping the actual documentation that downstream phases were supposed to consume. 439 unit tests caught none of these because each test stubbed the boundary it didn't own. The architecture diagram is not the system. Skill files on disk are not the same as agents that invoke them. Mocked end-to-end loops are not the same as production end-to-end runs.
+
+**These rules apply to every PR and every "phase complete" claim:**
+
+1. **Skill deployed ≠ skill invoked.** Before declaring a phase complete, prove that the agent which is supposed to invoke a skill is actually deployed in production AND that its prompt references the skill by name. A skill file in `.claude/skills/<name>/` does nothing on its own. Verification command pattern: `grep -l <skill-name> /opt/universal_agent/.claude/agents/*.md` — must return at least one agent.
+
+2. **Phase complete = real artifact on real disk.** A phase is not complete until a representative real-world artifact exists at the expected path on the VPS. Examples: a `cody_demo_task` row in Task Hub created by a non-test run; a `/opt/ua_demos/<id>/manifest.json` with `endpoint_hit=anthropic_native`; a vault entity page authored by a non-mocked Simone run. "Mechanical end-to-end loop synthesized in-memory" is NOT verification — it's a sanity check on the function-call graph, nothing more.
+
+3. **Diagnostic commands must read the canonical resolver, not your guess.** Path resolution lives in code (e.g. `artifacts.py:resolve_artifacts_dir` defaults to `<repo-root>/artifacts`, not `AGENT_RUN_WORKSPACES`). Before you script a `find` or `ls`, read the resolver function. Do not invent fallback paths.
+
+4. **No conflation of code paths under similar names.** "URL allowlist" exists in three different files for three different purposes (research grounding, csi_url_judge pre-filter, csi_url_judge LLM judge). Before you say "the allowlist blocks X," follow the call chain from the actual call site. Use grep on the call site, not on the term.
+
+5. **Prove your claim before stating it.** When asserting how the system behaves ("Task Hub queueing is per-handle"), open the function that does the gating and read the body. Function names lie; bodies don't. If you don't have time to read the body, say "I think X but haven't confirmed" — never assert.
+
+6. **End-of-PR production smoke is mandatory for any PR that touches a phase boundary.** A "phase boundary" PR is one whose value depends on a downstream agent picking up its output. Examples: scaffold-builder shipping → must verify a real Task Hub row was created. Cody implementation contract → must verify a real `manifest.json` was written. The shakedown log format is fine; what's NOT fine is letting "smoke deferred to operator" become permanent. If the smoke can't run from the dev box, schedule it on the VPS within 24 hours of merge AND record the result back in the PR thread.
+
+7. **Sandbox honesty.** When working from a sandbox that can't SSH the VPS, say so up front. Don't loop the operator through 5 incremental commands when one consolidated command would do. Don't claim "I checked" when you can't.
+
+8. **Branch-versus-deploy honesty.** A commit on `feature/latest2` is not deployed. A commit merged to `main` is not deployed if the GitHub Actions deploy hasn't completed. Never say "the fix is shipped" until the deploy workflow is green AND the live VPS state confirms the change took effect.
+
+If a rule above isn't satisfiable for a given PR, say so explicitly in the commit message and the SHIP_HANDOFF, with a specific operator step to close the gap. The acceptable failure mode is "I shipped the code change but Phase 2 wiring still needs a Simone agent file deployed — see Followup #1." The unacceptable failure mode is silence.
+
 ## Caveats
 - _(Living section — add caveats as we discover them.)_
 - Deployment is automated via GitHub Actions: `develop` is integration/review only, and a push to `main` triggers the single production deploy workflow. Do not use ad hoc scripts, `ssh`, `rsync`, or `git pull`. See [AI Coder Instructions](docs/deployment/ai_coder_instructions.md) for the full protocol.
+- **Simone / Cody agents are NOT deployed in `.claude/agents/` as of 2026-05-06.** The Phase 2/3 demo pipeline cannot execute until those agents exist with prompts that reference the deployed skills (`cody-scaffold-builder`, `cody-task-dispatcher`, `cody-implements-from-brief`, `cody-work-evaluator`, `cody-progress-monitor`). The skill files exist; the invokers do not. Confirmed via `ls /opt/universal_agent/.claude/agents/` on prod. Tracked as the top blocker in the v2 remaining-work plan.
