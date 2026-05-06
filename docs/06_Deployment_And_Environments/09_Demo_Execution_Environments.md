@@ -172,6 +172,8 @@ unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_DEFAULT_HAIKU_MODEL ANTH
 claude -p "Reply with the word OK"
 ```
 
+> **Note (post-inversion):** After the [Interactive Coding Environment inversion](10_Interactive_Coding_Environment.md) ships, the user-global `~/.claude/settings.json` no longer carries the ZAI env block — so for a *fresh* shell this `unset` is a no-op. It's still a "belt and suspenders" defensive measure (in case someone ran `zai` earlier in the same shell, or sourced an env file). Keep it.
+
 **Fix for production (Cody's autonomous demo execution):** Cody invokes the demo subprocess with an explicit `env={}` (or with only the env vars she actually wants) so no parent-shell pollution leaks in. PR 9 (`cody-implements-from-brief`) handles this.
 
 ---
@@ -289,8 +291,26 @@ You should see `api.anthropic.com` for Anthropic-native, `api.z.ai` for ZAI, **n
 
 ---
 
+## Interactive coding vs demo execution: how they coexist after the inversion
+
+The [Interactive Coding Environment plan](10_Interactive_Coding_Environment.md) inverts the *user-global* default so that plain `claude` (and the Antigravity IDE side panel and integrated terminal) hit **real Anthropic Max** by default. This is orthogonal to the demo-workspace mechanism described above:
+
+| Path | Endpoint | Mechanism |
+|---|---|---|
+| Plain `claude` from any non-demo dir | Anthropic Max | User-global `~/.claude/settings.json` no longer carries the ZAI env block |
+| `zai` shell function (explicit opt-in) | ZAI / GLM | Wraps with `infisical run --env=… -- claude "$@"` |
+| UA autonomous agent runs (services) | ZAI / GLM | Injected by `initialize_runtime_secrets()` from Infisical at process start — NOT via settings.json |
+| Demo workspace `/opt/ua_demos/<id>/` | Anthropic Max | **Unchanged** — project-local vanilla settings.json + launcher `unset` (this document) |
+
+**Practical implication for demo work:** nothing changes. The provisioner's structural assertions (no `env`/`hooks`/`enabledPlugins`/`extraKnownMarketplaces` in project-local settings) and the launcher's `unset` of leaked env vars continue to be the correct mechanism for demo execution. The post-inversion world makes shell-env-leak rarer (because user-global settings no longer injects ZAI vars), but the defensive `unset` is still right.
+
+See [`10_Interactive_Coding_Environment.md`](10_Interactive_Coding_Environment.md) for the full per-machine matrix, acid tests, and rollback procedure.
+
+---
+
 ## Related docs
 
+- [Interactive Coding Environment](10_Interactive_Coding_Environment.md) — companion doc covering Kevin's interactive coding path (the post-inversion default-Anthropic mode)
 - [ClaudeDevs X Intelligence System](../02_Subsystems/ClaudeDevs_X_Intelligence_System.md) — full subsystem reference
 - [ClaudeDevs X Intel v2 Design](../proactive_signals/claudedevs_intel_v2_design.md) §3, §8 — design rationale
 - [Demo Workspace Provisioning Runbook](../operations/demo_workspace_provisioning.md) — one-time setup steps

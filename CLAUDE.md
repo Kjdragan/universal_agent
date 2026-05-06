@@ -21,14 +21,17 @@ It includes:
 - TL;DR: Work on `feature/latest2`. Push there. Never touch `develop` or `main`. Someone else runs `/ship`.
 
 ## Claude Execution Environments (MUST READ before touching anything Claude-related)
-UA runs **TWO separate Claude environments side-by-side on the VPS**:
+UA runs **THREE Claude execution profiles** across the VPS and Kevin's desktop. Mistaking one for another is the #1 source of confusion in the system.
 
-1. **ZAI-mapped (default everywhere except `/opt/ua_demos/`)** — cheap GLM models via the ZAI proxy. Used for all routine UA work, Cody's normal coding tasks, the ClaudeDevs intel cron, Simone heartbeats, etc.
-2. **Anthropic-native (only inside `/opt/ua_demos/<demo-id>/`)** — real Claude models (Opus/Sonnet/Haiku) via the Max plan OAuth session. Used **only** for Phase 3 demo execution where the demo needs to exercise brand-new Anthropic features that the ZAI proxy may not have yet.
+1. **Kevin's interactive coding** (Antigravity terminal, Antigravity IDE side panel, plain `claude` from any shell) → **Anthropic Max plan** (real Opus/Sonnet/Haiku via OAuth). Default everywhere after the inversion plan ships.
+2. **UA autonomous agent runs** (Simone heartbeats, Atlas, Cody normal work, ClaudeDevs intel cron, dispatch sweep, etc.) → **ZAI proxy / GLM models** (cheap inference). ZAI vars are now injected at service-start by `initialize_runtime_secrets()` reading Infisical, NOT via user-global `~/.claude/settings.json`.
+3. **Demo workspace execution** (`/opt/ua_demos/<id>/`) → **Anthropic Max plan**. Used for Phase 3 demo execution where the demo needs to exercise brand-new Anthropic features that ZAI may not have yet.
 
-Mistaking one for the other is the #1 source of confusion. Before debugging anything Claude-related, **read [`docs/06_Deployment_And_Environments/09_Demo_Execution_Environments.md`](docs/06_Deployment_And_Environments/09_Demo_Execution_Environments.md)** — especially the decision tree and the CLI-vs-SDK auth wrinkle.
+**Canonical reference (read this FIRST before touching any Claude env, settings.json, or Anthropic-related code):** [`docs/06_Deployment_And_Environments/10_Interactive_Coding_Environment.md`](docs/06_Deployment_And_Environments/10_Interactive_Coding_Environment.md) — the inversion plan, per-machine matrix, `zai()` shell function, Antigravity Remote-SSH workflow, acid tests, rollback.
 
-Operational runbook: [`docs/operations/demo_workspace_provisioning.md`](docs/operations/demo_workspace_provisioning.md).
+Companion docs:
+- [`docs/06_Deployment_And_Environments/09_Demo_Execution_Environments.md`](docs/06_Deployment_And_Environments/09_Demo_Execution_Environments.md) — demo path mechanics, decision tree, CLI-vs-SDK auth wrinkle.
+- [`docs/operations/demo_workspace_provisioning.md`](docs/operations/demo_workspace_provisioning.md) — one-time setup runbook for `/opt/ua_demos/`.
 
 ## ClaudeDevs Intelligence v2 — Active Implementation Plan
 The ClaudeDevs X intel pipeline is undergoing a v2 rebuild. Two living docs track it:

@@ -131,6 +131,29 @@ The Claude Code intelligence lane uses X API app-only read access to poll `@Clau
 
 Current implementation is read-only and must not use posting endpoints without a separate approval-gated design. See [X API And Claude Code Intel Source Of Truth](../03_Operations/118_X_API_And_Claude_Code_Intel_Source_Of_Truth_2026-04-19.md).
 
+### Anthropic / ZAI Routing Secrets
+
+The 5 keys below route Anthropic SDK calls (and `claude` CLI subprocess invocations spawned from UA Python services) through the ZAI proxy. They are consumed by every UA Python service that calls `initialize_runtime_secrets()` at startup, and by the interactive `zai()` shell wrapper Kevin uses for explicit cheap inference. For the canonical reference on how this routing works, see [Interactive Coding Environment](../06_Deployment_And_Environments/10_Interactive_Coding_Environment.md).
+
+| Secret | Required? | Source | Consumers | Notes |
+|---|---:|---|---|---|
+| `ANTHROPIC_BASE_URL` | Yes | ZAI proxy | UA Python services + `zai()` wrapper | `https://api.z.ai/api/anthropic` |
+| `ANTHROPIC_AUTH_TOKEN` | Yes | ZAI proxy | UA Python services + `zai()` wrapper | ZAI account auth token |
+| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | Yes | ZAI proxy | Anthropic SDK model resolution | `glm-5-turbo` |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL` | Yes | ZAI proxy | Anthropic SDK model resolution | `glm-5-turbo` |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL` | Yes | ZAI proxy | Anthropic SDK model resolution | `glm-5.1` |
+
+Stage in BOTH `production` (VPS) and `development` (desktop) environments. Adding a key:
+
+```bash
+PROJECT_ID=9970e5b7-d48a-4ed8-a8af-43e923e67572
+python scripts/infisical_upsert_secret.py --env production --project "$PROJECT_ID" \
+  --key ANTHROPIC_BASE_URL --value 'https://api.z.ai/api/anthropic'
+# (repeat for development env, and for each of the 5 keys)
+```
+
+After staging, restart UA services (`sudo systemctl restart 'universal-agent-*.service'`) so `initialize_runtime_secrets()` picks them up on next startup.
+
 ## Deploy Workflow Contract
 
 The single production workflow, `.github/workflows/deploy.yml`, follows this sequence:
