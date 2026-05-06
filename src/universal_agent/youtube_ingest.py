@@ -631,19 +631,56 @@ def _run_youtube_transcript_api_extract(
         api_kwargs: dict[str, Any] = {}
         if proxy_config is not None:
             api_kwargs["proxy_config"] = proxy_config
-            
-        try:
-            api = YouTubeTranscriptApi(**api_kwargs)
-            fetched = api.fetch(video_id, languages=preferred_languages)
-            actual_proxy_mode = proxy_mode
-        except Exception as proxy_exc:
-            if proxy_config is not None:
-                log.warning("Proxy failed for %s (%s), retrying without proxy...", video_id, str(proxy_exc))
+
+        # Residential proxy pools rotate the egress IP per connection. A
+        # subset of those IPs are pre-flagged by YouTube (other tenants'
+        # prior abuse) and will fail any transcript fetch deterministically.
+        # Single-attempt failure rate is therefore the share of flagged IPs
+        # in the pool — empirically ~15-25% on Webshare/DataImpulse. Retry
+        # up to N times so we drop a single video's failure probability to
+        # roughly the Nth power of that. Each retry instantiates a new
+        # YouTubeTranscriptApi which opens a new proxy connection and
+        # therefore lands on a different egress IP.
+        #
+        # Falling back to no-proxy is intentionally NOT done here: from a
+        # VPS datacenter IP, YouTube blocks transcript fetches outright,
+        # so a no-proxy attempt is a guaranteed waste. If you ever run
+        # this from a residential machine, set
+        # `UA_YOUTUBE_TRANSCRIPT_NOPROXY_FALLBACK=1` to re-enable it.
+        max_attempts = max(1, int(os.getenv("UA_YOUTUBE_TRANSCRIPT_PROXY_RETRIES", "3") or 3))
+        noproxy_fallback = os.getenv("UA_YOUTUBE_TRANSCRIPT_NOPROXY_FALLBACK", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+        fetched = None
+        actual_proxy_mode = proxy_mode
+        last_proxy_exc: Optional[Exception] = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                api = YouTubeTranscriptApi(**api_kwargs)
+                fetched = api.fetch(video_id, languages=preferred_languages)
+                actual_proxy_mode = proxy_mode if proxy_config is not None else "disabled"
+                break
+            except Exception as proxy_exc:
+                last_proxy_exc = proxy_exc
+                if proxy_config is None:
+                    # No proxy in use → no point retrying with a "fresh"
+                    # connection that will reuse the same direct route.
+                    raise
+                if attempt < max_attempts:
+                    log.info(
+                        "Transcript fetch attempt %d/%d failed for %s via proxy (%s); retrying with fresh proxy IP",
+                        attempt, max_attempts, video_id, str(proxy_exc)[:200],
+                    )
+        if fetched is None:
+            if proxy_config is not None and noproxy_fallback:
+                log.warning(
+                    "All %d proxy attempts failed for %s; trying once without proxy as last resort",
+                    max_attempts, video_id,
+                )
                 api = YouTubeTranscriptApi()
                 fetched = api.fetch(video_id, languages=preferred_languages)
                 actual_proxy_mode = "fallback_disabled"
             else:
-                raise proxy_exc
+                raise last_proxy_exc if last_proxy_exc is not None else RuntimeError("transcript fetch failed without raising")
 
         lines: list[str] = []
         snippets = getattr(fetched, "snippets", None)

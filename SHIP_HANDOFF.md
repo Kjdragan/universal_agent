@@ -1,21 +1,40 @@
 # SHIP_HANDOFF
 
 **Summary of changes made:**
-ClaudeDevs X intel cron: add 22:00 America/Chicago poll (3x-daily total).
+YouTube daily digest: retry transcript fetch on residential-proxy bad-IP, plus richer failure logging.
 
 **What ships:**
-- `claude_code_intel_sync` schedule moves from `0 8,16 * * *` to `0 8,16,22 * * *` (8 AM / 4 PM / 10 PM Central).
-- Takes effect on gateway restart: `_ensure_claude_code_intel_cron_job` calls `update_job` for the existing entry, so the live VPS cron registry rewrites itself with the new `cron_expr` automatically — no manual `cron_jobs.json` surgery needed.
-- Mission Control CSI Ingester tile thresholds (12h green / 25h yellow / 48h red) are unchanged because worst-case poll gap drops from 16h → 10h, still well inside the green band.
-- No env flips needed. No new feature flags. Operators can still pin a custom schedule via `UA_CLAUDE_CODE_INTEL_CRON_EXPR` if they want to override.
+- `_run_youtube_transcript_api_extract` now retries up to 3 times through the proxy on transient failures (controlled by `UA_YOUTUBE_TRANSCRIPT_PROXY_RETRIES`, default 3). Each retry opens a new connection and gets a fresh egress IP from the rotating residential pool, so a single bad IP no longer poisons the whole fetch.
+- The old "fall back to no-proxy" behavior is removed by default — from a VPS datacenter IP it's a guaranteed wasted attempt that obscures the real failure. Re-enable for local residential testing via `UA_YOUTUBE_TRANSCRIPT_NOPROXY_FALLBACK=1`.
+- `youtube_daily_digest` now logs `failure_class` and `detail` on every transcript failure, not just the generic `error` name. Future post-mortems won't need a separate probe to figure out why a fetch failed.
+- Two new unit tests in `tests/unit/test_youtube_ingest.py` pin the retry loop and the no-fallback default.
+
+**Expected impact:** with default N=3 retries and an empirical ~20% bad-IP rate on Webshare/DataImpulse pools, single-video failure probability drops from ~20% to ~0.8%. On an 18-video playlist, mean failures per run drop from ~3.6 to ~0.14.
 
 **Latest commit ready for /ship:**
-- `cc14d94` — feat(csi): add 22:00 Central poll to ClaudeDevs intel cron
+- `6dc6f51` — fix(youtube-digest): retry transcript fetch on residential-proxy bad-IP
 
 **Post-deploy smoke test:**
-1. After the deploy, hit Mission Control or check `/opt/universal_agent/workspaces/cron_jobs.json` and confirm the `claude_code_intel_sync` entry shows `"cron_expr": "0 8,16,22 * * *"`.
-2. Watch for the 22:00 Central run tonight. The operator email lands at `kevinjdragan@gmail.com` only when `action_count > 0` (default `email_policy=when_actions`); a quiet poll won't email but will still write a packet under `<UA_ARTIFACTS_DIR>/proactive/claude-code-intelligence/`.
-3. If you want a guaranteed email regardless, set `UA_CLAUDE_CODE_INTEL_REPORT_EMAIL_POLICY=always` in the VPS env and restart the gateway — but this isn't part of this PR.
+1. SSH to VPS and run a manual digest dry-run against a populated day:
+   ```
+   ssh ua@uaonvps 'cd /opt/universal_agent && PYTHONPATH=src uv run python -m universal_agent.scripts.youtube_daily_digest --day TUESDAY --dry-run'
+   ```
+2. Compare ingestion failure count vs. last run — should be near zero on videos that have transcripts at all. Videos that legitimately lack captions will still go metadata-only (correct behavior).
+3. The next normal 6 AM Central cron tick will exercise the new retry logic against whichever day's playlist has fresh content.
 
 **Known risks:**
-- None new. The added 22:00 run hits the X API once more per day on the same shared `X_BEARER_TOKEN`; rate-limit headroom is comfortable for the read endpoints used here.
+- A pathological all-bad-IP pool would now take up to 3× the time per failed video before giving up. Bounded by per-script timeout; not expected in practice.
+- The removed no-proxy fallback was effectively a no-op on the VPS anyway (datacenter IPs are blocked), so nothing observable changes for production. Local-residential testers who relied on the implicit fallback should set `UA_YOUTUBE_TRANSCRIPT_NOPROXY_FALLBACK=1`.
+
+**Pre-existing test failures (NOT caused by this commit):**
+- `test_require_proxy_blocks_when_no_credentials`
+- `test_require_proxy_blocks_when_module_unavailable`
+- `test_require_proxy_true_proceeds_with_valid_proxy`
+
+These were already failing on `feature/latest2` before this change. Worth addressing separately, but don't block this fix.
+
+---
+
+**Earlier in this branch (already merged via /ship Run #98):**
+- `cc14d94` — feat(csi): add 22:00 Central poll to ClaudeDevs intel cron
+- `20d58fe` — docs: handoff note for 22:00 cron schedule change

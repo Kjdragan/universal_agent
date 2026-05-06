@@ -847,8 +847,18 @@ def process_daily_digest(
             transcripts.append(f"Title: {title}\nVideo ID: {video_id}\nTranscript:\n{text}\n")
             processed_items.append(item)
         else:
-            error_detail = result.get("detail", result.get("error", "unknown")) if result else "unknown"
-            logger.warning("Failed to ingest %s: %s", video_id, error_detail)
+            if result:
+                error_class = result.get("failure_class") or "unknown"
+                error_name = result.get("error") or "unknown"
+                error_detail = str(result.get("detail") or "")[:400]
+            else:
+                error_class = "unknown"
+                error_name = "unknown"
+                error_detail = ""
+            logger.warning(
+                "Failed to ingest %s: failure_class=%s error=%s detail=%s",
+                video_id, error_class, error_name, error_detail,
+            )
 
             # Metadata-only fallback: use title for synthesis (playlist API doesn't return description)
             fallback_text = f"[Metadata-only — transcript unavailable]\n\nTitle: {title}"
