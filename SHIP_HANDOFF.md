@@ -1,14 +1,21 @@
 # SHIP_HANDOFF
 
 **Summary of changes made:**
-Mission Control: CSI tile cadence fix + cron CancelledError handler
+ClaudeDevs X intel cron: add 22:00 America/Chicago poll (3x-daily total).
 
 **What ships:**
-- CSI Ingester tile stops sitting in red ~22h/day. Thresholds retuned from hourly assumption (1h/6h/24h) to actual twice-daily polling cadence (12h/25h/48h). Healthy system now reads green between scheduled polls instead of alarming.
-- Cron run cards stop painting red "Cron Run Failed" on every deploy. `asyncio.CancelledError` (BaseException subclass in Py3.8+) was bypassing the generic `except Exception` in `cron_service._run_job`, leaving in-flight runs unfinalized and triggering phantom failures from the recovery sweep on next startup. Now caught explicitly → status='cancelled' → info-severity cron_run_cancelled notification → hidden by default in /dashboard/events.
-- No env flips needed. Both fixes activate on deploy. No new feature flags.
+- `claude_code_intel_sync` schedule moves from `0 8,16 * * *` to `0 8,16,22 * * *` (8 AM / 4 PM / 10 PM Central).
+- Takes effect on gateway restart: `_ensure_claude_code_intel_cron_job` calls `update_job` for the existing entry, so the live VPS cron registry rewrites itself with the new `cron_expr` automatically — no manual `cron_jobs.json` surgery needed.
+- Mission Control CSI Ingester tile thresholds (12h green / 25h yellow / 48h red) are unchanged because worst-case poll gap drops from 16h → 10h, still well inside the green band.
+- No env flips needed. No new feature flags. Operators can still pin a custom schedule via `UA_CLAUDE_CODE_INTEL_CRON_EXPR` if they want to override.
 
-**List of commits:**
-- 257808c1 — fix(mission-control): tune CSI tile cadence + handle cron CancelledError
-- b969600a — docs(mission-control): document CSI cadence + cron-cancellation handling
-- e0d6f675 — chore(memory): capture proactive task rollover snapshots
+**Latest commit ready for /ship:**
+- `cc14d94` — feat(csi): add 22:00 Central poll to ClaudeDevs intel cron
+
+**Post-deploy smoke test:**
+1. After the deploy, hit Mission Control or check `/opt/universal_agent/workspaces/cron_jobs.json` and confirm the `claude_code_intel_sync` entry shows `"cron_expr": "0 8,16,22 * * *"`.
+2. Watch for the 22:00 Central run tonight. The operator email lands at `kevinjdragan@gmail.com` only when `action_count > 0` (default `email_policy=when_actions`); a quiet poll won't email but will still write a packet under `<UA_ARTIFACTS_DIR>/proactive/claude-code-intelligence/`.
+3. If you want a guaranteed email regardless, set `UA_CLAUDE_CODE_INTEL_REPORT_EMAIL_POLICY=always` in the VPS env and restart the gateway — but this isn't part of this PR.
+
+**Known risks:**
+- None new. The added 22:00 run hits the X API once more per day on the same shared `X_BEARER_TOKEN`; rate-limit headroom is comfortable for the read endpoints used here.
