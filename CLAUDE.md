@@ -42,6 +42,42 @@ The ClaudeDevs X intel pipeline is undergoing a v2 rebuild. Two living docs trac
 - Prefer root-cause fixes over temporary workarounds.
 - Update docs when behavior or operations change.
 
+## Pre-Implementation Reading — DO NOT SKIP
+
+**Why this section exists.** On 2026-05-06 an agent was minutes away from shipping ~50 lines of new orchestration logic into `memory/HEARTBEAT.md` (claim tasks, route to Simone, enforce concurrency cap, reset orphaned in-progress tasks) before the operator stopped them and asked "doesn't Task Hub already do this?" It does. Every line of the proposed addition was redundant with `services/dispatch_service.py` + `task_hub.py`, which the agent had not read. The actual missing piece was a 30-line *producer* change — the consumer side was already wired through `dispatch_sweep` + `route_all_to_simone`. Same class of error as the v2 shakedown: shipping without grounding.
+
+**The rule:** before you propose new logic for any of the verbs below, grep for the verb in the canonical service module. If a function already exists, compose with it. If you can't tell whether something exists, you have NOT done your reading and you should NOT propose a change yet.
+
+| If you're about to propose | Read first |
+|---|---|
+| Task claiming, routing, atomic dispatch, concurrency cap, queue rebuild, dedup | `src/universal_agent/services/dispatch_service.py` + `src/universal_agent/task_hub.py`. Heartbeats call `dispatch_sweep` → `claim_next_dispatch_tasks(limit=N)`. Every claimed task auto-routes to Simone via `route_all_to_simone`. |
+| Stale / orphaned in-progress task recovery | `task_hub.py` — `UA_TASK_STALE_ENABLED` / `UA_TASK_STALE_MIN_AGE_MINUTES` env vars. Don't write a per-task reaper. |
+| Cron registration (system jobs) | `gateway_server._register_system_cron_job` helper. Defaults `catch_up_on_restart=True`, takes `required_secrets`, handles update-vs-create. Do not hand-roll. |
+| Artifact path resolution | `src/universal_agent/artifacts.py:resolve_artifacts_dir`. Default is `<repo-root>/artifacts`, NOT `AGENT_RUN_WORKSPACES`. Read this before writing any `find` or `ls` diagnostic. |
+| URL fetching for CSI / linked-source enrichment | `services/csi_url_judge.enrich_urls` — three passes (pre-filter → LLM judge → fetch). The `trust_source=True` parameter bypasses the judge for official-handle lanes. |
+| Research grounding (open-web search restricted to official sources) | `services/research_grounding.is_allowed` — separate code path from the URL judge. The `research_allowlist` in `intel_lanes.yaml` only gates this path, NOT tweet-link fetching. |
+| Skill invocation by a principal | The skill's `SKILL.md` already documents the workflow. Don't re-document it in `HEARTBEAT.md`. |
+
+**Specific anti-patterns shipped (or nearly shipped) here that must not recur:**
+
+1. Writing "Simone, check Task Hub for source_kind X" in HEARTBEAT.md. Task Hub already routes every claimed task to Simone. The missing piece is always *producing* the task.
+2. Writing "concurrency cap of N" in a directive. `claim_next_dispatch_tasks(limit=N)` is the cap.
+3. Inventing a fallback artifact path. `artifacts.resolve_artifacts_dir` is canonical.
+4. Adding catch-up / backfill logic per-cron. `_register_system_cron_job` already handles it.
+5. Adding orphan-reset directives. The stale-task policy in Task Hub is the right knob.
+
+**The 30-second pre-flight check before writing new code:**
+
+```
+grep -rn "<verb you're about to use>" \
+  src/universal_agent/services/ \
+  src/universal_agent/task_hub.py \
+  src/universal_agent/cron_service.py \
+  src/universal_agent/artifacts.py
+```
+
+If matches come back, read them before proposing anything. If you don't have time to read them, you don't have time to ship.
+
 ## Production Verification Rules — DO NOT SKIP
 
 **Why this section exists.** Between 2026-04-15 and 2026-05-06 the v2 ClaudeDevs intel rebuild shipped 17 PRs with 439 passing unit tests and a "shakedown log" that declared the system green. After all of that, an operator pulled production state and found: (a) `/opt/ua_demos/` had only the smoke workspace — Phase 2/3 had never executed end-to-end despite Simone (the principal who owns Phase 2) being live and the `cody-scaffold-builder` skill being deployed, because `memory/HEARTBEAT.md` never directed her to scan new vault entities; (b) the linked-doc fetcher was silently dropping the actual documentation downstream phases were supposed to consume because an LLM judge gate was tagging official-handle links as "promotional"; (c) two consecutive sessions of "everything looks green" had concealed the gap. 439 unit tests caught none of these because each test stubbed the boundary it didn't own. The architecture diagram is not the system. Skill files on disk are not the same as the heartbeat directives that invoke them. Mocked end-to-end loops are not the same as production end-to-end runs.
