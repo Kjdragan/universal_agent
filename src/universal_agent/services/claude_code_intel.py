@@ -353,11 +353,20 @@ def run_sync(
                         if not post_links:
                             return post_id, None
                         try:
+                            # trust_source=True: ClaudeDevs/bcherny are curated
+                            # official handles. Any URL they post is intentional
+                            # and IS the substance we exist to capture (the
+                            # tweet is just the trigger). Bypassing the LLM
+                            # judge prevents documentation-page links from
+                            # being silently dropped as "promotional", which
+                            # was the root cause of "linked sources: 1 (0
+                            # fetched)" on the keyless-auth announcement.
                             records = enrich_urls(
                                 urls=post_links,
                                 context=str(post.get("text") or "")[:2000],
                                 output_dir=enrich_dir / post_id,
                                 timeout=15,
+                                trust_source=True,
                             )
                             linked_ctx = build_linked_context(records)
                             if linked_ctx:

@@ -35,11 +35,29 @@ lanes:
     # Research grounding allowlist. Priority order: lower index = higher trust.
     # The grounding subagent fetches official sources first and only falls
     # back to general web when the official lookup yields nothing.
+    #
+    # Note: this list is for Phase-1 research GROUNDING (going out to look
+    # for related context on a topic). It is NOT the gate on URLs that
+    # appear inside ClaudeDevs/bcherny tweets — those are handled by
+    # csi_url_judge.enrich_urls(trust_source=True), which fetches every
+    # URL that survives the social/product pre-filter. The two paths are
+    # intentionally separate: we restrict where we'll go searching, but
+    # we follow whatever official-handle posts link to.
+    #
+    # Anthropic rebranded several product-doc domains from anthropic.com
+    # to claude.com (docs.claude.com, code.claude.com, platform.claude.com,
+    # support.claude.com). Both branded domains are kept here so historical
+    # links and current links both ground correctly.
     research_allowlist:
       - "docs.anthropic.com"
+      - "docs.claude.com"
+      - "code.claude.com"
+      - "platform.claude.com"
+      - "support.claude.com"
       - "github.com/anthropics"
       - "anthropic.com/news"
       - "anthropic.com/engineering"
+      - "anthropic.com/docs"
       - "support.anthropic.com"
 
     # Storage roots. Paths are relative to UA_ARTIFACTS_DIR for vault and
