@@ -617,6 +617,7 @@ def enrich_urls(
     *,
     max_fetch: int | None = None,
     timeout: int = 15,
+    trust_source: bool = False,
 ) -> list[EnrichmentRecord]:
     """Full 3-pass pipeline: pre-filter → LLM judge → selective fetch.
 
@@ -625,6 +626,16 @@ def enrich_urls(
 
     `max_fetch` defaults to `DEFAULT_MAX_FETCH` (env `UA_CSI_MAX_FETCH_PER_POST`,
     default 10). Pass an explicit int to override per call.
+
+    `trust_source=True` short-circuits the LLM judge: every URL that
+    survives the pre-filter is marked `worth_fetching=True` and goes
+    straight to the fetch pass. Use this for lanes where the upstream
+    source is already curated as official (e.g. CSI lanes that only
+    poll hand-picked handles like @ClaudeDevs / @bcherny). The judge
+    was originally added to filter noise from open-web crawls; for
+    intentional links from official handles it just drops the actual
+    documentation we exist to capture. Set
+    `UA_CSI_TRUST_SOURCE_BYPASS_JUDGE=0` in the env to disable.
     """
     if not urls:
         return []
@@ -636,8 +647,28 @@ def enrich_urls(
     if not candidates:
         return discarded
 
-    # Pass 2: LLM judge
-    records = judge_urls(candidates, context)
+    # Pass 2: LLM judge — bypassed when trust_source is on AND env permits.
+    bypass_judge = trust_source and (
+        os.getenv("UA_CSI_TRUST_SOURCE_BYPASS_JUDGE", "1").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
+    if bypass_judge:
+        records = [
+            EnrichmentRecord(
+                url=url,
+                category="trusted_source",
+                worth_fetching=True,
+                reasoning="trust_source bypass: official-handle link, fetch unconditionally",
+                fetch_status="pending",
+            )
+            for url in candidates
+        ]
+        logger.info(
+            "URL judge bypassed (trust_source=True): %d URLs queued for fetch",
+            len(records),
+        )
+    else:
+        records = judge_urls(candidates, context)
 
     # Pass 3: selective fetch
     fetched_count = 0
