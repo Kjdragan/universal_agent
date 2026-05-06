@@ -40,6 +40,7 @@ DEFAULT_MAX_RESULTS = 25
 SOURCE_KIND_UPDATE = "claude_code_update"
 SOURCE_KIND_DEMO_TASK = "claude_code_demo_task"
 SOURCE_KIND_KB_UPDATE = "claude_code_kb_update"
+SOURCE_KIND_SCAFFOLD_REQUEST = "cody_scaffold_request"
 LANE_SLUG = "claude_code_intel"
 KB_SLUG = "claude-code-intelligence"
 
@@ -888,6 +889,15 @@ def _extract_title_snippet(text: str, max_len: int = 80) -> str:
     return cleaned[:max_len].strip().rstrip(" .-,;:") if cleaned.strip() else ""
 
 
+def _direct_demo_fallback_enabled() -> bool:
+    """Whether tier-3 actions also enqueue the legacy `claude_code_demo_task`
+    in addition to the new `cody_scaffold_request`. Off by default — Simone's
+    scaffold pass is the canonical path. Flip to "1" only as an emergency
+    lever if the scaffold pipeline is starving Cody.
+    """
+    return os.getenv("UA_CSI_DIRECT_DEMO_FALLBACK", "0").strip().lower() in _TRUTHY
+
+
 def queue_follow_up_tasks(
     conn: sqlite3.Connection,
     *,
@@ -904,15 +914,35 @@ def queue_follow_up_tasks(
         post_id = str(action.get("post_id") or "").strip()
         if not post_id:
             continue
-        source_kind = SOURCE_KIND_DEMO_TASK if tier == 3 else SOURCE_KIND_KB_UPDATE
+
+        # Phase 2 routing (v2 design):
+        #   tier 3 → cody_scaffold_request (Simone scaffolds workspace,
+        #            then SHE enqueues cody_demo_task for Cody downstream)
+        #   tier 4 → claude_code_kb_update (Atlas/general analysis)
+        # The legacy direct claude_code_demo_task path is gated behind
+        # UA_CSI_DIRECT_DEMO_FALLBACK for emergency use only.
+        if tier == 3:
+            source_kind = SOURCE_KIND_SCAFFOLD_REQUEST
+        else:
+            source_kind = SOURCE_KIND_KB_UPDATE
+
         task_id = f"{source_kind}:{hashlib.sha256(post_id.encode()).hexdigest()[:16]}"
         # Extract a descriptive snippet from the post text to differentiate
         # tasks in the proactive history panel (avoids 7 identical titles).
         post_snippet = _extract_title_snippet(str(action.get("text") or ""))
         if tier == 3:
-            title = f"Build demo: {post_snippet}" if post_snippet else f"Build Claude Code demo from @{handle} update"
+            title = f"Scaffold demo: {post_snippet}" if post_snippet else f"Scaffold Claude Code demo from @{handle} update"
+            description = _scaffold_task_description(handle=handle, packet_dir=packet_dir, action=action)
+            labels = ["agent-ready", "claude-code-intel", "x-api", "simone-scaffold"]
+            preferred_vp = "simone_direct"
+            workflow_kind = "scaffold_demo_workspace"
         else:
             title = f"Analyze: {post_snippet}" if post_snippet else f"Analyze strategic Claude Code update from @{handle}"
+            description = _task_description(handle=handle, packet_dir=packet_dir, action=action)
+            labels = ["agent-ready", "claude-code-intel", "x-api", "atlas"]
+            preferred_vp = "vp.general.primary"
+            workflow_kind = "research"
+
         task_hub.upsert_item(
             conn,
             {
@@ -920,10 +950,10 @@ def queue_follow_up_tasks(
                 "source_kind": source_kind,
                 "source_ref": post_id,
                 "title": title,
-                "description": _task_description(handle=handle, packet_dir=packet_dir, action=action),
+                "description": description,
                 "project_key": "proactive",
                 "priority": max(1, min(tier, 4)),
-                "labels": ["agent-ready", "claude-code-intel", "x-api", "codie" if tier == 3 else "atlas"],
+                "labels": labels,
                 "status": task_hub.TASK_STATUS_OPEN,
                 "agent_ready": True,
                 "trigger_type": "heartbeat_poll",
@@ -935,10 +965,11 @@ def queue_follow_up_tasks(
                     "tier": tier,
                     "action_type": action.get("action_type") or "",
                     "links": action.get("links") or [],
-                    "preferred_vp": "vp.coder.primary" if tier == 3 else "vp.general.primary",
+                    "preferred_vp": preferred_vp,
                     "knowledge_base_slug": KB_SLUG,
+                    "vault_slug": KB_SLUG,
                     "workflow_manifest": {
-                        "workflow_kind": "code_change" if tier == 3 else "research",
+                        "workflow_kind": workflow_kind,
                         "delivery_mode": "interactive_chat",
                         "requires_pdf": False,
                         "final_channel": "chat",
@@ -948,6 +979,49 @@ def queue_follow_up_tasks(
                 },
             },
         )
+
+        # Optional legacy fallback: also enqueue the direct cody_demo_task so
+        # Cody can pick it up even if Simone's scaffold pipeline is broken.
+        # Off by default. Flip UA_CSI_DIRECT_DEMO_FALLBACK=1 to enable.
+        if tier == 3 and _direct_demo_fallback_enabled():
+            legacy_task_id = f"{SOURCE_KIND_DEMO_TASK}:{hashlib.sha256(post_id.encode()).hexdigest()[:16]}"
+            legacy_title = f"Build demo (fallback): {post_snippet}" if post_snippet else f"Build Claude Code demo from @{handle} update (fallback)"
+            task_hub.upsert_item(
+                conn,
+                {
+                    "task_id": legacy_task_id,
+                    "source_kind": SOURCE_KIND_DEMO_TASK,
+                    "source_ref": post_id,
+                    "title": legacy_title,
+                    "description": _task_description(handle=handle, packet_dir=packet_dir, action=action),
+                    "project_key": "proactive",
+                    "priority": max(1, min(tier, 4)),
+                    "labels": ["agent-ready", "claude-code-intel", "x-api", "codie", "scaffold-fallback"],
+                    "status": task_hub.TASK_STATUS_OPEN,
+                    "agent_ready": True,
+                    "trigger_type": "heartbeat_poll",
+                    "metadata": {
+                        "source": LANE_SLUG,
+                        "post_id": post_id,
+                        "post_url": action.get("url") or "",
+                        "packet_dir": str(packet_dir),
+                        "tier": tier,
+                        "action_type": action.get("action_type") or "",
+                        "links": action.get("links") or [],
+                        "preferred_vp": "vp.coder.primary",
+                        "knowledge_base_slug": KB_SLUG,
+                        "fallback_for_scaffold_request": task_id,
+                        "workflow_manifest": {
+                            "workflow_kind": "code_change",
+                            "delivery_mode": "interactive_chat",
+                            "requires_pdf": False,
+                            "final_channel": "chat",
+                            "canonical_executor": "simone_first",
+                            "repo_mutation_allowed": True,
+                        },
+                    },
+                },
+            )
         upsert_artifact(
             conn,
             artifact_type="claude_code_follow_up_task",
@@ -1159,6 +1233,60 @@ def write_reference_kb_update(
             lines.append(f"  - {link}")
     index_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
     return index_path
+
+
+def _scaffold_task_description(*, handle: str, packet_dir: Path, action: dict[str, Any]) -> str:
+    """Phase-2 brief for Simone: scaffold a demo workspace from a vault entity.
+
+    The task references a tier-3 post that should already have a
+    corresponding entity page written under `vault/entities/`. Simone's
+    job is the Phase-2 chain documented in
+    `.claude/skills/cody-scaffold-builder/SKILL.md`:
+    locate the entity → run cody-scaffold-builder → refine
+    BRIEF/ACCEPTANCE/business_relevance → enqueue the downstream
+    cody_demo_task via `cody-task-dispatcher`.
+
+    Task Hub already routes this claim to Simone (Simone-first
+    routing in dispatch_service); concurrency is naturally one
+    (heartbeat claims one task per cycle). Persistence is automatic —
+    if Simone is busy this cycle the task waits in the queue.
+    """
+    links = "\n".join(f"- {link}" for link in action.get("links") or []) or "- None found in the post payload."
+    post_id = str(action.get("post_id") or "(missing)")
+    return "\n".join(
+        [
+            f"Phase 2 scaffold request — Tier {action.get('tier')} Claude Code update from @{handle}.",
+            "",
+            f"Post ID:  {post_id}",
+            f"Post URL: {action.get('url') or '(missing)'}",
+            f"Packet:   {packet_dir}",
+            "",
+            "Post text:",
+            str(action.get("text") or "").strip(),
+            "",
+            "Referenced links:",
+            links,
+            "",
+            "Workflow (cody-scaffold-builder skill):",
+            f"  1. Locate the vault entity in <UA_ARTIFACTS_DIR>/knowledge-vaults/{KB_SLUG}/entities/",
+            f"     whose source_ids include `x_post_{post_id}` (or whose body cites this post).",
+            "  2. Decide if the entity is demo-worthy (briefing_status=pending AND endpoint",
+            "     is satisfiable AND business_relevance is non-trivial). If not, mark this task",
+            "     `parked` with a structured reason — do NOT silently complete.",
+            "  3. Invoke `cody-scaffold-builder` against the entity. The skill is deterministic",
+            "     and writes BRIEF.md, ACCEPTANCE.md, business_relevance.md starter templates.",
+            "  4. Refine the templates per the skill's contract — replace `_(Simone: ...)_`",
+            "     placeholders with concrete prose, requirements, and rationale.",
+            "  5. Run `cody-task-dispatcher` to enqueue a `claude_code_demo_task` row pointing",
+            "     at the new workspace so Cody picks it up.",
+            "  6. Mark THIS task `completed` with a note linking the workspace path.",
+            "",
+            "On any failure: leave the task in `failed` state with a structured error note in",
+            "completion metadata. Task Hub will surface it in Mission Control. Do NOT silently skip.",
+            "",
+            "Do not post to X. This lane is read-only unless explicitly re-authorized.",
+        ]
+    )
 
 
 def _task_description(*, handle: str, packet_dir: Path, action: dict[str, Any]) -> str:

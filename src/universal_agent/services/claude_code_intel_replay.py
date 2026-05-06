@@ -27,6 +27,7 @@ from universal_agent.services.claude_code_intel import (
     KB_SLUG,
     LANE_SLUG,
     SOURCE_KIND_DEMO_TASK,
+    SOURCE_KIND_SCAFFOLD_REQUEST,
     SOURCE_KIND_KB_UPDATE,
     classify_post,
     queue_follow_up_tasks,
@@ -1057,10 +1058,25 @@ def write_replay_summary(*, packet_dir: Path, payload: dict[str, Any]) -> Path:
 
 
 def intended_task_identity(*, post_id: str, tier: int) -> dict[str, str]:
+    """Return the canonical task_id/source_kind a tier-N action will produce.
+
+    Mirrors the routing in `claude_code_intel.queue_follow_up_tasks`:
+      - tier 3 → cody_scaffold_request (Phase 2: Simone scaffolds workspace,
+                 then SHE enqueues claude_code_demo_task downstream)
+      - tier 4 → claude_code_kb_update (Atlas/general analysis)
+      - <3    → no task
+
+    Used by the candidate ledger to link a packet's actions to the row
+    actually written to Task Hub. If you change the producer routing in
+    `claude_code_intel.queue_follow_up_tasks`, change this in lockstep.
+    """
     clean_post_id = str(post_id or "").strip()
     if tier < 3 or not clean_post_id:
         return {"source_kind": "", "task_id": ""}
-    source_kind = SOURCE_KIND_DEMO_TASK if tier == 3 else SOURCE_KIND_KB_UPDATE
+    if tier == 3:
+        source_kind = SOURCE_KIND_SCAFFOLD_REQUEST
+    else:
+        source_kind = SOURCE_KIND_KB_UPDATE
     task_id = f"{source_kind}:{hashlib.sha256(clean_post_id.encode()).hexdigest()[:16]}"
     return {"source_kind": source_kind, "task_id": task_id}
 
