@@ -50,7 +50,12 @@ The ClaudeDevs X intel pipeline is undergoing a v2 rebuild. Two living docs trac
 
 **These rules apply to every PR and every "phase complete" claim:**
 
-1. **Skill deployed ≠ skill invoked.** Before declaring a phase complete, prove that the agent which is supposed to invoke a skill is actually deployed in production AND that its prompt references the skill by name. A skill file in `.claude/skills/<name>/` does nothing on its own. Verification command pattern: `grep -l <skill-name> /opt/universal_agent/.claude/agents/*.md` — must return at least one agent.
+1. **Skill deployed ≠ skill invoked.** Before declaring a phase complete, prove that *some invoker* in production is actually pointing at the skill by name. A skill file in `.claude/skills/<name>/` does nothing on its own. Skills are invoked from one of three places, and the check is different for each:
+   - **Sub-agent invocation:** `grep -l <skill-name> /opt/universal_agent/.claude/agents/*.md` — must return at least one sub-agent definition.
+   - **Principal heartbeat invocation (Simone, Cody, Atlas):** `grep -n <skill-name> /opt/universal_agent/memory/HEARTBEAT.md` — must return at least one directive.
+   - **Task Hub-mediated invocation:** check that some producer enqueues a task type whose handler invokes the skill, AND that the consumer principal's directives tell it to claim that task type. Both ends required.
+
+   At least one of the three checks must pass. If none do, the skill is dead code regardless of how many tests exercise it directly.
 
 2. **Phase complete = real artifact on real disk.** A phase is not complete until a representative real-world artifact exists at the expected path on the VPS. Examples: a `cody_demo_task` row in Task Hub created by a non-test run; a `/opt/ua_demos/<id>/manifest.json` with `endpoint_hit=anthropic_native`; a vault entity page authored by a non-mocked Simone run. "Mechanical end-to-end loop synthesized in-memory" is NOT verification — it's a sanity check on the function-call graph, nothing more.
 
