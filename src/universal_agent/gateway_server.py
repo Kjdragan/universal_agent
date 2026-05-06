@@ -18370,6 +18370,12 @@ def _ensure_claude_code_intel_cron_job() -> None:
         "timezone": timezone_name,
         "timeout_seconds": int(os.getenv("UA_CLAUDE_CODE_INTEL_CRON_TIMEOUT_SECONDS", "1800") or 1800),
         "enabled": True,
+        # Backfill missed windows on gateway restart (within 24h grace) so a
+        # deploy or service blip doesn't silently drop a poll. Same protection
+        # that nightly_wiki / proactive_reports / youtube_daily_digest already
+        # have via _register_system_cron_job. Predates that helper, never
+        # picked up the flag.
+        "catch_up_on_restart": True,
         "metadata": metadata,
     }
     existing = _cron_service.get_job(job_id)

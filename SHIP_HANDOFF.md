@@ -11,8 +11,26 @@ YouTube daily digest: retry transcript fetch on residential-proxy bad-IP, plus r
 
 **Expected impact:** with default N=3 retries and an empirical ~20% bad-IP rate on Webshare/DataImpulse pools, single-video failure probability drops from ~20% to ~0.8%. On an 18-video playlist, mean failures per run drop from ~3.6 to ~0.14.
 
-**Latest commit ready for /ship:**
+**Latest commits ready for /ship (in order):**
 - `6dc6f51` — fix(youtube-digest): retry transcript fetch on residential-proxy bad-IP
+- `05021fe` — docs: handoff note for transcript proxy-retry fix
+- `20bf032` — test(youtube-ingest): un-stale 3 require_proxy tests against PROXY_PROVIDER router
+- `f20bb2c` — docs: record stale-test fix in handoff
+- `09d7ee2` — fix(csi): enable catch_up_on_restart for claude_code_intel_sync
+
+**Critical post-deploy step for `09d7ee2`:** the live job's `next_run_at` is stuck at `null` (this is the bug we're fixing — every gateway restart since pre-deploy has missed it). After the deploy lands, fire the job once manually so the post-fire `schedule_next()` re-establishes the cadence:
+
+```
+ssh ua@uaonvps 'curl -s -X POST http://localhost:8002/api/v1/cron/jobs/claude_code_intel_sync/run | python3 -m json.tool'
+```
+
+Then verify the schedule is alive:
+
+```
+ssh ua@uaonvps 'curl -s http://localhost:8002/api/v1/cron/jobs/claude_code_intel_sync | python3 -m json.tool | grep -E "cron_expr|last_run_at|next_run_at"'
+```
+
+`next_run_at` should now show a future timestamp (the next 08/16/22 Central window). After that, the regular scheduler tick takes over and any future deploy that lands on a window gets backfilled within 24h instead of silently dropped.
 
 **Post-deploy smoke test:**
 1. SSH to VPS and run a manual digest dry-run against a populated day:
@@ -26,12 +44,12 @@ YouTube daily digest: retry transcript fetch on residential-proxy bad-IP, plus r
 - A pathological all-bad-IP pool would now take up to 3× the time per failed video before giving up. Bounded by per-script timeout; not expected in practice.
 - The removed no-proxy fallback was effectively a no-op on the VPS anyway (datacenter IPs are blocked), so nothing observable changes for production. Local-residential testers who relied on the implicit fallback should set `UA_YOUTUBE_TRANSCRIPT_NOPROXY_FALLBACK=1`.
 
-**Pre-existing test failures (NOT caused by this commit):**
+**Pre-existing test failures (now FIXED in 20bf032):**
 - `test_require_proxy_blocks_when_no_credentials`
 - `test_require_proxy_blocks_when_module_unavailable`
 - `test_require_proxy_true_proceeds_with_valid_proxy`
 
-These were already failing on `feature/latest2` before this change. Worth addressing separately, but don't block this fix.
+All three were stale (not deprecated): written before `_build_proxy_config` was added as the provider router. They patched/asserted Webshare-only behavior; production now defaults to DataImpulse with Webshare as alternative. Updated to either parametrize over both providers or patch the router entry point. `tests/unit/test_youtube_ingest.py` is now 24/24 green.
 
 ---
 
