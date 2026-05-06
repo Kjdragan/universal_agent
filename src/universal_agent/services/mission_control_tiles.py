@@ -250,10 +250,11 @@ class CsiIngesterTile(Tile):
         return "A"
 
     def compute_state(self, conn: sqlite3.Connection) -> TileState:
-        # CSI is a TWICE-DAILY scheduled job (cron 0 8,16 America/Chicago
-        # = ~13:00 / 21:00 UTC). Expected gap between events is ~8-12h,
-        # so we tune the freshness traffic-light to match cadence rather
-        # than hourly polling:
+        # CSI is a 3x-DAILY scheduled job (cron 0 8,16,22 America/Chicago
+        # = ~13:00 / 21:00 / 03:00 UTC). Worst-case gap between events is
+        # 10h (22:00 → 08:00 next day, America/Chicago), so the existing
+        # 12h green / 25h yellow thresholds still cover one full window
+        # and one missed cycle respectively — no tile retuning needed:
         #   green  = within one full polling window  (≤ 12h)
         #   yellow = missed exactly one cycle        (12h < age ≤ 25h)
         #   red    = missed ≥ 2 cycles               (> 25h)

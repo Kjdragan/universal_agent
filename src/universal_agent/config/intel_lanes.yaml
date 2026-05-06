@@ -47,8 +47,9 @@ lanes:
     vault_slug: "claude-code-intelligence"
     capability_library_slug: "claude_code_intel"
 
-    # Cron schedule. Twice daily America/Chicago is the existing cadence.
-    cron_expr: "0 8,16 * * *"
+    # Cron schedule. Three times daily America/Chicago (08:00, 16:00, 22:00).
+    # 22:00 added 2026-05-06 to give a late-evening poll for end-of-day signal.
+    cron_expr: "0 8,16,22 * * *"
     cron_timezone: "America/Chicago"
 
     # Demo execution profile. anthropic_native uses the vanilla

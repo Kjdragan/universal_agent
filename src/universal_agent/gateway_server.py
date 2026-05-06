@@ -18351,7 +18351,7 @@ def _ensure_claude_code_intel_cron_job() -> None:
         return
     job_id = "claude_code_intel_sync"
     command = "!script universal_agent.scripts.claude_code_intel_run_report"
-    cron_expr = os.getenv("UA_CLAUDE_CODE_INTEL_CRON_EXPR", "0 8,16 * * *").strip() or "0 8,16 * * *"
+    cron_expr = os.getenv("UA_CLAUDE_CODE_INTEL_CRON_EXPR", "0 8,16,22 * * *").strip() or "0 8,16,22 * * *"
     timezone_name = os.getenv("UA_CLAUDE_CODE_INTEL_CRON_TIMEZONE", "America/Chicago").strip() or "America/Chicago"
     workspace_dir = str(WORKSPACES_DIR / "cron_claude_code_intel_sync")
     metadata = {

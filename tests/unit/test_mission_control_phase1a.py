@@ -182,9 +182,10 @@ def test_csi_ingester_tile_green_on_recent_event(activity_db):
 
 
 def test_csi_ingester_tile_green_within_polling_cycle(activity_db):
-    """Production CSI source polls twice daily (cron 0 8,16 * * * America/Chicago).
-    A 5-hour gap is normal — well within the 8-hour polling window. The tile must
-    NOT alarm yellow during a normal between-poll silence.
+    """Production CSI source polls 3x daily (cron 0 8,16,22 * * * America/Chicago).
+    Worst-case gap is 10h (22:00 → 08:00 next day). A 5-hour gap is well inside
+    the green window. The tile must NOT alarm yellow during normal between-poll
+    silence.
     """
     _insert_event(activity_db, id="csi1", source_domain="csi",
                   created_at=_iso_hours_ago(5))
