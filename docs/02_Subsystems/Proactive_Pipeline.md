@@ -5,7 +5,7 @@
 > the end-to-end system that makes agents DO work autonomously, not just respond
 > to user messages.
 >
-> **Last updated:** 2026-04-18 — current-state audit added. Trusted AgentMail inbound defaults to one canonical Task Hub item per inbound request, disjoint email splitting is opt-in behind `UA_AGENTMAIL_SPLIT_DISJOINT_TASKS`, tracked chat-panel requests enter the same Task Hub / `todo_execution` lifecycle, the gateway accepts both `query` and `execute` websocket message types, and `todo_execution` preserves the golden-run delegation path while still requiring a durable Task Hub lifecycle mutation.
+> **Last updated:** 2026-05-06 — meaningful multi-phase proactive work now has a documented mission-envelope + child-phase model on top of the existing Task Hub / `todo_execution` lifecycle, while ordinary heartbeat supervision remains outside the meaningful-work ledger.
 > See `01_Architecture/05_Simone_First_Orchestration.md` for full
 > architectural rationale. Todoist decommissioned; Task Hub is the sole
 > dispatch and orchestration layer.
@@ -107,6 +107,18 @@ graph LR
 | Task entry points | Todoist API sync only | **6 ingress paths**: CSI, Email, Calendar, Dashboard, Heartbeat, Brainstorm |
 | Morning report | Not implemented | **Deterministic snapshot** injected into heartbeat prompts |
 | Agent tools | `todoist_*` tool family | **`task_hub_task_action`** — review, complete, block, park, unblock, delegate, approve<br>**`task_hub_decompose`** — split multi-part tasks into linked subtasks |
+
+Meaningful-work mission model (2026-05-06):
+- When proactive work spans multiple meaningful phases with distinct workspaces/artifacts (for example analysis → demo build → validation), it should be modeled as:
+  - one **parent mission envelope** task (`source_kind="mission_envelope"`, summary-only, non-executable)
+  - one or more **child phase tasks** (`source_kind="mission_phase"`, executable, each with its own run workspace and three-panel audit trail)
+- Parent/child linkage uses existing Task Hub primitives:
+  - `workstream_id` for mission grouping
+  - `parent_task_id` for task hierarchy
+  - `subtask_role` for phase semantics
+- Default policy is **progressive spawn**, not full upfront fan-out:
+  - create parent + first child immediately
+  - spawn each next child only after the previous child completes/approves and its outputs are available
 
 ---
 
@@ -248,6 +260,10 @@ Tasks with `refinement_stage` set are brainstorm items progressing through the
 The `HEARTBEAT.md` file contains standing instructions that the heartbeat
 service reads each cycle. These inform the agent's prompt but are not
 materialized as Task Hub entries directly.
+
+Heartbeat boundary:
+- ordinary heartbeat polling / supervision is not meaningful work and must not create mission envelopes
+- heartbeat findings that become actionable remediation can still materialize into Task Hub work, but only the remediation mission/phase work is operator-visible; the heartbeat noise itself remains suppressed
 
 ### 3.7 Canonical Ingress Convergence
 

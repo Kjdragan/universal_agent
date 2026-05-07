@@ -27,3 +27,22 @@ def test_disable_switches_still_win(monkeypatch):
 
     assert heartbeat_enabled() is False
     assert cron_enabled() is False
+
+
+def test_task_hub_missions_defaults_off(monkeypatch):
+    from universal_agent.feature_flags import task_hub_missions_enabled
+
+    monkeypatch.delenv("UA_TASK_HUB_MISSIONS_ENABLED", raising=False)
+    monkeypatch.delenv("UA_DISABLE_TASK_HUB_MISSIONS", raising=False)
+
+    assert task_hub_missions_enabled() is False
+
+
+def test_task_hub_missions_enable_and_disable(monkeypatch):
+    from universal_agent.feature_flags import task_hub_missions_enabled
+
+    monkeypatch.setenv("UA_TASK_HUB_MISSIONS_ENABLED", "1")
+    assert task_hub_missions_enabled() is True
+
+    monkeypatch.setenv("UA_DISABLE_TASK_HUB_MISSIONS", "1")
+    assert task_hub_missions_enabled() is False

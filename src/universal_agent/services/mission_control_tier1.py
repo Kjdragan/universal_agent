@@ -37,6 +37,8 @@ import os
 import sqlite3
 from typing import Any
 
+from universal_agent import task_hub
+from universal_agent.feature_flags import task_hub_missions_enabled
 from universal_agent.services.mission_control_cards import (
     SEVERITY_CRITICAL,
     SEVERITY_INFORMATIONAL,
@@ -136,6 +138,19 @@ def collect_tier1_evidence(
     except sqlite3.OperationalError:
         evidence["recent_completed_tasks"] = []
 
+    if task_hub_missions_enabled():
+        try:
+            task_hub.ensure_schema(activity_conn)
+            evidence["mission_summaries"] = task_hub.list_workstream_summaries(
+                activity_conn,
+                limit=max(6, min(int(task_limit), 20)),
+                include_recent_completed=True,
+            )
+        except sqlite3.OperationalError:
+            evidence["mission_summaries"] = []
+    else:
+        evidence["mission_summaries"] = []
+
     # Operator-relevant activity events (full text, full metadata)
     try:
         rows = activity_conn.execute(
@@ -190,6 +205,7 @@ def collect_tier1_evidence(
     evidence["counts"] = {
         "active_or_attention_tasks": len(evidence.get("active_or_attention_tasks", [])),
         "recent_completed_tasks": len(evidence.get("recent_completed_tasks", [])),
+        "mission_summaries": len(evidence.get("mission_summaries", [])),
         "recent_events": len(evidence.get("recent_events", [])),
         "tier0_tiles": len(evidence.get("tier0_tiles", [])),
         "prior_live_cards": len(evidence.get("prior_live_cards", [])),
@@ -216,6 +232,10 @@ def evidence_signature(evidence: dict[str, Any]) -> str:
         components.append(f"task:{task.get('task_id')}:{task.get('status')}:{task.get('updated_at')}")
     for task in evidence.get("recent_completed_tasks", []):
         components.append(f"completed:{task.get('task_id')}:{task.get('status')}:{task.get('updated_at')}")
+    for mission in evidence.get("mission_summaries", []):
+        components.append(
+            f"mission:{mission.get('workstream_id')}:{mission.get('mission_status')}:{mission.get('current_child_task_id')}"
+        )
     for event in evidence.get("recent_events", []):
         components.append(f"event:{event.get('id')}:{event.get('severity')}:{event.get('updated_at')}")
     for tile in evidence.get("tier0_tiles", []):

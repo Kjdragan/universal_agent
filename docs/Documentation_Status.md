@@ -1,6 +1,6 @@
 # Documentation Status
 
-**Last updated:** 2026-05-06 (Added Task Hub Happy-Path Audit and Meaningful Work Task Hub + Three-Panel Design reports covering ToDo lane drift, active-run workspace resolution, and parent/child mission design for multi-phase meaningful work.)
+**Last updated:** 2026-05-06 (Implemented and documented the Task Hub / three-panel happy-path repair, mission-envelope/workstream grouping, mission summaries in the ToDo dashboard, and mission-summary evidence ingestion for Mission Control / Chief-of-Staff. Existing reports remain indexed below.) 
 
 ## Development (development/)
 

@@ -897,10 +897,14 @@ class ToDoDispatchService:
                     "codebase_root": manifest_roots[0] if len(manifest_roots) == 1 else "",
                     "repo_mutation_allowed": bool(len(manifest_roots) == 1 and manifest_roots[0]),
                     "allowed_codebase_roots": approved_codebase_roots_from_env(),
+                    "await_execution_completion": True,
                 },
             )
             
             if self.execution_callback:
+                if isinstance(session.metadata, dict) and task_hub_claimed:
+                    session.metadata["active_run_id"] = str(task_hub_claimed[0].get("workflow_run_id") or "").strip()
+                    session.metadata["active_run_workspace"] = str(task_hub_claimed[0].get("workspace_dir") or "").strip()
                 self.executing_sessions.add(session.session_id)
                 dispatch_result = await self.execution_callback(session.session_id, req)
                 decision = str((dispatch_result or {}).get("decision") or "accepted").strip().lower()

@@ -61,6 +61,13 @@ The current system is built around five durable ideas:
 4. Task-specific artifacts live under `tasks/<task_name>/...` inside that run workspace.
 5. A run is not considered properly resolved unless it records a durable Task Hub lifecycle mutation such as `complete`, `review`, `block`, `park`, or `delegate`.
 
+As of 2026-05-06, two additional durable rules apply:
+
+6. A claimed ToDo task stays `in_progress` until the real execution run ends; admitting a turn into the gateway is not itself a terminal execution event.
+7. Multi-phase meaningful work should use a **mission envelope + child phase tasks** model:
+   - the parent mission is a summary-only Task Hub item / workstream envelope
+   - executable child tasks carry phase-level lifecycle state, run lineage, artifacts, and three-panel audit trails
+
 Implementation status (completed 2026-04-01):
 
 - all canonical execution paths (tracked chat, ToDo dispatch, email-to-task) allocate a fresh dedicated run workspace per accepted task via `ExecutionRunService.allocate_execution_run()`
@@ -77,6 +84,15 @@ The execution contract itself is normalized by `build_execution_manifest(...)` i
 - `canonical_executor`
 - `codebase_root` when the work item is an approved repo-backed coding task
 - `repo_mutation_allowed` when repo mutation authority is explicitly active
+
+Mission-envelope extension (feature-gated by `UA_TASK_HUB_MISSIONS_ENABLED`):
+
+- `task_hub_items.workstream_id` groups all child tasks under one mission
+- `task_hub_items.parent_task_id` links each child phase back to the parent mission
+- `task_hub_items.subtask_role` identifies the phase role (`analysis`, `demo_build`, `demo_validation`, `delivery`, etc.)
+- `task_hub_workstreams` is the canonical mission-group envelope read model
+- parent mission tasks use `source_kind="mission_envelope"` and are excluded from the normal executable Kanban lanes
+- child phase tasks use `source_kind="mission_phase"` and behave like ordinary Task Hub execution tasks
 
 ---
 

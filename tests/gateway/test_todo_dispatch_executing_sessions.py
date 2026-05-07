@@ -81,10 +81,12 @@ async def test_executing_sessions_added_during_execution(monkeypatch):
 
     # Track when executing_sessions is populated during callback
     captured_executing = []
+    captured_requests = []
 
     async def _capture_callback(session_id, request):
         # Snapshot executing_sessions at the moment the callback runs
         captured_executing.append(set(service.executing_sessions))
+        captured_requests.append(request)
         return {"decision": "accepted", "turn_id": "turn-test"}
 
     service = ToDoDispatchService(execution_callback=_capture_callback)
@@ -166,6 +168,10 @@ async def test_executing_sessions_added_during_execution(monkeypatch):
         "Session ID was not in executing_sessions during execution callback. "
         "The self.executing_sessions.add() call is missing."
     )
+    assert captured_requests, "Callback request was not captured"
+    assert captured_requests[0].metadata.get("await_execution_completion") is True
+    assert session.metadata.get("active_run_id") == "run_test_001"
+    assert session.metadata.get("active_run_workspace") == "/tmp/run_test_001"
 
 
 # ---------------------------------------------------------------------------

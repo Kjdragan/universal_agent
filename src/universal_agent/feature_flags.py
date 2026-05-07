@@ -52,6 +52,15 @@ def cron_enabled(default: bool = True) -> bool:
     return default
 
 
+def task_hub_missions_enabled(default: bool = False) -> bool:
+    """Enable mission-envelope/workstream behavior in Task Hub."""
+    if _is_truthy(os.getenv("UA_DISABLE_TASK_HUB_MISSIONS")):
+        return False
+    if _is_truthy(os.getenv("UA_TASK_HUB_MISSIONS_ENABLED")):
+        return True
+    return default
+
+
 def memory_enabled(default: bool = True) -> bool:
     """Return canonical memory enablement."""
     if _is_truthy(os.getenv("UA_DISABLE_MEMORY")):
