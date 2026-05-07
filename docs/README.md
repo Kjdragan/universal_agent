@@ -74,6 +74,7 @@ Mistaking one for the other is the #1 source of confusion in this system. Before
 - **[Intel Lane Templates](proactive_signals/intel_lane_templates.md)**: Operator guide for adding a new intel lane (Codex, Gemini, any other). Step-by-step recipe (YAML config → vault → secrets → manual run → cron → dashboard) with what's already lane-aware vs still hard-coded, verification checklist, and Codex/Gemini-specific differences.
 - **[Demo Execution Environments](06_Deployment_And_Environments/09_Demo_Execution_Environments.md)**: How the UA repo (ZAI-mapped) and `/opt/ua_demos/` (Anthropic-native, vanilla Claude Code, Max plan) coexist on the VPS. Where each lives, how Claude Code picks its environment, common pitfalls and failure modes, and the dependency-currency smoke matrix that gates upgrades across both.
 - **[Demo Workspace Provisioning Runbook](operations/demo_workspace_provisioning.md)**: Operator runbook — one-time `/opt/ua_demos/` setup on the VPS, smoke workspace provisioning, `claude /login` with the Max plan account (must run from inside the demo workspace), smoke test verification, troubleshooting.
+- **[2026-05-07 Handoff Follow-ups Runbook](operations/2026-05-07_handoff_followups.md)**: Operator runbook for the four VPS / GitHub-UI side-effect items from the 2026-05-07 session handoff (CSI v2 smoke verification, `gh` CLI cleanup, branch protection, v2 historical backfill). Items implemented in code (Item 7 prompt fix, Item 3 autonomous-mission contract) live in branch `claude/session-handoff-review-WeP30`.
 
 ### 3. [Flows](02_Flows)
 

@@ -1,6 +1,6 @@
 # Documentation Status
 
-**Last updated:** 2026-05-06 (Implemented and documented the Task Hub / three-panel happy-path repair, mission-envelope/workstream grouping, mission summaries in the ToDo dashboard, and mission-summary evidence ingestion for Mission Control / Chief-of-Staff. Existing reports remain indexed below.) 
+**Last updated:** 2026-05-07 (Item 7 — added FINAL DISPOSITION VERIFICATION block to `services/todo_dispatch_service.py:TODO_DISPATCH_PROMPT` so Simone always closes a Task Hub lifecycle action before declaring done; this stops the "Execution Missing Lifecycle Mutation" guardrail in `mission_guardrails.py` from firing post-hoc. Item 3 — landed `vp/worktree_utils.py` and `vp/autonomous_mission_executor.py` with full unit coverage; these are the reusable building blocks for the tier-2 autonomous-mission contract documented in `docs/deployment/ai_coder_instructions.md`. Item 1/4/5/6 operator runbook added at `docs/operations/2026-05-07_handoff_followups.md`. Full session reference: see end-of-session handoff in branch `claude/session-handoff-review-WeP30`. Earlier 2026-05-06 entry: Task Hub three-panel repair, mission-envelope/workstream grouping, ToDo dashboard summaries, Mission Control / Chief-of-Staff evidence ingestion.) 
 
 ## Development (development/)
 
@@ -196,6 +196,7 @@ These are the authoritative references for each subsystem. When any other docume
 | Doc | Subject |
 |-----|---------|
 | demo_workspace_provisioning.md | **Operator runbook** — one-time setup of `/opt/ua_demos/` on the VPS for Phase 3 demo execution: directory creation, smoke workspace provisioning, Max plan `claude /login` (must be run from inside the demo workspace, not from a ZAI-mapped dir), smoke test verification, troubleshooting table for endpoint mismatch / auth failure / pollution markers |
+| 2026-05-07_handoff_followups.md | **Operator runbook** — checklist for the four side-effect items left over from the 2026-05-07 session handoff: CSI v2 Phase 2/3 smoke verification (read `/tmp/csi_smoke_result.log`, decide a/b/c outcome, gate Item 6 backfill), VPS `gh` CLI cleanup (move shadow binary at `/home/ua/.local/bin/gh`), GitHub branch protection (apply Agent-Type → Workflow Matrix from `ai_coder_instructions.md` to main/develop/feature/latest2), and the v2 historical backfill sequence (dry-run → replay → diff → swap → revert). Items in code (Item 7 prompt fix, Item 3 worktree contract) are addressed in branch `claude/session-handoff-review-WeP30` |
 
 ## Proactive Signals (proactive_signals/)
 
