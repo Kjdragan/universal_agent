@@ -2107,10 +2107,12 @@ function ChatInterface() {
               hydratedLogCount += logs.length;
             }
           }
-        } else if (response.status !== 404) {
-          // Non-404 failures indicate a connectivity/proxy issue
-          if (!cancelled) {
-            setHydrationError(`Failed to load run history (HTTP ${response.status}). The gateway API may not be reachable.`);
+          
+          if (!usedTraceJson && !fetchedRaw && response.status !== 404) {
+            // Non-404 failures indicate a connectivity/proxy issue
+            if (!cancelled) {
+              setHydrationError(`Failed to load run history (HTTP ${response.status}). The gateway API may not be reachable.`);
+            }
           }
         }
 
