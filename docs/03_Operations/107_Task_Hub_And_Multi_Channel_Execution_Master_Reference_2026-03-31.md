@@ -436,6 +436,11 @@ To simplify agent logic, Task Hub resolution is now fundamentally **orchestrator
 
 Lifecycle actions can still be explicitly triggered by the agent via `perform_task_action(...)` in [task_hub.py](../../src/universal_agent/task_hub.py#L2709) for granular control (e.g., `delegate`, `block`, `park`). The bridge exposed to the model is `task_hub_task_action` in [task_hub_bridge.py](../../src/universal_agent/tools/task_hub_bridge.py#L26).
 
+Additional bridge tools:
+- **`task_hub_decompose`** — splits a multi-part task into linked sub-tasks (parent marked `decomposed`, children created with `parent_task_id` link).
+- **`task_hub_create`** — proactive task ideation. Creates tasks with title, description, priority, labels, and source_kind. When a `mission_plan` with phases is provided and missions are enabled, creates a mission envelope instead of a plain task.
+- **`task_hub_promote_signals`** — promotes curated signal cards into actionable Task Hub items via `signal_curator.promote_cards_to_tasks`. Takes an array of curated signal dicts with card_id, task_title, task_description, priority, and rationale.
+
 ### 13.1 Enforcement and Auto-Completion
 
 If a `todo_execution` run ends without an explicit lifecycle mutation, `_todo_execution_auto_complete_after_final_delivery(...)` in [gateway_server.py](../../src/universal_agent/gateway_server.py) is only allowed to repair the task when final delivery already happened and is durably recorded. It does **not** auto-complete unresolved tasks unconditionally.
@@ -605,7 +610,7 @@ Primary code files behind this document:
 - [gateway_server.py](../../src/universal_agent/gateway_server.py)
 - [todo_dispatch_service.py](../../src/universal_agent/services/todo_dispatch_service.py)
 - [task_hub.py](../../src/universal_agent/task_hub.py)
-- [task_hub_bridge.py](../../src/universal_agent/tools/task_hub_bridge.py)
+- [task_hub_bridge.py](../../src/universal_agent/tools/task_hub_bridge.py) — agent-facing MCP tools: `task_hub_task_action` (lifecycle), `task_hub_decompose` (split subtasks), `task_hub_create` (proactive ideation), `task_hub_promote_signals` (signal promotion)
 - [email_task_bridge.py](../../src/universal_agent/services/email_task_bridge.py)
 - [research_bridge.py](../../src/universal_agent/tools/research_bridge.py)
 - [mcp_server.py](../../src/mcp_server.py)
