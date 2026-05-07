@@ -51,6 +51,18 @@ curl -sS https://api.clearspringcg.com/api/v1/health
 curl -I https://app.clearspringcg.com
 ```
 
+## Quick: ZAI vs Anthropic on VPS (post-2026-05-07 inversion)
+
+From any `ua` user shell on the VPS:
+- `claude -p "..."` → **Anthropic Max** via OAuth (real Claude models)
+- `zai -p "..."` → **ZAI / GLM** via Infisical-wrapped `infisical run`
+
+UA services (gateway/api/telegram/etc.) auto-route to ZAI via
+Infisical-injected env vars at startup. Don't add `ANTHROPIC_*` keys to
+`~/.claude/settings.json` — Phase B explicitly removed them. Full guide:
+[`docs/06_Deployment_And_Environments/10_Interactive_Coding_Environment.md`](../06_Deployment_And_Environments/10_Interactive_Coding_Environment.md)
+and [`docs/06_Deployment_And_Environments/11_Daily_Dev_Workflow.md`](../06_Deployment_And_Environments/11_Daily_Dev_Workflow.md).
+
 Expected:
 1. All services show `active (running)`.
 2. API health returns JSON with `"status":"healthy"`.

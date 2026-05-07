@@ -2,6 +2,8 @@
 
 This file provides quick working context for Claude (and other coding agents) in this repository.
 
+> 👉 **Start here for daily work:** [`docs/WORKFLOW.md`](docs/WORKFLOW.md) is the one-page operator index. The deeper walkthrough is [`docs/06_Deployment_And_Environments/11_Daily_Dev_Workflow.md`](docs/06_Deployment_And_Environments/11_Daily_Dev_Workflow.md). Anything Claude-environment-related: [`docs/06_Deployment_And_Environments/10_Interactive_Coding_Environment.md`](docs/06_Deployment_And_Environments/10_Interactive_Coding_Environment.md).
+
 ## Project Description
 `universal_agent` is a Python-based agent runtime and orchestration project.
 

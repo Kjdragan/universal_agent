@@ -107,6 +107,16 @@ workspace (or any directory that doesn't carry the ZAI mapping in its local
 settings). Running it from a directory that inherits `~/.claude/settings.json`'s
 `ANTHROPIC_BASE_URL` would store credentials for the wrong endpoint.
 
+> **Post-2026-05-07 note (Interactive Coding Environment inversion):** the
+> user-global `~/.claude/settings.json` on both VPS (`/home/ua/`) and desktop
+> (`/home/kjdragan/`) no longer contains an `env` block carrying
+> `ANTHROPIC_BASE_URL`. Plain `claude` defaults to Anthropic Max via OAuth
+> from anywhere. The "must run /login from inside the demo workspace" rule
+> remains a defensive best practice — but the *practical* risk it guards
+> against is largely gone. See
+> [`../06_Deployment_And_Environments/10_Interactive_Coding_Environment.md`](../06_Deployment_And_Environments/10_Interactive_Coding_Environment.md)
+> for the full inversion story.
+
 ---
 
 ## Step 4 — Run the smoke demo
@@ -141,6 +151,13 @@ and try again:
 unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_DEFAULT_HAIKU_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL
 uv run python smoke.py
 ```
+
+> **Post-2026-05-07 note:** after the inversion, the most common cause of a
+> leaked `ANTHROPIC_BASE_URL` is having run `zai` earlier in the same shell
+> (the `zai` shell function inlines the env when running `claude`, but does
+> *not* export to the parent shell — so this should be rare). If you still
+> see the leak in a fresh shell, check `/home/ua/.claude/settings.json` for
+> any re-introduced `env` block — Phase B explicitly removed those keys.
 
 Best practice for the VPS: run Cody's demo subprocesses with a clean
 environment (e.g., a dedicated systemd service unit with `Environment=`

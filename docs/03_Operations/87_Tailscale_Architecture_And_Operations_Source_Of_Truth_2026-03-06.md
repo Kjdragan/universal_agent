@@ -37,10 +37,20 @@ Tailscale is currently used for:
 - remote deploy and control tooling
 - workspace and artifact sync from VPS to local development machine
 - private staging routes for the UI and API via `tailscale serve`
+- **Antigravity Remote-SSH workflows** for direct interactive coding on the VPS (added 2026-05-07; see [doc 11](../06_Deployment_And_Environments/11_Daily_Dev_Workflow.md))
 
 Tailscale is not currently the public ingress path for the main production app.
 
 Public internet entry points remain separate.
+
+> **Post-2026-05-07 note:** Kevin's primary development workflow is now
+> Antigravity Remote-SSH'd from `mint-desktop` to `ua@uaonvps`, opening
+> `/home/ua/dev/universal_agent` as the interactive workspace. This makes
+> Tailscale a hard dependency for daily development (not just ops). When
+> Tailscale flaps, Kevin can fall back to local desktop work — but the
+> normal flow assumes the tailnet is up. See
+> [`docs/06_Deployment_And_Environments/10_Interactive_Coding_Environment.md`](../06_Deployment_And_Environments/10_Interactive_Coding_Environment.md)
+> for the full inversion plan + Phase D dev-tree workflow.
 
 ## Canonical Tailnet Role Model
 
