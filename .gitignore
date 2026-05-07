@@ -150,3 +150,11 @@ memory/CSI_AutoRemediation_Fix.md
 universal_agent.code-workspace
 nproc
 session_workspaces/
+
+# === Patcher / autonomous-tool artifacts (tier-2 mission hygiene, see docs/deployment/ai_coder_instructions.md) ===
+# Block stray files left behind by autonomous patchers (CODIE docstring tool,
+# editor crash artifacts, etc.). pr-validate.yml + /ship also refuse to ship
+# trees that contain these — this is the first line of defense.
+*.py.bak
+*.py.orig
+*.bak

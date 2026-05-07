@@ -12,6 +12,60 @@ It includes:
 - Operational docs under `docs/`
 - Environment-driven feature flags and scheduler controls via `.env`
 
+## Problem-Solving Philosophy
+
+When investigating or fixing issues, always solve the **root cause** holistically — never just cure symptoms with band-aids. Before implementing a fix, ask:
+
+1. **Can we expand capabilities** rather than restrict them? (e.g., raise a system limit rather than cap our data to fit under it)
+2. **Is there a proper architectural pattern** for this? (e.g., write large data to files instead of stuffing it into env vars)
+3. **Are we losing information or functionality** with this approach? If yes, find a better way.
+
+Defensive guards and safety nets are acceptable as a *last resort backstop*, but they must not be the primary fix. The primary fix should eliminate the problem at its source.
+
+## Code-Verified Answers
+
+When answering questions about how this system works — architecture, data flows, service interactions, agent pipelines, or any behavioral claim — you **MUST read the actual source code first** before responding. Do not answer from memory, assumptions, or general knowledge.
+
+**Mandatory process:**
+
+1. **Read before you speak.** If the user asks "how does X work?", open and read the relevant source files before forming your answer. Use `grep`, `Read`, and `find` to locate the code.
+2. **Cite what you find.** Reference specific files, functions, and line numbers that support your explanation. If you cannot point to actual code, say "I need to check the code" — do not guess.
+3. **Never fabricate pipeline steps.** This system has complex multi-agent pipelines (email triage, heartbeat dispatch, daemon sessions, VP orchestration). These have specific intermediaries, classifiers, and routing logic. Do not simplify or omit steps you haven't verified exist or don't exist.
+4. **Distinguish what you know from what you're inferring.** If you've read the code and it's clear, state it with confidence. If you're extrapolating beyond what the code shows, explicitly flag it as an inference.
+5. **When in doubt, investigate more.** It is always better to spend an extra 30 seconds reading code than to give a wrong answer that wastes the user's time and erodes trust.
+
+**Why this matters:** A confident but incorrect architectural explanation is worse than saying "let me check." The user relies on accurate descriptions of their own system to make decisions. Wrong answers about agent pipelines, email flows, or session lifecycle can lead to flawed design decisions downstream.
+
+## LLM-Native Intelligence Design
+
+When designing intelligence, briefing, ideation, curation, or pattern-detection features, prefer using LLM reasoning over building custom Pythonic pseudo-reasoning systems unless scale, latency, auditability, or determinism clearly require code.
+
+Default division of labor:
+
+1. **Code collects and preserves evidence.** Store raw facts, source records, timestamps, links, tags, state, ownership, and retrieval metadata faithfully.
+2. **Code gates and protects execution.** Use deterministic rules for safety boundaries, budget/concurrency limits, deduplication, auth, irreversible actions, and promotion into Task Hub work.
+3. **LLMs synthesize meaning.** When the corpus is bounded enough to fit into a briefing, handoff, or retrieval context, let the LLM infer themes, neglected opportunities, recurring blockers, and recommended actions from the evidence.
+
+Avoid creating elaborate programmatic trend/theme/scoring systems that attempt to imitate reasoning over small-to-medium corpora. These systems often add noise, hardcode brittle assumptions, and make the agent less capable than simply giving a strong LLM the right context and asking for explicit synthesis.
+
+Use Pythonic aggregation when it solves a real systems problem: reducing a huge corpus to retrievable chunks, enforcing invariants, computing objective metrics, maintaining indexes, or producing deterministic eligibility decisions. Do not use it just because a pattern could be expressed in code.
+
+For briefings and operator-intelligence surfaces, prefer this pattern:
+
+`raw records -> durable knowledge blocks -> bounded retrieval context -> LLM synthesis -> gated action candidates`
+
+Required briefing behavior: when recent knowledge blocks include surfaced ideas, repeated warnings, stalled work, or recurring observations, the briefing LLM should explicitly assess whether any pattern or opportunity is emerging. If action is warranted, it should propose a candidate through existing gates rather than directly creating uncontrolled work.
+
+## Cross-Machine File Resolution (SSHFS)
+
+The Universal Agent infrastructure includes a seamless, transparent file resolution bridge via SSHFS over Tailscale.
+
+When executing on the VPS (`uaonvps`), agents have direct, native filesystem access to the local desktop environment at the exact same path.
+
+- **The Path Guarantee**: The local desktop path `/home/kjdragan/...` is mounted onto the VPS at `/home/kjdragan/...`.
+- **Capability Implication**: **Never** build custom "file fetcher" tools or syncing scripts to move files from the desktop to the VPS for agent tasks. Instead, simply refer to the absolute `/home/kjdragan/...` path directly. Standard OS operations (`cat`, Python `open()`, etc.) will seamlessly resolve over the SSHFS mount.
+- **Architectural Tenet**: This demonstrates the core design philosophy of "expanding system capabilities at the OS level" rather than building complex, brittle agent workarounds.
+
 ## Key Commands
 - Install deps: `uv sync`
 - Run app: `uv run python -m src.universal_agent.main`
@@ -19,8 +73,10 @@ It includes:
 - Lint/format (if configured): `uv run ruff check .` / `uv run ruff format .`
 
 ## Git Workflow (MUST READ)
-- **Read [`docs/deployment/ai_coder_instructions.md`](docs/deployment/ai_coder_instructions.md) before your first commit.** It defines the branch discipline, commit conventions, and `/ship` handoff protocol that all AI coders must follow.
-- TL;DR: Work on `feature/latest2`. Push there. Never touch `develop` or `main`. Someone else runs `/ship`.
+- **Read [`docs/deployment/ai_coder_instructions.md`](docs/deployment/ai_coder_instructions.md) before your first commit.** It defines the branch discipline, commit conventions, `/ship` handoff protocol, and the **Agent-Type → Workflow Matrix** (when to direct-commit vs. when to PR) that all AI coders must follow.
+- TL;DR for tier 1 (Kevin + Claude Code conversational): work on `feature/latest2`, push there, the operator runs `/ship`. Never touch `develop` or `main` directly.
+- TL;DR for tier 2 (autonomous missions like CODIE / Cody / scheduled VP coder): **never push directly to `feature/latest2`.** Worktree → patch → syntax-check → unit tests → push to `<bot>/<task-id>` branch → open PR → CI passes → human merges. Full pattern in [`ai_coder_instructions.md` § Autonomous Mission Workflow](docs/deployment/ai_coder_instructions.md#autonomous-mission-workflow-tier-2-in-detail).
+- All PRs to `feature/latest2`/`develop`/`main` are gated by [`.github/workflows/pr-validate.yml`](.github/workflows/pr-validate.yml) — `py_compile` on every changed `.py`, `ruff check`, `pytest tests/unit`, and a tripwire on `.py.bak` / `.swp` / `.orig` artifacts.
 
 ## Claude Execution Environments (MUST READ before touching anything Claude-related)
 UA runs **THREE Claude execution profiles** across the VPS and Kevin's desktop. Mistaking one for another is the #1 source of confusion in the system.
@@ -113,6 +169,74 @@ If matches come back, read them before proposing anything. If you don't have tim
 8. **Branch-versus-deploy honesty.** A commit on `feature/latest2` is not deployed. A commit merged to `main` is not deployed if the GitHub Actions deploy hasn't completed. Never say "the fix is shipped" until the deploy workflow is green AND the live VPS state confirms the change took effect.
 
 If a rule above isn't satisfiable for a given PR, say so explicitly in the commit message and the SHIP_HANDOFF, with a specific operator step to close the gap. The acceptable failure mode is "I shipped the code change but Phase 2 wiring still needs a Simone agent file deployed — see Followup #1." The unacceptable failure mode is silence.
+
+## Documentation Maintenance Rules
+
+All documentation for this project MUST reside exclusively within the `docs/` directory. Creating any other documentation directories (such as `OFFICIAL_PROJECT_DOCUMENTATION/`) is strictly prohibited.
+
+When asked to update or create documentation:
+
+1. **Always Check the Indexes First**: You must consult `docs/README.md` and `docs/Documentation_Status.md` before proceeding.
+2. **Update Over Create**: If a document already exists for your topic, update the existing file rather than creating a new one.
+3. **Log New Documents**: If you must create a new file, you are required to add a link and description of that new file to both `docs/README.md` and `docs/Documentation_Status.md`.
+4. **No Unindexed Files**: No document should exist in `docs/` without being linked from one of the two index files.
+
+### Dynamic Documentation Maintenance (MANDATORY)
+
+Documentation updates are **not optional follow-up work** — they are part of the implementation itself. When you make code changes that affect system behavior, architecture, routing, protocols, or configuration:
+
+1. **Update docs during implementation, not after.** Treat documentation updates as a deliverable of the same work unit, not a separate task.
+2. **Identify affected docs before coding.** Check `docs/README.md` and `docs/Documentation_Status.md` to find which existing documents cover the areas you are changing. Read them before you start coding so you understand the documented contract.
+3. **Update canonical source-of-truth docs first.** If your change touches email routing, update `82_Email_Architecture`. If it touches VP delegation, update `03_VP_Workers_And_Delegation`. If it touches Task Hub, update `107_Task_Hub_Master_Reference`. Always update the canonical doc, not a peripheral reference.
+4. **Include visual artifacts.** Mermaid diagrams, routing tables, and code-verified citations in doc updates — not just prose paragraphs.
+5. **Update both indexes.** Any new doc must appear in both `docs/README.md` and `docs/Documentation_Status.md`. Existing doc updates should bump the "last updated" timestamp.
+6. **When in doubt, update.** If you are unsure whether a change is "significant enough" to warrant a doc update, it is. Architecture drift caused by undocumented changes is worse than a minor redundant doc update.
+
+## Implementation Plan Quality Standards
+
+Implementation plans are decision documents — they must make complex system flows understandable at a glance. Text-only explanations are insufficient for this codebase's multi-agent architecture.
+
+**Every implementation plan MUST include:**
+
+1. **Mermaid sequence diagrams** for any multi-component interaction (email flows, task dispatch chains, agent delegation). Show the actual participants, message payloads, and decision points.
+2. **Mermaid flowcharts** for routing/branching logic (e.g., "which inbox → which agent → which action").
+3. **Code-verified citations** with `file:///path#Lnnn` links to the actual source lines that support each claim. Do not describe system behavior without pointing to the code that implements it.
+4. **Summary tables** for change impact ("What Changes vs. What Stays"), communication patterns, or comparison of alternatives.
+5. **Concrete code snippets** for every proposed modification — show the actual function signatures, new helper functions, and prompt text changes.
+6. **Phase-by-phase breakdown** with clear boundaries between config-only changes, code changes, and prompt changes.
+
+**Why this matters:** This system has complex multi-agent pipelines where a wrong mental model leads to flawed design decisions. Visual artifacts (diagrams, tables) catch misunderstandings that paragraphs hide.
+
+## Codex-Specific Addendum
+
+> This file is symlinked from `AGENTS.md` so Codex / Antigravity / OpenAI agents read identical rules. The sections below apply when **Codex** specifically is the active agent (PR review, browser-based debugging). Claude Code can ignore them; Codex must follow them.
+
+### Codex Review Guidelines
+
+These guidelines apply when Codex reviews pull requests targeting `develop` (and now also PRs targeting `feature/latest2`, since the 2026-05-07 incident codified PR-based merging for autonomous-mission output):
+
+- Flag any code that logs, stores, or transmits PII or secrets without explicit redaction.
+- Verify that every new or modified API route is wrapped by the appropriate authentication/authorization middleware.
+- Flag blocking I/O (database calls, HTTP requests) that runs inside an async event loop without `await` or proper executor offloading.
+- Verify that background tasks and service loops handle exceptions so they don't silently die.
+- Flag Python code that imports secrets or API keys from environment variables directly instead of using the Infisical secret service (our canonical secrets provider — never `.env` files or `os.getenv` for secrets).
+- Flag changes that touch `.github/workflows/deploy.yml` if the corresponding canonical docs in `docs/deployment/` were not updated in the same PR.
+- Do not flag formatting-only issues (whitespace, line length) unless they break a linter gate.
+- Treat typos in user-facing strings or documentation as P1.
+
+### Codex Browser Debugging Rules
+
+When working on frontend bugs, local web apps, or browser-based verification:
+
+1. Use the browser MCP tools instead of guessing.
+2. Start by navigating to the local app URL.
+3. Reproduce the bug in the browser.
+4. Inspect screenshots and page state.
+5. Inspect failed network requests if relevant.
+6. Only then edit code.
+7. After edits, retest in the browser to confirm the fix.
+
+Do not claim a UI bug is fixed unless it has been verified through the browser tools.
 
 ## Caveats
 - _(Living section — add caveats as we discover them.)_
