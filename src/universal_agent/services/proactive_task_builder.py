@@ -11,8 +11,56 @@ import sqlite3
 from typing import Any
 
 from universal_agent import task_hub
+from universal_agent.feature_flags import task_hub_missions_enabled
 
 logger = logging.getLogger(__name__)
+
+
+def create_meaningful_work_mission(
+    conn: sqlite3.Connection,
+    *,
+    root_task_id: str,
+    title: str,
+    description: str,
+    source_kind: str,
+    source_ref: str,
+    project_key: str,
+    priority: int,
+    labels: list[str] | None = None,
+    phases: list[dict[str, Any]] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Create a mission envelope plus the first executable child task.
+
+    Returns a dict with:
+      - ``mission``: parent mission-envelope task
+      - ``task``: first spawned child phase task (if any), otherwise the mission
+    """
+    if not task_hub_missions_enabled():
+        raise ValueError("task hub missions are disabled")
+    safe_task_id = str(root_task_id or "").strip()
+    if not safe_task_id:
+        raise ValueError("root_task_id is required")
+    normalized_phases = list(phases or [])
+    mission = task_hub.create_mission_envelope(
+        conn,
+        task_id=safe_task_id,
+        title=title,
+        description=description,
+        source_kind=source_kind,
+        source_ref=source_ref,
+        project_key=project_key,
+        priority=priority,
+        labels=labels or ["mission-envelope"],
+        mission_plan={
+            "mission_title": title,
+            "phases": normalized_phases,
+        },
+        metadata=metadata or {},
+    )
+    children = task_hub.list_workstream_tasks(conn, safe_task_id, include_parent=False)
+    first_child = children[0] if children else mission
+    return {"mission": mission, "task": first_child}
 
 
 def queue_proactive_task(
@@ -88,4 +136,3 @@ def queue_proactive_task(
         },
     )
     return item
-
