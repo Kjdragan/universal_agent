@@ -159,6 +159,46 @@ type OverviewPayload = {
     busy_session_count?: number;
     sleeping_session_warning?: boolean;
   };
+  mission_summaries?: MissionSummary[];
+};
+
+type MissionChildSummary = {
+  task_id: string;
+  title?: string;
+  status?: string;
+  source_kind?: string;
+  subtask_role?: string;
+  phase_id?: string;
+  canonical_execution_run_id?: string | null;
+  canonical_execution_workspace?: string | null;
+};
+
+type MissionSummary = {
+  workstream_id: string;
+  root_task_id?: string;
+  mission_title?: string;
+  mission_status?: string;
+  current_phase_id?: string | null;
+  current_phase_title?: string | null;
+  current_child_task_id?: string | null;
+  child_counts?: {
+    total?: number;
+    open?: number;
+    in_progress?: number;
+    needs_review?: number;
+    completed?: number;
+    blocked?: number;
+  };
+  latest_artifacts?: string[];
+  latest_workspace_dir?: string | null;
+  latest_run_id?: string | null;
+  children?: MissionChildSummary[];
+  root_task?: {
+    task_id?: string;
+    title?: string;
+    status?: string;
+    source_kind?: string;
+  };
 };
 
 
@@ -269,6 +309,15 @@ type TaskHistoryPayload = {
     run_kind?: string | null;
   };
   artifacts?: TaskHistoryLinks;
+  mission_summary?: MissionSummary | null;
+  mission_parent?: {
+    task_id?: string;
+    title?: string;
+    status?: string;
+    source_kind?: string;
+  } | null;
+  mission_children?: MissionChildSummary[];
+  mission_workstream?: string | null;
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -705,6 +754,10 @@ export default function ToDoListDashboardPage() {
   const visibleCompletedRows = useMemo(
     () => completedRows.filter((r) => !deletedTaskIds.has(r.task_id)),
     [completedRows, deletedTaskIds],
+  );
+  const missionSummaries = useMemo(
+    () => Array.isArray(overview?.mission_summaries) ? overview!.mission_summaries : [],
+    [overview],
   );
 
   const handleDeleteAllNotAssigned = useCallback(async () => {
@@ -1525,6 +1578,40 @@ export default function ToDoListDashboardPage() {
             </div>
           )}
           <div className="rounded border border-border/70 bg-background/50 p-2">
+            {taskHistory.mission_summary && (
+              <>
+                <div className="mb-1 text-[10px] uppercase tracking-[0.16em] text-muted-foreground">Mission Context</div>
+                <div className="space-y-1 text-[11px] text-foreground/80 mb-2">
+                  <div>
+                    <span className="font-semibold">{taskHistory.mission_summary.mission_title || taskHistory.mission_parent?.title || taskHistory.mission_workstream}</span>
+                    {taskHistory.mission_summary.mission_status ? ` · ${taskHistory.mission_summary.mission_status}` : ""}
+                  </div>
+                  {taskHistory.mission_summary.current_phase_title && (
+                    <div>Current phase {taskHistory.mission_summary.current_phase_title}</div>
+                  )}
+                  {taskHistory.mission_summary.child_counts && (
+                    <div>
+                      Children {taskHistory.mission_summary.child_counts.completed || 0}/{taskHistory.mission_summary.child_counts.total || 0} completed
+                    </div>
+                  )}
+                  {(taskHistory.mission_children || []).length > 0 && (
+                    <div className="pt-1">
+                      <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground mb-1">Phases</div>
+                      <div className="space-y-1">
+                        {(taskHistory.mission_children || []).slice(0, 6).map((child) => (
+                          <div key={child.task_id} className="flex items-center gap-2">
+                            <span className="font-mono text-[10px] text-muted-foreground">{child.subtask_role || child.phase_id || "phase"}</span>
+                            <span>{child.title || child.task_id}</span>
+                            <span className="opacity-40">·</span>
+                            <span className="text-[10px] uppercase tracking-[0.08em]">{child.status || "unknown"}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
             <div className="mb-1 text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
               Assignments ({taskHistory.assignments?.length || 0})
             </div>
@@ -1767,6 +1854,75 @@ export default function ToDoListDashboardPage() {
         <div className="font-mono text-[10px] text-kcd-text-muted">
           Blocked items are excluded from the main board lanes: <span className="text-kcd-amber">{blockedItems.length}</span>
         </div>
+      )}
+
+      {missionSummaries.length > 0 && (
+        <section className="backdrop-blur-sm bg-kcd-surface-dim/70 border border-white/[0.06] rounded-lg p-4">
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <div>
+              <h2 className="font-mono text-[11px] font-bold tracking-[0.1em] text-kcd-text-dim uppercase m-0">Mission Summaries</h2>
+              <p className="text-xs text-kcd-text-muted m-0">Meaningful multi-phase work grouped above the child-task lanes.</p>
+            </div>
+            <span className="font-mono text-[10px] text-kcd-text-muted">{missionSummaries.length} active/recent</span>
+          </div>
+          <div className="grid gap-3 grid-cols-1 xl:grid-cols-2">
+            {missionSummaries.map((mission) => {
+              const currentChild = (mission.children || []).find((child) => child.task_id === mission.current_child_task_id) || mission.children?.[0];
+              return (
+                <div key={mission.workstream_id} className="rounded border border-border/70 bg-background/50 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="font-semibold text-foreground truncate">{mission.mission_title || mission.workstream_id}</div>
+                      <div className="mt-1 flex items-center gap-2 text-[10px] text-muted-foreground">
+                        <span className="uppercase tracking-[0.08em]">{mission.mission_status || "open"}</span>
+                        {mission.current_phase_title && <><span className="opacity-40">│</span><span>{mission.current_phase_title}</span></>}
+                        {mission.child_counts?.total !== undefined && (
+                          <><span className="opacity-40">│</span><span>{mission.child_counts.completed || 0}/{mission.child_counts.total || 0}</span></>
+                        )}
+                      </div>
+                    </div>
+                    {currentChild && (
+                      <button
+                        onClick={() => {
+                          const target = resolveTaskWorkspaceTarget({
+                            canonical_execution_run_id: currentChild.canonical_execution_run_id || undefined,
+                            workflow_run_id: currentChild.canonical_execution_run_id || undefined,
+                          });
+                          if (target) {
+                            void openViewer({
+                              session_id: target.sessionId,
+                              run_id: target.runId,
+                              role: "viewer",
+                            });
+                          }
+                        }}
+                        className="px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase bg-emerald-500/10 text-emerald-400 border-none rounded-sm cursor-pointer hover:bg-emerald-500/20 transition-colors inline-flex items-center gap-1"
+                      >
+                        <span className="text-[10px]">📂</span> Current Phase
+                      </button>
+                    )}
+                  </div>
+                  {(mission.latest_artifacts || []).length > 0 && (
+                    <div className="mt-2 text-[11px] text-muted-foreground">
+                      Latest artifacts: {(mission.latest_artifacts || []).slice(0, 3).join(", ")}
+                    </div>
+                  )}
+                  {(mission.children || []).length > 0 && (
+                    <div className="mt-3 space-y-1">
+                      {(mission.children || []).slice(0, 4).map((child) => (
+                        <div key={child.task_id} className="flex items-center gap-2 text-[11px]">
+                          <span className="font-mono text-[10px] text-muted-foreground w-24 shrink-0 truncate">{child.subtask_role || child.phase_id || "phase"}</span>
+                          <span className="truncate flex-1">{child.title || child.task_id}</span>
+                          <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">{child.status || "open"}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
       )}
 
       {/* ── Allocation Breakdown ── */}

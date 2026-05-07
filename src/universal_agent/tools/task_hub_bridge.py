@@ -8,6 +8,7 @@ from claude_agent_sdk import tool
 
 from universal_agent import task_hub
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+from universal_agent.feature_flags import task_hub_missions_enabled
 
 _ACTION_ALIASES = {
     "claim": "seize",
@@ -182,6 +183,7 @@ async def _task_hub_decompose_impl(args: Dict[str, Any]) -> Dict[str, Any]:
         "priority": int,
         "labels": list,
         "source_kind": str,
+        "mission_plan": dict,
     },
 )
 async def task_hub_create_wrapper(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -205,6 +207,7 @@ async def _task_hub_create_impl(args: Dict[str, Any]) -> Dict[str, Any]:
         labels = [str(labels)]
 
     source_kind = str(args.get("source_kind", "reflection") or "reflection").strip()
+    mission_plan = args.get("mission_plan")
 
     conn = connect_runtime_db(get_activity_db_path())
     conn.row_factory = sqlite3.Row
@@ -212,19 +215,34 @@ async def _task_hub_create_impl(args: Dict[str, Any]) -> Dict[str, Any]:
         import uuid
         task_id = f"task_{uuid.uuid4().hex[:12]}"
 
-        item = {
-            "task_id": task_id,
-            "title": title,
-            "description": description,
-            "priority": priority,
-            "labels": labels,
-            "source_kind": source_kind,
-            "status": "open",
-            "agent_ready": True,
-            "trigger_type": "autonomous",
-        }
+        if isinstance(mission_plan, dict) and mission_plan.get("phases") and task_hub_missions_enabled():
+            created = task_hub.create_mission_envelope(
+                conn,
+                task_id=task_id,
+                title=title,
+                description=description,
+                source_kind=source_kind,
+                source_ref=task_id,
+                project_key="immediate",
+                priority=priority,
+                labels=labels,
+                mission_plan=mission_plan,
+                metadata={"mission_origin_source_kind": source_kind},
+            )
+        else:
+            item = {
+                "task_id": task_id,
+                "title": title,
+                "description": description,
+                "priority": priority,
+                "labels": labels,
+                "source_kind": source_kind,
+                "status": "open",
+                "agent_ready": True,
+                "trigger_type": "autonomous",
+            }
 
-        created = task_hub.upsert_item(conn, item)
+            created = task_hub.upsert_item(conn, item)
     except Exception as exc:
         return _err(str(exc))
     finally:

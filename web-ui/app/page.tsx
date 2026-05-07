@@ -1962,23 +1962,8 @@ function ChatInterface() {
         let raw = "";
         let fetchedRaw = false;
 
-        if (response.ok) {
-          if (useOpsTailHydration && !didFallback) {
-            const payload = await response.json() as { lines?: unknown; content?: unknown };
-            if (Array.isArray(payload.lines)) {
-              raw = payload.lines.map((line) => String(line)).join("\n");
-              if (raw.length > 0) raw += "\n";
-            } else if (typeof payload.content === "string") {
-              raw = payload.content;
-            }
-          } else {
-            raw = await response.text();
-          }
-          fetchedRaw = true;
-        }
-
         let cronOutputText: string | null = null;
-        if ((!response.ok || raw.trim().length === 0) && sessionId.startsWith("cron_")) {
+        if (!response.ok && sessionId.startsWith("cron_")) {
           const cronFallbackUrl = buildDurableFileUrl(currentSession || { session_id: sessionId, run_id: runId, is_live_session: !isRunWorkspaceOnly }, "work_products/cron_result.md");
           const cronResp = await fetch(cronFallbackUrl, { cache: "no-store" });
           if (cronResp.ok) {
@@ -2010,7 +1995,7 @@ function ChatInterface() {
             });
             hydratedLogCount += 1;
           }
-        } else if (fetchedRaw) {
+        } else {
 
           // ── Try trace.json for full-detail rehydration ──
           let usedTraceJson = false;
@@ -2086,8 +2071,23 @@ function ChatInterface() {
             }
           }
 
+          if (!usedTraceJson && response.ok) {
+            if (useOpsTailHydration && !didFallback) {
+              const payload = await response.json() as { lines?: unknown; content?: unknown };
+              if (Array.isArray(payload.lines)) {
+                raw = payload.lines.map((line) => String(line)).join("\n");
+                if (raw.length > 0) raw += "\n";
+              } else if (typeof payload.content === "string") {
+                raw = payload.content;
+              }
+            } else {
+              raw = await response.text();
+            }
+            fetchedRaw = true;
+          }
+
           // ── Fallback: run.log abbreviated hydration ──
-          if (!usedTraceJson) {
+          if (!usedTraceJson && fetchedRaw) {
             const { messages, logs } = extractHistoryFromRunLog(raw);
             if (!cancelled && messages.length > 0 && store.messages.length === 0) {
               for (const msg of messages) {

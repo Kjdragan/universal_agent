@@ -21,6 +21,7 @@ from universal_agent.durable.db import (
     get_activity_db_path,
     get_sqlite_busy_timeout_ms,
 )
+from universal_agent.feature_flags import task_hub_missions_enabled
 from universal_agent.rate_limiter import ZAIRateLimiter
 from universal_agent.utils.model_resolution import resolve_model
 
@@ -152,12 +153,19 @@ def collect_task_hub_evidence(*, limit: int = 20, completed_limit: int = 12) -> 
             _task_summary(item)
             for item in task_hub.list_completed_tasks(conn, limit=completed_limit)[:completed_limit]
         ]
+        mission_summaries = (
+            task_hub.list_workstream_summaries(conn, limit=max(limit, 8), include_recent_completed=True)
+            if task_hub_missions_enabled()
+            else []
+        )
     return {
         "active_or_attention_items": active_items,
         "recent_completed_items": completed_items,
+        "mission_summaries": mission_summaries,
         "counts": {
             "active_or_attention_items": len(active_items),
             "recent_completed_items": len(completed_items),
+            "mission_summaries": len(mission_summaries),
         },
     }
 

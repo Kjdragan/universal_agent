@@ -113,6 +113,7 @@ from universal_agent.feature_flags import (
     heartbeat_enabled,
     memory_index_enabled,
     sdk_session_history_enabled,
+    task_hub_missions_enabled,
 )
 from universal_agent.gateway import (
     GatewayRequest,
@@ -7034,10 +7035,19 @@ async def _run_gateway_session_request(
     if _todo_dispatch_service and request_run_kind == "todo_execution":
         _todo_dispatch_service.busy_sessions.add(session_id)
 
+    active_execution_workspace = str(
+        resolve_active_execution_workspace(
+            session=session,
+            request_metadata=request_metadata,
+        )
+        or session.workspace_dir
+        or ""
+    ).strip()
     run_log_handle = None
-    if session.workspace_dir:
+    if active_execution_workspace:
         try:
-            run_log_path = Path(session.workspace_dir) / "run.log"
+            run_log_path = Path(active_execution_workspace) / "run.log"
+            run_log_path.parent.mkdir(parents=True, exist_ok=True)
             run_log_handle = open(run_log_path, "a", encoding="utf-8")
             ts0 = datetime.now(timezone.utc).strftime("%H:%M:%S")
             run_log_handle.write(f"[{ts0}] 👤 USER: {request.user_input}\n")
@@ -7174,8 +7184,8 @@ async def _run_gateway_session_request(
                 saw_streaming_text = True
             if event.type == EventType.ERROR:
                 log_tail = None
-                if session.workspace_dir:
-                    log_tail = _read_run_log_tail(session.workspace_dir)
+                if active_execution_workspace:
+                    log_tail = _read_run_log_tail(active_execution_workspace)
                 if isinstance(event.data, dict):
                     if "message" not in event.data and "error" in event.data:
                         event.data["message"] = event.data.get("error")
@@ -7241,7 +7251,7 @@ async def _run_gateway_session_request(
         try:
             from universal_agent.session_checkpoint import SessionCheckpointGenerator
 
-            workspace_path = Path(session.workspace_dir)
+            workspace_path = Path(active_execution_workspace or session.workspace_dir)
             generator = SessionCheckpointGenerator(workspace_path)
             checkpoint_result = SimpleNamespace(
                 tool_calls=tool_call_count,
@@ -7290,8 +7300,8 @@ async def _run_gateway_session_request(
                 metadata={
                     "goal_satisfaction": goal_satisfaction,
                     "run_id": _session_run_id(session),
-                    "workspace_dir": session.workspace_dir or "",
-                    "active_run_workspace": _session_active_run_workspace(session) or "",
+                    "workspace_dir": active_execution_workspace or session.workspace_dir or "",
+                    "active_run_workspace": _session_active_run_workspace(session) or active_execution_workspace or "",
                 },
             )
             await manager.broadcast(
@@ -7681,6 +7691,20 @@ async def _dispatch_gateway_request_to_session(
         )
     )
     _register_execution_task(session_id, execution_task)
+    if bool(request_metadata.get("await_execution_completion")):
+        try:
+            await asyncio.shield(execution_task)
+        except asyncio.CancelledError:
+            raise
+        turn_snapshot = _session_turn_snapshot(session_id)
+        turns = turn_snapshot.get("turns", {})
+        record = turns.get(admitted_turn_id) if isinstance(turns, dict) else None
+        return {
+            "decision": "accepted",
+            "turn_id": admitted_turn_id,
+            "execution_status": str((record or {}).get("status") or "").strip().lower(),
+            "record": record,
+        }
     return {"decision": "accepted", "turn_id": admitted_turn_id}
 
 
@@ -21652,6 +21676,11 @@ async def dashboard_todolist_overview():
             data["status"] = "ok"
             data["heartbeat"] = _heartbeat_runtime_snapshot()
             data["todo_dispatch"] = _todo_dispatch_runtime_snapshot()
+            data["mission_summaries"] = (
+                task_hub.list_workstream_summaries(conn, limit=12, include_recent_completed=True)
+                if task_hub_missions_enabled()
+                else []
+            )
             return data
         finally:
             conn.close()
@@ -22686,6 +22715,11 @@ def _serialize_task_hub_queue_item(conn: sqlite3.Connection, item: dict[str, Any
         serialized["canonical_execution_session_id"] or "",
         workspace_dir=serialized["canonical_execution_workspace"] or ""
     )
+    serialized["mission_summary"] = (
+        task_hub.build_task_mission_summary(conn, serialized, max_children=20)
+        if task_hub_missions_enabled()
+        else None
+    )
     return serialized
 
 
@@ -22886,6 +22920,9 @@ async def dashboard_todolist_task_history(task_id: str, limit: int = 120):
                 item=dict(task_item) if task_item else {},
                 active_assignment=active_assignment,
             )
+            history["mission_summary"] = (
+                task_hub.build_task_mission_summary(conn, dict(task_item)) if task_item and task_hub_missions_enabled() else None
+            )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
         finally:
@@ -22975,6 +23012,10 @@ async def dashboard_todolist_task_history(task_id: str, limit: int = 120):
         or "standard_report"
     )
     history["canonical_execution"] = canonical_execution
+    mission_summary = history.get("mission_summary") if isinstance(history.get("mission_summary"), dict) else {}
+    history["mission_parent"] = mission_summary.get("root_task")
+    history["mission_children"] = mission_summary.get("children") if isinstance(mission_summary.get("children"), list) else []
+    history["mission_workstream"] = mission_summary.get("workstream_id")
     return {"status": "ok", **history}
 
 

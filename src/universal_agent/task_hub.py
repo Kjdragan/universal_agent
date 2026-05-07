@@ -11,6 +11,8 @@ import time
 from typing import Any, Optional
 import uuid
 
+from universal_agent.feature_flags import task_hub_missions_enabled
+
 TASK_STATUS_OPEN = "open"
 TASK_STATUS_IN_PROGRESS = "in_progress"
 TASK_STATUS_BLOCKED = "blocked"
@@ -70,6 +72,9 @@ _CSI_INCIDENT_NORMALIZED_EVENT_TYPES = {
 }
 
 logger = logging.getLogger(__name__)
+
+MISSION_ENVELOPE_SOURCE_KIND = "mission_envelope"
+MISSION_PHASE_SOURCE_KIND = "mission_phase"
 
 
 @dataclass
@@ -441,6 +446,513 @@ def get_item(conn: sqlite3.Connection, task_id: str) -> Optional[dict[str, Any]]
     if row is None:
         return None
     return hydrate_item(dict(row))
+
+
+def upsert_workstream(
+    conn: sqlite3.Connection,
+    *,
+    workstream_id: str,
+    name: str,
+    state: str = "active",
+    metadata: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    ensure_schema(conn)
+    safe_id = str(workstream_id or "").strip()
+    if not safe_id:
+        raise ValueError("workstream_id is required")
+    now_iso = _now_iso()
+    existing = conn.execute(
+        "SELECT * FROM task_hub_workstreams WHERE workstream_id = ? LIMIT 1",
+        (safe_id,),
+    ).fetchone()
+    existing_meta = _json_loads_obj(existing["metadata_json"], default={}) if existing else {}
+    merged_meta = dict(existing_meta)
+    merged_meta.update(dict(metadata or {}))
+    conn.execute(
+        """
+        INSERT INTO task_hub_workstreams (
+            workstream_id, name, state, agent_threshold, metadata_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(workstream_id) DO UPDATE SET
+            name=excluded.name,
+            state=excluded.state,
+            metadata_json=excluded.metadata_json,
+            updated_at=excluded.updated_at
+        """,
+        (
+            safe_id,
+            str(name or safe_id).strip() or safe_id,
+            str(state or "active").strip() or "active",
+            current_policy().agent_threshold,
+            _json_dumps(merged_meta),
+            str(existing["created_at"] if existing else now_iso),
+            now_iso,
+        ),
+    )
+    conn.commit()
+    return get_workstream(conn, safe_id) or {
+        "workstream_id": safe_id,
+        "name": str(name or safe_id).strip() or safe_id,
+        "state": str(state or "active").strip() or "active",
+        "metadata": merged_meta,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    }
+
+
+def get_workstream(conn: sqlite3.Connection, workstream_id: str) -> Optional[dict[str, Any]]:
+    ensure_schema(conn)
+    row = conn.execute(
+        "SELECT * FROM task_hub_workstreams WHERE workstream_id = ? LIMIT 1",
+        (str(workstream_id or "").strip(),),
+    ).fetchone()
+    if row is None:
+        return None
+    data = dict(row)
+    data["metadata"] = _json_loads_obj(data.get("metadata_json"), default={})
+    return data
+
+
+def list_workstream_tasks(
+    conn: sqlite3.Connection,
+    workstream_id: str,
+    *,
+    include_parent: bool = True,
+) -> list[dict[str, Any]]:
+    ensure_schema(conn)
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM task_hub_items
+        WHERE workstream_id = ?
+        ORDER BY created_at ASC, priority DESC
+        """,
+        (str(workstream_id or "").strip(),),
+    ).fetchall()
+    items = [hydrate_item(dict(row)) for row in rows]
+    if include_parent:
+        return items
+    return [
+        item
+        for item in items
+        if str(item.get("source_kind") or "").strip().lower() != MISSION_ENVELOPE_SOURCE_KIND
+    ]
+
+
+def _phase_task_status_bucket(status: str) -> str:
+    normalized = str(status or "").strip().lower()
+    if normalized in {TASK_STATUS_REVIEW, TASK_STATUS_PENDING_REVIEW}:
+        return "needs_review"
+    if normalized == TASK_STATUS_COMPLETED:
+        return "completed"
+    if normalized == TASK_STATUS_BLOCKED:
+        return "blocked"
+    if normalized in {TASK_STATUS_IN_PROGRESS, TASK_STATUS_DELEGATED}:
+        return "in_progress"
+    return "open"
+
+
+def _child_phase_task_ref(item: dict[str, Any]) -> dict[str, Any]:
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    mission_phase = metadata.get("mission_phase") if isinstance(metadata.get("mission_phase"), dict) else {}
+    return {
+        "task_id": str(item.get("task_id") or ""),
+        "title": str(item.get("title") or ""),
+        "status": str(item.get("status") or ""),
+        "source_kind": str(item.get("source_kind") or ""),
+        "subtask_role": str(item.get("subtask_role") or mission_phase.get("subtask_role") or ""),
+        "phase_id": str(mission_phase.get("phase_id") or ""),
+        "phase_index": _safe_int(mission_phase.get("phase_index"), 0),
+        "updated_at": str(item.get("updated_at") or ""),
+        "canonical_execution_run_id": str(((item.get("last_assignment") or {}) if isinstance(item.get("last_assignment"), dict) else {}).get("workflow_run_id") or "") or None,
+        "canonical_execution_workspace": str(((item.get("last_assignment") or {}) if isinstance(item.get("last_assignment"), dict) else {}).get("workspace_dir") or "") or None,
+    }
+
+
+def build_workstream_summary(
+    conn: sqlite3.Connection,
+    workstream_id: str,
+    *,
+    max_children: int = 20,
+) -> Optional[dict[str, Any]]:
+    ensure_schema(conn)
+    safe_id = str(workstream_id or "").strip()
+    if not safe_id:
+        return None
+    tasks = list_workstream_tasks(conn, safe_id, include_parent=True)
+    if not tasks:
+        return None
+
+    root = next((item for item in tasks if str(item.get("task_id") or "") == safe_id), None)
+    if root is None:
+        root = next(
+            (
+                item
+                for item in tasks
+                if str(item.get("source_kind") or "").strip().lower() == MISSION_ENVELOPE_SOURCE_KIND
+            ),
+            None,
+        )
+    if root is None:
+        root = next((item for item in tasks if not str(item.get("parent_task_id") or "").strip()), tasks[0])
+
+    root = _attach_latest_assignment_and_evidence(conn, dict(root), include_mission_summary=False)
+    children_raw = [
+        _attach_latest_assignment_and_evidence(conn, dict(item), include_mission_summary=False)
+        for item in tasks
+        if str(item.get("task_id") or "") != str(root.get("task_id") or "")
+    ]
+    children_raw.sort(
+        key=lambda item: (
+            {"in_progress": 0, "needs_review": 1, "blocked": 2, "open": 3, "completed": 4}.get(
+                _phase_task_status_bucket(item.get("status") or ""), 5
+            ),
+            -_parse_iso(item.get("updated_at") or "").timestamp() if _parse_iso(item.get("updated_at") or "") else 0,
+        )
+    )
+
+    child_counts = {"total": 0, "open": 0, "in_progress": 0, "needs_review": 0, "completed": 0, "blocked": 0}
+    for child in children_raw:
+        bucket = _phase_task_status_bucket(child.get("status") or "")
+        child_counts["total"] += 1
+        child_counts[bucket] += 1
+
+    current_child = next(
+        (child for child in children_raw if _phase_task_status_bucket(child.get("status") or "") != "completed"),
+        None,
+    )
+    latest_child = children_raw[0] if children_raw else None
+    mission_plan = (
+        (root.get("metadata") or {}).get("mission_plan")
+        if isinstance(root.get("metadata"), dict) and isinstance((root.get("metadata") or {}).get("mission_plan"), dict)
+        else {}
+    )
+    latest_artifacts: list[str] = []
+    if latest_child:
+        for ev in latest_child.get("delivery_evidence") or []:
+            latest_artifacts.extend(ev.get("work_product_paths") or [])
+        if not latest_artifacts:
+            latest_artifacts = [
+                str(path)
+                for path in (
+                    ((latest_child.get("metadata") or {}).get("work_product_paths") or [])
+                    if isinstance(latest_child.get("metadata"), dict)
+                    else []
+                )
+                if str(path).strip()
+            ]
+
+    if child_counts["total"] == 0:
+        mission_status = str(root.get("status") or TASK_STATUS_OPEN)
+    elif child_counts["blocked"] > 0:
+        mission_status = TASK_STATUS_BLOCKED
+    elif child_counts["needs_review"] > 0:
+        mission_status = TASK_STATUS_REVIEW
+    elif child_counts["in_progress"] > 0:
+        mission_status = TASK_STATUS_IN_PROGRESS
+    elif child_counts["open"] > 0:
+        mission_status = TASK_STATUS_OPEN
+    else:
+        mission_status = TASK_STATUS_COMPLETED
+
+    current_phase_id = ""
+    current_phase_title = ""
+    current_child_task_id = ""
+    if current_child:
+        current_phase_meta = (
+            (current_child.get("metadata") or {}).get("mission_phase")
+            if isinstance(current_child.get("metadata"), dict)
+            and isinstance((current_child.get("metadata") or {}).get("mission_phase"), dict)
+            else {}
+        )
+        current_phase_id = str(current_phase_meta.get("phase_id") or current_child.get("subtask_role") or "")
+        current_phase_title = str(current_child.get("title") or "")
+        current_child_task_id = str(current_child.get("task_id") or "")
+    elif isinstance(mission_plan, dict):
+        current_phase_id = str(mission_plan.get("current_phase_id") or "")
+
+    return {
+        "workstream_id": safe_id,
+        "root_task_id": str(root.get("task_id") or safe_id),
+        "mission_title": str(root.get("title") or safe_id),
+        "mission_status": mission_status,
+        "current_phase_id": current_phase_id or None,
+        "current_phase_title": current_phase_title or None,
+        "current_child_task_id": current_child_task_id or None,
+        "child_counts": child_counts,
+        "latest_artifacts": latest_artifacts[:12],
+        "latest_workspace_dir": str(((latest_child or {}).get("last_assignment") or {}).get("workspace_dir") or "") or None,
+        "latest_run_id": str(((latest_child or {}).get("last_assignment") or {}).get("workflow_run_id") or "") or None,
+        "children": [_child_phase_task_ref(child) for child in children_raw[: max(1, min(int(max_children), 50))]],
+        "root_task": {
+            "task_id": str(root.get("task_id") or ""),
+            "title": str(root.get("title") or ""),
+            "status": str(root.get("status") or ""),
+            "source_kind": str(root.get("source_kind") or ""),
+        },
+    }
+
+
+def build_task_mission_summary(
+    conn: sqlite3.Connection,
+    task_or_task_id: dict[str, Any] | str,
+    *,
+    max_children: int = 20,
+) -> Optional[dict[str, Any]]:
+    ensure_schema(conn)
+    item = (
+        get_item(conn, str(task_or_task_id or "").strip())
+        if isinstance(task_or_task_id, str)
+        else dict(task_or_task_id or {})
+    )
+    if not item:
+        return None
+    workstream_id = str(item.get("workstream_id") or "").strip()
+    if workstream_id:
+        return build_workstream_summary(conn, workstream_id, max_children=max_children)
+    if str(item.get("parent_task_id") or "").strip():
+        return {
+            "workstream_id": None,
+            "root_task_id": str(item.get("parent_task_id") or ""),
+            "mission_title": str(item.get("title") or ""),
+            "mission_status": str(item.get("status") or ""),
+            "current_phase_id": str(item.get("subtask_role") or "") or None,
+            "current_phase_title": str(item.get("title") or "") or None,
+            "current_child_task_id": str(item.get("task_id") or "") or None,
+            "child_counts": {"total": 1, "open": 0, "in_progress": 0, "needs_review": 0, "completed": 0, "blocked": 0},
+            "latest_artifacts": [],
+            "latest_workspace_dir": None,
+            "latest_run_id": None,
+            "children": [_child_phase_task_ref(item)],
+            "root_task": None,
+        }
+    return None
+
+
+def list_workstream_summaries(
+    conn: sqlite3.Connection,
+    *,
+    state: Optional[str] = None,
+    limit: int = 20,
+    include_recent_completed: bool = True,
+) -> list[dict[str, Any]]:
+    ensure_schema(conn)
+    rows = conn.execute(
+        "SELECT workstream_id FROM task_hub_workstreams ORDER BY updated_at DESC LIMIT ?",
+        (max(1, min(int(limit) * 4, 200)),),
+    ).fetchall()
+    summaries: list[dict[str, Any]] = []
+    for row in rows:
+        summary = build_workstream_summary(conn, str(row["workstream_id"] or ""), max_children=20)
+        if not summary:
+            continue
+        mission_status = str(summary.get("mission_status") or "").strip().lower()
+        if not include_recent_completed and mission_status == TASK_STATUS_COMPLETED:
+            continue
+        if state and mission_status != str(state).strip().lower():
+            continue
+        summaries.append(summary)
+        if len(summaries) >= max(1, min(int(limit), 100)):
+            break
+    return summaries
+
+
+def _mission_phase_template_to_task(
+    *,
+    parent: dict[str, Any],
+    workstream_id: str,
+    phase: dict[str, Any],
+    phase_index: int,
+    phase_count: int,
+    previous_task_id: Optional[str],
+) -> dict[str, Any]:
+    phase_id = str(phase.get("phase_id") or f"phase_{phase_index + 1}").strip()
+    subtask_role = str(phase.get("subtask_role") or phase_id).strip() or phase_id
+    task_id = str(phase.get("task_id") or f"{workstream_id}:phase:{phase_index + 1}")
+    title = str(phase.get("title") or phase.get("title_template") or f"{parent.get('title') or workstream_id} — {subtask_role}")
+    description = str(phase.get("description") or phase.get("description_template") or parent.get("description") or "")
+    child_metadata = {
+        "mission_phase": {
+            "workstream_id": workstream_id,
+            "phase_id": phase_id,
+            "phase_index": phase_index,
+            "phase_count": phase_count,
+            "previous_task_id": previous_task_id,
+            "next_phase_id": (
+                str(phase.get("next_phase_id") or "").strip()
+                or None
+            ),
+            "subtask_role": subtask_role,
+        },
+        "mission_origin_source_kind": str(parent.get("source_kind") or ""),
+    }
+    workflow_kind = str(phase.get("workflow_kind") or "").strip()
+    if workflow_kind:
+        child_metadata["workflow_manifest"] = {
+            "workflow_kind": workflow_kind,
+        }
+    return {
+        "task_id": task_id,
+        "source_kind": MISSION_PHASE_SOURCE_KIND,
+        "source_ref": f"{workstream_id}:{phase_id}",
+        "title": title,
+        "description": description,
+        "project_key": str(phase.get("project_key") or parent.get("project_key") or "immediate"),
+        "priority": _safe_int(phase.get("priority"), _safe_int(parent.get("priority"), 2)),
+        "labels": list(phase.get("labels") or ["agent-ready"]),
+        "status": str(phase.get("status") or TASK_STATUS_OPEN),
+        "agent_ready": bool(phase.get("agent_ready", True)),
+        "trigger_type": str(phase.get("trigger_type") or DEFAULT_TRIGGER_TYPE),
+        "parent_task_id": str(parent.get("task_id") or workstream_id),
+        "workstream_id": workstream_id,
+        "subtask_role": subtask_role,
+        "metadata": child_metadata,
+    }
+
+
+def create_mission_envelope(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    title: str,
+    description: str = "",
+    source_kind: str = "mission_envelope",
+    source_ref: str = "",
+    project_key: str = "immediate",
+    priority: int = 2,
+    labels: Optional[list[str]] = None,
+    mission_plan: Optional[dict[str, Any]] = None,
+    metadata: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    ensure_schema(conn)
+    safe_task_id = str(task_id or "").strip()
+    if not safe_task_id:
+        raise ValueError("task_id is required")
+    if not task_hub_missions_enabled():
+        raise ValueError("task hub missions are disabled")
+    phases = list((mission_plan or {}).get("phases") or [])
+    merged_metadata = dict(metadata or {})
+    mission_meta = dict(mission_plan or {})
+    if phases:
+        mission_meta.setdefault("current_phase_id", str(phases[0].get("phase_id") or ""))
+        mission_meta.setdefault("current_phase_index", 0)
+    merged_metadata["mission_plan"] = mission_meta
+    parent = upsert_item(
+        conn,
+        {
+            "task_id": safe_task_id,
+            "source_kind": MISSION_ENVELOPE_SOURCE_KIND,
+            "source_ref": source_ref,
+            "title": title,
+            "description": description,
+            "project_key": project_key,
+            "priority": priority,
+            "labels": labels or ["mission-envelope"],
+            "status": TASK_STATUS_OPEN,
+            "agent_ready": False,
+            "workstream_id": safe_task_id,
+            "metadata": merged_metadata,
+        },
+    )
+    upsert_workstream(
+        conn,
+        workstream_id=safe_task_id,
+        name=title,
+        state="active",
+        metadata={
+            "root_task_id": safe_task_id,
+            "source_kind": source_kind,
+            "mission_plan": mission_meta,
+        },
+    )
+    if phases:
+        spawn_next_workstream_child(conn, workstream_id=safe_task_id)
+    return get_item(conn, safe_task_id) or parent
+
+
+def spawn_next_workstream_child(
+    conn: sqlite3.Connection,
+    *,
+    workstream_id: str,
+    previous_task_id: Optional[str] = None,
+) -> Optional[dict[str, Any]]:
+    ensure_schema(conn)
+    if not task_hub_missions_enabled():
+        return None
+    parent = get_item(conn, str(workstream_id or "").strip())
+    if not parent:
+        return None
+    metadata = parent.get("metadata") if isinstance(parent.get("metadata"), dict) else {}
+    mission_plan = metadata.get("mission_plan") if isinstance(metadata.get("mission_plan"), dict) else {}
+    phases = list(mission_plan.get("phases") or [])
+    if not phases:
+        return None
+    children = list_workstream_tasks(conn, workstream_id, include_parent=False)
+    existing_phase_ids = {
+        str(
+            (
+                (child.get("metadata") or {}).get("mission_phase")
+                if isinstance(child.get("metadata"), dict) and isinstance((child.get("metadata") or {}).get("mission_phase"), dict)
+                else {}
+            ).get("phase_id")
+            or ""
+        ).strip()
+        for child in children
+    }
+    next_index = -1
+    next_phase: Optional[dict[str, Any]] = None
+    for idx, phase in enumerate(phases):
+        phase_id = str(phase.get("phase_id") or f"phase_{idx + 1}").strip()
+        if phase_id not in existing_phase_ids:
+            next_index = idx
+            next_phase = phase
+            break
+    if next_phase is None:
+        return None
+    child = _mission_phase_template_to_task(
+        parent=parent,
+        workstream_id=workstream_id,
+        phase=next_phase,
+        phase_index=next_index,
+        phase_count=len(phases),
+        previous_task_id=previous_task_id,
+    )
+    result = upsert_item(conn, child)
+    mission_plan["current_phase_id"] = str(next_phase.get("phase_id") or "")
+    mission_plan["current_phase_index"] = next_index
+    metadata["mission_plan"] = mission_plan
+    upsert_item(conn, {"task_id": workstream_id, "metadata": metadata})
+    _refresh_workstream_state(conn, workstream_id)
+    return result
+
+
+def _refresh_workstream_state(conn: sqlite3.Connection, workstream_id: str) -> Optional[dict[str, Any]]:
+    summary = build_workstream_summary(conn, workstream_id)
+    if not summary:
+        return None
+    updated = upsert_workstream(
+        conn,
+        workstream_id=workstream_id,
+        name=str(summary.get("mission_title") or workstream_id),
+        state=str(summary.get("mission_status") or "active"),
+        metadata=summary,
+    )
+    root = get_item(conn, workstream_id)
+    if root and str(root.get("source_kind") or "").strip().lower() == MISSION_ENVELOPE_SOURCE_KIND:
+        metadata = dict(root.get("metadata") or {})
+        mission_plan = metadata.get("mission_plan") if isinstance(metadata.get("mission_plan"), dict) else {}
+        if summary.get("current_phase_id"):
+            mission_plan["current_phase_id"] = summary.get("current_phase_id")
+        metadata["mission_plan"] = mission_plan
+        upsert_item(
+            conn,
+            {
+                "task_id": workstream_id,
+                "status": str(summary.get("mission_status") or TASK_STATUS_OPEN),
+                "metadata": metadata,
+            },
+        )
+    return updated
 
 
 def upsert_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any]:
@@ -1595,6 +2107,8 @@ def list_completed_tasks(conn: sqlite3.Connection, *, limit: int = 80) -> list[d
     out: list[dict[str, Any]] = []
     for row in rows:
         item = hydrate_item(dict(row))
+        if task_hub_missions_enabled() and str(item.get("source_kind") or "").strip().lower() == MISSION_ENVELOPE_SOURCE_KIND:
+            continue
         task_id = str(item.get("task_id") or "")
         assignment_row = conn.execute(
             """
@@ -1656,12 +2170,18 @@ def list_completed_tasks(conn: sqlite3.Connection, *, limit: int = 80) -> list[d
             }
             for ev in evidence_rows
         ]
+        item["mission_summary"] = build_task_mission_summary(conn, item, max_children=20)
 
         out.append(item)
     return out
 
 
-def _attach_latest_assignment_and_evidence(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any]:
+def _attach_latest_assignment_and_evidence(
+    conn: sqlite3.Connection,
+    item: dict[str, Any],
+    *,
+    include_mission_summary: bool = True,
+) -> dict[str, Any]:
     task_id = str(item.get("task_id") or "")
     assignment_row = conn.execute(
         """
@@ -1723,6 +2243,9 @@ def _attach_latest_assignment_and_evidence(conn: sqlite3.Connection, item: dict[
         for ev in evidence_rows
     ]
     item["proactive_chain"] = _proactive_chain_summary(conn, item)
+    item["mission_summary"] = (
+        build_task_mission_summary(conn, item, max_children=20) if include_mission_summary else None
+    )
     return item
 
 
@@ -2795,6 +3318,12 @@ def list_agent_queue(
     ).fetchall()
 
     items = [hydrate_item(dict(row)) for row in rows]
+    if task_hub_missions_enabled():
+        items = [
+            item
+            for item in items
+            if str(item.get("source_kind") or "").strip().lower() != MISSION_ENVELOPE_SOURCE_KIND
+        ]
     if not include_not_ready:
         items = [item for item in items if bool(item.get("agent_ready"))]
     items = [_decorate_csi_routing(item, threshold=policy.agent_threshold) for item in items]
@@ -3211,6 +3740,8 @@ def decompose_task(
             "status": sub.get("status", TASK_STATUS_OPEN),
             "agent_ready": sub.get("agent_ready", True),
             "trigger_type": sub.get("trigger_type", DEFAULT_TRIGGER_TYPE),
+            "workstream_id": sub.get("workstream_id", parent.get("workstream_id")),
+            "subtask_role": sub.get("subtask_role"),
         }
         result = upsert_item(conn, sub_item)
         created.append(result)
@@ -3619,6 +4150,14 @@ def perform_task_action(
             score_confidence=_safe_float(item.get("score_confidence"), 0.0),
             judge_payload={"source": "simone_review", "approval_note": str(note or "").strip()},
         )
+
+    if task_hub_missions_enabled():
+        workstream_id = str(item.get("workstream_id") or "").strip()
+        source_kind = str(item.get("source_kind") or "").strip().lower()
+        if workstream_id and source_kind != MISSION_ENVELOPE_SOURCE_KIND:
+            if action_norm in {"complete", "approve"}:
+                spawn_next_workstream_child(conn, workstream_id=workstream_id, previous_task_id=task_id)
+            _refresh_workstream_state(conn, workstream_id)
 
     conn.commit()
 

@@ -2,7 +2,7 @@
 
 > **Canonical source of truth** for the Task Hub Dashboard frontend — design system, component architecture, API integration, and Kanban UX patterns.
 >
-> **Last updated:** 2026-04-30 — Mission Control Chief-of-Staff durable readout, evidence collection, and situation read model documented.
+> **Last updated:** 2026-05-06 — ToDo happy-path repair documented; three-panel rehydration now prefers `trace.json`, live ToDo sessions stamp active run lineage, and mission-envelope / mission-summary UX for meaningful multi-phase work is documented.
 
 ---
 
@@ -112,6 +112,12 @@ Each task card renders:
 - **Outbound delivery visibility**: task history can distinguish hook acknowledgements from final outbound artifacts so duplicate response incidents are diagnosable
 - **Action buttons**: Contextual lifecycle actions per column
 
+Mission-aware extension (2026-05-06):
+- **Mission summaries strip**: when `UA_TASK_HUB_MISSIONS_ENABLED=1`, the dashboard renders a separate summary surface for parent mission envelopes / workstreams above the operator-detail surfaces and outside the normal executable Kanban lanes
+- **Lane discipline**: `mission_envelope` rows are summary-only and must not appear as normal `Not Assigned`, `In Progress`, `Needs Review`, or `Completed` task cards
+- **Phase-task visibility**: child mission phases continue to appear as ordinary Task Hub items in the normal board lanes
+- **History drill-up**: a child task’s history panel now includes mission context (root mission, sibling phases, current phase summary) in addition to assignment/evaluation forensics
+
 ### 4.3 Dispatcher Health Panel
 
 The ToDo dashboard includes a dedicated dispatcher-health strip for the separate non-heartbeat execution driver. It shows:
@@ -207,6 +213,11 @@ The dashboard consumes the following backend REST endpoints from `gateway_server
 Read endpoints must not rebuild the Task Hub dispatch queue. They read the latest stored queue snapshot so sidebar navigation and polling do not perform expensive scoring/write work while holding the activity-store lock. Use `/api/v1/dashboard/todolist/dispatch-queue/rebuild` or dispatcher/write paths when a queue rebuild is intentionally required.
 
 Queue, completed, and history responses surface `canonical_execution_session_id`, `canonical_execution_run_id`, and `canonical_execution_workspace` as distinct fields. The dashboard treats `session_id` as the attach target for the normal agent workspace view and treats `run_id` as the durable evidence/file-browsing key. Run-only workspace views must load `/api/v1/runs/{run_id}` and `/api/v1/runs/{run_id}/files` through the dashboard gateway proxy when the Web UI is deployed separately from the gateway; direct same-origin calls can fail auth and appear as empty workspaces.
+
+Happy-path repair (2026-05-06):
+- ToDo-executed tasks remain `IN PROGRESS` until the real execution run finishes; the dispatcher no longer treats mere turn admission as terminal execution
+- live ToDo sessions now stamp `active_run_id` / `active_run_workspace` like tracked chat sessions do, so the Workspace button and three-panel viewer resolve the current run workspace correctly
+- three-panel hydration now prefers `trace.json` independently of `run.log` success, so rehydrated middle-panel tool detail no longer collapses to terse `run.log` rows when the trace is available
 
 ### 5.1A Mission Control Chief-of-Staff Readout
 

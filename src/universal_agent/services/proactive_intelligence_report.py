@@ -26,6 +26,7 @@ from typing import Any
 import uuid
 
 from universal_agent import proactive_signals, task_hub
+from universal_agent.feature_flags import task_hub_missions_enabled
 from universal_agent.services.proactive_budget import (
     DEFAULT_DAILY_BUDGET,
     _parse_int_env,
@@ -130,6 +131,18 @@ def gather_pipeline_stats(conn: sqlite3.Connection) -> dict[str, Any]:
     budget_remaining = get_budget_remaining(conn)
     budget_limit = _parse_int_env("UA_PROACTIVE_DAILY_BUDGET", DEFAULT_DAILY_BUDGET)
 
+    mission_summary = {"total": 0, "active": 0, "completed": 0}
+    if task_hub_missions_enabled():
+        try:
+            mission_rows = task_hub.list_workstream_summaries(conn, limit=50, include_recent_completed=True)
+            mission_summary["total"] = len(mission_rows)
+            mission_summary["completed"] = sum(
+                1 for row in mission_rows if str(row.get("mission_status") or "").strip().lower() == task_hub.TASK_STATUS_COMPLETED
+            )
+            mission_summary["active"] = mission_summary["total"] - mission_summary["completed"]
+        except Exception as exc:
+            logger.warning("Failed to gather mission summary counts: %s", exc)
+
     # ── Signal card counts ────────────────────────────────────────────
     signal_pending = 0
     signal_promoted = 0
@@ -172,6 +185,7 @@ def gather_pipeline_stats(conn: sqlite3.Connection) -> dict[str, Any]:
             "remaining": budget_remaining,
             "daily_limit": budget_limit,
         },
+        "mission_workstreams": mission_summary,
         "signal_cards": {
             "pending": signal_pending,
             "promoted": signal_promoted,
