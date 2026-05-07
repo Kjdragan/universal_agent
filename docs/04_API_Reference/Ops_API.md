@@ -468,6 +468,14 @@ Daemon sessions (always-on heartbeat agents) are guarded by an execution timeout
 | `/api/v1/dashboard/todolist/dispatch-queue` | GET | Dispatch queue state |
 | `/api/v1/dashboard/todolist/dispatch-queue/rebuild` | POST | Rebuild dispatch queue |
 
+### Task Hub Missions
+
+When the `task_hub_missions` feature flag is enabled, several Task Hub endpoints include additional mission/workstream fields:
+
+- **Overview** (`/api/v1/dashboard/todolist/overview`): Returns `mission_summaries` with up to 12 active workstream summaries including recent completed tasks.
+- **Queue Items**: Each serialized queue item includes a `mission_summary` field with the task's root parent, children, and workstream ID.
+- **Task History** (`/api/v1/dashboard/todolist/tasks/{id}/history`): Response includes `mission_parent`, `mission_children`, and `mission_workstream` fields derived from the mission summary.
+
 ## 18. Dashboard Pipeline and Agent Metrics
 
 | Endpoint | Method | Description |
