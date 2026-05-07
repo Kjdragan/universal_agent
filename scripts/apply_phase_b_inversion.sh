@@ -88,6 +88,20 @@ if [[ ${#units[@]} -eq 0 ]]; then
 fi
 log "Running UA services found: ${units[*]}"
 
+# Pre-compute whether settings.json has any of the 5 keys to strip.
+# This determines whether the env-injection verify is fail-closed.
+[[ -f $SETTINGS ]] || die "$SETTINGS not found"
+present=$(jq -r '
+  (.env // {}) as $e |
+  ["ANTHROPIC_BASE_URL","ANTHROPIC_AUTH_TOKEN","ANTHROPIC_DEFAULT_HAIKU_MODEL","ANTHROPIC_DEFAULT_SONNET_MODEL","ANTHROPIC_DEFAULT_OPUS_MODEL"]
+  | map(select($e[.] != null)) | join(",")
+' "$SETTINGS")
+if [[ -z "$present" ]]; then
+  log "settings.json has no ANTHROPIC_* keys — strip is a no-op; verify is informational only"
+else
+  log "settings.json carries keys to strip: $present — verify will fail-close"
+fi
+
 log "B.2: restarting UA services to ingest Infisical-injected ZAI vars"
 maybe systemctl restart "${units[@]}"
 
@@ -95,42 +109,50 @@ if [[ "$APPLY_MODE" == "apply" ]]; then
   sleep 4  # give Python services time to call initialize_runtime_secrets
 fi
 
-log "B.2: verifying ANTHROPIC_BASE_URL is injected into running UA processes"
-verified=0
-for unit in "${units[@]}"; do
-  pid=$(systemctl show -p MainPID --value "$unit" 2>/dev/null || echo 0)
-  [[ "$pid" == "0" || -z "$pid" ]] && continue
-  if [[ ! -r /proc/$pid/environ ]]; then continue; fi
-  base=$(tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | awk -F= '/^ANTHROPIC_BASE_URL=/{print $2; exit}')
-  if [[ -n "$base" ]]; then
-    if [[ "$base" == *z.ai* ]]; then
-      ok "  $unit (pid=$pid): ANTHROPIC_BASE_URL=$base ✓"
-      verified=$((verified+1))
-    else
-      warn "  $unit (pid=$pid): ANTHROPIC_BASE_URL=$base (NOT z.ai!)"
-    fi
-  else
-    warn "  $unit (pid=$pid): no ANTHROPIC_BASE_URL in env"
-  fi
-done
+log "B.2: contract test — invoke venv Python and verify Infisical injects ANTHROPIC_BASE_URL into os.environ"
+# This is the *actual* mechanism by which UA services receive ZAI vars.
+# /proc/<pid>/environ shows the EXEC-time env, which never carries these
+# (systemd doesn't set them; Python injects via initialize_runtime_secrets()
+# at runtime). The contract test below mirrors what real services do.
+VENV_PY=/opt/universal_agent/.venv/bin/python
+[[ -x $VENV_PY ]] || die "venv python not found at $VENV_PY"
 
-if [[ "$APPLY_MODE" == "apply" && $verified -eq 0 ]]; then
-  die "No running UA service has ANTHROPIC_BASE_URL injected. Refusing to strip settings.json — would route services to Anthropic. Investigate Infisical secret loading."
+contract_output=$(cd /opt/universal_agent && sudo -u ua env -i \
+  HOME=/home/ua PATH=/usr/local/bin:/usr/bin:/bin \
+  $VENV_PY -c '
+import os, sys
+sys.path.insert(0, "/opt/universal_agent/src")
+from universal_agent.infisical_loader import initialize_runtime_secrets
+try:
+    initialize_runtime_secrets()
+except Exception as e:
+    print(f"FAIL initialize_runtime_secrets: {e}")
+    sys.exit(2)
+url = os.environ.get("ANTHROPIC_BASE_URL", "<unset>")
+auth = "set" if os.environ.get("ANTHROPIC_AUTH_TOKEN") else "unset"
+opus = os.environ.get("ANTHROPIC_DEFAULT_OPUS_MODEL", "<unset>")
+print(f"ANTHROPIC_BASE_URL={url}")
+print(f"ANTHROPIC_AUTH_TOKEN={auth}")
+print(f"ANTHROPIC_DEFAULT_OPUS_MODEL={opus}")
+sys.exit(0 if "z.ai" in url else 1)
+' 2>&1) && contract_rc=$? || contract_rc=$?
+
+echo "$contract_output" | sed 's/^/    /' >&2
+verified=0
+[[ "$contract_rc" == "0" ]] && verified=1
+
+if [[ "$verified" -eq 1 ]]; then
+  ok "B.2 contract test PASSED — initialize_runtime_secrets() injects z.ai into os.environ"
+elif [[ "$APPLY_MODE" == "apply" && -n "$present" ]]; then
+  die "B.2 contract test FAILED and settings.json has keys to strip. Refusing to proceed — would route services to Anthropic. Investigate Infisical: are the 5 ANTHROPIC_* keys staged in production env?"
+else
+  warn "B.2 contract test did not return z.ai. settings.json strip is a no-op so we proceed, but Phase G acid test must verify routing manually."
 fi
-[[ "$APPLY_MODE" == "apply" ]] && ok "B.2 verified ($verified service(s) confirmed receiving z.ai from Infisical)"
 
 # ------------------------------------------------------------------
 # B.3 — Backup + surgical-strip settings.json
 # ------------------------------------------------------------------
 log "B.3: backup + surgical strip $SETTINGS"
-[[ -f $SETTINGS ]] || die "$SETTINGS not found"
-
-# Detect whether ANY of the 5 keys are present in env block
-present=$(jq -r '
-  (.env // {}) as $e |
-  ["ANTHROPIC_BASE_URL","ANTHROPIC_AUTH_TOKEN","ANTHROPIC_DEFAULT_HAIKU_MODEL","ANTHROPIC_DEFAULT_SONNET_MODEL","ANTHROPIC_DEFAULT_OPUS_MODEL"]
-  | map(select($e[.] != null)) | join(",")
-' "$SETTINGS")
 
 if [[ -z "$present" ]]; then
   ok "B.3 settings.json env block already has no ANTHROPIC_* keys — no strip needed"
