@@ -1,7 +1,13 @@
 {
+<<<<<<< Updated upstream
   "total_turns": 61,
   "session_turns": 61,
   "last_activity": "2026-05-07T03:10:24.415Z",
+=======
+  "total_turns": 75,
+  "session_turns": 75,
+  "last_activity": "2026-04-15T20:14:13.328Z",
+>>>>>>> Stashed changes
   "session_input_tokens": 0,
   "session_output_tokens": 0,
   "session_total_tokens": 0,
