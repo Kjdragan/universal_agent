@@ -408,3 +408,46 @@ class TestInferWorkflowKindWordBoundary:
             final_channel="chat",
         )
         assert manifest["workflow_kind"] == "code_change"
+
+
+class TestTodoDispatchPromptVerificationBlock:
+    """Regression: TODO_DISPATCH_PROMPT must include the final disposition
+    verification block so Simone always closes the loop on Task Hub before
+    declaring the run done. Without this block the
+    'Execution Missing Lifecycle Mutation' guardrail in
+    `mission_guardrails.py` keeps firing in production
+    (observed 2026-05-07 at 1:35, 10:04, 10:08)."""
+
+    def _prompt(self) -> str:
+        from universal_agent.services.todo_dispatch_service import (
+            TODO_DISPATCH_PROMPT,
+        )
+
+        return TODO_DISPATCH_PROMPT
+
+    def test_prompt_contains_verification_header(self):
+        assert "FINAL DISPOSITION VERIFICATION" in self._prompt()
+
+    def test_prompt_lists_every_guardrail_action(self):
+        prompt = self._prompt()
+        for action in ("complete", "review", "block", "park", "approve"):
+            assert action in prompt, f"prompt is missing action: {action!r}"
+
+    def test_prompt_calls_out_dispatch_followup(self):
+        """Delegation is not enough — the prompt must explicitly tell
+        Simone that `vp_dispatch_mission` does NOT close the original
+        Task Hub item and that an explicit `complete` action is still
+        required."""
+        prompt = self._prompt()
+        assert "vp_dispatch_mission" in prompt
+        assert "does NOT close" in prompt or "does not close" in prompt.lower()
+
+    def test_prompt_names_the_blocking_guardrail(self):
+        """If a future edit removes or renames the verification block,
+        we want this test to point a reader straight at the guardrail
+        in `mission_guardrails.py`."""
+        prompt = self._prompt()
+        assert "Execution Missing Lifecycle Mutation" in prompt
+
+    def test_prompt_uses_task_hub_task_action_tool_name(self):
+        assert "task_hub_task_action" in self._prompt()

@@ -189,6 +189,32 @@ The core invariant: **an autonomous mission must never leave the deployed workin
 4. Commit invalid Python and rely on CI to catch it. Run the syntax check **before** committing.
 5. Suppress errors. If the patch tool fails, the mission fails. Do not log-and-continue.
 
+### Reusable building blocks (shipped 2026-05-07)
+
+The 8-step pattern is implemented as Python helpers under
+`src/universal_agent/vp/`. New autonomous-mission call sites should
+compose with these instead of hand-rolling git/subprocess sequences:
+
+| Module | Public API | What to use it for |
+|--------|------------|--------------------|
+| [`vp/worktree_utils.py`](../../src/universal_agent/vp/worktree_utils.py) | `provision_worktree`, `teardown_worktree`, `syntax_check_changed_py`, `revert_changed_files`, `assert_no_artifacts`, `list_changed_py_files`, `detect_repo_root` | Steps 2, 3 (path discipline), 4 (compile check), 8 (revert + cleanup), and the `pr-validate.yml` artifact tripwire. |
+| [`vp/autonomous_mission_executor.py`](../../src/universal_agent/vp/autonomous_mission_executor.py) | `execute_autonomous_mission(task, patch_fn, bot_name, ...)` returning `MissionResult` | The full 8-step orchestration. Side effects (test runner + PR creation) are dependency-injected so unit tests skip the network. The default PR creator targets `feature/latest2` and never auto-merges — human review is part of the contract. |
+
+Test coverage lives in
+[`tests/unit/test_vp_worktree_utils.py`](../../tests/unit/test_vp_worktree_utils.py)
+and
+[`tests/unit/test_vp_autonomous_mission_executor.py`](../../tests/unit/test_vp_autonomous_mission_executor.py).
+The syntax-check test deliberately mirrors the 2026-05-07
+docstring-in-arglist regression so we cannot weaken it without
+catching it in CI.
+
+`vp/worker_loop.py:_provision_workspace` (lines ~639-720) still has its
+own inline worktree path for `vp.coder.primary` missions. That path is
+correct for the running production loop; refactoring it to use
+`worktree_utils.py` is intentionally a follow-up PR so the building
+blocks land first and ship through the new tier-2 PR workflow as
+their own first real test.
+
 ### What `pr-validate.yml` will check on every PR (the safety net)
 
 Defined at [`.github/workflows/pr-validate.yml`](../../.github/workflows/pr-validate.yml). Runs on every `pull_request` against `feature/latest2`, `develop`, or `main`:

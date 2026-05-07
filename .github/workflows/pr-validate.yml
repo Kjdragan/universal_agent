@@ -44,10 +44,16 @@ jobs:
           # to identify only the .py files this PR touches.
           fetch-depth: 0
 
-      - name: Set up Python 3.13
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          # 3.12, not 3.13 — `infisical-python==2.3.5` only ships
+          # cp312 wheels for `manylinux_2_28_x86_64`, no cp313 wheel
+          # exists, and the source build needs PyO3 ≥ 0.22 (it pins
+          # 0.20.3, which doesn't support 3.13). This bit us on
+          # PR #153, the first PR to exercise this workflow end-to-end.
+          # Production runtime is also 3.12 — see `.python-version`.
+          python-version: '3.12'
 
       - name: Install uv
         run: pip install --quiet uv

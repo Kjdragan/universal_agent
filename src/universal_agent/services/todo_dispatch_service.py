@@ -428,6 +428,16 @@ After finishing work, ALWAYS disposition every claimed work item via `task_hub_t
        This reply was sent by {agent_name} directly to the requestor.
        You are CC'd for situational awareness only.
        ────────────────────────────────────────────────"
+
+### FINAL DISPOSITION VERIFICATION (CRITICAL):
+Before you stop responding, run this self-check for EVERY claimed work item in the To Do List above:
+
+1. Did you call `task_hub_task_action(task_id=<id>, action=<one of: complete, review, block, park, approve, delegate>)` for that item during this run?
+2. If NO: STOP. Do not declare the mission done. Decide which action applies, call `task_hub_task_action` now, then end your turn.
+3. If the item was delegated via `vp_dispatch_mission`, you still MUST call `task_hub_task_action(action="complete")` on the original work item with a note that it was delegated to <vp_id>. The dispatch alone does NOT close the work item — it only kicks off the VP. Without the explicit `complete` action, the original item remains "in progress" and your run will be flagged as incomplete.
+4. If the contract for an item required an outbound email and no email was sent yet, send it now (or, if blocked, call `task_hub_task_action(action="block"|"review")` with the concrete reason in the note).
+
+Failing this check triggers the "Execution Missing Lifecycle Mutation" guardrail (mission_guardrails.py) and your completion will be blocked. The guardrail accepts exactly these actions as a durable lifecycle mutation: `review`, `complete`, `block`, `park`, `approve`. Always close the loop with one of them.
 """
 
 
