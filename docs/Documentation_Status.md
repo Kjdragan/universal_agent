@@ -1,6 +1,6 @@
 # Documentation Status
 
-**Last updated:** 2026-05-04 (Mission Control Intelligence System Phases 0–4, 6, 7, 8 shipped: tier-0 tile strip with `heartbeat_tick` liveness emission, tier-1 LLM-discovered narrative cards with feedback/action buttons, tier-2 Chief-of-Staff readout with ledger feedback, Knowledge Ledger surface at `/dashboard/mission-control/ledger`, smart event titles + hide-by-default filter, Operator Brief panel removed and `/api/v1/dashboard/situations` deprecated, cron error-classification hardened to allow success-with-warnings; Phase 5 auto-remediation deferred per 1-week observation gate)
+**Last updated:** 2026-05-06 (Added Task Hub Happy-Path Audit and Meaningful Work Task Hub + Three-Panel Design reports covering ToDo lane drift, active-run workspace resolution, and parent/child mission design for multi-phase meaningful work.)
 
 ## Development (development/)
 
@@ -188,6 +188,8 @@ These are the authoritative references for each subsystem. When any other docume
 | Doc | Subject |
 |-----|---------|
 | todolist-task-pipeline-audit-2026-03-11.md | Historical audit of the early `/dashboard/todolist` pipeline before the dedicated ToDo dispatcher refactor |
+| task-hub-happy-path-audit-2026-05-06.md | Code-verified report on why active ToDo executions can fall out of `IN PROGRESS`, how live run workspace lineage is lost, and why viewer hydration falls back to terse `run.log` rows instead of structured `trace.json` detail |
+| meaningful-work-taskhub-three-panel-design-2026-05-06.md | Code-verified design proposal for using Task Hub as the ledger for meaningful autonomous work and using sequential parent/child tasks so each phase gets its own run, workspace, and three-panel audit trail |
 
 ## Operations (operations/)
 
