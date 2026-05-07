@@ -266,3 +266,51 @@ sqlite3 /opt/universal_agent/AGENT_RUN_WORKSPACES/activity_state.db \
 This investigation plan is **independent** of the CSI intelligence pass redesign. The CSI redesign is on its own track (its plan: [`../proactive_signals/csi_intelligence_pass_implementation_plan_2026-05-07.md`](../proactive_signals/csi_intelligence_pass_implementation_plan_2026-05-07.md)) and ships under its own PR (`claude/csi-intelligence-pass-mvp`).
 
 The only overlap: Item 4 (`IsADirectoryError`) is a CSI-replay bug found during the failed v2 backfill, and the CSI redesign PR will fix it as a free incidental — that's documented in the CSI plan's Phase F.
+
+---
+
+## Investigation results — 2026-05-07T23:53 UTC
+
+Read-only verification swept all 10 items. Summary:
+
+| # | Item | Verified status | Action needed |
+|---|---|---|---|
+| 1 | Followup #1 — Reconciler ignores TERMINAL_STATUSES | **OPEN** — no symmetric guard at `task_hub.py:1004-1009`, no commits since the postmortem | Tier-2 PR — `claude/reconciler-terminal-status-guard` |
+| 2 | Followup #2 — deploy.yml local main sync | **OPEN** — `deploy.yml:113-114` still does `git fetch origin main && git reset --hard origin/main` with no `update-ref refs/heads/main` | Tier-2 PR — `claude/deploy-yml-sync-local-main` |
+| 3 | Followup #3 — vp_mission Kanban mirror | **OPEN** — `tools/vp_orchestration.py:285-303` still mirrors VP missions with `agent_ready=True`; no source_kind filter on the consumer side | **Tier-2 PR — `claude/vp-mission-kanban-gate-fix` (P1, recurrence-risk)** |
+| 4 | IsADirectoryError bug | **OPEN** — `claude_code_intel_replay.py:281` still uses `.exists()` instead of `.is_file()` | Bundled into CSI redesign PR (Phase F) |
+| 5 | **PR #153 — surprise finding** | **MERGED to feature/latest2 but NOT on main.** PR #153 (`claude/session-handoff-review-WeP30 → feature/latest2`) merged at 2026-05-07T16:30:08Z. Files (`vp/autonomous_mission_executor.py`, `vp/worktree_utils.py`) exist on `origin/feature/latest2` but NOT on `origin/main`. To land on main, operator needs to run `/ship` (feature/latest2 → develop → main). | Operator action: `/ship` to promote the tier-2 contract to main |
+| 6 | Original Item 1 — CSI v2 smoke verification | **DONE** | Closed |
+| 7 | Original Item 4 — VPS gh CLI cleanup | **DONE** — `which gh` resolves to `/usr/bin/gh`, no shadow binary, auth healthy as Kjdragan with `repo` scope | Closed |
+| 8 | Original Item 5 — GitHub branch protection | **OPEN** — `main`: not protected (404); `develop`: protected but `required_approving_review_count=0` so minimal enforcement; `feature/latest2`: not protected (404) | Operator UI action — apply rules per original handoff doc § Item 5 |
+| 9 | Codie capture branch lifecycle | **PARKED** — branch on origin with 6 commits, no PR opened | Recommendation (c): leave parked. Document and close. |
+| 10 | vp-mission-df2c39bb parked state | **RESOLVED** — `parked / parked_manual / unseized / agent_ready=0` since 18:52:27 UTC | Closed |
+
+### Significant surprise (Item 5)
+
+PR #153 reached `feature/latest2` and is technically "merged" — that satisfies the literal letter of the postmortem's "Dead End 5" finding ("PR #153 is on feature/latest2 but not on main as of f4c793e2"), but operationally what matters is that the **autonomous-mission worktree contract is NOT yet on main**. Production Simone is running off `main` at `f4c793e2` and DOES NOT have the contract files.
+
+Until an operator runs `/ship` and the deploy workflow lands the merged feature/latest2 content on main, the tier-2 worktree contract is not in production. Combined with Item 3 still being OPEN (the `vp_mission` Kanban mirror still bypasses the agent gate), the rogue-branch incident remains repeatable on production today.
+
+This makes Item 3 (Followup #3) the highest-priority code work after the recovery, and Item 5 (operator-driven `/ship`) the highest-priority operator action.
+
+### Updated priority ordering
+
+| Priority | Item | Action |
+|---|---|---|
+| P0 (this session) | Item 5 | Operator: run `/ship` to land tier-2 contract on main |
+| P0 (this session) | Item 3 | Tier-2 PR: `claude/vp-mission-kanban-gate-fix` — close the recurrence hole |
+| P1 (in flight) | CSI intelligence pass redesign | Tier-2 PR: `claude/csi-intelligence-pass-mvp` (per separate plan) |
+| P1 (bundled) | Item 4 (IsADirectoryError) | Folded into CSI PR Phase F |
+| P2 (when convenient) | Item 1 — Reconciler TERMINAL_STATUSES | Tier-2 PR: `claude/reconciler-terminal-status-guard` |
+| P2 (when convenient) | Item 2 — deploy.yml local main sync | Tier-2 PR: `claude/deploy-yml-sync-local-main` |
+| P2 | Item 8 — Branch protection | Operator UI action |
+| Closed | Items 6, 7, 9, 10 | No further action |
+
+### Recommended sequence
+
+1. **Operator runs `/ship`** to get PR #153's contract files (`autonomous_mission_executor.py`, `worktree_utils.py`) onto main. This unblocks future autonomous-mission work going through proper sandboxing.
+2. **Open `claude/vp-mission-kanban-gate-fix`** PR (Item 3) immediately. ~10 LoC at the producer + ~30 LoC source_kind filter at the dispatcher + 3 unit tests. Small, deterministic, fixes the recurrence hole.
+3. **In parallel, start CSI redesign Phase A** (`claude/csi-intelligence-pass-mvp` per the separate plan).
+4. **After both ship**: Items 1, 2, 8 in any order. Lower priority. None blocking ops.
+
