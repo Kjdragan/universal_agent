@@ -4,6 +4,11 @@
   "session_counts": {},
   "recent_keys": {},
   "last_injection_ts": 0,
+<<<<<<< Updated upstream
   "last_reason": "mode_not_allowed",
   "last_event_at": "2026-05-07T03:10:24.469Z"
+=======
+  "last_reason": "disabled",
+  "last_event_at": "2026-04-15T20:14:13.474Z"
+>>>>>>> Stashed changes
 }

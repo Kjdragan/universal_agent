@@ -7,6 +7,7 @@
   "activated_at": "2026-05-01T01:07:21.208Z",
   "updated_at": "2026-05-07T03:10:24.465Z",
   "source": "keyword-detector",
+<<<<<<< Updated upstream
   "input_lock": {
     "active": false,
     "scope": "deep-interview-auto-approval",
@@ -25,4 +26,11 @@
     "message": "Deep interview is active; auto-approval shortcuts are blocked until the interview finishes.",
     "exit_reason": "handoff"
   }
+=======
+  "session_id": "",
+  "thread_id": "019d8ee6-9aee-73e3-b8a0-94f55f229153",
+  "turn_id": "019d8ee6-a3a5-7642-ad3a-4eb945854c9e",
+  "iteration": 2,
+  "last_turn_at": "2026-04-15T20:14:13.326Z"
+>>>>>>> Stashed changes
 }

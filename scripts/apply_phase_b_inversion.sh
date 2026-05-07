@@ -174,30 +174,88 @@ else
 fi
 
 # ------------------------------------------------------------------
-# B.4 — Append zai() function to .bashrc
+# B.3.5 — Ensure Infisical CLI installed (zai() shells out to it)
+# ------------------------------------------------------------------
+if command -v infisical >/dev/null 2>&1; then
+  ok "B.3.5 Infisical CLI present: $(command -v infisical)"
+else
+  log "B.3.5 Infisical CLI not installed — required by zai() function"
+  if [[ "$APPLY_MODE" == "apply" ]]; then
+    curl -1sLf "https://artifacts-cli.infisical.com/setup.deb.sh" | bash >/dev/null 2>&1
+    apt-get install -y -qq infisical >/dev/null 2>&1
+    command -v infisical >/dev/null 2>&1 || die "Infisical CLI install failed"
+    ok "B.3.5 Infisical CLI installed: $(infisical --version 2>&1 | head -1)"
+  else
+    log "DRY-RUN would: install Infisical CLI from official deb repo"
+  fi
+fi
+
+# ------------------------------------------------------------------
+# B.4 — Append/replace zai() function in .bashrc
 # ------------------------------------------------------------------
 log "B.4: ensure zai() function in $BASHRC"
 [[ -f $BASHRC ]] || maybe sudo -u ua touch "$BASHRC"
 
+# The block we want present (canonical version).
+ZAI_BLOCK_END='# --- end ZAI wrapper ---'
+read -r -d '' ZAI_BLOCK <<'ZAI_EOF' || true
+
+# --- ZAI explicit-opt-in wrapper (apply_phase_b_inversion.sh) ---
+# Default `claude` hits Anthropic Max via OAuth.
+# Use `zai` for cheap GLM inference in this terminal.
+# See docs/06_Deployment_And_Environments/10_Interactive_Coding_Environment.md
+export INFISICAL_PROJECT_ID="${INFISICAL_PROJECT_ID:-9970e5b7-d48a-4ed8-a8af-43e923e67572}"
+zai() {
+  ( local creds=/opt/universal_agent/.env
+    [[ -r "$creds" ]] || { echo "zai: cannot read $creds" >&2; exit 1; }
+    set -a; source "$creds" >/dev/null 2>&1; set +a
+    [[ -n "$INFISICAL_CLIENT_ID" && -n "$INFISICAL_CLIENT_SECRET" ]] \
+      || { echo "zai: missing INFISICAL_CLIENT_ID/SECRET in $creds" >&2; exit 1; }
+    local tok
+    tok=$(infisical login --method=universal-auth \
+            --client-id="$INFISICAL_CLIENT_ID" \
+            --client-secret="$INFISICAL_CLIENT_SECRET" \
+            --plain --silent 2>/dev/null) \
+      || { echo "zai: infisical universal-auth failed" >&2; exit 1; }
+    INFISICAL_TOKEN="$tok" infisical run \
+      --env=production --projectId="$INFISICAL_PROJECT_ID" --silent -- \
+      claude "$@"
+  )
+}
+# --- end ZAI wrapper ---
+ZAI_EOF
+
+# Idempotent edit: detect any prior block (matched by the start marker),
+# remove it, then append the canonical block. This way an out-of-date
+# block from a prior run gets replaced cleanly.
 if grep -qF "$ZAI_MARKER" "$BASHRC" 2>/dev/null; then
-  ok "B.4 zai() block already present — no change"
+  log "B.4 detected existing zai block — will replace with canonical version"
+  if [[ "$APPLY_MODE" == "apply" ]]; then
+    sudo -u ua python3 - "$BASHRC" "$ZAI_MARKER" "$ZAI_BLOCK_END" <<'PY'
+import sys, re
+path, start_marker, end_marker = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(path) as f: c = f.read()
+# Remove any prior block: from start_marker through either end_marker or
+# end of zai function (closing brace at column 0). Tolerates older versions
+# that didn't have the explicit end marker.
+pattern = re.compile(
+    re.escape(start_marker) + r".*?(?:" + re.escape(end_marker) + r"|^\}\s*\n)",
+    re.DOTALL | re.MULTILINE,
+)
+new = pattern.sub("", c).rstrip() + "\n"
+with open(path, "w") as f: f.write(new)
+PY
+    sudo -u ua tee -a "$BASHRC" >/dev/null <<<"$ZAI_BLOCK"
+    ok "B.4 replaced zai block in $BASHRC"
+  else
+    log "DRY-RUN would: replace existing zai block in $BASHRC with canonical version"
+  fi
 else
   if [[ "$APPLY_MODE" == "apply" ]]; then
-    sudo -u ua tee -a "$BASHRC" >/dev/null <<EOF
-
-$ZAI_MARKER
-# Default \`claude\` now hits Anthropic Max (after Phase B inversion).
-# Use \`zai\` when you want cheap GLM inference in this terminal.
-# See docs/06_Deployment_And_Environments/10_Interactive_Coding_Environment.md
-export INFISICAL_PROJECT_ID="\${INFISICAL_PROJECT_ID:-9970e5b7-d48a-4ed8-a8af-43e923e67572}"
-zai() {
-  infisical run --env=production --projectId="\$INFISICAL_PROJECT_ID" --silent -- \\
-    claude "\$@"
-}
-EOF
-    ok "B.4 appended zai() block to $BASHRC"
+    sudo -u ua tee -a "$BASHRC" >/dev/null <<<"$ZAI_BLOCK"
+    ok "B.4 appended zai block to $BASHRC"
   else
-    log "DRY-RUN would: append zai() block to $BASHRC"
+    log "DRY-RUN would: append zai block to $BASHRC"
   fi
 fi
 
