@@ -1,6 +1,6 @@
 # 11. Daily Dev Workflow — VPS-as-Dev via Antigravity Remote-SSH
 
-> **Audience:** Kevin (primary), and any future agent or operator who needs to understand how UA development actually happens day-to-day. This is the **idiot-proof beginning-to-end guide**. For the one-page TL;DR see [`docs/WORKFLOW.md`](../../WORKFLOW.md). For the deep-dive on *why* things route the way they do, see [`10_Interactive_Coding_Environment.md`](10_Interactive_Coding_Environment.md).
+> **Audience:** Kevin (primary), and any future agent or operator who needs to understand how UA development actually happens day-to-day. This is the **idiot-proof beginning-to-end guide**. For the one-page TL;DR see [`docs/WORKFLOW.md`](../WORKFLOW.md). For the deep-dive on *why* things route the way they do, see [`10_Interactive_Coding_Environment.md`](10_Interactive_Coding_Environment.md).
 >
 > **Status:** Canonical, post-2026-05-07 inversion. The previous "develop on desktop, push to VPS" model is obsolete (see § Why the workflow changed).
 

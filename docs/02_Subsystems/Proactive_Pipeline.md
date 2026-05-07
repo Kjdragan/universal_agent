@@ -106,7 +106,7 @@ graph LR
 | Brainstorm pipeline | Manual Todoist labels (Inbox→Triaging→Candidate) | **6-stage LLM refinement** (raw_idea→actionable) |
 | Task entry points | Todoist API sync only | **6 ingress paths**: CSI, Email, Calendar, Dashboard, Heartbeat, Brainstorm |
 | Morning report | Not implemented | **Deterministic snapshot** injected into heartbeat prompts |
-| Agent tools | `todoist_*` tool family | **`task_hub_task_action`** — review, complete, block, park, unblock, delegate, approve<br>**`task_hub_decompose`** — split multi-part tasks into linked subtasks |
+| Agent tools | `todoist_*` tool family | **`task_hub_task_action`** — review, complete, block, park, unblock, delegate, approve<br>**`task_hub_decompose`** — split multi-part tasks into linked subtasks<br>**`task_hub_create`** — proactive task ideation with optional mission envelopes<br>**`task_hub_promote_signals`** — promote curated signal cards into actionable tasks |
 
 Meaningful-work mission model (2026-05-06):
 - When proactive work spans multiple meaningful phases with distinct workspaces/artifacts (for example analysis → demo build → validation), it should be modeled as:
@@ -880,7 +880,7 @@ is advisory, never blocks heartbeat execution.
 | [`reflection_engine.py`](../../src/universal_agent/services/reflection_engine.py) | Overnight autonomous work generator — time windows, budget tracking, memory-driven context assembly |
 | [`refinement_agent.py`](../../src/universal_agent/services/refinement_agent.py) | LLM-powered brainstorm refinement (6-stage progression) |
 | [`decomposition_agent.py`](../../src/universal_agent/services/decomposition_agent.py) | LLM-powered task decomposition into 2-5 subtasks |
-| [`task_hub_bridge.py`](../../src/universal_agent/tools/task_hub_bridge.py) | Agent-facing MCP tools: `task_hub_task_action` (lifecycle), `task_hub_decompose` (split into subtasks) |
+| [`task_hub_bridge.py`](../../src/universal_agent/tools/task_hub_bridge.py) | Agent-facing MCP tools: `task_hub_task_action` (lifecycle), `task_hub_decompose` (split into subtasks), `task_hub_create` (proactive ideation), `task_hub_promote_signals` (signal card promotion) |
 | [`feature_flags.py`](../../src/universal_agent/feature_flags.py) | `heartbeat_enabled()`, `cron_enabled()` — master switches |
 | [`services/claude_code_intel.py`](../../src/universal_agent/services/claude_code_intel.py) | Dedicated X API `@ClaudeDevs` producer — writes Claude Code Intel packets, updates the local KB source index, and queues Tier 3/4 Task Hub follow-up |
 | [`services/claude_code_intel_replay.py`](../../src/universal_agent/services/claude_code_intel_replay.py) | Packet replay/backfill, candidate ledger generation, first-pass external vault population, and replay-safe Task Hub reconciliation for Claude Code Intel packets |
@@ -1271,7 +1271,7 @@ The proactive pipeline has extensive unit test coverage across **15 test modules
 |-------------|-------|-------|
 | `test_task_hub_lifecycle.py` | ~30 | CRUD, status transitions (`open → in_progress → review → completed`), assignment finalization, stale detection, scoring heuristics, `perform_task_action()` lifecycle |
 | `test_task_hub_schema_extensions.py` | 18 | Comments (CRUD, scoping, limits), question queue (enqueue/answer/expiry), subtask decomposition (parent→child hierarchy, custom IDs, progress tracking, tree traversal, depth limits), refinement lifecycle (stage advancement, invalid stage rejection), `trigger_type` defaults, `parent_task_id` column |
-| `test_task_hub_bridge.py` | 2 | MCP tool wiring — `task_hub_task_action` (lifecycle actions), `task_hub_decompose` (subtask creation from JSON) |
+| `test_task_hub_bridge.py` | 2 | MCP tool wiring — `task_hub_task_action` (lifecycle actions), `task_hub_decompose` (subtask creation from JSON), `task_hub_create` (proactive task creation), `task_hub_promote_signals` (signal card promotion) |
 
 ### Dispatch Layer Tests
 
