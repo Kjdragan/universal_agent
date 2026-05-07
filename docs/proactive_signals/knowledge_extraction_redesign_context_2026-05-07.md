@@ -15,7 +15,8 @@
 4. **The architectural insight: don't add a separate "extractor" step.** The pipeline already has two LLM passes (classifier at poll time, URL judge at replay time). The fix is to add **one more rich LLM analysis pass at replay time** whose structured output IS the vault delta — entities, concepts, relations, summary, all together. The regex memex extractor is *deleted*, not replaced piece-for-piece. See "Target architecture" below.
 5. **The slowness in the v2 backfill was NOT from extraction.** 964 z.ai LLM calls in 58 minutes — almost all of those were `csi_url_judge._call_llm_structured` (one LLM call per linked URL, ~15 URLs/packet × 36 packets ≈ 540 calls + retries). Plus URL fetching. The regex extractor was effectively free in compute terms — that's *why* its output is shallow. Adding the new rich analysis call adds ~30-50 LLM calls per backfill on top of the existing budget — small marginal cost.
 6. **The vault contents are throwaway.** Don't preserve them. Don't run a full backfill. Don't swap. The operator has explicitly said: rebuild the system, iterate small, throw away test runs freely. Production v1 vault stays canonical until a *good* extractor is built. After the new system is verified, a fresh full backfill produces the real v2 vault.
-7. **You're working on `feature/latest2` in the dev tree** at `/home/ua/dev/universal_agent`. Production at `/opt/universal_agent` was just recovered to `main @ f4c793e2` and is healthy — leave it alone except as a code-reading reference.
+7. **Model: GLM-5.1, no reasoning/thinking param.** Use `model=resolve_opus()` from `utils/model_resolution.py` — that resolves to `glm-5.1` via the ZAI map. GLM-5.1 has **no** thinking mode (operator-confirmed). Do NOT pass `thinking={...}` or `reasoning_effort` on these calls. Quality comes from a strong system prompt + rich context + structured-output via tool_use, not from a reasoning param. See Phase 2.1 below.
+8. **You're working on `feature/latest2` in the dev tree** at `/home/ua/dev/universal_agent`. Production at `/opt/universal_agent` was just recovered to `main @ f4c793e2` and is healthy — leave it alone except as a code-reading reference.
 
 ---
 
@@ -351,11 +352,13 @@ Notes on the schema:
 - A prompt-template file (probably under `prompts/` or inline in the module — operator's call) — the CSI-domain-specific system prompt.
 - Unit tests in `tests/unit/test_csi_intelligence_pass.py` covering: prompt-building, JSON-parsing, VaultDelta-to-memex-actions conversion, golden-set expectations (see Phase 3).
 
-### Phase 2.1 — Model + reasoning configuration (operator-mandated, hard requirement)
+### Phase 2.1 — Model selection (operator-mandated, hard requirement)
 
-**The new intelligence pass MUST run on GLM-5.1 with high reasoning enabled.** This is not negotiable and applies to the new rich-analysis call. The same upgrade should be considered for the existing `csi_url_judge._call_llm_structured` call (at minimum, audit whether reasoning improves URL-judge quality enough to justify the token cost).
+**The new intelligence pass MUST run on GLM-5.1.** This is not negotiable.
 
-#### Status of model selection (already correct)
+GLM-5.1 does **not** have a thinking / reasoning mode. Do not pass `thinking={...}`, `reasoning_effort`, or any extended-thinking parameter on the CSI calls — those are Anthropic-Claude features that don't apply to GLM-5.1. (The operator confirmed this directly. An earlier draft of this doc incorrectly prescribed a thinking budget; that was wrong and has been removed.)
+
+#### Status (already correct in code — no change needed)
 
 `utils/model_resolution.py:31-34` defines the ZAI model map:
 
@@ -372,53 +375,18 @@ Both existing CSI LLM call sites already use `resolve_opus()`:
 - `services/csi_url_judge.py:306` — `model=resolve_opus()` (URL judging)
 - `wiki/llm.py:58` — `model=model or resolve_opus()` (the latent extractor)
 
-So the new `csi_intelligence_pass.py` should follow the same convention: `model=resolve_opus()`. That gives you GLM-5.1.
+The new `csi_intelligence_pass.py` should follow the same convention: `model=resolve_opus()`. That gives you GLM-5.1, end of model-selection story.
 
-#### Status of reasoning level (currently NOT set; must be added)
+#### What you actually need from GLM-5.1
 
-**Currently: no thinking/reasoning param is set on any CSI call.** Repo-wide grep confirms zero usages of `thinking={...}`, `reasoning_effort`, or `extra_body` carrying reasoning config in `services/`, `wiki/`, or `utils/`. So we're getting GLM-5.1's default reasoning behavior, not high-reasoning.
+The way to get high-quality output from GLM-5.1 (in the absence of a thinking mode) is through:
 
-The Anthropic SDK shape for extended thinking is:
+- **A strong system prompt** that lays out the taxonomy, examples, and explicit "do not extract" guidance.
+- **Rich context in the user message** — full tweet text, classifier reasoning, fetched linked sources, existing vault entity list. The more relevant context the model sees, the less it has to guess.
+- **Structured output via tool_use** (same pattern as `csi_url_judge._call_llm_structured`). Forces the model to emit a typed schema instead of free-form prose, which constrains hallucination.
+- **Generous `max_tokens` for output** — 4096 is fine; larger if the analysis needs to emit many vault_actions for a packet.
 
-```python
-client.messages.create(
-    model=resolve_opus(),                              # → glm-5.1
-    max_tokens=4096,
-    thinking={
-        "type": "enabled",
-        "budget_tokens": 8000,                         # high-reasoning budget
-    },
-    system=...,
-    messages=[...],
-    tools=[csi_intelligence_tool],
-    tool_choice={"type": "tool", "name": "..."},
-)
-```
-
-The new session **must** pass this `thinking={...}` block on every CSI intelligence call. Suggested budget: start at 8000 tokens; tune up or down based on observed output quality + cost.
-
-#### Verification step (the new session must do this empirically)
-
-The Z.AI Anthropic-compatible endpoint (`api.z.ai/api/anthropic`) is a proxy. **Not every proxy honors every Anthropic-SDK parameter.** Some proxies silently drop `thinking={...}` and serve the call at default reasoning. If that happens here, the operator's "high reasoning" requirement is unmet even though the code looks right.
-
-The new session must do an empirical verification before declaring the redesign complete:
-
-1. Make a test call to Z.AI through the Anthropic SDK with `thinking={"type": "enabled", "budget_tokens": 8000}`.
-2. Inspect the response. If extended thinking is honored, the response will contain `thinking` blocks (`response.content[i].type == "thinking"`) BEFORE the tool_use / text blocks. If the proxy dropped the param, no thinking blocks will appear.
-3. If the proxy drops it: switch to calling Z.AI's native `/api/paas/v4` endpoint directly (different SDK shape — Z.AI documents their reasoning-mode parameter on their docs site at `https://docs.z.ai`). This is a bigger change — separate HTTP client setup — so flag it back to the operator before going down that path.
-4. Document the result of this verification in the new session's working notes.
-
-If you find that Z.AI is dropping `thinking={...}` for the Anthropic-emulated endpoint, that's a finding worth surfacing back to the operator immediately — it has implications well beyond CSI (every other LLM call in the system is also using the Anthropic-shape SDK against this proxy).
-
-#### Audit follow-up: existing `csi_url_judge._call_llm_structured`
-
-The URL judge makes ~540 calls per backfill. It's currently running at default reasoning. Once the new intelligence pass is working, the new session should:
-
-1. Test whether enabling `thinking={...}` on the URL judge improves its quality (fewer false-positive fetches, fewer false-negative skips).
-2. If yes, apply the same upgrade. Cost increase per backfill: probably ~5-10% on top of existing budget. Probably worth it.
-3. If no measurable improvement: leave as-is and note in working notes.
-
-**This audit is a follow-on, not a blocker for shipping the new analysis pass.** The new pass is the priority.
+Those four levers are the "reasoning quality" knobs available with GLM-5.1. Tune the system prompt as the primary lever during Phase 3 iteration.
 
 ### Phase 3 — Tight iteration loop
 
@@ -493,11 +461,10 @@ Once the unit test passes on hand-curated cases, run `apply_memex_pass` against 
 ## Open questions the new session should resolve early
 
 1. **What domain taxonomy do we want?** The schema above proposes `product / feature / concept / person / event` — confirm or refine before writing the prompt. Specifically: should `tool` be a separate kind, or just a sub-type of `product`? Should `team` (e.g. "the Claude Code team") be its own kind?
-2. **Reasoning verification (see Phase 2.1).** Confirm empirically that Z.AI's Anthropic-compatible proxy honors `thinking={"type": "enabled", "budget_tokens": N}`. If it silently drops the param, escalate to operator before proceeding. Don't ship a pass that *looks* like it has high reasoning but actually doesn't.
-3. **Token budget for the rich-analysis call.** With full packet context (tweet + classifier reasoning + 2-5 fetched linked sources at ~5K tokens each + existing vault entity list), the input prompt may run 20-30K tokens. Add 8000 thinking budget + 4096 max_tokens output. Verify GLM-5.1 supports a context window that big through the Z.AI proxy. If not, decide whether to truncate linked sources or chunk the analysis.
-4. **Should we also fix the v2 backfill `IsADirectoryError` in the same session?** Probably yes — same file (`claude_code_intel_replay.py:281`), ~5 LoC fix, removes a confound for future backfill runs and is a free win. Use `if metadata_path.is_file()` instead of `if metadata_path.exists()`.
-5. **What does "good output" look like at scale?** Define the eyeball-quality bar before iterating. E.g.: "running over a representative packet, every emitted entity is something a human reader would also flag as worth a vault page; zero stub-only entities; multi-word entities preserved as multi-word; no t.co slugs; no English stopwords; aliases captured for canonicalization." If the new session can't articulate this, it'll iterate forever.
-6. **Should the rich-analysis pass replace or augment the existing classifier?** Today the classifier runs at poll time and emits tier + reasoning per action. The new analysis runs at replay time. They're separate calls — but they overlap in what they read. Decide whether to: (a) keep both as-is, classifier output is just additional input to analysis (recommended — minimal disruption); (b) extend the classifier to also emit the rich analysis at poll time (more efficient but ignores linked-source content which isn't fetched yet); (c) eliminate the classifier and let the rich analysis do tier classification too (biggest change, biggest risk).
+2. **Token budget for the rich-analysis call.** With full packet context (tweet + classifier reasoning + 2-5 fetched linked sources at ~5K tokens each + existing vault entity list), the input prompt may run 20-30K tokens. Add 4096 max_tokens output. Verify GLM-5.1 supports an input context window that big through the Z.AI proxy (Z.AI's docs say GLM-5.1 supports up to 200K context, but verify empirically against `api.z.ai/api/anthropic`). If the prompt overflows, decide whether to truncate linked sources, chunk the analysis, or call per-action instead of per-packet.
+3. **Should we also fix the v2 backfill `IsADirectoryError` in the same session?** Probably yes — same file (`claude_code_intel_replay.py:281`), ~5 LoC fix, removes a confound for future backfill runs and is a free win. Use `if metadata_path.is_file()` instead of `if metadata_path.exists()`.
+4. **What does "good output" look like at scale?** Define the eyeball-quality bar before iterating. E.g.: "running over a representative packet, every emitted entity is something a human reader would also flag as worth a vault page; zero stub-only entities; multi-word entities preserved as multi-word; no t.co slugs; no English stopwords; aliases captured for canonicalization." If the new session can't articulate this, it'll iterate forever.
+5. **Should the rich-analysis pass replace or augment the existing classifier?** Today the classifier runs at poll time and emits tier + reasoning per action. The new analysis runs at replay time. They're separate calls — but they overlap in what they read. Decide whether to: (a) keep both as-is, classifier output is just additional input to analysis (recommended — minimal disruption); (b) extend the classifier to also emit the rich analysis at poll time (more efficient but ignores linked-source content which isn't fetched yet); (c) eliminate the classifier and let the rich analysis do tier classification too (biggest change, biggest risk).
 
 ---
 
@@ -555,6 +522,6 @@ cat /opt/universal_agent/artifacts/proactive/claude_code_intel/packets/2026-05-0
 ls /opt/universal_agent/artifacts/proactive/claude_code_intel/packets/2026-05-06/210011__ClaudeDevs/linked_sources/
 ```
 
-Then propose: prompt sketch + Pydantic schema + the verification step for `thinking={...}` honored by Z.AI. Don't write production code until that's been operator-reviewed.
+Then propose: prompt sketch + Pydantic schema. Don't write production code until that's been operator-reviewed.
 
 Good luck.
