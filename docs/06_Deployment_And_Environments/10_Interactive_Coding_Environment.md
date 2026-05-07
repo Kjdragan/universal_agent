@@ -1,9 +1,25 @@
 # 10. Interactive Coding Environment — Default-Anthropic Inversion
 
-> **Status:** Approved plan, execution pending. This is the canonical source-of-truth reference for how Kevin's interactive coding (Antigravity terminal, Antigravity IDE side panel, plain `claude` from any terminal) routes to **real Anthropic Max** while UA's autonomous agent runs continue to route to **ZAI / GLM**. Companion to [`09_Demo_Execution_Environments.md`](09_Demo_Execution_Environments.md).
+> **Status:** ✅ **EXECUTED AND VERIFIED 2026-05-07.** Phases A–C complete on VPS (`ua@uaonvps`) and desktop (`kjdragan@mint-desktop`). End-to-end routing confirmed via `/proc/<claude-pid>/environ` inspection. Phases D (Antigravity Remote-SSH) and Phase G (full 7-test acid suite) remain as optional polish.
+>
+> This is the canonical source-of-truth reference for how Kevin's interactive coding (Antigravity terminal, Antigravity IDE side panel, plain `claude` from any terminal) routes to **real Anthropic Max** while UA's autonomous agent runs continue to route to **ZAI / GLM**. Companion to [`09_Demo_Execution_Environments.md`](09_Demo_Execution_Environments.md).
 >
 > **Audience:** Operators, AI coders, future agents touching anything Claude-related on either machine.
-> **Last updated:** 2026-05-06.
+> **Last updated:** 2026-05-07 (post-execution; lessons-learned section added).
+
+## Lessons learned during execution (2026-05-07)
+
+Three real issues surfaced during apply that future operators must know about. The committed scripts (`scripts/apply_phase_b_inversion.sh`) handle these correctly; this section documents the *why* so future agents don't re-discover them.
+
+1. **`/proc/<pid>/environ` shows EXEC-time env, not runtime os.environ.** The original Phase B verify check tried to read `ANTHROPIC_BASE_URL` from `/proc/<gateway-pid>/environ` after restarting UA services, expecting to see the Infisical-injected value. It was always empty. Reason: UA Python services receive ZAI vars via `initialize_runtime_secrets()` injecting into `os.environ` *at runtime*; `/proc/environ` only reflects what was passed to `execve()`. **Fix in committed script:** B.2 now invokes `/opt/universal_agent/.venv/bin/python -c '...initialize_runtime_secrets()...; print(os.environ["ANTHROPIC_BASE_URL"])'` as a contract test instead. For the `claude` CLI subprocess (a node binary that doesn't mutate its own env at runtime), `/proc/environ` IS reliable — that's what the acid test uses.
+
+2. **Infisical CLI is not installed by default on UA VPS.** UA's Python services use the SDK directly via `httpx` (see `infisical_loader.py:440`), so the CLI was never needed. The `zai()` shell wrapper shells out to `infisical run`, so the CLI must be present. **Fix in committed script:** B.3.5 detects and installs from the official deb repo (`https://artifacts-cli.infisical.com/setup.deb.sh`).
+
+3. **`infisical run` requires either a CLI session OR explicit universal-auth — neither exists by default.** Kevin's desktop CLI had no `infisical login` session, so `infisical run --env=development -- claude ...` failed with "Failed to automatically trigger login flow." UA VPS has the same problem. **Fix in committed script:** the `zai()` function reads `INFISICAL_CLIENT_ID` / `INFISICAL_CLIENT_SECRET` from the bootstrap `.env` (`/opt/universal_agent/.env` on VPS, `~/lrepos/universal_agent/.env` on desktop), runs `infisical login --method=universal-auth --plain --silent` to get a token, then uses `INFISICAL_TOKEN=<token> infisical run ...`. Subshell isolation prevents creds leaking to the parent shell.
+
+Bonus gotcha that bit us: **stale `~/.claude/.credentials.json`.** Kevin's desktop had OAuth credentials from Apr 30 that returned 401 from api.anthropic.com. Resolution: `cd ~ && claude /login` to refresh. Won't surface unless the inversion was previously incomplete and OAuth was never the active auth path.
+
+---
 
 ## Context
 
