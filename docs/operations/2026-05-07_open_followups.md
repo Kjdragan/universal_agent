@@ -136,9 +136,11 @@ Small. Single workflow line + one verification step. ~half-hour.
 
 ---
 
-## Followup #3 — Simone executed a code-author `vp_mission`
+## Followup #3 — `vp_mission` Kanban mirror bypasses agent-capability gate
 
-**Priority:** P1. This is the failure that produced the rogue branch in the first place. Could recur tomorrow if not addressed.
+> **Title history:** Previously titled *"Simone executed a code-author `vp_mission`"* — that was the symptom. The verified root cause (this section) is mirror-and-reopen behavior in `tools/vp_orchestration.py` + `task_hub.py`, not a Simone-side bug.
+
+**Priority:** P1. This is the failure that produced the rogue branch in the first place. Recurrence is likely without the fix — the original mission was tier-2 production-coder work that aged out of the VP coder queue, got mirror-reopened as a generic `vp_mission` row, and Simone's dispatch sweep claimed it on the very next tick.
 
 ### Symptom
 
@@ -146,56 +148,99 @@ Small. Single workflow line + one verification step. ~half-hour.
 
 Simone is a heartbeat orchestrator. Code-mutation work belongs to `vp.coder.primary`, or to the autonomous-mission worktree contract documented in [`docs/deployment/ai_coder_instructions.md`](../deployment/ai_coder_instructions.md) (tier-2: worktree → patch → syntax check → unit tests → push to `<bot>/<task-id>` branch → PR → CI passes → human merges). This mission did none of that. It executed in-place against `/opt/universal_agent` and crashed CSI cron with a SyntaxError.
 
-### Root cause (hypothesis — needs investigation)
+### Root cause (verified by code reading)
 
-Three plausible causes, in order of likelihood:
+`tools/vp_orchestration.py` mirrors **every dispatched VP mission** as a claimable row in Task Hub with `source_kind='vp_mission'` and `agent_ready=True`. When the VP worker doesn't claim in time, `reopen_stale_delegations` flips the mirror row to `OPEN`, and `daemon_simone_todo`'s dispatch sweep claims it because `task_hub.py:claim_next_dispatch_tasks` has **no `source_kind` or target-agent filter**. `route_all_to_simone` then tags the claim with `agent_id=simone`, and Simone's runtime executes the mission body under her identity prompt.
 
-**(a) Dispatcher doesn't gate `vp_mission` by agent capability.** Inspection of `task_hub.py:claim_next_dispatch_tasks` and `services/dispatch_service.py:dispatch_sweep` does not show an obvious check like "this `source_kind` requires `agent_capability='code_author'` and the claimer's agent_id matches that capability." If true, any agent that pulls from the queue will pick up any `vp_mission` regardless of whether the work suits them.
+In other words: the Kanban mirror was meant as visibility for VP-owned work, but because (a) it inherits `agent_ready=True`, (b) the reopen path resets it to `OPEN` when stale, and (c) the dispatcher has no source_kind filter, it functions as a *fallback claim queue* for any agent — including agents who have no business executing the mission body.
 
-**(b) Simone's heartbeat directives include a too-broad "claim any vp_mission" rule.** `memory/HEARTBEAT.md` directs her to scan and claim from Task Hub. If the directive doesn't filter by `source_kind` or has a broad fallback ("if nothing else, claim any agent_ready vp_mission"), she will pull code-author missions into her own runtime.
+For the specific incident: the original delegation was likely a tier-2 docstring-cleanup mission targeting `vp.coder.primary`. That worker either was down, was busy on a longer mission, or hit its hold timeout. The reopen ran, Simone's next dispatch sweep saw an `OPEN` `agent_ready=True` row that looked claimable, and pulled it in.
 
-**(c) The mission's `source_kind` routing target was wrong.** The mission was a `vp_mission` source_kind. If there's a routing helper that maps `vp_mission` → preferred_vp, and that mapping defaults to `simone_direct` instead of `vp.coder.primary` for code-mutation missions, the mission pre-routed itself to Simone before being enqueued.
+### Code paths cited
 
-The mission's `metadata_json.preferred_vp` field would tell us which of these applies. From the diagnostic output during recovery: the parked task's metadata showed `preferred_vp: simone_direct` — strongly supporting hypothesis (c) for *this specific mission*. But that doesn't rule out (a) — even with `preferred_vp: simone_direct`, the dispatcher should refuse to give a code-mutation mission to a non-code-mutation agent.
+| Stage | File / Lines | Behavior |
+|---|---|---|
+| Producer (creates the original delegation) | `services/proactive_codie.py:71-139` | Builds the docstring-cleanup mission for `vp.coder.primary`. |
+| Kanban mirror (the gap) | `tools/vp_orchestration.py:285-303` | Mirrors VP mission to Task Hub as `source_kind='vp_mission'`, `agent_ready=True`. |
+| Reopen on staleness | `task_hub.py:reopen_stale_delegations:4331-4376` | Flips the mirror row from claimed/in_progress back to OPEN when the VP worker holds without progress. |
+| Claim filter (the missing filter) | `task_hub.py:claim_next_dispatch_tasks:1550-1682` | No `source_kind` filter, no target-agent filter. Any caller's claim sweep can claim any `OPEN` `agent_ready=True` row regardless of source_kind. |
+| Simone tag | `services/agent_router.py:48-55` | `route_all_to_simone` writes `agent_id=simone` onto whatever was claimed by `daemon_simone_todo`. |
+| Heartbeat directive (contributory) | `memory/HEARTBEAT.md:9` | Tells Simone to drive Task Hub work generally; doesn't exclude `vp_mission`. |
 
-### Investigation plan
+### Surprise finding — tier-2 contract not yet on main
 
-Three checks, in order:
+The autonomous-mission worktree contract referenced as the prevention for this exact failure mode (`autonomous_mission_executor.py`, `worktree_utils.py`) is on `feature/latest2` **but NOT on `main` as of `f4c793e2`**. It landed in commit `566ddb27` / PR #153, currently sitting on `feature/latest2`.
 
-1. **Who created `vp-mission-df2c39bb` and what did they pass for `preferred_vp`?**
-   ```bash
-   sqlite3 /opt/universal_agent/AGENT_RUN_WORKSPACES/activity_state.db \
-     "SELECT metadata_json FROM task_hub_items WHERE task_id='vp-mission-df2c39bb1e41c6f63d972894';" \
-     | python3 -m json.tool | grep -E 'preferred_vp|source|workflow_kind|created_by|origin'
-   ```
-   Then: grep the codebase for whoever wrote that origin string. That's the producer.
+This means the production Simone after the recovery (running off `main` at `f4c793e2`) is operating *without* the worktree contract that was supposed to make this whole class of failure impossible. If a stale-delegation reopen hits her dispatch sweep again before PR #153 reaches main, the same incident can recur.
 
-2. **Does `claim_next_dispatch_tasks` enforce agent-capability matching?**
-   Read `task_hub.py:1567-1700`. If there's no `WHERE agent_capability = ?` clause anywhere in the SQL, that's hypothesis (a) confirmed.
+We should also check: was PR #153 the work the docstring-cleanup mission was *trying to deliver*? Or is PR #153 already-shipped scaffolding for a contract that was supposed to *enforce* on this kind of work? The session transcript treated the contract as already-deployed — that mental model was wrong, and that's worth flagging in the postmortem under "what we thought was deployed."
 
-3. **Does Simone's HEARTBEAT.md filter by `source_kind`?**
-   ```bash
-   grep -nE 'source_kind|vp_mission|claim_next' /opt/universal_agent/memory/HEARTBEAT.md
-   ```
-   If it has a broad "claim any open vp_mission" rule without a code-author exclusion, that's hypothesis (b) confirmed.
+### Recommended fix (defense in depth — ship together on `feature/latest2`)
 
-The full fix likely requires action on all three:
-- Add a `target_agent_kind` column or `metadata.target_agent_kind` field to vp_missions (`code_author | research | analysis | …`).
-- `claim_next_dispatch_tasks` filters by it.
-- HEARTBEAT.md is updated to never claim `target_agent_kind='code_author'` missions.
-- Code-author missions are routed to `vp.coder.primary` by default.
+**Option B (primary, ~10 LoC) — fix at the producer side.**
 
-### Companion analysis
+`tools/vp_orchestration.py`'s Kanban mirror writes `agent_ready=False` (or skips writing entirely) for `vp_mission` rows. VP missions stay tracked in Task Hub for visibility/auditing but are *not claimable* through the normal dispatch sweep. VP workers reach in and claim them by `task_id` directly (the path they already use), not via dispatch.
 
-A companion analysis of the Simone-vs-VP-coder dispatch routing was started during the operator session but not completed in this transcript. Pick that up before working on the fix.
+```python
+# tools/vp_orchestration.py:285-303 (sketch)
+task_hub.upsert_item(
+    conn,
+    {
+        "task_id": vp_mission_task_id,
+        "source_kind": "vp_mission",
+        # ...existing fields...
+        "agent_ready": False,            # ← was True; flip to False
+        # OR equivalently: don't insert this row through upsert_item at all,
+        # and write to a separate vp_mission_log table for visibility.
+    },
+)
+```
+
+**Option A (backstop, ~30 LoC) — fix at the dispatcher side.**
+
+Plumb a `forbidden_source_kinds` filter through `dispatch_service.dispatch_sweep` → `todo_dispatch_service` → `task_hub.claim_next_dispatch_tasks`. For Simone's claim sweep, set `forbidden_source_kinds={"vp_mission"}`.
+
+```python
+# task_hub.py:claim_next_dispatch_tasks (sketch)
+def claim_next_dispatch_tasks(
+    conn,
+    *,
+    limit=1,
+    agent_id="heartbeat",
+    forbidden_source_kinds: set[str] | None = None,   # ← new
+    ...
+):
+    where = ["status = ?", "agent_ready = 1"]
+    params = [TASK_STATUS_OPEN]
+    if forbidden_source_kinds:
+        placeholders = ",".join("?" * len(forbidden_source_kinds))
+        where.append(f"source_kind NOT IN ({placeholders})")
+        params.extend(forbidden_source_kinds)
+    # ... rest unchanged
+```
+
+Why both: Option B closes the producer-side hole. Option A is a backstop in case some other path ever introduces a similar pattern. They're independent and small.
+
+### Tests
+
+Add `tests/unit/test_dispatch_source_kind_isolation.py`:
+
+1. **vp_mission rows are not claimable by a non-VP claimer.** Create a `vp_mission` row via `tools/vp_orchestration` mirror. Run a Simone-flavored dispatch sweep. Assert the `vp_mission` row is not in the returned claims.
+2. **Simone's claim sweep skips `source_kind=vp_mission` rows even when they're OPEN + agent_ready=True.** (Belt-and-suspenders for Option A.)
+3. **Reopen path doesn't transmute the row.** After `reopen_stale_delegations` runs, the `agent_ready` field on a `vp_mission` row is still `False`. (Catches the case where reopen sets `agent_ready=True` as a side effect.)
 
 ### Effort
 
-Investigation: 1-2 hours. Fix: probably 1-2 days because it touches the dispatch hot path and likely needs migration of in-flight `vp_mission` rows. Pretty large surface area. Worth scoping carefully before opening a PR.
+1.5–2 hours total: ~10 LoC for Option B, ~30 LoC for Option A, plus 3 unit tests. Half-day with PR cycle through `pr-validate.yml`.
+
+### Open ops questions (record but not blocking)
+
+- **Was `vp.coder.primary` actually down/unhealthy** at the time the original delegation aged out and got mirror-reopened? If so, that's a separate signal worth investigating (worker health → restart loop).
+- **Is PR #153 (the tier-2 worktree contract) on track to merge to main, or was it abandoned?** If it merges, the Kanban-mirror hole still exists but the worktree contract sandboxes the damage. If it's abandoned, the Kanban-mirror fix is the only defense.
 
 ### Containment until fixed
 
-While this remains unfixed, **do not enqueue any `vp_mission` against `/opt/universal_agent` directly.** All code-mutation work for the production tree must go through the autonomous-mission worktree contract: separate `<bot>/<task-id>` branch, separate worktree, PR through `pr-validate.yml`, human merge. No Simone-driven in-place edits. If a vp_mission slips through anyway, recovery is the sequence in this incident's postmortem.
+Until this lands, **do not enqueue any `vp_mission` against `/opt/universal_agent` directly.** All code-mutation work for the production tree must go through the autonomous-mission worktree contract: separate `<bot>/<task-id>` branch, separate worktree, PR through `pr-validate.yml`, human merge. No Simone-driven in-place edits. If a vp_mission slips through anyway, recovery is the sequence in this incident's postmortem.
 
 ---
 
@@ -207,4 +252,4 @@ These follow-ups are durable. They will live in this doc until shipped. When eac
 |---|---|---|---|
 | 1 — Reconciler `TERMINAL_STATUSES` protection | open | — | Workaround in place (use `parked`). Fix is a small `task_hub.py` change. |
 | 2 — Deploy.yml local `main` sync | open | — | Cosmetic-only impact. One-line workflow change. |
-| 3 — Simone vs. vp.coder.primary routing | **open / contains future risk** | — | Most-load-bearing of the three. Investigate before next autonomous code-author mission. |
+| 3 — `vp_mission` Kanban mirror bypasses agent-capability gate | **open / verified root cause** | — | Track B diagnosis confirmed: `tools/vp_orchestration.py:285-303` mirrors VP missions as `agent_ready=True`, `task_hub.py:reopen_stale_delegations:4331-4376` reopens them, `task_hub.py:claim_next_dispatch_tasks:1550-1682` has no `source_kind` filter, Simone's sweep claims them. Fix is small (Option B: ~10 LoC at the mirror). |

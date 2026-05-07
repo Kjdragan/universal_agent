@@ -97,6 +97,12 @@ The first attempt to halt the mission used `UPDATE task_hub_items SET status='ca
 
 The fix in this session was to use `status='parked'` instead. `PARKED` *did* survive — matches the existing `parked_manual` pattern that's been stable for 24h+. Tracked as Followup #1.
 
+### Dead end 5 — what we thought was deployed wasn't
+
+Throughout the diagnostic session both the operator and the Claude session referenced the autonomous-mission worktree contract (`autonomous_mission_executor.py`, `worktree_utils.py`) as if it were already deployed and "would have prevented this." Track B analysis after the recovery confirmed that contract is on `feature/latest2` (commit `566ddb27`, PR #153) **but NOT on `main` as of `f4c793e2`**. Production Simone after the recovery is therefore running *without* the contract that's supposed to make this class of failure impossible. Until PR #153 reaches main, the same incident can recur on the next stale-delegation reopen.
+
+Lesson: when reasoning about "this contract should have caught this", verify the contract is actually on the running revision. Both `git log --oneline main -- src/.../worktree_utils.py` and `git log --oneline feature/latest2 -- src/.../worktree_utils.py` would have surfaced the gap immediately. Tracked under Followup #3 as a surprise finding.
+
 ---
 
 ## Recovery sequence (commands actually used)
