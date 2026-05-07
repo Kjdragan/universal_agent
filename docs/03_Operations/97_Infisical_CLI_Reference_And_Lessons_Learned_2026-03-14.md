@@ -95,6 +95,43 @@ infisical run --env=development --silent -- python3 -c "import os; print(os.envi
 
 `infisical run` injects **all** secrets from the specified environment as environment variables before executing the command.
 
+### Universal-auth bootstrap for `infisical run` (no CLI session)
+
+**When you need:** running `infisical run` from a shell or wrapper function that has **no cached `infisical login` session**. This is the case for:
+- The `zai()` shell function (post-2026-05-07 inversion) on both VPS `ua` user and desktop
+- VPS automation scripts where running `infisical login` interactively isn't practical
+- Sandbox / ephemeral environments
+
+**Pattern (the `zai()` shell function uses this; copy/paste-able):**
+
+```bash
+zai() {
+  ( local creds=/opt/universal_agent/.env  # path differs per machine
+    [[ -r "$creds" ]] || { echo "zai: cannot read $creds" >&2; exit 1; }
+    set -a; source "$creds" >/dev/null 2>&1; set +a
+    [[ -n "$INFISICAL_CLIENT_ID" && -n "$INFISICAL_CLIENT_SECRET" ]] \
+      || { echo "zai: missing INFISICAL_CLIENT_ID/SECRET in $creds" >&2; exit 1; }
+    local tok
+    tok=$(infisical login --method=universal-auth \
+            --client-id="$INFISICAL_CLIENT_ID" \
+            --client-secret="$INFISICAL_CLIENT_SECRET" \
+            --plain --silent 2>/dev/null) \
+      || { echo "zai: infisical universal-auth failed" >&2; exit 1; }
+    INFISICAL_TOKEN="$tok" infisical run \
+      --env=production --projectId="$INFISICAL_PROJECT_ID" --silent -- \
+      claude "$@"
+  )
+}
+```
+
+Key points:
+1. Read `INFISICAL_CLIENT_ID` and `INFISICAL_CLIENT_SECRET` from a bootstrap `.env` (Infisical machine-identity credentials, present on both VPS `/opt/universal_agent/.env` and desktop `/home/kjdragan/lrepos/universal_agent/.env`).
+2. Run `infisical login --method=universal-auth ... --plain --silent` to get a token printed to stdout (no session stored on disk).
+3. Set `INFISICAL_TOKEN=<token>` for the `infisical run` invocation. The CLI honors this env var.
+4. Wrap in a subshell `( ... )` so the sourced creds don't leak to the parent shell.
+
+See [`docs/06_Deployment_And_Environments/10_Interactive_Coding_Environment.md`](../06_Deployment_And_Environments/10_Interactive_Coding_Environment.md) Phase B for the original use case.
+
 ### Setting Secrets
 
 ```bash

@@ -8,6 +8,16 @@ This document explains the production deployment on the Hostinger VPS.
 - **Management Access**: Now strictly via **Tailscale VPN** (`100.106.113.93`). Public SSH (port 22) is BLOCKED.
 - **Public Access**: Web UI (`app.clearspringcg.com`) and Webhooks (`api.clearspringcg.com`) remain PUBLIC.
 
+> **Status Update (2026-05-07) — ZAI Routing post-inversion:** UA Python
+> services (gateway, API, Telegram, Discord bots, VP workers) now receive
+> their `ANTHROPIC_*` env vars from **Infisical**, injected at startup via
+> `initialize_runtime_secrets()`. They do **not** rely on user-global
+> `~/.claude/settings.json` for ZAI routing. Interactive `claude`
+> invocations from operator shells (e.g., `ssh ua@uaonvps && claude ...`)
+> default to **Anthropic Max** via OAuth — use the `zai` shell function
+> when you want cheap GLM. Canonical reference:
+> [`docs/06_Deployment_And_Environments/10_Interactive_Coding_Environment.md`](../06_Deployment_And_Environments/10_Interactive_Coding_Environment.md).
+
 This is intended to be the source of truth for:
 
 1. Public Web UI access (`app.clearspringcg.com`)

@@ -180,6 +180,29 @@ Canonical bootstrap env surface from `.env.sample`:
 - local workstation may use `UA_INFISICAL_ALLOW_DOTENV_FALLBACK=1`
 - VPS should effectively run strict/fail-closed behavior
 
+## Anthropic / ZAI Routing Secrets (added 2026-05-07)
+
+The Interactive Coding Environment inversion (canonical doc:
+[`docs/06_Deployment_And_Environments/10_Interactive_Coding_Environment.md`](../06_Deployment_And_Environments/10_Interactive_Coding_Environment.md))
+relocated 5 ZAI-routing keys out of user-global `~/.claude/settings.json`
+and into Infisical so UA Python services pick them up at startup via
+`initialize_runtime_secrets()`.
+
+| Key | Value | Source | Consumers | Envs |
+|---|---|---|---|---|
+| `ANTHROPIC_BASE_URL` | `https://api.z.ai/api/anthropic` | ZAI proxy | UA Python services + interactive `zai()` wrapper | `production`, `development` |
+| `ANTHROPIC_AUTH_TOKEN` | (ZAI account token) | ZAI proxy | same | both |
+| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `glm-5-turbo` | ZAI proxy | Anthropic SDK model resolution | both |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL` | `glm-5-turbo` | ZAI proxy | Anthropic SDK model resolution | both |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL` | `glm-5.1` | ZAI proxy | Anthropic SDK model resolution | both |
+
+These are runtime secrets (never written to `.env` on disk). `.env` retains
+its bootstrap-only role. UA services restart picks up changes automatically;
+Web UI is rendered at deploy time only.
+
+To stage new values, use `scripts/infisical_upsert_secret.py` per the
+canonical pattern in [`docs/deployment/secrets_and_environments.md`](../deployment/secrets_and_environments.md).
+
 ## Operational Meaning of `.env.sample` Guidance
 
 The `.env.sample` guidance is now intentionally narrow:

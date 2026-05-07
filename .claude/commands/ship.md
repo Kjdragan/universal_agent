@@ -6,6 +6,8 @@ description: Run the commit changes through to production and deploy CI/CD
 
 This workflow automates the canonical deployment path for the Universal Agent repository. It commits all pending changes on your current branch, merges them into `develop`, fast-forwards `main` with `develop`, and pushes to GitHub to trigger the automated CI/CD deployment workflow.
 
+> **Where can `/ship` run?** Anywhere with the right git remote and a working `gh` CLI session: your desktop, a VPS dev-tree at `/home/ua/dev/universal_agent` (provisioned per Phase D), Antigravity Remote-SSH'd into the VPS, or a sandbox-Claude with the repo cloned. The workflow is **checkout-agnostic** — it operates on `origin` only, so any clone tracking the same GitHub remote can promote feature/latest2 to production. See [`docs/WORKFLOW.md`](../../docs/WORKFLOW.md) for daily-flow context.
+
 ## Notes for the Ship Operator (Pre-push Hygiene)
 
 If you are the agent running `/ship` (you may be reading this in a different session than the AI Coder who produced the commits), apply the same pre-push hygiene before promoting:

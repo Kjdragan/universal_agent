@@ -1,5 +1,13 @@
 # VPS Deployment Profile Stuck at `local_workstation` (2026-03-23)
 
+> **Post-2026-05-07 context:** This incident predates the Interactive Coding
+> Environment inversion. The env-sanitization fix documented here is
+> compatible with the new Infisical-injection model — Phase B.2 of the
+> [inversion plan](10_Interactive_Coding_Environment.md) explicitly verifies
+> that `initialize_runtime_secrets()` injects ZAI vars into `os.environ`
+> before any settings.json strip. If you're debugging a similar regression
+> today, read doc 10 first to understand the current routing model.
+
 ## Purpose
 
 This incident note records the full debugging arc for the YouTube tutorial
