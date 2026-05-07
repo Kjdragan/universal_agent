@@ -61,8 +61,22 @@ This repository has exactly one supported application deployment path. Productio
 1. **Integration:** Open reviewed feature work against `develop`. Pull requests into `develop` are the single Codex review gate, and `develop` itself does not deploy.
 2. **Production:** Fast-forward the validated `develop` SHA to `main`. The push to `main` triggers the single automated deploy workflow and updates production on the VPS checkout at `/opt/universal_agent` (or `/opt/universal_agent_repo` as a fallback).
 
+### Agent-Type → Workflow Matrix (post 2026-05-07 import storm)
+
+Every agent (Codex, Antigravity, Claude Code, autonomous CODIE/Cody/VP coder bots) must classify its work into one of these tiers and use the matching path. **Mismatches cause production incidents** — see `docs/deployment/ai_coder_instructions.md` for the full doc with the post-incident analysis.
+
+| Tier | Examples | Path |
+|---|---|---|
+| **1 — Human-supervised** | Kevin + Codex/Antigravity/Claude Code in a live session | Direct push to `feature/latest2`, operator runs `/ship`. PR required only for CICD changes, deploy-pipeline edits, durable-state schema, and orchestration core (`task_hub.py`, `dispatch_service.py`, `gateway_server.py` cron registration). |
+| **2 — Autonomous missions** | CODIE proactive cleanup, Cody scaffold-builder, scheduled VP coder, anything cron- or heartbeat-driven that mutates `*.py` | **NEVER** push directly. Worktree → patch → `python -c "compile(...)"` syntax check → `pytest tests/unit` → push to `<bot>/<task-id>` branch → open PR → CI passes → human merges. The detailed pattern is in `docs/deployment/ai_coder_instructions.md` § Autonomous Mission Workflow. |
+
+All PRs (tier 1 or tier 2) are gated by `.github/workflows/pr-validate.yml`: syntax check, ruff (errors only), pytest unit, and a tripwire on `.py.bak` / `.swp` / `.orig` artifacts.
+
+The `/ship` script (`.claude/commands/ship.md`) runs the same syntax check on the working tree before committing, as a last gate.
+
 **Canonical deployment docs:**
 
+- `docs/deployment/ai_coder_instructions.md` — **single source of truth** for the workflow matrix and autonomous-mission contract
 - `docs/deployment/architecture_overview.md`
 - `docs/deployment/ci_cd_pipeline.md`
 - `docs/deployment/infisical_factories.md`

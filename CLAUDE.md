@@ -19,8 +19,10 @@ It includes:
 - Lint/format (if configured): `uv run ruff check .` / `uv run ruff format .`
 
 ## Git Workflow (MUST READ)
-- **Read [`docs/deployment/ai_coder_instructions.md`](docs/deployment/ai_coder_instructions.md) before your first commit.** It defines the branch discipline, commit conventions, and `/ship` handoff protocol that all AI coders must follow.
-- TL;DR: Work on `feature/latest2`. Push there. Never touch `develop` or `main`. Someone else runs `/ship`.
+- **Read [`docs/deployment/ai_coder_instructions.md`](docs/deployment/ai_coder_instructions.md) before your first commit.** It defines the branch discipline, commit conventions, `/ship` handoff protocol, and the **Agent-Type → Workflow Matrix** (when to direct-commit vs. when to PR) that all AI coders must follow.
+- TL;DR for tier 1 (Kevin + Claude Code conversational): work on `feature/latest2`, push there, the operator runs `/ship`. Never touch `develop` or `main` directly.
+- TL;DR for tier 2 (autonomous missions like CODIE / Cody / scheduled VP coder): **never push directly to `feature/latest2`.** Worktree → patch → syntax-check → unit tests → push to `<bot>/<task-id>` branch → open PR → CI passes → human merges. Full pattern in [`ai_coder_instructions.md` § Autonomous Mission Workflow](docs/deployment/ai_coder_instructions.md#autonomous-mission-workflow-tier-2-in-detail).
+- All PRs to `feature/latest2`/`develop`/`main` are gated by [`.github/workflows/pr-validate.yml`](.github/workflows/pr-validate.yml) — `py_compile` on every changed `.py`, `ruff check`, `pytest tests/unit`, and a tripwire on `.py.bak` / `.swp` / `.orig` artifacts.
 
 ## Claude Execution Environments (MUST READ before touching anything Claude-related)
 UA runs **THREE Claude execution profiles** across the VPS and Kevin's desktop. Mistaking one for another is the #1 source of confusion in the system.

@@ -124,6 +124,90 @@ Never `git push --force` to `feature/latest2`, `develop`, or `main`.
 
 ---
 
+## Agent-Type → Workflow Matrix
+
+> **Audience:** anyone wiring up a new agent (CODIE-style cleanup, Cody scaffold-builder, scheduled VP coder mission, etc.) or asking "should this go through a PR?".
+> **Codified after the 2026-05-07 import storm:** an autonomous patcher mutated `/opt/universal_agent/src/` directly, the patches were syntactically invalid, nothing checked them, and every cron that imports the durable package failed for 8+ hours.
+
+| Tier | Who | What goes through `/ship` directly | What MUST go through PR |
+|---|---|---|---|
+| **1 — Human-supervised conversational coding** | Kevin + Claude Code (you, this conversation), Antigravity, Codex when Kevin is in the loop | Routine fix-and-iterate, doc edits, docstring tweaks, conversational debug commits | CICD changes, deploy-pipeline edits, durable-state schema changes, autonomous-mission code |
+| **2 — Autonomous missions** (CODIE proactive cleanup, Cody scaffold-builder, demo-builder, scheduled VP coder, anything cron- or heartbeat-driven that mutates source) | Bots running unattended on the VPS | **Nothing.** Tier 2 NEVER pushes directly to `feature/latest2`. | **Everything.** Worktree → patch → syntax-check → unit tests → push to `<bot-name>/<task-id>` branch → open PR → CI passes → human merges. |
+| **3 — GitHub branch protection** | The safety net | N/A | Enforces tier 1 vs. tier 2 at the push level — see [`ci_cd_pipeline.md`](ci_cd_pipeline.md). |
+
+### When in doubt: PR
+
+If the change touches any of these, open a PR even from tier 1:
+
+- `.github/workflows/*` (CI/CD)
+- `.claude/commands/ship.md` or anything else `/ship` reads
+- `src/universal_agent/durable/` (durable state schema or accessors)
+- `src/universal_agent/services/dispatch_service.py` or `task_hub.py` (orchestration core)
+- `gateway_server.py` cron registration helpers
+
+The cost of a PR (~5 min) is far below the cost of a 30-cron-storm + production recovery (today: ~6 hours of operator time).
+
+---
+
+## Autonomous Mission Workflow (Tier 2 in detail)
+
+> **For agents that run unattended.** Cron-triggered (CODIE proactive cleanup), heartbeat-triggered (Cody scaffold-builder), or task-hub-triggered (VP coder missions). They share a single contract.
+
+The core invariant: **an autonomous mission must never leave the deployed working tree (`/opt/universal_agent/`) in a state that doesn't match a committed SHA.**
+
+### The 8-step pattern
+
+```
+1. Pick up task from Task Hub (or wherever the mission's input comes from)
+2. Create a fresh worktree from feature/latest2:
+     git worktree add /tmp/<bot>_<task_id> feature/latest2
+3. Apply patches inside the worktree only — never touch /opt/universal_agent/src/
+4. For every modified .py file, run a syntax check:
+     python -c "compile(open(p).read(), p, 'exec')"
+   On failure: revert the file (git checkout HEAD -- p), abort, mark mission failed.
+5. Run a fast targeted test pass on the changed modules:
+     uv run pytest tests/unit/<related> -x -q
+   On failure: same revert + abort.
+6. Commit + push to a dedicated branch:
+     git -C /tmp/<bot>_<task_id> checkout -b <bot>/<task_id>
+     git -C /tmp/<bot>_<task_id> commit -am "..."
+     git -C /tmp/<bot>_<task_id> push origin <bot>/<task_id>
+7. Open a PR via GitHub API targeting feature/latest2.
+   Title: "<bot>: <one-line task summary>"
+   Body: includes link to the source task, list of changed files, syntax-check + test output.
+8. On any failure in steps 3-7:
+   git -C /tmp/<bot>_<task_id> checkout HEAD -- .
+   git worktree remove /tmp/<bot>_<task_id>
+   Mark mission failed in Task Hub with the actual error.
+```
+
+### What an autonomous mission MUST NEVER do
+
+1. Edit files inside `/opt/universal_agent/src/` directly. The deployed working tree is **runtime production state**, not scratch space.
+2. Skip the syntax check. `compile()` is one line and catches the entire SyntaxError class.
+3. Leave `.bak` / `.swp` / `.orig` files in the working tree. Those are the fingerprint of a half-finished patch run; `/ship` and `pr-validate.yml` both refuse to merge a tree with these.
+4. Commit invalid Python and rely on CI to catch it. Run the syntax check **before** committing.
+5. Suppress errors. If the patch tool fails, the mission fails. Do not log-and-continue.
+
+### What `pr-validate.yml` will check on every PR (the safety net)
+
+Defined at [`.github/workflows/pr-validate.yml`](../../.github/workflows/pr-validate.yml). Runs on every `pull_request` against `feature/latest2`, `develop`, or `main`:
+
+1. `python -m py_compile` on every changed `.py` file.
+2. `ruff check --select E9,F` (errors only, lint warnings allowed for now).
+3. `pytest tests/unit -x -q` (fast unit-test subset).
+4. Refuse merge if any `.py.bak` / `.swp` / `.orig` file is in the diff.
+
+Tier 1 PRs go through the same workflow — there's no exemption. The autonomous-mission rules above are stricter (they MUST do steps 4-5 *before* opening the PR, in their own worktree) but the CI gate is identical.
+
+### What `/ship` does at deploy time (the last gate)
+
+[`/ship`](../../.claude/commands/ship.md) (post-2026-05-07 update) runs the same `compile()` check on every changed `.py` file before it commits — so even if you forget to run a local check, `/ship` will catch a syntax error before pushing it to `develop`. It also refuses to ship a working tree that contains `.py.bak` / `.swp` / `.orig` artifacts.
+
+This means today's class of bug (broken docstring → SyntaxError → import storm) is now caught at three independent gates: agent's own pre-commit step, `pr-validate.yml` on PR, `/ship` at deploy time. Any one of them would have prevented the 2026-05-07 incident.
+
+---
+
 ## What NOT to Do
 
 | ❌ Don't | ✅ Do Instead |
