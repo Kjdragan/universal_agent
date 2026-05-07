@@ -36,6 +36,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
+    # Force pipefail on every `run:` block. Without this, lines like
+    # `pytest ... 2>&1 | tail -50` silently exit 0 because `tail`'s
+    # exit code wins the pipeline. That bug masked 12 pre-existing
+    # pytest failures (and a `uv sync` failure) for hours on PR #153
+    # before being diagnosed. GitHub Actions' default shell is
+    # `bash -e {0}` (no pipefail) — we have to opt in.
+    defaults:
+      run:
+        shell: bash -euo pipefail {0}
+
     steps:
       - name: Checkout PR head
         uses: actions/checkout@v4
