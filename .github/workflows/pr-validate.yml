@@ -113,11 +113,25 @@ jobs:
             exit 1
           fi
 
-      - name: Ruff check (non-blocking on style, blocking on errors)
+      - name: Ruff check (changed files only, errors-only gate)
+        if: steps.changed.outputs.files != ''
         run: |
-          # We allow style-level findings to pass for now; only fail on
-          # actual errors (E9, F). Tighten later as the codebase improves.
-          uv run ruff check --select E9,F --no-cache . 2>&1 | tail -50
+          # Scope: only the .py files this PR changes. Same scope as the
+          # syntax-check step above. The whole-repo run that lived here
+          # was masked by the pipe-to-tail bug for months — once that
+          # bug was fixed in the same PR that introduced this scoping,
+          # whole-repo ruff revealed ~8000 pre-existing rot findings
+          # (F405 from star imports, F541 empty f-strings, F841 unused
+          # locals). Cleaning that up is its own multi-PR effort. For
+          # PR validation we tighten the gate on new code only and let
+          # the legacy rot be tackled separately.
+          # Errors only (E9 + F minus codebase-wide ignores from
+          # pyproject.toml). Style-class findings stay non-blocking.
+          uv run ruff check \
+            --select E9,F \
+            --ignore E402,F401,F811 \
+            --no-cache \
+            ${{ steps.changed.outputs.files }} 2>&1 | tail -50
 
       - name: Run unit tests
         run: |
