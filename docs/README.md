@@ -200,6 +200,8 @@ Mistaking one for the other is the #1 source of confusion in this system. Before
 ### 11. [Reports](reports)
 
 - **[To Do List Task Pipeline Audit (2026-03-11)](reports/todolist-task-pipeline-audit-2026-03-11.md)**: Historical audit of the early `/dashboard/todolist` task pipeline before the dedicated ToDo dispatcher refactor.
+- **[Task Hub Happy-Path Audit (2026-05-06)](reports/task-hub-happy-path-audit-2026-05-06.md)**: Code-verified report on why active ToDo executions can fall out of the `IN PROGRESS` lane and why viewer rehydration degrades to terse `run.log` rows instead of full `trace.json` detail.
+- **[Meaningful Work Task Hub + Three-Panel Design (2026-05-06)](reports/meaningful-work-taskhub-three-panel-design-2026-05-06.md)**: Code-verified design proposal for using Task Hub as the ledger of meaningful autonomous work and using parent/child sequential tasks to preserve separate three-panel audits for multi-phase missions like analysis → demo build.
 
 ### 12. [Handoffs](.)
 

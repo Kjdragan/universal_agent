@@ -1,6 +1,6 @@
 {
-  "last_turn_at": "2026-05-01T15:28:10.943Z",
-  "turn_count": 40,
-  "last_progress_at": "2026-05-01T15:28:10.943Z",
-  "last_agent_output": "**Suggested Change Document**\n\nNo code changes made. This is a code-verified discovery and refactor "
+  "last_turn_at": "2026-05-06T22:34:23.353Z",
+  "turn_count": 51,
+  "last_progress_at": "2026-05-06T22:34:23.353Z",
+  "last_agent_output": "**Recorded**\n- Task Hub’s durable schema records task lineage on two layers: `task_hub_items` stores"
 }
