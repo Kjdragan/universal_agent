@@ -1,19 +1,20 @@
 # Knowledge-Extraction Redesign — Context for Fresh Session
 
 **Created:** 2026-05-07 23:15 UTC
+**Updated:** 2026-05-07 23:50 UTC (architecture locked: single rich LLM analysis pass at replay time; all regex-based meaning extraction is deleted, not tuned)
 **Audience:** Fresh Claude Code session that picks up the knowledge-extraction-quality work
-**Goal of the next session:** Diagnose root cause of low-quality entity extraction in the CSI v2 pipeline → redesign the extractor → verify in a tight test loop until it produces high-signal entities. The vault content itself is throwaway right now; the system is what matters.
+**Goal of the next session:** Replace the current regex-based "memex" extractor with a single rich LLM analysis pass that takes the full available context (tweet + classifier output + fetched linked sources + existing vault state) and emits structured vault deltas (CREATE / EXTEND / REVISE for entities and concepts, plus relations and summary). Iterate the prompt on a single test packet until output quality is high, then expand to the full corpus. The vault content itself is throwaway right now; the *system* is what matters.
 
 ---
 
 ## TL;DR for the new agent
 
-1. **The CSI knowledge-extraction system is producing low-signal output.** The v2 backfill (and the production v1 path) emits entities like `the.md`, `and.md`, `for.md`, `flibbertigibetting.md`, `ekyctqscxb.md` (a Twitter t.co URL slug). Roughly 50% of generated entities are junk.
-2. **It's a pure regex, not an LLM — and that's the load-bearing problem.** The producer is `_memex_candidates_for_action` at `src/universal_agent/services/claude_code_intel_replay.py:589-627`. Regex `[A-Z][a-zA-Z0-9_]{2,}|[a-z][a-zA-Z0-9_]+_[a-zA-Z0-9_]+` + a tiny ~30-word stopword list. **The operator has explicitly ruled out keeping a regex-based design.** The fix must be LLM-based extraction with a domain-specific prompt. Regex tuning is at best a 30-minute backstop, not the goal.
-3. **CLAUDE.md "LLM-Native Intelligence Design" applies.** *"Prefer using LLM reasoning over building custom Pythonic pseudo-reasoning systems... avoid creating elaborate programmatic trend/theme/scoring systems that attempt to imitate reasoning over small-to-medium corpora."* The current regex extractor is the canonical anti-pattern that rule was written to prevent. The redesign should let an LLM do the meaning-extraction with code only enforcing structure / dedup / persistence.
-4. **There's an LLM-based extractor scaffold at `src/universal_agent/wiki/llm.py:115` (`extract_entities`)** — used for `wiki_ingest_external_source` but NOT wired into CSI packet replay. Its prompt is too generic for our domain (just *"extract the most important named entities"*). The new session should either wire it in with a much better domain-specific prompt, or build a new CSI-specific extractor in a separate module.
-5. **The slowness in the v2 backfill was NOT from extraction.** 964 z.ai LLM calls in 58 minutes — almost all of those were `csi_url_judge._call_llm_structured` (one LLM call per linked URL, ~15 URLs/packet × 36 packets ≈ 540 calls + retries). Plus URL fetching. The regex extractor was effectively free in compute terms — that's *why* its output is shallow. Adding an LLM extraction step adds maybe 30-100 calls per backfill on top of the existing budget — small marginal cost.
-6. **The vault contents are throwaway.** Don't preserve them. Don't run a full backfill. Don't swap. The user has explicitly said: rebuild the system, iterate small, throw away test runs freely. Production v1 vault stays canonical until a *good* extractor is built.
+1. **The CSI knowledge-extraction system produces low-signal output because it does no meaning extraction at all.** What we call "extraction" today is a regex over tweet text — `[A-Z][a-zA-Z0-9_]{2,}|[a-z][a-zA-Z0-9_]+_[a-zA-Z0-9_]+` plus a 30-word stopword list. It produces entity pages for `the.md`, `and.md`, `for.md`, `flibbertigibetting.md`, `ekyctqscxb.md` (a Twitter t.co URL slug), and so on. The body of each page is the same regex-selected token stitched together with the tweet text and classifier rationale via Python string concatenation. There is no judgment anywhere in the chain.
+2. **Operator-mandated architecture: pure LLM-driven analysis. No exceptions, no hedges, no fallbacks.** The redesign is *not* "tune the regex" or "regex pre-filter + LLM validator". Both are forms of code-side meaning judgment, which is the anti-pattern. The redesign is: gather raw materials in code → pass everything to an LLM → LLM returns structured intelligence (entities + concepts + relations + summary) → code persists the structured output. Code never decides what's meaningful. RegEx exists in this design only for *plumbing* (slugifying filenames, parsing JSON, hostname matching) — never for meaning.
+3. **CLAUDE.md "LLM-Native Intelligence Design" rule is the governing doctrine.** *"Prefer using LLM reasoning over building custom Pythonic pseudo-reasoning systems... avoid creating elaborate programmatic trend/theme/scoring systems that attempt to imitate reasoning over small-to-medium corpora."* The current regex extractor is the canonical anti-pattern that rule was written to prevent. Read that section of CLAUDE.md before writing any code.
+4. **The architectural insight: don't add a separate "extractor" step.** The pipeline already has two LLM passes (classifier at poll time, URL judge at replay time). The fix is to add **one more rich LLM analysis pass at replay time** whose structured output IS the vault delta — entities, concepts, relations, summary, all together. The regex memex extractor is *deleted*, not replaced piece-for-piece. See "Target architecture" below.
+5. **The slowness in the v2 backfill was NOT from extraction.** 964 z.ai LLM calls in 58 minutes — almost all of those were `csi_url_judge._call_llm_structured` (one LLM call per linked URL, ~15 URLs/packet × 36 packets ≈ 540 calls + retries). Plus URL fetching. The regex extractor was effectively free in compute terms — that's *why* its output is shallow. Adding the new rich analysis call adds ~30-50 LLM calls per backfill on top of the existing budget — small marginal cost.
+6. **The vault contents are throwaway.** Don't preserve them. Don't run a full backfill. Don't swap. The operator has explicitly said: rebuild the system, iterate small, throw away test runs freely. Production v1 vault stays canonical until a *good* extractor is built. After the new system is verified, a fresh full backfill produces the real v2 vault.
 7. **You're working on `feature/latest2` in the dev tree** at `/home/ua/dev/universal_agent`. Production at `/opt/universal_agent` was just recovered to `main @ f4c793e2` and is healthy — leave it alone except as a code-reading reference.
 
 ---
@@ -243,36 +244,181 @@ The user's stated discipline: *"figure out why it's being produced in a non-qual
 2. Read `wiki/llm.py:80-150` (the LLM-based extractor) and `wiki/core.py:715-740` (where it's invoked from `wiki_ingest_external_source`). This is the alternative architecture if you decide to replace the regex with LLM.
 3. Read 3-5 actions.json files from the test-corpus packets. Pick at least one tweet that produced a junk entity — note exactly which token in the text triggered it.
 
-### Phase 2 — Architectural direction (operator-mandated)
+### Phase 2 — Target architecture (locked, operator-approved)
 
-**The operator has explicitly ruled the design: LLM-based extraction with a domain-specific prompt.** Regex is rejected as fundamentally inadequate for intelligence extraction. Per CLAUDE.md's "LLM-Native Intelligence Design" rule, code's job is to *collect and preserve evidence + gate execution + enforce structure*, not to imitate reasoning.
+**One rich LLM analysis pass at replay time. Its structured output IS the vault delta. The regex memex extractor is deleted, not replaced piece-for-piece.**
 
-So Phase 2 is about **how** to do LLM extraction well, not whether to do it.
+#### Pipeline shape after the redesign
 
-**Sub-option B1 — Wire in the existing `wiki/llm.py:extract_entities` with a better prompt.**
-- Replace the call to `_memex_candidates_for_action` with a call into `extract_entities` (or a CSI-specific cousin of it).
-- The current prompt is too generic — *"extract the most important named entities (people, organizations, locations, products, specific tools)"*. We need a domain-specific prompt that knows about Anthropic's product family (Claude, Claude Code, Opus/Sonnet/Haiku, MCP, managed agents, the Agent SDK, etc.), distinguishes products from features from concepts from people-handles, and explicitly rejects URL fragments / token IDs / English stopwords.
-- Pros: smallest delta to current code; reuses existing LLM client wiring; one call per tweet.
-- Cons: prompt has to be carefully tuned; structured output likely needed (use the SDK's `tools` / structured output mode).
+```
+Poll time (cron) — unchanged:
+  Fetch tweets → LLM classifier → save actions.json + posts.json verbatim
+                 (emits tier + action_type + reasoning per action)
 
-**Sub-option B2 — Build a new CSI-specific extraction module.**
-- New module e.g. `src/universal_agent/services/csi_entity_extractor.py` that takes a packet (multiple actions + linked sources + classifier rationale) and returns a structured entity list with kinds (product / feature / person / concept / event), aliases, and source attribution.
-- Single LLM call per packet (not per tweet) — gets richer context, can deduplicate / canonicalize within the packet, better at multi-word entities.
-- Pros: more coherent within a packet; potentially produces concepts (not just entities); explicit taxonomy.
-- Cons: bigger code change; more prompt-engineering work; one bad LLM response affects more entities.
+Replay time — modified:
+  For each tier-2/3 action:
+    1. URL judge (existing, unchanged) → fetch worthy linked URLs to linked_sources/
+    2. NEW: rich-analysis LLM call:
+         input  = tweet text
+                + classifier output (tier/reasoning, already analyzed)
+                + linked_sources/*.md (full text of fetched anthropic docs / blog posts)
+                + existing vault entity list (slugs + summaries, for dedup/canonicalization)
+         output = structured vault delta (see schema below)
+    3. Code: parse the structured output, persist to vault
+       (slugify names → filenames, write CREATE/EXTEND/REVISE bodies,
+        append to log.md, write _history/ snapshots on REVISE)
 
-**Sub-option B3 — Multi-stage extraction (candidate → verify → canonicalize).**
-- Stage 1: cheap candidate gathering (could even keep the current regex as a wide net).
-- Stage 2: LLM filters/canonicalizes the candidates with full packet context.
-- Stage 3: dedup / merge with existing vault entities.
-- Pros: most robust to bad LLM outputs (regex provides recall, LLM provides precision).
-- Cons: most code to write and reason about.
+  Source pages (sources/*.md): unchanged — verbatim copy of fetched content
+```
 
-**Recommendation for the new session:** Start with B1 (lowest delta) and a CSI-tuned prompt. Iterate via the test loop in Phase 3 below. If single-tweet-context produces fragmented or duplicative entities, escalate to B2. Don't pre-engineer for B3 unless B1 and B2 both prove insufficient. Either way, the deliverable is *"an LLM produces a structured list of real entities with kinds and aliases; code persists them"* — not *"a regex picks tokens; a body template wraps them."*
+The `_memex_candidates_for_action` regex extractor and the `_memex_body_for_create` / `_memex_body_for_extend` template synthesizers (`claude_code_intel_replay.py:548-687`) are deleted entirely. They're replaced by:
+- A new module — call it `services/csi_intelligence_pass.py` or similar — that builds the prompt, calls the LLM, parses the structured output, and returns a typed `VaultDelta` object.
+- A persistence helper that takes the `VaultDelta` and writes/extends/revises files in the vault using existing `wiki/core.py:memex_apply_action` primitives (which DO already exist for CREATE/EXTEND/REVISE — they just have nothing good feeding them).
 
-### Phase 2.5 — Backstop note (only if LLM extraction proves unworkable)
+#### Code's role (strictly plumbing)
 
-If for some reason LLM-based extraction can't be made to work (model cost prohibitive, latency unworkable, JSON quality too inconsistent across runs), the fallback would be improving the regex (broader stopwords, t.co URL-fragment exclusion, length floor, corroboration requirement). But the operator's stated direction is that this is **not** acceptable as the primary design — only as an emergency backstop. Don't build the regex backstop unless you've genuinely exhausted the LLM path.
+| Responsibility | Module |
+|---|---|
+| Read the packet's `actions.json` + `linked_sources/*.md` | new `csi_intelligence_pass.py` |
+| Read existing vault entity list (slug + summary) for context | new helper, or reuse `wiki/core.py` index reader |
+| Format the prompt | new |
+| Call the LLM (structured output / tools mode) | reuse the same client pattern as `csi_url_judge._call_llm_structured` |
+| Parse + validate the JSON response | new (Pydantic model recommended) |
+| Persist: slugify names, write/append/revise files | reuse `wiki/core.py:memex_apply_action` (already supports CREATE/EXTEND/REVISE) |
+| Append to `log.md` and `_history/` | already done by `memex_apply_action` |
+
+Code does no meaning judgment. The LLM produces the vault delta with full context; the code does the file I/O.
+
+#### LLM structured output schema (proposed; the new session can refine)
+
+```jsonc
+{
+  "vault_actions": [
+    {
+      "op": "create",            // create | extend | revise
+      "kind": "product",         // product | feature | concept | person | event
+      "name": "Claude Managed Agents",     // canonical name (LLM picks from context + existing vault list)
+      "aliases": ["managed agents"],       // for dedup against future references
+      "summary": "Anthropic's hosted agent runtime that lets developers deploy autonomous agents...",
+      "key_facts": [
+        "supports webhook subscriptions for event delivery",
+        "exposes outcomes-loop primitive for rubric-driven self-improvement"
+      ],
+      "source_post_ids": ["x_post_2052069321355182447"],
+      "source_doc_urls": ["https://platform.claude.com/docs/en/managed-agents"],
+      "confidence": "high"       // high | medium | low — LLM's own confidence
+    },
+    {
+      "op": "extend",
+      "existing_slug": "mcp",    // LLM matched a tweet about MCP to existing vault entity
+      "new_facts": ["webhook delivery now supported in MCP servers"],
+      "source_post_ids": ["..."],
+      "source_doc_urls": ["..."],
+      "confidence": "high"
+    }
+    // … or "op": "revise" with what_changed + why
+    // No vault_action emitted for tweets that contain nothing entity-worthy.
+    // (e.g. "Live now at https://t.co/EKyctqSCXB" produces zero vault_actions.)
+  ],
+  "relations": [
+    {"from": "claude-managed-agents", "to": "mcp", "kind": "uses"},
+    {"from": "outcomes-loop", "to": "claude-managed-agents", "kind": "feature-of"}
+  ],
+  "post_summary": "ClaudeDevs announces multiagent orchestration, outcomes loop, dreaming, and webhooks for Claude Managed Agents.",
+  "post_tags": ["release_announcement", "managed_agents", "webhooks"]
+}
+```
+
+Notes on the schema:
+- `op: "create"` requires `kind` + `name` + `summary`. The LLM picks the canonical name (multi-word OK, capitalized appropriately).
+- `op: "extend"` requires `existing_slug` (LLM is told the existing vault's slugs in the prompt and chooses one) + `new_facts`. Avoids duplicate entity pages.
+- `op: "revise"` requires `existing_slug` + `what_changed` + `why`. Triggers a `_history/` snapshot.
+- `confidence` is the LLM's self-rating. Code can use it as a routing signal (e.g. low-confidence creates land in a review queue rather than the live vault).
+- An empty `vault_actions` list is valid and expected for tweets that contain no entity-worthy content (greetings, retweets of unrelated content, t.co-only posts, joke tweets like the "flibbertigibetting" one).
+
+#### What gets deleted
+
+- `claude_code_intel_replay.py:548-587` — `_MEMEX_TERM_PATTERN`, `_MEMEX_TERM_STOPWORDS`. Gone.
+- `claude_code_intel_replay.py:589-627` — `_memex_candidates_for_action`. Gone.
+- `claude_code_intel_replay.py:630-687` — `_memex_body_for_create`, `_memex_body_for_extend`. Gone (the LLM now produces the body content as `summary` + `key_facts`).
+- `claude_code_intel_replay.py:689-…` — `apply_memex_pass` is rewritten to call the new analysis pass and persist its output via `memex_apply_action`. The function name can stay; only the body changes.
+- `wiki/llm.py:extract_entities`, `extract_concepts` — keep (used elsewhere by `wiki_ingest_external_source`), but DON'T wire them into CSI replay. The CSI replay path gets its own purpose-built rich-analysis call. Generic entity/concept extractors are not what we want here.
+
+#### What gets added
+
+- `services/csi_intelligence_pass.py` (or similar) — the new module.
+- A Pydantic model file or dataclass module defining the `VaultDelta` schema.
+- A prompt-template file (probably under `prompts/` or inline in the module — operator's call) — the CSI-domain-specific system prompt.
+- Unit tests in `tests/unit/test_csi_intelligence_pass.py` covering: prompt-building, JSON-parsing, VaultDelta-to-memex-actions conversion, golden-set expectations (see Phase 3).
+
+### Phase 2.1 — Model + reasoning configuration (operator-mandated, hard requirement)
+
+**The new intelligence pass MUST run on GLM-5.1 with high reasoning enabled.** This is not negotiable and applies to the new rich-analysis call. The same upgrade should be considered for the existing `csi_url_judge._call_llm_structured` call (at minimum, audit whether reasoning improves URL-judge quality enough to justify the token cost).
+
+#### Status of model selection (already correct)
+
+`utils/model_resolution.py:31-34` defines the ZAI model map:
+
+```python
+ZAI_MODEL_MAP = {
+    "haiku":  "glm-5-turbo",
+    "sonnet": "glm-5-turbo",
+    "opus":   "glm-5.1",       # ← THIS is what we want for CSI analysis
+}
+```
+
+Both existing CSI LLM call sites already use `resolve_opus()`:
+
+- `services/csi_url_judge.py:306` — `model=resolve_opus()` (URL judging)
+- `wiki/llm.py:58` — `model=model or resolve_opus()` (the latent extractor)
+
+So the new `csi_intelligence_pass.py` should follow the same convention: `model=resolve_opus()`. That gives you GLM-5.1.
+
+#### Status of reasoning level (currently NOT set; must be added)
+
+**Currently: no thinking/reasoning param is set on any CSI call.** Repo-wide grep confirms zero usages of `thinking={...}`, `reasoning_effort`, or `extra_body` carrying reasoning config in `services/`, `wiki/`, or `utils/`. So we're getting GLM-5.1's default reasoning behavior, not high-reasoning.
+
+The Anthropic SDK shape for extended thinking is:
+
+```python
+client.messages.create(
+    model=resolve_opus(),                              # → glm-5.1
+    max_tokens=4096,
+    thinking={
+        "type": "enabled",
+        "budget_tokens": 8000,                         # high-reasoning budget
+    },
+    system=...,
+    messages=[...],
+    tools=[csi_intelligence_tool],
+    tool_choice={"type": "tool", "name": "..."},
+)
+```
+
+The new session **must** pass this `thinking={...}` block on every CSI intelligence call. Suggested budget: start at 8000 tokens; tune up or down based on observed output quality + cost.
+
+#### Verification step (the new session must do this empirically)
+
+The Z.AI Anthropic-compatible endpoint (`api.z.ai/api/anthropic`) is a proxy. **Not every proxy honors every Anthropic-SDK parameter.** Some proxies silently drop `thinking={...}` and serve the call at default reasoning. If that happens here, the operator's "high reasoning" requirement is unmet even though the code looks right.
+
+The new session must do an empirical verification before declaring the redesign complete:
+
+1. Make a test call to Z.AI through the Anthropic SDK with `thinking={"type": "enabled", "budget_tokens": 8000}`.
+2. Inspect the response. If extended thinking is honored, the response will contain `thinking` blocks (`response.content[i].type == "thinking"`) BEFORE the tool_use / text blocks. If the proxy dropped the param, no thinking blocks will appear.
+3. If the proxy drops it: switch to calling Z.AI's native `/api/paas/v4` endpoint directly (different SDK shape — Z.AI documents their reasoning-mode parameter on their docs site at `https://docs.z.ai`). This is a bigger change — separate HTTP client setup — so flag it back to the operator before going down that path.
+4. Document the result of this verification in the new session's working notes.
+
+If you find that Z.AI is dropping `thinking={...}` for the Anthropic-emulated endpoint, that's a finding worth surfacing back to the operator immediately — it has implications well beyond CSI (every other LLM call in the system is also using the Anthropic-shape SDK against this proxy).
+
+#### Audit follow-up: existing `csi_url_judge._call_llm_structured`
+
+The URL judge makes ~540 calls per backfill. It's currently running at default reasoning. Once the new intelligence pass is working, the new session should:
+
+1. Test whether enabling `thinking={...}` on the URL judge improves its quality (fewer false-positive fetches, fewer false-negative skips).
+2. If yes, apply the same upgrade. Cost increase per backfill: probably ~5-10% on top of existing budget. Probably worth it.
+3. If no measurable improvement: leave as-is and note in working notes.
+
+**This audit is a follow-on, not a blocker for shipping the new analysis pass.** The new pass is the priority.
 
 ### Phase 3 — Tight iteration loop
 
@@ -346,11 +492,12 @@ Once the unit test passes on hand-curated cases, run `apply_memex_pass` against 
 
 ## Open questions the new session should resolve early
 
-1. **What domain taxonomy do we want?** The current code only emits `kind="entity"` (or sometimes `kind="concept"`, when called explicitly). For CSI we likely want at least: `product` (Claude Code, Claude Managed Agents, Claude Opus 4.7), `feature` (outcomes loop, rate limits, MCP webhooks), `concept` (multiagent orchestration, prompt caching), `person` / `handle` (rlancemartin, hackingdave), `event` (Code with Claude conference). Decide the taxonomy before writing the prompt.
-2. **What model to call?** Production runtime uses ZAI-mapped Claude Sonnet for cheap inference. CSI URL judging already runs through `csi_url_judge._call_llm_structured` which uses the Anthropic SDK with the production base_url. The new extractor should follow the same pattern. Check: does the new model need the structured-output / `tools` mode for reliable JSON, or can it return JSON in plain text?
-3. **Should we also fix the v2 backfill `IsADirectoryError` in the same session?** Probably yes — same file (`claude_code_intel_replay.py:281`), ~5 LoC fix, removes a confound for future backfill runs and is a free win.
-4. **Should concepts come from the same call or a separate pass?** A single extraction call could return both entities and concepts in one structured response (e.g. `{"products": [...], "features": [...], "concepts": [...], "people": [...]}`). Probably cleaner than the existing two-call pattern in `wiki/llm.py`.
-5. **What does "good output" look like at scale?** Define the eyeball-quality bar before iterating. E.g.: "running over a representative packet, ≥80% of returned entities are something a human reader would also flag as worth a vault page; <5% junk; multi-word entities preserved as multi-word; no t.co slugs; no English stopwords." If the new session can't articulate this, it'll iterate forever.
+1. **What domain taxonomy do we want?** The schema above proposes `product / feature / concept / person / event` — confirm or refine before writing the prompt. Specifically: should `tool` be a separate kind, or just a sub-type of `product`? Should `team` (e.g. "the Claude Code team") be its own kind?
+2. **Reasoning verification (see Phase 2.1).** Confirm empirically that Z.AI's Anthropic-compatible proxy honors `thinking={"type": "enabled", "budget_tokens": N}`. If it silently drops the param, escalate to operator before proceeding. Don't ship a pass that *looks* like it has high reasoning but actually doesn't.
+3. **Token budget for the rich-analysis call.** With full packet context (tweet + classifier reasoning + 2-5 fetched linked sources at ~5K tokens each + existing vault entity list), the input prompt may run 20-30K tokens. Add 8000 thinking budget + 4096 max_tokens output. Verify GLM-5.1 supports a context window that big through the Z.AI proxy. If not, decide whether to truncate linked sources or chunk the analysis.
+4. **Should we also fix the v2 backfill `IsADirectoryError` in the same session?** Probably yes — same file (`claude_code_intel_replay.py:281`), ~5 LoC fix, removes a confound for future backfill runs and is a free win. Use `if metadata_path.is_file()` instead of `if metadata_path.exists()`.
+5. **What does "good output" look like at scale?** Define the eyeball-quality bar before iterating. E.g.: "running over a representative packet, every emitted entity is something a human reader would also flag as worth a vault page; zero stub-only entities; multi-word entities preserved as multi-word; no t.co slugs; no English stopwords; aliases captured for canonicalization." If the new session can't articulate this, it'll iterate forever.
+6. **Should the rich-analysis pass replace or augment the existing classifier?** Today the classifier runs at poll time and emits tier + reasoning per action. The new analysis runs at replay time. They're separate calls — but they overlap in what they read. Decide whether to: (a) keep both as-is, classifier output is just additional input to analysis (recommended — minimal disruption); (b) extend the classifier to also emit the rich analysis at poll time (more efficient but ignores linked-source content which isn't fetched yet); (c) eliminate the classifier and let the rich analysis do tier classification too (biggest change, biggest risk).
 
 ---
 
@@ -385,17 +532,29 @@ cd /home/ua/dev/universal_agent
 git status
 git log --oneline -5
 
-# Read the bad extractor first
+# Read the (about-to-be-deleted) regex extractor + body templater
 sed -n '530,700p' /opt/universal_agent/src/universal_agent/services/claude_code_intel_replay.py
 
-# Read the LLM alternative
-sed -n '80,150p' /opt/universal_agent/src/universal_agent/wiki/llm.py
+# Read the existing memex_apply_action persistence helper (KEEP — the new pass will call it)
+grep -n "def memex_apply_action\|def memex_create_page\|def memex_extend_page\|def memex_revise_page" \
+    /opt/universal_agent/src/universal_agent/wiki/core.py
 
-# Pick a test packet
+# Read the existing structured-output LLM call pattern (model the new pass on this)
+sed -n '280,330p' /opt/universal_agent/src/universal_agent/services/csi_url_judge.py
+
+# Read the model resolver (confirms glm-5.1 mapping is in place)
+cat /opt/universal_agent/src/universal_agent/utils/model_resolution.py
+
+# Pick a test packet — the one that produced "flibbertigibetting" / "EKyctqSCXB" entities
 ls /opt/universal_agent/artifacts/proactive/claude_code_intel/packets/2026-05-06/
 
-# Read its actions.json
+# Read its actions.json — this is the input shape the new pass will receive
 cat /opt/universal_agent/artifacts/proactive/claude_code_intel/packets/2026-05-06/210011__ClaudeDevs/actions.json | head -100
+
+# See what linked sources were fetched for that packet
+ls /opt/universal_agent/artifacts/proactive/claude_code_intel/packets/2026-05-06/210011__ClaudeDevs/linked_sources/
 ```
+
+Then propose: prompt sketch + Pydantic schema + the verification step for `thinking={...}` honored by Z.AI. Don't write production code until that's been operator-reviewed.
 
 Good luck.
