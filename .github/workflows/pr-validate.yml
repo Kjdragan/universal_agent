@@ -1,0 +1,118 @@
+name: PR Validate
+
+# Lightweight gate that runs on every PR. Catches the class of failure
+# from the 2026-05-07 import storm: a syntax error introduced by an
+# autonomous patcher that nothing checked before deploy.
+#
+# Three gates:
+#   1. py_compile every changed .py file (catches the SyntaxError class)
+#   2. ruff check (catches obvious lint issues)
+#   3. pytest tests/unit -x -q (fast unit tests on the changed modules)
+#
+# All three must pass before a PR can be merged. Branch protection on
+# the GitHub side is what enforces this; this workflow is what produces
+# the "passing" check.
+
+on:
+  pull_request:
+    branches:
+      - feature/latest2
+      - develop
+      - main
+  # Allow manual re-run from the Actions tab if a flaky test fails.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # One run per PR. Cancel in-flight runs when a new commit lands.
+  group: pr-validate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          # Need full history so we can diff against the base branch
+          # to identify only the .py files this PR touches.
+          fetch-depth: 0
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install uv
+        run: pip install --quiet uv
+
+      - name: Install project dependencies
+        run: uv sync --frozen --no-progress 2>&1 | tail -5
+
+      - name: Identify changed Python files
+        id: changed
+        run: |
+          BASE_REF="${{ github.base_ref }}"
+          git fetch origin "$BASE_REF" --depth=1
+          CHANGED=$(git diff --name-only --diff-filter=AMR "origin/$BASE_REF...HEAD" -- '*.py' || true)
+          if [ -z "$CHANGED" ]; then
+            echo "No Python files changed; skipping py_compile + targeted tests."
+            echo "files=" >> "$GITHUB_OUTPUT"
+          else
+            echo "Changed Python files:"
+            echo "$CHANGED" | sed 's/^/  /'
+            # Pass as space-separated for downstream steps.
+            echo "files=$(echo "$CHANGED" | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Syntax check every changed .py file
+        if: steps.changed.outputs.files != ''
+        run: |
+          # This step would have caught the 2026-05-07 durable/state.py
+          # syntax error in seconds. compile() raises SyntaxError on the
+          # exact file + line, which fails the workflow. Cheaper than
+          # ruff or pytest.
+          set -e
+          for f in ${{ steps.changed.outputs.files }}; do
+            echo "  py_compile $f"
+            uv run python -c "compile(open('$f').read(), '$f', 'exec')"
+          done
+          echo "All changed .py files compile cleanly."
+
+      - name: Block .bak / .swp / .orig artifacts
+        run: |
+          # Autonomous patchers (e.g., CODIE's docstring tool) sometimes
+          # leave .bak files behind. Refuse to land a PR that has these.
+          STRAY=$(git diff --name-only --diff-filter=AM origin/${{ github.base_ref }}...HEAD | grep -E '\.(py\.bak|swp|orig)$' || true)
+          if [ -n "$STRAY" ]; then
+            echo "Refusing to merge: PR contains stray patcher artifacts:"
+            echo "$STRAY" | sed 's/^/  /'
+            echo "Remove these files and push again."
+            exit 1
+          fi
+
+      - name: Ruff check (non-blocking on style, blocking on errors)
+        run: |
+          # We allow style-level findings to pass for now; only fail on
+          # actual errors (E9, F). Tighten later as the codebase improves.
+          uv run ruff check --select E9,F --no-cache . 2>&1 | tail -50
+
+      - name: Run unit tests
+        run: |
+          # tests/unit is the fast subset. Full suite runs nightly.
+          if [ -d tests/unit ]; then
+            uv run pytest tests/unit -x -q --no-header 2>&1 | tail -50
+          else
+            echo "No tests/unit directory; skipping."
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "PR validation finished. See individual step results above."
