@@ -17,7 +17,7 @@
 
 ## 1. Where things stand right now (deployed state)
 
-**Production main as of this handoff: `9d303438`** (deployed 2026-05-08, all docs + canonical guidance shipped). Current branch on the VPS dev tree (`/home/ua/dev/universal_agent`) is `feature/latest2`, in sync with main.
+**Production main as of this handoff: `153109ed`** (deployed 2026-05-08 evening, after the launcher/Cody/ship-hardening work landed via PRs #170–#173). The original draft of this doc cited `9d303438` — that was main earlier on 2026-05-08. The newer commits since then (interactive-claude `ANTHROPIC_*` exclusion, Cody subprocess scrub, /ship hardening, doc cleanups) are **unrelated to V2/V3 substance** — they don't touch any CSI / claudedevs intel code. V2's Phase A–F shipped state on main is unchanged. Current branch on the VPS dev tree (`/home/ua/dev/universal_agent`) is `feature/latest2`, in sync with main.
 
 What's already shipped and live:
 
@@ -232,7 +232,7 @@ These are real concerns but not blockers for getting a backfill run done:
 - **Cron schedule shift** to off-peak windows — separate operational ticket; affects daily crons not one-shot backfill runs.
 - **Operator-idle-detection signal** for cron gating — separate feature.
 - **`csi_convergence` peak-aware schedule swap** — separate ticket.
-- **MCP / claude launcher work from this same session** — unrelated to the backfill; covered in `docs/deployment/secrets_and_environments.md` § "MCP Server Credentials".
+- **MCP / claude launcher work from this same session** — shipped 2026-05-08 evening as PRs #170 (interactive launcher `ANTHROPIC_*` exclusion), #171 (Cody subprocess scrub), #172 (post-deploy doc cleanup), #173 (/ship hardening). All deployed and verified live. Unrelated to the backfill; covered in `docs/deployment/secrets_and_environments.md` § "MCP Server Credentials" and `docs/06_Deployment_And_Environments/10_Interactive_Coding_Environment.md`. Side benefit for V3: the `csi_url_judge.py` and `csi_intelligence_pass.py` LLM calls (which become subprocesses in the backfill flow) no longer risk being poisoned by an `ANTHROPIC_API_KEY` leak from the parent process — the Cody scrub fix also covers any UA service that spawns `claude`.
 
 ---
 
