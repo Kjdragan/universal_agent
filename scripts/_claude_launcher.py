@@ -1,30 +1,38 @@
 """Python helper invoked by `scripts/claude_with_mcp_env.sh`.
 
 Sources $UA_INSTALL_ROOT/.env (bootstrap creds), calls
-`initialize_runtime_secrets()` to pull every Infisical secret onto
-os.environ, then execvp's `claude` so the bootstrapped env is fully
-inherited by Claude Code and its MCP children.
+`initialize_runtime_secrets()` to pull Infisical secrets onto os.environ
+(excluding ANTHROPIC_*), then execvp's `claude` so the bootstrapped env
+is fully inherited by Claude Code and its MCP children.
 
 Naming: leading underscore signals "internal helper, not intended to
 be invoked directly by operators" — use the bash wrapper which sets
 up the uv environment first.
 
-Why this strips ANTHROPIC_* before exec'ing claude
---------------------------------------------------
-Phase A of the interactive-coding inversion staged 5 ZAI routing vars
+Why this excludes ANTHROPIC_* from the load
+-------------------------------------------
+Phase A of the interactive-coding inversion staged ZAI routing vars
 (ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_DEFAULT_*_MODEL)
-in Infisical so UA Python services pick them up at startup. That is
-the correct routing for autonomous agent runs.
+in Infisical so UA Python services pick them up at startup. UA also
+keeps ANTHROPIC_API_KEY there for direct-SDK code paths
+(refinement_agent, gateway_server vision endpoint, etc.).
 
-But this launcher is the *interactive* path. Phase B's whole point
-was that interactive `claude` defaults to Anthropic Max via OAuth,
-not ZAI. Because `initialize_runtime_secrets()` fetches every
-Infisical secret indiscriminately, those ZAI vars land on os.environ
-and would silently re-route interactive `claude` back through ZAI —
-defeating the inversion. The fix is to strip just those keys after
-the bootstrap and before execvp; explicit ZAI opt-in remains
-available via the `zai` shell function (which uses `infisical run`,
-not this launcher). See
+This launcher is the *interactive* path. Phase B's whole point was
+that interactive `claude` defaults to Anthropic Max via OAuth. Any
+ANTHROPIC_* key on os.environ overrides OAuth: ANTHROPIC_API_KEY
+makes Claude Code treat it as an "external API key" (yields the
+"Invalid API key · Fix external API key" UI when that key is for a
+different account / has no Max billing); ANTHROPIC_BASE_URL routes to
+ZAI/GLM. Both are wrong for interactive use.
+
+Fix: pass `exclude_prefixes=("ANTHROPIC_",)` to
+initialize_runtime_secrets() so the entire ANTHROPIC_* namespace is
+filtered out at the Infisical-injection step (vars never enter
+os.environ). UA Python services that need those keys call the same
+function without the exclude param. The post-bootstrap strip below is
+defense-in-depth against any other source (bootstrap .env file,
+parent shell leak). Explicit ZAI opt-in remains via the `zai` shell
+function. See
 docs/06_Deployment_And_Environments/10_Interactive_Coding_Environment.md.
 """
 
@@ -34,24 +42,26 @@ import os
 from pathlib import Path
 import sys
 
-# Keys whose presence in os.environ forces the Claude CLI to route
-# LLM calls through ZAI/GLM. Stripping them lets OAuth → Anthropic
-# Max take over for the interactive launcher's exec'd `claude`.
-_INTERACTIVE_STRIP_KEYS: tuple[str, ...] = (
-    "ANTHROPIC_BASE_URL",
-    "ANTHROPIC_AUTH_TOKEN",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL",
-)
+# Any os.environ key starting with this prefix is removed before
+# exec'ing `claude`, so OAuth (~/.claude/.credentials.json) is the
+# auth path the CLI resolves to. The matching prefix is also passed
+# to `initialize_runtime_secrets(exclude_prefixes=…)` so the vars
+# don't enter os.environ from Infisical in the first place.
+_INTERACTIVE_STRIP_PREFIX: str = "ANTHROPIC_"
 
 
 def _strip_interactive_routing_vars(env: dict[str, str]) -> list[str]:
-    """Remove ZAI routing vars from `env` in place; return the keys removed.
+    """Remove every ANTHROPIC_* key from `env` in place; return removed keys.
 
     Pure helper so it can be unit-tested without execvp side effects.
+    Defense-in-depth against any non-Infisical source that might leak an
+    ANTHROPIC_* var into the launcher's env (bootstrap .env file, parent
+    shell, etc.).
     """
-    return [k for k in _INTERACTIVE_STRIP_KEYS if env.pop(k, None) is not None]
+    keys = sorted(k for k in list(env.keys()) if k.startswith(_INTERACTIVE_STRIP_PREFIX))
+    for key in keys:
+        env.pop(key, None)
+    return keys
 
 
 def _source_env_file(path: Path) -> int:
@@ -111,7 +121,12 @@ def main() -> int:
         return 2
 
     try:
-        result = initialize_runtime_secrets()
+        # Filter ANTHROPIC_* at injection time so the vars never land on
+        # os.environ for this launcher process. Anthropic Max OAuth
+        # (~/.claude/.credentials.json) becomes the resolved auth path.
+        result = initialize_runtime_secrets(
+            exclude_prefixes=(_INTERACTIVE_STRIP_PREFIX,),
+        )
     except Exception as exc:  # noqa: BLE001 — we want the operator to see *why*
         print(f"❌ initialize_runtime_secrets() failed: {exc}", file=sys.stderr)
         return 3
@@ -124,16 +139,19 @@ def main() -> int:
         )
     print(
         f"🔓 Infisical bootstrap loaded {result.loaded_count} secret(s) "
-        f"(env={os.environ.get('INFISICAL_ENVIRONMENT', 'unknown')}); "
-        "launching claude…",
+        f"(env={os.environ.get('INFISICAL_ENVIRONMENT', 'unknown')}, "
+        f"{_INTERACTIVE_STRIP_PREFIX}* excluded); launching claude…",
         file=sys.stderr,
     )
 
+    # Defense-in-depth: catch any ANTHROPIC_* leaked from a non-Infisical
+    # source (bootstrap .env file, parent shell, etc.). The Infisical-side
+    # exclude_prefixes filter handles the dominant case; this catches the rest.
     stripped = _strip_interactive_routing_vars(os.environ)
     if stripped:
         print(
-            f"🧹 unset {len(stripped)} ZAI routing var(s) so interactive "
-            "claude defaults to Anthropic Max OAuth — use `zai` for cheap GLM",
+            f"🧹 stripped {len(stripped)} leaked {_INTERACTIVE_STRIP_PREFIX}* "
+            f"var(s) from non-Infisical source: {', '.join(stripped)}",
             file=sys.stderr,
         )
 
