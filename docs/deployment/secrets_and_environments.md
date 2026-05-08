@@ -154,6 +154,89 @@ python scripts/infisical_upsert_secret.py --env production --project "$PROJECT_I
 
 After staging, restart UA services (`sudo systemctl restart 'universal-agent-*.service'`) so `initialize_runtime_secrets()` picks them up on next startup.
 
+### MCP Server Credentials (`.mcp.json` placeholders)
+
+Claude Code spawns MCP servers from `.mcp.json` at the repo root. Some need real
+credentials at process start: `AGENTMAIL_API_KEY`, `DISCORD_BOT_TOKEN`,
+`HOSTINGER_API_TOKEN`, and any other MCP server's `env.<KEY>` block. **All such
+values MUST be `${VAR}` placeholders in `.mcp.json` — never literal strings.**
+
+Why: the file is committed to git. A literal token sat in `.mcp.json:33` (the
+Hostinger one) for ~78 days because someone — likely a "fix" suggestion from
+Claude Code Doctor — was followed instead of the canonical pattern. See the
+2026-05-08 remediation runbook for what that cost in cleanup work.
+
+**The canonical pattern:**
+
+1. **Store the secret in Infisical** (`production` env). Use
+   `scripts/infisical_upsert_secret.py --environment production --secret-env <KEY>`
+   from a shell that has the value already exported, or use the Infisical UI.
+2. **Reference via `${VAR}` placeholder in `.mcp.json`:**
+   ```jsonc
+   "hostinger-mcp": {
+     "command": "npx",
+     "args": ["hostinger-api-mcp@latest"],
+     "env": {
+       "API_TOKEN": "${HOSTINGER_API_TOKEN}"   // ✅ placeholder, not literal
+     }
+   }
+   ```
+3. **Document the key in `.env.example`** under the "MCP server credentials"
+   block so future operators know it exists. Do NOT paste a real value into
+   `.env.example` or `.env`.
+
+**Resolving the placeholders at runtime:**
+
+`.mcp.json` placeholders are substituted by Claude Code from the env of the
+parent process that launched `claude`. UA services don't need anything special
+here because they call `initialize_runtime_secrets()` at startup, which fetches
+every Infisical secret onto `os.environ`. **An interactive `claude` session
+launched from a fresh shell does NOT run that bootstrap.** Use the canonical
+launcher:
+
+```bash
+./scripts/claude_with_mcp_env.sh [claude args…]
+```
+
+The launcher (a thin bash wrapper around `scripts/_claude_launcher.py`) sources
+`/opt/universal_agent/.env` for Infisical bootstrap creds, runs UA's
+`initialize_runtime_secrets()` to inject all secrets onto `os.environ`, then
+`os.execvp("claude", …)` so the bootstrapped env is fully inherited by Claude
+Code and every MCP child it spawns. This is the SAME code path UA services use
+— single source of truth for auth.
+
+For zero-friction operator UX, alias `claude` to the launcher in the shell rc:
+
+```bash
+# ~/.bashrc
+if [ -x /opt/universal_agent/scripts/claude_with_mcp_env.sh ]; then
+    alias claude='/opt/universal_agent/scripts/claude_with_mcp_env.sh'
+fi
+```
+
+(Already added on the VPS for user `ua` as of 2026-05-08. Mirror to the desktop
+shell rc if you launch interactive `claude` sessions there too — adjust
+`UA_INSTALL_ROOT` env var to point at the desktop's UA checkout if it isn't at
+`/opt/universal_agent`.)
+
+**Anti-patterns to never repeat:**
+
+| Anti-pattern | Why wrong | What to do instead |
+|---|---|---|
+| Inline literal token into `.mcp.json` env block | Token leaks into git permanently; rewriting history doesn't fully scrub forks/CI/PR refs (see 2026-05-08 Hostinger remediation doc) | Use `${VAR}` placeholder + Infisical |
+| Source `.env` in a shell wrapper to populate the launcher's env | Wrong primitive on the VPS — UA never uses `.env` for app secrets, only for Infisical bootstrap creds | Use `initialize_runtime_secrets()` (the Python SDK path) |
+| Wrap `claude` with `infisical run --env=… -- claude` (the CLI) | The Infisical CLI has a separate auth context (`~/.infisical/` interactive session) that doesn't exist headless on the VPS; falls into an interactive login prompt that fails non-tty | Use the Python SDK path via `scripts/claude_with_mcp_env.sh` |
+| Ignore "Claude Code Doctor says MCP needs <TOKEN>" by inlining the literal | Doctor is correctly diagnosing that the env var is unset in the parent process; the fix is to populate the env, not to leak the value | Run `claude` via `scripts/claude_with_mcp_env.sh` |
+| Background tools auto-resolving `${VAR}` to literals on disk | Some IDE plugins/Doctor variants try to "help" by resolving placeholders. **If you see a `git status` diff against `.mcp.json` that turns `${VAR}` into a literal, REVERT it before commit** — it's a leak in progress | `git checkout -- .mcp.json` before `git add`, then make sure `${VAR}` is preserved |
+
+**Adding a new MCP server that needs credentials:**
+
+1. Add the MCP server entry to `.mcp.json` with `${YOUR_KEY}` placeholder.
+2. `python scripts/infisical_upsert_secret.py --environment production --secret-env YOUR_KEY` (after exporting the value in your shell).
+3. `python scripts/infisical_upsert_secret.py --environment development --secret-env YOUR_KEY` (so desktop dev tree has it too, if applicable).
+4. Document the key in `.env.example` under "MCP server credentials".
+5. Verify end-to-end: `./scripts/claude_with_mcp_env.sh` and use the new MCP server. The `🔓 Infisical bootstrap loaded N secret(s)` line should reflect the increment.
+
 ## Deploy Workflow Contract
 
 The single production workflow, `.github/workflows/deploy.yml`, follows this sequence:
@@ -211,6 +294,8 @@ Control-plane credentials (e.g., `TAILSCALE_ADMIN_API_TOKEN`) are stored in Infi
 | Gateway fails to start on VPS | Infisical unreachable + strict mode | Check Infisical status, verify bootstrap `.env` credentials |
 | Local dev can't reach Infisical | CLI token expired | Run `infisical login` again |
 | Secrets not updating after Infisical change | Process reads secrets at startup only | Restart the service (`systemctl restart ...`) |
+| Claude Code Doctor: "MCP server X needs token Y" | Parent process env doesn't have `Y` set, so `${Y}` in `.mcp.json` substitutes to empty | Launch via `scripts/claude_with_mcp_env.sh` (or alias `claude` to it) so `initialize_runtime_secrets()` populates `Y` from Infisical before Claude Code spawns the MCP children. **Do NOT inline a literal value into `.mcp.json`.** |
+| `git status` shows `.mcp.json` modified with `${VAR}` → literal substitution | Background tool / Doctor / IDE plugin auto-resolved the placeholder | `git checkout -- .mcp.json` immediately. Never commit the substitution. The placeholder is the canonical form. |
 
 ## Related Docs
 

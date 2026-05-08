@@ -118,6 +118,8 @@ The ClaudeDevs X intel pipeline is undergoing a v2 rebuild. Two living docs trac
 | URL fetching for CSI / linked-source enrichment | `services/csi_url_judge.enrich_urls` — three passes (pre-filter → LLM judge → fetch). The `trust_source=True` parameter bypasses the judge for official-handle lanes. |
 | Research grounding (open-web search restricted to official sources) | `services/research_grounding.is_allowed` — separate code path from the URL judge. The `research_allowlist` in `intel_lanes.yaml` only gates this path, NOT tweet-link fetching. |
 | Skill invocation by a principal | The skill's `SKILL.md` already documents the workflow. Don't re-document it in `HEARTBEAT.md`. |
+| Storing/loading any application secret (API keys, tokens, credentials) | `docs/deployment/secrets_and_environments.md` is the canonical guide. Infisical is the single source of truth. UA services call `initialize_runtime_secrets()` at startup; never read secrets from `.env`/`os.getenv` directly except for Infisical bootstrap creds. |
+| Adding/touching anything in `.mcp.json` (especially `env.*` blocks) | `docs/deployment/secrets_and_environments.md` § "MCP Server Credentials". **Every value MUST be a `${VAR}` placeholder, never a literal token.** Resolution at runtime is via `scripts/claude_with_mcp_env.sh` which runs `initialize_runtime_secrets()`. The `infisical run` CLI is the WRONG primitive — it has its own auth context that doesn't exist headless on the VPS. |
 
 **Specific anti-patterns shipped (or nearly shipped) here that must not recur:**
 
@@ -126,6 +128,9 @@ The ClaudeDevs X intel pipeline is undergoing a v2 rebuild. Two living docs trac
 3. Inventing a fallback artifact path. `artifacts.resolve_artifacts_dir` is canonical.
 4. Adding catch-up / backfill logic per-cron. `_register_system_cron_job` already handles it.
 5. Adding orphan-reset directives. The stale-task policy in Task Hub is the right knob.
+6. Inlining a literal token into `.mcp.json` to satisfy "Claude Code Doctor says MCP needs <TOKEN>". Doctor is correctly diagnosing that the env var is unset in the parent process; the fix is to launch `claude` via `scripts/claude_with_mcp_env.sh` (or its alias), which runs the canonical Infisical bootstrap. The 2026-05-08 Hostinger token leak (`docs/operations/2026-05-08_hostinger_token_remediation.md`) is the cautionary tale.
+7. Wrapping `claude` with `infisical run --env=… -- claude` (the CLI). The CLI requires its own interactive `infisical login` session that doesn't exist on the VPS for user `ua`; falls into a tty-only login prompt and fails non-tty. Use the Python SDK path (`initialize_runtime_secrets()`) instead — that's what `scripts/claude_with_mcp_env.sh` does.
+8. Letting a background tool (Doctor / IDE plugin) auto-resolve `${VAR}` in `.mcp.json` to a literal value and then committing the diff. **If `git status` ever shows `.mcp.json` modified with a `${VAR}` → literal substitution, `git checkout -- .mcp.json` immediately.** Never commit the substitution.
 
 **The 30-second pre-flight check before writing new code:**
 

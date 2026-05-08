@@ -353,6 +353,35 @@ After all phases complete, run all 7 acid tests in Phase G. **Do not declare don
 
 ---
 
+## Related interactive-claude patterns (different concerns, same machine)
+
+The phases above govern **model routing** for interactive `claude` sessions
+(Anthropic-Max default, `zai()` opt-in). A separate but adjacent concern is
+**MCP server credentials** — the tokens that `.mcp.json` references via
+`${VAR}` placeholders (AgentMail, Discord, Hostinger, etc.). Those are
+populated by a different launcher (`scripts/claude_with_mcp_env.sh`) which
+runs UA's `initialize_runtime_secrets()` before exec'ing `claude`.
+
+The two launchers serve different purposes and should not be conflated:
+
+| Launcher | Purpose | When to use | Conflicts with the other? |
+|---|---|---|---|
+| `zai()` shell function (this doc) | Force `claude` to route LLM calls through the ZAI proxy instead of Anthropic Max for explicit cheap inference | Operator wants GLM models for one specific session | No — `zai` only sets `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN`, doesn't touch MCP env |
+| `scripts/claude_with_mcp_env.sh` | Populate MCP server credentials (`AGENTMAIL_API_KEY`, `DISCORD_BOT_TOKEN`, `HOSTINGER_API_TOKEN`) so `${VAR}` placeholders in `.mcp.json` resolve | Default everywhere — alias `claude` to it in shell rc | No — it injects from Infisical and exec's `claude`; if the user wants ZAI routing they'd still alias `zai` separately |
+
+For the canonical reference on MCP credentials and the launcher's design (the
+"`infisical run` CLI was the wrong primitive" lesson, the auto-resolution
+anti-pattern, the operator alias setup), see
+[`docs/deployment/secrets_and_environments.md` § MCP Server Credentials](../deployment/secrets_and_environments.md#mcp-server-credentials-mcpjson-placeholders).
+
+If you ever need *both* — interactive ZAI routing AND populated MCP creds in
+the same session — compose them: alias `claude` to the MCP launcher (the
+default), and define `zai()` to call the MCP launcher with the ZAI env vars
+overlaid. (Not a current need; flagged here so a future operator doesn't
+re-derive the relationship from scratch.)
+
+---
+
 ## Out of scope (explicit non-goals; track as separate work)
 
 1. Migrating the remaining non-Anthropic secrets currently in user-global settings.json env blocks (`TELEGRAM_BOT_TOKEN`, `GITHUB_PERSONAL_ACCESS_TOKEN`) to Infisical. Those don't affect ZAI routing; they're a separate hygiene improvement.
