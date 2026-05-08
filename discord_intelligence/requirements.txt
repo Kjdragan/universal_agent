@@ -4,7 +4,7 @@
 # Standard discord.py for the bot-token Command & Control server
 # Provides discord.ui (buttons, modals, views), app_commands (slash commands),
 # discord.Intents, and all interactive bot features.
-discord.py>=2.4.0
+discord.py>=2.7.1
 
 # NOTE: The Intelligence Daemon (daemon.py) uses user tokens and requires
 # discord.py-self (a fork that allows user token auth). Since discord.py and
