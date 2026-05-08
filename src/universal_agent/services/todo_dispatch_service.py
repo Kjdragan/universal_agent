@@ -428,6 +428,16 @@ After finishing work, ALWAYS disposition every claimed work item via `task_hub_t
        This reply was sent by {agent_name} directly to the requestor.
        You are CC'd for situational awareness only.
        ────────────────────────────────────────────────"
+
+### FINAL DISPOSITION VERIFICATION (CRITICAL):
+Before you stop responding, run this self-check for EVERY claimed work item in the To Do List above:
+
+1. Did you call `task_hub_task_action(task_id=<id>, action=<one of: complete, review, block, park, approve, delegate>)` for that item during this run?
+2. If NO: STOP. Do not declare the mission done. Decide which action applies, call `task_hub_task_action` now, then end your turn.
+3. If the item was delegated via `vp_dispatch_mission`, you still MUST call `task_hub_task_action(action="complete")` on the original work item with a note that it was delegated to <vp_id>. The dispatch alone does NOT close the work item — it only kicks off the VP. Without the explicit `complete` action, the original item remains "in progress" and your run will be flagged as incomplete.
+4. If the contract for an item required an outbound email and no email was sent yet, send it now (or, if blocked, call `task_hub_task_action(action="block"|"review")` with the concrete reason in the note).
+
+Failing this check triggers the "Execution Missing Lifecycle Mutation" guardrail (mission_guardrails.py) and your completion will be blocked. The guardrail accepts exactly these actions as a durable lifecycle mutation: `review`, `complete`, `block`, `park`, `approve`. Always close the loop with one of them.
 """
 
 
@@ -713,13 +723,23 @@ class ToDoDispatchService:
             max_per_sweep = TODO_DISPATCH_MAX_PER_SWEEP
             with connect_runtime_db(activity_db_path) as conn:
                 for _ in range(max_per_sweep):
-                    # Claim one task at a time with deferred workspace
+                    # Claim one task at a time with deferred workspace.
+                    #
+                    # forbidden_source_kinds: vp_mission rows are Kanban-visibility
+                    # mirrors of work owned by VP workers (vp.coder.primary etc).
+                    # daemon_simone_todo must NOT claim them — that's what produced
+                    # the 2026-05-07 rogue-branch incident when reopen_stale_delegations
+                    # flipped a stale vp_mission mirror to OPEN. The producer-side
+                    # fix (agent_ready=False on the mirror) plus this dispatcher-side
+                    # backstop together close the recurrence path. See
+                    # docs/operations/2026-05-07_open_followups.md Followup #3.
                     batch = dispatch_sweep(
                         conn,
                         agent_id=f"todo:{session.session_id}",
                         limit=1,
                         provider_session_id=session.session_id,
                         workspace_dir=None,
+                        forbidden_source_kinds=["vp_mission"],
                     )
                     if not batch:
                         break

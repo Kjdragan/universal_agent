@@ -1557,7 +1557,19 @@ def claim_next_dispatch_tasks(
     provider_session_id: Optional[str] = None,
     workspace_dir: Optional[str] = None,
     trigger_types: Optional[list[str]] = None,
+    forbidden_source_kinds: Optional[list[str]] = None,
 ) -> list[dict[str, Any]]:
+    """Claim up to `limit` agent-ready, eligible tasks from the dispatch queue.
+
+    The optional ``forbidden_source_kinds`` parameter is a backstop against
+    a specific failure mode: VP missions get mirrored into Task Hub for
+    Kanban visibility (``tools/vp_orchestration.py``), and if their
+    ``agent_ready`` field were ever True (or flipped True by some future
+    code path), a non-VP claimer (e.g. ``daemon_simone_todo``) could pick
+    them up. The producer-side fix is ``agent_ready=False`` on the mirror
+    write; this dispatcher-side filter is the defense-in-depth backstop.
+    See ``docs/operations/2026-05-07_open_followups.md`` Followup #3.
+    """
     ensure_schema(conn)
     rebuild_summary = rebuild_dispatch_queue(conn)
     queue_build_id = str(rebuild_summary.get("queue_build_id") or "")
@@ -1572,12 +1584,28 @@ def claim_next_dispatch_tasks(
 
     # Build trigger_type filter clause
     if trigger_types:
-        placeholders = ",".join("?" for _ in trigger_types)
-        trigger_filter = f"AND i.trigger_type IN ({placeholders})"
-        params: tuple = (queue_build_id, TASK_STATUS_OPEN, TASK_STATUS_REVIEW) + tuple(trigger_types) + (claim_limit,)
+        trigger_placeholders = ",".join("?" for _ in trigger_types)
+        trigger_filter = f"AND i.trigger_type IN ({trigger_placeholders})"
+        trigger_params: tuple = tuple(trigger_types)
     else:
         trigger_filter = ""
-        params = (queue_build_id, TASK_STATUS_OPEN, TASK_STATUS_REVIEW, claim_limit)
+        trigger_params = ()
+
+    # Build forbidden_source_kinds filter clause
+    if forbidden_source_kinds:
+        fsk_placeholders = ",".join("?" for _ in forbidden_source_kinds)
+        forbidden_filter = f"AND i.source_kind NOT IN ({fsk_placeholders})"
+        forbidden_params: tuple = tuple(forbidden_source_kinds)
+    else:
+        forbidden_filter = ""
+        forbidden_params = ()
+
+    params: tuple = (
+        (queue_build_id, TASK_STATUS_OPEN, TASK_STATUS_REVIEW)
+        + trigger_params
+        + forbidden_params
+        + (claim_limit,)
+    )
 
     rows = conn.execute(
         f"""
@@ -1588,6 +1616,7 @@ def claim_next_dispatch_tasks(
           AND q.eligible = 1
           AND i.status IN (?, ?)
           {trigger_filter}
+          {forbidden_filter}
         ORDER BY q.rank ASC
         LIMIT ?
         """,

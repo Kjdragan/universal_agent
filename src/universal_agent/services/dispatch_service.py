@@ -196,11 +196,18 @@ def dispatch_sweep(
     workflow_attempt_id: Optional[str] = None,
     provider_session_id: Optional[str] = None,
     workspace_dir: Optional[str] = None,
+    forbidden_source_kinds: Optional[list[str]] = None,
 ) -> list[dict[str, Any]]:
     """Generic sweep dispatch — wraps claim_next_dispatch_tasks.
 
     This is the heartbeat's drop-in replacement: it rebuilds the queue and
     claims the top N tasks regardless of trigger_type.
+
+    ``forbidden_source_kinds`` plumbs through to the claim-time SQL filter so
+    a caller can exclude task source_kinds that are inappropriate for its
+    runtime. Notably, ``daemon_simone_todo`` should pass
+    ``forbidden_source_kinds=["vp_mission"]`` so it won't claim VP-mirror
+    rows that should be executed by VP workers (Followup #3 backstop).
     """
     claimed = task_hub.claim_next_dispatch_tasks(
         conn,
@@ -210,5 +217,6 @@ def dispatch_sweep(
         workflow_attempt_id=workflow_attempt_id,
         provider_session_id=provider_session_id,
         workspace_dir=workspace_dir,
+        forbidden_source_kinds=forbidden_source_kinds,
     )
     return _enrich_with_routing(claimed)
