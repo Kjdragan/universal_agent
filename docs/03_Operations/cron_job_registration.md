@@ -56,6 +56,35 @@ last and their `update_job` call overwrites the seed's values. Future
 work could add a boot-time reconciliation log that warns about drift, but
 it's not necessary today (drift is self-healing).
 
+## ⚠️ Z.AI peak-time scheduling (read before picking a `default_cron`)
+
+The Z.AI proxy (`api.z.ai/api/anthropic`) is capacity-limited during
+peak demand from its primary user base, which follows **Greater-China
+business hours**. Because China is UTC+8 and our default timezone is
+`America/Chicago` (UTC−5 in CDT), **US night maps to China afternoon /
+evening peak**. Running heavy LLM-bound crons overnight US-time —
+the intuitive "do batch work when nobody is around" — puts them
+squarely into the worst capacity window.
+
+**Rule of thumb when picking a new `default_cron`:**
+
+| US Central (CDT) | China demand | Use for cron? |
+|---|---|---|
+| 00:00–10:00 (US night → US morning) | 🔴 Peak | **Avoid** for LLM-heavy jobs |
+| 10:00–14:00 (US lunch) | ✅ Off-peak (China night) | **Prefer** for proactive heavy lanes |
+| 14:00–17:00 (US afternoon) | ✅ Off-peak | **Prefer** for cleanup / low-priority |
+| 18:00–22:00 (US evening) | 🟡 Ramp-up | OK for light jobs |
+
+For the full audit of existing crons, the proposed reschedule, and the
+operator-idle-detection follow-up plan, see
+[`docs/operations/2026-05-08_zai_peak_time_scheduling.md`](../operations/2026-05-08_zai_peak_time_scheduling.md).
+
+A "heavy LLM-bound" cron is anything that issues more than ~10 LLM
+calls per fire (CSI lanes, briefing/report generators, vault backfills,
+research pipelines). Light jobs (file pruning, single-LLM digests,
+notification sweeps) are insensitive to the peak window and can fire
+whenever else makes sense.
+
 ## Adding a new proactive cron job
 
 Mirror `_ensure_paper_to_podcast_cron_job` (`gateway_server.py:17883`).

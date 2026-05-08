@@ -9,6 +9,36 @@ Our system primarily uses Z.AI endpoint definitions mapped onto Anthropic SDK co
 
 The master resolution logic lives strictly in `src/universal_agent/utils/model_resolution.py`.
 
+### ⚠️ Capacity behavior at peak (operationally indistinguishable from throttling)
+
+Z.AI's official position is that they **do not throttle** speed; peak-period
+behavior is described as "capacity-limited." In practice the symptom we observe
+is identical to throttling: bursts of ~20 calls/min punctuated by 1.5–3 minute
+stalls during peak demand. The Phase G v2 vault backfill (2026-05-07) hit this
+pattern across hundreds of LLM calls.
+
+**The peak window is anchored to Greater-China business hours**, not US hours.
+That means heavy proactive cron jobs run overnight US-time fall directly into
+the worst capacity window. The full audit, schedule remediation plan, and
+target off-peak windows are documented in
+[`docs/operations/2026-05-08_zai_peak_time_scheduling.md`](../operations/2026-05-08_zai_peak_time_scheduling.md).
+
+Two architectural mitigations exist:
+
+1. **Schedule shift (primary).** Move heavy proactive crons out of US night and
+   into US lunch / afternoon, which maps to China deep-night off-peak. See the
+   peak-time finding doc for the proposed mapping and env-var overrides.
+2. **Per-call pacing (backstop).** A token-bucket + adaptive-backoff module at
+   `src/universal_agent/services/csi_llm_pacing.py` (`paced_llm_call(stage=...)`)
+   wraps sustained-burst lanes so the call rate stays under the proxy's burst
+   ceiling and adaptive sleep grows when latencies climb. Used by the CSI URL
+   judge and intelligence pass; configurable via `UA_CSI_LLM_RATE_LIMIT_PER_MIN`
+   et al.
+
+Emergency override: if a phase-boundary backfill must run during China peak, the
+`/opt/ua_demos/` Anthropic-native environment is unaffected by Z.AI capacity and
+can be used as a fallback at higher per-call cost.
+
 ### The Core Model Map
 We maintain a three-tier fallback logic for consistency, equating Anthropic nomenclature with GLM performance targets:
 
