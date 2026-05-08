@@ -367,7 +367,31 @@ The two launchers serve different purposes and should not be conflated:
 | Launcher | Purpose | When to use | Conflicts with the other? |
 |---|---|---|---|
 | `zai()` shell function (this doc) | Force `claude` to route LLM calls through the ZAI proxy instead of Anthropic Max for explicit cheap inference | Operator wants GLM models for one specific session | No — `zai` only sets `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN`, doesn't touch MCP env |
-| `scripts/claude_with_mcp_env.sh` | Populate MCP server credentials (`AGENTMAIL_API_KEY`, `DISCORD_BOT_TOKEN`, `HOSTINGER_API_TOKEN`) so `${VAR}` placeholders in `.mcp.json` resolve | Default everywhere — alias `claude` to it in shell rc | No — it injects from Infisical and exec's `claude`; if the user wants ZAI routing they'd still alias `zai` separately |
+| `scripts/claude_with_mcp_env.sh` | Populate MCP server credentials (`AGENTMAIL_API_KEY`, `DISCORD_BOT_TOKEN`, `HOSTINGER_API_TOKEN`) so `${VAR}` placeholders in `.mcp.json` resolve | Default everywhere — alias `claude` to it in shell rc | **Resolved by strip-on-exec.** See note below. |
+
+> **⚠️ 2026-05-08 correction.** The original "No conflict" claim for
+> `claude_with_mcp_env.sh` was wrong. The launcher calls
+> `initialize_runtime_secrets()`, which fetches **every** Infisical secret onto
+> `os.environ` — and Phase A of this very inversion staged the 5 `ANTHROPIC_*`
+> ZAI vars in Infisical so UA Python services would pick them up. Net effect
+> until 2026-05-08: aliasing `claude` to the MCP launcher (per the canonical
+> advice in `secrets_and_environments.md`) silently re-injected the ZAI vars
+> and routed interactive `claude` back through GLM, exactly the routing Phase B
+> was meant to eliminate.
+>
+> **Fix shipped 2026-05-08:** `scripts/_claude_launcher.py` now strips the 5
+> `ANTHROPIC_*` keys from `os.environ` after the Infisical bootstrap and
+> before `os.execvp("claude", …)`. MCP credentials still flow through
+> unchanged; interactive `claude` falls through to Anthropic Max OAuth as
+> Phase B intended. UA Python services that need ZAI routing call
+> `initialize_runtime_secrets()` directly (not via this launcher), so they
+> are unaffected. The `zai` shell function uses `infisical run` (also not via
+> this launcher) and remains the explicit ZAI opt-in path.
+>
+> Regression guard: `tests/unit/test_claude_launcher_strip.py` asserts the
+> strip behavior. Functional smoke: launch via the alias, run
+> `claude --debug -p "1+1"`, and confirm the API endpoint in the debug
+> output is `api.anthropic.com`, not `api.z.ai`.
 
 For the canonical reference on MCP credentials and the launcher's design (the
 "`infisical run` CLI was the wrong primitive" lesson, the auto-resolution
