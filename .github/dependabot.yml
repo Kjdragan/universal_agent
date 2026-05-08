@@ -1,0 +1,68 @@
+# Dependabot configuration — routes dependency-update PRs through develop
+# instead of merging directly to main.
+#
+# Why target-branch: develop?
+#
+# Without this config, Dependabot defaults to opening PRs against the repo's
+# default branch (main). When those PRs merge to main directly, they bypass
+# the canonical feature/latest2 → develop → main fast-forward chain that
+# /ship relies on. Subsequent /ship runs then fail with "Diverging branches
+# can't be fast-forwarded" because main has commits develop doesn't.
+#
+# That's exactly what happened on 2026-05-07: PR #152 (a python-multipart
+# bump) merged directly to main via the GitHub UI, breaking /ship for the
+# next session and requiring a manual merge-commit recovery on main.
+#
+# By routing Dependabot PRs to develop, dep updates flow through the same
+# review path as feature work: develop → main fast-forward stays clean.
+#
+# References:
+#   - docs/operations/2026-05-07_open_followups.md (Followup #2 background)
+#   - .claude/commands/ship.md (the workflow whose --ff-only this protects)
+
+version: 2
+updates:
+
+  # Python dependencies (uv / pyproject.toml)
+  # Dependabot's pip ecosystem reads pyproject.toml directly. It does not
+  # natively understand uv.lock; users merging Dependabot's PRs must run
+  # `uv sync` (or `uv lock --upgrade-package <name>`) to refresh the lock
+  # before deployment. The dependencies install via uv on the production
+  # VPS in deploy.yml, so the lockfile must be regenerated locally.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "12:00"
+      timezone: "America/Chicago"
+    target-branch: "develop"
+    labels:
+      - "dependencies"
+      - "python"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    # Group security updates separately so they can be expedited if needed
+    groups:
+      python-security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
+  # GitHub Actions workflow dependencies
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "12:00"
+      timezone: "America/Chicago"
+    target-branch: "develop"
+    labels:
+      - "dependencies"
+      - "ci-cd"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(ci)"
