@@ -14,6 +14,7 @@ If you are the agent running `/ship` (you may be reading this in a different ses
 
 - Never assume the local working copy is current. Always re-fetch and rebase first. This eliminates the failure mode where the operator's stale checkout collides with a remote commit a coder just pushed.
 - If `/ship` fails on push with a non-fast-forward / 403 rejection, the recovery is the same: `git pull --rebase origin <branch>` and re-run the failed step. **Never `git push --force`.**
+- **Silent no-op pushes are now caught.** The script verifies that `origin/main` actually advanced after the push. If your local `develop` or `main` was stale, the ff-merge can be a no-op and `git push` will report "Everything up-to-date" while the deploy never triggers — `/ship` now refuses to silently report success in that case. This is the failure mode that bit on 2026-05-08.
 
 // turbo-all
 
@@ -34,6 +35,14 @@ if [ "$CURRENT_BRANCH" = "main" ] || [ "$CURRENT_BRANCH" = "develop" ]; then
     echo "   Switch to your feature branch first: git checkout feature/latest2"
     exit 1
 fi
+
+# 1b. SHA-delta preview — show operator what's about to ship before any pushes.
+echo "🔭 Pre-flight ref state (origin):"
+git fetch origin "$CURRENT_BRANCH" develop main --quiet 2>/dev/null || true
+for ref in "$CURRENT_BRANCH" develop main; do
+    sha=$(git rev-parse "origin/$ref" 2>/dev/null || echo "<none>")
+    echo "   origin/$ref = ${sha:0:8}"
+done
 
 # 2. Pre-commit safety: refuse to ship a corrupt working tree.
 #
@@ -89,50 +98,104 @@ if [ "$TOTAL_CHANGES" -gt 25 ]; then
     echo "   ... ($((TOTAL_CHANGES - 25)) more — git status for full list)"
 fi
 
-# 3. Commit and sync current branch
-git add .
-git commit -m "chore: deployment auto-commit via /ship" || echo "No pending changes to commit."
+# 3. Commit and sync current branch — only if there ARE pending changes.
+#    Old pattern `git commit -m … || echo "No pending"` masked ALL commit
+#    errors (hook failures, corrupt index) as "no pending changes".
+if [ -n "$(git status --porcelain)" ]; then
+    git add .
+    git commit -m "chore: deployment auto-commit via /ship"
+else
+    echo "✅ No pending changes to commit."
+fi
 
 echo "🔄 Fetching remote state to check for parallel activity..."
-git fetch origin $CURRENT_BRANCH develop main
+git fetch origin "$CURRENT_BRANCH" develop main
 
 LOCAL_SHA=$(git rev-parse @)
 REMOTE_SHA=$(git rev-parse @{u} 2>/dev/null || echo "no_remote")
 
 if [ "$LOCAL_SHA" != "$REMOTE_SHA" ] && [ "$REMOTE_SHA" != "no_remote" ]; then
     echo "⚠️ Remote changes detected (potential Claude Code activity). Performing pre-flight rebase..."
-    git pull --rebase origin $CURRENT_BRANCH
+    git pull --rebase origin "$CURRENT_BRANCH"
 else
     echo "✅ Local branch is up to date. Proceeding with standard push..."
 fi
 
-git push origin $CURRENT_BRANCH
+git push origin "$CURRENT_BRANCH"
 
-# 4. Merge into develop
+# 4. Merge into develop — --ff-only refuses to silently merge divergent state.
 echo "🔄 Updating integration branch (develop)..."
 git fetch origin
 git checkout develop
-git pull origin develop
-git merge $CURRENT_BRANCH -m "Merge branch '$CURRENT_BRANCH' into develop for deployment"
+git pull --ff-only origin develop || {
+    echo "❌ Local develop has diverged from origin/develop. Reconcile manually before /ship."
+    echo "   Investigate:"
+    echo "      git log --oneline origin/develop..develop   (commits in local, not on remote)"
+    echo "      git log --oneline develop..origin/develop   (commits on remote, not in local)"
+    exit 1
+}
+git merge "$CURRENT_BRANCH" -m "Merge branch '$CURRENT_BRANCH' into develop for deployment"
 git push origin develop
 
 # 5. Fast-forward main to deploy
 echo "🚢 Fast-forwarding production branch (main)..."
 git checkout main
-git pull origin main
+git pull --ff-only origin main || {
+    echo "❌ Local main has diverged from origin/main. Reconcile manually before /ship."
+    exit 1
+}
+
+PRE_MAIN=$(git rev-parse origin/main)
 git merge develop --ff-only
+TARGET_SHA=$(git rev-parse main)
+
+if [ "$PRE_MAIN" = "$TARGET_SHA" ]; then
+    echo "ℹ️  main is already at ${TARGET_SHA:0:8} — no new commits to deploy this cycle."
+    echo "   (develop matched main already; nothing new was merged.)"
+    git checkout "$CURRENT_BRANCH"
+    exit 0
+fi
+
 git push origin main
+
+# 5a. CRITICAL — verify origin/main actually advanced.
+#     git push can exit 0 with "Everything up-to-date" when the local
+#     ff-merge above was a silent no-op (stale local develop or main).
+#     This is the bug that bit /ship on 2026-05-08; without this check,
+#     /ship reports success and the deploy never triggers.
+git fetch origin main --quiet
+POST_MAIN=$(git rev-parse origin/main)
+
+if [ "$POST_MAIN" != "$TARGET_SHA" ]; then
+    echo "❌ FATAL: push to main reported success but origin/main is at ${POST_MAIN:0:8}, expected ${TARGET_SHA:0:8}."
+    echo "   The deploy workflow will NOT trigger. Most likely cause:"
+    echo "   - Local develop or main was stale; the ff-merge above was a silent no-op."
+    echo "   - Branch protection rejected the push without surfacing a non-zero exit."
+    echo "   Recover:"
+    echo "      git fetch origin"
+    echo "      git checkout main"
+    echo "      git merge origin/develop --ff-only"
+    echo "      git push origin main"
+    exit 1
+fi
+echo "✅ origin/main advanced: ${PRE_MAIN:0:8} → ${POST_MAIN:0:8}"
 
 # 6. Return to feature branch
 echo "🧹 Returning to feature branch ($CURRENT_BRANCH)..."
-git checkout $CURRENT_BRANCH
+git checkout "$CURRENT_BRANCH"
 
-# 7. Fast-forward feature branch to stay in sync with main
+# 7. Sync feature branch with main — surface divergence visibly without
+#    aborting the run (deploy was already pushed successfully above).
 echo "🔄 Syncing $CURRENT_BRANCH with main..."
-git merge main --ff-only || echo "⚠️ Feature branch has diverged from main — manual merge may be needed."
+if ! git merge main --ff-only 2>/dev/null; then
+    echo "⚠️  $CURRENT_BRANCH has diverged from main — ff-merge refused."
+    echo "   This is non-fatal for the deploy (main was pushed successfully above),"
+    echo "   but you should reconcile $CURRENT_BRANCH before the next /ship cycle:"
+    echo "      git rebase main      (if your branch should pick up main's recent commits)"
+    echo "   or git merge main       (if you want a merge commit instead)"
+fi
 
-# 8. Verify deployment completion
-TARGET_SHA=$(git rev-parse main)
+# 8. Verify deployment completion (gh CLI optional)
 echo "👀 Deploy triggered. main = $TARGET_SHA"
 echo "   GitHub Actions URL: https://github.com/Kjdragan/universal_agent/actions"
 
