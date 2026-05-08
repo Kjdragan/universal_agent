@@ -112,7 +112,14 @@ jobs:
             fi
             git fetch origin main
             git reset --hard origin/main
-            
+            # Sync the local 'main' branch pointer to origin/main too. Without
+            # this, repeated deploys advance HEAD and the working tree but
+            # leave the local main branch ref stuck at its old SHA. Anyone
+            # later running 'git checkout main' on the production tree (e.g.
+            # operator during incident recovery) lands on stale code.
+            # See Followup #2 in docs/operations/2026-05-07_open_followups.md.
+            git update-ref refs/heads/main "$(git rev-parse origin/main)"
+
             echo "--> Transferring ownership to service user before dependency sync..."
             # || true: tolerate ENOENT from transient SQLite WAL/SHM files
             # that may vanish mid-scan while the running service writes to DB.
