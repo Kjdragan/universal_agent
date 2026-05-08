@@ -76,7 +76,7 @@ dependencies = [
     "email-reply-parser>=0.5.12",
     "chardet>=5.2.0,<6",
     "typer>=0.12",
-    "infisical-python==2.3.5",
+    "infisical-python==2.3.6",
     "pyjwt>=2.12.1",
     "langsmith[claude-agent-sdk,otel]>=0.7.22",
     "crawl4ai-cloud-sdk",
