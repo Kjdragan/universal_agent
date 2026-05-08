@@ -44,15 +44,25 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-# Env vars that MUST be unset before invoking `claude` from a demo workspace.
-# Their presence in the parent shell would override the project-local
-# settings.json and silently route the request to the ZAI proxy.
-LEAKY_ANTHROPIC_ENV_VARS = (
-    "ANTHROPIC_AUTH_TOKEN",
-    "ANTHROPIC_BASE_URL",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+# Any env var starting with ANTHROPIC_ MUST be unset before invoking `claude`
+# from a demo workspace. The original list was the 5 ZAI routing vars
+# (BASE_URL/AUTH_TOKEN/three model names), but UA Python services that spawn
+# Cody (and therefore become the parent shell of the demo subprocess) also
+# carry ANTHROPIC_API_KEY in their env from Infisical. If that key reaches
+# the demo's `claude` subprocess, Claude Code treats it as an "external API
+# key" overriding OAuth and yields `Invalid API key · Fix external API key`
+# when the staged key isn't for the same Anthropic Max account. Same root
+# cause as the 2026-05-08 interactive launcher fix; same prefix-based
+# resolution. Canonical reference:
+# docs/06_Deployment_And_Environments/10_Interactive_Coding_Environment.md.
+LEAKY_ANTHROPIC_ENV_PREFIX = "ANTHROPIC_"
+
+# Backwards-compat alias kept for any external caller that imported the old
+# constant. New code should reference LEAKY_ANTHROPIC_ENV_PREFIX. The tuple
+# is now derived dynamically from the prefix at module init so it correctly
+# describes the *current* env's leaky vars rather than a stale 5-key list.
+LEAKY_ANTHROPIC_ENV_VARS: tuple[str, ...] = tuple(
+    sorted(k for k in os.environ if k.startswith(LEAKY_ANTHROPIC_ENV_PREFIX))
 )
 
 
@@ -257,11 +267,17 @@ def list_sources(workspace_dir: Path) -> list[Path]:
 
 
 def _scrubbed_env() -> dict[str, str]:
-    """Return os.environ minus the leaky Anthropic vars."""
-    env = dict(os.environ)
-    for var in LEAKY_ANTHROPIC_ENV_VARS:
-        env.pop(var, None)
-    return env
+    """Return os.environ minus every ANTHROPIC_* var.
+
+    Removes the entire ANTHROPIC_* namespace, not a fixed list, so any new
+    Anthropic env var added to Infisical (e.g. ANTHROPIC_VERTEX_PROJECT_ID
+    in the future) is automatically scrubbed without needing a code change
+    here. Same pattern as `scripts/_claude_launcher.py`'s strip helper.
+    """
+    return {
+        k: v for k, v in os.environ.items()
+        if not k.startswith(LEAKY_ANTHROPIC_ENV_PREFIX)
+    }
 
 
 @dataclass(frozen=True)

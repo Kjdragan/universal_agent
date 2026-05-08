@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import os
-import subprocess as sp
-from datetime import datetime, timezone
 from pathlib import Path
+import subprocess as sp
 
 import pytest
 
 from universal_agent.services.cody_implementation import (
+    LEAKY_ANTHROPIC_ENV_PREFIX,
     LEAKY_ANTHROPIC_ENV_VARS,
     BriefingBundle,
     DemoManifest,
@@ -29,7 +30,6 @@ from universal_agent.services.cody_implementation import (
     write_manifest,
     write_run_output,
 )
-
 
 # ── WorkspaceArtifacts shape ────────────────────────────────────────────────
 
@@ -193,9 +193,18 @@ def test_run_in_workspace_executes_and_captures_stdout(tmp_path: Path):
 
 
 def test_run_in_workspace_scrubs_leaky_anthropic_env(tmp_path: Path, monkeypatch):
-    """ANTHROPIC_AUTH_TOKEN must NOT leak into the subprocess by default."""
+    """No ANTHROPIC_* var should leak into the subprocess by default.
+
+    Covers the routing vars (BASE_URL/AUTH_TOKEN), the 2026-05-08-discovered
+    ANTHROPIC_API_KEY (which Claude Code treats as an external API key
+    overriding OAuth), and any future-added Anthropic env var (Vertex,
+    Bedrock, etc.) — the scrub is prefix-based so new vars are caught
+    automatically.
+    """
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "should_not_leak")
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://wrong.example/")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "should_not_leak_either")
+    monkeypatch.setenv("ANTHROPIC_VERTEX_PROJECT_ID", "future-anthropic-var")
     ws = tmp_path / "ws"
     ws.mkdir()
     result = run_in_workspace(
@@ -205,12 +214,16 @@ def test_run_in_workspace_scrubs_leaky_anthropic_env(tmp_path: Path, monkeypatch
             "-c",
             "import os; "
             "print('TOKEN=' + os.environ.get('ANTHROPIC_AUTH_TOKEN', 'unset'));"
-            "print('URL=' + os.environ.get('ANTHROPIC_BASE_URL', 'unset'))",
+            "print('URL=' + os.environ.get('ANTHROPIC_BASE_URL', 'unset'));"
+            "print('KEY=' + os.environ.get('ANTHROPIC_API_KEY', 'unset'));"
+            "print('VTX=' + os.environ.get('ANTHROPIC_VERTEX_PROJECT_ID', 'unset'))",
         ],
         timeout=15,
     )
     assert "TOKEN=unset" in result.stdout
     assert "URL=unset" in result.stdout
+    assert "KEY=unset" in result.stdout
+    assert "VTX=unset" in result.stdout
     assert result.env_scrubbed is True
 
 
@@ -257,10 +270,24 @@ def test_run_in_workspace_respects_timeout(tmp_path: Path):
     assert "timeout" in result.stderr
 
 
-def test_leaky_env_var_list_includes_critical_items():
-    """Catch a future regression that drops one of the must-scrub vars."""
-    for v in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"):
-        assert v in LEAKY_ANTHROPIC_ENV_VARS
+def test_leaky_env_prefix_is_anthropic_namespace():
+    """Scrub target is the entire ANTHROPIC_* namespace, not a fixed list.
+
+    This is the regression guard for the 2026-05-08 finding that the
+    original 5-key list omitted ANTHROPIC_API_KEY (and any other Anthropic
+    env var Infisical might hold). The launcher had the same blind spot
+    and was fixed first; this test enforces that Cody's scrub stays in
+    sync with that lesson.
+    """
+    assert LEAKY_ANTHROPIC_ENV_PREFIX == "ANTHROPIC_"
+
+
+def test_leaky_env_var_list_is_derived_from_prefix(monkeypatch):
+    """LEAKY_ANTHROPIC_ENV_VARS is a backward-compat snapshot of the
+    current env's ANTHROPIC_* keys at import time, not a hardcoded list.
+    Anything that was an ANTHROPIC_* key when the module loaded is in it."""
+    for v in LEAKY_ANTHROPIC_ENV_VARS:
+        assert v.startswith(LEAKY_ANTHROPIC_ENV_PREFIX)
 
 
 # ── detect_endpoint_from_text ───────────────────────────────────────────────
