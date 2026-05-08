@@ -22,7 +22,7 @@ jobs:
 
     steps:
       - name: Checkout develop branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: develop
           # Need full history so doc_drift_auditor.py can run `git log`
