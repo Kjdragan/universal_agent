@@ -27,18 +27,14 @@ from universal_agent.services.claude_code_intel import (
     KB_SLUG,
     LANE_SLUG,
     SOURCE_KIND_DEMO_TASK,
-    SOURCE_KIND_SCAFFOLD_REQUEST,
     SOURCE_KIND_KB_UPDATE,
+    SOURCE_KIND_SCAFFOLD_REQUEST,
     classify_post,
     queue_follow_up_tasks,
     register_packet_artifact,
 )
 from universal_agent.wiki.core import (
-    ACTION_CREATE,
-    ACTION_EXTEND,
     ensure_vault,
-    memex_apply_action,
-    memex_page_exists,
     wiki_ingest_external_source,
 )
 
@@ -278,7 +274,13 @@ def refine_actions_with_linked_sources(
         if not post_id:
             continue
         metadata_path = Path(str(entry.get("metadata_path") or ""))
-        metadata = _load_json(metadata_path) if metadata_path.exists() else {}
+        # NB: must be is_file(), not exists() — `exists()` returns True for
+        # directories too. The 2026-05-07 v2 backfill hit a packet whose
+        # metadata_path resolved to '.' (cwd), which is a directory; the
+        # subsequent _load_json(...).read_text() then raised IsADirectoryError
+        # and killed replay for that packet. Tracked in Followup #4 of
+        # docs/operations/2026-05-07_open_followups.md.
+        metadata = _load_json(metadata_path) if metadata_path.is_file() else {}
         summary_parts = [
             f"source_type={metadata.get('source_type') or ''}",
             f"domain={metadata.get('domain') or ''}",
@@ -527,163 +529,50 @@ def apply_research_grounding_pass(
     return out
 
 
-# ── Memex extraction (PR 15) ────────────────────────────────────────────────
+# ── Memex extraction — LLM-driven (Phase F replacement) ────────────────────
 #
-# After every replay, decide which entity/concept pages to CREATE or EXTEND
-# from each action. CREATE is the dominant case (~80% per design doc §4.2);
-# EXTEND fires when the page already exists. REVISE (~5%) requires LLM
-# judgment about supersedes and is intentionally NOT wired here — it can
-# layer on as a follow-up PR once we have data on how often it actually
-# matters.
+# Replaces the regex-based extractor that was producing ~50% junk entities
+# (English stopwords, t.co URL slugs, joke words from meme tweets — full
+# evidence in docs/operations/2026-05-07_codie_rogue_branch_recovery.md).
 #
-# Source-of-name precedence (deterministic, no LLM call):
-#   1. release_info.package — when the action is a release_announcement
-#      (PR 6a), the package name itself is an entity.
-#   2. CamelCase / snake_case feature terms in action.text — same heuristic
-#      research_grounding uses.
-#   3. Skipped: anything from linked source titles. Future enhancement.
-
-# Lifted from research_grounding._TERM_PATTERN so we extract the same
-# named-feature shapes consistently across the v2 pipeline.
-_MEMEX_TERM_PATTERN = re.compile(
-    r"\b([A-Z][a-zA-Z0-9_]{2,}|[a-z][a-zA-Z0-9_]+_[a-zA-Z0-9_]+)\b"
-)
-_MEMEX_TERM_STOPWORDS = frozenset(
-    {
-        "claude",
-        "anthropic",
-        "agents",
-        "agent",
-        "tool",
-        "tools",
-        "this",
-        "that",
-        "with",
-        "from",
-        "into",
-        "what",
-        "when",
-        "have",
-        "been",
-        "more",
-        "https",
-        "http",
-        "url",
-        "post",
-        "github",
-        "discord",
-        "twitter",
-        "reddit",
-        "demo",
-        "demos",
-        "build",
-        "release",
-        "released",
-        "today",
-        "support",
-        "supports",
-    }
-)
+# New design (per docs/proactive_signals/knowledge_extraction_redesign_context_2026-05-07.md):
+#   1. ``services.csi_intelligence_pass.analyze_action`` — LLM call (GLM-5.1)
+#      returning a structured ``VaultDelta`` (entities/concepts/relations
+#      with rich kinds and aliases). The LLM does the meaning judgment;
+#      code does no stopword filtering / pattern matching / ranking.
+#   2. ``services.csi_intelligence_persistence.apply_vault_delta_to_vault``
+#      — pure plumbing layer that translates the VaultDelta into
+#      ``memex_apply_action`` calls (auto-downgrade / -upgrade / -redirect
+#      based on current vault state, light name canonicalization, alias-tag
+#      emission, posts.jsonl + relations.jsonl persistence).
+#
+# Quality validation: Phase D ran 50 LLM calls across 4 diverse packets
+# with 0 junk emissions, perfect cross-packet canonical-name stability
+# for high-frequency entities (Claude Code, Opus 4.7, Claude Managed Agents).
 
 
-def _memex_candidates_for_action(action: dict[str, Any]) -> list[tuple[str, str]]:
-    """Return [(kind, name)] candidates for one action.
-
-    Conservative: returns at most a handful per action so the Memex pass
-    doesn't explode into dozens of pages per tweet.
-    """
-    candidates: list[tuple[str, str]] = []
-    seen: set[tuple[str, str]] = set()
-
-    def _add(kind: str, name: str) -> None:
-        cleaned = str(name or "").strip()
-        if not cleaned:
-            return
-        key = (kind, cleaned.lower())
-        if key in seen:
-            return
-        seen.add(key)
-        candidates.append((kind, cleaned))
-
-    # 1. Release announcements: the package itself is an entity.
-    release_info = action.get("release_info") if isinstance(action.get("release_info"), dict) else None
-    if release_info and release_info.get("package"):
-        _add("entity", str(release_info["package"]))
-
-    # 2. CamelCase / snake_case terms in the action's text. Cap to first 5.
-    text = str(action.get("text") or "")
-    if text:
-        terms_found = 0
-        for raw in _MEMEX_TERM_PATTERN.findall(text):
-            if len(raw) < 3:
-                continue
-            if raw.lower() in _MEMEX_TERM_STOPWORDS:
-                continue
-            _add("entity", raw)
-            terms_found += 1
-            if terms_found >= 5:
-                break
-
-    return candidates
+def _read_linked_source_text(entry: dict[str, Any], *, max_chars: int = 8000) -> str:
+    """Read a linked source's fetched body text. Empty string on any error."""
+    source_path = str(entry.get("source_path") or "").strip()
+    if not source_path:
+        return ""
+    try:
+        text = Path(source_path).read_text(encoding="utf-8", errors="replace")
+    except (OSError, ValueError):
+        return ""
+    if len(text) > max_chars:
+        return text[:max_chars] + f"\n\n[... truncated, original length {len(text)} chars]"
+    return text
 
 
-def _memex_body_for_create(
-    *,
-    handle: str,
-    action: dict[str, Any],
-    linked_for_post: list[dict[str, Any]],
-) -> str:
-    """Synthesize a minimal entity-page body from action + linked sources."""
-    title = str(action.get("post_id") or "").strip()
-    text = str(action.get("text") or "").strip()
-    classifier = action.get("classifier") if isinstance(action.get("classifier"), dict) else {}
-    reasoning = str(classifier.get("reasoning") or "").strip()
-    post_url = str(action.get("url") or "").strip()
-    parts: list[str] = ["## Discovery context", ""]
-    parts.append(f"- handle: `@{handle}`")
-    if post_url:
-        parts.append(f"- post: {post_url}")
-    if title:
-        parts.append(f"- post_id: `{title}`")
-    parts.append("")
-    if text:
-        parts.extend(["### Tweet text", "", text, ""])
-    if reasoning:
-        parts.extend(["### Classifier rationale", "", reasoning, ""])
-    if linked_for_post:
-        parts.extend(["### Linked official sources", ""])
-        for entry in linked_for_post[:6]:
-            url = str(entry.get("url") or "").strip()
-            t = str(entry.get("title") or "").strip() or url or "source"
-            if url:
-                parts.append(f"- [{t}]({url})")
-            else:
-                parts.append(f"- {t}")
-        parts.append("")
-    return "\n".join(parts).rstrip() + "\n"
-
-
-def _memex_body_for_extend(
-    *,
-    action: dict[str, Any],
-    linked_for_post: list[dict[str, Any]],
-) -> str:
-    """Body for an EXTEND — short, dated section appended to existing page."""
-    text = str(action.get("text") or "").strip()
-    parts: list[str] = []
-    if text:
-        parts.append(text)
-    if linked_for_post:
-        parts.append("")
-        parts.append("Newly linked sources:")
-        for entry in linked_for_post[:6]:
-            url = str(entry.get("url") or "").strip()
-            t = str(entry.get("title") or "").strip() or url or "source"
-            if url:
-                parts.append(f"- [{t}]({url})")
-            else:
-                parts.append(f"- {t}")
-    return "\n".join(parts).rstrip() + "\n"
+def _existing_vault_slugs(vault_path: Path) -> list[str]:
+    """List the slugs of existing entity + concept pages in this vault."""
+    slugs: list[str] = []
+    for sub in ("entities", "concepts"):
+        d = vault_path / sub
+        if d.is_dir():
+            slugs.extend(p.stem for p in d.glob("*.md"))
+    return slugs
 
 
 def apply_memex_pass(
@@ -692,81 +581,150 @@ def apply_memex_pass(
     handle: str,
     actions: list[dict[str, Any]],
     linked_source_entries: list[dict[str, Any]],
+    packet_id: str = "",
+    min_tier: int = 2,
 ) -> list[dict[str, Any]]:
-    """Walk every action; CREATE or EXTEND entity/concept pages as needed.
+    """Run the LLM-driven CSI intelligence pass over every tier-2+ action.
 
-    Returns a list of action records suitable for inclusion in the candidate
-    ledger. Never raises on per-action failure — surfaces the error in the
-    record so the downstream pipeline can keep working.
+    For each action whose tier ≥ ``min_tier``:
+      1. Gather linked-source text for the action's post (read fetched
+         markdown bodies from disk; truncated per source to keep prompt
+         sizes bounded).
+      2. Read the current vault's existing entity/concept slugs so the
+         LLM can choose CREATE-vs-EXTEND-vs-REVISE.
+      3. Call ``analyze_action`` (one GLM-5.1 call per action) →
+         ``VaultDelta``.
+      4. Persist the ``VaultDelta`` via ``apply_vault_delta_to_vault``.
+      5. Refresh the slug list with newly-created pages so the next
+         action's LLM context reflects the live vault state.
+
+    Returns a flat list of per-entity records preserving the legacy shape
+    callers expect:
+
+      ``{"action": "CREATE"|"EXTEND"|"REVISE"|"ERROR",
+         "post_id": "...", "entity_name": "...",
+         "entity_kind": "<llm kind: product/feature/concept/...>",
+         "memex_kind": "<entity|concept>",
+         "page_path": "entities/...md", "snapshot_path": "...|None",
+         "log_note": "..."}``
+
+    Never raises on per-action failure — surfaces errors as ``action="ERROR"``
+    records so the replay orchestrator can keep going.
     """
+    # Imports kept local to avoid pulling pydantic / anthropic SDK into
+    # callers that don't actually trigger memex (e.g. dry-run replays).
+    from universal_agent.services.csi_intelligence_pass import analyze_action
+    from universal_agent.services.csi_intelligence_persistence import (
+        apply_vault_delta_to_vault,
+    )
+
     results: list[dict[str, Any]] = []
 
-    # Pre-index linked sources by post_id so each action gets only its own.
-    linked_by_post: dict[str, list[dict[str, Any]]] = {}
+    # Pre-index linked-source TEXT (not entries) by post_id so each action
+    # gets only its own bodies, deduplicated by source_path.
+    linked_text_by_post: dict[str, list[str]] = {}
+    seen_paths_by_post: dict[str, set[str]] = {}
     for entry in linked_source_entries:
         if str(entry.get("fetch_status") or "") != "fetched":
             continue
         post_id = str(entry.get("post_id") or "").strip()
-        if post_id:
-            linked_by_post.setdefault(post_id, []).append(entry)
+        if not post_id:
+            continue
+        source_path = str(entry.get("source_path") or "").strip()
+        if not source_path:
+            continue
+        seen = seen_paths_by_post.setdefault(post_id, set())
+        if source_path in seen:
+            continue
+        seen.add(source_path)
+        text = _read_linked_source_text(entry)
+        if text:
+            linked_text_by_post.setdefault(post_id, []).append(text)
+
+    # Read existing slugs once; refresh from each apply_vault_delta_to_vault
+    # result so the next action's LLM context reflects in-batch additions.
+    existing_slugs: set[str] = set(_existing_vault_slugs(vault_path))
 
     for action in actions:
         post_id = str(action.get("post_id") or "").strip()
-        candidates = _memex_candidates_for_action(action)
-        if not candidates:
+        try:
+            tier_int = int(action.get("tier") or 0)
+        except (TypeError, ValueError):
+            tier_int = 0
+        if tier_int < min_tier:
             continue
-        linked_for_post = linked_by_post.get(post_id, [])
-        source_id = f"x_post_{post_id}" if post_id else "x_post"
-        source_title = f"ClaudeDevs post {post_id}" if post_id else "ClaudeDevs post"
 
-        for kind, name in candidates:
-            try:
-                if memex_page_exists(vault_path, kind, name):
-                    body = _memex_body_for_extend(
-                        action=action,
-                        linked_for_post=linked_for_post,
-                    )
-                    result = memex_apply_action(
-                        vault_path,
-                        action=ACTION_EXTEND,
-                        kind=kind,
-                        name=name,
-                        body=body,
-                        source_id=source_id,
-                        source_title=source_title,
-                        section_label=f"Update from @{handle}: post {post_id}",
-                    )
-                else:
-                    body = _memex_body_for_create(
-                        handle=handle,
-                        action=action,
-                        linked_for_post=linked_for_post,
-                    )
-                    result = memex_apply_action(
-                        vault_path,
-                        action=ACTION_CREATE,
-                        kind=kind,
-                        name=name,
-                        body=body,
-                        source_id=source_id,
-                        source_title=source_title,
-                        tags=["claude-code", "claude-devs", str(action.get("action_type") or "")],
-                    )
-                result["post_id"] = post_id
-                result["entity_name"] = name
-                result["entity_kind"] = kind
-                results.append(result)
-            except Exception as exc:
-                results.append(
-                    {
-                        "action": "ERROR",
-                        "post_id": post_id,
-                        "entity_name": name,
-                        "entity_kind": kind,
-                        "error_type": type(exc).__name__,
-                        "error": str(exc)[:300],
-                    }
-                )
+        # 3. LLM call
+        try:
+            delta = analyze_action(
+                action=action,
+                linked_sources=linked_text_by_post.get(post_id, []),
+                existing_vault_entities=sorted(existing_slugs),
+            )
+        except Exception as exc:
+            results.append(
+                {
+                    "action": "ERROR",
+                    "post_id": post_id,
+                    "stage": "analyze_action",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc)[:300],
+                }
+            )
+            continue
+
+        # 4. Persistence
+        try:
+            persist = apply_vault_delta_to_vault(
+                delta,
+                vault_path=vault_path,
+                packet_id=packet_id,
+                handle=handle,
+            )
+        except Exception as exc:
+            results.append(
+                {
+                    "action": "ERROR",
+                    "post_id": post_id,
+                    "stage": "apply_vault_delta_to_vault",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc)[:300],
+                }
+            )
+            continue
+
+        # 5. Convert to legacy result shape
+        for applied in persist.get("applied", []):
+            results.append(
+                {
+                    "action": applied["op"],
+                    "post_id": post_id,
+                    "entity_name": applied["name"],
+                    "entity_kind": applied["llm_kind"],
+                    "memex_kind": applied["memex_kind"],
+                    "page_path": applied["page_rel_path"],
+                    "snapshot_path": applied.get("snapshot_path"),
+                    "log_note": applied.get("log_note", ""),
+                }
+            )
+            # Track newly-created slugs so subsequent LLM calls see them
+            page_rel = str(applied.get("page_rel_path") or "")
+            if page_rel:
+                existing_slugs.add(Path(page_rel).stem)
+
+        for err in persist.get("errors", []):
+            results.append(
+                {
+                    "action": "ERROR",
+                    "post_id": post_id,
+                    "entity_name": err.get("name", ""),
+                    "entity_kind": err.get("kind", ""),
+                    "stage": "apply_vault_delta_to_vault",
+                    "error_type": (err.get("error", "") or "").split(":")[0],
+                    "error": err.get("error", ""),
+                }
+            )
+
     return results
 
 
@@ -891,11 +849,20 @@ def ingest_packet_into_external_vault(
     memex_actions: list[dict[str, Any]] = []
     if str(os.getenv("UA_CSI_MEMEX_WIRING_ENABLED") or "1").strip().lower() not in {"0", "false", "no", "off"}:
         try:
+            # Build a packet_id from the packet directory's last two segments,
+            # e.g. "2026-05-06/210011__ClaudeDevs". Used by the persistence
+            # layer for `packet:` frontmatter tags + EXTEND section labels.
+            packet_id = (
+                f"{packet_dir.parent.name}/{packet_dir.name}"
+                if packet_dir.parent.name
+                else packet_dir.name
+            )
             memex_actions = apply_memex_pass(
                 vault_path=context.path,
                 handle=handle,
                 actions=actions,
                 linked_source_entries=linked_source_entries,
+                packet_id=packet_id,
             )
         except Exception:
             # Memex failure must never block the source-page writes that
@@ -1382,7 +1349,7 @@ def _normalize_web_content(*, body: str, content_type: str, url: str, source_typ
     if source_type in {"docs_page", "vendor_docs"}:
         lines = ["# Linked Source", ""]
         if html_features["title"]:
-            lines.extend([f"## Title", "", html_features["title"], ""])
+            lines.extend(["## Title", "", html_features["title"], ""])
         if html_features["headings"]:
             lines.extend(["## Headings", ""])
             for heading in html_features["headings"][:12]:

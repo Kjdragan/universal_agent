@@ -1,316 +1,507 @@
-"""Tests for the Memex pass wired into ClaudeDevs replay (PR 15)."""
+"""Tests for the LLM-driven Memex pass wired into ClaudeDevs replay (Phase F).
+
+Replaces the prior PR 15 regex-extractor tests. The new ``apply_memex_pass``
+runs ``services.csi_intelligence_pass.analyze_action`` (LLM call, mocked
+here) per tier-2+ action, then ``services.csi_intelligence_persistence
+.apply_vault_delta_to_vault`` (deterministic). These tests mock the LLM
+call to return fixture VaultDeltas and verify the orchestration:
+
+  - Tier filter: actions below ``min_tier`` are skipped (no LLM call).
+  - Linked sources are read from disk per ``source_path`` and passed to
+    the LLM as text.
+  - Existing vault entity slugs are read once and refreshed in-batch as
+    new pages are created (so subsequent LLM calls see live state).
+  - The packet_id is propagated to the persistence layer.
+  - Per-action LLM failures are surfaced as ``action="ERROR"`` records
+    without raising or sinking sibling actions.
+  - ``ingest_packet_into_external_vault`` honors the
+    ``UA_CSI_MEMEX_WIRING_ENABLED=0`` kill switch.
+
+The granular Phase A schema + Phase E persistence behaviors have their own
+test files (``test_csi_intelligence_pass.py`` /
+``test_csi_intelligence_persistence.py``) — this file is purely about the
+replay-level wiring.
+"""
 
 from __future__ import annotations
 
-import importlib
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
 from universal_agent.services import claude_code_intel_replay
 from universal_agent.services.claude_code_intel_replay import (
-    _memex_body_for_create,
-    _memex_body_for_extend,
-    _memex_candidates_for_action,
     apply_memex_pass,
     ingest_packet_into_external_vault,
 )
-from universal_agent.wiki.core import (
-    ACTION_CREATE,
-    ACTION_EXTEND,
-    ensure_vault,
-    memex_page_exists,
+from universal_agent.services.csi_intelligence_pass import (
+    VaultAction,
+    VaultDelta,
+    VaultRelation,
 )
+from universal_agent.wiki.core import ensure_vault
 
-
-# ── Candidate extraction ────────────────────────────────────────────────────
-
-
-def test_candidates_includes_release_info_package():
-    action = {
-        "post_id": "1",
-        "text": "we shipped something",
-        "release_info": {"package": "claude-agent-sdk", "version": "0.5.1"},
-    }
-    candidates = _memex_candidates_for_action(action)
-    assert ("entity", "claude-agent-sdk") in candidates
-
-
-def test_candidates_extracts_camelcase_terms_from_text():
-    action = {
-        "post_id": "1",
-        "text": "Try the new MemoryTool with ManagedAgents support",
-    }
-    candidates = _memex_candidates_for_action(action)
-    names = {n for _, n in candidates}
-    assert "MemoryTool" in names
-    assert "ManagedAgents" in names
-
-
-def test_candidates_filters_stopwords():
-    action = {
-        "post_id": "1",
-        "text": "Anthropic announced new Claude Tool support today",
-    }
-    candidates = _memex_candidates_for_action(action)
-    names_lower = {n.lower() for _, n in candidates}
-    # Generic words should not become entities.
-    for stop in ("anthropic", "claude", "tool", "today"):
-        assert stop not in names_lower
-
-
-def test_candidates_caps_at_5_terms():
-    action = {
-        "post_id": "1",
-        "text": "FeatureA FeatureB FeatureC FeatureD FeatureE FeatureF FeatureG FeatureH",
-    }
-    candidates = _memex_candidates_for_action(action)
-    # 5 terms from text (cap), no release_info.
-    assert len(candidates) == 5
-
-
-def test_candidates_dedupe():
-    action = {
-        "post_id": "1",
-        "text": "MemoryTool MemoryTool memorytool",  # case-insensitive dedupe
-        "release_info": {"package": "claude-agent-sdk", "version": "0.5.1"},
-    }
-    candidates = _memex_candidates_for_action(action)
-    # Only one MemoryTool entry plus the release package.
-    names = [n.lower() for _, n in candidates]
-    assert names.count("memorytool") == 1
-
-
-def test_candidates_empty_when_nothing_matches():
-    action = {"post_id": "1", "text": "just a chat with friends"}
-    assert _memex_candidates_for_action(action) == []
-
-
-# ── Body construction ───────────────────────────────────────────────────────
-
-
-def test_create_body_includes_handle_post_url_text_reasoning_sources():
-    action = {
-        "post_id": "999",
-        "text": "Skills support cross-project references",
-        "url": "https://x.com/ClaudeDevs/status/999",
-        "classifier": {"reasoning": "Reusable for agent systems"},
-    }
-    linked = [
-        {"url": "https://docs.anthropic.com/skills", "title": "Skills docs"},
-    ]
-    body = _memex_body_for_create(handle="ClaudeDevs", action=action, linked_for_post=linked)
-    assert "@ClaudeDevs" in body
-    assert "https://x.com/ClaudeDevs/status/999" in body
-    assert "post_id: `999`" in body
-    assert "Skills support cross-project references" in body
-    assert "Reusable for agent systems" in body
-    assert "Skills docs" in body
-    assert "https://docs.anthropic.com/skills" in body
-
-
-def test_extend_body_is_compact():
-    action = {"post_id": "999", "text": "small follow-up"}
-    body = _memex_body_for_extend(action=action, linked_for_post=[])
-    assert "small follow-up" in body
-    # Extend bodies don't repeat the full discovery context block.
-    assert "Discovery context" not in body
-
-
-# ── End-to-end Memex pass ────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
-def vault(tmp_path: Path):
+def vault(tmp_path: Path) -> Path:
+    """A clean external vault under tmp_path."""
     ctx = ensure_vault(
         "external",
-        "memex-wiring-test",
-        title="Memex Wiring Test",
-        root_override=str(tmp_path / "vault"),
+        "csi-replay-test",
+        title="CSI replay test vault",
+        root_override=str(tmp_path),
     )
     return ctx.path
 
 
-def test_memex_pass_creates_entity_pages_from_release_info(vault: Path):
-    actions = [
-        {
-            "post_id": "100",
-            "text": "Claude Code 2.1.116 ships with Skills",
-            "url": "https://x.com/ClaudeDevs/status/100",
-            "release_info": {"package": "claude-code", "version": "2.1.116"},
-            "action_type": "release_announcement",
-        }
-    ]
-    results = apply_memex_pass(
-        vault_path=vault,
-        handle="ClaudeDevs",
-        actions=actions,
-        linked_source_entries=[],
+def _action(post_id: str, text: str, tier: int = 2, **extra) -> dict:
+    out = {
+        "post_id": post_id,
+        "text": text,
+        "tier": tier,
+        "action_type": "release_announcement",
+        "url": f"https://x.com/ClaudeDevs/status/{post_id}",
+    }
+    out.update(extra)
+    return out
+
+
+def _linked_entry(
+    post_id: str,
+    *,
+    source_path: str,
+    fetch_status: str = "fetched",
+    title: str = "Doc",
+    url: str = "https://platform.claude.com/docs",
+) -> dict:
+    return {
+        "post_id": post_id,
+        "url": url,
+        "source_path": source_path,
+        "fetch_status": fetch_status,
+        "title": title,
+    }
+
+
+def _delta(*actions: VaultAction, post_summary: str = "", relations=None) -> VaultDelta:
+    return VaultDelta(
+        vault_actions=list(actions),
+        relations=list(relations or []),
+        post_summary=post_summary,
     )
-    # claude-code (release_info) + Skills (CamelCase) = 2 entities
-    creates = [r for r in results if r.get("action") == ACTION_CREATE]
-    names = {r["entity_name"] for r in creates}
-    assert "claude-code" in names
-    assert "Skills" in names
-    assert memex_page_exists(vault, "entity", "claude-code")
-    assert memex_page_exists(vault, "entity", "Skills")
 
 
-def test_memex_pass_extends_existing_pages(vault: Path):
-    """Second action that mentions an existing entity should EXTEND, not CREATE."""
-    actions_first = [
-        {
-            "post_id": "100",
-            "text": "MemoryTool announcement",
-            "url": "https://x.com/ClaudeDevs/status/100",
-        }
-    ]
-    apply_memex_pass(
-        vault_path=vault,
-        handle="ClaudeDevs",
-        actions=actions_first,
-        linked_source_entries=[],
-    )
-    # Now a second action mentioning the same entity.
-    actions_second = [
-        {
-            "post_id": "200",
-            "text": "MemoryTool now supports typed schemas",
-            "url": "https://x.com/ClaudeDevs/status/200",
-        }
-    ]
-    results = apply_memex_pass(
-        vault_path=vault,
-        handle="ClaudeDevs",
-        actions=actions_second,
-        linked_source_entries=[],
-    )
-    extends = [r for r in results if r.get("action") == ACTION_EXTEND and r.get("entity_name") == "MemoryTool"]
-    assert len(extends) == 1
-    # The page should have content from BOTH actions.
-    page = (vault / "entities" / "memorytool.md").read_text(encoding="utf-8")
-    assert "MemoryTool announcement" in page
-    assert "MemoryTool now supports typed schemas" in page
+# ---------------------------------------------------------------------------
+# Tier filtering
+# ---------------------------------------------------------------------------
 
 
-def test_memex_pass_records_log_entries(vault: Path):
-    actions = [
-        {
-            "post_id": "100",
-            "text": "Hooks API expanded with PostToolUseFailure",
-            "url": "https://x.com/ClaudeDevs/status/100",
-        }
-    ]
-    apply_memex_pass(
-        vault_path=vault,
-        handle="ClaudeDevs",
-        actions=actions,
-        linked_source_entries=[],
-    )
-    log_text = (vault / "log.md").read_text(encoding="utf-8")
-    assert "CREATE" in log_text
-    # Log entries reference slugified page paths, e.g. entities/hooks.md.
-    assert "entities/hooks.md" in log_text or "entities/posttoolusefailure.md" in log_text
+class TestTierFilter:
+    def test_tier_1_actions_are_skipped(self, vault: Path):
+        actions = [
+            _action("100", "Tier-1 promotional. Live now.", tier=1),
+            _action("200", "Tier-2 substantive content.", tier=2),
+        ]
+        analyzed_post_ids: list[str] = []
+
+        def fake_analyze(action, **_):
+            analyzed_post_ids.append(action["post_id"])
+            return _delta(VaultAction(
+                op="create", kind="product", name=f"Entity for {action['post_id']}",
+                summary=".", confidence="medium",
+            ))
+
+        with mock.patch(
+            "universal_agent.services.csi_intelligence_pass.analyze_action",
+            side_effect=fake_analyze
+        ):
+            results = apply_memex_pass(
+                vault_path=vault,
+                handle="ClaudeDevs",
+                actions=actions,
+                linked_source_entries=[],
+            )
+
+        # Only tier-2 action got an LLM call
+        assert analyzed_post_ids == ["200"]
+        # The result list contains only the tier-2 entity record
+        post_ids_in_results = {r.get("post_id") for r in results}
+        assert post_ids_in_results == {"200"}
+
+    def test_min_tier_override(self, vault: Path):
+        actions = [
+            _action("a", "tier-2", tier=2),
+            _action("b", "tier-3", tier=3),
+        ]
+        called_with: list[dict] = []
+
+        def fake_analyze(action, **_):
+            called_with.append(action)
+            return _delta()  # empty — no vault writes
+
+        with mock.patch(
+            "universal_agent.services.csi_intelligence_pass.analyze_action",
+            side_effect=fake_analyze
+        ):
+            apply_memex_pass(
+                vault_path=vault, handle="ClaudeDevs",
+                actions=actions, linked_source_entries=[],
+                min_tier=3,
+            )
+        assert [a["post_id"] for a in called_with] == ["b"]
 
 
-def test_memex_pass_handles_per_action_failure_gracefully(vault: Path, monkeypatch):
-    """One bad action must not block the rest."""
-
-    actions = [
-        {"post_id": "100", "text": "MemoryTool is great"},
-        {"post_id": "200", "text": "Skills are awesome"},
-    ]
-
-    real_apply = claude_code_intel_replay.memex_apply_action
-    call_count = {"n": 0}
-
-    def flaky_apply(*args, **kwargs):
-        call_count["n"] += 1
-        if call_count["n"] == 1:
-            raise RuntimeError("simulated_first_call_failure")
-        return real_apply(*args, **kwargs)
-
-    monkeypatch.setattr(claude_code_intel_replay, "memex_apply_action", flaky_apply)
-
-    results = apply_memex_pass(
-        vault_path=vault,
-        handle="ClaudeDevs",
-        actions=actions,
-        linked_source_entries=[],
-    )
-    # First call errored — record in results.
-    errors = [r for r in results if r.get("action") == "ERROR"]
-    successes = [r for r in results if r.get("action") in (ACTION_CREATE, ACTION_EXTEND)]
-    assert len(errors) >= 1
-    assert len(successes) >= 1
+# ---------------------------------------------------------------------------
+# Linked-source plumbing (read from disk, dedupe, pass to LLM as text)
+# ---------------------------------------------------------------------------
 
 
-def test_ingest_packet_runs_memex_when_wiring_enabled(monkeypatch, tmp_path: Path):
-    monkeypatch.setenv("UA_CSI_MEMEX_WIRING_ENABLED", "1")
-    artifacts_root = tmp_path / "artifacts"
-    artifacts_root.mkdir()
-    packet_dir = tmp_path / "packet"
-    packet_dir.mkdir()
-    (packet_dir / "manifest.json").write_text("{}", encoding="utf-8")
+class TestLinkedSourceWiring:
+    def test_linked_sources_read_from_disk_and_passed_per_post(
+        self, vault: Path, tmp_path: Path
+    ):
+        # Create two source files for two different posts
+        src_a = tmp_path / "source_a.md"
+        src_a.write_text("Body A — Anthropic docs about prompt caching.")
+        src_b = tmp_path / "source_b.md"
+        src_b.write_text("Body B — different Anthropic doc.")
 
-    posts = [{"id": "100", "text": "MemoryTool launched"}]
-    actions = [{"post_id": "100", "text": "MemoryTool launched", "url": "https://x.com/ClaudeDevs/status/100"}]
+        actions = [
+            _action("aaa", "Post A about caching.", tier=2),
+            _action("bbb", "Post B about something else.", tier=2),
+        ]
+        linked = [
+            _linked_entry("aaa", source_path=str(src_a)),
+            _linked_entry("bbb", source_path=str(src_b)),
+            _linked_entry("aaa", source_path=str(src_b)),  # extra cross-post
+            # An entry that didn't actually fetch successfully — should be skipped
+            _linked_entry("aaa", source_path="/nonexistent/file.md", fetch_status="failed"),
+        ]
 
-    result = ingest_packet_into_external_vault(
-        packet_dir=packet_dir,
-        handle="ClaudeDevs",
-        posts=posts,
-        actions=actions,
-        linked_source_entries=[],
-        artifacts_root=artifacts_root,
-        work_product_dir=None,
-        enabled=True,
-    )
-    assert "memex_actions" in result
-    memex_actions = result["memex_actions"]
-    assert any(r.get("entity_name") == "MemoryTool" for r in memex_actions)
+        captured: dict[str, list[str]] = {}
+
+        def fake_analyze(action, *, linked_sources, **_):
+            captured[action["post_id"]] = list(linked_sources)
+            return _delta()
+
+        with mock.patch(
+            "universal_agent.services.csi_intelligence_pass.analyze_action",
+            side_effect=fake_analyze
+        ):
+            apply_memex_pass(
+                vault_path=vault, handle="ClaudeDevs",
+                actions=actions, linked_source_entries=linked,
+            )
+
+        # Post aaa got Body A first; the cross-post entry pointing at source_b
+        # also gets attached because they're indexed by post_id.
+        assert any("Body A" in t for t in captured["aaa"])
+        assert any("Body B" in t for t in captured["aaa"])
+        # Post bbb got only Body B
+        assert any("Body B" in t for t in captured["bbb"])
+        # The failed-fetch entry never made it into either list
+        assert all("/nonexistent" not in t for t in captured["aaa"])
+
+    def test_dedup_by_source_path(self, vault: Path, tmp_path: Path):
+        """Same source file referenced twice for one post should appear once."""
+        src = tmp_path / "src.md"
+        src.write_text("the body text")
+        actions = [_action("p1", "post text", tier=2)]
+        linked = [
+            _linked_entry("p1", source_path=str(src)),
+            _linked_entry("p1", source_path=str(src)),  # duplicate
+        ]
+
+        captured: list[list[str]] = []
+
+        def fake_analyze(action, *, linked_sources, **_):
+            captured.append(list(linked_sources))
+            return _delta()
+
+        with mock.patch(
+            "universal_agent.services.csi_intelligence_pass.analyze_action",
+            side_effect=fake_analyze
+        ):
+            apply_memex_pass(
+                vault_path=vault, handle="ClaudeDevs",
+                actions=actions, linked_source_entries=linked,
+            )
+        assert len(captured) == 1
+        assert len(captured[0]) == 1  # deduplicated
 
 
-def test_ingest_packet_skips_memex_when_wiring_disabled(monkeypatch, tmp_path: Path):
-    monkeypatch.setenv("UA_CSI_MEMEX_WIRING_ENABLED", "0")
-    artifacts_root = tmp_path / "artifacts"
-    artifacts_root.mkdir()
-    packet_dir = tmp_path / "packet"
-    packet_dir.mkdir()
-    (packet_dir / "manifest.json").write_text("{}", encoding="utf-8")
-
-    posts = [{"id": "100", "text": "MemoryTool launched"}]
-    actions = [{"post_id": "100", "text": "MemoryTool launched"}]
-
-    result = ingest_packet_into_external_vault(
-        packet_dir=packet_dir,
-        handle="ClaudeDevs",
-        posts=posts,
-        actions=actions,
-        linked_source_entries=[],
-        artifacts_root=artifacts_root,
-        work_product_dir=None,
-        enabled=True,
-    )
-    # memex_actions present but empty when wiring is off.
-    assert result.get("memex_actions") == []
+# ---------------------------------------------------------------------------
+# Existing-entities refresh — newly-created slugs visible to next LLM call
+# ---------------------------------------------------------------------------
 
 
-def test_ingest_packet_returns_memex_actions_field_when_disabled_via_enabled_flag(tmp_path: Path):
-    """If ingest itself is disabled (enabled=False), nothing happens at all."""
-    artifacts_root = tmp_path / "artifacts"
-    artifacts_root.mkdir()
-    packet_dir = tmp_path / "packet"
-    packet_dir.mkdir()
-    result = ingest_packet_into_external_vault(
-        packet_dir=packet_dir,
-        handle="ClaudeDevs",
-        posts=[],
-        actions=[],
-        linked_source_entries=[],
-        artifacts_root=artifacts_root,
-        work_product_dir=None,
-        enabled=False,
-    )
-    # Disabled-ingest short-circuit doesn't include memex_actions key.
-    assert result == {"vault_path": "", "pages": [], "email_evidence_ids": []}
+class TestExistingEntitiesRefresh:
+    def test_action2_sees_action1_created_slug(self, vault: Path):
+        """When action #1 creates an entity, action #2's LLM call should
+        receive that new slug in existing_vault_entities. (Otherwise the
+        LLM might emit a duplicate CREATE that the persistence layer has
+        to auto-downgrade.)"""
+        actions = [
+            _action("p1", "First post.", tier=2),
+            _action("p2", "Second post.", tier=2),
+        ]
+        seen_slugs: list[set[str]] = []
+
+        def fake_analyze(action, *, existing_vault_entities, **_):
+            seen_slugs.append(set(existing_vault_entities))
+            return _delta(VaultAction(
+                op="create", kind="product",
+                name=f"Entity {action['post_id']}",
+                summary=".", confidence="medium",
+            ))
+
+        with mock.patch(
+            "universal_agent.services.csi_intelligence_pass.analyze_action",
+            side_effect=fake_analyze
+        ):
+            apply_memex_pass(
+                vault_path=vault, handle="ClaudeDevs",
+                actions=actions, linked_source_entries=[],
+            )
+
+        # First call sees an empty vault
+        assert "entity-p1" not in seen_slugs[0]
+        # Second call sees the slug created by the first action
+        assert "entity-p1" in seen_slugs[1]
+
+
+# ---------------------------------------------------------------------------
+# Persistence integration — VaultDelta ends up as files on disk
+# ---------------------------------------------------------------------------
+
+
+class TestPersistenceIntegration:
+    def test_vault_delta_creates_entity_pages(self, vault: Path):
+        actions = [_action("100", "Multi-feature release.", tier=3)]
+
+        def fake_analyze(action, **_):
+            return _delta(
+                VaultAction(
+                    op="create", kind="product", name="Claude Managed Agents",
+                    summary="Hosted agent runtime.",
+                    source_post_ids=[action["post_id"]],
+                    confidence="high",
+                ),
+                VaultAction(
+                    op="create", kind="feature", name="Outcomes Loop",
+                    summary="Rubric-driven self-improvement.",
+                    source_post_ids=[action["post_id"]],
+                    confidence="high",
+                ),
+                relations=[
+                    VaultRelation(
+                        from_slug="outcomes-loop",
+                        to_slug="claude-managed-agents",
+                        kind="feature-of",
+                    )
+                ],
+                post_summary="Announce managed agents capabilities.",
+            )
+
+        with mock.patch(
+            "universal_agent.services.csi_intelligence_pass.analyze_action",
+            side_effect=fake_analyze
+        ):
+            results = apply_memex_pass(
+                vault_path=vault, handle="ClaudeDevs",
+                actions=actions, linked_source_entries=[],
+                packet_id="2026-05-08/test-packet",
+            )
+
+        # Files on disk
+        assert (vault / "entities" / "claude-managed-agents.md").is_file()
+        assert (vault / "entities" / "outcomes-loop.md").is_file()
+        assert (vault / "relations.jsonl").is_file()
+        assert (vault / "posts.jsonl").is_file()
+
+        # log.md tracks both creations
+        log_md = (vault / "log.md").read_text()
+        assert "entities/claude-managed-agents.md CREATE" in log_md
+        assert "entities/outcomes-loop.md CREATE" in log_md
+
+        # Result records preserve legacy shape
+        ops = [r["action"] for r in results]
+        assert ops.count("CREATE") == 2
+        names = {r["entity_name"] for r in results}
+        assert names == {"Claude Managed Agents", "Outcomes Loop"}
+        for r in results:
+            assert r["post_id"] == "100"
+            assert "page_path" in r
+            assert "memex_kind" in r
+            assert r["memex_kind"] == "entity"  # product/feature both → entity
+            assert "log_note" in r
+
+    def test_packet_id_reaches_frontmatter_tags(self, vault: Path):
+        """packet_id should propagate into the page's frontmatter as a tag."""
+        def fake_analyze(action, **_):
+            return _delta(VaultAction(
+                op="create", kind="concept", name="Some Concept",
+                summary=".", confidence="medium",
+            ))
+
+        with mock.patch(
+            "universal_agent.services.csi_intelligence_pass.analyze_action",
+            side_effect=fake_analyze
+        ):
+            apply_memex_pass(
+                vault_path=vault, handle="ClaudeDevs",
+                actions=[_action("1", "x", tier=2)],
+                linked_source_entries=[],
+                packet_id="2026-05-08/abc__bcherny",
+            )
+        page = (vault / "concepts" / "some-concept.md").read_text()
+        assert "packet:2026-05-08/abc__bcherny" in page
+
+
+# ---------------------------------------------------------------------------
+# Error handling — per-action failures don't sink the batch
+# ---------------------------------------------------------------------------
+
+
+class TestErrorIsolation:
+    def test_analyze_action_failure_surfaces_as_error_record(self, vault: Path):
+        actions = [
+            _action("ok", "First action — fine.", tier=2),
+            _action("bad", "Second action — LLM raises.", tier=2),
+            _action("ok2", "Third action — also fine.", tier=2),
+        ]
+        call_count = {"n": 0}
+
+        def fake_analyze(action, **_):
+            call_count["n"] += 1
+            if action["post_id"] == "bad":
+                raise RuntimeError("simulated LLM failure")
+            return _delta(VaultAction(
+                op="create", kind="product", name=f"Entity {action['post_id']}",
+                summary=".", confidence="medium",
+            ))
+
+        with mock.patch(
+            "universal_agent.services.csi_intelligence_pass.analyze_action",
+            side_effect=fake_analyze
+        ):
+            results = apply_memex_pass(
+                vault_path=vault, handle="ClaudeDevs",
+                actions=actions, linked_source_entries=[],
+            )
+
+        # All three actions were attempted (no early exit on the failure)
+        assert call_count["n"] == 3
+
+        ops = [r["action"] for r in results]
+        assert ops.count("ERROR") == 1
+        assert ops.count("CREATE") == 2
+
+        err = next(r for r in results if r["action"] == "ERROR")
+        assert err["post_id"] == "bad"
+        assert err["stage"] == "analyze_action"
+        assert "RuntimeError" in err["error_type"]
+        assert "simulated LLM failure" in err["error"]
+
+
+# ---------------------------------------------------------------------------
+# UA_CSI_MEMEX_WIRING_ENABLED kill switch
+# ---------------------------------------------------------------------------
+
+
+class TestKillSwitch:
+    def test_disabled_via_env_var(
+        self, vault: Path, tmp_path: Path, monkeypatch
+    ):
+        # Build the minimal fixture ingest_packet_into_external_vault expects
+        packet_dir = tmp_path / "2026-05-08" / "abc__ClaudeDevs"
+        packet_dir.mkdir(parents=True)
+        (packet_dir / "manifest.json").write_text("{}")
+
+        analyze_called = {"n": 0}
+
+        def fake_analyze(action, **_):
+            analyze_called["n"] += 1
+            return _delta()
+
+        monkeypatch.setenv("UA_CSI_MEMEX_WIRING_ENABLED", "0")
+
+        with mock.patch(
+            "universal_agent.services.csi_intelligence_pass.analyze_action",
+            side_effect=fake_analyze
+        ):
+            result = ingest_packet_into_external_vault(
+                packet_dir=packet_dir,
+                handle="ClaudeDevs",
+                posts=[],
+                actions=[_action("1", "tier-2 content", tier=2)],
+                linked_source_entries=[],
+                artifacts_root=tmp_path,
+                work_product_dir=None,
+                enabled=True,
+            )
+
+        # Memex pass should be entirely skipped
+        assert analyze_called["n"] == 0
+        assert result["memex_actions"] == []
+
+    def test_enabled_by_default_runs_memex(
+        self, vault: Path, tmp_path: Path, monkeypatch
+    ):
+        packet_dir = tmp_path / "2026-05-08" / "abc__ClaudeDevs"
+        packet_dir.mkdir(parents=True)
+        (packet_dir / "manifest.json").write_text("{}")
+
+        analyze_called = {"n": 0}
+
+        def fake_analyze(action, **_):
+            analyze_called["n"] += 1
+            return _delta(VaultAction(
+                op="create", kind="product", name="Test Entity",
+                summary=".", confidence="medium",
+            ))
+
+        # No env var override — wiring defaults to enabled
+        monkeypatch.delenv("UA_CSI_MEMEX_WIRING_ENABLED", raising=False)
+
+        with mock.patch(
+            "universal_agent.services.csi_intelligence_pass.analyze_action",
+            side_effect=fake_analyze
+        ):
+            result = ingest_packet_into_external_vault(
+                packet_dir=packet_dir,
+                handle="ClaudeDevs",
+                posts=[],
+                actions=[_action("1", "content", tier=2)],
+                linked_source_entries=[],
+                artifacts_root=tmp_path,
+                work_product_dir=None,
+                enabled=True,
+            )
+        assert analyze_called["n"] == 1
+        assert len(result["memex_actions"]) == 1
+        assert result["memex_actions"][0]["action"] == "CREATE"
+
+
+# ---------------------------------------------------------------------------
+# Module-level smoke — package imports cleanly post-swap
+# ---------------------------------------------------------------------------
+
+
+def test_module_no_longer_has_deleted_regex_helpers():
+    """Ensure the deleted regex helpers don't have lingering references."""
+    for name in (
+        "_MEMEX_TERM_PATTERN",
+        "_MEMEX_TERM_STOPWORDS",
+        "_memex_candidates_for_action",
+        "_memex_body_for_create",
+        "_memex_body_for_extend",
+    ):
+        assert not hasattr(claude_code_intel_replay, name), (
+            f"{name!r} should have been deleted in Phase F but still exists"
+        )
