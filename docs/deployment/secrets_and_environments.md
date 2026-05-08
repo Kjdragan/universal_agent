@@ -219,6 +219,29 @@ shell rc if you launch interactive `claude` sessions there too — adjust
 `UA_INSTALL_ROOT` env var to point at the desktop's UA checkout if it isn't at
 `/opt/universal_agent`.)
 
+**Important: ANTHROPIC_* exclusion (2026-05-08 hardening).** The launcher
+intentionally **excludes** every `ANTHROPIC_*` key from the Infisical inject
+step (it passes `exclude_prefixes=("ANTHROPIC_",)` to
+`initialize_runtime_secrets`) and also does a defense-in-depth strip after the
+bootstrap. This is required because the same Infisical environment holds:
+
+- The 5 ZAI routing vars (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`,
+  `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`,
+  `ANTHROPIC_DEFAULT_OPUS_MODEL`) — used by UA Python services that need
+  cheap GLM inference.
+- `ANTHROPIC_API_KEY` — used by direct-SDK code paths (`refinement_agent`,
+  `gateway_server` vision endpoint, `proactive_signals`, etc.).
+
+Both must reach UA Python services but neither should reach interactive
+`claude`: `ANTHROPIC_BASE_URL` would re-route to ZAI/GLM, and
+`ANTHROPIC_API_KEY` would override OAuth and yield
+`Invalid API key · Fix external API key` when the key isn't for the same
+Anthropic Max account. **UA Python services that need these vars call
+`initialize_runtime_secrets()` without the `exclude_prefixes` parameter** and
+get all secrets normally — so this hardening only applies to the interactive
+launcher path. Canonical reference: see § "Related interactive-claude patterns"
+in [`docs/06_Deployment_And_Environments/10_Interactive_Coding_Environment.md`](../06_Deployment_And_Environments/10_Interactive_Coding_Environment.md#related-interactive-claude-patterns-different-concerns-same-machine).
+
 **Anti-patterns to never repeat:**
 
 | Anti-pattern | Why wrong | What to do instead |
