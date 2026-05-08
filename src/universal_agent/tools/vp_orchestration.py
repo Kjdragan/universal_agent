@@ -293,7 +293,16 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
                     "source_ref": vp_id,
                     "mirror_status": "external",
                     "trigger_type": "vp_dispatch",
-                    "agent_ready": True,
+                    # vp_mission rows are visibility mirrors only — VP workers
+                    # claim by mission_id directly, NOT through the dispatch
+                    # sweep. Setting agent_ready=False keeps the row out of
+                    # the queue eligibility check (task_hub.py:1387) so a
+                    # non-VP claimer (e.g. daemon_simone_todo) can't pick it
+                    # up if reopen_stale_delegations flips status back to
+                    # OPEN. Closes the recurrence path that produced the
+                    # 2026-05-07 rogue-branch incident — see
+                    # docs/operations/2026-05-07_open_followups.md Followup #3.
+                    "agent_ready": False,
                     "metadata": {
                         "vp_id": vp_id,
                         "mission_type": mission_type,

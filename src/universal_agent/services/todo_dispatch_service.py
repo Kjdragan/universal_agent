@@ -723,13 +723,23 @@ class ToDoDispatchService:
             max_per_sweep = TODO_DISPATCH_MAX_PER_SWEEP
             with connect_runtime_db(activity_db_path) as conn:
                 for _ in range(max_per_sweep):
-                    # Claim one task at a time with deferred workspace
+                    # Claim one task at a time with deferred workspace.
+                    #
+                    # forbidden_source_kinds: vp_mission rows are Kanban-visibility
+                    # mirrors of work owned by VP workers (vp.coder.primary etc).
+                    # daemon_simone_todo must NOT claim them — that's what produced
+                    # the 2026-05-07 rogue-branch incident when reopen_stale_delegations
+                    # flipped a stale vp_mission mirror to OPEN. The producer-side
+                    # fix (agent_ready=False on the mirror) plus this dispatcher-side
+                    # backstop together close the recurrence path. See
+                    # docs/operations/2026-05-07_open_followups.md Followup #3.
                     batch = dispatch_sweep(
                         conn,
                         agent_id=f"todo:{session.session_id}",
                         limit=1,
                         provider_session_id=session.session_id,
                         workspace_dir=None,
+                        forbidden_source_kinds=["vp_mission"],
                     )
                     if not batch:
                         break
