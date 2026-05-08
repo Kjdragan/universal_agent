@@ -279,14 +279,33 @@ def _resolve_effective_op(
         return (ACTION_CREATE, canonical_name, "")
 
     if intended in {"extend", "revise"}:
-        # Honor the LLM's existing_slug if present and the page exists
-        # under that name, else fall back to canonical_name.
-        candidate_name = action.existing_slug or canonical_name
-        if memex_page_exists(vault_path, memex_kind, candidate_name):
-            actual_op = ACTION_EXTEND if intended == "extend" else ACTION_REVISE
-            return (actual_op, candidate_name, "")
-        # The LLM intended to extend/revise something that doesn't exist —
-        # treat as a fresh CREATE with the canonical name.
+        actual_op = ACTION_EXTEND if intended == "extend" else ACTION_REVISE
+
+        # First try: honor the LLM's existing_slug if it actually exists.
+        if action.existing_slug and memex_page_exists(
+            vault_path, memex_kind, action.existing_slug
+        ):
+            return (actual_op, action.existing_slug, "")
+
+        # Second try: maybe the LLM gave a wrong existing_slug but the
+        # canonical name already has a page. Don't create a duplicate —
+        # extend the canonical-name page instead. (Phase D Step 1
+        # surfaced this as a real-world failure mode: LLM emits
+        # ``existing_slug="multi"`` for a "Claude Managed Agents" extend,
+        # which doesn't exist, but the canonical "Claude Managed Agents"
+        # page does. Preserve the operator's intent — EXTEND wins over
+        # CREATE when any reasonable target exists.)
+        if memex_page_exists(vault_path, memex_kind, canonical_name):
+            note = ""
+            if action.existing_slug and action.existing_slug != canonical_name:
+                note = (
+                    f"redirected {intended.upper()} from existing_slug="
+                    f"{action.existing_slug!r} (missing) to canonical "
+                    f"name {canonical_name!r} (exists)"
+                )
+            return (actual_op, canonical_name, note)
+
+        # No matching page exists under either slug — fall back to CREATE.
         return (
             ACTION_CREATE,
             canonical_name,
@@ -344,9 +363,79 @@ def _append_relations_log(
     return written
 
 
+def _append_posts_log(
+    vault_path: Path,
+    delta: VaultDelta,
+    *,
+    packet_id: str,
+    handle: str,
+) -> bool:
+    """Append a per-post analysis record to ``posts.jsonl`` at vault root.
+
+    Captures the LLM's post-level metadata (``post_summary``, ``post_tags``)
+    that isn't tied to any specific entity page. Without this, posts whose
+    delta has no relations would lose ``post_summary`` entirely — see
+    Phase E followup #2.
+
+    Returns True if a record was written.
+    """
+    has_summary = bool((delta.post_summary or "").strip())
+    has_tags = bool(delta.post_tags)
+    if not (has_summary or has_tags):
+        return False
+
+    import json  # local import — only needed when post-level metadata is present
+
+    primary_post_id = ""
+    for va in delta.vault_actions:
+        if va.source_post_ids:
+            primary_post_id = va.source_post_ids[0]
+            break
+
+    log_path = vault_path / "posts.jsonl"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "packet_id": packet_id,
+        "handle": handle,
+        "primary_post_id": primary_post_id,
+        "post_summary": delta.post_summary,
+        "post_tags": list(delta.post_tags),
+        "vault_action_count": len(delta.vault_actions),
+        "relation_count": len(delta.relations),
+    }
+    with log_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record, ensure_ascii=False))
+        fh.write("\n")
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+
+# Confidence ordering for the optional min_confidence filter.
+_CONFIDENCE_RANK = {"low": 1, "medium": 2, "high": 3}
+
+
+def _packet_id_to_section_label(packet_id: str, primary_post_id: str) -> str:
+    """Render a short, human-readable section header for an EXTEND.
+
+    Packet IDs are typically of the form ``YYYY-MM-DD/HHMMSS__handle`` —
+    using the raw form as a markdown header is verbose and ugly. Extract
+    just the date prefix when present, otherwise fall back to the raw
+    packet_id, primary_post_id, or "Update".
+    """
+    pid = (packet_id or "").strip()
+    if pid:
+        # Match YYYY-MM-DD prefix (10 chars), keep just that for the header.
+        m = re.match(r"^(\d{4}-\d{2}-\d{2})", pid)
+        if m:
+            return f"Update {m.group(1)}"
+        return f"Update {pid}"
+    if primary_post_id:
+        return f"Update from post {primary_post_id}"
+    return "Update"
 
 
 def apply_vault_delta_to_vault(
@@ -355,19 +444,25 @@ def apply_vault_delta_to_vault(
     vault_path: Path,
     packet_id: str = "",
     handle: str = "",
+    min_confidence: str | None = None,
 ) -> dict[str, Any]:
     """Persist a ``VaultDelta`` to a Memex vault.
 
     For each ``VaultAction`` in ``delta.vault_actions``:
       1. Canonicalize the entity name (light surface-form normalization).
-      2. Resolve the effective op based on current vault state
+      2. Optionally drop low-confidence actions per ``min_confidence``.
+      3. Resolve the effective op based on current vault state
          (auto-downgrade CREATE→EXTEND when page already exists;
-         auto-upgrade EXTEND/REVISE→CREATE when target page is missing).
-      3. Build the markdown body content from structured fields.
-      4. Call ``memex_apply_action`` (which dispatches to the appropriate
+         auto-upgrade EXTEND/REVISE→CREATE when target page is missing;
+         redirect EXTEND/REVISE to canonical name when the LLM's
+         ``existing_slug`` is wrong but a canonical-name page exists).
+      4. Build the markdown body content from structured fields.
+      5. Call ``memex_apply_action`` (which dispatches to the appropriate
          create/extend/revise primitive and appends to ``log.md``).
 
-    Then append every ``VaultRelation`` to ``relations.jsonl``.
+    Then append every ``VaultRelation`` to ``relations.jsonl``, plus a
+    per-post metadata record to ``posts.jsonl`` (so ``post_summary`` /
+    ``post_tags`` are recoverable even when no relations exist).
 
     Args:
         delta: The structured analysis emitted by ``analyze_action``.
@@ -377,6 +472,11 @@ def apply_vault_delta_to_vault(
             for tracing which CSI poll surfaced the entity.
         handle: Optional X handle (e.g. ``"ClaudeDevs"``) used to build
             full ``https://x.com/<handle>/status/<id>`` URLs.
+        min_confidence: Optional confidence threshold. When set to
+            ``"high"``, ``"medium"``, or ``"low"``, VaultActions with a
+            confidence rank below this threshold are skipped (counted in
+            ``skipped_low_confidence``). Default ``None`` persists all
+            actions regardless of confidence.
 
     Returns:
         Dict summary of what happened, suitable for logging:
@@ -385,8 +485,10 @@ def apply_vault_delta_to_vault(
 
            {
              "applied": [
-                {"op": "CREATE", "name": "Claude Code", "kind": "product",
-                 "page_rel_path": "entities/claude-code.md", "log_note": ""},
+                {"op": "CREATE", "name": "Claude Code",
+                 "llm_kind": "product", "memex_kind": "entity",
+                 "page_rel_path": "entities/claude-code.md",
+                 "snapshot_path": None, "log_note": ""},
                 ...
              ],
              "errors": [
@@ -394,7 +496,9 @@ def apply_vault_delta_to_vault(
              ],
              "counts": {"create": 3, "extend": 1, "revise": 0},
              "relations_written": 4,
+             "post_log_written": True,
              "skipped_empty": 0,
+             "skipped_low_confidence": 0,
            }
 
     Never raises on a single VaultAction error — collects per-action
@@ -405,11 +509,35 @@ def apply_vault_delta_to_vault(
     errors: list[dict[str, Any]] = []
     counts: dict[str, int] = {"create": 0, "extend": 0, "revise": 0}
     skipped_empty = 0
+    skipped_low_confidence = 0
+
+    threshold_rank: int | None = None
+    if min_confidence:
+        normalized = min_confidence.strip().lower()
+        if normalized in _CONFIDENCE_RANK:
+            threshold_rank = _CONFIDENCE_RANK[normalized]
+        else:
+            logger.warning(
+                "csi_persistence: ignoring unknown min_confidence=%r "
+                "(expected high/medium/low)",
+                min_confidence,
+            )
 
     for idx, va in enumerate(delta.vault_actions):
         if not va.name.strip():
             skipped_empty += 1
             continue
+
+        if threshold_rank is not None:
+            action_rank = _CONFIDENCE_RANK.get(va.confidence, 2)
+            if action_rank < threshold_rank:
+                skipped_low_confidence += 1
+                logger.info(
+                    "csi_persistence: skipping VaultAction[%d] "
+                    "(name=%r confidence=%r below threshold %r)",
+                    idx, va.name, va.confidence, min_confidence,
+                )
+                continue
 
         try:
             effective_op, effective_name, log_note = _resolve_effective_op(
@@ -425,7 +553,10 @@ def apply_vault_delta_to_vault(
 
             # Tags surfaced into page frontmatter for downstream filtering /
             # capability-library indexing. Includes the kind, the source
-            # provenance bucket, and the LLM's confidence rating.
+            # provenance bucket, the LLM's confidence rating, the packet
+            # ID for time-window filtering, and one ``alias:<x>`` tag per
+            # alias so downstream consumers can canonicalize without
+            # re-parsing the body.
             tags = [
                 f"kind:{va.kind}",
                 "source:csi-claude-code",
@@ -433,6 +564,10 @@ def apply_vault_delta_to_vault(
             ]
             if packet_id:
                 tags.append(f"packet:{packet_id}")
+            for alias in va.aliases or []:
+                cleaned = (alias or "").strip()
+                if cleaned:
+                    tags.append(f"alias:{cleaned}")
 
             primary_post_id = (va.source_post_ids or [""])[0]
             primary_doc_url = (va.source_doc_urls or [""])[0]
@@ -441,7 +576,9 @@ def apply_vault_delta_to_vault(
 
             section_label = ""
             if effective_op == ACTION_EXTEND:
-                section_label = packet_id or primary_post_id or "Update"
+                section_label = _packet_id_to_section_label(
+                    packet_id, primary_post_id
+                )
 
             reason = ""
             if effective_op == ACTION_REVISE:
@@ -503,13 +640,18 @@ def apply_vault_delta_to_vault(
             )
 
     relations_written = _append_relations_log(vault_path, delta, packet_id=packet_id)
+    post_log_written = _append_posts_log(
+        vault_path, delta, packet_id=packet_id, handle=handle
+    )
 
     return {
         "applied": applied,
         "errors": errors,
         "counts": counts,
         "relations_written": relations_written,
+        "post_log_written": post_log_written,
         "skipped_empty": skipped_empty,
+        "skipped_low_confidence": skipped_low_confidence,
     }
 
 

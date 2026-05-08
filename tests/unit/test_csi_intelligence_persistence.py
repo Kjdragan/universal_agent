@@ -561,3 +561,378 @@ class TestTagsAndProvenance:
         assert "source:csi-claude-code" in page
         assert "confidence:high" in page
         assert "packet:2026-05-06/210011" in page
+
+    def test_aliases_emitted_as_alias_tags(self, vault: Path):
+        """Followup #3 — aliases land in frontmatter as ``alias:<x>`` tags so
+        downstream consumers can canonicalize without re-parsing the body."""
+        delta = VaultDelta(
+            vault_actions=[
+                VaultAction(
+                    op="create",
+                    kind="product",
+                    name="Claude Opus 4.7",
+                    aliases=["Opus 4.7", "claude-opus-4-7", "opus47"],
+                    summary="Anthropic's flagship model.",
+                    confidence="high",
+                )
+            ],
+        )
+        apply_vault_delta_to_vault(delta, vault_path=vault)
+        page = _read_page(vault, "entities", "claude-opus-4-7")
+        assert "alias:Opus 4.7" in page
+        assert "alias:claude-opus-4-7" in page
+        assert "alias:opus47" in page
+
+
+# ---------------------------------------------------------------------------
+# Followup #2 — posts.jsonl persistence
+# ---------------------------------------------------------------------------
+
+
+class TestPostsLog:
+    def test_post_summary_persisted_when_no_relations(self, vault: Path):
+        """The earlier impl dropped post_summary when relations were empty.
+        Followup #2 fix: write it to ``posts.jsonl`` so it's recoverable."""
+        delta = VaultDelta(
+            vault_actions=[
+                VaultAction(
+                    op="create",
+                    kind="product",
+                    name="Lone Entity",
+                    summary="One entity, no relations.",
+                    source_post_ids=["2050000000000000001"],
+                    confidence="medium",
+                )
+            ],
+            relations=[],  # no relations
+            post_summary="A standalone entity announcement.",
+            post_tags=["release_announcement"],
+        )
+        result = apply_vault_delta_to_vault(
+            delta, vault_path=vault, packet_id="2026-05-08/foo", handle="ClaudeDevs"
+        )
+        assert result["post_log_written"] is True
+
+        log_path = vault / "posts.jsonl"
+        assert log_path.is_file()
+        line = log_path.read_text(encoding="utf-8").strip()
+        record = json.loads(line)
+        assert record["packet_id"] == "2026-05-08/foo"
+        assert record["handle"] == "ClaudeDevs"
+        assert record["primary_post_id"] == "2050000000000000001"
+        assert record["post_summary"] == "A standalone entity announcement."
+        assert record["post_tags"] == ["release_announcement"]
+        assert record["vault_action_count"] == 1
+        assert record["relation_count"] == 0
+
+    def test_no_posts_log_when_summary_and_tags_empty(self, vault: Path):
+        delta = VaultDelta(
+            vault_actions=[
+                VaultAction(
+                    op="create", kind="product", name="X",
+                    summary="X.", confidence="low",
+                )
+            ],
+            post_summary="",
+            post_tags=[],
+        )
+        result = apply_vault_delta_to_vault(delta, vault_path=vault)
+        assert result["post_log_written"] is False
+        assert not (vault / "posts.jsonl").exists()
+
+    def test_posts_log_appends_idempotently_across_calls(self, vault: Path):
+        delta = VaultDelta(
+            vault_actions=[],
+            post_summary="Just a post-level summary.",
+            post_tags=["commentary"],
+        )
+        apply_vault_delta_to_vault(delta, vault_path=vault, packet_id="p1")
+        apply_vault_delta_to_vault(delta, vault_path=vault, packet_id="p2")
+        lines = (vault / "posts.jsonl").read_text().strip().splitlines()
+        assert len(lines) == 2
+        assert json.loads(lines[0])["packet_id"] == "p1"
+        assert json.loads(lines[1])["packet_id"] == "p2"
+
+
+# ---------------------------------------------------------------------------
+# Followup #4 — confidence-threshold gating
+# ---------------------------------------------------------------------------
+
+
+class TestConfidenceGating:
+    def test_min_confidence_high_drops_medium_and_low(self, vault: Path):
+        delta = VaultDelta(
+            vault_actions=[
+                VaultAction(
+                    op="create", kind="product", name="High Confidence Thing",
+                    summary="Should be persisted.", confidence="high",
+                ),
+                VaultAction(
+                    op="create", kind="product", name="Medium Confidence Thing",
+                    summary="Should be skipped at min=high.", confidence="medium",
+                ),
+                VaultAction(
+                    op="create", kind="product", name="Low Confidence Thing",
+                    summary="Should be skipped at min=high.", confidence="low",
+                ),
+            ],
+        )
+        result = apply_vault_delta_to_vault(
+            delta, vault_path=vault, min_confidence="high"
+        )
+        assert result["counts"]["create"] == 1
+        assert result["skipped_low_confidence"] == 2
+        assert (vault / "entities" / "high-confidence-thing.md").exists()
+        assert not (vault / "entities" / "medium-confidence-thing.md").exists()
+        assert not (vault / "entities" / "low-confidence-thing.md").exists()
+
+    def test_min_confidence_medium_keeps_medium_and_high(self, vault: Path):
+        delta = VaultDelta(
+            vault_actions=[
+                VaultAction(
+                    op="create", kind="product", name="High",
+                    summary=".", confidence="high",
+                ),
+                VaultAction(
+                    op="create", kind="product", name="Medium",
+                    summary=".", confidence="medium",
+                ),
+                VaultAction(
+                    op="create", kind="product", name="Low",
+                    summary=".", confidence="low",
+                ),
+            ],
+        )
+        result = apply_vault_delta_to_vault(
+            delta, vault_path=vault, min_confidence="medium"
+        )
+        assert result["counts"]["create"] == 2
+        assert result["skipped_low_confidence"] == 1
+
+    def test_no_min_confidence_persists_all(self, vault: Path):
+        """Default behavior — backward compat."""
+        delta = VaultDelta(
+            vault_actions=[
+                VaultAction(
+                    op="create", kind="product", name="LowConfThing",
+                    summary=".", confidence="low",
+                ),
+            ],
+        )
+        result = apply_vault_delta_to_vault(delta, vault_path=vault)
+        assert result["counts"]["create"] == 1
+        assert result["skipped_low_confidence"] == 0
+
+    def test_unknown_min_confidence_ignored_with_warning(self, vault: Path):
+        """Defensive: unknown threshold values fall through as no-op."""
+        delta = VaultDelta(
+            vault_actions=[
+                VaultAction(
+                    op="create", kind="product", name="Whatever",
+                    summary=".", confidence="medium",
+                ),
+            ],
+        )
+        result = apply_vault_delta_to_vault(
+            delta, vault_path=vault, min_confidence="bogus"
+        )
+        assert result["counts"]["create"] == 1
+        assert result["skipped_low_confidence"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Followup #5 — section_label cleanup for EXTEND
+# ---------------------------------------------------------------------------
+
+
+class TestExtendSectionLabel:
+    def test_extend_section_uses_date_prefix_when_packet_id_is_dated(self, vault: Path):
+        # Seed the page first
+        seed = VaultDelta(
+            vault_actions=[
+                VaultAction(
+                    op="create", kind="product", name="Claude Code",
+                    summary="seed.", confidence="medium",
+                )
+            ],
+        )
+        apply_vault_delta_to_vault(seed, vault_path=vault)
+
+        # Now extend with a typical CSI-style packet_id
+        ext = VaultDelta(
+            vault_actions=[
+                VaultAction(
+                    op="extend", kind="product", name="Claude Code",
+                    existing_slug="claude-code",
+                    summary="A new fact.", confidence="high",
+                )
+            ],
+        )
+        apply_vault_delta_to_vault(
+            ext, vault_path=vault, packet_id="2026-05-08/210011__ClaudeDevs"
+        )
+        page = _read_page(vault, "entities", "claude-code")
+        # The H2 section header (from memex_extend_page + our section_label)
+        # should be clean and date-prefixed, NOT the full verbose packet_id.
+        # The packet_id can still appear elsewhere (frontmatter packet: tag,
+        # body provenance footer) — that's intentional. Just the header
+        # needs to be readable.
+        h2_lines = [line for line in page.splitlines() if line.startswith("## ")]
+        assert h2_lines, "expected at least one H2 section in the extended page"
+        extend_header = h2_lines[-1]  # most recently appended section
+        assert "2026-05-08" in extend_header
+        assert "210011__ClaudeDevs" not in extend_header
+
+    def test_extend_falls_back_to_post_id_when_no_packet(self, vault: Path):
+        seed = VaultDelta(
+            vault_actions=[
+                VaultAction(
+                    op="create", kind="product", name="Thing",
+                    summary="seed.", confidence="medium",
+                )
+            ],
+        )
+        apply_vault_delta_to_vault(seed, vault_path=vault)
+
+        ext = VaultDelta(
+            vault_actions=[
+                VaultAction(
+                    op="extend", kind="product", name="Thing",
+                    existing_slug="thing",
+                    summary="An update.",
+                    source_post_ids=["2050000000000099999"],
+                    confidence="medium",
+                )
+            ],
+        )
+        apply_vault_delta_to_vault(ext, vault_path=vault, packet_id="")
+        page = _read_page(vault, "entities", "thing")
+        assert "Update from post 2050000000000099999" in page
+
+
+# ---------------------------------------------------------------------------
+# Followup #6 — existing_slug is wrong but canonical_name has a page
+# ---------------------------------------------------------------------------
+
+
+class TestExistingSlugRedirect:
+    def test_extend_with_wrong_existing_slug_redirects_to_canonical(self, vault: Path):
+        """LLM emits ``existing_slug='managed'`` (wrong — that page doesn't
+        exist) for an entity whose canonical name 'Claude Managed Agents'
+        already has a page. We should EXTEND the canonical-name page,
+        NOT CREATE a duplicate ``managed.md``."""
+
+        # Seed: page exists under the canonical slug
+        seed = VaultDelta(
+            vault_actions=[
+                VaultAction(
+                    op="create", kind="product", name="Claude Managed Agents",
+                    summary="seed.", confidence="medium",
+                )
+            ],
+        )
+        apply_vault_delta_to_vault(seed, vault_path=vault)
+        assert (vault / "entities" / "claude-managed-agents.md").exists()
+
+        # Now LLM emits an EXTEND with the WRONG existing_slug
+        ext = VaultDelta(
+            vault_actions=[
+                VaultAction(
+                    op="extend",
+                    kind="product",
+                    name="Claude Managed Agents",
+                    existing_slug="managed",  # wrong — managed.md doesn't exist
+                    summary="New capability.",
+                    confidence="high",
+                )
+            ],
+        )
+        result = apply_vault_delta_to_vault(ext, vault_path=vault)
+
+        # Should EXTEND the canonical-name page, not CREATE a duplicate
+        assert result["counts"]["extend"] == 1
+        assert result["counts"]["create"] == 0
+        applied = result["applied"][0]
+        assert applied["op"] == "EXTEND"
+        assert applied["page_rel_path"] == "entities/claude-managed-agents.md"
+        assert "redirected" in applied["log_note"]
+        assert "managed" in applied["log_note"]
+        assert "claude-managed-agents" in applied["log_note"].lower() or \
+               "Claude Managed Agents" in applied["log_note"]
+
+        # No spurious managed.md page was created
+        assert not (vault / "entities" / "managed.md").exists()
+
+        # The canonical page got the new content
+        page = _read_page(vault, "entities", "claude-managed-agents")
+        assert "New capability." in page
+
+    def test_revise_with_wrong_existing_slug_redirects_to_canonical(self, vault: Path):
+        """Same fix applies to REVISE."""
+        seed = VaultDelta(
+            vault_actions=[
+                VaultAction(
+                    op="create", kind="product", name="Claude Code",
+                    summary="seed.", confidence="medium",
+                )
+            ],
+        )
+        apply_vault_delta_to_vault(seed, vault_path=vault)
+
+        rev = VaultDelta(
+            vault_actions=[
+                VaultAction(
+                    op="revise",
+                    kind="product",
+                    name="Claude Code",
+                    existing_slug="code",  # wrong — code.md doesn't exist
+                    summary="Reframed description.",
+                    confidence="high",
+                )
+            ],
+        )
+        result = apply_vault_delta_to_vault(rev, vault_path=vault)
+        assert result["counts"]["revise"] == 1
+        assert result["counts"]["create"] == 0
+        applied = result["applied"][0]
+        assert applied["op"] == "REVISE"
+        assert applied["page_rel_path"] == "entities/claude-code.md"
+        assert applied["snapshot_path"] is not None  # _history/ snapshot written
+        assert "redirected" in applied["log_note"]
+
+
+# ---------------------------------------------------------------------------
+# Followup #1 — docstring example sanity (verify return-dict shape)
+# ---------------------------------------------------------------------------
+
+
+class TestReturnDictShape:
+    def test_return_dict_has_documented_fields(self, vault: Path):
+        """Sanity check that the dict shape matches the docstring example."""
+        delta = VaultDelta(
+            vault_actions=[
+                VaultAction(
+                    op="create", kind="product", name="DocstringSanity",
+                    summary=".", confidence="medium",
+                )
+            ],
+        )
+        result = apply_vault_delta_to_vault(delta, vault_path=vault)
+
+        # All documented top-level keys
+        for key in {
+            "applied",
+            "errors",
+            "counts",
+            "relations_written",
+            "post_log_written",
+            "skipped_empty",
+            "skipped_low_confidence",
+        }:
+            assert key in result, f"missing top-level key: {key!r}"
+
+        # Each applied entry has the documented shape (incl. llm_kind / memex_kind)
+        applied = result["applied"][0]
+        for key in {"op", "name", "llm_kind", "memex_kind", "page_rel_path",
+                    "snapshot_path", "log_note"}:
+            assert key in applied, f"missing applied[*] key: {key!r}"
