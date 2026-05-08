@@ -2,6 +2,33 @@
 
 **Last Updated:** 2026-04-25
 
+> **⚠️ Status Update (2026-05-08) — § 2 "Claude Code and Z.ai Model Mapping" is
+> stale post-Phase-B inversion.** This guide claims Archon's spawned `claude`
+> subprocess inherits Z.ai routing from `~/.claude/settings.json`. That was
+> true when this doc was written, but the 2026-05-07 interactive-coding
+> inversion (Phase B) **surgically removed** the `ANTHROPIC_*` env block from
+> `~/.claude/settings.json` on the VPS. Plain `claude` now defaults to
+> Anthropic Max via OAuth. For Archon's `claude` subprocesses to actually use
+> Z.ai, one of:
+>
+> 1. Wrap Archon's `claude` invocation with `infisical run --env=production
+>    --projectId=… -- claude …` (mirrors the existing `zai()` shell function
+>    on both VPS and desktop). Or:
+> 2. Have Archon explicitly export `ANTHROPIC_BASE_URL` and
+>    `ANTHROPIC_AUTH_TOKEN` (sourced from Infisical) into the subprocess env
+>    before spawning `claude`.
+>
+> Until § 2 is rewritten with one of those patterns, **Archon's claude calls
+> will hit Anthropic Max** and burn the Max plan budget instead of Z.ai.
+> Canonical reference for the inversion:
+> [`docs/06_Deployment_And_Environments/10_Interactive_Coding_Environment.md`](../06_Deployment_And_Environments/10_Interactive_Coding_Environment.md).
+> Canonical secrets/launcher patterns:
+> [`docs/deployment/secrets_and_environments.md`](../deployment/secrets_and_environments.md).
+>
+> If you're using Archon today, treat § 2 as obsolete and pick one of the two
+> wrap patterns above before deploying. The rest of this doc (§ 1 setup,
+> § 3 VPS deployment posture) is unaffected.
+
 This document serves as the canonical operations guide for **Archon**, an open-source workflow engine for AI coding agents that we have integrated into our infrastructure alongside the Universal Agent (UA).
 
 ## Architectural Strategy

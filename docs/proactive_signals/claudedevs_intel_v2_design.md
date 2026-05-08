@@ -5,6 +5,32 @@
 **Branch:** `claude/monitor-twitter-feeds-WoLqF`
 **Supersedes:** the existing `claude_code_intel` lane (services, rollup, replay) and its `agent_capability_library/claude_code_intel/current/` artifact
 
+> **⚠️ Status updates relative to current state (read before treating as authoritative):**
+>
+> - **§ 8.1 "Execution environment — the dual-environment requirement"** describes the
+>   ZAI-mapped lane as living in `~/.claude/settings.json` with a full env block.
+>   That was true at design time but the **2026-05-07 Phase B inversion**
+>   surgically removed those `ANTHROPIC_*` keys from `~/.claude/settings.json`.
+>   ZAI routing for UA Python services is now via Infisical →
+>   `initialize_runtime_secrets()` at startup (the same pattern this section
+>   describes for "Anthropic native" demos, but pointed at Z.ai). Interactive
+>   `claude` defaults to Anthropic Max via OAuth; `zai()` shell wrapper opts
+>   in to ZAI explicitly. Canonical reference:
+>   [`docs/06_Deployment_And_Environments/10_Interactive_Coding_Environment.md`](../06_Deployment_And_Environments/10_Interactive_Coding_Environment.md).
+> - **Implementation status (2026-05-08):** Phases A–F have shipped (LLM-driven
+>   extraction replacing the regex extractor, vault writes via the Memex
+>   primitives, etc.). Phase G (full historical backfill into a parallel V2
+>   vault for validation) is the in-flight work. A self-imposed pacing layer
+>   (`csi_llm_pacing.py`) was added 2026-05-08 in response to observed Z.AI
+>   throttling — see
+>   [`docs/proactive_signals/csi_v3_backfill_restart_handoff_2026-05-08.md`](csi_v3_backfill_restart_handoff_2026-05-08.md)
+>   for the V3 (V2 + pacing) restart context. The remaining-work plan is
+>   tracked in
+>   [`docs/proactive_signals/claudedevs_intel_v2_remaining_work.md`](claudedevs_intel_v2_remaining_work.md).
+>
+> Treat this design doc as the **architectural intent**; for current-state
+> facts (what's deployed, what's pending) read the two living docs above.
+
 ---
 
 ## 1. Why this exists
