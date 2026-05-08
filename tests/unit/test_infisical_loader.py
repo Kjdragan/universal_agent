@@ -68,7 +68,7 @@ def test_initialize_runtime_secrets_local_profile_falls_back_to_dotenv(monkeypat
         "_fetch_infisical_secrets",
         lambda: (_ for _ in ()).throw(RuntimeError("network down")),
     )
-    monkeypatch.setattr(infisical_loader, "_load_local_dotenv", lambda: 3)
+    monkeypatch.setattr(infisical_loader, "_load_local_dotenv", lambda **_: 3)
 
     result = infisical_loader.initialize_runtime_secrets(force_reload=True)
     assert result.ok is True

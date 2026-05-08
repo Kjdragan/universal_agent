@@ -367,7 +367,48 @@ The two launchers serve different purposes and should not be conflated:
 | Launcher | Purpose | When to use | Conflicts with the other? |
 |---|---|---|---|
 | `zai()` shell function (this doc) | Force `claude` to route LLM calls through the ZAI proxy instead of Anthropic Max for explicit cheap inference | Operator wants GLM models for one specific session | No — `zai` only sets `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN`, doesn't touch MCP env |
-| `scripts/claude_with_mcp_env.sh` | Populate MCP server credentials (`AGENTMAIL_API_KEY`, `DISCORD_BOT_TOKEN`, `HOSTINGER_API_TOKEN`) so `${VAR}` placeholders in `.mcp.json` resolve | Default everywhere — alias `claude` to it in shell rc | No — it injects from Infisical and exec's `claude`; if the user wants ZAI routing they'd still alias `zai` separately |
+| `scripts/claude_with_mcp_env.sh` | Populate MCP server credentials (`AGENTMAIL_API_KEY`, `DISCORD_BOT_TOKEN`, `HOSTINGER_API_TOKEN`) so `${VAR}` placeholders in `.mcp.json` resolve | Default everywhere — alias `claude` to it in shell rc | **Resolved by strip-on-exec.** See note below. |
+
+> **⚠️ 2026-05-08 correction.** The original "No conflict" claim for
+> `claude_with_mcp_env.sh` was wrong. The launcher calls
+> `initialize_runtime_secrets()`, which fetches **every** Infisical secret onto
+> `os.environ`. Phase A staged the 5 `ANTHROPIC_*` ZAI routing vars in
+> Infisical so UA Python services would pick them up — but UA also keeps
+> `ANTHROPIC_API_KEY` there for direct-SDK code paths
+> (`refinement_agent`, `gateway_server` vision endpoint, `proactive_signals`,
+> etc.). The first-pass fix only stripped the 5 routing vars; it left
+> `ANTHROPIC_API_KEY` intact, which Claude Code interpreted as an
+> "external API key" and rejected with `Invalid API key · Fix external API key`
+> when the staged key was for a different account / had no Max billing.
+>
+> **Fix shipped 2026-05-08 (revised):** the strip now covers the entire
+> `ANTHROPIC_*` namespace, in two layers:
+>
+> 1. **Load-time filter.** `initialize_runtime_secrets()` accepts an
+>    `exclude_prefixes` parameter; the launcher passes
+>    `exclude_prefixes=("ANTHROPIC_",)` so those keys never enter
+>    `os.environ` from Infisical in the first place. UA Python services that
+>    need them call the same function without the parameter and get all
+>    secrets normally.
+> 2. **Defense-in-depth strip.** After the bootstrap, the launcher also
+>    strips any `ANTHROPIC_*` key that landed on `os.environ` from a
+>    non-Infisical source (bootstrap `.env`, parent shell leak).
+>
+> Net effect: interactive `claude` falls through to Anthropic Max OAuth via
+> `~/.claude/.credentials.json`. MCP credentials flow unchanged. UA Python
+> services unaffected. The `zai` shell function uses `infisical run` (not
+> this launcher) and remains the explicit ZAI opt-in.
+>
+> **Operator action required after deploy:** if `~/.claude/.credentials.json`
+> for `ua` is stale or absent, the first `claude` call will fail with a
+> not-logged-in error. Refresh OAuth from a vanilla project-local context:
+> `cd /opt/ua_demos/_smoke && claude /login`.
+>
+> Regression guards: `tests/unit/test_claude_launcher_strip.py` covers both
+> layers (load-time exclude + defense-in-depth strip). Functional smoke:
+> after the OAuth refresh, run `claude -p "say PASS"` and confirm the model
+> replies; for protocol-level certainty use the `ss -t state established`
+> sniffer pattern from § "Phase G acid tests" above.
 
 For the canonical reference on MCP credentials and the launcher's design (the
 "`infisical run` CLI was the wrong primitive" lesson, the auto-resolution

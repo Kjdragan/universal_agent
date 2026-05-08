@@ -88,27 +88,34 @@ def _safe_error(exc: Exception) -> str:
     return f"{type(exc).__name__}"
 
 
-def _inject_environment_values(values: dict[str, str], *, overwrite: bool = False) -> int:
+def _inject_environment_values(
+    values: dict[str, str],
+    *,
+    overwrite: bool = False,
+    exclude_prefixes: tuple[str, ...] = (),
+) -> int:
     inserted = 0
     for key, value in values.items():
         clean_key = str(key or "").strip()
         if not clean_key:
             continue
+        if exclude_prefixes and any(clean_key.startswith(p) for p in exclude_prefixes):
+            continue
         if not overwrite and clean_key in os.environ:
             continue
         os.environ[clean_key] = str(value or "")
         inserted += 1
-        
+
         # Alias for zai_vision tool compatibility
         if clean_key == "ZAI_API_KEY":
             if overwrite or "Z_AI_API_KEY" not in os.environ:
                 os.environ["Z_AI_API_KEY"] = str(value or "")
                 inserted += 1
-                
+
     return inserted
 
 
-def _load_local_dotenv() -> int:
+def _load_local_dotenv(exclude_prefixes: tuple[str, ...] = ()) -> int:
     dotenv_path_raw = str(os.getenv("UA_DOTENV_PATH") or "").strip()
     if dotenv_path_raw:
         dotenv_path = Path(dotenv_path_raw).expanduser()
@@ -129,7 +136,11 @@ def _load_local_dotenv() -> int:
         for k, v in raw_values.items()
         if k and v is not None
     }
-    inserted = _inject_environment_values(normalized, overwrite=False)
+    inserted = _inject_environment_values(
+        normalized,
+        overwrite=False,
+        exclude_prefixes=exclude_prefixes,
+    )
     if inserted > 0:
         logger.info("Loaded %d env values from local dotenv fallback (%s)", inserted, str(dotenv_path))
     return inserted
@@ -437,13 +448,25 @@ def _fetch_infisical_secrets_via_rest(
     return out
 
 
-def initialize_runtime_secrets(profile: str | None = None, *, force_reload: bool = False) -> SecretBootstrapResult:
+def initialize_runtime_secrets(
+    profile: str | None = None,
+    *,
+    force_reload: bool = False,
+    exclude_prefixes: tuple[str, ...] = (),
+) -> SecretBootstrapResult:
     """
     Initialize runtime secrets with Infisical-first strategy.
 
     Behavior:
     - strict mode (default on VPS/standalone): fail closed if Infisical cannot load.
     - local mode: allow optional dotenv fallback and existing env-only startup.
+
+    Parameters:
+    - exclude_prefixes: tuple of key prefixes to skip when injecting secrets onto
+      ``os.environ``. Used by the interactive `claude` launcher to prevent
+      ``ANTHROPIC_*`` runtime keys (e.g. ``ANTHROPIC_API_KEY``) from polluting
+      the env and overriding the Anthropic Max OAuth path. UA Python services
+      that need those keys call this without ``exclude_prefixes``.
     """
     global _BOOTSTRAP_RESULT
 
@@ -476,7 +499,11 @@ def initialize_runtime_secrets(profile: str | None = None, *, force_reload: bool
         if infisical_enabled:
             try:
                 secret_values = _fetch_infisical_secrets()
-                loaded_count = _inject_environment_values(secret_values, overwrite=False)
+                loaded_count = _inject_environment_values(
+                    secret_values,
+                    overwrite=False,
+                    exclude_prefixes=exclude_prefixes,
+                )
                 source = "infisical"
                 normalized_environment = _normalize_infisical_environment(os.getenv("INFISICAL_ENVIRONMENT"))
                 os.environ["INFISICAL_ENVIRONMENT"] = normalized_environment
@@ -526,7 +553,7 @@ def initialize_runtime_secrets(profile: str | None = None, *, force_reload: bool
                 )
 
             if allow_dotenv_fallback:
-                loaded_count = _load_local_dotenv()
+                loaded_count = _load_local_dotenv(exclude_prefixes=exclude_prefixes)
                 if loaded_count > 0:
                     source = "dotenv"
             fallback_used = bool(errors)
