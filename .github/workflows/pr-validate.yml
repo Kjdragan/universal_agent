@@ -48,7 +48,7 @@ jobs:
 
     steps:
       - name: Checkout PR head
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # Need full history so we can diff against the base branch
           # to identify only the .py files this PR touches.
