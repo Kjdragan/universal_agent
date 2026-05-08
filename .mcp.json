@@ -30,7 +30,7 @@
         "hostinger-api-mcp@latest"
       ],
       "env": {
-        "API_TOKEN": "ei5Jd5yVKFtX16mJyIOoghYDMV2CFeE7VaIm9qDM54249443"
+        "API_TOKEN": "${HOSTINGER_API_TOKEN}"
       }
     },
     "discord": {
