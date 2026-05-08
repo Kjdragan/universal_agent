@@ -1,11 +1,11 @@
 # 10. Interactive Coding Environment — Default-Anthropic Inversion
 
-> **Status:** ✅ **EXECUTED AND VERIFIED 2026-05-07.** Phases A–C complete on VPS (`ua@uaonvps`) and desktop (`kjdragan@mint-desktop`). End-to-end routing confirmed via `/proc/<claude-pid>/environ` inspection. Phases D (Antigravity Remote-SSH) and Phase G (full 7-test acid suite) remain as optional polish.
+> **Status:** ✅ **EXECUTED, VERIFIED, AND HARDENED.** Phases A–C executed 2026-05-07 on VPS (`ua@uaonvps`) and desktop (`kjdragan@mint-desktop`); end-to-end routing confirmed via `/proc/<claude-pid>/environ` inspection. Phases D (Antigravity Remote-SSH) and Phase G (full 7-test acid suite) remain as optional polish. **2026-05-08 follow-up:** the canonical alias `claude=/opt/universal_agent/scripts/claude_with_mcp_env.sh` (introduced same day for MCP credential bootstrap) was silently re-injecting `ANTHROPIC_*` from Infisical and defeating the inversion; fixed with two-layer exclusion (`exclude_prefixes=("ANTHROPIC_",)` at load time + defense-in-depth strip in the launcher). Live re-verification on `ua@uaonvps` 2026-05-08 confirmed `Opus 4.7 · Claude Max` routing for interactive `claude`. Details in § "Related interactive-claude patterns" below.
 >
 > This is the canonical source-of-truth reference for how Kevin's interactive coding (Antigravity terminal, Antigravity IDE side panel, plain `claude` from any terminal) routes to **real Anthropic Max** while UA's autonomous agent runs continue to route to **ZAI / GLM**. Companion to [`09_Demo_Execution_Environments.md`](09_Demo_Execution_Environments.md).
 >
 > **Audience:** Operators, AI coders, future agents touching anything Claude-related on either machine.
-> **Last updated:** 2026-05-07 (post-execution; lessons-learned section added).
+> **Last updated:** 2026-05-08 (post-2026-05-08 launcher hardening; lessons-learned section added; § "Related interactive-claude patterns" rewritten).
 
 ## Lessons learned during execution (2026-05-07)
 
@@ -362,12 +362,12 @@ The phases above govern **model routing** for interactive `claude` sessions
 populated by a different launcher (`scripts/claude_with_mcp_env.sh`) which
 runs UA's `initialize_runtime_secrets()` before exec'ing `claude`.
 
-The two launchers serve different purposes and should not be conflated:
+The two launchers serve different purposes and (after the 2026-05-08 hardening) coexist cleanly:
 
-| Launcher | Purpose | When to use | Conflicts with the other? |
+| Launcher | Purpose | When to use | Interaction with the other |
 |---|---|---|---|
-| `zai()` shell function (this doc) | Force `claude` to route LLM calls through the ZAI proxy instead of Anthropic Max for explicit cheap inference | Operator wants GLM models for one specific session | No — `zai` only sets `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN`, doesn't touch MCP env |
-| `scripts/claude_with_mcp_env.sh` | Populate MCP server credentials (`AGENTMAIL_API_KEY`, `DISCORD_BOT_TOKEN`, `HOSTINGER_API_TOKEN`) so `${VAR}` placeholders in `.mcp.json` resolve | Default everywhere — alias `claude` to it in shell rc | **Resolved by strip-on-exec.** See note below. |
+| `zai()` shell function (this doc) | Force `claude` to route LLM calls through the ZAI proxy instead of Anthropic Max for explicit cheap inference | Operator wants GLM models for one specific session | Independent. `zai` uses `infisical run`, doesn't go through `claude_with_mcp_env.sh`, and only sets `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` for the duration of the `claude` invocation. |
+| `scripts/claude_with_mcp_env.sh` | Populate MCP server credentials (`AGENTMAIL_API_KEY`, `DISCORD_BOT_TOKEN`, `HOSTINGER_API_TOKEN`) so `${VAR}` placeholders in `.mcp.json` resolve | Default everywhere — alias `claude` to it in shell rc | Excludes `ANTHROPIC_*` at the Infisical inject step (`exclude_prefixes=("ANTHROPIC_",)`) plus a defense-in-depth strip post-bootstrap, so OAuth → Anthropic Max is the resolved auth path. MCP creds flow unchanged. See note below. |
 
 > **⚠️ 2026-05-08 correction.** The original "No conflict" claim for
 > `claude_with_mcp_env.sh` was wrong. The launcher calls
