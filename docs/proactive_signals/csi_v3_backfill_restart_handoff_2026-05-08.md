@@ -27,17 +27,21 @@ What's already shipped and live:
 - **CSI cron infrastructure** — `csi_convergence` (every 30 min) and `claude_code_intel` (08/16/22 CDT) both registered and active.
 - **All today's docs and canonical guidance** — `docs/operations/2026-05-08_zai_peak_time_scheduling.md`, the MCP-credentials section in `docs/deployment/secrets_and_environments.md`, etc.
 
-**What's NOT shipped (sitting in a worktree):** the pacing / rate-limiting module itself. Lives at:
+**What's NOT shipped (parked on a branch):** the pacing / rate-limiting module itself. Two access paths to the same code, pick whichever works for your environment:
 
-```
-/tmp/ua-wt-csi-pacing/
-    src/universal_agent/services/csi_llm_pacing.py            (NEW, ~280 lines)
-    src/universal_agent/services/csi_url_judge.py             (modified — paced_llm_call wrap)
-    src/universal_agent/services/csi_intelligence_pass.py     (modified — paced_llm_call wrap)
-    tests/unit/test_csi_llm_pacing.py                         (NEW, 15 tests, all passing)
-```
+| Access | Location | Use when |
+|---|---|---|
+| **Branch on origin** | `claude/csi-llm-pacing` (tip = `de0ebbe5`, pushed 2026-05-08) | You want a clean checkout from anywhere: `git fetch && git checkout claude/csi-llm-pacing` |
+| **Existing worktree** | `/tmp/ua-wt-csi-pacing/` on the VPS | You want the same checkout the prior session used; the worktree's HEAD is the same `de0ebbe5` |
 
-The worktree has not been merged into `feature/latest2`. **A new session should review the worktree, decide whether to merge as-is or revise, and only then run the backfill.** See §4 for the merge decision criteria.
+Files in this branch (4 changes, 634 insertions):
+
+- `src/universal_agent/services/csi_llm_pacing.py`            (NEW, ~280 lines)
+- `src/universal_agent/services/csi_url_judge.py`             (modified — `paced_llm_call` wrap)
+- `src/universal_agent/services/csi_intelligence_pass.py`     (modified — `paced_llm_call` wrap)
+- `tests/unit/test_csi_llm_pacing.py`                         (NEW, 15 tests, all passing in isolation)
+
+The branch has not been merged into `feature/latest2`. **A new session should review the branch, decide whether to merge as-is or revise, and only then run the backfill.** See §4 for the merge decision criteria.
 
 ---
 
