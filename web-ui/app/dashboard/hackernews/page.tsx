@@ -219,7 +219,7 @@ function PanelHeading({
         display: "flex",
         alignItems: "center",
         gap: 10,
-        padding: "10px 14px",
+        padding: "7px 14px",
         borderBottom: `1px solid ${T.line}`,
         background: `linear-gradient(180deg, ${T.bg3}, ${T.bg2})`,
       }}
@@ -322,22 +322,20 @@ function StoryRow({
   dim?: boolean;
 }) {
   const host = deriveHost(story);
-  const url = story.url || commentUrl(story.id);
+  const articleUrl = story.url || commentUrl(story.id);
+  // Avoid nested <a> tags — invalid HTML, Chromium silently closes the outer one
+  // at the first inner one, killing clicks on most of the row. Wrapper is a
+  // <div>; the title block and the action icons each have their own <a>.
   return (
-    <a
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="hn-story-row"
+    <div
       style={{
         display: "grid",
         gridTemplateColumns: "30px 1fr auto",
         gap: 10,
-        padding: "7px 14px",
+        padding: "5px 14px",
         alignItems: "center",
         borderTop: `1px solid ${rank === 1 ? "transparent" : T.line}`,
         color: T.t0,
-        textDecoration: "none",
       }}
     >
       <div
@@ -351,7 +349,13 @@ function StoryRow({
       >
         {String(rank).padStart(2, "0")}
       </div>
-      <div style={{ minWidth: 0 }}>
+      <a
+        href={articleUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        title={story.title}
+        style={{ minWidth: 0, color: T.t0, textDecoration: "none", display: "block" }}
+      >
         <div
           style={{
             color: T.t0,
@@ -366,7 +370,7 @@ function StoryRow({
         </div>
         <div
           style={{
-            marginTop: 2,
+            marginTop: 1,
             fontFamily: T.fontMono,
             fontSize: 11,
             color: T.t2,
@@ -391,7 +395,7 @@ function StoryRow({
           <span style={{ color: T.t3 }}>·</span>
           <span style={{ color: T.t3 }}>{hnAge(story)}</span>
         </div>
-      </div>
+      </a>
       <div
         style={{
           display: "inline-flex",
@@ -408,10 +412,7 @@ function StoryRow({
         </span>
         <span>{commentsOf(story)} cmt</span>
         <span style={{ display: "inline-flex", gap: 4, marginLeft: 8 }}>
-          <ActionIcon
-            href={story.url || commentUrl(story.id)}
-            label="Open article"
-          >
+          <ActionIcon href={articleUrl} label="Open article">
             <ExternalLink size={11} />
           </ActionIcon>
           <ActionIcon href={commentUrl(story.id)} label="HN comments" accent>
@@ -419,7 +420,7 @@ function StoryRow({
           </ActionIcon>
         </span>
       </div>
-    </a>
+    </div>
   );
 }
 
@@ -466,7 +467,7 @@ function HeatedPanel({
 }) {
   const list = (rows ?? []).slice(0, 12);
   return (
-    <section style={{ ...panelStyle, marginTop: 14 }}>
+    <section style={{ ...panelStyle, marginTop: 10 }}>
       <PanelHeading
         title={
           <>
@@ -487,15 +488,21 @@ function HeatedPanel({
             const cmts = commentsOf(s);
             const ratio = pts ? cmts / pts : 0;
             return (
-              <div
+              <a
                 key={s.id ?? i}
+                href={s.url || commentUrl(s.id)}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={s.title}
                 style={{
                   display: "grid",
                   gridTemplateColumns: "48px 1fr auto",
                   gap: 10,
                   alignItems: "center",
-                  padding: "7px 14px",
+                  padding: "5px 14px",
                   borderTop: i === 0 ? "1px solid transparent" : `1px solid ${T.line}`,
+                  color: T.t0,
+                  textDecoration: "none",
                 }}
               >
                 <div
@@ -546,7 +553,7 @@ function HeatedPanel({
                   <span style={{ color: T.warn }}>{cmts} cmt</span>
                   <span style={{ color: T.t1 }}>{pts} pts</span>
                 </div>
-              </div>
+              </a>
             );
           })}
         </div>
@@ -573,8 +580,8 @@ function PulsePanel({
         style={{
           display: "grid",
           gridTemplateColumns: "repeat(3, 1fr)",
-          gap: 8,
-          padding: 12,
+          gap: 6,
+          padding: "8px 10px 10px",
         }}
       >
         {watchlist.slice(0, 6).map((topic) => {
@@ -586,7 +593,7 @@ function PulsePanel({
                   <span style={tileName}>{topic}</span>
                   <span style={{ ...tileCount, color: T.down }}>–</span>
                 </div>
-                <div style={{ height: 28 }} />
+                <div style={{ height: 22 }} />
                 <div style={tileRow3}>
                   <span style={{ color: T.down }}>load failed</span>
                 </div>
@@ -613,7 +620,7 @@ function PulsePanel({
               <svg
                 viewBox="0 0 100 30"
                 preserveAspectRatio="none"
-                style={{ display: "block", width: "100%", height: 28 }}
+                style={{ display: "block", width: "100%", height: 22 }}
               >
                 <defs>
                   <linearGradient id={`g-${topic}`} x1="0" x2="0" y1="0" y2="1">
@@ -676,6 +683,8 @@ function MoversPanel({
 }
 
 function MoverRow({ change, first }: { change: MoverChange; first?: boolean }) {
+  // Movers don't carry a story URL, so clicking opens the HN comment thread.
+  const href = commentUrl(change.id);
   const status = (change.status ?? "").toLowerCase();
   const delta = Number(change.delta ?? 0);
   let badge: React.ReactNode = null;
@@ -733,14 +742,20 @@ function MoverRow({ change, first }: { change: MoverChange; first?: boolean }) {
     );
   }
   return (
-    <div
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={change.title}
       style={{
         display: "grid",
         gridTemplateColumns: "64px 1fr auto",
         gap: 10,
         alignItems: "center",
-        padding: "6px 14px",
+        padding: "5px 14px",
         borderTop: first ? "1px solid transparent" : `1px solid ${T.line}`,
+        color: T.t0,
+        textDecoration: "none",
       }}
     >
       <div>{badge}</div>
@@ -767,7 +782,7 @@ function MoverRow({ change, first }: { change: MoverChange; first?: boolean }) {
           </span>
         )}
       </div>
-    </div>
+    </a>
   );
 }
 
@@ -854,12 +869,13 @@ function SmallStoriesPanel({
               href={s.url || commentUrl(s.id)}
               target="_blank"
               rel="noopener noreferrer"
+              title={s.title}
               style={{
                 display: "grid",
                 gridTemplateColumns: "1fr auto",
                 alignItems: "center",
                 gap: 8,
-                padding: "7px 14px",
+                padding: "5px 14px",
                 borderTop: i === 0 ? "1px solid transparent" : `1px solid ${T.line}`,
                 color: T.t0,
                 textDecoration: "none",
@@ -995,15 +1011,15 @@ const tabOnStyle: React.CSSProperties = {
 const tileStyle: React.CSSProperties = {
   background: T.bg3,
   border: `1px solid ${T.line}`,
-  borderRadius: 7,
-  padding: "9px 11px 8px",
+  borderRadius: 6,
+  padding: "6px 9px 6px",
   cursor: "default",
 };
 const tileRow1: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
-  marginBottom: 4,
+  marginBottom: 2,
 };
 const tileName: React.CSSProperties = {
   fontFamily: T.fontMono,
@@ -1022,7 +1038,7 @@ const tileRow3: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
-  marginTop: 4,
+  marginTop: 2,
   fontFamily: T.fontMono,
   fontSize: 10.5,
   color: T.t2,
@@ -1097,6 +1113,7 @@ export default function HackerNewsPage() {
 
   return (
     <div
+      className="hn-tab"
       style={{
         background: T.bg0,
         color: T.t0,
@@ -1113,7 +1130,7 @@ export default function HackerNewsPage() {
           gridTemplateColumns: "1fr auto",
           alignItems: "center",
           gap: 16,
-          padding: "12px 18px",
+          padding: "8px 18px",
           borderBottom: `1px solid ${T.line}`,
           background: `linear-gradient(180deg, rgba(255,102,0,.02), transparent 70%), ${T.bg0}`,
         }}
@@ -1199,7 +1216,7 @@ export default function HackerNewsPage() {
       {/* Search */}
       <div
         style={{
-          padding: "10px 18px 12px",
+          padding: "6px 18px 8px",
           borderBottom: `1px solid ${T.line}`,
           background: T.bg0,
         }}
@@ -1212,8 +1229,8 @@ export default function HackerNewsPage() {
             gap: 10,
             background: T.bg2,
             border: `1px solid ${T.line2}`,
-            borderRadius: 8,
-            padding: "8px 10px",
+            borderRadius: 6,
+            padding: "5px 10px",
           }}
         >
           <Search size={13} color={T.t2} />
@@ -1289,8 +1306,8 @@ export default function HackerNewsPage() {
           style={{
             display: "grid",
             gridTemplateColumns: "minmax(0, 1.55fr) minmax(0, 1fr)",
-            gap: 14,
-            padding: "14px 18px 18px",
+            gap: 10,
+            padding: "10px 18px 14px",
           }}
         >
           <div>
@@ -1304,7 +1321,7 @@ export default function HackerNewsPage() {
               errored={errors.has("controversial")}
             />
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 14, minWidth: 0 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
             <PulsePanel pulses={pulses} watchlist={watchlist} />
             <MoversPanel
               movers={snap!.movers}
@@ -1323,7 +1340,7 @@ export default function HackerNewsPage() {
 
       <div
         style={{
-          padding: "10px 18px 18px",
+          padding: "6px 18px 12px",
           color: T.t3,
           fontFamily: T.fontMono,
           fontSize: 10.5,
@@ -1342,6 +1359,10 @@ export default function HackerNewsPage() {
           to {
             transform: rotate(360deg);
           }
+        }
+        /* Row click affordance — subtle bg lift on hover, scoped to the HN tab. */
+        .hn-tab a[href][target="_blank"]:hover {
+          background: rgba(255, 102, 0, 0.04);
         }
       `}</style>
     </div>
