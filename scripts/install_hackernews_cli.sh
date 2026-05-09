@@ -19,7 +19,11 @@ HN_CLI_URL="${HN_CLI_URL:-https://github.com/mvanhorn/printing-press-library/rel
 
 INSTALL_DIR="/opt/universal_agent/bin"
 TARGET="${INSTALL_DIR}/hackernews-pp-cli"
-XDG_BASE="/opt/universal_agent/var/hackernews"
+# hackernews-pp-cli v1.0.0 derives its config + SQLite paths from $HOME and
+# does NOT honor XDG_CONFIG_HOME / XDG_DATA_HOME (verified empirically).
+# CLI_HOME is the override that makes `~/.config` and `~/.local/share`
+# resolve into the project tree.
+CLI_HOME="/opt/universal_agent/var/hackernews"
 
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
@@ -32,12 +36,10 @@ echo "${HN_CLI_SHA256}  ${TMPDIR}/hackernews-pp-cli" | sha256sum -c -
 
 install -m 0755 "$TMPDIR/hackernews-pp-cli" "$TARGET"
 
-mkdir -p "${XDG_BASE}/config/hackernews-pp-cli"
-mkdir -p "${XDG_BASE}/data/hackernews-pp-cli"
+mkdir -p "${CLI_HOME}/.config/hackernews-pp-cli"
+mkdir -p "${CLI_HOME}/.local/share/hackernews-pp-cli"
 
 "$TARGET" --version
-XDG_CONFIG_HOME="${XDG_BASE}/config" \
-XDG_DATA_HOME="${XDG_BASE}/data" \
-"$TARGET" doctor
+HOME="${CLI_HOME}" "$TARGET" doctor
 
 echo "Installed hackernews-pp-cli ${HN_CLI_VERSION} at ${TARGET}"

@@ -17,7 +17,11 @@ from universal_agent.artifacts import resolve_artifacts_dir
 logger = logging.getLogger(__name__)
 
 CLI_BINARY = Path("/opt/universal_agent/bin/hackernews-pp-cli")
-XDG_BASE = Path("/opt/universal_agent/var/hackernews")
+# hackernews-pp-cli v1.0.0 derives its config + SQLite paths from $HOME and
+# does NOT honor XDG_CONFIG_HOME / XDG_DATA_HOME (verified empirically). We
+# override $HOME so the CLI's `~/.config` and `~/.local/share` resolve into
+# the project tree at /opt/universal_agent/var/hackernews/.
+CLI_HOME = Path("/opt/universal_agent/var/hackernews")
 WATCHLIST_FILE = Path("/opt/universal_agent/config/hackernews_watchlist.yaml")
 SNAPSHOT_RING_DEPTH = 48
 DEFAULT_TOPICS = ["claude", "agent", "codex", "llm", "harness", "agentic"]
@@ -25,8 +29,7 @@ DEFAULT_TOPICS = ["claude", "agent", "codex", "llm", "harness", "agentic"]
 
 def _cli_env() -> dict[str, str]:
     env = os.environ.copy()
-    env["XDG_CONFIG_HOME"] = str(XDG_BASE / "config")
-    env["XDG_DATA_HOME"] = str(XDG_BASE / "data")
+    env["HOME"] = str(CLI_HOME)
     env["HACKERNEWS_NO_COLOR"] = "1"
     return env
 

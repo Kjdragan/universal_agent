@@ -87,8 +87,8 @@ def test_run_cli_returns_parsed_json(monkeypatch) -> None:
     result = svc._run_cli(["stories", "top"])
     assert result == {"ok": True}
     assert captured["cmd"][-2:] == ["--json", "--agent"]
-    assert captured["env"]["XDG_CONFIG_HOME"].endswith("/config")
-    assert captured["env"]["XDG_DATA_HOME"].endswith("/data")
+    assert captured["env"]["HOME"] == "/opt/universal_agent/var/hackernews"
+    assert captured["env"]["HACKERNEWS_NO_COLOR"] == "1"
 
 
 def test_run_cli_returns_none_on_nonzero_exit(monkeypatch) -> None:
