@@ -127,9 +127,16 @@ jobs:
           # the legacy rot be tackled separately.
           # Errors only (E9 + F minus codebase-wide ignores from
           # pyproject.toml). Style-class findings stay non-blocking.
+          # --ignore broadens to cover the rot classes the workflow comment
+          # above already named (F541 empty f-strings, F841 unused locals)
+          # but were never added to the ignore list. F821 (undefined name)
+          # stays selected — it's a real-bug signal. Specific defensive
+          # globals() patterns and pre-existing F821 bugs in
+          # gateway_server.py carry surgical `# noqa: F821` annotations
+          # with TODO comments at their sites instead.
           uv run ruff check \
             --select E9,F \
-            --ignore E402,F401,F811 \
+            --ignore E402,F401,F541,F811,F841 \
             --no-cache \
             ${{ steps.changed.outputs.files }} 2>&1 | tail -50
 
