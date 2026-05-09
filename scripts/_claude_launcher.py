@@ -34,6 +34,23 @@ defense-in-depth against any other source (bootstrap .env file,
 parent shell leak). Explicit ZAI opt-in remains via the `zai` shell
 function. See
 docs/06_Deployment_And_Environments/10_Interactive_Coding_Environment.md.
+
+Why this also strips GH_TOKEN / GITHUB_TOKEN
+--------------------------------------------
+The same Infisical-injection pattern was poisoning interactive `gh`:
+Infisical holds a `GH_TOKEN` value that's currently invalid/expired,
+and the `gh` CLI checks env-var auth (GH_TOKEN, then GITHUB_TOKEN)
+before falling back to file-stored OAuth (~/.config/gh/hosts.yml).
+With a stale GH_TOKEN on os.environ, every `gh` call inside an
+interactive Claude session failed with "The token in GH_TOKEN is
+invalid" — which broke `/ship`'s in-script deploy watching.
+
+The file-stored OAuth (`gho_*` token in hosts.yml) is the credential
+we actually want for interactive sessions. Stripping GH_TOKEN /
+GITHUB_TOKEN from interactive launches lets `gh` resolve to that.
+UA Python services and crons keep getting the env var (they don't go
+through this launcher), so anything depending on Infisical's GH_TOKEN
+value continues to behave the way it did before.
 """
 
 from __future__ import annotations
@@ -49,6 +66,14 @@ import sys
 # don't enter os.environ from Infisical in the first place.
 _INTERACTIVE_STRIP_PREFIX: str = "ANTHROPIC_"
 
+# Exact env-var names removed before exec'ing `claude`. Same intent as
+# _INTERACTIVE_STRIP_PREFIX but for vars where prefix matching is too
+# broad. GH_TOKEN/GITHUB_TOKEN: gh CLI checks these before file-stored
+# OAuth (~/.config/gh/hosts.yml); a stale Infisical GH_TOKEN was breaking
+# every interactive `gh` call (and therefore /ship's in-script deploy
+# watching). Crons/services still see these via the normal Infisical load.
+_INTERACTIVE_STRIP_NAMES: tuple[str, ...] = ("GH_TOKEN", "GITHUB_TOKEN")
+
 
 def _strip_interactive_routing_vars(env: dict[str, str]) -> list[str]:
     """Remove every ANTHROPIC_* key from `env` in place; return removed keys.
@@ -62,6 +87,20 @@ def _strip_interactive_routing_vars(env: dict[str, str]) -> list[str]:
     for key in keys:
         env.pop(key, None)
     return keys
+
+
+def _strip_named_interactive_vars(env: dict[str, str]) -> list[str]:
+    """Remove every key in _INTERACTIVE_STRIP_NAMES from `env` in place.
+
+    Returns the names actually removed (subset of the constant) so the
+    launcher can log a precise diagnostic. Counterpart to
+    _strip_interactive_routing_vars but for exact-name matches rather
+    than prefix matches.
+    """
+    removed = sorted(name for name in _INTERACTIVE_STRIP_NAMES if name in env)
+    for name in removed:
+        env.pop(name, None)
+    return removed
 
 
 def _source_env_file(path: Path) -> int:
@@ -152,6 +191,17 @@ def main() -> int:
         print(
             f"🧹 stripped {len(stripped)} leaked {_INTERACTIVE_STRIP_PREFIX}* "
             f"var(s) from non-Infisical source: {', '.join(stripped)}",
+            file=sys.stderr,
+        )
+
+    # Same intent for exact-name matches (currently GH_TOKEN / GITHUB_TOKEN).
+    # Stale Infisical GH_TOKEN was overriding the file-stored OAuth and
+    # breaking every interactive `gh` call.
+    stripped_named = _strip_named_interactive_vars(os.environ)
+    if stripped_named:
+        print(
+            f"🧹 stripped {len(stripped_named)} interactive-only "
+            f"var(s) from os.environ: {', '.join(stripped_named)}",
             file=sys.stderr,
         )
 

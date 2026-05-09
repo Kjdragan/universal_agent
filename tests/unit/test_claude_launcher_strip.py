@@ -38,6 +38,8 @@ def _import_launcher_module():
 _launcher = _import_launcher_module()
 _strip_interactive_routing_vars = _launcher._strip_interactive_routing_vars
 _INTERACTIVE_STRIP_PREFIX = _launcher._INTERACTIVE_STRIP_PREFIX
+_strip_named_interactive_vars = _launcher._strip_named_interactive_vars
+_INTERACTIVE_STRIP_NAMES = _launcher._INTERACTIVE_STRIP_NAMES
 
 
 # ─── Layer 2: post-bootstrap strip (defense-in-depth) ──────────────────────
@@ -115,6 +117,54 @@ def test_strip_is_prefix_match_not_substring():
 
     assert stripped == ["ANTHROPIC_API_KEY"]
     assert env == {"MY_ANTHROPIC_NOTE": "keep-this"}
+
+
+# ─── Named-var strip (GH_TOKEN / GITHUB_TOKEN) ─────────────────────────────
+
+
+def test_strip_named_targets_gh_tokens_only():
+    """The named-strip target list covers exactly the gh-CLI env vars."""
+    assert set(_INTERACTIVE_STRIP_NAMES) == {"GH_TOKEN", "GITHUB_TOKEN"}
+
+
+def test_strip_named_removes_gh_tokens_and_preserves_other_creds():
+    """GH_TOKEN/GITHUB_TOKEN must go (they break interactive `gh`); other
+    GH-adjacent vars like GITHUB_PERSONAL_ACCESS_TOKEN are preserved because
+    `gh` doesn't recognize them and they may be used by Python services."""
+    env = {
+        "GH_TOKEN": "ghp_stale_invalid_token_from_infisical",
+        "GITHUB_TOKEN": "ghp_also_stale",
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_valid_keep_for_python_services",
+        "AGENTMAIL_API_KEY": "keep-mcp-cred",
+        "ANTHROPIC_API_KEY": "this-is-the-prefix-strip's-job-not-mine",
+    }
+
+    stripped = _strip_named_interactive_vars(env)
+
+    assert stripped == ["GH_TOKEN", "GITHUB_TOKEN"]
+    assert env == {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_valid_keep_for_python_services",
+        "AGENTMAIL_API_KEY": "keep-mcp-cred",
+        "ANTHROPIC_API_KEY": "this-is-the-prefix-strip's-job-not-mine",
+    }
+
+
+def test_strip_named_is_noop_when_neither_token_present():
+    env = {"AGENTMAIL_API_KEY": "k", "DISCORD_BOT_TOKEN": "d"}
+
+    stripped = _strip_named_interactive_vars(env)
+
+    assert stripped == []
+    assert env == {"AGENTMAIL_API_KEY": "k", "DISCORD_BOT_TOKEN": "d"}
+
+
+def test_strip_named_handles_partial_set():
+    env = {"GH_TOKEN": "stale", "AGENTMAIL_API_KEY": "k"}
+
+    stripped = _strip_named_interactive_vars(env)
+
+    assert stripped == ["GH_TOKEN"]
+    assert env == {"AGENTMAIL_API_KEY": "k"}
 
 
 # ─── Layer 1: load-time filter via _inject_environment_values ──────────────
