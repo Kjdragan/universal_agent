@@ -430,3 +430,71 @@ def test_normalize_hiring_maps_top_companies() -> None:
 def test_normalize_controversial_passes_list_through() -> None:
     raw = [{"id": "1", "title": "x", "score": 10, "descendants": 100}]
     assert svc._normalize_controversial(raw) == raw
+
+
+# ─── P2.B2 — CSI emitter wiring ────────────────────────────────────────
+
+
+def test_build_snapshot_calls_csi_emitter_with_normalized_snapshot(all_ok, monkeypatch, tmp_path: Path) -> None:
+    """build_snapshot() must call emit_movers_signals at the end of the tick,
+    passing the NORMALIZED snapshot (not the raw CLI output)."""
+    monkeypatch.setattr(svc, "WATCHLIST_FILE", tmp_path / "missing")
+    captured: dict[str, Any] = {}
+
+    def fake_emit(snapshot, **kwargs):
+        captured["snapshot"] = snapshot
+        captured["kwargs"] = kwargs
+        return 1
+
+    monkeypatch.setattr(svc, "emit_movers_signals", fake_emit)
+
+    snap = svc.build_snapshot()
+
+    assert "snapshot" in captured, "emit_movers_signals must be called"
+    # The captured snapshot is the post-_normalize one — has the keys page.tsx expects
+    captured_snap = captured["snapshot"]
+    assert "movers" in captured_snap
+    assert "controversial" in captured_snap
+    # And it's the same one we returned from build_snapshot
+    assert captured_snap is snap
+
+
+def test_build_snapshot_succeeds_when_csi_emitter_raises(all_ok, monkeypatch, tmp_path: Path) -> None:
+    """A crashing emitter must NEVER abort the snapshot — it's best-effort."""
+    monkeypatch.setattr(svc, "WATCHLIST_FILE", tmp_path / "missing")
+
+    def angry_emit(snapshot, **kwargs):
+        raise RuntimeError("CSI is on fire")
+
+    monkeypatch.setattr(svc, "emit_movers_signals", angry_emit)
+
+    # Must not raise
+    snap = svc.build_snapshot()
+    assert snap["meta"]["schema_version"] == 2  # we still got a snapshot back
+
+
+def test_build_snapshot_does_not_call_emitter_when_all_panels_fail(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """If we abort the tick (RuntimeError), emit must NOT have been called —
+    we don't want to emit signals based on a non-existent snapshot."""
+    monkeypatch.setattr(svc, "WATCHLIST_FILE", tmp_path / "missing")
+
+    def fake(args, timeout=60):
+        if args[0] == "sync":
+            return {"ok": True}
+        return None  # all panels fail
+
+    monkeypatch.setattr(svc, "_run_cli", fake)
+
+    called: dict[str, bool] = {"emitted": False}
+
+    def fake_emit(snapshot, **kwargs):
+        called["emitted"] = True
+        return 0
+
+    monkeypatch.setattr(svc, "emit_movers_signals", fake_emit)
+
+    with pytest.raises(RuntimeError, match="all panels failed"):
+        svc.build_snapshot()
+    assert called["emitted"] is False

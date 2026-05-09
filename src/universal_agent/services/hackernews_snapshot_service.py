@@ -28,6 +28,7 @@ from typing import Any
 import yaml
 
 from universal_agent.artifacts import resolve_artifacts_dir
+from universal_agent.services.hackernews_csi_emitter import emit_movers_signals
 
 logger = logging.getLogger(__name__)
 
@@ -333,6 +334,19 @@ def build_snapshot() -> dict[str, Any]:
     snapshot = _normalize(raw)
     snapshot["meta"]["errors"] = errors
     snapshot["meta"]["duration_seconds"] = round(time.monotonic() - started, 2)
+
+    # Phase 2 Lane B (P2.B2) — emit `hackernews_movers_signal` events into the
+    # CSI events bus for material movers + top-3 controversial. Best-effort:
+    # any emitter failure is logged and swallowed so it can never block the
+    # snapshot from being written. The emitter itself is also failure-tolerant
+    # (returns 0 if csi.db is missing or schema is unrecognizable).
+    try:
+        emitted = emit_movers_signals(snapshot)
+        if emitted:
+            logger.info("HN snapshot: emitted %d CSI movers signal(s)", emitted)
+    except Exception as exc:  # noqa: BLE001 — emission must never abort the snapshot
+        logger.warning("HN snapshot: CSI emission failed (snapshot still written): %s", exc)
+
     return snapshot
 
 
