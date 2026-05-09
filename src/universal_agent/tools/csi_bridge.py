@@ -266,7 +266,8 @@ async def csi_recent_reports_wrapper(args: Dict[str, Any]) -> Dict[str, Any]:
                 'global_trend_brief_ready',
                 'csi_global_brief_review_due',
                 'rss_insight_daily',
-                'rss_insight_emerging'
+                'rss_insight_emerging',
+                'hackernews_movers_signal'
             )
             ORDER BY occurred_at DESC
             LIMIT ?
