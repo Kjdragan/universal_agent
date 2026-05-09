@@ -224,6 +224,7 @@ These are the authoritative references for each subsystem. When any other docume
 | Doc | Subject |
 |-----|---------|
 | hackernews_phase1_plan.md | **Phase 1 implementation plan** for the Hacker News CLI integration — standalone `/dashboard/hackernews` tab fed by half-hourly `hackernews-pp-cli` cron. Pre-built binary install, XDG-pinned SQLite store, snapshot JSON with 48-deep ring buffer, FastAPI router, single sidebar entry, 8 panels per the design prototype. No LLM, no client-side polling, no integration with Task Hub / CSI / Simone in Phase 1 (Phase 2 catalogued). Approved 2026-05-09 via /grill-me. |
+| hackernews_phase2_plan.md | **Phase 2 implementation plan** covering the two highest-leverage items from the Phase 1 catalog. **Lane A:** Pulse → Simone briefing context — extends `briefings_agent.py` to read `artifacts/hackernews/latest.json` and inject a deterministic markdown block (watchlist pulse table + top stories + controversial) into the VP briefing prompt. No new LLM call — the existing briefing LLM does the synthesis per the CLAUDE.md LLM-Native rule. **Lane B:** Movers → CSI lane — wires `build_snapshot()` to emit `hackernews_movers_signal` events into the existing `/var/lib/universal-agent/csi/csi.db` events bus with materiality filter and 24h dedup. ~580 LOC product+test, ~600 LOC docs. Five-phase rollout (P2.A1→A2, P2.B1→B3). Awaiting `/grill-me` approval. |
 
 ## Remaining Operational References (03_Operations/)
 

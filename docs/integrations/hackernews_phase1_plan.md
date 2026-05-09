@@ -699,17 +699,17 @@ Per the CLAUDE.md "Production Verification Rules" section:
 
 ## 9. Phase 2 — explicitly deferred (catalog only)
 
-Documented for future reference, **not built in Phase 1**:
+Documented for future reference, **not built in Phase 1**. The first two are now planned in detail in [`hackernews_phase2_plan.md`](./hackernews_phase2_plan.md):
 
-| Idea | Why interesting | Effort |
-|---|---|---|
-| Pulse → Simone briefing context | LLM synthesis over weekly HN signal; matches CLAUDE.md LLM-Native rule | Medium |
-| Movers → CSI lane | High-velocity stories become CSI signals via existing pipeline | Medium |
-| Daily LLM digest panel | Haiku 4.5 one-paragraph summary on top of the page; ~$0.0001/run | Small |
-| `repost` gate before Show HN | Sanity-check our own posts vs. priors | Small |
-| Hiring quarterly trend | Long-window aggregation surfaced as a tile | Medium |
-| LLM relevance filter on Pulse | Only if data shows false-positive noise | Small |
-| Topic auto-suggest | "you don't track X but it's trending" | Medium |
+| Idea | Why interesting | Effort | Status |
+|---|---|---|---|
+| Pulse → Simone briefing context | LLM synthesis over weekly HN signal; matches CLAUDE.md LLM-Native rule | Medium | Planned (Phase 2 Lane A) |
+| Movers → CSI lane | High-velocity stories become CSI signals via existing pipeline | Medium | Planned (Phase 2 Lane B) |
+| Daily LLM digest panel | Haiku 4.5 one-paragraph summary on top of the page; ~$0.0001/run | Small | Catalog only |
+| `repost` gate before Show HN | Sanity-check our own posts vs. priors | Small | Catalog only |
+| Hiring quarterly trend | Long-window aggregation surfaced as a tile | Medium | Catalog only |
+| LLM relevance filter on Pulse | Only if data shows false-positive noise | Small | Catalog only |
+| Topic auto-suggest | "you don't track X but it's trending" | Medium | Catalog only |
 
 ---
 
