@@ -1,222 +1,316 @@
-# CSI Demo Triage — Handoff Context (2026-05-09)
+# CSI Demo Triage — Validation Plan & Handoff (2026-05-09)
 
-> **Purpose:** Self-contained handoff for a new Claude Code session that picks
-> up CSI demo triage work where the 2026-05-09 session left it. Paste this
-> entire file as the opening prompt and the new session has everything it
-> needs.
-
----
-
-## 1. What just shipped today (2026-05-09)
-
-Two commits landed on `main` today:
-
-| SHA | Subject | What it does |
-|---|---|---|
-| `5a3a936a` | feat(csi): demo triage flyout — human approval gate before Task Hub | The full triage subsystem (DB + ranker + API + UI). 12 files, +2077 LOC. |
-| `67534779` | fix(launcher): strip GH_TOKEN/GITHUB_TOKEN from interactive claude env | Fixes interactive `gh` so `/ship`'s in-script deploy watching works. |
-
-Both went through `/ship`. Verify deploys at: https://github.com/Kjdragan/universal_agent/actions
+> **You are a fresh Claude Code session. Read this entire doc first. Then
+> execute the phases in order. Do not skip phases. Each phase has clear
+> success criteria. Stop and ask the operator only if a success criterion
+> fails — never if it passes.**
 
 ---
 
-## 2. What the demo triage subsystem does
+## 1. Big picture (what this system does)
 
-**The problem it solves:** The CSI intel pipeline (cron `claude_code_intel_sync`
-+ backfill `scripts/claude_code_intel_backfill_v2.py`) processes tweets from
-@ClaudeDevs and @bcherny and tier-classifies actions 1-4. Tier 3+ actions are
-"demo-worthy" or "intel-worthy" — they should generate work for Cody (tier 3)
-or Atlas (tier 4). Previously these could be auto-queued into Task Hub via
-`queue_follow_up_tasks` — which would create unsupervised work. **51 tier-3
-and 67 tier-4 candidates exist in historical packets**; auto-queuing them
-would flood Task Hub. Each Cody demo build is 5-30 min of agent time.
+We monitor the @ClaudeDevs and @bcherny X (Twitter) accounts for new Claude
+Code features, releases, and discussion. The pipeline:
 
-**The new flow:**
-1. **Discovery (passive, runs as side-effect of intel pipeline):** After every
-   packet write, `replay_packet()` calls `csi_demo_triage.sync_candidates_from_packet(packet_dir)`
-   which `INSERT OR IGNORE`s tier 3+ actions into a SQLite triage DB at
-   `artifacts/proactive/claude_code_intel/demo_triage.db`. Idempotent.
+```
+X API → packets (raw tweets + metadata)
+      → LLM extraction → actions_refined.json (each action tier 1-4)
+      → vault writes (knowledge base of entities/concepts)
+      → triage DB (NEW — only tier 3+ actions, awaiting human review)
+      → operator drawer on /dashboard/claude-code-intel
+            ↓ approve
+      → Task Hub (cody_scaffold_request for tier 3 / claude_code_kb_update for tier 4)
+            ↓
+      → Cody builds the demo / Atlas writes the analysis
+```
 
-2. **Ranking (separate cron, every 8:15 / 14:15 CDT — both off-peak per
-   Z.AI peak-time scheduling):** `csi_demo_triage_ranker.run_ranking()` selects
-   pending candidates without scores (or with stale scores >24h old), makes one
-   GLM call to score each 0-10 with rationale, persists results.
+**Tier meanings:**
+- Tier 1: FYI digest (not actionable)
+- Tier 2: worth a vault note (auto-handled)
+- **Tier 3: demo-worthy** (build something to exercise the feature) → Cody
+- **Tier 4: strategic intel** (analyze + write up) → Atlas
 
-3. **UI (flyout drawer on the existing `/dashboard/claude-code-intel/` page):**
-   - "Demo Triage" button next to "Knowledge Search" with a pending-count chip
-   - Right-side drawer (560px) with two panels:
-     - **★ Top 5 Recommended** — highest LLM-scored pending candidates
-     - **All Candidates** — newest-first, with filter pills (Cody/Atlas/All) and "Show resolved" toggle for restoring dismissed items
-   - Each card: score badge + tier badge + handle/date + summary + "Why this score" + linked-source count + Approve/Trash buttons
-   - Approve → calls `task_hub.upsert_item` with the same payload `queue_follow_up_tasks` would have produced (shared via extracted `_build_followup_task_payload` helper)
-   - Trash → state=dismissed (with Restore option in "Show resolved" view)
+**The gate this PR adds:** Tier 3+ actions DO NOT auto-queue to Task Hub
+anymore. They land in a triage DB, get LLM-ranked 0-10, and surface in a
+flyout drawer where the operator clicks Approve or Trash. The Top 5
+highest-ranked candidates appear at the top of the drawer for quick
+high-confidence approvals; the full chronological list is below.
 
-**The auto-queue path is dead:**
-- `--queue-task-hub` flag removed from backfill CLI
-- `claude_code_intel_run_report.py` cron hard-defaults `queue_task_hub=False` with no opt-in flag (belt-and-suspenders: forced 3x in the call chain)
-- After this lands, the ONLY way a Cody/Atlas task gets created from claude-code intel is through the operator's approval click in the flyout
+**Why a gate?** Each Cody demo build is 5-30 min of agent time. There are
+~118 historical candidates. Auto-queueing them would flood Task Hub.
 
 ---
 
-## 3. Where things are RIGHT NOW
+## 2. State of the world right now
 
-**Live in production:**
-- Both commits deployed
-- New cron `csi_demo_triage_rank` registered (next fires at 13:15 or 19:15 UTC, whichever is sooner)
-- 5 new endpoints live under `/api/v1/dashboard/claude-code-intel/triage[...]`
-- Triage flyout button visible in dashboard
+✅ **Code deployed and live on `main`:**
+- `5a3a936a` — triage flyout (DB + ranker + 5 endpoints + UI)
+- `67534779` — launcher fix (strips bad `GH_TOKEN` from interactive sessions so `gh` works)
 
-**Triage DB state:** **Empty / not yet auto-created.** The DB file at
-`artifacts/proactive/claude_code_intel/demo_triage.db` is created on first
-write — either by:
-- The next `claude_code_intel_sync` cron run (08:00 / 16:00 / 22:00 CDT) producing a new packet, OR
-- A manual replay of an existing packet, OR
-- An explicit historical-packet backfill (see §4)
+✅ **Subsystem autonomously working:**
+- Triage DB exists at `artifacts/proactive/claude_code_intel/demo_triage.db`
+- 5 candidates already populated by the most recent cron run (3 tier-3 + 2 tier-4, all from @ClaudeDevs, all `state=pending`, all unranked)
+- Discovery hook fires on every replay — new packets from cron will keep adding candidates
+- Ranking cron is registered (job_id `9ad58b493f`, schedule `15 13,19 * * *` UTC = 8:15/14:15 CDT — both in off-peak window). First firing missed today because gateway restart was after 19:15 UTC; next run tomorrow 13:15 UTC.
 
-**As of right now there are 0 candidates in the triage DB.** The cron-era
-packets from 5/8 onward only had 1 tier-3 action across them, so even after
-a few cron cycles the drawer will be sparse.
+⚠️ **Gaps to address in this validation session:**
+- Only 5 candidates in the DB; the historical 51 tier-3 + 67 tier-4 from packets back to 2026-04-20 are NOT yet in there. Sync them in.
+- All 5 are unranked. Trigger the ranker so the Top-5 panel populates.
+- Verify the dashboard drawer renders correctly with real data.
+- Approve one test candidate end-to-end to prove the round-trip into Task Hub works.
+
+❌ **Out of scope for this session (known, not blocking):**
+- `memory/HEARTBEAT.md` has no directive telling Simone to act on approved `cody_scaffold_request` rows. So even after Approve creates a Task Hub row, Cody won't auto-build until that wiring lands. Documented in CLAUDE.md.
+- The pacing module (`claude/csi-llm-pacing` branch) is parked unmerged. Not needed for this validation; only matters for heavy LLM backfills.
 
 ---
 
-## 4. Open decision: historical backfill
+## 3. The plan — five phases, smallest to largest
 
-The 51 tier-3 + 67 tier-4 candidates from packets 2026-04-20 through
-2026-05-09 are NOT yet in the triage DB. Two ways to get them in:
+### Phase 0 — Sanity (5 minutes)
 
-**Option A — Targeted replay (recommended for first test):** Run replay
-against a small window first to validate end-to-end. Example:
+**Goal:** Confirm you're in a fresh session and the deploy is live.
+
+```bash
+# Confirm gh works (proves you're in a NEW session post-launcher-fix)
+echo "GH_TOKEN: ${GH_TOKEN:-unset}"
+gh auth status
+```
+
+**Success:** `GH_TOKEN: unset`, `gh auth status` shows green file-stored OAuth.
+
+**If GH_TOKEN is set:** You're in an OLD session. Exit, start a fresh one,
+re-paste this doc.
+
+```bash
+# Confirm deploy
+git log --oneline origin/main | head -3
+```
+
+**Success:** Top three are `67534779`, `5a3a936a`, and one earlier commit.
+
+```bash
+# Confirm gateway picked up new endpoints
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8002/api/v1/dashboard/claude-code-intel/triage
+```
+
+**Success:** Returns `401` (auth required). NOT `404` (endpoint missing) and
+NOT connection refused.
+
+---
+
+### Phase 1 — See what's already there (2 minutes)
+
+**Goal:** Look at the autonomously-populated triage DB. Confirm the
+discovery hook is producing reasonable data.
+
+```bash
+python3 << 'EOF'
+import sqlite3
+c = sqlite3.connect('/opt/universal_agent/artifacts/proactive/claude_code_intel/demo_triage.db')
+c.row_factory = sqlite3.Row
+print("Counts:")
+for r in c.execute('SELECT state, tier, COUNT(*) cnt FROM demo_triage_candidates GROUP BY state, tier'):
+    print(f"  {r['state']:12s}  tier={r['tier']}  count={r['cnt']}")
+print()
+print("All candidates (newest first):")
+for r in c.execute('SELECT post_id, handle, tier, action_type, first_seen_at, ranking_score, substr(post_text,1,90) snip FROM demo_triage_candidates ORDER BY first_seen_at DESC'):
+    score = f"{r['ranking_score']:.1f}" if r['ranking_score'] else "—"
+    print(f"  T{r['tier']} score={score:5s} {r['action_type']:25s} @{r['handle']:15s} {r['first_seen_at']}")
+    print(f"     {r['snip']}")
+EOF
+```
+
+**Success:** At least the 5 baseline candidates appear, all unranked.
+
+**Note for the operator:** These came in autonomously from the most recent
+cron — proof the discovery hook in `replay_packet` is firing. The dashboard
+should already show them.
+
+---
+
+### Phase 2 — Sync the historical backlog (1 minute)
+
+**Goal:** Get all ~118 historical tier 3+ candidates into the triage DB.
+This is a pure DB operation — no LLM calls, no HTTP, no risk.
 
 ```bash
 cd /opt/universal_agent
 PYTHONPATH=src uv run python -c "
 from pathlib import Path
-from universal_agent.services.claude_code_intel_replay import replay_packet, ClaudeCodeIntelReplayConfig
-import sqlite3
-from universal_agent.durable.db import get_activity_db_path
-packet = Path('/opt/universal_agent/artifacts/proactive/claude_code_intel/packets/2026-04-27/224255__bcherny')
-with sqlite3.connect(get_activity_db_path()) as conn:
-    conn.row_factory = sqlite3.Row
-    result = replay_packet(config=ClaudeCodeIntelReplayConfig(packet_dir=packet, queue_task_hub=False, write_vault=False), conn=conn)
-    print('triage_inserted:', result.get('triage_inserted'))
+import glob
+from universal_agent.services.csi_demo_triage import sync_candidates_from_packet
+total = {'inserted': 0, 'skipped': 0, 'packets': 0}
+for p in sorted(glob.glob('/opt/universal_agent/artifacts/proactive/claude_code_intel/packets/*/*/actions_refined.json')):
+    pdir = Path(p).parent
+    r = sync_candidates_from_packet(packet_dir=pdir)
+    total['inserted'] += r.get('inserted', 0)
+    total['skipped'] += r.get('skipped', 0)
+    total['packets'] += 1
+print('TOTAL:', total)
 "
 ```
 
-That packet has 7 tier-4 actions per the backfill audit; should insert 7 rows.
-Does NOT make LLM calls beyond grounding (it re-reads the existing
-`actions_refined.json`).
+**Success:** Roughly `{'inserted': ~110-118, 'skipped': ~5, 'packets': ~25-30}`.
+The ~5 skipped are the candidates already in the DB from Phase 1.
 
-**Option B — Full historical backfill:** Run the full backfill against all 43
-packets. Expect ~4,000 LLM calls (mostly URL judging and intelligence pass —
-this populates the vault AND the triage DB). Per the prior handoff
-(`csi_v3_backfill_restart_handoff_2026-05-08.md`):
-- Run during US 12:00–17:00 CDT (China deep-night) to avoid Z.AI throttling
-- Use `tmux` or `nohup` so terminal-close doesn't kill the run
-- The pacing module is on a parked branch (`claude/csi-llm-pacing` / worktree `/tmp/ua-wt-csi-pacing`), NOT yet merged to main — so a backfill from main runs without pacing. Last 5/9 attempt got 4/10 hours of throttling.
-
-Recommendation: **Option A first** to confirm the discovery hook produces
-expected DB rows and the UI renders them correctly. Then decide on Option B.
+Re-run the Phase 1 query — total should be ~118 across `state=pending`.
 
 ---
 
-## 5. Verification checklist for the new session
+### Phase 3 — LLM rank everything (~30 seconds, single GLM call)
 
-Run these in order before doing anything else:
+**Goal:** Run the LLM ranker so all candidates get scored 0-10 with a
+rationale. This populates the "★ Top 5 Recommended" panel in the drawer.
+
+We're in the off-peak window (US 12:00–17:00 CDT = China deep night), so
+the call should return in 5-15 seconds with no throttling.
 
 ```bash
-# 5a. Confirm latest deploy is live
-git log --oneline origin/main | head -3
-# Expect: 67534779 (launcher fix), 5a3a936a (triage flyout), 435b8ca9 (hackernews)
-
-# 5b. Confirm gh works (proves the launcher fix is active in this session)
-echo "GH_TOKEN: ${GH_TOKEN:-unset}"
-gh auth status
-# Expect: GH_TOKEN: unset, gh shows file-stored OAuth (gho_*) all green
-
-# 5c. Confirm the gateway picked up the new endpoints (live on 127.0.0.1:???)
-curl -s http://127.0.0.1:8090/api/v1/dashboard/claude-code-intel/triage | head -50
-# Expect: JSON {"counts": {...}, "top5": [], "all": []} (status: ok, empty lists)
-# If 404: gateway hasn't picked up the new code — restart needed
-# If non-listening: check `systemctl --user status universal-agent` or wherever gateway lives
-
-# 5d. Confirm the new cron is registered
-python3 -c "
-import json, time
-d = json.load(open('/opt/universal_agent/AGENT_RUN_WORKSPACES/cron_jobs.json'))
-for j in d['jobs']:
-    if 'demo_triage' in j['job_id']:
-        print(j['job_id'], '|', j['cron_expr'], '|', 'enabled='+str(j['enabled']))
-"
-# Expect: csi_demo_triage_rank | 15 13,19 * * * | enabled=True
-
-# 5e. Confirm the triage DB does NOT yet exist (will be auto-created on first write)
-ls -la /opt/universal_agent/artifacts/proactive/claude_code_intel/demo_triage.db 2>&1
-# Expect: "No such file or directory" (correct — it auto-creates on first sync)
+cd /opt/universal_agent
+PYTHONPATH=src uv run python -m universal_agent.scripts.csi_demo_triage_rank
 ```
 
-If all 5 pass, the system is healthy and ready for the historical backfill
-decision.
+**Success:** Output shows JSON like
+`{"candidates_scored": ~118, "candidates_skipped": 0, "error": null, ...}`.
+
+Re-run the Phase 1 query — every row should now have a `ranking_score` and
+the score column populated.
+
+**If the ranker fails:** Check stderr. Most likely cause is the GLM call
+returned malformed output or hit an unexpected throttle. Re-run; the script
+is idempotent (only re-scores stale or unscored rows).
 
 ---
 
-## 6. Where things live
+### Phase 4 — Verify the dashboard drawer (5 minutes, manual browser check)
 
-**Production code:**
-- `src/universal_agent/services/csi_demo_triage.py` (519 LOC) — DB schema, candidate dataclass, sync/list/approve/dismiss/restore
-- `src/universal_agent/services/csi_demo_triage_ranker.py` (264 LOC) — LLM scoring (single GLM call, parses one-JSON-per-line)
-- `src/universal_agent/scripts/csi_demo_triage_rank.py` (60 LOC) — cron CLI entry
-- `src/universal_agent/services/claude_code_intel.py` lines 901-986 — extracted `_build_followup_task_payload(handle, packet_dir, action, tier, post_id)` shared between `queue_follow_up_tasks` and triage approval
-- `src/universal_agent/services/claude_code_intel_replay.py` lines ~195-210 — discovery hook in `replay_packet()`
-- `src/universal_agent/gateway_server.py` lines 18395-18430 — `_ensure_csi_demo_triage_rank_cron_job()`
-- `src/universal_agent/gateway_server.py` lines 18820-18900 — 5 new triage endpoints
-- `web-ui/app/dashboard/claude-code-intel/page.tsx` lines 230-245 + 374-440 + 500-518 + 1019-1170 — drawer state, fetchers, button, drawer JSX, `TriageCard` component
+**Goal:** Confirm the operator-facing UI works end-to-end with real data.
 
-**Tests:**
-- `tests/unit/test_csi_demo_triage.py` (296 LOC, 13 tests) — schema, sync idempotence, listing, top-N, approve round-trip into real Task Hub, idempotency, dismiss/restore, refusal rules, counts
-- `tests/unit/test_csi_demo_triage_ranker.py` (96 LOC, 3 tests) — parse+persist, no-pending short-circuit, LLM failure path
-- `tests/unit/test_claude_launcher_strip.py` (now 11 tests) — covers GH_TOKEN strip alongside the existing ANTHROPIC_* prefix strip
+1. Open `https://<dashboard-host>/dashboard/claude-code-intel` in a browser.
+2. Look at the header: there should be a **"Demo Triage"** button next to
+   "Knowledge Search", with a count chip showing the pending total
+   (~118 after Phase 2-3).
+3. Click it. The right-side drawer (560px wide) should slide in.
+4. Drawer should show:
+   - **★ Top 5 Recommended** panel at top, with the 5 highest-scored cards.
+     Each card has: score badge (e.g. "8.5/10"), tier badge ("Demo" or "Intel"),
+     handle + relative date, summary text, "Why this score" expandable
+     showing the LLM rationale, "Approve" button (primary), trash icon (right).
+   - **All Candidates** section below, full chronological list, with filter
+     pills (All / Cody (T3) / Atlas (T4)) and "Show resolved" toggle.
+5. Verify the trash icon appears on hover (red tint).
+6. Verify clicking a card body opens the source X post in a new tab (if linked).
 
-**Data paths:**
+**Success:** All 6 visual checks pass.
+
+**If the drawer is empty or broken:** Hit the rerank button in the drawer
+header (it calls `POST /triage/rerank`) — that fetches the latest data. If
+still empty, check browser console for fetch errors and report the exact
+error to the operator.
+
+---
+
+### Phase 5 — Approve one test candidate end-to-end (2 minutes)
+
+**Goal:** Prove the Approve → Task Hub round-trip works.
+
+Pick the highest-scored tier-3 candidate from the Top 5. Click **Approve**.
+
+The drawer should:
+- Optimistically remove the card from view
+- Show a brief toast / confirmation
+- Refresh; the card now appears under "Show resolved" with status `approved` and a Task Hub task_id link
+
+Verify Task Hub got the row:
+
+```bash
+python3 -c "
+import sqlite3
+c = sqlite3.connect('/opt/universal_agent/AGENT_RUN_WORKSPACES/task_hub.db')
+for r in c.execute(\"SELECT task_id, source_kind, status, title, created_at FROM task_hub_items WHERE source_kind = 'cody_scaffold_request' ORDER BY created_at DESC LIMIT 3\"):
+    print(r)
+"
+```
+
+**Success:** At least one row with `source_kind='cody_scaffold_request'`,
+`status='open'`, recent `created_at` timestamp, title matching the post you
+approved.
+
+**Note:** The task will sit `open` in Task Hub. **Cody won't auto-pick it up
+until `memory/HEARTBEAT.md` gets the Phase 2 wiring directive added.** That's
+a separate ticket — do NOT add it in this session. Just confirm the row
+exists; that proves the triage→approval→queue path works.
+
+---
+
+## 4. Report back to operator
+
+After Phase 5 succeeds, report to operator with:
+
+1. **Phase results** — checkmark each phase that passed
+2. **Final candidate counts** — pending / approved / dismissed by tier
+3. **Top 5 list** — copy the post titles + scores so the operator can sanity-check the LLM ranking
+4. **The one approved task_id** — so they can verify it in Task Hub if they want
+5. **Any anomalies** — anything weird (low scores, missing fields, slow LLM calls)
+6. **Recommended next step** — likely either: (a) wire HEARTBEAT.md so Cody picks up the approved task, or (b) approve a few more candidates to load test, or (c) tune the LLM ranking prompt if scores look off
+
+---
+
+## 5. If something blocks you
+
+- **Phase 0 fails:** Don't try to fix the deploy. Stop and tell the operator.
+- **Phase 2 fails (sync errors):** Inspect the failing packet's `actions_refined.json`. Most likely a malformed action object. Skip the bad packet and continue.
+- **Phase 3 fails (LLM errors):** Try once more (off-peak should be reliable). If it still fails, check `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` are set and pointing at Z.AI. Don't fix Infisical from here.
+- **Phase 4 fails (UI broken):** Don't dig into the React code. Take a screenshot, dump browser console, hand off to operator.
+- **Phase 5 fails (no Task Hub row):** Check the Approve endpoint response payload — it should include `{ok: true, task_id: '...'}`. If `ok: false`, the reason is in the response.
+
+---
+
+## 6. Where things live (reference)
+
+**New code (read if you need to debug):**
+- `src/universal_agent/services/csi_demo_triage.py` — DB + candidate ops
+- `src/universal_agent/services/csi_demo_triage_ranker.py` — LLM scoring
+- `src/universal_agent/scripts/csi_demo_triage_rank.py` — cron CLI entry
+- `src/universal_agent/services/claude_code_intel.py` — `_build_followup_task_payload` shared helper
+- `src/universal_agent/services/claude_code_intel_replay.py` — discovery hook
+- `src/universal_agent/gateway_server.py` — cron registration + 5 endpoints
+- `web-ui/app/dashboard/claude-code-intel/page.tsx` — drawer + TriageCard
+
+**Tests (16 + 11 = 27 tests, all passing):**
+- `tests/unit/test_csi_demo_triage.py`
+- `tests/unit/test_csi_demo_triage_ranker.py`
+- `tests/unit/test_claude_launcher_strip.py`
+
+**Endpoints (all under `/api/v1/dashboard/claude-code-intel/`):**
+- `GET /triage` → counts + top5 + all
+- `POST /triage/{post_id}/approve` → enqueues, returns refreshed
+- `POST /triage/{post_id}/dismiss` → marks dismissed, returns refreshed
+- `POST /triage/{post_id}/restore` → un-dismiss, returns refreshed
+- `POST /triage/rerank` → triggers ranker, returns refreshed
+
+**Data:**
 - Triage DB: `artifacts/proactive/claude_code_intel/demo_triage.db`
 - Source packets: `artifacts/proactive/claude_code_intel/packets/<YYYY-MM-DD>/<HHMMSS>__<handle>/`
-- CSI vault (V2, populated): `artifacts/knowledge-vaults/claude-code-intelligence/` (770 files, 58 entities as of 2026-05-09)
-
-**Cron registry (canonical, NOT the `workspaces/cron_jobs.json` file):**
-- `AGENT_RUN_WORKSPACES/cron_jobs.json`
+- Task Hub: `AGENT_RUN_WORKSPACES/task_hub.db`
+- Cron registry: `AGENT_RUN_WORKSPACES/cron_jobs.json`
 
 ---
 
-## 7. What to do first in the new session
-
-Recommended sequence:
-
-1. **Verify** (run the §5 checklist above, all 5 should pass)
-2. **Open the dashboard** in a browser to confirm the "Demo Triage" button renders next to "Knowledge Search". Click it. Drawer should open with empty state ("0 pending").
-3. **Decide on the backfill approach** — Option A (single packet) first to validate the flow, OR jump to Option B (full historical) if you want to commit to the longer run
-4. **Run the chosen backfill** (commands in §4)
-5. **Refresh the dashboard drawer** — it should now show candidates. Initially unranked (no scores). Wait for next 13:15 or 19:15 UTC for the ranker cron to score them, OR hit the "Rerank" button in the drawer to score them immediately.
-6. **Approve a test candidate** — one click to verify the round-trip into Task Hub works end-to-end (check `AGENT_RUN_WORKSPACES/task_hub.db` for the new row)
-
----
-
-## 8. Known gaps / followups (not blocking, just to be aware)
-
-- **Pacing module not merged.** The `claude/csi-llm-pacing` branch (with the dual-channel observability fix) is still parked. Worktree at `/tmp/ua-wt-csi-pacing/`. The triage ranker imports `paced_llm_call` if available, falls back to a `nullcontext` if not — so it works either way, but heavy backfill runs would benefit from merging the pacing branch first. See `csi_v3_backfill_restart_handoff_2026-05-08.md` §4.
-- **Phase 2 wiring still missing.** `memory/HEARTBEAT.md` has no directive telling Simone to handle approved `cody_scaffold_request` rows. So even when you Approve a candidate today and a row lands in Task Hub, Simone won't act on it without a manual nudge. Out of scope for this PR; tracked in CLAUDE.md caveats.
-- **GitHub vulnerability nags.** Push output flagged 4 vulnerabilities in dependencies (2 high, 1 moderate, 1 low). Visible at https://github.com/Kjdragan/universal_agent/security/dependabot — separate housekeeping task.
-
----
-
-## 9. Operator (Kevin) preferences captured today
+## 7. Operator preferences (Kevin)
 
 - Wants demos to go through human approval, NOT auto-queue
-- Wants the flyout panel on the intel tab specifically (not a separate page)
+- Wants the flyout panel ON the existing intel tab (not a separate page)
 - Wants two panels: top-5 LLM-recommended + full chronological list
 - Wants delete/trash icon on every candidate, hover-revealed
 - Wants SQLite (not JSON) so we can analyze the corpus over time
 - Wants both tier 3 (Cody/demos) and tier 4 (Atlas/intel) in the drawer with separate sections
-- Defers auto-running the full backfill — wants to start small to validate first
+- Wants to test small first before doing anything heavy
+- Off-peak window (US 12:00–17:00 CDT) is the right time for any LLM-bound work
+- Doesn't want pedantic step-by-step narration — wants to see results
 
 ---
 
-End of handoff. Good luck. The hard part is done — this is just verification + a small backfill + watching it work.
+End of plan. Phases 0-5 should take ~15 minutes total. Execute in order,
+report results.
