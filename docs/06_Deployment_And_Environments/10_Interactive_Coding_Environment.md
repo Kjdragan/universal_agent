@@ -429,3 +429,69 @@ re-derive the relationship from scratch.)
 2. Replacing user-global settings.json with the full vanilla template (drops hooks/plugins/statusline). Decided against — surgical strip preserves Kevin's IDE setup.
 3. Phase E *execution* (sandbox-Claude bootstrap end-to-end). Script is written in this work; first real bootstrap happens in a later session when Kevin pastes credentials.
 4. Auditing every CSI / discord / vp-worker systemd unit for whether it goes through `initialize_runtime_secrets()`. Phase 1 audit confirmed the Python services that matter do; non-Python or template-only units (telegram, docs, youtube tunnel) don't make LLM calls so are exempt.
+
+---
+
+## Tool Surface by Execution Mode
+
+> **Why this exists.** Universal Agent runs three distinct Claude execution profiles (autonomous / interactive / demo). The model behind each profile is different (GLM-5.1 via Z.ai vs Claude Opus 4.7 via Anthropic Max), and the *appropriate* tool surface is different too. This section is the canonical reference for "which tool should this agent be using?" Future agents and human operators consult it before assuming a tool is available — both to avoid wasted attempts (an Anthropic-side session calling a ZAI MCP burns ZAI quota for an Anthropic-side use; an autonomous-mode call to `WebSearch` hits the disallow list) and to keep tool-use reliability high (GLM-5.1 is trained on ZAI MCPs; Anthropic models are trained on their built-ins).
+>
+> Added 2026-05-09 as part of the [Hacker News Phase 2 plan](../integrations/hackernews_phase2_plan.md) when registering `web-reader` and `web-search-prime` ZAI MCPs in `.mcp.json`.
+
+### The three modes
+
+| Mode | What runs in it | cwd | Endpoint | Model |
+|---|---|---|---|---|
+| **Autonomous** | Simone heartbeats, Atlas (`vp.general.primary`), Cody normal work, ClaudeDevs cron, briefings, dispatch sweeps, scheduled VP missions | `/opt/universal_agent/` | `https://api.z.ai/api/anthropic` | GLM-5.1 (mapped to `opus`) / GLM-5-turbo (mapped to `sonnet`/`haiku`) |
+| **Interactive** | Kevin's `claude` from any terminal (Antigravity, Remote-SSH, plain shell) | typically `/opt/universal_agent/` (VPS) or `~/lrepos/universal_agent/` (desktop) | `https://api.anthropic.com` | Claude Opus 4.7 / Sonnet 4.6 / Haiku 4.5 (Max plan OAuth) |
+| **Demo** | Phase 3 demo workspaces under `/opt/ua_demos/<id>/` | `/opt/ua_demos/<id>/` | `https://api.anthropic.com` | Claude Max plan OAuth (vanilla, no ZAI mapping) |
+
+### MCP visibility per mode
+
+`/opt/universal_agent/.mcp.json` is project-scope — visible to any `claude` invoked with cwd inside the project. Demo workspaces under `/opt/ua_demos/<id>/` have their own settings and **do not see** the project `.mcp.json`. So:
+
+| Mode | Sees `/opt/universal_agent/.mcp.json`? |
+|---|---|
+| Autonomous | YES (intended — Atlas/Simone/etc. need MCPs registered there) |
+| Interactive (cwd inside project) | YES (file is in scope; documented convention is to not over-use ZAI MCPs from Anthropic-side sessions) |
+| Interactive (cwd outside project, e.g. `~`, `/tmp`) | NO (only user-scope `~/.claude.json` MCPs apply) |
+| Demo | NO (cwd is `/opt/ua_demos/<id>/`, outside project) |
+
+### Tool surface — what's appropriate per mode
+
+| Need | Autonomous (ZAI / GLM) | Interactive (Anthropic) | Demo (Anthropic) |
+|---|---|---|---|
+| **Search the web** | `webSearchPrime` MCP (ZAI) | `WebSearch` (Claude built-in)¹ | `WebSearch` |
+| **Fetch & extract a URL** | `webReader` MCP (ZAI) | `WebFetch` (Claude built-in) | `WebFetch` |
+| **Vision / OCR / image analysis** | `zai-mcp-server` Vision MCP (when registered) | Direct image input to Claude | Direct image input |
+| **Bash, Read, Write, Edit, Grep, Glob** | All available (Claude Agent SDK runtime) | All available | All available |
+| **File-system I/O within project tree** | Always allowed | Always allowed | Always allowed |
+| **MCPs in project `.mcp.json`** (agentation, AgentMail, arxiv, hostinger, discord, discord-intelligence-bridge) | All available | All available — same MCPs, same credentials | NOT visible (cwd outside project) |
+
+¹ `WebSearch` is on UA's `DISALLOWED_TOOLS` list at [`agent_core.py:78`](../../src/universal_agent/agent_core.py#L78) — that disallow applies to the autonomous Claude Agent SDK runtime specifically. Kevin's interactive `claude` sessions are not gated by `DISALLOWED_TOOLS` (which is a UA-internal config, not a Claude Code config), so `WebSearch` works there normally.
+
+### Decision rule
+
+Before reaching for a tool inside an autonomous prompt or sub-agent definition:
+
+1. **Is this code path running under autonomous mode?** (heartbeats, scheduled cron, VP missions, Simone/Atlas/Cody normal work) → **Use ZAI MCPs.** `webReader` for URL extraction, `webSearchPrime` for general search, `zai-mcp-server` for vision. The model behind these (GLM-5.1) was trained on these tool schemas.
+2. **Is this Kevin's interactive coding session?** → **Use Anthropic-native tools.** `WebFetch` for URL extraction, `WebSearch` for search. Even though the project `.mcp.json` makes ZAI MCPs callable from this session, doing so burns ZAI quota for an Anthropic-side use. Avoid unless you specifically need the ZAI surface (e.g., testing a ZAI MCP's behavior).
+3. **Is this a demo workspace prompt?** → **Use Anthropic-native tools.** Demos run on Anthropic Max plan OAuth and don't see project MCPs by design — the demo environment is intentionally vanilla.
+
+### Quota accounting
+
+ZAI MCPs draw from your GLM Coding Plan quota:
+
+| Plan tier | Combined web-search + web-reader + vision per month |
+|---|---|
+| Lite | 100 |
+| Pro | 1,000 |
+| **Max** | **4,000** |
+
+Lane A's HN briefing typically uses ~5-10 `webReader` calls per day = ~150-300/month. Comfortable on Max; tight on Lite. If you migrate to a smaller plan, add a quota guardrail in the helper before each `webReader` call.
+
+### What this section does NOT enforce
+
+This is a documented convention, not a runtime gate. We can't prevent a script in `/opt/universal_agent/` from invoking `webReader` while running under Anthropic auth — the file-scope of `.mcp.json` makes the tool callable, and we have no per-mode tool-allowlist mechanism in Claude Code today. The `_comment_zai_scope` block in `.mcp.json` flags the convention; this doc is the authoritative reference; CLAUDE.md's Pre-Implementation Reading matrix points future agents here.
+
+If a future agent needs to be more restrictive (e.g., enforce that demo missions can't call ZAI MCPs even if the file were visible), the right hook is a Claude Code permissions config in the demo's `.claude/settings.json` — not a change to `.mcp.json` or this doc.

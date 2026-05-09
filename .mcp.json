@@ -49,6 +49,23 @@
         "python",
         "/home/kjdragan/lrepos/universal_agent/discord_intelligence/mcp_bridge.py"
       ]
+    },
+
+    "_comment_zai_scope": "The two MCPs below (web-reader, web-search-prime) are ZAI-tier-gated remote HTTP MCPs designed for the GLM Coding Plan. They consume ZAI plan quota (Max = 4000 reads + searches/month combined). APPROPRIATE in autonomous mode (Atlas/Simone/Cody-normal/cron — anything inferred via the Z.ai Anthropic-compat endpoint at https://api.z.ai/api/anthropic). NOT APPROPRIATE for Kevin's interactive Anthropic-Max sessions or for /opt/ua_demos/ workspaces — those should use Anthropic-native tools (WebFetch, WebSearch). See docs/06_Deployment_And_Environments/10_Interactive_Coding_Environment.md § 'Tool Surface by Execution Mode' for the full matrix. CLAUDE.md Pre-Implementation Reading also points here.",
+
+    "web-reader": {
+      "type": "http",
+      "url": "https://api.z.ai/api/mcp/web_reader/mcp",
+      "headers": {
+        "Authorization": "Bearer ${ZAI_API_KEY}"
+      }
+    },
+    "web-search-prime": {
+      "type": "http",
+      "url": "https://api.z.ai/api/mcp/web_search_prime/mcp",
+      "headers": {
+        "Authorization": "Bearer ${ZAI_API_KEY}"
+      }
     }
   }
 }
