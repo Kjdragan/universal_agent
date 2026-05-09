@@ -30,6 +30,19 @@ Both align with the [LLM-Native Intelligence Design](../../CLAUDE.md#llm-native-
 
 ## 1. Lane A — Pulse → Simone briefing context
 
+> **Design decision (2026-05-09):** the originally-drafted "render the snapshot
+> as a markdown table" approach was rejected after a discussion with the
+> operator about signal quality. Title-level pulse counts feed the LLM
+> aggregates and ask it to imagine the underlying evidence — the
+> antipattern CLAUDE.md's LLM-Native rule explicitly warns against. The
+> revised plan in §§ 1.2–1.7 below treats the briefing helper as a real
+> evidence-gathering layer: HN comment threads (always free, often the
+> highest-signal source), HN post bodies (free, hidden in the `text`
+> field today), and article extracts via `defuddle` (graceful fallback
+> on paywalls / 403s). The operator confirmed that ~10% paywalled items
+> failing through to "article body unavailable" is acceptable — no
+> headless-browser cookie passthrough this phase.
+
 ### 1.1 What the briefing pipeline looks like today
 
 ```mermaid
@@ -57,76 +70,120 @@ Code-verified anchors:
 - Telemetry collector: [`gateway_server.py:26748` `ops_telemetry_briefing_get`](../../src/universal_agent/gateway_server.py#L26748) → `_collect_autonomous_activity_rows`.
 - Prompt assembled at [`briefings_agent.py:56-78`](../../src/universal_agent/scripts/briefings_agent.py#L56) — single f-string with three sections (`telemetry_json`, `wiki_content`, `Instructions`).
 
-### 1.2 What changes
+### 1.2 What changes — content depth, not just titles
 
-Add a fourth section to the prompt: `hn_pulse_block`. It's a deterministic markdown snippet rendered from `artifacts/hackernews/latest.json` covering the watchlist topics + top-of-front-page stories. The LLM in the VP mission already knows how to synthesize "did anything important on HN this week align with my work" from that context — no prompt-engineering acrobatics needed, just provide the evidence.
+Once a day at briefing time, the helper:
+
+1. Reads `artifacts/hackernews/latest.json` (already kept fresh by the */30m cron — no extra work in the snapshot path).
+2. Picks ~10 candidate items: top 5 from `top_stories`, top 3 from `controversial`, plus up to 2 items from each watchlist topic's `pulses[topic].top_stories`. Deduplicates by story id.
+3. For each candidate, **fetches actual content** (not just title):
+   - Always: HN comment thread via `hackernews-pp-cli items thread <id>` — top ~10 comments by `points`. Free, never paywalled, often the highest-signal source.
+   - Always: HN post `text` field via `hackernews-pp-cli items <id>` — captures Show HN / Ask HN body text we currently throw away.
+   - Best-effort: article body via `defuddle <url>`. Graceful fallback to "article body unavailable (paywall / 403 / fetch error)" — the comments + post body still carry signal.
+4. Adds a separate `Algolia mentions block` from `hackernews-pp-cli search "<topic>" --tag comment --since 7d` for each watchlist topic — top mentions of *your* topics across ALL HN comments this week, not just the front page.
+5. Renders all of this as a structured markdown block ~15-30K tokens, injected into the briefing prompt.
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant Agent as briefings_agent.py
+    participant Hlp as hackernews_briefing_context.py
     participant Snap as artifacts/hackernews/<br/>latest.json
+    participant CLI as hackernews-pp-cli
+    participant Df as defuddle
     participant VP as vp.general.primary
     participant Out as DAILY_BRIEFING.md
 
-    Note over Agent: NEW: read HN snapshot + render block
-    Agent->>Snap: read latest.json (best-effort)
-    Snap-->>Agent: {pulses, top_stories, controversial}
-    Agent->>Agent: hn_pulse_block = render_hn_block(snap)
-    Agent->>VP: prompt = telemetry + wiki + hn_pulse_block + instructions
-    VP->>Out: writes "Hacker News This Week" subsection
+    Agent->>Hlp: build_briefing_block(watchlist)
+    Hlp->>Snap: read latest.json
+    Hlp->>Hlp: pick top ~10 items by relevance + score
+    par per-item content hydration
+      Hlp->>CLI: items thread <id> --json   %% comments
+      Hlp->>CLI: items <id> --json          %% post body / text field
+      Hlp->>Df: defuddle <article-url>      %% best-effort article
+    end
+    Hlp->>CLI: search "<topic>" --tag comment --since 7d  %% per watchlist topic
+    Hlp-->>Agent: hn_briefing_block (markdown, 15-30K tok)
+    Agent->>VP: prompt = telemetry + wiki + hn_briefing_block + instructions
+    VP->>Out: writes "Hacker News This Week" section
 ```
 
 ### 1.3 File-by-file change
 
 | File | Action | LOC |
 |---|---|---|
-| `src/universal_agent/scripts/briefings_agent.py` | MODIFY — add `_render_hn_pulse_block(snap)` helper + read snapshot + add prompt section | ~50 |
-| `src/universal_agent/services/hackernews_briefing_context.py` | NEW — pure helper: read latest.json, format markdown block. Isolating it lets us unit-test without touching briefings_agent | ~80 |
-| `tests/unit/test_hackernews_briefing_context.py` | NEW — covers: missing snapshot, stale snapshot, populated snapshot, errored panels | ~120 |
-| **Total** | | **~250 LOC** (~130 product + ~120 test) |
+| `src/universal_agent/scripts/briefings_agent.py` | MODIFY — call `build_briefing_block()` and inject into prompt | ~30 |
+| `src/universal_agent/services/hackernews_briefing_context.py` | NEW — orchestrates fetching + formatting. Picks items, calls CLI for comments/post-text, calls `defuddle` for articles, runs per-topic Algolia comment search, renders markdown | ~450 |
+| `src/universal_agent/services/hackernews_content_fetch.py` | NEW — narrow client wrappers around the CLI's `items thread`, `items get`, `search` commands. Pure I/O, mockable from tests | ~180 |
+| `tests/unit/test_hackernews_content_fetch.py` | NEW — covers CLI subprocess wrapping, JSON parsing, timeout, error paths | ~140 |
+| `tests/unit/test_hackernews_briefing_context.py` | NEW — covers: empty snapshot, fully populated, comments-only fallback when defuddle fails, paywall fallback, Algolia search merge, watchlist matching | ~220 |
+| **Total** | | **~1,020 LOC** (~660 product + ~360 test) |
 
-### 1.4 The HN block format
+The original draft estimated ~250 LOC for a pure formatter. The real fetcher is ~4× larger — almost entirely because of robust error handling on the network paths (defuddle timeouts, 403s, paywalls, JSON parse failures, partial CLI output) and the per-topic Algolia search aggregation.
 
-Deterministic markdown the LLM ingests as evidence. No LLM call here — pure code rendering of the snapshot:
+### 1.4 The HN block format (revised)
+
+The block has FOUR sections instead of one. Each is a chunk of evidence the briefing LLM can cite. Token estimates assume ~10 candidate items + 6 watchlist topics:
 
 ```markdown
 ## Hacker News This Week (snapshot from <generated_at>)
 
-**Watchlist pulse** — counts are 7-day mention totals across HN posts and comments:
+### 1. Watchlist pulse — 7-day mention volume
 
-| topic    | mentions | avg points |
-|----------|---------:|-----------:|
-| claude   |      231 |        348 |
-| agent    |      188 |        212 |
-| codex    |       97 |        145 |
+| topic    | mentions | avg pts | top hit |
+|----------|---------:|--------:|---------|
+| claude   |      231 |     348 | "Higher usage limits for Claude and a compute deal with SpaceX" (507 pts) |
+| agent    |      188 |     212 | "Building a coding agent in 1000 LOC" (310 pts) |
 | ...
 
-**Top front-page stories right now (top 5):**
+### 2. Front-page stories with content (top 5 by score, +3 controversial, +2 watchlist-matched)
 
-1. **Internet Archive Switzerland** — 213 pts · 24 cmt · `internetarchive.ch` — https://news.ycombinator.com/item?id=48074265
-2. **PipeDream on the Acorn Archimedes** — 187 pts · 32 cmt · `pipedream.com` — ...
-...
+#### Internet Archive Switzerland
+- 213 pts · 24 cmt · `internetarchive.ch` · by hggh
+- Article: https://internetarchive.ch/  ·  HN: https://news.ycombinator.com/item?id=48074265
+- **Article excerpt** (defuddle, ~250 words):
+  > Internet Archive Switzerland (IAS) is a non-profit foundation based in
+  > St. Gallen dedicated to preserving Swiss digital heritage. We are
+  > facing constant changes in file formats, sudden failure of storage
+  > media... [truncated to 250 words]
+- **Top comments** (3 of 24, by points):
+  > **timr** (52 pts): "The Swiss are uniquely positioned for this — long political stability + neutrality + strong privacy laws make them a natural archival jurisdiction."
+  > **knubie** (38 pts): "Worth noting they're partnered with Stanford and Internet Archive proper for the technical infra; this isn't a from-scratch effort."
+  > **shadowgovt** (24 pts): "I'd like to see how they handle the requirement to keep storage media physically maintained over multi-decade timescales..."
 
-**Most-controversial (last 7d, ≥100 cmt, top 3):**
+#### [next item...]
 
-1. **Inventing Cyrillic** — ratio 2.23× — 105 cmt / 47 pts — https://...
-...
+### 3. Show HN / Ask HN highlights (top 2 each)
+
+#### Show HN: Free hotspot/polygon-region tool for game development
+- 6 pts · 2 cmt · `magikmaker.dev` · by magikMaker
+- **Post body** (from `text` field): "For a game I'm developing I needed an easy way to create hotspot regions on textures. Existing tools were either commercial or required a heavy editor install, so I built this..."
+- **Comments**: [...]
+
+### 4. Watchlist mentions across ALL HN comments this week (top 5 per topic, via Algolia)
+
+#### claude (231 hits this week)
+- "I switched our codegen pipeline to Claude 4.6 and saw a 30% reduction in tool-call retries..." (in thread: "Building agentic systems that don't suck", 412 pts) — 7d ago
+- "Claude's projects feature is finally usable for codebases >100 files now that..." (in thread: "Anthropic ships project memory", 290 pts) — 4d ago
+- ...
+
+#### agent (188 hits this week)
+- "We've been running multi-agent systems in prod for 8 months and the failure modes are..." (in thread: "Multi-agent traps to avoid", 521 pts) — 5d ago
+- ...
+
+_(panels with errors this run, if any: pulse_codex)_
 ```
-
-Caps: 5 top stories, 3 controversial. Skipped silently when the snapshot is missing or older than 24 hours (the briefing is daily; stale HN data is worse than no HN data). Errored panels in `meta.errors[]` are listed as a one-line caveat instead of dropped silently.
 
 ### 1.5 The prompt change
 
-Inserted after the wiki section, before instructions, at [`briefings_agent.py:67-69`](../../src/universal_agent/scripts/briefings_agent.py#L67):
+Inserted after the wiki section, at [`briefings_agent.py:67-69`](../../src/universal_agent/scripts/briefings_agent.py#L67):
 
 ```python
-# NEW: HN context block
-from universal_agent.services.hackernews_briefing_context import render_hn_pulse_block
+from universal_agent.services.hackernews_briefing_context import build_briefing_block
 
-hn_block = render_hn_pulse_block()  # returns "" when snapshot missing/stale
+# Build the HN evidence block (~15-30K tokens). Returns "" on failure.
+hn_block = build_briefing_block(watchlist=["claude", "agent", "codex", "llm", "harness", "agentic"])
 
-# UPDATED prompt — adds one section, leaves the rest verbatim
 objective = f"""Generate the daily autonomous operations briefing for the last 24 hours.
 ...
 
@@ -146,87 +203,119 @@ Instructions:
 - Summarize tasks completed, attempted, and failed.
 - ... (existing bullets unchanged) ...
 - If the Hacker News block above is non-empty, include a "Hacker News This Week"
-  section that calls out 1-3 stories most relevant to ongoing work,
-  surfaces any topic whose mention count surged this week vs typical
-  baseline, and skips noise. If none of it lands on relevant ground,
-  say so in one line and move on. Do NOT just paraphrase the table.
+  section. **Read the actual content (article excerpts, comments, post bodies)** —
+  do NOT just paraphrase titles. Surface 1-3 items where the *substance* aligns
+  with active work or open questions. Quote a comment or excerpt where it
+  illuminates "why this matters." If a topic surged in mentions vs the
+  baseline (compare to historical pulse counts in prior briefings if you
+  have them), call that out separately. If nothing in the HN block lands
+  on relevant ground, say so in one line and move on — do not pad.
 """
 ```
 
-The "if not relevant, say so in one line and move on" guard is important: the briefing's job is to synthesize signal, not to pad itself with unrelated tech-news. The LLM-Native rule from CLAUDE.md explicitly says to let the LLM judge.
+### 1.6 The fetcher
 
-### 1.6 The pure helper
+`hackernews_briefing_context.py` is no longer "pure" — it makes ~30 subprocess calls (CLI items + threads + searches) and ~10 HTTP calls (defuddle on article URLs). Skeleton:
 
 ```python
-# src/universal_agent/services/hackernews_briefing_context.py
-"""Render the HN snapshot into a deterministic markdown block for briefings.
+"""Build the HN evidence block for the daily briefing.
 
-No LLM calls — purely formats the existing latest.json snapshot. Used by
-briefings_agent.py to fold HN context into the daily VP briefing prompt
-without coupling the briefing pipeline to the snapshot service.
+This is the LANE A consumer of the snapshot. It does real fetching at
+briefing-time (once daily) so the briefing LLM gets actual article
+excerpts, comment threads, and HN post bodies — not just titles. The
+half-hourly snapshot (services/hackernews_snapshot_service.py) stays
+cheap and content-free; this module is where the evidence is assembled.
+
+Failure-tolerant: any single fetch can fail without aborting the block.
+Article fetches in particular are best-effort — paywalls, 403s, and
+fetch timeouts gracefully degrade to "article body unavailable" and
+the rest of the item (comments, post body) still renders.
 """
 from __future__ import annotations
 
+import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
 
 from universal_agent.services.hackernews_snapshot_service import read_latest
+from universal_agent.services.hackernews_content_fetch import (
+    fetch_item,
+    fetch_thread_comments,
+    search_topic_mentions,
+    fetch_article_via_defuddle,
+)
+
+logger = logging.getLogger(__name__)
 
 MAX_AGE_HOURS = 24
-TOP_STORY_COUNT = 5
-CONTROVERSIAL_COUNT = 3
+CANDIDATE_TOP_STORIES = 5
+CANDIDATE_CONTROVERSIAL = 3
+CANDIDATE_PER_TOPIC = 2
+MAX_COMMENTS_PER_ITEM = 10
+MAX_ARTICLE_EXCERPT_WORDS = 250
+MAX_TOPIC_MENTIONS = 5
+DEFUDDLE_TIMEOUT_S = 10
+HYDRATE_PARALLELISM = 6
 
 
-def render_hn_pulse_block(now: datetime | None = None) -> str:
-    """Returns a markdown block of HN watchlist pulse + top stories, or ""
-    when the snapshot is missing, stale, or empty."""
+def build_briefing_block(watchlist: list[str], now: datetime | None = None) -> str:
+    """Return a multi-section markdown block (~15-30K tokens) or "" on failure."""
     snap = read_latest()
-    if not snap or not isinstance(snap, dict):
+    if not _is_fresh(snap, now=now):
         return ""
 
-    generated_at = snap.get("meta", {}).get("generated_at", "")
-    if not _is_fresh(generated_at, now=now):
+    candidates = _select_candidates(snap, watchlist)
+    if not candidates:
         return ""
 
-    parts = [f"## Hacker News This Week (snapshot from {generated_at})"]
-    parts.append(_render_pulse_table(snap.get("pulses", {})))
-    parts.append(_render_top_stories(snap.get("top_stories") or []))
-    parts.append(_render_controversial(snap.get("controversial") or []))
+    with ThreadPoolExecutor(max_workers=HYDRATE_PARALLELISM) as pool:
+        hydrated = list(pool.map(_hydrate_one, candidates))
 
-    errored = snap.get("meta", {}).get("errors") or []
-    if errored:
-        parts.append(f"_(panels with errors this run: {', '.join(errored)})_")
+    topic_mentions = _gather_topic_mentions(watchlist)
 
-    return "\n\n".join(p for p in parts if p)
+    return _render(snap, hydrated, topic_mentions)
 
 
-def _is_fresh(iso_ts: str, now: datetime | None = None) -> bool:
-    if not iso_ts:
-        return False
+def _hydrate_one(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Fetch comments + post text + article excerpt for a single candidate. Best-effort."""
+    out: dict[str, Any] = {**candidate}
+    out["comments"] = _safe(lambda: fetch_thread_comments(candidate["id"], limit=MAX_COMMENTS_PER_ITEM)) or []
+    out["post_text"] = _safe(lambda: fetch_item(candidate["id"]).get("text") or "") or ""
+    if candidate.get("url"):
+        out["article_excerpt"] = _safe(
+            lambda: fetch_article_via_defuddle(candidate["url"], timeout_s=DEFUDDLE_TIMEOUT_S)
+        )
+    out["article_excerpt"] = (out.get("article_excerpt") or "").strip()
+    return out
+
+
+def _safe(fn):
     try:
-        ts = datetime.fromisoformat(iso_ts)
-    except ValueError:
-        return False
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    age_h = ((now or datetime.now(timezone.utc)) - ts).total_seconds() / 3600
-    return age_h <= MAX_AGE_HOURS
+        return fn()
+    except Exception as exc:
+        logger.warning("HN briefing fetch failed: %s", exc)
+        return None
 
 
-# ... _render_pulse_table, _render_top_stories, _render_controversial ...
+# ... _select_candidates, _gather_topic_mentions, _render, _is_fresh ...
 ```
 
 ### 1.7 Failure modes
 
 | Mode | Behavior |
 |---|---|
-| `latest.json` missing | block = `""`, briefing proceeds unchanged |
-| Snapshot older than 24h | block = `""`, briefing proceeds unchanged |
-| Snapshot present but `meta.errors` non-empty | block renders what's available; appends caveat line |
-| Snapshot has unexpected shape | helper catches and returns `""` (never blocks the briefing) |
-| HN service down for the whole day | LLM produces briefing without HN section — same as today |
+| `latest.json` missing or stale (>24h) | block = `""`, briefing proceeds unchanged |
+| Snapshot present but no panels populated | block = `""`, briefing proceeds unchanged |
+| Single defuddle fetch fails (paywall / 403 / timeout) | item still renders with comments + post body; "article body unavailable" marker |
+| All defuddle fetches fail (defuddle service down) | items render with comments + post body only; no article excerpts anywhere — block is still useful |
+| Single CLI subprocess call hangs | per-call timeout (15s); item degrades to whatever did succeed |
+| All CLI calls fail | block = `""`, briefing proceeds unchanged (CLI is essential to ALL content paths) |
+| Algolia topic search fails for some topics | partial — successful topic blocks render, failed topics omitted with a footnote |
+| HTTP runaway (e.g., defuddle stuck on a redirect loop) | per-fetch timeout 10s, total budget 60s on the fetch phase |
+| Token-budget overrun (briefing prompt > 100K tok) | helper truncates oldest content first (article excerpts → trimmed → comments → trimmed → topic mentions trimmed); never grows the prompt unboundedly |
 
-The invariant: **the HN block must never block or corrupt the briefing.** It's additive context, not a hard dependency. The briefing was working without it and continues to work without it on its bad days.
+The invariant is unchanged: **the HN block must never block or corrupt the briefing.** New invariant: **the briefing block must never grow unbounded** — there's a hard 30K-token cap on the rendered block, with a deterministic truncation order.
 
 ---
 
@@ -383,36 +472,57 @@ The invariant is the same as Lane A: **CSI emission must never block the snapsho
 
 | Phase | Scope | Ship gate |
 |---|---|---|
-| **P2.A1** | Lane A pure helper + unit tests (no briefings_agent change yet) | All tests green, no live behavior change |
-| **P2.A2** | Wire helper into briefings_agent.py prompt | One real briefing run completes with HN block visible in output |
-| **P2.B1** | Lane B emitter + unit tests (no snapshot wiring yet) | All tests green, no live behavior change |
-| **P2.B2** | Wire emitter into `build_snapshot()` (best-effort) | One real `*/30m` cron tick produces a CSI event when movers exist; `csi_recent_reports` tool surfaces it |
+| **P2.A1** | `hackernews_content_fetch.py` (CLI wrappers) + tests | All tests green; no live behavior change |
+| **P2.A2** | `hackernews_briefing_context.py` orchestration + tests (with mocked fetcher) | All tests green; helper builds a valid block from fixture data |
+| **P2.A3** | Wire helper into `briefings_agent.py`. One real briefing run end-to-end | Manual smoke: today's `DAILY_BRIEFING.md` contains a "Hacker News This Week" section that quotes a comment or article excerpt, not just titles |
+| **P2.B1** | Lane B emitter + unit tests (no snapshot wiring yet) | All tests green; no live behavior change |
+| **P2.B2** | Wire emitter into `build_snapshot()` (best-effort) | One real `*/30m` cron tick produces a CSI event when material movers exist; `csi_recent_reports` tool surfaces it |
 | **P2.B3** | Add `hackernews_movers_signal` to consumer whitelist in `csi_bridge.py` | `csi_recent_reports` returns HN events to the `csi-trend-analyst` agent |
 
-Each phase is an independent commit. P2.A and P2.B are independent — either can ship first or alone.
+Each phase is an independent commit. P2.A1→A2→A3 must ship in order (A2 depends on A1, A3 depends on A2). P2.B1→B2→B3 likewise. Lanes A and B are independent of each other.
 
 ---
 
 ## 4. Risks / unknowns
 
 1. **CSI event-type proliferation.** Adding new types is cheap, but every consumer that filters by type needs to know about the new one. We're modifying exactly one consumer ([`csi_bridge.py:256`](../../src/universal_agent/tools/csi_bridge.py#L256)) — others (factory-supervisor, csi-trend-analyst) consume events through that bridge and don't need to know the underlying type list. Verified before writing this plan.
-2. **Briefing prompt token budget.** The HN block adds ~600-1200 tokens per day. The briefings_agent dispatches to `vp.general.primary` which runs on Anthropic Max. No budget concern.
-3. **Materiality threshold tuning.** The `delta >= 3` threshold is a guess. After the first week of live signal, we'll have data to tune it (false-positive rate vs missed-signal rate). Documented as a follow-up, not blocking.
-4. **`topic_match` substring matching is naive.** Will produce false positives ("agent" matches "real estate agent" stories). For Phase 2 we accept this; Phase 3 could swap to embeddings. The downstream LLM consumers in CSI synthesis can usually tell the difference.
-5. **DB write contention.** csi.db sees writes from CSI_Ingester adapters and (with this change) from the HN snapshot cron. SQLite WAL + `busy_timeout=5000ms` handles this, but worth observing the first few ticks for `database is locked` errors. Falls back to skip-and-log.
+2. **Briefing prompt token budget.** Revised block is ~15-30K tokens vs ~1K in the original draft — ~25× larger. Briefing dispatches to `vp.general.primary` (Anthropic Max), so the absolute number is fine. The risk is content bloat over time (more topics added, more candidates picked) silently growing the prompt past ~50K. Mitigation: hard 30K-token cap with deterministic truncation order (article excerpts trim first, then comments, then topic mentions).
+3. **Defuddle / external-fetch reliability.** HN front-page links go to arbitrary domains. ~10% will paywall or 403 — we accept "article body unavailable" with comments+post-body fallback (operator-confirmed 2026-05-09). New risk: if defuddle as a service is intermittent, we may see all article excerpts vanish for a day. The block degrades gracefully but the briefing's HN section becomes title+comments only — still useful, but a quiet capability-loss the operator should notice if it persists.
+4. **CLI subprocess fan-out.** P2.A makes ~30 CLI subprocess calls in one briefing pass (10 candidates × 3 calls + ~6 topic searches). Each is ~100-500ms. Parallelized at `HYDRATE_PARALLELISM=6`, total briefing-helper wall time ~30-60s. If any single call hangs, the per-call timeout (15s) bounds the damage. Worth observing the first few briefings for tail-latency outliers.
+5. **Materiality threshold tuning.** The `delta >= 3` threshold for Lane B is a guess. After the first week of live signal, we'll have data to tune it (false-positive rate vs missed-signal rate). Documented as a follow-up, not blocking.
+6. **`topic_match` substring matching is naive.** Will produce false positives ("agent" matches "real estate agent" stories) in both Lane A's candidate selection and Lane B's event-tagging. For Phase 2 we accept this; Phase 3 could swap to embeddings. Downstream LLM consumers (briefing LLM, CSI synthesis) can usually tell the difference because they have full content.
+7. **DB write contention.** csi.db sees writes from CSI_Ingester adapters and (with this change) from the HN snapshot cron. SQLite WAL + `busy_timeout=5000ms` handles this, but worth observing the first few ticks for `database is locked` errors. Falls back to skip-and-log.
 
 ---
 
 ## 5. Test plan
 
-### Lane A unit tests
+### Lane A unit tests (`hackernews_briefing_context` + `hackernews_content_fetch`)
 
-- `test_render_block_returns_empty_when_no_snapshot`
-- `test_render_block_returns_empty_when_snapshot_stale_25h_old`
-- `test_render_block_returns_full_block_when_fresh`
-- `test_render_block_handles_partial_panel_errors`
-- `test_render_block_handles_missing_pulses_safely`
-- `test_render_block_handles_zero_top_stories`
+Block-builder behavior:
+- `test_block_returns_empty_when_no_snapshot`
+- `test_block_returns_empty_when_snapshot_stale_25h_old`
+- `test_block_returns_full_block_when_fresh_and_fetcher_succeeds`
+- `test_block_renders_when_defuddle_fails_for_one_item` — comments+post body still render; "article body unavailable" marker
+- `test_block_renders_when_defuddle_fails_for_all_items` — items render comments-only
+- `test_block_renders_when_one_topic_search_fails` — other topics render; failed topic listed in caveat
+- `test_block_renders_when_one_thread_fetch_hangs` — that item renders with whatever did succeed
+- `test_block_returns_empty_when_all_cli_calls_fail` — CLI down = no content = no block
+- `test_block_truncates_article_excerpts_to_word_cap`
+- `test_block_truncates_when_total_exceeds_30k_tokens`
+- `test_candidate_selection_dedupes_across_top_stories_and_pulse_top`
+- `test_candidate_selection_respects_per_topic_cap`
+
+Content fetcher (subprocess wrapping):
+- `test_fetch_thread_comments_returns_top_n_by_points`
+- `test_fetch_thread_comments_returns_empty_on_cli_failure`
+- `test_fetch_thread_comments_respects_timeout`
+- `test_fetch_item_extracts_text_field`
+- `test_fetch_item_returns_empty_text_for_link_posts`
+- `test_search_topic_mentions_returns_compact_results`
+- `test_search_topic_mentions_uses_tag_comment_filter`
+- `test_fetch_article_via_defuddle_returns_excerpt_or_empty`
+- `test_fetch_article_via_defuddle_handles_paywall_html_as_empty`
 
 ### Lane B unit tests
 
@@ -450,4 +560,4 @@ Per [`CLAUDE.md` § Documentation Maintenance Rules](../../CLAUDE.md#documentati
 
 This plan is ready for `/grill-me` interview. After approval, hand off to the `code-writer` sub-agent or implement directly via Claude Code conversational on `feature/latest2`.
 
-Estimated total: ~580 LOC across product + test (Lane A 250 + Lane B 330), plus ~600 LOC docs.
+Estimated total: **~1,350 LOC** across product + test (Lane A ~1,020 + Lane B ~330), plus ~700 LOC docs. Lane A grew from ~250 to ~1,020 after the 2026-05-09 design discussion: a real fetcher (CLI wrappers + defuddle + Algolia comment search + truncation logic + parallelism + comprehensive failure handling) is ~4× the original "pure markdown formatter" estimate, but it's the difference between feeding the briefing LLM real evidence vs. asking it to guess from titles.
