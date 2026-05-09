@@ -213,6 +213,12 @@ Mistaking one for the other is the #1 source of confusion in this system. Before
 
 - **[coding_handoff.md](coding_handoff.md)**: Code-verified implementation handoff for the run-per-task workspace refactor, covering tracked chat, trusted email, To Do dispatch, run/attempt lineage, UI file resolution, acceptance criteria, and test plan.
 
+### 13. [Integrations](integrations)
+
+Third-party CLI integrations (read-only feeds, dashboard tabs, snapshot pipelines) that wrap external tooling for use inside Universal Agent.
+
+- **[Hacker News CLI — Phase 1 Plan](integrations/hackernews_phase1_plan.md)**: Standalone `/dashboard/hackernews` tab populated by half-hourly `hackernews-pp-cli` cron. Pre-built binary at `/opt/universal_agent/bin/`, XDG-pinned SQLite store at `/opt/universal_agent/var/hackernews/`, denormalized snapshot JSON at `artifacts/hackernews/latest.json` with 48-deep ring buffer. 8 panels (Top Stories, Movers, Heated, Topic Pulse, Show HN, Ask HN, Hiring, Search). Zero LLM, zero client-side polling. Phase 2 integration with Task Hub / CSI / Simone / Atlas explicitly deferred.
+
 ---
 
 ## 🚀 Recommended Path for New Developers

@@ -218,6 +218,12 @@ These are the authoritative references for each subsystem. When any other docume
 |-----|---------|
 | coding_handoff.md | Code-verified implementation handoff for the run-per-task workspace refactor across tracked chat, trusted email, dispatcher claims, run/attempt lineage, Session Explorer resolution, acceptance criteria, and validation steps |
 
+## Integrations (integrations/)
+
+| Doc | Subject |
+|-----|---------|
+| hackernews_phase1_plan.md | **Phase 1 implementation plan** for the Hacker News CLI integration — standalone `/dashboard/hackernews` tab fed by half-hourly `hackernews-pp-cli` cron. Pre-built binary install, XDG-pinned SQLite store, snapshot JSON with 48-deep ring buffer, FastAPI router, single sidebar entry, 8 panels per the design prototype. No LLM, no client-side polling, no integration with Task Hub / CSI / Simone in Phase 1 (Phase 2 catalogued). Approved 2026-05-09 via /grill-me. |
+
 ## Remaining Operational References (03_Operations/)
 
 | Doc | Subject |
