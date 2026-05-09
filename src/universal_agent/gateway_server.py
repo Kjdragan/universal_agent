@@ -14254,6 +14254,7 @@ async def lifespan(app: FastAPI):
             _ensure_proactive_report_afternoon_cron_job()
             _ensure_proactive_artifact_digest_cron_job()
             _ensure_vp_coder_workspace_pruning_cron_job()
+            _ensure_hackernews_snapshot_cron_job()
         except Exception as exc:
             logger.warning("Failed ensuring autonomous cron jobs: %s", exc)
     else:
@@ -14795,6 +14796,12 @@ try:
     app.include_router(csi_discord_watchlist_router)
 except Exception:
     logger.warning("Could not mount CSI watchlist router on gateway", exc_info=True)
+
+try:
+    from universal_agent.api.routers.hackernews import router as hackernews_router
+    app.include_router(hackernews_router)
+except Exception:
+    logger.warning("Could not mount Hacker News router on gateway", exc_info=True)
 _LOGFIRE_FASTAPI_INSTRUMENTED = False
 
 
@@ -18174,6 +18181,20 @@ def _ensure_morning_briefing_cron_job() -> Optional[dict[str, Any]]:
         # Declare it so the Phase 5 pre-flight surfaces a structured
         # cron_run_failed notification instead of a generic exit code.
         required_secrets=["UA_OPS_TOKEN"],
+    )
+
+
+def _ensure_hackernews_snapshot_cron_job() -> Optional[dict[str, Any]]:
+    return _register_system_cron_job(
+        system_job="hackernews_snapshot",
+        default_cron="*/30 * * * *",
+        default_timezone="UTC",
+        command="!script universal_agent.scripts.hackernews_snapshot",
+        description="Half-hourly Hacker News snapshot via hackernews-pp-cli.",
+        timeout_seconds=300,
+        enabled=_proactive_cron_enabled("UA_HACKERNEWS_SNAPSHOT_ENABLED"),
+        cron_env_var="UA_HACKERNEWS_SNAPSHOT_CRON",
+        timezone_env_var="UA_HACKERNEWS_SNAPSHOT_TIMEZONE",
     )
 
 
