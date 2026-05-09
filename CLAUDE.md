@@ -173,6 +173,22 @@ If matches come back, read them before proposing anything. If you don't have tim
 
 8. **Branch-versus-deploy honesty.** A commit on `feature/latest2` is not deployed. A commit merged to `main` is not deployed if the GitHub Actions deploy hasn't completed. Never say "the fix is shipped" until the deploy workflow is green AND the live VPS state confirms the change took effect.
 
+9. **Verify the right artifact (Rule A).** Before any browser-based or HTTP-based end-to-end check against `app.clearspringcg.com` or `127.0.0.1:8002`, the agent MUST first hit `GET /api/v1/version` (no auth) and log the returned `commit_sha`, `branch`, and `process_started_at`. If the live SHA does not contain the change being verified, **STOP** — do not run the browser pass, do not declare anything verified. The acceptable response is: "live SHA is X, my change is on SHA Y which has not deployed yet — verification deferred until ship completes." The unacceptable response is burning a 5-minute browser session against stale code and reporting its findings as if they reflect the new behavior.
+
+10. **Backend logic vs. UI rendering — different verification paths (Rule B).**
+    - **Backend logic changes** (DB queries, scoring/ranking, route handlers, service-layer functions) → authoritative verification is direct Python invocation in dev: `PYTHONPATH=src uv run python -c "from universal_agent.services.X import Y; print(Y(...))"`. This is conclusive because it exercises the new code in-process. Browser verification of backend logic against production is only meaningful AFTER ship.
+    - **UI rendering** (drawer layouts, hover states, optimistic updates, CSS, component composition) → verified post-deploy against `app.clearspringcg.com` via the agent-browser sub-agent. Pre-deploy local browser checks are acceptable when the change is `web-ui/` only (Next.js hot reload).
+    - **Anti-pattern:** dispatching a browser agent against production to "verify the dedup I just wrote" before the dedup is on `main` and deployed. The browser is looking at the old code; its findings about the new behavior are noise.
+
+11. **Ship-then-verify cadence for backend-touching work (Rule C).** When work touches gateway endpoints, DB queries, scoring logic, or service-layer code AND end-to-end browser confirmation is desired:
+    1. Land code on `feature/latest2` with local Python verification of the new behavior (Rule B).
+    2. Operator runs `/ship`.
+    3. Wait for GH Actions deploy to go green AND `GET /api/v1/version` on production returns the new SHA.
+    4. Then dispatch the browser agent against `app.clearspringcg.com`.
+    5. Browser agent's first action is Rule A: hit `/api/v1/version`, log SHA, confirm it includes the change. If not, abort.
+
+12. **Deploy-time service restart is already part of the workflow (Rule D — verified, not a gap).** `.github/workflows/deploy.yml` runs `sudo systemctl restart universal-agent-gateway universal-agent-api universal-agent-webui ...` after the rsync + venv sync. Gateway picks up Python changes on the next deploy by construction. There is NO separate "remember to restart the gateway" step needed. If a backend change is on `main` and the deploy workflow is green, the new code is live. Confirm via Rule A's `/api/v1/version` check, not by guessing.
+
 If a rule above isn't satisfiable for a given PR, say so explicitly in the commit message and the SHIP_HANDOFF, with a specific operator step to close the gap. The acceptable failure mode is "I shipped the code change but Phase 2 wiring still needs a Simone agent file deployed — see Followup #1." The unacceptable failure mode is silence.
 
 ## Documentation Maintenance Rules

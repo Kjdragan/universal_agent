@@ -15459,6 +15459,71 @@ async def health(response: Response):
     }
 
 
+# Module-level cache: captured once at process import. Survives until the
+# next gateway restart (which is exactly when the deployed code changes,
+# so the cached value matches the running code by construction).
+_VERSION_INFO: dict[str, Any] | None = None
+
+
+def _capture_version_info() -> dict[str, Any]:
+    """Read commit SHA / branch / deploy time once. Best-effort — never raises.
+
+    Used by ``/api/v1/version`` so external verifiers (browser agents,
+    operators) can confirm which commit is live before declaring an
+    end-to-end check valid. See ``CLAUDE.md`` § Production Verification
+    Rules → Rule A.
+    """
+    import subprocess
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    info: dict[str, Any] = {
+        "commit_sha": None,
+        "short_sha": None,
+        "branch": None,
+        "commit_subject": None,
+        "commit_committed_at": None,
+        "process_started_at": datetime.now(timezone.utc).isoformat(),
+        "repo_root": repo_root,
+    }
+
+    def _git(args: list[str]) -> str | None:
+        try:
+            out = subprocess.run(
+                ["git", "-C", repo_root, *args],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            if out.returncode != 0:
+                return None
+            return (out.stdout or "").strip() or None
+        except Exception:
+            return None
+
+    sha = _git(["rev-parse", "HEAD"])
+    if sha:
+        info["commit_sha"] = sha
+        info["short_sha"] = sha[:8]
+    info["branch"] = _git(["rev-parse", "--abbrev-ref", "HEAD"])
+    info["commit_subject"] = _git(["log", "-1", "--pretty=%s"])
+    info["commit_committed_at"] = _git(["log", "-1", "--pretty=%cI"])
+    return info
+
+
+@app.get("/api/v1/version")
+async def version_info():
+    """Public — no auth — so external verifiers can confirm which commit
+    is live on this host. Browser agents MUST hit this and confirm the
+    target SHA before declaring any end-to-end UI verification valid.
+    See ``CLAUDE.md`` § Production Verification Rules.
+    """
+    global _VERSION_INFO
+    if _VERSION_INFO is None:
+        _VERSION_INFO = _capture_version_info()
+    return _VERSION_INFO
+
+
 def _csi_delivery_health_summary() -> dict[str, Any] | None:
     """Read CSI delivery health canary state from the CSI SQLite DB.
 
