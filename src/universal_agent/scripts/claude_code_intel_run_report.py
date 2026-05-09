@@ -1,5 +1,11 @@
 """Run the ClaudeDevs X sync, write an operator report, and optionally email it."""
 
+# As of 2026-05-09, this cron NEVER queues Task Hub items directly. Tier 3+
+# actions flow into the triage flyout via services.csi_demo_triage. The user
+# Approves/Trashes them in the dashboard. See
+# docs/proactive_signals/csi_v3_backfill_restart_handoff_2026-05-08.md.
+
+
 from __future__ import annotations
 
 import argparse
@@ -44,7 +50,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--handle", default="", help="X handle to poll, without @. Defaults to env or ClaudeDevs.")
     parser.add_argument("--max-results", type=int, default=0, help="Maximum posts to fetch, 5-100.")
     parser.add_argument("--profile", default="", help="Deployment profile. Defaults to UA_DEPLOYMENT_PROFILE or local_workstation.")
-    parser.add_argument("--no-task-hub", action="store_true", help="Do not queue Task Hub follow-up tasks.")
     parser.add_argument("--no-post-process", action="store_true", help="Skip replay-style post-processing.")
     parser.add_argument("--email-to", default="", help="Send the operator report to this recipient if provided.")
     parser.add_argument(
@@ -80,14 +85,14 @@ def _config_from_args(args: argparse.Namespace) -> ClaudeCodeIntelConfig:
             request_timeout_seconds=cfg.request_timeout_seconds,
             artifacts_root=cfg.artifacts_root,
         )
-    if args.no_task_hub:
-        cfg = ClaudeCodeIntelConfig(
-            handle=cfg.handle,
-            max_results=cfg.max_results,
-            queue_task_hub=False,
-            request_timeout_seconds=cfg.request_timeout_seconds,
-            artifacts_root=cfg.artifacts_root,
-        )
+    # Triage flyout is the only Task Hub path; never queue from this cron.
+    cfg = ClaudeCodeIntelConfig(
+        handle=cfg.handle,
+        max_results=cfg.max_results,
+        queue_task_hub=False,
+        request_timeout_seconds=cfg.request_timeout_seconds,
+        artifacts_root=cfg.artifacts_root,
+    )
     return cfg
 
 
@@ -217,9 +222,9 @@ async def main() -> int:
 
         for handle in handles:
             handle_cfg = replace(cfg, handle=handle)
-            result_cfg = handle_cfg
-            if not args.no_post_process and handle_cfg.queue_task_hub:
-                result_cfg = replace(handle_cfg, queue_task_hub=False)
+            # Belt-and-suspenders: replay must never queue Task Hub items
+            # because triage flyout is the only operator-facing path.
+            result_cfg = replace(handle_cfg, queue_task_hub=False)
 
             logger.info("Syncing handle: @%s", handle)
             result = run_sync(config=result_cfg, conn=conn)
@@ -229,7 +234,8 @@ async def main() -> int:
                 post_process = replay_packet(
                     config=ClaudeCodeIntelReplayConfig(
                         packet_dir=Path(result.packet_dir),
-                        queue_task_hub=handle_cfg.queue_task_hub,
+                        # Triage flyout owns Task Hub creation now.
+                        queue_task_hub=False,
                         write_vault=True,
                     ),
                     conn=conn,

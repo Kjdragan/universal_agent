@@ -192,6 +192,26 @@ def replay_packet(
         "email_evidence_ids": vault_result.get("email_evidence_ids") or [],
     }
     write_replay_summary(packet_dir=packet_dir, payload=result)
+
+    # Discovery: sync any tier 3+ actions from this packet into the
+    # demo-triage candidate store so they appear in the dashboard flyout.
+    # Best-effort — never break replay if the triage DB has a problem.
+    try:
+        from universal_agent.services.csi_demo_triage import (
+            sync_candidates_from_packet,
+        )
+
+        triage_sync = sync_candidates_from_packet(packet_dir=packet_dir)
+        result["triage_inserted"] = int(triage_sync.get("inserted", 0))
+    except Exception as exc:
+        import logging as _logging
+
+        _logging.getLogger(__name__).exception(
+            "csi_demo_triage sync failed for %s", packet_dir
+        )
+        result["triage_inserted"] = 0
+        result["triage_error"] = f"{type(exc).__name__}: {exc}"
+
     return result
 
 

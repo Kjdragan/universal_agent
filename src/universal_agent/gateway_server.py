@@ -14245,6 +14245,7 @@ async def lifespan(app: FastAPI):
             _ensure_codie_proactive_cleanup_cron_job()
             _ensure_csi_convergence_cron_job()
             _ensure_claude_code_intel_cron_job()
+            _ensure_csi_demo_triage_rank_cron_job()
             _ensure_paper_to_podcast_cron_job()
             _ensure_youtube_daily_digest_cron_job()
             _ensure_nightly_wiki_cron_job()
@@ -18391,6 +18392,39 @@ def _claude_code_intel_cron_enabled() -> bool:
     return os.getenv("UA_CLAUDE_CODE_INTEL_CRON_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _csi_demo_triage_rank_cron_enabled() -> bool:
+    """Whether the CSI demo-triage ranking cron should be registered.
+
+    Default ON. Disable with UA_CSI_DEMO_TRIAGE_RANK_CRON_ENABLED=0.
+    """
+    raw = os.getenv("UA_CSI_DEMO_TRIAGE_RANK_CRON_ENABLED", "1").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _ensure_csi_demo_triage_rank_cron_job() -> Optional[dict[str, Any]]:
+    """Register the CSI demo-triage LLM ranking cron via the canonical helper.
+
+    Twice-daily by default (13:15 and 19:15 UTC == 8:15 and 14:15 CDT —
+    both inside the US off-peak window). Re-ranks any pending candidates
+    that are unscored or older than 24h.
+    """
+    if not _csi_demo_triage_rank_cron_enabled():
+        return None
+    return _register_system_cron_job(
+        system_job="csi_demo_triage_rank",
+        default_cron="15 13,19 * * *",
+        default_timezone="UTC",
+        command="!script universal_agent.scripts.csi_demo_triage_rank",
+        description="Rank pending CSI demo triage candidates with an LLM.",
+        timeout_seconds=600,
+        enabled=True,
+        cron_env_var="UA_CSI_DEMO_TRIAGE_RANK_CRON_EXPR",
+        timezone_env_var="UA_CSI_DEMO_TRIAGE_RANK_CRON_TIMEZONE",
+        required_secrets=["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
+    )
+
+
+
 def _ensure_claude_code_intel_cron_job() -> None:
     if not _cron_service or not _claude_code_intel_cron_enabled():
         return
@@ -18762,6 +18796,106 @@ async def dashboard_claude_code_intel_trigger(
     except Exception as exc:
         return {"status": "error", "detail": f"Failed to launch pipeline: {type(exc).__name__}: {exc}"}
 
+
+# ── CSI demo triage flyout endpoints ─────────────────────────────────────
+# These four GET/POST endpoints power the "Demo Triage" drawer on
+# /dashboard/claude-code-intel/. They are the ONLY path from a tier 3+
+# CSI candidate to a Task Hub item — auto-queue from the cron is gone.
+
+def _triage_refreshed_payload() -> dict[str, Any]:
+    """Build the same shape returned by GET /triage so action endpoints
+    can include a fresh snapshot in their response."""
+    from universal_agent.services import csi_demo_triage as _triage_mod
+
+    conn = _triage_mod.open_db()
+    try:
+        counts = _triage_mod.get_counts(conn=conn)
+        top5 = [c.to_dict() for c in _triage_mod.get_top_recommendations(conn=conn, n=5)]
+        all_rows = [c.to_dict() for c in _triage_mod.list_candidates(conn=conn)]
+    finally:
+        conn.close()
+    return {"counts": counts, "top5": top5, "all": all_rows}
+
+
+@app.get("/api/v1/dashboard/claude-code-intel/triage")
+async def dashboard_csi_triage(request: Request):
+    _require_ops_auth(request)
+    try:
+        return {"status": "ok", **_triage_refreshed_payload()}
+    except Exception as exc:
+        logger.exception("triage GET failed")
+        return {"status": "error", "detail": f"{type(exc).__name__}: {exc}"}
+
+
+@app.post("/api/v1/dashboard/claude-code-intel/triage/{post_id}/approve")
+async def dashboard_csi_triage_approve(request: Request, post_id: str):
+    _require_ops_auth(request)
+    try:
+        body: dict[str, Any] = {}
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        decided_by = str((body or {}).get("decided_by") or "kevin").strip() or "kevin"
+
+        from universal_agent.services import csi_demo_triage as _triage_mod
+
+        result = _triage_mod.approve_candidate(post_id=post_id, decided_by=decided_by)
+        return {"status": "ok", **result, "refreshed": _triage_refreshed_payload()}
+    except Exception as exc:
+        logger.exception("triage approve failed for %s", post_id)
+        return {"status": "error", "detail": f"{type(exc).__name__}: {exc}"}
+
+
+@app.post("/api/v1/dashboard/claude-code-intel/triage/{post_id}/dismiss")
+async def dashboard_csi_triage_dismiss(request: Request, post_id: str):
+    _require_ops_auth(request)
+    try:
+        body: dict[str, Any] = {}
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        decided_by = str((body or {}).get("decided_by") or "kevin").strip() or "kevin"
+
+        from universal_agent.services import csi_demo_triage as _triage_mod
+
+        result = _triage_mod.dismiss_candidate(post_id=post_id, decided_by=decided_by)
+        return {"status": "ok", **result, "refreshed": _triage_refreshed_payload()}
+    except Exception as exc:
+        logger.exception("triage dismiss failed for %s", post_id)
+        return {"status": "error", "detail": f"{type(exc).__name__}: {exc}"}
+
+
+@app.post("/api/v1/dashboard/claude-code-intel/triage/{post_id}/restore")
+async def dashboard_csi_triage_restore(request: Request, post_id: str):
+    _require_ops_auth(request)
+    try:
+        from universal_agent.services import csi_demo_triage as _triage_mod
+
+        result = _triage_mod.restore_candidate(post_id=post_id)
+        return {"status": "ok", **result, "refreshed": _triage_refreshed_payload()}
+    except Exception as exc:
+        logger.exception("triage restore failed for %s", post_id)
+        return {"status": "error", "detail": f"{type(exc).__name__}: {exc}"}
+
+
+@app.post("/api/v1/dashboard/claude-code-intel/triage/rerank")
+async def dashboard_csi_triage_rerank(request: Request):
+    _require_ops_auth(request)
+    try:
+        from universal_agent.services.csi_demo_triage_ranker import run_ranking
+
+        result = run_ranking()
+        return {
+            "status": "ok",
+            "ok": result.error is None,
+            **result.to_dict(),
+            "refreshed": _triage_refreshed_payload(),
+        }
+    except Exception as exc:
+        logger.exception("triage rerank failed")
+        return {"status": "error", "detail": f"{type(exc).__name__}: {exc}"}
 
 
 @app.get("/api/v1/dashboard/proactive-artifacts")

@@ -92,11 +92,6 @@ def _parse_args() -> argparse.Namespace:
         help="When swapping, overwrite an existing v1-archive instead of refusing.",
     )
     parser.add_argument(
-        "--queue-task-hub",
-        action="store_true",
-        help="Re-queue Task Hub items during replay. OFF by default to avoid duplicating work.",
-    )
-    parser.add_argument(
         "--no-vault-write",
         action="store_true",
         help="Run replay without writing to the parallel vault. Useful for measuring just the timing.",
@@ -172,7 +167,9 @@ def main() -> int:
         stats: BackfillStats = run_backfill(
             packets_root=src_packets,
             parallel_vault=parallel,
-            queue_task_hub=args.queue_task_hub,
+            # queue_task_hub kept at the function-default (False).
+            # Triage flyout (services.csi_demo_triage) is now the only Task
+            # Hub path; backfill never queues anything directly.
             write_vault=write_vault,
             conn=conn,
             stop_on_error=args.stop_on_error,

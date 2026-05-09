@@ -16,6 +16,10 @@ import {
   RefreshCcw,
   Search,
   Sparkles,
+  Star,
+  ThumbsUp,
+  Trash2,
+  Undo2,
   Zap,
 } from "lucide-react";
 import { formatDateTimeTz } from "@/lib/timezone";
@@ -146,6 +150,42 @@ type Payload = {
   };
 };
 
+type TriageCandidate = {
+  post_id: string;
+  handle: string;
+  tier: number;
+  action_type: string;
+  post_url: string;
+  post_text: string;
+  summary: string;
+  linked_sources: string[];
+  packet_dir: string;
+  first_seen_at: string;
+  state: 'pending' | 'approved' | 'dismissed';
+  task_id: string | null;
+  decided_at: string | null;
+  decided_by: string | null;
+  ranking_score: number | null;
+  ranking_rationale: string | null;
+  ranking_evaluated_at: string | null;
+  ranking_run_id: string | null;
+};
+
+type TriageCounts = {
+  pending: number;
+  approved: number;
+  dismissed: number;
+  tier3_pending: number;
+  tier4_pending: number;
+  unranked_pending: number;
+};
+
+type TriagePayload = {
+  counts: TriageCounts;
+  top5: TriageCandidate[];
+  all: TriageCandidate[];
+};
+
 function asText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -188,6 +228,19 @@ export default function DashboardClaudeCodeIntelPage() {
   const [knowledgeQuery, setKnowledgeQuery] = useState("");
   const [showKnowledgeDrawer, setShowKnowledgeDrawer] = useState(false);
   const deferredKnowledgeQuery = useDeferredValue(knowledgeQuery);
+
+  // ── Demo Triage drawer state ───────────────────────────────────────
+  // Source of truth for which CSI tier 3+ candidates make it into Task
+  // Hub is the operator's click in this drawer (no more auto-queue).
+  const [showTriageDrawer, setShowTriageDrawer] = useState(false);
+  const [triageData, setTriageData] = useState<TriagePayload | null>(null);
+  const [triageLoading, setTriageLoading] = useState(false);
+  const [triageActionPending, setTriageActionPending] = useState<string | null>(null);
+  const [triageRerankPending, setTriageRerankPending] = useState(false);
+  const [triageError, setTriageError] = useState("");
+  const [triageTierFilter, setTriageTierFilter] = useState<"all" | 3 | 4>("all");
+  const [showDismissed, setShowDismissed] = useState(false);
+  const [expandedRationaleId, setExpandedRationaleId] = useState<string | null>(null);
   const [triggerStatus, setTriggerStatus] = useState<"idle" | "pending" | "accepted" | "error">("idle");
   const [triggerMessage, setTriggerMessage] = useState("");
 
@@ -318,6 +371,83 @@ export default function DashboardClaudeCodeIntelPage() {
     return "offline" as const;
   }, [mostRecentPoll]);
 
+  // ── Demo Triage fetchers ────────────────────────────────────────────
+  async function fetchTriage() {
+    setTriageLoading(true);
+    setTriageError("");
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/dashboard/claude-code-intel/triage`, { cache: "no-store" });
+      const data = await res.json();
+      if (data?.status === "ok") {
+        setTriageData({ counts: data.counts, top5: data.top5 ?? [], all: data.all ?? [] });
+      } else {
+        setTriageError(data?.detail || "Failed to load triage data.");
+      }
+    } catch (err) {
+      setTriageError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setTriageLoading(false);
+    }
+  }
+
+  async function postTriageAction(postId: string, kind: "approve" | "dismiss" | "restore") {
+    setTriageActionPending(`${kind}:${postId}`);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/v1/dashboard/claude-code-intel/triage/${encodeURIComponent(postId)}/${kind}`,
+        { method: "POST", cache: "no-store", headers: { "content-type": "application/json" }, body: JSON.stringify({}) },
+      );
+      const data = await res.json();
+      if (data?.refreshed) {
+        setTriageData({ counts: data.refreshed.counts, top5: data.refreshed.top5 ?? [], all: data.refreshed.all ?? [] });
+      } else {
+        await fetchTriage();
+      }
+    } catch (err) {
+      setTriageError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setTriageActionPending(null);
+    }
+  }
+
+  async function rerankTriage() {
+    setTriageRerankPending(true);
+    setTriageError("");
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/dashboard/claude-code-intel/triage/rerank`, { method: "POST", cache: "no-store" });
+      const data = await res.json();
+      if (data?.refreshed) {
+        setTriageData({ counts: data.refreshed.counts, top5: data.refreshed.top5 ?? [], all: data.refreshed.all ?? [] });
+      } else {
+        await fetchTriage();
+      }
+    } catch (err) {
+      setTriageError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setTriageRerankPending(false);
+    }
+  }
+
+  function relativeTime(iso?: string | null): string {
+    if (!iso) return "";
+    const t = new Date(iso).getTime();
+    if (Number.isNaN(t)) return "";
+    const days = Math.floor((Date.now() - t) / 86_400_000);
+    if (days < 1) return "today";
+    if (days === 1) return "1d ago";
+    if (days < 30) return `${days}d ago`;
+    return `${Math.floor(days / 30)}mo ago`;
+  }
+
+  const triageVisibleAll = useMemo(() => {
+    const rows = triageData?.all ?? [];
+    return rows.filter((row) => {
+      if (!showDismissed && row.state !== "pending") return false;
+      if (triageTierFilter !== "all" && row.tier !== triageTierFilter) return false;
+      return true;
+    });
+  }, [triageData?.all, triageTierFilter, showDismissed]);
+
   return (
     <div className="h-full overflow-auto bg-background text-foreground">
       <div className="mx-auto flex w-full max-w-[1800px] flex-col gap-6 px-4 py-5 md:px-6">
@@ -367,6 +497,20 @@ export default function DashboardClaudeCodeIntelPage() {
               >
                 {showKnowledgeDrawer ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
                 Knowledge Search
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowTriageDrawer(true);
+                  void fetchTriage();
+                }}
+                className="inline-flex items-center gap-2 rounded-full border border-amber-400/30 bg-amber-500/10 px-4 py-2 text-sm font-medium text-amber-100 transition hover:bg-amber-500/20"
+              >
+                <Sparkles className="h-4 w-4" />
+                Demo Triage
+                {triageData?.counts.pending ? (
+                  <span className="ml-2 rounded-full bg-amber-500/20 px-2 py-0.5 text-xs">{triageData.counts.pending}</span>
+                ) : null}
               </button>
               <button
                 type="button"
@@ -871,6 +1015,262 @@ export default function DashboardClaudeCodeIntelPage() {
             </aside>
           </>
         ) : null}
+
+        {showTriageDrawer ? (
+          <>
+            <div className="fixed inset-0 z-40 bg-black/45 backdrop-blur-sm" onClick={() => setShowTriageDrawer(false)} />
+            <aside className="fixed inset-y-0 right-0 z-50 w-full max-w-[560px] border-l border-white/10 bg-[#08111f]/96 p-4 shadow-[0_40px_120px_rgba(0,0,0,0.55)] backdrop-blur-2xl">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Operator review</div>
+                  <h2 className="mt-1 text-lg font-semibold text-slate-100">Demo Triage</h2>
+                  {triageData?.counts ? (
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-300">
+                      <span className="rounded-full border border-amber-400/30 bg-amber-500/10 px-2 py-0.5">{triageData.counts.pending} pending</span>
+                      <span className="rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2 py-0.5">{triageData.counts.approved} approved</span>
+                      <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5">{triageData.counts.dismissed} dismissed</span>
+                      <span className="rounded-full border border-cyan-400/25 bg-cyan-400/10 px-2 py-0.5">{triageData.counts.unranked_pending} unranked</span>
+                    </div>
+                  ) : null}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={triageRerankPending}
+                    onClick={() => void rerankTriage()}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-violet-400/30 bg-violet-500/10 px-3 py-1.5 text-xs font-medium text-violet-100 transition hover:bg-violet-500/20 disabled:opacity-40"
+                  >
+                    {triageRerankPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCcw className="h-3.5 w-3.5" />}
+                    Rerank
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowTriageDrawer(false)}
+                    className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-slate-200 hover:bg-white/5"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+
+              {triageError ? (
+                <div className="mt-3 rounded-2xl border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-100">{triageError}</div>
+              ) : null}
+
+              {triageLoading && !triageData ? (
+                <div className="mt-6 flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Loading candidates...
+                </div>
+              ) : null}
+
+              <div className="mt-4 space-y-5 overflow-auto pr-1" style={{ maxHeight: "calc(100vh - 168px)" }}>
+                {(triageData?.top5 ?? []).length > 0 ? (
+                  <section>
+                    <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-amber-200/80">
+                      <Star className="h-3.5 w-3.5" /> Top 5 recommended
+                    </div>
+                    <div className="mt-2 space-y-2.5">
+                      {(triageData?.top5 ?? []).map((cand) => (
+                        <TriageCard
+                          key={`top-${cand.post_id}`}
+                          cand={cand}
+                          highlighted
+                          actionPending={triageActionPending}
+                          expandedRationaleId={expandedRationaleId}
+                          setExpandedRationaleId={setExpandedRationaleId}
+                          onApprove={() => void postTriageAction(cand.post_id, "approve")}
+                          onDismiss={() => void postTriageAction(cand.post_id, "dismiss")}
+                          onRestore={() => void postTriageAction(cand.post_id, "restore")}
+                          relativeTime={relativeTime}
+                        />
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+
+                <section>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                      All candidates ({triageData?.counts?.pending ?? 0} pending)
+                    </div>
+                    <div className="flex items-center gap-1.5 text-[11px]">
+                      {([
+                        ["all", "All"],
+                        [3, "Cody (T3)"],
+                        [4, "Atlas (T4)"],
+                      ] as const).map(([value, label]) => (
+                        <button
+                          key={String(value)}
+                          type="button"
+                          onClick={() => setTriageTierFilter(value as typeof triageTierFilter)}
+                          className={`rounded-full border px-2 py-0.5 transition ${triageTierFilter === value ? "border-cyan-400/40 bg-cyan-400/15 text-cyan-100" : "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10"}`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                      <label className="ml-2 inline-flex items-center gap-1 text-slate-300">
+                        <input
+                          type="checkbox"
+                          checked={showDismissed}
+                          onChange={(event) => setShowDismissed(event.target.checked)}
+                          className="h-3 w-3 accent-amber-400"
+                        />
+                        Show resolved
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="mt-2 space-y-2.5">
+                    {triageVisibleAll.length === 0 ? (
+                      <div className="rounded-2xl border border-dashed border-white/10 p-4 text-sm text-muted-foreground">
+                        No candidates match the current filters.
+                      </div>
+                    ) : (
+                      triageVisibleAll.map((cand) => (
+                        <TriageCard
+                          key={`all-${cand.post_id}`}
+                          cand={cand}
+                          actionPending={triageActionPending}
+                          expandedRationaleId={expandedRationaleId}
+                          setExpandedRationaleId={setExpandedRationaleId}
+                          onApprove={() => void postTriageAction(cand.post_id, "approve")}
+                          onDismiss={() => void postTriageAction(cand.post_id, "dismiss")}
+                          onRestore={() => void postTriageAction(cand.post_id, "restore")}
+                          relativeTime={relativeTime}
+                        />
+                      ))
+                    )}
+                  </div>
+                </section>
+              </div>
+            </aside>
+          </>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+
+function TriageCard({
+  cand,
+  highlighted,
+  actionPending,
+  expandedRationaleId,
+  setExpandedRationaleId,
+  onApprove,
+  onDismiss,
+  onRestore,
+  relativeTime,
+}: {
+  cand: TriageCandidate;
+  highlighted?: boolean;
+  actionPending: string | null;
+  expandedRationaleId: string | null;
+  setExpandedRationaleId: (id: string | null) => void;
+  onApprove: () => void;
+  onDismiss: () => void;
+  onRestore: () => void;
+  relativeTime: (iso?: string | null) => string;
+}) {
+  const tierLabel = cand.tier === 3 ? "Demo" : cand.tier === 4 ? "Intel" : `T${cand.tier}`;
+  const scoreLabel = cand.ranking_score == null ? "—" : `${cand.ranking_score.toFixed(1)}`;
+  const isApproveBusy = actionPending === `approve:${cand.post_id}`;
+  const isDismissBusy = actionPending === `dismiss:${cand.post_id}`;
+  const isRestoreBusy = actionPending === `restore:${cand.post_id}`;
+  const expanded = expandedRationaleId === cand.post_id;
+  const stateBorder =
+    cand.state === "approved"
+      ? "border-emerald-400/30"
+      : cand.state === "dismissed"
+        ? "border-white/8 opacity-70"
+        : highlighted
+          ? "border-amber-400/30"
+          : "border-white/10";
+
+  return (
+    <div className={`rounded-2xl border ${stateBorder} bg-white/[0.03] p-3`}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${cand.ranking_score == null ? "border-white/10 bg-white/5 text-slate-400" : "border-amber-400/40 bg-amber-500/15 text-amber-100"}`}>
+            {scoreLabel}{cand.ranking_score == null ? "" : " / 10"}
+          </span>
+          <span className={`rounded-full border px-2 py-0.5 text-[11px] ${cand.tier === 4 ? "border-violet-400/40 bg-violet-500/10 text-violet-100" : "border-cyan-400/30 bg-cyan-400/10 text-cyan-100"}`}>{tierLabel}</span>
+          <span className="text-xs text-slate-300">@{cand.handle || "?"}</span>
+          <span className="text-[11px] text-muted-foreground">{relativeTime(cand.first_seen_at)}</span>
+          {cand.state === "approved" ? (
+            <span className="rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] text-emerald-100">approved</span>
+          ) : null}
+          {cand.state === "dismissed" ? (
+            <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] text-slate-300">dismissed</span>
+          ) : null}
+        </div>
+        {cand.state === "pending" ? (
+          <button
+            type="button"
+            disabled={isDismissBusy}
+            onClick={onDismiss}
+            title="Trash this candidate"
+            className="rounded-full border border-white/10 p-1.5 text-slate-400 transition hover:border-rose-400/40 hover:bg-rose-500/10 hover:text-rose-200 disabled:opacity-40"
+          >
+            {isDismissBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+          </button>
+        ) : null}
+      </div>
+
+      <div className="mt-2 text-sm leading-5 text-slate-100">
+        {cand.summary || cand.post_text || "(no summary)"}
+      </div>
+
+      {cand.ranking_rationale ? (
+        <button
+          type="button"
+          onClick={() => setExpandedRationaleId(expanded ? null : cand.post_id)}
+          className="mt-2 text-[11px] text-cyan-200/80 underline-offset-2 hover:underline"
+        >
+          {expanded ? "Hide score reasoning" : "Why this score?"}
+        </button>
+      ) : null}
+      {expanded && cand.ranking_rationale ? (
+        <div className="mt-1 rounded-xl border border-white/8 bg-white/[0.03] p-2 text-[12px] leading-5 text-slate-200">
+          {cand.ranking_rationale}
+        </div>
+      ) : null}
+
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
+        <div className="flex items-center gap-2">
+          {cand.linked_sources.length ? <span>{cand.linked_sources.length} linked source{cand.linked_sources.length === 1 ? "" : "s"}</span> : null}
+          {cand.post_url ? (
+            <a href={cand.post_url} target="_blank" rel="noreferrer" className="text-cyan-200/80 hover:underline">
+              source post
+            </a>
+          ) : null}
+          {cand.task_id ? <span className="text-emerald-200/80">task: {cand.task_id.slice(0, 24)}…</span> : null}
+        </div>
+        <div className="flex items-center gap-2">
+          {cand.state === "pending" ? (
+            <button
+              type="button"
+              disabled={isApproveBusy}
+              onClick={onApprove}
+              className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/40 bg-emerald-500/15 px-3 py-1 text-xs font-semibold text-emerald-100 transition hover:bg-emerald-500/25 disabled:opacity-40"
+            >
+              {isApproveBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ThumbsUp className="h-3.5 w-3.5" />}
+              {cand.tier === 3 ? "Approve & send to Cody" : "Approve & send to Atlas"}
+            </button>
+          ) : null}
+          {cand.state === "dismissed" ? (
+            <button
+              type="button"
+              disabled={isRestoreBusy}
+              onClick={onRestore}
+              className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/5 px-3 py-1 text-xs text-slate-200 transition hover:bg-white/10 disabled:opacity-40"
+            >
+              {isRestoreBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Undo2 className="h-3.5 w-3.5" />}
+              Restore
+            </button>
+          ) : null}
+        </div>
       </div>
     </div>
   );

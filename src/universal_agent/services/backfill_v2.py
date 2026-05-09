@@ -158,6 +158,8 @@ def run_backfill(
 
     queue_task_hub defaults to False because backfill replays should NOT
     re-queue Task Hub items that may have already been processed in v1.
+    Triage flyout (services.csi_demo_triage) is now the only Task Hub
+    path; never queue from backfill.
     """
     # Lazy import — replay_packet has heavy transitive deps that we don't
     # need until we're actually backfilling.

@@ -898,6 +898,92 @@ def _direct_demo_fallback_enabled() -> bool:
     return os.getenv("UA_CSI_DIRECT_DEMO_FALLBACK", "0").strip().lower() in _TRUTHY
 
 
+def _build_followup_task_payload(
+    *,
+    handle: str,
+    packet_dir: Path,
+    action: dict[str, Any],
+    tier: int,
+    post_id: str,
+) -> dict[str, Any]:
+    """Build the canonical Task Hub upsert dict for a tier 3+ CSI action.
+
+    Single source of truth shared by:
+      - queue_follow_up_tasks() — the legacy auto-queue path used inside
+        run_sync()/replay_packet() when queue_task_hub=True.
+      - csi_demo_triage.approve_candidate() — the operator-driven approve
+        button in the dashboard flyout (the new ONLY path as of 2026-05-09).
+
+    Both call sites must produce identical payloads so a candidate that
+    moves from "auto-queued in v1" to "operator-approved in v2" lands on
+    the same downstream agent with the same metadata. Do NOT inline this
+    logic anywhere else.
+    """
+    if tier == 3:
+        source_kind = SOURCE_KIND_SCAFFOLD_REQUEST
+    else:
+        source_kind = SOURCE_KIND_KB_UPDATE
+
+    task_id = f"{source_kind}:{hashlib.sha256(post_id.encode()).hexdigest()[:16]}"
+    # Extract a descriptive snippet from the post text to differentiate
+    # tasks in the proactive history panel (avoids 7 identical titles).
+    post_snippet = _extract_title_snippet(str(action.get("text") or ""))
+    if tier == 3:
+        title = (
+            f"Scaffold demo: {post_snippet}"
+            if post_snippet
+            else f"Scaffold Claude Code demo from @{handle} update"
+        )
+        description = _scaffold_task_description(handle=handle, packet_dir=packet_dir, action=action)
+        labels = ["agent-ready", "claude-code-intel", "x-api", "simone-scaffold"]
+        preferred_vp = "simone_direct"
+        workflow_kind = "scaffold_demo_workspace"
+    else:
+        title = (
+            f"Analyze: {post_snippet}"
+            if post_snippet
+            else f"Analyze strategic Claude Code update from @{handle}"
+        )
+        description = _task_description(handle=handle, packet_dir=packet_dir, action=action)
+        labels = ["agent-ready", "claude-code-intel", "x-api", "atlas"]
+        preferred_vp = "vp.general.primary"
+        workflow_kind = "research"
+
+    return {
+        "task_id": task_id,
+        "source_kind": source_kind,
+        "source_ref": post_id,
+        "title": title,
+        "description": description,
+        "project_key": "proactive",
+        "priority": max(1, min(tier, 4)),
+        "labels": labels,
+        "status": task_hub.TASK_STATUS_OPEN,
+        "agent_ready": True,
+        "trigger_type": "heartbeat_poll",
+        "metadata": {
+            "source": LANE_SLUG,
+            "post_id": post_id,
+            "post_url": action.get("url") or "",
+            "packet_dir": str(packet_dir),
+            "tier": tier,
+            "action_type": action.get("action_type") or "",
+            "links": action.get("links") or [],
+            "preferred_vp": preferred_vp,
+            "knowledge_base_slug": KB_SLUG,
+            "vault_slug": KB_SLUG,
+            "workflow_manifest": {
+                "workflow_kind": workflow_kind,
+                "delivery_mode": "interactive_chat",
+                "requires_pdf": False,
+                "final_channel": "chat",
+                "canonical_executor": "simone_first",
+                "repo_mutation_allowed": tier == 3,
+            },
+        },
+    }
+
+
 def queue_follow_up_tasks(
     conn: sqlite3.Connection,
     *,
@@ -921,71 +1007,31 @@ def queue_follow_up_tasks(
         #   tier 4 → claude_code_kb_update (Atlas/general analysis)
         # The legacy direct claude_code_demo_task path is gated behind
         # UA_CSI_DIRECT_DEMO_FALLBACK for emergency use only.
-        if tier == 3:
-            source_kind = SOURCE_KIND_SCAFFOLD_REQUEST
-        else:
-            source_kind = SOURCE_KIND_KB_UPDATE
-
-        task_id = f"{source_kind}:{hashlib.sha256(post_id.encode()).hexdigest()[:16]}"
-        # Extract a descriptive snippet from the post text to differentiate
-        # tasks in the proactive history panel (avoids 7 identical titles).
-        post_snippet = _extract_title_snippet(str(action.get("text") or ""))
-        if tier == 3:
-            title = f"Scaffold demo: {post_snippet}" if post_snippet else f"Scaffold Claude Code demo from @{handle} update"
-            description = _scaffold_task_description(handle=handle, packet_dir=packet_dir, action=action)
-            labels = ["agent-ready", "claude-code-intel", "x-api", "simone-scaffold"]
-            preferred_vp = "simone_direct"
-            workflow_kind = "scaffold_demo_workspace"
-        else:
-            title = f"Analyze: {post_snippet}" if post_snippet else f"Analyze strategic Claude Code update from @{handle}"
-            description = _task_description(handle=handle, packet_dir=packet_dir, action=action)
-            labels = ["agent-ready", "claude-code-intel", "x-api", "atlas"]
-            preferred_vp = "vp.general.primary"
-            workflow_kind = "research"
-
-        task_hub.upsert_item(
-            conn,
-            {
-                "task_id": task_id,
-                "source_kind": source_kind,
-                "source_ref": post_id,
-                "title": title,
-                "description": description,
-                "project_key": "proactive",
-                "priority": max(1, min(tier, 4)),
-                "labels": labels,
-                "status": task_hub.TASK_STATUS_OPEN,
-                "agent_ready": True,
-                "trigger_type": "heartbeat_poll",
-                "metadata": {
-                    "source": LANE_SLUG,
-                    "post_id": post_id,
-                    "post_url": action.get("url") or "",
-                    "packet_dir": str(packet_dir),
-                    "tier": tier,
-                    "action_type": action.get("action_type") or "",
-                    "links": action.get("links") or [],
-                    "preferred_vp": preferred_vp,
-                    "knowledge_base_slug": KB_SLUG,
-                    "vault_slug": KB_SLUG,
-                    "workflow_manifest": {
-                        "workflow_kind": workflow_kind,
-                        "delivery_mode": "interactive_chat",
-                        "requires_pdf": False,
-                        "final_channel": "chat",
-                        "canonical_executor": "simone_first",
-                        "repo_mutation_allowed": tier == 3,
-                    },
-                },
-            },
+        # Build the canonical payload via the shared helper so the
+        # operator-driven approve flow in csi_demo_triage cannot drift.
+        payload = _build_followup_task_payload(
+            handle=handle,
+            packet_dir=packet_dir,
+            action=action,
+            tier=tier,
+            post_id=post_id,
         )
+        task_id = payload["task_id"]
+        source_kind = payload["source_kind"]
+        title = payload["title"]
+        task_hub.upsert_item(conn, payload)
 
         # Optional legacy fallback: also enqueue the direct cody_demo_task so
         # Cody can pick it up even if Simone's scaffold pipeline is broken.
         # Off by default. Flip UA_CSI_DIRECT_DEMO_FALLBACK=1 to enable.
         if tier == 3 and _direct_demo_fallback_enabled():
+            legacy_post_snippet = _extract_title_snippet(str(action.get("text") or ""))
             legacy_task_id = f"{SOURCE_KIND_DEMO_TASK}:{hashlib.sha256(post_id.encode()).hexdigest()[:16]}"
-            legacy_title = f"Build demo (fallback): {post_snippet}" if post_snippet else f"Build Claude Code demo from @{handle} update (fallback)"
+            legacy_title = (
+                f"Build demo (fallback): {legacy_post_snippet}"
+                if legacy_post_snippet
+                else f"Build Claude Code demo from @{handle} update (fallback)"
+            )
             task_hub.upsert_item(
                 conn,
                 {
