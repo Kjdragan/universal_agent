@@ -16,7 +16,13 @@ from universal_agent.artifacts import resolve_artifacts_dir
 
 logger = logging.getLogger(__name__)
 
-CLI_BINARY = Path("/opt/universal_agent/bin/hackernews-pp-cli")
+# Binary lives in $HOME/.local/bin/ — outside the repo tree, so it survives
+# `git clean`, deploys, and other repo-resetting operations. See issue #179
+# and docs/operations/2026-05-09_ship_pollution_and_phase1_followups.md for
+# the failure mode that drove this relocation. The deploy workflow
+# (.github/workflows/deploy.yml) ensures the binary is present on every
+# deploy via `bash scripts/install_hackernews_cli.sh`.
+CLI_BINARY = Path.home() / ".local" / "bin" / "hackernews-pp-cli"
 # hackernews-pp-cli v1.0.0 derives its config + SQLite paths from $HOME and
 # does NOT honor XDG_CONFIG_HOME / XDG_DATA_HOME (verified empirically). We
 # override $HOME so the CLI's `~/.config` and `~/.local/share` resolve into

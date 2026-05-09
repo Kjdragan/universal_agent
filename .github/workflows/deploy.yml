@@ -171,7 +171,14 @@ jobs:
             
             echo "--> Installing goplaces CLI..."
             run_as_ua "export PATH=\"$PATH\"; if [ ! -x \"$HOME/.local/bin/goplaces\" ]; then echo 'Downloading goplaces v0.3.0...'; mkdir -p /tmp/goplaces-dl && cd /tmp/goplaces-dl && curl -sSLO https://github.com/steipete/goplaces/releases/download/v0.3.0/goplaces_0.3.0_linux_amd64.tar.gz && tar -xzf goplaces_0.3.0_linux_amd64.tar.gz && mkdir -p ~/.local/bin && mv goplaces ~/.local/bin/ && chmod +x ~/.local/bin/goplaces && cd ~/ && rm -rf /tmp/goplaces-dl; else echo 'goplaces is already installed.'; fi"
-            
+
+            echo "--> Installing hackernews-pp-cli (Phase 1 HN dashboard tab)..."
+            # Idempotent — only downloads if missing. Targets ~/.local/bin/ (not
+            # /opt/universal_agent/bin/) so it survives `git clean` / repo
+            # resets — see issue #179. The install script does its own SHA-pin
+            # verification + smoke test (`doctor`) before reporting success.
+            run_as_ua "export PATH=\"\$PATH\"; if [ ! -x \"\$HOME/.local/bin/hackernews-pp-cli\" ]; then bash $PROD_DIR/scripts/install_hackernews_cli.sh; else echo 'hackernews-pp-cli is already installed.'; fi"
+
             echo "--> Building web-ui Next.js application..."
             run_as_ua "export PATH=\"$PATH\"; export NODE_OPTIONS='--max-old-space-size=1536'; if [ -d \"$PROD_DIR/web-ui\" ] && command -v npm >/dev/null 2>&1; then cd \"$PROD_DIR/web-ui\" && [ -f next.config.js ] || true; if [ package.json -nt node_modules/.package-json-mtime ] 2>/dev/null || [ ! -d node_modules ]; then echo '--> package.json changed or node_modules missing — running npm install...'; npm install && touch node_modules/.package-json-mtime; else echo '--> node_modules up to date, skipping npm install'; fi && echo '--> Removing stale Next.js build artifacts...' && rm -rf .next && npm run build; else echo 'WARN: web-ui or npm missing, skipping web build'; fi"
 
