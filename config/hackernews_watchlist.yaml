@@ -1,0 +1,10 @@
+# Hacker News topic watchlist — drives the Pulse panel.
+# Re-read on every cron tick. Cap: 6 topics (matches design 3x2 grid).
+# Edit and the change is live within 30 minutes.
+topics:
+  - claude
+  - agent
+  - codex
+  - llm
+  - harness
+  - agentic
