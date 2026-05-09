@@ -174,6 +174,62 @@ def test_get_top_recommendations(tmp_path: Path):
     conn.close()
 
 
+def test_extract_feature_key_priority():
+    """Slash commands beat flags; flags beat post-id fallback. URLs are stripped."""
+    assert triage._extract_feature_key("Use /ultrareview today", post_id="x") == "slash:ultrareview"
+    assert (
+        triage._extract_feature_key("--agent gives a system prompt", post_id="x")
+        == "flag:agent"
+    )
+    # URL-embedded slash should NOT trigger (URLs are stripped first).
+    assert (
+        triage._extract_feature_key("see https://docs.example.com/loop", post_id="abc")
+        == "post:abc"
+    )
+    # Slash inside summary still counts.
+    assert (
+        triage._extract_feature_key("plain text", summary="Try /batch", post_id="x")
+        == "slash:batch"
+    )
+    # Hyphenated slash command.
+    assert (
+        triage._extract_feature_key("the /fewer-permission-prompts skill", post_id="x")
+        == "slash:fewer-permission-prompts"
+    )
+
+
+def test_get_top_recommendations_dedupes_same_feature(tmp_path: Path):
+    """Two posts about /ultrareview should collapse to the highest-scored one
+    so the Top-N panel always surfaces independent features."""
+    conn = _open(tmp_path)
+    rows = [
+        ("u1", 9.0, "ClaudeDevs", "New /ultrareview command — bug-hunting agents"),
+        ("u2", 8.7, "ClaudeDevs", "For deep code review, /ultrareview research preview"),
+        ("b1", 9.5, "bcherny", "Use --agent to give Claude Code a custom system prompt"),
+        ("b2", 9.0, "bcherny", "/batch interviews you, then fans out worktrees"),
+        ("b3", 8.5, "bcherny", "/loop schedules recurring tasks"),
+        ("b4", 8.0, "bcherny", "/simplify uses parallel agents to improve code"),
+    ]
+    for post_id, score, handle, text in rows:
+        conn.execute(
+            """
+            INSERT INTO demo_triage_candidates
+              (post_id, handle, tier, action_type, post_text, packet_dir,
+               first_seen_at, state, ranking_score, ranking_evaluated_at,
+               ranking_run_id)
+            VALUES (?, ?, 3, 'demo_task', ?, '/x', '2026-05-09T00:00:00Z',
+                    'pending', ?, '2026-05-09T00:00:00Z', 'run1')
+            """,
+            (post_id, handle, text, score),
+        )
+    conn.commit()
+    top = triage.get_top_recommendations(conn=conn, n=5)
+    ids = [c.post_id for c in top]
+    # u1 (9.0) wins over u2 (8.7) for /ultrareview — u2 is dropped.
+    assert "u2" not in ids, f"duplicate /ultrareview should be dropped, got {ids}"
+    assert ids == ["b1", "u1", "b2", "b3", "b4"], ids
+
+
 # ── Approve round-trip ─────────────────────────────────────────────────
 
 

@@ -46,6 +46,7 @@ from datetime import datetime, timezone
 import json
 import logging
 from pathlib import Path
+import re
 import sqlite3
 from typing import Any
 
@@ -347,13 +348,49 @@ def list_candidates(
             conn.close()
 
 
+# ── Feature-key extraction (for Top-N dedup) ─────────────────────────────
+
+_URL_RE = re.compile(r"https?://\S+")
+# Slash-commands like /ultrareview, /fewer-permission-prompts. Requires a
+# non-word boundary before the "/" so URL paths previously stripped, plus
+# inline literals like "use /loop" both match. Min length 3 avoids false
+# positives on stray "/a" tokens.
+_SLASH_RE = re.compile(r"(?:^|[^\w/])/([a-zA-Z][a-zA-Z0-9_-]{2,})")
+# Long flags like --agent, --no-cache.
+_FLAG_RE = re.compile(r"--([a-zA-Z][a-zA-Z0-9_-]{2,})")
+
+
+def _extract_feature_key(post_text: str, summary: str = "", post_id: str = "") -> str:
+    """Normalised dedup key for the Top-N panel.
+
+    Picks the first slash-command, then the first long-flag, falling back to
+    the post_id so posts with no canonical feature anchor each surface on
+    their own (no silent collapse).
+    """
+    haystack = _URL_RE.sub(" ", f"{post_text}\n{summary}")
+    m = _SLASH_RE.search(haystack)
+    if m:
+        return f"slash:{m.group(1).lower()}"
+    m = _FLAG_RE.search(haystack)
+    if m:
+        return f"flag:{m.group(1).lower()}"
+    return f"post:{post_id}"
+
+
 def get_top_recommendations(
     *,
     conn: sqlite3.Connection | None = None,
     artifacts_root: Path | None = None,
     n: int = 5,
 ) -> list[TriageCandidate]:
-    """Top-scoring pending candidates. Skips unranked rows entirely."""
+    """Top-scoring pending candidates, deduped by extracted feature key.
+
+    Posts referencing the same slash-command (e.g. ``/ultrareview``) or long
+    flag (e.g. ``--agent``) collapse to the highest-scored representative
+    so the panel surfaces N *independent* features. Posts with no
+    recognisable command/flag anchor each get their own slot — they are not
+    silently dropped.
+    """
     own_conn = conn is None
     if conn is None:
         conn = open_db(artifacts_root)
@@ -365,11 +402,21 @@ def get_top_recommendations(
             SELECT * FROM demo_triage_candidates
             WHERE state = 'pending' AND ranking_score IS NOT NULL
             ORDER BY ranking_score DESC, first_seen_at DESC
-            LIMIT ?
-            """,
-            (int(max(1, n)),),
+            """
         ).fetchall()
-        return [_row_to_candidate(r) for r in rows]
+        target = max(1, int(n))
+        seen_keys: set[str] = set()
+        top: list[TriageCandidate] = []
+        for r in rows:
+            cand = _row_to_candidate(r)
+            key = _extract_feature_key(cand.post_text, cand.summary, cand.post_id)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            top.append(cand)
+            if len(top) >= target:
+                break
+        return top
     finally:
         if own_conn:
             conn.close()

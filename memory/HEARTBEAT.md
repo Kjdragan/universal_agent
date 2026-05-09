@@ -80,6 +80,14 @@ This file controls proactive heartbeat behavior. Keep items concrete and actiona
   - Surface quick-win side-hustle opportunities with short path to cash.
 - [ ] Operational hygiene
   - review pending Task Hub/calendar/email execution blockers and propose the next 1-3 actions.
+<!-- scope:hq -->
+- [ ] CSI demo-triage approvals → Phase 2 scaffold (Simone owns)
+  - Each cycle, query Task Hub for `source_kind = 'cody_scaffold_request'` AND `status = 'open'`. Concurrency cap: claim **at most one** row per cycle (oldest `created_at` first) so a flood of operator approvals can't blow the tick budget. The triage flyout at `/dashboard/claude-code-intel` is the producer.
+  - For the claimed row, read `metadata_json` to get `post_url`, `packet_dir`, `links`, `tier`, and `vault_slug`. Tier 3 → demo workspace (this directive). Tier 4 → kb_update (route to Atlas via existing `claude_code_kb_update` flow, do NOT scaffold).
+  - **Entity match**: search `artifacts/knowledge-vaults/claude-code-intelligence/entities/` for an entity page covering the same feature. Use slug-match against feature anchors extracted from `post_text` (slash-commands like `/ultrareview`, long flags like `--agent`) or against linked `code.claude.com/docs/...` paths. Examples already on disk: `custom-subagents.md`, `batch-command.md`, `claude-code-loop-command.md`, `fewer-permission-prompts-skill.md`.
+  - **If entity exists**: invoke the `cody-scaffold-builder` skill with the matched entity slug. Then refine the generated `BRIEF.md` / `ACCEPTANCE.md` / `business_relevance.md` placeholders with real prose synthesis (do NOT just delete `_(Simone: ...)_` markers — substitute substantive content). Then invoke `cody-task-dispatcher` to enqueue the `cody_demo_task`. Finally, mark the original `cody_scaffold_request` row `status=completed` with a Task Hub comment linking to the workspace and the new `cody_demo_task:<id>`.
+  - **If entity is missing**: do NOT speculate or invent a stub. Mark the `cody_scaffold_request` row `status=blocked` with reason `vault_entity_missing:<expected_slug>` and surface a one-line note in the heartbeat response so Kevin can decide whether to backfill the entity or defer the demo. Do not loop on it.
+  - **Safety**: only use the deterministic `cody-scaffold-builder` Python entry point. Never bypass it to write workspace files directly. The skill enforces the vanilla-settings safety net (`/opt/ua_demos/<id>/.claude/settings.json` integrity).
 ## Novelty Policy
 - Do NOT repeat an investigation topic that appears in the RECENT INVESTIGATIONS list provided in the prompt.
 - Each heartbeat cycle should advance a DIFFERENT item from the Active Monitors list or explore a genuinely new angle.

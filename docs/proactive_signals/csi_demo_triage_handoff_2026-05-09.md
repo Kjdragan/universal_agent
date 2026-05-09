@@ -151,10 +151,10 @@ print('TOTAL:', total)
 "
 ```
 
-**Success:** Roughly `{'inserted': ~110-118, 'skipped': ~5, 'packets': ~25-30}`.
-The ~5 skipped are the candidates already in the DB from Phase 1.
+**Success:** Roughly `{'inserted': ~75-85, 'skipped': ~35-45, 'packets': ~25-30}`.
+The skipped count is dominated by **post_id duplicates across packets** (a tweet that appears in multiple packet snapshots inserts once, then is skipped on subsequent encounters via `INSERT OR IGNORE`). That is correct dedup behavior, not a bug.
 
-Re-run the Phase 1 query — total should be ~118 across `state=pending`.
+Re-run the Phase 1 query — total `state=pending` should be **~80-90**, not 118. The original ~118 estimate counted action rows across packets pre-dedup; the post-level dedup is what we want.
 
 ---
 
@@ -172,14 +172,22 @@ PYTHONPATH=src uv run python -m universal_agent.scripts.csi_demo_triage_rank
 ```
 
 **Success:** Output shows JSON like
-`{"candidates_scored": ~118, "candidates_skipped": 0, "error": null, ...}`.
+`{"candidates_scored": ~60-80, "candidates_skipped": 0, "error": null, ...}`.
+
+**Expect to invoke the script 1-3 times.** The ranker has an internal batch
+ceiling (~60 rows per LLM call) so a fresh sync of ~80+ candidates will
+need a second pass. Occasionally the GLM streams a malformed JSON line
+(escaped quotes inside a `rationale`) which the parser logs as
+`triage_rank: skipping malformed line: ...` and skips — re-run and the
+self-healing third pass picks them up. The script is idempotent: it only
+scores rows where `ranking_score IS NULL` (or stale), so re-runs are safe.
 
 Re-run the Phase 1 query — every row should now have a `ranking_score` and
 the score column populated.
 
-**If the ranker fails:** Check stderr. Most likely cause is the GLM call
-returned malformed output or hit an unexpected throttle. Re-run; the script
-is idempotent (only re-scores stale or unscored rows).
+**If the ranker fails harder than that:** Check stderr. Verify
+`ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` point at Z.AI. Don't fix
+Infisical from here.
 
 ---
 
@@ -199,8 +207,8 @@ is idempotent (only re-scores stale or unscored rows).
      showing the LLM rationale, "Approve" button (primary), trash icon (right).
    - **All Candidates** section below, full chronological list, with filter
      pills (All / Cody (T3) / Atlas (T4)) and "Show resolved" toggle.
-5. Verify the trash icon appears on hover (red tint).
-6. Verify clicking a card body opens the source X post in a new tab (if linked).
+5. Verify the trash icon appears at the top-right of every card and gets a rose/red tint + border on hover (the icon itself is always visible; only the color treatment is hover-revealed).
+6. Verify the explicit `source post` link inside each card opens the X post in a new tab. **Note:** the card body itself is NOT a click target — only the `source post` link is. (An earlier draft of this doc said the whole card was clickable; that was wrong.)
 
 **Success:** All 6 visual checks pass.
 
@@ -222,12 +230,16 @@ The drawer should:
 - Show a brief toast / confirmation
 - Refresh; the card now appears under "Show resolved" with status `approved` and a Task Hub task_id link
 
-Verify Task Hub got the row:
+Verify Task Hub got the row. **Note the canonical Task Hub DB path is
+`activity_state.db`, NOT `task_hub.db`** (an earlier draft of this doc had
+the wrong filename — the approve service routes through
+`task_hub.upsert_item` against `durable.db.get_activity_db_path()` which
+resolves to `activity_state.db`):
 
 ```bash
 python3 -c "
 import sqlite3
-c = sqlite3.connect('/opt/universal_agent/AGENT_RUN_WORKSPACES/task_hub.db')
+c = sqlite3.connect('/opt/universal_agent/AGENT_RUN_WORKSPACES/activity_state.db')
 for r in c.execute(\"SELECT task_id, source_kind, status, title, created_at FROM task_hub_items WHERE source_kind = 'cody_scaffold_request' ORDER BY created_at DESC LIMIT 3\"):
     print(r)
 "
@@ -237,10 +249,18 @@ for r in c.execute(\"SELECT task_id, source_kind, status, title, created_at FROM
 `status='open'`, recent `created_at` timestamp, title matching the post you
 approved.
 
-**Note:** The task will sit `open` in Task Hub. **Cody won't auto-pick it up
-until `memory/HEARTBEAT.md` gets the Phase 2 wiring directive added.** That's
-a separate ticket — do NOT add it in this session. Just confirm the row
-exists; that proves the triage→approval→queue path works.
+**Note:** As of 2026-05-09 the row will be picked up by **Simone** on her
+next heartbeat tick — `memory/HEARTBEAT.md` now has the Phase 2 wiring
+directive ("CSI demo-triage approvals → Phase 2 scaffold"). She'll claim
+ONE row per cycle (oldest first), match it to a vault entity, run
+`cody-scaffold-builder`, refine the BRIEF/ACCEPTANCE/business_relevance
+templates with prose, and dispatch via `cody-task-dispatcher`. If no
+matching vault entity exists for the approved post, she'll mark the row
+`status=blocked` with reason `vault_entity_missing:<slug>` rather than
+guess. Confirming a `cody_scaffold_request` row exists at this point
+proves the triage → approval → queue path; observing it transition to
+`completed` (with a downstream `cody_demo_task` linked) on a later
+heartbeat proves the full Phase 2 chain.
 
 ---
 
