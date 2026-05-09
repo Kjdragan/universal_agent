@@ -7,6 +7,8 @@ import {
   RefreshCw,
   Search,
   AlertTriangle,
+  X,
+  ArrowLeft,
 } from "lucide-react";
 
 const API = "/api/dashboard/gateway/api/v1/hackernews";
@@ -1044,11 +1046,199 @@ const tileRow3: React.CSSProperties = {
   color: T.t2,
 };
 
+type PreviewState = { url: string; title: string };
+
+function PreviewOverlay({
+  preview,
+  onClose,
+}: {
+  preview: PreviewState;
+  onClose: () => void;
+}) {
+  let host = "";
+  try {
+    host = new URL(preview.url).hostname.replace(/^www\./, "");
+  } catch {
+    host = "";
+  }
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(5, 7, 11, 0.78)",
+        backdropFilter: "blur(2px)",
+        zIndex: 9000,
+        display: "flex",
+        alignItems: "stretch",
+        justifyContent: "stretch",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          margin: "2.5vh auto",
+          width: "min(1400px, 95vw)",
+          height: "95vh",
+          background: T.bg0,
+          border: `1px solid ${T.line2}`,
+          borderRadius: 10,
+          boxShadow: "0 20px 60px rgba(0,0,0,0.55)",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+        }}
+      >
+        {/* Sticky header — back/return pill, title, open-in-new-tab, close */}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "auto 1fr auto auto",
+            alignItems: "center",
+            gap: 10,
+            padding: "8px 12px",
+            borderBottom: `1px solid ${T.line}`,
+            background: `linear-gradient(180deg, ${T.bg3}, ${T.bg2})`,
+            fontFamily: T.fontMono,
+            fontSize: 12,
+          }}
+        >
+          <button
+            onClick={onClose}
+            title="Back to Hacker News dashboard (Esc)"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "5px 10px",
+              borderRadius: 999,
+              border: `1px solid ${T.hnDim}`,
+              background: "rgba(255,102,0,0.08)",
+              color: T.hn,
+              cursor: "pointer",
+              fontFamily: T.fontMono,
+              fontSize: 12,
+              fontWeight: 600,
+            }}
+          >
+            <ArrowLeft size={13} />
+            Back to dashboard
+          </button>
+          <div
+            style={{
+              minWidth: 0,
+              color: T.t1,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+            title={preview.title}
+          >
+            <span style={{ color: T.t0, fontWeight: 500 }}>{preview.title}</span>
+            {host ? (
+              <span style={{ color: T.t3, marginLeft: 8 }}>· {host}</span>
+            ) : null}
+          </div>
+          <a
+            href={preview.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Open in a new tab (use this if the page below is blank — some sites block embedding)"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 5,
+              padding: "5px 9px",
+              borderRadius: 6,
+              border: `1px solid ${T.line2}`,
+              background: T.bg2,
+              color: T.t0,
+              textDecoration: "none",
+              fontFamily: T.fontMono,
+              fontSize: 11.5,
+            }}
+          >
+            <ExternalLink size={11} />
+            Open in new tab
+          </a>
+          <button
+            onClick={onClose}
+            title="Close (Esc)"
+            style={{
+              width: 28,
+              height: 28,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              borderRadius: 6,
+              border: `1px solid ${T.line2}`,
+              background: T.bg2,
+              color: T.t1,
+              cursor: "pointer",
+            }}
+          >
+            <X size={14} />
+          </button>
+        </div>
+
+        {/* Iframe body. Sandbox is permissive enough for most sites to render. */}
+        <iframe
+          src={preview.url}
+          title={preview.title}
+          referrerPolicy="no-referrer-when-downgrade"
+          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
+          style={{
+            flex: 1,
+            border: 0,
+            background: "#fff",
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
 export default function HackerNewsPage() {
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [preview, setPreview] = useState<PreviewState | null>(null);
   const [, force] = useState(0);
+
+  // One delegated click handler on the page wrapper intercepts every
+  // `<a target="_blank">` row click and pops the in-dashboard preview
+  // modal. Cmd/Ctrl/Shift/middle-click are passed through so power users
+  // still get a real new tab. The modal exposes an "Open in new tab"
+  // escape hatch for sites that block iframe embedding via X-Frame-Options
+  // or frame-ancestors CSP — we can't reliably detect those from JS, so
+  // the user-driven escape hatch is the simplest correct answer.
+  const handleRowIntercept = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    let el = e.target as HTMLElement | null;
+    while (el && el !== e.currentTarget) {
+      if (el.tagName === "A") {
+        const a = el as HTMLAnchorElement;
+        if (a.target === "_blank" && a.href) {
+          e.preventDefault();
+          setPreview({ url: a.href, title: a.title || a.textContent || a.href });
+          return;
+        }
+      }
+      el = el.parentElement;
+    }
+  }, []);
+
+  // Esc closes the preview overlay.
+  useEffect(() => {
+    if (!preview) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPreview(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [preview]);
 
   const load = useCallback(async () => {
     try {
@@ -1114,6 +1304,7 @@ export default function HackerNewsPage() {
   return (
     <div
       className="hn-tab"
+      onClick={handleRowIntercept}
       style={{
         background: T.bg0,
         color: T.t0,
@@ -1350,6 +1541,10 @@ export default function HackerNewsPage() {
         hackernews-pp-cli · sqlite snapshot store · cron */30m · schema v
         {snap?.meta.schema_version ?? 1}
       </div>
+
+      {preview ? (
+        <PreviewOverlay preview={preview} onClose={() => setPreview(null)} />
+      ) : null}
 
       <style jsx global>{`
         @keyframes hn-spin {
