@@ -153,11 +153,20 @@ def all_ok(monkeypatch):
 def test_build_snapshot_success(all_ok, monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(svc, "WATCHLIST_FILE", tmp_path / "missing")
     snap = svc.build_snapshot()
-    assert snap["meta"]["schema_version"] == 1
+    assert snap["meta"]["schema_version"] == 2
     assert snap["meta"]["errors"] == []
     assert isinstance(snap["meta"]["duration_seconds"], float)
+    # Top-stories input was already a list of hydrated dicts; passes through unchanged.
     assert snap["top_stories"] == [{"id": 1, "title": "t1"}]
     assert set(snap["pulses"].keys()) == set(svc.DEFAULT_TOPICS)
+    # Pulses are normalized into the frontend-shaped {count, avg_points, trend, pct_change} dict.
+    assert snap["pulses"]["claude"] == {
+        "topic": "claude",
+        "count": 0,  # the fixture returns {"topic":..., "count": 5} but no "total_hits"
+        "avg_points": 0,
+        "trend": [],
+        "pct_change": 0,
+    }
     assert snap["meta"]["watchlist"] == svc.DEFAULT_TOPICS
 
 
@@ -193,9 +202,10 @@ def test_build_snapshot_partial_failure_marks_errors(
     snap = svc.build_snapshot()
     assert "hiring" in snap["meta"]["errors"]
     assert "pulse_claude" in snap["meta"]["errors"]
-    # other panels survived
+    # other panels survived (post-normalization shape)
     assert snap["top_stories"] is not None
-    assert snap["pulses"]["agent"] == {"ok": True}
+    assert snap["pulses"]["agent"]["topic"] == "agent"
+    assert snap["pulses"]["agent"]["count"] == 0  # fake returns {"ok": True} → no total_hits
     assert snap["pulses"]["claude"] is None
     assert snap["hiring"] is None
 
@@ -322,3 +332,101 @@ def test_build_snapshot_records_duration(monkeypatch, tmp_path: Path) -> None:
     assert snap["meta"]["duration_seconds"] == 1.5
     # sync + 6 pulses + 6 fixed panels (top, movers, controversial, show, ask, hiring) = 13
     assert counter["n"] == 13
+
+
+# ─── _normalize_* helpers ──────────────────────────────────────────────
+
+
+def test_normalize_top_like_passes_through_hydrated_dicts() -> None:
+    raw = [{"id": 1, "title": "t"}, {"id": 2, "title": "u"}]
+    assert svc._normalize_top_like(raw, limit=10) == raw
+
+
+def test_normalize_top_like_handles_results_wrapper(monkeypatch) -> None:
+    # IDs-only payload (the real CLI shape for `stories top|show|ask`).
+    monkeypatch.setattr(
+        svc,
+        "_hydrate_stories",
+        lambda ids, max_workers=8: [{"id": i, "title": f"t{i}"} for i in ids],
+    )
+    raw = {"meta": {"source": "live"}, "results": [10, 20, 30]}
+    assert svc._normalize_top_like(raw, limit=2) == [
+        {"id": 10, "title": "t10"},
+        {"id": 20, "title": "t20"},
+    ]
+
+
+def test_normalize_top_like_passes_none_through() -> None:
+    assert svc._normalize_top_like(None, limit=5) is None
+
+
+def test_normalize_movers_emits_changes(monkeypatch) -> None:
+    monkeypatch.setattr(
+        svc,
+        "_hydrate_stories",
+        lambda ids, max_workers=8: [
+            {"id": int(i), "title": f"#{i}", "score": 100} for i in ids
+        ],
+    )
+    raw = {
+        "previous_taken_at": "2026-05-09T15:00:00Z",
+        "current_taken_at": "2026-05-09T15:30:00Z",
+        "added": ["111"],
+        "removed": ["222"],
+        "moved": [{"id": "333", "from_rank": 5, "to_rank": 2}],
+    }
+    out = svc._normalize_movers(raw)
+    assert out["since"] == "2026-05-09T15:00:00Z"
+    statuses = [c["status"] for c in out["changes"]]
+    assert statuses == ["new", "moved", "dropped"]
+    moved = next(c for c in out["changes"] if c["status"] == "moved")
+    assert moved["delta"] == 3  # climbed 3 ranks
+    assert moved["rank"] == 2
+
+
+def test_normalize_pulse_computes_avg_points() -> None:
+    raw = {
+        "topic": "claude",
+        "total_hits": 232,
+        "top_stories": [
+            {"id": "1", "points": 500},
+            {"id": "2", "points": 300},
+            {"id": "3", "points": 100},
+        ],
+    }
+    out = svc._normalize_pulse(raw, "claude")
+    assert out == {
+        "topic": "claude",
+        "count": 232,
+        "avg_points": 300,
+        "trend": [],
+        "pct_change": 0,
+    }
+
+
+def test_normalize_hiring_maps_top_companies() -> None:
+    raw = {
+        "top_companies": [
+            {"name": "Apple", "count": 4},
+            {"name": "MongoDB", "count": 4},
+            {"name": "Foxglove", "count": 3},
+            {"name": "X", "count": 2},
+            {"name": "Y", "count": 2},
+            {"name": "Z", "count": 1},  # capped to 5
+        ]
+    }
+    out = svc._normalize_hiring(raw)
+    assert out == {
+        "companies": [
+            {"name": "Apple", "months": 4},
+            {"name": "MongoDB", "months": 4},
+            {"name": "Foxglove", "months": 3},
+            {"name": "X", "months": 2},
+            {"name": "Y", "months": 2},
+        ]
+    }
+
+
+def test_normalize_controversial_passes_list_through() -> None:
+    raw = [{"id": "1", "title": "x", "score": 10, "descendants": 100}]
+    assert svc._normalize_controversial(raw) == raw
