@@ -158,3 +158,22 @@ session_workspaces/
 *.py.bak
 *.py.orig
 *.bak
+
+# === Runtime state created by services on the VPS ===
+# /var/ holds the hackernews-pp-cli SQLite store, response cache, and
+# config files (see services/hackernews_snapshot_service.py:CLI_HOME).
+# Pure runtime state — regenerated on every cron tick; no consumer
+# in source.
+/var/
+# /bin/ used to hold the hackernews-pp-cli binary. cf891dfb relocated
+# it to ~/.local/bin/ explicitly so it survives `git clean`. Anything
+# that ends up here now is leftover or accidental — keep it out of git.
+/bin/
+
+# === Generated intelligence outputs (no dashboard consumer) ===
+# Markdown briefings produced by the autonomous briefings agent and
+# Discord digests produced by the discord-intel pipeline. The dashboards
+# read the underlying SQLite DBs / structured artifacts, not these
+# markdown summaries. Treat as runtime output, regeneratable from source.
+/kb/briefings/
+/discord_intelligence/digests/
