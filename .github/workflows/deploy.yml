@@ -23,6 +23,12 @@ on:
       # so a deploy on these commits would just restart the gateway for
       # zero behavior change.
       - 'artifacts/**'
+      # Harness-managed session memory snapshots (memory/index.json,
+      # memory/<date>.md). Auto-written during agent sessions and
+      # periodically committed (e.g. PR #182). Production gateway never
+      # reads these — they're operator-tier state — so a deploy that
+      # only touches memory/ would restart the gateway for nothing.
+      - 'memory/**'
   workflow_dispatch:
 
 jobs:
