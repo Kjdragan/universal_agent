@@ -124,6 +124,19 @@ def test_ship_primary_provides_no_gh_fallback() -> None:
     )
 
 
+def test_ship_primary_enables_auto_merge() -> None:
+    """The slim /ship redesign (2026-05-10) calls `gh pr merge --auto --merge`.
+
+    This is THE point of the redesign: open the PR + queue auto-merge in one
+    shot so the operator can walk away. Pre-redesign /ship watched CI; the
+    new flow trusts auto-merge to do that. Regression here means we lost
+    the queue behavior and operators have to babysit PRs again.
+    """
+    content = _SHIP_PRIMARY.read_text(encoding="utf-8")
+    assert "gh pr merge" in content, "/ship must call gh pr merge to enable auto-merge"
+    assert "--auto" in content, "/ship's gh pr merge call must use --auto for queue behavior"
+
+
 # ─── secondary slash command (.agents/workflows/ship.md) ───────────────
 
 
