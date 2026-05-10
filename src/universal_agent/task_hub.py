@@ -3262,7 +3262,18 @@ def release_stale_assignments(
     agent_id_prefix: Any = "heartbeat:",
     stale_after_seconds: int = 1800,
     limit: int = 500,
+    exclude_session_ids: Optional[Any] = None,
 ) -> dict[str, int]:
+    """Release seized/running assignments older than ``stale_after_seconds``.
+
+    ``exclude_session_ids`` (Hermes-adaptation Phase A.2): an optional
+    iterable of ``provider_session_id`` values to skip even when their
+    assignments are age-eligible. Used by ``dispatch_sweep`` to protect the
+    *calling* session (and any other known-live sessions) from accidental
+    release when this function is called inline from a heartbeat tick. The
+    default (``None`` / empty) preserves backward-compat behavior for manual
+    operator triggers and ops scripts.
+    """
     ensure_schema(conn)
     stale_after_seconds = max(1, int(stale_after_seconds))
     raw_prefixes = agent_id_prefix
@@ -3273,11 +3284,25 @@ def release_stale_assignments(
     if not prefixes:
         prefixes = ["heartbeat:"]
 
+    # Normalize the exclude set. Accept any iterable; coerce to non-empty strings.
+    excluded: set[str] = set()
+    if exclude_session_ids is not None:
+        try:
+            for v in exclude_session_ids:
+                text = str(v).strip()
+                if text:
+                    excluded.add(text)
+        except TypeError:
+            # Single string accidentally passed without wrapping — treat as one item.
+            text = str(exclude_session_ids).strip()
+            if text:
+                excluded.add(text)
+
     clauses = " OR ".join("agent_id LIKE ?" for _ in prefixes)
     params = tuple(f"{prefix}%" for prefix in prefixes) + (max(1, int(limit)),)
     rows = conn.execute(
         f"""
-        SELECT assignment_id, started_at
+        SELECT assignment_id, started_at, provider_session_id
         FROM task_hub_assignments
         WHERE state IN ('seized', 'running')
           AND ({clauses})
@@ -3289,17 +3314,24 @@ def release_stale_assignments(
 
     now_dt = datetime.now(timezone.utc)
     stale_ids: list[str] = []
+    skipped_live = 0
     for row in rows:
         assignment_id = str(row["assignment_id"] or "").strip()
         started_at = _parse_iso(row["started_at"])
         if not assignment_id or started_at is None:
             continue
         age_seconds = (now_dt - started_at).total_seconds()
-        if age_seconds >= stale_after_seconds:
-            stale_ids.append(assignment_id)
+        if age_seconds < stale_after_seconds:
+            continue
+        # Skip assignments whose session is in the caller-supplied live set.
+        session_id = str(row["provider_session_id"] or "").strip()
+        if session_id and session_id in excluded:
+            skipped_live += 1
+            continue
+        stale_ids.append(assignment_id)
 
     if not stale_ids:
-        return {"stale_detected": 0, "finalized": 0, "reopened": 0}
+        return {"stale_detected": 0, "finalized": 0, "reopened": 0, "skipped_live": skipped_live}
 
     result = finalize_assignments(
         conn,
@@ -3312,6 +3344,7 @@ def release_stale_assignments(
         "stale_detected": len(stale_ids),
         "finalized": int(result.get("finalized") or 0),
         "reopened": int(result.get("reopened") or 0),
+        "skipped_live": skipped_live,
     }
 
 
