@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   ExternalLink,
   MessageCircle,
@@ -1048,6 +1050,22 @@ const tileRow3: React.CSSProperties = {
 
 type PreviewState = { url: string; title: string };
 
+type ArticleData = {
+  ok: boolean;
+  title?: string;
+  byline?: string;
+  host?: string;
+  lead_image_url?: string;
+  content_md?: string;
+  content_length?: number;
+  source_url?: string;
+  fetched_at?: string;
+  error?: string;
+};
+
+type ReaderStatus = "loading" | "ready" | "error";
+type PreviewMode = "reader" | "original";
+
 function PreviewOverlay({
   preview,
   onClose,
@@ -1061,6 +1079,54 @@ function PreviewOverlay({
   } catch {
     host = "";
   }
+
+  // Self-posts (HN's own item pages) and HN domains skip reader mode —
+  // a comment thread is not an "article" and HN embeds cleanly anyway.
+  const isHnNative = host.endsWith("ycombinator.com");
+
+  const [article, setArticle] = useState<ArticleData | null>(null);
+  const [readerStatus, setReaderStatus] = useState<ReaderStatus>("loading");
+  const [mode, setMode] = useState<PreviewMode>(isHnNative ? "original" : "reader");
+
+  // Fetch reader-mode article on mount. Skipped for HN-native URLs since
+  // the iframe renders fine and the page is a comment thread, not prose.
+  useEffect(() => {
+    if (isHnNative) {
+      setReaderStatus("error"); // forces toggle to stay on Original
+      return;
+    }
+    let cancelled = false;
+    setReaderStatus("loading");
+    setArticle(null);
+    fetch(`${API}/article?url=${encodeURIComponent(preview.url)}`, {
+      cache: "no-store",
+    })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`http ${r.status}`))))
+      .then((data: ArticleData) => {
+        if (cancelled) return;
+        setArticle(data);
+        if (data.ok && (data.content_md ?? "").trim().length > 0) {
+          setReaderStatus("ready");
+        } else {
+          // Reader couldn't extract anything useful — fall through to iframe.
+          setReaderStatus("error");
+          setMode("original");
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.warn("HN reader fetch failed:", err);
+        setReaderStatus("error");
+        setMode("original");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [preview.url, isHnNative]);
+
+  const readerAvailable = readerStatus === "ready";
+  const showLoader = readerStatus === "loading" && mode === "reader";
+
   return (
     <div
       onClick={onClose}
@@ -1090,11 +1156,11 @@ function PreviewOverlay({
           overflow: "hidden",
         }}
       >
-        {/* Sticky header — back/return pill, title, open-in-new-tab, close */}
+        {/* Sticky header — back/return pill, title, mode toggle, open-in-new-tab, close */}
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "auto 1fr auto auto",
+            gridTemplateColumns: "auto 1fr auto auto auto",
             alignItems: "center",
             gap: 10,
             padding: "8px 12px",
@@ -1140,11 +1206,18 @@ function PreviewOverlay({
               <span style={{ color: T.t3, marginLeft: 8 }}>· {host}</span>
             ) : null}
           </div>
+          {/* Mode toggle — Reader / Original. Reader disabled when extraction failed. */}
+          <ModeToggle
+            mode={mode}
+            onChange={setMode}
+            readerAvailable={readerAvailable}
+            readerLoading={readerStatus === "loading"}
+          />
           <a
             href={preview.url}
             target="_blank"
             rel="noopener noreferrer"
-            title="Open in a new tab (use this if the page below is blank — some sites block embedding)"
+            title="Open the original article in a new tab"
             style={{
               display: "inline-flex",
               alignItems: "center",
@@ -1182,19 +1255,234 @@ function PreviewOverlay({
           </button>
         </div>
 
-        {/* Iframe body. Sandbox is permissive enough for most sites to render. */}
-        <iframe
-          src={preview.url}
-          title={preview.title}
-          referrerPolicy="no-referrer-when-downgrade"
-          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
-          style={{
-            flex: 1,
-            border: 0,
-            background: "#fff",
-          }}
-        />
+        {/* Body: reader-mode markdown by default, iframe when toggled to Original */}
+        {mode === "reader" ? (
+          showLoader ? (
+            <ReaderLoading />
+          ) : article && article.ok ? (
+            <ReaderArticle article={article} />
+          ) : (
+            <ReaderError article={article} sourceUrl={preview.url} />
+          )
+        ) : (
+          <iframe
+            src={preview.url}
+            title={preview.title}
+            referrerPolicy="no-referrer-when-downgrade"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
+            style={{
+              flex: 1,
+              border: 0,
+              background: "#fff",
+            }}
+          />
+        )}
       </div>
+    </div>
+  );
+}
+
+function ModeToggle({
+  mode,
+  onChange,
+  readerAvailable,
+  readerLoading,
+}: {
+  mode: PreviewMode;
+  onChange: (m: PreviewMode) => void;
+  readerAvailable: boolean;
+  readerLoading: boolean;
+}) {
+  const readerDisabled = !readerAvailable && !readerLoading;
+  const baseBtn: React.CSSProperties = {
+    padding: "4px 10px",
+    fontFamily: T.fontMono,
+    fontSize: 11,
+    border: `1px solid ${T.line2}`,
+    background: T.bg2,
+    color: T.t2,
+    cursor: "pointer",
+  };
+  const activeBtn: React.CSSProperties = {
+    background: T.bg4,
+    color: T.t0,
+    borderColor: T.hnDim,
+  };
+  return (
+    <div
+      title={
+        readerDisabled
+          ? "Reader extraction unavailable for this URL — falling back to original"
+          : "Toggle between reader-mode and the original page"
+      }
+      style={{ display: "inline-flex", borderRadius: 6, overflow: "hidden" }}
+    >
+      <button
+        onClick={() => onChange("reader")}
+        disabled={readerDisabled}
+        style={{
+          ...baseBtn,
+          ...(mode === "reader" ? activeBtn : {}),
+          borderTopRightRadius: 0,
+          borderBottomRightRadius: 0,
+          borderRight: 0,
+          opacity: readerDisabled ? 0.45 : 1,
+          cursor: readerDisabled ? "not-allowed" : "pointer",
+        }}
+      >
+        {readerLoading ? "Reader…" : "Reader"}
+      </button>
+      <button
+        onClick={() => onChange("original")}
+        style={{
+          ...baseBtn,
+          ...(mode === "original" ? activeBtn : {}),
+          borderTopLeftRadius: 0,
+          borderBottomLeftRadius: 0,
+        }}
+      >
+        Original
+      </button>
+    </div>
+  );
+}
+
+function ReaderLoading() {
+  return (
+    <div
+      style={{
+        flex: 1,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        color: T.t2,
+        fontFamily: T.fontMono,
+        fontSize: 12,
+      }}
+    >
+      <RefreshCw
+        size={14}
+        style={{ marginRight: 8, animation: "hn-spin 1.2s linear infinite" }}
+      />
+      fetching reader content…
+    </div>
+  );
+}
+
+function ReaderError({
+  article,
+  sourceUrl,
+}: {
+  article: ArticleData | null;
+  sourceUrl: string;
+}) {
+  const reason = article?.error || "couldn’t extract reader content";
+  return (
+    <div
+      style={{
+        flex: 1,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 12,
+        color: T.t2,
+        fontFamily: T.fontMono,
+        fontSize: 12.5,
+        padding: 24,
+        textAlign: "center",
+      }}
+    >
+      <AlertTriangle size={20} color={T.warn} />
+      <div style={{ color: T.t1 }}>Reader-mode extraction failed</div>
+      <div style={{ color: T.t3, fontSize: 11 }}>{reason}</div>
+      <div style={{ color: T.t3, fontSize: 11 }}>
+        Switch to <b style={{ color: T.t1 }}>Original</b> above, or{" "}
+        <a
+          href={sourceUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ color: T.hn, textDecoration: "none" }}
+        >
+          open in a new tab
+        </a>
+        .
+      </div>
+    </div>
+  );
+}
+
+function ReaderArticle({ article }: { article: ArticleData }) {
+  const title = (article.title || "").trim();
+  const byline = (article.byline || "").trim();
+  const lead = (article.lead_image_url || "").trim();
+  const md = (article.content_md || "").trim();
+  return (
+    <div
+      style={{
+        flex: 1,
+        overflow: "auto",
+        background: T.bg0,
+        color: T.t0,
+        fontFamily: T.fontSans,
+        padding: "26px 32px 60px",
+      }}
+    >
+      <article
+        className="hn-reader"
+        style={{ maxWidth: 760, margin: "0 auto", lineHeight: 1.65, fontSize: 15 }}
+      >
+        {title ? (
+          <h1
+            style={{
+              margin: "0 0 6px",
+              fontSize: 26,
+              lineHeight: 1.2,
+              color: T.t0,
+              fontWeight: 700,
+            }}
+          >
+            {title}
+          </h1>
+        ) : null}
+        {(byline || article.host) ? (
+          <div
+            style={{
+              color: T.t2,
+              fontFamily: T.fontMono,
+              fontSize: 11.5,
+              marginBottom: 18,
+            }}
+          >
+            {byline ? (
+              <>
+                <span style={{ color: T.t1 }}>{byline}</span>
+                {article.host ? (
+                  <span style={{ color: T.t3 }}> · {article.host}</span>
+                ) : null}
+              </>
+            ) : (
+              <span style={{ color: T.t3 }}>{article.host}</span>
+            )}
+          </div>
+        ) : null}
+        {lead ? (
+          <img
+            src={lead}
+            alt=""
+            style={{
+              display: "block",
+              maxWidth: "100%",
+              borderRadius: 6,
+              marginBottom: 22,
+            }}
+            onError={(e) => {
+              (e.currentTarget as HTMLImageElement).style.display = "none";
+            }}
+          />
+        ) : null}
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{md}</ReactMarkdown>
+      </article>
     </div>
   );
 }
@@ -1558,6 +1846,94 @@ export default function HackerNewsPage() {
         /* Row click affordance — subtle bg lift on hover, scoped to the HN tab. */
         .hn-tab a[href][target="_blank"]:hover {
           background: rgba(255, 102, 0, 0.04);
+        }
+        /* Reader-mode typography for the in-tab article preview. Scoped to
+           .hn-reader so it never bleeds into the dashboard rows. */
+        .hn-reader h1,
+        .hn-reader h2,
+        .hn-reader h3,
+        .hn-reader h4 {
+          color: #e6e9ef;
+          line-height: 1.25;
+          margin: 1.4em 0 0.5em;
+          font-weight: 600;
+        }
+        .hn-reader h1 { font-size: 1.6em; }
+        .hn-reader h2 { font-size: 1.3em; }
+        .hn-reader h3 { font-size: 1.1em; }
+        .hn-reader p,
+        .hn-reader li {
+          color: #d2d6df;
+        }
+        .hn-reader p { margin: 0.8em 0; }
+        .hn-reader a {
+          color: #ff8a3d;
+          text-decoration: none;
+          border-bottom: 1px solid rgba(255, 138, 61, 0.3);
+        }
+        .hn-reader a:hover {
+          border-bottom-color: rgba(255, 138, 61, 0.7);
+        }
+        .hn-reader code {
+          background: #161b26;
+          border: 1px solid #283040;
+          color: #e6e9ef;
+          padding: 1px 5px;
+          border-radius: 4px;
+          font-size: 0.92em;
+          font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+        }
+        .hn-reader pre {
+          background: #12161f;
+          border: 1px solid #1f2735;
+          border-radius: 6px;
+          padding: 12px 14px;
+          overflow-x: auto;
+          line-height: 1.4;
+        }
+        .hn-reader pre code {
+          background: transparent;
+          border: 0;
+          padding: 0;
+          font-size: 0.86em;
+          color: #d2d6df;
+        }
+        .hn-reader blockquote {
+          border-left: 3px solid #283040;
+          padding: 2px 14px;
+          margin: 0.8em 0;
+          color: #aab2c0;
+          background: rgba(255, 102, 0, 0.02);
+        }
+        .hn-reader img {
+          max-width: 100%;
+          border-radius: 5px;
+          display: block;
+          margin: 1em 0;
+        }
+        .hn-reader hr {
+          border: 0;
+          border-top: 1px solid #1f2735;
+          margin: 1.8em 0;
+        }
+        .hn-reader ul,
+        .hn-reader ol {
+          padding-left: 1.6em;
+        }
+        .hn-reader table {
+          border-collapse: collapse;
+          margin: 1em 0;
+          font-size: 0.92em;
+        }
+        .hn-reader th,
+        .hn-reader td {
+          border: 1px solid #283040;
+          padding: 6px 10px;
+          text-align: left;
+        }
+        .hn-reader th {
+          background: #161b26;
+          color: #e6e9ef;
         }
       `}</style>
     </div>

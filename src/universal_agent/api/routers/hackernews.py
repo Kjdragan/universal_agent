@@ -1,12 +1,14 @@
 """Read-only HN snapshot endpoints. Mounted on /api/v1/hackernews."""
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
+from universal_agent.services.hackernews_article_reader import fetch_article
 from universal_agent.services.hackernews_snapshot_service import (
     build_snapshot,
     read_latest,
@@ -70,3 +72,32 @@ def refresh_now() -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"refresh failed: {exc}")
     write_snapshot(snap)
     return {"ok": True, "errors": snap.get("meta", {}).get("errors", [])}
+
+
+@router.get("/article")
+async def get_article(
+    url: str = Query(..., description="HTTP(S) URL to extract reader-mode content from"),
+) -> dict[str, Any]:
+    """Reader-mode extraction for the dashboard preview overlay.
+
+    Many HN-linked sites refuse to be embedded in an iframe via
+    ``X-Frame-Options`` / ``Content-Security-Policy: frame-ancestors``.
+    This endpoint fetches the URL server-side and returns extracted
+    title + byline + lead-image + markdown body so the modal can
+    render a clean reader view instead of a blank gray panel.
+
+    Always returns 200 with a structured payload — the ``ok`` flag
+    tells the frontend whether to render the reader or fall back to
+    the iframe / new-tab affordance.
+    """
+    try:
+        result = await asyncio.to_thread(fetch_article, url)
+    except Exception as exc:  # noqa: BLE001 — never let the helper crash the route
+        logger.exception("hackernews article reader crashed for url=%s", url)
+        return {
+            "ok": False,
+            "error": f"reader_crashed: {type(exc).__name__}: {exc}",
+            "host": "",
+            "source_url": url,
+        }
+    return result
