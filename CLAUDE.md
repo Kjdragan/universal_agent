@@ -73,10 +73,11 @@ When executing on the VPS (`uaonvps`), agents have direct, native filesystem acc
 - Lint/format (if configured): `uv run ruff check .` / `uv run ruff format .`
 
 ## Git Workflow (MUST READ)
-- **Read [`docs/deployment/ai_coder_instructions.md`](docs/deployment/ai_coder_instructions.md) before your first commit.** It defines the branch discipline, commit conventions, `/ship` handoff protocol, and the **Agent-Type → Workflow Matrix** (when to direct-commit vs. when to PR) that all AI coders must follow.
-- TL;DR for tier 1 (Kevin + Claude Code conversational): work on `feature/latest2`, push there, the operator runs `/ship`. Never touch `develop` or `main` directly.
-- TL;DR for tier 2 (autonomous missions like CODIE / Cody / scheduled VP coder): **never push directly to `feature/latest2`.** Worktree → patch → syntax-check → unit tests → push to `<bot>/<task-id>` branch → open PR → CI passes → human merges. Full pattern in [`ai_coder_instructions.md` § Autonomous Mission Workflow](docs/deployment/ai_coder_instructions.md#autonomous-mission-workflow-tier-2-in-detail).
-- All PRs to `feature/latest2`/`develop`/`main` are gated by [`.github/workflows/pr-validate.yml`](.github/workflows/pr-validate.yml) — `py_compile` on every changed `.py`, `ruff check`, `pytest tests/unit`, and a tripwire on `.py.bak` / `.swp` / `.orig` artifacts.
+- **Read [`docs/deployment/ai_coder_instructions.md`](docs/deployment/ai_coder_instructions.md) before your first commit.** It defines the branch discipline, commit conventions, `/ship` handoff protocol, and the **Agent-Type → Workflow Matrix** that all AI coders must follow.
+- **Branch model (post-2026-05-10 simplification):** any branch → PR → `main` → Deploy. The `develop` branch was retired — staging never materialized and the chain was adding failure modes (silent no-op pushes, stale-branch divergence, mid-chain `git fetch` flakes) without integration value. See [`docs/06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md`](docs/06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md) for the full new model.
+- TL;DR: work on a feature branch (Kevin's pseudo-trunk is `feature/latest2`; bot branches use `<bot>/<task-id>`), push, run `/ship` (or open the PR manually) to land in `main`. The merge to `main` triggers `.github/workflows/deploy.yml`. **Never push directly to `main`.**
+- All PRs to `main` (and `feature/latest2`) are gated by [`.github/workflows/pr-validate.yml`](.github/workflows/pr-validate.yml) — `py_compile` on every changed `.py`, `ruff check`, `pytest tests/unit`, and a tripwire on `.py.bak` / `.swp` / `.orig` artifacts. **PR-Validate is the only pre-deploy gate** now that `develop` is gone, so don't merge red.
+- `deploy.yml` has a `paths-ignore` filter (docs/, **.md, reports/, state/, artifacts/) so docs-only commits (e.g. nightly drift report, openclaw release sync) merging to `main` don't trigger a production restart. Mixed code+docs commits still deploy — that's the safe default.
 
 ## Claude Execution Environments (MUST READ before touching anything Claude-related)
 UA runs **THREE Claude execution profiles** across the VPS and Kevin's desktop. Mistaking one for another is the #1 source of confusion in the system.
@@ -235,7 +236,7 @@ Implementation plans are decision documents — they must make complex system fl
 
 ### Codex Review Guidelines
 
-These guidelines apply when Codex reviews pull requests targeting `develop` (and now also PRs targeting `feature/latest2`, since the 2026-05-07 incident codified PR-based merging for autonomous-mission output):
+These guidelines apply when Codex reviews pull requests targeting `main` (the only deploy-firing branch post-2026-05-10) and `feature/latest2` (Kevin's working pseudo-trunk):
 
 - Flag any code that logs, stores, or transmits PII or secrets without explicit redaction.
 - Verify that every new or modified API route is wrapped by the appropriate authentication/authorization middleware.
@@ -262,5 +263,5 @@ Do not claim a UI bug is fixed unless it has been verified through the browser t
 
 ## Caveats
 - _(Living section — add caveats as we discover them.)_
-- Deployment is automated via GitHub Actions: `develop` is integration/review only, and a push to `main` triggers the single production deploy workflow. Do not use ad hoc scripts, `ssh`, `rsync`, or `git pull`. See [AI Coder Instructions](docs/deployment/ai_coder_instructions.md) for the full protocol.
+- Deployment is automated via GitHub Actions: a push to `main` (via merged PR) triggers the single production deploy workflow. The `develop` branch was retired 2026-05-10 — see [`docs/06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md`](docs/06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md). Do not use ad hoc scripts, `ssh`, `rsync`, or `git pull`. See [AI Coder Instructions](docs/deployment/ai_coder_instructions.md) for the full protocol.
 - **v2 Phase 2 wiring is missing in `memory/HEARTBEAT.md` as of 2026-05-06.** Simone (the heartbeat-driven principal who owns Phase 2) IS deployed and running. Cody and Atlas exist as downstream principals. The skills `cody-scaffold-builder`, `cody-task-dispatcher`, `cody-implements-from-brief`, `cody-work-evaluator`, `cody-progress-monitor` are all on disk. **What's missing is the directive in `memory/HEARTBEAT.md` telling Simone to scan new CSI vault entities each cycle and decide whether to invoke `cody-scaffold-builder`.** That's why `/opt/ua_demos/` has only `_smoke` despite the skills being present — Simone is busy with the directives she has and was never told to look at vault entities. v2 design called this "Heartbeat poll integration" in PR 8 but the actual HEARTBEAT.md edit was never made. Fix is ~10 lines in `memory/HEARTBEAT.md`.

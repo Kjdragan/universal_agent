@@ -1,6 +1,6 @@
 # Branching and Release Workflow
 
-Last updated: April 18, 2026
+Last updated: 2026-05-10 (post `develop` retirement; collapsed to PR-only-to-`main`).
 
 ## Purpose
 
@@ -10,57 +10,60 @@ Use this document as the operational source of truth for how code should move th
 
 ## Canonical Rule
 
-There are three practical branch roles:
+There are exactly two practical branch roles:
 
-1. `feature/...` branches for active coding work
-2. `develop` for integrated review and CI validation
-3. `main` for production release
+1. **Feature branches** for active coding work. Tier-1 convention: `feature/latest2` (Kevin's pseudo-trunk). Tier-2 (autonomous bots): `<bot-name>/<task-id>`.
+2. **`main`** for production release.
 
-Do not use long-lived historical branches as the default development lane.
+That's it. No `develop`, no `dev-parallel`, no staging branch. PR-Validate CI is the only pre-merge gate.
+
+> **2026-05-10 simplification:** the `develop` branch was retired. Earlier docs that describe a `feature/latest2 → develop → main` chain are stale. The aspirational "develop = staging" environment never materialized; the chain was adding failure modes (silent no-op pushes, stale-branch divergence, mid-chain `git fetch` flakes) without delivering any integration value. Single PR target (`main`) collapses three-step ship cycles to one.
 
 ## Current Deployment Contract
 
 GitHub Actions is the only supported application deployment path.
 
-1. Open a pull request to `develop` to run Codex review on the proposed change.
-2. Merge to `develop` after review and CI validation.
-3. Fast-forward the exact validated `develop` SHA to `main`; the push to `main` triggers the single production deploy workflow.
+1. Push your work to a feature branch.
+2. Open a pull request to `main` (use `/ship` or `gh pr create --base main`).
+3. `pr-validate.yml` runs `py_compile` + `ruff` + `pytest tests/unit`. Required to pass.
+4. Operator reviews and merges. The merge to `main` triggers `.github/workflows/deploy.yml`.
+5. Production VPS updates automatically.
+
+`deploy.yml` has a `paths-ignore` filter (`docs/**`, `**.md`, `reports/**`, `state/**`, `artifacts/**`) so docs-only / report-only commits merging to `main` (e.g. nightly drift report, openclaw release sync state) don't restart the gateway. Mixed code+docs commits still deploy — that's the safe default.
 
 Supporting references:
 
-- `docs/deployment/ci_cd_pipeline.md`
-- `docs/deployment/architecture_overview.md`
-- `AGENTS.md`
+- [`docs/deployment/ci_cd_pipeline.md`](../deployment/ci_cd_pipeline.md)
+- [`docs/deployment/architecture_overview.md`](../deployment/architecture_overview.md)
+- [`docs/deployment/ai_coder_instructions.md`](../deployment/ai_coder_instructions.md)
+- `AGENTS.md` (symlinked from `CLAUDE.md`)
 
 ## Environment Mapping
 
 | Branch | Role | Deployment Target |
 |------|------|-------------------|
-| `feature/...` | local development and review | no automatic deploy |
-| `develop` | integration and review branch | no automatic deploy |
-| `main` | release branch | production VPS |
+| `feature/latest2` (or any feature branch) | local development and PR preparation | no automatic deploy |
+| `main` | release branch | production VPS, via `.github/workflows/deploy.yml` |
 
 ## Required Working Method
 
 ### 1. Start New Work
 
-Create new work from `develop`.
+Create a feature branch from `main`:
 
 ```bash
-git checkout develop
+git checkout main
 git pull --ff-only
-git checkout -b feature/my-change
+git checkout -b feature/my-change   # or kevin/my-change, claude/my-task, etc.
 ```
+
+For tier-1 work where Kevin is iterating quickly in Antigravity, working on `feature/latest2` directly is fine — that's the operator's pseudo-trunk by convention.
 
 ### 2. Do Local Development
 
-Work on the `feature/...` branch until the change is locally ready.
-
-For the main product UI and gateway, local development should happen from the repo checkout in **HQ dev mode**, not from the local worker environment.
-
 Local checkout roles:
 
-1. `/home/kjdragan/lrepos/universal_agent` = HQ dev lane
+1. `/home/kjdragan/lrepos/universal_agent` = HQ dev lane (`INFISICAL_ENVIRONMENT=development`, `FACTORY_ROLE=HEADQUARTERS`, `UA_DEPLOYMENT_PROFILE=local_workstation`)
 2. `~/universal_agent_factory` = optional local worker lane
 
 If localhost starts returning role-based `403` responses on HQ dashboard pages, the repo checkout is almost certainly no longer bootstrapped as `development + HEADQUARTERS + local_workstation`.
@@ -68,166 +71,132 @@ If localhost starts returning role-based `403` responses on HQ dashboard pages, 
 Typical local loop:
 
 1. code
-2. run targeted tests
+2. run targeted tests (`uv run pytest tests/unit/<area> -x -q`)
 3. build affected surfaces as needed
-4. commit the feature branch
+4. commit on the feature branch
 
-### 3. Integrate Through Develop
+### 3. Open the PR to `main`
 
-When the change should be reviewed and integrated:
+When the change is ready:
 
-1. open a pull request from the feature branch into `develop`
-2. let Codex review the PR, or let the workflow soft-skip if `OPENAI_API_KEY` is not configured yet
-3. merge or fast-forward the feature branch into `develop`
-4. validate CI and any required local/browser checks
+```bash
+git push -u origin feature/my-change
+# Either: run /ship (it opens the PR for you and watches CI)
+# Or:    gh pr create --base main --head feature/my-change --fill
+```
 
-### 4. Promote to Production
+### 4. CI runs, operator merges
 
-Only after `develop` validation is acceptable:
+`pr-validate.yml` runs on every PR to `main`:
 
-1. record the exact validated `develop` commit SHA
-2. fast-forward `main` to that SHA
-3. wait for `.github/workflows/deploy.yml` to pass
-4. validate production
+1. `python -m py_compile` on every changed `.py` file.
+2. `ruff check --select E9,F` (errors only).
+3. `pytest tests/unit -x -q` (fast unit-test subset).
+4. Refuse merge if any `.py.bak` / `.swp` / `.orig` file is in the diff.
 
-Validation rule:
+Once green, click Merge in the GitHub UI. The merge to `main` triggers `.github/workflows/deploy.yml`, which deploys to the production VPS.
 
-- confirm the live environment by deployed `HEAD` SHA and observed runtime behavior
-- do not treat a checkout label like `develop` or local branch assumptions as sufficient proof of what is running
+### 5. Verify production runs the new code
 
-### 5. Return The Local Checkout To The Active Feature Branch
+After deploy, hit `GET /api/v1/version` on production and confirm the `commit_sha` matches the merge SHA — the canonical Rule A from `CLAUDE.md` § Production Verification Rules.
 
-After integration validation, production promotion, or deploy debugging, return the local coding checkout to the active feature branch.
-
-Current default:
-
-1. production/integration operations may temporarily move the local repo to `develop`
-2. once validation is finished, restore the local repo to `feature/latest2`
-3. only leave a different feature branch checked out if it has explicitly replaced `feature/latest2` as the active development lane
+```bash
+curl -s https://app.clearspringcg.com/api/v1/version | jq
+# {"commit_sha": "<merge-sha>", "branch": "...", "process_started_at": "..."}
+```
 
 ## What Not To Do
 
-1. Do not do normal coding directly on `main`.
-2. Do not treat `dev-parallel` as the active integration branch.
-3. Do not use `scripts/vpsctl.sh`, `ssh`, `scp`, or `rsync` as the default application deployment path. Older scripts like `deploy_vps.sh` have been completely removed.
-
-Those older scripts are legacy or break-glass tooling only. The `.agents/workflows/ship.md` automation workflow should be used as the standard proxy command to trigger deployments.
+1. **Do not push directly to `main`.** All changes flow through PR. (GitHub branch protection should reject direct pushes; if it doesn't, you're bypassing CI.)
+2. **Do not use the `develop` branch.** It was retired 2026-05-10. If you find references to it in older docs, those docs need updating.
+3. **Do not use `dev-parallel`** — it's a stale historical branch.
+4. **Do not use `scripts/vpsctl.sh`, `ssh`, `scp`, or `rsync` as the default application deployment path.** Older scripts like `deploy_vps.sh` are removed; `promote_to_production.sh` was deleted 2026-05-10. They're break-glass tooling only.
+5. **Do not assume production is missing a fix until you verify the deployed VPS `HEAD` SHA directly** — hit `/api/v1/version`. Branch labels in production checkouts can lie; the SHA cannot.
 
 > [!IMPORTANT]
-> The `/ship` workflow includes a guard that **refuses to run from `main` or `develop`**. It must be invoked from a feature branch. After deployment, it automatically returns you to the feature branch and fast-forwards it to stay in sync with `main`.
-
-4. Do not assume production is missing a fix until you verify the deployed VPS `HEAD` SHA directly.
-
-## Status Snapshot As Of March 12, 2026
-
-This snapshot explains why the current branch policy was chosen.
-
-1. `develop` and `main` were aligned at the same latest commit.
-2. `dev-parallel` was behind both `develop` and `main` by 37 commits.
-3. `develop` was the active integration branch.
-4. Production deploy from `main` was green.
-
-That means:
-
-1. `develop` is the correct active integration branch.
-2. `main` is a working production branch.
-3. `dev-parallel` is a stale historical branch and should not be used as the normal base for future work.
+> The `/ship` workflow includes a guard that **refuses to run from `main`**. It must be invoked from a feature branch. `/ship` opens a PR to `main` and prints the URL; the operator clicks Merge in GitHub.
 
 ## Practical Usage
 
-### If you want integration only
+### Standard ship loop
 
 Tell the agent to:
 
-`Open or update a PR from my current feature branch into develop, run Codex review, merge it if acceptable, and verify CI/local checks.`
+> `Open a PR from my current feature branch to main, run pre-flight checks, watch CI, and tell me when it's ready to merge.`
 
-### If you want full rollout
+That's `/ship` in one sentence.
 
-Tell the agent to:
+### Auto-merge for trusted automation
 
-`Open or update a PR from my current feature branch into develop, run Codex review, merge it if acceptable, verify CI/local checks, then fast-forward the validated develop SHA to main and verify production.`
+The two scheduled jobs (`nightly-doc-drift-audit.yml`, `openclaw-release-sync.yml`) auto-merge their report PRs to `main` via `gh pr merge --squash --admin`. `deploy.yml`'s `paths-ignore` ensures these report-only commits don't trigger a production deploy.
 
 ## Summary
 
 The default operating model is:
 
-1. branch from `develop`
-2. code on `feature/...`
-3. review and merge through a PR into `develop`
-4. validate CI/local checks on `develop`
-5. fast-forward the exact validated `develop` SHA to `main`
-6. release through the `main` deploy workflow
+1. branch from `main` (or work on `feature/latest2`)
+2. code on the feature branch
+3. open a PR to `main` (via `/ship` or `gh pr create`)
+4. PR-Validate CI runs
+5. operator merges
+6. `deploy.yml` fires and updates production
 
 ## 1. One-Minute Cheat Sheet
 
 Use this if you just want the shortest correct explanation.
 
-1. Start new work from `develop`.
-2. Do your coding on a `feature/...` branch.
-3. Open a PR into `develop` when you want Codex review and integration validation.
-4. Promote only the exact validated `develop` SHA to `main`.
+1. Branch from `main`.
+2. Code on a `feature/...` branch.
+3. Run `/ship` — it opens a PR to `main` and reports CI status.
+4. Operator merges the green PR. Production deploys automatically.
 
 Short meanings:
 
-1. `feature/...` = your working branch
-2. `develop` = integration branch
-3. `main` = production branch
+1. feature branch = your working branch
+2. `main` = production branch (the only branch that triggers Deploy)
 
 ## 2. Exact Git Commands
 
 ### Start a new feature
 
 ```bash
-git checkout develop
+git checkout main
 git pull --ff-only
 git checkout -b feature/my-change
 ```
 
-### Integrate through develop
+### Open the PR
 
 ```bash
 git push -u origin feature/my-change
-gh pr create --base develop --head feature/my-change --fill
+# /ship handles this in one step — or:
+gh pr create --base main --head feature/my-change --fill
 ```
 
-That opens the reviewed path. After the PR is approved and merged, validate CI and any required local/browser checks from `develop`.
+### After CI passes, merge in GitHub UI
 
-### Promote to production after develop validation passes
-
-```bash
-git checkout main
-git merge --ff-only <validated_sha>
-git push origin main
-```
-
-That fast-forwards `main` to the exact validated `develop` commit and triggers `.github/workflows/deploy.yml`.
+The merge fires `.github/workflows/deploy.yml`. Verify production runs the new SHA via `GET /api/v1/version`.
 
 ## 3. Branch Flow Diagram
 
 > [!TIP]
-> The diagram below visualizes our branch policy. This entire process is automated via the `/ship` slash command workflow which handles the merges and triggering of CI/CD.
+> The diagram below visualizes the post-2026-05-10 branch policy. The entire process is automated via the `/ship` slash command which opens the PR and watches CI.
 
 ```mermaid
-%%{init: { 'theme': 'base', 'themeVariables': { 'git0': '#ff4757', 'git1': '#2ed573', 'git2': '#1e90ff' } } }%%
+%%{init: { 'theme': 'base', 'themeVariables': { 'git0': '#ff4757', 'git1': '#1e90ff' } } }%%
 gitGraph
-    commit id: "Initial state"
-    branch develop
-    checkout develop
-    commit id: "Integration baseline"
+    commit id: "main baseline"
     branch feature/my-change
     checkout feature/my-change
     commit id: "Code new feature"
     commit id: "Address PR feedback"
-    checkout develop
-    merge feature/my-change id: "Merge PR" tag: "CI Validation"
     checkout main
-    merge develop id: "Fast-Forward Release" tag: "Deploy Triggered"
+    merge feature/my-change id: "PR merged" tag: "Deploy Triggered"
+    commit id: "next change..."
 ```
 
-*As demonstrated in the exhibit above, work originates on feature branches, merges exclusively into `develop` for CI validation and review, and relies entirely on a fast-forward operation to `main` to trigger the production deploy via GitHub Actions. At no point is standard development performed directly on `main` or `develop`.*
+*Work originates on feature branches, opens a PR to `main` (PR-Validate CI runs), and on merge `deploy.yml` fires for the new `main` HEAD. At no point is standard development performed directly on `main`.*
 
-For local runtime mode details, see:
-
-- `docs/06_Deployment_And_Environments/05_Local_Runtime_Modes.md`
+For local runtime mode details, see [`05_Local_Runtime_Modes.md`](05_Local_Runtime_Modes.md).
 
 If deployment behavior changes later, update this file together with the GitHub Actions workflow documentation.

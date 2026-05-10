@@ -4,11 +4,12 @@ Our CI/CD pipeline is built on GitHub Actions and automates PR review and produc
 
 ## Canonical Rule
 
-This is the only supported app deployment path in this repository.
+This is the only supported app deployment path in this repository (post-2026-05-10 simplification).
 
-- `feature/latest2` is the active work branch.
-- Open a pull request to `develop` to run Devin automated review and CI checks. `develop` is for integration and review only.
-- Fast-forward `main` to the validated `develop` SHA to deploy to production automatically.
+- Work happens on a feature branch (tier 1 convention: `feature/latest2`; tier 2 bots use `<bot>/<task-id>`).
+- Open a pull request to `main`. `pr-validate.yml` runs `py_compile` + `ruff` + `pytest tests/unit` — that's the pre-deploy gate.
+- When CI is green, merge the PR. The merge to `main` triggers `.github/workflows/deploy.yml` and the VPS updates automatically.
+- The `develop` branch was retired 2026-05-10 — see [Branching and Release Workflow](../06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md).
 - Do not treat `scripts/deploy_vps.sh`, `scripts/vpsctl.sh`, or manual SSH deploy steps as the primary deployment path.
 
 Release verification rule:
@@ -21,8 +22,8 @@ Release verification rule:
 
 | Name | Trigger | Target |
 |------|---------|--------|
-| `Devin PR Review` | Pull request to `develop` | Automated PR review by Devin |
-| `Deploy` | Push to `main` | Production Service |
+| `PR Validate` | Pull request to `feature/latest2` or `main` | `py_compile` + `ruff check` + `pytest tests/unit` (mandatory pre-merge gate) |
+| `Deploy` | Push to `main` (paths-ignore: docs/, **.md, reports/, state/, artifacts/) | Production Service |
 
 ### Utility Workflows
 
@@ -112,15 +113,14 @@ Allow `tag:ci-gha` to reach `tag:vps` on TCP/22 in your current ACL/grants model
 ## Pipeline Steps (using `/ship` slash command)
 
 > [!IMPORTANT]
-> The `/ship` workflow **must** be run from `feature/latest2` (or another feature branch). It will refuse to run from `main` or `develop` directly. This prevents accidental direct commits to production branches that bypass the merge flow.
+> The `/ship` workflow **must** be run from a feature branch. It refuses to run from `main`. This prevents accidental direct commits to production that bypass the PR-Validate CI gate.
 
-1. **Commit & Push** on `feature/latest2`.
-2. **Merge to `develop`** — `/ship` handles this automatically.
-3. **Devin PR Review** runs automated checks on PRs to `develop` (does not block `/ship`).
-4. **Fast-forward `main`** to point to the new `develop` commit.
-5. **Production deploy** triggers automatically on push to `main` via Github Actions.
-6. **Return to `feature/latest2`** — `/ship` checks out your feature branch and fast-forwards it to stay in sync with `main`.
-7. **Post-release verification should use the deployed checkout SHA**. If production appears to be missing a fix, confirm the VPS `HEAD` commit before reopening code investigation or assuming a deploy gap.
+1. **Commit & Push** on your feature branch.
+2. **`/ship`** opens a PR to `main` automatically (or prints the PR-create URL if `gh` CLI isn't installed).
+3. **`PR Validate`** runs `py_compile` + `ruff` + `pytest tests/unit` on the PR. Required to pass.
+4. **Operator reviews and merges** the PR in GitHub UI.
+5. **Production deploy** triggers automatically when the merge moves `main`.
+6. **Post-release verification should use the deployed checkout SHA**. Hit `GET /api/v1/version` on production and confirm the `commit_sha` matches the merge SHA before declaring any browser-side check valid (Rule A from CLAUDE.md § Production Verification Rules).
 
 ## Lessons From The April 5 Dashboard Incident
 
@@ -271,33 +271,25 @@ ps -eo pid,lstart,cmd | grep gateway_server | grep -v grep
 
 ## Review and Promotion Rule
 
-- There is exactly one review gate: the PR into `develop`.
-- Direct pushes to `main` without PR flow are restricted for safety.
-- The `Deploy` workflow triggers on push to `main` preventing the need for workflow dispatch APIs.
-- To make the review gate enforceable, configure GitHub branch protection on `develop` to require status checks before merge.
-
-## Temporary Missing-Secret Behavior
-
-If `DEVIN_API_KEY` is not configured yet:
-- the `Devin PR Review` workflow posts a warning or fails fast.
-- the PR can still merge to `develop` since Devin PR reviews are non-blocking.
-
-Once `DEVIN_API_KEY` is configured, Devin reviews provide helpful code advice.
+- There is exactly one pre-merge gate: `pr-validate.yml` on the PR to `main`.
+- Direct pushes to `main` are restricted (configure GitHub branch protection to enforce). All changes flow through PR.
+- The `Deploy` workflow triggers on push to `main` (the merge), preventing the need for workflow dispatch APIs.
 
 ## Recommended GitHub Branch Protection
 
-Configure these settings in GitHub repository settings.
-
-### `develop`
-
-- Require a pull request before merging
-- Optionally require Devin reviews to complete
-- The `Nightly Doc Drift Audit` workflow creates auto-merged PRs using `gh pr merge --squash --admin`.
+Configure these settings in GitHub repository settings → Branches → Branch protection rules.
 
 ### `main`
 
-- Do not require PR reviews on `main`.
-- Restrict direct pushes except for trusted operators/workflow fast-forwards.
+- **Require a pull request before merging** ✅
+- **Require status checks to pass before merging** ✅ — at minimum `Validate PR` (from `pr-validate.yml`). Optionally also `GitGuardian Security Checks`.
+- **Require branches to be up to date before merging** ✅ — prevents merging stale PRs.
+- **Do not allow bypassing the above settings** ✅ — except for the GitHub Actions bot identity used by `nightly-doc-drift-audit.yml` and `openclaw-release-sync.yml` to auto-merge their report PRs (those use `--admin` fallback).
+- **Restrict who can push to matching branches** ✅ — only trusted operators / GitHub Actions bot.
+
+### `feature/latest2`
+
+- **Optional**: leave open for direct push (Kevin's tier-1 working branch). If branch protection is added here later, switch tier-1 to PR-driven only.
 
 ## Troubleshooting
 

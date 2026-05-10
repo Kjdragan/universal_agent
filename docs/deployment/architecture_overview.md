@@ -10,7 +10,7 @@ This document defines the current supported deployment model for Universal Agent
 > | **Local Dev** | `http://localhost:3000` | Localheadquarters Next.js server |
 > | **Production** | `https://app.clearspringcg.com/dashboard` | Public — no VPN needed |
 >
-> Production deploys automatically when `main` is pushed. `develop` is for integration and review only.
+> Production deploys automatically when `main` is pushed (via merged PR). The `develop` branch was retired 2026-05-10 — see [Branching and Release Workflow](../06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md).
 
 > [!IMPORTANT]
 > Release verification is SHA-based. The authoritative proof of what is deployed on VPS is the checkout `HEAD` commit, not the branch name reported by the checkout alone.
@@ -19,9 +19,12 @@ This document defines the current supported deployment model for Universal Agent
 
 We use branch-driven automated deployment with a simplified single-environment pipeline.
 
-- **`feature/latest2`**: local coding and PR preparation.
-- **`develop`**: integration branch. PRs from `feature/latest2` land here. Devin automated review runs and CI runs, but nothing deploys.
-- **`main`**: automated production deployment target. When `main` moves forward via fast-forward from `develop`, the deploy updates the VPS.
+- **Feature branches** (any name; tier-1 convention is `feature/latest2`, tier-2 bots use `<bot>/<task-id>`): local coding. Push, open a PR to `main`.
+- **`main`**: automated production deployment target. When a PR merges to `main`, `.github/workflows/deploy.yml` fires and updates the VPS.
+
+`pr-validate.yml` runs on every PR (`py_compile` + `ruff` + `pytest tests/unit`) — the only pre-deploy gate. `deploy.yml` has a `paths-ignore` filter so docs-only / report-only commits merging to `main` (e.g. nightly drift report) don't restart the gateway.
+
+The `develop` branch was retired 2026-05-10. The staging environment it was meant to fed never materialized; the chain `feature/latest2 → develop → main` was adding failure modes (silent no-op pushes, stale-branch divergence, mid-chain `git fetch` flakes) without integration value.
 
 ## Environmental Mapping
 
@@ -156,10 +159,13 @@ Kevin's desktop has two supported runtime modes:
 
 ## Supported Deployment Rule
 
-1. Fast-forward `main` to `develop`.
-2. The `deploy.yml` workflow fires and VPS updates automatically via Github Actions.
-3. Use `/ship` to fast-forward main end-to-end, `/checkpoint` to deploy current `develop`, or `/rollback` to reset `main`.
-4. The canonical deployment runbooks live in `docs/deployment/`.
+1. From a feature branch, run `/ship` (or `gh pr create --base main --head <branch>`).
+2. PR-Validate CI runs.
+3. When CI is green, merge the PR in GitHub UI.
+4. The merge to `main` triggers `.github/workflows/deploy.yml` and the VPS updates automatically.
+5. The canonical deployment runbooks live in `docs/deployment/`.
+
+The `/checkpoint` and `/rollback` slash-command flows that depended on `develop` are retired — rollback is now `git revert <merge-sha>` + open a PR (or use GitHub's "Revert" button on the merged PR), which goes through the same Deploy pipeline.
 
 ## Repo-Backed Coding Sessions On VPS
 

@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # DEPRECATED FOR PRIMARY DEPLOYMENT: use only as a break-glass helper.
-# Canonical deploy flow is branch-driven GitHub Actions:
-#   develop -> staging
-#   main    -> production
+# Canonical deploy flow is branch-driven GitHub Actions: PR into `main`
+# triggers `.github/workflows/deploy.yml` which deploys to production VPS.
 # See docs/deployment/ci_cd_pipeline.md and AGENTS.md.
 
 set -euo pipefail

@@ -51,7 +51,12 @@ def test_deploy_workflow_fails_when_post_restart_health_fails() -> None:
 
     assert "trap cleanup_deployment_window EXIT" in content
     assert 'echo "--> Verifying production service health..."' in content
-    assert 'run_health_check gateway "http://127.0.0.1:8002/api/v1/health" 48 5' in content
+    # Gateway window is 96×5s = 8 min (raised from 48×5s = 4 min on 2026-05-10
+    # after Deploy #436 + #437 timed out at the previous window even though
+    # the gateway came up healthy seconds later — the lifespan does ~734
+    # lines of synchronous setup before yielding). api/webui windows
+    # unchanged because they're not the bottleneck.
+    assert 'run_health_check gateway "http://127.0.0.1:8002/api/v1/health" 96 5' in content
     assert 'run_health_check api "http://127.0.0.1:8001/api/health" 24 5' in content
     assert 'run_health_check webui "http://127.0.0.1:3000/dashboard" 24 5' in content
     assert 'health_pids="$health_pids $!"' in content
@@ -60,6 +65,27 @@ def test_deploy_workflow_fails_when_post_restart_health_fails() -> None:
     assert 'echo "::error::$name did not become healthy at $url"' in content
     assert "sudo journalctl -u universal-agent-gateway -n 120 --no-pager" in content
     assert 'exit 1' in content
+
+
+def test_deploy_workflow_paths_ignore_suppresses_docs_only_deploys() -> None:
+    """Deploy must skip docs-only / report-only commits to main.
+
+    The two scheduled jobs (nightly-doc-drift-audit, openclaw-release-sync)
+    auto-merge their report PRs into `main` post-2026-05-10 (when develop
+    was retired). Without paths-ignore, every nightly run would restart
+    the gateway for zero behavior change. This guard pins the path
+    filter so a future commit can't silently re-enable docs-triggered
+    deploys.
+
+    GitHub semantics: deploy is skipped only when EVERY changed file
+    matches a paths-ignore glob — a mixed code+docs commit still deploys.
+    """
+    content = _DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "paths-ignore:" in content
+    # Keep these exact globs in sync with .github/workflows/deploy.yml's on.push trigger
+    for glob in ("- 'docs/**'", "- '**.md'", "- 'reports/**'", "- 'state/**'", "- 'artifacts/**'"):
+        assert glob in content, f"paths-ignore missing required glob: {glob}"
 
 
 def test_production_systemd_installer_manages_discord_services() -> None:

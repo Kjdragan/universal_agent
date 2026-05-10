@@ -62,14 +62,15 @@ Plain `claude` defaults to Anthropic. Use `zai` only when you actively want to s
 /ship     # from inside Claude Code (any clone with the right git remote)
 ```
 
-What it does (single command, ~1 min):
-1. Auto-commits any pending changes on your feature branch
-2. Pushes to origin, merges to `develop`, fast-forwards `main`
-3. GitHub Actions deploy.yml fires automatically on push to `main`
-4. CI/CD SSHes into `uaonvps`, `git reset --hard origin/main` on `/opt/universal_agent`, restarts services
-5. `/ship` polls GH Actions and reports green/red
+What it does (post-2026-05-10 redesign — PR-only-to-`main`):
+1. Pre-flight syntax/lint checks on changed `.py` files
+2. Auto-commits any pending changes on your feature branch
+3. Pushes the branch to origin
+4. Opens a PR to `main` via `gh pr create` (or prints the PR-create URL if `gh` isn't installed)
+5. Watches `pr-validate.yml` CI and reports green/red
+6. Operator clicks Merge in GitHub UI; the merge to `main` triggers `.github/workflows/deploy.yml`
 
-Works from desktop, VPS dev-tree, or anywhere with the right git remote and `gh` CLI authenticated. Defined at [`.claude/commands/ship.md`](../.claude/commands/ship.md).
+Works from desktop, VPS dev-tree, or anywhere with the right git remote. `gh` CLI is optional but recommended (without it, `/ship` prints the PR URL for you to open in browser). Defined at [`.claude/commands/ship.md`](../.claude/commands/ship.md). The `develop` branch was retired 2026-05-10 — see [`docs/06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md`](06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md).
 
 ---
 

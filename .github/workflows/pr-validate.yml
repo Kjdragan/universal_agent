@@ -15,9 +15,12 @@ name: PR Validate
 
 on:
   pull_request:
+    # `develop` was retired 2026-05-10 — see PR retiring it. Merge model is
+    # now: <any-branch> → PR → CI → merge to `main` → deploy. `feature/latest2`
+    # remains in the list as a transitional convenience for the existing
+    # operator workflow; new bot/Claude branches PR directly to `main`.
     branches:
       - feature/latest2
-      - develop
       - main
   # Allow manual re-run from the Actions tab if a flaky test fails.
   workflow_dispatch:

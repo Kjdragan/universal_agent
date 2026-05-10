@@ -4,6 +4,25 @@ on:
   push:
     branches:
       - main
+    # Skip production deploy when a push to `main` only contains docs,
+    # markdown, or scheduled-job state files. These are produced by
+    # `nightly-doc-drift-audit.yml` and `openclaw-release-sync.yml` (which
+    # auto-merge their PRs to main directly post-2026-05-10) and shouldn't
+    # restart the gateway. GitHub semantics: deploy is skipped only when
+    # **every** changed file matches a `paths-ignore` glob — a mixed
+    # code+docs commit still deploys, which is the safe default.
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - 'reports/**'
+      - 'state/**'
+      # Machine-generated audit/report artifacts written by the two
+      # scheduled jobs (nightly-doc-drift-audit, openclaw-release-sync).
+      # These are force-added (artifacts/ is normally .gitignored) into
+      # main via auto-merged PR; nothing under artifacts/ is source code,
+      # so a deploy on these commits would just restart the gateway for
+      # zero behavior change.
+      - 'artifacts/**'
   workflow_dispatch:
 
 jobs:
@@ -303,7 +322,20 @@ jobs:
             }
             health_ok=true
             health_pids=""
-            run_health_check gateway "http://127.0.0.1:8002/api/v1/health" 48 5
+            # Gateway: 96 × 5s = 8 minutes. The lifespan startup at
+            # gateway_server.py:13980-14714 runs ~734 lines of synchronous
+            # subsystem init (factory registry, runtime DB schema migration,
+            # heartbeat session seed, daemon session seed, task lifecycle
+            # reconcile, email mapping reconcile, task recovery sweep,
+            # autonomous cron registration, session reaper, workspace
+            # archiver, _reconcile_stale_vp_missions_on_startup) before
+            # FastAPI begins serving — and accumulated production state
+            # has pushed total cold-start past the previous 4-minute
+            # window (Deploy #436 + #437 both timed out at 4:00 even
+            # though the gateway came up healthy seconds later). The
+            # right architectural fix is to slim the pre-yield work
+            # (tracked separately); 8 minutes is the operational backstop.
+            run_health_check gateway "http://127.0.0.1:8002/api/v1/health" 96 5
             run_health_check api "http://127.0.0.1:8001/api/health" 24 5
             run_health_check webui "http://127.0.0.1:3000/dashboard" 24 5
             for health_pid in $health_pids; do
