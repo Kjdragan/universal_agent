@@ -17914,11 +17914,15 @@ def _ensure_vp_coder_workspace_pruning_cron_job() -> Optional[dict[str, Any]]:
     The session reaper at startup handles main AGENT_RUN_WORKSPACES.
     External VP-coder workspaces under UA_VP_CODER_WORKSPACE_ROOT have
     no scheduled cleanup — they accumulated to 55 subdirs / 64% disk
-    before this job was added.  Runs Sunday 04:00 CT by default.
+    before this job was added.  Runs Sunday 07:00 CT by default.
+
+    The 04:00 default was moved to 07:00 on 2026-05-10 to comply with
+    the operating-hours dormancy default (6 AM – 9 PM Houston). See
+    docs/operations/operating_hours_dormancy.md.
     """
     return _register_system_cron_job(
         system_job="vp_coder_workspace_pruning",
-        default_cron="0 4 * * 0",
+        default_cron="0 7 * * 0",
         default_timezone="America/Chicago",
         command="!script universal_agent.scripts.vp_coder_workspace_pruner",
         description="Weekly pruning of stale VP-coder workspace subdirectories (default: archive after 7 days).",
@@ -18251,12 +18255,23 @@ def _ensure_morning_briefing_cron_job() -> Optional[dict[str, Any]]:
 
 
 def _ensure_hackernews_snapshot_cron_job() -> Optional[dict[str, Any]]:
+    # Operating-hours dormancy default (2026-05-10): half-hourly during
+    # 6 AM – 9 PM Houston only. Pre-2026-05-10 the default was every
+    # 30 min UTC (24/7); the overnight ticks burned HN-API + bs4 calls
+    # for snapshots nobody was reading. See
+    # docs/operations/operating_hours_dormancy.md.
+    #
+    # Note on Movers semantics: the first snapshot after the 9-hour
+    # dormancy gap (the 6 AM Houston tick) compares to the last 8:30 PM
+    # tick from the previous day, so its "delta" is wider than a normal
+    # 30-minute diff. That's intentional — operator wakes up to see what
+    # actually moved on the front page overnight.
     return _register_system_cron_job(
         system_job="hackernews_snapshot",
-        default_cron="*/30 * * * *",
-        default_timezone="UTC",
+        default_cron="0,30 6-20 * * *",
+        default_timezone="America/Chicago",
         command="!script universal_agent.scripts.hackernews_snapshot",
-        description="Half-hourly Hacker News snapshot via hackernews-pp-cli.",
+        description="Half-hourly Hacker News snapshot (active hours only: 6 AM–9 PM Houston).",
         timeout_seconds=300,
         enabled=_proactive_cron_enabled("UA_HACKERNEWS_SNAPSHOT_ENABLED"),
         cron_env_var="UA_HACKERNEWS_SNAPSHOT_CRON",

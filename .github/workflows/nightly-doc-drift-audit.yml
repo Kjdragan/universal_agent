@@ -2,8 +2,12 @@ name: Nightly Documentation Drift Audit
 
 on:
   schedule:
-    # 08:17 UTC ≈ 3:17 AM CDT — off-peak minute to reduce GHA scheduling delay
-    - cron: '17 8 * * *'
+    # 12:17 UTC ≈ 7:17 AM CDT / 6:17 AM CST — inside the operating-hours
+    # window per docs/operations/operating_hours_dormancy.md (the
+    # operator wants no overnight workflow noise). Pre-2026-05-10 this
+    # ran at 08:17 UTC (3:17 AM CDT) which violated the dormancy default.
+    # 17-minute offset is GHA scheduling-delay mitigation (off-peak minute).
+    - cron: '17 12 * * *'
   workflow_dispatch:
     inputs:
       since_hours:

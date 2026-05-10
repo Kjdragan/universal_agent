@@ -104,6 +104,18 @@ The ClaudeDevs X intel pipeline is undergoing a v2 rebuild. Two living docs trac
 - Prefer root-cause fixes over temporary workarounds.
 - Update docs when behavior or operations change.
 
+## Operating Hours / Dormancy Default
+
+**Active window: 6:00 AM – 9:00 PM Houston time.** **Dormant window: 9:00 PM – 6:00 AM Houston time.**
+
+By default, every cron job, polling loop, scheduled GitHub Actions workflow, or background service runs **only during the active window**. Use `default_timezone="America/Chicago"` (or `TZ=America/Chicago` in cron strings) so DST is handled automatically. GitHub Actions schedules are UTC-only — express in UTC and accept the 1h DST drift.
+
+**Why:** the operator does not want infrastructure burning quota / firing emails / restarting processes / running LLM calls while he's asleep. Most "intelligence" surfaces are read in the morning anyway — generating them at 3 AM provides zero operational value but adds cost.
+
+**Adding a new cron job:** check whether it qualifies as a documented exception (downstream-consumer dependency during dormancy / transient-data capture / latency-sensitive incident response). If none apply, schedule inside the active window. See [`docs/operations/operating_hours_dormancy.md`](docs/operations/operating_hours_dormancy.md) for the exception checklist + currently-registered exceptions.
+
+A guard test (`tests/unit/test_cron_dormancy_defaults.py`) pins active-hour schedules and asserts new crons fall inside the active window unless they're listed as exceptions in the doc.
+
 ## Pre-Implementation Reading — DO NOT SKIP
 
 **Why this section exists.** On 2026-05-06 an agent was minutes away from shipping ~50 lines of new orchestration logic into `memory/HEARTBEAT.md` (claim tasks, route to Simone, enforce concurrency cap, reset orphaned in-progress tasks) before the operator stopped them and asked "doesn't Task Hub already do this?" It does. Every line of the proposed addition was redundant with `services/dispatch_service.py` + `task_hub.py`, which the agent had not read. The actual missing piece was a 30-line *producer* change — the consumer side was already wired through `dispatch_sweep` + `route_all_to_simone`. Same class of error as the v2 shakedown: shipping without grounding.

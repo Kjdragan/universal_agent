@@ -2,9 +2,12 @@ name: OpenClaw Release Sync
 
 on:
   schedule:
-    # Twice weekly: Tuesday 10:13 UTC and Friday 10:13 UTC
-    # (~5:13 AM CDT — off-peak minute to reduce GHA scheduling delay)
-    - cron: '13 10 * * 2,5'
+    # Twice weekly: Tuesday 12:13 UTC and Friday 12:13 UTC
+    # ≈ 7:13 AM CDT / 6:13 AM CST — inside the operating-hours window
+    # per docs/operations/operating_hours_dormancy.md. Pre-2026-05-10
+    # this ran at 10:13 UTC (5:13 AM CDT) which violated the dormancy
+    # default. 13-minute offset is GHA scheduling-delay mitigation.
+    - cron: '13 12 * * 2,5'
   workflow_dispatch:
     inputs:
       force_rescan:
