@@ -70,11 +70,12 @@ def fetch_article(url: str, *, timeout_s: float = DEFAULT_TIMEOUT_S) -> dict[str
             "error": "invalid_url",
             "host": "",
             "source_url": url,
+            "iframe_blocked_by_headers": False,
         }
     host = parsed.netloc.removeprefix("www.")
 
     try:
-        html_text = _fetch_html(url, timeout_s=timeout_s)
+        html_text, response_headers = _fetch_html(url, timeout_s=timeout_s)
     except Exception as exc:  # noqa: BLE001 — surface clean error payload
         logger.info("HN reader: fetch failed for %s: %s", url, exc)
         return {
@@ -82,6 +83,12 @@ def fetch_article(url: str, *, timeout_s: float = DEFAULT_TIMEOUT_S) -> dict[str
             "error": f"fetch_failed: {type(exc).__name__}: {exc}",
             "host": host,
             "source_url": url,
+            # We don't know the headers (fetch failed) — but in the operator
+            # UX, "fetch failed" already means "iframe also probably won't
+            # work" because most fetch failures are 4xx/5xx that the iframe
+            # would also surface. Mark as blocked so the UI doesn't auto-swap
+            # to a likely-blank iframe.
+            "iframe_blocked_by_headers": True,
         }
 
     if not html_text:
@@ -90,6 +97,7 @@ def fetch_article(url: str, *, timeout_s: float = DEFAULT_TIMEOUT_S) -> dict[str
             "error": "empty_response",
             "host": host,
             "source_url": url,
+            "iframe_blocked_by_headers": _is_iframe_blocked(response_headers),
         }
 
     soup = BeautifulSoup(html_text, "html.parser")
@@ -109,14 +117,30 @@ def fetch_article(url: str, *, timeout_s: float = DEFAULT_TIMEOUT_S) -> dict[str
         "content_length": len(content_md),
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "source_url": url,
+        # If the upstream sets X-Frame-Options or a restrictive
+        # Content-Security-Policy frame-ancestors directive, the operator's
+        # browser will refuse to embed the URL in our preview iframe. The
+        # frontend uses this flag to decide whether to auto-swap to
+        # "Original" (iframe) when reader extraction returns empty/error
+        # content, or to instead show the friendly "Open in new tab"
+        # error panel. Catches the twitter.com / x.com / github.com case
+        # where bs4 returns a noscript stub (empty content_md) and the
+        # iframe would also blank out from XFO/CSP — without this flag
+        # we'd silently swap to a blank iframe.
+        "iframe_blocked_by_headers": _is_iframe_blocked(response_headers),
     }
 
 
 # ─── HTTP fetch ────────────────────────────────────────────────────────
 
 
-def _fetch_html(url: str, *, timeout_s: float) -> str:
-    """GET the URL with a browser-like UA; honor MAX_BYTES; return decoded text."""
+def _fetch_html(url: str, *, timeout_s: float) -> tuple[str, dict[str, str]]:
+    """GET the URL with a browser-like UA; honor MAX_BYTES.
+
+    Returns (decoded_html, response_headers_dict). The headers are returned
+    separately so the caller can inspect anti-embedding signals like
+    X-Frame-Options and Content-Security-Policy without re-fetching.
+    """
     headers = {
         "User-Agent": USER_AGENT,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -138,10 +162,59 @@ def _fetch_html(url: str, *, timeout_s: float) -> str:
     if len(raw) > MAX_BYTES:
         raw = raw[:MAX_BYTES]
     encoding = resp.encoding or "utf-8"
+    # Lower-case header keys for case-insensitive lookup downstream
+    headers_dict = {k.lower(): v for k, v in resp.headers.items()}
     try:
-        return raw.decode(encoding, errors="replace")
+        return raw.decode(encoding, errors="replace"), headers_dict
     except LookupError:
-        return raw.decode("utf-8", errors="replace")
+        return raw.decode("utf-8", errors="replace"), headers_dict
+
+
+def _is_iframe_blocked(headers: dict[str, str]) -> bool:
+    """Return True if the upstream server sends headers that block iframe embedding.
+
+    We look at two headers:
+
+    * ``X-Frame-Options`` (deprecated but widely used): values ``DENY``,
+      ``SAMEORIGIN``, or ``ALLOW-FROM <uri>`` all block embedding from
+      our origin (we're never same-origin with HN-linked sites and the
+      ALLOW-FROM URI is never us).
+
+    * ``Content-Security-Policy`` ``frame-ancestors`` directive: values
+      ``'none'``, ``'self'``, or any host list that doesn't include
+      our dashboard domain block embedding. We treat ANY frame-ancestors
+      directive as blocking unless it explicitly allows ``*`` or our
+      production hostname.
+
+    False negatives (we say not-blocked but iframe still blanks) are
+    acceptable — the user can still click "Open in new tab". False
+    positives (we say blocked but iframe would have worked) are also
+    acceptable — they just see the friendly error panel instead of a
+    rendered iframe. The cost-of-error tradeoff favors over-blocking.
+    """
+    xfo = (headers.get("x-frame-options") or "").strip().lower()
+    if xfo:
+        # Any X-Frame-Options value blocks us in practice.
+        return True
+
+    csp = (headers.get("content-security-policy") or "").lower()
+    if "frame-ancestors" not in csp:
+        return False
+
+    # Find the frame-ancestors directive value.
+    for directive in csp.split(";"):
+        d = directive.strip()
+        if d.startswith("frame-ancestors"):
+            value = d[len("frame-ancestors"):].strip()
+            if not value:
+                return True
+            # Permissive forms: '*' or our production hostname.
+            if "*" in value.split() or "app.clearspringcg.com" in value:
+                return False
+            # 'none', 'self', or any specific host list that doesn't
+            # include us blocks embedding.
+            return True
+    return False
 
 
 # ─── metadata extraction ───────────────────────────────────────────────
