@@ -51,7 +51,12 @@ def test_deploy_workflow_fails_when_post_restart_health_fails() -> None:
 
     assert "trap cleanup_deployment_window EXIT" in content
     assert 'echo "--> Verifying production service health..."' in content
-    assert 'run_health_check gateway "http://127.0.0.1:8002/api/v1/health" 48 5' in content
+    # Gateway window is 96×5s = 8 min (raised from 48×5s = 4 min on 2026-05-10
+    # after Deploy #436 + #437 timed out at the previous window even though
+    # the gateway came up healthy seconds later — the lifespan does ~734
+    # lines of synchronous setup before yielding). api/webui windows
+    # unchanged because they're not the bottleneck.
+    assert 'run_health_check gateway "http://127.0.0.1:8002/api/v1/health" 96 5' in content
     assert 'run_health_check api "http://127.0.0.1:8001/api/health" 24 5' in content
     assert 'run_health_check webui "http://127.0.0.1:3000/dashboard" 24 5' in content
     assert 'health_pids="$health_pids $!"' in content
