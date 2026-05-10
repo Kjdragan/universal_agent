@@ -66,6 +66,9 @@ When executing on the VPS (`uaonvps`), agents have direct, native filesystem acc
 - **Capability Implication**: **Never** build custom "file fetcher" tools or syncing scripts to move files from the desktop to the VPS for agent tasks. Instead, simply refer to the absolute `/home/kjdragan/...` path directly. Standard OS operations (`cat`, Python `open()`, etc.) will seamlessly resolve over the SSHFS mount.
 - **Architectural Tenet**: This demonstrates the core design philosophy of "expanding system capabilities at the OS level" rather than building complex, brittle agent workarounds.
 
+## Screenshots
+Operator's screenshots live in Google Drive folder `Awesome Screenshots` (id: `1PM22v6FKY7Z8ukJA83LF3Ru_xGw7_S9I`). When the operator says "get the latest screenshot" / "look at the screenshot from Drive" / similar, resolve via `mcp__33c2a029-2ddb-4320-9fba-2d9695495b50__search_files` with `query: "parentId = '1PM22v6FKY7Z8ukJA83LF3Ru_xGw7_S9I'"` and `orderBy: "recency"`, then `read_file_content { fileId }` for a natural-language description of the image.
+
 ## Key Commands
 - Install deps: `uv sync`
 - Run app: `uv run python -m src.universal_agent.main`
