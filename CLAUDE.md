@@ -62,6 +62,7 @@ The Universal Agent infrastructure includes a seamless, transparent file resolut
 
 When executing on the VPS (`uaonvps`), agents have direct, native filesystem access to the local desktop environment at the exact same path.
 
+- **The VPS user**: interactive Claude Code on the VPS runs as system user `ua` (not `kjdragan`). Reach the VPS with `ssh ua@uaonvps`. The `/home/kjdragan/...` paths below are an SSHFS mount point — `ua` can read those paths via the mount; there's no `kjdragan` user account on the VPS itself. Global `~/.claude/CLAUDE.md` for VPS interactive sessions therefore lives at `/home/ua/.claude/CLAUDE.md`.
 - **The Path Guarantee**: The local desktop path `/home/kjdragan/...` is mounted onto the VPS at `/home/kjdragan/...`.
 - **Capability Implication**: **Never** build custom "file fetcher" tools or syncing scripts to move files from the desktop to the VPS for agent tasks. Instead, simply refer to the absolute `/home/kjdragan/...` path directly. Standard OS operations (`cat`, Python `open()`, etc.) will seamlessly resolve over the SSHFS mount.
 - **Architectural Tenet**: This demonstrates the core design philosophy of "expanding system capabilities at the OS level" rather than building complex, brittle agent workarounds.
