@@ -224,7 +224,7 @@ Both environments must run the **same versions** of Anthropic-adjacent packages 
 
 - **Daily sweep** ([`dependency_currency_sweep.py`](../../src/universal_agent/scripts/dependency_currency_sweep.py)) reports outdated `claude-code` CLI, `claude-agent-sdk-python`, `claude-agent-sdk-typescript`, `anthropic`, `@anthropic-ai/sdk`. Writes to `vault/infrastructure/version_drift.md`.
 - **Release detection** (in `classify_post`) flags `@ClaudeDevs` tweets that announce new versions, attaching a structured `release_info` to the action.
-- **Upgrade actuator (PR 6b, pending)** will: bump the manifest, run smoke tests against **both environments** (ZAI smoke verifies UA's normal operation still works; Anthropic-native smoke verifies demo path still works), deploy via the existing `develop → main` GitHub Actions pipeline, email Kevin on every change. Rollback on either smoke fail.
+- **Upgrade actuator (PR 6b, pending)** will: bump the manifest, run smoke tests against **both environments** (ZAI smoke verifies UA's normal operation still works; Anthropic-native smoke verifies demo path still works), open a PR to `main` (the post-2026-05-10 deploy path — see [04_Branching_And_Release_Workflow.md](04_Branching_And_Release_Workflow.md)), email Kevin on every change. Rollback on either smoke fail.
 
 The dual-environment smoke matrix is the single most important guardrail in Phase 0. An upgrade that breaks ZAI breaks all of UA. An upgrade that breaks Anthropic-native breaks demos. **Both have to pass before anything ships.**
 

@@ -286,7 +286,7 @@ def main() -> int:
             print(f"⚠️  Proxy verification error (credentials may still be OK): {exc}")
 
     print("\nNext steps:")
-    print("  1. Deploy to staging: merge to develop branch")
+    print("  1. Open a PR to main and run /ship to deploy")
     print("  2. Verify on VPS: uv run python scripts/check_webshare_proxy.py")
     print("  3. Any failed videos will be retried on the next playlist poll cycle")
     print("     (proxy_connect_failed videos are held in cooldown — clear with service restart)")

@@ -48,8 +48,9 @@ Documentation updates are **not optional follow-up work** — they are part of t
 
 This repository has exactly one supported deployment path. Production is branch-driven and automated.
 
-1. **Integration:** Open reviewed feature work against `develop`.
-2. **Production:** Fast-forward `develop` to `main`. Push to `main` triggers the automated deploy workflow.
+1. **Open a pull request to `main`** from your feature branch.
+2. **CI runs** (`pr-validate.yml`: py_compile + ruff + pytest tests/unit). Required to pass.
+3. **Operator merges** the PR in GitHub UI; the merge to `main` triggers `.github/workflows/deploy.yml` which deploys to production.
 
 **Do not** use ad hoc `ssh`, `rsync`, `git pull`, or manual VPS deployment flows.
 

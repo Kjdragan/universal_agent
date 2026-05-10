@@ -4,6 +4,25 @@ on:
   push:
     branches:
       - main
+    # Skip production deploy when a push to `main` only contains docs,
+    # markdown, or scheduled-job state files. These are produced by
+    # `nightly-doc-drift-audit.yml` and `openclaw-release-sync.yml` (which
+    # auto-merge their PRs to main directly post-2026-05-10) and shouldn't
+    # restart the gateway. GitHub semantics: deploy is skipped only when
+    # **every** changed file matches a `paths-ignore` glob — a mixed
+    # code+docs commit still deploys, which is the safe default.
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - 'reports/**'
+      - 'state/**'
+      # Machine-generated audit/report artifacts written by the two
+      # scheduled jobs (nightly-doc-drift-audit, openclaw-release-sync).
+      # These are force-added (artifacts/ is normally .gitignored) into
+      # main via auto-merged PR; nothing under artifacts/ is source code,
+      # so a deploy on these commits would just restart the gateway for
+      # zero behavior change.
+      - 'artifacts/**'
   workflow_dispatch:
 
 jobs:

@@ -1,97 +1,80 @@
 # AI Coder Coordination Instructions
 
 > **Audience:** Any AI coding agent (Claude Code, Codex, Cursor, etc.) working on this repository.
-> **Last updated:** 2026-05-01
+> **Last updated:** 2026-05-10 (post `develop` retirement — branch model collapsed to PR-only-to-`main`).
 
 ## Overview
 
-This repository uses a **branch-driven, automated deployment pipeline**. There are two roles in the workflow:
+This repository uses a **PR-driven, automated deployment pipeline**. There are two roles:
 
 | Role | Responsibility |
 |------|---------------|
-| **AI Coder** (you) | Write code, commit, and push to the shared feature branch |
-| **Ship Operator** | Runs `/ship` to promote the feature branch → `develop` → `main` and trigger CI/CD |
+| **AI Coder** (you) | Write code, commit, and push to a feature branch |
+| **Ship Operator** | Runs `/ship` (or opens the PR manually) to land changes on `main` |
 
-You are the AI Coder. You do **not** deploy. You write code and push it to the right place.
+You are the AI Coder. You do **not** deploy directly. You write code, push it to a feature branch, and either run `/ship` or hand off to the operator. Either way, the path to production is **always through a PR to `main`**.
+
+> **2026-05-10 simplification:** The `develop` branch was retired. Everything now goes through one PR to `main`. Earlier docs that describe a `feature/latest2 → develop → main` chain are stale. See [`docs/06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md`](../06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md) for the new model.
 
 ---
 
 ## Git Workflow Rules
 
-### 1. Always work on `feature/latest2`
+### 1. Branch model
 
-Before starting any work, ensure you are on the shared feature branch and up to date:
-
-```bash
-git checkout feature/latest2
-git pull origin feature/latest2
+```
+<your-branch>  →  PR  →  pr-validate.yml CI  →  human merges  →  main moves  →  Deploy fires
 ```
 
-**Do NOT create your own branches** (e.g., `claude/universal-agent-feature-*`, `codex/*`, `cursor/*`). All work goes directly on `feature/latest2`. Creating side branches causes merge conflicts and deployment delays.
+- **Tier 1 (Kevin in Antigravity, Claude Code conversational):** work on `feature/latest2` (the operator's pseudo-trunk by convention). Run `/ship` when done; `/ship` opens a PR from `feature/latest2` → `main`.
+- **Tier 2 (autonomous bots — CODIE, Cody scaffold-builder, scheduled VP coder):** create a dedicated branch (`<bot>/<task-id>` convention), worktree-isolate the work, syntax-check + unit-test in the worktree, then open a PR to `main` directly. Never push to `feature/latest2` from automation.
 
-### 2. Commit and push to `feature/latest2` only
+Both paths arrive at the same gate: a PR to `main` with PR-Validate CI green.
+
+### 2. Commit conventions
 
 When your work is done:
 
 ```bash
 git add .
 git commit -m "feat(component): descriptive message"
-git push origin feature/latest2
+git push -u origin <your-branch>
 ```
 
 Use [conventional commit](https://www.conventionalcommits.org/) prefixes: `feat`, `fix`, `docs`, `chore`, `refactor`, `test`.
 
-### 3. Never touch `develop` or `main`
+### 3. Never push to `main`
 
-You do not merge into, fast-forward, or push to these branches — ever. The `/ship` workflow handles the full promotion chain:
-
-```
-feature/latest2 → develop → main → GitHub Actions deploy
-```
-
-Someone else will run `/ship`. That is not your job.
+- **Direct push to `main` is forbidden.** GitHub branch protection should reject it; if it doesn't, your push bypasses CI and risks shipping a SyntaxError to production.
+- **Direct push to `feature/latest2`** is allowed for tier 1 only (Kevin + Claude Code conversational). Tier 2 bots must use their own branch.
+- **`develop`** no longer exists. If you find yourself reaching for it, you're following stale documentation — read this file's "2026-05-10 simplification" note above.
 
 ### 4. Never run deployment commands
 
 The following are **strictly prohibited**:
 
-- `git push origin main`
-- `git push origin develop`
-- `git merge ... develop` or `git merge ... main`
+- `git push origin main` (use a PR instead)
+- `git push --force` to `main` or `feature/latest2`
 - Any `ssh`, `rsync`, or manual VPS deployment commands
-- Running CI/CD workflows manually
+- Running CI/CD workflows manually except for legitimate `workflow_dispatch` reruns
 
-The deploy pipeline is fully automated via GitHub Actions, triggered by pushes to `main`.
+The deploy pipeline is fully automated via GitHub Actions, triggered only by pushes to `main` (which arrive via merged PR).
 
-### 5. Sync before starting new work
+### 5. Sync before pushing
 
-If your branch has fallen behind (e.g., after a `/ship` cycle synced everything):
-
-```bash
-git checkout feature/latest2
-git fetch origin
-git merge origin/feature/latest2
-```
-
-If there are conflicts, resolve them before writing new code.
-
-### 5a. Always sync before *pushing*, not just before working
-
-Multiple AI agents collaborate on `feature/latest2`. Your local checkout can go stale between commits — especially when an operator runs `/ship` or another coder pushes in parallel. Push rejections from this exact race used to require the ship operator to recover with a manual rebase.
-
-**Mandatory pre-push sequence**, every push, no exceptions:
+If your branch has fallen behind:
 
 ```bash
-git fetch origin feature/latest2
-git pull --rebase origin feature/latest2   # idempotent if already current
-git push -u origin feature/latest2
+git fetch origin <your-branch>
+git pull --rebase origin <your-branch>   # idempotent if already current
+git push -u origin <your-branch>
 ```
 
 If the rebase surfaces conflicts, resolve them locally and push. Never `--force` push.
 
 ### 6. Handoff signal
 
-When your coding session is complete, make sure your **last commit is pushed to `origin/feature/latest2`** AND record the exact SHA in your final reply to the user (e.g. *"ready to /ship; latest commit is `abc123de`"*). That gives the ship operator a deterministic anchor — they verify the SHA is in `origin/feature/latest2` before promoting, which removes ambiguity when multiple agents have been touching the branch.
+When your coding session is complete, make sure your **last commit is pushed** AND record the exact SHA in your final reply to the user (e.g. *"ready to /ship; latest commit is `abc123de` on `<your-branch>`"*). That gives the ship operator a deterministic anchor.
 
 If you want to leave a detailed handoff note, create or update `SHIP_HANDOFF.md` at the repo root with:
 - Summary of changes made
@@ -101,26 +84,24 @@ If you want to leave a detailed handoff note, create or update `SHIP_HANDOFF.md`
 
 ### 7. Notes for the Ship Operator
 
-If you are the agent running `/ship` (you may be reading this in a different session than the AI Coder who produced the commits), apply the same pre-push hygiene before promoting:
+If you are the agent running `/ship` (you may be reading this in a different session than the AI Coder who produced the commits), apply pre-push hygiene before opening the PR:
 
 ```bash
-git fetch origin feature/latest2 develop main
-git checkout feature/latest2
-git pull --rebase origin feature/latest2     # ensures local matches remote BEFORE you start
+git fetch origin <current-branch> main
+git checkout <current-branch>
+git pull --rebase origin <current-branch>     # ensures local matches remote BEFORE pushing
 # verify expected handoff SHA is in `git log` if the coder gave you one
-# then proceed with the standard /ship promotion chain
+# then proceed with /ship
 ```
 
-Never assume the local working copy is current. Always re-fetch and rebase first. This eliminates the failure mode where the operator's stale checkout collides with a remote commit a coder just pushed.
-
-If `/ship` fails on push with a non-fast-forward / 403 rejection, the recovery is the same:
+If `/ship` (or `git push`) fails on push with a non-fast-forward / 403 rejection:
 
 ```bash
 git pull --rebase origin <branch>
 # re-run the failed step
 ```
 
-Never `git push --force` to `feature/latest2`, `develop`, or `main`.
+Never `git push --force` to `feature/latest2` or `main`.
 
 ---
 
@@ -129,15 +110,15 @@ Never `git push --force` to `feature/latest2`, `develop`, or `main`.
 > **Audience:** anyone wiring up a new agent (CODIE-style cleanup, Cody scaffold-builder, scheduled VP coder mission, etc.) or asking "should this go through a PR?".
 > **Codified after the 2026-05-07 import storm:** an autonomous patcher mutated `/opt/universal_agent/src/` directly, the patches were syntactically invalid, nothing checked them, and every cron that imports the durable package failed for 8+ hours.
 
-| Tier | Who | What goes through `/ship` directly | What MUST go through PR |
+| Tier | Who | Branch convention | Path to `main` |
 |---|---|---|---|
-| **1 — Human-supervised conversational coding** | Kevin + Claude Code (you, this conversation), Antigravity, Codex when Kevin is in the loop | Routine fix-and-iterate, doc edits, docstring tweaks, conversational debug commits | CICD changes, deploy-pipeline edits, durable-state schema changes, autonomous-mission code |
-| **2 — Autonomous missions** (CODIE proactive cleanup, Cody scaffold-builder, demo-builder, scheduled VP coder, anything cron- or heartbeat-driven that mutates source) | Bots running unattended on the VPS | **Nothing.** Tier 2 NEVER pushes directly to `feature/latest2`. | **Everything.** Worktree → patch → syntax-check → unit tests → push to `<bot-name>/<task-id>` branch → open PR → CI passes → human merges. |
-| **3 — GitHub branch protection** | The safety net | N/A | Enforces tier 1 vs. tier 2 at the push level — see [`ci_cd_pipeline.md`](ci_cd_pipeline.md). |
+| **1 — Human-supervised conversational coding** | Kevin + Claude Code (this conversation), Antigravity, Codex when Kevin is in the loop | `feature/latest2` (the operator's pseudo-trunk) | `/ship` opens a PR `feature/latest2 → main`; CI runs; operator merges in GitHub UI |
+| **2 — Autonomous missions** (CODIE proactive cleanup, Cody scaffold-builder, demo-builder, scheduled VP coder, anything cron- or heartbeat-driven that mutates source) | Bots running unattended on the VPS | `<bot-name>/<task-id>` (e.g., `codie/cleanup-2026-05-10`) | Worktree → patch → syntax-check → unit tests → push to `<bot>/<task-id>` → open PR to `main` directly → CI passes → human merges |
+| **3 — GitHub branch protection** | The safety net | N/A | Enforces "no direct push to `main`" at the push level — see [`ci_cd_pipeline.md`](ci_cd_pipeline.md) |
 
-### When in doubt: PR
+### When in doubt
 
-If the change touches any of these, open a PR even from tier 1:
+If the change touches any of these, treat it like a tier-2 PR (real review, not a direct ff-merge through tier 1):
 
 - `.github/workflows/*` (CI/CD)
 - `.claude/commands/ship.md` or anything else `/ship` reads
@@ -145,7 +126,7 @@ If the change touches any of these, open a PR even from tier 1:
 - `src/universal_agent/services/dispatch_service.py` or `task_hub.py` (orchestration core)
 - `gateway_server.py` cron registration helpers
 
-The cost of a PR (~5 min) is far below the cost of a 30-cron-storm + production recovery (today: ~6 hours of operator time).
+The cost of a careful PR (~5 min CI + a glance) is far below the cost of a 30-cron-storm + production recovery.
 
 ---
 
@@ -172,7 +153,7 @@ The core invariant: **an autonomous mission must never leave the deployed workin
      git -C /tmp/<bot>_<task_id> checkout -b <bot>/<task_id>
      git -C /tmp/<bot>_<task_id> commit -am "..."
      git -C /tmp/<bot>_<task_id> push origin <bot>/<task_id>
-7. Open a PR via GitHub API targeting feature/latest2.
+7. Open a PR via GitHub API targeting main.
    Title: "<bot>: <one-line task summary>"
    Body: includes link to the source task, list of changed files, syntax-check + test output.
 8. On any failure in steps 3-7:
@@ -188,36 +169,22 @@ The core invariant: **an autonomous mission must never leave the deployed workin
 3. Leave `.bak` / `.swp` / `.orig` files in the working tree. Those are the fingerprint of a half-finished patch run; `/ship` and `pr-validate.yml` both refuse to merge a tree with these.
 4. Commit invalid Python and rely on CI to catch it. Run the syntax check **before** committing.
 5. Suppress errors. If the patch tool fails, the mission fails. Do not log-and-continue.
+6. Open a PR to `feature/latest2`. Tier 2 PRs target `main` directly post-2026-05-10.
 
 ### Reusable building blocks (shipped 2026-05-07)
 
-The 8-step pattern is implemented as Python helpers under
-`src/universal_agent/vp/`. New autonomous-mission call sites should
-compose with these instead of hand-rolling git/subprocess sequences:
+The 8-step pattern is implemented as Python helpers under `src/universal_agent/vp/`. New autonomous-mission call sites should compose with these instead of hand-rolling git/subprocess sequences:
 
 | Module | Public API | What to use it for |
 |--------|------------|--------------------|
 | [`vp/worktree_utils.py`](../../src/universal_agent/vp/worktree_utils.py) | `provision_worktree`, `teardown_worktree`, `syntax_check_changed_py`, `revert_changed_files`, `assert_no_artifacts`, `list_changed_py_files`, `detect_repo_root` | Steps 2, 3 (path discipline), 4 (compile check), 8 (revert + cleanup), and the `pr-validate.yml` artifact tripwire. |
-| [`vp/autonomous_mission_executor.py`](../../src/universal_agent/vp/autonomous_mission_executor.py) | `execute_autonomous_mission(task, patch_fn, bot_name, ...)` returning `MissionResult` | The full 8-step orchestration. Side effects (test runner + PR creation) are dependency-injected so unit tests skip the network. The default PR creator targets `feature/latest2` and never auto-merges — human review is part of the contract. |
+| [`vp/autonomous_mission_executor.py`](../../src/universal_agent/vp/autonomous_mission_executor.py) | `execute_autonomous_mission(task, patch_fn, bot_name, ...)` returning `MissionResult` | The full 8-step orchestration. Side effects (test runner + PR creation) are dependency-injected so unit tests skip the network. The default PR creator now targets **`main`** (post-2026-05-10) and never auto-merges — human review is part of the contract. |
 
-Test coverage lives in
-[`tests/unit/test_vp_worktree_utils.py`](../../tests/unit/test_vp_worktree_utils.py)
-and
-[`tests/unit/test_vp_autonomous_mission_executor.py`](../../tests/unit/test_vp_autonomous_mission_executor.py).
-The syntax-check test deliberately mirrors the 2026-05-07
-docstring-in-arglist regression so we cannot weaken it without
-catching it in CI.
+Test coverage lives in [`tests/unit/test_vp_worktree_utils.py`](../../tests/unit/test_vp_worktree_utils.py) and [`tests/unit/test_vp_autonomous_mission_executor.py`](../../tests/unit/test_vp_autonomous_mission_executor.py). The syntax-check test deliberately mirrors the 2026-05-07 docstring-in-arglist regression so we cannot weaken it without catching it in CI.
 
-`vp/worker_loop.py:_provision_workspace` (lines ~639-720) still has its
-own inline worktree path for `vp.coder.primary` missions. That path is
-correct for the running production loop; refactoring it to use
-`worktree_utils.py` is intentionally a follow-up PR so the building
-blocks land first and ship through the new tier-2 PR workflow as
-their own first real test.
+### What `pr-validate.yml` checks on every PR (the safety net)
 
-### What `pr-validate.yml` will check on every PR (the safety net)
-
-Defined at [`.github/workflows/pr-validate.yml`](../../.github/workflows/pr-validate.yml). Runs on every `pull_request` against `feature/latest2`, `develop`, or `main`:
+Defined at [`.github/workflows/pr-validate.yml`](../../.github/workflows/pr-validate.yml). Runs on every `pull_request` against `feature/latest2` or `main`:
 
 1. `python -m py_compile` on every changed `.py` file.
 2. `ruff check --select E9,F` (errors only, lint warnings allowed for now).
@@ -226,11 +193,17 @@ Defined at [`.github/workflows/pr-validate.yml`](../../.github/workflows/pr-vali
 
 Tier 1 PRs go through the same workflow — there's no exemption. The autonomous-mission rules above are stricter (they MUST do steps 4-5 *before* opening the PR, in their own worktree) but the CI gate is identical.
 
-### What `/ship` does at deploy time (the last gate)
+### What `/ship` does at PR-open time (the last pre-CI gate)
 
-[`/ship`](../../.claude/commands/ship.md) (post-2026-05-07 update) runs the same `compile()` check on every changed `.py` file before it commits — so even if you forget to run a local check, `/ship` will catch a syntax error before pushing it to `develop`. It also refuses to ship a working tree that contains `.py.bak` / `.swp` / `.orig` artifacts.
+[`/ship`](../../.claude/commands/ship.md) (post-2026-05-10 redesign) runs the same `compile()` check on every changed `.py` file before it commits + opens the PR — so even if you forget to run a local check, `/ship` catches the SyntaxError before the PR is opened. It also refuses to ship a working tree that contains `.py.bak` / `.swp` / `.orig` artifacts.
 
-This means today's class of bug (broken docstring → SyntaxError → import storm) is now caught at three independent gates: agent's own pre-commit step, `pr-validate.yml` on PR, `/ship` at deploy time. Any one of them would have prevented the 2026-05-07 incident.
+This means today's class of bug (broken docstring → SyntaxError → import storm) is now caught at three independent gates: agent's own pre-commit step, `/ship` at PR-open time, and `pr-validate.yml` on the PR itself. Any one of them would have prevented the 2026-05-07 incident.
+
+### What `deploy.yml` does at merge time
+
+The merge of a PR to `main` triggers `.github/workflows/deploy.yml`, which SSHs into the VPS, runs `git fetch + reset --hard origin/main`, runs `uv sync`, builds the web-ui, restarts services, and waits up to 8 minutes for the gateway `/api/v1/health` to return 200.
+
+`deploy.yml`'s `on.push` trigger has a `paths-ignore` filter so docs-only commits (e.g. nightly drift reports, openclaw release sync state) merging to `main` don't restart the gateway. Mixed code+docs commits still deploy — that's the safe default.
 
 ---
 
@@ -238,11 +211,11 @@ This means today's class of bug (broken docstring → SyntaxError → import sto
 
 | ❌ Don't | ✅ Do Instead |
 |----------|--------------|
-| Create `claude/feature-xyz` branches | Commit directly to `feature/latest2` |
-| Push to `main` or `develop` | Push only to `feature/latest2` |
-| Run `ssh vps ...` to deploy | Let the operator run `/ship` |
-| Merge `develop` into your branch | Merge `origin/feature/latest2` to stay current |
-| Leave work on an unpushed local branch | Always `git push origin feature/latest2` |
+| Create `claude/feature-xyz` branches and push directly to `feature/latest2` from them | If you're tier 1 (Claude Code conversational, Kevin in the loop), commit directly to `feature/latest2`. If you're tier 2 (bot), use your own `<bot>/<task-id>` branch and PR to `main`. |
+| Push to `main` directly | Open a PR to `main`. Either via `/ship` (tier 1) or `gh pr create --base main` (tier 2). |
+| Use the `develop` branch (it was retired 2026-05-10) | PR directly to `main`. |
+| Run `ssh vps ...` to deploy | Let the operator merge the PR; deploy fires automatically. |
+| Leave work on an unpushed local branch | Always push your branch and open the PR. |
 
 ---
 
@@ -250,8 +223,9 @@ This means today's class of bug (broken docstring → SyntaxError → import sto
 
 For full details on the CI/CD pipeline, branching strategy, and infrastructure:
 
+- [Branching and Release Workflow](../06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md)
 - [Architecture Overview](architecture_overview.md)
 - [CI/CD Pipeline](ci_cd_pipeline.md)
 - [Secrets and Environments](secrets_and_environments.md)
 
-The canonical deployment contract is defined in `AGENTS.md` at the repo root.
+The canonical deployment contract is defined in `AGENTS.md` (symlinked from `CLAUDE.md`) at the repo root.

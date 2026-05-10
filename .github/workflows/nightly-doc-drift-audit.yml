@@ -21,10 +21,10 @@ jobs:
       pull-requests: write
 
     steps:
-      - name: Checkout develop branch
+      - name: Checkout main branch
         uses: actions/checkout@v6
         with:
-          ref: develop
+          ref: main
           # Need full history so doc_drift_auditor.py can run `git log`
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -99,7 +99,7 @@ jobs:
           path: artifacts/doc-drift-reports/
           retention-days: 30
 
-      # ── Stage 1b: Commit Report to develop ──────────────────────────────
+      # ── Stage 1b: Commit Report to main (paths-ignore in deploy.yml suppresses prod deploy) ──
       - name: "Stage 1b — Commit drift report via auto-merged PR"
         id: commit_report
         continue-on-error: true
@@ -147,12 +147,14 @@ jobs:
           git commit -m "${COMMIT_MSG}"
           git push origin "${PR_BRANCH}"
 
-          # Create PR (without label to avoid failure)
+          # Create PR (without label to avoid failure). Targets main directly
+          # post-2026-05-10 develop retirement; deploy.yml's paths-ignore on
+          # docs/** suppresses the production deploy for this commit.
           PR_URL=$(gh pr create \
-            --base develop \
+            --base main \
             --head "${PR_BRANCH}" \
             --title "${COMMIT_MSG}" \
-            --body "Automated nightly drift report for ${REPORT_DATE}. Auto-merged by CI.")
+            --body "Automated nightly drift report for ${REPORT_DATE}. Auto-merged by CI. Lands on main; deploy.yml paths-ignore on docs/** suppresses the production deploy.")
 
           echo "📝 PR created: ${PR_URL}"
           echo "pr_created=true" >> "$GITHUB_OUTPUT"
@@ -170,11 +172,11 @@ jobs:
             echo "⚠️ Auto-merge failed — PR remains open for manual merge at: ${PR_URL}"
           fi
 
-          echo "✅ Drift report committed to develop via auto-merged PR."
+          echo "✅ Drift report committed to main via auto-merged PR."
 
-          # Return to develop for Stage 2
-          git checkout develop
-          git pull origin develop
+          # Return to main for Stage 2
+          git checkout main
+          git pull origin main
 
       - name: Summarize in Job Summary
         if: always()
