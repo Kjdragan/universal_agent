@@ -199,3 +199,168 @@ def test_strict_max_bytes_truncates_huge_response(monkeypatch: pytest.MonkeyPatc
 
     out = reader.fetch_article("https://example.com/")
     assert out["ok"] is True  # truncated but still parsed
+
+
+# ─── iframe-blocked detection (frontend auto-fallback signal) ───────────
+
+
+def _html_response_with_headers(html: str, extra_headers: dict[str, str]) -> httpx.Response:
+    headers = {"content-type": "text/html; charset=utf-8"}
+    headers.update(extra_headers)
+    return httpx.Response(200, headers=headers, text=html)
+
+
+def test_iframe_blocked_when_xfo_deny(monkeypatch: pytest.MonkeyPatch) -> None:
+    """X-Frame-Options: DENY means the iframe will blank — flag must be True."""
+    html = "<html><body><article><p>content here</p></article></body></html>"
+    _patch_transport(
+        monkeypatch,
+        lambda req: _html_response_with_headers(html, {"x-frame-options": "DENY"}),
+    )
+    out = reader.fetch_article("https://example.com/")
+    assert out["ok"] is True
+    assert out["iframe_blocked_by_headers"] is True
+
+
+def test_iframe_blocked_when_xfo_sameorigin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """X-Frame-Options: SAMEORIGIN blocks us (we're never same-origin with linked sites)."""
+    html = "<html><body><article><p>content</p></article></body></html>"
+    _patch_transport(
+        monkeypatch,
+        lambda req: _html_response_with_headers(html, {"x-frame-options": "SAMEORIGIN"}),
+    )
+    out = reader.fetch_article("https://example.com/")
+    assert out["iframe_blocked_by_headers"] is True
+
+
+def test_iframe_blocked_when_csp_frame_ancestors_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CSP frame-ancestors 'none' blocks all embedding."""
+    html = "<html><body><article><p>content</p></article></body></html>"
+    _patch_transport(
+        monkeypatch,
+        lambda req: _html_response_with_headers(
+            html,
+            {"content-security-policy": "default-src 'self'; frame-ancestors 'none'"},
+        ),
+    )
+    out = reader.fetch_article("https://example.com/")
+    assert out["iframe_blocked_by_headers"] is True
+
+
+def test_iframe_blocked_when_csp_frame_ancestors_self(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CSP frame-ancestors 'self' blocks us (we're never same-origin)."""
+    html = "<html><body><article><p>content</p></article></body></html>"
+    _patch_transport(
+        monkeypatch,
+        lambda req: _html_response_with_headers(
+            html,
+            {"content-security-policy": "frame-ancestors 'self'"},
+        ),
+    )
+    out = reader.fetch_article("https://example.com/")
+    assert out["iframe_blocked_by_headers"] is True
+
+
+def test_iframe_blocked_when_csp_lists_other_hosts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """frame-ancestors with a host list that doesn't include us blocks us."""
+    html = "<html><body><article><p>content</p></article></body></html>"
+    _patch_transport(
+        monkeypatch,
+        lambda req: _html_response_with_headers(
+            html,
+            {"content-security-policy": "frame-ancestors *.theverge.com vox.com"},
+        ),
+    )
+    out = reader.fetch_article("https://example.com/")
+    assert out["iframe_blocked_by_headers"] is True
+
+
+def test_iframe_NOT_blocked_when_csp_wildcard(monkeypatch: pytest.MonkeyPatch) -> None:
+    """frame-ancestors * means anyone can embed — NOT blocked."""
+    html = "<html><body><article><p>content</p></article></body></html>"
+    _patch_transport(
+        monkeypatch,
+        lambda req: _html_response_with_headers(
+            html,
+            {"content-security-policy": "frame-ancestors *"},
+        ),
+    )
+    out = reader.fetch_article("https://example.com/")
+    assert out["iframe_blocked_by_headers"] is False
+
+
+def test_iframe_NOT_blocked_when_csp_includes_our_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If frame-ancestors explicitly allows our prod host, NOT blocked."""
+    html = "<html><body><article><p>content</p></article></body></html>"
+    _patch_transport(
+        monkeypatch,
+        lambda req: _html_response_with_headers(
+            html,
+            {"content-security-policy": "frame-ancestors app.clearspringcg.com"},
+        ),
+    )
+    out = reader.fetch_article("https://example.com/")
+    assert out["iframe_blocked_by_headers"] is False
+
+
+def test_iframe_NOT_blocked_when_no_xfo_or_csp(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No anti-embed headers → iframe should work → NOT blocked."""
+    html = "<html><body><article><p>plain content, no XFO</p></article></body></html>"
+    _patch_transport(
+        monkeypatch,
+        lambda req: _html_response_with_headers(html, {}),
+    )
+    out = reader.fetch_article("https://example.com/")
+    assert out["iframe_blocked_by_headers"] is False
+
+
+def test_iframe_blocked_when_csp_has_other_directives_but_no_frame_ancestors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A CSP without frame-ancestors doesn't block embedding."""
+    html = "<html><body><article><p>content</p></article></body></html>"
+    _patch_transport(
+        monkeypatch,
+        lambda req: _html_response_with_headers(
+            html,
+            {"content-security-policy": "default-src 'self'; script-src 'self'"},
+        ),
+    )
+    out = reader.fetch_article("https://example.com/")
+    assert out["iframe_blocked_by_headers"] is False
+
+
+def test_iframe_blocked_marker_set_to_true_on_fetch_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On fetch failure (5xx, timeout) we conservatively mark iframe_blocked=True.
+
+    Rationale: most fetch failures from our backend (DNS, 5xx, Akamai 403,
+    timeouts) suggest the iframe load from the user's browser will also
+    fail. Better to show the friendly error panel than auto-swap to a
+    likely-blank iframe.
+    """
+    _patch_transport(monkeypatch, lambda req: httpx.Response(500, text="server error"))
+    out = reader.fetch_article("https://example.com/")
+    assert out["ok"] is False
+    assert out["iframe_blocked_by_headers"] is True
+
+
+def test_invalid_url_iframe_blocked_marker_is_false() -> None:
+    """An invalid URL never goes to fetch — iframe_blocked stays False (and it
+    doesn't matter; the frontend won't try to iframe an invalid URL anyway)."""
+    out = reader.fetch_article("not-a-url")
+    assert out["ok"] is False
+    assert out["iframe_blocked_by_headers"] is False
+
+
+def test_xfo_header_check_is_case_insensitive(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real-world servers send X-Frame-Options in mixed case (e.g. 'X-Frame-Options: deny')."""
+    html = "<html><body><article><p>content</p></article></body></html>"
+    _patch_transport(
+        monkeypatch,
+        # Lower-case header from server (httpx normalizes case but real responses vary)
+        lambda req: _html_response_with_headers(html, {"X-Frame-Options": "deny"}),
+    )
+    out = reader.fetch_article("https://example.com/")
+    assert out["iframe_blocked_by_headers"] is True

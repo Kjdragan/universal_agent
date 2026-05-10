@@ -1061,6 +1061,13 @@ type ArticleData = {
   source_url?: string;
   fetched_at?: string;
   error?: string;
+  // True when the upstream URL's response carries X-Frame-Options or a
+  // restrictive CSP frame-ancestors directive that will cause our preview
+  // iframe to render blank. Used to decide whether to auto-fall-back to
+  // Original (iframe) when reader extraction yields empty content, or to
+  // instead show the friendly "Open in new tab" error panel. See
+  // services/hackernews_article_reader.py:_is_iframe_blocked.
+  iframe_blocked_by_headers?: boolean;
 };
 
 type ReaderStatus = "loading" | "ready" | "error";
@@ -1105,19 +1112,36 @@ function PreviewOverlay({
       .then((data: ArticleData) => {
         if (cancelled) return;
         setArticle(data);
-        if (data.ok && (data.content_md ?? "").trim().length > 0) {
+        const hasReadableContent =
+          data.ok && (data.content_md ?? "").trim().length > 0;
+        if (hasReadableContent) {
           setReaderStatus("ready");
         } else {
-          // Reader couldn't extract anything useful — fall through to iframe.
+          // Reader couldn't extract anything useful. Decide whether to
+          // auto-swap to Original (iframe) — but ONLY if iframe is likely
+          // to actually render. For sites that send X-Frame-Options or a
+          // restrictive CSP frame-ancestors (twitter.com, x.com,
+          // github.com, etc.), the iframe will blank out too and silently
+          // swapping just shows a different blank screen. In that case
+          // keep the user in Reader mode and let the ReaderError panel
+          // surface the "Open in new tab" CTA. See
+          // services/hackernews_article_reader.py for the upstream
+          // iframe_blocked_by_headers detection.
           setReaderStatus("error");
-          setMode("original");
+          if (!data.iframe_blocked_by_headers) {
+            setMode("original");
+          }
         }
       })
       .catch((err) => {
         if (cancelled) return;
         console.warn("HN reader fetch failed:", err);
         setReaderStatus("error");
-        setMode("original");
+        // Same logic as above — if our backend even crashed, we don't
+        // know whether the iframe will work, but the typical "fetch
+        // failed" cases (DNS, timeouts, 5xx) suggest the iframe will
+        // also be unable to load. Don't auto-swap; show the error panel.
+        // The user can still manually toggle to Original via the pill.
       });
     return () => {
       cancelled = true;
@@ -1377,6 +1401,10 @@ function ReaderError({
   sourceUrl: string;
 }) {
   const reason = article?.error || "couldn’t extract reader content";
+  // If we know the upstream blocks iframes too, the "Switch to Original"
+  // suggestion would just hand the user another blank screen. In that
+  // case lead with "open in a new tab" as the primary affordance.
+  const iframeBlocked = article?.iframe_blocked_by_headers === true;
   return (
     <div
       style={{
@@ -1394,20 +1422,52 @@ function ReaderError({
       }}
     >
       <AlertTriangle size={20} color={T.warn} />
-      <div style={{ color: T.t1 }}>Reader-mode extraction failed</div>
-      <div style={{ color: T.t3, fontSize: 11 }}>{reason}</div>
-      <div style={{ color: T.t3, fontSize: 11 }}>
-        Switch to <b style={{ color: T.t1 }}>Original</b> above, or{" "}
-        <a
-          href={sourceUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{ color: T.hn, textDecoration: "none" }}
-        >
-          open in a new tab
-        </a>
-        .
+      <div style={{ color: T.t1 }}>
+        {iframeBlocked
+          ? "This site can’t be previewed inline"
+          : "Reader-mode extraction failed"}
       </div>
+      <div style={{ color: T.t3, fontSize: 11, maxWidth: 480 }}>
+        {iframeBlocked ? (
+          <>
+            <b style={{ color: T.t1 }}>{article?.host || "The site"}</b> blocks
+            both reader extraction and iframe embedding (it sends
+            X-Frame-Options or a restrictive CSP). Most modern SaaS sites
+            (twitter, github, x.com, ...) do this.
+          </>
+        ) : (
+          <>{reason}</>
+        )}
+      </div>
+      <a
+        href={sourceUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          marginTop: 4,
+          padding: "6px 14px",
+          borderRadius: 6,
+          border: `1px solid ${T.hnDim}`,
+          background: "rgba(255,102,0,0.08)",
+          color: T.hn,
+          textDecoration: "none",
+          fontFamily: T.fontMono,
+          fontSize: 12,
+          fontWeight: 600,
+        }}
+      >
+        <ExternalLink size={12} />
+        Open in a new tab
+      </a>
+      {!iframeBlocked && (
+        <div style={{ color: T.t3, fontSize: 10.5 }}>
+          (or switch to <b style={{ color: T.t2 }}>Original</b> above to try
+          the iframe view)
+        </div>
+      )}
     </div>
   );
 }
