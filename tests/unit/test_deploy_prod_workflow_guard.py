@@ -83,8 +83,17 @@ def test_deploy_workflow_paths_ignore_suppresses_docs_only_deploys() -> None:
     content = _DEPLOY_WORKFLOW.read_text(encoding="utf-8")
 
     assert "paths-ignore:" in content
-    # Keep these exact globs in sync with .github/workflows/deploy.yml's on.push trigger
-    for glob in ("- 'docs/**'", "- '**.md'", "- 'reports/**'", "- 'state/**'", "- 'artifacts/**'"):
+    # Keep these exact globs in sync with .github/workflows/deploy.yml's on.push trigger.
+    # `memory/**` was added 2026-05-10 follow-up after PR #182 merge triggered a
+    # no-op gateway restart for harness session-memory updates.
+    for glob in (
+        "- 'docs/**'",
+        "- '**.md'",
+        "- 'reports/**'",
+        "- 'state/**'",
+        "- 'artifacts/**'",
+        "- 'memory/**'",
+    ):
         assert glob in content, f"paths-ignore missing required glob: {glob}"
 
 
