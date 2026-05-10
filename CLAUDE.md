@@ -66,6 +66,31 @@ When executing on the VPS (`uaonvps`), agents have direct, native filesystem acc
 - **Capability Implication**: **Never** build custom "file fetcher" tools or syncing scripts to move files from the desktop to the VPS for agent tasks. Instead, simply refer to the absolute `/home/kjdragan/...` path directly. Standard OS operations (`cat`, Python `open()`, etc.) will seamlessly resolve over the SSHFS mount.
 - **Architectural Tenet**: This demonstrates the core design philosophy of "expanding system capabilities at the OS level" rather than building complex, brittle agent workarounds.
 
+## Screenshot Access (Google Drive Bridge)
+
+Claude Code sandbox sessions (the web/IDE chat ones, not VPS-running agents) cannot reach the SSHFS bridge above — those sessions run in isolated containers without `/home/kjdragan/`. To give every session a uniform way to resolve "the latest screenshot," screenshots are auto-uploaded to a dedicated Google Drive folder.
+
+**Canonical folder:** `Awesome Screenshots` (Kevin's Drive root)
+- Folder ID: `1PM22v6FKY7Z8ukJA83LF3Ru_xGw7_S9I`
+- URL: https://drive.google.com/drive/folders/1PM22v6FKY7Z8ukJA83LF3Ru_xGw7_S9I
+
+**When the operator says "look at my latest screenshot" / "the latest saved screenshot" / similar:**
+
+1. Search the canonical folder, sorted by most recent:
+   ```
+   mcp__33c2a029-2ddb-4320-9fba-2d9695495b50__search_files
+     query: "parentId = '1PM22v6FKY7Z8ukJA83LF3Ru_xGw7_S9I' and (mimeType contains 'image/' or mimeType = 'image/png' or mimeType = 'image/jpeg')"
+     pageSize: 5
+     orderBy: "modifiedTime desc"  (note: orderBy may not be honored — the API defaults to 'recency' which is similar; sort the response client-side by modifiedTime if needed)
+   ```
+2. Take the first result (highest `modifiedTime`).
+3. Read it via `mcp__33c2a029-2ddb-4320-9fba-2d9695495b50__read_file_content { fileId: <id> }` — that returns a natural-language description of the image (which is what we need to "see" what's in it). For raw binary, use `download_file_content` instead.
+
+**Operator-side setup (one-time, on the desktop):**
+The Awesome Screenshot Chrome extension has a built-in Google Drive integration. Enable it in the extension settings, authorize the same Google account that owns this Drive, and set the upload destination to the `Awesome Screenshots` folder above. From then on, every screenshot the operator captures auto-uploads to the canonical folder and any agent session can resolve it via the search above.
+
+**Fallback if the bridge is broken** (e.g., extension auth lapsed, folder renamed, file not appearing): the operator can still drag the screenshot directly into the Claude Code chat as an attachment — that always works.
+
 ## Key Commands
 - Install deps: `uv sync`
 - Run app: `uv run python -m src.universal_agent.main`
