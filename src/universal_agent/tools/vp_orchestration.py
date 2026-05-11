@@ -247,13 +247,14 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
     if not source_session_id:
         source_session_id = "internal.vp_tool"
 
-    # Hermes Phase E.1 — resolve cody_mode and plumb it into mission
+    # Hermes Phase E — resolve cody_mode and plumb it into mission
     # metadata so vp_missions.payload_json carries the toggle for the
     # VP worker (CLI/SDK adapter) to honor. Resolution order:
     #   1. explicit args["cody_mode"]
     #   2. task row's cody_mode (if a linked task_id is supplied)
-    #   3. UA_CODY_DEFAULT_MODE env
-    #   4. "zai" default
+    #   3. DB setting `cody_default_mode` (operator UI toggle)
+    #   4. UA_CODY_DEFAULT_MODE env
+    #   5. "anthropic" hardcoded fallback (flipped 2026-05-11 PM)
     raw_metadata = (
         args.get("metadata") if isinstance(args.get("metadata"), dict) else {}
     )
@@ -263,28 +264,54 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
     else:
         from universal_agent.services.cody_mode import resolve_cody_mode
 
-        # Try to load the linked task row to pick up its per-task override.
+        # Load the linked task row (if any) and pass the same conn into
+        # the resolver so it can read the operator DB setting.
         linked_task_id = str(args.get("task_id") or raw_metadata.get("task_id") or "").strip()
         linked_task: dict[str, Any] | None = None
-        if linked_task_id:
-            try:
-                from universal_agent import task_hub
-                from universal_agent.durable.db import (
-                    connect_runtime_db,
-                    get_activity_db_path,
-                )
+        th_conn = None
+        try:
+            from universal_agent import task_hub  # noqa: F401 (used implicitly via resolve_cody_mode)
+            from universal_agent.durable.db import (
+                connect_runtime_db,
+                get_activity_db_path,
+            )
 
-                th_conn = connect_runtime_db(get_activity_db_path())
+            th_conn = connect_runtime_db(get_activity_db_path())
+            if linked_task_id:
                 try:
-                    linked_task = task_hub.get_item(th_conn, linked_task_id)
-                finally:
+                    from universal_agent import task_hub as _th
+                    linked_task = _th.get_item(th_conn, linked_task_id)
+                except Exception:
+                    linked_task = None
+            resolved_cody_mode = resolve_cody_mode(linked_task, conn=th_conn)
+        except Exception:
+            # Resolver couldn't reach the DB; fall through to env/hardcoded.
+            resolved_cody_mode = resolve_cody_mode(linked_task)
+        finally:
+            if th_conn is not None:
+                try:
                     th_conn.close()
-            except Exception:
-                linked_task = None
-        resolved_cody_mode = resolve_cody_mode(linked_task)
+                except Exception:
+                    pass
 
     mission_metadata = dict(raw_metadata)
     mission_metadata["cody_mode"] = resolved_cody_mode
+
+    # Hermes Phase E.2 routing rule: when the resolved mode is
+    # "anthropic", auto-route through execution_mode="cli" so the
+    # spawned `claude` subprocess uses workspace-local OAuth (Anthropic
+    # Max) instead of the gateway's ZAI-routed env. SDK in-process mode
+    # cannot easily flip ANTHROPIC_* per-call without races; CLI mode
+    # gives Cody true environmental autonomy (own PID/env/workspace).
+    # Explicit args["execution_mode"] still wins so an operator can
+    # override (e.g. force "dag" for deterministic flows).
+    explicit_exec_mode = str(args.get("execution_mode") or "").strip().lower()
+    if explicit_exec_mode:
+        resolved_execution_mode = explicit_exec_mode
+    elif resolved_cody_mode == "anthropic":
+        resolved_execution_mode = "cli"
+    else:
+        resolved_execution_mode = "sdk"
 
     conn = _connect_vp_db()
     try:
@@ -302,8 +329,7 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
                 reply_mode=reply_mode,
                 priority=priority,
                 run_id=run_id or None,
-                execution_mode=str(args.get("execution_mode") or "sdk").strip()
-                or "sdk",
+                execution_mode=resolved_execution_mode,
                 metadata=mission_metadata,
             ),
         )
