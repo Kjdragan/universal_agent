@@ -1,8 +1,16 @@
-# 11. Daily Dev Workflow — VPS-as-Dev via Antigravity Remote-SSH
+# 11. Daily Dev Workflow — VPS-as-Dev via Antigravity Remote-SSH (Fallback)
 
-> **Audience:** Kevin (primary), and any future agent or operator who needs to understand how UA development actually happens day-to-day. This is the **idiot-proof beginning-to-end guide**. For the one-page TL;DR see [`docs/WORKFLOW.md`](../WORKFLOW.md). For the deep-dive on *why* things route the way they do, see [`10_Interactive_Coding_Environment.md`](10_Interactive_Coding_Environment.md).
+> **⚠️ SUPERSEDED 2026-05-11.** The canonical local-dev runbook is now [`12_Local_Dev_Environment.md`](12_Local_Dev_Environment.md). Development happens on **Kevin's desktop** via `just dev` (on-demand, autonomous loops off, no ZAI quota burn, no collision with prod state). The VPS is production-only.
 >
-> **Status:** Canonical, post-2026-05-07 inversion. The previous "develop on desktop, push to VPS" model is obsolete (see § Why the workflow changed).
+> **This doc is retained as a FALLBACK** for cases where desktop dev isn't available (e.g., away from desktop, traveling, desktop hardware issue). It describes the Antigravity Remote-SSH workflow that was the canonical path between 2026-05-07 (Default-Anthropic inversion) and 2026-05-11 (dev/prod separation initiative). The mechanics below still work — they're just no longer the primary path.
+>
+> If you're a new operator or fresh AI session: **read Doc 12 first.** Use this doc only if Doc 12's `just dev` path isn't an option in your current situation.
+
+---
+
+> **Audience:** Kevin (primary), and any future agent or operator who needs to understand how UA development happened pre-2026-05-11. This is the **idiot-proof beginning-to-end guide for the VPS-as-dev fallback path.** For the canonical post-2026-05-11 path, see [`12_Local_Dev_Environment.md`](12_Local_Dev_Environment.md). For the one-page TL;DR see [`docs/WORKFLOW.md`](../WORKFLOW.md). For the deep-dive on *why* Claude routes the way it does, see [`10_Interactive_Coding_Environment.md`](10_Interactive_Coding_Environment.md).
+>
+> **Status:** **Fallback workflow** (post-2026-05-11). Was canonical between 2026-05-07 (Default-Anthropic inversion) and 2026-05-11 (dev/prod separation initiative). The previous "develop on desktop, push to VPS" model from before 2026-05-07 is obsolete (see § Why the workflow changed).
 
 ---
 

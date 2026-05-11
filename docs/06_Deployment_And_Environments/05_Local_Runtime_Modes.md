@@ -1,6 +1,8 @@
 # Local Runtime Modes
 
-Last updated: March 19, 2026
+Last updated: March 19, 2026 (status banner added 2026-05-11)
+
+> **⚠️ Scope clarification (2026-05-11).** This doc defines the two local lanes (HQ Dev Lane vs Desktop Worker Lane) — it's the **lane DEFINITION**. The **runbook** for actually running the HQ Dev Lane (one-command `just dev`, loop-off semantics, troubleshooting) moved to [`12_Local_Dev_Environment.md`](12_Local_Dev_Environment.md) on 2026-05-11. Use this doc to understand what a lane *is*; use Doc 12 to actually run it.
 
 ## Purpose
 
