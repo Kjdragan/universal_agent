@@ -1,0 +1,126 @@
+name: Auto-Promote to Production
+
+# Fires on push to feature/latest2 (typically from PR Auto-Merge fully
+# completing). Performs the same fast-forward promotion that /ship does:
+#
+#   feature/latest2 -> develop (merge commit) -> main (ff-only) -> push
+#
+# The push to main triggers the existing deploy.yml workflow, which
+# deploys to production.
+#
+# This is the second half of the "PR -> production" automation. With
+# pr-auto-merge.yml + this workflow, the flow becomes:
+#
+#   1. Agent opens PR (claude/* -> feature/latest2)
+#   2. pr-validate.yml runs (compile + ruff + pytest)
+#   3. pr-auto-merge.yml enables GitHub auto-merge on the PR
+#   4. CI passes -> GitHub squash-merges -> push to feature/latest2
+#   5. THIS workflow fires -> ff-promotes to develop and main
+#   6. deploy.yml fires from the main push -> production
+#
+# Manual fallback: /ship still exists for direct-push or hot-fix paths,
+# but in normal operation no operator action is required between PR
+# open and production deploy.
+
+on:
+  push:
+    branches: [feature/latest2]
+
+permissions:
+  contents: write
+
+concurrency:
+  # Never cancel an in-flight promotion; queue subsequent pushes so each
+  # PR gets its own deploy. Two PRs landing back-to-back will produce
+  # two sequential deploys, not a clobbered one.
+  group: auto-promote-to-prod
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Promote feature/latest2 -> develop -> main
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    defaults:
+      run:
+        # Same as pr-validate.yml: opt into pipefail so `cmd | tail -N`
+        # doesn't silently swallow non-zero exit codes from cmd.
+        shell: bash -euo pipefail {0}
+
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git for bot
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Skip if push was made by this workflow itself
+        id: loop_guard
+        run: |
+          # Defensive: this workflow only writes to develop and main, not
+          # feature/latest2, so a self-trigger loop should be impossible.
+          # But if some future change pushes to feature/latest2 from this
+          # job, abort cleanly instead of looping. Pusher login for the
+          # GITHUB_TOKEN identity is "github-actions[bot]".
+          PUSHER='${{ github.event.pusher.name }}'
+          if [ "$PUSHER" = "github-actions[bot]" ]; then
+            echo "Push originated from this bot identity. Aborting to avoid loop."
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Promote feature/latest2 -> develop
+        if: steps.loop_guard.outputs.skip == '0'
+        run: |
+          git fetch origin develop main feature/latest2
+          git checkout develop
+          git pull --ff-only origin develop
+          # Merge commit (matches /ship's pattern at .claude/commands/ship.md:137).
+          # We use a merge commit (not ff-only) into develop so develop's
+          # history shows discrete deployment events.
+          git merge feature/latest2 \
+            -m "Merge branch 'feature/latest2' into develop for deployment [auto]"
+          git push origin develop
+          echo "develop advanced to $(git rev-parse --short HEAD)"
+
+      - name: Promote develop -> main (ff-only)
+        if: steps.loop_guard.outputs.skip == '0'
+        run: |
+          git fetch origin main
+          PRE_MAIN=$(git rev-parse origin/main)
+          git checkout main
+          git pull --ff-only origin main
+          git merge develop --ff-only
+          TARGET_SHA=$(git rev-parse main)
+
+          if [ "$PRE_MAIN" = "$TARGET_SHA" ]; then
+            echo "main already at ${TARGET_SHA:0:8} - nothing new to deploy."
+            exit 0
+          fi
+
+          git push origin main
+
+          # Silent-no-op detection (per ship.md:166-180 lesson from 2026-05-08).
+          # `git push` can exit 0 with "Everything up-to-date" when the
+          # local ff-merge above was a silent no-op (stale local state
+          # or branch protection silently rejecting the push). Without
+          # this check, the promotion reports success and the deploy
+          # never triggers.
+          git fetch origin main --quiet
+          POST_MAIN=$(git rev-parse origin/main)
+          if [ "$POST_MAIN" != "$TARGET_SHA" ]; then
+            echo "FATAL: push to main reported success but origin/main is at ${POST_MAIN:0:8}, expected ${TARGET_SHA:0:8}."
+            echo "       The deploy workflow will NOT trigger."
+            echo "       Most likely cause: branch protection on main rejected the push."
+            echo "       Check repo Settings -> Branches -> main -> 'Allow GitHub Actions to bypass'."
+            exit 1
+          fi
+          echo "origin/main advanced: ${PRE_MAIN:0:8} -> ${POST_MAIN:0:8}"
+          echo "deploy.yml will fire - watch at https://github.com/${{ github.repository }}/actions"

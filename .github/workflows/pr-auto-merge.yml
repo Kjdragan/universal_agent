@@ -1,0 +1,56 @@
+name: PR Auto-Merge
+
+# Auto-enable GitHub auto-merge on PRs that:
+#   - Target feature/latest2
+#   - Are from a claude/* head branch (i.e., from an AI coder)
+#   - Are not draft
+#
+# Once auto-merge is enabled, GitHub squash-merges the PR as soon as
+# pr-validate.yml passes and any required reviews are satisfied.
+#
+# This is half of the "PR -> production" automation. The other half is
+# auto-promote-to-prod.yml, which fires on push to feature/latest2 and
+# advances develop+main, triggering deploy.yml.
+#
+# Manual fallback: if a PR doesn't match the head-branch pattern below,
+# the operator merges it manually. /ship is also still available for
+# direct-push paths.
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+    branches: [feature/latest2]
+
+permissions:
+  pull-requests: write
+  contents: write
+
+jobs:
+  enable-automerge:
+    name: Enable auto-merge (squash)
+    if: |
+      startsWith(github.event.pull_request.head.ref, 'claude/') &&
+      !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Enable auto-merge via gh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          PR_NUM="${{ github.event.pull_request.number }}"
+          # Best-effort enable. If auto-merge is already enabled or the
+          # PR is already mergeable+merged, gh exits non-zero with a
+          # message; we treat that as a soft success so a re-run on a
+          # late "synchronize" event doesn't fail the workflow.
+          if gh pr merge "$PR_NUM" \
+                --auto --squash --delete-branch \
+                --repo "${{ github.repository }}"; then
+            echo "Auto-merge enabled on PR #${PR_NUM} (squash, delete branch)."
+          else
+            echo "Note: auto-merge could not be (re-)enabled on PR #${PR_NUM}."
+            echo "      This is usually because the PR is already merged, already"
+            echo "      auto-merging, or auto-merge is disabled at the repo level."
+            echo "      Check repo Settings -> General -> 'Allow auto-merge'."
+          fi

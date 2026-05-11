@@ -4,6 +4,17 @@ description: Run the commit changes through to production and deploy CI/CD
 
 # Ship Workflow
 
+> **As of 2026-05-11, `/ship` is now an OPTIONAL manual fallback.** The standard path is fully automated end-to-end:
+>
+> 1. Agent opens PR (`claude/*` → `feature/latest2`)
+> 2. [`pr-validate.yml`](../../.github/workflows/pr-validate.yml) runs (compile + ruff + pytest)
+> 3. [`pr-auto-merge.yml`](../../.github/workflows/pr-auto-merge.yml) enables GitHub auto-merge on the PR
+> 4. CI passes → GitHub squash-merges into `feature/latest2`
+> 5. [`auto-promote-to-prod.yml`](../../.github/workflows/auto-promote-to-prod.yml) fires on the push → ff-promotes `feature/latest2` → `develop` → `main`
+> 6. [`deploy.yml`](../../.github/workflows/deploy.yml) fires on the `main` push → production
+>
+> No `/ship` needed for that flow. **Type `/ship` only when you want to deploy work that isn't going through a PR** — e.g., a hot-fix you committed locally, or any direct push to `feature/latest2` that needs to reach production immediately. The hygiene checks below still apply when you do.
+
 This workflow automates the canonical deployment path for the Universal Agent repository. It commits all pending changes on your current branch, merges them into `develop`, fast-forwards `main` with `develop`, and pushes to GitHub to trigger the automated CI/CD deployment workflow.
 
 > **Where can `/ship` run?** Anywhere with the right git remote and a working `gh` CLI session: your desktop, a VPS dev-tree at `/home/ua/dev/universal_agent` (provisioned per Phase D), Antigravity Remote-SSH'd into the VPS, or a sandbox-Claude with the repo cloned. The workflow is **checkout-agnostic** — it operates on `origin` only, so any clone tracking the same GitHub remote can promote feature/latest2 to production. See [`docs/WORKFLOW.md`](../../docs/WORKFLOW.md) for daily-flow context.

@@ -132,7 +132,7 @@ Never `git push --force` to `feature/latest2`, `develop`, or `main`.
 | Tier | Who | What goes through `/ship` directly | What MUST go through PR |
 |---|---|---|---|
 | **1 — Human-supervised conversational coding** | Kevin + Claude Code (you, this conversation), Antigravity, Codex when Kevin is in the loop | Routine fix-and-iterate, doc edits, docstring tweaks, conversational debug commits | CICD changes, deploy-pipeline edits, durable-state schema changes, autonomous-mission code |
-| **2 — Autonomous missions** (CODIE proactive cleanup, Cody scaffold-builder, demo-builder, scheduled VP coder, anything cron- or heartbeat-driven that mutates source) | Bots running unattended on the VPS | **Nothing.** Tier 2 NEVER pushes directly to `feature/latest2`. | **Everything.** Worktree → patch → syntax-check → unit tests → push to `<bot-name>/<task-id>` branch → open PR → CI passes → human merges. |
+| **2 — Autonomous missions** (CODIE proactive cleanup, Cody scaffold-builder, demo-builder, scheduled VP coder, anything cron- or heartbeat-driven that mutates source) | Bots running unattended on the VPS | **Nothing.** Tier 2 NEVER pushes directly to `feature/latest2`. | **Everything.** Worktree → patch → syntax-check → unit tests → push to `<bot-name>/<task-id>` branch → open PR → CI passes → [`pr-auto-merge.yml`](../../.github/workflows/pr-auto-merge.yml) auto-merges → [`auto-promote-to-prod.yml`](../../.github/workflows/auto-promote-to-prod.yml) deploys (no human merge needed for `claude/*` head branches). |
 | **3 — GitHub branch protection** | The safety net | N/A | Enforces tier 1 vs. tier 2 at the push level — see [`ci_cd_pipeline.md`](ci_cd_pipeline.md). |
 
 ### When in doubt: PR
@@ -231,6 +231,8 @@ Tier 1 PRs go through the same workflow — there's no exemption. The autonomous
 [`/ship`](../../.claude/commands/ship.md) (post-2026-05-07 update) runs the same `compile()` check on every changed `.py` file before it commits — so even if you forget to run a local check, `/ship` will catch a syntax error before pushing it to `develop`. It also refuses to ship a working tree that contains `.py.bak` / `.swp` / `.orig` artifacts.
 
 This means today's class of bug (broken docstring → SyntaxError → import storm) is now caught at three independent gates: agent's own pre-commit step, `pr-validate.yml` on PR, `/ship` at deploy time. Any one of them would have prevented the 2026-05-07 incident.
+
+> **As of 2026-05-11:** the standard `claude/*` PR flow is fully automated end-to-end via [`pr-auto-merge.yml`](../../.github/workflows/pr-auto-merge.yml) + [`auto-promote-to-prod.yml`](../../.github/workflows/auto-promote-to-prod.yml). PR open → CI passes → auto-merge → auto-promote → deploy fires, with no operator action required. `/ship` is now an **optional manual fallback** for direct-push or hot-fix paths that bypass the PR flow. The hygiene checks above still apply when it's invoked.
 
 ---
 
