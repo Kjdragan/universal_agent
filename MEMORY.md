@@ -9,6 +9,8 @@ Persistent context for the agent.
 ## [RECENT_CONTEXT]
 Recent context snapshots (most recent first):
 
+- 2026-05-11T05:09:06.697672+00:00: Proactive task completed successfully: Digest proactive task Source: proactive_codie | Duration: 1004947s This type of proactive work was productive. (tags: proactive_outcome, success, source:proactive_codie)
+- 2026-05-11T05:08:34.126824+00:00: Proactive task completed successfully: Digest proactive task Source: proactive_codie | Duration: 1004914s This type of proactive work was productive. (tags: proactive_outcome, success, source:proactive_codie)
 - 2026-05-11T04:39:05.716410+00:00: Proactive task completed successfully: Digest proactive task Source: proactive_codie | Duration: 1003146s This type of proactive work was productive. (tags: proactive_outcome, success, source:proactive_codie)
 - 2026-05-11T04:00:00.650041+00:00: Proactive task completed successfully: Digest proactive task Source: proactive_codie | Duration: 1000801s This type of proactive work was productive. (tags: proactive_outcome, success, source:proactive_codie)
 - 2026-05-11T03:59:35.229842+00:00: Proactive task completed successfully: Digest proactive task Source: proactive_codie | Duration: 1000775s This type of proactive work was productive. (tags: proactive_outcome, success, source:proactive_codie)
@@ -17,6 +19,4 @@ Recent context snapshots (most recent first):
 - 2026-05-11T03:22:30.615484+00:00: Proactive task completed successfully: Digest proactive task Source: proactive_codie | Duration: 998551s This type of proactive work was productive. (tags: proactive_outcome, success, source:proactive_codie)
 - 2026-05-11T03:20:04.295849+00:00: Proactive task completed successfully: Digest proactive task Source: proactive_codie | Duration: 998404s This type of proactive work was productive. (tags: proactive_outcome, success, source:proactive_codie)
 - 2026-05-10T02:37:46.413955+00:00: Proactive task completed successfully: Digest proactive task Source: proactive_codie | Duration: 909466s This type of proactive work was productive. (tags: proactive_outcome, success, source:proactive_codie)
-- 2026-05-07T16:45:16.135377+00:00: Proactive task completed successfully: Digest proactive task Source: proactive_codie | Duration: 701116s This type of proactive work was productive. (tags: proactive_outcome, success, source:proactive_codie)
-- 2026-05-07T16:40:06.982338+00:00: Proactive task completed successfully: Create proactive cleanup brief Source: proactive_codie | Duration: 715207s This type of proactive work was productive. (tags: proactive_outcome, success, source:proactive_codie)
 
