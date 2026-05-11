@@ -39,7 +39,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess as sp
-from typing import Any
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -293,6 +293,14 @@ class RunResult:
     responsibility for the demo path because the demo workspace does
     NOT have a direct ``task_hub_assignments`` linkage at the
     ``subprocess.run`` level.
+
+    Hermes Phase F.1 follow-up (Popen migration) — ``worker_pid`` carries
+    the spawned subprocess PID when the call provided an
+    ``assignment_id`` AND PID recording succeeded.  ``None`` otherwise
+    (no linkage requested, recording skipped, or in-process tests where
+    Popen was mocked).  PID is captured at spawn time via Popen.pid,
+    matching the observability shape of the cron and VP CLI sites that
+    already wire Phase F.1.
     """
 
     return_code: int
@@ -303,6 +311,7 @@ class RunResult:
     cwd: str
     env_scrubbed: bool
     exit_classification: Any = None  # WorkerExit | None — quoted to keep import optional
+    worker_pid: Optional[int] = None  # F.1 follow-up: captured from Popen.pid
 
     @property
     def ok(self) -> bool:
@@ -326,7 +335,50 @@ class RunResult:
                 # Best-effort: if a plain dict was stashed instead of a
                 # WorkerExit, propagate as-is.
                 payload["exit_classification"] = self.exit_classification
+        if self.worker_pid is not None:
+            payload["worker_pid"] = self.worker_pid
         return payload
+
+
+def _record_demo_worker_pid(assignment_id: str, worker_pid: int) -> bool:
+    """Best-effort F.1 demo-site PID record.
+
+    Opens its own runtime DB connection (mirrors the cron/VP CLI site
+    pattern), writes the PID against ``assignment_id`` via
+    :func:`task_hub.record_worker_pid`, commits, and closes.  Never
+    raises — failures are logged at WARNING but do not block the spawn
+    happy path.
+
+    Returns ``True`` on a successful write, ``False`` on any error (or
+    no-op skip for empty assignment_id / non-positive PID).
+    """
+    aid = str(assignment_id or "").strip()
+    if not aid or worker_pid <= 0:
+        return False
+    try:
+        from universal_agent import task_hub
+        from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+
+        conn = connect_runtime_db(get_activity_db_path())
+        try:
+            task_hub.record_worker_pid(
+                conn,
+                assignment_id=aid,
+                worker_pid=int(worker_pid),
+            )
+            try:
+                conn.commit()
+            except Exception:
+                pass
+        finally:
+            conn.close()
+        return True
+    except Exception as exc:
+        logger.warning(
+            "Phase F.1 demo workspace PID record failed (assignment_id=%s): %s",
+            aid, exc,
+        )
+        return False
 
 
 def run_in_workspace(
@@ -335,6 +387,8 @@ def run_in_workspace(
     *,
     timeout: int = 300,
     scrub_env: bool = True,
+    assignment_id: Optional[str] = None,
+    task_id: Optional[str] = None,
 ) -> RunResult:
     """Run a command from inside the workspace dir with optional env scrubbing.
 
@@ -350,40 +404,98 @@ def run_in_workspace(
     Hermes Phase F.1 site-wiring — the returned ``RunResult`` carries an
     ``exit_classification`` (a :class:`WorkerExit`) so the caller can
     distinguish clean exit / timeout / signaled / nonzero / protocol
-    violation.  PID recording is NOT supported here because
-    ``subprocess.run`` does not expose the PID; switching to ``Popen``
-    would be the upgrade path if PID observability becomes required for
-    the demo workspace.  F.3 (parking into needs_review) is the
-    caller\u2019s responsibility because the demo workspace has no direct
-    ``task_hub_assignments`` linkage at this level.
+    violation.
+
+    Hermes Phase F.1 follow-up (Popen migration) — the spawn now uses
+    :class:`subprocess.Popen` so the PID is observable immediately after
+    spawn rather than only after completion.  When the caller passes
+    ``assignment_id`` (the Task Hub assignment that owns this demo run),
+    the spawned subprocess PID is stamped onto
+    ``task_hub_assignments.worker_pid`` via
+    :func:`task_hub.record_worker_pid`.  Backward-compatible: existing
+    callers that don't pass ``assignment_id`` see identical behavior to
+    the pre-Popen path.
+
+    The ``task_id`` kwarg is accepted (and surfaced on the
+    ``RunResult.command`` audit trail via logger context only) for
+    future F.3 protocol-violation routing from this site.  Today the
+    demo site's caller (cody-task-dispatcher / cody-implements-from-brief)
+    owns disposition; this signature keeps the door open for moving the
+    F.3 park decision into ``run_in_workspace`` itself once a real
+    Task Hub-linked demo path lands.
     """
     cwd = workspace_dir.resolve()
     if not cwd.exists():
         raise FileNotFoundError(f"workspace does not exist: {cwd}")
     env = _scrubbed_env() if scrub_env else dict(os.environ)
+    cwd_str = str(cwd)
+    command_list = list(command)
 
     start = datetime.now(timezone.utc)
     was_timeout_killed = False
+    worker_pid: Optional[int] = None
+    rc: int
+    stdout: str
+    stderr: str
+
     try:
-        completed = sp.run(
-            list(command),
-            cwd=str(cwd),
-            capture_output=True,
+        proc = sp.Popen(
+            command_list,
+            cwd=cwd_str,
+            stdout=sp.PIPE,
+            stderr=sp.PIPE,
             text=True,
-            timeout=timeout,
-            check=False,
             env=env,
         )
-        rc = completed.returncode
-        stdout = completed.stdout or ""
-        stderr = completed.stderr or ""
     except FileNotFoundError as exc:
         rc, stdout, stderr = 127, "", f"binary_not_found: {exc}"
-    except sp.TimeoutExpired:
-        rc, stdout, stderr = 124, "", f"timeout after {timeout}s"
-        was_timeout_killed = True
     except Exception as exc:
         rc, stdout, stderr = 1, "", f"unexpected_error: {exc}"
+    else:
+        # Capture PID immediately — that's the whole point of switching
+        # to Popen.  Record onto the assignment row before we block on
+        # communicate() so the observability metadata lands even if the
+        # subprocess is long-running.
+        try:
+            worker_pid = int(proc.pid) if proc.pid else None
+        except (TypeError, ValueError):
+            worker_pid = None
+        if assignment_id and worker_pid:
+            _record_demo_worker_pid(assignment_id, worker_pid)
+
+        try:
+            stdout_raw, stderr_raw = proc.communicate(timeout=timeout)
+            rc = proc.returncode if proc.returncode is not None else 1
+            stdout = stdout_raw or ""
+            stderr = stderr_raw or ""
+        except sp.TimeoutExpired:
+            # Preserve existing semantics: kill the process, drain its
+            # pipes, set rc=124, and flag the timeout-killed signal for
+            # the classifier.  communicate() after kill() drains the
+            # remaining buffered output.
+            was_timeout_killed = True
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            try:
+                drain_stdout, drain_stderr = proc.communicate()
+            except Exception:
+                drain_stdout, drain_stderr = "", ""
+            rc = 124
+            stdout = drain_stdout or ""
+            stderr = (drain_stderr or "") + f"\ntimeout after {timeout}s"
+        except Exception as exc:
+            # Best-effort cleanup of any straggling process.
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            try:
+                proc.communicate()
+            except Exception:
+                pass
+            rc, stdout, stderr = 1, "", f"unexpected_error: {exc}"
     end = datetime.now(timezone.utc)
 
     # Phase F.1 — classify the exit so the caller can route protocol
@@ -411,15 +523,25 @@ def run_in_workspace(
     except Exception as exc:
         logger.debug("Phase F.1 demo classification skipped: %s", exc)
 
+    if task_id:
+        # Quiet breadcrumb so a future F.3 routing decision can be
+        # back-correlated through logs without changing this function's
+        # return shape.
+        logger.debug(
+            "run_in_workspace task_id=%s assignment_id=%s rc=%s pid=%s",
+            task_id, assignment_id, rc, worker_pid,
+        )
+
     return RunResult(
         return_code=rc,
         stdout=stdout,
         stderr=stderr,
         wall_time_seconds=(end - start).total_seconds(),
         command=tuple(command),
-        cwd=str(cwd),
+        cwd=cwd_str,
         env_scrubbed=scrub_env,
         exit_classification=classification,
+        worker_pid=worker_pid,
     )
 
 
