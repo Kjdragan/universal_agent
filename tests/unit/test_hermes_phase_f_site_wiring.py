@@ -475,6 +475,61 @@ def test_classify_and_route_cli_exit_parks_on_protocol_violation(
 
 
 # ── Demo workspace site wiring ──────────────────────────────────────────────
+#
+# Hermes Phase F.1 follow-up: ``run_in_workspace`` now spawns via
+# ``subprocess.Popen`` so the PID is observable immediately after spawn.
+# These tests mock ``sp.Popen`` (NOT ``sp.run``) and exercise:
+#
+#   * ``clean_exit_zero`` classification on rc=0 happy path.
+#   * ``timeout_killed`` classification + ``proc.kill()`` + ``proc.communicate()``
+#     drain when ``communicate(timeout=…)`` raises ``TimeoutExpired``.
+#   * ``nonzero_exit`` and ``signaled`` classifications via mocked
+#     ``returncode``.
+#   * Round-tripping the result through ``to_dict()``.
+#   * PID recording when ``assignment_id`` is supplied + no-op when it
+#     is omitted (backward compat for the existing callers in
+#     ``cody_evaluation`` etc.).
+
+
+def _make_popen_mock(
+    *,
+    returncode: int = 0,
+    stdout: str = "ok",
+    stderr: str = "",
+    pid: int = 4242,
+    raise_timeout: bool = False,
+    raise_exception: Exception | None = None,
+) -> MagicMock:
+    """Build a Popen-compatible mock for ``run_in_workspace`` tests.
+
+    Mimics the post-spawn surface ``run_in_workspace`` touches:
+      * ``proc.pid`` — captured immediately for F.1 PID recording.
+      * ``proc.communicate(timeout=…)`` — returns ``(stdout, stderr)``
+        on success, raises ``sp.TimeoutExpired`` when ``raise_timeout``,
+        or any other ``raise_exception`` for fault-injection.
+      * ``proc.returncode`` — read after communicate() resolves.
+      * ``proc.kill()`` — must be callable; we record it via MagicMock.
+    """
+    proc = MagicMock()
+    proc.pid = pid
+
+    if raise_timeout:
+        # First call raises TimeoutExpired; the drain call (post-kill)
+        # returns empty strings.  Use side_effect with an iterator so
+        # the second invocation succeeds.
+        proc.communicate.side_effect = [
+            sp.TimeoutExpired(cmd="x", timeout=1),
+            ("", ""),
+        ]
+        proc.returncode = None
+    elif raise_exception is not None:
+        proc.communicate.side_effect = raise_exception
+        proc.returncode = None
+    else:
+        proc.communicate.return_value = (stdout, stderr)
+        proc.returncode = returncode
+
+    return proc
 
 
 def test_demo_run_in_workspace_stamps_classification_clean_exit(
@@ -484,12 +539,9 @@ def test_demo_run_in_workspace_stamps_classification_clean_exit(
     workspace = tmp_path / "demo"
     workspace.mkdir()
 
-    fake_completed = MagicMock()
-    fake_completed.returncode = 0
-    fake_completed.stdout = "ok"
-    fake_completed.stderr = ""
+    proc = _make_popen_mock(returncode=0, stdout="ok", stderr="")
 
-    with patch.object(cody_implementation.sp, "run", return_value=fake_completed):
+    with patch.object(cody_implementation.sp, "Popen", return_value=proc):
         result = cody_implementation.run_in_workspace(
             workspace,
             ["echo", "hi"],
@@ -510,10 +562,9 @@ def test_demo_run_in_workspace_stamps_classification_timeout(
     workspace = tmp_path / "demo-tmo"
     workspace.mkdir()
 
-    def _raise_timeout(*a, **kw):
-        raise sp.TimeoutExpired(cmd="claude", timeout=10)
+    proc = _make_popen_mock(raise_timeout=True)
 
-    with patch.object(cody_implementation.sp, "run", side_effect=_raise_timeout):
+    with patch.object(cody_implementation.sp, "Popen", return_value=proc):
         result = cody_implementation.run_in_workspace(
             workspace,
             ["claude"],
@@ -522,6 +573,9 @@ def test_demo_run_in_workspace_stamps_classification_timeout(
     assert result.return_code == 124
     assert result.exit_classification is not None
     assert result.exit_classification.outcome == "timeout_killed"
+    # Timeout path MUST have killed the process and drained its pipes.
+    proc.kill.assert_called_once()
+    assert proc.communicate.call_count == 2
 
 
 def test_demo_run_in_workspace_stamps_classification_nonzero(
@@ -530,12 +584,9 @@ def test_demo_run_in_workspace_stamps_classification_nonzero(
     workspace = tmp_path / "demo-err"
     workspace.mkdir()
 
-    fake = MagicMock()
-    fake.returncode = 2
-    fake.stdout = ""
-    fake.stderr = "boom"
+    proc = _make_popen_mock(returncode=2, stdout="", stderr="boom")
 
-    with patch.object(cody_implementation.sp, "run", return_value=fake):
+    with patch.object(cody_implementation.sp, "Popen", return_value=proc):
         result = cody_implementation.run_in_workspace(
             workspace,
             ["something"],
@@ -554,12 +605,9 @@ def test_demo_run_in_workspace_stamps_classification_signaled(
     workspace = tmp_path / "demo-sig"
     workspace.mkdir()
 
-    fake = MagicMock()
-    fake.returncode = -9
-    fake.stdout = ""
-    fake.stderr = ""
+    proc = _make_popen_mock(returncode=-9, stdout="", stderr="")
 
-    with patch.object(cody_implementation.sp, "run", return_value=fake):
+    with patch.object(cody_implementation.sp, "Popen", return_value=proc):
         result = cody_implementation.run_in_workspace(
             workspace,
             ["something"],
@@ -573,11 +621,8 @@ def test_demo_run_in_workspace_stamps_classification_signaled(
 def test_demo_run_in_workspace_to_dict_round_trip(tmp_path: Path) -> None:
     workspace = tmp_path / "demo-rt"
     workspace.mkdir()
-    fake = MagicMock()
-    fake.returncode = 0
-    fake.stdout = "ok"
-    fake.stderr = ""
-    with patch.object(cody_implementation.sp, "run", return_value=fake):
+    proc = _make_popen_mock(returncode=0, stdout="ok", stderr="")
+    with patch.object(cody_implementation.sp, "Popen", return_value=proc):
         result = cody_implementation.run_in_workspace(
             workspace, ["echo", "ok"], timeout=5,
         )
@@ -587,3 +632,209 @@ def test_demo_run_in_workspace_to_dict_round_trip(tmp_path: Path) -> None:
     assert "exit_classification" in payload
     assert payload["exit_classification"]["outcome"] == "clean_exit_zero"
     assert payload["exit_classification"]["is_failure"] is False
+
+
+# ── F.1 follow-up — Popen + PID observability for demo workspace ───────────
+
+
+def test_demo_run_in_workspace_uses_popen_not_run(tmp_path: Path) -> None:
+    """Regression guard: confirms the spawn path is ``sp.Popen``.
+
+    The whole point of the F.1 follow-up is moving demo-workspace
+    invocations off ``sp.run`` so the spawned PID is observable
+    immediately.  This test ensures the migration sticks.
+    """
+    workspace = tmp_path / "demo-popen"
+    workspace.mkdir()
+
+    proc = _make_popen_mock(returncode=0)
+
+    with patch.object(cody_implementation.sp, "Popen", return_value=proc) as popen:
+        result = cody_implementation.run_in_workspace(
+            workspace,
+            ["echo", "hi"],
+            timeout=5,
+        )
+    popen.assert_called_once()
+    # Popen must be passed PIPE for stdout/stderr (text=True) and cwd
+    # set to the resolved workspace dir.
+    _, kwargs = popen.call_args
+    assert kwargs["cwd"] == str(workspace.resolve())
+    assert kwargs["stdout"] is sp.PIPE
+    assert kwargs["stderr"] is sp.PIPE
+    assert kwargs["text"] is True
+    assert result.return_code == 0
+
+
+def test_demo_run_in_workspace_captures_pid_on_result(tmp_path: Path) -> None:
+    """The Popen PID lands on ``RunResult.worker_pid`` regardless of linkage."""
+    workspace = tmp_path / "demo-pid"
+    workspace.mkdir()
+
+    proc = _make_popen_mock(returncode=0, pid=9876)
+
+    with patch.object(cody_implementation.sp, "Popen", return_value=proc):
+        result = cody_implementation.run_in_workspace(
+            workspace,
+            ["echo", "hi"],
+            timeout=5,
+        )
+    assert result.worker_pid == 9876
+    # ``worker_pid`` should also round-trip through ``to_dict``.
+    assert result.to_dict()["worker_pid"] == 9876
+
+
+def test_demo_run_in_workspace_records_pid_when_assignment_id_provided(
+    tmp_path: Path,
+) -> None:
+    """When ``assignment_id`` is set, the spawned PID is written via
+    ``task_hub.record_worker_pid``.  Connection plumbing is mocked at
+    the ``_record_demo_worker_pid`` boundary to avoid touching the real
+    runtime DB."""
+    workspace = tmp_path / "demo-record"
+    workspace.mkdir()
+    proc = _make_popen_mock(returncode=0, pid=5555)
+
+    with patch.object(cody_implementation.sp, "Popen", return_value=proc), \
+         patch.object(
+             cody_implementation,
+             "_record_demo_worker_pid",
+             return_value=True,
+         ) as recorder:
+        cody_implementation.run_in_workspace(
+            workspace,
+            ["claude"],
+            timeout=5,
+            assignment_id="asg-demo-123",
+        )
+    recorder.assert_called_once_with("asg-demo-123", 5555)
+
+
+def test_demo_run_in_workspace_no_pid_record_when_assignment_id_missing(
+    tmp_path: Path,
+) -> None:
+    """Backward compat: legacy callers (no ``assignment_id``) must NOT
+    trigger any PID-record call."""
+    workspace = tmp_path / "demo-noid"
+    workspace.mkdir()
+    proc = _make_popen_mock(returncode=0)
+
+    with patch.object(cody_implementation.sp, "Popen", return_value=proc), \
+         patch.object(
+             cody_implementation,
+             "_record_demo_worker_pid",
+         ) as recorder:
+        cody_implementation.run_in_workspace(
+            workspace,
+            ["echo", "hi"],
+            timeout=5,
+        )
+    recorder.assert_not_called()
+
+
+def test_demo_run_in_workspace_with_broken_db_completes_normally(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """The real ``_record_demo_worker_pid`` swallows DB errors, so
+    ``run_in_workspace`` MUST complete normally even when the runtime
+    DB is unreachable.  Uses the real helper (not a mock) so the
+    swallowing logic is exercised end-to-end.
+    """
+    workspace = tmp_path / "demo-recerr"
+    workspace.mkdir()
+    proc = _make_popen_mock(returncode=0, pid=7777)
+
+    # Break the DB connect path so the helper hits the warning + return
+    # False branch internally.
+    monkeypatch.setattr(
+        "universal_agent.durable.db.connect_runtime_db",
+        lambda _path=None: (_ for _ in ()).throw(RuntimeError("db down")),
+    )
+
+    with patch.object(cody_implementation.sp, "Popen", return_value=proc):
+        result = cody_implementation.run_in_workspace(
+            workspace,
+            ["claude"],
+            timeout=5,
+            assignment_id="asg-demo-err",
+        )
+    # Happy path still completes; the failed PID record is observability
+    # noise, not a blocker.
+    assert result.return_code == 0
+    assert result.worker_pid == 7777
+    assert result.exit_classification.outcome == "clean_exit_zero"
+
+
+def test_record_demo_worker_pid_helper_no_op_for_empty_assignment(
+    tmp_path: Path,
+) -> None:
+    """``_record_demo_worker_pid("", pid)`` is a silent no-op."""
+    assert cody_implementation._record_demo_worker_pid("", 1234) is False
+    assert cody_implementation._record_demo_worker_pid("   ", 1234) is False
+
+
+def test_record_demo_worker_pid_helper_no_op_for_non_positive_pid(
+    tmp_path: Path,
+) -> None:
+    assert cody_implementation._record_demo_worker_pid("asg", 0) is False
+    assert cody_implementation._record_demo_worker_pid("asg", -1) is False
+
+
+def test_record_demo_worker_pid_helper_swallows_db_errors(
+    monkeypatch,
+) -> None:
+    """If the runtime DB connect raises, the helper logs and returns False."""
+
+    def _raise(*_a, **_kw):
+        raise RuntimeError("db connect failed")
+
+    monkeypatch.setattr(
+        "universal_agent.durable.db.connect_runtime_db", _raise,
+    )
+    ok = cody_implementation._record_demo_worker_pid("asg-x", 12345)
+    assert ok is False
+
+
+def test_record_demo_worker_pid_helper_writes_and_commits(
+    monkeypatch,
+) -> None:
+    """Happy path: helper opens a conn, writes the PID, commits, closes."""
+
+    class _FakeConn:
+        def __init__(self) -> None:
+            self.commits = 0
+            self.closed = False
+
+        def commit(self) -> None:
+            self.commits += 1
+
+        def close(self) -> None:
+            self.closed = True
+
+    fake_conn = _FakeConn()
+
+    monkeypatch.setattr(
+        "universal_agent.durable.db.connect_runtime_db",
+        lambda _path=None: fake_conn,
+    )
+    monkeypatch.setattr(
+        "universal_agent.durable.db.get_activity_db_path",
+        lambda: "/tmp/fake.db",
+    )
+
+    record_calls: list[tuple[str, int]] = []
+
+    def _record(conn, *, assignment_id, worker_pid):
+        record_calls.append((assignment_id, worker_pid))
+        assert conn is fake_conn
+        return 1
+
+    monkeypatch.setattr(
+        "universal_agent.task_hub.record_worker_pid", _record,
+    )
+
+    ok = cody_implementation._record_demo_worker_pid("asg-real", 4321)
+    assert ok is True
+    assert record_calls == [("asg-real", 4321)]
+    assert fake_conn.commits == 1
+    assert fake_conn.closed is True
