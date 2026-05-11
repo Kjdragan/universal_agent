@@ -18,6 +18,7 @@ import sqlite3
 from typing import Any, Iterable, Optional
 
 from universal_agent import task_hub
+from universal_agent.loop_control import should_run_loop
 
 log = logging.getLogger(__name__)
 
@@ -28,9 +29,13 @@ log = logging.getLogger(__name__)
 
 
 def _stale_sweep_enabled() -> bool:
-    """Phase A.2 feature gate. Defaults to ON; operator can disable via env."""
-    raw = (os.getenv("UA_DISPATCH_STALE_SWEEP_ENABLED") or "1").strip().lower()
-    return raw not in {"0", "false", "no", "off"}
+    """Phase A.2 feature gate.
+
+    Resolution: explicit ``UA_DISPATCH_STALE_SWEEP_ENABLED`` env wins; else
+    ON in production, OFF in development (so local dev doesn't release
+    assignments on a timer when the operator isn't around to notice).
+    """
+    return should_run_loop("dispatch_stale_sweep", prod_default=True)
 
 
 def _stale_after_seconds() -> int:

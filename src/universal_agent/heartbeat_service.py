@@ -15,6 +15,7 @@ from universal_agent import task_hub
 from universal_agent.agent_core import EventType
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
 from universal_agent.gateway import GatewayRequest, GatewaySession, InProcessGateway
+from universal_agent.loop_control import should_run_loop
 from universal_agent.utils.heartbeat_findings_schema import HeartbeatFindings
 from universal_agent.utils.json_utils import extract_json_payload
 
@@ -91,8 +92,8 @@ DEFAULT_FOREGROUND_COOLDOWN_SECONDS = max(
     0,
     int(os.getenv("UA_HEARTBEAT_FOREGROUND_COOLDOWN_SECONDS", "1800") or 1800),
 )
-DEFAULT_HEARTBEAT_AUTONOMOUS_ENABLED = (
-    str(os.getenv("UA_HEARTBEAT_AUTONOMOUS_ENABLED", "1")).strip().lower() in {"1", "true", "yes", "on"}
+DEFAULT_HEARTBEAT_AUTONOMOUS_ENABLED = should_run_loop(
+    "heartbeat_autonomous", prod_default=True
 )
 DEFAULT_HEARTBEAT_MAX_PROACTIVE_PER_CYCLE = max(
     1,
