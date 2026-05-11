@@ -512,7 +512,21 @@ class CronService:
         jobs_path = workspaces_dir / "cron_jobs.json"
         runs_path = workspaces_dir / "cron_runs.jsonl"
         self.store = CronStore(jobs_path, runs_path)
-        self.jobs = self.store.load_jobs()
+        # Defensive: skip loading persisted jobs in dev. CronService should not
+        # have been constructed at all in dev (feature_flags.cron_enabled()
+        # returns False), but if some startup path still instantiates it the
+        # belt-and-suspenders guard here keeps the 53+ persisted prod cron jobs
+        # from ticking on Kevin's desktop. Phase D 2026-05-11.
+        from universal_agent.loop_control import is_development_runtime  # noqa: PLC0415 — lazy
+        if is_development_runtime():
+            logger.info(
+                "CronService started in dev mode — skipping persisted "
+                "cron_jobs.json load (would have loaded %d job(s))",
+                len(self.store.load_jobs()),
+            )
+            self.jobs = {}
+        else:
+            self.jobs = self.store.load_jobs()
         _now_ts = time.time()
         _needs_save = False
         _backfill_max_age = 86400  # Only backfill missed windows within the last 24 hours
