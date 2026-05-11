@@ -1,0 +1,96 @@
+name: CI Failure Issue Filer
+
+# Surfaces failed workflow runs as GitHub issues so the operator (and any
+# AI session reading the issue feed) discovers them immediately instead of
+# learning hours later that PR #N's Validate run failed silently.
+#
+# Background (observed 2026-05-11): PR #221 had a failing `Validate PR`
+# run that sat unnoticed for hours. The operator's prompt — "Do we not
+# have a process to follow up on it or retry until successful or fixed?"
+# — exposed the gap: GitHub's notification UI surfaces failures, but
+# autonomous AI sessions don't watch the UI and operator inbox volume
+# meant the email got lost.
+#
+# Mechanism: `workflow_run` triggers on any registered workflow finishing.
+# We filter to `conclusion == failure` and open one issue per failed run
+# (dedup is per-run-id — re-runs get their own issue).
+#
+# Runs 24/7. Per docs/operations/operating_hours_dormancy.md § "Scope":
+# infrastructure-event handlers like CI failure handling are NOT subject
+# to the active-hours dormancy default. A PR that fails at 3 AM should be
+# surfaced for morning fix, not silently broken until 6 AM.
+
+on:
+  workflow_run:
+    workflows:
+      - Deploy
+      - PR Validate
+      - PR Auto-Merge
+      - Post-Merge Deploy Dispatcher
+      - Auto-Promote to Production
+      - Nightly Documentation Drift Audit
+      - OpenClaw Release Sync
+    types: [completed]
+
+permissions:
+  issues: write
+  contents: read
+  actions: read
+
+jobs:
+  file-issue:
+    if: github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Ensure ci-failure label exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh label create ci-failure \
+            --repo "${REPO}" \
+            --color B60205 \
+            --description "Auto-filed by ci-failure-issue.yml when a workflow run fails" \
+            2>/dev/null || true
+
+      - name: Open issue for failed run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          EVENT: ${{ github.event.workflow_run.event }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${HEAD_SHA:0:7}"
+          TITLE="[ci-watchdog] ${WORKFLOW_NAME} failed on ${HEAD_BRANCH} (${SHORT_SHA})"
+
+          # Dedup: don't re-file if an issue already exists for this exact run.
+          EXISTING=$(gh issue list \
+            --label ci-failure \
+            --state open \
+            --search "in:title \"${RUN_ID}\"" \
+            --json number \
+            --jq 'length')
+          if [ "${EXISTING}" -gt 0 ]; then
+            echo "Issue already exists for run ${RUN_ID}; skipping."
+            exit 0
+          fi
+
+          {
+            printf 'Workflow **%s** failed.\n\n' "${WORKFLOW_NAME}"
+            printf -- '- Run: [%s](%s)\n' "${RUN_ID}" "${RUN_URL}"
+            printf -- '- Branch: `%s`\n' "${HEAD_BRANCH}"
+            printf -- '- Head SHA: `%s`\n' "${SHORT_SHA}"
+            printf -- '- Triggering event: `%s`\n\n' "${EVENT}"
+            printf -- '---\n\n'
+            printf 'Auto-filed by `ci-failure-issue.yml`. Close once fixed or superseded by a passing re-run.\n'
+          } > /tmp/issue-body.md
+
+          gh issue create \
+            --title "${TITLE} — run_id=${RUN_ID}" \
+            --body-file /tmp/issue-body.md \
+            --label ci-failure
