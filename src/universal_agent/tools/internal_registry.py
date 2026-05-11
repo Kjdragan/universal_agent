@@ -77,6 +77,11 @@ from universal_agent.tools.task_hub_bridge import (
     task_hub_decompose_wrapper,
     task_hub_task_action_wrapper,
 )
+from universal_agent.tools.task_hub_simone_verbs import (
+    task_re_evaluate_wrapper,
+    task_redirect_to_wrapper,
+    task_request_revision_wrapper,
+)
 from universal_agent.tools.vp_orchestration import (
     vp_cancel_mission_wrapper,
     vp_dispatch_mission_wrapper,
@@ -132,6 +137,13 @@ def get_core_internal_tools() -> List[Callable]:
         csi_watchlist_snapshot_wrapper,
         task_hub_task_action_wrapper,
         task_hub_decompose_wrapper,
+        # Hermes Phase D — Simone-callable unstick verb tools (closes the
+        # Simone-directs-Cody autonomy loop). Wrap perform_task_action verbs
+        # so Simone can re-evaluate / redirect / request_revision from her
+        # own tool calls instead of needing operator dashboard clicks.
+        task_re_evaluate_wrapper,
+        task_redirect_to_wrapper,
+        task_request_revision_wrapper,
         wiki_init_vault_wrapper,
         wiki_sync_internal_memory_wrapper,
         wiki_query_wrapper,
