@@ -106,6 +106,21 @@ Steps:
    a structured `cron_run_failed` notification naming the missing keys
    before the script even starts.
 
+## Schedule constraints
+
+**Minimum interval — `every_seconds ≥ 60s` (PR #218, 2026-05-11).** The
+cron API supports two schedule modes: cron expressions (`cron_expr`,
+preferred for almost everything) and simple intervals (`every_seconds`).
+After a real incident where two test crons with `every_seconds=2`
+generated ~30 retry-storm warning emails over 10 hours,
+`cron_service.add_job` and `update_job` now reject any `every_seconds`
+value below `MIN_CRON_INTERVAL_SECONDS = 60`. If you need finer-grained
+scheduling, the error message points you to `cron_expr`.
+
+This guard does NOT apply to internal periodic loops (heartbeat,
+factory-staleness sweep, `_vp_stale_reconcile_loop`) — those run as
+async tasks in the gateway lifespan, not as cron rows.
+
 ## Disabling a job in production
 
 Every `_ensure_*` helper is gated by an `<env>_enabled()` flag, so any
@@ -124,6 +139,16 @@ job can be disabled at deploy time by adding the env var to `.env`
 | `morning_briefing` | `UA_MORNING_BRIEFING_ENABLED=0` |
 | `proactive_report_*` | `UA_PROACTIVE_REPORTS_ENABLED=0` (covers all three time slots) |
 | `proactive_artifact_digest` | `UA_PROACTIVE_ARTIFACT_DIGEST_ENABLED=0` |
+| `hackernews_snapshot` | `UA_HACKERNEWS_SNAPSHOT_ENABLED=0` |
+| `atlas_direct_dispatch` (Hermes Phase C, default OFF) | `UA_ATLAS_DIRECT_DISPATCH_ENABLED=0` |
+
+> **`atlas_direct_dispatch` (Hermes Phase C, PR #221):** independent
+> dispatcher that bypasses Simone's heartbeat throttle for tasks tagged
+> `metadata.preferred_vp = "vp.general.primary"`. Runs every 60s when
+> enabled. Default OFF; operator opts in via
+> `UA_ATLAS_DIRECT_DISPATCH_ENABLED=1` after dry-run. See
+> [`docs/reports/hermes-adaptation-phased-plan-2026-05-10.md`](../reports/hermes-adaptation-phased-plan-2026-05-10.md)
+> § Phase C for the full design.
 
 Disabling via env doesn't delete the job from the runtime DB; it just
 makes the helper skip the upsert on next boot, leaving the existing row
