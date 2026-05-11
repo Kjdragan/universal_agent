@@ -4612,6 +4612,10 @@ def perform_task_action(
         # Hermes-adaptation Phase B.1 — rehydrate + attach a structured
         # failure-context block so Simone's prompt assembler can surface
         # "what went wrong last time" as an addendum on her next claim.
+        # Phase D.2 enriches the block with `prior_runs` from
+        # `task_hub_runs` (per-attempt outcome / summary / error)
+        # alongside the original `prior_assignments_summary` from
+        # `task_hub_assignments` (claim ledger only).
         # Snapshot the failure indicators BEFORE rehydrate clears them.
         _pre_dispatch = dict((dict(item.get("metadata") or {})).get("dispatch") or {})
         re_eval_ctx: dict[str, Any] = {
@@ -4624,6 +4628,7 @@ def perform_task_action(
             ),
             "side_effect_evidence": str(_pre_dispatch.get("last_side_effect_summary") or ""),
             "prior_assignments_summary": _summarize_prior_assignments(conn, task_id=task_id),
+            "prior_runs": list_runs_for_task(conn, task_id=task_id, limit=5),
         }
         metadata = _rehydrate_task(
             item,
