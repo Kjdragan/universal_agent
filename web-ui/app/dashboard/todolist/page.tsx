@@ -477,8 +477,44 @@ export default function ToDoListDashboardPage() {
   const [quickAddPending, setQuickAddPending] = useState(false);
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
 
+  // Hermes Phase B.2 — operator failure-context for the unstick verbs.
+  // Fetched lazily when a needs_review / blocked task drawer opens so the
+  // operator sees last error, retry counters, prior assignments, and the
+  // re_evaluation_context block before deciding which unstick verb to call.
+  type FailureContext = {
+    task_id: string;
+    status: string | null;
+    last_disposition: string;
+    last_disposition_reason: string;
+    heartbeat_retry_count: number;
+    todo_retry_count: number;
+    heartbeat_retry_limit: number | null;
+    todo_retry_limit: number | null;
+    last_side_effect_summary: string;
+    re_evaluation_context: Record<string, unknown> | null;
+    revision_round: number;
+    rehydrated_at: string;
+    rehydrated_by: string;
+    max_retries: number | null;
+    prior_assignments: Array<{
+      assignment_id: string;
+      agent_id: string | null;
+      state: string | null;
+      started_at: string | null;
+      ended_at: string | null;
+      result_summary: string | null;
+    }>;
+  };
+  const [failureContext, setFailureContext] = useState<FailureContext | null>(null);
+  const [failureContextLoading, setFailureContextLoading] = useState(false);
+
   useEffect(() => {
-    if (!expandedTaskId) return;
+    if (!expandedTaskId) {
+      // Reset failure context when drawer closes so the next open
+      // doesn't briefly flash the previous task's data.
+      setFailureContext(null);
+      return;
+    }
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") setExpandedTaskId(null);
     };
@@ -585,14 +621,17 @@ export default function ToDoListDashboardPage() {
     };
   }, [load]);
 
-  const handleTaskAction = useCallback(async (taskId: string, action: string) => {
+  const handleTaskAction = useCallback(async (taskId: string, action: string, extra?: { reason?: string; note?: string }) => {
     setActionPendingTaskId(taskId);
     setOpenActionMenuId(null);
     try {
+      const body: Record<string, string> = { action };
+      if (extra?.reason) body.reason = extra.reason;
+      if (extra?.note) body.note = extra.note;
       const res = await fetch(`${API_BASE}/api/v1/dashboard/todolist/tasks/${encodeURIComponent(taskId)}/action`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
         const payload = await res.json().catch(() => ({}));
@@ -605,6 +644,61 @@ export default function ToDoListDashboardPage() {
       setActionPendingTaskId("");
     }
   }, [load]);
+
+  // Hermes Phase B.2 — fetch failure context for a wedged task so the
+  // operator can decide which unstick verb to call (rehydrate /
+  // re_evaluate / redirect_to / request_revision).
+  const handleFetchFailureContext = useCallback(async (taskId: string) => {
+    setFailureContextLoading(true);
+    setFailureContext(null);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/v1/dashboard/todolist/tasks/${encodeURIComponent(taskId)}/failure-context`,
+        { cache: "no-store" },
+      );
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        throw new Error(String(payload?.detail || `Failed to load failure context (${res.status})`));
+      }
+      const payload = (await res.json()) as FailureContext;
+      setFailureContext(payload);
+    } catch (err: any) {
+      setError(err?.message || "Failed to load failure context.");
+    } finally {
+      setFailureContextLoading(false);
+    }
+  }, []);
+
+  // Hermes Phase B.2 — unstick verb dispatcher. Wraps handleTaskAction
+  // with verb-specific input prompts for redirect_to + request_revision.
+  const handleUnstickVerb = useCallback(async (taskId: string, verb: string) => {
+    let reason: string | undefined;
+    let note: string | undefined;
+    if (verb === "redirect_to") {
+      // Caller provides the target VP slug (e.g. "vp.general.primary").
+      const target = window.prompt(
+        "Redirect to which agent? (e.g. vp.general.primary, vp.coder.primary, simone)",
+        "vp.general.primary",
+      );
+      if (!target) return;
+      reason = target.trim();
+      if (!reason) return;
+    } else if (verb === "request_revision") {
+      // Caller provides feedback text.
+      const feedback = window.prompt(
+        "Revision feedback for the next agent attempt:",
+        "",
+      );
+      if (!feedback) return;
+      note = feedback.trim();
+      if (!note) return;
+    }
+    await handleTaskAction(taskId, verb, { reason, note });
+    // Refresh the failure context after the verb fires so the drawer
+    // shows the post-rehydrate state (counters reset, revision_round
+    // bumped, etc.) without requiring a manual reload.
+    await handleFetchFailureContext(taskId);
+  }, [handleTaskAction, handleFetchFailureContext]);
 
   const handleOpenTaskHistory = useCallback(async (taskId: string) => {
     setTaskHistoryLoadingId(taskId);
@@ -1208,6 +1302,102 @@ export default function ToDoListDashboardPage() {
                   className="px-3 py-1.5 font-mono text-[11px] font-bold tracking-wider uppercase bg-kcd-cyan/10 text-kcd-cyan border border-kcd-cyan/20 rounded-md cursor-pointer hover:bg-kcd-cyan/20 transition-colors disabled:opacity-40">
                   ⚡ {wakePending ? "Queueing…" : "Dispatch"}
                 </button>
+              </div>
+            )}
+
+            {/* Hermes Phase B.2 — failure-context block + unstick verb buttons.
+                Visible only when the task is wedged in needs_review or blocked.
+                Operator-only verbs; Simone-callable tool versions ship in Phase D. */}
+            {(item.status === "needs_review" || item.status === "blocked") && (
+              <div className="mt-4 p-3 border border-kcd-amber/30 bg-kcd-amber/5 rounded-md">
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="font-mono text-[10px] font-bold tracking-[0.1em] text-kcd-amber uppercase m-0">
+                    Failure Context
+                  </h4>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); void handleFetchFailureContext(item.task_id); }}
+                    disabled={failureContextLoading}
+                    className="px-2 py-0.5 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-amber/10 text-kcd-amber border border-kcd-amber/20 rounded cursor-pointer hover:bg-kcd-amber/20 transition-colors disabled:opacity-40"
+                  >
+                    {failureContextLoading ? "Loading…" : (failureContext?.task_id === item.task_id ? "↻ Refresh" : "Load Context")}
+                  </button>
+                </div>
+                {failureContext?.task_id === item.task_id && (
+                  <div className="space-y-2 text-[11px] font-mono text-kcd-text-muted">
+                    {failureContext.last_disposition_reason && (
+                      <div>
+                        <span className="text-kcd-text-dim">Last error:</span>{" "}
+                        <span className="text-kcd-amber">{failureContext.last_disposition_reason}</span>
+                      </div>
+                    )}
+                    <div className="flex flex-wrap gap-3">
+                      <span>Heartbeat retries: <span className="text-kcd-text">{failureContext.heartbeat_retry_count}</span>{failureContext.heartbeat_retry_limit !== null ? ` / ${failureContext.heartbeat_retry_limit}` : ""}</span>
+                      <span>ToDo retries: <span className="text-kcd-text">{failureContext.todo_retry_count}</span>{failureContext.todo_retry_limit !== null ? ` / ${failureContext.todo_retry_limit}` : ""}</span>
+                      {failureContext.revision_round > 0 && (
+                        <span>Revision round: <span className="text-kcd-text">{failureContext.revision_round}</span></span>
+                      )}
+                      {failureContext.max_retries !== null && (
+                        <span>Max retries: <span className="text-kcd-text">{failureContext.max_retries}</span></span>
+                      )}
+                    </div>
+                    {failureContext.last_side_effect_summary && (
+                      <div>
+                        <span className="text-kcd-text-dim">Side-effect evidence:</span>{" "}
+                        <span className="text-kcd-text">{failureContext.last_side_effect_summary}</span>
+                      </div>
+                    )}
+                    {failureContext.prior_assignments.length > 0 && (
+                      <details className="mt-1">
+                        <summary className="text-kcd-text-dim cursor-pointer hover:text-kcd-amber">
+                          Prior assignments ({failureContext.prior_assignments.length})
+                        </summary>
+                        <ul className="mt-1 ml-3 space-y-1">
+                          {failureContext.prior_assignments.map((a) => (
+                            <li key={a.assignment_id} className="text-[10px]">
+                              <span className="text-kcd-text">{a.agent_id || "?"}</span>
+                              <span className="opacity-50"> · </span>
+                              <span>{a.state || "?"}</span>
+                              {a.result_summary && (
+                                <>
+                                  <span className="opacity-50"> · </span>
+                                  <span className="text-kcd-text-dim">{a.result_summary.slice(0, 80)}</span>
+                                </>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    )}
+                    {failureContext.rehydrated_at && (
+                      <div className="text-[10px] italic text-kcd-text-dim">
+                        Last rehydrated {failureContext.rehydrated_at.slice(0, 19)} by {failureContext.rehydrated_by || "?"}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {/* Unstick verb buttons — operator-only (Simone-callable in Phase D). */}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button onClick={(e) => { e.stopPropagation(); void handleUnstickVerb(item.task_id, "rehydrate"); }} disabled={isPending}
+                    className="px-3 py-1.5 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-cyan/10 text-kcd-cyan border border-kcd-cyan/20 rounded cursor-pointer hover:bg-kcd-cyan/20 transition-colors disabled:opacity-40"
+                    title="Clean restart: status → open, retry counters reset. Preserves task body and history.">
+                    Rehydrate
+                  </button>
+                  <button onClick={(e) => { e.stopPropagation(); void handleUnstickVerb(item.task_id, "re_evaluate"); }} disabled={isPending}
+                    className="px-3 py-1.5 font-mono text-[10px] font-bold tracking-wider uppercase bg-indigo-500/10 text-indigo-400 border border-indigo-400/20 rounded cursor-pointer hover:bg-indigo-500/20 transition-colors disabled:opacity-40"
+                    title="Rehydrate + attach failure-context block so the next agent claim judges from evidence.">
+                    Re-evaluate
+                  </button>
+                  <button onClick={(e) => { e.stopPropagation(); void handleUnstickVerb(item.task_id, "redirect_to"); }} disabled={isPending}
+                    className="px-3 py-1.5 font-mono text-[10px] font-bold tracking-wider uppercase bg-purple-500/10 text-purple-400 border border-purple-400/20 rounded cursor-pointer hover:bg-purple-500/20 transition-colors disabled:opacity-40"
+                    title="Rehydrate + set metadata.preferred_vp so a different agent picks it up.">
+                    Redirect To…
+                  </button>
+                  <button onClick={(e) => { e.stopPropagation(); void handleUnstickVerb(item.task_id, "request_revision"); }} disabled={isPending}
+                    className="px-3 py-1.5 font-mono text-[10px] font-bold tracking-wider uppercase bg-kcd-amber/10 text-kcd-amber border border-kcd-amber/20 rounded cursor-pointer hover:bg-kcd-amber/20 transition-colors disabled:opacity-40"
+                    title="Rehydrate + append revision feedback as a comment + bump revision_round + give max_retries one more attempt.">
+                    Request Revision…
+                  </button>
+                </div>
               </div>
             )}
           </div>

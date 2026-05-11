@@ -22579,6 +22579,63 @@ async def dashboard_todolist_get_subtasks(task_id: str):
             conn.close()
 
 
+@app.get("/api/v1/dashboard/todolist/tasks/{task_id}/failure-context")
+async def dashboard_todolist_get_failure_context(task_id: str):
+    """Return operator-facing failure context for a wedged task (Hermes Phase B.2).
+
+    Surfaces the data an operator needs to decide between rehydrate /
+    re_evaluate / redirect_to / request_revision when a task has wedged
+    in ``needs_review`` or ``blocked``:
+
+    * ``last_disposition_reason`` / ``last_disposition`` from
+      ``metadata.dispatch`` — the eligibility-gate trip reason.
+    * ``heartbeat_retry_count`` / ``todo_retry_count`` — current retry
+      counter values that fed the eligibility gate.
+    * ``last_side_effect_summary`` if recorded.
+    * ``re_evaluation_context`` if a previous re_evaluate verb attached one.
+    * ``revision_round`` if a previous request_revision verb bumped it.
+    * ``prior_assignments`` — most-recent N rows from
+      ``task_hub_assignments`` (default 5, configurable via ``?limit=N``)
+      with assignment_id, agent_id, state, started_at, ended_at,
+      result_summary.
+
+    Returns 404 if the task doesn't exist.
+    """
+    tid = str(task_id or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="task_id is required")
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            item = task_hub.get_item(conn, tid)
+            if item is None:
+                raise HTTPException(status_code=404, detail="task not found")
+            metadata = dict(item.get("metadata") or {})
+            dispatch_meta = dict(metadata.get("dispatch") or {})
+            prior_assignments = task_hub._summarize_prior_assignments(
+                conn, task_id=tid, limit=5
+            )
+            return {
+                "task_id": tid,
+                "status": item.get("status"),
+                "last_disposition": dispatch_meta.get("last_disposition") or "",
+                "last_disposition_reason": dispatch_meta.get("last_disposition_reason") or "",
+                "heartbeat_retry_count": int(dispatch_meta.get("heartbeat_retry_count") or 0),
+                "todo_retry_count": int(dispatch_meta.get("todo_retry_count") or 0),
+                "heartbeat_retry_limit": dispatch_meta.get("heartbeat_retry_limit"),
+                "todo_retry_limit": dispatch_meta.get("todo_retry_limit"),
+                "last_side_effect_summary": dispatch_meta.get("last_side_effect_summary") or "",
+                "re_evaluation_context": dispatch_meta.get("re_evaluation_context") or None,
+                "revision_round": int(dispatch_meta.get("revision_round") or 0),
+                "rehydrated_at": dispatch_meta.get("rehydrated_at") or "",
+                "rehydrated_by": dispatch_meta.get("rehydrated_by") or "",
+                "max_retries": item.get("max_retries"),
+                "prior_assignments": prior_assignments,
+            }
+        finally:
+            conn.close()
+
+
 # ── Brainstorm Refinement Endpoints ───────────────────────────────────
 
 @app.post("/api/v1/dashboard/todolist/tasks/{task_id}/refine")
