@@ -1198,17 +1198,66 @@ class CronService:
                                 env["PYTHONPATH"] = f"{project_src}:{env.get('PYTHONPATH', '')}"
 
                                 # Hermes Phase F site-wiring (cron `!script`).
-                                # Resolve the linked Task Hub task / assignment
-                                # (if any) BEFORE spawning so we can stamp the
-                                # subprocess PID onto the assignment row right
-                                # after spawn.  Cron jobs without a linked
-                                # task_id (the majority) skip F.1/F.3 silently
-                                # — observability is best-effort for the
-                                # subset that DO carry the linkage.
+                                # Resolve / auto-ensure the linked Task Hub
+                                # task + assignment BEFORE spawning so we can
+                                # stamp the subprocess PID onto the assignment
+                                # row right after spawn.
+                                #
+                                # Post-PR #238 (Hermes-F cron task-link
+                                # backfill, 2026-05-11): every cron `!script`
+                                # job gets a stable `cron:<system_job>` task
+                                # row auto-ensured by
+                                # ``ensure_cron_task_link`` unless its
+                                # metadata carries ``skip_task_hub_link =
+                                # True`` (housekeeping crons opt out).  The
+                                # email scheduler path (which already
+                                # populates ``metadata.task_id``) is honored
+                                # verbatim — the helper returns the explicit
+                                # task_id and lets the existing
+                                # ``find_active_assignment_for_task`` lookup
+                                # run below to discover its assignment.
                                 _f_job_metadata = job.metadata or {}
-                                _f_task_id = str(_f_job_metadata.get("task_id") or "").strip()
+                                _f_task_id = ""
                                 _f_assignment_id: Optional[str] = None
+                                _f_auto_linked = False
                                 _f_was_timeout_killed = False
+
+                                try:
+                                    from universal_agent.gateway_server import (
+                                        _task_hub_open_conn as _f_link_open_conn,
+                                    )
+                                    from universal_agent.services.cron_task_hub_link import (
+                                        ensure_cron_task_link as _f_ensure_link,
+                                    )
+                                    _f_link_conn = _f_link_open_conn()
+                                    try:
+                                        _f_linkage = _f_ensure_link(
+                                            _f_link_conn,
+                                            job_id=job.job_id,
+                                            job_metadata=_f_job_metadata,
+                                            description=(job.description or job.command)[:500],
+                                        )
+                                    finally:
+                                        _f_link_conn.close()
+                                    if _f_linkage:
+                                        _f_task_id = str(_f_linkage.get("task_id") or "").strip()
+                                        _f_assignment_id = str(_f_linkage.get("assignment_id") or "").strip() or None
+                                        # `_f_auto_linked` distinguishes the
+                                        # auto-ensured stable cron task from
+                                        # an externally-supplied task_id
+                                        # (email scheduler).  Only auto-linked
+                                        # tasks get their status flipped back
+                                        # to `open` after a clean run; the
+                                        # email path manages its own
+                                        # lifecycle.
+                                        _f_auto_linked = not str(
+                                            _f_job_metadata.get("task_id") or ""
+                                        ).strip()
+                                except Exception as _f_link_exc:
+                                    logger.debug(
+                                        "Phase F cron task-link skipped for job %s: %s",
+                                        job.job_id, _f_link_exc,
+                                    )
 
                                 proc = await asyncio.create_subprocess_exec(
                                     sys.executable, "-m", script_path.replace("/", ".").replace(".py", ""),
@@ -1218,8 +1267,13 @@ class CronService:
                                     env=env,
                                 )
                                 # Phase F.1 — record worker_pid on the linked
-                                # assignment (if any).  Best-effort; never
-                                # blocks the happy path.
+                                # assignment.  When auto-linked, the helper
+                                # already created the assignment row and
+                                # populated `_f_assignment_id`; for the
+                                # email-scheduler path we still need to look
+                                # it up via the classifier helper.  Best-
+                                # effort throughout; never blocks the happy
+                                # path.
                                 if _f_task_id:
                                     try:
                                         from universal_agent import (
@@ -1233,9 +1287,10 @@ class CronService:
                                         )
                                         _f_conn = _f_open_conn()
                                         try:
-                                            _f_assignment_id = _f_find_aid(
-                                                _f_conn, task_id=_f_task_id,
-                                            )
+                                            if not _f_assignment_id:
+                                                _f_assignment_id = _f_find_aid(
+                                                    _f_conn, task_id=_f_task_id,
+                                                )
                                             if _f_assignment_id and proc.pid:
                                                 _f_th.record_worker_pid(
                                                     _f_conn,
@@ -1281,6 +1336,22 @@ class CronService:
                                 # still in_progress), route the task into
                                 # needs_review for Phase B.1 unstick verbs to
                                 # act on.
+                                #
+                                # Auto-linked cron tasks: the cron script
+                                # itself doesn't know about the Task Hub row,
+                                # so a clean rc=0 exit is the normal happy
+                                # path — not a protocol violation.  Before
+                                # the classifier runs we flip the auto-
+                                # linked task to ``completed`` so
+                                # ``task_was_closed_normally`` returns True
+                                # and the classifier picks
+                                # ``clean_exit_zero``.  After the close-run
+                                # records the assignment outcome,
+                                # ``close_cron_task_link`` flips the
+                                # perpetual task back to ``open`` so the
+                                # next cron tick can reuse it.  Email-
+                                # scheduler crons (``_f_auto_linked = False``)
+                                # keep the pre-existing semantics.
                                 if _f_task_id:
                                     try:
                                         from universal_agent import (
@@ -1289,6 +1360,9 @@ class CronService:
                                         from universal_agent.gateway_server import (
                                             _task_hub_open_conn as _f_open_conn2,
                                         )
+                                        from universal_agent.services.cron_task_hub_link import (
+                                            close_cron_task_link as _f_close_link,
+                                        )
                                         from universal_agent.services.worker_exit_classifier import (
                                             classify_worker_exit as _f_classify,
                                             park_task_for_protocol_violation as _f_park,
@@ -1296,6 +1370,42 @@ class CronService:
                                         )
                                         _f_conn2 = _f_open_conn2()
                                         try:
+                                            # Pre-close the auto-linked task
+                                            # on a clean exit so F.3 doesn't
+                                            # treat the normal cron lifecycle
+                                            # as a protocol violation.  We
+                                            # flip the status directly via
+                                            # SQL rather than calling
+                                            # ``perform_task_action`` —
+                                            # auto-linked cron tasks are
+                                            # never email-bound, so the
+                                            # verified-delivery gate that
+                                            # ``perform_task_action`` runs
+                                            # would just add noise.
+                                            if (
+                                                _f_auto_linked
+                                                and exit_code == 0
+                                                and not _f_was_timeout_killed
+                                            ):
+                                                try:
+                                                    _f_conn2.execute(
+                                                        "UPDATE task_hub_items "
+                                                        "SET status = ?, seizure_state = ?, updated_at = ? "
+                                                        "WHERE task_id = ?",
+                                                        (
+                                                            _f_th2.TASK_STATUS_COMPLETED,
+                                                            "unseized",
+                                                            _f_th2._now_iso(),
+                                                            _f_task_id,
+                                                        ),
+                                                    )
+                                                    _f_conn2.commit()
+                                                except Exception as _f_complete_exc:
+                                                    logger.debug(
+                                                        "Phase F auto-link pre-close skipped for cron job %s: %s",
+                                                        job.job_id, _f_complete_exc,
+                                                    )
+
                                             _f_was_signaled = bool(
                                                 exit_code is not None
                                                 and exit_code < 0
@@ -1312,10 +1422,10 @@ class CronService:
                                             )
                                             logger.info(
                                                 "Phase F.1 cron job %s exit classified as %s "
-                                                "(task=%s, assignment=%s, rc=%s)",
+                                                "(task=%s, assignment=%s, rc=%s, auto_linked=%s)",
                                                 job.job_id, _f_classification.outcome,
                                                 _f_task_id, _f_assignment_id or "<none>",
-                                                exit_code,
+                                                exit_code, _f_auto_linked,
                                             )
                                             if _f_assignment_id:
                                                 try:
@@ -1332,7 +1442,24 @@ class CronService:
                                                         metadata={
                                                             "worker_exit": _f_classification.to_dict(),
                                                             "site": "cron",
+                                                            "auto_linked": _f_auto_linked,
                                                         },
+                                                    )
+                                                    # Also mark the
+                                                    # assignment itself as
+                                                    # ended so subsequent
+                                                    # ``find_active_assignment_for_task``
+                                                    # lookups don't keep
+                                                    # returning this row.
+                                                    _f_conn2.execute(
+                                                        "UPDATE task_hub_assignments "
+                                                        "SET state = ?, ended_at = ? "
+                                                        "WHERE assignment_id = ? AND ended_at IS NULL",
+                                                        (
+                                                            "completed" if exit_code == 0 else "failed",
+                                                            _f_th2._now_iso(),
+                                                            _f_assignment_id,
+                                                        ),
                                                     )
                                                     _f_conn2.commit()
                                                 except Exception as _f_close_exc:
@@ -1347,6 +1474,21 @@ class CronService:
                                                     site="cron",
                                                     summary=f"cron !script {script_path} job={job.job_id}",
                                                     agent_id="cron_scheduler",
+                                                )
+
+                                            # Auto-linked tasks: flip
+                                            # perpetual task back to
+                                            # ``open`` so the next cron
+                                            # tick can re-claim it.
+                                            # ``close_cron_task_link``
+                                            # checks status to avoid
+                                            # stomping needs_review left
+                                            # by F.3.
+                                            if _f_auto_linked:
+                                                _f_close_link(
+                                                    _f_conn2,
+                                                    task_id=_f_task_id,
+                                                    success=(exit_code == 0),
                                                 )
                                         finally:
                                             _f_conn2.close()

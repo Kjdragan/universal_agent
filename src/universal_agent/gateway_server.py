@@ -17984,6 +17984,12 @@ def _ensure_codie_proactive_cleanup_cron_job() -> Optional[dict[str, Any]]:
         "source": "system",
         "session_id": "cron_codie_cleanup",
         "proactive_producer": "codie_cleanup",
+        # Housekeeping: this cron enqueues OTHER Task Hub tasks; it
+        # doesn't itself produce a tracked work-product, so we skip
+        # the Hermes-F auto-link to avoid surfacing a useless
+        # ``cron:codie_proactive_cleanup`` row in the dashboard.
+        # See `services/cron_task_hub_link.py`.
+        "skip_task_hub_link": True,
     }
     updates = {
         "user_id": "system",
@@ -18036,6 +18042,8 @@ def _ensure_vp_coder_workspace_pruning_cron_job() -> Optional[dict[str, Any]]:
         enabled=_proactive_cron_enabled("UA_VP_CODER_WORKSPACE_PRUNING_ENABLED"),
         cron_env_var="UA_VP_CODER_WORKSPACE_PRUNING_CRON",
         timezone_env_var="UA_VP_CODER_WORKSPACE_PRUNING_TIMEZONE",
+        # Housekeeping: GC sweep, no tracked work-product.
+        skip_task_hub_link=True,
     )
 
 
@@ -18259,12 +18267,20 @@ def _register_system_cron_job(
     cron_env_var: str | None = None,
     timezone_env_var: str | None = None,
     required_secrets: list[str] | None = None,
+    skip_task_hub_link: bool = False,
 ) -> Optional[dict[str, Any]]:
     """Idempotent boot-time helper for proactive cron jobs.
 
     Looks up an existing job by `metadata.system_job`; updates if found,
     adds if not.  Always sets `catch_up_on_restart=True` so missed runs
     are backfilled on next gateway start instead of silently skipped.
+
+    `skip_task_hub_link=True` opts the job out of the Hermes Phase F
+    auto-link path (`services/cron_task_hub_link.py`).  Use this for
+    housekeeping crons (dispatcher sweeps, GC, re-rank passes) that
+    don't themselves produce a tracked work-product.  Crons that
+    produce artifacts (briefings, snapshots, digests) should leave
+    this False — the auto-link gives them F.1/F.3 observability.
 
     Returns the job dict on success, or `None` when disabled or the
     cron service is unavailable.
@@ -18290,6 +18306,8 @@ def _register_system_cron_job(
     }
     if required_secrets:
         metadata["required_secrets"] = list(required_secrets)
+    if skip_task_hub_link:
+        metadata["skip_task_hub_link"] = True
     updates = {
         "user_id": "cron_system",
         "workspace_dir": workspace_dir,
@@ -18409,6 +18427,9 @@ def _ensure_atlas_direct_dispatch_cron_job() -> Optional[dict[str, Any]]:
         enabled=_proactive_cron_enabled("UA_ATLAS_DIRECT_DISPATCH_ENABLED"),
         cron_env_var="UA_ATLAS_DIRECT_DISPATCH_CRON",
         timezone_env_var="UA_ATLAS_DIRECT_DISPATCH_TIMEZONE",
+        # Housekeeping: dispatcher sweep, no tracked work-product.
+        # The tasks it dispatches have their own task_hub linkage.
+        skip_task_hub_link=True,
     )
 
 
@@ -18638,6 +18659,9 @@ def _ensure_csi_demo_triage_rank_cron_job() -> Optional[dict[str, Any]]:
         cron_env_var="UA_CSI_DEMO_TRIAGE_RANK_CRON_EXPR",
         timezone_env_var="UA_CSI_DEMO_TRIAGE_RANK_CRON_TIMEZONE",
         required_secrets=["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
+        # Housekeeping: re-ranking sweep over existing candidates; the
+        # candidates themselves carry their own task_hub linkage.
+        skip_task_hub_link=True,
     )
 
 
