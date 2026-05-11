@@ -42,6 +42,7 @@ These services run inside the dormancy window with documented justification:
 | Service | Schedule | Rationale |
 |---|---|---|
 | `nightly_wiki` | 3:15 AM Houston | Generates overnight wiki output that `morning_briefing` (6:30 AM) reads. Dormancy-window run gives the briefing fresh material. Exception #1 (downstream consumer). See [`gateway_server.py:18217`](../../src/universal_agent/gateway_server.py#L18217). |
+| `atlas_direct_dispatch` | Every 60s, 24/7, UTC | Hermes Phase C (PR #221) — independent dispatcher for tasks tagged `metadata.preferred_vp = "vp.general.primary"`. Exception #3 (latency-sensitive): Atlas-eligible tasks must dispatch within ~60s of being queued; waiting until 6 AM defeats the purpose. **Default OFF** via `UA_ATLAS_DIRECT_DISPATCH_ENABLED=0` — operator opts in after dry-run, so the 24/7 schedule has zero quota cost until enabled. The cron registration also goes through `_proactive_cron_enabled`, AND the script itself re-checks the env var before doing any work (belt-and-suspenders against accidental activation). See [`gateway_server.py:_ensure_atlas_direct_dispatch_cron_job`](../../src/universal_agent/gateway_server.py) and [`docs/reports/hermes-adaptation-phased-plan-2026-05-10.md`](../reports/hermes-adaptation-phased-plan-2026-05-10.md) § Phase C. |
 
 ## Active-hour services (subject to dormancy default)
 
