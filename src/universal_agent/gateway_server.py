@@ -22670,6 +22670,73 @@ async def dashboard_todolist_get_failure_context(task_id: str):
             conn.close()
 
 
+# ── Cody Mode Settings (Hermes Phase E.2 — operator UI toggle) ───────
+
+
+@app.get("/api/v1/cody/mode-setting")
+async def cody_mode_setting_get():
+    """Return the current operator-configured Cody default mode.
+
+    Response shape:
+        {
+            "mode": "anthropic" | "zai",
+            "source": "db_setting" | "env_var" | "hardcoded_default",
+            "updated_at": ISO string or "",
+            "updated_by": str or "",
+            "available_modes": ["zai", "anthropic"]
+        }
+
+    The dashboard tile uses ``source`` to decide whether to show "(default)"
+    next to the mode label and ``updated_at`` to render "last changed N
+    days ago".
+    """
+    from universal_agent.services.cody_mode import get_default_mode_state
+
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            state = get_default_mode_state(conn)
+        finally:
+            conn.close()
+    state["available_modes"] = ["zai", "anthropic"]
+    return state
+
+
+@app.post("/api/v1/cody/mode-setting")
+async def cody_mode_setting_post(payload: dict):
+    """Persist the operator-configured Cody default mode.
+
+    Body: ``{"mode": "anthropic" | "zai", "updated_by": "operator"}``.
+    Returns the new state in the same shape as ``GET /cody/mode-setting``.
+    """
+    from universal_agent.services.cody_mode import (
+        get_default_mode_state,
+        set_default_mode,
+    )
+
+    raw_mode = ""
+    raw_updated_by = "operator"
+    if isinstance(payload, dict):
+        raw_mode = str(payload.get("mode") or "").strip()
+        raw_updated_by = str(payload.get("updated_by") or "operator").strip() or "operator"
+
+    if not raw_mode:
+        raise HTTPException(status_code=400, detail="mode is required")
+
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            try:
+                set_default_mode(conn, raw_mode, updated_by=raw_updated_by)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            state = get_default_mode_state(conn)
+        finally:
+            conn.close()
+    state["available_modes"] = ["zai", "anthropic"]
+    return state
+
+
 # ── Brainstorm Refinement Endpoints ───────────────────────────────────
 
 @app.post("/api/v1/dashboard/todolist/tasks/{task_id}/refine")
