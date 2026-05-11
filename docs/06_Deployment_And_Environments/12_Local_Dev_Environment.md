@@ -232,9 +232,24 @@ Available dev opt-in flags (one per loop) — set `UA_DEV_<NAME>_FORCE_ON=1`:
 
 > **Note: legacy `UA_ENABLE_HEARTBEAT=1` / `UA_HEARTBEAT_ENABLED=1` are IGNORED in dev.** Phase D treats them as Infisical-injected prod-parity pollution. Setting them in your local `.env` will NOT enable the loop in dev — only `UA_DEV_<NAME>_FORCE_ON=1` does. This is intentional defensive behavior so dev stays safe even if Infisical's `development` env has prod flags mirrored.
 
-**Pattern B: Single-iteration CLI invocations (Phase E follow-up).**
+**Pattern B: Inspection CLI via `python -m universal_agent.dev_tools` (Phase E, 2026-05-11).**
 
-The intended pattern is `python -m universal_agent.heartbeat_service tick` and similar — one tick, deterministic, exits when done. Coming in Phase E. Until then, Pattern A is the way.
+For sanity-checking what's running BEFORE you spin up the stack:
+
+```bash
+# Print per-loop dev decisions (same as the gateway startup log)
+PYTHONPATH=src python -m universal_agent.dev_tools env-report
+
+# Explain why a single loop is on or off
+PYTHONPATH=src python -m universal_agent.dev_tools loop-status heartbeat
+
+# List persisted cron jobs (note: dev refuses to load these at startup)
+PYTHONPATH=src python -m universal_agent.dev_tools cron-list
+```
+
+These are **inspection only** — they don't trigger any autonomous loop. To actually fire a loop in dev, use Pattern A (`UA_DEV_<NAME>_FORCE_ON=1`).
+
+> **Why no live single-tick CLI?** Triggering one heartbeat / cron / sweep cycle in isolation requires booting a minimal in-process gateway (the loops need the gateway + DB + Infisical secrets to function). That's substantial scaffolding for limited extra value when Pattern A already gives you "tick at normal interval until you Ctrl-C." If you need single-iteration testing for a specific scenario, use Pattern A and Ctrl-C after one tick — the gateway logs each cycle.
 
 Either pattern gives you the **same code path as prod** — only the trigger is different.
 
@@ -387,9 +402,11 @@ A second `just dev` run showed heartbeat + cron service + 5 cron jobs firing des
 - [x] **CronService defensive isolation** — even if cron_enabled() returns True somehow, the service skips loading the persisted `cron_jobs.json` in dev. Belt-and-suspenders: the 53 persisted prod cron jobs cannot tick on Kevin's desktop even by accident.
 - [x] **`report_dev_overrides()` startup log.** At gateway boot in dev mode, logs a per-loop summary showing which loops are off, which are dev-opted-in, and which truthy `UA_*_ENABLED` flags are being ignored as Infisical pollution. Operator sees at a glance what's happening.
 
-**Deferred to follow-up PRs (not blockers for the contract):**
+**Closed in Phase E (2026-05-11):**
 
-- [ ] **Single-iteration CLI entry points** for each autonomous loop. Pattern: `python -m universal_agent.heartbeat_service tick`, `python -m universal_agent.cron_service run-once <name>`. Useful for testing autonomous behavior in dev without ticking continuously. Workaround until then: set `UA_DEV_<NAME>_FORCE_ON=1` for the specific loop you want to test, restart `just dev`. (Phase E.)
+- [x] **Inspection CLI: `python -m universal_agent.dev_tools`.** Three subcommands: `env-report` (per-loop dev decisions, same as gateway startup log), `loop-status <name>` (explain one loop), `cron-list` (list persisted cron jobs from `cron_jobs.json`). 12-test suite in `tests/unit/test_dev_tools_cli.py`. **Live single-iteration triggers (`heartbeat tick`, `cron run-once`) explicitly deferred** — they'd require booting a minimal in-process gateway, and Pattern A (set `UA_DEV_<NAME>_FORCE_ON=1`, restart `just dev`, Ctrl-C after one tick) covers the same use case without the scaffolding.
+
+**Deferred to follow-up PRs (not blockers for the contract):**
 - [ ] **`development` Infisical environment hygiene.** Optional now — Phase D makes dev safe regardless of Infisical pollution — but cleaning the `UA_*_ENABLED` flags out of the `development` env removes the startup warning lines and clarifies intent. **Operator-side check** — list of flags to remove is in `13_Infisical_Dev_Env_Hygiene.md`.
 - [ ] **Dev DB story.** Force SQLite when `UA_RUNTIME_STAGE=development` regardless of any Postgres URL in Infisical-dev. (Phase F.)
 - [ ] **`snapshot_prod_to_dev.py` script.** For pulling a read-only prod snapshot when realistic data is needed. Not a blocker — dev works without it; quality-of-life addon. (Phase F.)
