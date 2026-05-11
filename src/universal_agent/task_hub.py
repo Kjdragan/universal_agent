@@ -271,6 +271,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             metadata_json TEXT NOT NULL DEFAULT '{}',
             max_retries INTEGER,
             cody_mode TEXT,
+            max_runtime_seconds INTEGER,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -302,7 +303,8 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             state TEXT NOT NULL,
             started_at TEXT NOT NULL,
             ended_at TEXT,
-            result_summary TEXT
+            result_summary TEXT,
+            worker_pid INTEGER
         );
         CREATE INDEX IF NOT EXISTS idx_task_hub_assign_task_state ON task_hub_assignments(task_id, state, started_at DESC);
         CREATE INDEX IF NOT EXISTS idx_task_hub_assign_agent_state ON task_hub_assignments(agent_id, state, started_at DESC);
@@ -442,6 +444,17 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         # and plumbed into vp_missions.payload_json for worker_loop. See
         # docs/reports/hermes-adaptation-phased-plan-2026-05-10.md § Phase E.
         "ALTER TABLE task_hub_items ADD COLUMN cody_mode TEXT",
+        # Hermes-adaptation Phase F.1 — subprocess observability foundation.
+        # `worker_pid` on assignments is the spawned subprocess PID for
+        # owned-subprocess assignments (cron `!script`, VP CLI, demo
+        # workspace). NULL for in-process assignments (SDK, ToDo,
+        # heartbeat) — they share the gateway daemon PID.
+        "ALTER TABLE task_hub_assignments ADD COLUMN worker_pid INTEGER",
+        # Hermes-adaptation Phase F.2 — per-task wall-clock timeout. NULL
+        # inherits from UA_TASK_DEFAULT_MAX_RUNTIME_SECONDS env (default
+        # 7200s / 2h). Resolved at spawn time and passed to each site's
+        # existing timeout machinery.
+        "ALTER TABLE task_hub_items ADD COLUMN max_runtime_seconds INTEGER",
     ):
         try:
             conn.execute(ddl)
@@ -1116,6 +1129,27 @@ def upsert_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any
         _existing_cody = str(existing.get("cody_mode") or "").strip().lower()
         cody_mode_value = _existing_cody if _existing_cody in {"zai", "anthropic"} else None
 
+    # Hermes Phase F.2 — per-task wall-clock timeout. NULL preserves env-default
+    # fallback (UA_TASK_DEFAULT_MAX_RUNTIME_SECONDS). Inherits existing value
+    # when caller omits the key (matches max_retries semantics).
+    if "max_runtime_seconds" in item:
+        _raw_runtime = item.get("max_runtime_seconds")
+        if _raw_runtime is None or str(_raw_runtime).strip() == "":
+            max_runtime_value: Optional[int] = None
+        else:
+            try:
+                _coerced_rt = int(_raw_runtime)
+                max_runtime_value = max(1, _coerced_rt)
+            except (TypeError, ValueError):
+                max_runtime_value = None
+    else:
+        _existing_runtime = existing.get("max_runtime_seconds")
+        max_runtime_value = (
+            int(_existing_runtime)
+            if _existing_runtime is not None
+            else None
+        )
+
     payload = {
         "task_id": task_id,
         "source_kind": str(item.get("source_kind") or existing.get("source_kind") or "internal"),
@@ -1142,6 +1176,7 @@ def upsert_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any
         "metadata_json": _json_dumps(metadata),
         "max_retries": max_retries_value,
         "cody_mode": cody_mode_value,
+        "max_runtime_seconds": max_runtime_value,
         "created_at": str(existing.get("created_at") or item.get("created_at") or now_iso),
         "updated_at": now_iso,
     }
@@ -1152,12 +1187,12 @@ def upsert_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any
             task_id, source_kind, source_ref, title, description, project_key, priority, due_at,
             labels_json, status, must_complete, incident_key, workstream_id, subtask_role,
             parent_task_id, agent_ready, score, score_confidence, stale_state, seizure_state,
-            mirror_status, trigger_type, metadata_json, max_retries, cody_mode, created_at, updated_at
+            mirror_status, trigger_type, metadata_json, max_retries, cody_mode, max_runtime_seconds, created_at, updated_at
         ) VALUES (
             :task_id, :source_kind, :source_ref, :title, :description, :project_key, :priority, :due_at,
             :labels_json, :status, :must_complete, :incident_key, :workstream_id, :subtask_role,
             :parent_task_id, :agent_ready, :score, :score_confidence, :stale_state, :seizure_state,
-            :mirror_status, :trigger_type, :metadata_json, :max_retries, :cody_mode, :created_at, :updated_at
+            :mirror_status, :trigger_type, :metadata_json, :max_retries, :cody_mode, :max_runtime_seconds, :created_at, :updated_at
         )
         ON CONFLICT(task_id) DO UPDATE SET
             source_kind=excluded.source_kind,
@@ -1184,6 +1219,7 @@ def upsert_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any
             metadata_json=excluded.metadata_json,
             max_retries=excluded.max_retries,
             cody_mode=excluded.cody_mode,
+            max_runtime_seconds=excluded.max_runtime_seconds,
             updated_at=excluded.updated_at
         """,
         payload,
@@ -1693,6 +1729,74 @@ def _open_run(
         (run_id, task_id, assignment_id, agent_id, _now_iso(), metadata_json),
     )
     return run_id
+
+
+def record_worker_pid(
+    conn: sqlite3.Connection,
+    *,
+    assignment_id: str,
+    worker_pid: int,
+) -> int:
+    """Phase F.1 — record the spawned subprocess PID on an assignment.
+
+    Called from the three owned-subprocess spawn sites (cron `!script`,
+    VP CLI client, demo workspace) immediately after the subprocess is
+    created. NULL `worker_pid` is the default for in-process assignments
+    (SDK clients, ToDo dispatch, heartbeat) since they share the gateway
+    daemon's PID.
+
+    Returns the number of rows updated. Additive — callers ignore the
+    return value; this is observability metadata that doesn't gate any
+    behavior. Idempotent — calling twice with the same PID is a no-op
+    since the WHERE clause matches the same row.
+    """
+    aid = str(assignment_id or "").strip()
+    if not aid:
+        return 0
+    try:
+        pid = int(worker_pid)
+    except (TypeError, ValueError):
+        return 0
+    if pid <= 0:
+        return 0
+    cursor = conn.execute(
+        "UPDATE task_hub_assignments SET worker_pid = ? WHERE assignment_id = ?",
+        (pid, aid),
+    )
+    return cursor.rowcount
+
+
+def resolve_max_runtime_seconds(task: dict[str, Any] | None) -> int:
+    """Phase F.2 — resolve effective wall-clock timeout for a task.
+
+    Resolution order:
+        1. ``task.max_runtime_seconds`` — per-task override
+        2. ``UA_TASK_DEFAULT_MAX_RUNTIME_SECONDS`` env var (default 7200)
+        3. ``7200`` (2 hours) hardcoded fallback
+
+    Returns the resolved value in seconds. Each spawn site (cron,
+    VP CLI, demo) consumes this and passes it to its existing timeout
+    machinery — Phase F.2 does NOT add new kill primitives, it just
+    makes the timeout per-task-configurable.
+    """
+    if task:
+        raw = task.get("max_runtime_seconds")
+        if raw is not None:
+            try:
+                value = int(raw)
+                if value > 0:
+                    return value
+            except (TypeError, ValueError):
+                pass
+    env_value = os.getenv("UA_TASK_DEFAULT_MAX_RUNTIME_SECONDS", "").strip()
+    if env_value:
+        try:
+            v = int(env_value)
+            if v > 0:
+                return v
+        except (TypeError, ValueError):
+            pass
+    return 7200
 
 
 def _close_run(
