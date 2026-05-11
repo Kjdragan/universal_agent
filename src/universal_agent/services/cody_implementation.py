@@ -282,7 +282,18 @@ def _scrubbed_env() -> dict[str, str]:
 
 @dataclass(frozen=True)
 class RunResult:
-    """Result of running a command inside a demo workspace."""
+    """Result of running a command inside a demo workspace.
+
+    Hermes Phase F.1 site-wiring — ``exit_classification`` carries the
+    :class:`WorkerExit` classification from
+    :func:`universal_agent.services.worker_exit_classifier.classify_worker_exit`.
+    The caller (Cody\u2019s demo task dispatcher) inspects it to decide
+    whether the run succeeded, timed out, signaled, or was a protocol
+    violation.  F.3 (parking into needs_review) is the caller\u2019s
+    responsibility for the demo path because the demo workspace does
+    NOT have a direct ``task_hub_assignments`` linkage at the
+    ``subprocess.run`` level.
+    """
 
     return_code: int
     stdout: str
@@ -291,13 +302,14 @@ class RunResult:
     command: tuple[str, ...]
     cwd: str
     env_scrubbed: bool
+    exit_classification: Any = None  # WorkerExit | None — quoted to keep import optional
 
     @property
     def ok(self) -> bool:
         return self.return_code == 0
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "return_code": self.return_code,
             "stdout_excerpt": self.stdout[:2000],
             "stderr_excerpt": self.stderr[:2000],
@@ -307,6 +319,14 @@ class RunResult:
             "env_scrubbed": self.env_scrubbed,
             "ok": self.ok,
         }
+        if self.exit_classification is not None:
+            try:
+                payload["exit_classification"] = self.exit_classification.to_dict()
+            except AttributeError:
+                # Best-effort: if a plain dict was stashed instead of a
+                # WorkerExit, propagate as-is.
+                payload["exit_classification"] = self.exit_classification
+        return payload
 
 
 def run_in_workspace(
@@ -326,6 +346,16 @@ def run_in_workspace(
     `scrub_env=True` removes any ANTHROPIC_* env var that would override
     the project-local settings. Default ON because the production VPS
     shell typically has them set.
+
+    Hermes Phase F.1 site-wiring — the returned ``RunResult`` carries an
+    ``exit_classification`` (a :class:`WorkerExit`) so the caller can
+    distinguish clean exit / timeout / signaled / nonzero / protocol
+    violation.  PID recording is NOT supported here because
+    ``subprocess.run`` does not expose the PID; switching to ``Popen``
+    would be the upgrade path if PID observability becomes required for
+    the demo workspace.  F.3 (parking into needs_review) is the
+    caller\u2019s responsibility because the demo workspace has no direct
+    ``task_hub_assignments`` linkage at this level.
     """
     cwd = workspace_dir.resolve()
     if not cwd.exists():
@@ -333,6 +363,7 @@ def run_in_workspace(
     env = _scrubbed_env() if scrub_env else dict(os.environ)
 
     start = datetime.now(timezone.utc)
+    was_timeout_killed = False
     try:
         completed = sp.run(
             list(command),
@@ -350,9 +381,35 @@ def run_in_workspace(
         rc, stdout, stderr = 127, "", f"binary_not_found: {exc}"
     except sp.TimeoutExpired:
         rc, stdout, stderr = 124, "", f"timeout after {timeout}s"
+        was_timeout_killed = True
     except Exception as exc:
         rc, stdout, stderr = 1, "", f"unexpected_error: {exc}"
     end = datetime.now(timezone.utc)
+
+    # Phase F.1 — classify the exit so the caller can route protocol
+    # violations / failures appropriately.  Best-effort; classifier is
+    # pure so failures should never happen, but defensive try just in
+    # case.
+    classification = None
+    try:
+        from universal_agent.services.worker_exit_classifier import (
+            classify_worker_exit as _f_classify,
+        )
+        # Negative rc on POSIX = signaled. Skip when we already classified
+        # as timeout-killed (timeout takes priority).
+        was_signaled = bool(
+            isinstance(rc, int) and rc < 0 and not was_timeout_killed
+        )
+        classification = _f_classify(
+            return_code=rc,
+            was_signaled=was_signaled,
+            was_timeout_killed=was_timeout_killed,
+            # No linked Task Hub assignment at this level — caller owns
+            # disposition; treat rc=0 as the success signal.
+            task_closed_normally=(rc == 0 and not was_timeout_killed),
+        )
+    except Exception as exc:
+        logger.debug("Phase F.1 demo classification skipped: %s", exc)
 
     return RunResult(
         return_code=rc,
@@ -362,6 +419,7 @@ def run_in_workspace(
         command=tuple(command),
         cwd=str(cwd),
         env_scrubbed=scrub_env,
+        exit_classification=classification,
     )
 
 
