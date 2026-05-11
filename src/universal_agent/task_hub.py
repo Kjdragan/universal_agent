@@ -306,6 +306,28 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_task_hub_assign_task_state ON task_hub_assignments(task_id, state, started_at DESC);
         CREATE INDEX IF NOT EXISTS idx_task_hub_assign_agent_state ON task_hub_assignments(agent_id, state, started_at DESC);
 
+        -- Hermes Phase D: per-attempt durable history alongside task_hub_assignments.
+        -- task_hub_assignments is the claim-ledger (started/ended/state) while
+        -- task_hub_runs holds the closing outcome/summary/metadata/error so
+        -- Simone's re_evaluate verb and the dashboard drawer can show
+        -- "what actually happened on each attempt" not just "an attempt occurred".
+        -- Additive only: existing code paths work without these rows being populated.
+        CREATE TABLE IF NOT EXISTS task_hub_runs (
+            run_id              TEXT PRIMARY KEY,
+            task_id             TEXT NOT NULL,
+            assignment_id       TEXT,
+            agent_id            TEXT,
+            started_at          TEXT NOT NULL,
+            ended_at            TEXT,
+            outcome             TEXT,
+            summary             TEXT,
+            metadata_json       TEXT,
+            error               TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_hub_runs_task ON task_hub_runs(task_id, started_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_task_hub_runs_outcome ON task_hub_runs(outcome, ended_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_task_hub_runs_assignment ON task_hub_runs(assignment_id);
+
         CREATE TABLE IF NOT EXISTS task_hub_dispatch_queue (
             queue_build_id TEXT NOT NULL,
             task_id TEXT NOT NULL,
@@ -1624,6 +1646,133 @@ def get_dispatch_queue(conn: sqlite3.Connection, *, limit: int = 100) -> dict[st
     }
 
 
+# ── Phase D: task_hub_runs helpers ──────────────────────────────────────────
+
+
+def _open_run(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    assignment_id: str,
+    agent_id: str,
+    metadata: Optional[dict[str, Any]] = None,
+) -> str:
+    """Open a new task_hub_runs row for this attempt.
+
+    Returns the generated ``run_id``. Safe to call multiple times — each
+    call creates a distinct row keyed by ``assignment_id`` for join-back.
+    Additive: callers may ignore the returned ID; the row stands alone.
+    """
+    run_id = str(uuid.uuid4())
+    metadata_json = _json_dumps(metadata or {}) if metadata else None
+    conn.execute(
+        """
+        INSERT INTO task_hub_runs (
+            run_id, task_id, assignment_id, agent_id, started_at, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (run_id, task_id, assignment_id, agent_id, _now_iso(), metadata_json),
+    )
+    return run_id
+
+
+def _close_run(
+    conn: sqlite3.Connection,
+    *,
+    assignment_id: str,
+    outcome: str,
+    summary: str = "",
+    error: str = "",
+    metadata: Optional[dict[str, Any]] = None,
+) -> int:
+    """Close the run row associated with ``assignment_id``.
+
+    Sets ended_at, outcome, summary, error, and (optionally) merges
+    metadata into any existing metadata_json. ``outcome`` should be one
+    of: completed | failed | reclaimed | timed_out | crashed | gave_up.
+
+    Returns the number of rows updated (0 if no matching run found —
+    callers can ignore; phase D is additive). Idempotency: only updates
+    rows where ``ended_at IS NULL``, so calling _close_run twice on the
+    same assignment is a no-op for the second call.
+    """
+    if not str(assignment_id or "").strip():
+        return 0
+    # Find the open run row (if any) for this assignment.
+    row = conn.execute(
+        "SELECT run_id, metadata_json FROM task_hub_runs "
+        "WHERE assignment_id = ? AND ended_at IS NULL "
+        "ORDER BY started_at DESC LIMIT 1",
+        (assignment_id,),
+    ).fetchone()
+    if not row:
+        return 0
+    run_id = row["run_id"]
+    existing_meta = _json_loads_obj(row["metadata_json"], default={}) if row["metadata_json"] else {}
+    if metadata:
+        existing_meta.update(metadata)
+    metadata_json = _json_dumps(existing_meta) if existing_meta else None
+    cursor = conn.execute(
+        """
+        UPDATE task_hub_runs
+        SET ended_at = ?, outcome = ?, summary = ?, error = ?, metadata_json = ?
+        WHERE run_id = ? AND ended_at IS NULL
+        """,
+        (
+            _now_iso(),
+            str(outcome or "").strip().lower() or None,
+            (summary or "").strip() or None,
+            (error or "").strip() or None,
+            metadata_json,
+            run_id,
+        ),
+    )
+    return cursor.rowcount
+
+
+def list_runs_for_task(
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """Return per-attempt history for a task, newest first.
+
+    Used by Phase D.2 (Simone's re_evaluate prompt addendum) and the
+    dashboard failure-context drawer to render "what actually happened
+    on each attempt".
+    """
+    ensure_schema(conn)
+    rows = conn.execute(
+        """
+        SELECT run_id, task_id, assignment_id, agent_id, started_at, ended_at,
+               outcome, summary, error, metadata_json
+        FROM task_hub_runs
+        WHERE task_id = ?
+        ORDER BY started_at DESC
+        LIMIT ?
+        """,
+        (str(task_id or "").strip(), max(1, int(limit))),
+    ).fetchall()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        out.append(
+            {
+                "run_id": str(row["run_id"]),
+                "task_id": str(row["task_id"]),
+                "assignment_id": row["assignment_id"],
+                "agent_id": row["agent_id"],
+                "started_at": row["started_at"],
+                "ended_at": row["ended_at"],
+                "outcome": row["outcome"],
+                "summary": row["summary"],
+                "error": row["error"],
+                "metadata": _json_loads_obj(row["metadata_json"], default={}),
+            }
+        )
+    return out
+
+
 def claim_next_dispatch_tasks(
     conn: sqlite3.Connection,
     *,
@@ -1747,6 +1896,27 @@ def claim_next_dispatch_tasks(
                 _now_iso(),
             ),
         )
+        # Phase D: open a parallel task_hub_runs row for this attempt.
+        # Best-effort — additive feature, never block the claim path.
+        try:
+            _open_run(
+                conn,
+                task_id=task_id,
+                assignment_id=assignment_id,
+                agent_id=agent_id,
+                metadata={
+                    "claim_source": "dispatch_sweep",
+                    "workflow_run_id": resolved_workflow_run_id,
+                    "workflow_attempt_id": resolved_workflow_attempt_id,
+                    "provider_session_id": resolved_provider_session_id,
+                },
+            )
+        except Exception:
+            logger.exception(
+                "Phase D _open_run failed for task=%s assignment=%s (continuing)",
+                task_id,
+                assignment_id,
+            )
         metadata = dict(current.get("metadata") or {})
         dispatch_meta = dict(metadata.get("dispatch") or {})
         dispatch_meta.update(
@@ -3071,6 +3241,28 @@ def finalize_assignments(
             (state, now_iso, result_summary.strip() or None, assignment_id),
         )
         finalized += 1
+        # Phase D: close the parallel task_hub_runs row. Best-effort —
+        # additive feature, never block finalize.
+        try:
+            run_outcome = {
+                "completed": "completed",
+                "failed": "failed",
+                "review": "failed",
+                "reclaimed": "reclaimed",
+                "timed_out": "timed_out",
+            }.get(run_state, run_state or "failed")
+            _close_run(
+                conn,
+                assignment_id=assignment_id,
+                outcome=run_outcome,
+                summary=result_summary or "",
+                error="" if run_outcome == "completed" else result_summary or "",
+            )
+        except Exception:
+            logger.exception(
+                "Phase D _close_run failed for assignment=%s (continuing)",
+                assignment_id,
+            )
 
         if not reopen_in_progress:
             continue
