@@ -504,6 +504,18 @@ export default function ToDoListDashboardPage() {
       ended_at: string | null;
       result_summary: string | null;
     }>;
+    prior_runs: Array<{
+      run_id: string;
+      task_id: string;
+      assignment_id: string | null;
+      agent_id: string | null;
+      started_at: string | null;
+      ended_at: string | null;
+      outcome: string | null;
+      summary: string | null;
+      error: string | null;
+      metadata: Record<string, unknown>;
+    }>;
   };
   const [failureContext, setFailureContext] = useState<FailureContext | null>(null);
   const [failureContextLoading, setFailureContextLoading] = useState(false);
@@ -1365,6 +1377,44 @@ export default function ToDoListDashboardPage() {
                               )}
                             </li>
                           ))}
+                        </ul>
+                      </details>
+                    )}
+                    {failureContext.prior_runs.length > 0 && (
+                      <details className="mt-1" open>
+                        <summary className="text-kcd-text-dim cursor-pointer hover:text-kcd-amber">
+                          Attempt history ({failureContext.prior_runs.length})
+                        </summary>
+                        <ul className="mt-1 ml-3 space-y-1.5">
+                          {failureContext.prior_runs.map((r) => {
+                            const isFailed = r.outcome && r.outcome !== "completed";
+                            const outcomeClass = r.outcome === "completed"
+                              ? "text-kcd-green"
+                              : isFailed
+                                ? "text-kcd-red"
+                                : "text-kcd-text-dim";
+                            return (
+                              <li key={r.run_id} className="text-[10px] border-l border-kcd-text-dim/30 pl-2">
+                                <div>
+                                  <span className="text-kcd-text">{r.agent_id || "?"}</span>
+                                  <span className="opacity-50"> · </span>
+                                  <span className={outcomeClass}>{r.outcome || "in_progress"}</span>
+                                  {r.started_at && (
+                                    <>
+                                      <span className="opacity-50"> · </span>
+                                      <span className="text-kcd-text-dim">{r.started_at.slice(0, 19)}</span>
+                                    </>
+                                  )}
+                                </div>
+                                {r.summary && (
+                                  <div className="text-kcd-text-dim ml-1 mt-0.5">{r.summary.slice(0, 140)}</div>
+                                )}
+                                {r.error && (
+                                  <div className="text-kcd-red/80 ml-1 mt-0.5">error: {r.error.slice(0, 140)}</div>
+                                )}
+                              </li>
+                            );
+                          })}
                         </ul>
                       </details>
                     )}

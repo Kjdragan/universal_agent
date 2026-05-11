@@ -22626,6 +22626,10 @@ async def dashboard_todolist_get_failure_context(task_id: str):
       ``task_hub_assignments`` (default 5, configurable via ``?limit=N``)
       with assignment_id, agent_id, state, started_at, ended_at,
       result_summary.
+    * ``prior_runs`` — Hermes Phase D.2: most-recent N rows from
+      ``task_hub_runs`` (per-attempt outcome / summary / error /
+      metadata). Empty list if D.1 has not yet recorded any runs for
+      this task (additive rollout).
 
     Returns 404 if the task doesn't exist.
     """
@@ -22643,6 +22647,7 @@ async def dashboard_todolist_get_failure_context(task_id: str):
             prior_assignments = task_hub._summarize_prior_assignments(
                 conn, task_id=tid, limit=5
             )
+            prior_runs = task_hub.list_runs_for_task(conn, task_id=tid, limit=5)
             return {
                 "task_id": tid,
                 "status": item.get("status"),
@@ -22659,6 +22664,7 @@ async def dashboard_todolist_get_failure_context(task_id: str):
                 "rehydrated_by": dispatch_meta.get("rehydrated_by") or "",
                 "max_retries": item.get("max_retries"),
                 "prior_assignments": prior_assignments,
+                "prior_runs": prior_runs,
             }
         finally:
             conn.close()

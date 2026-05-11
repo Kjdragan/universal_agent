@@ -229,3 +229,130 @@ def test_prior_assignments_returns_expected_shape_newest_first(
             "ended_at",
             "result_summary",
         }
+
+
+# ── 7. Phase D.2 — prior_runs surfaced from task_hub_runs ───────────────────
+
+
+def test_prior_runs_returns_closed_runs_newest_first(
+    seeded_db: sqlite3.Connection,
+) -> None:
+    """Phase D.2 — `prior_runs` reads `task_hub_runs` (per-attempt history).
+
+    Distinct from `prior_assignments`, which is the claim ledger. Runs
+    carry the closing outcome/summary/error per attempt; these are what
+    Simone (and the operator) need to judge from.
+    """
+    _seed_wedged_task(seeded_db, task_id="task:runs")
+    # Manually open + close two runs (older first, then newer) to mirror
+    # what claim_next_dispatch_tasks + finalize_assignments would record
+    # for a task that was attempted twice.
+    task_hub._open_run(
+        seeded_db,
+        task_id="task:runs",
+        assignment_id="asg-r-old",
+        agent_id="agent:a",
+    )
+    seeded_db.execute(
+        "UPDATE task_hub_runs SET started_at=? WHERE assignment_id=?",
+        ("2026-05-11T10:00:00+00:00", "asg-r-old"),
+    )
+    task_hub._close_run(
+        seeded_db,
+        assignment_id="asg-r-old",
+        outcome="failed",
+        summary="first attempt failed",
+        error="boom",
+    )
+    task_hub._open_run(
+        seeded_db,
+        task_id="task:runs",
+        assignment_id="asg-r-new",
+        agent_id="agent:b",
+    )
+    seeded_db.execute(
+        "UPDATE task_hub_runs SET started_at=? WHERE assignment_id=?",
+        ("2026-05-11T11:00:00+00:00", "asg-r-new"),
+    )
+    task_hub._close_run(
+        seeded_db,
+        assignment_id="asg-r-new",
+        outcome="failed",
+        summary="second attempt also failed",
+        error="kaboom",
+    )
+    seeded_db.commit()
+
+    payload = _call("task:runs")
+    runs = payload["prior_runs"]
+    assert len(runs) == 2
+    # Newest first.
+    assert runs[0]["assignment_id"] == "asg-r-new"
+    assert runs[1]["assignment_id"] == "asg-r-old"
+    # Closing fields populated.
+    assert runs[0]["outcome"] == "failed"
+    assert runs[0]["summary"] == "second attempt also failed"
+    assert runs[0]["error"] == "kaboom"
+    # Required keys (matches `list_runs_for_task` shape).
+    for row in runs:
+        assert set(row.keys()) >= {
+            "run_id",
+            "task_id",
+            "assignment_id",
+            "agent_id",
+            "started_at",
+            "ended_at",
+            "outcome",
+            "summary",
+            "error",
+            "metadata",
+        }
+
+
+def test_prior_runs_empty_when_no_runs_recorded(
+    seeded_db: sqlite3.Connection,
+) -> None:
+    """D.2 rollout is additive — absence of runs must yield empty list."""
+    _seed_wedged_task(seeded_db, task_id="task:no-runs")
+    payload = _call("task:no-runs")
+    assert payload["prior_runs"] == []
+
+
+def test_re_evaluate_attaches_prior_runs_into_context(
+    seeded_db: sqlite3.Connection,
+) -> None:
+    """D.2 — re_evaluate verb embeds `prior_runs` in re_evaluation_context.
+
+    Simone's prompt assembler will read this on her next claim; the
+    failing attempts give her evidence to judge from.
+    """
+    _seed_wedged_task(seeded_db, task_id="task:reeval-runs")
+    # Seed one closed failing run.
+    task_hub._open_run(
+        seeded_db,
+        task_id="task:reeval-runs",
+        assignment_id="asg-pre",
+        agent_id="agent:a",
+    )
+    task_hub._close_run(
+        seeded_db,
+        assignment_id="asg-pre",
+        outcome="failed",
+        summary="prior attempt blew up",
+        error="permission denied",
+    )
+    seeded_db.commit()
+
+    task_hub.perform_task_action(
+        seeded_db,
+        task_id="task:reeval-runs",
+        action="re_evaluate",
+    )
+    payload = _call("task:reeval-runs")
+    ctx = payload["re_evaluation_context"]
+    assert isinstance(ctx, dict)
+    assert "prior_runs" in ctx
+    assert isinstance(ctx["prior_runs"], list)
+    assert len(ctx["prior_runs"]) == 1
+    assert ctx["prior_runs"][0]["outcome"] == "failed"
+    assert ctx["prior_runs"][0]["error"] == "permission denied"
