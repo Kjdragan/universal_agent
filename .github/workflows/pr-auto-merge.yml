@@ -43,7 +43,15 @@ jobs:
     steps:
       - name: Enable auto-merge via gh
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 2026-05-11: swapped GITHUB_TOKEN -> AUTO_MERGE_PAT so the
+          # downstream squash-merge `push` event isn't suppressed by
+          # GitHub's "events triggered by GITHUB_TOKEN don't fire new
+          # workflows" rule. Falls back to GITHUB_TOKEN if the secret is
+          # not configured so the workflow stays functional (just
+          # without deploy auto-firing). See operating note in
+          # docs/06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md
+          # and the post-merge-deploy.yml comment block.
+          GH_TOKEN: ${{ secrets.AUTO_MERGE_PAT || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           PR_NUM="${{ github.event.pull_request.number }}"
