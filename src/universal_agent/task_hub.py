@@ -105,6 +105,42 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _resolve_effective_max_retries(
+    task_item: Optional[dict[str, Any]],
+    fallback_limit: int,
+) -> tuple[int, str]:
+    """Return ``(limit, source)`` where ``source`` ∈ ``{"task", "dispatcher"}``.
+
+    Resolution order (per Hermes-adaptation Phase A.1):
+
+    1. Per-task ``max_retries`` if set on the task row (nothing else overrides).
+    2. Caller-supplied ``fallback_limit`` (resolved from
+       ``UA_TASK_HUB_HEARTBEAT_MAX_RETRIES`` / ``UA_TASK_HUB_TODO_MAX_RETRIES``
+       env vars at the top of ``finalize_assignments``).
+
+    The returned ``source`` is recorded on the task's ``metadata.dispatch``
+    so dashboards / Simone's briefing can show *why* a particular retry budget
+    applied. Mirrors Hermes' ``limit_source`` tracking at
+    ``kanban_db.py:3398-3408``.
+    """
+    fallback = max(1, int(fallback_limit))
+    if task_item is None:
+        return fallback, "dispatcher"
+    override = task_item.get("max_retries")
+    if override is None:
+        return fallback, "dispatcher"
+    try:
+        coerced = int(override)
+    except (TypeError, ValueError):
+        return fallback, "dispatcher"
+    if coerced < 1:
+        # Treat 0 / negative as "fall back to the dispatcher default" to keep
+        # the operator's intent obvious (zero retries doesn't make sense as
+        # a retry *budget* — one attempt is always allowed).
+        return fallback, "dispatcher"
+    return coerced, "task"
+
+
 def _json_loads_obj(raw: Any, *, default: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     if default is None:
         default = {}
@@ -224,6 +260,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             mirror_status TEXT NOT NULL DEFAULT 'internal',
             feedback_json TEXT NOT NULL DEFAULT '{}',
             metadata_json TEXT NOT NULL DEFAULT '{}',
+            max_retries INTEGER,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -360,6 +397,13 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         "ALTER TABLE task_hub_items ADD COLUMN feedback_json TEXT NOT NULL DEFAULT '{}'",
         "ALTER TABLE task_hub_dispatch_queue ADD COLUMN eligible INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE task_hub_dispatch_queue ADD COLUMN skip_reason TEXT",
+        # Per-task override for the consecutive-failure retry budget. NULL (the
+        # common case) falls through to UA_TASK_HUB_HEARTBEAT_MAX_RETRIES or
+        # UA_TASK_HUB_TODO_MAX_RETRIES env var (default 3). The value is the
+        # retry-count threshold at which the dispatcher gives up and parks the
+        # task in needs_review. Hermes-adaptation Phase A.1 (2026-05-10) —
+        # see docs/reports/hermes-adaptation-phased-plan-2026-05-10.md.
+        "ALTER TABLE task_hub_items ADD COLUMN max_retries INTEGER",
     ):
         try:
             conn.execute(ddl)
@@ -1002,6 +1046,28 @@ def upsert_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any
     if trigger_type not in TRIGGER_TYPES:
         trigger_type = DEFAULT_TRIGGER_TYPE
 
+    # Resolve per-task max_retries override. NULL preserves the fallback to
+    # env defaults (UA_TASK_HUB_HEARTBEAT_MAX_RETRIES / UA_TASK_HUB_TODO_MAX_RETRIES).
+    # If the caller passed ``max_retries`` explicitly (including 0), respect it;
+    # otherwise inherit from the existing row to preserve a previously set override.
+    if "max_retries" in item:
+        _raw_max_retries = item.get("max_retries")
+        if _raw_max_retries is None or str(_raw_max_retries).strip() == "":
+            max_retries_value: Optional[int] = None
+        else:
+            try:
+                _coerced = int(_raw_max_retries)
+                max_retries_value = max(1, _coerced)
+            except (TypeError, ValueError):
+                max_retries_value = None
+    else:
+        _existing_max_retries = existing.get("max_retries")
+        max_retries_value = (
+            int(_existing_max_retries)
+            if _existing_max_retries is not None
+            else None
+        )
+
     payload = {
         "task_id": task_id,
         "source_kind": str(item.get("source_kind") or existing.get("source_kind") or "internal"),
@@ -1026,6 +1092,7 @@ def upsert_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any
         "mirror_status": str(item.get("mirror_status") or existing.get("mirror_status") or "internal"),
         "trigger_type": trigger_type,
         "metadata_json": _json_dumps(metadata),
+        "max_retries": max_retries_value,
         "created_at": str(existing.get("created_at") or item.get("created_at") or now_iso),
         "updated_at": now_iso,
     }
@@ -1036,12 +1103,12 @@ def upsert_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any
             task_id, source_kind, source_ref, title, description, project_key, priority, due_at,
             labels_json, status, must_complete, incident_key, workstream_id, subtask_role,
             parent_task_id, agent_ready, score, score_confidence, stale_state, seizure_state,
-            mirror_status, trigger_type, metadata_json, created_at, updated_at
+            mirror_status, trigger_type, metadata_json, max_retries, created_at, updated_at
         ) VALUES (
             :task_id, :source_kind, :source_ref, :title, :description, :project_key, :priority, :due_at,
             :labels_json, :status, :must_complete, :incident_key, :workstream_id, :subtask_role,
             :parent_task_id, :agent_ready, :score, :score_confidence, :stale_state, :seizure_state,
-            :mirror_status, :trigger_type, :metadata_json, :created_at, :updated_at
+            :mirror_status, :trigger_type, :metadata_json, :max_retries, :created_at, :updated_at
         )
         ON CONFLICT(task_id) DO UPDATE SET
             source_kind=excluded.source_kind,
@@ -1066,6 +1133,7 @@ def upsert_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any
             mirror_status=excluded.mirror_status,
             trigger_type=excluded.trigger_type,
             metadata_json=excluded.metadata_json,
+            max_retries=excluded.max_retries,
             updated_at=excluded.updated_at
         """,
         payload,
@@ -2997,9 +3065,17 @@ def finalize_assignments(
 
             retry_count = max(0, _safe_int(dispatch_meta.get("heartbeat_retry_count"), 0)) + 1
             dispatch_meta["heartbeat_retry_count"] = retry_count
-            dispatch_meta["heartbeat_retry_limit"] = heartbeat_retry_limit
+            # Per-task max_retries override resolution (Hermes-adaptation Phase A.1).
+            # NULL on the task falls back to the dispatcher default; otherwise the
+            # task value wins. Stores limit_source so dashboards / Simone briefing
+            # can show *why* a particular retry budget applied.
+            effective_heartbeat_limit, heartbeat_limit_source = _resolve_effective_max_retries(
+                task_item, heartbeat_retry_limit,
+            )
+            dispatch_meta["heartbeat_retry_limit"] = effective_heartbeat_limit
+            dispatch_meta["heartbeat_retry_limit_source"] = heartbeat_limit_source
             metadata["dispatch"] = dispatch_meta
-            if retry_count >= heartbeat_retry_limit:
+            if retry_count >= effective_heartbeat_limit:
                 dispatch_meta["last_disposition"] = "needs_review"
                 dispatch_meta["last_disposition_reason"] = "heartbeat_retry_exhausted"
                 conn.execute(
@@ -3013,10 +3089,11 @@ def finalize_assignments(
                 reviewed += 1
                 retry_exhausted += 1
                 logger.info(
-                    "Task Hub heartbeat finalize moved task %s to needs_review after retry exhaustion (%s/%s)",
+                    "Task Hub heartbeat finalize moved task %s to needs_review after retry exhaustion (%s/%s, source=%s)",
                     task_id,
                     retry_count,
-                    heartbeat_retry_limit,
+                    effective_heartbeat_limit,
+                    heartbeat_limit_source,
                 )
             else:
                 if _email_side_effects_detected(conn, task_id):
@@ -3050,10 +3127,11 @@ def finalize_assignments(
                     )
                     reopened += 1
                     logger.info(
-                        "Task Hub heartbeat finalize reopened task %s for retry (%s/%s)",
+                        "Task Hub heartbeat finalize reopened task %s for retry (%s/%s, source=%s)",
                         task_id,
                         retry_count,
-                        heartbeat_retry_limit,
+                        effective_heartbeat_limit,
+                        heartbeat_limit_source,
                     )
             continue
 
@@ -3132,9 +3210,14 @@ def finalize_assignments(
         else:
             retry_count = max(0, _safe_int(dispatch_meta.get("todo_retry_count"), 0)) + 1
             dispatch_meta["todo_retry_count"] = retry_count
-            dispatch_meta["todo_retry_limit"] = todo_retry_limit
+            # Per-task max_retries override resolution (Hermes-adaptation Phase A.1).
+            effective_todo_limit, todo_limit_source = _resolve_effective_max_retries(
+                task_item, todo_retry_limit,
+            )
+            dispatch_meta["todo_retry_limit"] = effective_todo_limit
+            dispatch_meta["todo_retry_limit_source"] = todo_limit_source
             metadata["dispatch"] = dispatch_meta
-            if retry_count >= todo_retry_limit:
+            if retry_count >= effective_todo_limit:
                 dispatch_meta["last_disposition"] = "needs_review"
                 dispatch_meta["last_disposition_reason"] = "todo_retry_exhausted"
                 dispatch_meta["completion_unverified"] = True
@@ -3149,10 +3232,11 @@ def finalize_assignments(
                 reviewed += 1
                 retry_exhausted += 1
                 logger.warning(
-                    "Task Hub ToDo finalize moved task %s to needs_review after retry exhaustion (%s/%s)",
+                    "Task Hub ToDo finalize moved task %s to needs_review after retry exhaustion (%s/%s, source=%s)",
                     task_id,
                     retry_count,
-                    todo_retry_limit,
+                    effective_todo_limit,
+                    todo_limit_source,
                 )
             else:
                 dispatch_meta["last_disposition"] = "reopened"
