@@ -30,8 +30,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import logging
-import re
 from pathlib import Path
+import re
 from typing import Any, Iterable
 
 import yaml

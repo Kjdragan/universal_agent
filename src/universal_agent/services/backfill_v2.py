@@ -27,9 +27,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import logging
 import os
+from pathlib import Path
 import shutil
 import sqlite3
-from pathlib import Path
 from typing import Any
 
 from universal_agent.artifacts import resolve_artifacts_dir

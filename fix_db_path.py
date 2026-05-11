@@ -1,8 +1,8 @@
-from pathlib import Path
-import os
-import sqlite3
-import json
 from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path
+import sqlite3
 import uuid
 
 # Read the artifact we just generated

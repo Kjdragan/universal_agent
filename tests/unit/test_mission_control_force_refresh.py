@@ -35,10 +35,9 @@ import pytest
 from universal_agent.services.mission_control_db import open_store
 from universal_agent.services.mission_control_intelligence_sweeper import (
     MissionControlSweeper,
-    SweepResult,
     SweeperConfig,
+    SweepResult,
 )
-
 
 # ── Helpers ────────────────────────────────────────────────────────────
 
@@ -469,9 +468,9 @@ async def test_tier0_retires_infrastructure_card_when_tile_returns_to_green(
     # Seed: prior tile state is RED for csi_ingester. A live infra card
     # exists (created by an earlier sweep when the tile flipped red).
     from universal_agent.services.mission_control_cards import (
-        CardUpsert,
         SEVERITY_CRITICAL,
         SUBJECT_INFRASTRUCTURE,
+        CardUpsert,
         get_card,
         live_card_exists_for_subject,
         make_card_id,
@@ -575,9 +574,9 @@ async def test_tier0_keeps_yellow_or_red_infra_card_alive(
     monkeypatch.setenv("UA_MC_PHASE_1_ENABLED", "1")
 
     from universal_agent.services.mission_control_cards import (
-        CardUpsert,
         SEVERITY_WARNING,
         SUBJECT_INFRASTRUCTURE,
+        CardUpsert,
         live_card_exists_for_subject,
         upsert_card,
     )

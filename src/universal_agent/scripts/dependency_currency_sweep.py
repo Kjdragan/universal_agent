@@ -14,13 +14,13 @@ See docs/proactive_signals/claudedevs_intel_v2_design.md §5.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import logging
+from pathlib import Path
 import shutil
 import subprocess as sp
 import sys
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from universal_agent.artifacts import resolve_artifacts_dir

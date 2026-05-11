@@ -69,7 +69,9 @@ class TestUpsert:
         reg = _in_memory_registry()
         r1 = reg.upsert(_base_payload(), source="first")
         # Tiny delay to ensure timestamps differ
-        import time; time.sleep(0.01)
+        import time
+
+        time.sleep(0.01)
         r2 = reg.upsert(_base_payload(), source="second")
         assert r2["last_seen_at"] >= r1["last_seen_at"]
 

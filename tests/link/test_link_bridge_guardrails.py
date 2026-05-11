@@ -20,7 +20,6 @@ import pytest
 
 from universal_agent.tools import link_bridge
 
-
 VALID_CONTEXT = (
     "User initiated this purchase via the shopping assistant flow. "
     "Buying a single hardcover copy of 'Working in Public' for personal reading. "

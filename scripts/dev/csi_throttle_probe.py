@@ -39,11 +39,11 @@ from __future__ import annotations
 
 import argparse
 import csv
+from datetime import datetime, timezone
 import os
+from pathlib import Path
 import sys
 import time
-from datetime import datetime, timezone
-from pathlib import Path
 
 # A representative system prompt — shape matches csi_intelligence_pass
 # without dragging in the entire 5KB prompt. Token count is similar.

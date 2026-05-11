@@ -18,14 +18,13 @@ from __future__ import annotations
 import base64
 import json
 import os
-import subprocess
 from pathlib import Path
+import subprocess
 from unittest import mock
 
 import pytest
 
 from universal_agent.tools import link_bridge
-
 
 VALID_CONTEXT = (
     "User initiated this purchase via the shopping assistant flow. "

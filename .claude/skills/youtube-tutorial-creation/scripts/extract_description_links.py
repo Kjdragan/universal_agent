@@ -37,10 +37,10 @@ import argparse
 import json
 import logging
 import os
+from pathlib import Path
 import re
 import sys
 import time
-from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
 
@@ -562,8 +562,9 @@ def _fetch_github_repo(url: str, output_dir: Path, timeout: int) -> dict[str, An
 
 def _fetch_web_page(url: str, output_dir: Path, link_type: str, timeout: int) -> dict[str, Any]:
     """Fetch a web page and save as markdown. Uses defuddle CLI if available, falls back to httpx."""
-    import httpx
     import subprocess as sp
+
+    import httpx
 
     filename = _safe_filename(url, link_type)
     output_path = output_dir / filename

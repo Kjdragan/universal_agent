@@ -37,9 +37,9 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+from pathlib import Path
 import sqlite3
 import sys
-from pathlib import Path
 from typing import Any
 
 from universal_agent.durable.db import get_activity_db_path

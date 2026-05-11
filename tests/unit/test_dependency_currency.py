@@ -25,7 +25,6 @@ from universal_agent.services.dependency_currency import (
     write_version_drift_page,
 )
 
-
 # ── Anthropic-adjacency ──────────────────────────────────────────────────────
 
 

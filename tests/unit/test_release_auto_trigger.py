@@ -17,7 +17,6 @@ from universal_agent.services.release_auto_trigger import (
     summarize_auto_upgrade_results,
 )
 
-
 # ── Env switch ───────────────────────────────────────────────────────────────
 
 

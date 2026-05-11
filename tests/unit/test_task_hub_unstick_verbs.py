@@ -214,7 +214,7 @@ def test_re_evaluate_prior_assignments_summary_includes_assignment_rows() -> Non
     try:
         _seed_wedged_task(conn, task_id="task:re2")
         # Insert two completed assignment rows so the summary has content.
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timedelta, timezone
 
         now = datetime.now(timezone.utc)
         for i, agent_id in enumerate(("simone", "vp.coder.primary")):

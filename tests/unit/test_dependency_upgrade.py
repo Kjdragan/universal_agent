@@ -11,12 +11,11 @@ from universal_agent.services.dependency_upgrade import (
     SmokeResult,
     UpgradeOutcome,
     apply_upgrade,
-    bump_pyproject_dep,
     build_upgrade_email,
+    bump_pyproject_dep,
     find_pyproject_dep,
     restore_pyproject,
 )
-
 
 # ── pyproject surgery ────────────────────────────────────────────────────────
 

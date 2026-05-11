@@ -18,7 +18,6 @@ from universal_agent.services.demo_workspace import (
     read_endpoint_profile,
 )
 
-
 # ── Profile vocabulary ──────────────────────────────────────────────────────
 
 

@@ -6,10 +6,10 @@ Uses the real marimo video (bMoNOb0iXpA) description as the canonical test case:
 """
 
 import json
+from pathlib import Path
 import subprocess
 import sys
 import textwrap
-from pathlib import Path
 
 import pytest
 
@@ -21,9 +21,9 @@ SCRIPT_DIR = Path(__file__).resolve().parent.parent / ".claude" / "skills" / "yo
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from extract_description_links import (
+    classify_and_filter,
     classify_url,
     extract_urls,
-    classify_and_filter,
 )
 
 # ---------------------------------------------------------------------------

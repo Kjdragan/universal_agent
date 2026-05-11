@@ -8,10 +8,10 @@ behavior the gateway lifespan depends on.
 from __future__ import annotations
 
 import asyncio
-import json
-import sqlite3
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
+import sqlite3
 
 import pytest
 
@@ -28,7 +28,6 @@ from universal_agent.services.mission_control_tiles import (
     Tile,
     TileState,
 )
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────
 

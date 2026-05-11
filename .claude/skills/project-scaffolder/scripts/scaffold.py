@@ -12,16 +12,16 @@ Usage:
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import getpass
 import json
 import os
+from pathlib import Path
 import re
 import shutil
 import socket
 import subprocess
 import sys
-from datetime import datetime, timezone
-from pathlib import Path
 
 try:
     import httpx

@@ -24,8 +24,8 @@ import asyncio
 import json
 import logging
 import os
-import sys
 from pathlib import Path
+import sys
 
 from universal_agent.artifacts import resolve_artifacts_dir
 from universal_agent.infisical_loader import initialize_runtime_secrets

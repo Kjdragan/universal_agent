@@ -13997,7 +13997,9 @@ async def lifespan(app: FastAPI):
     # Phase D (2026-05-11): if we're in dev mode, log a per-loop summary so the
     # operator sees what's actually going to run vs what Infisical injected.
     # No-op in prod.
-    from universal_agent.loop_control import report_dev_overrides  # noqa: PLC0415 — lazy
+    from universal_agent.loop_control import (
+        report_dev_overrides,  # noqa: PLC0415 — lazy
+    )
     report_dev_overrides(log=logger)
     _refresh_ops_auth_config_from_env()
     _maybe_instrument_logfire_fastapi()
@@ -14593,7 +14595,9 @@ async def lifespan(app: FastAPI):
     # --- Notification Dispatcher (out-of-band email/Telegram delivery) ---
     if _notification_dispatcher_enabled():
         try:
-            from universal_agent.services.notification_dispatcher import NotificationDispatcher
+            from universal_agent.services.notification_dispatcher import (
+                NotificationDispatcher,
+            )
             from universal_agent.services.telegram_send import telegram_send_async
 
             async def _send_email_for_notification(*, to: str, subject: str, text: str, html: str) -> Any:
@@ -24692,7 +24696,9 @@ def _get_mission_control_sweeper():
     """Return the singleton Mission Control sweeper. Indirection point so
     tests can monkeypatch a fake sweeper without spinning the real
     background loop."""
-    from universal_agent.services.mission_control_intelligence_sweeper import get_sweeper
+    from universal_agent.services.mission_control_intelligence_sweeper import (
+        get_sweeper,
+    )
     return get_sweeper()
 
 

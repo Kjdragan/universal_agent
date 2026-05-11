@@ -5,8 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
-from universal_agent.services import csi_demo_triage as triage
-from universal_agent.services import csi_demo_triage_ranker as ranker
+from universal_agent.services import (
+    csi_demo_triage as triage,
+    csi_demo_triage_ranker as ranker,
+)
 
 
 def _seed_pending(conn, *, post_ids: list[str]) -> None:

@@ -16,10 +16,10 @@ These tests cover:
 """
 from __future__ import annotations
 
-import json
-import sqlite3
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
+import sqlite3
 
 import pytest
 
