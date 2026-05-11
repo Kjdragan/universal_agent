@@ -2435,6 +2435,17 @@ _vp_stale_reconcile_seconds = max(
     60,
     int(os.getenv("UA_VP_STALE_RECONCILE_SECONDS", "").strip() or 15 * 60),
 )
+# How often to sweep for stale VP missions. Without this loop, reconciliation
+# only runs at gateway startup — so a VP daemon that stopped polling at 6 AM
+# leaves its missions in `running` state until the next deploy. 5 min default
+# bounds the worst case to ~5 min instead of "until next restart". Floor 60s
+# matches the cron min-interval guard (PR #218).
+_vp_stale_reconcile_interval_seconds = max(
+    60,
+    int(os.getenv("UA_VP_STALE_RECONCILE_INTERVAL_SECONDS", "").strip() or 5 * 60),
+)
+_vp_stale_reconcile_task: Optional[asyncio.Task] = None
+_vp_stale_reconcile_stop: Optional[asyncio.Event] = None
 _channel_probe_results: dict[str, dict] = {}
 _notifications: list[dict] = []
 _notifications_max = int(os.getenv("UA_NOTIFICATIONS_MAX", "500"))
@@ -8853,6 +8864,38 @@ async def _factory_staleness_enforcement_loop(stop_event: asyncio.Event) -> None
                 logger.warning("Factory staleness enforcement failed: %s", exc)
 
 
+async def _vp_stale_reconcile_loop(stop_event: asyncio.Event) -> None:
+    """Periodically finalize VP missions whose external runtime stopped polling.
+
+    Mirrors the existing on-startup reconciler (`_reconcile_stale_vp_missions_on_startup`)
+    but runs continuously. Without this loop, a VP daemon that stops polling
+    the `vp_missions` table leaves its missions stuck in `running` state until
+    the next gateway restart — which is how the 2026-05-11 VP Coder mission
+    sat in `running` for 8+ hours after the work had already shipped via PR.
+
+    The underlying `_reconcile_stale_vp_missions_once` only finalizes rows
+    that exceed `_vp_stale_reconcile_seconds` of inactivity, so legitimate
+    in-progress missions are never disturbed.
+    """
+    interval = max(60.0, float(_vp_stale_reconcile_interval_seconds))
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval)
+        except asyncio.TimeoutError:
+            pass
+        if stop_event.is_set():
+            break
+        try:
+            reconciled = _reconcile_stale_vp_missions_on_startup()
+            if reconciled > 0:
+                logger.warning(
+                    "🧹 Periodic sweep reconciled %d stale running VP mission(s)",
+                    reconciled,
+                )
+        except Exception as exc:
+            logger.warning("Periodic VP stale-mission reconciliation failed: %s", exc)
+
+
 async def _hq_self_heartbeat_loop(stop_event: asyncio.Event) -> None:
     """Periodically refresh HQ's own factory registration so it stays 'online'."""
     _hq_heartbeat_interval = 60.0
@@ -14042,6 +14085,7 @@ async def lifespan(app: FastAPI):
     # Initialize SQLite-backed factory registry (survives gateway restarts)
     global _factory_registry, _factory_staleness_task, _factory_staleness_stop
     global _hq_self_heartbeat_task, _hq_self_heartbeat_stop
+    global _vp_stale_reconcile_task, _vp_stale_reconcile_stop
     try:
         _registry_conn = connect_registry_db()
         _factory_registry = FactoryRegistry(_registry_conn)
@@ -14691,6 +14735,20 @@ async def lifespan(app: FastAPI):
         else:
             logger.info("🧹 No stale running VP missions detected on startup")
 
+    # --- Periodic VP stale-mission reconciliation (covers daemons that stop
+    # polling between deploys; on-startup reconcile alone leaves multi-hour gaps). ---
+    if _vp_stale_reconcile_enabled:
+        _vp_stale_reconcile_stop = asyncio.Event()
+        _vp_stale_reconcile_task = asyncio.create_task(
+            _vp_stale_reconcile_loop(_vp_stale_reconcile_stop)
+        )
+        logger.info(
+            "🧹 VP stale-mission periodic sweep enabled "
+            "(interval=%ds, stale_threshold=%ds)",
+            _vp_stale_reconcile_interval_seconds,
+            _vp_stale_reconcile_seconds,
+        )
+
     if _vp_event_bridge_enabled:
         _vp_event_bridge_stop_event = asyncio.Event()
         _vp_event_bridge_task = asyncio.create_task(_vp_event_bridge_loop())
@@ -14776,6 +14834,13 @@ async def lifespan(app: FastAPI):
     if _hq_self_heartbeat_task is not None:
         try:
             await _hq_self_heartbeat_task
+        except Exception:
+            pass
+    if _vp_stale_reconcile_stop is not None:
+        _vp_stale_reconcile_stop.set()
+    if _vp_stale_reconcile_task is not None:
+        try:
+            await _vp_stale_reconcile_task
         except Exception:
             pass
     if _mission_control_sweeper_stop is not None:
