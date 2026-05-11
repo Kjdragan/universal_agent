@@ -184,7 +184,29 @@ cat <<EOF
 
 HQ dev bootstrap complete.
 
-Run commands:
+Recommended: start the full stack with:
+  cd "$APP_ROOT" && just dev
+
+  (Or run the three services manually — Gateway/API/Web UI commands below.)
+
+Autonomous loops silenced in dev (UA_RUNTIME_STAGE=development):
+  • Heartbeat (no Claude Agent SDK runs, no quota burn)
+  • Cron service (registered crons don't fire; cron service itself doesn't tick)
+  • Cron job registration (no schedules registered at startup)
+  • Idle dispatch loop
+  • Dispatch stale-task sweep
+  • Daemon sessions
+  • VP event bridge / VP stale reconciler
+  • AgentMail service (no inbox polling, no WebSocket, no outbound email)
+  • Notification dispatcher (no real emails to operator)
+  • YouTube playlist watcher (no Google API quota burn)
+
+To opt a specific loop back on for testing, set its UA_<NAME>_ENABLED=1 in .env
+and restart. Examples:
+  UA_HEARTBEAT_ENABLED=1            # turn heartbeat on for one dev session
+  UA_AGENTMAIL_SERVICE_ENABLED=1    # use real AgentMail inbox in dev (careful)
+
+Manual run commands (skip if using 'just dev'):
   Gateway:
     cd "$APP_ROOT" && set -a && source .env && set +a && PYTHONPATH=src "$PY_BIN" -m universal_agent.gateway_server
 
