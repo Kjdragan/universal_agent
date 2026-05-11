@@ -693,8 +693,36 @@ class VPAgentHealthTile(Tile):
             return TileState(
                 color=COLOR_YELLOW,
                 one_line_status="no VP missions in last 7d",
-                evidence={"per_vp": per_vp},
+                evidence={"per_vp": per_vp, "active_anthropic_modes": []},
             )
+
+        # Hermes Phase E.3 — surface active Cody-on-Anthropic missions so an
+        # operator looking at "active_coder=1" understands the session has
+        # internal Agent-Team fan-out (more cost, more capability) than the
+        # bare count implies.
+        anthropic_active: list[dict[str, str]] = []
+        try:
+            anthropic_rows = conn.execute(
+                """
+                SELECT task_id, source_ref, updated_at
+                FROM task_hub_items
+                WHERE source_kind = 'vp_mission'
+                  AND status IN ('open', 'in_progress', 'delegated')
+                  AND json_extract(metadata_json, '$.cody_mode') = 'anthropic'
+                ORDER BY updated_at DESC
+                LIMIT 10
+                """
+            ).fetchall()
+            for row in anthropic_rows:
+                anthropic_active.append(
+                    {
+                        "task_id": str(row["task_id"]),
+                        "vp_id": str(row["source_ref"] or ""),
+                        "updated_at": str(row["updated_at"] or ""),
+                    }
+                )
+        except sqlite3.OperationalError:
+            anthropic_active = []
 
         # Red if any VP has >=3 failures and zero completions in window;
         # yellow if any VP failure rate >50% over >=3 missions; otherwise
@@ -716,10 +744,12 @@ class VPAgentHealthTile(Tile):
         if worst_color == COLOR_GREEN:
             total_completed = sum(v["completed"] for v in per_vp.values())
             worst_summary = f"both VPs healthy, {total_completed} completed in 7d"
+        if anthropic_active:
+            worst_summary = f"{worst_summary} · {len(anthropic_active)} on Anthropic"
         return TileState(
             color=worst_color,
             one_line_status=worst_summary,
-            evidence={"per_vp": per_vp},
+            evidence={"per_vp": per_vp, "active_anthropic_modes": anthropic_active},
         )
 
 

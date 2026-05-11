@@ -33,7 +33,8 @@
 | **B.2** — dashboard failure-context endpoint + drawer UI + 4 unstick buttons | [#220](https://github.com/Kjdragan/universal_agent/pull/220) | `c1c121e5` | ✅ shipped to `main` 2026-05-11 |
 | **C** — Atlas-direct-dispatch + Simone awareness (independent cron-registered dispatcher) | [#221](https://github.com/Kjdragan/universal_agent/pull/221) | — | ✅ scaffolded 2026-05-11; default OFF via `UA_ATLAS_DIRECT_DISPATCH_ENABLED=0`; operator flips on after dry-run |
 | **D.1** — `task_hub_runs` attempt-history table + claim/finalize wiring | [#222](https://github.com/Kjdragan/universal_agent/pull/222) | `e00842d2` | ✅ shipped to `main` 2026-05-11; additive — D.2 (prompt/UI consumers) follows |
-| **D.2** — Phase B `re_evaluate` verb + dashboard drawer consume `task_hub_runs` | — | — | ✅ shipped to `main` 2026-05-11 (this PR); 3 new unit tests pass on top of D.1 (9/9 failure-context, 10/10 task_hub_runs, 12/12 unstick verbs) |
+| **D.2** — Phase B `re_evaluate` verb + dashboard drawer consume `task_hub_runs` | [#228](https://github.com/Kjdragan/universal_agent/pull/228) | `9866f18d` | ✅ shipped to `main` 2026-05-11; 3 new unit tests on top of D.1 |
+| **E.1 + E.2.a + E.3** — Cody Anthropic/ZAI toggle (CLI path) | — | — | 🟢 in flight 2026-05-11 (this branch); per-task `cody_mode` column, `services/cody_mode.resolve_cody_mode`, CLI `_build_cli_env(cody_mode=...)` strips ANTHROPIC_* + forces agent-teams, VPAgentHealthTile surfaces active anthropic missions. 13 new unit tests. **E.2.b SDK in-process adapter routing deferred** — see § Phase E follow-ups below. |
 
 > **Operator-supporting interludes (2026-05-11):** PR #218 added a minimum-interval guard on the cron `every_seconds` create path. PR #219 added a periodic `_vp_stale_reconcile_loop`. Both close real operator-burden vectors orthogonal to the lettered phases.
 
