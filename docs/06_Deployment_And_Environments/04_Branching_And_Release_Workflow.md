@@ -1,6 +1,8 @@
 # Branching and Release Workflow
 
-Last updated: April 18, 2026
+Last updated: 2026-05-11
+
+> **Major flow change as of 2026-05-11:** the PR-to-production path is now fully automated via `pr-auto-merge.yml` + `auto-promote-to-prod.yml`. For agent-driven PRs from `claude/*` head branches, no operator action is required between PR open and production deploy. See [§ Automated PR-to-Production Flow](#automated-pr-to-production-flow-2026-05-11) below. `/ship` becomes a manual fallback for direct-push / hot-fix paths.
 
 ## Purpose
 
@@ -205,7 +207,7 @@ That fast-forwards `main` to the exact validated `develop` commit and triggers `
 ## 3. Branch Flow Diagram
 
 > [!TIP]
-> The diagram below visualizes our branch policy. This entire process is automated via the `/ship` slash command workflow which handles the merges and triggering of CI/CD.
+> The diagram below visualizes our branch policy. As of 2026-05-11, this entire process is automated via the `pr-auto-merge.yml` + `auto-promote-to-prod.yml` workflows for agent-driven PRs from `claude/*` head branches. The `/ship` slash command remains as a manual fallback for direct-push / hot-fix paths. See [§ Automated PR-to-Production Flow](#automated-pr-to-production-flow-2026-05-11) below for the new mechanism.
 
 ```mermaid
 %%{init: { 'theme': 'base', 'themeVariables': { 'git0': '#ff4757', 'git1': '#2ed573', 'git2': '#1e90ff' } } }%%
@@ -225,6 +227,28 @@ gitGraph
 ```
 
 *As demonstrated in the exhibit above, work originates on feature branches, merges exclusively into `develop` for CI validation and review, and relies entirely on a fast-forward operation to `main` to trigger the production deploy via GitHub Actions. At no point is standard development performed directly on `main` or `develop`.*
+
+## Automated PR-to-Production Flow (2026-05-11)
+
+For agent-driven PRs from `claude/*` head branches targeting `feature/latest2`, the entire promotion chain runs without operator action. See [`docs/deployment/ci_cd_pipeline.md`](../deployment/ci_cd_pipeline.md#end-to-end-pr-to-production-flow-shipped-2026-05-11) for the full pipeline.
+
+```mermaid
+flowchart LR
+    A[Agent opens PR<br/>claude/* → feature/latest2] --> B[pr-validate.yml<br/>compile + ruff + pytest]
+    A --> C[pr-auto-merge.yml<br/>enables GitHub auto-merge]
+    B -->|passes| D[GitHub squash-merges PR<br/>→ feature/latest2]
+    C --> D
+    D --> E[auto-promote-to-prod.yml<br/>ff-promotes through develop → main]
+    E --> F[deploy.yml fires on main push]
+    F --> G[Production VPS]
+```
+
+**When `/ship` is still the right tool:**
+- Direct pushes to `feature/latest2` that bypass the PR flow (the auto-promote workflow will still fire on the push, but `/ship` is the primary mechanism if you're working from a local checkout that needs the same hygiene checks).
+- Hot-fixes that need to skip the PR review cycle.
+- Recovery / debugging scenarios where the operator wants to run promotion explicitly.
+
+**One-time prerequisites:** see [`ci_cd_pipeline.md` § "End-to-End PR-to-Production Flow"](../deployment/ci_cd_pipeline.md#end-to-end-pr-to-production-flow-shipped-2026-05-11) for the three branch-protection / repo-setting toggles that must be in place.
 
 For local runtime mode details, see:
 

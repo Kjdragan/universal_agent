@@ -19,18 +19,42 @@ Release verification rule:
 
 ### Primary Deployment Workflows
 
-| Name | Trigger | Target |
-|------|---------|--------|
-| `Devin PR Review` | Pull request to `develop` | Automated PR review by Devin |
-| `Deploy` | Push to `main` | Production Service |
+| Name | File | Trigger | Target |
+|------|------|---------|--------|
+| `PR Validate` | `pr-validate.yml` | Pull request to `feature/latest2` / `develop` / `main` | Compile + ruff + pytest unit suite |
+| `PR Auto-Merge` | `pr-auto-merge.yml` | Pull request to `feature/latest2` from `claude/*` head branch | Enables GitHub auto-merge (squash + delete branch) so PR merges automatically once `Validate PR` passes |
+| `Auto-Promote to Production` | `auto-promote-to-prod.yml` | Push to `feature/latest2` | ff-promotes `feature/latest2` → `develop` → `main` (ports `/ship`'s logic with silent-no-op detection) |
+| `Devin PR Review` | external | Pull request to `develop` | Automated PR review by Devin |
+| `Deploy` | `deploy.yml` | Push to `main` | Production VPS deploy |
 
 ### Utility Workflows
 
 | Name | Trigger | Purpose |
 |------|---------|---------|
-
 | `Nightly Doc Drift Audit` | Scheduled (daily) | Detect documentation drift via auto-merged PR |
 | `OpenClaw Release Sync` | Scheduled | Syncs OpenClaw updates |
+
+### End-to-End PR-to-Production Flow (shipped 2026-05-11)
+
+For the standard agent-driven path (`claude/*` head branch → `feature/latest2`), no operator action is required between PR open and production deploy:
+
+```mermaid
+flowchart LR
+    A[Agent opens PR<br/>claude/* → feature/latest2] --> B[pr-validate.yml<br/>compile + ruff + pytest]
+    A --> C[pr-auto-merge.yml<br/>enables GitHub auto-merge]
+    B -->|passes| D[GitHub squash-merges PR<br/>→ feature/latest2]
+    C --> D
+    D --> E[auto-promote-to-prod.yml<br/>ff-promotes through develop → main]
+    E --> F[deploy.yml fires on main push]
+    F --> G[Production deploy]
+```
+
+**Manual fallback:** `/ship` still exists for direct-push or hot-fix paths that bypass the PR flow. See [`.claude/commands/ship.md`](../../.claude/commands/ship.md) for the full script.
+
+**One-time prerequisites for the auto flow to work end-to-end:**
+1. Repo Settings → "Allow auto-merge" must be on.
+2. Branch protection on `feature/latest2` must list `Validate PR` as a required status check (otherwise auto-merge fires immediately on PR open without waiting for CI).
+3. Branch protection on `main` must allow GitHub Actions to bypass (or `GITHUB_TOKEN` must be permitted to push to protected branches), otherwise `auto-promote-to-prod`'s push to `main` will be silently rejected. The workflow's silent-no-op detection (re-fetch `origin/main`, confirm advancement) catches this and fails loudly.
 
 ## Current Targets
 
