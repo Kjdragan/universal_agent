@@ -23,18 +23,19 @@ Release verification rule:
 | Name | File | Trigger | Target |
 |------|------|---------|--------|
 | `PR Validate` | `pr-validate.yml` | Pull request to `feature/latest2` or `main` | `py_compile` + `ruff check` + `pytest tests/unit` (mandatory pre-merge gate) |
-| `PR Auto-Merge` | `pr-auto-merge.yml` | Pull request to `main` from `claude/*` head branch (added 2026-05-11) | Enables GitHub auto-merge (squash + delete branch) so PR merges automatically once `Validate PR` passes. Tier-1 PRs through `/ship` already self-enable auto-merge — this workflow handles the agent path. |
-| `Deploy` | `deploy.yml` | Push to `main` (paths-ignore: docs/, **.md, reports/, state/, artifacts/) | Production Service |
+| `PR Auto-Merge` | `pr-auto-merge.yml` | Pull request to `main` from `claude/*` head branch (added 2026-05-11) | Enables GitHub auto-merge (squash + delete branch) so PR merges automatically once `Validate PR` passes. Uses `secrets.AUTO_MERGE_PAT` (fine-grained PAT) so the downstream squash-merge `push` event actually fires `deploy.yml` — see "Why a PAT" below. Tier-1 PRs through `/ship` already self-enable auto-merge. |
+| `Post-Merge Deploy Dispatcher` | `post-merge-deploy.yml` | `pull_request: closed` with `merged=true` and `base.ref=main` | Belt-and-suspenders: dispatches `deploy.yml` via `workflow_dispatch` for any merged PR. Also suffered the GITHUB_TOKEN-suppression issue documented below, so it primarily helps during the bootstrap window when `AUTO_MERGE_PAT` is missing. |
+| `Deploy` | `deploy.yml` | Push to `main` (paths-ignore: docs/, **.md, reports/, state/, artifacts/), or `workflow_dispatch` | Production Service. **No concurrency guard as of 2026-05-11** — see "Concurrency caveat" below. |
 
 ### End-to-End PR-to-Production Flow (2026-05-11)
 
 ```mermaid
 flowchart LR
     A[Agent opens PR<br/>claude/* → main] --> B[pr-validate.yml<br/>compile + ruff + pytest]
-    A --> C[pr-auto-merge.yml<br/>enables GitHub auto-merge]
+    A --> C[pr-auto-merge.yml<br/>uses AUTO_MERGE_PAT to enable auto-merge]
     B -->|passes| D[GitHub squash-merges<br/>→ main]
     C --> D
-    D --> E[deploy.yml fires<br/>on main push]
+    D --> E[deploy.yml fires<br/>on push to main]
     E --> F[Production VPS]
 ```
 
@@ -43,6 +44,38 @@ flowchart LR
 **Tier-1 PRs (operator-driven via `/ship`):** Same flow but auto-merge is enabled by `/ship` itself, not by this workflow.
 
 **Manual fallback:** if a PR doesn't match the `claude/*` head-branch pattern, the operator merges it manually in the GitHub UI.
+
+#### Why a PAT (2026-05-11 PR #232)
+
+GitHub's [token rules](https://docs.github.com/en/actions/security-guides/automatic-token-authentication) explicitly state:
+
+> "Events triggered by the GITHUB_TOKEN, with the exception of `workflow_dispatch` and `repository_dispatch`, will not create a new workflow run."
+
+When `pr-auto-merge.yml` previously called `gh pr merge --auto` with `GITHUB_TOKEN`, the resulting squash-merge `push` event to main was attributed to `GITHUB_TOKEN` and `deploy.yml`'s `on: push` trigger was silently skipped. Three Hermes PRs (#228, #229, #230) shipped to main with no deploy firing until an operator manually invoked `gh workflow run deploy.yml --ref main`. The `post-merge-deploy.yml` dispatcher had the same fault.
+
+Fix: `pr-auto-merge.yml` now uses `secrets.AUTO_MERGE_PAT` (a fine-grained PAT scoped to `Kjdragan/universal_agent` with `Contents: Read+Write` and `Pull requests: Read+Write` only). The PAT-driven push fires `deploy.yml` normally. Fallback to `GITHUB_TOKEN` is preserved for the bootstrap window before the secret is configured.
+
+**PAT maintenance:** default fine-grained PATs expire after 1 year. When the token expires, `gh pr merge --auto` calls will 401/403 — regenerate the token, paste the new value into the existing `AUTO_MERGE_PAT` secret (overwrite), no workflow file change needed.
+
+#### Concurrency caveat (2026-05-11 PM incident)
+
+`deploy.yml` does NOT currently have a `concurrency:` guard. When three Dependabot/operator PRs (#231, #226, plus the chain catch-up commit) merged within seconds of each other, three deploy runs raced on `/opt/universal_agent/.git/index.lock` and all three failed with:
+
+```
+fatal: Unable to create '/opt/universal_agent/.git/index.lock': File exists.
+```
+
+Manual recovery: one fresh `gh workflow run deploy.yml --ref main` once the stale lock self-clears.
+
+**Recommended hardening** (not yet implemented; open follow-up):
+
+```yaml
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false  # preserve every deploy's intent
+```
+
+This serializes deploys so simultaneous merges queue instead of colliding. `cancel-in-progress: false` is the right setting — main is the source of truth and every deploy should run to completion.
 
 ### Utility Workflows
 

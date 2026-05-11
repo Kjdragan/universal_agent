@@ -31,6 +31,19 @@ on:
       - 'memory/**'
   workflow_dispatch:
 
+# 2026-05-11 PM: serialize concurrent deploys to prevent races on the
+# `/opt/universal_agent/.git/index.lock` file. When multiple PRs merge to
+# main within seconds (e.g. PRs #231, #226, #232 + Dependabot batch),
+# their `push` triggers fire deploy.yml simultaneously; three concurrent
+# `git fetch` invocations on the same checkout collide and ALL fail with
+# `fatal: Unable to create '/opt/universal_agent/.git/index.lock': File
+# exists.`. `cancel-in-progress: false` queues subsequent runs instead of
+# cancelling them — main is the source of truth and every deploy should
+# run to completion (last-write-wins semantics on production).
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
 jobs:
   deploy-production:
     runs-on: ubuntu-latest
