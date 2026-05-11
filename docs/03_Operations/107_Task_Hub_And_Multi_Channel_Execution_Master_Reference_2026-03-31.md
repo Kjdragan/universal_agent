@@ -480,7 +480,85 @@ Action-specific extras:
 
 Each verb writes a `task_hub_evaluations` row tagged with the action decision string for downstream audit / dashboards.
 
-**Caller scope (per Hermes plan):** Operator-only via dashboard initially. The dashboard drawer + API surface ships in **Phase B.2**. The Simone-callable tool versions of these verbs ship in **Phase D** once the `task_hub_runs` per-attempt history table lands and gives Simone the failure-context evidence needed to judge from. See [`docs/reports/hermes-adaptation-phased-plan-2026-05-10.md`](../reports/hermes-adaptation-phased-plan-2026-05-10.md) § Phase B for the full design.
+**Caller scope (per Hermes plan):** Operator-only via dashboard initially. The dashboard drawer + API surface shipped in **Phase B.2** (PR #220). The Simone-callable tool versions of these verbs ship in **Phase D.2** once the prompt-context plumbing reads `task_hub_runs` (table landed in D.1, PR #222). See [`docs/reports/hermes-adaptation-phased-plan-2026-05-10.md`](../reports/hermes-adaptation-phased-plan-2026-05-10.md) § Phase B for the full design.
+
+#### 13.0.2 Dashboard Failure-Context Endpoint (Hermes Phase B.2, shipped 2026-05-11)
+
+`GET /api/v1/dashboard/todolist/tasks/{task_id}/failure-context` ([gateway_server.py:22515](../../src/universal_agent/gateway_server.py#L22515)) returns the operator-facing rehydrate payload for tasks wedged in `needs_review` or `blocked`. Powers the drawer "Failure context" block + 4 unstick verb buttons (Rehydrate / Re-evaluate / Redirect to / Request revision) added in [`web-ui/app/dashboard/todolist/page.tsx`](../../web-ui/app/dashboard/todolist/page.tsx).
+
+Returned fields:
+
+| Field | Source | Purpose |
+|---|---|---|
+| `last_disposition` / `last_disposition_reason` | `metadata.dispatch` | Eligibility-gate trip reason |
+| `heartbeat_retry_count` / `todo_retry_count` | `metadata.dispatch` | Current retry counters that fed the gate |
+| `heartbeat_retry_limit` / `todo_retry_limit` | `metadata.dispatch` (if recorded) | Limits in effect for comparison |
+| `last_side_effect_summary` | `metadata.dispatch` | Last side-effect evidence (if any) |
+| `re_evaluation_context` | `metadata.dispatch.re_evaluation_context` | Failure-context block attached by prior `re_evaluate` |
+| `revision_round` | `metadata.dispatch.revision_round` | Bumped by `request_revision`, surfaces operator-asked revisions |
+| `rehydrated_at` / `rehydrated_by` | `metadata.dispatch` | Audit trail for prior unstick verbs |
+| `max_retries` | `task_hub_items.max_retries` | Per-task override (Phase A.1) |
+| `prior_assignments` | `task_hub._summarize_prior_assignments(conn, task_id, limit=5)` | Last 5 assignment rows: assignment_id, agent_id, state, started_at, ended_at, result_summary |
+
+Returns 404 for a missing task. No auth — same gate as the rest of the dashboard endpoints.
+
+### 13.0.3 Attempt History — `task_hub_runs` Table (Hermes Phase D.1, shipped 2026-05-11)
+
+Phase D adds a per-attempt durable history table parallel to `task_hub_assignments`. The assignment table is the **claim ledger** (started/ended/state); the new runs table is the **outcome record** (outcome/summary/metadata/error). Both rows are keyed by `assignment_id` so a single join surfaces "this attempt was claimed at X, ran on workspace Y, ended at Z with summary 'wrote 3 files'."
+
+```sql
+CREATE TABLE task_hub_runs (
+    run_id          TEXT PRIMARY KEY,
+    task_id         TEXT NOT NULL,
+    assignment_id   TEXT,                -- joins back to task_hub_assignments
+    agent_id        TEXT,
+    started_at      TEXT NOT NULL,
+    ended_at        TEXT,
+    outcome         TEXT,                -- completed | failed | reclaimed | timed_out
+    summary         TEXT,
+    metadata_json   TEXT,                -- structured context (claim_source, workflow IDs)
+    error           TEXT
+);
+CREATE INDEX idx_task_hub_runs_task ON task_hub_runs(task_id, started_at DESC);
+CREATE INDEX idx_task_hub_runs_outcome ON task_hub_runs(outcome, ended_at DESC);
+CREATE INDEX idx_task_hub_runs_assignment ON task_hub_runs(assignment_id);
+```
+
+Helpers in [`task_hub.py`](../../src/universal_agent/task_hub.py):
+
+| Helper | Behavior |
+|---|---|
+| `_open_run(conn, *, task_id, assignment_id, agent_id, metadata)` | INSERT a new runs row with `started_at=now`, `ended_at=NULL`. Returns the generated `run_id`. |
+| `_close_run(conn, *, assignment_id, outcome, summary, error, metadata)` | UPDATE the matching open run with closing fields. **Idempotent** — only matches rows where `ended_at IS NULL`, so a second call is a no-op. |
+| `list_runs_for_task(conn, task_id, limit=10)` | Returns newest-first attempt history. Used by D.2's prompt addendum and the B.2 drawer (when D.2 lands). |
+
+**Wiring (additive, fail-open):**
+
+- `claim_next_dispatch_tasks` calls `_open_run` immediately after the assignment INSERT (captures `claim_source`, `workflow_run_id`, `workflow_attempt_id`, `provider_session_id` in metadata).
+- `finalize_assignments` calls `_close_run` immediately after the assignment UPDATE, mapping `state` to an outcome (`completed` | `failed` | `reclaimed` | `timed_out`) and storing `summary` / `error`.
+
+Both wire-ins are wrapped in `try/except` that logs but never re-raises — Phase D is intentionally additive. If the runs table is absent or a helper bug surfaces, the host claim/finalize path continues working.
+
+```mermaid
+sequenceDiagram
+    participant H as Heartbeat
+    participant TH as task_hub.claim_next_dispatch_tasks
+    participant A as task_hub_assignments
+    participant R as task_hub_runs
+
+    H->>TH: claim batch
+    TH->>A: INSERT assignment (state=seized)
+    TH->>R: _open_run (ended_at=NULL)
+    Note over R: Run is open; lives in parallel<br/>to the assignment row
+
+    Note over H,R: ... agent works ...
+
+    H->>TH: finalize_assignments(state=completed, summary)
+    TH->>A: UPDATE state=completed, ended_at, result_summary
+    TH->>R: _close_run (outcome=completed, summary, ended_at)
+```
+
+**Phase D.2 (not yet shipped):** the `re_evaluate` prompt addendum will pull `list_runs_for_task` to surface the last 3 runs' summaries + errors to Simone. The B.2 drawer will render an attempt-history table. Both bounded UI/prompt work; tracked separately.
 
 ### 13.1 Enforcement and Auto-Completion
 
