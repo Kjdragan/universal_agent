@@ -34,9 +34,16 @@ def _stale_sweep_enabled() -> bool:
 
 
 def _stale_after_seconds() -> int:
+    """Resolve the per-sweep stale-cutoff in seconds.
+
+    Env: ``UA_DISPATCH_STALE_AFTER_SECONDS`` (default 1800 = 30 minutes).
+    Floored at 60s — anything tighter than a minute risks releasing
+    assignments mid-tick during normal heartbeat cadence. Falls back to
+    1800 on parse errors (e.g., operator typo).
+    """
     raw = (os.getenv("UA_DISPATCH_STALE_AFTER_SECONDS") or "1800").strip()
     try:
-        return max(60, int(raw))  # 60s floor — anything tighter is dangerous
+        return max(60, int(raw))
     except ValueError:
         return 1800
 
