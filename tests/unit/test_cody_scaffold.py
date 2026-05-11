@@ -20,7 +20,6 @@ from universal_agent.services.cody_scaffold import (
     write_business_relevance_template,
 )
 
-
 # ── Vault entity loading ────────────────────────────────────────────────────
 
 

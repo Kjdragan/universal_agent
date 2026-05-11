@@ -109,7 +109,8 @@ def test_resolve_workspace_picks_latest_daemon_run_dir(tmp_path, monkeypatch):
     (newer / "marker.txt").write_text("new")
 
     # Make `newer` strictly more recent than `older`.
-    import os, time
+    import os
+    import time
     os.utime(older, (time.time() - 3600, time.time() - 3600))
     os.utime(newer, (time.time(), time.time()))
 
@@ -173,7 +174,8 @@ def test_resolve_workspace_prefers_candidate_with_run_log(tmp_path, monkeypatch)
     newer_empty_bootstrap.mkdir()
     (newer_empty_bootstrap / "AGENTS.md").write_text("system prompt only")
 
-    import os, time
+    import os
+    import time
     os.utime(older_with_content, (time.time() - 1200, time.time() - 1200))
     os.utime(newer_empty_bootstrap, (time.time(), time.time()))
 
@@ -199,7 +201,8 @@ def test_resolve_workspace_falls_back_to_newest_when_none_have_content(tmp_path,
     newer = ws_root / "run_daemon_simone_todo_20260502_120000_bbbb"
     newer.mkdir()
 
-    import os, time
+    import os
+    import time
     os.utime(older, (time.time() - 3600, time.time() - 3600))
     os.utime(newer, (time.time(), time.time()))
 

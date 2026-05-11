@@ -11,18 +11,17 @@ from __future__ import annotations
 from pathlib import Path
 
 from universal_agent.codebase_policy import (
-    _truthy,
-    _dedupe_paths,
     _dedupe_agents,
+    _dedupe_paths,
+    _truthy,
     agent_can_mutate_codebase,
-    path_is_within_roots,
-    repo_mutation_requested,
     build_codebase_access,
     normalize_codebase_access,
+    path_is_within_roots,
+    repo_mutation_requested,
     resolve_codebase_access,
     validate_codebase_root,
 )
-
 
 # ---------------------------------------------------------------------------
 # _truthy

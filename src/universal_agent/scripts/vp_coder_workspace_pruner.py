@@ -15,8 +15,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import sys
 from pathlib import Path
+import sys
 
 from universal_agent.feature_flags import vp_coder_workspace_root
 from universal_agent.session.reaper import cleanup_stale_workspaces

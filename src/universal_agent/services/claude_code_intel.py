@@ -669,7 +669,9 @@ def classify_post(post: dict[str, Any], *, handle: str = DEFAULT_HANDLE, linked_
     # LLM is allowed to miss this; deterministic detection wins.
     release_info: dict[str, Any] | None = None
     try:
-        from universal_agent.services.dependency_currency import detect_release_announcement
+        from universal_agent.services.dependency_currency import (
+            detect_release_announcement,
+        )
 
         release_info = detect_release_announcement(text=text, links=links)
     except Exception as exc:  # pragma: no cover — defensive

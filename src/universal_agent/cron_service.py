@@ -517,7 +517,9 @@ class CronService:
         # returns False), but if some startup path still instantiates it the
         # belt-and-suspenders guard here keeps the 53+ persisted prod cron jobs
         # from ticking on Kevin's desktop. Phase D 2026-05-11.
-        from universal_agent.loop_control import is_development_runtime  # noqa: PLC0415 — lazy
+        from universal_agent.loop_control import (
+            is_development_runtime,  # noqa: PLC0415 — lazy
+        )
         if is_development_runtime():
             logger.info(
                 "CronService started in dev mode — skipping persisted "

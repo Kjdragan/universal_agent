@@ -30,7 +30,6 @@ from universal_agent.services.mission_control_event_titles import (
     store_template,
 )
 
-
 # ── Signature stability ────────────────────────────────────────────────
 
 

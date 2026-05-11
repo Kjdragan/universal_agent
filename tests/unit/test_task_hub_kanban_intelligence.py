@@ -17,8 +17,8 @@ default; in production that's correct, in tests it leaks state.)
 """
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
+import sqlite3
 
 import pytest
 

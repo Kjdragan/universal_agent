@@ -24,12 +24,12 @@ dashboard does not accumulate probe noise.
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass, field
 import os
 import sys
 import time
-import uuid
-from dataclasses import dataclass, field
 from typing import Any, Optional
+import uuid
 
 import httpx
 

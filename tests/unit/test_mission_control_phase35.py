@@ -16,8 +16,8 @@ These tests cover:
 from __future__ import annotations
 
 import asyncio
-import json
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -26,10 +26,9 @@ import pytest
 from universal_agent.services.mission_control_db import open_store
 from universal_agent.services.mission_control_intelligence_sweeper import (
     MissionControlSweeper,
-    SweepResult,
     SweeperConfig,
+    SweepResult,
 )
-
 
 # ── _tier2_cascade_reason: precedence ──────────────────────────────────
 

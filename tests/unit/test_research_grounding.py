@@ -31,7 +31,6 @@ from universal_agent.services.research_grounding import (
     tier_gate,
 )
 
-
 # ── Tier gate ────────────────────────────────────────────────────────────────
 
 

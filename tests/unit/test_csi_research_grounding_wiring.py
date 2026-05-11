@@ -19,7 +19,6 @@ from universal_agent.services.research_grounding import (
     TriggerReason,
 )
 
-
 # ── Vault entity discovery ───────────────────────────────────────────────────
 
 

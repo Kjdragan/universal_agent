@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
+import sqlite3
 
 import pytest
 
@@ -15,7 +15,9 @@ from universal_agent.services.cody_dispatch import (
     dispatch_cody_demo_task,
     reissue_cody_demo_task_with_feedback,
 )
-from universal_agent.services.proactive_artifacts import ensure_schema as ensure_artifacts_schema
+from universal_agent.services.proactive_artifacts import (
+    ensure_schema as ensure_artifacts_schema,
+)
 
 
 @pytest.fixture

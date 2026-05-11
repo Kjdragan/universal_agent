@@ -7,8 +7,8 @@ import re
 import time
 from typing import Any
 
-from universal_agent.codebase_policy import normalize_codebase_access
 from universal_agent import feature_flags
+from universal_agent.codebase_policy import normalize_codebase_access
 from universal_agent.ops_config import apply_merge_patch
 
 _MONEY_RE = re.compile(r"\b(pay|purchase|buy|checkout|wire|transfer|invoice|payment)\b", re.IGNORECASE)

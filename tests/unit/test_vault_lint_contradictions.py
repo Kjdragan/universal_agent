@@ -26,7 +26,6 @@ from universal_agent.services.vault_lint_contradictions import (
     write_contradiction_report,
 )
 
-
 # ── Page loader ─────────────────────────────────────────────────────────────
 
 

@@ -27,7 +27,9 @@ from universal_agent.services.proactive_preferences import (
     get_preference_snapshot,
     record_artifact_feedback_signal,
 )
-from universal_agent.services.proactive_work_recap import ensure_schema as ensure_recap_schema
+from universal_agent.services.proactive_work_recap import (
+    ensure_schema as ensure_recap_schema,
+)
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:

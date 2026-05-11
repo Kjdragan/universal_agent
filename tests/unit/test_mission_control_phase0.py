@@ -12,11 +12,10 @@ See docs/02_Subsystems/Mission_Control_Intelligence_System.md.
 from __future__ import annotations
 
 import os
-import sqlite3
 from pathlib import Path
+import sqlite3
 
 import pytest
-
 
 # ── Model resolver ────────────────────────────────────────────────────
 
@@ -58,14 +57,18 @@ def test_mission_control_model_does_not_pass_through_zai_map(monkeypatch: pytest
 
 
 def test_mission_control_call_timeout_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    from universal_agent.utils.model_resolution import mission_control_call_timeout_seconds
+    from universal_agent.utils.model_resolution import (
+        mission_control_call_timeout_seconds,
+    )
 
     monkeypatch.delenv("UA_MISSION_CONTROL_CALL_TIMEOUT_SECONDS", raising=False)
     assert mission_control_call_timeout_seconds() == 180.0
 
 
 def test_mission_control_call_timeout_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    from universal_agent.utils.model_resolution import mission_control_call_timeout_seconds
+    from universal_agent.utils.model_resolution import (
+        mission_control_call_timeout_seconds,
+    )
 
     monkeypatch.setenv("UA_MISSION_CONTROL_CALL_TIMEOUT_SECONDS", "45")
     assert mission_control_call_timeout_seconds() == 45.0
@@ -324,7 +327,9 @@ def test_sweeper_tick_runs_tier1_when_phase2_enabled(monkeypatch: pytest.MonkeyP
 
 
 def test_sweeper_config_from_env_picks_up_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
-    from universal_agent.services.mission_control_intelligence_sweeper import SweeperConfig
+    from universal_agent.services.mission_control_intelligence_sweeper import (
+        SweeperConfig,
+    )
 
     monkeypatch.setenv("UA_MISSION_CONTROL_SWEEPER_INTERVAL_S", "30")
     monkeypatch.setenv("UA_MISSION_CONTROL_LANE_CONCURRENCY", "2")
@@ -336,7 +341,9 @@ def test_sweeper_config_from_env_picks_up_overrides(monkeypatch: pytest.MonkeyPa
 
 
 def test_sweeper_config_from_env_handles_garbage_gracefully(monkeypatch: pytest.MonkeyPatch) -> None:
-    from universal_agent.services.mission_control_intelligence_sweeper import SweeperConfig
+    from universal_agent.services.mission_control_intelligence_sweeper import (
+        SweeperConfig,
+    )
 
     monkeypatch.setenv("UA_MISSION_CONTROL_SWEEPER_INTERVAL_S", "not-a-number")
     monkeypatch.setenv("UA_MISSION_CONTROL_LANE_CONCURRENCY", "bogus")

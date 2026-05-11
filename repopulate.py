@@ -6,7 +6,10 @@ from __future__ import annotations
 import argparse
 import json
 
-from universal_agent.scripts.youtube_daily_digest import DAYS, repopulate_digest_playlist
+from universal_agent.scripts.youtube_daily_digest import (
+    DAYS,
+    repopulate_digest_playlist,
+)
 
 
 def main() -> int:

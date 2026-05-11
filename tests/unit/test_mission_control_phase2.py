@@ -13,10 +13,10 @@ LLM calls themselves are mocked; we don't hit the real glm-4.7 lane.
 from __future__ import annotations
 
 import asyncio
-import json
-import sqlite3
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
+import sqlite3
 from unittest.mock import patch
 
 import pytest
@@ -43,7 +43,6 @@ from universal_agent.services.mission_control_tier1 import (
     collect_tier1_evidence,
     evidence_signature,
 )
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────
 

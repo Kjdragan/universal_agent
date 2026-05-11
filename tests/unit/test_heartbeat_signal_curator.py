@@ -1,6 +1,9 @@
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
-from universal_agent.heartbeat_service import HeartbeatService, GatewaySession
+
+from universal_agent.heartbeat_service import GatewaySession, HeartbeatService
+
 
 @pytest.mark.asyncio
 async def test_heartbeat_dispatches_curator_mission():
@@ -45,7 +48,12 @@ async def test_heartbeat_dispatches_curator_mission():
                 # Let it reach the signal curator block by NOT raising an exception
                 with patch("universal_agent.heartbeat_service._heartbeat_guard_policy", return_value={"autonomous_enabled": True, "skip_reason": ""}):
                     try:
-                        from universal_agent.heartbeat_service import HeartbeatState, HeartbeatScheduleConfig, HeartbeatDeliveryConfig, HeartbeatVisibilityConfig
+                        from universal_agent.heartbeat_service import (
+                            HeartbeatDeliveryConfig,
+                            HeartbeatScheduleConfig,
+                            HeartbeatState,
+                            HeartbeatVisibilityConfig,
+                        )
                         await service._run_heartbeat(
                             session=session,
                             state=MagicMock(),

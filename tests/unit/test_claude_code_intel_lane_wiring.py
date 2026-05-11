@@ -24,7 +24,6 @@ from universal_agent.services.claude_code_intel import (
     _first_handle_from_lane,
 )
 
-
 # ── _first_handle_from_lane / _all_handles_from_lane ────────────────────────
 
 

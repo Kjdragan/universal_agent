@@ -603,7 +603,9 @@ def test_replay_hydrates_email_evidence_from_task_and_assignment_workspace(monke
 
 
 def test_reconcile_packet_candidate_ledger_standalone(monkeypatch, tmp_path: Path) -> None:
-    from universal_agent.services.claude_code_intel_replay import reconcile_packet_candidate_ledger
+    from universal_agent.services.claude_code_intel_replay import (
+        reconcile_packet_candidate_ledger,
+    )
     
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row

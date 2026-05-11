@@ -16,7 +16,6 @@ from universal_agent.services.email_security import (
     should_auto_quarantine_agentmail_sender,
 )
 
-
 # ── Injection Scanner Tests ─────────────────────────────────────────────
 
 

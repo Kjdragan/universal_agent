@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import os
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 
 import pytest
@@ -26,7 +26,6 @@ from universal_agent.services.backfill_v2 import (
     run_backfill,
     swap_vaults,
 )
-
 
 # ── Path helpers ────────────────────────────────────────────────────────────
 

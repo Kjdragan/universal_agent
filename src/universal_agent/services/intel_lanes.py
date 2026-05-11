@@ -19,9 +19,8 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
-import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-
+import yaml
 
 # Sentinel for "use the bundled lanes.yaml shipped with the package."
 DEFAULT_LANE_CONFIG_PACKAGE = "universal_agent.config"

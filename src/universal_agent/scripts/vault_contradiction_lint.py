@@ -20,8 +20,8 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import sys
 from pathlib import Path
+import sys
 from typing import Any
 
 from universal_agent.artifacts import resolve_artifacts_dir

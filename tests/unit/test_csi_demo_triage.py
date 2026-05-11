@@ -8,17 +8,16 @@ can't silently regress.
 
 from __future__ import annotations
 
-import json
-import sqlite3
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
+import sqlite3
 from typing import Any
 
 import pytest
 
 from universal_agent import task_hub
 from universal_agent.services import csi_demo_triage as triage
-
 
 # ── Helpers ─────────────────────────────────────────────────────────────
 

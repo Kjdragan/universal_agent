@@ -3,8 +3,10 @@ from __future__ import annotations
 import sqlite3
 
 from universal_agent import task_hub
-from universal_agent.services import mission_control_chief_of_staff as cos
-from universal_agent.services import mission_control_tier1 as tier1
+from universal_agent.services import (
+    mission_control_chief_of_staff as cos,
+    mission_control_tier1 as tier1,
+)
 from universal_agent.services.mission_control_db import open_store
 
 

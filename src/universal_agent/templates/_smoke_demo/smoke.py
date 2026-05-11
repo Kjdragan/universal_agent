@@ -39,11 +39,10 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 import shutil
 import subprocess as sp
 import sys
-from pathlib import Path
-
 
 SMOKE_PROMPT = "Reply with exactly the word OK and nothing else."
 SMOKE_EXPECTED_TOKEN = "OK"
