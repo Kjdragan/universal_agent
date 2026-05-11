@@ -725,6 +725,18 @@ class CronService:
             self._emit_event({"type": "cron_job_deleted", "job_id": job_id})
             del self.jobs[job_id]
             self.store.save_jobs(self.jobs.values())
+        # Cancel any in-flight asyncio retry tasks for this job. Without
+        # this, a `_schedule_retry_run` chain started while the job was
+        # alive will keep firing every retry tick, re-emitting
+        # `cron_run_retry_queued` events forever — even though the job
+        # is gone from `self.jobs` and `cron_jobs.json`. Observed live
+        # on 2026-05-11 when test cron `2df80b6f95` was deleted via API
+        # but kept generating retry-storm emails for 90+ minutes.
+        # `_run_job` also defense-in-depths via a deleted-job guard at
+        # its top so any retry tick that survives this cancel still
+        # short-circuits cleanly.
+        self.running_jobs.discard(job_id)
+        self.running_job_scheduled_at.pop(job_id, None)
 
     def list_runs(self, job_id: Optional[str] = None, limit: int = 200) -> list[dict[str, Any]]:
         return self.store.read_runs(job_id=job_id, limit=limit)
@@ -966,6 +978,36 @@ class CronService:
         workflow_attempt_id: Optional[str] = None,
         skip_workflow_admission: bool = False,
     ) -> CronRunRecord:
+        # Deleted-job guard: short-circuit retries / scheduled runs for
+        # jobs that have been removed from the registry since the task
+        # was queued. Prevents the orphan-asyncio-task retry-storm
+        # observed on 2026-05-11 (cron 2df80b6f95). The retry chain
+        # `_finalize_workflow_attempt` → `_schedule_retry_run` →
+        # `_run_job` would keep running off a stale `job` object reference
+        # even after `delete_job` purged the registry, because the
+        # asyncio task held the CronJob in closure. This guard breaks
+        # the cycle.
+        if job.job_id not in self.jobs:
+            logger.info(
+                "🛑 _run_job skipped — job %s was deleted from registry "
+                "(orphan retry / scheduled tick discarded)",
+                job.job_id,
+            )
+            self.running_jobs.discard(job.job_id)
+            self.running_job_scheduled_at.pop(job.job_id, None)
+            return CronRunRecord(
+                run_id=uuid.uuid4().hex[:12],
+                job_id=job.job_id,
+                status="skipped",
+                scheduled_at=scheduled_at,
+                started_at=time.time(),
+                finished_at=time.time(),
+                error="job_deleted_before_run",
+                workflow_run_id=workflow_run_id,
+                workflow_attempt_id=workflow_attempt_id,
+                workflow_attempt_number=None,
+                dispatch_key=dispatch_key,
+            )
         # running_jobs is set by the caller (_scheduler_loop or run_job_now)
         # before dispatching, so no duplicate-guard needed here.
         async with self._semaphore:

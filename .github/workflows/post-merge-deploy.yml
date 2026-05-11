@@ -1,0 +1,58 @@
+name: Post-Merge Deploy Dispatcher
+
+# Bridge for the GITHUB_TOKEN downstream-trigger suppression issue.
+#
+# Background (observed 2026-05-11): four PRs merged to main via auto-merge
+# (#218 #219 #220 #222) — none triggered the `Deploy` workflow despite
+# touching production Python files. Root cause: per GitHub's docs
+# (https://docs.github.com/en/actions/security-guides/automatic-token-authentication):
+#
+#   "When you use the repository's GITHUB_TOKEN to perform tasks, events
+#    triggered by the GITHUB_TOKEN, with the exception of workflow_dispatch
+#    and repository_dispatch, will not create a new workflow run."
+#
+# `pr-auto-merge.yml` enables auto-merge via GITHUB_TOKEN. When GitHub
+# then squash-merges the PR, the resulting `push` to main was triggered
+# by GITHUB_TOKEN and `deploy.yml`'s `on: push: branches: main` is
+# silently skipped. Production drifts. The orphaned cron retry storm
+# stayed alive because the gateway never restarted.
+#
+# Fix: this workflow listens for `pull_request: closed` with
+# `merged == true && base.ref == main`, and explicitly calls
+# `gh workflow run deploy.yml --ref main`. workflow_dispatch IS in the
+# allow-list above, so this restores the deploy-on-merge contract.
+#
+# Why not switch pr-auto-merge.yml to a PAT? That works, but requires
+# the operator to mint and rotate a token. This workflow needs no extra
+# secrets and recovers the right behavior automatically.
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  actions: write       # required for `gh workflow run`
+  contents: read       # to inspect ref/SHA
+
+jobs:
+  dispatch-deploy:
+    name: Dispatch Deploy on merged PR
+    if: |
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Dispatch deploy.yml on main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          PR_NUM="${{ github.event.pull_request.number }}"
+          HEAD_REF="${{ github.event.pull_request.head.ref }}"
+          MERGE_COMMIT="${{ github.event.pull_request.merge_commit_sha }}"
+          echo "PR #${PR_NUM} (${HEAD_REF}) merged to main; merge commit ${MERGE_COMMIT}"
+          echo "Dispatching Deploy workflow..."
+          gh workflow run deploy.yml --ref main \
+            --repo "${{ github.repository }}"
+          echo "✅ Deploy dispatched"
