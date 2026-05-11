@@ -1187,16 +1187,29 @@ class CronService:
                             if raw_command.startswith("!script "):
                                 script_path = raw_command.replace("!script ", "", 1).strip()
                                 logger.info(f"Chron job {job.job_id} executing native script: {script_path}")
-                                
+
                                 # Use asyncio.create_subprocess_exec
                                 import subprocess
                                 import sys
-                                
+
                                 env = os.environ.copy()
                                 cwd_str = str(job.workspace_dir_resolved) if hasattr(job, "workspace_dir_resolved") else str(Path(__file__).resolve().parents[2])
                                 project_src = str(Path(__file__).resolve().parents[1])
                                 env["PYTHONPATH"] = f"{project_src}:{env.get('PYTHONPATH', '')}"
-                                
+
+                                # Hermes Phase F site-wiring (cron `!script`).
+                                # Resolve the linked Task Hub task / assignment
+                                # (if any) BEFORE spawning so we can stamp the
+                                # subprocess PID onto the assignment row right
+                                # after spawn.  Cron jobs without a linked
+                                # task_id (the majority) skip F.1/F.3 silently
+                                # — observability is best-effort for the
+                                # subset that DO carry the linkage.
+                                _f_job_metadata = job.metadata or {}
+                                _f_task_id = str(_f_job_metadata.get("task_id") or "").strip()
+                                _f_assignment_id: Optional[str] = None
+                                _f_was_timeout_killed = False
+
                                 proc = await asyncio.create_subprocess_exec(
                                     sys.executable, "-m", script_path.replace("/", ".").replace(".py", ""),
                                     stdout=subprocess.PIPE,
@@ -1204,9 +1217,44 @@ class CronService:
                                     cwd=cwd_str,
                                     env=env,
                                 )
+                                # Phase F.1 — record worker_pid on the linked
+                                # assignment (if any).  Best-effort; never
+                                # blocks the happy path.
+                                if _f_task_id:
+                                    try:
+                                        from universal_agent import (
+                                            task_hub as _f_th,
+                                        )
+                                        from universal_agent.gateway_server import (
+                                            _task_hub_open_conn as _f_open_conn,
+                                        )
+                                        from universal_agent.services.worker_exit_classifier import (
+                                            find_active_assignment_for_task as _f_find_aid,
+                                        )
+                                        _f_conn = _f_open_conn()
+                                        try:
+                                            _f_assignment_id = _f_find_aid(
+                                                _f_conn, task_id=_f_task_id,
+                                            )
+                                            if _f_assignment_id and proc.pid:
+                                                _f_th.record_worker_pid(
+                                                    _f_conn,
+                                                    assignment_id=_f_assignment_id,
+                                                    worker_pid=int(proc.pid),
+                                                )
+                                                _f_conn.commit()
+                                        finally:
+                                            _f_conn.close()
+                                    except Exception as _f_pid_exc:
+                                        logger.debug(
+                                            "Phase F.1 record_worker_pid skipped for cron job %s: %s",
+                                            job.job_id, _f_pid_exc,
+                                        )
+
                                 try:
                                     stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
                                 except asyncio.TimeoutError:
+                                    _f_was_timeout_killed = True
                                     with contextlib.suppress(ProcessLookupError):
                                         proc.kill()
                                     try:
@@ -1216,10 +1264,10 @@ class CronService:
                                     output_text = stdout.decode(errors="replace") + "\n" + stderr.decode(errors="replace")
                                     record.output_preview = output_text[:400]
                                     raise
-                                
+
                                 exit_code = proc.returncode
                                 output_text = stdout.decode(errors="replace") + "\n" + stderr.decode(errors="replace")
-                                
+
                                 if exit_code == 0:
                                     record.status = "success"
                                     record.output_preview = output_text[:400]
@@ -1227,6 +1275,86 @@ class CronService:
                                     record.status = "error"
                                     record.error = f"Script exited with {exit_code}"
                                     record.output_preview = output_text[:400]
+
+                                # Phase F.1 / F.3 — classify exit and, if a
+                                # protocol violation (rc=0 but linked task is
+                                # still in_progress), route the task into
+                                # needs_review for Phase B.1 unstick verbs to
+                                # act on.
+                                if _f_task_id:
+                                    try:
+                                        from universal_agent import (
+                                            task_hub as _f_th2,
+                                        )
+                                        from universal_agent.gateway_server import (
+                                            _task_hub_open_conn as _f_open_conn2,
+                                        )
+                                        from universal_agent.services.worker_exit_classifier import (
+                                            classify_worker_exit as _f_classify,
+                                            park_task_for_protocol_violation as _f_park,
+                                            task_was_closed_normally as _f_closed,
+                                        )
+                                        _f_conn2 = _f_open_conn2()
+                                        try:
+                                            _f_was_signaled = bool(
+                                                exit_code is not None
+                                                and exit_code < 0
+                                                and not _f_was_timeout_killed
+                                            )
+                                            _f_closed_normally = _f_closed(
+                                                _f_conn2, task_id=_f_task_id,
+                                            )
+                                            _f_classification = _f_classify(
+                                                return_code=exit_code,
+                                                was_signaled=_f_was_signaled,
+                                                was_timeout_killed=_f_was_timeout_killed,
+                                                task_closed_normally=_f_closed_normally,
+                                            )
+                                            logger.info(
+                                                "Phase F.1 cron job %s exit classified as %s "
+                                                "(task=%s, assignment=%s, rc=%s)",
+                                                job.job_id, _f_classification.outcome,
+                                                _f_task_id, _f_assignment_id or "<none>",
+                                                exit_code,
+                                            )
+                                            if _f_assignment_id:
+                                                try:
+                                                    _f_th2._close_run(
+                                                        _f_conn2,
+                                                        assignment_id=_f_assignment_id,
+                                                        outcome=(
+                                                            "completed"
+                                                            if exit_code == 0
+                                                            else "failed"
+                                                        ),
+                                                        summary=f"cron !script {script_path}",
+                                                        error=(record.error or "")[:500],
+                                                        metadata={
+                                                            "worker_exit": _f_classification.to_dict(),
+                                                            "site": "cron",
+                                                        },
+                                                    )
+                                                    _f_conn2.commit()
+                                                except Exception as _f_close_exc:
+                                                    logger.debug(
+                                                        "Phase F.1 _close_run skipped for cron job %s: %s",
+                                                        job.job_id, _f_close_exc,
+                                                    )
+                                            if _f_classification.is_protocol_violation:
+                                                _f_park(
+                                                    _f_conn2,
+                                                    task_id=_f_task_id,
+                                                    site="cron",
+                                                    summary=f"cron !script {script_path} job={job.job_id}",
+                                                    agent_id="cron_scheduler",
+                                                )
+                                        finally:
+                                            _f_conn2.close()
+                                    except Exception as _f_exc:
+                                        logger.debug(
+                                            "Phase F.1/F.3 wiring skipped for cron job %s: %s",
+                                            job.job_id, _f_exc,
+                                        )
 
                                 # Manually construct a result object to satisfy _persist_run_output
                                 class _MockResult:

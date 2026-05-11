@@ -32,7 +32,11 @@ Outcomes:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+import logging
+import sqlite3
+from typing import Any, Literal, Optional
+
+logger = logging.getLogger(__name__)
 
 WorkerOutcome = Literal[
     "clean_exit_zero",
@@ -62,6 +66,13 @@ class WorkerExit:
     outcome: WorkerOutcome
     is_protocol_violation: bool
     is_failure: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "outcome": self.outcome,
+            "is_protocol_violation": self.is_protocol_violation,
+            "is_failure": self.is_failure,
+        }
 
 
 def classify_worker_exit(
@@ -136,9 +147,193 @@ PROTOCOL_VIOLATION_REASONS: dict[str, str] = {
 }
 
 
+# F.3 sentinel — sites pass the string key into ``park_task_for_protocol_violation``
+# so the helper looks up the canonical reason. Keeps the reason vocabulary
+# centralized in this module.
+_VALID_SITES = frozenset(PROTOCOL_VIOLATION_REASONS.keys())
+
+
+def park_task_for_protocol_violation(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    site: str,
+    summary: str = "",
+    agent_id: str = "worker_exit_classifier",
+) -> bool:
+    """Hermes Phase F.3 — route a protocol-violating task into ``needs_review``.
+
+    Called from each owned-subprocess spawn site (cron / VP CLI) when
+    ``classify_worker_exit`` returns ``is_protocol_violation=True`` — the
+    subprocess exited rc=0 but never closed its task via
+    ``finalize_assignments`` or ``perform_task_action(action="complete")``.
+    Phase B.1's ``rehydrate`` / ``re_evaluate`` verbs then surface the
+    parked task for Simone to act on.
+
+    Args:
+        conn: A live Task Hub connection. The caller owns the
+            transaction — this function commits before returning.
+        task_id: The Task Hub item to route. If empty or unknown the
+            call is a no-op and returns ``False``.
+        site: One of ``"cron"`` | ``"vp_cli"`` | ``"demo"``. Determines
+            which canonical reason string from ``PROTOCOL_VIOLATION_REASONS``
+            is recorded on the task.
+        summary: Optional short text appended to the reason. Surfaces in
+            the task's ``last_disposition_reason`` metadata field so the
+            operator (or Simone, post-Phase D) can see *what* the
+            worker was attempting when it bailed silently.
+        agent_id: The agent attribution string written to the
+            evaluation/action audit trail. Defaults to
+            ``"worker_exit_classifier"`` to make protocol-violation parks
+            grep-able in the audit log.
+
+    Returns:
+        ``True`` if the task was parked, ``False`` if the call was a
+        no-op (missing task_id, unknown task, unknown site, or any
+        ``perform_task_action`` failure). Best-effort by design — F.3
+        is observability + recovery routing; it must never raise into the
+        spawn site's happy path.
+    """
+    tid = str(task_id or "").strip()
+    if not tid:
+        return False
+    site_norm = str(site or "").strip().lower()
+    if site_norm not in _VALID_SITES:
+        logger.warning(
+            "park_task_for_protocol_violation called with unknown site=%r; "
+            "valid: %s",
+            site, sorted(_VALID_SITES),
+        )
+        return False
+
+    reason = PROTOCOL_VIOLATION_REASONS[site_norm]
+    if summary:
+        # Keep the canonical reason key as the leading token so downstream
+        # filters / log scrapers stay simple.
+        combined_reason = f"{reason}: {summary.strip()[:300]}"
+    else:
+        combined_reason = reason
+
+    try:
+        # Lazy import to avoid a hard module-level dependency cycle with
+        # task_hub (task_hub may import from services in the future).
+        from universal_agent import task_hub  # noqa: WPS433 (local import is intentional)
+
+        task_hub.perform_task_action(
+            conn,
+            task_id=tid,
+            action="review",
+            reason=combined_reason,
+            agent_id=agent_id,
+        )
+        try:
+            conn.commit()
+        except Exception:
+            # Some callers wrap us in a larger transaction; don't blow up.
+            pass
+        logger.info(
+            "Phase F.3 parked task %s in needs_review (site=%s, reason=%s)",
+            tid, site_norm, reason,
+        )
+        return True
+    except Exception as exc:
+        logger.warning(
+            "Phase F.3 park failed for task %s (site=%s): %s",
+            tid, site_norm, exc,
+        )
+        return False
+
+
+def find_active_assignment_for_task(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+) -> Optional[str]:
+    """Look up the most recent active assignment_id for a task.
+
+    Active = ``state IN ('seized', 'running')``. Used by spawn sites to
+    correlate their just-spawned subprocess back to a Task Hub assignment
+    row (so ``record_worker_pid`` knows which row to stamp).
+
+    Returns ``None`` if the task has no active assignment (which is the
+    common case for cron-only jobs that don't go through Task Hub).
+    Never raises — wraps DB errors in a warning log and returns ``None``.
+    """
+    tid = str(task_id or "").strip()
+    if not tid:
+        return None
+    try:
+        row = conn.execute(
+            """
+            SELECT assignment_id
+            FROM task_hub_assignments
+            WHERE task_id = ? AND state IN ('seized', 'running')
+            ORDER BY started_at DESC
+            LIMIT 1
+            """,
+            (tid,),
+        ).fetchone()
+        if not row:
+            return None
+        # Support both Row (mapping access) and tuple cursor row_factory.
+        try:
+            return str(row["assignment_id"])
+        except (TypeError, IndexError, KeyError):
+            return str(row[0])
+    except Exception as exc:
+        logger.debug(
+            "find_active_assignment_for_task(%s) failed: %s", tid, exc,
+        )
+        return None
+
+
+def task_was_closed_normally(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+) -> bool:
+    """Return True iff the task is in a terminal-success-ish state.
+
+    Used by spawn sites to feed ``classify_worker_exit``'s
+    ``task_closed_normally`` flag. ``completed`` (the normal success
+    path) is the canonical signal. ``cancelled`` is also acceptable
+    because the operator/Simone explicitly closed the task — it's not a
+    protocol violation if the worker happened to exit rc=0 after the
+    task was cancelled out from under it.
+
+    States that explicitly mean "still in flight" or "needs human
+    follow-up" return ``False`` so F.3 routes them.
+
+    Returns ``False`` on unknown task / DB error (conservative —
+    prevents spurious protocol-violation parks against tasks we can't
+    even read).
+    """
+    tid = str(task_id or "").strip()
+    if not tid:
+        return False
+    try:
+        row = conn.execute(
+            "SELECT status FROM task_hub_items WHERE task_id = ? LIMIT 1",
+            (tid,),
+        ).fetchone()
+        if not row:
+            return False
+        try:
+            status = str(row["status"] or "").strip().lower()
+        except (TypeError, IndexError, KeyError):
+            status = str(row[0] or "").strip().lower()
+        return status in {"completed", "cancelled"}
+    except Exception as exc:
+        logger.debug("task_was_closed_normally(%s) failed: %s", tid, exc)
+        return False
+
+
 __all__ = [
     "WorkerOutcome",
     "WorkerExit",
     "classify_worker_exit",
     "PROTOCOL_VIOLATION_REASONS",
+    "park_task_for_protocol_violation",
+    "find_active_assignment_for_task",
+    "task_was_closed_normally",
 ]

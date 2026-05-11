@@ -151,6 +151,7 @@ class ClaudeCodeCLIClient(VpClient):
                         attempt=attempt,
                     )
 
+                _cli_task_id = str(payload.get("task_id") or "").strip()
                 outcome = await _execute_cli_session(
                     prompt=current_prompt,
                     workspace_dir=workspace_dir,
@@ -158,6 +159,18 @@ class ClaudeCodeCLIClient(VpClient):
                     enable_agent_teams=enable_agent_teams,
                     mission_id=mission_id,
                     cody_mode=cody_mode,
+                    task_id=_cli_task_id,
+                )
+
+                # Hermes Phase F.1 / F.3 — classify the CLI exit and, if
+                # this was a protocol violation (rc=0 but linked task
+                # still in_progress), route the task into needs_review.
+                # Also persists the classification onto the run row via
+                # _close_run.  Best-effort: never blocks dispatch.
+                _classify_and_route_cli_exit(
+                    outcome=outcome,
+                    task_id=_cli_task_id,
+                    mission_id=mission_id,
                 )
 
                 if outcome.status == "completed":
@@ -200,8 +213,16 @@ async def _execute_cli_session(
     enable_agent_teams: bool,
     mission_id: str,
     cody_mode: str = "zai",
+    task_id: str = "",
 ) -> MissionOutcome:
-    """Spawn a claude CLI subprocess and monitor its output."""
+    """Spawn a claude CLI subprocess and monitor its output.
+
+    Hermes Phase F site-wiring — if ``task_id`` is provided, the
+    spawned subprocess's PID is recorded on the linked Task Hub
+    assignment (best-effort) and the eventual exit is fed into
+    ``classify_worker_exit`` upstream in :func:`run_mission`. Empty
+    ``task_id`` skips F.1 bookkeeping silently.
+    """
 
     env = _build_cli_env(enable_agent_teams, workspace_dir, cody_mode=cody_mode)
 
@@ -236,6 +257,38 @@ async def _execute_cli_session(
             message=f"Failed to launch claude CLI: {exc}",
         )
 
+    # Hermes Phase F.1 site-wiring — if the mission carries a linked
+    # Task Hub task_id, stamp the spawned subprocess PID onto its
+    # active assignment row.  Best-effort; never blocks the happy
+    # path of the CLI session.
+    cli_assignment_id: Optional[str] = None
+    if task_id and proc.pid:
+        try:
+            from universal_agent import task_hub as _f_th
+            from universal_agent.gateway_server import (
+                _task_hub_open_conn as _f_open_conn,
+            )
+            from universal_agent.services.worker_exit_classifier import (
+                find_active_assignment_for_task as _f_find_aid,
+            )
+            _f_conn = _f_open_conn()
+            try:
+                cli_assignment_id = _f_find_aid(_f_conn, task_id=task_id)
+                if cli_assignment_id:
+                    _f_th.record_worker_pid(
+                        _f_conn,
+                        assignment_id=cli_assignment_id,
+                        worker_pid=int(proc.pid),
+                    )
+                    _f_conn.commit()
+            finally:
+                _f_conn.close()
+        except Exception as _f_exc:
+            logger.debug(
+                "Phase F.1 record_worker_pid skipped for CLI mission %s: %s",
+                mission_id, _f_exc,
+            )
+
     # Send the prompt to stdin
     try:
         proc.stdin.write(prompt.encode("utf-8"))
@@ -258,7 +311,28 @@ async def _execute_cli_session(
         mission_id=mission_id,
     )
 
-    return result
+    # Phase F.1 — enrich the outcome payload with PID + assignment +
+    # timeout-kill signal so run_mission can classify the exit.
+    enriched_payload = dict(result.payload or {})
+    if proc.pid:
+        enriched_payload.setdefault("worker_pid", int(proc.pid))
+    if cli_assignment_id:
+        enriched_payload.setdefault("assignment_id", cli_assignment_id)
+    # Heuristic: a "timed out" message indicates _monitor_cli_output\u2019s
+    # timeout path fired (it calls ``_kill_process`` and returns
+    # status="failed" with a "timed out" message).
+    if (
+        result.status == "failed"
+        and result.message
+        and "timed out" in result.message.lower()
+    ):
+        enriched_payload.setdefault("was_timeout_killed", True)
+    return MissionOutcome(
+        status=result.status,
+        result_ref=result.result_ref,
+        message=result.message,
+        payload=enriched_payload,
+    )
 
 
 async def _monitor_cli_output(
@@ -413,6 +487,158 @@ async def _monitor_cli_output(
             "stream_lines": len(stream_lines),
         },
     )
+
+
+def _classify_and_route_cli_exit(
+    *,
+    outcome: MissionOutcome,
+    task_id: str,
+    mission_id: str,
+) -> None:
+    """Hermes Phase F.1 / F.3 — classify a CLI mission exit and route.
+
+    Called from :meth:`ClaudeCodeCLIClient.run_mission` immediately
+    after ``_execute_cli_session`` returns.  Pulls ``exit_code`` +
+    ``was_timeout_killed`` + ``assignment_id`` out of
+    ``outcome.payload`` (populated in ``_execute_cli_session``\u2019s
+    enriched return path) and feeds them into
+    :func:`classify_worker_exit`.
+
+    Side effects (all best-effort, never raise):
+      * Logs the classified outcome with mission_id + task_id +
+        assignment_id for grep-ability.
+      * If a linked assignment exists, writes the classification onto
+        the open run row via ``task_hub._close_run``.
+      * If the classification is a protocol violation
+        (``clean_exit_zero_no_disposition`` — rc=0 but task is still
+        in_progress), parks the task in ``needs_review`` with the
+        canonical ``protocol_violation_vp_cli_clean_exit_no_disposition``
+        reason so Phase B.1\u2019s ``rehydrate`` / ``re_evaluate`` verbs
+        can act on it.
+
+    No-ops silently if ``task_id`` is empty (the common case — most VP
+    missions don\u2019t carry a direct Task Hub linkage).
+    """
+    tid = str(task_id or "").strip()
+    if not tid:
+        # No linked task — just log the classification at debug for
+        # observability and return.  We still classify so the log
+        # carries the outcome bucket.
+        try:
+            from universal_agent.services.worker_exit_classifier import (
+                classify_worker_exit as _f_classify,
+            )
+            _exit_code = None
+            _was_timeout_killed = False
+            if outcome.payload:
+                _exit_code = outcome.payload.get("exit_code")
+                _was_timeout_killed = bool(outcome.payload.get("was_timeout_killed"))
+            _was_signaled = bool(
+                isinstance(_exit_code, int)
+                and _exit_code < 0
+                and not _was_timeout_killed
+            )
+            _classification = _f_classify(
+                return_code=_exit_code if isinstance(_exit_code, int) else None,
+                was_signaled=_was_signaled,
+                was_timeout_killed=_was_timeout_killed,
+                # No linked task — treat outcome.status as ground truth.
+                task_closed_normally=outcome.status == "completed",
+            )
+            logger.debug(
+                "Phase F.1 CLI mission %s exit classified as %s (no linked task)",
+                mission_id, _classification.outcome,
+            )
+        except Exception as _f_exc:
+            logger.debug(
+                "Phase F.1 classification skipped for mission %s: %s",
+                mission_id, _f_exc,
+            )
+        return
+
+    try:
+        from universal_agent import task_hub as _f_th
+        from universal_agent.gateway_server import (
+            _task_hub_open_conn as _f_open_conn,
+        )
+        from universal_agent.services.worker_exit_classifier import (
+            classify_worker_exit as _f_classify,
+            park_task_for_protocol_violation as _f_park,
+            task_was_closed_normally as _f_closed,
+        )
+
+        _exit_code = None
+        _was_timeout_killed = False
+        _assignment_id = ""
+        if outcome.payload:
+            _exit_code = outcome.payload.get("exit_code")
+            _was_timeout_killed = bool(outcome.payload.get("was_timeout_killed"))
+            _assignment_id = str(outcome.payload.get("assignment_id") or "")
+
+        _was_signaled = bool(
+            isinstance(_exit_code, int)
+            and _exit_code < 0
+            and not _was_timeout_killed
+        )
+
+        _conn = _f_open_conn()
+        try:
+            _closed_normally = _f_closed(_conn, task_id=tid)
+            _classification = _f_classify(
+                return_code=_exit_code if isinstance(_exit_code, int) else None,
+                was_signaled=_was_signaled,
+                was_timeout_killed=_was_timeout_killed,
+                task_closed_normally=_closed_normally,
+            )
+            logger.info(
+                "Phase F.1 CLI mission %s exit classified as %s "
+                "(task=%s, assignment=%s, rc=%s)",
+                mission_id, _classification.outcome, tid,
+                _assignment_id or "<none>", _exit_code,
+            )
+            if _assignment_id:
+                try:
+                    _f_th._close_run(
+                        _conn,
+                        assignment_id=_assignment_id,
+                        outcome=(
+                            "completed"
+                            if outcome.status == "completed"
+                            else "failed"
+                        ),
+                        summary=(outcome.message or "")[:200],
+                        error=(
+                            ""
+                            if outcome.status == "completed"
+                            else (outcome.message or "")[:500]
+                        ),
+                        metadata={
+                            "worker_exit": _classification.to_dict(),
+                            "site": "vp_cli",
+                            "mission_id": mission_id,
+                        },
+                    )
+                    _conn.commit()
+                except Exception as _close_exc:
+                    logger.debug(
+                        "Phase F.1 _close_run skipped for CLI mission %s: %s",
+                        mission_id, _close_exc,
+                    )
+            if _classification.is_protocol_violation:
+                _f_park(
+                    _conn,
+                    task_id=tid,
+                    site="vp_cli",
+                    summary=f"vp cli mission_id={mission_id}",
+                    agent_id="vp_cli_client",
+                )
+        finally:
+            _conn.close()
+    except Exception as exc:
+        logger.debug(
+            "Phase F.1/F.3 wiring skipped for CLI mission %s: %s",
+            mission_id, exc,
+        )
 
 
 def _record_mission_token_usage(
