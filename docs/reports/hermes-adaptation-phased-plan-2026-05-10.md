@@ -27,10 +27,14 @@
 
 | Phase | PR | Merge SHA | Status |
 |---|---|---|---|
-| **A.1** — per-task `max_retries` override | [#193](https://github.com/Kjdragan/universal_agent/pull/193) | `c6fe1dd` | ✅ merged into `feature/latest2` 2026-05-11 |
-| **A.2** — wire `release_stale_assignments` into `dispatch_sweep` | [#194](https://github.com/Kjdragan/universal_agent/pull/194) | `aaf773a` | ✅ merged into `feature/latest2` 2026-05-11 (first CI run was an infra flake; retrigger via `337dbb9` passed) |
+| **A.1** — per-task `max_retries` override | [#193](https://github.com/Kjdragan/universal_agent/pull/193) | `c6fe1dd` | ✅ shipped to `main` via recovery PR [#198](https://github.com/Kjdragan/universal_agent/pull/198) 2026-05-11 |
+| **A.2** — wire `release_stale_assignments` into `dispatch_sweep` | [#194](https://github.com/Kjdragan/universal_agent/pull/194) | `aaf773a` | ✅ shipped to `main` via recovery PR [#198](https://github.com/Kjdragan/universal_agent/pull/198) 2026-05-11 |
+| **B.1** — operator unstick verbs (`rehydrate` / `re_evaluate` / `redirect_to` / `request_revision`) | [#195](https://github.com/Kjdragan/universal_agent/pull/195) | shipped via [#198](https://github.com/Kjdragan/universal_agent/pull/198) | ✅ shipped to `main` 2026-05-11 |
+| **B.2** — dashboard failure-context endpoint + drawer UI + 4 unstick buttons | (current PR — see `claude/hermes-phase-b2-dashboard`) | — | ✅ tests + UI shipped 2026-05-11; awaiting CI/merge/deploy |
 
-### Phase B.1 — IN FLIGHT (next ship)
+> **Operator-supporting interlude (2026-05-11):** While B.2 was in flight, a stuck VP Coder mission ran `status=running` for 8+ hours after its external daemon stopped polling (workflow-side gap, not a Hermes regression). Two surgical follow-ups shipped same day: PR #218 added a minimum-interval guard to the cron `every_seconds` create path (closed a real retry-storm vector — two test crons with `every_seconds=2`), and PR #219 added a periodic `_vp_stale_reconcile_loop` so VP mission staleness is now reconciled every 5 min instead of "only at gateway startup". These bound the worst-case stuck-mission window to ~5 min and were not in the original phase scope but addressed the same operator-burden class the Hermes plan targets.
+
+### Phase B.1 — SHIPPED
 
 * **Branch:** `claude/hermes-phase-b1-unstick-verbs` (created off `origin/feature/latest2`, no commits yet at time of writing).
 * **Confirmed defaults from Kevin (2026-05-11 sync):**
