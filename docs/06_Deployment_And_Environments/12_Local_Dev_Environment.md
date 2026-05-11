@@ -2,7 +2,7 @@
 
 > **Audience:** Kevin (primary), and any future agent/operator who needs to run UA locally for development.
 >
-> **Status:** Contract draft (2026-05-10). Some pieces work today; others are gaps to close. See **§ Audit pending** at the bottom for the explicit punch list.
+> **Status:** Canonical (2026-05-11) — Phase F shipped. Contract is implemented end-to-end across PRs #199 (doc), #200 (loop_control + justfile), #202 (Phase C.2 service gates), #206 (Phase D dev-safe semantics), #207 (Phase E dev_tools CLI), Phase F (this PR: snapshot script + canonization). Local dev now defaults safely to no autonomous loops, no real emails, no Google API calls, no Claude Agent SDK iterations — regardless of Infisical-injected pollution.
 >
 > **TL;DR:** Your **desktop** runs UA on demand for development. The **VPS** runs UA always-on for production. They never share state. The desktop dev stack has the same code, the same routes, and the same UI as prod — but the autonomous loops (heartbeat, cron, dispatch sweep, etc.) are **off**. You spin it up when working, kill it when done. One command starts everything: `just dev`.
 
@@ -232,9 +232,24 @@ Available dev opt-in flags (one per loop) — set `UA_DEV_<NAME>_FORCE_ON=1`:
 
 > **Note: legacy `UA_ENABLE_HEARTBEAT=1` / `UA_HEARTBEAT_ENABLED=1` are IGNORED in dev.** Phase D treats them as Infisical-injected prod-parity pollution. Setting them in your local `.env` will NOT enable the loop in dev — only `UA_DEV_<NAME>_FORCE_ON=1` does. This is intentional defensive behavior so dev stays safe even if Infisical's `development` env has prod flags mirrored.
 
-**Pattern B: Single-iteration CLI invocations (Phase E follow-up).**
+**Pattern B: Inspection CLI via `python -m universal_agent.dev_tools` (Phase E, 2026-05-11).**
 
-The intended pattern is `python -m universal_agent.heartbeat_service tick` and similar — one tick, deterministic, exits when done. Coming in Phase E. Until then, Pattern A is the way.
+For sanity-checking what's running BEFORE you spin up the stack:
+
+```bash
+# Print per-loop dev decisions (same as the gateway startup log)
+PYTHONPATH=src python -m universal_agent.dev_tools env-report
+
+# Explain why a single loop is on or off
+PYTHONPATH=src python -m universal_agent.dev_tools loop-status heartbeat
+
+# List persisted cron jobs (note: dev refuses to load these at startup)
+PYTHONPATH=src python -m universal_agent.dev_tools cron-list
+```
+
+These are **inspection only** — they don't trigger any autonomous loop. To actually fire a loop in dev, use Pattern A (`UA_DEV_<NAME>_FORCE_ON=1`).
+
+> **Why no live single-tick CLI?** Triggering one heartbeat / cron / sweep cycle in isolation requires booting a minimal in-process gateway (the loops need the gateway + DB + Infisical secrets to function). That's substantial scaffolding for limited extra value when Pattern A already gives you "tick at normal interval until you Ctrl-C." If you need single-iteration testing for a specific scenario, use Pattern A and Ctrl-C after one tick — the gateway logs each cycle.
 
 Either pattern gives you the **same code path as prod** — only the trigger is different.
 
@@ -251,14 +266,27 @@ Either pattern gives you the **same code path as prod** — only the trigger is 
 
 ### Realistic data: pulling a prod snapshot
 
-When you want to debug against realistic data shape (large CSI report counts, real HN snapshots, real Task Hub history):
+When you want to debug against realistic data shape (real Task Hub history, real run/attempt records, real VP state), use the Phase F snapshot script. UA is 100% SQLite — both prod and dev — so this collapses to safely copying SQLite files over SSH:
 
 ```bash
-# Pull a one-time snapshot from prod's Postgres into dev's SQLite
-uv run python -m universal_agent.scripts.snapshot_prod_to_dev
+# Pull snapshots of the standard runtime DBs from prod to local
+python scripts/snapshot_prod_to_dev.py
+
+# Dry-run first if you want to see what it'll do
+python scripts/snapshot_prod_to_dev.py --dry-run
+
+# Custom host or paths
+python scripts/snapshot_prod_to_dev.py \
+    --ssh-host ua@uaonvps \
+    --prod-workspaces-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
+    --dev-workspaces-dir ./AGENT_RUN_WORKSPACES
 ```
 
-(Audit pending — this script may need to be created. The pattern: `pg_dump --data-only` from prod, transform to SQLite-compatible SQL, load into dev.db. Read-only dump; never writes back to prod.)
+**How it works:** the script uses SQLite's online `.backup` command on the VPS (creates a consistent point-in-time snapshot WITHOUT pausing prod), then `scp`s the snapshot to the local dev workspace. Operator-only — uses your SSH keys, doesn't take credentials. Refuses to run in production (`UA_RUNTIME_STAGE=production`).
+
+Snapshotted databases (default): `runtime_state.db`, `activity_state.db`, `vp_state.db`, `coder_vp_state.db`. Add `--db custom.db` to snapshot others. CSI db at `/var/lib/universal-agent/csi/csi.db` is owned by root and not snapshotted by default — add `--include-csi` (not wired yet) or do it manually if needed.
+
+**Safety:** refuses to overwrite a local DB modified within the last 5 minutes (passes `--force` to override). Prevents stomping on local dev changes mid-session.
 
 ### Migrations
 
@@ -387,15 +415,21 @@ A second `just dev` run showed heartbeat + cron service + 5 cron jobs firing des
 - [x] **CronService defensive isolation** — even if cron_enabled() returns True somehow, the service skips loading the persisted `cron_jobs.json` in dev. Belt-and-suspenders: the 53 persisted prod cron jobs cannot tick on Kevin's desktop even by accident.
 - [x] **`report_dev_overrides()` startup log.** At gateway boot in dev mode, logs a per-loop summary showing which loops are off, which are dev-opted-in, and which truthy `UA_*_ENABLED` flags are being ignored as Infisical pollution. Operator sees at a glance what's happening.
 
-**Deferred to follow-up PRs (not blockers for the contract):**
+**Closed in Phase E (2026-05-11):**
 
-- [ ] **Single-iteration CLI entry points** for each autonomous loop. Pattern: `python -m universal_agent.heartbeat_service tick`, `python -m universal_agent.cron_service run-once <name>`. Useful for testing autonomous behavior in dev without ticking continuously. Workaround until then: set `UA_DEV_<NAME>_FORCE_ON=1` for the specific loop you want to test, restart `just dev`. (Phase E.)
-- [ ] **`development` Infisical environment hygiene.** Optional now — Phase D makes dev safe regardless of Infisical pollution — but cleaning the `UA_*_ENABLED` flags out of the `development` env removes the startup warning lines and clarifies intent. **Operator-side check** — list of flags to remove is in `13_Infisical_Dev_Env_Hygiene.md`.
-- [ ] **Dev DB story.** Force SQLite when `UA_RUNTIME_STAGE=development` regardless of any Postgres URL in Infisical-dev. (Phase F.)
-- [ ] **`snapshot_prod_to_dev.py` script.** For pulling a read-only prod snapshot when realistic data is needed. Not a blocker — dev works without it; quality-of-life addon. (Phase F.)
-- [ ] **`bootstrap_local_hq_dev.sh` freshness verification.** Verified working 2026-05-11 by operator desktop run; this item is effectively closed but kept for changelog.
+- [x] **Inspection CLI: `python -m universal_agent.dev_tools`.** Three subcommands: `env-report` (per-loop dev decisions, same as gateway startup log), `loop-status <name>` (explain one loop), `cron-list` (list persisted cron jobs from `cron_jobs.json`). 12-test suite in `tests/unit/test_dev_tools_cli.py`. **Live single-iteration triggers (`heartbeat tick`, `cron run-once`) explicitly deferred** — they'd require booting a minimal in-process gateway, and Pattern A (set `UA_DEV_<NAME>_FORCE_ON=1`, restart `just dev`, Ctrl-C after one tick) covers the same use case without the scaffolding.
 
-Once the deferred items close, this doc moves from "Contract draft" to "Canonical."
+**Closed in Phase F (2026-05-11):**
+
+- [x] **`snapshot_prod_to_dev.py` script.** New `scripts/snapshot_prod_to_dev.py` pulls SQLite snapshots from prod via SSH + SQLite's online `.backup` (consistent point-in-time, no prod pause). Refuses to run in production. Refuses to overwrite a local DB modified within 5 minutes (use `--force` to override). Default DBs: `runtime_state.db`, `activity_state.db`, `vp_state.db`, `coder_vp_state.db`. 10-test suite in `tests/unit/test_snapshot_prod_to_dev.py`. See § Realistic data above.
+- [x] **Dev DB story confirmed: UA is 100% SQLite.** Investigation during Phase F found no Postgres code paths anywhere — `durable/db.py` ships only SQLite drivers, all the runtime/state/VP DBs are `.db` files in `AGENT_RUN_WORKSPACES`. The hypothetical "force SQLite in dev" defensive code was unnecessary because Postgres was never an option. Documented above in § Database (clarified).
+- [x] **`bootstrap_local_hq_dev.sh` freshness verification.** Operator confirmed working end-to-end on desktop 2026-05-11. Closed.
+
+**Operator-side, not blocking:**
+
+- [x] **`development` Infisical environment hygiene.** Operator-side cleanup per `13_Infisical_Dev_Env_Hygiene.md` — already partially completed by operator 2026-05-11. Phase D's defensive layer makes this nice-to-have, not blocking.
+
+**Contract is canonical.** Future enhancements (e.g., a live single-iteration CLI for heartbeat/cron triggers) would be additive — not gaps in the contract.
 
 ---
 
