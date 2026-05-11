@@ -190,14 +190,21 @@ def test_hackernews_snapshot_uses_active_hour_range() -> None:
 
 
 def test_vp_coder_workspace_pruning_moved_to_active_hours() -> None:
-    """The 4 AM Sunday cleanup was moved to 7 AM Sunday on 2026-05-10."""
+    """vp_coder_workspace_pruning runs Sunday afternoon.
+
+    2026-05-10: moved from 4 AM Sun → 7 AM Sun (dormancy default).
+    2026-05-11: moved from 7 AM Sun → 5:05 PM Sun as part of the
+    cron-spread refactor. 7 AM Sunday was bunching with
+    proactive_report_morning at 7:05 AM.
+    """
     content = GATEWAY_SERVER.read_text(encoding="utf-8")
     assert (
-        'default_cron="0 7 * * 0"' in content
+        'default_cron="5 17 * * 0"' in content
         and '"vp_coder_workspace_pruning"' in content
     ), (
-        "vp_coder_workspace_pruning must default to '0 7 * * 0' America/Chicago. "
-        "Pre-2026-05-10 it was '0 4 * * 0' (4 AM Sunday Houston, inside dormancy)."
+        "vp_coder_workspace_pruning must default to '5 17 * * 0' America/Chicago "
+        "(Sunday 5:05 PM Houston). 2026-05-11 spread refactor moved it from "
+        "7 AM Sun (which collided with proactive_report_morning) to 5:05 PM."
     )
 
 

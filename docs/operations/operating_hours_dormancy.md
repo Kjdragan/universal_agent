@@ -68,23 +68,36 @@ These services run inside the dormancy window with documented justification:
 
 These run only during 6 AM – 9 PM Houston:
 
+All times Houston (America/Chicago) unless noted. Schedules spread on 2026-05-11 — see "Cron spread (2026-05-11)" below for rationale.
+
 | Service | Schedule | Source |
 |---|---|---|
-| `vp_coder_workspace_pruning` | 7:00 AM Sun Houston (weekly) | [`gateway_server.py:17921`](../../src/universal_agent/gateway_server.py#L17921) |
-| `morning_briefing` | 6:30 AM daily Houston | [`gateway_server.py:18238`](../../src/universal_agent/gateway_server.py#L18238) |
-| `hackernews_snapshot` | every 30m, 6 AM–9 PM Houston | [`gateway_server.py:18256`](../../src/universal_agent/gateway_server.py#L18256) |
-| `proactive_report_morning` | 7:00 AM daily Houston | [`gateway_server.py:18270`](../../src/universal_agent/gateway_server.py#L18270) |
-| `proactive_report_midday` | 12:00 PM daily Houston | [`gateway_server.py:18284`](../../src/universal_agent/gateway_server.py#L18284) |
-| `proactive_report_afternoon` | 4:00 PM daily Houston | [`gateway_server.py:18298`](../../src/universal_agent/gateway_server.py#L18298) |
-| `proactive_artifact_digest` | 8:00 AM daily Houston | [`gateway_server.py:18312`](../../src/universal_agent/gateway_server.py#L18312) |
-| `csi_demo_triage_rank` | 8:15 AM, 2:15 PM CDT (twice daily) | [`gateway_server.py:18480`](../../src/universal_agent/gateway_server.py#L18480) |
+| `morning_briefing` | 6:30 AM daily | [`gateway_server.py`](../../src/universal_agent/gateway_server.py) |
+| `proactive_report_morning` | 7:05 AM daily | [`gateway_server.py`](../../src/universal_agent/gateway_server.py) |
+| `proactive_artifact_digest` | 8:35 AM daily | [`gateway_server.py`](../../src/universal_agent/gateway_server.py) |
+| `csi_demo_triage_rank` | 10:05 AM, 3:05 PM daily | [`gateway_server.py`](../../src/universal_agent/gateway_server.py) |
+| `proactive_report_midday` | 12:05 PM daily | [`gateway_server.py`](../../src/universal_agent/gateway_server.py) |
+| `proactive_report_afternoon` | 4:05 PM daily | [`gateway_server.py`](../../src/universal_agent/gateway_server.py) |
+| `vp_coder_workspace_pruning` | Sun 5:05 PM (weekly) | [`gateway_server.py`](../../src/universal_agent/gateway_server.py) |
+| `hackernews_snapshot` | every 30m, 6 AM–9 PM (at :00 and :30) | [`gateway_server.py`](../../src/universal_agent/gateway_server.py) |
 
-GitHub Actions schedules:
+GitHub Actions schedules (UTC, no DST handling):
 
 | Workflow | Schedule | Source |
 |---|---|---|
-| `nightly-doc-drift-audit` | 12:17 UTC daily ≈ 7:17 AM CDT | [`.github/workflows/nightly-doc-drift-audit.yml`](../../.github/workflows/nightly-doc-drift-audit.yml) |
-| `openclaw-release-sync` | 12:13 UTC Tue/Fri ≈ 7:13 AM CDT | [`.github/workflows/openclaw-release-sync.yml`](../../.github/workflows/openclaw-release-sync.yml) |
+| `nightly-doc-drift-audit` | 18:35 UTC daily ≈ 1:35 PM CDT / 12:35 PM CST | [`.github/workflows/nightly-doc-drift-audit.yml`](../../.github/workflows/nightly-doc-drift-audit.yml) |
+| `openclaw-release-sync` | 20:35 UTC Tue/Fri ≈ 3:35 PM CDT / 2:35 PM CST | [`.github/workflows/openclaw-release-sync.yml`](../../.github/workflows/openclaw-release-sync.yml) |
+
+## Cron spread (2026-05-11)
+
+Before today, six cron jobs fired between 6:30 and 8:20 AM Houston (morning_briefing, proactive_report_morning, vp_coder_workspace_pruning, openclaw-release-sync, nightly-doc-drift-audit, proactive_artifact_digest, csi_demo_triage_rank #1), with hackernews_snapshot ticking at the :00 and :30 minute marks on top. That bunch caused contention — agents busy at the same time, jobs queueing behind each other, no headroom to add new proactive verbs without picking another saturated slot.
+
+Today's spread uses two simple primitives:
+
+1. **Minute offsets of `:05` and `:35`** to dodge the half-hourly `hackernews_snapshot` ticks.
+2. **Hour spacing** so heavy proactive jobs have ≥1h of breathing room.
+
+`morning_briefing` (6:30 AM) and `nightly_wiki` (3:15 AM, exception row) stay fixed because they have explicit consumption-time semantics (operator reads briefing on wake; nightly_wiki feeds briefing). Everything else moved to fill gaps.
 
 ## Adding a new cron job
 

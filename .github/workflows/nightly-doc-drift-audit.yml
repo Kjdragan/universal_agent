@@ -2,12 +2,14 @@ name: Nightly Documentation Drift Audit
 
 on:
   schedule:
-    # 12:17 UTC ≈ 7:17 AM CDT / 6:17 AM CST — inside the operating-hours
-    # window per docs/operations/operating_hours_dormancy.md (the
-    # operator wants no overnight workflow noise). Pre-2026-05-10 this
-    # ran at 08:17 UTC (3:17 AM CDT) which violated the dormancy default.
-    # 17-minute offset is GHA scheduling-delay mitigation (off-peak minute).
-    - cron: '17 12 * * *'
+    # 18:35 UTC ≈ 1:35 PM CDT / 12:35 PM CST — inside the operating-hours
+    # window per docs/operations/operating_hours_dormancy.md.
+    # 2026-05-11: moved out of the 7-8 AM CDT bunch (was 12:17 UTC) into
+    # the early-afternoon quiet slot between proactive_report_midday
+    # (12:05 PM) and csi_demo_triage_rank #2 (3:05 PM). 35-min minute
+    # offset is GHA scheduling-delay mitigation AND dodges the half-
+    # hourly hackernews_snapshot ticks at :00 / :30.
+    - cron: '35 18 * * *'
   workflow_dispatch:
     inputs:
       since_hours:
