@@ -23,6 +23,8 @@ GATEWAY_SERVER = Path("src/universal_agent/gateway_server.py")
 NIGHTLY_DOC_DRIFT = Path(".github/workflows/nightly-doc-drift-audit.yml")
 OPENCLAW_SYNC = Path(".github/workflows/openclaw-release-sync.yml")
 DORMANCY_DOC = Path("docs/operations/operating_hours_dormancy.md")
+POST_MERGE_DEPLOY = Path(".github/workflows/post-merge-deploy.yml")
+CI_FAILURE_ISSUE = Path(".github/workflows/ci-failure-issue.yml")
 
 # Documented exceptions (services that genuinely run inside the dormancy
 # window per the exception checklist in operating_hours_dormancy.md).
@@ -230,4 +232,54 @@ def test_openclaw_release_sync_runs_in_active_hours() -> None:
         f"openclaw-release-sync cron={cron!r} hits UTC hour(s) "
         f"{sorted(hours - safe_utc_active)} outside the safe DST-overlap "
         f"active window 12-01 UTC."
+    )
+
+
+# ─── infrastructure-event-handler tripwires ───────────────────────────
+# These are NOT subject to dormancy (they handle real-world events whose
+# timing is uncontrollable — merges, PR failures, deploys). See
+# docs/operations/operating_hours_dormancy.md § "Scope". Tests here just
+# pin that the files exist so a future cleanup can't silently remove them
+# and re-introduce the gaps that PR #224 / this PR closed.
+
+
+def test_post_merge_deploy_workflow_exists() -> None:
+    """Bridge workflow that dispatches Deploy on PR merge.
+
+    Closes the GITHUB_TOKEN downstream-trigger suppression gap. If this
+    file goes missing, merges to main stop firing Deploy and production
+    silently drifts behind main. Added 2026-05-11 via PR #224.
+    """
+    assert POST_MERGE_DEPLOY.exists(), (
+        f"Missing {POST_MERGE_DEPLOY} — without it, merges to main via "
+        f"the GITHUB_TOKEN-driven pr-auto-merge.yml will NOT trigger "
+        f"deploy.yml (per GitHub's downstream-trigger suppression rule). "
+        f"Restore the file or update the PR-merge flow to use a PAT."
+    )
+    body = POST_MERGE_DEPLOY.read_text(encoding="utf-8")
+    assert "pull_request" in body and "closed" in body
+    assert "workflow run deploy.yml" in body, (
+        "post-merge-deploy.yml must dispatch deploy.yml via workflow_dispatch; "
+        "that's the whole point — workflow_dispatch IS on GitHub's allow-list "
+        "of GITHUB_TOKEN-triggerable workflows."
+    )
+
+
+def test_ci_failure_issue_filer_workflow_exists() -> None:
+    """Workflow that opens an issue on failed workflow runs.
+
+    Surfaces silent CI failures (like PR #221's Validate failure that sat
+    unnoticed) so autonomous AI sessions and the operator both discover
+    them immediately. Added 2026-05-11.
+    """
+    assert CI_FAILURE_ISSUE.exists(), (
+        f"Missing {CI_FAILURE_ISSUE} — without it, failed workflow runs "
+        f"can sit unnoticed for hours. Restore the file or replace with "
+        f"a different notification mechanism."
+    )
+    body = CI_FAILURE_ISSUE.read_text(encoding="utf-8")
+    assert "workflow_run" in body
+    assert "conclusion == 'failure'" in body, (
+        "ci-failure-issue.yml must gate on conclusion=='failure'; otherwise "
+        "it spams issues on every successful run."
     )

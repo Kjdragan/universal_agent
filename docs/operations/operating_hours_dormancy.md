@@ -25,6 +25,26 @@ The operator (Kevin) does not want infrastructure burning quota / firing emails 
 
 Default-dormant moves the operating tempo to the operator's actual day.
 
+## Scope: this is a content-generation policy, not a global cron gate
+
+The dormancy default exists to suppress **wasteful work** — crons that burn quota or tokens to produce material no human will read until morning. It is **not** a license to turn off production-health automation overnight.
+
+**Subject to dormancy (default 6 AM – 9 PM Houston):**
+
+- Content-generation crons: HackerNews snapshot, briefing materials, proactive reports, doc drift audit, openclaw release sync, intel pipeline material production
+- Quota-burning polls: scheduled LLM runs that synthesize observations into briefings
+- Anything that costs API calls / tokens / network calls to produce intelligence
+
+**NOT subject to dormancy (24/7 by design):**
+
+- Deploy workflows (`deploy.yml`, `post-merge-deploy.yml`) — a merge to main can happen at any wall-clock time and the resulting deploy must fire
+- Auto-merge (`pr-auto-merge.yml`) — PRs land when CI completes, regardless of clock
+- CI / PR failure handling (`ci-failure-issue.yml`) — a failed run at 3 AM should be surfaced for morning fix, not silently broken for 7 hours
+- Error alerting, secret rotation alerts, security event handlers
+- GitHub Actions workflows triggered by `push` / `pull_request` / `workflow_run` events — these are event-driven, not scheduled, so the policy doesn't apply mechanically
+
+**Decision rule when registering a new cron:** if disabling the cron during sleep hours loses the operator nothing (intel will be regenerated in the morning anyway), it belongs in the active window. If disabling it during sleep hours means production is broken / merges are stuck / failures are silent until 6 AM, it must run 24/7 (add to `DOCUMENTED_EXCEPTIONS` with rationale citing Exception #3 below — latency-sensitive incident response).
+
 ## Exceptions
 
 Some services genuinely need 24/7 operation. Adding a new cron requires this checklist:

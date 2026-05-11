@@ -113,11 +113,13 @@ The ClaudeDevs X intel pipeline is undergoing a v2 rebuild. Two living docs trac
 
 **Active window: 6:00 AM – 9:00 PM Houston time.** **Dormant window: 9:00 PM – 6:00 AM Houston time.**
 
-By default, every cron job, polling loop, scheduled GitHub Actions workflow, or background service runs **only during the active window**. Use `default_timezone="America/Chicago"` (or `TZ=America/Chicago` in cron strings) so DST is handled automatically. GitHub Actions schedules are UTC-only — express in UTC and accept the 1h DST drift.
+By default, **content-generation** cron jobs, polling loops, and scheduled GitHub Actions workflows run **only during the active window**. Use `default_timezone="America/Chicago"` (or `TZ=America/Chicago` in cron strings) so DST is handled automatically. GitHub Actions schedules are UTC-only — express in UTC and accept the 1h DST drift.
 
-**Why:** the operator does not want infrastructure burning quota / firing emails / restarting processes / running LLM calls while he's asleep. Most "intelligence" surfaces are read in the morning anyway — generating them at 3 AM provides zero operational value but adds cost.
+**Scope: dormancy is a content-policy, not a global cron gate.** It applies to crons that burn quota/tokens to produce intelligence nobody reads until morning (HackerNews polls, briefing materials, drift audits). It does **NOT** apply to infrastructure-event handlers — deploy workflows, auto-merge, CI/PR failure handling, error alerting. Those run 24/7 because a merge can land or a CI run can fail at any wall-clock time, and silently broken production until 6 AM is unacceptable. Event-driven GHA workflows (triggered by `push`/`pull_request`/`workflow_run`) are not subject to dormancy mechanically either.
 
-**Adding a new cron job:** check whether it qualifies as a documented exception (downstream-consumer dependency during dormancy / transient-data capture / latency-sensitive incident response). If none apply, schedule inside the active window. See [`docs/operations/operating_hours_dormancy.md`](docs/operations/operating_hours_dormancy.md) for the exception checklist + currently-registered exceptions.
+**Why:** the operator does not want infrastructure burning quota / firing emails / restarting processes / running LLM calls while he's asleep. Most "intelligence" surfaces are read in the morning anyway — generating them at 3 AM provides zero operational value but adds cost. Infrastructure event handling is the opposite — its cost is near-zero and the cost of delay is high.
+
+**Adding a new cron job:** classify it first. Content-generation → respect dormancy. Infrastructure-event handler → 24/7, add to `DOCUMENTED_EXCEPTIONS` citing Exception #3 (latency-sensitive incident response). See [`docs/operations/operating_hours_dormancy.md`](docs/operations/operating_hours_dormancy.md) for the full scope rules + currently-registered exceptions.
 
 A guard test (`tests/unit/test_cron_dormancy_defaults.py`) pins active-hour schedules and asserts new crons fall inside the active window unless they're listed as exceptions in the doc.
 
