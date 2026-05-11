@@ -43,13 +43,18 @@ def _is_truthy(value: str | None) -> bool:
 def daemon_sessions_enabled(*, heartbeat_enabled: bool = False) -> bool:
     """Return True when daemon sessions should be created.
 
-    Defaults to True when heartbeat is enabled.  Override with
-    ``UA_DAEMON_SESSIONS_ENABLED``.
+    Resolution: explicit ``UA_DAEMON_SESSIONS_ENABLED`` wins; in development
+    mode (``UA_RUNTIME_STAGE=development``) daemon sessions are OFF by
+    default; otherwise defaults to ``heartbeat_enabled``.
     """
+    from universal_agent.loop_control import should_run_loop  # lazy: avoid import cycle
+
     raw = os.getenv("UA_DAEMON_SESSIONS_ENABLED")
     if raw is not None:
         return _is_truthy(raw)
-    return heartbeat_enabled
+    # No explicit flag: ``should_run_loop`` returns False in dev (correct);
+    # in prod we want ``heartbeat_enabled`` to remain the historical gate.
+    return should_run_loop("daemon_sessions", prod_default=heartbeat_enabled)
 
 
 def configured_daemon_agents() -> list[str]:

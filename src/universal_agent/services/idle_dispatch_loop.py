@@ -20,14 +20,14 @@ import os
 import time
 from typing import Any, Optional
 
+from universal_agent.loop_control import should_run_loop
+
 logger = logging.getLogger(__name__)
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
 IDLE_POLL_INTERVAL_SECONDS = int(os.getenv("UA_IDLE_POLL_INTERVAL_SECONDS", "60"))
-IDLE_POLL_ENABLED = str(os.getenv("UA_IDLE_POLL_ENABLED", "1")).strip().lower() in {
-    "1", "true", "yes", "on",
-}
+IDLE_POLL_ENABLED = should_run_loop("idle_poll", prod_default=True)
 
 # ── Nudge Mechanism ─────────────────────────────────────────────────────────
 # Phase 3: asyncio.Event that can be set by external callers to wake the

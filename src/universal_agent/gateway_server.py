@@ -131,6 +131,7 @@ from universal_agent.heartbeat_service import (
 )
 from universal_agent.hooks_service import HooksService, build_manual_youtube_action
 from universal_agent.identity import resolve_user_id
+from universal_agent.loop_control import should_run_loop
 from universal_agent.memory.memory_index import load_index
 from universal_agent.memory.orchestrator import get_memory_orchestrator
 from universal_agent.memory.paths import resolve_shared_memory_workspace
@@ -2410,7 +2411,7 @@ _daemon_session_manager: Optional[Any] = None  # DaemonSessionManager (lazy impo
 _system_events: dict[str, list[dict]] = {}
 _system_presence: dict[str, dict] = {}
 _system_events_max = int(os.getenv("UA_SYSTEM_EVENTS_MAX", "100"))
-_vp_event_bridge_enabled = (os.getenv("UA_VP_EVENT_BRIDGE_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"})
+_vp_event_bridge_enabled = should_run_loop("vp_event_bridge", prod_default=True)
 _vp_event_bridge_interval_seconds = max(
     0.2,
     float(os.getenv("UA_VP_EVENT_BRIDGE_INTERVAL_SECONDS", "1.0") or "1.0"),
@@ -2429,9 +2430,7 @@ _vp_event_bridge_metrics: dict[str, Any] = {
     "manual_updates": 0,
     "last_manual_update_at": None,
 }
-_vp_stale_reconcile_enabled = (
-    os.getenv("UA_VP_STALE_RECONCILE_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
-)
+_vp_stale_reconcile_enabled = should_run_loop("vp_stale_reconcile", prod_default=True)
 _vp_stale_reconcile_seconds = max(
     60,
     int(os.getenv("UA_VP_STALE_RECONCILE_SECONDS", "").strip() or 15 * 60),
@@ -14240,24 +14239,33 @@ async def lifespan(app: FastAPI):
             )
         else:
             await _cron_service.start()
-        try:
-            _ensure_autonomous_daily_briefing_job()
-            _ensure_codie_proactive_cleanup_cron_job()
-            _ensure_csi_convergence_cron_job()
-            _ensure_claude_code_intel_cron_job()
-            _ensure_csi_demo_triage_rank_cron_job()
-            _ensure_paper_to_podcast_cron_job()
-            _ensure_youtube_daily_digest_cron_job()
-            _ensure_nightly_wiki_cron_job()
-            _ensure_morning_briefing_cron_job()
-            _ensure_proactive_report_morning_cron_job()
-            _ensure_proactive_report_midday_cron_job()
-            _ensure_proactive_report_afternoon_cron_job()
-            _ensure_proactive_artifact_digest_cron_job()
-            _ensure_vp_coder_workspace_pruning_cron_job()
-            _ensure_hackernews_snapshot_cron_job()
-        except Exception as exc:
-            logger.warning("Failed ensuring autonomous cron jobs: %s", exc)
+        if should_run_loop("cron_registration", prod_default=True):
+            try:
+                _ensure_autonomous_daily_briefing_job()
+                _ensure_codie_proactive_cleanup_cron_job()
+                _ensure_csi_convergence_cron_job()
+                _ensure_claude_code_intel_cron_job()
+                _ensure_csi_demo_triage_rank_cron_job()
+                _ensure_paper_to_podcast_cron_job()
+                _ensure_youtube_daily_digest_cron_job()
+                _ensure_nightly_wiki_cron_job()
+                _ensure_morning_briefing_cron_job()
+                _ensure_proactive_report_morning_cron_job()
+                _ensure_proactive_report_midday_cron_job()
+                _ensure_proactive_report_afternoon_cron_job()
+                _ensure_proactive_artifact_digest_cron_job()
+                _ensure_vp_coder_workspace_pruning_cron_job()
+                _ensure_hackernews_snapshot_cron_job()
+            except Exception as exc:
+                logger.warning("Failed ensuring autonomous cron jobs: %s", exc)
+        else:
+            logger.info(
+                "⏸️ Cron job registration skipped (UA_CRON_REGISTRATION_ENABLED=0 "
+                "or UA_RUNTIME_STAGE=development). Cron service ticker is running "
+                "but no schedules are registered. Trigger jobs manually via the "
+                "gateway admin API or by calling _ensure_<job>_cron_job() in a "
+                "Python REPL."
+            )
     else:
         logger.info("⏲️ Chron Service DISABLED (feature flag)")
 
