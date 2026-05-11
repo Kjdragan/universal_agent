@@ -1,6 +1,6 @@
 # Branching and Release Workflow
 
-Last updated: 2026-05-11 (added `pr-auto-merge.yml` for `claude/*` PRs to `main`; full PR-to-production flow now hands-free for agent PRs)
+Last updated: 2026-05-11 (PAT-based auto-merge now actually fires `deploy.yml`; documented concurrency caveat for simultaneous merges)
 
 ## Purpose
 
@@ -130,21 +130,41 @@ That's `/ship` in one sentence.
 
 The two scheduled jobs (`nightly-doc-drift-audit.yml`, `openclaw-release-sync.yml`) auto-merge their report PRs to `main` via `gh pr merge --squash --admin`. `deploy.yml`'s `paths-ignore` ensures these report-only commits don't trigger a production deploy.
 
-### Auto-merge for `claude/*` agent PRs (added 2026-05-11)
+### Auto-merge for `claude/*` agent PRs (added 2026-05-11; PAT-fixed 2026-05-11 PM)
 
 Autonomous agent PRs from a `claude/*` head branch to `main` get auto-merge enabled automatically by `pr-auto-merge.yml`. Once `pr-validate.yml` passes, GitHub squash-merges the PR, deletes the branch, and the merge to `main` triggers `deploy.yml` → production.
 
 ```mermaid
 flowchart LR
     A[Agent opens PR<br/>claude/* → main] --> B[pr-validate.yml]
-    A --> C[pr-auto-merge.yml<br/>enables auto-merge]
+    A --> C[pr-auto-merge.yml<br/>uses AUTO_MERGE_PAT to enable auto-merge]
     B -->|passes| D[GitHub squash-merges]
     C --> D
-    D --> E[deploy.yml fires]
+    D --> E[deploy.yml fires on push]
     E --> F[Production VPS]
 ```
 
 This is the same auto-merge mechanism `/ship` uses for tier-1 PRs — `pr-auto-merge.yml` just enables it for PRs that are opened directly via `gh pr create` / GitHub API instead of through `/ship`. No operator action is required between PR open and production deploy.
+
+#### Why a fine-grained PAT (and not GITHUB_TOKEN)
+
+PR #232 (merged 2026-05-11) swapped `pr-auto-merge.yml` from `GITHUB_TOKEN` to `secrets.AUTO_MERGE_PAT` (with `GITHUB_TOKEN` fallback) because of GitHub's documented suppression rule:
+
+> "Events triggered by the GITHUB_TOKEN, with the exception of `workflow_dispatch` and `repository_dispatch`, will not create a new workflow run."
+
+When `gh pr merge --auto` was invoked with `GITHUB_TOKEN`, GitHub's resulting squash-merge `push` to main was attributed to that token, and `deploy.yml`'s `on: push: branches: main` trigger was silently skipped. Three Hermes PRs (#228, #229, #230) shipped to main with no deploy firing; production drifted until manual `gh workflow run deploy.yml --ref main`.
+
+A fine-grained PAT (`AUTO_MERGE_PAT`, repo secret) is attributed to the operator's user identity, so the downstream push fires `deploy.yml` normally. PAT scopes: `Contents: Read+Write`, `Pull requests: Read+Write` on `Kjdragan/universal_agent` only. Rotate yearly (default token expiry).
+
+Belt-and-suspenders backstop: `post-merge-deploy.yml` still listens for `pull_request: closed` and dispatches `deploy.yml` via `workflow_dispatch`. Note that the dispatcher itself also suffered the GITHUB_TOKEN-suppression issue, so the PAT swap is the actual fix. The dispatcher remains useful for the bootstrap window when `AUTO_MERGE_PAT` is missing.
+
+#### Concurrency caveat (2026-05-11 PM incident)
+
+Multiple PRs merging to `main` within a few seconds of each other each trigger their own `deploy.yml` run. As of 2026-05-11 PM, `deploy.yml` has no `concurrency:` guard, so three concurrent deploys raced on `/opt/universal_agent/.git/index.lock` and **all three failed** with `fatal: Unable to create '/opt/universal_agent/.git/index.lock': File exists.`
+
+Recovery: dispatch a single `deploy.yml` run via `gh workflow run deploy.yml --ref main` — once the stale lock file is removed (manually or by the next successful deploy's cleanup), production catches up to the latest commit.
+
+**Recommended hardening** (not yet implemented): add `concurrency: { group: deploy-production, cancel-in-progress: false }` to `deploy.yml` so simultaneous merges queue instead of colliding. The `cancel-in-progress: false` setting preserves every deploy's intent (last-write-wins semantics on main); only the lock collision is eliminated.
 
 For full pipeline detail see [`docs/deployment/ci_cd_pipeline.md` § "End-to-End PR-to-Production Flow"](../deployment/ci_cd_pipeline.md#end-to-end-pr-to-production-flow-2026-05-11).
 
