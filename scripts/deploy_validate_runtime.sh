@@ -108,12 +108,39 @@ remove_runtime_venv() {
 
 ensure_existing_venv_is_usable() {
   echo "--> Checking whether the existing venv is usable by $SERVICE_USER..."
-  if [[ -e "$APP_ROOT/.venv/bin/python3" ]]; then
-    if ! run_as_service_user "readlink -f \"$APP_ROOT/.venv/bin/python3\" >/dev/null 2>&1"; then
-      echo "--> Existing venv interpreter is not accessible to $SERVICE_USER; removing stale .venv for clean rebuild..."
-      remove_runtime_venv
-    fi
+  if [[ ! -e "$APP_ROOT/.venv/bin/python3" ]]; then
+    return
   fi
+
+  # Symlink-accessibility check (existing behavior).
+  if ! run_as_service_user "readlink -f \"$APP_ROOT/.venv/bin/python3\" >/dev/null 2>&1"; then
+    echo "--> Existing venv interpreter is not accessible to $SERVICE_USER; removing stale .venv for clean rebuild..."
+    remove_runtime_venv
+    return
+  fi
+
+  # Python-version check (added 2026-05-11 after deploy #449 incident).
+  #
+  # The previous symlink-accessibility check was insufficient: a venv built
+  # with Python 3.12 looks "usable" (the symlink resolves to a working
+  # interpreter) but `uv sync --python 3.13` will then refuse it with
+  # "Project virtual environment directory ... cannot be used because it is
+  # not a valid Python environment (no Python executable was found)" —
+  # which is uv-speak for "no Python AT THE REQUIRED VERSION." We catch
+  # the version mismatch up front and force a clean rebuild.
+  local venv_version
+  venv_version="$(run_as_service_user "\"$APP_ROOT/.venv/bin/python3\" -c \"import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')\" 2>/dev/null" || true)"
+  if [[ -z "$venv_version" ]]; then
+    echo "--> Existing venv interpreter could not report its version; removing stale .venv for clean rebuild..."
+    remove_runtime_venv
+    return
+  fi
+  if [[ "$venv_version" != "3.13" ]]; then
+    echo "--> Existing venv uses Python $venv_version but deploy requires 3.13; removing stale .venv for clean rebuild..."
+    remove_runtime_venv
+    return
+  fi
+  echo "--> Existing venv Python version OK ($venv_version)."
 }
 
 ensure_python_runtime() {
