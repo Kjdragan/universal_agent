@@ -32,11 +32,11 @@
 | **B.1** — operator unstick verbs (`rehydrate` / `re_evaluate` / `redirect_to` / `request_revision`) | [#195](https://github.com/Kjdragan/universal_agent/pull/195) | shipped via [#198](https://github.com/Kjdragan/universal_agent/pull/198) | ✅ shipped to `main` 2026-05-11 |
 | **B.2** — dashboard failure-context endpoint + drawer UI + 4 unstick buttons | [#220](https://github.com/Kjdragan/universal_agent/pull/220) | `c1c121e5` | ✅ shipped to `main` 2026-05-11 |
 | **C** — Atlas-direct-dispatch + Simone awareness (independent cron-registered dispatcher) | [#221](https://github.com/Kjdragan/universal_agent/pull/221) | — | ✅ scaffolded 2026-05-11; default OFF via `UA_ATLAS_DIRECT_DISPATCH_ENABLED=0`; operator flips on after dry-run |
-| **D.1** — `task_hub_runs` attempt-history table + claim/finalize wiring | (current PR — see `claude/hermes-phase-d-task-hub-runs`) | — | ✅ shipped 2026-05-11; additive — D.2 (prompt/UI consumers) follows |
+| **D.1** — `task_hub_runs` attempt-history table + claim/finalize wiring | [#222](https://github.com/Kjdragan/universal_agent/pull/222) | `e00842d2` | ✅ shipped to `main` 2026-05-11; additive — D.2 (prompt/UI consumers) follows |
 
-> **Operator-supporting interlude (2026-05-11):** While B.2 was in flight, a stuck VP Coder mission ran `status=running` for 8+ hours after its external daemon stopped polling (workflow-side gap, not a Hermes regression). Two surgical follow-ups shipped same day: PR #218 added a minimum-interval guard to the cron `every_seconds` create path (closed a real retry-storm vector — two test crons with `every_seconds=2`), and PR #219 added a periodic `_vp_stale_reconcile_loop` so VP mission staleness is now reconciled every 5 min instead of "only at gateway startup". These bound the worst-case stuck-mission window to ~5 min and were not in the original phase scope but addressed the same operator-burden class the Hermes plan targets.
+> **Operator-supporting interludes (2026-05-11):** PR #218 added a minimum-interval guard on the cron `every_seconds` create path. PR #219 added a periodic `_vp_stale_reconcile_loop`. Both close real operator-burden vectors orthogonal to the lettered phases.
 
-### Phase B.1 — SHIPPED
+### Phase B.1 — SHIPPED via #198
 
 * **Branch:** `claude/hermes-phase-b1-unstick-verbs` (created off `origin/feature/latest2`, no commits yet at time of writing).
 * **Confirmed defaults from Kevin (2026-05-11 sync):**

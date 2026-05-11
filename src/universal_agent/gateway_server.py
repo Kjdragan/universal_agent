@@ -14307,6 +14307,7 @@ async def lifespan(app: FastAPI):
                 _ensure_proactive_artifact_digest_cron_job()
                 _ensure_vp_coder_workspace_pruning_cron_job()
                 _ensure_hackernews_snapshot_cron_job()
+                _ensure_atlas_direct_dispatch_cron_job()
             except Exception as exc:
                 logger.warning("Failed ensuring autonomous cron jobs: %s", exc)
         else:
@@ -18381,6 +18382,33 @@ def _ensure_hackernews_snapshot_cron_job() -> Optional[dict[str, Any]]:
         enabled=_proactive_cron_enabled("UA_HACKERNEWS_SNAPSHOT_ENABLED"),
         cron_env_var="UA_HACKERNEWS_SNAPSHOT_CRON",
         timezone_env_var="UA_HACKERNEWS_SNAPSHOT_TIMEZONE",
+    )
+
+
+def _ensure_atlas_direct_dispatch_cron_job() -> Optional[dict[str, Any]]:
+    """Hermes Phase C — independent Atlas dispatcher.
+
+    Runs every 60s to dispatch tasks tagged `metadata.preferred_vp =
+    "vp.general.primary"` directly, bypassing Simone's heartbeat throttle.
+    Default OFF: operator opts in via `UA_ATLAS_DIRECT_DISPATCH_ENABLED=1`
+    after dry-run testing. The script itself also gates on that env var so
+    accidentally-enabled crons are still a no-op.
+
+    See `docs/reports/hermes-adaptation-phased-plan-2026-05-10.md` § Phase C.
+    """
+    return _register_system_cron_job(
+        system_job="atlas_direct_dispatch",
+        default_cron="*/1 * * * *",
+        default_timezone="UTC",
+        command="!script universal_agent.scripts.atlas_direct_dispatch",
+        description=(
+            "Independent Atlas dispatcher for preferred_vp-tagged tasks; "
+            "bypasses Simone-heartbeat throttle (Hermes Phase C)."
+        ),
+        timeout_seconds=60,
+        enabled=_proactive_cron_enabled("UA_ATLAS_DIRECT_DISPATCH_ENABLED"),
+        cron_env_var="UA_ATLAS_DIRECT_DISPATCH_CRON",
+        timezone_env_var="UA_ATLAS_DIRECT_DISPATCH_TIMEZONE",
     )
 
 

@@ -492,6 +492,34 @@ def _compose_heartbeat_prompt(
                     lines.append("  → Delegation IS available. Use it for disparate tasks.")
                 else:
                     lines.append("  → All VP slots occupied. DEFER delegation or process yourself.")
+
+                # ── Hermes Phase C: Atlas-direct-dispatch FYI ──
+                # Surface tasks the independent Atlas-direct dispatcher has
+                # routed in the last 15 minutes so Simone retains situational
+                # awareness without going through her own heartbeat throttle.
+                try:
+                    from universal_agent.services.atlas_direct_dispatch import (
+                        list_recent_atlas_direct_dispatches,
+                    )
+                    recent = list_recent_atlas_direct_dispatches(
+                        runtime_conn, within_minutes=15, limit=10
+                    )
+                    if recent:
+                        lines.append("")
+                        lines.append(
+                            f"## Atlas Direct-Dispatch (last 15m, {len(recent)} mission(s))"
+                        )
+                        for entry in recent:
+                            preview = (entry.get("objective_preview") or "")[:80]
+                            tid = entry.get("task_id", "")
+                            status = entry.get("status", "")
+                            suffix = f" — {status}" if status else ""
+                            lines.append(f"  - {tid}{suffix}: {preview}")
+                        lines.append(
+                            "  → To take over: redirect_to(task_id, agent_id='simone')."
+                        )
+                except Exception as _atlas_fyi_exc:
+                    logger.debug("atlas_direct FYI injection failed: %s", _atlas_fyi_exc)
             except Exception as _cap_exc:
                 logger.debug("VP capacity injection failed: %s", _cap_exc)
 

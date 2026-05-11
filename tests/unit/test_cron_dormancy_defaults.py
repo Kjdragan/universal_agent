@@ -31,6 +31,12 @@ DORMANCY_DOC = Path("docs/operations/operating_hours_dormancy.md")
 # section of the operating_hours_dormancy.md doc.
 DOCUMENTED_EXCEPTIONS = {
     "nightly_wiki",  # 3:15 AM Houston — feeds 6:30 AM morning briefing
+    # Hermes Phase C (PR #221): every-60s dispatcher for tasks tagged
+    # metadata.preferred_vp = "vp.general.primary". Default OFF via
+    # UA_ATLAS_DIRECT_DISPATCH_ENABLED=0. Exception #3 (latency-sensitive):
+    # Atlas-eligible tasks must dispatch within ~60s of being queued, not
+    # wait until 6 AM. See operating_hours_dormancy.md exceptions table.
+    "atlas_direct_dispatch",
 }
 
 # Hours considered active in America/Chicago. 6 AM start (operator wakes),
