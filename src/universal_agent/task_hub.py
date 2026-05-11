@@ -309,6 +309,32 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_task_hub_assign_task_state ON task_hub_assignments(task_id, state, started_at DESC);
         CREATE INDEX IF NOT EXISTS idx_task_hub_assign_agent_state ON task_hub_assignments(agent_id, state, started_at DESC);
 
+        -- Hermes Phase E.2b: per-mission Cody token-usage telemetry.
+        -- Rows are written by claude_cli_client at mission close (one
+        -- row per mission). The dashboard tile sums rows where
+        -- recorded_at >= the `cody_token_tracking_window.reset_at`
+        -- cursor stored in task_hub_settings, so the operator can hit
+        -- "Refresh" to start a new accumulator window without losing
+        -- history. `cody_mode` lets the tile filter to "anthropic" usage
+        -- when surfacing cost on the Anthropic-mode card specifically.
+        CREATE TABLE IF NOT EXISTS cody_token_usage (
+            id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+            mission_id                  TEXT,
+            task_id                     TEXT,
+            cody_mode                   TEXT NOT NULL,
+            model                       TEXT,
+            input_tokens                INTEGER NOT NULL DEFAULT 0,
+            output_tokens               INTEGER NOT NULL DEFAULT 0,
+            cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_read_input_tokens     INTEGER NOT NULL DEFAULT 0,
+            total_cost_usd              REAL NOT NULL DEFAULT 0.0,
+            duration_ms                 INTEGER NOT NULL DEFAULT 0,
+            recorded_at                 TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_cody_token_mode_recorded ON cody_token_usage(cody_mode, recorded_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_cody_token_mission ON cody_token_usage(mission_id);
+        CREATE INDEX IF NOT EXISTS idx_cody_token_task ON cody_token_usage(task_id);
+
         -- Hermes Phase D: per-attempt durable history alongside task_hub_assignments.
         -- task_hub_assignments is the claim-ledger (started/ended/state) while
         -- task_hub_runs holds the closing outcome/summary/metadata/error so
