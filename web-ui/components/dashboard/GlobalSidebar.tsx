@@ -25,6 +25,7 @@ import {
   Bot,
   GraduationCap,
   Clock,
+  Cpu,
   History,
   Settings,
   Wrench,
@@ -96,6 +97,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/dashboard/cron-jobs", label: "Cron Jobs", icon: Clock },
       { href: "/dashboard/config", label: "Configuration", icon: Settings },
+      { href: "/dashboard/cody", label: "Cody Mode & Usage", icon: Cpu },
       { href: "/dashboard/skills", label: "Skills", icon: Wrench },
       { href: "/files", label: "File Browser", icon: FolderOpen, external: true },
     ],
