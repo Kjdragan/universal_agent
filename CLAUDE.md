@@ -103,6 +103,7 @@ The ClaudeDevs X intel pipeline is undergoing a v2 rebuild. Two living docs trac
 - **Plan (what's left):** [`docs/proactive_signals/claudedevs_intel_v2_remaining_work.md`](docs/proactive_signals/claudedevs_intel_v2_remaining_work.md) — reconciled execution catalog. Cross-references original design § 16 PRs to the actual reconciled PRs (some shipped scaffolding only; their wiring is tracked separately). Lists what's shipped vs what's left across four phases. Updated after every ship — read this first when picking up the work.
 
 ## Working Rules
+- **Local dev happens on Kevin's desktop, not the VPS.** Spin up the stack with `just dev` from `/home/kjdragan/lrepos/universal_agent/`. Autonomous loops (heartbeat, cron, dispatch sweep, AgentMail polling, etc.) are OFF in dev by default — set `UA_DEV_<NAME>_FORCE_ON=1` in `.env` to opt a specific loop in for testing. The VPS is production-only. Canonical runbook: [`docs/06_Deployment_And_Environments/12_Local_Dev_Environment.md`](docs/06_Deployment_And_Environments/12_Local_Dev_Environment.md). One-page operator index: [`docs/WORKFLOW.md`](docs/WORKFLOW.md). VPS-as-dev via Antigravity Remote-SSH ([Doc 11](docs/06_Deployment_And_Environments/11_Daily_Dev_Workflow.md)) is the fallback for when desktop isn't available.
 - Keep changes small and targeted.
 - Do not commit secrets, credentials, or local state files.
 - Prefer root-cause fixes over temporary workarounds.

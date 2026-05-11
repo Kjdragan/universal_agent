@@ -2,46 +2,64 @@
 
 > **Purpose:** the single page you read first when you sit down to work on this project. For deep-dives, every section links to the canonical doc.
 >
-> **Last updated:** 2026-05-07 (post-inversion + Phase D dev-tree workflow).
+> **Last updated:** 2026-05-11 (dev/prod separation initiative shipped — desktop-local dev is now the canonical path).
 
 ---
 
 ## 1 — Mental model in 60 seconds
 
-UA runs on **`uaonvps`** (Hostinger VPS, accessed via Tailscale MagicDNS). Three Claude environments live there, all on the same machine:
+Two physical machines, two distinct roles:
+
+| Machine | Role | What runs there |
+|---|---|---|
+| **`mint-desktop`** (your screen + keyboard) | **Local dev — on-demand.** | `just dev` runs gateway/api/web-ui locally. Autonomous loops (heartbeat, cron, dispatch sweep, AgentMail polling, etc.) are **off**. Zero ZAI quota burn at idle. You spin it up when working, kill it when done. |
+| **`uaonvps`** (Hostinger VPS via Tailscale MagicDNS) | **Production — always-on.** | The deployed gateway, full autonomous loop fleet, all the Claude environments below. Every merge to `main` deploys here via GitHub Actions. |
+
+Three Claude environments still live on the VPS (production-side; for the canonical reference see [doc 10](06_Deployment_And_Environments/10_Interactive_Coding_Environment.md)):
 
 | When | Endpoint | Models |
 |---|---|---|
-| Kevin coding interactively (Antigravity terminal, IDE side panel, plain `claude`) | **api.anthropic.com** | Claude Opus 4.7 / Sonnet 4.6 / Haiku — Max plan OAuth |
+| Kevin coding interactively on VPS (when away from desktop) — Antigravity terminal, IDE side panel, plain `claude` | **api.anthropic.com** | Claude Opus 4.7 / Sonnet 4.6 / Haiku — Max plan OAuth |
 | `zai` shell function (explicit cheap-mode opt-in) | **api.z.ai** | GLM-5.x via ZAI proxy |
 | UA autonomous services (Simone, Atlas, Cody normal work, ClaudeDevs cron, …) | **api.z.ai** | GLM-5.x via Infisical-injected env |
 | Demo workspaces under `/opt/ua_demos/<id>/` | **api.anthropic.com** | Real Anthropic for new-feature demos |
 
-Two physical machines:
-- **`mint-desktop`** — your screen, keyboard, Antigravity IDE, Tailscale client.
-- **`uaonvps`** — Linux VPS where everything actually runs (services, dev-tree, prod checkout, demo workspaces).
-
-You connect mint-desktop → uaonvps via Antigravity Remote-SSH over Tailscale. Editor displays on desktop; everything else (workspace, terminal, Claude Code, git) runs on the VPS.
-
 ---
 
-## 2 — Daily session start
+## 2 — Daily session start (canonical: desktop-local)
+
+```bash
+cd /home/kjdragan/lrepos/universal_agent
+git fetch origin && git pull --ff-only origin main
+uv sync
+just dev
+```
+
+`just dev` boots gateway (`:8002`) + API (`:8001`) + web-ui Next.js (`:3000`) with prefixed output. Ctrl-C tears down the whole tree. All autonomous loops are off (no heartbeat firing, no cron ticking, no real emails). To opt a specific loop in for testing, set `UA_DEV_<NAME>_FORCE_ON=1` in `.env` and restart.
+
+Full walkthrough + prerequisites + troubleshooting: [`docs/06_Deployment_And_Environments/12_Local_Dev_Environment.md`](06_Deployment_And_Environments/12_Local_Dev_Environment.md) **(canonical)**.
+
+### Inspection helpers (from anywhere)
+
+```bash
+PYTHONPATH=src python -m universal_agent.dev_tools env-report      # per-loop dev decisions
+PYTHONPATH=src python -m universal_agent.dev_tools loop-status heartbeat
+PYTHONPATH=src python -m universal_agent.dev_tools cron-list       # persisted cron jobs
+python scripts/snapshot_prod_to_dev.py --dry-run                   # pull prod data preview
+```
+
+### Fallback: VPS-as-dev via Antigravity Remote-SSH
+
+If desktop dev isn't available (away from desktop, hardware issue, etc.), the older VPS-as-dev path still works:
 
 ```
 1. Wake desktop (Tailscale auto-connects)
-2. Open Antigravity
-3. Remote Explorer → connect to ua@uaonvps
-4. Open folder: /home/ua/dev/universal_agent
-5. Ctrl+`  →  start coding
+2. Open Antigravity → Remote Explorer → connect to ua@uaonvps
+3. Open folder: /home/ua/dev/universal_agent
+4. Ctrl+` → start coding
 ```
 
-If `/home/ua/dev/universal_agent` doesn't exist yet, run the provisioning script once (this only needs to happen once, ever):
-
-```
-ssh root@uaonvps 'bash /opt/universal_agent/scripts/provision_vps_dev_tree.sh'
-```
-
-Full walkthrough + prerequisite checklist: [`docs/06_Deployment_And_Environments/11_Daily_Dev_Workflow.md`](06_Deployment_And_Environments/11_Daily_Dev_Workflow.md).
+If `/home/ua/dev/universal_agent` doesn't exist: `ssh root@uaonvps 'bash /opt/universal_agent/scripts/provision_vps_dev_tree.sh'`. Fallback walkthrough: [`docs/06_Deployment_And_Environments/11_Daily_Dev_Workflow.md`](06_Deployment_And_Environments/11_Daily_Dev_Workflow.md).
 
 ---
 
@@ -93,7 +111,10 @@ Fuller diagnostic table: [doc 11 § Recovery procedures](06_Deployment_And_Envir
 
 | Topic | Doc |
 |---|---|
-| Daily workflow walkthrough (this doc, expanded) | [doc 11](06_Deployment_And_Environments/11_Daily_Dev_Workflow.md) |
+| **Canonical desktop-local dev runbook (`just dev`)** | [**doc 12**](06_Deployment_And_Environments/12_Local_Dev_Environment.md) |
+| Infisical dev-env hygiene (optional cleanup) | [doc 13](06_Deployment_And_Environments/13_Infisical_Dev_Env_Hygiene.md) |
+| Local runtime lane definitions (HQ Dev / Desktop Worker) | [doc 05](06_Deployment_And_Environments/05_Local_Runtime_Modes.md) |
+| VPS-as-dev fallback workflow (Antigravity Remote-SSH) | [doc 11](06_Deployment_And_Environments/11_Daily_Dev_Workflow.md) |
 | Why interactive `claude` defaults to Anthropic Max — full mechanism, lessons learned | [doc 10](06_Deployment_And_Environments/10_Interactive_Coding_Environment.md) |
 | Demo workspace mechanics, OAuth wrinkles | [doc 09](06_Deployment_And_Environments/09_Demo_Execution_Environments.md) |
 | Demo provisioning runbook (one-time setup) | [demo_workspace_provisioning.md](operations/demo_workspace_provisioning.md) |

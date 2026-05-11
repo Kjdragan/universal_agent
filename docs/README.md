@@ -33,7 +33,10 @@ Mistaking one for the other is the #1 source of confusion in this system. Before
 
 ## Development
 
-- **[Local Development Guide](development/LOCAL_DEV.md)**: How to run Universal Agent on your desktop at `http://localhost:3000` — prerequisites, one-time setup, daily workflow, architecture, troubleshooting.
+- **[Local Development Environment](06_Deployment_And_Environments/12_Local_Dev_Environment.md)** — **CANONICAL (2026-05-11).** How to run Universal Agent on your desktop at `http://localhost:3000` via `just dev`. Autonomous loops off by default. Same code as prod, separate dev SQLite, secrets via Infisical `development` env. Bootstrap, daily workflow, troubleshooting, prod-snapshot pattern.
+- **[Infisical Dev Env Hygiene](06_Deployment_And_Environments/13_Infisical_Dev_Env_Hygiene.md)** — Optional cleanup for Infisical's `development` env (remove `UA_*_ENABLED` flags mirrored from prod).
+- **[Local Dev Initiative Briefing (2026-05-11)](operations/2026-05-11_local_dev_initiative_briefing.md)** — Cross-session handoff for concurrent AI sessions working in the repo.
+- **[Local Development Guide (pre-2026-05-11, archived approach)](development/LOCAL_DEV.md)** — ⚠️ Superseded by Doc 12 above. Describes an older `.local` Infisical environment + shell-script flow that's no longer canonical.
 
 ## 📚 Table of Contents
 

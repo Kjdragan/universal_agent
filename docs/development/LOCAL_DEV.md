@@ -1,5 +1,10 @@
 # Local Development Guide
 
+> [!WARNING]
+> **⚠️ SUPERSEDED 2026-05-11.** The canonical local-dev runbook is now [`docs/06_Deployment_And_Environments/12_Local_Dev_Environment.md`](../06_Deployment_And_Environments/12_Local_Dev_Environment.md). It uses `just dev` (single command), Infisical's `development` environment (not a custom `.local` env), and a master `loop_control.py` switch with `UA_DEV_<NAME>_FORCE_ON=1` opt-in semantics. **Start there.**
+>
+> This doc described an earlier approach using a `.local` Infisical env and three `dev_*.sh` scripts. Kept for historical reference but no longer canonical. Some of the conceptual framing below (especially "local dev runs independently of the VPS") remains correct; the implementation details (file paths, script names, env names) do not.
+
 Run Universal Agent on your desktop at `http://localhost:3000`, iterate with fast feedback, and push to production only when you're happy.
 
 > [!IMPORTANT]
