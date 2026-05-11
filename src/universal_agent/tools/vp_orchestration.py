@@ -247,6 +247,45 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
     if not source_session_id:
         source_session_id = "internal.vp_tool"
 
+    # Hermes Phase E.1 — resolve cody_mode and plumb it into mission
+    # metadata so vp_missions.payload_json carries the toggle for the
+    # VP worker (CLI/SDK adapter) to honor. Resolution order:
+    #   1. explicit args["cody_mode"]
+    #   2. task row's cody_mode (if a linked task_id is supplied)
+    #   3. UA_CODY_DEFAULT_MODE env
+    #   4. "zai" default
+    raw_metadata = (
+        args.get("metadata") if isinstance(args.get("metadata"), dict) else {}
+    )
+    explicit_cody_mode = str(args.get("cody_mode") or raw_metadata.get("cody_mode") or "").strip().lower()
+    if explicit_cody_mode in {"zai", "anthropic"}:
+        resolved_cody_mode: str = explicit_cody_mode
+    else:
+        from universal_agent.services.cody_mode import resolve_cody_mode
+
+        # Try to load the linked task row to pick up its per-task override.
+        linked_task_id = str(args.get("task_id") or raw_metadata.get("task_id") or "").strip()
+        linked_task: dict[str, Any] | None = None
+        if linked_task_id:
+            try:
+                from universal_agent import task_hub
+                from universal_agent.durable.db import (
+                    connect_runtime_db,
+                    get_activity_db_path,
+                )
+
+                th_conn = connect_runtime_db(get_activity_db_path())
+                try:
+                    linked_task = task_hub.get_item(th_conn, linked_task_id)
+                finally:
+                    th_conn.close()
+            except Exception:
+                linked_task = None
+        resolved_cody_mode = resolve_cody_mode(linked_task)
+
+    mission_metadata = dict(raw_metadata)
+    mission_metadata["cody_mode"] = resolved_cody_mode
+
     conn = _connect_vp_db()
     try:
         row = dispatch_mission_with_retry(
@@ -265,9 +304,7 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
                 run_id=run_id or None,
                 execution_mode=str(args.get("execution_mode") or "sdk").strip()
                 or "sdk",
-                metadata=args.get("metadata")
-                if isinstance(args.get("metadata"), dict)
-                else {},
+                metadata=mission_metadata,
             ),
         )
         mission = _mission_to_dict(row) or {}

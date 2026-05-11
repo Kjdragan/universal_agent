@@ -270,6 +270,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             feedback_json TEXT NOT NULL DEFAULT '{}',
             metadata_json TEXT NOT NULL DEFAULT '{}',
             max_retries INTEGER,
+            cody_mode TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -435,6 +436,12 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         # task in needs_review. Hermes-adaptation Phase A.1 (2026-05-10) —
         # see docs/reports/hermes-adaptation-phased-plan-2026-05-10.md.
         "ALTER TABLE task_hub_items ADD COLUMN max_retries INTEGER",
+        # Per-task override for the Cody execution model. NULL inherits from
+        # UA_CODY_DEFAULT_MODE env (default "zai"). Values: "zai" | "anthropic".
+        # Resolved via services/cody_mode.resolve_cody_mode at dispatch time
+        # and plumbed into vp_missions.payload_json for worker_loop. See
+        # docs/reports/hermes-adaptation-phased-plan-2026-05-10.md § Phase E.
+        "ALTER TABLE task_hub_items ADD COLUMN cody_mode TEXT",
     ):
         try:
             conn.execute(ddl)
@@ -1099,6 +1106,16 @@ def upsert_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any
             else None
         )
 
+    # Hermes Phase E.1 — per-task cody_mode override. NULL inherits from
+    # UA_CODY_DEFAULT_MODE env (default "zai"). Only "zai" / "anthropic"
+    # are accepted; anything else is normalized to NULL.
+    if "cody_mode" in item:
+        _raw_cody = str(item.get("cody_mode") or "").strip().lower()
+        cody_mode_value: Optional[str] = _raw_cody if _raw_cody in {"zai", "anthropic"} else None
+    else:
+        _existing_cody = str(existing.get("cody_mode") or "").strip().lower()
+        cody_mode_value = _existing_cody if _existing_cody in {"zai", "anthropic"} else None
+
     payload = {
         "task_id": task_id,
         "source_kind": str(item.get("source_kind") or existing.get("source_kind") or "internal"),
@@ -1124,6 +1141,7 @@ def upsert_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any
         "trigger_type": trigger_type,
         "metadata_json": _json_dumps(metadata),
         "max_retries": max_retries_value,
+        "cody_mode": cody_mode_value,
         "created_at": str(existing.get("created_at") or item.get("created_at") or now_iso),
         "updated_at": now_iso,
     }
@@ -1134,12 +1152,12 @@ def upsert_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any
             task_id, source_kind, source_ref, title, description, project_key, priority, due_at,
             labels_json, status, must_complete, incident_key, workstream_id, subtask_role,
             parent_task_id, agent_ready, score, score_confidence, stale_state, seizure_state,
-            mirror_status, trigger_type, metadata_json, max_retries, created_at, updated_at
+            mirror_status, trigger_type, metadata_json, max_retries, cody_mode, created_at, updated_at
         ) VALUES (
             :task_id, :source_kind, :source_ref, :title, :description, :project_key, :priority, :due_at,
             :labels_json, :status, :must_complete, :incident_key, :workstream_id, :subtask_role,
             :parent_task_id, :agent_ready, :score, :score_confidence, :stale_state, :seizure_state,
-            :mirror_status, :trigger_type, :metadata_json, :max_retries, :created_at, :updated_at
+            :mirror_status, :trigger_type, :metadata_json, :max_retries, :cody_mode, :created_at, :updated_at
         )
         ON CONFLICT(task_id) DO UPDATE SET
             source_kind=excluded.source_kind,
@@ -1165,6 +1183,7 @@ def upsert_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any
             trigger_type=excluded.trigger_type,
             metadata_json=excluded.metadata_json,
             max_retries=excluded.max_retries,
+            cody_mode=excluded.cody_mode,
             updated_at=excluded.updated_at
         """,
         payload,

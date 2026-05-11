@@ -90,6 +90,21 @@ class ClaudeCodeCLIClient(VpClient):
         skill_name = str(payload.get("skill") or "").strip()
         enable_agent_teams = bool(payload.get("enable_agent_teams", True))
 
+        # Hermes Phase E.2.a — resolve Cody execution mode from the
+        # mission's metadata block. Falls back to env / "zai" default
+        # if the mission row predates Phase E.1.
+        from universal_agent.services.cody_mode import resolve_from_payload
+
+        cody_mode = resolve_from_payload(
+            payload.get("metadata") if isinstance(payload.get("metadata"), dict) else None
+        )
+        if cody_mode == "anthropic":
+            logger.info(
+                "CLI mission %s — Cody mode=anthropic; scrubbing ANTHROPIC_* env "
+                "and forcing CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1",
+                mission_id,
+            )
+
         workspace_dir = _resolve_workspace(mission_id, workspace_root, payload)
         workspace_dir.mkdir(parents=True, exist_ok=True)
 
@@ -142,6 +157,7 @@ class ClaudeCodeCLIClient(VpClient):
                     timeout_seconds=timeout_seconds,
                     enable_agent_teams=enable_agent_teams,
                     mission_id=mission_id,
+                    cody_mode=cody_mode,
                 )
 
                 if outcome.status == "completed":
@@ -173,10 +189,11 @@ async def _execute_cli_session(
     timeout_seconds: int,
     enable_agent_teams: bool,
     mission_id: str,
+    cody_mode: str = "zai",
 ) -> MissionOutcome:
     """Spawn a claude CLI subprocess and monitor its output."""
 
-    env = _build_cli_env(enable_agent_teams, workspace_dir)
+    env = _build_cli_env(enable_agent_teams, workspace_dir, cody_mode=cody_mode)
 
     cmd = [
         "claude",
@@ -388,12 +405,31 @@ async def _monitor_cli_output(
     )
 
 
-def _build_cli_env(enable_agent_teams: bool, workspace_dir: Path) -> dict[str, str]:
-    """Build the environment for the CLI subprocess."""
-    env = dict(os.environ)
+def _build_cli_env(
+    enable_agent_teams: bool,
+    workspace_dir: Path,
+    *,
+    cody_mode: str = "zai",
+) -> dict[str, str]:
+    """Build the environment for the CLI subprocess.
 
-    if enable_agent_teams:
+    Hermes Phase E.2.a — when ``cody_mode == "anthropic"``, every
+    ``ANTHROPIC_*`` env var is scrubbed so the spawned ``claude``
+    subprocess falls through to its workspace-local OAuth (the user's
+    Anthropic Max plan) instead of the UA daemon's ZAI routing. This
+    mirrors the pattern in ``services/cody_implementation._scrubbed_env``
+    that demo workspaces already use unconditionally.
+
+    Defaulted to "zai" (current behavior — inherit parent ZAI routing).
+    """
+    if cody_mode == "anthropic":
+        env = {k: v for k, v in os.environ.items() if not k.startswith("ANTHROPIC_")}
+        # Agent Teams is the whole point of Anthropic mode — force on.
         env["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
+    else:
+        env = dict(os.environ)
+        if enable_agent_teams:
+            env["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
 
     env["CURRENT_RUN_WORKSPACE"] = str(workspace_dir)
     env["CURRENT_SESSION_WORKSPACE"] = str(workspace_dir)
