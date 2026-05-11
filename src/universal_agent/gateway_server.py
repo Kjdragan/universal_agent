@@ -13994,6 +13994,11 @@ async def lifespan(app: FastAPI):
     logger.info("Lifespan: deployment profile resolved to %s", _DEPLOYMENT_PROFILE)
     _FACTORY_POLICY = bootstrap_state.policy
     _refresh_runtime_feature_flags_from_env()
+    # Phase D (2026-05-11): if we're in dev mode, log a per-loop summary so the
+    # operator sees what's actually going to run vs what Infisical injected.
+    # No-op in prod.
+    from universal_agent.loop_control import report_dev_overrides  # noqa: PLC0415 — lazy
+    report_dev_overrides(log=logger)
     _refresh_ops_auth_config_from_env()
     _maybe_instrument_logfire_fastapi()
 
@@ -14702,11 +14707,18 @@ async def lifespan(app: FastAPI):
         logger.info("🏭 Factory staleness enforcement enabled (interval=60s)")
 
     # --- HQ self-heartbeat (keeps HQ's own registration fresh) ---
-    _hq_self_heartbeat_stop = asyncio.Event()
-    _hq_self_heartbeat_task = asyncio.create_task(
-        _hq_self_heartbeat_loop(_hq_self_heartbeat_stop)
-    )
-    logger.info("💓 HQ self-heartbeat enabled (interval=60s)")
+    if should_run_loop("hq_self_heartbeat", prod_default=True):
+        _hq_self_heartbeat_stop = asyncio.Event()
+        _hq_self_heartbeat_task = asyncio.create_task(
+            _hq_self_heartbeat_loop(_hq_self_heartbeat_stop)
+        )
+        logger.info("💓 HQ self-heartbeat enabled (interval=60s)")
+    else:
+        logger.info(
+            "⏸️ HQ self-heartbeat disabled (UA_HQ_SELF_HEARTBEAT_ENABLED=0 or "
+            "UA_RUNTIME_STAGE=development). Factory registration won't refresh — "
+            "fine for local dev, would be a problem in prod."
+        )
 
     # --- Mission Control intelligence sweeper (Phase 1B+) ---
     # Gated by UA_MC_PHASE_1_ENABLED. When the flag is off, the sweeper's

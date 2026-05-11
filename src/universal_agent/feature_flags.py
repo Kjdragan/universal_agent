@@ -33,18 +33,34 @@ def heartbeat_enabled(default: bool = True) -> bool:
     """Return True when heartbeat is enabled (default: ON in prod, OFF in dev).
 
     Resolution order:
-      1. ``UA_DISABLE_HEARTBEAT=1`` → False (legacy explicit kill-switch wins).
-      2. ``UA_ENABLE_HEARTBEAT=1`` → True (legacy explicit on-switch wins).
-      3. ``UA_HEARTBEAT_ENABLED`` (modern flag) handled by ``should_run_loop``.
-      4. Else: OFF in ``UA_RUNTIME_STAGE=development``, ``default`` otherwise.
 
-    Centralizes the dev-default-OFF behavior added in PR #200's
-    ``loop_control.should_run_loop`` so the heartbeat doesn't tick on a
-    fresh dev box.
+    **Dev** (``UA_RUNTIME_STAGE=development``): defer entirely to
+    ``loop_control.should_run_loop("heartbeat")``. That function ignores
+    truthy ``UA_HEARTBEAT_ENABLED`` and legacy ``UA_ENABLE_HEARTBEAT``
+    from Infisical-injected env to defend against prod-parity pollution.
+    Only ``UA_DEV_HEARTBEAT_FORCE_ON=1`` opts the loop in.
+
+    **Prod** (anything else):
+      1. ``UA_DISABLE_HEARTBEAT=1`` → False (legacy kill-switch).
+      2. ``UA_ENABLE_HEARTBEAT=1`` → True (legacy on-switch).
+      3. ``UA_HEARTBEAT_ENABLED`` (modern flag) handled by ``should_run_loop``.
+      4. Else: ``default``.
+
+    The dev-vs-prod split was tightened on 2026-05-11 (Phase D) after a
+    desktop run showed heartbeat firing despite Phase C.2 gates because
+    Infisical's ``development`` env mirrored ``UA_ENABLE_HEARTBEAT=1``
+    from prod parity.
     """
     # Lazy import to avoid circular-import surface at module-load time.
-    from universal_agent.loop_control import should_run_loop
+    from universal_agent.loop_control import is_development_runtime, should_run_loop
 
+    if is_development_runtime():
+        # Dev: only UA_DEV_HEARTBEAT_FORCE_ON=1 turns it on. Legacy and
+        # modern UA_*_ENABLED truthy values are treated as Infisical
+        # pollution and ignored.
+        return should_run_loop("heartbeat", prod_default=default)
+
+    # Production: legacy switches + modern flag honored as before.
     if _is_truthy(os.getenv("UA_DISABLE_HEARTBEAT")):
         return False
     if _is_truthy(os.getenv("UA_ENABLE_HEARTBEAT")):
@@ -60,13 +76,20 @@ def memory_index_enabled(default: bool = True) -> bool:
 def cron_enabled(default: bool = True) -> bool:
     """Return True when cron service is enabled (default: ON in prod, OFF in dev).
 
-    Same resolution shape as ``heartbeat_enabled``. Note: PR #200's
-    ``UA_CRON_REGISTRATION_ENABLED`` master gate independently controls
-    whether the registered cron jobs actually fire. This flag controls
-    whether the ``CronService`` itself is instantiated and its scheduler
-    loop ticks.
+    Same dev-vs-prod split as ``heartbeat_enabled`` (see its docstring for
+    the rationale). In dev, only ``UA_DEV_CRON_FORCE_ON=1`` opts the
+    service in; legacy and modern truthy ``UA_*_ENABLED`` are ignored as
+    Infisical prod-parity pollution.
+
+    Note: PR #200's ``UA_CRON_REGISTRATION_ENABLED`` master gate
+    independently controls whether the registered cron jobs actually
+    fire. This flag controls whether the ``CronService`` itself is
+    instantiated and its scheduler loop ticks at all.
     """
-    from universal_agent.loop_control import should_run_loop
+    from universal_agent.loop_control import is_development_runtime, should_run_loop
+
+    if is_development_runtime():
+        return should_run_loop("cron", prod_default=default)
 
     if _is_truthy(os.getenv("UA_DISABLE_CRON")):
         return False

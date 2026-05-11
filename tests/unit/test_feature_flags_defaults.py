@@ -75,34 +75,76 @@ def test_cron_enabled_defaults_off_in_dev(monkeypatch):
     assert cron_enabled() is False
 
 
-def test_heartbeat_legacy_enable_wins_over_dev_default(monkeypatch):
-    """``UA_ENABLE_HEARTBEAT=1`` must still force heartbeat ON in dev — operator override."""
+def test_heartbeat_legacy_enable_is_IGNORED_in_dev(monkeypatch):
+    """Phase D (2026-05-11): ``UA_ENABLE_HEARTBEAT=1`` is treated as Infisical
+    prod-parity pollution in dev and IGNORED. Use ``UA_DEV_HEARTBEAT_FORCE_ON=1``
+    to opt in instead."""
     from universal_agent.feature_flags import heartbeat_enabled
 
     monkeypatch.setenv("UA_RUNTIME_STAGE", "development")
     monkeypatch.setenv("UA_ENABLE_HEARTBEAT", "1")
+    monkeypatch.delenv("UA_DEV_HEARTBEAT_FORCE_ON", raising=False)
 
-    assert heartbeat_enabled() is True
+    assert heartbeat_enabled() is False
 
 
-def test_cron_legacy_enable_wins_over_dev_default(monkeypatch):
-    """``UA_ENABLE_CRON=1`` must still force cron ON in dev — operator override."""
+def test_cron_legacy_enable_is_IGNORED_in_dev(monkeypatch):
+    """Phase D: ``UA_ENABLE_CRON=1`` is ignored in dev (Infisical pollution)."""
     from universal_agent.feature_flags import cron_enabled
 
     monkeypatch.setenv("UA_RUNTIME_STAGE", "development")
     monkeypatch.setenv("UA_ENABLE_CRON", "1")
+    monkeypatch.delenv("UA_DEV_CRON_FORCE_ON", raising=False)
 
-    assert cron_enabled() is True
+    assert cron_enabled() is False
 
 
-def test_heartbeat_modern_flag_wins_over_dev_default(monkeypatch):
-    """``UA_HEARTBEAT_ENABLED=1`` (modern flag) overrides dev-default-OFF."""
+def test_heartbeat_modern_flag_is_IGNORED_in_dev(monkeypatch):
+    """Phase D: ``UA_HEARTBEAT_ENABLED=1`` is also ignored in dev."""
     from universal_agent.feature_flags import heartbeat_enabled
 
     monkeypatch.setenv("UA_RUNTIME_STAGE", "development")
     monkeypatch.delenv("UA_ENABLE_HEARTBEAT", raising=False)
     monkeypatch.delenv("UA_DISABLE_HEARTBEAT", raising=False)
     monkeypatch.setenv("UA_HEARTBEAT_ENABLED", "1")
+    monkeypatch.delenv("UA_DEV_HEARTBEAT_FORCE_ON", raising=False)
+
+    assert heartbeat_enabled() is False
+
+
+def test_heartbeat_dev_force_on_opts_in(monkeypatch):
+    """Phase D: ``UA_DEV_HEARTBEAT_FORCE_ON=1`` is the canonical dev opt-in."""
+    from universal_agent.feature_flags import heartbeat_enabled
+
+    monkeypatch.setenv("UA_RUNTIME_STAGE", "development")
+    monkeypatch.delenv("UA_HEARTBEAT_ENABLED", raising=False)
+    monkeypatch.delenv("UA_ENABLE_HEARTBEAT", raising=False)
+    monkeypatch.delenv("UA_DISABLE_HEARTBEAT", raising=False)
+    monkeypatch.setenv("UA_DEV_HEARTBEAT_FORCE_ON", "1")
+
+    assert heartbeat_enabled() is True
+
+
+def test_cron_dev_force_on_opts_in(monkeypatch):
+    """Phase D: ``UA_DEV_CRON_FORCE_ON=1`` opts the cron service into dev."""
+    from universal_agent.feature_flags import cron_enabled
+
+    monkeypatch.setenv("UA_RUNTIME_STAGE", "development")
+    monkeypatch.delenv("UA_CRON_ENABLED", raising=False)
+    monkeypatch.delenv("UA_ENABLE_CRON", raising=False)
+    monkeypatch.delenv("UA_DISABLE_CRON", raising=False)
+    monkeypatch.setenv("UA_DEV_CRON_FORCE_ON", "1")
+
+    assert cron_enabled() is True
+
+
+def test_heartbeat_legacy_enable_still_wins_in_prod(monkeypatch):
+    """Production behavior unchanged: legacy ``UA_ENABLE_HEARTBEAT=1`` still works."""
+    from universal_agent.feature_flags import heartbeat_enabled
+
+    monkeypatch.setenv("UA_RUNTIME_STAGE", "production")
+    monkeypatch.delenv("UA_DISABLE_HEARTBEAT", raising=False)
+    monkeypatch.setenv("UA_ENABLE_HEARTBEAT", "1")
 
     assert heartbeat_enabled() is True
 

@@ -201,41 +201,40 @@ Ctrl-C in the terminal running `just dev`. All three processes exit cleanly. Hit
 
 Local dev does NOT tick autonomous loops by default. To test autonomous behavior in dev there are two patterns:
 
-**Pattern A: Flip an individual loop ON via env var, restart `just dev`.**
+**Pattern A: Opt a specific loop INTO dev via `UA_DEV_<NAME>_FORCE_ON=1`.**
 
-Each loop respects an explicit `UA_<NAME>_ENABLED` override that beats the dev-default-OFF. Add the line to your `.env`, restart, and the loop ticks at its normal interval. Set back to `0` or remove the line when done.
+Phase D (2026-05-11) tightened the dev-mode gate: in dev, **any truthy `UA_<NAME>_ENABLED` is IGNORED** because Infisical's `development` env tends to mirror prod-parity flags. To opt a specific loop in for testing, use the dev-only `UA_DEV_<NAME>_FORCE_ON=1` variable in your `.env`:
 
 ```bash
 # Example: turn the heartbeat on for one dev session
-echo "UA_HEARTBEAT_AUTONOMOUS_ENABLED=1" >> .env
+echo "UA_DEV_HEARTBEAT_FORCE_ON=1" >> .env
 just dev   # Ctrl-C the previous session first
 
 # When done, remove the line or set =0
 ```
 
-Available flags (one per loop):
+Available dev opt-in flags (one per loop) — set `UA_DEV_<NAME>_FORCE_ON=1`:
 
-| Loop | Env var | Notes |
+| Loop | Dev opt-in var | Notes |
 |---|---|---|
-| Heartbeat (entire service) | `UA_HEARTBEAT_ENABLED` | Master gate. When OFF, the `HeartbeatService` itself is not instantiated and no scheduler loop ticks — zero Claude Agent SDK invocations from heartbeat. |
-| Heartbeat (autonomous tick subset, only relevant if service is on) | `UA_HEARTBEAT_AUTONOMOUS_ENABLED` | |
-| Cron service (entire service) | `UA_CRON_ENABLED` | Master gate. When OFF, the `CronService` itself is not instantiated. |
-| Cron job registration (only relevant if cron service is on) | `UA_CRON_REGISTRATION_ENABLED` | When OFF, the cron service ticks but no schedules are registered. |
-| Idle dispatch loop | `UA_IDLE_POLL_ENABLED` | |
-| Dispatch stale sweep | `UA_DISPATCH_STALE_SWEEP_ENABLED` | |
-| Daemon sessions | `UA_DAEMON_SESSIONS_ENABLED` | |
-| VP event bridge | `UA_VP_EVENT_BRIDGE_ENABLED` | |
-| VP stale reconciler | `UA_VP_STALE_RECONCILE_ENABLED` | |
-| AgentMail service (entire service) | `UA_AGENTMAIL_SERVICE_ENABLED` | Master gate. When OFF, no inbox polling, no WebSocket, no outbound email. |
-| AgentMail polling-specific (legacy, only if service is on) | `UA_AGENTMAIL_ENABLED` | |
-| AgentMail WS-specific (legacy, only if service is on) | `UA_AGENTMAIL_WS_ENABLED` | |
-| Notification dispatcher (real emails) | `UA_NOTIFICATION_DISPATCHER_ENABLED` | Defaults OFF in dev — prevents accidental gmail blast from queued backlog. |
-| YouTube playlist watcher | `UA_YOUTUBE_PLAYLIST_WATCHER_ENABLED` | |
-| Autonomous daily briefing | `UA_AUTONOMOUS_DAILY_BRIEFING_ENABLED` | |
+| Heartbeat (entire service) | `UA_DEV_HEARTBEAT_FORCE_ON` | Master gate. When OFF, the `HeartbeatService` is not instantiated. |
+| Cron service (entire service) | `UA_DEV_CRON_FORCE_ON` | Master gate. When OFF, the `CronService` is not instantiated. (Even if it is, persisted jobs from `cron_jobs.json` are NOT loaded in dev.) |
+| Cron job registration (only relevant if cron service is on) | `UA_DEV_CRON_REGISTRATION_FORCE_ON` | When OFF, no schedules are registered. |
+| Idle dispatch loop | `UA_DEV_IDLE_POLL_FORCE_ON` | |
+| Dispatch stale sweep | `UA_DEV_DISPATCH_STALE_SWEEP_FORCE_ON` | |
+| Daemon sessions | `UA_DEV_DAEMON_SESSIONS_FORCE_ON` | |
+| VP event bridge | `UA_DEV_VP_EVENT_BRIDGE_FORCE_ON` | |
+| VP stale reconciler | `UA_DEV_VP_STALE_RECONCILE_FORCE_ON` | |
+| AgentMail service | `UA_DEV_AGENTMAIL_SERVICE_FORCE_ON` | When ON, dev connects to the real AgentMail inbox and CAN send real emails. **Use with care.** |
+| Notification dispatcher | `UA_DEV_NOTIFICATION_DISPATCHER_FORCE_ON` | When ON, dev CAN send real emails to operator's gmail. **Use with care.** |
+| YouTube playlist watcher | `UA_DEV_YOUTUBE_PLAYLIST_WATCHER_FORCE_ON` | |
+| HQ self-heartbeat | `UA_DEV_HQ_SELF_HEARTBEAT_FORCE_ON` | Refreshes factory registration — fine to leave off in dev. |
 
-**Pattern B: Single-iteration CLI invocations (deferred — coming in a follow-up PR).**
+> **Note: legacy `UA_ENABLE_HEARTBEAT=1` / `UA_HEARTBEAT_ENABLED=1` are IGNORED in dev.** Phase D treats them as Infisical-injected prod-parity pollution. Setting them in your local `.env` will NOT enable the loop in dev — only `UA_DEV_<NAME>_FORCE_ON=1` does. This is intentional defensive behavior so dev stays safe even if Infisical's `development` env has prod flags mirrored.
 
-The intended pattern is `python -m universal_agent.heartbeat tick` and similar — one tick, deterministic, exits when done. These entry points are not yet wired (see § Audit pending). Until they are, Pattern A is the way.
+**Pattern B: Single-iteration CLI invocations (Phase E follow-up).**
+
+The intended pattern is `python -m universal_agent.heartbeat_service tick` and similar — one tick, deterministic, exits when done. Coming in Phase E. Until then, Pattern A is the way.
 
 Either pattern gives you the **same code path as prod** — only the trigger is different.
 
@@ -378,13 +377,23 @@ Items the doc claims that **may not yet be true** in the codebase. Each one is a
 - [x] **YouTube playlist watcher master gate.** `should_run_loop("youtube_playlist_watcher")` — no Google API quota burn from dev.
 - [x] **`bootstrap_local_hq_dev.sh` prints a "loops silenced" banner** at the end of bootstrap so operators see what's off and how to opt back in.
 
+**Closed in Phase D (2026-05-11, after second end-to-end dev verification revealed Infisical pollution):**
+
+A second `just dev` run showed heartbeat + cron service + 5 cron jobs firing despite the Phase C.2 gates, because Infisical's `development` env mirrors `UA_ENABLE_HEARTBEAT=1` / `UA_CRON_ENABLED=1` from prod parity. Phase C.2's gates honored those as "explicit operator overrides" — correct for operator-set env vars but wrong for Infisical injection. Phase D tightens the semantics:
+
+- [x] **`loop_control.should_run_loop` dev semantics tightened.** In `UA_RUNTIME_STAGE=development`, truthy `UA_<NAME>_ENABLED` is now **IGNORED** as likely Infisical pollution. Only `UA_DEV_<NAME>_FORCE_ON=1` opts a loop in for dev testing. Explicit `UA_<NAME>_ENABLED=0/false` still honored (operator can force off). Production semantics unchanged.
+- [x] **`feature_flags.heartbeat_enabled()` and `cron_enabled()` updated** to the dev/prod split. In dev, legacy `UA_ENABLE_HEARTBEAT=1` from Infisical is also ignored; use `UA_DEV_HEARTBEAT_FORCE_ON=1` to opt in.
+- [x] **HQ self-heartbeat gate** added in `gateway_server.py`. `should_run_loop("hq_self_heartbeat")` — in dev, factory registration doesn't refresh (fine; no fleet membership to maintain).
+- [x] **CronService defensive isolation** — even if cron_enabled() returns True somehow, the service skips loading the persisted `cron_jobs.json` in dev. Belt-and-suspenders: the 53 persisted prod cron jobs cannot tick on Kevin's desktop even by accident.
+- [x] **`report_dev_overrides()` startup log.** At gateway boot in dev mode, logs a per-loop summary showing which loops are off, which are dev-opted-in, and which truthy `UA_*_ENABLED` flags are being ignored as Infisical pollution. Operator sees at a glance what's happening.
+
 **Deferred to follow-up PRs (not blockers for the contract):**
 
-- [ ] **Single-iteration CLI entry points** for each autonomous loop. Pattern: `python -m universal_agent.heartbeat tick`, `python -m universal_agent.cron run-once <name>`. Useful for testing autonomous behavior in dev without ticking continuously. Workaround until then: set `UA_<NAME>_ENABLED=1` in `.env` for the specific loop you want to test, restart `just dev`, and the loop will tick at its normal interval. Tradeoff: that loop ticks until you set the flag back to 0.
-- [ ] **`development` Infisical environment completeness.** Cross-reference every secret the gateway/api try to load against the `development` env in Infisical. Anything prod-only must either be added to dev (with a sandbox/test value) or have a defaults-and-skip path. **Operator-side check** — can only be verified by reading what's in Infisical.
-- [ ] **Dev DB story.** Confirm the `development` env returns a SQLite URL (or that the gateway falls back to one when a Postgres URL isn't set). Confirm migrations apply cleanly to a fresh SQLite. Depends on the Infisical-completeness audit above.
-- [ ] **`snapshot_prod_to_dev.py` script.** For pulling a read-only prod snapshot when realistic data is needed. Not a blocker — dev works without it; this is a quality-of-life addon when you want to debug against realistic data shape.
-- [ ] **`bootstrap_local_hq_dev.sh` freshness verification.** Last modified March 2026; needs end-to-end manual run on Kevin's desktop to confirm it still works against current code + Infisical schema.
+- [ ] **Single-iteration CLI entry points** for each autonomous loop. Pattern: `python -m universal_agent.heartbeat_service tick`, `python -m universal_agent.cron_service run-once <name>`. Useful for testing autonomous behavior in dev without ticking continuously. Workaround until then: set `UA_DEV_<NAME>_FORCE_ON=1` for the specific loop you want to test, restart `just dev`. (Phase E.)
+- [ ] **`development` Infisical environment hygiene.** Optional now — Phase D makes dev safe regardless of Infisical pollution — but cleaning the `UA_*_ENABLED` flags out of the `development` env removes the startup warning lines and clarifies intent. **Operator-side check** — list of flags to remove is in `13_Infisical_Dev_Env_Hygiene.md`.
+- [ ] **Dev DB story.** Force SQLite when `UA_RUNTIME_STAGE=development` regardless of any Postgres URL in Infisical-dev. (Phase F.)
+- [ ] **`snapshot_prod_to_dev.py` script.** For pulling a read-only prod snapshot when realistic data is needed. Not a blocker — dev works without it; quality-of-life addon. (Phase F.)
+- [ ] **`bootstrap_local_hq_dev.sh` freshness verification.** Verified working 2026-05-11 by operator desktop run; this item is effectively closed but kept for changelog.
 
 Once the deferred items close, this doc moves from "Contract draft" to "Canonical."
 
