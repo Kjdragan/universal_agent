@@ -14325,17 +14325,25 @@ async def lifespan(app: FastAPI):
             subpath=subpath, payload=payload, headers={"x-ua-source": "yt_playlist_watcher"}
         )
 
-    _yt_playlist_watcher = YouTubePlaylistWatcher(
-        dispatch_fn=_yt_watcher_dispatch_fn,
-        notification_sink=_hook_notification_sink,
-    )
-    _spawn_background_task(
-        _run_after_deployment_window(
-            "youtube_playlist_watcher",
-            _startup_start_youtube_playlist_watcher,
-        ),
-        task_name="youtube_playlist_watcher_startup",
-    )
+    if should_run_loop("youtube_playlist_watcher", prod_default=True):
+        _yt_playlist_watcher = YouTubePlaylistWatcher(
+            dispatch_fn=_yt_watcher_dispatch_fn,
+            notification_sink=_hook_notification_sink,
+        )
+        _spawn_background_task(
+            _run_after_deployment_window(
+                "youtube_playlist_watcher",
+                _startup_start_youtube_playlist_watcher,
+            ),
+            task_name="youtube_playlist_watcher_startup",
+        )
+    else:
+        logger.info(
+            "⏸️ YouTube playlist watcher disabled "
+            "(UA_YOUTUBE_PLAYLIST_WATCHER_ENABLED=0 or "
+            "UA_RUNTIME_STAGE=development). No 60s polling, no Google API "
+            "quota burn."
+        )
 
     # --- gws Workspace Event Listener (Phase 5 — Gmail polling) ---
     async def _gws_event_dispatch_fn(subpath: str, payload: dict) -> tuple[bool, str]:
@@ -14520,17 +14528,25 @@ async def lifespan(app: FastAPI):
                 parts.append(str(sid))
         return ", ".join(parts[:3]) or "background tasks"
 
-    _agentmail_service = AgentMailService(
-        dispatch_fn=_agentmail_dispatch_fn,
-        dispatch_with_admission_fn=_agentmail_dispatch_with_admission_fn,
-        notification_sink=_hook_notification_sink,
-        trusted_ingress_fn=_maybe_trigger_heartbeat_from_agentmail_action,
-        priority_dispatch_fn=_priority_dispatch_for_email,
-    )
-    _spawn_background_task(
-        _run_after_deployment_window("agentmail_service", _startup_start_agentmail_service),
-        task_name="agentmail_service_startup",
-    )
+    if should_run_loop("agentmail_service", prod_default=True):
+        _agentmail_service = AgentMailService(
+            dispatch_fn=_agentmail_dispatch_fn,
+            dispatch_with_admission_fn=_agentmail_dispatch_with_admission_fn,
+            notification_sink=_hook_notification_sink,
+            trusted_ingress_fn=_maybe_trigger_heartbeat_from_agentmail_action,
+            priority_dispatch_fn=_priority_dispatch_for_email,
+        )
+        _spawn_background_task(
+            _run_after_deployment_window("agentmail_service", _startup_start_agentmail_service),
+            task_name="agentmail_service_startup",
+        )
+    else:
+        logger.info(
+            "⏸️ AgentMail service disabled (UA_AGENTMAIL_SERVICE_ENABLED=0 or "
+            "UA_RUNTIME_STAGE=development). No inbox polling, no WebSocket, "
+            "no outbound email. Set UA_AGENTMAIL_SERVICE_ENABLED=1 in .env to "
+            "test against a real inbox."
+        )
 
     _spawn_background_task(
         _run_after_deployment_window(
@@ -18346,12 +18362,16 @@ def _ensure_proactive_artifact_digest_cron_job() -> Optional[dict[str, Any]]:
 def _notification_dispatcher_enabled() -> bool:
     """Master switch for the out-of-band email/Telegram delivery loop.
 
-    Defaults ON — the user explicitly wants high-severity proactive
-    alerts delivered via email/Telegram so they don't have to keep the
-    dashboard open.  Set `UA_NOTIFICATION_DISPATCHER_ENABLED=0` to
-    disable (e.g. during incident remediation to avoid alert storms).
+    Defaults ON in production — the user explicitly wants high-severity
+    proactive alerts delivered via email/Telegram so they don't have to
+    keep the dashboard open. Defaults OFF in ``UA_RUNTIME_STAGE=development``
+    so a local dev run can't accidentally fire real emails to operator
+    while flushing a backlog of queued notifications. Set
+    ``UA_NOTIFICATION_DISPATCHER_ENABLED=0`` to disable in prod (e.g.
+    during incident remediation to avoid alert storms); set =1 in dev
+    to opt back in for testing.
     """
-    return os.getenv("UA_NOTIFICATION_DISPATCHER_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+    return should_run_loop("notification_dispatcher", prod_default=True)
 
 
 def _list_undelivered_high_severity_notifications(limit: int = 50) -> list[dict[str, Any]]:

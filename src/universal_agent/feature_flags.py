@@ -30,12 +30,26 @@ def _read_env_bool(name: str) -> bool | None:
 
 
 def heartbeat_enabled(default: bool = True) -> bool:
-    """Return True when heartbeat is enabled (default: ON)."""
+    """Return True when heartbeat is enabled (default: ON in prod, OFF in dev).
+
+    Resolution order:
+      1. ``UA_DISABLE_HEARTBEAT=1`` → False (legacy explicit kill-switch wins).
+      2. ``UA_ENABLE_HEARTBEAT=1`` → True (legacy explicit on-switch wins).
+      3. ``UA_HEARTBEAT_ENABLED`` (modern flag) handled by ``should_run_loop``.
+      4. Else: OFF in ``UA_RUNTIME_STAGE=development``, ``default`` otherwise.
+
+    Centralizes the dev-default-OFF behavior added in PR #200's
+    ``loop_control.should_run_loop`` so the heartbeat doesn't tick on a
+    fresh dev box.
+    """
+    # Lazy import to avoid circular-import surface at module-load time.
+    from universal_agent.loop_control import should_run_loop
+
     if _is_truthy(os.getenv("UA_DISABLE_HEARTBEAT")):
         return False
     if _is_truthy(os.getenv("UA_ENABLE_HEARTBEAT")):
         return True
-    return default
+    return should_run_loop("heartbeat", prod_default=default)
 
 
 def memory_index_enabled(default: bool = True) -> bool:
@@ -44,12 +58,21 @@ def memory_index_enabled(default: bool = True) -> bool:
 
 
 def cron_enabled(default: bool = True) -> bool:
-    """Return True when cron is enabled (default: ON)."""
+    """Return True when cron service is enabled (default: ON in prod, OFF in dev).
+
+    Same resolution shape as ``heartbeat_enabled``. Note: PR #200's
+    ``UA_CRON_REGISTRATION_ENABLED`` master gate independently controls
+    whether the registered cron jobs actually fire. This flag controls
+    whether the ``CronService`` itself is instantiated and its scheduler
+    loop ticks.
+    """
+    from universal_agent.loop_control import should_run_loop
+
     if _is_truthy(os.getenv("UA_DISABLE_CRON")):
         return False
     if _is_truthy(os.getenv("UA_ENABLE_CRON")):
         return True
-    return default
+    return should_run_loop("cron", prod_default=default)
 
 
 def task_hub_missions_enabled(default: bool = False) -> bool:

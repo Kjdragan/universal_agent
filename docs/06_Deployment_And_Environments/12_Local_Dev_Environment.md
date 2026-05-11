@@ -215,18 +215,23 @@ just dev   # Ctrl-C the previous session first
 
 Available flags (one per loop):
 
-| Loop | Env var |
-|---|---|
-| Autonomous heartbeat | `UA_HEARTBEAT_AUTONOMOUS_ENABLED` |
-| Idle dispatch loop | `UA_IDLE_POLL_ENABLED` |
-| Dispatch stale sweep | `UA_DISPATCH_STALE_SWEEP_ENABLED` |
-| Daemon sessions | `UA_DAEMON_SESSIONS_ENABLED` |
-| VP event bridge | `UA_VP_EVENT_BRIDGE_ENABLED` |
-| VP stale reconciler | `UA_VP_STALE_RECONCILE_ENABLED` |
-| Cron registration (all crons) | `UA_CRON_REGISTRATION_ENABLED` |
-| AgentMail polling | `UA_AGENTMAIL_ENABLED` |
-| AgentMail WS | `UA_AGENTMAIL_WS_ENABLED` |
-| Autonomous daily briefing | `UA_AUTONOMOUS_DAILY_BRIEFING_ENABLED` |
+| Loop | Env var | Notes |
+|---|---|---|
+| Heartbeat (entire service) | `UA_HEARTBEAT_ENABLED` | Master gate. When OFF, the `HeartbeatService` itself is not instantiated and no scheduler loop ticks — zero Claude Agent SDK invocations from heartbeat. |
+| Heartbeat (autonomous tick subset, only relevant if service is on) | `UA_HEARTBEAT_AUTONOMOUS_ENABLED` | |
+| Cron service (entire service) | `UA_CRON_ENABLED` | Master gate. When OFF, the `CronService` itself is not instantiated. |
+| Cron job registration (only relevant if cron service is on) | `UA_CRON_REGISTRATION_ENABLED` | When OFF, the cron service ticks but no schedules are registered. |
+| Idle dispatch loop | `UA_IDLE_POLL_ENABLED` | |
+| Dispatch stale sweep | `UA_DISPATCH_STALE_SWEEP_ENABLED` | |
+| Daemon sessions | `UA_DAEMON_SESSIONS_ENABLED` | |
+| VP event bridge | `UA_VP_EVENT_BRIDGE_ENABLED` | |
+| VP stale reconciler | `UA_VP_STALE_RECONCILE_ENABLED` | |
+| AgentMail service (entire service) | `UA_AGENTMAIL_SERVICE_ENABLED` | Master gate. When OFF, no inbox polling, no WebSocket, no outbound email. |
+| AgentMail polling-specific (legacy, only if service is on) | `UA_AGENTMAIL_ENABLED` | |
+| AgentMail WS-specific (legacy, only if service is on) | `UA_AGENTMAIL_WS_ENABLED` | |
+| Notification dispatcher (real emails) | `UA_NOTIFICATION_DISPATCHER_ENABLED` | Defaults OFF in dev — prevents accidental gmail blast from queued backlog. |
+| YouTube playlist watcher | `UA_YOUTUBE_PLAYLIST_WATCHER_ENABLED` | |
+| Autonomous daily briefing | `UA_AUTONOMOUS_DAILY_BRIEFING_ENABLED` | |
 
 **Pattern B: Single-iteration CLI invocations (deferred — coming in a follow-up PR).**
 
@@ -358,11 +363,20 @@ rm -f ~/.local/share/universal_agent/dev.db
 
 Items the doc claims that **may not yet be true** in the codebase. Each one is a small, testable task.
 
-**Closed in PR following the contract:**
+**Closed in PR #200 (initial implementation, 2026-05-11):**
 
 - [x] **`justfile` at repo root with `dev` recipe.** Runs gateway + api + web-ui in parallel with prefixed output and clean Ctrl-C teardown. Recipes: `dev`, `dev-gateway`, `dev-webui`, `bootstrap`, `dev-kill`, `test`, `lint`, `format`, `preship`.
-- [x] **Verify every autonomous loop has a clean OFF flag.** Audit completed; new `src/universal_agent/loop_control.py` is the centralized control plane. In `UA_RUNTIME_STAGE=development` every loop defaults OFF; explicit `UA_<NAME>_ENABLED` always wins. Refactored: heartbeat_service, idle_dispatch_loop, dispatch_service (stale sweep), daemon_sessions, gateway_server (vp_event_bridge, vp_stale_reconcile, cron_registration master). Already-OFF-by-default: AgentMail, daily briefing, dashboard SSE, activity digest. Standalone CLI process: worker.py (only runs when manually invoked).
+- [x] **Initial loop-off audit + master switch.** New `src/universal_agent/loop_control.py` is the centralized control plane. In `UA_RUNTIME_STAGE=development` every loop defaults OFF; explicit `UA_<NAME>_ENABLED` always wins. Initial refactor wave: idle_dispatch_loop, dispatch_service (stale sweep), daemon_sessions, gateway_server (vp_event_bridge, vp_stale_reconcile, cron_registration master), heartbeat_service (autonomous-tick subset).
 - [x] **`docs/README.md` and `docs/Documentation_Status.md` reference this doc** + the companion briefing doc.
+
+**Closed in Phase C.2 follow-up (2026-05-11, after first end-to-end dev verification revealed gaps):**
+
+- [x] **Heartbeat SERVICE master gate** (not just the autonomous-tick subset). `feature_flags.heartbeat_enabled()` now defaults OFF in dev. Without this, `HeartbeatService` itself instantiated and the scheduler loop ticked, firing real Claude Agent SDK runs.
+- [x] **Cron service master gate.** `feature_flags.cron_enabled()` now defaults OFF in dev — the `CronService` itself doesn't instantiate (independent of `UA_CRON_REGISTRATION_ENABLED` which only controls registration once the service is up).
+- [x] **AgentMail service master gate.** `should_run_loop("agentmail_service")` — when OFF, no inbox polling, no WebSocket, no outbound email. Prevents dev from racing with prod on the same `oddcity216@agentmail.to` inbox or sending real emails to operator's gmail.
+- [x] **Notification dispatcher master gate.** `_notification_dispatcher_enabled()` now uses `should_run_loop` — defaults OFF in dev. Prevents accidental email blast from queued notification backlog when dev boots.
+- [x] **YouTube playlist watcher master gate.** `should_run_loop("youtube_playlist_watcher")` — no Google API quota burn from dev.
+- [x] **`bootstrap_local_hq_dev.sh` prints a "loops silenced" banner** at the end of bootstrap so operators see what's off and how to opt back in.
 
 **Deferred to follow-up PRs (not blockers for the contract):**
 
