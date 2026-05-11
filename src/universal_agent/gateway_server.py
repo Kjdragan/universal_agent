@@ -22737,6 +22737,82 @@ async def cody_mode_setting_post(payload: dict):
     return state
 
 
+# ── Cody Token Tracking (Hermes Phase E.2b — dashboard tile) ─────────
+
+
+@app.get("/api/v1/cody/anthropic-token-tracking")
+async def cody_anthropic_token_tracking_get(mode: str = "anthropic"):
+    """Return cumulative Cody token usage since the last operator refresh.
+
+    Query params:
+        mode: "anthropic" (default) | "zai" | "all" — filter the totals.
+
+    Response shape:
+        {
+            "reset_at": ISO string (cursor lower bound),
+            "reset_by": str,
+            "days_in_window": float,
+            "mission_count": int,
+            "input_tokens": int,
+            "output_tokens": int,
+            "cache_creation_input_tokens": int,
+            "cache_read_input_tokens": int,
+            "total_cost_usd": float,
+            "model_breakdown": [{"model", "missions", "input_tokens",
+                                  "output_tokens", "total_cost_usd"}, ...],
+            "cody_mode_filter": "anthropic" | "zai" | null
+        }
+    """
+    from universal_agent.services.cody_token_tracking import summarize_window
+
+    mode_norm = str(mode or "").strip().lower()
+    cody_mode_filter: Optional[str]
+    if mode_norm == "all":
+        cody_mode_filter = None
+    elif mode_norm in {"zai", "anthropic"}:
+        cody_mode_filter = mode_norm
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="mode must be one of: 'anthropic', 'zai', 'all'",
+        )
+
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            return summarize_window(conn, cody_mode=cody_mode_filter)
+        finally:
+            conn.close()
+
+
+@app.post("/api/v1/cody/anthropic-token-tracking/reset")
+async def cody_anthropic_token_tracking_reset(payload: dict = None):
+    """Bump the tracking window cursor to now.
+
+    History rows are preserved; the dashboard tile will show zero
+    totals on the next poll and start accumulating again. Body is
+    optional: ``{"reset_by": "operator"}``.
+    """
+    from universal_agent.services.cody_token_tracking import (
+        reset_window,
+        summarize_window,
+    )
+
+    reset_by = "operator"
+    if isinstance(payload, dict):
+        raw = str(payload.get("reset_by") or "").strip()
+        if raw:
+            reset_by = raw
+
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            reset_window(conn, reset_by=reset_by)
+            return summarize_window(conn, cody_mode="anthropic")
+        finally:
+            conn.close()
+
+
 # ── Brainstorm Refinement Endpoints ───────────────────────────────────
 
 @app.post("/api/v1/dashboard/todolist/tasks/{task_id}/refine")

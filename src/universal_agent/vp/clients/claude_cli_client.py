@@ -161,6 +161,16 @@ class ClaudeCodeCLIClient(VpClient):
                 )
 
                 if outcome.status == "completed":
+                    # Hermes Phase E.2b — record token usage for the dashboard
+                    # tile. Best-effort, never raises. Captures every
+                    # completed mission regardless of cody_mode so the
+                    # operator can compare costs across modes.
+                    _record_mission_token_usage(
+                        outcome=outcome,
+                        mission_id=mission_id,
+                        task_id=str(payload.get("task_id") or "").strip() or None,
+                        cody_mode=cody_mode,
+                    )
                     return outcome
 
                 last_outcome = outcome
@@ -403,6 +413,57 @@ async def _monitor_cli_output(
             "stream_lines": len(stream_lines),
         },
     )
+
+
+def _record_mission_token_usage(
+    *,
+    outcome: MissionOutcome,
+    mission_id: str,
+    task_id: Optional[str],
+    cody_mode: str,
+) -> None:
+    """Hermes Phase E.2b — persist token usage for the dashboard tile.
+
+    Best-effort: never raises, never blocks the happy path. The CLI's
+    ``result`` event populated ``outcome.payload["cost"]`` with the
+    usage breakdown (``input_tokens`` etc.) and the model identifier
+    sometimes lives in the same dict. Forwards everything we have to
+    ``cody_token_tracking.record_token_usage``.
+    """
+    try:
+        cost_info = (outcome.payload or {}).get("cost") if outcome.payload else None
+        if not isinstance(cost_info, dict):
+            cost_info = {}
+        # Some Claude CLI stream-json variants put the model on the
+        # result event directly; some nest it under usage. Best-effort.
+        model = cost_info.get("model") or cost_info.get("model_id") or None
+
+        from universal_agent.durable.db import (
+            connect_runtime_db,
+            get_activity_db_path,
+        )
+        from universal_agent.services.cody_token_tracking import (
+            record_token_usage,
+        )
+
+        conn = connect_runtime_db(get_activity_db_path())
+        try:
+            record_token_usage(
+                conn,
+                cody_mode=cody_mode,
+                mission_id=mission_id or None,
+                task_id=task_id,
+                model=str(model) if model else None,
+                cost_info=cost_info,
+            )
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.warning(
+            "Token usage capture failed for mission %s (cody_mode=%s): %s",
+            mission_id, cody_mode, exc,
+            exc_info=False,
+        )
 
 
 def _build_cli_env(
