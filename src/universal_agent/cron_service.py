@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 MIN_CRON_TIMEOUT_SECONDS = 1
 MAX_CRON_TIMEOUT_SECONDS = 7200
+MIN_CRON_INTERVAL_SECONDS = 60
 _CRON_DB_LOCK_RETRY_DELAY_SECONDS = 1.0
 _CRON_DB_LOCK_RETRY_MAX = 5
 
@@ -614,11 +615,17 @@ class CronService:
         metadata: Optional[dict[str, Any]] = None,
     ) -> CronJob:
         every_seconds = _parse_duration_seconds(every_raw, 0) if every_raw else 0
-        
+
         # Validate scheduling - must have at least one method
         if every_seconds <= 0 and not cron_expr and run_at is None:
             raise ValueError("Must provide at least one of: every, cron_expr, or run_at")
-        
+
+        if 0 < every_seconds < MIN_CRON_INTERVAL_SECONDS:
+            raise ValueError(
+                f"every_seconds={every_seconds} is below the minimum interval "
+                f"({MIN_CRON_INTERVAL_SECONDS}s). Use cron_expr for finer scheduling."
+            )
+
         # Validate cron expression if provided
         if cron_expr:
             try:
@@ -670,7 +677,13 @@ class CronService:
             job.enabled = bool(updates["enabled"])
         if "every" in updates or "every_seconds" in updates:
             raw = updates.get("every") or updates.get("every_seconds")
-            job.every_seconds = _parse_duration_seconds(str(raw), job.every_seconds)
+            new_every = _parse_duration_seconds(str(raw), job.every_seconds)
+            if 0 < new_every < MIN_CRON_INTERVAL_SECONDS:
+                raise ValueError(
+                    f"every_seconds={new_every} is below the minimum interval "
+                    f"({MIN_CRON_INTERVAL_SECONDS}s). Use cron_expr for finer scheduling."
+                )
+            job.every_seconds = new_every
         if "cron_expr" in updates:
             cron_expr = updates["cron_expr"]
             if cron_expr:
