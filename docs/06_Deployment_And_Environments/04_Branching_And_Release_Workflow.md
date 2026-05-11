@@ -1,6 +1,6 @@
 # Branching and Release Workflow
 
-Last updated: 2026-05-10 (post `develop` retirement; collapsed to PR-only-to-`main`).
+Last updated: 2026-05-11 (added `pr-auto-merge.yml` for `claude/*` PRs to `main`; full PR-to-production flow now hands-free for agent PRs)
 
 ## Purpose
 
@@ -129,6 +129,24 @@ That's `/ship` in one sentence.
 ### Auto-merge for trusted automation
 
 The two scheduled jobs (`nightly-doc-drift-audit.yml`, `openclaw-release-sync.yml`) auto-merge their report PRs to `main` via `gh pr merge --squash --admin`. `deploy.yml`'s `paths-ignore` ensures these report-only commits don't trigger a production deploy.
+
+### Auto-merge for `claude/*` agent PRs (added 2026-05-11)
+
+Autonomous agent PRs from a `claude/*` head branch to `main` get auto-merge enabled automatically by `pr-auto-merge.yml`. Once `pr-validate.yml` passes, GitHub squash-merges the PR, deletes the branch, and the merge to `main` triggers `deploy.yml` → production.
+
+```mermaid
+flowchart LR
+    A[Agent opens PR<br/>claude/* → main] --> B[pr-validate.yml]
+    A --> C[pr-auto-merge.yml<br/>enables auto-merge]
+    B -->|passes| D[GitHub squash-merges]
+    C --> D
+    D --> E[deploy.yml fires]
+    E --> F[Production VPS]
+```
+
+This is the same auto-merge mechanism `/ship` uses for tier-1 PRs — `pr-auto-merge.yml` just enables it for PRs that are opened directly via `gh pr create` / GitHub API instead of through `/ship`. No operator action is required between PR open and production deploy.
+
+For full pipeline detail see [`docs/deployment/ci_cd_pipeline.md` § "End-to-End PR-to-Production Flow"](../deployment/ci_cd_pipeline.md#end-to-end-pr-to-production-flow-2026-05-11).
 
 ## Summary
 

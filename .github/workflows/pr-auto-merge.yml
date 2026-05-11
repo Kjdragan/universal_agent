@@ -1,0 +1,63 @@
+name: PR Auto-Merge
+
+# Auto-enable GitHub auto-merge on PRs that:
+#   - Target main
+#   - Are from a claude/* head branch (i.e., from an AI coder)
+#   - Are not draft
+#
+# Once auto-merge is enabled, GitHub squash-merges the PR as soon as
+# pr-validate.yml passes and any required reviews are satisfied. The
+# squash-merge to main triggers the existing deploy.yml -> production.
+#
+# This is the "no operator action between PR open and production" piece
+# for autonomous claude/* PRs. Tier-1 PRs that go through /ship already
+# get auto-merge enabled by /ship itself (see .claude/commands/ship.md).
+# This workflow handles the agent path where /ship isn't invoked.
+#
+# Manual fallback: if a PR doesn't match the head-branch pattern below,
+# the operator merges it manually in the GitHub UI.
+#
+# 2026-05-11 design note: an earlier iteration of this workflow targeted
+# `feature/latest2` and was paired with an `auto-promote-to-prod.yml`
+# that ff-merged feature/latest2 -> develop -> main. That model was
+# wrong for the post-2026-05-10 architecture (develop is retired, PRs
+# target main directly). This file is the corrected version.
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+    branches: [main]
+
+permissions:
+  pull-requests: write
+  contents: write
+
+jobs:
+  enable-automerge:
+    name: Enable auto-merge (squash)
+    if: |
+      startsWith(github.event.pull_request.head.ref, 'claude/') &&
+      !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Enable auto-merge via gh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          PR_NUM="${{ github.event.pull_request.number }}"
+          # Best-effort enable. If auto-merge is already enabled or the
+          # PR is already mergeable+merged, gh exits non-zero with a
+          # message; we treat that as a soft success so a re-run on a
+          # late "synchronize" event doesn't fail the workflow.
+          if gh pr merge "$PR_NUM" \
+                --auto --squash --delete-branch \
+                --repo "${{ github.repository }}"; then
+            echo "Auto-merge enabled on PR #${PR_NUM} (squash, delete branch)."
+          else
+            echo "Note: auto-merge could not be (re-)enabled on PR #${PR_NUM}."
+            echo "      This is usually because the PR is already merged, already"
+            echo "      auto-merging, or auto-merge is disabled at the repo level."
+            echo "      Check repo Settings -> General -> 'Allow auto-merge'."
+          fi

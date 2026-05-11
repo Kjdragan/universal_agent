@@ -30,7 +30,16 @@ ACTIVE_STATUSES = {
     TASK_STATUS_REVIEW, TASK_STATUS_DELEGATED, TASK_STATUS_PENDING_REVIEW,
     TASK_STATUS_SCHEDULED,
 }
-VALID_ACTIONS = {"seize", "reject", "block", "unblock", "review", "complete", "park", "snooze", "delegate", "approve"}
+VALID_ACTIONS = {
+    "seize", "reject", "block", "unblock", "review", "complete", "park",
+    "snooze", "delegate", "approve",
+    # Hermes-adaptation Phase B.1 — operator-driven "unstick" verbs.
+    # Defined for tasks wedged in needs_review / blocked because the
+    # heartbeat or todo retry budget tripped. Operator-only initially;
+    # Simone-callable tool surface ships in Phase D once task_hub_runs
+    # gives her the failure-context evidence to judge from.
+    "rehydrate", "re_evaluate", "redirect_to", "request_revision",
+}
 
 TRIGGER_TYPES = {"immediate", "scheduled", "event_triggered", "human_approved", "brainstorm", "heartbeat_poll", "vp_dispatch"}
 DEFAULT_TRIGGER_TYPE = "heartbeat_poll"
@@ -103,6 +112,42 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return float(value)
     except Exception:
         return default
+
+
+def _resolve_effective_max_retries(
+    task_item: Optional[dict[str, Any]],
+    fallback_limit: int,
+) -> tuple[int, str]:
+    """Return ``(limit, source)`` where ``source`` ∈ ``{"task", "dispatcher"}``.
+
+    Resolution order (per Hermes-adaptation Phase A.1):
+
+    1. Per-task ``max_retries`` if set on the task row (nothing else overrides).
+    2. Caller-supplied ``fallback_limit`` (resolved from
+       ``UA_TASK_HUB_HEARTBEAT_MAX_RETRIES`` / ``UA_TASK_HUB_TODO_MAX_RETRIES``
+       env vars at the top of ``finalize_assignments``).
+
+    The returned ``source`` is recorded on the task's ``metadata.dispatch``
+    so dashboards / Simone's briefing can show *why* a particular retry budget
+    applied. Mirrors Hermes' ``limit_source`` tracking at
+    ``kanban_db.py:3398-3408``.
+    """
+    fallback = max(1, int(fallback_limit))
+    if task_item is None:
+        return fallback, "dispatcher"
+    override = task_item.get("max_retries")
+    if override is None:
+        return fallback, "dispatcher"
+    try:
+        coerced = int(override)
+    except (TypeError, ValueError):
+        return fallback, "dispatcher"
+    if coerced < 1:
+        # Treat 0 / negative as "fall back to the dispatcher default" to keep
+        # the operator's intent obvious (zero retries doesn't make sense as
+        # a retry *budget* — one attempt is always allowed).
+        return fallback, "dispatcher"
+    return coerced, "task"
 
 
 def _json_loads_obj(raw: Any, *, default: Optional[dict[str, Any]] = None) -> dict[str, Any]:
@@ -224,6 +269,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             mirror_status TEXT NOT NULL DEFAULT 'internal',
             feedback_json TEXT NOT NULL DEFAULT '{}',
             metadata_json TEXT NOT NULL DEFAULT '{}',
+            max_retries INTEGER,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -360,6 +406,13 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         "ALTER TABLE task_hub_items ADD COLUMN feedback_json TEXT NOT NULL DEFAULT '{}'",
         "ALTER TABLE task_hub_dispatch_queue ADD COLUMN eligible INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE task_hub_dispatch_queue ADD COLUMN skip_reason TEXT",
+        # Per-task override for the consecutive-failure retry budget. NULL (the
+        # common case) falls through to UA_TASK_HUB_HEARTBEAT_MAX_RETRIES or
+        # UA_TASK_HUB_TODO_MAX_RETRIES env var (default 3). The value is the
+        # retry-count threshold at which the dispatcher gives up and parks the
+        # task in needs_review. Hermes-adaptation Phase A.1 (2026-05-10) —
+        # see docs/reports/hermes-adaptation-phased-plan-2026-05-10.md.
+        "ALTER TABLE task_hub_items ADD COLUMN max_retries INTEGER",
     ):
         try:
             conn.execute(ddl)
@@ -1002,6 +1055,28 @@ def upsert_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any
     if trigger_type not in TRIGGER_TYPES:
         trigger_type = DEFAULT_TRIGGER_TYPE
 
+    # Resolve per-task max_retries override. NULL preserves the fallback to
+    # env defaults (UA_TASK_HUB_HEARTBEAT_MAX_RETRIES / UA_TASK_HUB_TODO_MAX_RETRIES).
+    # If the caller passed ``max_retries`` explicitly (including 0), respect it;
+    # otherwise inherit from the existing row to preserve a previously set override.
+    if "max_retries" in item:
+        _raw_max_retries = item.get("max_retries")
+        if _raw_max_retries is None or str(_raw_max_retries).strip() == "":
+            max_retries_value: Optional[int] = None
+        else:
+            try:
+                _coerced = int(_raw_max_retries)
+                max_retries_value = max(1, _coerced)
+            except (TypeError, ValueError):
+                max_retries_value = None
+    else:
+        _existing_max_retries = existing.get("max_retries")
+        max_retries_value = (
+            int(_existing_max_retries)
+            if _existing_max_retries is not None
+            else None
+        )
+
     payload = {
         "task_id": task_id,
         "source_kind": str(item.get("source_kind") or existing.get("source_kind") or "internal"),
@@ -1026,6 +1101,7 @@ def upsert_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any
         "mirror_status": str(item.get("mirror_status") or existing.get("mirror_status") or "internal"),
         "trigger_type": trigger_type,
         "metadata_json": _json_dumps(metadata),
+        "max_retries": max_retries_value,
         "created_at": str(existing.get("created_at") or item.get("created_at") or now_iso),
         "updated_at": now_iso,
     }
@@ -1036,12 +1112,12 @@ def upsert_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any
             task_id, source_kind, source_ref, title, description, project_key, priority, due_at,
             labels_json, status, must_complete, incident_key, workstream_id, subtask_role,
             parent_task_id, agent_ready, score, score_confidence, stale_state, seizure_state,
-            mirror_status, trigger_type, metadata_json, created_at, updated_at
+            mirror_status, trigger_type, metadata_json, max_retries, created_at, updated_at
         ) VALUES (
             :task_id, :source_kind, :source_ref, :title, :description, :project_key, :priority, :due_at,
             :labels_json, :status, :must_complete, :incident_key, :workstream_id, :subtask_role,
             :parent_task_id, :agent_ready, :score, :score_confidence, :stale_state, :seizure_state,
-            :mirror_status, :trigger_type, :metadata_json, :created_at, :updated_at
+            :mirror_status, :trigger_type, :metadata_json, :max_retries, :created_at, :updated_at
         )
         ON CONFLICT(task_id) DO UPDATE SET
             source_kind=excluded.source_kind,
@@ -1066,6 +1142,7 @@ def upsert_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any
             mirror_status=excluded.mirror_status,
             trigger_type=excluded.trigger_type,
             metadata_json=excluded.metadata_json,
+            max_retries=excluded.max_retries,
             updated_at=excluded.updated_at
         """,
         payload,
@@ -1858,6 +1935,85 @@ def _complete_active_assignments_for_task(
         """,
         (ended_at, result_summary.strip() or None, task_id),
     )
+
+
+def _summarize_prior_assignments(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Return the most-recent N assignments for a task as a compact summary list.
+
+    Used by ``re_evaluate`` (Hermes-adaptation Phase B.1) to seed Simone's
+    next prompt with evidence of what the prior agents tried and how each
+    attempt ended. Phase D will swap this for ``task_hub_runs`` rows once
+    the per-attempt history table lands; until then we read assignments.
+    """
+    rows = conn.execute(
+        """
+        SELECT assignment_id, agent_id, state, started_at, ended_at, result_summary
+        FROM task_hub_assignments
+        WHERE task_id = ?
+        ORDER BY started_at DESC
+        LIMIT ?
+        """,
+        (task_id, max(1, int(limit))),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _rehydrate_task(
+    item: dict[str, Any],
+    *,
+    agent_id: str,
+    reason: str,
+    now_iso: str,
+) -> dict[str, Any]:
+    """Reset stuck-task state for the four 'unstick' verbs (Hermes Phase B.1).
+
+    Common state-mutation core used by ``rehydrate``, ``re_evaluate``,
+    ``redirect_to``, and ``request_revision``. Mutates the metadata dict
+    so that:
+
+    * Active dispatch lineage rolls into ``last_*`` (via
+      ``_resolve_dispatch_metadata``).
+    * The eligibility-gating retry counters
+      (``metadata.dispatch.heartbeat_retry_count``,
+      ``metadata.dispatch.todo_retry_count``) reset to ``0``.
+    * ``metadata.dispatch.last_disposition_reason`` clears so the
+      anti-starvation gate at ``rebuild_dispatch_queue`` (lines 1474-1476)
+      no longer trips.
+    * Rehydration audit fields (``rehydrated_at``, ``rehydrated_by``,
+      ``rehydrate_reason``) are set so dashboards can show *why* the task
+      was reopened.
+
+    Refuses to operate on tasks already in a terminal status. Caller is
+    responsible for the surrounding ``UPDATE task_hub_items`` SQL (status
+    flip + seizure_state + metadata write) and any action-specific extras
+    (e.g. ``redirect_to`` setting ``metadata.preferred_vp``).
+    """
+    current_status = str(item.get("status") or "")
+    if current_status in TERMINAL_STATUSES:
+        raise ValueError(
+            f"cannot rehydrate task in terminal status {current_status!r}"
+        )
+
+    metadata = _resolve_dispatch_metadata(
+        dict(item.get("metadata") or {}),
+        assignment_state="rehydrated",
+        now_iso=now_iso,
+    )
+    dispatch_meta = dict(metadata.get("dispatch") or {})
+    dispatch_meta["heartbeat_retry_count"] = 0
+    dispatch_meta["todo_retry_count"] = 0
+    dispatch_meta["last_disposition_reason"] = ""
+    dispatch_meta["last_disposition"] = "rehydrated"
+    dispatch_meta["rehydrated_at"] = now_iso
+    dispatch_meta["rehydrated_by"] = agent_id
+    dispatch_meta["rehydrate_reason"] = reason
+    metadata["dispatch"] = dispatch_meta
+    return metadata
 
 
 def list_due_scheduled_tasks(
@@ -2997,9 +3153,17 @@ def finalize_assignments(
 
             retry_count = max(0, _safe_int(dispatch_meta.get("heartbeat_retry_count"), 0)) + 1
             dispatch_meta["heartbeat_retry_count"] = retry_count
-            dispatch_meta["heartbeat_retry_limit"] = heartbeat_retry_limit
+            # Per-task max_retries override resolution (Hermes-adaptation Phase A.1).
+            # NULL on the task falls back to the dispatcher default; otherwise the
+            # task value wins. Stores limit_source so dashboards / Simone briefing
+            # can show *why* a particular retry budget applied.
+            effective_heartbeat_limit, heartbeat_limit_source = _resolve_effective_max_retries(
+                task_item, heartbeat_retry_limit,
+            )
+            dispatch_meta["heartbeat_retry_limit"] = effective_heartbeat_limit
+            dispatch_meta["heartbeat_retry_limit_source"] = heartbeat_limit_source
             metadata["dispatch"] = dispatch_meta
-            if retry_count >= heartbeat_retry_limit:
+            if retry_count >= effective_heartbeat_limit:
                 dispatch_meta["last_disposition"] = "needs_review"
                 dispatch_meta["last_disposition_reason"] = "heartbeat_retry_exhausted"
                 conn.execute(
@@ -3013,10 +3177,11 @@ def finalize_assignments(
                 reviewed += 1
                 retry_exhausted += 1
                 logger.info(
-                    "Task Hub heartbeat finalize moved task %s to needs_review after retry exhaustion (%s/%s)",
+                    "Task Hub heartbeat finalize moved task %s to needs_review after retry exhaustion (%s/%s, source=%s)",
                     task_id,
                     retry_count,
-                    heartbeat_retry_limit,
+                    effective_heartbeat_limit,
+                    heartbeat_limit_source,
                 )
             else:
                 if _email_side_effects_detected(conn, task_id):
@@ -3050,10 +3215,11 @@ def finalize_assignments(
                     )
                     reopened += 1
                     logger.info(
-                        "Task Hub heartbeat finalize reopened task %s for retry (%s/%s)",
+                        "Task Hub heartbeat finalize reopened task %s for retry (%s/%s, source=%s)",
                         task_id,
                         retry_count,
-                        heartbeat_retry_limit,
+                        effective_heartbeat_limit,
+                        heartbeat_limit_source,
                     )
             continue
 
@@ -3132,9 +3298,14 @@ def finalize_assignments(
         else:
             retry_count = max(0, _safe_int(dispatch_meta.get("todo_retry_count"), 0)) + 1
             dispatch_meta["todo_retry_count"] = retry_count
-            dispatch_meta["todo_retry_limit"] = todo_retry_limit
+            # Per-task max_retries override resolution (Hermes-adaptation Phase A.1).
+            effective_todo_limit, todo_limit_source = _resolve_effective_max_retries(
+                task_item, todo_retry_limit,
+            )
+            dispatch_meta["todo_retry_limit"] = effective_todo_limit
+            dispatch_meta["todo_retry_limit_source"] = todo_limit_source
             metadata["dispatch"] = dispatch_meta
-            if retry_count >= todo_retry_limit:
+            if retry_count >= effective_todo_limit:
                 dispatch_meta["last_disposition"] = "needs_review"
                 dispatch_meta["last_disposition_reason"] = "todo_retry_exhausted"
                 dispatch_meta["completion_unverified"] = True
@@ -3149,10 +3320,11 @@ def finalize_assignments(
                 reviewed += 1
                 retry_exhausted += 1
                 logger.warning(
-                    "Task Hub ToDo finalize moved task %s to needs_review after retry exhaustion (%s/%s)",
+                    "Task Hub ToDo finalize moved task %s to needs_review after retry exhaustion (%s/%s, source=%s)",
                     task_id,
                     retry_count,
-                    todo_retry_limit,
+                    effective_todo_limit,
+                    todo_limit_source,
                 )
             else:
                 dispatch_meta["last_disposition"] = "reopened"
@@ -3262,7 +3434,18 @@ def release_stale_assignments(
     agent_id_prefix: Any = "heartbeat:",
     stale_after_seconds: int = 1800,
     limit: int = 500,
+    exclude_session_ids: Optional[Any] = None,
 ) -> dict[str, int]:
+    """Release seized/running assignments older than ``stale_after_seconds``.
+
+    ``exclude_session_ids`` (Hermes-adaptation Phase A.2): an optional
+    iterable of ``provider_session_id`` values to skip even when their
+    assignments are age-eligible. Used by ``dispatch_sweep`` to protect the
+    *calling* session (and any other known-live sessions) from accidental
+    release when this function is called inline from a heartbeat tick. The
+    default (``None`` / empty) preserves backward-compat behavior for manual
+    operator triggers and ops scripts.
+    """
     ensure_schema(conn)
     stale_after_seconds = max(1, int(stale_after_seconds))
     raw_prefixes = agent_id_prefix
@@ -3273,11 +3456,25 @@ def release_stale_assignments(
     if not prefixes:
         prefixes = ["heartbeat:"]
 
+    # Normalize the exclude set. Accept any iterable; coerce to non-empty strings.
+    excluded: set[str] = set()
+    if exclude_session_ids is not None:
+        try:
+            for v in exclude_session_ids:
+                text = str(v).strip()
+                if text:
+                    excluded.add(text)
+        except TypeError:
+            # Single string accidentally passed without wrapping — treat as one item.
+            text = str(exclude_session_ids).strip()
+            if text:
+                excluded.add(text)
+
     clauses = " OR ".join("agent_id LIKE ?" for _ in prefixes)
     params = tuple(f"{prefix}%" for prefix in prefixes) + (max(1, int(limit)),)
     rows = conn.execute(
         f"""
-        SELECT assignment_id, started_at
+        SELECT assignment_id, started_at, provider_session_id
         FROM task_hub_assignments
         WHERE state IN ('seized', 'running')
           AND ({clauses})
@@ -3289,17 +3486,24 @@ def release_stale_assignments(
 
     now_dt = datetime.now(timezone.utc)
     stale_ids: list[str] = []
+    skipped_live = 0
     for row in rows:
         assignment_id = str(row["assignment_id"] or "").strip()
         started_at = _parse_iso(row["started_at"])
         if not assignment_id or started_at is None:
             continue
         age_seconds = (now_dt - started_at).total_seconds()
-        if age_seconds >= stale_after_seconds:
-            stale_ids.append(assignment_id)
+        if age_seconds < stale_after_seconds:
+            continue
+        # Skip assignments whose session is in the caller-supplied live set.
+        session_id = str(row["provider_session_id"] or "").strip()
+        if session_id and session_id in excluded:
+            skipped_live += 1
+            continue
+        stale_ids.append(assignment_id)
 
     if not stale_ids:
-        return {"stale_detected": 0, "finalized": 0, "reopened": 0}
+        return {"stale_detected": 0, "finalized": 0, "reopened": 0, "skipped_live": skipped_live}
 
     result = finalize_assignments(
         conn,
@@ -3312,6 +3516,7 @@ def release_stale_assignments(
         "stale_detected": len(stale_ids),
         "finalized": int(result.get("finalized") or 0),
         "reopened": int(result.get("reopened") or 0),
+        "skipped_live": skipped_live,
     }
 
 
@@ -4178,6 +4383,193 @@ def perform_task_action(
             score=_safe_float(item.get("score"), 0.0),
             score_confidence=_safe_float(item.get("score_confidence"), 0.0),
             judge_payload={"source": "simone_review", "approval_note": str(note or "").strip()},
+        )
+
+    elif action_norm == "rehydrate":
+        # Hermes-adaptation Phase B.1 — clean restart for tasks wedged in
+        # needs_review or blocked because the heartbeat / todo retry budget
+        # tripped. No extra context attached; sibling verbs add their own.
+        metadata = _rehydrate_task(
+            item,
+            agent_id=agent_id,
+            reason=reason_text or "manual_rehydrate",
+            now_iso=now_iso,
+        )
+        _complete_active_assignments_for_task(
+            conn,
+            task_id=task_id,
+            result_summary=reason_text or "rehydrated",
+            ended_at=now_iso,
+        )
+        conn.execute(
+            "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
+            (TASK_STATUS_OPEN, "unseized", _json_dumps(metadata), now_iso, task_id),
+        )
+        _record_evaluation(
+            conn,
+            task_id=task_id,
+            agent_id=agent_id,
+            decision="rehydrate",
+            reason=reason_text or "manual_rehydrate",
+            score=_safe_float(item.get("score"), 0.0),
+            score_confidence=_safe_float(item.get("score_confidence"), 0.0),
+            judge_payload={"source": "manual_action"},
+        )
+
+    elif action_norm == "re_evaluate":
+        # Hermes-adaptation Phase B.1 — rehydrate + attach a structured
+        # failure-context block so Simone's prompt assembler can surface
+        # "what went wrong last time" as an addendum on her next claim.
+        # Snapshot the failure indicators BEFORE rehydrate clears them.
+        _pre_dispatch = dict((dict(item.get("metadata") or {})).get("dispatch") or {})
+        re_eval_ctx: dict[str, Any] = {
+            "captured_at": now_iso,
+            "last_error": str(_pre_dispatch.get("last_disposition_reason") or "") or "unknown",
+            "last_disposition": str(_pre_dispatch.get("last_disposition") or ""),
+            "retry_count": (
+                _safe_int(_pre_dispatch.get("heartbeat_retry_count"), 0)
+                + _safe_int(_pre_dispatch.get("todo_retry_count"), 0)
+            ),
+            "side_effect_evidence": str(_pre_dispatch.get("last_side_effect_summary") or ""),
+            "prior_assignments_summary": _summarize_prior_assignments(conn, task_id=task_id),
+        }
+        metadata = _rehydrate_task(
+            item,
+            agent_id=agent_id,
+            reason=reason_text or "manual_re_evaluate",
+            now_iso=now_iso,
+        )
+        dispatch_meta = dict(metadata.get("dispatch") or {})
+        dispatch_meta["re_evaluation_context"] = re_eval_ctx
+        metadata["dispatch"] = dispatch_meta
+        _complete_active_assignments_for_task(
+            conn,
+            task_id=task_id,
+            result_summary=reason_text or "re_evaluated",
+            ended_at=now_iso,
+        )
+        conn.execute(
+            "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
+            (TASK_STATUS_OPEN, "unseized", _json_dumps(metadata), now_iso, task_id),
+        )
+        _record_evaluation(
+            conn,
+            task_id=task_id,
+            agent_id=agent_id,
+            decision="re_evaluate",
+            reason=reason_text or "manual_re_evaluate",
+            score=_safe_float(item.get("score"), 0.0),
+            score_confidence=_safe_float(item.get("score_confidence"), 0.0),
+            judge_payload={"source": "manual_action", "re_evaluation_context": re_eval_ctx},
+        )
+
+    elif action_norm == "redirect_to":
+        # Hermes-adaptation Phase B.1 — rehydrate + set the top-level
+        # metadata.preferred_vp tag so Phase C's Atlas-direct-dispatch
+        # sweep can pick the task up. Path is top-level (not under
+        # metadata.dispatch) — confirmed v3 path that
+        # services/proactive_convergence.py:562, 646 sets and
+        # queue_proactive_task passes through unchanged.
+        target_agent = reason_text or str(note or "").strip()
+        if not target_agent:
+            raise ValueError(
+                "redirect_to requires reason= or note= containing target agent_id"
+            )
+        metadata = _rehydrate_task(
+            item,
+            agent_id=agent_id,
+            reason=f"redirect_to:{target_agent}",
+            now_iso=now_iso,
+        )
+        metadata["preferred_vp"] = target_agent
+        _complete_active_assignments_for_task(
+            conn,
+            task_id=task_id,
+            result_summary=f"redirected_to:{target_agent}",
+            ended_at=now_iso,
+        )
+        conn.execute(
+            "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
+            (TASK_STATUS_OPEN, "unseized", _json_dumps(metadata), now_iso, task_id),
+        )
+        _record_evaluation(
+            conn,
+            task_id=task_id,
+            agent_id=agent_id,
+            decision="redirect_to",
+            reason=f"redirect_to:{target_agent}",
+            score=_safe_float(item.get("score"), 0.0),
+            score_confidence=_safe_float(item.get("score_confidence"), 0.0),
+            judge_payload={"source": "manual_action", "preferred_vp": target_agent},
+        )
+
+    elif action_norm == "request_revision":
+        # Hermes-adaptation Phase B.1 — rehydrate + append operator feedback
+        # as a comment + bump revision_round + bump max_retries by 1 so the
+        # absorbed revision attempt doesn't immediately re-trip the budget.
+        feedback_text = (str(note or "").strip()) or reason_text
+        if not feedback_text:
+            raise ValueError(
+                "request_revision requires note= or reason= containing feedback text"
+            )
+        metadata = _rehydrate_task(
+            item,
+            agent_id=agent_id,
+            reason="manual_request_revision",
+            now_iso=now_iso,
+        )
+        dispatch_meta = dict(metadata.get("dispatch") or {})
+        dispatch_meta["revision_round"] = (
+            _safe_int(dispatch_meta.get("revision_round"), 0) + 1
+        )
+        dispatch_meta["last_revision_feedback"] = feedback_text
+        metadata["dispatch"] = dispatch_meta
+        _complete_active_assignments_for_task(
+            conn,
+            task_id=task_id,
+            result_summary="revision_requested",
+            ended_at=now_iso,
+        )
+        # Bump max_retries: NULL → 4 (default 3 + 1), set → +1.
+        # Mirrors Phase A.1 semantics where NULL means "use dispatcher default"
+        # (typically 3); the +1 absorbs the revision attempt without
+        # immediately tripping the budget on the next retry-finalize.
+        current_max = item.get("max_retries")
+        new_max = (
+            _safe_int(current_max, 3) + 1 if current_max is not None else 4
+        )
+        conn.execute(
+            "UPDATE task_hub_items "
+            "SET status=?, seizure_state=?, metadata_json=?, max_retries=?, updated_at=? "
+            "WHERE task_id=?",
+            (
+                TASK_STATUS_OPEN,
+                "unseized",
+                _json_dumps(metadata),
+                new_max,
+                now_iso,
+                task_id,
+            ),
+        )
+        add_comment(
+            conn,
+            task_id=task_id,
+            content=feedback_text,
+            author="operator-review",
+        )
+        _record_evaluation(
+            conn,
+            task_id=task_id,
+            agent_id=agent_id,
+            decision="request_revision",
+            reason="manual_request_revision",
+            score=_safe_float(item.get("score"), 0.0),
+            score_confidence=_safe_float(item.get("score_confidence"), 0.0),
+            judge_payload={
+                "source": "manual_action",
+                "revision_round": dispatch_meta["revision_round"],
+                "max_retries_after": new_max,
+            },
         )
 
     if task_hub_missions_enabled():

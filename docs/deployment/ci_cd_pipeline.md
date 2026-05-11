@@ -20,10 +20,29 @@ Release verification rule:
 
 ### Primary Deployment Workflows
 
-| Name | Trigger | Target |
-|------|---------|--------|
-| `PR Validate` | Pull request to `feature/latest2` or `main` | `py_compile` + `ruff check` + `pytest tests/unit` (mandatory pre-merge gate) |
-| `Deploy` | Push to `main` (paths-ignore: docs/, **.md, reports/, state/, artifacts/) | Production Service |
+| Name | File | Trigger | Target |
+|------|------|---------|--------|
+| `PR Validate` | `pr-validate.yml` | Pull request to `feature/latest2` or `main` | `py_compile` + `ruff check` + `pytest tests/unit` (mandatory pre-merge gate) |
+| `PR Auto-Merge` | `pr-auto-merge.yml` | Pull request to `main` from `claude/*` head branch (added 2026-05-11) | Enables GitHub auto-merge (squash + delete branch) so PR merges automatically once `Validate PR` passes. Tier-1 PRs through `/ship` already self-enable auto-merge — this workflow handles the agent path. |
+| `Deploy` | `deploy.yml` | Push to `main` (paths-ignore: docs/, **.md, reports/, state/, artifacts/) | Production Service |
+
+### End-to-End PR-to-Production Flow (2026-05-11)
+
+```mermaid
+flowchart LR
+    A[Agent opens PR<br/>claude/* → main] --> B[pr-validate.yml<br/>compile + ruff + pytest]
+    A --> C[pr-auto-merge.yml<br/>enables GitHub auto-merge]
+    B -->|passes| D[GitHub squash-merges<br/>→ main]
+    C --> D
+    D --> E[deploy.yml fires<br/>on main push]
+    E --> F[Production VPS]
+```
+
+**One-time prerequisite:** Repo Settings → "Allow auto-merge" must be on. Likely already enabled since `/ship` uses the same mechanism.
+
+**Tier-1 PRs (operator-driven via `/ship`):** Same flow but auto-merge is enabled by `/ship` itself, not by this workflow.
+
+**Manual fallback:** if a PR doesn't match the `claude/*` head-branch pattern, the operator merges it manually in the GitHub UI.
 
 ### Utility Workflows
 

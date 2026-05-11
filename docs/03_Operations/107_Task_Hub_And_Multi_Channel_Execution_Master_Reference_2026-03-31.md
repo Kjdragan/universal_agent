@@ -441,6 +441,47 @@ Additional bridge tools:
 - **`task_hub_create`** — proactive task ideation. Creates tasks with title, description, priority, labels, and source_kind. When a `mission_plan` with phases is provided and missions are enabled, creates a mission envelope instead of a plain task.
 - **`task_hub_promote_signals`** — promotes curated signal cards into actionable Task Hub items via `signal_curator.promote_cards_to_tasks`. Takes an array of curated signal dicts with card_id, task_title, task_description, priority, and rationale.
 
+### 13.0 Lifecycle Actions Reference (`VALID_ACTIONS`)
+
+`perform_task_action` accepts the following actions, defined in `VALID_ACTIONS` at [task_hub.py:33](../../src/universal_agent/task_hub.py#L33):
+
+| Action | Purpose | Caller |
+|---|---|---|
+| `seize` | Atomically claim a task (status → `in_progress`, assignment row created) | Agent / dispatcher |
+| `reject` | Mark task rejected (no status change) | Operator / Simone triage |
+| `block` | Move to `blocked` (e.g., waiting on external dependency) | Agent / operator |
+| `unblock` | Move `blocked` → `open` | Operator |
+| `review` | Move to `needs_review` (operator inspection required) | Agent / operator |
+| `complete` | Terminal complete (verifies delivery for email-channel tasks) | Agent / operator |
+| `park` | Terminal park (long-term hold; not re-dispatched) | Operator |
+| `snooze` | Annotate metadata.snoozed_note (no status change) | Operator |
+| `delegate` | Simone delegates to a VP agent (status → `delegated`, mission_id on metadata) | Simone |
+| `approve` | Sign off on a VP-completed task (`pending_review` → `completed`) | Simone |
+| `rehydrate` | **Hermes Phase B.1** — clean restart for tasks wedged in `needs_review` or `blocked` | Operator (dashboard) |
+| `re_evaluate` | **Hermes Phase B.1** — rehydrate + attach failure-context block at `metadata.dispatch.re_evaluation_context` | Operator (Simone-callable in Phase D) |
+| `redirect_to(agent_id)` | **Hermes Phase B.1** — rehydrate + set top-level `metadata.preferred_vp` for Atlas-direct lane | Operator (Simone-callable in Phase D) |
+| `request_revision(feedback)` | **Hermes Phase B.1** — rehydrate + append operator-review comment + bump `revision_round` + bump `max_retries` by 1 | Operator (Simone-callable in Phase D) |
+
+#### 13.0.1 Unstick Verbs (Hermes Phase B.1, shipped 2026-05-11)
+
+Four operator-driven actions added to unstick tasks that have wedged in `needs_review` or `blocked` because the heartbeat / todo retry budget tripped — without losing the task body, comments, or history.
+
+All four share a `_rehydrate_task` helper that:
+1. Refuses terminal-status tasks (`completed` / `parked` / `cancelled`) — raises `ValueError`.
+2. Calls `_resolve_dispatch_metadata` to roll `active_*` → `last_*`.
+3. Resets `metadata.dispatch.heartbeat_retry_count` and `todo_retry_count` to 0.
+4. Clears `metadata.dispatch.last_disposition_reason` so the `rebuild_dispatch_queue` anti-starvation gates ([task_hub.py:1474-1476, 1483-1486](../../src/universal_agent/task_hub.py#L1474)) no longer trip on the next sweep.
+5. Stamps `rehydrated_at` / `rehydrated_by` / `rehydrate_reason` for dashboard/audit visibility.
+
+Action-specific extras:
+- **`re_evaluate`** snapshots failure indicators BEFORE rehydrate clears them, then attaches `metadata.dispatch.re_evaluation_context` with `last_error`, `retry_count`, `side_effect_evidence`, and `prior_assignments_summary` (most-recent N rows from `task_hub_assignments`). Simone's prompt assembler reads this on next claim so she judges from evidence instead of from the task title.
+- **`redirect_to`** sets `metadata.preferred_vp = <agent_id>` at the **top level** of metadata (NOT under `metadata.dispatch.preferred_vp`). This matches the path that `services/proactive_convergence.py:562, 646` sets and that Phase C's Atlas-direct-dispatch sweep will read.
+- **`request_revision`** appends the operator's feedback as a comment via `add_comment(author="operator-review")`, increments `metadata.dispatch.revision_round`, and bumps `tasks.max_retries` by 1 (NULL → 4, set → +1) so the absorbed revision attempt doesn't immediately re-trip the budget.
+
+Each verb writes a `task_hub_evaluations` row tagged with the action decision string for downstream audit / dashboards.
+
+**Caller scope (per Hermes plan):** Operator-only via dashboard initially. The dashboard drawer + API surface ships in **Phase B.2**. The Simone-callable tool versions of these verbs ship in **Phase D** once the `task_hub_runs` per-attempt history table lands and gives Simone the failure-context evidence needed to judge from. See [`docs/reports/hermes-adaptation-phased-plan-2026-05-10.md`](../reports/hermes-adaptation-phased-plan-2026-05-10.md) § Phase B for the full design.
+
 ### 13.1 Enforcement and Auto-Completion
 
 If a `todo_execution` run ends without an explicit lifecycle mutation, `_todo_execution_auto_complete_after_final_delivery(...)` in [gateway_server.py](../../src/universal_agent/gateway_server.py) is only allowed to repair the task when final delivery already happened and is durably recorded. It does **not** auto-complete unresolved tasks unconditionally.
@@ -467,7 +508,12 @@ stateDiagram-v2
     InProgress --> Blocked: agent explicitly calls block
     InProgress --> Parked: agent explicitly calls park
     InProgress --> Delegated: agent delegates
+    InProgress --> NeedsReview: agent calls review
     InProgress --> Open: process crash / timeout\nassignment finalized failed + reopened
+    NeedsReview --> Open: rehydrate / re_evaluate / redirect_to / request_revision\n(Hermes B.1 unstick verbs)
+    Blocked --> Open: rehydrate / re_evaluate / redirect_to / request_revision\n(Hermes B.1 unstick verbs)
+    Delegated --> PendingReview: VP completes mission
+    PendingReview --> Completed: Simone calls approve
 ```
 
 ---

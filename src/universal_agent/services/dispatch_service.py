@@ -13,12 +13,97 @@ Simone is the primary orchestrator and decides delegation via batch triage.
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 from universal_agent import task_hub
 
 log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Stale-assignment release (Hermes-adaptation Phase A.2)
+# ---------------------------------------------------------------------------
+
+
+def _stale_sweep_enabled() -> bool:
+    """Phase A.2 feature gate. Defaults to ON; operator can disable via env."""
+    raw = (os.getenv("UA_DISPATCH_STALE_SWEEP_ENABLED") or "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _stale_after_seconds() -> int:
+    """Resolve the per-sweep stale-cutoff in seconds.
+
+    Env: ``UA_DISPATCH_STALE_AFTER_SECONDS`` (default 1800 = 30 minutes).
+    Floored at 60s — anything tighter than a minute risks releasing
+    assignments mid-tick during normal heartbeat cadence. Falls back to
+    1800 on parse errors (e.g., operator typo).
+    """
+    raw = (os.getenv("UA_DISPATCH_STALE_AFTER_SECONDS") or "1800").strip()
+    try:
+        return max(60, int(raw))
+    except ValueError:
+        return 1800
+
+
+def _release_stale_for_sweep(
+    conn: sqlite3.Connection,
+    *,
+    provider_session_id: Optional[str],
+    additional_running_sessions: Optional[Iterable[str]] = None,
+    agent_id_prefix: Any = ("heartbeat:", "todo:"),
+) -> None:
+    """Top-of-sweep stale-assignment release. Hermes-adaptation Phase A.2.
+
+    Mirrors Hermes' ``release_stale_claims`` call at the top of each
+    ``dispatch_once`` tick (``kanban_db.py:3658``). Mode of operation:
+
+    * Reads ``UA_DISPATCH_STALE_SWEEP_ENABLED`` (default on) and
+      ``UA_DISPATCH_STALE_AFTER_SECONDS`` (default 1800).
+    * Builds an exclude set from ``provider_session_id`` (the current caller)
+      plus any ``additional_running_sessions`` caller provides. This protects
+      live sessions from accidental release when a heartbeat tick takes
+      longer than the stale-cutoff.
+    * Calls ``task_hub.release_stale_assignments`` with the exclude set.
+    * Logs the outcome for ops visibility; never raises into the caller.
+
+    Best-effort — failures here must not block the actual claim that follows.
+    """
+    if not _stale_sweep_enabled():
+        return
+    excluded: set[str] = set()
+    if provider_session_id:
+        text = str(provider_session_id).strip()
+        if text:
+            excluded.add(text)
+    if additional_running_sessions:
+        try:
+            for v in additional_running_sessions:
+                t = str(v).strip()
+                if t:
+                    excluded.add(t)
+        except TypeError:
+            pass
+    try:
+        result = task_hub.release_stale_assignments(
+            conn,
+            agent_id_prefix=agent_id_prefix,
+            stale_after_seconds=_stale_after_seconds(),
+            exclude_session_ids=excluded if excluded else None,
+        )
+    except Exception as exc:  # noqa: BLE001 — never block the sweep
+        log.warning("dispatch_sweep: stale-release pass failed: %s", exc)
+        return
+    if result.get("stale_detected") or result.get("skipped_live"):
+        log.info(
+            "dispatch_sweep stale-release: detected=%s finalized=%s reopened=%s skipped_live=%s",
+            result.get("stale_detected", 0),
+            result.get("finalized", 0),
+            result.get("reopened", 0),
+            result.get("skipped_live", 0),
+        )
 
 
 class DispatchError(Exception):
@@ -197,6 +282,7 @@ def dispatch_sweep(
     provider_session_id: Optional[str] = None,
     workspace_dir: Optional[str] = None,
     forbidden_source_kinds: Optional[list[str]] = None,
+    additional_running_sessions: Optional[Iterable[str]] = None,
 ) -> list[dict[str, Any]]:
     """Generic sweep dispatch — wraps claim_next_dispatch_tasks.
 
@@ -208,7 +294,23 @@ def dispatch_sweep(
     runtime. Notably, ``daemon_simone_todo`` should pass
     ``forbidden_source_kinds=["vp_mission"]`` so it won't claim VP-mirror
     rows that should be executed by VP workers (Followup #3 backstop).
+
+    ``additional_running_sessions`` (Hermes-adaptation Phase A.2): optional
+    iterable of ``provider_session_id`` values for sessions known to be live.
+    These are excluded from the stale-assignment release pass that runs at
+    the top of every sweep. The calling session (``provider_session_id``) is
+    auto-excluded. Pass ``heartbeat_service.busy_sessions``-style sets when
+    available so a long-running tick doesn't accidentally release peers.
     """
+    # Top-of-sweep stale-release pass (Phase A.2 wiring). Gated by env, runs
+    # before the claim so any reopened tasks are eligible in the very next
+    # queue rebuild this sweep performs.
+    _release_stale_for_sweep(
+        conn,
+        provider_session_id=provider_session_id,
+        additional_running_sessions=additional_running_sessions,
+    )
+
     claimed = task_hub.claim_next_dispatch_tasks(
         conn,
         limit=limit,
