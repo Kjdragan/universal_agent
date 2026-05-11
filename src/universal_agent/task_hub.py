@@ -30,7 +30,16 @@ ACTIVE_STATUSES = {
     TASK_STATUS_REVIEW, TASK_STATUS_DELEGATED, TASK_STATUS_PENDING_REVIEW,
     TASK_STATUS_SCHEDULED,
 }
-VALID_ACTIONS = {"seize", "reject", "block", "unblock", "review", "complete", "park", "snooze", "delegate", "approve"}
+VALID_ACTIONS = {
+    "seize", "reject", "block", "unblock", "review", "complete", "park",
+    "snooze", "delegate", "approve",
+    # Hermes-adaptation Phase B.1 — operator-driven "unstick" verbs.
+    # Defined for tasks wedged in needs_review / blocked because the
+    # heartbeat or todo retry budget tripped. Operator-only initially;
+    # Simone-callable tool surface ships in Phase D once task_hub_runs
+    # gives her the failure-context evidence to judge from.
+    "rehydrate", "re_evaluate", "redirect_to", "request_revision",
+}
 
 TRIGGER_TYPES = {"immediate", "scheduled", "event_triggered", "human_approved", "brainstorm", "heartbeat_poll", "vp_dispatch"}
 DEFAULT_TRIGGER_TYPE = "heartbeat_poll"
@@ -1926,6 +1935,85 @@ def _complete_active_assignments_for_task(
         """,
         (ended_at, result_summary.strip() or None, task_id),
     )
+
+
+def _summarize_prior_assignments(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Return the most-recent N assignments for a task as a compact summary list.
+
+    Used by ``re_evaluate`` (Hermes-adaptation Phase B.1) to seed Simone's
+    next prompt with evidence of what the prior agents tried and how each
+    attempt ended. Phase D will swap this for ``task_hub_runs`` rows once
+    the per-attempt history table lands; until then we read assignments.
+    """
+    rows = conn.execute(
+        """
+        SELECT assignment_id, agent_id, state, started_at, ended_at, result_summary
+        FROM task_hub_assignments
+        WHERE task_id = ?
+        ORDER BY started_at DESC
+        LIMIT ?
+        """,
+        (task_id, max(1, int(limit))),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _rehydrate_task(
+    item: dict[str, Any],
+    *,
+    agent_id: str,
+    reason: str,
+    now_iso: str,
+) -> dict[str, Any]:
+    """Reset stuck-task state for the four 'unstick' verbs (Hermes Phase B.1).
+
+    Common state-mutation core used by ``rehydrate``, ``re_evaluate``,
+    ``redirect_to``, and ``request_revision``. Mutates the metadata dict
+    so that:
+
+    * Active dispatch lineage rolls into ``last_*`` (via
+      ``_resolve_dispatch_metadata``).
+    * The eligibility-gating retry counters
+      (``metadata.dispatch.heartbeat_retry_count``,
+      ``metadata.dispatch.todo_retry_count``) reset to ``0``.
+    * ``metadata.dispatch.last_disposition_reason`` clears so the
+      anti-starvation gate at ``rebuild_dispatch_queue`` (lines 1474-1476)
+      no longer trips.
+    * Rehydration audit fields (``rehydrated_at``, ``rehydrated_by``,
+      ``rehydrate_reason``) are set so dashboards can show *why* the task
+      was reopened.
+
+    Refuses to operate on tasks already in a terminal status. Caller is
+    responsible for the surrounding ``UPDATE task_hub_items`` SQL (status
+    flip + seizure_state + metadata write) and any action-specific extras
+    (e.g. ``redirect_to`` setting ``metadata.preferred_vp``).
+    """
+    current_status = str(item.get("status") or "")
+    if current_status in TERMINAL_STATUSES:
+        raise ValueError(
+            f"cannot rehydrate task in terminal status {current_status!r}"
+        )
+
+    metadata = _resolve_dispatch_metadata(
+        dict(item.get("metadata") or {}),
+        assignment_state="rehydrated",
+        now_iso=now_iso,
+    )
+    dispatch_meta = dict(metadata.get("dispatch") or {})
+    dispatch_meta["heartbeat_retry_count"] = 0
+    dispatch_meta["todo_retry_count"] = 0
+    dispatch_meta["last_disposition_reason"] = ""
+    dispatch_meta["last_disposition"] = "rehydrated"
+    dispatch_meta["rehydrated_at"] = now_iso
+    dispatch_meta["rehydrated_by"] = agent_id
+    dispatch_meta["rehydrate_reason"] = reason
+    metadata["dispatch"] = dispatch_meta
+    return metadata
 
 
 def list_due_scheduled_tasks(
@@ -4295,6 +4383,193 @@ def perform_task_action(
             score=_safe_float(item.get("score"), 0.0),
             score_confidence=_safe_float(item.get("score_confidence"), 0.0),
             judge_payload={"source": "simone_review", "approval_note": str(note or "").strip()},
+        )
+
+    elif action_norm == "rehydrate":
+        # Hermes-adaptation Phase B.1 — clean restart for tasks wedged in
+        # needs_review or blocked because the heartbeat / todo retry budget
+        # tripped. No extra context attached; sibling verbs add their own.
+        metadata = _rehydrate_task(
+            item,
+            agent_id=agent_id,
+            reason=reason_text or "manual_rehydrate",
+            now_iso=now_iso,
+        )
+        _complete_active_assignments_for_task(
+            conn,
+            task_id=task_id,
+            result_summary=reason_text or "rehydrated",
+            ended_at=now_iso,
+        )
+        conn.execute(
+            "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
+            (TASK_STATUS_OPEN, "unseized", _json_dumps(metadata), now_iso, task_id),
+        )
+        _record_evaluation(
+            conn,
+            task_id=task_id,
+            agent_id=agent_id,
+            decision="rehydrate",
+            reason=reason_text or "manual_rehydrate",
+            score=_safe_float(item.get("score"), 0.0),
+            score_confidence=_safe_float(item.get("score_confidence"), 0.0),
+            judge_payload={"source": "manual_action"},
+        )
+
+    elif action_norm == "re_evaluate":
+        # Hermes-adaptation Phase B.1 — rehydrate + attach a structured
+        # failure-context block so Simone's prompt assembler can surface
+        # "what went wrong last time" as an addendum on her next claim.
+        # Snapshot the failure indicators BEFORE rehydrate clears them.
+        _pre_dispatch = dict((dict(item.get("metadata") or {})).get("dispatch") or {})
+        re_eval_ctx: dict[str, Any] = {
+            "captured_at": now_iso,
+            "last_error": str(_pre_dispatch.get("last_disposition_reason") or "") or "unknown",
+            "last_disposition": str(_pre_dispatch.get("last_disposition") or ""),
+            "retry_count": (
+                _safe_int(_pre_dispatch.get("heartbeat_retry_count"), 0)
+                + _safe_int(_pre_dispatch.get("todo_retry_count"), 0)
+            ),
+            "side_effect_evidence": str(_pre_dispatch.get("last_side_effect_summary") or ""),
+            "prior_assignments_summary": _summarize_prior_assignments(conn, task_id=task_id),
+        }
+        metadata = _rehydrate_task(
+            item,
+            agent_id=agent_id,
+            reason=reason_text or "manual_re_evaluate",
+            now_iso=now_iso,
+        )
+        dispatch_meta = dict(metadata.get("dispatch") or {})
+        dispatch_meta["re_evaluation_context"] = re_eval_ctx
+        metadata["dispatch"] = dispatch_meta
+        _complete_active_assignments_for_task(
+            conn,
+            task_id=task_id,
+            result_summary=reason_text or "re_evaluated",
+            ended_at=now_iso,
+        )
+        conn.execute(
+            "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
+            (TASK_STATUS_OPEN, "unseized", _json_dumps(metadata), now_iso, task_id),
+        )
+        _record_evaluation(
+            conn,
+            task_id=task_id,
+            agent_id=agent_id,
+            decision="re_evaluate",
+            reason=reason_text or "manual_re_evaluate",
+            score=_safe_float(item.get("score"), 0.0),
+            score_confidence=_safe_float(item.get("score_confidence"), 0.0),
+            judge_payload={"source": "manual_action", "re_evaluation_context": re_eval_ctx},
+        )
+
+    elif action_norm == "redirect_to":
+        # Hermes-adaptation Phase B.1 — rehydrate + set the top-level
+        # metadata.preferred_vp tag so Phase C's Atlas-direct-dispatch
+        # sweep can pick the task up. Path is top-level (not under
+        # metadata.dispatch) — confirmed v3 path that
+        # services/proactive_convergence.py:562, 646 sets and
+        # queue_proactive_task passes through unchanged.
+        target_agent = reason_text or str(note or "").strip()
+        if not target_agent:
+            raise ValueError(
+                "redirect_to requires reason= or note= containing target agent_id"
+            )
+        metadata = _rehydrate_task(
+            item,
+            agent_id=agent_id,
+            reason=f"redirect_to:{target_agent}",
+            now_iso=now_iso,
+        )
+        metadata["preferred_vp"] = target_agent
+        _complete_active_assignments_for_task(
+            conn,
+            task_id=task_id,
+            result_summary=f"redirected_to:{target_agent}",
+            ended_at=now_iso,
+        )
+        conn.execute(
+            "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
+            (TASK_STATUS_OPEN, "unseized", _json_dumps(metadata), now_iso, task_id),
+        )
+        _record_evaluation(
+            conn,
+            task_id=task_id,
+            agent_id=agent_id,
+            decision="redirect_to",
+            reason=f"redirect_to:{target_agent}",
+            score=_safe_float(item.get("score"), 0.0),
+            score_confidence=_safe_float(item.get("score_confidence"), 0.0),
+            judge_payload={"source": "manual_action", "preferred_vp": target_agent},
+        )
+
+    elif action_norm == "request_revision":
+        # Hermes-adaptation Phase B.1 — rehydrate + append operator feedback
+        # as a comment + bump revision_round + bump max_retries by 1 so the
+        # absorbed revision attempt doesn't immediately re-trip the budget.
+        feedback_text = (str(note or "").strip()) or reason_text
+        if not feedback_text:
+            raise ValueError(
+                "request_revision requires note= or reason= containing feedback text"
+            )
+        metadata = _rehydrate_task(
+            item,
+            agent_id=agent_id,
+            reason="manual_request_revision",
+            now_iso=now_iso,
+        )
+        dispatch_meta = dict(metadata.get("dispatch") or {})
+        dispatch_meta["revision_round"] = (
+            _safe_int(dispatch_meta.get("revision_round"), 0) + 1
+        )
+        dispatch_meta["last_revision_feedback"] = feedback_text
+        metadata["dispatch"] = dispatch_meta
+        _complete_active_assignments_for_task(
+            conn,
+            task_id=task_id,
+            result_summary="revision_requested",
+            ended_at=now_iso,
+        )
+        # Bump max_retries: NULL → 4 (default 3 + 1), set → +1.
+        # Mirrors Phase A.1 semantics where NULL means "use dispatcher default"
+        # (typically 3); the +1 absorbs the revision attempt without
+        # immediately tripping the budget on the next retry-finalize.
+        current_max = item.get("max_retries")
+        new_max = (
+            _safe_int(current_max, 3) + 1 if current_max is not None else 4
+        )
+        conn.execute(
+            "UPDATE task_hub_items "
+            "SET status=?, seizure_state=?, metadata_json=?, max_retries=?, updated_at=? "
+            "WHERE task_id=?",
+            (
+                TASK_STATUS_OPEN,
+                "unseized",
+                _json_dumps(metadata),
+                new_max,
+                now_iso,
+                task_id,
+            ),
+        )
+        add_comment(
+            conn,
+            task_id=task_id,
+            content=feedback_text,
+            author="operator-review",
+        )
+        _record_evaluation(
+            conn,
+            task_id=task_id,
+            agent_id=agent_id,
+            decision="request_revision",
+            reason="manual_request_revision",
+            score=_safe_float(item.get("score"), 0.0),
+            score_confidence=_safe_float(item.get("score_confidence"), 0.0),
+            judge_payload={
+                "source": "manual_action",
+                "revision_round": dispatch_meta["revision_round"],
+                "max_retries_after": new_max,
+            },
         )
 
     if task_hub_missions_enabled():
