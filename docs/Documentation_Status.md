@@ -7,6 +7,7 @@
 | Doc | Subject |
 |-----|---------|
 | **`06_Deployment_And_Environments/12_Local_Dev_Environment.md`** | **CANONICAL (2026-05-11).** Desktop-local dev via `just dev`. Autonomous loops off by default. Bootstrap, daily workflow, loop opt-in pattern (`UA_DEV_<NAME>_FORCE_ON=1`), inspection CLI (`dev_tools`), prod snapshot script. |
+| **`development/CLAUDE_CODE_CHEAT_SHEET.md`** | **One-page cheat sheet (2026-05-11).** How to run Claude Code interactively from your desktop: `bash scripts/claude_with_mcp_env.sh` wrapper, common flags, ZAI cheap-mode alternative, slash commands, anti-patterns, troubleshooting. **Read before opening a Claude Code terminal in Antigravity.** |
 | `06_Deployment_And_Environments/13_Infisical_Dev_Env_Hygiene.md` | Optional Infisical `development` env cleanup checklist. |
 | `operations/2026-05-11_local_dev_initiative_briefing.md` | Cross-session briefing for concurrent AI sessions during the dev/prod separation rollout. |
 | `development/LOCAL_DEV.md` | ⚠️ **Superseded by Doc 12 (2026-05-11).** Describes a pre-initiative `.local` Infisical env + shell-script flow that's no longer canonical. Kept for historical reference. |

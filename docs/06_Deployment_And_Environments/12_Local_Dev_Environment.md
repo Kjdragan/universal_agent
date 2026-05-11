@@ -435,6 +435,7 @@ A second `just dev` run showed heartbeat + cron service + 5 cron jobs firing des
 
 ## Cross-references
 
+- **Running Claude Code in this dev env:** [`../development/CLAUDE_CODE_CHEAT_SHEET.md`](../development/CLAUDE_CODE_CHEAT_SHEET.md) — one-page cheat sheet for `bash scripts/claude_with_mcp_env.sh`, common flags, ZAI cheap-mode alternative.
 - **Lane definition:** [`05_Local_Runtime_Modes.md`](05_Local_Runtime_Modes.md) — defines HQ Dev Lane vs Desktop Worker Lane (this doc supersedes its HQ Dev Lane runbook).
 - **VPS-as-dev (now a fallback path):** [`11_Daily_Dev_Workflow.md`](11_Daily_Dev_Workflow.md) — Antigravity Remote-SSH workflow. Pre-2026-05-10 this was the canonical dev path. Post-inversion, **desktop dev (this doc) is canonical**; VPS-via-Remote-SSH is a fallback for cases where desktop dev isn't available.
 - **Branch + deploy model:** [`04_Branching_And_Release_Workflow.md`](04_Branching_And_Release_Workflow.md) — what happens after you commit + push.

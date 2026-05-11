@@ -112,6 +112,7 @@ Fuller diagnostic table: [doc 11 § Recovery procedures](06_Deployment_And_Envir
 | Topic | Doc |
 |---|---|
 | **Canonical desktop-local dev runbook (`just dev`)** | [**doc 12**](06_Deployment_And_Environments/12_Local_Dev_Environment.md) |
+| **Running Claude Code in local dev — cheat sheet** | [**development/CLAUDE_CODE_CHEAT_SHEET.md**](development/CLAUDE_CODE_CHEAT_SHEET.md) |
 | Infisical dev-env hygiene (optional cleanup) | [doc 13](06_Deployment_And_Environments/13_Infisical_Dev_Env_Hygiene.md) |
 | Local runtime lane definitions (HQ Dev / Desktop Worker) | [doc 05](06_Deployment_And_Environments/05_Local_Runtime_Modes.md) |
 | VPS-as-dev fallback workflow (Antigravity Remote-SSH) | [doc 11](06_Deployment_And_Environments/11_Daily_Dev_Workflow.md) |

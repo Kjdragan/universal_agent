@@ -49,12 +49,31 @@
 
 set -e
 
-UA_INSTALL_ROOT="${UA_INSTALL_ROOT:-/opt/universal_agent}"
-LAUNCHER="$(cd "$(dirname "$0")" && pwd)/_claude_launcher.py"
+# Resolve UA_INSTALL_ROOT with auto-detection (2026-05-11):
+#   1. Honor explicit UA_INSTALL_ROOT if set
+#   2. Otherwise try /opt/universal_agent (canonical VPS prod path)
+#   3. Otherwise fall back to the repo containing this script (desktop dev case)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT_FROM_SCRIPT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+if [ -z "${UA_INSTALL_ROOT:-}" ]; then
+    if [ -f "/opt/universal_agent/.env" ]; then
+        UA_INSTALL_ROOT="/opt/universal_agent"
+    elif [ -f "$REPO_ROOT_FROM_SCRIPT/.env" ]; then
+        UA_INSTALL_ROOT="$REPO_ROOT_FROM_SCRIPT"
+    else
+        UA_INSTALL_ROOT="/opt/universal_agent"   # default for error msg below
+    fi
+fi
+
+LAUNCHER="$SCRIPT_DIR/_claude_launcher.py"
 
 if [ ! -f "$UA_INSTALL_ROOT/.env" ]; then
     echo "❌ $UA_INSTALL_ROOT/.env not found." >&2
-    echo "   Set UA_INSTALL_ROOT to the prod checkout that has Infisical bootstrap creds." >&2
+    echo "   Auto-detection tried /opt/universal_agent/.env and $REPO_ROOT_FROM_SCRIPT/.env." >&2
+    echo "   Set UA_INSTALL_ROOT explicitly to a checkout with Infisical bootstrap creds:" >&2
+    echo "     export UA_INSTALL_ROOT=/path/to/universal_agent" >&2
+    echo "   Or run scripts/bootstrap_local_hq_dev.sh first to create the .env." >&2
     exit 1
 fi
 
