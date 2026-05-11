@@ -18028,7 +18028,7 @@ def _ensure_vp_coder_workspace_pruning_cron_job() -> Optional[dict[str, Any]]:
     """
     return _register_system_cron_job(
         system_job="vp_coder_workspace_pruning",
-        default_cron="0 7 * * 0",
+        default_cron="5 17 * * 0",
         default_timezone="America/Chicago",
         command="!script universal_agent.scripts.vp_coder_workspace_pruner",
         description="Weekly pruning of stale VP-coder workspace subdirectories (default: archive after 7 days).",
@@ -18415,7 +18415,7 @@ def _ensure_atlas_direct_dispatch_cron_job() -> Optional[dict[str, Any]]:
 def _ensure_proactive_report_morning_cron_job() -> Optional[dict[str, Any]]:
     return _register_system_cron_job(
         system_job="proactive_report_morning",
-        default_cron="0 7 * * *",
+        default_cron="5 7 * * *",
         default_timezone="America/Chicago",
         command="!script universal_agent.scripts.proactive_report_agent",
         description="Morning proactive intelligence report — pipeline stats + LLM analysis.",
@@ -18429,7 +18429,7 @@ def _ensure_proactive_report_morning_cron_job() -> Optional[dict[str, Any]]:
 def _ensure_proactive_report_midday_cron_job() -> Optional[dict[str, Any]]:
     return _register_system_cron_job(
         system_job="proactive_report_midday",
-        default_cron="0 12 * * *",
+        default_cron="5 12 * * *",
         default_timezone="America/Chicago",
         command="!script universal_agent.scripts.proactive_report_agent",
         description="Midday proactive intelligence report — pipeline stats + LLM analysis.",
@@ -18443,7 +18443,7 @@ def _ensure_proactive_report_midday_cron_job() -> Optional[dict[str, Any]]:
 def _ensure_proactive_report_afternoon_cron_job() -> Optional[dict[str, Any]]:
     return _register_system_cron_job(
         system_job="proactive_report_afternoon",
-        default_cron="0 16 * * *",
+        default_cron="5 16 * * *",
         default_timezone="America/Chicago",
         command="!script universal_agent.scripts.proactive_report_agent",
         description="Afternoon proactive intelligence report — pipeline stats + LLM analysis.",
@@ -18457,7 +18457,7 @@ def _ensure_proactive_report_afternoon_cron_job() -> Optional[dict[str, Any]]:
 def _ensure_proactive_artifact_digest_cron_job() -> Optional[dict[str, Any]]:
     return _register_system_cron_job(
         system_job="proactive_artifact_digest",
-        default_cron="0 8 * * *",
+        default_cron="35 8 * * *",
         default_timezone="America/Chicago",
         command="!script universal_agent.scripts.proactive_digest_agent",
         description="Daily proactive artifact digest — surfaces unseen CODIE PRs, tutorial builds, and convergence insights via email.",
@@ -18629,8 +18629,8 @@ def _ensure_csi_demo_triage_rank_cron_job() -> Optional[dict[str, Any]]:
         return None
     return _register_system_cron_job(
         system_job="csi_demo_triage_rank",
-        default_cron="15 13,19 * * *",
-        default_timezone="UTC",
+        default_cron="5 10,15 * * *",
+        default_timezone="America/Chicago",
         command="!script universal_agent.scripts.csi_demo_triage_rank",
         description="Rank pending CSI demo triage candidates with an LLM.",
         timeout_seconds=600,
