@@ -199,26 +199,40 @@ Ctrl-C in the terminal running `just dev`. All three processes exit cleanly. Hit
 
 ## Triggering autonomous loops manually (for testing)
 
-Local dev does NOT tick. To test autonomous behavior in dev, you trigger one iteration explicitly:
+Local dev does NOT tick autonomous loops by default. To test autonomous behavior in dev there are two patterns:
+
+**Pattern A: Flip an individual loop ON via env var, restart `just dev`.**
+
+Each loop respects an explicit `UA_<NAME>_ENABLED` override that beats the dev-default-OFF. Add the line to your `.env`, restart, and the loop ticks at its normal interval. Set back to `0` or remove the line when done.
 
 ```bash
-# Heartbeat — single tick, exits when done
-uv run python -m universal_agent.heartbeat tick
+# Example: turn the heartbeat on for one dev session
+echo "UA_HEARTBEAT_AUTONOMOUS_ENABLED=1" >> .env
+just dev   # Ctrl-C the previous session first
 
-# Cron — fire one specific cron once
-uv run python -m universal_agent.cron run-once <cron_name>
-# example: uv run python -m universal_agent.cron run-once morning_briefing
-
-# Dispatch sweep — claim one batch of tasks once
-uv run python -m universal_agent.dispatch sweep --once
-
-# CSI watchlist refresh — one cycle
-uv run python -m universal_agent.csi.watchlist refresh
+# When done, remove the line or set =0
 ```
 
-(See § Audit pending — these CLI entry points may need to be wired up if they don't all exist today. The pattern is the goal.)
+Available flags (one per loop):
 
-This gives you the **best of both worlds**: same code path as prod, deterministic single-shot execution, no quota burn while you debug, no collision with prod's continuous loops.
+| Loop | Env var |
+|---|---|
+| Autonomous heartbeat | `UA_HEARTBEAT_AUTONOMOUS_ENABLED` |
+| Idle dispatch loop | `UA_IDLE_POLL_ENABLED` |
+| Dispatch stale sweep | `UA_DISPATCH_STALE_SWEEP_ENABLED` |
+| Daemon sessions | `UA_DAEMON_SESSIONS_ENABLED` |
+| VP event bridge | `UA_VP_EVENT_BRIDGE_ENABLED` |
+| VP stale reconciler | `UA_VP_STALE_RECONCILE_ENABLED` |
+| Cron registration (all crons) | `UA_CRON_REGISTRATION_ENABLED` |
+| AgentMail polling | `UA_AGENTMAIL_ENABLED` |
+| AgentMail WS | `UA_AGENTMAIL_WS_ENABLED` |
+| Autonomous daily briefing | `UA_AUTONOMOUS_DAILY_BRIEFING_ENABLED` |
+
+**Pattern B: Single-iteration CLI invocations (deferred — coming in a follow-up PR).**
+
+The intended pattern is `python -m universal_agent.heartbeat tick` and similar — one tick, deterministic, exits when done. These entry points are not yet wired (see § Audit pending). Until they are, Pattern A is the way.
+
+Either pattern gives you the **same code path as prod** — only the trigger is different.
 
 ---
 
@@ -342,18 +356,23 @@ rm -f ~/.local/share/universal_agent/dev.db
 
 ## Audit pending — gaps to close before this contract is fully real
 
-Items the doc claims that **may not yet be true** in the codebase. Each one is a small, testable task — a follow-up PR (or part of the local-dev rollout PR).
+Items the doc claims that **may not yet be true** in the codebase. Each one is a small, testable task.
 
-- [ ] **`justfile` at repo root with `dev` recipe.** Currently the bootstrap script prints three commands you run by hand in three terminals. Goal: one command launches all three with combined log output and clean Ctrl-C teardown.
-- [ ] **Verify every autonomous loop has a clean OFF flag.** Audit: heartbeat, dispatch sweep, cron service, AgentMail polling, X/ClaudeDevs polling, demo workspace orchestration. Each should have an env-var gate (e.g., `UA_HEARTBEAT_ENABLED`, `UA_CRON_REGISTER_ON_BOOT`) that defaults to **ON for prod**, but is **OFF when `UA_RUNTIME_STAGE=development`**. Some flags exist; some may be missing.
-- [ ] **Single-iteration CLI entry points** for each autonomous loop. The doc's § Triggering loops manually section claims `python -m universal_agent.heartbeat tick` etc. — verify each exists; create the missing ones.
-- [ ] **`development` Infisical environment is complete.** Cross-reference every secret the gateway/api try to load against the `development` env in Infisical. Anything prod-only must either be added to dev (with a sandbox/test value) or have a defaults-and-skip path.
-- [ ] **Dev DB story is wired.** Confirm the `development` env returns a SQLite URL (or that the gateway falls back to one when a Postgres URL isn't set). Confirm migrations apply cleanly to a fresh SQLite.
-- [ ] **`snapshot_prod_to_dev.py` script exists.** For pulling a read-only prod snapshot when realistic data is needed.
-- [ ] **`docs/README.md` and `docs/Documentation_Status.md` reference this doc.** Per the Documentation Maintenance Rules in CLAUDE.md.
-- [ ] **`bootstrap_local_hq_dev.sh` is up to date.** Last-modified date is from March 2026; verify it still works against the current code and Infisical schema.
+**Closed in PR following the contract:**
 
-Once those are closed, this doc moves from "Contract draft" to "Canonical."
+- [x] **`justfile` at repo root with `dev` recipe.** Runs gateway + api + web-ui in parallel with prefixed output and clean Ctrl-C teardown. Recipes: `dev`, `dev-gateway`, `dev-webui`, `bootstrap`, `dev-kill`, `test`, `lint`, `format`, `preship`.
+- [x] **Verify every autonomous loop has a clean OFF flag.** Audit completed; new `src/universal_agent/loop_control.py` is the centralized control plane. In `UA_RUNTIME_STAGE=development` every loop defaults OFF; explicit `UA_<NAME>_ENABLED` always wins. Refactored: heartbeat_service, idle_dispatch_loop, dispatch_service (stale sweep), daemon_sessions, gateway_server (vp_event_bridge, vp_stale_reconcile, cron_registration master). Already-OFF-by-default: AgentMail, daily briefing, dashboard SSE, activity digest. Standalone CLI process: worker.py (only runs when manually invoked).
+- [x] **`docs/README.md` and `docs/Documentation_Status.md` reference this doc** + the companion briefing doc.
+
+**Deferred to follow-up PRs (not blockers for the contract):**
+
+- [ ] **Single-iteration CLI entry points** for each autonomous loop. Pattern: `python -m universal_agent.heartbeat tick`, `python -m universal_agent.cron run-once <name>`. Useful for testing autonomous behavior in dev without ticking continuously. Workaround until then: set `UA_<NAME>_ENABLED=1` in `.env` for the specific loop you want to test, restart `just dev`, and the loop will tick at its normal interval. Tradeoff: that loop ticks until you set the flag back to 0.
+- [ ] **`development` Infisical environment completeness.** Cross-reference every secret the gateway/api try to load against the `development` env in Infisical. Anything prod-only must either be added to dev (with a sandbox/test value) or have a defaults-and-skip path. **Operator-side check** — can only be verified by reading what's in Infisical.
+- [ ] **Dev DB story.** Confirm the `development` env returns a SQLite URL (or that the gateway falls back to one when a Postgres URL isn't set). Confirm migrations apply cleanly to a fresh SQLite. Depends on the Infisical-completeness audit above.
+- [ ] **`snapshot_prod_to_dev.py` script.** For pulling a read-only prod snapshot when realistic data is needed. Not a blocker — dev works without it; this is a quality-of-life addon when you want to debug against realistic data shape.
+- [ ] **`bootstrap_local_hq_dev.sh` freshness verification.** Last modified March 2026; needs end-to-end manual run on Kevin's desktop to confirm it still works against current code + Infisical schema.
+
+Once the deferred items close, this doc moves from "Contract draft" to "Canonical."
 
 ---
 
