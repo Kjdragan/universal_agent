@@ -105,5 +105,14 @@ def test_production_systemd_installer_manages_discord_services() -> None:
     assert '"ua-discord-cc-bot.service"' in content
     assert '"ua-discord-intelligence.service"' in content
     deploy_content = _DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+    # Discord services must still be restarted by deploy.
     assert "ua-discord-cc-bot ua-discord-intelligence" in deploy_content
-    assert "systemctl is-active --quiet ua-discord-cc-bot" in deploy_content
+    # Discord services must still be health-checked, but the gate is now
+    # baseline-aware (see `check_discord_regression`) so chronic crash
+    # loops don't false-positive the deploy. Pin the new mechanism so a
+    # future refactor can't silently drop discord from the health gate.
+    assert "discord_cc_pre=" in deploy_content
+    assert "discord_intel_pre=" in deploy_content
+    assert "check_discord_regression()" in deploy_content
+    assert "check_discord_regression ua-discord-cc-bot" in deploy_content
+    assert "check_discord_regression ua-discord-intelligence" in deploy_content
