@@ -222,22 +222,28 @@ def test_cron_pipelines_tile_green_when_all_clear(activity_db):
     assert state.color == COLOR_GREEN
 
 
-@pytest.mark.skip(
-    reason=(
-        "TODO(2026-05-07 pre-existing rot, exposed by pipe-to-tail fix in "
-        "pr-validate.yml): CronPipelinesTile.compute_state returns 'green' "
-        "even when multiple jobs are failing. Either the threshold logic "
-        "changed without updating tests, or the test fixture isn't seeding "
-        "the activity_db in a way the tile reads. Investigate "
-        "mission_control_tiles.CronPipelinesTile before un-skipping."
+def _seed_cron_registry(workspaces_dir: Path, job_ids: list[str]) -> None:
+    """Write a minimal cron_jobs.json so `_load_live_cron_job_ids` finds the
+    given ids. Used by tests that exercise the deleted-job filter."""
+    workspaces_dir.mkdir(parents=True, exist_ok=True)
+    payload = [{"job_id": jid} for jid in job_ids]
+    (workspaces_dir / "cron_jobs.json").write_text(
+        json.dumps(payload), encoding="utf-8"
     )
-)
-def test_cron_pipelines_tile_red_when_multiple_jobs_failing(activity_db):
+
+
+def test_cron_pipelines_tile_red_when_multiple_jobs_failing(
+    activity_db, tmp_path, monkeypatch
+):
+    # Seed both jobs into the registry so the deleted-job filter keeps them.
+    _seed_cron_registry(tmp_path / "workspaces", ["a", "b"])
+    monkeypatch.setenv("UA_WORKSPACES_DIR", str(tmp_path / "workspaces"))
     for i, job in enumerate(["a", "b"], start=1):
         _insert_event(
             activity_db,
             id=f"cron_fail_{i}",
             source_domain="cron",
+            kind="cron_run_failed",
             severity="error",
             created_at=_iso_hours_ago(1),
             metadata_json=json.dumps({"job_id": job}),
@@ -247,25 +253,122 @@ def test_cron_pipelines_tile_red_when_multiple_jobs_failing(activity_db):
     assert state.evidence["distinct_failing_jobs"] == 2
 
 
-@pytest.mark.skip(
-    reason=(
-        "TODO(2026-05-07 pre-existing rot, exposed by pipe-to-tail fix in "
-        "pr-validate.yml): CronPipelinesTile.compute_state returns 'green' "
-        "instead of 'yellow' for a single failing job. Same root cause as "
-        "the red-tile test above; investigate together."
-    )
-)
-def test_cron_pipelines_tile_yellow_when_one_job_fails(activity_db):
+def test_cron_pipelines_tile_yellow_when_one_job_fails(
+    activity_db, tmp_path, monkeypatch
+):
+    _seed_cron_registry(tmp_path / "workspaces", ["single"])
+    monkeypatch.setenv("UA_WORKSPACES_DIR", str(tmp_path / "workspaces"))
     _insert_event(
         activity_db,
         id="cron_one",
         source_domain="cron",
+        kind="cron_run_failed",
         severity="error",
         created_at=_iso_hours_ago(1),
         metadata_json=json.dumps({"job_id": "single"}),
     )
     state = CronPipelinesTile().compute_state(activity_db)
     assert state.color == COLOR_YELLOW
+
+
+def test_cron_pipelines_tile_excludes_deleted_jobs_from_active_count(
+    activity_db, tmp_path, monkeypatch
+):
+    """Regression: a deleted test cron's residue failures must not drive
+    the tile red. 2026-05-11 incident — runaway test cron `2df80b6f95`
+    was deleted but 484 historical failures in the 24h window kept the
+    Cron Pipelines tile red for 24h. The operator cannot remediate a job
+    that no longer exists, so "red" is anti-signal.
+    """
+    workspaces = tmp_path / "workspaces"
+    _seed_cron_registry(workspaces, ["live_job"])  # only one live job
+    monkeypatch.setenv("UA_WORKSPACES_DIR", str(workspaces))
+
+    # Live job is healthy (no failures).
+    # Deleted job has 5 failures in the 24h window.
+    for i in range(5):
+        _insert_event(
+            activity_db,
+            id=f"deleted_fail_{i}",
+            source_domain="cron",
+            kind="cron_run_failed",
+            severity="error",
+            created_at=_iso_hours_ago(1),
+            metadata_json=json.dumps({"job_id": "deleted_test_cron"}),
+        )
+    state = CronPipelinesTile().compute_state(activity_db)
+    assert state.color == COLOR_GREEN, (
+        f"deleted-job failures should not drive color; got {state.color} "
+        f"with evidence={state.evidence}"
+    )
+    assert state.evidence["distinct_failing_jobs"] == 0
+    assert state.evidence["total_failures_24h"] == 0
+    # Residue surfaced in evidence for transparency.
+    assert state.evidence["deleted_jobs_residue_total"] == 5
+    assert state.evidence["deleted_jobs_residue_failures"] == {
+        "deleted_test_cron": 5
+    }
+
+
+def test_cron_pipelines_tile_mixes_live_and_deleted(
+    activity_db, tmp_path, monkeypatch
+):
+    """A real live failure on top of deleted-job residue still drives the
+    tile yellow/red based on the live failure alone."""
+    workspaces = tmp_path / "workspaces"
+    _seed_cron_registry(workspaces, ["live_job"])
+    monkeypatch.setenv("UA_WORKSPACES_DIR", str(workspaces))
+
+    # 1 live failure (should drive yellow).
+    _insert_event(
+        activity_db,
+        id="live_fail",
+        source_domain="cron",
+        kind="cron_run_failed",
+        severity="error",
+        created_at=_iso_hours_ago(0.5),
+        metadata_json=json.dumps({"job_id": "live_job"}),
+    )
+    # 300 deleted-job failures (residue — must not bump distinct count).
+    for i in range(300):
+        _insert_event(
+            activity_db,
+            id=f"residue_{i}",
+            source_domain="cron",
+            kind="cron_run_failed",
+            severity="error",
+            created_at=_iso_hours_ago(2),
+            metadata_json=json.dumps({"job_id": "ghost_cron"}),
+        )
+    state = CronPipelinesTile().compute_state(activity_db)
+    assert state.color == COLOR_YELLOW
+    assert state.evidence["distinct_failing_jobs"] == 1
+    assert state.evidence["total_failures_24h"] == 1
+    assert state.evidence["deleted_jobs_residue_total"] == 300
+
+
+def test_cron_pipelines_tile_falls_back_when_registry_missing(
+    activity_db, tmp_path, monkeypatch
+):
+    """If the cron registry is unreadable, the tile must NOT silently
+    swallow failures — fall back to legacy behavior (count everything)."""
+    # Point at a directory that has no cron_jobs.json file.
+    monkeypatch.setenv("UA_WORKSPACES_DIR", str(tmp_path / "empty_workspaces"))
+    _insert_event(
+        activity_db,
+        id="cron_fb",
+        source_domain="cron",
+        kind="cron_run_failed",
+        severity="error",
+        created_at=_iso_hours_ago(1),
+        metadata_json=json.dumps({"job_id": "some_job"}),
+    )
+    state = CronPipelinesTile().compute_state(activity_db)
+    # Without registry data we cannot prove the job is deleted, so it
+    # counts toward the active aggregation.
+    assert state.color == COLOR_YELLOW
+    assert state.evidence["distinct_failing_jobs"] == 1
+    assert state.evidence.get("registry_readable") is False
 
 
 def test_heartbeat_tile_green_on_recent_tick(activity_db):
