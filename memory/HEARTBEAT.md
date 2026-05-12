@@ -88,6 +88,57 @@ This file controls proactive heartbeat behavior. Keep items concrete and actiona
   - **If entity exists**: invoke the `cody-scaffold-builder` skill with the matched entity slug. Then refine the generated `BRIEF.md` / `ACCEPTANCE.md` / `business_relevance.md` placeholders with real prose synthesis (do NOT just delete `_(Simone: ...)_` markers — substitute substantive content). Then invoke `cody-task-dispatcher` to enqueue the `cody_demo_task`. Finally, mark the original `cody_scaffold_request` row `status=completed` with a Task Hub comment linking to the workspace and the new `cody_demo_task:<id>`.
   - **If entity is missing**: do NOT speculate or invent a stub. Mark the `cody_scaffold_request` row `status=blocked` with reason `vault_entity_missing:<expected_slug>` and surface a one-line note in the heartbeat response so Kevin can decide whether to backfill the entity or defer the demo. Do not loop on it.
   - **Safety**: only use the deterministic `cody-scaffold-builder` Python entry point. Never bypass it to write workspace files directly. The skill enforces the vanilla-settings safety net (`/opt/ua_demos/<id>/.claude/settings.json` integrity).
+## Reviewing Cody's completed missions
+
+When Cody (vp.coder.primary) completes a mission, your job is to judge the
+work product and decide if it's done or if it needs follow-up. Use this
+decision tree:
+
+**Did Cody nail it?**
+→ No action. Task stays `completed`. Move on.
+
+**Wrong output, but you can articulate exactly what to fix?**
+→ Call `task_request_revision(task_id, feedback="...", max_extra_retries=1)`.
+   The `feedback` is operator-style guidance Cody reads verbatim on his
+   next claim. Bumps retry budget by 1 so he can actually attempt the
+   revision without immediately hitting the consecutive-failure limit.
+   Example: feedback="The column is there but the header should be
+   'Output' with a capital O. Also add a footer row with the column total."
+
+**Wrong output, but you can't pinpoint what's wrong?**
+→ Call `task_re_evaluate(task_id, reason="...")`.
+   This attaches the full prior-run history (errors, summaries, side
+   effects) to the task so Cody sees the evidence on his next attempt
+   and can figure it out. Does NOT bump retry budget — operates within
+   his existing failure-count limit. Use when output looks off but
+   you're not sure why (numbers don't add up, completion claim looks
+   unverified, file written but content suspicious).
+   Example: reason="The output column shows 0 for several days I know
+   had transactions. Possibly reading from the wrong sheet?"
+
+**Wrong agent, someone else should try?**
+→ Call `task_redirect_to(task_id, target_vp="vp.general.primary", reason="...")`.
+   Clears Cody-specific retry counters; sets `metadata.preferred_vp` so
+   the next dispatch routes to Atlas (or other named VP). Use when the
+   task isn't a coding problem in the first place, or when Cody's
+   toolchain is the wrong shape (e.g. needs database access he doesn't
+   have configured, or requires a generalist research lane that fits
+   Atlas better).
+   Example: target_vp="vp.general.primary", reason="This needs a
+   research summary of the regulatory landscape, not code changes."
+
+### Key invariants you should know
+
+- `task_re_evaluate` does NOT bump retry budget. If a task has already hit
+  its `max_retries` ceiling, `re_evaluate` will reset state but the
+  next attempt-failure may immediately re-park. Use `task_request_revision`
+  when you need to extend the budget.
+- The natural-language `objective` you pass to `vp_dispatch_mission` is
+  how you communicate the INITIAL work to Cody. The three verbs above
+  are exclusively for after-the-fact follow-up.
+- Sign-off is the default. Only invoke a follow-up verb when you've
+  actually identified a problem with the work product. Don't reflexively
+  re-evaluate every completed task.
 ## Novelty Policy
 - Do NOT repeat an investigation topic that appears in the RECENT INVESTIGATIONS list provided in the prompt.
 - Each heartbeat cycle should advance a DIFFERENT item from the Active Monitors list or explore a genuinely new angle.
