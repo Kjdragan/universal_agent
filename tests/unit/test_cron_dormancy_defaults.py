@@ -39,6 +39,16 @@ DOCUMENTED_EXCEPTIONS = {
     # Atlas-eligible tasks must dispatch within ~60s of being queued, not
     # wait until 6 AM. See operating_hours_dormancy.md exceptions table.
     "atlas_direct_dispatch",
+    # Simone-chat mission control (PR #255): every-60s SQLite-only
+    # housekeeping that promotes simone_chat Task Hub rows from
+    # status="in_progress" to status="completed" once Simone has proposed
+    # completion and the operator has been silent for UA_SIMONE_CHAT_IDLE_MINUTES
+    # (default 10). No LLM tokens, no external API. Exception #3
+    # (latency-sensitive operator-facing state): a chat started at 8:55 PM
+    # crosses into the dormant window mid-cycle; without 24/7 the row stays
+    # "in_progress" overnight and pollutes the dashboard. See
+    # operating_hours_dormancy.md exceptions table.
+    "simone_chat_auto_complete",
 }
 
 # Hours considered active in America/Chicago. 6 AM start (operator wakes),
