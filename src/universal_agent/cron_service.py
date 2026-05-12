@@ -1536,12 +1536,64 @@ class CronService:
                                 else:
                                     resolved_command = job.command
 
+                                # Hermes Phase F site-wiring (cron LLM path).
+                                # Mirrors the `!script` branch above: ensure a
+                                # stable ``cron:<system_job>`` task + open an
+                                # assignment row before invoking the LLM so we
+                                # can record an outcome on the way out.
+                                # LLM crons are in-process, so ``worker_pid``
+                                # stays NULL. The try/finally below ensures
+                                # the close-out fires even on timeout/error.
+                                # All F wiring is best-effort — never breaks
+                                # LLM execution.
+                                #
+                                # See docs/03_Operations/108_Task_Hub_Observability_Protocol.md.
+                                _f_job_metadata = job.metadata or {}
+                                _f_skip_link = bool(
+                                    _f_job_metadata.get("skip_task_hub_link")
+                                )
+                                _f_task_id = ""
+                                _f_assignment_id: Optional[str] = None
+                                _f_auto_linked = False
+                                _f_was_timeout_killed = False
+                                _f_was_exception = False
+                                _f_run_error_text = ""
+                                if not _f_skip_link:
+                                    try:
+                                        from universal_agent.gateway_server import (
+                                            _task_hub_open_conn as _f_link_open_conn_llm,
+                                        )
+                                        from universal_agent.services.cron_task_hub_link import (
+                                            ensure_cron_task_link as _f_ensure_link_llm,
+                                        )
+                                        _f_link_conn_llm = _f_link_open_conn_llm()
+                                        try:
+                                            _f_linkage = _f_ensure_link_llm(
+                                                _f_link_conn_llm,
+                                                job_id=job.job_id,
+                                                job_metadata=_f_job_metadata,
+                                                description=(job.description or job.command)[:500],
+                                            )
+                                        finally:
+                                            _f_link_conn_llm.close()
+                                        if _f_linkage:
+                                            _f_task_id = str(_f_linkage.get("task_id") or "").strip()
+                                            _f_assignment_id = str(_f_linkage.get("assignment_id") or "").strip() or None
+                                            _f_auto_linked = not str(
+                                                _f_job_metadata.get("task_id") or ""
+                                            ).strip()
+                                    except Exception as _f_link_exc:
+                                        logger.debug(
+                                            "Phase F LLM cron task-link skipped for job %s: %s",
+                                            job.job_id, _f_link_exc,
+                                        )
+
                                 request = GatewayRequest(
                                     user_input=resolved_command,
                                     force_complex=True,
                                     metadata=request_metadata,
                                 )
-                                
+
                                 async def _fire_event(evt: Any) -> None:
                                     if self.agent_event_sink:
                                         try:
@@ -1553,74 +1605,220 @@ class CronService:
                                             logger.warning("Error dispatching chron agent event to UI sink: %s", e)
 
                                 run_coro = self.gateway.run_query(session, request, event_callback=_fire_event)
-                                if timeout_seconds is not None:
-                                    result = await asyncio.wait_for(run_coro, timeout=timeout_seconds)
-                                else:
-                                    result = await run_coro
-                                meta = getattr(result, "metadata", None)
-                                auth_required = False
-                                auth_link = None
-                                errors: list[str] = []
-                                if isinstance(meta, dict):
-                                    auth_required = bool(meta.get("auth_required"))
-                                    raw_link = meta.get("auth_link")
-                                    auth_link = raw_link if isinstance(raw_link, str) and raw_link.strip() else None
-                                    raw_errors = meta.get("errors")
-                                    if isinstance(raw_errors, list):
-                                        errors = [str(e) for e in raw_errors if str(e).strip()]
+                                try:
+                                    try:
+                                        if timeout_seconds is not None:
+                                            result = await asyncio.wait_for(run_coro, timeout=timeout_seconds)
+                                        else:
+                                            result = await run_coro
+                                    except asyncio.TimeoutError:
+                                        _f_was_timeout_killed = True
+                                        _f_run_error_text = (
+                                            f"LLM cron timed out after {timeout_seconds}s"
+                                        )
+                                        raise
+                                    except Exception as _llm_exc:
+                                        _f_was_exception = True
+                                        _f_run_error_text = str(_llm_exc)[:500]
+                                        raise
+                                    meta = getattr(result, "metadata", None)
+                                    auth_required = False
+                                    auth_link = None
+                                    errors: list[str] = []
+                                    if isinstance(meta, dict):
+                                        auth_required = bool(meta.get("auth_required"))
+                                        raw_link = meta.get("auth_link")
+                                        auth_link = raw_link if isinstance(raw_link, str) and raw_link.strip() else None
+                                        raw_errors = meta.get("errors")
+                                        if isinstance(raw_errors, list):
+                                            errors = [str(e) for e in raw_errors if str(e).strip()]
 
-                                if auth_required:
-                                    record.status = "auth_required"
-                                    # Preserve the link in output so the Web UI can display it without terminal access.
-                                    if auth_link:
-                                        record.output_preview = f"AUTH REQUIRED: {auth_link}"
+                                    if auth_required:
+                                        record.status = "auth_required"
+                                        # Preserve the link in output so the Web UI can display it without terminal access.
+                                        if auth_link:
+                                            record.output_preview = f"AUTH REQUIRED: {auth_link}"
+                                        else:
+                                            record.output_preview = "AUTH REQUIRED: open the Composio connect link shown in the run logs."
+                                    elif errors:
+                                        # Classification policy:
+                                        #   errors + response_text  -> success_with_warnings (the agent
+                                        #     produced a final answer despite tool/sandbox hiccups
+                                        #     it recovered from; e.g. transient sandbox-violation
+                                        #     attempts, retry-and-recover sequences). Logged as warning,
+                                        #     not failed, so a clean cron tile reflects truth.
+                                        #   errors + no response_text -> real error
+                                        response_text = (getattr(result, "response_text", "") or "").strip()
+                                        if response_text:
+                                            record.status = "success"
+                                            record.output_preview = response_text[:400]
+                                            # Carry the warnings on the record so they're visible in the
+                                            # Web UI's run detail and the activity_event metadata, even
+                                            # though we don't fail the run.
+                                            record.error = (
+                                                f"completed with {len(errors)} tool warning(s); first: {errors[0][:200]}"
+                                            )
+                                            logger.warning(
+                                                "Chron job %s succeeded with %d tool warning(s): %s",
+                                                job.job_id,
+                                                len(errors),
+                                                errors[0][:200],
+                                            )
+                                        else:
+                                            record.status = "error"
+                                            record.error = errors[0]
+                                            record.output_preview = record.error[:400]
                                     else:
-                                        record.output_preview = "AUTH REQUIRED: open the Composio connect link shown in the run logs."
-                                elif errors:
-                                    # Classification policy:
-                                    #   errors + response_text  -> success_with_warnings (the agent
-                                    #     produced a final answer despite tool/sandbox hiccups
-                                    #     it recovered from; e.g. transient sandbox-violation
-                                    #     attempts, retry-and-recover sequences). Logged as warning,
-                                    #     not failed, so a clean cron tile reflects truth.
-                                    #   errors + no response_text -> real error
-                                    response_text = (getattr(result, "response_text", "") or "").strip()
-                                    if response_text:
                                         record.status = "success"
-                                        record.output_preview = response_text[:400]
-                                        # Carry the warnings on the record so they're visible in the
-                                        # Web UI's run detail and the activity_event metadata, even
-                                        # though we don't fail the run.
-                                        record.error = (
-                                            f"completed with {len(errors)} tool warning(s); first: {errors[0][:200]}"
-                                        )
-                                        logger.warning(
-                                            "Chron job %s succeeded with %d tool warning(s): %s",
-                                            job.job_id,
-                                            len(errors),
-                                            errors[0][:200],
-                                        )
-                                    else:
-                                        record.status = "error"
-                                        record.error = errors[0]
-                                        record.output_preview = record.error[:400]
-                                else:
-                                    record.status = "success"
-                                    record.output_preview = (getattr(result, "response_text", "") or "")[:400]
-                                record.finished_at = time.time()
-                                self._persist_run_output(job, record, result)
-                                self._finalize_workflow_attempt(
-                                    job=job,
-                                    record=record,
-                                    scheduled_at=scheduled_at,
-                                    reason=reason,
-                                    dispatch_key=dispatch_key,
-                                    workflow_run_id=workflow_run_id,
-                                    workflow_attempt_id=workflow_attempt_id,
-                                    failure_reason=record.error or ("auth_required" if record.status == "auth_required" else None),
-                                    failure_class="auth_required" if record.status == "auth_required" else "cron_dispatch_failed",
-                                    retryable=record.status == "error",
-                                )
+                                        record.output_preview = (getattr(result, "response_text", "") or "")[:400]
+                                    record.finished_at = time.time()
+                                    self._persist_run_output(job, record, result)
+                                    self._finalize_workflow_attempt(
+                                        job=job,
+                                        record=record,
+                                        scheduled_at=scheduled_at,
+                                        reason=reason,
+                                        dispatch_key=dispatch_key,
+                                        workflow_run_id=workflow_run_id,
+                                        workflow_attempt_id=workflow_attempt_id,
+                                        failure_reason=record.error or ("auth_required" if record.status == "auth_required" else None),
+                                        failure_class="auth_required" if record.status == "auth_required" else "cron_dispatch_failed",
+                                        retryable=record.status == "error",
+                                    )
+                                finally:
+                                    # Phase F.1 / F.3 site-wiring CLOSE (LLM cron).
+                                    # Runs on success, timeout, and exception
+                                    # paths so every tick produces a
+                                    # ``task_hub_runs`` row.  Mirrors the
+                                    # !script branch's close logic but treats
+                                    # the in-process LLM call as a synthetic
+                                    # subprocess: rc=0 when the coroutine
+                                    # returned, rc=1 when it raised or timed
+                                    # out.  Best-effort throughout.
+                                    if _f_task_id:
+                                        try:
+                                            from universal_agent import (
+                                                task_hub as _f_th_llm,
+                                            )
+                                            from universal_agent.gateway_server import (
+                                                _task_hub_open_conn as _f_open_conn_llm,
+                                            )
+                                            from universal_agent.services.cron_task_hub_link import (
+                                                close_cron_task_link as _f_close_link_llm,
+                                            )
+                                            from universal_agent.services.worker_exit_classifier import (
+                                                classify_worker_exit as _f_classify_llm,
+                                                park_task_for_protocol_violation as _f_park_llm,
+                                                task_was_closed_normally as _f_closed_llm,
+                                            )
+                                            _f_rc_equiv_llm = (
+                                                0
+                                                if not _f_was_timeout_killed
+                                                and not _f_was_exception
+                                                else 1
+                                            )
+                                            _f_conn_llm = _f_open_conn_llm()
+                                            try:
+                                                # Pre-close auto-linked cron
+                                                # task on clean rc=0 paths so
+                                                # F.3 doesn't treat the normal
+                                                # cron lifecycle as a protocol
+                                                # violation (mirrors !script).
+                                                if (
+                                                    _f_auto_linked
+                                                    and _f_rc_equiv_llm == 0
+                                                ):
+                                                    try:
+                                                        _f_conn_llm.execute(
+                                                            "UPDATE task_hub_items "
+                                                            "SET status = ?, seizure_state = ?, updated_at = ? "
+                                                            "WHERE task_id = ?",
+                                                            (
+                                                                _f_th_llm.TASK_STATUS_COMPLETED,
+                                                                "unseized",
+                                                                _f_th_llm._now_iso(),
+                                                                _f_task_id,
+                                                            ),
+                                                        )
+                                                        _f_conn_llm.commit()
+                                                    except Exception as _f_pre_close_exc_llm:
+                                                        logger.debug(
+                                                            "Phase F LLM auto-link pre-close skipped for cron job %s: %s",
+                                                            job.job_id, _f_pre_close_exc_llm,
+                                                        )
+
+                                                _f_closed_normally_llm = _f_closed_llm(
+                                                    _f_conn_llm, task_id=_f_task_id,
+                                                )
+                                                _f_classification_llm = _f_classify_llm(
+                                                    return_code=_f_rc_equiv_llm,
+                                                    was_signaled=False,
+                                                    was_timeout_killed=_f_was_timeout_killed,
+                                                    task_closed_normally=_f_closed_normally_llm,
+                                                )
+                                                logger.info(
+                                                    "Phase F.1 LLM cron job %s exit classified as %s "
+                                                    "(task=%s, assignment=%s, rc_equiv=%s, auto_linked=%s)",
+                                                    job.job_id, _f_classification_llm.outcome,
+                                                    _f_task_id, _f_assignment_id or "<none>",
+                                                    _f_rc_equiv_llm, _f_auto_linked,
+                                                )
+                                                if _f_assignment_id:
+                                                    try:
+                                                        _f_th_llm._close_run(
+                                                            _f_conn_llm,
+                                                            assignment_id=_f_assignment_id,
+                                                            outcome=(
+                                                                "completed"
+                                                                if _f_rc_equiv_llm == 0
+                                                                else "failed"
+                                                            ),
+                                                            summary=f"cron LLM {job.job_id}",
+                                                            error=(_f_run_error_text or "")[:500],
+                                                            metadata={
+                                                                "worker_exit": _f_classification_llm.to_dict(),
+                                                                "site": "cron",
+                                                                "auto_linked": _f_auto_linked,
+                                                                "execution_mode": "llm_in_process",
+                                                            },
+                                                        )
+                                                        _f_conn_llm.execute(
+                                                            "UPDATE task_hub_assignments "
+                                                            "SET state = ?, ended_at = ? "
+                                                            "WHERE assignment_id = ? AND ended_at IS NULL",
+                                                            (
+                                                                "completed" if _f_rc_equiv_llm == 0 else "failed",
+                                                                _f_th_llm._now_iso(),
+                                                                _f_assignment_id,
+                                                            ),
+                                                        )
+                                                        _f_conn_llm.commit()
+                                                    except Exception as _f_close_exc_llm:
+                                                        logger.debug(
+                                                            "Phase F.1 LLM _close_run skipped for cron job %s: %s",
+                                                            job.job_id, _f_close_exc_llm,
+                                                        )
+                                                if _f_classification_llm.is_protocol_violation:
+                                                    _f_park_llm(
+                                                        _f_conn_llm,
+                                                        task_id=_f_task_id,
+                                                        site="cron",
+                                                        summary=f"cron LLM {job.job_id} clean exit no disposition",
+                                                        agent_id="cron_scheduler",
+                                                    )
+                                                if _f_auto_linked:
+                                                    _f_close_link_llm(
+                                                        _f_conn_llm,
+                                                        task_id=_f_task_id,
+                                                        success=(_f_rc_equiv_llm == 0),
+                                                    )
+                                            finally:
+                                                _f_conn_llm.close()
+                                        except Exception as _f_exc_llm:
+                                            logger.debug(
+                                                "Phase F.1/F.3 LLM wiring skipped for cron job %s: %s",
+                                                job.job_id, _f_exc_llm,
+                                            )
                                 break
                             record.finished_at = time.time()
                             self._persist_run_output(job, record, result)

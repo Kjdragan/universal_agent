@@ -355,3 +355,89 @@ def test_ensure_creates_assignment_findable_by_phase_f_helper(
     )
     found = find_active_assignment_for_task(conn, task_id="cron:morning_briefing")
     assert found == result["assignment_id"]
+
+
+# ── Ship 4 — housekeeping crons flipped opt-IN to the protocol ─────────────
+#
+# These four cron sources were opt-OUT (``skip_task_hub_link=True``)
+# in PR #240 because they're dispatcher/GC crons whose work-products
+# already carry their own task_hub linkage.  Ship 4 flips them opt-IN:
+# meta-observability ("is the dispatcher itself running cleanly?")
+# is worth more than the cost of one row per cron source.  These tests
+# pin that the registration source no longer carries the opt-out flag.
+
+
+def _gateway_source_excerpt(symbol: str, *, lines_after: int = 40) -> str:
+    """Read the gateway_server.py source around ``def {symbol}(...)``.
+
+    We grep the registration function body rather than calling it,
+    because the function depends on a live ``_cron_service`` global
+    and a SQLite-backed cron store that aren't available in unit-test
+    fixtures.  The protocol contract this test enforces lives at the
+    call-site of ``_register_system_cron_job`` (or in the inline
+    metadata dict for the cleanup cron) — both are textually
+    inspectable.
+    """
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[2] / "src" / "universal_agent" / "gateway_server.py"
+    text = src.read_text(encoding="utf-8")
+    anchor = f"def {symbol}("
+    idx = text.find(anchor)
+    if idx == -1:
+        raise AssertionError(f"could not locate def {symbol}() in gateway_server.py")
+    # Slice 80 lines to be safe.
+    tail = text[idx:]
+    return "\n".join(tail.splitlines()[: max(lines_after, 80)])
+
+
+def test_codie_proactive_cleanup_is_observed() -> None:
+    """codie_proactive_cleanup uses an inline metadata dict (not
+    ``_register_system_cron_job``).  Ship 4 removed the
+    ``skip_task_hub_link`` key from that dict."""
+    excerpt = _gateway_source_excerpt(
+        "_ensure_codie_proactive_cleanup_cron_job", lines_after=80,
+    )
+    # The key should NOT appear at all in the body — neither as
+    # ``"skip_task_hub_link": True`` nor as a kwarg.
+    assert '"skip_task_hub_link"' not in excerpt, (
+        "codie_proactive_cleanup must no longer set "
+        "metadata['skip_task_hub_link'] post-Ship-4"
+    )
+    assert "skip_task_hub_link=True" not in excerpt
+
+
+def test_vp_coder_workspace_pruning_is_observed() -> None:
+    """vp_coder_workspace_pruning uses ``_register_system_cron_job``;
+    Ship 4 removed the ``skip_task_hub_link=True`` kwarg."""
+    excerpt = _gateway_source_excerpt(
+        "_ensure_vp_coder_workspace_pruning_cron_job", lines_after=40,
+    )
+    assert "skip_task_hub_link=True" not in excerpt, (
+        "vp_coder_workspace_pruning must no longer pass "
+        "skip_task_hub_link=True post-Ship-4"
+    )
+
+
+def test_atlas_direct_dispatch_is_observed() -> None:
+    """atlas_direct_dispatch uses ``_register_system_cron_job``;
+    Ship 4 removed the ``skip_task_hub_link=True`` kwarg."""
+    excerpt = _gateway_source_excerpt(
+        "_ensure_atlas_direct_dispatch_cron_job", lines_after=40,
+    )
+    assert "skip_task_hub_link=True" not in excerpt, (
+        "atlas_direct_dispatch must no longer pass "
+        "skip_task_hub_link=True post-Ship-4"
+    )
+
+
+def test_csi_demo_triage_rank_is_observed() -> None:
+    """csi_demo_triage_rank uses ``_register_system_cron_job``;
+    Ship 4 removed the ``skip_task_hub_link=True`` kwarg."""
+    excerpt = _gateway_source_excerpt(
+        "_ensure_csi_demo_triage_rank_cron_job", lines_after=40,
+    )
+    assert "skip_task_hub_link=True" not in excerpt, (
+        "csi_demo_triage_rank must no longer pass "
+        "skip_task_hub_link=True post-Ship-4"
+    )
