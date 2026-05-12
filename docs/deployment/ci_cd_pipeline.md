@@ -24,7 +24,7 @@ Release verification rule:
 |------|------|---------|--------|
 | `PR Validate` | `pr-validate.yml` | Pull request to `feature/latest2` or `main` | `py_compile` + `ruff check` + `pytest tests/unit` (mandatory pre-merge gate) |
 | `PR Auto-Merge` | `pr-auto-merge.yml` | Pull request to `main` from `claude/*` head branch (added 2026-05-11) | Enables GitHub auto-merge (squash + delete branch) so PR merges automatically once `Validate PR` passes. Uses `secrets.AUTO_MERGE_PAT` (fine-grained PAT) so the downstream squash-merge `push` event actually fires `deploy.yml` — see "Why a PAT" below. Tier-1 PRs through `/ship` already self-enable auto-merge. |
-| `Post-Merge Deploy Dispatcher` | `post-merge-deploy.yml` | `pull_request: closed` with `merged=true` and `base.ref=main` | Belt-and-suspenders: dispatches `deploy.yml` via `workflow_dispatch` for any merged PR. Also suffered the GITHUB_TOKEN-suppression issue documented below, so it primarily helps during the bootstrap window when `AUTO_MERGE_PAT` is missing. |
+| ~~`Post-Merge Deploy Dispatcher`~~ | ~~`post-merge-deploy.yml`~~ | **Deleted 2026-05-11 PM** | Was the workaround for the GITHUB_TOKEN suppression bug. With PR #232's PAT swap making `pr-auto-merge.yml` fire deploys via the natural `push` trigger, this bridge was redundant — every merge produced two Deploy runs (one from `push`, one from the bridge's `workflow_dispatch`). Removed to avoid double-deploys + Actions-tab clutter. |
 | `Deploy` | `deploy.yml` | Push to `main` (paths-ignore: docs/, **.md, reports/, state/, artifacts/), or `workflow_dispatch` | Production Service. **No concurrency guard as of 2026-05-11** — see "Concurrency caveat" below. |
 
 ### End-to-End PR-to-Production Flow (2026-05-11)
@@ -51,7 +51,7 @@ GitHub's [token rules](https://docs.github.com/en/actions/security-guides/automa
 
 > "Events triggered by the GITHUB_TOKEN, with the exception of `workflow_dispatch` and `repository_dispatch`, will not create a new workflow run."
 
-When `pr-auto-merge.yml` previously called `gh pr merge --auto` with `GITHUB_TOKEN`, the resulting squash-merge `push` event to main was attributed to `GITHUB_TOKEN` and `deploy.yml`'s `on: push` trigger was silently skipped. Three Hermes PRs (#228, #229, #230) shipped to main with no deploy firing until an operator manually invoked `gh workflow run deploy.yml --ref main`. The `post-merge-deploy.yml` dispatcher had the same fault.
+When `pr-auto-merge.yml` previously called `gh pr merge --auto` with `GITHUB_TOKEN`, the resulting squash-merge `push` event to main was attributed to `GITHUB_TOKEN` and `deploy.yml`'s `on: push` trigger was silently skipped. Three Hermes PRs (#228, #229, #230) shipped to main with no deploy firing until an operator manually invoked `gh workflow run deploy.yml --ref main`. The `post-merge-deploy.yml` dispatcher (introduced as a bridge for this gap) had the same fault, and was later deleted once the PAT proved itself.
 
 Fix: `pr-auto-merge.yml` now uses `secrets.AUTO_MERGE_PAT` (a fine-grained PAT scoped to `Kjdragan/universal_agent` with `Contents: Read+Write` and `Pull requests: Read+Write` only). The PAT-driven push fires `deploy.yml` normally. Fallback to `GITHUB_TOKEN` is preserved for the bootstrap window before the secret is configured.
 

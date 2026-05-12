@@ -26,7 +26,6 @@ on:
       - Deploy
       - PR Validate
       - PR Auto-Merge
-      - Post-Merge Deploy Dispatcher
       - Auto-Promote to Production
       - Nightly Documentation Drift Audit
       - OpenClaw Release Sync

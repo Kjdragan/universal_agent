@@ -37,7 +37,7 @@ The dormancy default exists to suppress **wasteful work** — crons that burn qu
 
 **NOT subject to dormancy (24/7 by design):**
 
-- Deploy workflows (`deploy.yml`, `post-merge-deploy.yml`) — a merge to main can happen at any wall-clock time and the resulting deploy must fire
+- Deploy workflow (`deploy.yml`) — a merge to main can happen at any wall-clock time and the resulting deploy must fire
 - Auto-merge (`pr-auto-merge.yml`) — PRs land when CI completes, regardless of clock
 - CI / PR failure handling (`ci-failure-issue.yml`) — a failed run at 3 AM should be surfaced for morning fix, not silently broken for 7 hours
 - Error alerting, secret rotation alerts, security event handlers
