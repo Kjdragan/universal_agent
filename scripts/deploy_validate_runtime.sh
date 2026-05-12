@@ -108,6 +108,22 @@ remove_runtime_venv() {
 
 ensure_existing_venv_is_usable() {
   echo "--> Checking whether the existing venv is usable by $SERVICE_USER..."
+
+  # Guard: a .venv that exists but is missing bin/python3 is a corrupted
+  # leftover (e.g. from a failed `uv run` python-version downgrade that
+  # got partway through site-packages deletion before hitting a
+  # permission-denied error). Without this guard the function exits
+  # without entering the version-check branch below, and the subsequent
+  # `uv sync` fails with "Project virtual environment directory ...
+  # cannot be used because it is not a valid Python environment (no
+  # Python executable was found)". Force-remove before that happens.
+  # Triggered 2026-05-12 after PR #250 deploy left .venv/ in this state.
+  if [[ -d "$APP_ROOT/.venv" && ! -e "$APP_ROOT/.venv/bin/python3" ]]; then
+    echo "--> Existing .venv has no python3 interpreter — likely corrupted; removing for clean rebuild..."
+    remove_runtime_venv
+    return
+  fi
+
   if [[ -e "$APP_ROOT/.venv/bin/python3" ]]; then
     if ! run_as_service_user "readlink -f \"$APP_ROOT/.venv/bin/python3\" >/dev/null 2>&1"; then
       echo "--> Existing venv interpreter is not accessible to $SERVICE_USER; removing stale .venv for clean rebuild..."
