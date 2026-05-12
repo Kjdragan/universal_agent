@@ -2126,8 +2126,20 @@ export default function ToDoListDashboardPage() {
         )}
       </section>
 
-      {/* ── Kanban Time Horizon Board ── */}
-      <div className="grid gap-3 grid-cols-1 xl:grid-cols-4" onClick={(e) => e.stopPropagation()}>
+      {/* ── Kanban Time Horizon Board ──
+       *
+       * 5-column layout (post-2026-05-12). The 5th column ("Blocked")
+       * was added because quarantined-email cards (status='blocked',
+       * board_lane='blocked') were previously filtered out of every
+       * Kanban lane and only surfaced as a 1-line counter at the bottom.
+       * That made the inline Archive / Delete verbs added in PR #255
+       * unreachable through the UI — the operator had no way to clear
+       * a quarantined card without going through chat or the API.
+       *
+       * On screens narrower than xl the columns stack to single-column
+       * (grid-cols-1); operator workflow on small viewports is unchanged.
+       */}
+      <div className="grid gap-3 grid-cols-1 xl:grid-cols-5" onClick={(e) => e.stopPropagation()}>
         <KanbanCol
           label="Not Assigned"
           icon="schedule"
@@ -2154,6 +2166,15 @@ export default function ToDoListDashboardPage() {
         <KanbanCol label="Needs Review" icon="rate_review" count={needsReviewItems.length} accentColor="#F59E0B" emptyText="Nothing awaiting Simone review.">
           {needsReviewItems.map((item, idx) => renderTaskCard(item, idx, true))}
         </KanbanCol>
+        <KanbanCol
+          label="Blocked"
+          icon="block"
+          count={blockedItems.length}
+          accentColor="#EF4444"
+          emptyText="No blocked items. Quarantined emails and other holds will appear here."
+        >
+          {blockedItems.map((item, idx) => renderTaskCard(item, idx, true))}
+        </KanbanCol>
         <KanbanCol label="Completed" icon="check_circle" count={visibleCompletedRows.length} accentColor="#4ADE80" emptyText="No completed tasks yet.">
           <>
             {visibleCompletedRows.length > 1 && (
@@ -2168,12 +2189,6 @@ export default function ToDoListDashboardPage() {
           </>
         </KanbanCol>
       </div>
-
-      {blockedItems.length > 0 && (
-        <div className="font-mono text-[10px] text-kcd-text-muted">
-          Blocked items are excluded from the main board lanes: <span className="text-kcd-amber">{blockedItems.length}</span>
-        </div>
-      )}
 
       {missionSummaries.length > 0 && (
         <section className="backdrop-blur-sm bg-kcd-surface-dim/70 border border-white/[0.06] rounded-lg p-4">
