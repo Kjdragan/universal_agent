@@ -17984,12 +17984,13 @@ def _ensure_codie_proactive_cleanup_cron_job() -> Optional[dict[str, Any]]:
         "source": "system",
         "session_id": "cron_codie_cleanup",
         "proactive_producer": "codie_cleanup",
-        # Housekeeping: this cron enqueues OTHER Task Hub tasks; it
-        # doesn't itself produce a tracked work-product, so we skip
-        # the Hermes-F auto-link to avoid surfacing a useless
-        # ``cron:codie_proactive_cleanup`` row in the dashboard.
-        # See `services/cron_task_hub_link.py`.
-        "skip_task_hub_link": True,
+        # Ship 4 (Task Hub Observability Protocol): opted IN to Hermes-F
+        # auto-link. Even dispatcher / GC crons benefit from
+        # meta-observability ("is the cron itself running and exiting
+        # cleanly?"). The cron_run row is keyed by
+        # ``cron:codie_proactive_cleanup`` and is updated in place each
+        # tick — no row explosion. See
+        # docs/03_Operations/108_Task_Hub_Observability_Protocol.md.
     }
     updates = {
         "user_id": "system",
@@ -18042,8 +18043,8 @@ def _ensure_vp_coder_workspace_pruning_cron_job() -> Optional[dict[str, Any]]:
         enabled=_proactive_cron_enabled("UA_VP_CODER_WORKSPACE_PRUNING_ENABLED"),
         cron_env_var="UA_VP_CODER_WORKSPACE_PRUNING_CRON",
         timezone_env_var="UA_VP_CODER_WORKSPACE_PRUNING_TIMEZONE",
-        # Housekeeping: GC sweep, no tracked work-product.
-        skip_task_hub_link=True,
+        # Ship 4 (Task Hub Observability Protocol): opted IN. Even GC
+        # sweeps benefit from "did it run cleanly?" visibility.
     )
 
 
@@ -18427,9 +18428,9 @@ def _ensure_atlas_direct_dispatch_cron_job() -> Optional[dict[str, Any]]:
         enabled=_proactive_cron_enabled("UA_ATLAS_DIRECT_DISPATCH_ENABLED"),
         cron_env_var="UA_ATLAS_DIRECT_DISPATCH_CRON",
         timezone_env_var="UA_ATLAS_DIRECT_DISPATCH_TIMEZONE",
-        # Housekeeping: dispatcher sweep, no tracked work-product.
-        # The tasks it dispatches have their own task_hub linkage.
-        skip_task_hub_link=True,
+        # Ship 4 (Task Hub Observability Protocol): opted IN. The tasks
+        # this cron dispatches still carry their own task_hub linkage —
+        # this row tracks the dispatcher's own liveness, separately.
     )
 
 
@@ -18659,9 +18660,9 @@ def _ensure_csi_demo_triage_rank_cron_job() -> Optional[dict[str, Any]]:
         cron_env_var="UA_CSI_DEMO_TRIAGE_RANK_CRON_EXPR",
         timezone_env_var="UA_CSI_DEMO_TRIAGE_RANK_CRON_TIMEZONE",
         required_secrets=["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
-        # Housekeeping: re-ranking sweep over existing candidates; the
-        # candidates themselves carry their own task_hub linkage.
-        skip_task_hub_link=True,
+        # Ship 4 (Task Hub Observability Protocol): opted IN. Re-ranking
+        # sweeps benefit from "did this LLM tick run and finish cleanly?"
+        # observability separately from the candidate rows it touches.
     )
 
 
