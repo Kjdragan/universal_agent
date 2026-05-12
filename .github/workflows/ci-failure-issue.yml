@@ -57,6 +57,15 @@ jobs:
       - name: Open issue for failed run
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 2026-05-11 fix: `gh issue list` / `gh issue create` auto-detect
+          # the repo by running `git rev-parse`, which fails on a
+          # checkout-less runner with `fatal: not a git repository`. Pass
+          # --repo explicitly so the CLI doesn't shell out to git. This
+          # workflow has run 64 times and successfully filed 0 issues
+          # because of this bug — every failure since the watcher was
+          # introduced has been silent. Issue creation now works without
+          # an actions/checkout dependency.
+          REPO: ${{ github.repository }}
           WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
           RUN_ID: ${{ github.event.workflow_run.id }}
@@ -70,6 +79,7 @@ jobs:
 
           # Dedup: don't re-file if an issue already exists for this exact run.
           EXISTING=$(gh issue list \
+            --repo "${REPO}" \
             --label ci-failure \
             --state open \
             --search "in:title \"${RUN_ID}\"" \
@@ -91,6 +101,7 @@ jobs:
           } > /tmp/issue-body.md
 
           gh issue create \
+            --repo "${REPO}" \
             --title "${TITLE} — run_id=${RUN_ID}" \
             --body-file /tmp/issue-body.md \
             --label ci-failure
