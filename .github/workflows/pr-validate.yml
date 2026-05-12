@@ -53,9 +53,16 @@ jobs:
       - name: Checkout PR head
         uses: actions/checkout@v6
         with:
-          # Need full history so we can diff against the base branch
-          # to identify only the .py files this PR touches.
-          fetch-depth: 0
+          # Shallow history sized for "diff against base branch only."
+          # The `Identify changed Python files` step below re-fetches the
+          # base ref at `--depth=1` and runs `git diff origin/$BASE_REF...HEAD`,
+          # which needs the merge-base plus a few commits of head history —
+          # never tens of thousands. Previously `fetch-depth: 0` (full
+          # history + all branches + all tags + PR merge ref) made the
+          # initial `git fetch` huge and prone to network-stall hangs;
+          # PR #259's first PR-Validate run timed out at 15 min waiting
+          # on that fetch (2026-05-12). 50 is generous for any PR diff.
+          fetch-depth: 50
 
       - name: Set up Python 3.13
         uses: actions/setup-python@v6
@@ -79,7 +86,12 @@ jobs:
         id: changed
         run: |
           BASE_REF="${{ github.base_ref }}"
-          git fetch origin "$BASE_REF" --depth=1
+          # Match the fetch-depth window used at checkout (50) so the
+          # triple-dot diff's merge-base lookup can succeed even when
+          # the PR diverged a few dozen commits back. A shallow `--depth=1`
+          # paired with a shallow head would race the merge-base computation
+          # for any non-trivial PR.
+          git fetch origin "$BASE_REF" --depth=50
           CHANGED=$(git diff --name-only --diff-filter=AMR "origin/$BASE_REF...HEAD" -- '*.py' || true)
           if [ -z "$CHANGED" ]; then
             echo "No Python files changed; skipping py_compile + targeted tests."
