@@ -25,7 +25,7 @@ Bonus gotcha that bit us: **stale `~/.claude/.credentials.json`.** Kevin's deskt
 
 ### Why this change
 
-UA's `~/.claude/settings.json` (on both `kjdragan@mint-desktop` and `ua@uaonvps`) carries an `env` block that maps Anthropic endpoints to the ZAI proxy and Anthropic model names to GLM models. This is correct for UA's autonomous agent runs (Simone heartbeats, Atlas, Cody normal work, ClaudeDevs cron — high-volume agentic inference where cheap GLM is the right answer), but it incorrectly routes **Kevin's interactive coding** through ZAI as well.
+UA's `~/.claude/settings.json` (on both `kjdragan@mint-desktop` and `ua@uaonvps`) carries an `env` block that maps Anthropic endpoints to the ZAI proxy and Anthropic model names to GLM models. This is correct for UA's autonomous in-process principals (Simone heartbeats, Atlas, ClaudeDevs cron — high-volume agentic inference where cheap GLM is the right answer), but it incorrectly routes **Kevin's interactive coding** through ZAI as well. *(Historical note: Cody's per-task CLI subprocesses were also in this "ZAI by default" bucket until the 2026-05-11 PM flip. As of `services/cody_mode.py:_HARDCODED_FALLBACK_MODE = "anthropic"`, Cody now defaults to Anthropic Max for every task — see § "The three modes" table further down for the post-flip topology.)*
 
 Today, anytime Kevin opens the Antigravity terminal or the Claude Code IDE side panel, those `claude` invocations inherit the user-global `env` block and code through ZAI. That's the wrong default for interactive use — Kevin pays for an Anthropic Max plan precisely so his interactive coding gets real Claude (Opus 4.7).
 
@@ -442,9 +442,10 @@ re-derive the relationship from scratch.)
 
 | Mode | What runs in it | cwd | Endpoint | Model |
 |---|---|---|---|---|
-| **Autonomous** | Simone heartbeats, Atlas (`vp.general.primary`), Cody normal work, ClaudeDevs cron, briefings, dispatch sweeps, scheduled VP missions | `/opt/universal_agent/` | `https://api.z.ai/api/anthropic` | GLM-5.1 (mapped to `opus`) / GLM-5-turbo (mapped to `sonnet`/`haiku`) |
-| **Interactive** | Kevin's `claude` from any terminal (Antigravity, Remote-SSH, plain shell) | typically `/opt/universal_agent/` (VPS) or `~/lrepos/universal_agent/` (desktop) | `https://api.anthropic.com` | Claude Opus 4.7 / Sonnet 4.6 / Haiku 4.5 (Max plan OAuth) |
-| **Demo** | Phase 3 demo workspaces under `/opt/ua_demos/<id>/` | `/opt/ua_demos/<id>/` | `https://api.anthropic.com` | Claude Max plan OAuth (vanilla, no ZAI mapping) |
+| **Autonomous** | Simone heartbeats, Atlas (`vp.general.primary`), ClaudeDevs cron, briefings, dispatch sweeps, scheduled VP missions | `/opt/universal_agent/` | `https://api.z.ai/api/anthropic` | GLM-5.1 (mapped to `opus`) / GLM-5-turbo (mapped to `sonnet`/`haiku`) |
+| **Interactive** | Kevin's `claude` from any terminal (Antigravity, Remote-SSH, plain shell). Alias `claude` → `scripts/claude_with_mcp_env.sh`, which auto-injects `--dangerously-skip-permissions` for sessions (and skips it for management subcommands like `claude agents` / `auth` / `doctor`). The new `claude agents` (v2.1.139+, 2026-05-11) is the **Agent View** session-roster manager — not a different coding interface; the wrapper passes it through cleanly because its flag surface is just `--setting-sources` + `-h`. | typically `/opt/universal_agent/` (VPS) or `~/lrepos/universal_agent/` (desktop) | `https://api.anthropic.com` | Claude Opus 4.7 / Sonnet 4.6 / Haiku 4.5 (Max plan OAuth) |
+| **Cody (per-task CLI subprocess)** | Every Cody task — BOTH in-environment work AND demo workspaces. Spawned by `vp/clients/claude_cli_client.py` per mission. Mode resolved from `cody_mode` field (per-task → DB setting → `UA_CODY_DEFAULT_MODE` env → hardcoded `"anthropic"`, see `services/cody_mode.py:34-37`). Flipped from `"zai"` default to `"anthropic"` 2026-05-11 PM per operator decision. | varies (`/opt/ua_demos/<id>/` for demos; mission workspace for in-env work) | `https://api.anthropic.com` (when `cody_mode="anthropic"`); ZAI proxy (when `cody_mode="zai"`) | Claude Max plan OAuth by default; GLM via ZAI only when explicitly overridden |
+| **Demo workspace settings** | Vanilla `.claude/settings.json` in `templates/ua_demos_scaffold/` (deployed to `/opt/ua_demos/<id>/.claude/settings.json`). Second layer of defense on top of Cody's per-mission `ANTHROPIC_*` env scrub. | `/opt/ua_demos/<id>/` | `https://api.anthropic.com` | Claude Max plan OAuth (vanilla, no ZAI mapping) |
 
 ### MCP visibility per mode
 
@@ -474,9 +475,10 @@ re-derive the relationship from scratch.)
 
 Before reaching for a tool inside an autonomous prompt or sub-agent definition:
 
-1. **Is this code path running under autonomous mode?** (heartbeats, scheduled cron, VP missions, Simone/Atlas/Cody normal work) → **Use ZAI MCPs.** `webReader` for URL extraction, `webSearchPrime` for general search, `zai-mcp-server` for vision. The model behind these (GLM-5.1) was trained on these tool schemas.
+1. **Is this code path running under autonomous mode on ZAI?** (heartbeats, scheduled cron, VP missions, Simone/Atlas, ClaudeDevs intel cron) → **Use ZAI MCPs.** `webReader` for URL extraction, `webSearchPrime` for general search, `zai-mcp-server` for vision. The model behind these (GLM-5.1) was trained on these tool schemas.
 2. **Is this Kevin's interactive coding session?** → **Use Anthropic-native tools.** `WebFetch` for URL extraction, `WebSearch` for search. Even though the project `.mcp.json` makes ZAI MCPs callable from this session, doing so burns ZAI quota for an Anthropic-side use. Avoid unless you specifically need the ZAI surface (e.g., testing a ZAI MCP's behavior).
-3. **Is this a demo workspace prompt?** → **Use Anthropic-native tools.** Demos run on Anthropic Max plan OAuth and don't see project MCPs by design — the demo environment is intentionally vanilla.
+3. **Is this a Cody per-task CLI subprocess?** → **Check `cody_mode` first.** If `cody_mode="anthropic"` (the default since 2026-05-11 PM), use Anthropic-native tools — the spawned `claude` subprocess is on Max plan OAuth. If `cody_mode="zai"` (explicit override), use ZAI MCPs.
+4. **Is this a demo workspace prompt?** → **Use Anthropic-native tools.** Demos run on Anthropic Max plan OAuth and don't see project MCPs by design — the demo environment is intentionally vanilla.
 
 ### Quota accounting
 
