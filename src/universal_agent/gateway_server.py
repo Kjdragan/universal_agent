@@ -5448,7 +5448,7 @@ def _extract_csi_recommendations(subject: Any) -> list[dict[str, Any]]:
                 code = str(step.get("code") or "").strip()
                 source_name = str(step.get("source") or "").strip()
                 if runbook_command:
-                    detail = f"Run remediation step"
+                    detail = "Run remediation step"
                     if code:
                         detail += f" '{code}'"
                     if source_name:
@@ -13138,7 +13138,7 @@ async def _calendar_apply_event_action(
             return {
                 "status": "ok",
                 "action": action_norm,
-                "path": f"/api/v1/ops/logs/tail?path=cron_runs.jsonl",
+                "path": "/api/v1/ops/logs/tail?path=cron_runs.jsonl",
             }
         if action_norm == "open_session":
             _source, _ref, scheduled_at_int = _calendar_parse_event_id(event_id)
@@ -14306,6 +14306,7 @@ async def lifespan(app: FastAPI):
                 _ensure_proactive_report_afternoon_cron_job()
                 _ensure_proactive_artifact_digest_cron_job()
                 _ensure_vp_coder_workspace_pruning_cron_job()
+                _ensure_vp_mission_pr_reconciler_cron_job()
                 _ensure_hackernews_snapshot_cron_job()
                 _ensure_atlas_direct_dispatch_cron_job()
             except Exception as exc:
@@ -18019,6 +18020,38 @@ def _ensure_codie_proactive_cleanup_cron_job() -> Optional[dict[str, Any]]:
         metadata=metadata,
     )
     return job.to_dict() if hasattr(job, "to_dict") else {"job_id": str(getattr(job, "job_id", ""))}
+
+
+def _ensure_vp_mission_pr_reconciler_cron_job() -> Optional[dict[str, Any]]:
+    """Auto-reconcile VP coding missions with their shipped PRs.
+
+    Every 15 minutes during active hours, scans recent vp_mission
+    Task Hub rows that are still non-terminal, queries GitHub for the
+    associated PR's merge status, and auto-closes the task when the PR
+    has merged. Closes the gap that left
+    `vp-mission-95e1a15a3b0ec8dbf58db662` blocked for 10 days even
+    though PR #142 had merged. See
+    `services/vp_mission_pr_reconciler.py` for the full design.
+
+    `skip_task_hub_link=True` — this is a state-sync sweeper, not a
+    work-producing job. We do NOT want every 15-min tick creating a
+    new task_hub row.
+    """
+    return _register_system_cron_job(
+        system_job="vp_mission_pr_reconciler",
+        default_cron="*/15 6-20 * * *",
+        default_timezone="America/Chicago",
+        command="!script universal_agent.scripts.reconcile_vp_mission_prs",
+        description=(
+            "Reconcile non-terminal vp_mission tasks against their PRs; "
+            "auto-close any whose PR has merged on GitHub."
+        ),
+        timeout_seconds=120,
+        enabled=_proactive_cron_enabled("UA_VP_MISSION_PR_RECONCILER_ENABLED"),
+        cron_env_var="UA_VP_MISSION_PR_RECONCILER_CRON",
+        timezone_env_var="UA_VP_MISSION_PR_RECONCILER_TIMEZONE",
+        skip_task_hub_link=True,
+    )
 
 
 def _ensure_vp_coder_workspace_pruning_cron_job() -> Optional[dict[str, Any]]:
@@ -24759,6 +24792,120 @@ async def dashboard_mission_control_card_dismiss(card_id: str):
     return _mc_card_feedback_dispatch(card_id, lambda c, cid: (_mc_retire(c, cid), "retired")[1])
 
 
+@app.post("/api/v1/dashboard/mission-control/cards/{card_id}/complete")
+async def dashboard_mission_control_card_complete(card_id: str):
+    """Operator-mark-complete on a card whose subject is a task or mission.
+
+    Backstop for cases where automatic reconciliation (e.g. the
+    `vp_mission_pr_reconciler` cron) can't establish the work is done —
+    for example, the mission shipped its outcome by a non-PR channel,
+    the PR URL never made it into the metadata, or the auto-link broke.
+
+    Behavior:
+      1. Load the card. Reject (400) if `subject_kind` is not `task` or
+         `mission` — completing infrastructure-tile cards or alert cards
+         doesn't have a sensible meaning here.
+      2. Call `task_hub.perform_task_action(action='complete')` to record
+         the evaluation history. If the email-delivery verification gate
+         parks the task in `needs_review`, force-close via `upsert_item`
+         with an explicit `operator_override` marker — the operator
+         clicking this button IS the completion evidence.
+      3. Retire the card from the live grid (same final step as dismiss).
+
+    Audit trail: a `task_evaluation_history` row is added by
+    `perform_task_action`; the explicit `operator_override` marker
+    captures the bypass in metadata.
+    """
+    from universal_agent import task_hub as _th
+    from universal_agent.durable.db import (
+        connect_runtime_db as _connect,
+        get_activity_db_path as _activity_path,
+    )
+    from universal_agent.services.mission_control_cards import (
+        retire_card as _mc_retire,
+    )
+    from universal_agent.services.mission_control_db import open_store as _mc_open
+
+    card = _mc_load_card_for_action(card_id)
+    subject_kind = str(card.get("subject_kind") or "").strip().lower()
+    subject_id = str(card.get("subject_id") or "").strip()
+    if subject_kind not in {"task", "mission"}:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"complete only valid for task/mission cards, got subject_kind={subject_kind!r}. "
+                "Use /dismiss for other card kinds."
+            ),
+        )
+    if not subject_id:
+        raise HTTPException(status_code=400, detail="card has no subject_id")
+
+    th_conn = _connect(_activity_path())
+    th_conn.row_factory = __import__("sqlite3").Row
+    try:
+        existing = _th.get_item(th_conn, subject_id)
+        if not existing:
+            raise HTTPException(
+                status_code=404,
+                detail=f"no task_hub row for subject_id={subject_id!r}",
+            )
+
+        # Attempt the standard completion path first. This records the
+        # evaluation history correctly. If the delivery-verification
+        # gate parks it in needs_review, we override below.
+        reason = "operator_manual_complete_from_mission_control"
+        try:
+            result_item = _th.perform_task_action(
+                th_conn,
+                task_id=subject_id,
+                action="complete",
+                reason=reason,
+                agent_id="dashboard_operator",
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        # If parked in review, force-close with explicit operator override.
+        if (result_item or {}).get("status") == _th.TASK_STATUS_REVIEW:
+            from datetime import datetime, timezone
+            now_iso = datetime.now(timezone.utc).isoformat()
+            metadata = dict(result_item.get("metadata") or {})
+            dispatch = dict(metadata.get("dispatch") or {})
+            dispatch["operator_override"] = {
+                "completed_at": now_iso,
+                "via": "mission_control_card_button",
+                "card_id": card_id,
+            }
+            dispatch["last_disposition"] = "completed"
+            dispatch["last_disposition_reason"] = "operator_override_via_mission_control"
+            dispatch["completion_unverified"] = False
+            metadata["dispatch"] = dispatch
+            _th.upsert_item(
+                th_conn,
+                {
+                    "task_id": subject_id,
+                    "status": _th.TASK_STATUS_COMPLETED,
+                    "seizure_state": "completed",
+                    "metadata": metadata,
+                },
+            )
+            th_conn.commit()
+        else:
+            th_conn.commit()
+    finally:
+        th_conn.close()
+
+    # Retire the card so it disappears from the live grid. Same pattern
+    # as dismiss — preserves history in the Knowledge Ledger.
+    mc_conn = _mc_open()
+    try:
+        _mc_retire(mc_conn, card_id)
+    finally:
+        mc_conn.close()
+
+    return {"status": "ok", "result": "completed", "task_id": subject_id}
+
+
 # ── Mission Control action buttons (Phase 4) ────────────────────────────
 
 
@@ -26032,6 +26179,10 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
         repeat_schedule=repeat_schedule,
     )
     duplicate_parked = 0
+    # System-command tasks are operator-initiated and internal-only by default.
+    # If a mirror class is ever defined for this lane, route it through
+    # `_task_hub_should_mirror` like other source kinds do.
+    should_mirror = False
     with _activity_store_lock:
         conn = _task_hub_open_conn()
         try:
@@ -26050,11 +26201,7 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
                     "status": "open",
                     "must_complete": must_complete,
                     "agent_ready": not is_personal,
-                    # FIXME(claude/pr-validate-workflow-fix): `should_mirror` is referenced
-                    # but never assigned in `dashboard_system_command()`. This code path
-                    # would raise NameError at runtime. Filed as a follow-up issue;
-                    # the noqa here is a documented gap, not a silent fix.
-                    "mirror_status": "mirror_eligible" if should_mirror else "internal_only",  # noqa: F821
+                    "mirror_status": "mirror_eligible" if should_mirror else "internal_only",
                     "metadata": {
                         "source_page": source_page,
                         "source_context": source_context,
