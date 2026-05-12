@@ -156,7 +156,7 @@ When `gh pr merge --auto` was invoked with `GITHUB_TOKEN`, GitHub's resulting sq
 
 A fine-grained PAT (`AUTO_MERGE_PAT`, repo secret) is attributed to the operator's user identity, so the downstream push fires `deploy.yml` normally. PAT scopes: `Contents: Read+Write`, `Pull requests: Read+Write` on `Kjdragan/universal_agent` only. Rotate yearly (default token expiry).
 
-Belt-and-suspenders backstop: `post-merge-deploy.yml` still listens for `pull_request: closed` and dispatches `deploy.yml` via `workflow_dispatch`. Note that the dispatcher itself also suffered the GITHUB_TOKEN-suppression issue, so the PAT swap is the actual fix. The dispatcher remains useful for the bootstrap window when `AUTO_MERGE_PAT` is missing.
+The `post-merge-deploy.yml` bridge workflow was **deleted 2026-05-11 PM** after the PAT chain proved itself. The bridge had been added earlier the same day as a workaround for the GITHUB_TOKEN suppression bug, but with the PAT in place every merge was producing two Deploy runs (one from the natural `push` trigger via PAT, one from the bridge's `workflow_dispatch`). The PAT path is canonical; the bridge was redundant. If `AUTO_MERGE_PAT` ever expires and isn't rotated, restore the PAT — don't reintroduce the bridge (running deploy twice wastes minutes and clutters the Actions tab).
 
 #### Concurrency caveat (2026-05-11 PM incident)
 

@@ -250,25 +250,51 @@ def test_openclaw_release_sync_runs_in_active_hours() -> None:
 # and re-introduce the gaps that PR #224 / this PR closed.
 
 
-def test_post_merge_deploy_workflow_exists() -> None:
-    """Bridge workflow that dispatches Deploy on PR merge.
+def test_pr_auto_merge_uses_pat_to_avoid_token_suppression() -> None:
+    """pr-auto-merge.yml must use AUTO_MERGE_PAT (not GITHUB_TOKEN) so the
+    downstream squash-merge `push` event fires `deploy.yml`.
 
-    Closes the GITHUB_TOKEN downstream-trigger suppression gap. If this
-    file goes missing, merges to main stop firing Deploy and production
-    silently drifts behind main. Added 2026-05-11 via PR #224.
+    Replaces the prior `test_post_merge_deploy_workflow_exists` (which
+    asserted the existence of a redundant bridge workflow). That bridge
+    was the workaround for GitHub's GITHUB_TOKEN-downstream-trigger
+    suppression rule. With pr-auto-merge.yml using a fine-grained PAT
+    (PR #232, 2026-05-11), the bridge is no longer needed and the
+    workflow was deleted (PR replacing this test).
+
+    If this test fails, the auto-merge → deploy chain is back to being
+    GITHUB_TOKEN-driven and production will silently stop deploying on
+    merges. Fix is to restore the PAT reference in pr-auto-merge.yml.
     """
-    assert POST_MERGE_DEPLOY.exists(), (
-        f"Missing {POST_MERGE_DEPLOY} — without it, merges to main via "
-        f"the GITHUB_TOKEN-driven pr-auto-merge.yml will NOT trigger "
-        f"deploy.yml (per GitHub's downstream-trigger suppression rule). "
-        f"Restore the file or update the PR-merge flow to use a PAT."
+    pr_auto_merge = Path(".github/workflows/pr-auto-merge.yml")
+    assert pr_auto_merge.exists(), (
+        f"Missing {pr_auto_merge} — without it, claude/* PRs don't get "
+        f"auto-merge enabled. Restore the file."
     )
-    body = POST_MERGE_DEPLOY.read_text(encoding="utf-8")
-    assert "pull_request" in body and "closed" in body
-    assert "workflow run deploy.yml" in body, (
-        "post-merge-deploy.yml must dispatch deploy.yml via workflow_dispatch; "
-        "that's the whole point — workflow_dispatch IS on GitHub's allow-list "
-        "of GITHUB_TOKEN-triggerable workflows."
+    body = pr_auto_merge.read_text(encoding="utf-8")
+    assert "AUTO_MERGE_PAT" in body, (
+        "pr-auto-merge.yml must reference secrets.AUTO_MERGE_PAT so the "
+        "downstream push to main fires deploy.yml. Reverting to "
+        "GITHUB_TOKEN-only will silently break the deploy-on-merge chain "
+        "per GitHub's downstream-trigger suppression rule."
+    )
+
+
+def test_post_merge_deploy_workflow_removed() -> None:
+    """The bridge workflow file (post-merge-deploy.yml) must stay deleted.
+
+    The PAT-based pr-auto-merge.yml is the canonical mechanism for
+    firing deploy.yml on merge. Re-introducing the bridge workflow
+    would cause two Deploy runs per merge (one from the natural push
+    trigger, one from the bridge's workflow_dispatch), doubling
+    Actions cost and cluttering the Actions tab. If the bridge needs
+    to come back as a backstop, route it through a single deploy via
+    the concurrency guard, not parallel.
+    """
+    assert not POST_MERGE_DEPLOY.exists(), (
+        f"{POST_MERGE_DEPLOY} re-appeared. It was deleted because the "
+        f"PAT-based pr-auto-merge.yml makes it redundant — every merge "
+        f"would otherwise fire two Deploy runs (push + workflow_dispatch). "
+        f"If you need a bridge, make sure it doesn't double-deploy."
     )
 
 

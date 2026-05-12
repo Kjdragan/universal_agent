@@ -49,8 +49,14 @@ jobs:
           # workflows" rule. Falls back to GITHUB_TOKEN if the secret is
           # not configured so the workflow stays functional (just
           # without deploy auto-firing). See operating note in
-          # docs/06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md
-          # and the post-merge-deploy.yml comment block.
+          # docs/06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md.
+          #
+          # 2026-05-11 PM: the post-merge-deploy.yml bridge workflow
+          # (which dispatched deploy.yml via workflow_dispatch on PR
+          # closure) was deleted — it was redundant once the PAT path
+          # started firing deploy.yml from the natural push trigger,
+          # and was producing two Deploy runs per merge. If this PAT
+          # ever expires, restore the PAT, not the bridge.
           GH_TOKEN: ${{ secrets.AUTO_MERGE_PAT || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
