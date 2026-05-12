@@ -239,6 +239,22 @@ jobs:
             echo "--> Installing canonical VP worker unit template from repo..."
             sudo bash "$PROD_DIR/scripts/install_vp_worker_services.sh" vp.coder.primary vp.general.primary
 
+            # Capture discord-services state BEFORE the restart so the
+            # post-restart health gate can distinguish "this deploy broke
+            # discord" (regression — fail) from "discord was already
+            # crashing before this deploy" (pre-existing — warn only).
+            # See PR #259 deploy-fail (2026-05-12): all HTTP services
+            # healthy on the new SHA, but ua-discord-intelligence was in
+            # an existing crash loop and the old hard gate flagged the
+            # whole deploy as failed.
+            discord_cc_pre="unknown"
+            discord_intel_pre="unknown"
+            if command -v systemctl >/dev/null 2>&1; then
+              discord_cc_pre="$(systemctl is-active ua-discord-cc-bot 2>/dev/null || echo unknown)"
+              discord_intel_pre="$(systemctl is-active ua-discord-intelligence 2>/dev/null || echo unknown)"
+              echo "--> Discord baseline (pre-deploy): cc-bot=$discord_cc_pre intelligence=$discord_intel_pre"
+            fi
+
             echo "--> Restarting production services..."
             if command -v systemctl >/dev/null 2>&1; then
               if command -v sudo >/dev/null 2>&1; then
@@ -366,9 +382,31 @@ jobs:
               fi
             done
             rm -rf "$health_status_dir"
+            # Discord services: baseline-aware health check. Only fail
+            # the deploy if the service was healthy BEFORE the deploy
+            # and is unhealthy AFTER (true regression). Pre-existing
+            # crash loops surface as a warning so chronic discord
+            # flakiness doesn't mask real PR-caused failures elsewhere.
+            check_discord_regression() {
+              svc="$1"
+              pre_state="$2"
+              if systemctl is-active --quiet "$svc"; then
+                if [ "$pre_state" != "active" ] && [ "$pre_state" != "unknown" ]; then
+                  echo "    [RECOVERED] $svc transitioned $pre_state -> active across this deploy."
+                fi
+                return 0
+              fi
+              now_state="$(systemctl is-active "$svc" 2>/dev/null || echo unknown)"
+              if [ "$pre_state" = "active" ]; then
+                echo "::error::$svc was active pre-deploy but is now $now_state — likely regression caused by this deploy."
+                return 1
+              fi
+              echo "::warning::$svc is $now_state (pre-deploy was $pre_state). Pre-existing failure, not blocking this deploy."
+              return 0
+            }
             if command -v systemctl >/dev/null 2>&1; then
-              systemctl is-active --quiet ua-discord-cc-bot || health_ok=false
-              systemctl is-active --quiet ua-discord-intelligence || health_ok=false
+              check_discord_regression ua-discord-cc-bot "$discord_cc_pre" || health_ok=false
+              check_discord_regression ua-discord-intelligence "$discord_intel_pre" || health_ok=false
             fi
 
             if [ "$health_ok" != "true" ]; then
