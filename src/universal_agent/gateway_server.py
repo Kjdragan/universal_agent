@@ -7711,6 +7711,97 @@ async def _dispatch_gateway_request_to_session(
     return {"decision": "accepted", "turn_id": admitted_turn_id}
 
 
+# ── Upstream-outage alert deduplication ──────────────────────────────────
+#
+# A brief Composio / OpenTelemetry / network outage can fail multiple
+# in-flight cron runs (and their retries) in quick succession. Without
+# dedup, the operator gets one alert email per failed attempt — e.g. on
+# 2026-05-12 a 30s Composio ToolRouterV2 blip generated 3 emails (one for
+# atlas_direct_dispatch, two for simone_chat_auto_complete's attempt-1
+# warning + final failure). The system worked as designed, but the
+# operator's inbox doesn't need every aftershock — one alert per outage
+# signature is enough to surface the incident, and the dashboard
+# notification log retains everything for audit.
+#
+# Design:
+#   - Classify the error text into an outage `signature` (e.g.
+#     `composio_tool_router_500`). Errors that don't match a known
+#     upstream-outage pattern are passed through unchanged.
+#   - Track last-alerted timestamp per signature in a process-local dict.
+#   - If a new alert lands within `UA_CRON_ALERT_OUTAGE_DEDUP_SECONDS`
+#     of the last one for the same signature, suppress it (no email, no
+#     dashboard notification — just a log line).
+#   - First alert in the window always goes through, so the operator
+#     learns about the incident.
+#
+# State is in-process; on gateway restart the dedup window resets,
+# which is acceptable — restart already drops in-flight retry state
+# anyway, and a fresh outage signature gets a fresh first-alert.
+_UPSTREAM_OUTAGE_DEDUP_DEFAULT_SECONDS = 600  # 10 min
+_last_outage_alert_at: dict[str, float] = {}
+
+
+def _classify_upstream_outage_signature(error_text: str) -> Optional[str]:
+    """Map a free-text error string to a known upstream-outage signature.
+
+    Returns None for errors that don't match a known outage pattern —
+    those are passed through to `_add_notification` unchanged (no
+    suppression). The patterns target failures we've observed where a
+    third-party service we depend on returned a transient 5xx and our
+    SDK gave up after its own retries.
+    """
+    if not error_text:
+        return None
+    et = error_text.lower()
+    # Composio ToolRouterV2 is the most common offender — observed 2026-05-12.
+    if "toolrouterv2_internalservererror" in et:
+        return "composio_tool_router_500"
+    if "failed to search for existing tool router session" in et:
+        return "composio_tool_router_500"
+    if "tool_router/session" in et and ("500" in et or "503" in et):
+        return "composio_tool_router_5xx"
+    # Generic upstream 5xx patterns
+    if "503 service unavailable" in et:
+        return "upstream_503"
+    if "502 bad gateway" in et:
+        return "upstream_502"
+    if "connection refused" in et or "econnrefused" in et:
+        return "upstream_connection_refused"
+    return None
+
+
+def _outage_dedup_window_seconds() -> int:
+    raw = str(os.getenv("UA_CRON_ALERT_OUTAGE_DEDUP_SECONDS") or "").strip()
+    if not raw:
+        return _UPSTREAM_OUTAGE_DEDUP_DEFAULT_SECONDS
+    try:
+        value = int(raw)
+    except ValueError:
+        return _UPSTREAM_OUTAGE_DEDUP_DEFAULT_SECONDS
+    if value < 0:
+        return 0
+    return value
+
+
+def _should_suppress_upstream_outage_alert(error_text: str) -> bool:
+    """Returns True if this alert should be suppressed because we've
+    already alerted about the same upstream-outage signature within the
+    dedup window. Updates the last-alerted timestamp on a non-suppress.
+    """
+    signature = _classify_upstream_outage_signature(error_text)
+    if not signature:
+        return False
+    window = _outage_dedup_window_seconds()
+    if window <= 0:
+        return False
+    now = time.time()
+    last = _last_outage_alert_at.get(signature, 0.0)
+    if now - last < window:
+        return True
+    _last_outage_alert_at[signature] = now
+    return False
+
+
 def _emit_cron_event(payload: dict) -> None:
     event_type = str(payload.get("type") or "cron_event")
     _scheduling_record_event("cron", event_type)
@@ -7778,6 +7869,26 @@ def _emit_cron_event(payload: dict) -> None:
             message = f"{command}"
             if error_text:
                 message = f"{message} | {error_text[:240]}"
+
+        # Upstream-outage alert dedup. Failure + retry-queued alerts that
+        # share a known transient-service signature get suppressed after
+        # the first one in the dedup window. Success / cancelled alerts
+        # are never suppressed. See `_classify_upstream_outage_signature`
+        # docblock for the full rationale.
+        if kind in {
+            "autonomous_run_failed",
+            "cron_run_failed",
+            "cron_run_retry_queued",
+        }:
+            _outage_error_text = str(run_data.get("error") or "").strip()
+            if _should_suppress_upstream_outage_alert(_outage_error_text):
+                _signature = _classify_upstream_outage_signature(_outage_error_text) or "?"
+                logger.info(
+                    "Suppressing cron alert kind=%s job=%s system_job=%s signature=%s "
+                    "(already alerted within %ds dedup window)",
+                    kind, job_id, system_job, _signature, _outage_dedup_window_seconds(),
+                )
+                return
 
         _add_notification(
             kind=kind,
