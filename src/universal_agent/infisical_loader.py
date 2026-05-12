@@ -182,60 +182,14 @@ def _fetch_infisical_secrets() -> dict[str, str]:
     if missing:
         raise RuntimeError(f"Missing required Infisical settings: {', '.join(missing)}")
 
-    try:
-        from infisical_client import (
-            AuthenticationOptions,
-            ClientSettings,
-            InfisicalClient,
-            ListSecretsOptions,
-            UniversalAuthMethod,
-        )
-    except Exception as exc:
-        logger.warning("Infisical SDK unavailable; falling back to REST bootstrap (%s)", _safe_error(exc))
-        return _fetch_infisical_secrets_via_rest(
-            api_url=api_url,
-            client_id=client_id,
-            client_secret=client_secret,
-            project_id=project_id,
-            environment=environment,
-            secret_path=secret_path,
-        )
-
-    try:
-        client = InfisicalClient(
-            ClientSettings(
-                auth=AuthenticationOptions(
-                    universal_auth=UniversalAuthMethod(
-                        client_id=client_id,
-                        client_secret=client_secret,
-                    )
-                )
-            )
-        )
-        secrets = client.listSecrets(
-            options=ListSecretsOptions(
-                environment=environment,
-                project_id=project_id,
-                path=secret_path,
-            )
-        )
-        out: dict[str, str] = {}
-        for item in secrets:
-            key = str(getattr(item, "secret_key", "")).strip()
-            if not key:
-                continue
-            out[key] = str(getattr(item, "secret_value", "") or "")
-        return out
-    except Exception as exc:
-        logger.warning("Infisical SDK fetch failed; falling back to REST bootstrap (%s)", _safe_error(exc))
-        return _fetch_infisical_secrets_via_rest(
-            api_url=api_url,
-            client_id=client_id,
-            client_secret=client_secret,
-            project_id=project_id,
-            environment=environment,
-            secret_path=secret_path,
-        )
+    return _fetch_infisical_secrets_via_rest(
+        api_url=api_url,
+        client_id=client_id,
+        client_secret=client_secret,
+        project_id=project_id,
+        environment=environment,
+        secret_path=secret_path,
+    )
 
 
 def _upsert_infisical_secret_via_rest(
@@ -319,68 +273,19 @@ def upsert_infisical_secret(key: str, value: str) -> bool:
         return False
 
     try:
-        from infisical_client import (
-            AuthenticationOptions,
-            ClientSettings,
-            CreateSecretOptions,
-            InfisicalClient,
-            UniversalAuthMethod,
-            UpdateSecretOptions,
+        _upsert_infisical_secret_via_rest(
+            api_url=api_url,
+            client_id=client_id,
+            client_secret=client_secret,
+            project_id=project_id,
+            environment=environment,
+            secret_path=secret_path,
+            key=key,
+            value=value,
         )
-
-        client = InfisicalClient(
-            ClientSettings(
-                auth=AuthenticationOptions(
-                    universal_auth=UniversalAuthMethod(
-                        client_id=client_id,
-                        client_secret=client_secret,
-                    )
-                )
-            )
-        )
-        
-        try:
-            client.updateSecret(
-                options=UpdateSecretOptions(
-                    environment=environment,
-                    project_id=project_id,
-                    path=secret_path,
-                    secret_name=key,
-                    secret_value=value,
-                    type="shared",
-                )
-            )
-        except Exception as exc:
-            if "not found" in str(exc).lower() or "404" in str(exc):
-                client.createSecret(
-                    options=CreateSecretOptions(
-                        environment=environment,
-                        project_id=project_id,
-                        path=secret_path,
-                        secret_name=key,
-                        secret_value=value,
-                        type="shared",
-                    )
-                )
-            else:
-                raise
-                
-    except Exception as exc:
-        logger.warning("Infisical SDK upsert failed; falling back to REST bootstrap (%s)", _safe_error(exc))
-        try:
-            _upsert_infisical_secret_via_rest(
-                api_url=api_url,
-                client_id=client_id,
-                client_secret=client_secret,
-                project_id=project_id,
-                environment=environment,
-                secret_path=secret_path,
-                key=key,
-                value=value,
-            )
-        except Exception as rest_exc:
-            logger.error("Infisical REST upsert failed for %s: %s", key, _safe_error(rest_exc))
-            return False
+    except Exception as rest_exc:
+        logger.error("Infisical REST upsert failed for %s: %s", key, _safe_error(rest_exc))
+        return False
 
     # Update current process environment so changes reflect immediately without restart
     os.environ[key] = value

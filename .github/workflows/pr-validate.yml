@@ -57,31 +57,23 @@ jobs:
           # to identify only the .py files this PR touches.
           fetch-depth: 0
 
-      - name: Set up Python 3.12
+      - name: Set up Python 3.13
         uses: actions/setup-python@v6
         with:
-          # 3.12, not 3.13 — `infisical-python==2.3.5` only ships
-          # cp312 wheels for `manylinux_2_28_x86_64`, no cp313 wheel
-          # exists, and the source build needs PyO3 ≥ 0.22 (it pins
-          # 0.20.3, which doesn't support 3.13). This bit us on
-          # PR #153, the first PR to exercise this workflow end-to-end.
-          # Production runtime is 3.13 (see `.python-version` and
-          # scripts/deploy_validate_runtime.sh) — the deploy host has
-          # the cp313 source-built wheel cached in ~/.cache/uv/sdists-v9/
-          # so it bypasses the cp313 wheel gap. CI runners don't have
-          # that cache, hence we stay on 3.12 here for the lint/syntax
-          # gate only.
-          python-version: '3.12'
+          # Matches `.python-version` and production. The cp313 band-aid
+          # that lived here (cp312 + `--python 3.12` pins on every uv
+          # call) existed only because `infisical-python==2.3.5` had no
+          # cp313 manylinux wheel. That dep was dropped in the same PR
+          # as this bump — UA talks to Infisical via httpx against the
+          # REST API now (see `src/universal_agent/infisical_loader.py`),
+          # so the whole pyproject resolves cleanly on cp313.
+          python-version: '3.13'
 
       - name: Install uv
         run: pip install --quiet uv
 
       - name: Install project dependencies
-        # --python 3.12 overrides `.python-version` (3.13). Without this
-        # uv would try to fetch the cp313 infisical-python wheel (none
-        # exists) and then build from source, which fails on a vanilla
-        # GH runner. See pr-validate Python comment above.
-        run: uv sync --frozen --no-progress --python 3.12 2>&1 | tail -5
+        run: uv sync --frozen --no-progress 2>&1 | tail -5
 
       - name: Identify changed Python files
         id: changed
@@ -109,7 +101,7 @@ jobs:
           set -e
           for f in ${{ steps.changed.outputs.files }}; do
             echo "  py_compile $f"
-            uv run --python 3.12 python -c "compile(open('$f').read(), '$f', 'exec')"
+            uv run python -c "compile(open('$f').read(), '$f', 'exec')"
           done
           echo "All changed .py files compile cleanly."
 
@@ -146,7 +138,7 @@ jobs:
           # globals() patterns and pre-existing F821 bugs in
           # gateway_server.py carry surgical `# noqa: F821` annotations
           # with TODO comments at their sites instead.
-          uv run --python 3.12 ruff check \
+          uv run ruff check \
             --select E9,F \
             --ignore E402,F401,F541,F811,F841 \
             --no-cache \
@@ -156,7 +148,7 @@ jobs:
         run: |
           # tests/unit is the fast subset. Full suite runs nightly.
           if [ -d tests/unit ]; then
-            uv run --python 3.12 pytest tests/unit -x -q --no-header 2>&1 | tail -50
+            uv run pytest tests/unit -x -q --no-header 2>&1 | tail -50
           else
             echo "No tests/unit directory; skipping."
           fi
