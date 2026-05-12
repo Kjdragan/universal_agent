@@ -76,7 +76,12 @@ dependencies = [
     "email-reply-parser>=0.5.12",
     "chardet>=5.2.0,<6",
     "typer>=0.12",
-    "infisical-python==2.3.5",
+    # Removed 2026-05-12: replaced with the pure-Python REST path already
+    # in src/universal_agent/infisical_loader.py. Upstream infisical-python
+    # ships no cp313 manylinux wheel on any version and the PyO3 0.20.3 cap
+    # blocks a clean 3.13 source build; 2.3.6 also regressed (lost cp312
+    # manylinux x86_64). httpx already covers the full universal-auth +
+    # /api/v3/secrets/raw surface we use.
     "pyjwt>=2.12.1",
     "langsmith[claude-agent-sdk,otel]>=0.7.22",
     "crawl4ai-cloud-sdk",
