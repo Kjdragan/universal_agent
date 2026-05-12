@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import SystemCommandBar from "@/components/dashboard/SystemCommandBar";
+import SimoneChatBar from "@/components/dashboard/SimoneChatBar";
 import { openViewer } from "@/lib/viewer/openViewer";
 
 /* ─── API plumbing ─────────────────────────────────────────── */
@@ -849,7 +849,7 @@ export default function CalendarPage() {
           <div className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold mb-2">
             Schedule a new task, cron job, or reminder
           </div>
-          <SystemCommandBar sourcePage="calendar" onSuccess={fetchCalendar} />
+          <SimoneChatBar sourcePage="calendar" onSuccess={fetchCalendar} />
         </div>
       )}
 

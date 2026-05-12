@@ -764,6 +764,57 @@ export default function ToDoListDashboardPage() {
     }
   }, []);
 
+  // Quarantined-email card verbs: Archive (status=completed, stale=archived)
+  // and Delete (status=cancelled, stale=dismissed). Both flow through the
+  // existing dashboard endpoints so the Kanban / Mission Control views stay
+  // consistent. Reload after success so the card disappears from this view.
+  const handleArchiveQuarantined = useCallback(
+    async (taskId: string) => {
+      setActionPendingTaskId(taskId);
+      try {
+        const res = await fetch(
+          `${API_BASE}/api/v1/dashboard/todolist/archive/${encodeURIComponent(taskId)}`,
+          { method: "POST" },
+        );
+        if (!res.ok) {
+          const payload = await res.json().catch(() => ({}));
+          throw new Error(String(payload?.detail || `Archive failed (${res.status})`));
+        }
+        await load(true);
+      } catch (err: any) {
+        setError(err?.message || "Failed to archive task.");
+      } finally {
+        setActionPendingTaskId("");
+      }
+    },
+    [load],
+  );
+
+  const handleDismissQuarantined = useCallback(
+    async (taskId: string) => {
+      if (typeof window !== "undefined" && !window.confirm("Delete this quarantined item? This cannot be undone.")) {
+        return;
+      }
+      setActionPendingTaskId(taskId);
+      try {
+        const res = await fetch(
+          `${API_BASE}/api/v1/dashboard/todolist/dismiss/${encodeURIComponent(taskId)}`,
+          { method: "DELETE" },
+        );
+        if (!res.ok) {
+          const payload = await res.json().catch(() => ({}));
+          throw new Error(String(payload?.detail || `Delete failed (${res.status})`));
+        }
+        await load(true);
+      } catch (err: any) {
+        setError(err?.message || "Failed to delete task.");
+      } finally {
+        setActionPendingTaskId("");
+      }
+    },
+    [load],
+  );
+
   const handleDeleteAllCompleted = useCallback(async () => {
     setDeleteAllPending(true);
     const ids = (completedTasks?.items || []).map((i) => i.task_id);
@@ -1062,9 +1113,37 @@ export default function ToDoListDashboardPage() {
               {isQuarantined ? "⛔ Quarantined" : "⚠ External Sender — Security Review Required"}
             </span>
             {senderEmail && (
-              <span className="font-mono text-[9px] text-red-300/80 ml-auto">
+              <span className="font-mono text-[9px] text-red-300/80 ml-2 truncate">
                 from: {senderEmail}
               </span>
+            )}
+            {isQuarantined && (
+              <div className="ml-auto flex items-center gap-1 shrink-0">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void handleArchiveQuarantined(item.task_id);
+                  }}
+                  disabled={isPending}
+                  title="Archive — flip to completed (audit retained)"
+                  className="font-mono text-[9px] font-bold tracking-[0.1em] uppercase px-2 py-0.5 rounded-sm border border-red-400/40 bg-red-500/10 text-red-300 hover:bg-red-500/20 hover:text-red-200 disabled:opacity-50 transition-colors"
+                >
+                  Archive
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void handleDismissQuarantined(item.task_id);
+                  }}
+                  disabled={isPending}
+                  title="Delete — cancel and remove from active queues"
+                  className="font-mono text-[9px] font-bold tracking-[0.1em] uppercase px-2 py-0.5 rounded-sm border border-red-400/60 bg-red-500/20 text-red-200 hover:bg-red-500/30 hover:text-red-100 disabled:opacity-50 transition-colors"
+                >
+                  Delete
+                </button>
+              </div>
             )}
           </div>
         )}

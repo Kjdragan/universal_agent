@@ -4,7 +4,7 @@ import { usePathname } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { LayoutDashboard } from "lucide-react";
-import SystemCommandBar from "@/components/dashboard/SystemCommandBar";
+import SimoneChatBar from "@/components/dashboard/SimoneChatBar";
 import { GlobalSidebar } from "@/components/dashboard/GlobalSidebar";
 
 /* ------------------------------------------------------------------ */
@@ -116,7 +116,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     await loadAuthSession();
   }, [loadAuthSession]);
 
-  const showSystemCommandBar = Boolean(
+  const showSimoneChatBar = Boolean(
     pathname &&
     !pathname.startsWith("/dashboard/chat") &&
     !pathname.startsWith("/dashboard/csi")
@@ -211,8 +211,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
         {/* Main Content */}
         <main className="relative flex flex-1 flex-col overflow-hidden md:ml-20">
-          {/* SystemCommandBar hover trigger zone */}
-          {showSystemCommandBar && (
+          {/* SimoneChatBar hover trigger zone */}
+          {showSimoneChatBar && (
             <>
               <div
                 className="absolute top-0 left-0 right-0 z-30 h-1 cursor-pointer"
@@ -236,7 +236,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                 }}
               >
                 <div className="border-b border-border/40 bg-background/95 backdrop-blur-lg p-3">
-                  <SystemCommandBar sourcePage={pathname || "/dashboard"} />
+                  <SimoneChatBar sourcePage={pathname || "/dashboard"} />
                 </div>
               </div>
             </>
