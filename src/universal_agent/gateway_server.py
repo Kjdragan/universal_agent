@@ -2334,14 +2334,6 @@ class OpsNotificationCreateRequest(BaseModel):
     metadata: Optional[dict] = None
 
 
-class DashboardSystemCommandRequest(BaseModel):
-    text: str
-    source_page: Optional[str] = None
-    source_context: Optional[dict] = None
-    timezone: Optional[str] = None
-    dry_run: bool = False
-
-
 class TutorialReviewDispatchRequest(BaseModel):
     run_path: str
     note: Optional[str] = None
@@ -7471,6 +7463,7 @@ async def _run_gateway_session_request(
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             },
         )
+        _record_simone_chat_query_complete(session_id, completed=True)
         await manager.broadcast(
             session_id,
             {"type": "pong", "data": {}, "timestamp": datetime.now(timezone.utc).isoformat()},
@@ -14309,6 +14302,7 @@ async def lifespan(app: FastAPI):
                 _ensure_vp_mission_pr_reconciler_cron_job()
                 _ensure_hackernews_snapshot_cron_job()
                 _ensure_atlas_direct_dispatch_cron_job()
+                _ensure_simone_chat_autocomplete_cron_job()
             except Exception as exc:
                 logger.warning("Failed ensuring autonomous cron jobs: %s", exc)
         else:
@@ -18467,6 +18461,32 @@ def _ensure_atlas_direct_dispatch_cron_job() -> Optional[dict[str, Any]]:
     )
 
 
+def _ensure_simone_chat_autocomplete_cron_job() -> Optional[dict[str, Any]]:
+    """1-minute cron that promotes idle simone_chat completion proposals.
+
+    Scans `task_hub_items` for `source_kind="simone_chat"` rows in
+    `status="in_progress"` with a `metadata.completion_proposed_at` older
+    than `UA_SIMONE_CHAT_IDLE_MINUTES` (default 10) AND no operator reply
+    since the proposal — then flips them to `completed`.
+
+    Pure housekeeping; skips the Task Hub Observability link.
+    """
+    return _register_system_cron_job(
+        system_job="simone_chat_auto_complete",
+        default_cron="*/1 * * * *",
+        default_timezone="UTC",
+        command="!script universal_agent.scripts.simone_chat_auto_complete",
+        description=(
+            "Auto-complete idle Simone-chat tasks once the operator has been "
+            "silent past UA_SIMONE_CHAT_IDLE_MINUTES (default 10)."
+        ),
+        timeout_seconds=60,
+        enabled=True,
+        cron_env_var="UA_SIMONE_CHAT_AUTOCOMPLETE_CRON",
+        skip_task_hub_link=True,
+    )
+
+
 def _ensure_proactive_report_morning_cron_job() -> Optional[dict[str, Any]]:
     return _register_system_cron_job(
         system_job="proactive_report_morning",
@@ -21444,6 +21464,55 @@ def _task_hub_open_conn() -> sqlite3.Connection:
     return conn
 
 
+def _record_simone_chat_operator_message(session_id: str, text: str, source_page: str = "") -> None:
+    """Fire-and-forget hook for inbound operator messages.
+
+    Creates the simone_chat Task Hub row on the first operator message in a
+    session, bumps `last_operator_message_at`, and resumes a previously
+    completed row. Swallows errors so a Task Hub blip never blocks chat
+    delivery.
+    """
+    if not (session_id or "").strip() or not (text or "").strip():
+        return
+    try:
+        from universal_agent.services import simone_chat_tasks  # local import to avoid cycles
+        with _activity_store_lock:
+            conn = _task_hub_open_conn()
+            try:
+                simone_chat_tasks.on_operator_message(
+                    conn,
+                    session_id=session_id,
+                    text=text,
+                    source_page=source_page or None,
+                )
+            finally:
+                conn.close()
+    except Exception:
+        logger.exception("simone_chat operator-message hook failed (session=%s)", session_id)
+
+
+def _record_simone_chat_query_complete(session_id: str, completed: bool) -> None:
+    """Fire-and-forget hook for the `query_complete` (completed=True) broadcast.
+
+    Sets `metadata.completion_proposed_at` on the matching simone_chat row.
+    Auto-completer cron later promotes proposed → completed once idle.
+    """
+    if not completed or not (session_id or "").strip():
+        return
+    try:
+        from universal_agent.services import simone_chat_tasks
+        with _activity_store_lock:
+            conn = _task_hub_open_conn()
+            try:
+                simone_chat_tasks.on_query_complete(
+                    conn, session_id=session_id, completed=True
+                )
+            finally:
+                conn.close()
+    except Exception:
+        logger.exception("simone_chat query-complete hook failed (session=%s)", session_id)
+
+
 def _compute_agent_metrics(conn: sqlite3.Connection) -> dict[str, Any]:
     """Compute aggregated agent metrics from task_hub tables.
 
@@ -23473,6 +23542,105 @@ async def dashboard_todolist_dismiss_task(task_id: str):
         finally:
             conn.close()
     return {"status": "ok", "task_id": tid, "new_status": task_hub.TASK_STATUS_CANCELLED}
+
+
+@app.post("/api/v1/dashboard/todolist/archive/{task_id}")
+async def dashboard_todolist_archive_task(task_id: str):
+    """Archive an active work item — flip to `completed` with an `archived` marker.
+
+    Distinct from `dismiss` (which sets `cancelled` + `dashboard_dismissed`).
+    Archiving preserves the row in the audit trail and reads as "this work
+    is done / no further action," whereas dismiss reads as "we shouldn't
+    have tracked this." The current driving use case is one-click archiving
+    of quarantined-email cards on the dashboard, where the operator has
+    looked at the email and decided no follow-up is needed.
+    """
+    tid = str(task_id or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="task_id is required")
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            row = conn.execute(
+                "SELECT status FROM task_hub_items WHERE task_id = ? LIMIT 1",
+                (tid,),
+            ).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Task not found")
+            current_status = str(row["status"] or "").strip().lower()
+            if current_status in task_hub.TERMINAL_STATUSES:
+                return {
+                    "status": "ok",
+                    "task_id": tid,
+                    "new_status": current_status,
+                    "detail": "already terminal",
+                }
+            conn.execute(
+                "UPDATE task_hub_items SET status=?, stale_state=?, seizure_state=?, updated_at=? WHERE task_id=?",
+                (
+                    task_hub.TASK_STATUS_COMPLETED,
+                    "dashboard_archived",
+                    "unseized",
+                    _utc_now_iso(),
+                    tid,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    return {"status": "ok", "task_id": tid, "new_status": task_hub.TASK_STATUS_COMPLETED}
+
+
+@app.post("/api/v1/dashboard/simone_chat/{task_id}/complete")
+async def dashboard_simone_chat_complete(task_id: str):
+    """Manually promote a simone_chat task to `completed`.
+
+    Used by the Kanban "Mark complete" affordance when an operator wants to
+    finalize a chat before the auto-completer idle threshold elapses.
+    """
+    tid = str(task_id or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="task_id is required")
+    if not tid.startswith("simone_chat:"):
+        raise HTTPException(status_code=400, detail="not a simone_chat task")
+    from universal_agent.services import simone_chat_tasks  # local import to avoid cycles
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            row = simone_chat_tasks.mark_complete(conn, task_id=tid)
+            if row is None:
+                raise HTTPException(status_code=404, detail="task not found")
+            conn.commit()
+        finally:
+            conn.close()
+    return {"status": "ok", "task_id": tid, "new_status": row.get("status")}
+
+
+@app.post("/api/v1/dashboard/simone_chat/{task_id}/reopen")
+async def dashboard_simone_chat_reopen(task_id: str):
+    """Operator override — flip a `completed` simone_chat row back to `in_progress`.
+
+    Used when auto-complete fired prematurely and the operator wants to
+    resume the conversation without sending a new message yet. Sending a
+    new operator message in the chat would also reopen the row; this endpoint
+    makes the override explicit on the Kanban.
+    """
+    tid = str(task_id or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="task_id is required")
+    if not tid.startswith("simone_chat:"):
+        raise HTTPException(status_code=400, detail="not a simone_chat task")
+    from universal_agent.services import simone_chat_tasks
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            row = simone_chat_tasks.reopen(conn, task_id=tid)
+            if row is None:
+                raise HTTPException(status_code=404, detail="task not found")
+            conn.commit()
+        finally:
+            conn.close()
+    return {"status": "ok", "task_id": tid, "new_status": row.get("status")}
 
 
 @app.get("/api/v1/dashboard/todolist/email-tasks")
@@ -26057,266 +26225,6 @@ async def handle_dashboard_system_resources(request: Request):
     }
 
 
-@app.post("/api/v1/dashboard/system/commands")
-async def dashboard_system_command(payload: DashboardSystemCommandRequest):
-    text = str(payload.text or "").strip()
-    if not text:
-        raise HTTPException(status_code=400, detail="text is required")
-
-    source_page = str(payload.source_page or "").strip()
-    source_context = _normalize_source_context(payload.source_context)
-    timezone_name = str(payload.timezone or "").strip() or "UTC"
-    dry_run = bool(payload.dry_run)
-    source_session_id = _system_context_session_id(source_context)
-    source_run_id = _system_context_run_id(source_context)
-    source_attempt_id = _system_context_attempt_id(source_context)
-    task_description = _build_system_command_task_description(
-        source_page=source_page,
-        source_context=source_context,
-    )
-
-    if _system_command_is_status_query(text):
-        pending_approvals = list_approvals(status="pending")
-        pending_count = len(pending_approvals if isinstance(pending_approvals, list) else [])
-        with _activity_store_lock:
-            conn = _task_hub_open_conn()
-            try:
-                approvals_upserted = _task_hub_sync_pending_approvals(conn)
-                rebuild_summary = task_hub.rebuild_dispatch_queue(conn)
-                overview = task_hub.overview(conn, approvals_pending=pending_count)
-                dispatch = task_hub.get_dispatch_queue(conn, limit=20)
-                agent_activity = task_hub.get_agent_activity(conn)
-                mirror_policy = task_hub.get_mirror_policy(conn)
-                mirror_metrics = task_hub.get_mirror_metrics(conn)
-            finally:
-                conn.close()
-        return {
-            "ok": True,
-            "lane": "system",
-            "intent": "status_query",
-            "interpreted": {"query": text, "scope": "task_hub"},
-            "task_hub": {
-                "overview": overview,
-                "dispatch": dispatch,
-                "agent_activity": agent_activity,
-                "sync": {"approvals_upserted": approvals_upserted},
-                "dispatch_rebuild": rebuild_summary,
-                "mirror": {
-                    "policy": mirror_policy,
-                    "metrics": mirror_metrics,
-                },
-            },
-            "dry_run": dry_run,
-        }
-
-    is_brainstorm = _system_command_is_brainstorm_capture(text)
-    content, schedule_text = _extract_system_command_content_and_schedule(text)
-    if not content:
-        content = _strip_system_command_prefix(text) or text
-
-    priority_text = _system_command_priority_from_text(text)
-    priority_map = {"low": 1, "medium": 2, "high": 3, "urgent": 4}
-    priority_value = int(priority_map.get(priority_text, 2))
-    schedule_section = "scheduled" if schedule_text else "background"
-    is_personal = is_brainstorm or _system_command_is_personal_task(text)
-    repeat_schedule = bool(schedule_text and _schedule_text_suggests_repeat(schedule_text))
-    is_schedule_instruction = bool(schedule_text and not is_personal)
-    if is_schedule_instruction:
-        priority_value = max(priority_value, 4)
-    must_complete = bool(is_schedule_instruction and not repeat_schedule)
-    intent = "capture_idea" if is_brainstorm else ("schedule_task" if schedule_text else "capture_task")
-
-    due_at_iso: Optional[str] = None
-    if schedule_text and not repeat_schedule:
-        run_at_ts = parse_run_at(schedule_text, timezone_name=timezone_name)
-        if run_at_ts is not None:
-            due_at_iso = datetime.fromtimestamp(float(run_at_ts), tz=timezone.utc).isoformat()
-
-    project_key = "proactive" if is_brainstorm else "immediate"
-    labels = ["system-lane"]
-    if is_brainstorm:
-        labels.extend(["brainstorm", "human"])
-    elif is_personal:
-        labels.extend(["human", "personal-reminder"])
-    else:
-        labels.append("agent-ready")
-    if is_schedule_instruction:
-        labels.append("schedule-command")
-    if must_complete:
-        labels.append("must-complete")
-
-    interpreted = {
-        "content": content,
-        "schedule_text": schedule_text,
-        "priority": priority_text,
-        "section": schedule_section,
-        "project_key": project_key,
-        "personal_task": is_personal,
-        "agent_ready": not is_personal,
-        "repeat_schedule": repeat_schedule,
-        "source_page": source_page,
-        "source_context": source_context,
-        "source_run_id": source_run_id,
-        "source_attempt_id": source_attempt_id,
-    }
-    if dry_run:
-        return {
-            "ok": True,
-            "lane": "system",
-            "intent": intent,
-            "interpreted": interpreted,
-            "dry_run": True,
-        }
-
-    hub_task: dict[str, Any] = {}
-    task_id = _system_command_task_id(
-        content=content,
-        schedule_text=schedule_text,
-        source_page=source_page,
-        source_run_id=source_run_id,
-        source_session_id=source_session_id,
-        intent=intent,
-        repeat_schedule=repeat_schedule,
-    )
-    duplicate_parked = 0
-    # System-command tasks are operator-initiated and internal-only by default.
-    # If a mirror class is ever defined for this lane, route it through
-    # `_task_hub_should_mirror` like other source kinds do.
-    should_mirror = False
-    with _activity_store_lock:
-        conn = _task_hub_open_conn()
-        try:
-            hub_task = task_hub.upsert_item(
-                conn,
-                {
-                    "task_id": task_id,
-                    "source_kind": "system_command",
-                    "source_ref": source_run_id or source_session_id or "",
-                    "title": content,
-                    "description": task_description,
-                    "project_key": project_key,
-                    "priority": priority_value,
-                    "due_at": due_at_iso,
-                    "labels": labels,
-                    "status": "open",
-                    "must_complete": must_complete,
-                    "agent_ready": not is_personal,
-                    "mirror_status": "mirror_eligible" if should_mirror else "internal_only",
-                    "metadata": {
-                        "source_page": source_page,
-                        "source_context": source_context,
-                        "source_session_id": source_session_id or "",
-                        "source_run_id": source_run_id or "",
-                        "source_attempt_id": source_attempt_id or "",
-                        "schedule_text": schedule_text or "",
-                        "repeat_schedule": repeat_schedule,
-                        "intent": intent,
-                        "dispatch_hint": "system_schedule_instruction" if is_schedule_instruction else "",
-                    },
-                },
-            )
-            duplicate_parked = _park_duplicate_system_command_tasks(
-                conn,
-                keep_task_id=str(hub_task.get("task_id") or ""),
-                content=content,
-                schedule_text=schedule_text,
-                source_page=source_page,
-                source_run_id=source_run_id,
-                source_session_id=source_session_id,
-                intent=intent,
-                repeat_schedule=repeat_schedule,
-            )
-            task_hub.rebuild_dispatch_queue(conn)
-            conn.commit()
-        finally:
-            conn.close()
-
-    cron_job: Optional[dict[str, Any]] = None
-    cron_bridge_status: Optional[str] = None
-    enable_cron_bridge = (
-        os.getenv("UA_SYSTEM_COMMAND_ENABLE_CRON_BRIDGE", "1").strip().lower() in {"1", "true", "yes", "on"}
-    )
-    if schedule_text and _cron_service and enable_cron_bridge:
-        try:
-            every_raw, cron_expr, run_at_ts, delete_after_run = _resolve_simplified_schedule_fields(
-                schedule_time=schedule_text,
-                repeat=repeat_schedule,
-                timezone_name=timezone_name,
-            )
-            run_command = _build_task_hub_execution_cron_command(
-                task_id=str(hub_task.get("task_id") or ""),
-                content=content,
-            )
-            job_metadata = {
-                "source": "system_command",
-                "autonomous": not is_personal,
-                "task_hub_task_id": str(hub_task.get("task_id") or ""),
-                "source_page": source_page,
-                "source_context": source_context,
-            }
-            job = _cron_service.add_job(
-                user_id="cron_system",
-                workspace_dir=str(
-                    WORKSPACES_DIR
-                    / f"cron_taskhub_{str(hub_task.get('task_id') or 'task').split(':')[-1][:8]}_{int(time.time())}"
-                ),
-                command=run_command,
-                every_raw=every_raw,
-                cron_expr=cron_expr,
-                timezone=timezone_name,
-                run_at=run_at_ts,
-                delete_after_run=delete_after_run,
-                enabled=True,
-                metadata=job_metadata,
-            )
-            cron_bridge_status = "created"
-            cron_job = {**job.to_dict(), "running": job.job_id in _cron_service.running_jobs}
-        except Exception as exc:
-            cron_bridge_status = "failed"
-            logger.warning("System command cron bridge failed: %s", exc)
-
-    _add_notification(
-        kind="system_command_routed",
-        title="System Command Captured",
-        message=f"{content[:120]}",
-        severity="info",
-        metadata={
-            "source": "system_command",
-            "source_page": source_page,
-            "task_hub_task_id": str(hub_task.get("task_id") or ""),
-            "schedule_text": schedule_text or "",
-            "cron_job_id": str((cron_job or {}).get("job_id") or ""),
-            "cron_bridge_status": cron_bridge_status or "",
-            "source_context": source_context,
-        },
-    )
-    if is_schedule_instruction and _heartbeat_service:
-        target_sessions: list[str] = []
-        if source_session_id:
-            target_sessions = [source_session_id]
-        else:
-            target_sessions = [
-                str(getattr(s, "session_id", "") or "")
-                for s in _gateway_live_session_summaries()[:5]
-                if str(getattr(s, "session_id", "") or "")
-            ]
-        for sid in target_sessions:
-            if sid:
-                _heartbeat_service.request_heartbeat_next(sid, reason="system_command_schedule")
-    return {
-        "ok": True,
-        "lane": "system",
-        "intent": intent,
-        "interpreted": interpreted,
-        "task_hub": {
-            "task": hub_task,
-            "duplicates_parked": int(duplicate_parked),
-        },
-        "cron": {"job": cron_job, "status": cron_bridge_status} if cron_job or cron_bridge_status else None,
-        "dry_run": False,
-    }
-
-
 @app.get("/api/v1/dashboard/tutorials/runs")
 async def dashboard_tutorial_runs(limit: int = 100):
     clamped_limit = max(1, min(int(limit), 500))
@@ -27760,137 +27668,6 @@ _SIMPLE_INTERVAL_RE = re.compile(
     re.IGNORECASE,
 )
 
-_SYSTEM_COMMAND_SCHEDULE_MARKERS = (
-    " in ",
-    " at ",
-    " tomorrow",
-    " today",
-    " tonight",
-    " every ",
-    " daily",
-    " weekly",
-    " monthly",
-    " weekday",
-    " weekdays",
-)
-
-
-def _normalize_system_context_value(value: Any, *, depth: int = 0) -> Any:
-    if depth > 3:
-        return None
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value
-    if isinstance(value, str):
-        compact = value.strip()
-        if not compact:
-            return None
-        return compact[:500]
-    if isinstance(value, list):
-        out: list[Any] = []
-        for item in value[:25]:
-            normalized = _normalize_system_context_value(item, depth=depth + 1)
-            if normalized is not None:
-                out.append(normalized)
-        return out or None
-    if isinstance(value, dict):
-        out: dict[str, Any] = {}
-        for key in sorted(value.keys(), key=lambda k: str(k))[:40]:
-            key_text = str(key).strip()
-            if not key_text:
-                continue
-            normalized = _normalize_system_context_value(value.get(key), depth=depth + 1)
-            if normalized is not None:
-                out[key_text[:120]] = normalized
-        return out or None
-    return str(value)[:500]
-
-
-def _normalize_source_context(payload: Any) -> dict[str, Any]:
-    if not isinstance(payload, dict):
-        return {}
-    normalized = _normalize_system_context_value(payload, depth=0)
-    if isinstance(normalized, dict):
-        return normalized
-    return {}
-
-
-def _system_context_session_id(source_context: dict[str, Any]) -> Optional[str]:
-    for key in ("session_id", "active_session_id", "chat_session_id"):
-        value = source_context.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    selection = source_context.get("selection")
-    if isinstance(selection, dict):
-        for key in ("session_id", "active_session_id"):
-            value = selection.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-    return None
-
-
-def _system_context_run_id(source_context: dict[str, Any]) -> Optional[str]:
-    for key in ("run_id", "workflow_run_id"):
-        value = source_context.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    selection = source_context.get("selection")
-    if isinstance(selection, dict):
-        for key in ("run_id", "workflow_run_id"):
-            value = selection.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-    return None
-
-
-def _system_context_attempt_id(source_context: dict[str, Any]) -> Optional[str]:
-    for key in ("attempt_id", "workflow_attempt_id"):
-        value = source_context.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    selection = source_context.get("selection")
-    if isinstance(selection, dict):
-        for key in ("attempt_id", "workflow_attempt_id"):
-            value = selection.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-    return None
-
-
-def _source_context_snippet(source_context: dict[str, Any], *, max_chars: int = 800) -> str:
-    if not source_context:
-        return ""
-    try:
-        snippet = json.dumps(source_context, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
-    except Exception:
-        return ""
-    if len(snippet) <= max_chars:
-        return snippet
-    return snippet[: max(0, max_chars - 3)] + "..."
-
-
-def _build_system_command_task_description(*, source_page: str, source_context: dict[str, Any]) -> str:
-    parts = [f"source_page: {source_page or 'unknown'}"]
-    source_run_id = _system_context_run_id(source_context)
-    source_attempt_id = _system_context_attempt_id(source_context)
-    source_session_id = _system_context_session_id(source_context)
-    if source_run_id:
-        parts.append(f"source_run_id: {source_run_id}")
-    if source_attempt_id:
-        parts.append(f"source_attempt_id: {source_attempt_id}")
-    if source_session_id:
-        parts.append(f"source_session_id: {source_session_id}")
-    context_snippet = _source_context_snippet(source_context)
-    if context_snippet:
-        parts.append(f"source_context: {context_snippet}")
-    return "\n".join(parts)
-
-
-
-
 def _autonomous_notification_timestamp(item: dict[str, Any]) -> Optional[float]:
     created = _parse_iso_datetime(item.get("created_at"))
     if created is not None:
@@ -29030,198 +28807,6 @@ def _autonomous_job_artifact_links(job_id: str, *, max_files: int = 6) -> list[d
     return links
 
 
-def _strip_system_command_prefix(text: str) -> str:
-    cleaned = (text or "").strip()
-    patterns = [
-        r"^(please\s+)?(add|schedule|queue|create|put)\s+",
-        r"^(please\s+)?(remind|remind me)\s+to\s+",
-    ]
-    for pattern in patterns:
-        cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE).strip()
-    cleaned = re.sub(
-        r"\bto\s+(my\s+)?(to-?do\s+list|todo\s+list|task\s+hub)\b",
-        "",
-        cleaned,
-        flags=re.IGNORECASE,
-    ).strip()
-    return cleaned.strip(" \t\n\r:;,-")
-
-
-def _extract_system_command_content_and_schedule(text: str) -> tuple[str, Optional[str]]:
-    raw = _strip_system_command_prefix(text)
-    lowered = raw.lower()
-    start_index: Optional[int] = None
-    for marker in _SYSTEM_COMMAND_SCHEDULE_MARKERS:
-        idx = lowered.find(marker)
-        if idx <= 0:
-            continue
-        if start_index is None or idx < start_index:
-            start_index = idx
-    if start_index is None:
-        return raw.strip(), None
-    content = raw[:start_index].strip(" \t\n\r:;,-")
-    schedule_text = raw[start_index:].strip(" \t\n\r:;,-")
-    if not content:
-        return raw.strip(), None
-    if not schedule_text:
-        return raw.strip(), None
-    return content, schedule_text
-
-
-def _system_command_priority_from_text(text: str) -> str:
-    lowered = str(text or "").strip().lower()
-    if re.search(r"\b(urgent|asap|immediately|immediate|critical)\b", lowered):
-        return "urgent"
-    if re.search(r"\b(high priority|high-priority|important|soon)\b", lowered):
-        return "high"
-    if re.search(r"\b(low priority|low-priority|whenever|someday|later)\b", lowered):
-        return "low"
-    return "medium"
-
-
-def _system_command_is_status_query(text: str) -> bool:
-    lowered = str(text or "").strip().lower()
-    if not lowered:
-        return False
-    has_query_verb = bool(re.search(r"\b(status|show|list|what|summary|summarize)\b", lowered))
-    return has_query_verb and bool(re.search(r"\b(todo|to-?do|task\s+hub|task\s+list)\b", lowered))
-
-
-def _system_command_is_personal_task(text: str) -> bool:
-    lowered = str(text or "").strip().lower()
-    if not lowered:
-        return False
-    return bool(
-        re.search(
-            r"\b(remind me|for me|personal reminder|my reminder|don't let me forget|follow up with me)\b",
-            lowered,
-        )
-    )
-
-
-def _system_command_is_brainstorm_capture(text: str) -> bool:
-    lowered = str(text or "").strip().lower()
-    return bool(re.search(r"\b(idea|brainstorm|backlog|capture this)\b", lowered))
-
-
-def _system_command_task_id(
-    *,
-    content: str,
-    schedule_text: Optional[str],
-    source_page: str,
-    source_run_id: str,
-    source_session_id: str,
-    intent: str,
-    repeat_schedule: bool,
-) -> str:
-    normalized_source_run_id = str(source_run_id or "").strip().lower()
-    normalized_source_session_id = str(source_session_id or "").strip().lower()
-    source_identity = normalized_source_run_id or normalized_source_session_id
-    signature = {
-        "content": str(content or "").strip().lower(),
-        "schedule_text": str(schedule_text or "").strip().lower(),
-        "source_page": str(source_page or "").strip().lower(),
-        "source_identity": source_identity,
-        "source_identity_type": "run" if normalized_source_run_id else "session",
-        "intent": str(intent or "").strip().lower(),
-        "repeat_schedule": bool(repeat_schedule),
-    }
-    raw = json.dumps(signature, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
-    return f"scmd:{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:16]}"
-
-
-def _park_duplicate_system_command_tasks(
-    conn: sqlite3.Connection,
-    *,
-    keep_task_id: str,
-    content: str,
-    schedule_text: Optional[str],
-    source_page: str,
-    source_run_id: str,
-    source_session_id: str,
-    intent: str,
-    repeat_schedule: bool,
-) -> int:
-    rows = conn.execute(
-        """
-        SELECT task_id, metadata_json
-        FROM task_hub_items
-        WHERE source_kind = 'system_command'
-          AND task_id <> ?
-          AND title = ?
-          AND status IN ('open', 'in_progress', 'blocked', 'needs_review', 'delegated', 'pending_review')
-        """,
-        (str(keep_task_id or ""), str(content or "").strip()),
-    ).fetchall()
-    parked = 0
-    now_iso = _utc_now_iso()
-    target_schedule = str(schedule_text or "").strip().lower()
-    target_source_page = str(source_page or "").strip().lower()
-    target_source_run = str(source_run_id or "").strip().lower()
-    target_source_session = str(source_session_id or "").strip().lower()
-    target_intent = str(intent or "").strip().lower()
-    for row in rows:
-        metadata = {}
-        try:
-            metadata = json.loads(str(row["metadata_json"] or "{}"))
-        except Exception:
-            metadata = {}
-        if not isinstance(metadata, dict):
-            metadata = {}
-        if str(metadata.get("schedule_text") or "").strip().lower() != target_schedule:
-            continue
-        if str(metadata.get("source_page") or "").strip().lower() != target_source_page:
-            continue
-        existing_source_run = str(metadata.get("source_run_id") or "").strip().lower()
-        existing_source_session = str(metadata.get("source_session_id") or "").strip().lower()
-        if target_source_run:
-            if existing_source_run:
-                if existing_source_run != target_source_run:
-                    continue
-            elif existing_source_session != target_source_session:
-                continue
-        elif existing_source_session != target_source_session:
-            continue
-        if str(metadata.get("intent") or "").strip().lower() != target_intent:
-            continue
-        if bool(metadata.get("repeat_schedule")) != bool(repeat_schedule):
-            continue
-        metadata["duplicate_of_task_id"] = str(keep_task_id or "")
-        metadata["duplicate_parked_at"] = now_iso
-        metadata["duplicate_reason"] = "system_command_signature"
-        conn.execute(
-            """
-            UPDATE task_hub_items
-            SET status = ?, stale_state = ?, seizure_state = ?, metadata_json = ?, updated_at = ?
-            WHERE task_id = ?
-            """,
-            (
-                task_hub.TASK_STATUS_PARKED,
-                "duplicate_parked",
-                "unseized",
-                json.dumps(metadata, ensure_ascii=True, separators=(",", ":")),
-                now_iso,
-                str(row["task_id"] or ""),
-            ),
-        )
-        parked += 1
-    return parked
-
-
-def _build_task_hub_execution_cron_command(*, task_id: str, content: str) -> str:
-    safe_content = str(content or "").strip()
-    if len(safe_content) > 200:
-        safe_content = safe_content[:197] + "..."
-    return "\n".join(
-        [
-            "Autonomous Task Hub execution task.",
-            f"task_hub_task_id: {task_id}",
-            f"task_hub_task_content: {safe_content}",
-            "Run the task now using available UA tools and produce concrete outputs when relevant.",
-            "If completed, update the corresponding Task Hub task as completed with a concise summary note.",
-            "If blocked, update the Task Hub task metadata with exactly what is missing.",
-        ]
-    )
 
 
 
@@ -32698,10 +32283,20 @@ async def websocket_stream(
                         user_input = str(raw_data.get("text") or "")
                     else:
                         user_input = str(raw_data.get("user_input") or "")
-                    
+
                     user_input_strip = user_input.strip()
                     exec_session = session
-                    
+
+                    # simone_chat lifecycle: every inbound operator turn either
+                    # creates the Task Hub row (first message) or bumps the
+                    # last-message timestamp + resumes a completed row.
+                    if user_input_strip:
+                        _record_simone_chat_operator_message(
+                            session_id,
+                            user_input_strip,
+                            source_page=str(raw_data.get("source_page") or ""),
+                        )
+
                     if user_input_strip.startswith("/btw ") or user_input_strip == "/btw":
                         prompt = user_input_strip[4:].strip()
                         sidebar_id = get_active_sidebar(session_id)
