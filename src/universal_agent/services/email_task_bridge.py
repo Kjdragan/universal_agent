@@ -953,6 +953,104 @@ class EmailTaskBridge:
         )
         return True
 
+    def clear_quarantine_state(self, task_id: str) -> Optional[str]:
+        """Clear UA-side quarantine state for an email task.
+
+        Called by the dashboard archive/dismiss verbs after the Task Hub
+        status flip so future re-renders (and any future re-derivation
+        of "is this still quarantined?") don't keep showing the badge:
+
+        - `task_hub_items.labels` JSON has the `quarantined` entry removed.
+        - `email_task_mappings.status` is moved from `quarantined` to
+          `released` (a non-quarantine sentinel; explicitly distinct from
+          `active` so we don't accidentally pick the row up as still-live
+          email work that needs response).
+
+        Idempotent. If the task_id is not an email task, returns None
+        without raising. If it IS an email task, returns the associated
+        `thread_id` so the caller can pass it to
+        `AgentMailService.release_quarantine_label` for the best-effort
+        AgentMail-side mirror call.
+
+        Args:
+            task_id: The Task Hub task_id (matches the deterministic
+                hash from `_deterministic_task_id(thread_id)`).
+
+        Returns:
+            The email thread_id if cleared, or None if the row didn't
+            exist / wasn't a quarantined email / wasn't an email at all.
+        """
+        tid = str(task_id or "").strip()
+        if not tid:
+            return None
+
+        # Look up the bridge mapping for this task. The bridge is keyed
+        # by thread_id, not task_id, so we have to search the secondary
+        # task_id column (indexed via idx_email_task_mappings_task_id).
+        mapping_row = self._conn.execute(
+            "SELECT thread_id, status FROM email_task_mappings "
+            "WHERE task_id = ? LIMIT 1",
+            (tid,),
+        ).fetchone()
+        if not mapping_row:
+            return None
+
+        thread_id = str(mapping_row["thread_id"] or "").strip()
+        if not thread_id:
+            return None
+
+        now = _now_iso()
+
+        # ── 1. Update email_task_mappings.status ──
+        # Only flip when actually quarantined; idempotent re-clear is a no-op.
+        if str(mapping_row["status"] or "").strip().lower() == "quarantined":
+            self._conn.execute(
+                "UPDATE email_task_mappings "
+                "SET status = 'released', "
+                "    security_classification = '', "
+                "    updated_at = ? "
+                "WHERE task_id = ?",
+                (now, tid),
+            )
+
+        # ── 2. Strip the 'quarantined' label from task_hub_items.labels ──
+        # task_hub_items.labels is stored as a JSON array on the row's
+        # labels_json column (see task_hub.upsert_item). We read, filter,
+        # and write back via task_hub helpers rather than poking JSON
+        # directly so future schema changes stay encapsulated.
+        try:
+            from universal_agent.task_hub import get_item, upsert_item
+
+            current = get_item(self._conn, tid) or {}
+            existing_labels = list(current.get("labels") or [])
+            new_labels = [
+                lbl for lbl in existing_labels
+                if str(lbl or "").strip().lower() != _EMAIL_TASK_QUARANTINED_LABEL
+            ]
+            if new_labels != existing_labels:
+                upsert_item(
+                    self._conn,
+                    {
+                        "task_id": tid,
+                        "labels": new_labels,
+                    },
+                )
+        except Exception as exc:
+            # Defensive: even if the label strip fails (e.g. row vanished
+            # between SELECT and UPDATE), the mapping table update above
+            # already changed the source-of-truth field. Log + continue.
+            logger.warning(
+                "📧 clear_quarantine_state label strip failed task=%s: %s",
+                tid, exc,
+            )
+
+        self._conn.commit()
+        logger.info(
+            "📧🔓 Cleared UA quarantine state task=%s thread=%s",
+            tid, thread_id,
+        )
+        return thread_id
+
     def _upsert_thread_task_state(
         self,
         *,

@@ -23511,6 +23511,89 @@ async def dashboard_todolist_delete_all_completed():
     return {"status": "ok", "hidden_count": count, "new_status": task_hub.TASK_STATUS_PARKED}
 
 
+def _clear_email_quarantine_local(conn, task_id: str) -> Optional[str]:
+    """Sync-side quarantine cleanup invoked after a terminal-flip on an email task.
+
+    Inspects the row at ``task_id``; if it's an email task carrying the
+    `quarantined` label, strips the label, flips
+    ``email_task_mappings.status`` from `quarantined` to `released`, and
+    returns the AgentMail thread_id so the caller can fire the
+    AgentMail-side label removal asynchronously.
+
+    Designed to be called WHILE holding ``_activity_store_lock`` so the
+    state change is atomic with the dashboard verb's status UPDATE.
+
+    Returns ``None`` for non-email tasks, non-quarantined tasks, or missing
+    rows — the caller short-circuits the AgentMail call on None.
+    """
+    try:
+        from universal_agent.services.email_task_bridge import (
+            EmailTaskBridge,
+            ensure_email_task_schema,
+        )
+        from universal_agent.task_hub import get_item
+    except Exception as exc:
+        logger.debug(
+            "📧 _clear_email_quarantine_local: bridge import failed task=%s: %s",
+            task_id, exc,
+        )
+        return None
+
+    try:
+        row = get_item(conn, task_id) or {}
+    except Exception as exc:
+        logger.debug(
+            "📧 _clear_email_quarantine_local: get_item failed task=%s: %s",
+            task_id, exc,
+        )
+        return None
+
+    source_kind = str(row.get("source_kind") or "").strip().lower()
+    labels_norm = [str(label or "").strip().lower() for label in (row.get("labels") or [])]
+    if source_kind != "email" or "quarantined" not in labels_norm:
+        return None
+
+    try:
+        ensure_email_task_schema(conn)
+        bridge = EmailTaskBridge(db_conn=conn)
+        return bridge.clear_quarantine_state(task_id)
+    except Exception as exc:
+        logger.warning(
+            "📧 _clear_email_quarantine_local: bridge.clear_quarantine_state "
+            "raised for task=%s: %s",
+            task_id, exc,
+        )
+        return None
+
+
+async def _release_quarantine_agentmail(thread_id: Optional[str], task_id: str) -> None:
+    """Async-side companion to `_clear_email_quarantine_local`.
+
+    Fire-and-log call to AgentMailService to remove the `quarantined` label
+    from the thread. Runs outside `_activity_store_lock` because it's a
+    network round-trip. Failure is logged but never raised — the local DB
+    state has already been corrected; AgentMail-side drift is acceptable.
+    """
+    if not thread_id:
+        return
+    svc = _agentmail_service
+    if svc is None:
+        logger.debug(
+            "📧 _release_quarantine_agentmail: AgentMail service not initialized "
+            "task=%s thread=%s — skipping AgentMail-side cleanup",
+            task_id, thread_id,
+        )
+        return
+    try:
+        await svc.release_quarantine_label(thread_id)
+    except Exception as exc:
+        logger.warning(
+            "📧⚠️ AgentMail release_quarantine_label raised for thread=%s "
+            "task=%s — UA-side quarantine state is already cleared: %s",
+            thread_id, task_id, exc,
+        )
+
+
 @app.delete("/api/v1/dashboard/todolist/dismiss/{task_id}")
 async def dashboard_todolist_dismiss_task(task_id: str):
     """Dismiss any active work item by moving it to cancelled status.
@@ -23522,6 +23605,7 @@ async def dashboard_todolist_dismiss_task(task_id: str):
     tid = str(task_id or "").strip()
     if not tid:
         raise HTTPException(status_code=400, detail="task_id is required")
+    thread_id_to_release: Optional[str] = None
     with _activity_store_lock:
         conn = _task_hub_open_conn()
         try:
@@ -23539,8 +23623,13 @@ async def dashboard_todolist_dismiss_task(task_id: str):
                 (task_hub.TASK_STATUS_CANCELLED, "dashboard_dismissed", "unseized", _utc_now_iso(), tid),
             )
             conn.commit()
+            # Quarantine-clear runs inside the lock so the UA-side state
+            # change is atomic with the dismiss above.
+            thread_id_to_release = _clear_email_quarantine_local(conn, tid)
         finally:
             conn.close()
+    # AgentMail-side label removal is network — fire-and-log outside the lock.
+    await _release_quarantine_agentmail(thread_id_to_release, tid)
     return {"status": "ok", "task_id": tid, "new_status": task_hub.TASK_STATUS_CANCELLED}
 
 
@@ -23558,6 +23647,7 @@ async def dashboard_todolist_archive_task(task_id: str):
     tid = str(task_id or "").strip()
     if not tid:
         raise HTTPException(status_code=400, detail="task_id is required")
+    thread_id_to_release: Optional[str] = None
     with _activity_store_lock:
         conn = _task_hub_open_conn()
         try:
@@ -23586,8 +23676,13 @@ async def dashboard_todolist_archive_task(task_id: str):
                 ),
             )
             conn.commit()
+            # Quarantine-clear runs inside the lock so the UA-side state
+            # change is atomic with the archive above.
+            thread_id_to_release = _clear_email_quarantine_local(conn, tid)
         finally:
             conn.close()
+    # AgentMail-side label removal is network — fire-and-log outside the lock.
+    await _release_quarantine_agentmail(thread_id_to_release, tid)
     return {"status": "ok", "task_id": tid, "new_status": task_hub.TASK_STATUS_COMPLETED}
 
 

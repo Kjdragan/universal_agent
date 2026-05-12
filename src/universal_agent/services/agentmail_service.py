@@ -1116,6 +1116,97 @@ class AgentMailService:
         logger.info("📧 Deleted thread thread_id=%s inbox_id=%s", thread_id, inbox_id)
         return {"status": "deleted", "thread_id": thread_id, "inbox_id": inbox_id}
 
+    async def release_quarantine_label(
+        self,
+        thread_id: str,
+        *,
+        inbox_id: Optional[str] = None,
+        label: str = _QUEUE_STATUS_QUARANTINED,
+    ) -> bool:
+        """Best-effort removal of the quarantine label from an AgentMail thread.
+
+        Wired into the dashboard archive/dismiss verb handlers
+        (`dashboard_todolist_archive_task` / `dashboard_todolist_dismiss_task`)
+        so that when the operator clears a quarantined-email card, the
+        AgentMail-side label state is also cleared. Today UA does not write a
+        `quarantined` label to AgentMail itself — the local bridge tables are
+        the canonical store — but the API is wired defensively so this call
+        is a no-op-and-log when no AgentMail label is present, AND becomes a
+        real cleanup if UA ever starts mirroring quarantine state into
+        AgentMail.
+
+        Idempotent. Returns True if AgentMail accepted the update on at least
+        one inbox, False otherwise. Failures are logged but never raised — the
+        caller is expected to have already flipped Task Hub status and should
+        not roll back if the AgentMail side stays dirty.
+
+        Inbox resolution: if ``inbox_id`` is provided it's the only target.
+        Otherwise the helper tries every inbox UA owns (single inbox in the
+        common production case; multi-inbox installs are rare but supported).
+        AgentMail 404s on the wrong inbox quickly so the iteration cost is
+        bounded.
+        """
+        thread = str(thread_id or "").strip()
+        if not thread:
+            return False
+        if self._client is None:
+            logger.debug(
+                "📧 release_quarantine_label called before client ready thread=%s",
+                thread,
+            )
+            return False
+
+        targets: list[str] = []
+        if inbox_id:
+            targets = [str(inbox_id).strip()]
+        elif self._inbox_ids:
+            targets = list(self._inbox_ids)
+        elif self._inbox_id:
+            targets = [self._inbox_id]
+
+        targets = [t for t in targets if t]
+        if not targets:
+            logger.debug(
+                "📧 release_quarantine_label has no inbox targets thread=%s",
+                thread,
+            )
+            return False
+
+        accepted = False
+        for tgt in targets:
+            try:
+                await self._await_read(
+                    self._client.inboxes.threads.update(
+                        inbox_id=tgt,
+                        thread_id=thread,
+                        remove_labels=[label],
+                    ),
+                    operation="agentmail_release_quarantine",
+                    target=f"{tgt}/{thread}",
+                )
+                logger.info(
+                    "📧✅ Released '%s' label thread=%s inbox=%s",
+                    label, thread, tgt,
+                )
+                accepted = True
+                break
+            except Exception as exc:
+                # 404 on wrong inbox is expected when iterating; other
+                # errors (auth, transient 5xx) are also non-fatal here.
+                logger.debug(
+                    "📧 release_quarantine_label inbox=%s thread=%s did not apply: %s",
+                    tgt, thread, exc,
+                )
+
+        if not accepted:
+            logger.warning(
+                "📧⚠️ release_quarantine_label could not remove '%s' thread=%s "
+                "across %d inbox(es) — AgentMail-side label state may drift "
+                "from UA's local state. UA-side state is already cleared.",
+                label, thread, len(targets),
+            )
+        return accepted
+
     def get_inbox_ids(self) -> list[str]:
         """Return all configured inbox IDs."""
         return list(self._inbox_ids) if self._inbox_ids else ([self._inbox_id] if self._inbox_id else [])
