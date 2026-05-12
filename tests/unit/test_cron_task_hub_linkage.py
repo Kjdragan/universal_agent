@@ -377,6 +377,13 @@ def _gateway_source_excerpt(symbol: str, *, lines_after: int = 40) -> str:
     call-site of ``_register_system_cron_job`` (or in the inline
     metadata dict for the cleanup cron) — both are textually
     inspectable.
+
+    Slices from the ``def {symbol}(`` anchor to the next top-level
+    ``def`` (or ``class``) so a downstream function inserted between
+    this one and the next can't pollute the excerpt — caught when
+    `_ensure_vp_mission_pr_reconciler_cron_job` was added below
+    `_ensure_codie_proactive_cleanup_cron_job` and the 80-line
+    window slurped the new function's docstring.
     """
     from pathlib import Path
 
@@ -386,9 +393,15 @@ def _gateway_source_excerpt(symbol: str, *, lines_after: int = 40) -> str:
     idx = text.find(anchor)
     if idx == -1:
         raise AssertionError(f"could not locate def {symbol}() in gateway_server.py")
-    # Slice 80 lines to be safe.
-    tail = text[idx:]
-    return "\n".join(tail.splitlines()[: max(lines_after, 80)])
+    tail_lines = text[idx:].splitlines()
+    out_lines: list[str] = []
+    for i, line in enumerate(tail_lines):
+        if i > 0 and (line.startswith("def ") or line.startswith("class ")):
+            break
+        out_lines.append(line)
+        if i + 1 >= max(lines_after, 80):
+            break
+    return "\n".join(out_lines)
 
 
 def test_codie_proactive_cleanup_is_observed() -> None:

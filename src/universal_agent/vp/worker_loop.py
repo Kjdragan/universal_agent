@@ -142,6 +142,7 @@ def _post_mission_push_pr_merge(*, workspace_root: str, mission_id: str) -> None
         with urllib.request.urlopen(req, timeout=15) as resp:
             pr_data = json.loads(resp.read())
             pr_number = pr_data.get("number")
+            pr_html_url = pr_data.get("html_url")
             logger.info("Post-mission hook: created PR #%s — %s", pr_number, commit_title)
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[:500]
@@ -154,6 +155,33 @@ def _post_mission_push_pr_merge(*, workspace_root: str, mission_id: str) -> None
     if not pr_number:
         logger.warning("Post-mission hook: PR created but no number returned")
         return
+
+    # Record the PR linkage on the mission's task_hub row so the
+    # `vp_mission_pr_reconciler` cron can later close the mission when
+    # the PR merges. Best-effort — a failure here is non-fatal because
+    # the reconciler also fallback-handles missions whose final_text
+    # mentioned a PR URL (see `claude_code_client.run_mission`).
+    try:
+        from universal_agent import task_hub as _th
+        from universal_agent.durable.db import (
+            connect_runtime_db as _connect,
+            get_activity_db_path as _activity_path,
+        )
+        from universal_agent.services.vp_mission_pr_reconciler import record_mission_pr
+        _th_conn = _connect(_activity_path())
+        try:
+            record_mission_pr(
+                _th_conn,
+                mission_id=mission_id,
+                pr_number=pr_number,
+                pr_url=pr_html_url,
+                head_branch=branch,
+            )
+            _th_conn.commit()
+        finally:
+            _th_conn.close()
+    except Exception as exc:
+        logger.warning("Post-mission hook: record_mission_pr failed: %s", exc)
 
     # 6. Squash-merge the PR
     import time as _time

@@ -97,6 +97,44 @@ class ClaudeCodeClient(VpClient):
                 payload={"trace_id": trace_id, "zero_output": True},
             )
 
+        # Scan CODIE's wrap-up text for a PR URL it just opened. When
+        # present, record the mission → PR linkage so the reconciler
+        # cron can auto-close the task when the PR merges. CODIE's
+        # convention is to mention the PR in its final paragraph.
+        # Failures here are non-fatal — the mission still completes,
+        # the operator just won't get auto-close on merge for this
+        # specific mission. See services/vp_mission_pr_reconciler.py.
+        try:
+            from universal_agent.services.vp_mission_pr_reconciler import (
+                extract_pr_from_text,
+                record_mission_pr,
+            )
+            pr_info = extract_pr_from_text(final_text)
+            mission_id = str(mission.get("mission_id") or "").strip()
+            if pr_info and mission_id:
+                from universal_agent.durable.db import (
+                    connect_runtime_db as _connect,
+                    get_activity_db_path as _activity_path,
+                )
+                _th_conn = _connect(_activity_path())
+                try:
+                    record_mission_pr(
+                        _th_conn,
+                        mission_id=mission_id,
+                        pr_number=pr_info["number"],
+                        pr_url=pr_info["url"],
+                    )
+                    _th_conn.commit()
+                finally:
+                    _th_conn.close()
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning(
+                "VP mission %s: PR URL recording failed (non-fatal)",
+                str(mission.get("mission_id") or ""),
+                exc_info=True,
+            )
+
         return MissionOutcome(
             status="completed",
             result_ref=f"workspace://{workspace_dir}",

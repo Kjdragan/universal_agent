@@ -1118,6 +1118,36 @@ function CardGridPanel() {
     }
   }, [load]);
 
+  // Operator backstop for cases the auto-reconciler can't close: e.g.
+  // a VP mission whose PR shipped but never linked back into metadata.
+  // Closes the underlying Task Hub row AND retires the card. Friction
+  // (confirm dialog) is intentional — this is the one button that
+  // closes work outside of a normal completion flow.
+  const markCardComplete = useCallback(async (cardId: string, title: string) => {
+    if (typeof window === "undefined") return;
+    const ok = window.confirm(
+      `Mark this card complete? This will close the underlying task in Task Hub and remove the card from the grid.\n\n${title}`,
+    );
+    if (!ok) return;
+    setDismissingCardId(cardId);  // re-use the dim-while-mutating state
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/v1/dashboard/mission-control/cards/${encodeURIComponent(cardId)}/complete`,
+        { method: "POST" },
+      );
+      if (!res.ok) {
+        const detail = await res.text().catch(() => `${res.status}`);
+        throw new Error(detail || `complete failed: ${res.status}`);
+      }
+      void load();
+    } catch (err: any) {
+      console.error("MC complete failed", err);
+      alert(`Mark complete failed: ${err?.message || err}`);
+    } finally {
+      setDismissingCardId(null);
+    }
+  }, [load]);
+
   const submitComment = useCallback(async () => {
     if (!commentingCardId || !commentDraft.trim()) return;
     await sendFeedback(commentingCardId, "comment", { text: commentDraft.trim() });
@@ -1279,6 +1309,7 @@ function CardGridPanel() {
                 onOpenComment={() => { setCommentingCardId(card.card_id); setCommentDraft(""); }}
                 onGeneratePrompt={() => generatePrompt(card.card_id)}
                 onSendToCodie={() => openCodieFlyout(card.card_id)}
+                onMarkComplete={() => markCardComplete(card.card_id, card.title)}
                 onDismiss={() => dismissCard(card.card_id)}
                 isDismissing={dismissingCardId === card.card_id}
               />
@@ -1310,6 +1341,7 @@ function CardGridPanel() {
               onOpenComment={() => { setCommentingCardId(card.card_id); setCommentDraft(""); }}
               onGeneratePrompt={() => generatePrompt(card.card_id)}
               onSendToCodie={() => openCodieFlyout(card.card_id)}
+              onMarkComplete={() => markCardComplete(card.card_id, card.title)}
               onDismiss={() => dismissCard(card.card_id)}
               isDismissing={dismissingCardId === card.card_id}
               actionPending={actionPending === card.card_id}
@@ -1331,6 +1363,7 @@ function CardGridPanel() {
               onOpenComment={() => { setCommentingCardId(card.card_id); setCommentDraft(""); }}
               onGeneratePrompt={() => generatePrompt(card.card_id)}
               onSendToCodie={() => openCodieFlyout(card.card_id)}
+              onMarkComplete={() => markCardComplete(card.card_id, card.title)}
               onDismiss={() => dismissCard(card.card_id)}
               isDismissing={dismissingCardId === card.card_id}
               actionPending={actionPending === card.card_id}
@@ -1485,6 +1518,7 @@ function CardItem({
   onOpenComment,
   onGeneratePrompt,
   onSendToCodie,
+  onMarkComplete,
   onDismiss,
   isDismissing = false,
   actionPending = false,
@@ -1496,6 +1530,7 @@ function CardItem({
   onOpenComment: () => void;
   onGeneratePrompt?: () => void;
   onSendToCodie?: () => void;
+  onMarkComplete?: () => void;
   onDismiss?: () => void;
   isDismissing?: boolean;
   actionPending?: boolean;
@@ -1645,7 +1680,7 @@ function CardItem({
         </div>
       )}
 
-      {(onGeneratePrompt || onSendToCodie) && (
+      {(onGeneratePrompt || onSendToCodie || onMarkComplete) && (
         <div className="mt-3 flex flex-wrap gap-2">
           {onGeneratePrompt && (
             <button
@@ -1665,6 +1700,16 @@ function CardItem({
               title="Dispatch this card's investigation prompt to Codie (vp.coder.primary). Opens a confirmation flyout."
             >
               🚀 Send to Codie
+            </button>
+          )}
+          {onMarkComplete && (card.subject_kind === "task" || card.subject_kind === "mission") && (
+            <button
+              onClick={onMarkComplete}
+              disabled={actionPending || isDismissing}
+              className="inline-flex items-center gap-1 rounded border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+              title="Operator backstop — mark the underlying task as completed and retire this card. Use only when the work is genuinely done (e.g. PR shipped but auto-reconciler didn't catch the link)."
+            >
+              ✓ Mark Complete
             </button>
           )}
         </div>
