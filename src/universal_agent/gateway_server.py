@@ -22719,6 +22719,41 @@ async def dashboard_todolist_complete_subtask(task_id: str):
             conn.close()
 
 
+@app.get("/api/v1/dashboard/todolist/tasks/{task_id}")
+async def dashboard_todolist_get_task(task_id: str):
+    """Return a single task_hub row by `task_id`.
+
+    Companion to the list endpoints (`/agent-queue`, `/completed`,
+    `/overview`). Useful for operator tools, smoke tests, and any
+    consumer that already knows the `task_id` and wants the full row
+    without filtering a list.
+
+    Returns the same row shape `task_hub.get_item` produces — JSON
+    fields like `labels` and `metadata` are deserialized, terminal
+    rows include `stale_state`, etc. A missing row is a 404 (not an
+    empty 200) so callers can distinguish "not found" from "exists
+    but no value."
+
+    Added 2026-05-12 — the A2 production-smoke playbook for PR #255 /
+    PR #257 referenced this endpoint, but it didn't exist. The smoke
+    successfully verified everything via the list endpoints, but
+    having a single-task GET makes future smokes (and operator
+    debugging) cleaner.
+    """
+    tid = str(task_id or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="task_id is required")
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            row = task_hub.get_item(conn, tid)
+        finally:
+            conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return row
+
+
 @app.get("/api/v1/dashboard/todolist/tasks/{task_id}/subtasks")
 async def dashboard_todolist_get_subtasks(task_id: str):
     """Return decomposition tree for a task."""
