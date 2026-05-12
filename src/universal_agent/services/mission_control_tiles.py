@@ -26,9 +26,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
 import json
+import logging
 import os
+from pathlib import Path
 import sqlite3
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # Tile color vocabulary lives at the column-check level in
 # mission_control_tile_states; we mirror it here as constants so tests
@@ -308,6 +312,65 @@ class CsiIngesterTile(Tile):
         )
 
 
+def _load_live_cron_job_ids() -> set[str] | None:
+    """Return the set of `job_id` values currently in the cron registry.
+
+    Reads `cron_jobs.json` from the workspaces directory — the same file
+    `CronService` loads at construction. Returns `None` (NOT an empty set)
+    on any error so callers can fall back to no-filter behavior: a missing
+    or unreadable registry must never falsely "make jobs disappear" from
+    the failure aggregation. An empty set means the registry exists and
+    is empty, which is a legitimate signal (filter everything out).
+
+    Resolution order for the workspaces dir matches `gateway_server.py`
+    (search for `WORKSPACES_DIR`):
+      1. `UA_WORKSPACES_DIR` env var, if set.
+      2. `<repo-root>/AGENT_RUN_WORKSPACES/` as the default.
+
+    Why this is read on every tile compute rather than cached: the tile
+    runs every 60s in the sweeper and on every operator refresh. A
+    sweeper cache would either become stale (operator deletes a cron via
+    API, but the tile still treats it as live for N minutes) or require
+    an invalidation hook we don't have. The file is tiny (<10 KB even
+    with ~50 jobs) and the read is local.
+    """
+    workspaces_env = os.getenv("UA_WORKSPACES_DIR")
+    if workspaces_env:
+        path = Path(workspaces_env).resolve() / "cron_jobs.json"
+    else:
+        # `mission_control_tiles.py` lives at
+        # `src/universal_agent/services/mission_control_tiles.py`, so
+        # parents[3] is the repo root — matches `BASE_DIR` in
+        # gateway_server.py.
+        path = Path(__file__).resolve().parents[3] / "AGENT_RUN_WORKSPACES" / "cron_jobs.json"
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except FileNotFoundError:
+        logger.debug("cron_jobs.json not found at %s — skipping deleted-job filter", path)
+        return None
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("cron_jobs.json read failed at %s: %s — skipping deleted-job filter", path, exc)
+        return None
+
+    # CronStore historically writes either a bare list or a `{"jobs": [...]}`
+    # envelope (depending on schema version). Handle both shapes.
+    jobs_list: list[Any]
+    if isinstance(data, list):
+        jobs_list = data
+    elif isinstance(data, dict) and isinstance(data.get("jobs"), list):
+        jobs_list = data["jobs"]
+    else:
+        logger.warning("cron_jobs.json has unexpected shape at %s — skipping deleted-job filter", path)
+        return None
+
+    return {
+        job["job_id"]
+        for job in jobs_list
+        if isinstance(job, dict) and isinstance(job.get("job_id"), str)
+    }
+
+
 class CronPipelinesTile(Tile):
     name = "cron_pipelines"
     display_name = "Cron Pipelines"
@@ -351,9 +414,32 @@ class CronPipelinesTile(Tile):
             )
 
         failures_by_job = {row["job_id"]: int(row["failures"]) for row in rows}
-        total_failures = sum(failures_by_job.values())
-        distinct_jobs = len(failures_by_job)
-        max_per_job = max(failures_by_job.values(), default=0)
+
+        # Filter out failures attributed to job_ids no longer in the cron
+        # registry. Otherwise a runaway test cron that the operator
+        # deletes (the 2026-05-11 `2df80b6f95` retry storm) keeps the
+        # tile red for 24h after deletion — the operator can't possibly
+        # take remediation action on a job that doesn't exist, so the
+        # red is anti-signal. Failures from deleted jobs stay in
+        # evidence under `deleted_jobs_residue_failures` for transparency
+        # but don't drive color/status.
+        live_job_ids = _load_live_cron_job_ids()
+        if live_job_ids is None:
+            # Registry unreadable — fall back to legacy behavior so a
+            # missing file doesn't silently mask real failures.
+            active_failures = failures_by_job
+            deleted_residue: dict[str, int] = {}
+        else:
+            active_failures = {
+                jid: n for jid, n in failures_by_job.items() if jid in live_job_ids
+            }
+            deleted_residue = {
+                jid: n for jid, n in failures_by_job.items() if jid not in live_job_ids
+            }
+
+        total_failures = sum(active_failures.values())
+        distinct_jobs = len(active_failures)
+        max_per_job = max(active_failures.values(), default=0)
 
         if total_failures == 0:
             color = COLOR_GREEN
@@ -364,14 +450,22 @@ class CronPipelinesTile(Tile):
         else:
             color = COLOR_YELLOW
             status = f"1 job failed {max_per_job}x in 24h"
+
+        evidence: dict[str, Any] = {
+            "failures_by_job": active_failures,
+            "total_failures_24h": total_failures,
+            "distinct_failing_jobs": distinct_jobs,
+        }
+        if deleted_residue:
+            evidence["deleted_jobs_residue_failures"] = deleted_residue
+            evidence["deleted_jobs_residue_total"] = sum(deleted_residue.values())
+        if live_job_ids is None:
+            evidence["registry_readable"] = False
+
         return TileState(
             color=color,
             one_line_status=status,
-            evidence={
-                "failures_by_job": failures_by_job,
-                "total_failures_24h": total_failures,
-                "distinct_failing_jobs": distinct_jobs,
-            },
+            evidence=evidence,
         )
 
 

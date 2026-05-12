@@ -700,6 +700,22 @@ def test_cron_tile_counts_retry_queued_warnings_as_failures(tmp_path, monkeypatc
     db = tmp_path / "act.db"
     monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str(db))
 
+    # Seed the cron registry so the deleted-job filter (mission_control_tiles
+    # `_load_live_cron_job_ids`) treats these synthetic job_ids as live —
+    # otherwise their failures get classified as residue and the tile stays
+    # green. The fixture mirrors the production cron_jobs.json shape.
+    workspaces = tmp_path / "workspaces"
+    workspaces.mkdir(parents=True, exist_ok=True)
+    import json as _json
+    (workspaces / "cron_jobs.json").write_text(
+        _json.dumps([
+            {"job_id": "youtube_daily_digest"},
+            {"job_id": "nightly_wiki"},
+        ]),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("UA_WORKSPACES_DIR", str(workspaces))
+
     # Seed: one error-severity (youtube_daily_digest, missing secrets)
     # and one warning-severity (nightly_wiki, retry queued). Two distinct
     # job_ids → tile MUST flip RED (>=2 distinct failing jobs).
