@@ -19,10 +19,11 @@ Three Claude environments still live on the VPS (production-side; for the canoni
 
 | When | Endpoint | Models |
 |---|---|---|
-| Kevin coding interactively on VPS (when away from desktop) — Antigravity terminal, IDE side panel, plain `claude` | **api.anthropic.com** | Claude Opus 4.7 / Sonnet 4.6 / Haiku — Max plan OAuth |
+| Kevin coding interactively on VPS (when away from desktop) — Antigravity terminal, IDE side panel, `claude` (aliased to `scripts/claude_with_mcp_env.sh`, which auto-injects `--dangerously-skip-permissions` for sessions) | **api.anthropic.com** | Claude Opus 4.7 / Sonnet 4.6 / Haiku — Max plan OAuth |
 | `zai` shell function (explicit cheap-mode opt-in) | **api.z.ai** | GLM-5.x via ZAI proxy |
-| UA autonomous services (Simone, Atlas, Cody normal work, ClaudeDevs cron, …) | **api.z.ai** | GLM-5.x via Infisical-injected env |
-| Demo workspaces under `/opt/ua_demos/<id>/` | **api.anthropic.com** | Real Anthropic for new-feature demos |
+| UA autonomous services (Simone, Atlas, ClaudeDevs cron, dispatch sweep, briefings, …) | **api.z.ai** | GLM-5.x via Infisical-injected env |
+| Cody per-task CLI subprocess (default since 2026-05-11 PM, applies to in-env work AND demos) | **api.anthropic.com** | Max plan OAuth (per-task `cody_mode` field can flip to `"zai"`) |
+| Demo workspaces under `/opt/ua_demos/<id>/` (vanilla `.claude/settings.json` layer) | **api.anthropic.com** | Real Anthropic for new-feature demos |
 
 ---
 

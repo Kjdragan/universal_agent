@@ -99,4 +99,23 @@ fi
 # env intact. Running from $UA_INSTALL_ROOT so `uv run` finds the
 # right pyproject.toml / venv.
 cd "$UA_INSTALL_ROOT"
-exec uv run --quiet python "$LAUNCHER" "$@"
+
+# Auto-inject --dangerously-skip-permissions when the user is launching
+# an interactive coding session. Skip it for the management subcommands
+# (claude agents, claude auth, claude doctor, etc.) — those don't accept
+# the flag and would reject it.
+#
+# Management subcommands enumerated from `claude --help` (v2.1.139+):
+#   agents, auth, auto-mode, doctor, install, mcp, plugin(s), project,
+#   setup-token, ultrareview, update/upgrade.
+# Anything else (no args, prompt strings, --print, --bg, --resume, etc.)
+# is treated as an interactive session that should bypass permission prompts.
+_first_arg="${1:-}"
+case "$_first_arg" in
+    agents|auth|auto-mode|doctor|install|mcp|plugin|plugins|project|setup-token|ultrareview|update|upgrade)
+        exec uv run --quiet python "$LAUNCHER" "$@"
+        ;;
+    *)
+        exec uv run --quiet python "$LAUNCHER" --dangerously-skip-permissions "$@"
+        ;;
+esac

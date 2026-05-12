@@ -2,37 +2,49 @@
 
 > **Audience:** Kevin running interactive Claude Code (Anthropic Max plan) from his desktop while `just dev` is running.
 >
-> **TL;DR:** Open a terminal at `/home/kjdragan/lrepos/universal_agent`, run `bash scripts/claude_with_mcp_env.sh`. That's it. The rest of this doc is flags, alternatives, and troubleshooting.
+> **TL;DR:** Type `claude`. That's it. The rest of this doc is flags, alternatives, and troubleshooting.
 
 ---
 
 ## 1. The one command you need
 
-From the repo root (`/home/kjdragan/lrepos/universal_agent`):
+From any directory (the alias auto-detects which UA checkout to bootstrap from):
 
 ```bash
-bash scripts/claude_with_mcp_env.sh
+claude
 ```
 
 That launches Claude Code with:
 - **Anthropic Max** OAuth (real Opus 4.7 / Sonnet 4.6 / Haiku — not ZAI/GLM)
 - All MCP servers authenticated (Composio, edgartools, video_audio, youtube, zai_vision, etc. — the `${VAR}` placeholders in `.mcp.json` get resolved at startup)
+- **`--dangerously-skip-permissions` auto-injected** for interactive sessions (no more permission prompts mid-session). The wrapper skips this flag for management subcommands like `claude agents`, `claude auth`, `claude doctor`.
 - Project-local skills, slash commands (`/ship`, `/dev`, etc.), agents discovered
 
-The wrapper handles two concerns at once: (a) Infisical secrets for MCPs, (b) preserving your Anthropic Max OAuth (it deliberately strips `ANTHROPIC_*` from Infisical-injected env so api.anthropic.com is the endpoint, not Z.AI).
+### How the alias works (so you understand what's happening)
+
+`~/.bashrc` aliases `claude` → `~/lrepos/universal_agent/scripts/claude_with_mcp_env.sh`. That wrapper handles three concerns at once:
+1. Infisical secrets for MCPs (so `${VAR}` placeholders in `.mcp.json` resolve)
+2. Preserves Anthropic Max OAuth (strips `ANTHROPIC_*` from Infisical so api.anthropic.com is the endpoint, not Z.AI)
+3. Injects `--dangerously-skip-permissions` for sessions but not for management subcommands
+
+The wrapper internally calls `os.execvp("claude", …)` which does direct PATH lookup and bypasses shell aliases — no recursion risk. If you ever need the raw, un-bootstrapped `claude` binary (rare — typically for debugging), invoke it by absolute path: `$(which -a claude | head -1)`.
+
+### The new `claude agents` subcommand (v2.1.139+, released 2026-05-11)
+
+Plural, not singular. Opens **Agent View** — a session-roster manager for parallel coding sessions. From the roster you can peek at sessions with spacebar, jump in with Enter, send active sessions to the background with `/bg`, kick off new background sessions with `claude --bg "task"`. It's NOT a different coding interface — just the manager UI. The wrapper passes it through cleanly (no permission flag, since `claude agents` doesn't accept one).
 
 ### Where the wrapper looks for `.env`
 
 The wrapper needs an Infisical-bootstrap `.env` to load secrets from. Auto-detection (2026-05-11):
 
-1. `UA_INSTALL_ROOT` env var if set (explicit override)
+1. `UA_INSTALL_ROOT` env var if set (explicit override; `~/.bashrc` exports this to `~/lrepos/universal_agent`)
 2. `/opt/universal_agent/.env` (canonical VPS prod path)
 3. **The repo containing the script itself** (your desktop checkout — this is the default case)
 
 You shouldn't need to set `UA_INSTALL_ROOT` manually on your desktop — auto-detect handles it. If you have multiple checkouts and want to point at a specific one:
 
 ```bash
-UA_INSTALL_ROOT=/home/kjdragan/lrepos/universal_agent bash scripts/claude_with_mcp_env.sh
+UA_INSTALL_ROOT=/home/kjdragan/lrepos/universal_agent claude
 ```
 
 If you see `❌ <path>/.env not found` at launch, the most common cause is you haven't run `bash scripts/bootstrap_local_hq_dev.sh` yet — that's what creates `.env` from your Infisical bootstrap creds.
@@ -41,29 +53,34 @@ If you see `❌ <path>/.env not found` at launch, the most common cause is you h
 
 ## 2. Common flags
 
-Pass any of these AFTER the wrapper script:
+Pass any of these directly to `claude`:
 
 ```bash
 # One-shot prompt mode (don't open the chat UI; print + exit)
-bash scripts/claude_with_mcp_env.sh -p "summarize what's in src/universal_agent/loop_control.py"
+claude -p "summarize what's in src/universal_agent/loop_control.py"
 
 # Pick a specific model
-bash scripts/claude_with_mcp_env.sh --model sonnet
-bash scripts/claude_with_mcp_env.sh --model haiku
-bash scripts/claude_with_mcp_env.sh --model opus           # default
-bash scripts/claude_with_mcp_env.sh --model claude-opus-4-7
+claude --model sonnet
+claude --model haiku
+claude --model opus           # default
+claude --model claude-opus-4-7
 
 # Resume previous session
-bash scripts/claude_with_mcp_env.sh --resume
+claude --resume
 
-# Skip permission prompts (auto-allow common tools — be careful with this)
-bash scripts/claude_with_mcp_env.sh --dangerously-skip-permissions
+# Launch a background session (appears in `claude agents` roster)
+claude --bg "fix the broken integration test in tests/unit/test_x.py"
+
+# Open Agent View — session-roster manager (v2.1.139+, 2026-05-11)
+claude agents
 
 # Show full help
-bash scripts/claude_with_mcp_env.sh --help
+claude --help
 ```
 
-For the canonical full flag list: `claude --help` (works after launch too).
+`--dangerously-skip-permissions` is **already auto-injected by the alias** for interactive sessions — no need to type it. The wrapper skips auto-injection for `claude agents`, `claude auth`, `claude doctor`, `claude mcp`, `claude plugin(s)`, `claude project`, `claude setup-token`, `claude ultrareview`, `claude update`/`upgrade`, `claude install`, `claude auto-mode` (these subcommands don't accept the flag).
+
+For the canonical full flag list: `claude --help`.
 
 ---
 
@@ -82,9 +99,9 @@ zai --model glm-5.1
 
 | Scenario | Use |
 |---|---|
-| Daily interactive coding, debugging, refactoring | `bash scripts/claude_with_mcp_env.sh` (Anthropic Max) |
+| Daily interactive coding, debugging, refactoring | `claude` (Anthropic Max) |
 | Bulk find/replace, mass refactor, batch analysis | `zai -p "..."` (cheap GLM) |
-| Anything that needs the strongest reasoning | `bash scripts/claude_with_mcp_env.sh --model opus` |
+| Anything that needs the strongest reasoning | `claude --model opus` |
 | Quick one-liners where you don't need MCPs | `claude -p "..."` (plain; MCPs may fail but that's OK for trivial prompts) |
 
 ---
@@ -148,7 +165,7 @@ Your environment leaked an `ANTHROPIC_*` var that's overriding OAuth. Fix:
 
 ```bash
 unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL ANTHROPIC_MODEL ANTHROPIC_DEFAULT_HAIKU_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL
-bash scripts/claude_with_mcp_env.sh
+claude
 ```
 
 Or refresh OAuth: `cd ~ && claude /login` (run from outside the repo to dodge any project-level `.env` injection).
@@ -160,7 +177,7 @@ Or refresh OAuth: `cd ~ && claude /login` (run from outside the repo to dodge an
 ```bash
 ls -l .env                          # should exist with INFISICAL_CLIENT_ID etc.
 bash scripts/bootstrap_local_hq_dev.sh   # re-bootstrap if needed
-bash scripts/claude_with_mcp_env.sh
+claude
 ```
 
 ### Side panel uses ZAI / wrong endpoint (in Antigravity)
@@ -188,7 +205,7 @@ git checkout -b claude/my-feature-name
 just dev                            # starts gateway + api + web-ui in another terminal
 
 # In a SECOND terminal in Antigravity
-bash scripts/claude_with_mcp_env.sh
+claude
 
 # Inside Claude:
 "Implement X. Test it. Show me the diff before committing."
@@ -200,7 +217,7 @@ bash scripts/claude_with_mcp_env.sh
 ### Quick one-shot analysis
 
 ```bash
-bash scripts/claude_with_mcp_env.sh -p "What does src/universal_agent/loop_control.py do? Summarize in 5 bullets."
+claude -p "What does src/universal_agent/loop_control.py do? Summarize in 5 bullets."
 ```
 
 ### Cheap bulk task
@@ -212,7 +229,7 @@ zai -p "Read every .py file under src/universal_agent/services/ and list the one
 ### Resume yesterday's session
 
 ```bash
-bash scripts/claude_with_mcp_env.sh --resume
+claude --resume
 ```
 
 ---
