@@ -205,6 +205,22 @@ def main() -> int:
             file=sys.stderr,
         )
 
+    # Restore the caller's original working directory so Claude Code opens
+    # in the project the user was actually in. The shell wrapper had to cd
+    # into UA_INSTALL_ROOT for `uv run` to find the right pyproject.toml,
+    # but that's an implementation detail — the user wants to land in their
+    # CWD, not UA's repo.
+    orig_cwd = os.environ.get("UA_ORIGINAL_CWD")
+    if orig_cwd and os.path.isdir(orig_cwd):
+        try:
+            os.chdir(orig_cwd)
+        except OSError as exc:
+            print(
+                f"⚠️  Could not restore CWD to {orig_cwd!r}: {exc}; "
+                f"continuing in {os.getcwd()!r}",
+                file=sys.stderr,
+            )
+
     # execvp claude so the user's terminal directly drives the process.
     # All secrets are already on os.environ and will be inherited.
     args = ["claude", *sys.argv[1:]]
