@@ -1,7 +1,8 @@
 """Hermes Phase F.1 — Worker exit classification.
 
 Classifies the termination of an owned-subprocess worker (cron `!script`,
-VP CLI client, demo workspace) into one of five buckets so Task Hub can
+VP CLI client, demo workspace) or an in-process LLM coroutine
+(cron LLM-prompt path) into one of six buckets so Task Hub can
 distinguish "clean success" from "clean exit but didn't close its task"
 (protocol violation — F.3) and from real errors.
 
@@ -11,7 +12,9 @@ returned classification into ``task_hub._close_run`` via the ``outcome``
 parameter.
 
 The classification taxonomy mirrors Hermes' kanban_db.py:2879-2911
-``_classify_worker_exit`` but is scoped to UA's three subprocess sites.
+``_classify_worker_exit`` but is scoped to UA's three subprocess sites
+(and the in-process LLM cron path, which uses cancellation detection
+rather than a return code).
 
 Outcomes:
     * ``clean_exit_zero`` — rc=0 AND task was closed via finalize_assignments
@@ -27,6 +30,12 @@ Outcomes:
     * ``timeout_killed`` — UA's own timeout machinery killed it. Distinct
       from ``signaled`` because the kill was intentional and the worker
       may have made partial progress worth surfacing in the run's metadata.
+    * ``cancelled_mid_run`` — the coroutine was cancelled externally
+      (gateway session reaper, operator action). Distinct from
+      ``timeout_killed`` (UA's own timeout) and ``signaled`` (OS-level
+      kill to a subprocess). Added 2026-05-13 after the gateway-freeze
+      incident where reaped LLM-cron coroutines were mis-painted as
+      ``clean_exit_zero``. See plans/2026-05-13_proactivity_gap_findings.md.
 """
 
 from __future__ import annotations
@@ -44,6 +53,7 @@ WorkerOutcome = Literal[
     "nonzero_exit",
     "signaled",
     "timeout_killed",
+    "cancelled_mid_run",
 ]
 
 
@@ -81,6 +91,7 @@ def classify_worker_exit(
     was_signaled: bool = False,
     was_timeout_killed: bool = False,
     task_closed_normally: bool = True,
+    was_cancelled: bool = False,
 ) -> WorkerExit:
     """Classify a subprocess termination into one of the F.1 outcome buckets.
 
@@ -99,10 +110,25 @@ def classify_worker_exit(
             ``perform_task_action(action="complete")`` BEFORE this
             classification ran. Distinguishes clean success from
             protocol violation.
+        was_cancelled: ``True`` iff the coroutine was cancelled mid-run
+            (e.g. the gateway session reaper called ``task.cancel()``
+            after the 600s TTL elapsed, or the cron was operator-
+            cancelled via ``task_hub_task_action``). ``asyncio.CancelledError``
+            inherits from ``BaseException`` (not ``Exception``), so it
+            bypasses generic ``except Exception`` handlers — callers
+            must explicitly detect it and pass ``was_cancelled=True``.
+            Distinct from ``was_timeout_killed`` (UA's own timeout) and
+            ``was_signaled`` (OS-level signal to a subprocess).
 
     Returns:
         A ``WorkerExit`` record.
     """
+    if was_cancelled:
+        return WorkerExit(
+            outcome="cancelled_mid_run",
+            is_protocol_violation=False,
+            is_failure=True,
+        )
     if was_timeout_killed:
         return WorkerExit(
             outcome="timeout_killed",
@@ -217,7 +243,9 @@ def park_task_for_protocol_violation(
     try:
         # Lazy import to avoid a hard module-level dependency cycle with
         # task_hub (task_hub may import from services in the future).
-        from universal_agent import task_hub  # noqa: WPS433 (local import is intentional)
+        from universal_agent import (
+            task_hub,  # noqa: WPS433 (local import is intentional)
+        )
 
         task_hub.perform_task_action(
             conn,
