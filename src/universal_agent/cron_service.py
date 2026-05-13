@@ -780,6 +780,68 @@ class CronService:
         finally:
             conn.close()
 
+    # Per-cron model tier resolution. The LLM cron path (cron_service.py
+    # ~line 1591) historically hard-coded ``force_complex=True``, which biases
+    # the agent loop toward Opus-tier reasoning on ZAI (``glm-5.1``). For
+    # low-complexity content crons (codie_cleanup, csi_demo_triage_rank,
+    # proactive_artifact_digest, etc.) that's wasteful and exacerbates ZAI
+    # Fair-Usage 429s. ``metadata.model_tier`` lets each cron declare its
+    # required reasoning tier. Default remains ``"high"`` to preserve the
+    # pre-change behavior for any cron that hasn't opted in.
+    #
+    # NOTE — Cody dispatch path is NOT affected by this helper. When a cron
+    # enqueues a Cody mission via ``vp_dispatch_mission``, Cody's model
+    # selection lives in ``vp/clients/claude_cli_client.py`` (her CLI env
+    # build). The Cody-on-ZAI rule (Opus always, never downgrade) is
+    # documented in ``memory/feedback_cody_on_zai_opus.md`` and enforced
+    # there, not here.
+    _MODEL_TIER_HIGH = ("high", "opus")
+    _MODEL_TIER_LOW = ("low", "sonnet", "haiku")
+
+    @classmethod
+    def _force_complex_for_job(cls, job: CronJob) -> bool:
+        """Resolve the ``force_complex`` flag from ``metadata.model_tier``.
+
+        Returns True (Opus-tier reasoning) for unset or "high"/"opus",
+        False (Sonnet-tier or lower) for "low"/"sonnet"/"haiku". Unknown
+        values fall back to True so a typo never silently downgrades a
+        critical cron.
+        """
+        metadata = getattr(job, "metadata", None) or {}
+        tier = str(metadata.get("model_tier") or "").strip().lower()
+        if not tier:
+            return True  # preserves pre-2026-05-13 default
+        if tier in cls._MODEL_TIER_LOW:
+            return False
+        if tier in cls._MODEL_TIER_HIGH:
+            return True
+        logger.warning(
+            "Unknown model_tier=%r on cron job %s; falling back to force_complex=True",
+            tier, job.job_id,
+        )
+        return True
+
+    @staticmethod
+    def _max_attempts_for_job(job: CronJob) -> int:
+        """Resolve workflow ``max_attempts`` from ``metadata.max_attempts``.
+
+        Default 3 preserves the pre-change behavior. Lower bound is 1
+        (i.e., the first dispatch counts; no retries). Floats, bools,
+        and other non-integer types fall back to the default rather
+        than silently truncating (e.g., ``2.5`` should not become 2).
+        """
+        metadata = getattr(job, "metadata", None) or {}
+        raw = metadata.get("max_attempts")
+        # bool is a subclass of int in Python; reject it explicitly.
+        # Only accept actual ints or integer-valued strings.
+        if isinstance(raw, bool) or not isinstance(raw, (int, str)):
+            return 3
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return 3
+        return max(1, value)
+
     def _schedule_retry_run(
         self,
         *,
@@ -857,7 +919,7 @@ class CronService:
                 workspace_dir=job.workspace_dir,
                 failure_reason=failure_reason or "cron_dispatch_failed",
                 failure_class=failure_class or "cron_dispatch_failed",
-                max_attempts=3,
+                max_attempts=self._max_attempts_for_job(job),
             )
             if retry_decision.action == "start_new_attempt" and retry_decision.attempt_id:
                 next_attempt_number = self._attempt_number(retry_decision.attempt_id)
@@ -1019,7 +1081,7 @@ class CronService:
                     trigger,
                     entrypoint="cron_service._run_job",
                     workspace_dir=job.workspace_dir,
-                    max_attempts=3,
+                    max_attempts=self._max_attempts_for_job(job),
                 )
                 workflow_run_id = decision.run_id
                 workflow_attempt_id = decision.attempt_id
@@ -1590,7 +1652,7 @@ class CronService:
 
                                 request = GatewayRequest(
                                     user_input=resolved_command,
-                                    force_complex=True,
+                                    force_complex=self._force_complex_for_job(job),
                                     metadata=request_metadata,
                                 )
 
