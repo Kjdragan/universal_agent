@@ -17,16 +17,61 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, Optional
+from typing import Any, Optional, TypedDict
 
 from universal_agent.utils.model_resolution import resolve_opus
 
 logger = logging.getLogger(__name__)
 
 
+# ── Typed Return Contracts ──────────────────────────────────────────────────
+
+
+class PriorityResult(TypedDict):
+    """Return shape of classify_priority."""
+
+    priority: int
+    reasoning: str
+    method: str
+
+
+class AgentRouteResult(TypedDict):
+    """Return shape of classify_agent_route."""
+
+    agent_id: str
+    confidence: str
+    reasoning: str
+    method: str
+    should_delegate: bool
+
+
+class CalendarTaskResult(TypedDict):
+    """Return shape of generate_calendar_task_description."""
+
+    task_description: str
+    suggested_labels: list[str]
+    method: str
+
+
+class TemporalResult(TypedDict):
+    """Return shape of extract_due_at."""
+
+    due_at: str | None
+    reasoning: str
+    confidence: str
+    method: str
+
+
+class DisjointedTask(TypedDict):
+    """Single item in the list returned by extract_disjointed_tasks."""
+
+    task_content: str
+    reasoning: str
+
+
 # ── LLM Client Helper ──────────────────────────────────────────────────────
 
-async def _get_anthropic_client():
+async def _get_anthropic_client() -> Any:
     """Create an AsyncAnthropic client using the ZAI emulation layer."""
     try:
         from anthropic import AsyncAnthropic
@@ -79,7 +124,7 @@ def _parse_json_response(raw: str) -> dict[str, Any]:
     cleaned = raw.strip()
     if cleaned.startswith("```"):
         lines = cleaned.split("\n")
-        lines = [l for l in lines if not l.strip().startswith("```")]
+        lines = [line for line in lines if not line.strip().startswith("```")]
         cleaned = "\n".join(lines).strip()
 
     return json.loads(cleaned)
@@ -137,7 +182,7 @@ async def classify_priority(
     sender_trusted: bool = False,
     context: str = "",
     fallback_priority: int = 2,
-) -> dict[str, Any]:
+) -> PriorityResult:
     """Classify task priority using LLM reasoning.
 
     Returns a dict with:
@@ -236,7 +281,7 @@ async def classify_agent_route(
     source_kind: str = "",
     project_key: str = "",
     available_agents: frozenset[str] | None = None,
-) -> dict[str, Any]:
+) -> AgentRouteResult:
     """Classify which agent should handle a task using LLM reasoning.
 
     Returns a dict with:
@@ -340,7 +385,7 @@ async def generate_calendar_task_description(
     duration_minutes: int | None = None,
     organizer: str = "",
     fallback_description: str = "",
-) -> dict[str, Any]:
+) -> CalendarTaskResult:
     """Generate an actionable task description from a calendar event.
 
     Returns a dict with:
@@ -423,7 +468,7 @@ async def extract_due_at(
     subject: str,
     body: str = "",
     current_datetime_ct: str = "",
-) -> dict[str, Any]:
+) -> TemporalResult:
     """Extract a due_at timestamp from email text using LLM reasoning.
 
     Returns a dict with:
@@ -537,7 +582,7 @@ async def extract_disjointed_tasks(
     *,
     subject: str,
     body: str = "",
-) -> list[dict[str, Any]]:
+) -> list[DisjointedTask]:
     """Analyze an email to extract disjointed, independent tasks.
 
     Returns a list of dicts, each with:

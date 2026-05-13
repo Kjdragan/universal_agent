@@ -5,12 +5,14 @@ Tests cover:
   - Priority classification (LLM path mocked, fallback path)
   - Agent routing (LLM path mocked, fallback path, availability filtering)
   - Calendar task description generation (LLM path mocked, fallback path)
+  - Temporal extraction (heuristic skip, LLM path, fallback, invalid ISO)
+  - Disjointed task extraction (LLM split, single task, fallback, malformed)
 """
 
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -19,10 +21,13 @@ from universal_agent.services.llm_classifier import (
     _parse_json_response,
     classify_agent_route,
     classify_priority,
+    extract_disjointed_tasks,
+    extract_due_at,
     generate_calendar_task_description,
 )
 
 # ── JSON Parsing ─────────────────────────────────────────────────────────────
+
 
 class TestParseJsonResponse:
 
@@ -52,6 +57,7 @@ class TestParseJsonResponse:
 
 
 # ── Priority Classification ──────────────────────────────────────────────────
+
 
 class TestClassifyPriority:
 
@@ -130,6 +136,7 @@ class TestClassifyPriority:
 
 # ── Agent Routing ────────────────────────────────────────────────────────────
 
+
 class TestClassifyAgentRoute:
 
     @pytest.mark.asyncio
@@ -201,6 +208,7 @@ class TestClassifyAgentRoute:
 
 # ── Calendar Description Generation ──────────────────────────────────────────
 
+
 class TestGenerateCalendarTaskDescription:
 
     @pytest.mark.asyncio
@@ -262,7 +270,153 @@ class TestGenerateCalendarTaskDescription:
             assert result["method"] == "llm"
 
 
+# ── Temporal Extraction (due_at) ──────────────────────────────────────────────
+
+
+class TestExtractDueAt:
+
+    @pytest.mark.asyncio
+    async def test_heuristic_skip_no_time_reference(self):
+        """When text has no temporal keywords, skip LLM entirely."""
+        with patch("universal_agent.services.llm_classifier._call_llm", new_callable=AsyncMock) as mock_llm:
+            result = await extract_due_at(
+                subject="Weekly newsletter",
+                body="Here are some interesting links about Python.",
+            )
+            assert result["due_at"] is None
+            assert result["method"] == "heuristic_skip"
+            mock_llm.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_llm_extracts_time(self):
+        mock_response = json.dumps({
+            "has_time": True,
+            "iso_datetime": "2026-05-13T15:00:00-05:00",
+            "reasoning": "Sender asked for 3pm",
+            "confidence": "high",
+        })
+        with patch("universal_agent.services.llm_classifier._call_llm", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = mock_response
+            result = await extract_due_at(
+                subject="Review by 3pm",
+                body="Please review the doc.",
+                current_datetime_ct="2026-05-13 10:00 AM CDT",
+            )
+            assert result["due_at"] is not None
+            assert result["method"] == "llm"
+            assert result["confidence"] == "high"
+
+    @pytest.mark.asyncio
+    async def test_llm_no_time_found(self):
+        mock_response = json.dumps({
+            "has_time": False,
+            "iso_datetime": None,
+            "reasoning": "No specific time",
+            "confidence": "high",
+        })
+        with patch("universal_agent.services.llm_classifier._call_llm", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = mock_response
+            result = await extract_due_at(
+                subject="Call me tomorrow",
+                body="Let's chat.",
+            )
+            assert result["due_at"] is None
+            assert result["method"] == "llm"
+
+    @pytest.mark.asyncio
+    async def test_llm_invalid_iso_falls_back_to_none(self):
+        mock_response = json.dumps({
+            "has_time": True,
+            "iso_datetime": "not-a-date",
+            "reasoning": "bad date",
+            "confidence": "low",
+        })
+        with patch("universal_agent.services.llm_classifier._call_llm", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = mock_response
+            result = await extract_due_at(
+                subject="Meet at noon",
+                body="Let's meet.",
+                current_datetime_ct="2026-05-13 10:00 AM CDT",
+            )
+            assert result["due_at"] is None
+            assert result["method"] == "llm"
+
+    @pytest.mark.asyncio
+    async def test_fallback_on_llm_error(self):
+        with patch("universal_agent.services.llm_classifier._call_llm", new_callable=AsyncMock) as mock_llm:
+            mock_llm.side_effect = Exception("timeout")
+            result = await extract_due_at(
+                subject="Meet at 3pm",
+                body="Please confirm.",
+            )
+            assert result["due_at"] is None
+            assert result["method"] == "fallback"
+
+
+# ── Disjointed Task Extraction ────────────────────────────────────────────────
+
+
+class TestExtractDisjointedTasks:
+
+    @pytest.mark.asyncio
+    async def test_llm_splits_tasks(self):
+        mock_response = json.dumps({
+            "tasks": [
+                {"task_content": "Fix the login bug in auth.py", "reasoning": "Coding task"},
+                {"task_content": "Research competitor pricing", "reasoning": "Research task"},
+            ]
+        })
+        with patch("universal_agent.services.llm_classifier._call_llm", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = mock_response
+            result = await extract_disjointed_tasks(
+                subject="Two things",
+                body="Fix the login bug. Also research competitor pricing.",
+            )
+            assert len(result) == 2
+            assert result[0]["task_content"] == "Fix the login bug in auth.py"
+            assert result[1]["reasoning"] == "Research task"
+
+    @pytest.mark.asyncio
+    async def test_llm_single_task(self):
+        mock_response = json.dumps({
+            "tasks": [
+                {"task_content": "Prepare slides for meeting", "reasoning": "Single cohesive task"},
+            ]
+        })
+        with patch("universal_agent.services.llm_classifier._call_llm", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = mock_response
+            result = await extract_disjointed_tasks(
+                subject="Meeting prep",
+                body="Prepare the slides.",
+            )
+            assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_fallback_on_llm_error(self):
+        with patch("universal_agent.services.llm_classifier._call_llm", new_callable=AsyncMock) as mock_llm:
+            mock_llm.side_effect = Exception("API error")
+            result = await extract_disjointed_tasks(
+                subject="Test",
+                body="Do something.",
+            )
+            assert len(result) == 1
+            assert "Test" in result[0]["task_content"]
+            assert "Fallback" in result[0]["reasoning"]
+
+    @pytest.mark.asyncio
+    async def test_fallback_on_malformed_response(self):
+        with patch("universal_agent.services.llm_classifier._call_llm", new_callable=AsyncMock) as mock_llm:
+            mock_llm.return_value = '{"tasks": []}'
+            result = await extract_disjointed_tasks(
+                subject="Test",
+                body="Do something.",
+            )
+            assert len(result) == 1
+            assert "Test" in result[0]["task_content"]
+
+
 # ── ClassificationError ──────────────────────────────────────────────────────
+
 
 class TestClassificationError:
 
