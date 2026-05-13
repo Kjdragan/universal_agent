@@ -17,14 +17,14 @@ def get_discord_watchlist_path() -> Path:
     path = Path(os.getenv("CSI_DATA_DIR", "/var/lib/universal-agent/csi")).expanduser()
     return path / "discord_watchlist.json"
 
-def _ensure_file_exists(path: Path):
+def _ensure_file_exists(path: Path) -> None:
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump({"categories": [], "servers": []}, f, indent=2)
 
 @router.get("")
-async def get_watchlist():
+async def get_watchlist() -> dict[str, Any]:
     """Retrieve the current Discord CSI watchlist."""
     path = get_discord_watchlist_path()
     _ensure_file_exists(path)
@@ -43,7 +43,7 @@ class CategoryRequest(BaseModel):
     name: str
 
 @router.post("/categories")
-async def add_category(request: CategoryRequest):
+async def add_category(request: CategoryRequest) -> dict[str, Any]:
     path = get_discord_watchlist_path()
     _ensure_file_exists(path)
     try:
@@ -65,7 +65,7 @@ async def add_category(request: CategoryRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/categories/{old_name}")
-async def rename_category(old_name: str, request: CategoryRequest):
+async def rename_category(old_name: str, request: CategoryRequest) -> dict[str, Any]:
     path = get_discord_watchlist_path()
     _ensure_file_exists(path)
     try:
@@ -92,7 +92,7 @@ async def rename_category(old_name: str, request: CategoryRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/categories/{name}")
-async def delete_category(name: str):
+async def delete_category(name: str) -> dict[str, Any]:
     path = get_discord_watchlist_path()
     _ensure_file_exists(path)
     try:
@@ -118,7 +118,7 @@ class ServerAddRequest(BaseModel):
     server_id: str
 
 @router.post("/add")
-async def add_server(request: ServerAddRequest):
+async def add_server(request: ServerAddRequest) -> dict[str, Any]:
     path = get_discord_watchlist_path()
     _ensure_file_exists(path)
     server_id = request.server_id.strip()
@@ -184,7 +184,7 @@ async def add_server(request: ServerAddRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/{server_id}")
-async def delete_server(server_id: str):
+async def delete_server(server_id: str) -> dict[str, Any]:
     path = get_discord_watchlist_path()
     _ensure_file_exists(path)
     try:
@@ -208,7 +208,7 @@ class ServerDomainPatch(BaseModel):
     domain: str
 
 @router.patch("/{server_id}")
-async def patch_server_domain(server_id: str, request: ServerDomainPatch):
+async def patch_server_domain(server_id: str, request: ServerDomainPatch) -> dict[str, Any]:
     path = get_discord_watchlist_path()
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -236,7 +236,7 @@ class SubChannelToggleRequest(BaseModel):
     is_watched: bool
 
 @router.patch("/{server_id}/channels/{channel_id}")
-async def toggle_subchannel(server_id: str, channel_id: str, request: SubChannelToggleRequest):
+async def toggle_subchannel(server_id: str, channel_id: str, request: SubChannelToggleRequest) -> dict[str, Any]:
     path = get_discord_watchlist_path()
     _ensure_file_exists(path)
     try:
