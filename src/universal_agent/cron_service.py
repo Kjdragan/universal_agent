@@ -85,6 +85,74 @@ def _normalize_timeout_seconds(value: Any) -> Optional[int]:
     return max(MIN_CRON_TIMEOUT_SECONDS, min(MAX_CRON_TIMEOUT_SECONDS, seconds))
 
 
+# ── Hermes-F site-wiring timing instrumentation ─────────────────────────────
+#
+# The Hermes-F cron task-link helpers (``ensure_cron_task_link``,
+# ``_task_hub_open_conn``, ``_close_run``, etc.) run *synchronous* SQLite
+# work inside the cron service's *async* coroutines. Sync SQL inside async
+# code blocks the entire event loop if the call hangs.
+#
+# After the 2026-05-12 gateway freeze (20.8h silence — see
+# plans/2026-05-13_proactivity_gap_findings.md primary root cause), we
+# need breadcrumbs in the journal so a future freeze can be diagnosed
+# without operator intervention. The pattern is:
+#
+#     _t = _phase_f_start(job_id, "step_name")
+#     <synchronous sql call>
+#     _phase_f_done(job_id, "step_name", _t)
+#
+# ``_phase_f_start`` logs an entry marker at DEBUG (always present at that
+# level, so a journal slice with DEBUG enabled shows every step).
+# ``_phase_f_done`` logs the elapsed time:
+#   - WARNING if > 5s — possible deadlock root cause
+#   - INFO if > 500ms — slow, worth investigating
+#   - DEBUG otherwise — normal, kept for full breadcrumb trail
+#
+# If a step's "entering" log appears with no corresponding "took N ms"
+# log later in the journal, that step is the freeze site.
+
+_PHASE_F_WARN_MS = 5000.0  # > 5s — flag as potential deadlock root cause
+_PHASE_F_INFO_MS = 500.0   # > 500ms — flag as slow but not catastrophic
+
+
+def _phase_f_start(job_id: str, step_name: str) -> float:
+    """Log entry into a Hermes-F site-wiring step and return its start time.
+
+    Always logs at DEBUG so the full breadcrumb trail is available when
+    the journal is queried at that level. Returns ``time.perf_counter()``
+    so ``_phase_f_done`` can compute the elapsed.
+    """
+    logger.debug("Phase F site-wiring [%s]: entering %s", job_id, step_name)
+    return time.perf_counter()
+
+
+def _phase_f_done(job_id: str, step_name: str, t0: float) -> None:
+    """Log exit from a Hermes-F site-wiring step with elapsed time.
+
+    Tiered logging so the journal isn't flooded:
+      - WARNING if > 5s
+      - INFO if > 500ms
+      - DEBUG otherwise (matched pair with the entry log at DEBUG)
+    """
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+    if elapsed_ms > _PHASE_F_WARN_MS:
+        logger.warning(
+            "Phase F site-wiring [%s]: %s took %.0fms "
+            "(>5s — possible deadlock root cause)",
+            job_id, step_name, elapsed_ms,
+        )
+    elif elapsed_ms > _PHASE_F_INFO_MS:
+        logger.info(
+            "Phase F site-wiring [%s]: %s took %.0fms",
+            job_id, step_name, elapsed_ms,
+        )
+    else:
+        logger.debug(
+            "Phase F site-wiring [%s]: %s took %.1fms",
+            job_id, step_name, elapsed_ms,
+        )
+
+
 def _resolve_run_at_timezone(timezone_name: str | None) -> Any:
     name = (timezone_name or "").strip() or "UTC"
     try:
@@ -1291,14 +1359,18 @@ class CronService:
                                     from universal_agent.services.cron_task_hub_link import (
                                         ensure_cron_task_link as _f_ensure_link,
                                     )
+                                    _t_open = _phase_f_start(job.job_id, "script.open_conn")
                                     _f_link_conn = _f_link_open_conn()
+                                    _phase_f_done(job.job_id, "script.open_conn", _t_open)
                                     try:
+                                        _t_link = _phase_f_start(job.job_id, "script.ensure_link")
                                         _f_linkage = _f_ensure_link(
                                             _f_link_conn,
                                             job_id=job.job_id,
                                             job_metadata=_f_job_metadata,
                                             description=(job.description or job.command)[:500],
                                         )
+                                        _phase_f_done(job.job_id, "script.ensure_link", _t_link)
                                     finally:
                                         _f_link_conn.close()
                                     if _f_linkage:
@@ -1347,19 +1419,25 @@ class CronService:
                                         from universal_agent.services.worker_exit_classifier import (
                                             find_active_assignment_for_task as _f_find_aid,
                                         )
+                                        _t_pid_open = _phase_f_start(job.job_id, "script.pid_stamp_open_conn")
                                         _f_conn = _f_open_conn()
+                                        _phase_f_done(job.job_id, "script.pid_stamp_open_conn", _t_pid_open)
                                         try:
                                             if not _f_assignment_id:
+                                                _t_find = _phase_f_start(job.job_id, "script.find_assignment")
                                                 _f_assignment_id = _f_find_aid(
                                                     _f_conn, task_id=_f_task_id,
                                                 )
+                                                _phase_f_done(job.job_id, "script.find_assignment", _t_find)
                                             if _f_assignment_id and proc.pid:
+                                                _t_pid = _phase_f_start(job.job_id, "script.record_worker_pid")
                                                 _f_th.record_worker_pid(
                                                     _f_conn,
                                                     assignment_id=_f_assignment_id,
                                                     worker_pid=int(proc.pid),
                                                 )
                                                 _f_conn.commit()
+                                                _phase_f_done(job.job_id, "script.record_worker_pid", _t_pid)
                                         finally:
                                             _f_conn.close()
                                     except Exception as _f_pid_exc:
@@ -1641,14 +1719,18 @@ class CronService:
                                         from universal_agent.services.cron_task_hub_link import (
                                             ensure_cron_task_link as _f_ensure_link_llm,
                                         )
+                                        _t_llm_open = _phase_f_start(job.job_id, "llm.open_conn")
                                         _f_link_conn_llm = _f_link_open_conn_llm()
+                                        _phase_f_done(job.job_id, "llm.open_conn", _t_llm_open)
                                         try:
+                                            _t_llm_link = _phase_f_start(job.job_id, "llm.ensure_link")
                                             _f_linkage = _f_ensure_link_llm(
                                                 _f_link_conn_llm,
                                                 job_id=job.job_id,
                                                 job_metadata=_f_job_metadata,
                                                 description=(job.description or job.command)[:500],
                                             )
+                                            _phase_f_done(job.job_id, "llm.ensure_link", _t_llm_link)
                                         finally:
                                             _f_link_conn_llm.close()
                                         if _f_linkage:
