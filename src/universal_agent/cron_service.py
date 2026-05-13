@@ -1619,6 +1619,19 @@ class CronService:
                                 _f_auto_linked = False
                                 _f_was_timeout_killed = False
                                 _f_was_exception = False
+                                # Tracks ``asyncio.CancelledError`` separately
+                                # from timeouts and exceptions. The gateway's
+                                # session reaper invokes ``task.cancel()`` on
+                                # the in-process LLM coroutine when the
+                                # 600s TTL elapses. ``CancelledError`` inherits
+                                # from ``BaseException`` so it bypasses the
+                                # generic ``except Exception`` block below —
+                                # without explicit detection, ``_f_rc_equiv_llm``
+                                # falls through to 0 and the F.1 classifier
+                                # mis-paints the reap as ``clean_exit_zero``.
+                                # See plans/2026-05-13_proactivity_gap_findings.md
+                                # Contributing Factor #3.
+                                _f_was_cancelled = False
                                 _f_run_error_text = ""
                                 if not _f_skip_link:
                                     try:
@@ -1677,6 +1690,19 @@ class CronService:
                                         _f_was_timeout_killed = True
                                         _f_run_error_text = (
                                             f"LLM cron timed out after {timeout_seconds}s"
+                                        )
+                                        raise
+                                    except asyncio.CancelledError:
+                                        # Session reaper or operator cancellation.
+                                        # MUST be re-raised so the cancellation
+                                        # propagates correctly to the asyncio
+                                        # runtime; swallowing it would resume the
+                                        # coroutine and break asyncio's cancel
+                                        # contract.
+                                        _f_was_cancelled = True
+                                        _f_run_error_text = (
+                                            "LLM cron cancelled mid-run "
+                                            "(session reaper or operator action)"
                                         )
                                         raise
                                     except Exception as _llm_exc:
@@ -1777,6 +1803,7 @@ class CronService:
                                                 0
                                                 if not _f_was_timeout_killed
                                                 and not _f_was_exception
+                                                and not _f_was_cancelled
                                                 else 1
                                             )
                                             _f_conn_llm = _f_open_conn_llm()
@@ -1817,6 +1844,7 @@ class CronService:
                                                     was_signaled=False,
                                                     was_timeout_killed=_f_was_timeout_killed,
                                                     task_closed_normally=_f_closed_normally_llm,
+                                                    was_cancelled=_f_was_cancelled,
                                                 )
                                                 logger.info(
                                                     "Phase F.1 LLM cron job %s exit classified as %s "

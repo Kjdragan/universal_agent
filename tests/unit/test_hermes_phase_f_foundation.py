@@ -28,7 +28,6 @@ from universal_agent.services.worker_exit_classifier import (
     classify_worker_exit,
 )
 
-
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
 
@@ -157,6 +156,109 @@ def test_protocol_violation_reasons_has_three_sites() -> None:
     for value in PROTOCOL_VIOLATION_REASONS.values():
         assert value.startswith("protocol_violation_")
         assert value.endswith("_clean_exit_no_disposition")
+
+
+# ── F.1: cancelled_mid_run outcome (2026-05-13 follow-up) ────────────────────
+# Added after the 2026-05-12 → 2026-05-13 gateway-freeze incident where the
+# session reaper cancelled stuck LLM-cron coroutines (asyncio.CancelledError)
+# and the F.1 classifier mis-painted them as clean_exit_zero. See
+# plans/2026-05-13_proactivity_gap_findings.md Contributing Factor #3.
+
+
+def test_classify_cancelled_mid_run_basic() -> None:
+    """``was_cancelled=True`` is a distinct outcome from timeout/signaled.
+
+    Models the case where the gateway's session reaper called
+    ``task.cancel()`` on the in-process LLM coroutine because the 600s
+    TTL elapsed. The coroutine raised ``asyncio.CancelledError``; the
+    caller flagged it and passed ``was_cancelled=True`` here.
+    """
+    result = classify_worker_exit(
+        return_code=0, was_cancelled=True, task_closed_normally=True
+    )
+    assert result.outcome == "cancelled_mid_run"
+    assert result.is_protocol_violation is False
+    # Cancellation is a real failure for the operator's retry budget.
+    # The run did not complete its mission (briefing didn't go out,
+    # paper-to-podcast didn't dispatch, etc.).
+    assert result.is_failure is True
+
+
+def test_classify_cancelled_takes_priority_over_clean_exit_zero() -> None:
+    """``was_cancelled`` wins over rc=0 + task_closed_normally.
+
+    The original incident: a reaped session had rc_equiv=0 (falsy
+    timeout/exception flags) and task_closed_normally was True
+    because Simone had manually cancelled the cron Task Hub item via
+    ``task_hub_task_action`` before the classifier ran. Without the
+    cancellation flag the classifier would say ``clean_exit_zero``
+    (success!) — the opposite of the truth.
+    """
+    result = classify_worker_exit(
+        return_code=0,
+        was_cancelled=True,
+        task_closed_normally=True,
+        was_timeout_killed=False,
+        was_signaled=False,
+    )
+    assert result.outcome == "cancelled_mid_run"
+    assert result.is_failure is True
+
+
+def test_classify_cancelled_takes_priority_over_timeout_killed() -> None:
+    """If both flags somehow true, cancellation wins.
+
+    Timeout = UA's own ``asyncio.wait_for`` raising TimeoutError.
+    Cancellation = external ``task.cancel()`` (typically session reaper).
+    These should be mutually exclusive in practice, but if a race
+    produces both, ``cancelled_mid_run`` is the more informative
+    classification — it tells the operator the kill came from outside
+    UA's own timeout machinery.
+    """
+    result = classify_worker_exit(
+        return_code=0,
+        was_cancelled=True,
+        was_timeout_killed=True,
+    )
+    assert result.outcome == "cancelled_mid_run"
+
+
+def test_classify_cancelled_with_no_task_closure_not_protocol_violation() -> None:
+    """Cancellation pre-empts the protocol-violation check.
+
+    A cancelled coroutine never had a chance to close its task —
+    that's the cancellation, not a protocol violation. The
+    ``cancelled_mid_run`` outcome is the right signal; F.3's
+    "needs_review" path is for genuinely silent successes
+    (rc=0 + no close), which is a different operational concern.
+    """
+    result = classify_worker_exit(
+        return_code=0,
+        was_cancelled=True,
+        task_closed_normally=False,
+    )
+    assert result.outcome == "cancelled_mid_run"
+    assert result.is_protocol_violation is False
+
+
+def test_classify_default_was_cancelled_false_preserves_old_paths() -> None:
+    """Existing callers that don't pass ``was_cancelled`` keep old behavior.
+
+    Guards against accidentally regressing the four pre-existing
+    classification paths now that ``was_cancelled`` is in the signature.
+    """
+    # rc=0 + closed → clean_exit_zero
+    r1 = classify_worker_exit(return_code=0, task_closed_normally=True)
+    assert r1.outcome == "clean_exit_zero"
+    # rc=0 + not-closed → protocol violation
+    r2 = classify_worker_exit(return_code=0, task_closed_normally=False)
+    assert r2.outcome == "clean_exit_zero_no_disposition"
+    # rc != 0 → nonzero_exit
+    r3 = classify_worker_exit(return_code=1)
+    assert r3.outcome == "nonzero_exit"
+    # timeout
+    r4 = classify_worker_exit(return_code=-9, was_timeout_killed=True)
+    assert r4.outcome == "timeout_killed"
 
 
 # ── F.2: max_runtime_seconds column ────────────────────────────────────────
