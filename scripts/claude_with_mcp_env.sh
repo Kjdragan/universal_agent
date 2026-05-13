@@ -98,6 +98,15 @@ fi
 # initialize_runtime_secrets(), and execs claude with the bootstrapped
 # env intact. Running from $UA_INSTALL_ROOT so `uv run` finds the
 # right pyproject.toml / venv.
+#
+# Preserve the caller's working directory: we have to `cd` into UA so
+# `uv run` finds the right pyproject.toml, but the launcher will
+# `os.chdir(UA_ORIGINAL_CWD)` immediately before `execvp("claude", …)`
+# so Claude Code opens in the directory the user was actually in. This
+# matters when `claudereal` is invoked from another project — the user
+# wants UA's MCPs + Infisical secrets available, but doesn't want to be
+# teleported into UA's repo.
+export UA_ORIGINAL_CWD="$PWD"
 cd "$UA_INSTALL_ROOT"
 
 # Auto-inject --dangerously-skip-permissions when the user is launching
