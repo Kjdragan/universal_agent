@@ -150,7 +150,7 @@ Mistaking one for the other is the #1 source of confusion in this system. Before
 
 ### 4A. [Deployment and Environments](06_Deployment_And_Environments)
 
-- **[Branching and Release Workflow](06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md)**: Current branch policy for feature work, production release, SHA-based verification, and returning the local checkout to the active feature branch.
+- **[Branching and Release Workflow](06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md)**: Current branch policy — per-task branches off `main`, PR → auto-merge → deploy. **2026-05-13:** `feature/latest2` retired. **2026-05-13:** Session Baseline Cleanup (`scripts/claude_session_baseline.py` invoked by `_claude_launcher.py`) automatically lands every new `claudereal` session on fresh `main` after PR auto-merge. **2026-05-14:** Cron deploy-cancellation classification — subprocess SIGTERM during the deploy window is recognized as a benign cancellation (no `[ERROR]` email) and the cron is rescheduled for next-boot backfill via the existing `catch_up_on_restart` mechanism.
 - **[Local Runtime Modes](06_Deployment_And_Environments/05_Local_Runtime_Modes.md)**: Canonical split between HQ dev and the separate desktop worker lane.
 - **[Production Deploy Incident (2026-03-12)](06_Deployment_And_Environments/06_Production_Deploy_Incident_2026-03-12.md)**: Root cause, fix, verification, and prevention notes for the March 12 production `.venv` deployment regression.
 - **[Stage-Based Infisical and Machine Bootstrap Migration Plan (2026-03-12)](06_Deployment_And_Environments/07_Stage_Based_Infisical_And_Machine_Bootstrap_Migration_Plan_2026-03-12.md)**: Living migration record for stage environments, machine-local bootstrap identity, and CI/CD runtime validation.
@@ -166,7 +166,7 @@ Mistaking one for the other is the #1 source of confusion in this system. Before
 - **[Architecture Overview](deployment/architecture_overview.md)**: Git branching, environmental mapping, service topology, and gateway resource limits (MemoryMax/MemoryHigh/TasksMax).
 - **[CI/CD Pipeline](deployment/ci_cd_pipeline.md)**: Workflow details, timing, pipeline structure, and SHA-first post-release verification guidance.
 - **[Infisical Factories](deployment/infisical_factories.md)**: Stage naming and machine bootstrap detail (superseded by Secrets and Environments).
-- **[AI Coder Instructions](deployment/ai_coder_instructions.md)**: Coordination rules for external AI coding agents — branch discipline (`feature/latest2` only), commit conventions, and the `/ship` handoff protocol.
+- **[AI Coder Instructions](deployment/ai_coder_instructions.md)**: Coordination rules for AI coding agents — per-task branches off `main` (`claude/<task>` / `kevin/<task>` / `feature/<task>`), commit conventions, and the `/ship` handoff protocol. `feature/latest2` was retired 2026-05-13 (PR #273) — `main` is the canonical home base.
 
 ### 4C. [CSI Subsystem](04_CSI)
 
