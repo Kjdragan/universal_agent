@@ -339,7 +339,7 @@ class PythonParser:
 
     def _should_include_name(self, name: str) -> bool:
         """Check if a name should be included based on filter settings."""
-        if name.startswith("__") and name.endswith("__"):
+        if name.startswith("__"):
             return self.extract_dunder
         if name.startswith("_"):
             return self.extract_private
@@ -636,7 +636,9 @@ class PythonParser:
 
     def _is_constant_name(self, name: str) -> bool:
         """Check if a name follows constant naming convention."""
-        return name.isupper() or name.startswith("_") and name[1:].isupper()
+        if name.startswith("__"):
+            return False
+        return name.isupper() or (name.startswith("_") and name[1:].isupper())
 
 
 # Convenience functions
