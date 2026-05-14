@@ -2,7 +2,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
 import httpx
@@ -119,7 +119,7 @@ def get_watchlist_path() -> Path:
     return Path(os.getenv("CSI_YOUTUBE_WATCHLIST_FILE", _DEFAULT_WATCHLIST_FILE)).expanduser()
 
 
-def _ensure_file_exists(file_path: Path):
+def _ensure_file_exists(file_path: Path) -> None:
     if not file_path.exists():
         file_path.parent.mkdir(parents=True, exist_ok=True)
         with open(file_path, "w") as f:
@@ -127,7 +127,7 @@ def _ensure_file_exists(file_path: Path):
 
 
 @router.get("")
-async def get_watchlist():
+async def get_watchlist() -> dict[str, Any]:
     """Retrieve the current list of YouTube channels."""
     path = get_watchlist_path()
     if not path.exists():
@@ -156,7 +156,7 @@ async def get_watchlist():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _purge_channel_from_db(channel_id: str):
+def _purge_channel_from_db(channel_id: str) -> None:
     db_path = Path(os.getenv("CSI_DB_PATH", "/var/lib/universal-agent/csi/csi.db")).expanduser()
     if not db_path.exists():
         return
@@ -169,7 +169,7 @@ def _purge_channel_from_db(channel_id: str):
         logger.error(f"Error purging DB for channel {channel_id}: {e}")
 
 @router.delete("/{channel_id}")
-async def delete_channel(channel_id: str):
+async def delete_channel(channel_id: str) -> dict[str, Any]:
     """Remove a channel from the watchlist by ID."""
     path = get_watchlist_path()
     _ensure_file_exists(path)
@@ -198,7 +198,7 @@ async def delete_channel(channel_id: str):
 
 
 @router.post("/add")
-async def add_channel(request: AddChannelRequest):
+async def add_channel(request: AddChannelRequest) -> dict[str, Any]:
     """Add a new channel by extracting channel id via youtube API or scraping."""
     url = request.url.strip()
     
@@ -355,7 +355,7 @@ class ChannelPatchRequest(BaseModel):
     domain: str
 
 @router.post("/categories")
-async def add_category(request: CategoryRequest):
+async def add_category(request: CategoryRequest) -> dict[str, Any]:
     """Add a new category."""
     path = get_watchlist_path()
     _ensure_file_exists(path)
@@ -380,7 +380,7 @@ async def add_category(request: CategoryRequest):
 
 
 @router.put("/categories/{old_name}")
-async def rename_category(old_name: str, request: CategoryRequest):
+async def rename_category(old_name: str, request: CategoryRequest) -> dict[str, Any]:
     """Rename a category and migrate channels."""
     path = get_watchlist_path()
     _ensure_file_exists(path)
@@ -412,7 +412,7 @@ async def rename_category(old_name: str, request: CategoryRequest):
 
 
 @router.delete("/categories/{name}")
-async def delete_category(name: str):
+async def delete_category(name: str) -> dict[str, Any]:
     """Delete a category and cascade delete channels including in DB."""
     path = get_watchlist_path()
     _ensure_file_exists(path)
@@ -440,7 +440,7 @@ async def delete_category(name: str):
 
 
 @router.patch("/{channel_id}")
-async def patch_channel(channel_id: str, request: ChannelPatchRequest):
+async def patch_channel(channel_id: str, request: ChannelPatchRequest) -> dict[str, Any]:
     """Update a specific channel's metadata (e.g. category reassignment)."""
     path = get_watchlist_path()
     _ensure_file_exists(path)
@@ -477,7 +477,7 @@ class ReclassifyRequest(BaseModel):
 
 
 @router.post("/reclassify")
-async def reclassify_channel(request: ReclassifyRequest):
+async def reclassify_channel(request: ReclassifyRequest) -> dict[str, Any]:
     """Re-classify a channel using transcript samples (called when transcripts arrive)."""
     path = get_watchlist_path()
     if not path.exists():
@@ -544,7 +544,7 @@ async def reclassify_channel(request: ReclassifyRequest):
 
 
 @router.get("/recent-videos")
-async def get_recent_videos(limit: int = 50, category: Optional[str] = None):
+async def get_recent_videos(limit: int = 50, category: Optional[str] = None) -> dict[str, Any]:
     """Return the most recently ingested YouTube videos from the CSI events table."""
     import sqlite3
 
