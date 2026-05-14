@@ -48,9 +48,11 @@ class RedisVpResultBridge:
 
     @property
     def metrics(self) -> dict[str, Any]:
+        """Snapshot of result-bridge operational counters (published, errors)."""
         return dict(self._metrics)
 
     def stop(self) -> None:
+        """Signal the result-bridge loop to exit gracefully."""
         self._stopped.set()
 
     async def run(self) -> None:

@@ -156,6 +156,11 @@ def _shutdown(
 
 
 def main() -> int:
+    """CLI entry point for the Redis↔VP bridge process.
+
+    Parses arguments, sets up logging, and runs the inbound/outbound
+    bridge loops with heartbeat reporting.  Returns 0 on clean exit.
+    """
     parser = argparse.ArgumentParser(
         description="Redis→VP SQLite bridge for cross-machine mission delegation.",
     )

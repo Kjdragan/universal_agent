@@ -62,6 +62,7 @@ class BridgeConfig:
     default_vp_id: str = "vp.general.primary"
 
     def resolve_consumer_name(self, factory_id: str = "") -> str:
+        """Return a sanitised consumer name, falling back to *factory_id* or a random suffix."""
         if self.consumer_name:
             return self.consumer_name
         base = factory_id or f"bridge-{uuid.uuid4().hex[:8]}"
@@ -100,14 +101,17 @@ class RedisVpBridge:
 
     @property
     def metrics(self) -> dict[str, Any]:
+        """Snapshot of bridge operational counters (consumed, inserted, skipped, errors)."""
         return dict(self._metrics)
 
     @property
     def restart_requested(self) -> bool:
+        """True if a system mission requested a bridge restart."""
         return self._restart_requested
 
     @property
     def paused(self) -> bool:
+        """True if mission consumption is paused (system missions still process)."""
         return self._paused
 
     def pause(self) -> None:
@@ -121,6 +125,7 @@ class RedisVpBridge:
         logger.info("RedisVpBridge resumed")
 
     def stop(self) -> None:
+        """Signal the bridge loop to exit gracefully."""
         self._stopped.set()
 
     async def run(self, *, once: bool = False) -> int:

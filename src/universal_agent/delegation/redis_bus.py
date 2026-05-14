@@ -12,14 +12,31 @@ MISSION_DLQ_STREAM = "ua:missions:dlq"
 
 
 class RedisLikeClient(Protocol):
-    def xgroup_create(self, *args: Any, **kwargs: Any) -> Any: ...
-    def xadd(self, *args: Any, **kwargs: Any) -> Any: ...
-    def xreadgroup(self, *args: Any, **kwargs: Any) -> Any: ...
-    def xack(self, *args: Any, **kwargs: Any) -> Any: ...
+    """Minimal Redis client protocol required by :class:`RedisMissionBus`.
+
+    Only the stream operations used by the bus are declared.
+    """
+
+    def xgroup_create(self, *args: Any, **kwargs: Any) -> Any:
+        """Create a consumer group on a stream (no-op if already exists)."""
+        ...
+
+    def xadd(self, *args: Any, **kwargs: Any) -> Any:
+        """Append a message to a stream and return its ID."""
+        ...
+
+    def xreadgroup(self, *args: Any, **kwargs: Any) -> Any:
+        """Read messages from a stream via consumer group."""
+        ...
+
+    def xack(self, *args: Any, **kwargs: Any) -> Any:
+        """Acknowledge a stream message as processed."""
+        ...
 
 
 @dataclass(frozen=True)
 class ConsumedMission:
+    """A mission message consumed from a Redis stream, ready for processing."""
     stream: str
     message_id: str
     envelope: MissionEnvelope
@@ -27,6 +44,12 @@ class ConsumedMission:
 
 
 class RedisMissionBus:
+    """Redis Streams-backed message bus for cross-machine mission delegation.
+
+    Provides publish/subscribe semantics over Redis consumer groups so that
+    HQ gateways can dispatch missions to remote factories.
+    """
+
     def __init__(
         self,
         client: RedisLikeClient,
@@ -49,6 +72,7 @@ class RedisMissionBus:
         consumer_group: str = MISSION_CONSUMER_GROUP,
         dlq_stream: str = MISSION_DLQ_STREAM,
     ) -> "RedisMissionBus":
+        """Create a bus from a Redis connection URL string."""
         try:
             import redis  # type: ignore
         except Exception as exc:  # pragma: no cover - runtime environment specific
@@ -58,6 +82,7 @@ class RedisMissionBus:
         return cls(client, stream_name=stream_name, consumer_group=consumer_group, dlq_stream=dlq_stream)
 
     def ensure_group(self) -> None:
+        """Create the consumer group if it does not already exist."""
         try:
             self._client.xgroup_create(
                 name=self.stream_name,
@@ -71,6 +96,7 @@ class RedisMissionBus:
                 raise
 
     def publish_mission(self, envelope: MissionEnvelope) -> str:
+        """Publish a mission envelope to the delegation stream. Returns the Redis message ID."""
         payload = envelope.model_dump(mode="json")
         return str(
             self._client.xadd(
@@ -84,6 +110,7 @@ class RedisMissionBus:
         )
 
     def publish_result(self, result: MissionResultEnvelope) -> str:
+        """Publish a mission result to the results stream. Returns the Redis message ID."""
         payload = result.model_dump(mode="json")
         return str(
             self._client.xadd(
@@ -104,6 +131,17 @@ class RedisMissionBus:
         block_ms: int = 1000,
         stream_id: str = ">",
     ) -> list[ConsumedMission]:
+        """Read and deserialize pending missions from the consumer group.
+
+        Args:
+            consumer_name: Unique name for this consumer within the group.
+            count: Maximum number of messages to fetch per call.
+            block_ms: Milliseconds to block waiting for new messages.
+            stream_id: Stream offset; ">" means only unread messages.
+
+        Returns:
+            List of :class:`ConsumedMission` instances.
+        """
         rows = self._client.xreadgroup(
             groupname=self.consumer_group,
             consumername=consumer_name,
@@ -134,6 +172,7 @@ class RedisMissionBus:
         return consumed
 
     def ack(self, message_id: str) -> int:
+        """Acknowledge a message as successfully processed."""
         return int(self._client.xack(self.stream_name, self.consumer_group, message_id))
 
     def fail_and_maybe_dlq(
@@ -143,6 +182,14 @@ class RedisMissionBus:
         failure_error: str,
         retry_count: int,
     ) -> bool:
+        """Handle a processing failure by sending to DLQ or allowing retry.
+
+        If *retry_count* >= the envelope max_retries, the mission is published
+        to the dead-letter queue stream and acknowledged.
+
+        Returns:
+            True if the mission was sent to the DLQ.
+        """
         max_retries = max(0, int(consumed.envelope.max_retries))
         should_dlq = int(retry_count) >= max_retries
         if should_dlq:

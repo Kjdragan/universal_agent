@@ -137,17 +137,21 @@ class FactoryHeartbeat:
 
     @property
     def is_healthy(self) -> bool:
+        """True when fewer than 3 consecutive heartbeat failures have occurred."""
         return self._consecutive_failures < 3
 
     @property
     def last_sent_at(self) -> float:
+        """Unix timestamp of the most recent successful heartbeat, or 0.0."""
         return self._last_sent_at
 
     @property
     def consecutive_failures(self) -> int:
+        """Number of heartbeat sends that failed in a row."""
         return self._consecutive_failures
 
     def stop(self) -> None:
+        """Signal the heartbeat loop to exit gracefully."""
         self._stopped.set()
 
     def _effective_interval(self) -> float:
