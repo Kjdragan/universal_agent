@@ -35,7 +35,15 @@ _EMAIL_ACTION_PATTERNS = (
     # "one per gmail" (existing interim pattern dependency)
     re.compile(r"\bone\s+per\s+gmail\b", re.IGNORECASE),
 )
-_EMAIL_NEGATION_PATTERN = re.compile(r"\b(do\s*not|don['']t|no)\s+(gmail|e-?mail)\b", re.IGNORECASE)
+# Negation must allow intervening words so we catch phrases like
+# "do not send email", "don't send an email", "do not deliver the email"
+# in addition to bare "do not email" / "don't email".  The execution
+# prompt template line "do not send email unless the user explicitly
+# asked for email delivery" is the canonical false positive this guards.
+_EMAIL_NEGATION_PATTERN = re.compile(
+    r"\b(do\s*not|don['']t|no)\b(?:\s+\w+){0,3}\s+(gmail|e-?mail)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)

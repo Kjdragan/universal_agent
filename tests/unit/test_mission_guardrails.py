@@ -96,13 +96,10 @@ def test_code_gen_request_does_not_trigger_email_required():
     assert contract.min_email_sends == 0
 
 
-def test_inflated_execution_prompt_would_falsely_trigger_email():
-    """Documents that the inflated prompt template contains email-triggering
-    language.  If build_mission_contract ever receives this instead of the
-    raw user input, email_required would be a false positive."""
-    # This is the actual delivery contract text appended by build_todo_execution_prompt
-    # for interactive_chat tasks.  The phrase "do not send email unless" contains
-    # the token pair "send ... email" which matches _EMAIL_ACTION_PATTERNS[2].
+def test_inflated_execution_prompt_no_longer_triggers_email_required():
+    """The inflated prompt template contains 'do not send email unless ...';
+    the negation pattern must suppress the 'send ... email' action match so
+    purely-chat tasks aren't forced to email."""
     inflated = (
         "You are Simone. Execute the assigned work items.\n"
         "== DELIVERY CONTRACT ==\n"
@@ -111,10 +108,30 @@ def test_inflated_execution_prompt_would_falsely_trigger_email():
         "Work Item 1: Direct Codie to create a demo application at /tmp/test\n"
     )
     contract = build_mission_contract(inflated)
-    # The inflated prompt matches _EMAIL_ACTION_PATTERNS ("send ... email"),
-    # which is exactly the false positive we guard against.
-    assert contract.email_required is True, (
-        "If this starts passing as False, the prompt template language changed "
-        "and the guard in todo_dispatch_service.py may no longer be necessary."
+    assert contract.email_required is False
+    assert contract.min_email_sends == 0
+
+
+def test_email_negation_handles_intervening_verbs():
+    """Negation should cover 'do not send/deliver/forward (a|the)? email' too,
+    not just bare 'do not email'."""
+    for phrase in (
+        "do not send email about this",
+        "don't send an email about this",
+        "do not deliver the email summary",
+        "don't forward any email",
+        "no send email please",
+    ):
+        contract = build_mission_contract(phrase)
+        assert contract.email_required is False, f"negation failed for: {phrase!r}"
+
+
+def test_explicit_email_request_still_required_despite_nearby_negation():
+    """A real 'email me the report' request should still set email_required even
+    if a separate negated clause sits in the same prompt — they're independent
+    matches and we err on the side of fulfilling the explicit ask."""
+    contract = build_mission_contract(
+        "Email me the report. Do not include any private attachments."
     )
+    assert contract.email_required is True
 
