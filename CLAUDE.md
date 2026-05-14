@@ -76,7 +76,7 @@ When executing on the VPS (`uaonvps`), agents have direct, native filesystem acc
 ## Git Workflow (MUST READ)
 - Read [`docs/deployment/ai_coder_instructions.md`](docs/deployment/ai_coder_instructions.md) before your first commit. It defines branch discipline, commit conventions, `/ship` handoff, and the **Agent-Type → Workflow Matrix**.
 - **Branch model:** any branch → PR → `main` → Deploy. `develop` retired 2026-05-10. See [`04_Branching_And_Release_Workflow`](docs/06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md).
-- TL;DR: work on a feature branch (Kevin's pseudo-trunk is `feature/latest2`; bot branches use `<bot>/<task-id>`), push, run `/ship` to land in `main`. The merge triggers `.github/workflows/deploy.yml`. **Never push directly to `main`.**
+- TL;DR: branch from `main` (per-task — agent work uses `claude/<task>`, operator work uses `kevin/<task>` or `feature/<task>`), push, run `/ship` (or `gh pr create --base main`). `pr-auto-merge.yml` auto-enables auto-merge for `claude/*` heads; CI runs; squash-merge fires `.github/workflows/deploy.yml`. `feature/latest2` retired 2026-05-13 — `main` is the home base. **Never push directly to `main`.**
 - PRs are gated by [`.github/workflows/pr-validate.yml`](.github/workflows/pr-validate.yml) — `py_compile` on every changed `.py`, `ruff check`, `pytest tests/unit`, and a `.py.bak`/`.swp`/`.orig` tripwire. **PR-Validate is the only pre-deploy gate.** Don't merge red.
 - `deploy.yml` has `paths-ignore` for docs (`docs/`, `**.md`, `reports/`, `state/`, `artifacts/`) so docs-only commits don't restart production. Mixed code+docs commits still deploy.
 - Auto-merge uses `AUTO_MERGE_PAT` (not `GITHUB_TOKEN` — that suppresses downstream workflow events). `deploy.yml` lacks a `concurrency:` guard — simultaneous merges can race on `/opt/universal_agent/.git/index.lock`. Recommended guard: `concurrency: { group: deploy-production, cancel-in-progress: false }`. Full rationale: [`docs/deployment/ci_cd_pipeline.md`](docs/deployment/ci_cd_pipeline.md).
@@ -179,7 +179,7 @@ If matches come back, read them before proposing anything. If you don't have tim
 
 7. **Sandbox honesty.** When working from a sandbox that can't SSH the VPS, say so up front. Don't loop the operator through 5 incremental commands when one consolidated command would do. Don't claim "I checked" when you can't.
 
-8. **Branch-versus-deploy honesty.** A commit on `feature/latest2` is not deployed. A commit on `main` is not deployed if the GitHub Actions deploy hasn't completed. Never say "the fix is shipped" until the deploy workflow is green AND the live VPS state confirms the change took effect.
+8. **Branch-versus-deploy honesty.** A commit on a feature branch is not deployed. A commit merged to `main` is not deployed if the GitHub Actions deploy hasn't completed. Never say "the fix is shipped" until the deploy workflow is green AND the live VPS state confirms the change took effect (Rule A: `/api/v1/version` SHA check).
 
 For the **Ship-then-Verify cadence (Rules A–D)** — `/api/v1/version` SHA check, backend-logic vs. UI-rendering verification paths, full ship-then-verify sequence, deploy-restart guarantee — see [`docs/03_Operations/130_Production_Verification_Rules.md`](docs/03_Operations/130_Production_Verification_Rules.md). If your work touches gateway endpoints, DB queries, scoring logic, or service-layer code AND you want end-to-end browser confirmation, read that doc first.
 

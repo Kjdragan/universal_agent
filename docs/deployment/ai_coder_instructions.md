@@ -1,7 +1,7 @@
 # AI Coder Coordination Instructions
 
 > **Audience:** Any AI coding agent (Claude Code, Codex, Cursor, etc.) working on this repository.
-> **Last updated:** 2026-05-10 (post `develop` retirement — branch model collapsed to PR-only-to-`main`).
+> **Last updated:** 2026-05-14 (`feature/latest2` retired; session baseline cleanup auto-lands every new session on `main`; cron deploy-cancellation classification suppresses scary emails for deploy-induced SIGTERMs).
 
 ## Overview
 
@@ -9,12 +9,14 @@ This repository uses a **PR-driven, automated deployment pipeline**. There are t
 
 | Role | Responsibility |
 |------|---------------|
-| **AI Coder** (you) | Write code, commit, and push to a feature branch |
-| **Ship Operator** | Runs `/ship` (or opens the PR manually) to land changes on `main` |
+| **AI Coder** (you) | Write code on a per-task branch off `main`, commit, push, open the PR |
+| **Auto-Merge + Deploy** | `pr-auto-merge.yml` enables auto-merge for `claude/*` heads; CI gates; squash-merge fires `deploy.yml` |
 
-You are the AI Coder. You do **not** deploy directly. You write code, push it to a feature branch, and either run `/ship` or hand off to the operator. Either way, the path to production is **always through a PR to `main`**.
+You are the AI Coder. You do **not** deploy directly. You branch from `main`, write code, push, and open the PR (via `/ship` or `gh pr create --base main`). The path to production is **always through a PR to `main`**.
 
-> **2026-05-10 simplification:** The `develop` branch was retired. Everything now goes through one PR to `main`. Earlier docs that describe a `feature/latest2 → develop → main` chain are stale. See [`docs/06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md`](../06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md) for the new model.
+> **2026-05-14 simplification:** `feature/latest2` was retired (PR #273 deleted it locally + on origin). The post-2026-05-10 collapse went one step further — there is no longer a "pseudo-trunk" of any kind. Every PR branches from `main`, lands on `main`, deploys. The Session Baseline Cleanup (`scripts/claude_session_baseline.py`, invoked by `_claude_launcher.py`) auto-lands every new `claudereal` session on fresh `main` after PR auto-merge — see [`docs/06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md` § Session Baseline Cleanup](../06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md#session-baseline-cleanup).
+>
+> **2026-05-10 simplification (prior):** The `develop` branch was retired. Earlier docs that describe a `feature/latest2 → develop → main` chain are stale.
 
 ---
 
@@ -26,10 +28,10 @@ You are the AI Coder. You do **not** deploy directly. You write code, push it to
 <your-branch>  →  PR  →  pr-validate.yml CI  →  human merges  →  main moves  →  Deploy fires
 ```
 
-- **Tier 1 (Kevin in Antigravity, Claude Code conversational):** work on `feature/latest2` (the operator's pseudo-trunk by convention). Run `/ship` when done; `/ship` opens a PR from `feature/latest2` → `main`.
-- **Tier 2 (autonomous bots — CODIE, Cody scaffold-builder, scheduled VP coder):** create a dedicated branch (`<bot>/<task-id>` convention), worktree-isolate the work, syntax-check + unit-test in the worktree, then open a PR to `main` directly. Never push to `feature/latest2` from automation.
+- **Tier 1 (Kevin in Antigravity, Claude Code conversational):** branch fresh from `main` (`kevin/<task>` or `feature/<task>` by convention; the Session Baseline Cleanup ensures every new session starts on a fresh `main`). Run `/ship` when done; `/ship` opens a PR to `main`.
+- **Tier 2 (autonomous bots — CODIE, Cody scaffold-builder, scheduled VP coder):** create a dedicated branch (`<bot>/<task-id>` convention, with `claude/<task>` being the established pattern for Claude Code agent work that triggers `pr-auto-merge.yml`), worktree-isolate the work, syntax-check + unit-test in the worktree, then open a PR to `main` directly.
 
-Both paths arrive at the same gate: a PR to `main` with PR-Validate CI green.
+Both paths arrive at the same gate: a PR to `main` with PR-Validate CI green. The `pr-auto-merge.yml` workflow enables auto-merge for `claude/*` heads automatically; tier-1 PRs from `/ship` enable auto-merge the same way.
 
 ### 2. Commit conventions
 
@@ -46,7 +48,7 @@ Use [conventional commit](https://www.conventionalcommits.org/) prefixes: `feat`
 ### 3. Never push to `main`
 
 - **Direct push to `main` is forbidden.** GitHub branch protection should reject it; if it doesn't, your push bypasses CI and risks shipping a SyntaxError to production.
-- **Direct push to `feature/latest2`** is allowed for tier 1 only (Kevin + Claude Code conversational). Tier 2 bots must use their own branch.
+- **No more pseudo-trunk.** `feature/latest2` was retired 2026-05-14 (PR #273). Each task gets its own per-task branch off `main`. Tier-1 conversational sessions: `kevin/<task>` or `feature/<task>`. Tier-2 bots: `<bot>/<task-id>` (e.g. `claude/<task>` for any Claude Code agent work — this naming triggers `pr-auto-merge.yml`).
 - **`develop`** no longer exists. If you find yourself reaching for it, you're following stale documentation — read this file's "2026-05-10 simplification" note above.
 
 ### 4. Never run deployment commands
@@ -54,7 +56,7 @@ Use [conventional commit](https://www.conventionalcommits.org/) prefixes: `feat`
 The following are **strictly prohibited**:
 
 - `git push origin main` (use a PR instead)
-- `git push --force` to `main` or `feature/latest2`
+- `git push --force` to `main` or any shared branch
 - Any `ssh`, `rsync`, or manual VPS deployment commands
 - Running CI/CD workflows manually except for legitimate `workflow_dispatch` reruns
 
@@ -101,7 +103,7 @@ git pull --rebase origin <branch>
 # re-run the failed step
 ```
 
-Never `git push --force` to `feature/latest2` or `main`.
+Never `git push --force` to `main` or any shared branch.
 
 ---
 
@@ -112,7 +114,7 @@ Never `git push --force` to `feature/latest2` or `main`.
 
 | Tier | Who | Branch convention | Path to `main` |
 |---|---|---|---|
-| **1 — Human-supervised conversational coding** | Kevin + Claude Code (this conversation), Antigravity, Codex when Kevin is in the loop | `feature/latest2` (the operator's pseudo-trunk) | `/ship` opens a PR `feature/latest2 → main`; CI runs; operator merges in GitHub UI |
+| **1 — Human-supervised conversational coding** | Kevin + Claude Code (this conversation), Antigravity, Codex when Kevin is in the loop | per-task branch off `main` (`kevin/<task>` / `feature/<task>` / `claude/<task>` for agent work) | `/ship` opens a PR to `main`; `pr-auto-merge.yml` enables auto-merge; CI runs; squash-merge fires `deploy.yml` |
 | **2 — Autonomous missions** (CODIE proactive cleanup, Cody scaffold-builder, demo-builder, scheduled VP coder, anything cron- or heartbeat-driven that mutates source) | Bots running unattended on the VPS | `<bot-name>/<task-id>` (e.g., `codie/cleanup-2026-05-10`) | Worktree → patch → syntax-check → unit tests → push to `<bot>/<task-id>` → open PR to `main` directly → CI passes → human merges |
 | **3 — GitHub branch protection** | The safety net | N/A | Enforces "no direct push to `main`" at the push level — see [`ci_cd_pipeline.md`](ci_cd_pipeline.md) |
 
@@ -140,8 +142,9 @@ The core invariant: **an autonomous mission must never leave the deployed workin
 
 ```
 1. Pick up task from Task Hub (or wherever the mission's input comes from)
-2. Create a fresh worktree from feature/latest2:
-     git worktree add /tmp/<bot>_<task_id> feature/latest2
+2. Create a fresh worktree from main:
+     git fetch origin main
+     git worktree add /tmp/<bot>_<task_id> origin/main
 3. Apply patches inside the worktree only — never touch /opt/universal_agent/src/
 4. For every modified .py file, run a syntax check:
      python -c "compile(open(p).read(), p, 'exec')"
@@ -169,7 +172,7 @@ The core invariant: **an autonomous mission must never leave the deployed workin
 3. Leave `.bak` / `.swp` / `.orig` files in the working tree. Those are the fingerprint of a half-finished patch run; `/ship` and `pr-validate.yml` both refuse to merge a tree with these.
 4. Commit invalid Python and rely on CI to catch it. Run the syntax check **before** committing.
 5. Suppress errors. If the patch tool fails, the mission fails. Do not log-and-continue.
-6. Open a PR to `feature/latest2`. Tier 2 PRs target `main` directly post-2026-05-10.
+6. Open a PR to anything other than `main`. All PRs target `main` directly post-2026-05-10 (and post-2026-05-14 `feature/latest2` retirement).
 
 ### Reusable building blocks (shipped 2026-05-07)
 
@@ -184,7 +187,7 @@ Test coverage lives in [`tests/unit/test_vp_worktree_utils.py`](../../tests/unit
 
 ### What `pr-validate.yml` checks on every PR (the safety net)
 
-Defined at [`.github/workflows/pr-validate.yml`](../../.github/workflows/pr-validate.yml). Runs on every `pull_request` against `feature/latest2` or `main`:
+Defined at [`.github/workflows/pr-validate.yml`](../../.github/workflows/pr-validate.yml). Runs on every `pull_request` against `main`:
 
 1. `python -m py_compile` on every changed `.py` file.
 2. `ruff check --select E9,F` (errors only, lint warnings allowed for now).
@@ -211,7 +214,7 @@ The merge of a PR to `main` triggers `.github/workflows/deploy.yml`, which SSHs 
 
 | ❌ Don't | ✅ Do Instead |
 |----------|--------------|
-| Create `claude/feature-xyz` branches and push directly to `feature/latest2` from them | If you're tier 1 (Claude Code conversational, Kevin in the loop), commit directly to `feature/latest2`. If you're tier 2 (bot), use your own `<bot>/<task-id>` branch and PR to `main`. |
+| Push to a shared/legacy branch like `feature/latest2` | `feature/latest2` was retired 2026-05-14. Branch from `main` (`claude/<task>` for agent work, `kevin/<task>` or `feature/<task>` for operator-driven work), push that branch, open the PR. The Session Baseline Cleanup auto-lands every new session on fresh `main`, so re-using a stale local branch is never needed. |
 | Push to `main` directly | Open a PR to `main`. Either via `/ship` (tier 1) or `gh pr create --base main` (tier 2). |
 | Use the `develop` branch (it was retired 2026-05-10) | PR directly to `main`. |
 | Run `ssh vps ...` to deploy | Let the operator merge the PR; deploy fires automatically. |
