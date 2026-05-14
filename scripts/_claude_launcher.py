@@ -221,6 +221,17 @@ def main() -> int:
                 file=sys.stderr,
             )
 
+    # Restore a sensible git baseline when launching inside the UA repo:
+    # land on main + fast-forward + prune merged feature branches so every
+    # new claude session starts from a clean state. No-op for non-UA CWDs.
+    # See module docstring for the four-case contract.
+    try:
+        from claude_session_baseline import run_baseline_check
+
+        run_baseline_check(cwd=Path.cwd(), ua_install_root=install_root)
+    except Exception as exc:  # noqa: BLE001 — never block the session
+        print(f"⚠️  baseline check skipped: {exc}", file=sys.stderr)
+
     # execvp claude so the user's terminal directly drives the process.
     # All secrets are already on os.environ and will be inherited.
     args = ["claude", *sys.argv[1:]]
