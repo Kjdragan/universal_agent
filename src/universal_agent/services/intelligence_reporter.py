@@ -19,6 +19,8 @@ from universal_agent.services.proactive_preferences import (
 
 @dataclass(frozen=True)
 class ReviewEmailPayload:
+    """Rendered email ready for delivery via a mail service."""
+
     artifact_id: str
     to: str
     subject: str
@@ -34,6 +36,10 @@ class IntelligenceReporter:
         proactive_artifacts.ensure_schema(conn)
 
     def compose_review_email(self, *, artifact_id: str, recipient: str) -> ReviewEmailPayload:
+        """Build a review email payload for a single proactive artifact.
+
+        Raises KeyError if the artifact_id does not exist.
+        """
         artifact = proactive_artifacts.get_artifact(self._conn, artifact_id)
         if artifact is None:
             raise KeyError(artifact_id)
@@ -55,6 +61,12 @@ class IntelligenceReporter:
         limit: int = 12,
         calendar_events: list[dict[str, Any]] | None = None,
     ) -> ReviewEmailPayload:
+        """Build a daily digest email from the top-ranked review candidates.
+
+        Syncs proactive signal cards and work items, ranks candidates by
+        preference score, and renders a digest payload with optional
+        calendar context.
+        """
         artifacts = self._rank_digest_artifacts(limit=max(1, int(limit or 12)))
         today = datetime.now(timezone.utc).date().isoformat()
         title = f"Daily proactive review digest - {today}"
@@ -87,6 +99,11 @@ class IntelligenceReporter:
         )
 
     def compose_weekly_preference_report(self, *, recipient: str) -> ReviewEmailPayload:
+        """Build a weekly preference model summary email.
+
+        Aggregates the week's positive and negative feedback signals into
+        a human-readable report and wraps it in a delivery payload.
+        """
         report = build_weekly_preference_report(self._conn)
         today = datetime.now(timezone.utc).date().isoformat()
         title = f"Weekly preference model update - {today}"
@@ -126,6 +143,11 @@ class IntelligenceReporter:
         recipient: str,
         mail_service: Any,
     ) -> dict[str, Any]:
+        """Compose and send a review email, then record the delivery.
+
+        Delegates to ``compose_review_email`` for rendering, sends via
+        *mail_service*, and persists the delivery metadata.
+        """
         payload = self.compose_review_email(artifact_id=artifact_id, recipient=recipient)
         result = await mail_service.send_email(
             to=payload.to,
@@ -154,6 +176,7 @@ class IntelligenceReporter:
         limit: int = 12,
         calendar_events: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
+        """Compose and send the daily digest, then record the delivery."""
         payload = self.compose_daily_digest(
             recipient=recipient,
             limit=limit,
@@ -184,6 +207,7 @@ class IntelligenceReporter:
         recipient: str,
         mail_service: Any,
     ) -> dict[str, Any]:
+        """Compose and send the weekly preference report, then record the delivery."""
         payload = self.compose_weekly_preference_report(recipient=recipient)
         result = await mail_service.send_email(
             to=payload.to,
