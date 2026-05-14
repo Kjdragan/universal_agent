@@ -25,8 +25,10 @@ This file controls proactive heartbeat behavior. Keep items concrete and actiona
     6. **Gateway uptime**: `systemctl status universal-agent-gateway --no-pager | head -5`
     7. **Recent errors (last 30min)**: `journalctl -u universal-agent-gateway --since '30 min ago' --no-pager | grep -ci 'error|exception|locked'`
     8. **Dispatch gate / concurrency**: check `UA_HOOKS_AGENT_DISPATCH_CONCURRENCY` env value
+    9. **Task Hub pressure**: `sqlite3 /opt/universal_agent/AGENT_RUN_WORKSPACES/task_hub.db "SELECT status, COUNT(*) FROM task_hub_items GROUP BY status;"` plus `sqlite3 /opt/universal_agent/AGENT_RUN_WORKSPACES/task_hub.db "SELECT COUNT(*) FROM task_hub_items WHERE status='in_progress' AND updated_at < datetime('now','-15 minutes');"` for stuck claims. Report as `<in_progress> in_progress, <open> open, <stuck> stuck >15m`. This matches the `task_hub_pressure` mission-control tile (`src/universal_agent/services/mission_control_tiles.py:531`); use its thresholds verbatim.
   - Summarize as a compact table: metric | value | status (OK/WARN/CRITICAL)
-  - Thresholds: CPU load > 2x cores = WARN, RAM > 85% = WARN, Disk > 80% = WARN, errors > 50 in 30min = WARN
+  - Thresholds: CPU load > 2x cores = WARN, RAM > 85% = WARN, Disk > 80% = WARN, errors > 50 in 30min = WARN, Task Hub `in_progress > 10` OR `stuck >= 1` = WARN, `in_progress > 25` OR `stuck >= 3` = CRITICAL.
+  - **No invented metrics.** Every row in the System Health table must trace to a tool result above. Do not fabricate ratios like "X/500" or "Y%" to round out a row — if a real ceiling exists, cite the source file and line; otherwise omit the row. The 2026-05-14 digest's "Tasks 453/500 (90.6%) WATCH" entry was invented (no DB has 453 task_hub_items, and the `task_hub_pressure` tile has no 500-cap) and must not recur.
   - If any metric is WARN or CRITICAL, flag it in the heartbeat response for Kevin's attention.
   - Write the full human-readable report to `work_products/system_health_latest.md` (overwrite each cycle).
     - Also write a machine-readable findings contract to `work_products/heartbeat_findings_latest.json` (overwrite each cycle)
