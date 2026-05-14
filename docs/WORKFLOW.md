@@ -2,7 +2,7 @@
 
 > **Purpose:** the single page you read first when you sit down to work on this project. For deep-dives, every section links to the canonical doc.
 >
-> **Last updated:** 2026-05-11 (dev/prod separation initiative shipped — desktop-local dev is now the canonical path).
+> **Last updated:** 2026-05-13 (retired `feature/latest2`; `claudereal` now auto-lands new sessions on `main` after PR auto-merge — see [doc 04 § Session Baseline Cleanup](06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md#session-baseline-cleanup)).
 
 ---
 
@@ -101,7 +101,7 @@ Works from desktop, VPS dev-tree, or anywhere with the right git remote. `gh` CL
 | `claude` returns 401 | `cd ~ && claude /login` (browser flow refreshes OAuth) |
 | `zai` says "no infisical login session" | `cat /home/ua/dev/universal_agent/.env \| grep INFISICAL_CLIENT_ID` — should not be empty |
 | Side panel uses ZAI / wrong endpoint | Reinstall Claude Code extension on the **remote** host (not local) |
-| `/ship` aborts with non-fast-forward | `git pull --rebase origin feature/latest2`, retry. Never `--force`. |
+| `/ship` aborts with non-fast-forward | `git pull --rebase origin main`, retry. Never `--force`. |
 | UA gateway responding wrong endpoint | `ssh root@uaonvps 'sudo systemctl restart universal-agent-gateway'` |
 
 Fuller diagnostic table: [doc 11 § Recovery procedures](06_Deployment_And_Environments/11_Daily_Dev_Workflow.md#recovery-procedures-when-things-break).

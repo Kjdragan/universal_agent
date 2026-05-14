@@ -1,6 +1,6 @@
 # Branching and Release Workflow
 
-Last updated: 2026-05-11 (PAT-based auto-merge now actually fires `deploy.yml`; documented concurrency caveat for simultaneous merges)
+Last updated: 2026-05-13 (retired `feature/latest2`; documented the `claudereal` session-baseline cleanup that lands new sessions on `main` automatically)
 
 ## Purpose
 
@@ -12,11 +12,13 @@ Use this document as the operational source of truth for how code should move th
 
 There are exactly two practical branch roles:
 
-1. **Feature branches** for active coding work. Tier-1 convention: `feature/latest2` (Kevin's pseudo-trunk). Tier-2 (autonomous bots): `<bot-name>/<task-id>`.
-2. **`main`** for production release.
+1. **Per-task feature branches** for active coding work. Naming convention: `claude/<task>` for autonomous agent work, `kevin/<task>` or `feature/<task>` for operator-driven work. Always branched fresh from `main`.
+2. **`main`** for production release. Every session's "home base."
 
-That's it. No `develop`, no `dev-parallel`, no staging branch. PR-Validate CI is the only pre-merge gate.
+That's it. No `develop`, no `feature/latest2`, no `dev-parallel`, no staging branch. PR-Validate CI is the only pre-merge gate.
 
+> **2026-05-13 simplification:** `feature/latest2` (the former "pseudo-trunk") was retired. By the time it was deleted, local was 22 commits behind `main` and origin was even further behind — no PR had touched it in nine days, and every PR shipped during that period had branched off `main` directly. `feature/latest2` was a fossil that misled new sessions into thinking it was the home base. The post-retirement model has exactly one home branch: `main`. (See also the [Session Baseline Cleanup](#session-baseline-cleanup) section below for the local-side automation that enforces this.)
+>
 > **2026-05-10 simplification:** the `develop` branch was retired. Earlier docs that describe a `feature/latest2 → develop → main` chain are stale. The aspirational "develop = staging" environment never materialized; the chain was adding failure modes (silent no-op pushes, stale-branch divergence, mid-chain `git fetch` flakes) without delivering any integration value. Single PR target (`main`) collapses three-step ship cycles to one.
 
 ## Current Deployment Contract
@@ -42,8 +44,8 @@ Supporting references:
 
 | Branch | Role | Deployment Target |
 |------|------|-------------------|
-| `feature/latest2` (or any feature branch) | local development and PR preparation | no automatic deploy |
-| `main` | release branch | production VPS, via `.github/workflows/deploy.yml` |
+| any feature branch (`claude/<task>`, `kevin/<task>`, `feature/<task>`) | local development and PR preparation | no automatic deploy |
+| `main` | release branch + session home base | production VPS, via `.github/workflows/deploy.yml` |
 
 ## Required Working Method
 
@@ -57,7 +59,7 @@ git pull --ff-only
 git checkout -b feature/my-change   # or kevin/my-change, claude/my-task, etc.
 ```
 
-For tier-1 work where Kevin is iterating quickly in Antigravity, working on `feature/latest2` directly is fine — that's the operator's pseudo-trunk by convention.
+After `claudereal` (or `claude` via the bash wrapper) launches an interactive session, the [Session Baseline Cleanup](#session-baseline-cleanup) automatically lands you on `main` if the previous session's branch has already been merged. You can also branch from `main` manually with the commands above.
 
 ### 2. Do Local Development
 
@@ -168,16 +170,36 @@ Recovery: dispatch a single `deploy.yml` run via `gh workflow run deploy.yml --r
 
 For full pipeline detail see [`docs/deployment/ci_cd_pipeline.md` § "End-to-End PR-to-Production Flow"](../deployment/ci_cd_pipeline.md#end-to-end-pr-to-production-flow-2026-05-11).
 
+## Session Baseline Cleanup
+
+Added 2026-05-13. Lives at [`scripts/claude_session_baseline.py`](../../scripts/claude_session_baseline.py) and is invoked once per session by [`scripts/_claude_launcher.py`](../../scripts/_claude_launcher.py) when the launch CWD is the UA checkout. The agent / operator does nothing — opening a new terminal and typing `claudereal` is enough.
+
+What it does (four-case contract):
+
+| Current state | Action |
+|---|---|
+| On `main` | `git fetch --prune`, `git pull --ff-only origin main`. Prints `✓ on main @ <sha>`. |
+| On a feature branch whose PR is **MERGED** (or whose remote branch was already deleted by auto-merge) | Stash known runtime gunk (`.omc/state/`, `memory/`, `MEMORY.md`, `temp/`), `git switch main`, fast-forward, `git branch -D <old>`, drop the stash. Prints `🧹 cleaned up merged <old>; on main @ <sha>`. |
+| On a feature branch with an **OPEN** PR | No mutation. Prints `ℹ on <branch> @ <sha> (PR open); staying put`. |
+| On a feature branch with no PR yet, or a dirty working tree containing real source edits | No mutation. Prints `ℹ on <branch> @ <sha> (...); staying put`. |
+
+The cleanup is best-effort: any unexpected failure prints a warning to stderr and falls through, so `claude` always launches even if git is in a state the script doesn't recognize.
+
+Closes the local-side gap in the `claude/* → PR → auto-merge → deploy` loop. Without this, after PR auto-merge GitHub deletes the remote branch but the local checkout stays put on the now-dead branch — so the next session opens on stale code (the trigger for this feature was the trimmed CLAUDE.md being silently invisible to sessions that branched off `main` before the trim landed). The cleanup makes that lag self-correct on the next session start.
+
 ## Summary
 
 The default operating model is:
 
-1. branch from `main` (or work on `feature/latest2`)
-2. code on the feature branch
-3. open a PR to `main` (via `/ship` or `gh pr create`)
-4. PR-Validate CI runs
-5. operator merges
-6. `deploy.yml` fires and updates production
+1. open a new terminal → `claudereal` runs the session-baseline cleanup → land on fresh `main`
+2. agent (or operator) branches `claude/<task>` from `main`
+3. code on the feature branch
+4. `gh pr create --base main --head claude/<task>` (or `/ship`)
+5. `pr-validate.yml` runs PR-Validate CI
+6. `pr-auto-merge.yml` enables GitHub auto-merge for `claude/*` heads
+7. on CI green, GitHub squash-merges and deletes the remote branch
+8. `deploy.yml` fires on the resulting `main` push, deploys to the VPS
+9. next session start: cleanup automatically prunes the merged local branch and lands you back on `main`
 
 ## 1. One-Minute Cheat Sheet
 
