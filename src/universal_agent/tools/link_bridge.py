@@ -571,6 +571,12 @@ def retrieve_spend_request(
 
 
 def list_payment_methods(*, caller: str) -> dict[str, Any]:
+    """List payment methods available in the authenticated Link wallet.
+
+    Guarded by the master switch and caller allowlist. In stub mode
+    returns a canned list. Otherwise shells out to ``link-cli
+    payment-methods list`` and returns the parsed JSON payload.
+    """
     audit_id = _new_audit_id()
     for check in (_check_master_switch(), _check_caller(caller)):
         if check is not None:

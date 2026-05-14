@@ -37,6 +37,11 @@ def _project_root() -> Path:
 
 
 def resolve_tokens_path() -> Path:
+    """Return the JSON file path for one-shot card-detail tokens.
+
+    Override with ``UA_LINK_CARD_TOKENS_PATH``; defaults to
+    ``<project-root>/AGENT_RUN_WORKSPACES/link_card_tokens.json``.
+    """
     override = os.getenv("UA_LINK_CARD_TOKENS_PATH")
     if override:
         return Path(override).expanduser().resolve()
