@@ -30,6 +30,93 @@ MIN_CRON_INTERVAL_SECONDS = 60
 _CRON_DB_LOCK_RETRY_DELAY_SECONDS = 1.0
 _CRON_DB_LOCK_RETRY_MAX = 5
 
+# Deploy-window detection — `.github/workflows/deploy.yml` touches this
+# file just before `systemctl restart` and removes it on EXIT (or after
+# a 25-minute safety timer). When a cron subprocess is SIGTERM'd inside
+# this window, the kill is a deploy-restart side effect, not a real
+# failure — classify the run as cancelled (matches the asyncio
+# CancelledError path) and advance next_run_at so the existing
+# scheduler picks up the work on the next gateway boot. Without this,
+# every deploy that overlaps a long cron generates an `[ERROR]
+# Autonomous Task Failed` + `[WARNING] Retrying` email pair for what's
+# actually a non-event.
+_DEPLOY_WINDOW_FLAG_PATH = "/tmp/ua-deployment-window"
+# Fallback window: if the flag file is missing (very old deploys, or
+# the flag's cleanup ran before us), treat any signal kill within
+# 60 seconds of gateway start as deploy-induced. Cheap, conservative.
+_DEPLOY_WINDOW_FALLBACK_UPTIME_SEC = 60
+# How far in the future to push next_run_at when a cron is cancelled
+# by a deploy restart. Small positive offset (5s) so the scheduler's
+# missed-window detection (cron_service.py:605) picks it up cleanly
+# on next boot without thundering-herd risk if multiple crons were
+# in flight.
+_DEPLOY_CANCEL_BACKFILL_OFFSET_SEC = 5
+# Gateway process-start cache. Populated lazily on first call; never
+# re-read because the process can't restart without dropping the
+# module from memory.
+_PROCESS_START_TIME: Optional[float] = None
+
+
+def _process_start_time() -> float:
+    """Return this process's start time as epoch seconds (cached)."""
+    global _PROCESS_START_TIME
+    if _PROCESS_START_TIME is None:
+        try:
+            # Linux: /proc/self/stat field 22 is starttime in clock ticks
+            # since boot. Convert with btime + ticks/sec.
+            with open("/proc/self/stat", encoding="utf-8") as f:
+                fields = f.read().split()
+            starttime_ticks = float(fields[21])
+            ticks_per_sec = float(os.sysconf("SC_CLK_TCK"))
+            with open("/proc/stat", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("btime "):
+                        btime = float(line.split()[1])
+                        break
+                else:
+                    raise ValueError("btime not found in /proc/stat")
+            _PROCESS_START_TIME = btime + (starttime_ticks / ticks_per_sec)
+        except (OSError, ValueError, IndexError):
+            # Fallback: use module-import time. Pessimistic but never wrong
+            # in a way that suppresses real failures (a positive uptime
+            # always grows; we only widen the deploy window, not narrow it).
+            _PROCESS_START_TIME = time.time()
+    return _PROCESS_START_TIME
+
+
+def _is_deploy_window_active() -> bool:
+    """True iff a deploy is currently in flight or just completed.
+
+    Two signals, OR'd:
+
+    1. The deploy-marker flag file (``/tmp/ua-deployment-window``) is
+       present. `.github/workflows/deploy.yml` creates this BEFORE the
+       systemctl restart and removes it on EXIT. Primary signal.
+    2. This gateway process started within the last 60 seconds. Fallback
+       when the flag's cleanup ran before the cron's failure-handler
+       (rare race), or when the flag wasn't set (manual ops restart that
+       happens to look like a deploy).
+
+    Note (1) covers all GitHub-Actions-driven deploys; (2) widens to
+    cover the rare race + makes the system tolerant of operator-initiated
+    `systemctl restart` for ops reasons. Both signals are conservative:
+    they widen the "treat signal as deploy-cancellation" window, never
+    narrow it. Real failures (OOM, code crash, etc.) outside this window
+    surface loudly as before.
+    """
+    try:
+        if os.path.exists(_DEPLOY_WINDOW_FLAG_PATH):
+            return True
+    except OSError:
+        pass
+    try:
+        uptime = time.time() - _process_start_time()
+        if 0 <= uptime <= _DEPLOY_WINDOW_FALLBACK_UPTIME_SEC:
+            return True
+    except Exception:  # noqa: BLE001 — never block cron flow
+        pass
+    return False
+
 _CRON_MEDIA_EXTENSIONS = {
     ".png",
     ".jpg",
@@ -1466,6 +1553,52 @@ class CronService:
                                 if exit_code == 0:
                                     record.status = "success"
                                     record.output_preview = output_text[:400]
+                                elif exit_code is not None and exit_code < 0 and _is_deploy_window_active():
+                                    # Subprocess was signal-killed during an active
+                                    # deploy window. This is a deploy-restart side
+                                    # effect, not a real failure — mirror the
+                                    # asyncio.CancelledError handling below: mark
+                                    # cancelled, advance next_run_at so the next
+                                    # scheduler tick re-fires this job, and skip
+                                    # the retry chain entirely. The notifier's
+                                    # existing `cancelled` branch already routes
+                                    # this to a benign [INFO] alert instead of
+                                    # the scary [ERROR] + [WARNING] pair.
+                                    signal_num = -exit_code
+                                    record.status = "cancelled"
+                                    record.error = (
+                                        f"subprocess killed by signal {signal_num} "
+                                        "during deploy restart (will re-fire on next gateway boot)"
+                                    )
+                                    record.output_preview = output_text[:400]
+                                    # Reschedule to fire shortly after gateway
+                                    # boot. The startup pass at
+                                    # cron_service.py:604-624 will see
+                                    # next_run_at < now, recalculate to a fresh
+                                    # schedule, and (because catch_up_on_restart
+                                    # is set for the relevant LLM/intel crons)
+                                    # queue a backfill run for the missed
+                                    # window. For jobs without catch_up_on_restart,
+                                    # the next regular scheduled fire picks it
+                                    # up — no work is lost on idempotent crons.
+                                    try:
+                                        job.next_run_at = time.time() + _DEPLOY_CANCEL_BACKFILL_OFFSET_SEC
+                                        self.store.save_jobs(self.jobs.values())
+                                        logger.info(
+                                            "Chron job %s: subprocess killed by signal %d "
+                                            "during deploy window — marked cancelled, "
+                                            "next_run_at advanced to +%ds for backfill on next boot",
+                                            job.job_id,
+                                            signal_num,
+                                            _DEPLOY_CANCEL_BACKFILL_OFFSET_SEC,
+                                        )
+                                    except Exception as backfill_exc:  # noqa: BLE001
+                                        logger.warning(
+                                            "Chron job %s: failed to advance next_run_at "
+                                            "after deploy-cancellation: %s",
+                                            job.job_id,
+                                            backfill_exc,
+                                        )
                                 else:
                                     record.status = "error"
                                     record.error = f"Script exited with {exit_code}"
@@ -1646,6 +1779,15 @@ class CronService:
                                 result = _MockResult(output_text)
                                 record.finished_at = time.time()
                                 self._persist_run_output(job, record, result)
+                                # Pick failure_class to match the run status. The
+                                # `cancelled` branch (added 2026-05-14, deploy-
+                                # restart detection) needs the same label as the
+                                # asyncio.CancelledError handler downstream so
+                                # the admission service doesn't queue a retry.
+                                if record.status == "cancelled":
+                                    _final_failure_class = "cancelled"
+                                else:
+                                    _final_failure_class = "script_exit_error"
                                 self._finalize_workflow_attempt(
                                     job=job,
                                     record=record,
@@ -1655,7 +1797,7 @@ class CronService:
                                     workflow_run_id=workflow_run_id,
                                     workflow_attempt_id=workflow_attempt_id,
                                     failure_reason=record.error,
-                                    failure_class="script_exit_error",
+                                    failure_class=_final_failure_class,
                                     retryable=record.status == "error",
                                 )
                                 break
