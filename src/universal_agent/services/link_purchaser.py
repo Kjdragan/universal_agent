@@ -54,6 +54,11 @@ def _project_root() -> Path:
 
 
 def resolve_captcha_usage_path() -> Path:
+    """Return the JSONL path used to track daily captcha-solver invocations.
+
+    Override with ``UA_LINK_CAPTCHA_USAGE_PATH``; defaults to
+    ``<project-root>/AGENT_RUN_WORKSPACES/link_captcha_usage.jsonl``.
+    """
     override = os.getenv("UA_LINK_CAPTCHA_USAGE_PATH")
     if override:
         return Path(override).expanduser().resolve()
@@ -61,6 +66,11 @@ def resolve_captcha_usage_path() -> Path:
 
 
 def resolve_attempts_path() -> Path:
+    """Return the JSON file path for checkout-attempt idempotency records.
+
+    Override with ``UA_LINK_PURCHASER_ATTEMPTS_PATH``; defaults to
+    ``<project-root>/AGENT_RUN_WORKSPACES/link_purchaser_attempts.json``.
+    """
     override = os.getenv("UA_LINK_PURCHASER_ATTEMPTS_PATH")
     if override:
         return Path(override).expanduser().resolve()
@@ -100,6 +110,7 @@ def _read_captcha_usage_today() -> int:
 
 
 def captcha_budget_snapshot() -> dict[str, Any]:
+    """Return a dict with ``cap``, ``used``, ``remaining`` and ``window`` for the rolling 24h captcha budget."""
     cap = feature_flags.link_daily_captcha_budget()
     used = _read_captcha_usage_today()
     return {
@@ -125,6 +136,7 @@ def record_captcha_usage(spend_request_id: str, *, merchant_url: str | None = No
 
 
 def captcha_budget_available() -> bool:
+    """Return ``True`` when the daily captcha budget has not been exhausted."""
     snap = captcha_budget_snapshot()
     return snap["remaining"] > 0
 
@@ -151,10 +163,15 @@ def _save_attempts(payload: dict[str, Any]) -> None:
 
 
 def get_attempt(spend_request_id: str) -> Optional[dict[str, Any]]:
+    """Return the previously recorded outcome for *spend_request_id*, or ``None``."""
     return (_load_attempts().get("attempts") or {}).get(spend_request_id)
 
 
 def record_attempt(spend_request_id: str, outcome: dict[str, Any]) -> None:
+    """Persist a checkout outcome keyed by *spend_request_id*.
+
+    Card details are stripped before writing; only status metadata is stored.
+    """
     payload = _load_attempts()
     attempts = payload.setdefault("attempts", {})
     attempts[spend_request_id] = {
