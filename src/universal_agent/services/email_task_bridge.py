@@ -96,6 +96,17 @@ _TRIAGE_FIELD_RE = {
 
 
 def parse_email_triage_brief(raw: Any, *, sender_trusted: bool) -> dict[str, Any]:
+    """Extract structured triage fields from a raw LLM triage brief.
+
+    Parses safety_status, routing_decision, classification, priority,
+    and subject_summary from free-form text using regex.  Falls back to
+    defaults based on *sender_trusted* when the text is empty or fields
+    are missing.
+
+    Returns a dict with keys: raw_text, safety_status, routing_decision,
+    classification, priority, subject_summary.
+    """
+
     text = str(raw or "").strip()
     parsed: dict[str, Any] = {
         "raw_text": text,
@@ -699,6 +710,11 @@ class EmailTaskBridge:
         return True
 
     def get_mapping_for_task_id(self, task_id: str) -> Optional[dict[str, Any]]:
+        """Look up an email task mapping by its Task Hub task_id.
+
+        Returns the mapping dict or None if no row matches.
+        """
+
         row = self._conn.execute(
             "SELECT * FROM email_task_mappings WHERE task_id = ? ORDER BY updated_at DESC LIMIT 1",
             (str(task_id or "").strip(),),
@@ -706,6 +722,14 @@ class EmailTaskBridge:
         return dict(row) if row else None
 
     def get_mapping_for_session_key(self, session_key: str) -> Optional[dict[str, Any]]:
+        """Look up an email task mapping by its AgentMail session key.
+
+        Searches Task Hub metadata for a matching session_key, then
+        delegates to :meth:`get_mapping_for_task_id`.
+
+        Returns the mapping dict or None.
+        """
+
         key = str(session_key or "").strip()
         if not key:
             return None
@@ -741,6 +765,8 @@ class EmailTaskBridge:
         return self.get_mapping_for_task_id(task_id)
 
     def has_ack_outbound(self, thread_id: str) -> bool:
+        """Return True if an acknowledgement email was already sent for this thread."""
+
         mapping = self._get_mapping(thread_id)
         if not mapping:
             return False
@@ -750,6 +776,8 @@ class EmailTaskBridge:
         )
 
     def has_final_outbound(self, thread_id: str) -> bool:
+        """Return True if a final response email was already sent for this thread."""
+
         mapping = self._get_mapping(thread_id)
         if not mapping:
             return False
@@ -759,6 +787,11 @@ class EmailTaskBridge:
         )
 
     def record_ack_outbound(self, thread_id: str, *, message_id: str = "", draft_id: str = "") -> bool:
+        """Persist the ack outbound metadata (message_id / draft_id) for a thread.
+
+        Fields are set only once (idempotent re-calls do not overwrite).
+        """
+
         now = _now_iso()
         self._conn.execute(
             """
@@ -783,6 +816,12 @@ class EmailTaskBridge:
         return True
 
     def record_final_outbound(self, thread_id: str, *, message_id: str = "", draft_id: str = "") -> bool:
+        """Persist the final outbound metadata for a thread.
+
+        Sets final_email_sent_at, final_message_id, final_draft_id, and
+        email_sent_at (idempotent — existing values are preserved).
+        """
+
         now = _now_iso()
         self._conn.execute(
             """
@@ -859,6 +898,12 @@ class EmailTaskBridge:
         )
 
     def promote_to_agent_ready(self, thread_id: str) -> bool:
+        """Move an email task from quarantine/review back to active agent-ready.
+
+        Clears any quarantine security_classification and relabels the
+        corresponding Task Hub entry as ``open`` with ``agent-ready``.
+        """
+
         thread = str(thread_id or "").strip()
         if not thread:
             return False
@@ -889,6 +934,13 @@ class EmailTaskBridge:
         security_classification: str = "clean",
         note: str = "",
     ) -> bool:
+        """Flag an email task as requiring human review.
+
+        Sets status to ``review_required`` on the mapping row and
+        ``needs_review`` on the Task Hub entry with the
+        ``review-required`` label appended.
+        """
+
         thread = str(thread_id or "").strip()
         if not thread:
             return False
@@ -924,6 +976,13 @@ class EmailTaskBridge:
         note: str = "",
         sender_trusted: bool = False,
     ) -> bool:
+        """Quarantine an email task, blocking it from execution.
+
+        Sets status to ``quarantined``, security_classification to
+        ``quarantine``, and updates the Task Hub entry to ``blocked``
+        with the ``quarantined`` label.
+        """
+
         thread = str(thread_id or "").strip()
         if not thread:
             return False
