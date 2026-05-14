@@ -170,6 +170,14 @@ Recovery: dispatch a single `deploy.yml` run via `gh workflow run deploy.yml --r
 
 For full pipeline detail see [`docs/deployment/ci_cd_pipeline.md` § "End-to-End PR-to-Production Flow"](../deployment/ci_cd_pipeline.md#end-to-end-pr-to-production-flow-2026-05-11).
 
+#### Cron deploy-cancellation classification (added 2026-05-14)
+
+A deploy that overlaps a long-running subprocess cron (e.g. `claude_code_intel_sync` running its `!script` worker) used to emit a scary `[ERROR] Autonomous Task Failed` + `[WARNING] Autonomous Task Retrying` email pair every deploy. Root cause: the asyncio-coroutine cancellation path (`cron_service.py:2013-2036`) correctly classified shutdown-induced cancellation as `record.status = "cancelled"` (benign `[INFO]`), but the subprocess path treated SIGTERM (`exit_code = -15`) as a normal non-zero failure.
+
+Fix (`cron_service.py:_is_deploy_window_active` + new branch around line 1466): when a subprocess exits with a negative return code AND either (a) `/tmp/ua-deployment-window` exists (the deploy.yml-managed flag, already used by CSI canary), or (b) the gateway has been up for less than 60 seconds (fallback), classify the run as `cancelled` and advance the job's `next_run_at` by 5 seconds. The existing scheduler startup pass at `cron_service.py:604-624` then picks up the rescheduled job on next boot — backfill via the existing `catch_up_on_restart` mechanism, no new table or replay system required.
+
+Net effect: a deploy that lands during a long cron's run is now a non-event (single `[INFO] Chron Run Cancelled` email instead of `[ERROR]` + `[WARNING]` pair, and the cron re-fires on the next gateway boot). Real subprocess failures (positive exit codes, signals outside the deploy window) keep their existing loud behavior so genuine bugs still surface.
+
 ## Session Baseline Cleanup
 
 Added 2026-05-13. Lives at [`scripts/claude_session_baseline.py`](../../scripts/claude_session_baseline.py) and is invoked once per session by [`scripts/_claude_launcher.py`](../../scripts/_claude_launcher.py) when the launch CWD is the UA checkout. The agent / operator does nothing — opening a new terminal and typing `claudereal` is enough.
