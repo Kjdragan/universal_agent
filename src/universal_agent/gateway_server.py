@@ -7840,7 +7840,15 @@ def _emit_cron_event(payload: dict) -> None:
 
         if event_type == "cron_run_retry_queued":
             title = "Autonomous Task Retrying" if is_autonomous else "Chron Retry Queued"
-            severity = "warning"
+            # Severity = info so the notification dispatcher (which routes
+            # `warning`/`error` rows to email + Telegram via
+            # `_list_undelivered_high_severity_notifications`) skips this row.
+            # Retries are normal cron lifecycle — a job that fails 2/3
+            # attempts but ultimately succeeds shouldn't email per attempt.
+            # Dashboard, event bus, and cron_runs.jsonl still receive the
+            # retry signal; only out-of-band delivery is suppressed.
+            # Terminal failures keep their existing `error` severity below.
+            severity = "info"
             kind = "cron_run_retry_queued"
             next_attempt_number = run_data.get("next_attempt_number")
             message = (
