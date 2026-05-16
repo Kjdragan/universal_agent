@@ -132,13 +132,15 @@ That's `/ship` in one sentence.
 
 The two scheduled jobs (`nightly-doc-drift-audit.yml`, `openclaw-release-sync.yml`) auto-merge their report PRs to `main` via `gh pr merge --squash --admin`. `deploy.yml`'s `paths-ignore` ensures these report-only commits don't trigger a production deploy.
 
-### Auto-merge for `claude/*` agent PRs (added 2026-05-11; PAT-fixed 2026-05-11 PM)
+### Auto-merge for AI-coder PRs (added 2026-05-11; PAT-fixed 2026-05-11 PM; codie/* added 2026-05-15)
 
-Autonomous agent PRs from a `claude/*` head branch to `main` get auto-merge enabled automatically by `pr-auto-merge.yml`. Once `pr-validate.yml` passes, GitHub squash-merges the PR, deletes the branch, and the merge to `main` triggers `deploy.yml` → production.
+Autonomous agent PRs from a `claude/*` **or** `codie/*` head branch to `main` get auto-merge enabled automatically by `pr-auto-merge.yml`. Once `pr-validate.yml` passes, GitHub squash-merges the PR, deletes the branch, and the merge to `main` triggers `deploy.yml` → production.
+
+> **2026-05-15 fix:** the workflow filter originally matched only `claude/*` heads, leaving every `codie/*` PR (the autonomous code-writer agent) stuck pending manual merge. Three Codie PRs sat green-CI but unmerged for 1–2 days before this was caught. The filter now matches both prefixes.
 
 ```mermaid
 flowchart LR
-    A[Agent opens PR<br/>claude/* → main] --> B[pr-validate.yml]
+    A[Agent opens PR<br/>claude/* or codie/* → main] --> B[pr-validate.yml]
     A --> C[pr-auto-merge.yml<br/>uses AUTO_MERGE_PAT to enable auto-merge]
     B -->|passes| D[GitHub squash-merges]
     C --> D
@@ -204,7 +206,7 @@ The default operating model is:
 3. code on the feature branch
 4. `gh pr create --base main --head claude/<task>` (or `/ship`)
 5. `pr-validate.yml` runs PR-Validate CI
-6. `pr-auto-merge.yml` enables GitHub auto-merge for `claude/*` heads
+6. `pr-auto-merge.yml` enables GitHub auto-merge for `claude/*` and `codie/*` heads
 7. on CI green, GitHub squash-merges and deletes the remote branch
 8. `deploy.yml` fires on the resulting `main` push, deploys to the VPS
 9. next session start: cleanup automatically prunes the merged local branch and lands you back on `main`
