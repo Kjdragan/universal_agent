@@ -22,6 +22,39 @@ _LEGACY_INFISICAL_ENV_ALIASES = {
 _BOOTSTRAP_LOCK = threading.Lock()
 _BOOTSTRAP_RESULT: SecretBootstrapResult | None = None
 
+# Keys that represent the runtime's bootstrap identity. When already set in
+# the process environment (typically by systemd Environment= directives or
+# the bootstrap .env), we preserve the pre-set value even if Infisical
+# returns a different one. Everything else is treated as application
+# configuration where Infisical is authoritative.
+#
+# Why this exists: previously _inject_environment_values defaulted to
+# overwrite=False, which meant ANY key already in os.environ was silently
+# skipped — including new Infisical-managed feature flags. On the VPS,
+# systemd + bootstrap .env + module-import side effects pre-populate ~37
+# keys before bootstrap runs, so any of those that overlap with Infisical
+# secrets stayed at their bootstrap values forever. Operator-flippable
+# disables like UA_ATLAS_DIRECT_DISPATCH_ENABLED were unreachable from
+# Infisical. The fix is to make Infisical authoritative by default, with
+# this small carve-out for true identity keys that must not be moved by
+# remote config.
+_BOOTSTRAP_IDENTITY_KEYS: frozenset[str] = frozenset({
+    "INFISICAL_CLIENT_ID",
+    "INFISICAL_CLIENT_SECRET",
+    "INFISICAL_PROJECT_ID",
+    "INFISICAL_API_URL",
+    "INFISICAL_ENVIRONMENT",
+    "INFISICAL_SECRET_PATH",
+    "UA_RUNTIME_STAGE",
+    "UA_MACHINE_SLUG",
+    "UA_DEPLOYMENT_PROFILE",
+    "FACTORY_ROLE",
+    "UA_INFISICAL_ENABLED",
+    "UA_INFISICAL_STRICT",
+    "UA_INFISICAL_ALLOW_DOTENV_FALLBACK",
+    "UA_DOTENV_PATH",
+})
+
 
 @dataclass(frozen=True)
 class SecretBootstrapResult:
@@ -93,6 +126,7 @@ def _inject_environment_values(
     *,
     overwrite: bool = False,
     exclude_prefixes: tuple[str, ...] = (),
+    preserve_keys: frozenset[str] = frozenset(),
 ) -> int:
     inserted = 0
     for key, value in values.items():
@@ -100,6 +134,10 @@ def _inject_environment_values(
         if not clean_key:
             continue
         if exclude_prefixes and any(clean_key.startswith(p) for p in exclude_prefixes):
+            continue
+        # Bootstrap identity keys win over remote config when pre-set,
+        # even if overwrite=True for everything else.
+        if clean_key in preserve_keys and clean_key in os.environ:
             continue
         if not overwrite and clean_key in os.environ:
             continue
@@ -404,10 +442,17 @@ def initialize_runtime_secrets(
         if infisical_enabled:
             try:
                 secret_values = _fetch_infisical_secrets()
+                # Infisical is single source of truth for application config.
+                # We pass overwrite=True so values from the vault win over any
+                # pre-existing os.environ entries (systemd Environment=, .env
+                # bootstrap, module-import side effects). Bootstrap identity
+                # keys are exempted via preserve_keys so the machine's
+                # role/stage/slug can never be moved by remote config.
                 loaded_count = _inject_environment_values(
                     secret_values,
-                    overwrite=False,
+                    overwrite=True,
                     exclude_prefixes=exclude_prefixes,
+                    preserve_keys=_BOOTSTRAP_IDENTITY_KEYS,
                 )
                 source = "infisical"
                 normalized_environment = _normalize_infisical_environment(os.getenv("INFISICAL_ENVIRONMENT"))
