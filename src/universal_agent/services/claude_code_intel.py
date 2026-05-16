@@ -426,7 +426,7 @@ def run_sync(
             if conn is not None:
                 artifact_id = register_packet_artifact(conn, packet_dir=packet_dir, handle=cfg.handle, actions=actions, new_posts=new_posts)
                 if cfg.queue_task_hub:
-                    queued += queue_follow_up_tasks(conn, handle=cfg.handle, packet_dir=packet_dir, actions=chunk_actions)
+                    queued += queue_follow_up_tasks(conn, handle=cfg.handle, packet_dir=packet_dir, actions=chunk_actions, lane_slug=cfg.lane_slug)
                     
             # Checkpoint the state forward
             current_state = _next_state(
@@ -926,6 +926,24 @@ def _direct_demo_fallback_enabled() -> bool:
     return os.getenv("UA_CSI_DIRECT_DEMO_FALLBACK", "0").strip().lower() in _TRUTHY
 
 
+def _vault_slug_for_lane(lane_slug: str) -> str:
+    """Look up the vault_slug for a given intel lane.
+
+    PR 17 — Falls back to the hardcoded ``KB_SLUG`` if the lane config is
+    unreachable (defensive: tests, broken yaml, etc.). For the single
+    ``claude-code-intelligence`` lane this is a no-op (yaml + constant
+    happen to match). The indirection earns its weight only when a second
+    lane (e.g. Codex / Gemini intel) gets added.
+    """
+    try:
+        from universal_agent.services.intel_lanes import get_lane
+
+        lane = get_lane(lane_slug)
+    except Exception:
+        return KB_SLUG
+    return str(getattr(lane, "vault_slug", "") or KB_SLUG)
+
+
 def _build_followup_task_payload(
     *,
     handle: str,
@@ -933,6 +951,7 @@ def _build_followup_task_payload(
     action: dict[str, Any],
     tier: int,
     post_id: str,
+    lane_slug: str = "claude-code-intelligence",
 ) -> dict[str, Any]:
     """Build the canonical Task Hub upsert dict for a tier 3+ CSI action.
 
@@ -946,6 +965,11 @@ def _build_followup_task_payload(
     moves from "auto-queued in v1" to "operator-approved in v2" lands on
     the same downstream agent with the same metadata. Do NOT inline this
     logic anywhere else.
+
+    PR 17 — ``lane_slug`` resolves the vault and KB slug from
+    ``intel_lanes.yaml`` so a future Codex / Gemini intel lane lands tasks
+    targeting its own vault instead of the hardcoded ``claude-code-intelligence``.
+    Defaults preserve current single-lane behavior.
     """
     if tier == 3:
         source_kind = SOURCE_KIND_SCAFFOLD_REQUEST
@@ -962,7 +986,7 @@ def _build_followup_task_payload(
             if post_snippet
             else f"Scaffold Claude Code demo from @{handle} update"
         )
-        description = _scaffold_task_description(handle=handle, packet_dir=packet_dir, action=action)
+        description = _scaffold_task_description(handle=handle, packet_dir=packet_dir, action=action, lane_slug=lane_slug)
         labels = ["agent-ready", "claude-code-intel", "x-api", "simone-scaffold"]
         preferred_vp = "simone_direct"
         workflow_kind = "scaffold_demo_workspace"
@@ -998,8 +1022,8 @@ def _build_followup_task_payload(
             "action_type": action.get("action_type") or "",
             "links": action.get("links") or [],
             "preferred_vp": preferred_vp,
-            "knowledge_base_slug": KB_SLUG,
-            "vault_slug": KB_SLUG,
+            "knowledge_base_slug": _vault_slug_for_lane(lane_slug),
+            "vault_slug": _vault_slug_for_lane(lane_slug),
             "workflow_manifest": {
                 "workflow_kind": workflow_kind,
                 "delivery_mode": "interactive_chat",
@@ -1018,6 +1042,7 @@ def queue_follow_up_tasks(
     handle: str,
     packet_dir: Path,
     actions: list[dict[str, Any]],
+    lane_slug: str = "claude-code-intelligence",
 ) -> int:
     task_hub.ensure_schema(conn)
     queued = 0
@@ -1043,6 +1068,7 @@ def queue_follow_up_tasks(
             action=action,
             tier=tier,
             post_id=post_id,
+            lane_slug=lane_slug,
         )
         task_id = payload["task_id"]
         source_kind = payload["source_kind"]
@@ -1083,7 +1109,7 @@ def queue_follow_up_tasks(
                         "action_type": action.get("action_type") or "",
                         "links": action.get("links") or [],
                         "preferred_vp": "vp.coder.primary",
-                        "knowledge_base_slug": KB_SLUG,
+                        "knowledge_base_slug": _vault_slug_for_lane(lane_slug),
                         "fallback_for_scaffold_request": task_id,
                         "workflow_manifest": {
                             "workflow_kind": "code_change",
@@ -1309,7 +1335,13 @@ def write_reference_kb_update(
     return index_path
 
 
-def _scaffold_task_description(*, handle: str, packet_dir: Path, action: dict[str, Any]) -> str:
+def _scaffold_task_description(
+    *,
+    handle: str,
+    packet_dir: Path,
+    action: dict[str, Any],
+    lane_slug: str = "claude-code-intelligence",
+) -> str:
     """Phase-2 brief for Simone: scaffold a demo workspace from a vault entity.
 
     The task references a tier-3 post that should already have a
@@ -1342,7 +1374,7 @@ def _scaffold_task_description(*, handle: str, packet_dir: Path, action: dict[st
             links,
             "",
             "Workflow (cody-scaffold-builder skill):",
-            f"  1. Locate the vault entity in <UA_ARTIFACTS_DIR>/knowledge-vaults/{KB_SLUG}/entities/",
+            f"  1. Locate the vault entity in <UA_ARTIFACTS_DIR>/knowledge-vaults/{_vault_slug_for_lane(lane_slug)}/entities/",
             f"     whose source_ids include `x_post_{post_id}` (or whose body cites this post).",
             "  2. Decide if the entity is demo-worthy (briefing_status=pending AND endpoint",
             "     is satisfiable AND business_relevance is non-trivial). If not, mark this task",

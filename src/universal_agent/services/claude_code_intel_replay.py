@@ -99,6 +99,7 @@ def replay_packet(
                 handle=handle,
                 packet_dir=packet_dir,
                 actions=actions,
+                lane_slug=config.lane_slug,
             )
 
     linked_sources_path = write_linked_sources(packet_dir=packet_dir, actions=actions)
