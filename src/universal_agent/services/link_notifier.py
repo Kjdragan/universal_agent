@@ -37,6 +37,11 @@ def _project_root() -> Path:
 
 
 def resolve_state_path() -> Path:
+    """Return the JSON file path for notification-idempotency state.
+
+    Override with UA_LINK_NOTIFIER_STATE_PATH; defaults to
+    <project-root>/AGENT_RUN_WORKSPACES/link_notifications.json.
+    """
     override = os.getenv("UA_LINK_NOTIFIER_STATE_PATH")
     if override:
         return Path(override).expanduser().resolve()
@@ -114,6 +119,7 @@ def _send_via_agentmail(
 
 
 def already_notified(spend_request_id: str) -> bool:
+    """Return True if a notification was already sent for *spend_request_id*."""
     state = _load_state()
     return bool((state.get("notified") or {}).get(spend_request_id))
 
@@ -125,6 +131,11 @@ def mark_notified(
     sent_to: Optional[str],
     via: Optional[str],
 ) -> None:
+    """Record that *spend_request_id* has been notified.
+
+    Persists the card-token, recipient, and delivery channel alongside a
+    timestamp so subsequent already_notified calls return True.
+    """
     state = _load_state()
     notified = state.setdefault("notified", {})
     notified[spend_request_id] = {
