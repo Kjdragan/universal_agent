@@ -14457,6 +14457,7 @@ async def lifespan(app: FastAPI):
                 _ensure_hackernews_snapshot_cron_job()
                 _ensure_atlas_direct_dispatch_cron_job()
                 _ensure_simone_chat_autocomplete_cron_job()
+                _ensure_vault_lint_contradictions_cron_job()
             except Exception as exc:
                 logger.warning("Failed ensuring autonomous cron jobs: %s", exc)
         else:
@@ -18557,6 +18558,25 @@ def _ensure_morning_briefing_cron_job() -> Optional[dict[str, Any]]:
         # Declare it so the Phase 5 pre-flight surfaces a structured
         # cron_run_failed notification instead of a generic exit code.
         required_secrets=["UA_OPS_TOKEN"],
+    )
+
+
+def _ensure_vault_lint_contradictions_cron_job() -> Optional[dict[str, Any]]:
+    # PR 13 — monthly vault contradiction sweep. Report-only (never modifies
+    # pages). LLM cost is bounded by candidate-pair filtering before the
+    # analysis pass. Schedule: 1st of month at 07:00 Central (inside the
+    # 6 AM – 9 PM Houston active window per docs/operations/operating_hours_dormancy.md
+    # since this is content-generation, not infrastructure-event handling).
+    return _register_system_cron_job(
+        system_job="vault_lint_contradictions",
+        default_cron="0 7 1 * *",
+        default_timezone="America/Chicago",
+        command="!script universal_agent.scripts.vault_contradiction_lint",
+        description="Monthly vault contradictions sweep across every enabled intel lane (report-only).",
+        timeout_seconds=1800,
+        enabled=_proactive_cron_enabled("UA_VAULT_LINT_CONTRADICTIONS_ENABLED"),
+        cron_env_var="UA_VAULT_LINT_CONTRADICTIONS_CRON",
+        timezone_env_var="UA_VAULT_LINT_CONTRADICTIONS_TIMEZONE",
     )
 
 
