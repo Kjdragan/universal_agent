@@ -177,6 +177,26 @@ After a scheduled tick:
    heartbeat is currently ticking. Stale heartbeat usually correlates
    with broader background-task issues that affect cron reliability.
 
+## Backfill-on-restart behavior
+
+By default, missed cron windows during gateway downtime are **not** replayed on
+restart. The `CronService.start()` method queues any missed runs during
+`_reconcile_schedule()`, but the dispatch loop is gated behind
+`UA_CRON_BACKFILL_ON_RESTART` (default `0` = OFF). When OFF, queued backfill
+entries are logged then discarded; missed jobs resume on the next normal cron
+tick.
+
+This default exists because production restarts typically have several heavy
+crons queued (atlas_direct_dispatch, claude_code_intel_sync, etc.), each doing
+HTTP calls + LLM work. Firing them all simultaneously starves the asyncio
+event loop and prevents the gateway from answering `/api/v1/health`, causing
+deploy health-check timeouts. Missed runs are harmless — heavy crons provide
+continuous coverage, and lighter crons have their own dedup/upsert logic.
+
+To enable backfill (for example, after an extended outage), set
+`UA_CRON_BACKFILL_ON_RESTART=1` in `/opt/universal_agent/.env` and restart the
+gateway. Remove it after the next successful tick cycle.
+
 ## Related files
 
 - `src/universal_agent/gateway_server.py` — `_ensure_*_cron_job` helpers

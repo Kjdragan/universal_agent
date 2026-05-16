@@ -222,6 +222,14 @@ These endpoints expose the durable run catalog. They are the canonical browsing 
 |----------|--------|-------------|
 | `/api/v1/dashboard/proactive-artifacts` | GET | List durable proactive work-product artifacts; optionally sync proactive signal cards first |
 | `/api/v1/dashboard/claude-code-intel` | GET | Read latest ClaudeDevs packet summary, recent packet history, checkpoint state, and Claude Code knowledge-vault pages for the dedicated dashboard review surface |
+| `/api/v1/dashboard/claude-code-intel/vault/entities` | GET | List knowledge-vault entity pages; supports `limit` and `kind` query params |
+| `/api/v1/dashboard/claude-code-intel/vault/concepts` | GET | List knowledge-vault concept pages; supports `limit` and `kind` query params |
+| `/api/v1/dashboard/claude-code-intel/demos` | GET | List Cody demo workspace records for the dashboard review surface |
+| `/api/v1/dashboard/claude-code-intel/triage` | GET | Get CSI demo triage candidates (counts, top-5, full list) |
+| `/api/v1/dashboard/claude-code-intel/triage/{post_id}/approve` | POST | Approve a triage candidate (queues demo scaffold Task Hub item) |
+| `/api/v1/dashboard/claude-code-intel/triage/{post_id}/dismiss` | POST | Dismiss a triage candidate |
+| `/api/v1/dashboard/claude-code-intel/triage/{post_id}/restore` | POST | Restore a previously dismissed triage candidate |
+| `/api/v1/dashboard/claude-code-intel/triage/rerank` | POST | Re-rank triage candidates (recalculates scoring) |
 | `/api/v1/dashboard/proactive-artifacts/digest/preview` | GET | Preview the proactive review digest email; supports `include_calendar=true` |
 | `/api/v1/dashboard/proactive-artifacts/digest/send` | POST | Send the proactive review digest through the initialized AgentMail service |
 | `/api/v1/dashboard/proactive-artifacts/preferences/weekly/preview` | GET | Preview the weekly preference model report |
@@ -750,6 +758,7 @@ Key environment variables controlling gateway behavior:
 | `UA_DAEMON_IDLE_TIMEOUT` | `1800` | Seconds before daemon session execution is killed as stuck |
 | `UA_ACTIVITY_NOTIFICATION_AUTO_READ_HOURS` | `24` | Hours after which non-actionable info/success notifications are auto-marked as read |
 | `UA_CODIE_PROACTIVE_CLEANUP_TIMEZONE` | `America/Chicago` | Timezone for CODIE proactive cleanup cron job |
+| `UA_CRON_BACKFILL_ON_RESTART` | `0` | When `1`, replay missed cron windows at gateway restart; default OFF to avoid startup storms that starve the health endpoint
 
 ## 35. Error Responses
 
