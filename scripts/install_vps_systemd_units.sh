@@ -198,5 +198,19 @@ if ! command -v systemctl >/dev/null 2>&1; then
   exit 0
 fi
 
+# Heartbeat during the systemd reload/enable step so the parent SSH session sees
+# periodic output. On a busy production VPS this section can stay silent for
+# minutes (observed ~3 min in the 2026-05-16 incident); an idle SSH connection
+# in that window gets pruned by an intermediate keepalive-killer, which makes
+# the deploy workflow exit 255 even though the actual work completed. See
+# docs/operations/2026-05-16_deploy_ssh_timeout_plan.md for the full diagnosis.
+( while true; do printf '[heartbeat install_vps_systemd_units] %s\n' "$(date -Iseconds)"; sleep 30; done ) &
+HB_PID=$!
+# shellcheck disable=SC2064
+trap "kill $HB_PID 2>/dev/null || true; wait $HB_PID 2>/dev/null || true" EXIT
+
+echo "--> systemctl daemon-reload..."
 systemctl daemon-reload
+echo "--> systemctl enable units..."
 systemctl enable "${units_to_enable[@]}"
+echo "--> install_vps_systemd_units done"

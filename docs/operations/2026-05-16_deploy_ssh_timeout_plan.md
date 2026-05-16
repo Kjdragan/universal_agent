@@ -1,6 +1,6 @@
 # Deploy Workflow SSH-Timeout False-Failure — Remediation Plan
 
-> **Status:** Plan only — no code changes shipped. Awaiting operator approval before implementing.
+> **Status (2026-05-16 PM update):** **Options A + B shipped.** Option C deferred per operator decision pending ~5-deploy observation window. See § 10 for implementation pointers.
 > **Author:** Claude Opus 4.7 via PR drafting session 2026-05-16.
 > **Triggering incident:** PR #300 deploy (run `25967376397`) reported `failure` exit 255 at 16:47:43, but VPS verification confirmed services restarted at 16:52:10 with the correct merged SHA `2225d48c`. Identical pattern observed on PR #297 and #299 in the same week.
 
@@ -129,9 +129,42 @@ If 3 consecutive deploys are green and code reaches the VPS, mark the issue clos
 
 ## 9. Open questions for operator review
 
-1. **Approve Option A as the immediate fix?** If yes, I'll prepare a 1-line PR.
-2. **Approve Option B as a follow-up?** If yes, I'll prepare a separate PR after Option A is validated.
-3. **Any reason to skip straight to Option C?** (E.g. known additional fragility in the deploy chain that fire-and-poll would address.)
+1. **Approve Option A as the immediate fix?** ✅ Approved 2026-05-16 PM.
+2. **Approve Option B as a follow-up?** ✅ Approved 2026-05-16 PM (shipped together with A in same PR).
+3. **Any reason to skip straight to Option C?** ❌ No — defer C unless A+B prove insufficient over ~5 deploys.
+
+---
+
+## 10. Implementation (2026-05-16 PM)
+
+Options A + B shipped together. Code anchors:
+
+| Option | File | Change |
+|---|---|---|
+| A — SSH keepalive flags | `.github/workflows/deploy.yml` (around line 97) | Added `-o ServerAliveInterval=30 -o ServerAliveCountMax=120` to the deploy `ssh` invocation. Keepalive every 30s, tolerate up to 60 min of pure idle, inside the outer `timeout 30m` envelope. |
+| B — heartbeat during silent steps | `scripts/install_vps_systemd_units.sh` | Background `( while true; printf heartbeat; sleep 30; done )` loop started before `systemctl daemon-reload` + `systemctl enable`, killed via `trap EXIT`. |
+| B — heartbeat during silent steps | `scripts/install_vp_worker_services.sh` | Same pattern as above, started before `systemctl daemon-reload` + `systemctl enable --now`. |
+
+Each heartbeat emits a line like:
+
+```
+[heartbeat install_vps_systemd_units] 2026-05-16T17:45:30+00:00
+[heartbeat install_vps_systemd_units] 2026-05-16T17:46:00+00:00
+```
+
+Combined effect: Option A keeps the SSH TCP connection alive regardless of remote-side silence (defense at the connection layer); Option B makes remote-side silence shorter and gives operators visible progress in the workflow log (defense at the application layer).
+
+### Verification plan (active)
+
+Watch the next 5 production deploys after this PR merges. Per § 6, success criteria:
+
+- Workflow exit code `success` (0)
+- No more than ~2 minutes of true silence between log lines (heartbeats fill any longer gap)
+- `/api/v1/version` SHA still matches merged SHA (Rule A — should continue working regardless)
+
+If 5 consecutive green deploys: close this issue, mark the 2026-05-11 PM `Documentation_Status.md` concurrency-caveat entry as fully resolved (concurrency guard was already shipped in PR #233; this addresses the orthogonal SSH-timeout class).
+
+If even one false-failure recurs with the same signature (long silent gap + `Terminated`): escalate to Option C and open a follow-up issue.
 
 ---
 
