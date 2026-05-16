@@ -125,6 +125,8 @@ Because they have **opposite needs**:
 │      │                                                                  │
 │      ├── <demo-id-1>/                One real demo                      │
 │      │   ├── .claude/settings.json   Vanilla (provisioner asserts this) │
+│      │   ├── .mcp.json               Demo-only MCP servers (Ghost for   │
+│      │   │                           ephemeral Postgres). Not pollution.│
 │      │   ├── BRIEF.md                Authored by Simone (Phase 2)       │
 │      │   ├── ACCEPTANCE.md           Authored by Simone                 │
 │      │   ├── business_relevance.md   Authored by Simone                 │
@@ -132,7 +134,8 @@ Because they have **opposite needs**:
 │      │   ├── pyproject.toml          Demo-local Python deps             │
 │      │   ├── src/                    Cody's implementation              │
 │      │   ├── BUILD_NOTES.md          Cody documents gaps (no invention) │
-│      │   ├── manifest.json           endpoint hit + versions used       │
+│      │   ├── manifest.json           endpoint hit + versions used +     │
+│      │   │                           ghost_databases [] for cleanup     │
 │      │   └── run_output.txt          Captured stdout from successful run│
 │      │                                                                  │
 │      └── <demo-id-2>/  ...                                              │
@@ -305,6 +308,37 @@ The [Interactive Coding Environment plan](10_Interactive_Coding_Environment.md) 
 **Practical implication for demo work:** nothing changes. The provisioner's structural assertions (no `env`/`hooks`/`enabledPlugins`/`extraKnownMarketplaces` in project-local settings) and the launcher's `unset` of leaked env vars continue to be the correct mechanism for demo execution. The post-inversion world makes shell-env-leak rarer (because user-global settings no longer injects ZAI vars), but the defensive `unset` is still right.
 
 See [`10_Interactive_Coding_Environment.md`](10_Interactive_Coding_Environment.md) for the full per-machine matrix, acid tests, and rollback procedure.
+
+---
+
+## Demo-only capabilities (MCP servers in the scaffold)
+
+Demo workspaces carry a separate `.mcp.json` from the polluted top-level UA
+`.mcp.json`. `.mcp.json` is **not** read by `verify_vanilla_settings` — that
+function only audits `.claude/settings.json`. MCP servers in a demo workspace
+augment Cody's tool surface for that one demo without affecting routing.
+
+Currently registered: **Ghost** (Timescale's "database for agents"). It gives
+Cody on-demand Postgres databases with pgvector, TimescaleDB hypertables,
+PostGIS, JSONB — anything that would otherwise force a demo to mock
+infrastructure or invent fixtures.
+
+| Server | Command | Why demo-only | Cleanup obligation |
+|---|---|---|---|
+| `ghost` | `npx -y @ghost.build/cli mcp start` | WAN-latency hosted DB unsuitable for UA's prod data plane (Task Hub, CSI, vault); appropriate for one-off demo workloads | Cody MUST call `ghost_delete` on success and record any DBs in `manifest.json.ghost_databases` so abandoned ones can be reclaimed |
+
+`GHOST_API_KEY` is registered in Infisical and injected by the UA daemon at
+subprocess launch. To enable a demo workspace to use Ghost, the operator
+provisions the workspace normally and ensures `GHOST_API_KEY` is set in
+Infisical — no per-workspace setup. See
+[Demo Workspace Provisioning Runbook §Ephemeral databases](../operations/demo_workspace_provisioning.md#step-6--optional-ephemeral-databases-via-ghost).
+
+To add a future MCP server, drop it into
+`src/universal_agent/templates/ua_demos_scaffold/.mcp.json` with a
+`${VAR}` placeholder for any token (per the MCP placeholder rule in CLAUDE.md)
+and register the var in Infisical. Do NOT add it to the top-level
+`/.mcp.json` — that would expose it to Simone, Atlas, and every other
+non-demo agent in UA, contradicting the "demo-only" scope.
 
 ---
 

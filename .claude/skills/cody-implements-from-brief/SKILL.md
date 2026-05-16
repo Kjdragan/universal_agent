@@ -185,6 +185,32 @@ write `BUILD_NOTES.md` describing exactly what happened, leave the task
 in OPEN status, and surface the situation. Simone will iterate via
 `cody-task-dispatcher.reissue_cody_demo_task_with_feedback`.
 
+## Ephemeral Postgres via Ghost (when the demo needs a real DB)
+
+Demo workspaces ship with `.mcp.json` that exposes the **Ghost** MCP server —
+on-demand Postgres databases with pgvector, TimescaleDB hypertables, PostGIS,
+and JSONB. Use this when the demo legitimately needs a database (e.g.
+demonstrating a memory pattern, a vector retrieval, a time-series feature)
+instead of inventing fixtures or scaffolding SQLite.
+
+Tools available: `ghost_create`, `ghost_sql`, `ghost_schema`, `ghost_fork`,
+`ghost_logs`, `ghost_delete`. The `GHOST_API_KEY` env var is injected by the
+UA daemon — you don't need to source it yourself.
+
+**Cleanup obligation.** Ghost's free tier is 100 hours/month for the whole UA
+account. Abandoned demo DBs burn that cap. Therefore:
+
+1. Record every DB you create in `manifest.json.ghost_databases: ["<name>"]`.
+2. On successful run, call `ghost_delete` on each name BEFORE writing the
+   final `manifest.json`.
+3. On failure, leave the DB intact AND keep its name in `manifest.json` so
+   the next iteration or operator audit can reclaim it via
+   `ghost list` / `ghost_delete`.
+
+If `${GHOST_API_KEY}` resolves empty (the MCP server fails to start), that's
+an Infisical bootstrap problem — write a `kind="blocker"` build note and
+stop. Do not invent a workaround.
+
 ## Failure modes that need build notes (not invention)
 
 | Symptom | Action |

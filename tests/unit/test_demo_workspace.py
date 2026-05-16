@@ -191,6 +191,51 @@ def test_smoke_workspace_smoke_py_is_runnable_python(tmp_path: Path):
     compile(text, str(smoke_path), "exec")
 
 
+def test_provision_ships_ghost_mcp_server(tmp_path: Path):
+    """Demo scaffold MUST ship a .mcp.json that exposes the Ghost server.
+
+    Ghost gives Cody ephemeral Postgres for demos that need pgvector /
+    TimescaleDB / PostGIS without operator setup. Demo-only — must not
+    pollute the top-level UA .mcp.json. The placeholder must use the
+    ${GHOST_API_KEY} substitution pattern (per CLAUDE.md MCP rule), never
+    a literal token.
+    """
+    result = provision_demo_workspace("demo_ghost_check", root=tmp_path)
+    mcp_path = result.workspace_dir / ".mcp.json"
+    assert mcp_path.exists(), "demo scaffold must ship .mcp.json"
+
+    config = json.loads(mcp_path.read_text(encoding="utf-8"))
+    servers = config.get("mcpServers", {})
+    assert "ghost" in servers, "ghost MCP server entry must be present"
+
+    ghost = servers["ghost"]
+    assert ghost.get("command") == "npx"
+    # Argv MUST resolve the @ghost.build/cli package and start the MCP server.
+    args = ghost.get("args", [])
+    assert "@ghost.build/cli" in args
+    assert "mcp" in args and "start" in args
+
+    # Env var MUST be a placeholder, never a literal token (CLAUDE.md MCP rule).
+    env = ghost.get("env", {})
+    assert env.get("GHOST_API_KEY") == "${GHOST_API_KEY}", (
+        "GHOST_API_KEY must be ${VAR} placeholder, not a literal — "
+        "literal tokens leak into git permanently"
+    )
+
+
+def test_smoke_workspace_does_not_ship_ghost_mcp(tmp_path: Path):
+    """The _smoke workspace is a pure liveness probe — no MCP servers.
+
+    Adding Ghost (or any other MCP server) to the smoke would burn the
+    100hr/mo Ghost free cap on every dependency-upgrade sweep and obscure
+    what's being smoke-tested.
+    """
+    result = provision_smoke_workspace(root=tmp_path)
+    assert not (result.workspace_dir / ".mcp.json").exists(), (
+        "smoke workspace must stay minimal — no .mcp.json"
+    )
+
+
 def test_provisioned_brief_files_are_placeholders(tmp_path: Path):
     """BRIEF/ACCEPTANCE/business_relevance ship as placeholders for Simone to fill in."""
     result = provision_demo_workspace("demo_placeholders", root=tmp_path)

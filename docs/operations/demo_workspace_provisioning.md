@@ -218,7 +218,67 @@ for the full CLI-vs-SDK distinction and which type of demo to use when.
 
 ---
 
-## Step 5 — Verify Cody's invocation contract
+## Step 6 — Optional: ephemeral databases via Ghost
+
+Demo workspaces ship with a `.mcp.json` that exposes the **Ghost** MCP server
+(Timescale's "database for agents"). When a demo needs a real Postgres
+(pgvector, TimescaleDB hypertables, PostGIS, JSONB at scale), Cody calls
+`ghost_create`, `ghost_sql`, `ghost_schema`, `ghost_fork`, `ghost_delete`
+as tools — no SDK, no connection-string plumbing, no operator setup per demo.
+
+**Operator one-time setup:**
+
+1. Sign in at https://ghost.build (GitHub OAuth) and generate an API key from
+   the account dashboard.
+2. Add it to Infisical at the same path as the rest of UA's MCP-consumed
+   secrets:
+
+   ```
+   key  = GHOST_API_KEY
+   value = ghost_pat_xxxxxxxxxxxx
+   ```
+
+3. Restart the UA daemon (or wait for the next deploy) so
+   `initialize_runtime_secrets()` injects the new var into `os.environ`.
+   From there, `_build_cli_env` propagates it into Cody's subprocess and the
+   `${GHOST_API_KEY}` placeholder in the demo's `.mcp.json` resolves.
+
+**First-run cost.** The MCP server launches via `npx -y @ghost.build/cli` —
+the first demo to invoke it downloads ~2 MB. Subsequent demos hit the npm
+cache. If you'd rather avoid the per-demo cold start, install the CLI
+globally with `npm install -g @ghost.build/cli` (the same `.mcp.json`
+command resolves to the installed binary because of npm's lookup order).
+
+**Cleanup obligation (CRITICAL).** Ghost's free tier is 100 hours/month across
+the whole UA account. Abandoned demo DBs burn that cap. The cleanup contract
+is enforced by convention, not code:
+
+| Phase | Responsibility |
+|---|---|
+| Cody, during the demo run | Record every created DB in `manifest.json.ghost_databases: ["<name>"]` before calling any `ghost_sql` against it. |
+| Cody, on successful run | Call `ghost_delete` on each DB before writing the final `manifest.json`. |
+| Cody, on failed run | Leave the DB intact AND keep its name in `manifest.json` so the next iteration / operator audit can reclaim it. |
+| Operator, weekly | Run `ghost list` from any shell that has `GHOST_API_KEY` set. Compare against `/opt/ua_demos/*/manifest.json` and `ghost delete` any orphans. |
+
+A future hardening would be a sweeper script that parses every demo's
+`manifest.json`, cross-references against `ghost list`, and deletes orphans
+automatically. Not built yet — manual audit is the current contract.
+
+**Demos that should NOT use Ghost:**
+- The `_smoke` workspace (no `.mcp.json`; it's a pure liveness probe).
+- Any demo whose acceptance contract can be met with SQLite or in-memory
+  fixtures — Ghost burns the 100hr cap for no reason.
+
+**Demos that probably SHOULD use Ghost:**
+- pgvector retrieval demos.
+- TimescaleDB hypertable / continuous aggregate demos.
+- PostGIS spatial query demos.
+- Any demo whose acceptance contract explicitly names "real Postgres" or
+  one of the above extensions.
+
+---
+
+## Step 7 — Verify Cody's invocation contract
 
 When Cody's `cody-implements-from-brief` skill (PR 9) lands, it will:
 
@@ -257,3 +317,5 @@ Once the smoke workspace is provisioned and OAuth is set up:
 | `smoke.py` exits with code 1, `live_call: timeout` | Network issue or `claude` is hanging | Try `claude -p "test"` manually; check VPS network egress |
 | `uv run python smoke.py` complains "No virtual environment found" | The smoke template was deployed before PR 7b shipped the bundled `pyproject.toml` | Re-deploy or manually `cd /opt/ua_demos/_smoke && uv venv && uv pip install -r /dev/null` |
 | `Anthropic()` constructor in some demo Python file raises `Could not resolve authentication method` | Trying to use the Python SDK with the Max plan OAuth session, which the SDK ignores | Either rewrite the demo to shell out to `claude` (preferred for Claude Code feature demos), OR add an `ANTHROPIC_API_KEY` from `console.anthropic.com` to the workspace env (for SDK feature demos) |
+| Ghost MCP server fails to start with "missing GHOST_API_KEY" | `GHOST_API_KEY` not in Infisical, OR UA daemon hasn't restarted since it was added | Add the var to Infisical (Step 6), then `sudo systemctl restart ua-daemon` (or whatever the production service is named) so `initialize_runtime_secrets()` re-fetches |
+| `ghost list` shows DBs no demo references | Abandoned by failed/orphaned demo. Burns the 100hr/mo cap. | Cross-reference against `/opt/ua_demos/*/manifest.json`. `ghost delete <name>` for orphans. |

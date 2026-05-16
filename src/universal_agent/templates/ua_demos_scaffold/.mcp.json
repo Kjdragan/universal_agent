@@ -1,0 +1,17 @@
+{
+  "_comment": "MCP servers available to Cody from inside this demo workspace. Distinct from .claude/settings.json (which must stay vanilla per verify_vanilla_settings). The Ghost server is the only entry by default — it gives Cody on-demand, ephemeral Postgres databases for demos that need them (pgvector, TimescaleDB hypertables, PostGIS, JSONB, etc.). See ../../../docs/operations/demo_workspace_provisioning.md §Ephemeral databases for the cleanup obligation.",
+  "mcpServers": {
+    "ghost": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@ghost.build/cli",
+        "mcp",
+        "start"
+      ],
+      "env": {
+        "GHOST_API_KEY": "${GHOST_API_KEY}"
+      }
+    }
+  }
+}
