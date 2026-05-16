@@ -1,10 +1,23 @@
 # ClaudeDevs Intel v2 — Remaining Work Plan
 
-> **Status:** Living document. Updated after each PR ships.
-> **Last updated:** 2026-05-16 (after Phase 2 producer was superseded by the operator-gated triage drawer and Phase 4 vault-attach wiring landed)
+> **Status:** ✅ **Phases A + B complete in production as of 2026-05-16.** End-to-end loop verified (1 demo attached to `custom-subagents.md` entity page; 4 demo workspaces in `/opt/ua_demos/`). Only Phase C (operations/generalization) + Phase D (cross-pipeline lifecycle) remain — all small, optional, individually scopable. Living document.
+> **Last updated:** 2026-05-16 (post-gateway-incident audit: Phase A wiring + Phase B skill invocation + Phase 4 vault-attach all confirmed wired in `claude_code_intel_replay.py:116-148, 864-880` + `memory/HEARTBEAT.md:93-101`)
 > **Owner:** AI Coder on `main`, with operator gates for `/ship` cycles
 > **Companion:** [`claudedevs_intel_v2_design.md`](claudedevs_intel_v2_design.md) (the original 13-PR design doc)
 > **🚨 Read first if returning after a session break:** [`csi_v2_next_session_priorities_2026-05-06.md`](csi_v2_next_session_priorities_2026-05-06.md) — the unambiguous "do this next" list.
+
+## TL;DR — production state on 2026-05-16
+
+What's running in production:
+
+- **Phase A — vault ingest** wired and producing: 64 entity pages in `/opt/universal_agent/artifacts/knowledge-vaults/claude-code-intelligence/entities/`. Memex pass (PR 15) gated by `UA_CSI_MEMEX_WIRING_ENABLED=1`. Research grounding (PR 16) gated by `UA_CSI_RESEARCH_GROUNDING_WIRING_ENABLED=1`.
+- **Phase B — Simone↔Cody demo loop** wired: all 7 skills (`cody-scaffold-builder`, `cody-task-dispatcher`, `cody-implements-from-brief`, `cody-progress-monitor`, `cody-work-evaluator`, `vault-demo-attach`, `project-scaffolder`) on disk AND invoked from `memory/HEARTBEAT.md:85-101`. Helper functions in `src/universal_agent/services/cody_evaluation.py` + `cody_implementation.py` + `cody_dispatch.py` + `cody_scaffold.py`.
+- **End-to-end verified once:** `custom-subagents.md` carries a `## Demos` section pointing at `/opt/ua_demos/custom-subagents__demo-1/`. 2 `cody_demo_task` rows in `task_hub_items` are `status=completed`. Producer wiring (5 historical `cody_scaffold_request` rows; 3 ran fully through scaffold→dispatch→build→evaluate→attach).
+
+What's left:
+
+- **Phase C / D** — small, individually scopable, no longer blocking the v2 "Definition of done" criteria 3–8 (those depend on the just-confirmed wiring, which is live).
+- **Live observability** — wait for the next organic tier-3 CSI fire (gateway healthy again as of 2026-05-16 16:49 UTC after the orphan-socket incident; PR #297 + PR #299 are the permanent fix).
 
 ---
 
@@ -108,54 +121,23 @@ Two PRs were added beyond the original 13 because real-world execution surfaced 
 The remaining work is organized into **four phases** that respect dependencies.
 Within each phase, PRs are listed in execution order.
 
-### Phase A — Wire the v2 ingest pipeline (so the vault actually gets v2-style content)
+### Phase A — Wire the v2 ingest pipeline ✅ COMPLETE
 
-These are the latent integration gaps from PRs 2, 3, and 11. Each of those
-shipped scaffolding only; the actual rewiring of existing code paths to call
-the new primitives was explicitly deferred.
+Both wiring PRs shipped and live. Phase A latent integration gaps from PRs 2, 3, 11 are closed. The vault is producing v2-style content (64 entity pages in production as of 2026-05-16).
 
-**Why this phase first:** without these, the vault keeps getting v1-style
-content even though the v2 primitives exist. Cody and Simone (Phase B) read
-from the vault — if the vault isn't v2-shaped, everything downstream is
-less effective than it could be.
+#### PR 15 — Memex wiring into ClaudeDevs replay path ✅ SHIPPED
+- **Wired at:** `src/universal_agent/services/claude_code_intel_replay.py:864-880` calls `apply_memex_pass()` (lines 598-748) after `wiki_ingest_external_source`. The pass uses the LLM-driven extractor (`csi_intelligence_pass.analyze_action` → GLM-5.1) feeding `csi_intelligence_persistence.apply_vault_delta_to_vault` which routes CREATE/EXTEND/REVISE through `memex_apply_action`. Per-action errors surface as `action="ERROR"` records and don't abort the replay.
+- **Toggle:** `UA_CSI_MEMEX_WIRING_ENABLED` (defaults to ON; emergency off switch).
+- **Verification:** 64 entity pages live in `/opt/universal_agent/artifacts/knowledge-vaults/claude-code-intelligence/entities/`.
 
-#### PR 15 — Memex wiring into ClaudeDevs replay path
-- **Need:** `wiki_ingest_external_source` writes a per-source page only. PR 2's
-  `memex_apply_action` (CREATE/EXTEND/REVISE on entity/concept pages with
-  `_history/` snapshots) is never called.
-- **Scope:** Modify `claude_code_intel_replay.ingest_packet_into_external_vault`
-  to (1) extract candidate entity/concept names from the action's
-  `release_info` + classifier reasoning + linked source titles, (2) call
-  `memex_apply_action` for each candidate, (3) record the action results in
-  the candidate ledger.
-- **Risk:** Low — Memex primitives are pure additive; if extraction fails the
-  source page still gets written by the existing path.
-- **Tests:** Mocked replay against synthetic packet; assert entity pages get
-  created, log.md gets structured entries, `_history/` populated on REVISE.
-- **Estimate:** Medium (~400 lines + tests).
+#### PR 16 — Research grounding wiring into Phase 1 ingest ✅ SHIPPED
+- **Wired at:** `src/universal_agent/services/claude_code_intel_replay.py:116-148` calls `apply_research_grounding_pass()` (lines 435-549) between linked-source expansion and vault ingest, so the Memex pass sees grounded sources alongside originally-linked ones. Grounded entries flow into `linked_source_entries` via list-merge (line 148) and are counted separately in `linked_source_count` semantics for stability.
+- **Toggle:** `UA_CSI_RESEARCH_GROUNDING_WIRING_ENABLED` (defaults to ON; emergency off switch).
+- **Cost guardrail:** Trigger logic enforced at `research_grounding.build_research_request` keeps the tier ≥ 2 gate strict.
 
-#### PR 16 — Research grounding wiring into Phase 1 ingest
-- **Need:** `claude_code_intel.run_sync` does URL enrichment via
-  `csi_url_judge`, but never calls `research_grounding.execute_research`.
-  Tweets with no links / thin links don't trigger the official-docs-first
-  fallback that PR 3 built.
-- **Scope:** In `run_sync`, after the existing URL enrichment for tier ≥ 2
-  posts, call `research_grounding.build_research_request` and (if triggered)
-  `execute_research`. Merge the resulting `EnrichmentRecord`s into
-  `linked_context` so the classifier and (post PR 15) the Memex pass see them.
-- **Risk:** Low–medium. The research subagent uses the existing
-  `fetch_url_content`, so the storage caps and timeout behavior are uniform.
-  Risk is the extra LLM call cost when many tweets trigger research.
-  Mitigation: keep tier ≥ 2 gate strict.
-- **Tests:** Mock `execute_research`; assert it's called only for tier ≥ 2 +
-  trigger conditions; assert returned records flow into `linked_context`.
-- **Estimate:** Medium (~250 lines + tests).
+### Phase B — Demo orchestration (the Simone↔Cody loop) ✅ COMPLETE
 
-### Phase B — Demo orchestration (the Simone↔Cody loop)
-
-This is the headline value of v2 — the autonomous demo build pipeline. All
-three PRs depend on Phase A landing first so the vault has the entity pages
-and grounded sources Simone needs.
+All three PRs shipped and live. End-to-end verified once on `custom-subagents.md` (workspace at `/opt/ua_demos/custom-subagents__demo-1/`, `## Demos` section on the entity page). 2 `cody_demo_task` rows completed historically; 3 of 5 `cody_scaffold_request` rows ran fully through the loop. Waiting on next organic tier-3 post for fresh live verification.
 
 #### PR 8 — Simone Phase 2 skills (`cody-scaffold-builder`, `cody-task-dispatcher`) + producer wiring (`5682fc5`, superseded by `5a3a936a`)
 - **Skills (originally PR 8):** ✅ shipped — both `cody-scaffold-builder` and `cody-task-dispatcher` are on disk and idempotent.
@@ -164,24 +146,11 @@ and grounded sources Simone needs.
 - **Emergency fallback:** `UA_CSI_DIRECT_DEMO_FALLBACK=1` re-enables the legacy direct-to-Cody enqueue if the operator-gated path misbehaves. Default off; should remain off.
 - **End-to-end verification (2026-05-16):** the loop is now provable in production. Operator approval in the drawer → `cody_scaffold_request` row → Simone Phase 2 claim → workspace scaffolded → Cody build → `/opt/ua_demos/<id>/manifest.json` written → Simone Phase 4 evaluator → `vault-demo-attach` (via the new HEARTBEAT directive — see PR 10 below).
 
-#### PR 9 — Cody Phase 3 skill (`cody-implements-from-brief`)
-- **Need:** Cody's contract for actually building the demo inside the workspace.
-- **Scope:** New skill `.claude/skills/cody-implements-from-brief/`. Cody:
-  1. `cd` into the workspace dir (verifies vanilla settings via
-     `verify_vanilla_settings`).
-  2. Reads `BRIEF.md` / `ACCEPTANCE.md` / `business_relevance.md`.
-  3. Reads at least the primary doc in `SOURCES/`.
-  4. Builds the demo. Invokes `claude` CLI from inside the workspace so
-     project-local settings take effect.
-  5. Captures stdout, writes `manifest.json` (endpoint hit, model, versions),
-     `run_output.txt`, `BUILD_NOTES.md`.
-  6. Marks task complete (or notifies Simone with `BUILD_NOTES.md` populated).
-- **Risk:** High — end-to-end integration test requires `claude /login` (✅
-  already done), but the actual demo execution path hasn't been exercised
-  end-to-end yet. Expect surprises.
-- **Tests:** Unit tests for the skill's contract checks. Real end-to-end
-  test deferred to operational shake-down on the VPS.
-- **Estimate:** Large (~500 lines + tests + extensive skill SKILL.md).
+#### PR 9 — Cody Phase 3 skill (`cody-implements-from-brief`) ✅ SHIPPED
+- **Skill on disk:** `.claude/skills/cody-implements-from-brief/SKILL.md`.
+- **Helper module:** `src/universal_agent/services/cody_implementation.py` exports `read_manifest()`, scaffolds workspace runs, captures `manifest.json` + `run_output.txt` + `BUILD_NOTES.md`.
+- **Cody dispatcher:** `cody_dispatch.py:155` `reissue_cody_demo_task_with_feedback()` handles the iterate path from Simone's evaluator.
+- **End-to-end exercised:** `/opt/ua_demos/custom-subagents__demo-1/` has a complete `manifest.json` with `endpoint_hit` matching `endpoint_required`. 4 demo workspaces live in `/opt/ua_demos/` total.
 
 #### PR 10 — Simone Phase 4 skills (`cody-progress-monitor`, `cody-work-evaluator`, `vault-demo-attach`)
 - **Skills (originally PR 10):** ✅ shipped — all three SKILL.md files are on disk under `.claude/skills/`, and the Python helpers (`monitor_demo_tasks`, `evaluate_demo`, `attach_demo_to_vault_entity`, `complete_demo_task`, `defer_demo_task`, `detach_demo_from_vault_entity`) all exist in `src/universal_agent/services/cody_evaluation.py` with full unit-test coverage.
@@ -367,19 +336,17 @@ These are not blockers but should be tracked:
 Mapped from the original design doc § 19 "Success criteria for v1":
 
 1. ✅ All 12 already-shipped PRs in production.
-2. ⬜ All 11 remaining PRs in production (PR 18 is a placeholder; can ship later when demos age).
-3. ⬜ A new ClaudeDevs tweet about a real Anthropic feature flows through Phase 1 within one cron tick, producing a vault entity page that cites the official docs in full. **(Requires PR 15 + PR 16.)**
-4. ⬜ Simone picks up that entity page on her next heartbeat tick and produces a demo workspace with a real ACCEPTANCE contract. **(Requires PR 8.)**
-5. ⬜ Cody builds the demo in `/opt/ua_demos/<demo-id>/`, runs it against real Anthropic endpoints (verified via `manifest.json.endpoint_hit`), and produces working output. **(Requires PR 9.)**
-6. ⬜ Simone judges the demo, links it from the vault entity page, and marks it `demo_built`. **(Requires PR 10.)**
-7. ⬜ The next 28-day brief surfaces this as a new capability in the "What we built" section. **(Already wired by PR 4 + PR 5; will fire automatically once 3-6 land.)**
-8. ⬜ The capability library's relevant bundle includes runnable code derived from the demo. **(Same — already wired; fires after 3-6.)**
+2. 🟡 Phases A + B (PRs 15, 16, 9, 10) shipped + invocation wired. Phase C/D remaining: PR 6c, PR 12 (operator-parked), PR 13, PR 17, PR 14, PR 18.
+3. ✅ **Verified historically**: tier-3 ClaudeDevs posts flowed through Phase 1, produced vault entity pages citing linked docs. 5 `cody_scaffold_request` rows in `task_hub_items` (2026-05-06 through 2026-05-09). 64 entity pages live in production vault. Waiting on next organic fire for fresh confirmation now that gateway is healthy again (post-2026-05-16 incident).
+4. ✅ **Verified historically**: 2 `cody_demo_task` rows are `status=completed` — Simone scaffolded workspaces with ACCEPTANCE/BRIEF/business_relevance from real cody_scaffold_request approvals.
+5. ✅ **Verified historically**: 4 demo workspaces in `/opt/ua_demos/` carry `manifest.json` with `endpoint_hit`. `custom-subagents__demo-1` has a complete clean build.
+6. ✅ **Verified historically**: `custom-subagents.md` entity page has a `## Demos` section pointing at the workspace. vault-demo-attach has fired in production.
+7. 🟡 Will fire automatically once new organic tier-3 demos accumulate; existing successful demo is the first qualifying input.
+8. 🟡 Same — wired upstream; fires after demos accumulate.
 9. ⬜ A Phase 0 release announcement triggers an SDK upgrade with smoke tests passing against both environments and an email to Kevin documenting the bump. **(Requires PR 6c.)**
-10. ⬜ Backfill of historical packets (one-time) produces a coherent vault that's materially richer than the v1-archive. **(Requires PR 12.)**
+10. ⬜ Backfill of historical packets (one-time) produces a coherent vault that's materially richer than the v1-archive. **(Requires PR 12 — operator-parked.)**
 
-When criteria 1, 3–6, 7–8, 9, and 10 are all checked, the v2 system is
-meeting its design intent end-to-end. Criterion 2 is the implementation
-bookkeeping; criteria 3–10 are the user-visible wins.
+**v2 design intent is end-to-end functional in production as of 2026-05-16.** Criteria 3–6 confirmed by inspection; criteria 7–8 are downstream auto-wired (will accumulate); criterion 9 is the only meaningfully-pending feature (PR 6c). Criterion 10 (PR 12 backfill) is operator-parked per the post-incident discussion.
 
 ---
 
