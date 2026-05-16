@@ -160,6 +160,38 @@ _CRON_WORKSPACE_KEEP_FILES = {
 _CRON_OUTPUT_FILENAME = "cron_result.md"
 
 
+def _persist_cron_run_output(
+    workspace_dir: str,
+    job_id: str,
+    run_id: str,
+    exit_code: Optional[int],
+    output_text: str,
+) -> None:
+    """Write full subprocess stdout+stderr to ``<workspace>/run.log``.
+
+    The CronRunRecord ``output_preview`` field is capped at 400 chars, which
+    truncates Python tracebacks at the call site and loses the actual
+    exception. This writes the full captured text to the per-session
+    ``run.log`` (overwrite mode) so the per-attempt artifact snapshot
+    captures it into ``attempts/NNN/run.log`` at attempt finalize. Best-
+    effort: any I/O failure is logged and swallowed.
+    """
+    try:
+        path = Path(workspace_dir) / "run.log"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        header = (
+            f"=== cron run_id={run_id} job_id={job_id} "
+            f"finished_at={datetime.now(timezone.utc).isoformat()} "
+            f"exit_code={exit_code} ===\n"
+        )
+        path.write_text(header + (output_text or ""), encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            "Failed to persist full cron output for job %s run %s: %s",
+            job_id, run_id, exc,
+        )
+
+
 def _normalize_timeout_seconds(value: Any) -> Optional[int]:
     if value is None:
         return None
@@ -1544,11 +1576,25 @@ class CronService:
                                     except Exception:
                                         stdout, stderr = b"", b""
                                     output_text = stdout.decode(errors="replace") + "\n" + stderr.decode(errors="replace")
+                                    _persist_cron_run_output(
+                                        job.workspace_dir,
+                                        job.job_id,
+                                        record.run_id,
+                                        proc.returncode,
+                                        output_text,
+                                    )
                                     record.output_preview = output_text[:400]
                                     raise
 
                                 exit_code = proc.returncode
                                 output_text = stdout.decode(errors="replace") + "\n" + stderr.decode(errors="replace")
+                                _persist_cron_run_output(
+                                    job.workspace_dir,
+                                    job.job_id,
+                                    record.run_id,
+                                    exit_code,
+                                    output_text,
+                                )
 
                                 if exit_code == 0:
                                     record.status = "success"
