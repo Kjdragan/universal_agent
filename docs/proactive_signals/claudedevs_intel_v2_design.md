@@ -712,3 +712,12 @@ The system is working when:
 8. Backfill of historical packets (one-time) produces a coherent vault that's materially richer than the v1-archive.
 
 When all eight happen end-to-end, ship.
+
+---
+
+## 20. Addendum — 2026-05-09 flyout flip and 2026-05-16 follow-ups
+
+The original Phase 2 design (§9) assumed the tier-3 producer would write directly to Task Hub on every fire. That auto-queue path shipped on 2026-05-06 (`5682fc5`) and was **removed on 2026-05-09 (`5a3a936a`)** in favor of an operator-gated triage drawer at `/dashboard/claude-code-intel`. Rationale: the auto-queue was producing more `cody_scaffold_request` rows than the human-review loop could absorb, swamping Task Hub and starving Cody of focused work. See [`csi_demo_triage_handoff_2026-05-09.md`](csi_demo_triage_handoff_2026-05-09.md) for the full validation plan; see [`claudedevs_intel_v2_remaining_work.md`](claudedevs_intel_v2_remaining_work.md) for the reconciled status table.
+
+A secondary failure mode emerged: the drawer had no proactive surfacing, so 12+ tier-3 candidates accumulated between 2026-05-09 and 2026-05-16 with zero operator approvals. The 2026-05-16 follow-up adds a pending-count block to the daily morning briefing (`src/universal_agent/scripts/briefings_agent.py`) and wires the Phase 4 `vault-demo-attach` skill into the Simone heartbeat directive (`memory/HEARTBEAT.md`) so a demo's success closes the loop back to its entity page. Treat §9's "auto-queue" wording as historical; the operator click is the canonical producer path.
+
