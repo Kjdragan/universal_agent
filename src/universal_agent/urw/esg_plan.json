@@ -61,7 +61,7 @@
                 },
                 {
                     "name": "Email Report",
-                    "description": "Email the final report as an attachment to kevin.dragan@outlook.com. Include a brief executive summary in the email body.",
+                    "description": "Email the final report as an attachment to kevinjdragan@gmail.com. Include a brief executive summary in the email body.",
                     "use_case": "Deliver findings to stakeholder.",
                     "subagent": "computer-user",
                     "success_criteria": [

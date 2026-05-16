@@ -223,7 +223,7 @@ def _cleanup_task_description(*, chosen_theme: str, note: str = "", preference_c
         "8. Open a pull request targeting develop for Kevin review. A PR is the required final work product unless no worthwhile improvement is found.",
         "9. Do not merge, push to main, deploy, delete production data, or make public releases.",
         "10. In the PR body, include rationale, changed files, tests run, red-green evidence or why it was not applicable, risks, rollback notes, and why the scope remained low/medium complexity.",
-        "11. After creating the PR, use the AgentMail tools from the shared VP mailbox (vp.agents@agentmail.to) to send an email to kevin.dragan@outlook.com.",
+        "11. After creating the PR, use the AgentMail tools from the shared VP mailbox (vp.agents@agentmail.to) to send an email to kevinjdragan@gmail.com.",
         "12. CC Simone's inbox (oddcity216@agentmail.to) on the email for situational awareness.",
         "13. Prefix the subject with '[VP Status]' and include this header at the top of the email body before your content:",
         "   '── VP Status Update (FYI — no action required) ──",
