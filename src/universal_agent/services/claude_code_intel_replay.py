@@ -47,6 +47,10 @@ class ClaudeCodeIntelReplayConfig:
     expand_sources: bool = True
     artifacts_root: Path | None = None
     work_product_dir: Path | None = None
+    # PR 17 — passed through to queue_follow_up_tasks so the task-hub
+    # metadata resolves vault_slug/knowledge_base_slug from the right
+    # intel lane. Default preserves single-lane back-compat.
+    lane_slug: str = "claude-code-intelligence"
 
 
 def resolve_lane_root(artifacts_root: Path | None = None) -> Path:
@@ -99,6 +103,7 @@ def replay_packet(
                 handle=handle,
                 packet_dir=packet_dir,
                 actions=actions,
+                lane_slug=config.lane_slug,
             )
 
     linked_sources_path = write_linked_sources(packet_dir=packet_dir, actions=actions)
