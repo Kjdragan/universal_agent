@@ -53,6 +53,8 @@ Process starts
 
 The gateway uses `src/universal_agent/infisical_loader.py` to load secrets at startup. This is the preferred approach — secrets are fetched live, never stored on disk.
 
+**Authoritative-overwrite semantics (2026-05-16):** `_inject_environment_values()` defaults to `overwrite=False` for safety (used by the dotenv fallback path), but `initialize_runtime_secrets()` calls it with `overwrite=True` so Infisical values **win over any pre-existing `os.environ` entries** (systemd `Environment=`, bootstrap `.env`, Python module-import side effects). A small whitelist of bootstrap identity keys is preserved via `_BOOTSTRAP_IDENTITY_KEYS` — `FACTORY_ROLE`, `UA_RUNTIME_STAGE`, `UA_MACHINE_SLUG`, `UA_DEPLOYMENT_PROFILE`, `INFISICAL_*`, etc. — so a machine's role/stage cannot be moved by remote config. Operator-flippable feature flags (`UA_ATLAS_DIRECT_DISPATCH_ENABLED`, `UA_CRON_BACKFILL_ON_RESTART`, etc.) flow from Infisical → `os.environ` reliably even when those keys also happen to be set by the systemd unit. Regression test: `tests/unit/test_infisical_loader.py::test_initialize_runtime_secrets_overwrites_preexisting_env_for_non_identity_keys`.
+
 ### Next.js Web UI (deploy-time rendering)
 
 ```

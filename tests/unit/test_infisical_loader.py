@@ -187,6 +187,39 @@ def test_initialize_runtime_secrets_preserves_bootstrap_identity_over_infisical(
     assert infisical_loader.os.getenv("UA_MACHINE_SLUG") == "kevins-desktop"
     assert infisical_loader.os.getenv("UA_OPS_TOKEN") == "token"
 
+def test_initialize_runtime_secrets_overwrites_preexisting_env_for_non_identity_keys(monkeypatch):
+    """Regression: 2026-05-16 incident — operator set
+    UA_ATLAS_DIRECT_DISPATCH_ENABLED=0 in Infisical to disable a runaway cron,
+    but the loader silently skipped it because the key was already present in
+    os.environ (set by systemd / .env / module-import side effects). Infisical
+    is the single source of truth for application config — its values MUST
+    win over pre-existing env entries for any key that isn't a bootstrap
+    identity key.
+    """
+    monkeypatch.setenv("UA_DEPLOYMENT_PROFILE", "local_workstation")
+    monkeypatch.setenv("UA_INFISICAL_ENABLED", "1")
+    monkeypatch.setenv("INFISICAL_CLIENT_ID", "client")
+    monkeypatch.setenv("INFISICAL_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("INFISICAL_PROJECT_ID", "project")
+    # Simulate systemd/.env pre-populating the env with a stale value.
+    monkeypatch.setenv("UA_ATLAS_DIRECT_DISPATCH_ENABLED", "1")
+    monkeypatch.setenv("UA_SOME_FEATURE_FLAG", "old")
+    monkeypatch.setattr(
+        infisical_loader,
+        "_fetch_infisical_secrets",
+        lambda: {
+            "UA_ATLAS_DIRECT_DISPATCH_ENABLED": "0",
+            "UA_SOME_FEATURE_FLAG": "new",
+        },
+    )
+
+    result = infisical_loader.initialize_runtime_secrets(force_reload=True)
+
+    assert result.ok is True
+    assert infisical_loader.os.getenv("UA_ATLAS_DIRECT_DISPATCH_ENABLED") == "0"
+    assert infisical_loader.os.getenv("UA_SOME_FEATURE_FLAG") == "new"
+
+
 def test_initialize_runtime_secrets_aliases_zai_api_key(monkeypatch):
     monkeypatch.setenv("UA_DEPLOYMENT_PROFILE", "local_workstation")
     monkeypatch.setenv("UA_INFISICAL_ENABLED", "1")
