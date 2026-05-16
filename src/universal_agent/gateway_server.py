@@ -33279,19 +33279,18 @@ if __name__ == "__main__":
 ╚══════════════════════════════════════════════════════════════╝
     """)
 
-    # ``reuse_port=True`` enables SO_REUSEPORT on the listen socket so that
-    # restarts don't lose to the kernel TIME_WAIT / lingering-socket state
-    # from the previous PID. Without it, ``sudo systemctl restart`` (and the
-    # deploy.yml restart path) can race the kernel's port release and the
-    # new uvicorn fails with errno 98 even though no other process is
-    # holding 8002 — seen repeatedly during the 2026-05-16 incident where
-    # every fresh gateway PID logged "address already in use" right after
-    # "Application startup complete" and entered shutdown mode. With
-    # SO_REUSEPORT the new bind succeeds regardless of TIME_WAIT.
+    # PR #293 added ``reuse_port=True`` to address restart-race port-bind
+    # failures, but uvicorn 0.46.0 (currently pinned in production) doesn't
+    # accept that keyword and the gateway crash-looped with TypeError. The
+    # restart-race issue is real, but the fix requires either bumping
+    # uvicorn or constructing the socket manually with SO_REUSEPORT before
+    # passing it to uvicorn.Config — not just a kwarg flip. Revert to the
+    # plain call for now; the retry-loop below already softens transient
+    # bind failures.
     max_retries = 5
     for attempt in range(max_retries):
         try:
-            uvicorn.run(app, host=host, port=port, log_level="info", reuse_port=True)
+            uvicorn.run(app, host=host, port=port, log_level="info")
             break
         except OSError as e:
             if "address already in use" in str(e).lower() or getattr(e, "errno", None) == 98:
