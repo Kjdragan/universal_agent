@@ -219,20 +219,13 @@ All three PRs shipped and live. End-to-end verified once on `custom-subagents.md
 
 ### Phase D — Cross-pipeline generalization & lifecycle
 
-#### PR 14 — YouTube tutorial endpoint_profile generalization
-- **Need:** Per Kevin's question on 2026-05-05: YouTube tutorials about
-  Claude/Anthropic features hit the same dual-environment trap. Tutorials
-  about Gemini, OpenAI, etc. are fine where they are.
-- **Scope:**
-  - Generalize `demo_workspace.provision_demo_workspace` to accept
-    `endpoint_profile: anthropic_native | gemini_native | openai_native | none`.
-  - Update `youtube-tutorial-creation` skill to detect Anthropic-related
-    tutorials and route them through the demo workspace pattern.
-  - Update `youtube_daily_digest` dispatcher to pass topic hints.
-- **Risk:** Medium — touches a separate pipeline and a skill outside the v2
-  CSI scope.
-- **Tests:** Profile-aware provisioning; routing decision in tutorial skill.
-- **Estimate:** Large (~600 lines + tests + skill update).
+#### PR 14 — YouTube demo unification (next-phase initiative)
+
+**Scope expanded 2026-05-16.** What the original design framed as "YouTube tutorial endpoint_profile generalization" is in fact the trigger for a broader consolidation: the CSI demo workspace pattern (BRIEF/ACCEPTANCE/manifest + evaluation + iteration + vault-attach) is content-agnostic and would substantially improve the YouTube tutorial pipeline. The runnable-demo half of YouTube tutorials should flow through the same Simone→Cody loop as CSI demos; the YouTube skill should keep producing `CONCEPT.md` as a standalone tutorial doc.
+
+**Trigger condition (operator preference 2026-05-16):** Defer until CSI v2 has run live end-to-end for a meaningful period — minimum ≥5 organic tier-3 demo-triage approvals flowing scaffold→build→evaluate→attach without operator intervention.
+
+**Full plan + reasoning + cost breakdown:** [`youtube_demo_unification_plan.md`](youtube_demo_unification_plan.md). Sub-PRs PR 14a (generalize `provision_demo_workspace`), PR 14b (`youtube_demo_request` Task Hub plumbing), PR 14c (producer wiring in `youtube-tutorial-creation`), PR 14d (optional `youtube-tutorials` vault). Combined ~560 lines + tests.
 
 #### PR 18 — Demo lifecycle / retire policy
 - **Need:** Per design doc § 17 deferred questions. A demo built against
