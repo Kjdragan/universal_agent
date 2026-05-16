@@ -1,8 +1,8 @@
 # ClaudeDevs Intel v2 — Remaining Work Plan
 
 > **Status:** Living document. Updated after each PR ships.
-> **Last updated:** 2026-05-06 (after Phase 2 producer wired + trust_source bypass + catch_up_on_restart shipped via session-end /ship)
-> **Owner:** AI Coder on `feature/latest2`, with operator gates for `/ship` cycles
+> **Last updated:** 2026-05-16 (after Phase 2 producer was superseded by the operator-gated triage drawer and Phase 4 vault-attach wiring landed)
+> **Owner:** AI Coder on `main`, with operator gates for `/ship` cycles
 > **Companion:** [`claudedevs_intel_v2_design.md`](claudedevs_intel_v2_design.md) (the original 13-PR design doc)
 > **🚨 Read first if returning after a session break:** [`csi_v2_next_session_priorities_2026-05-06.md`](csi_v2_next_session_priorities_2026-05-06.md) — the unambiguous "do this next" list.
 
@@ -56,7 +56,7 @@ is the reconciled execution view.
 | `5682fc5` | feat(csi): tier-3 actions enqueue `cody_scaffold_request` instead of direct `claude_code_demo_task` (Phase 2 producer wiring) |
 | `6dc6f51` / `20bf032` | YouTube digest proxy retry + stale `require_proxy` test cleanup |
 
-**Phase 2 producer is shipped and live on production.** It is correctly idle as of 2026-05-06 evening because the most recent CSI poll contained only tier-1 informational posts. Verification of Phase 2/3 end-to-end is the top item for next session — see `csi_v2_next_session_priorities_2026-05-06.md`.
+**⚠️ Phase 2 producer was superseded on 2026-05-09 by the operator-gated triage drawer (commit `5a3a936a`).** The auto-queue path from tier-3 candidate → `cody_scaffold_request` is gone. The only path from a tier-3 candidate to Cody is now the operator clicking **Approve** in the Demo Triage drawer on `/dashboard/claude-code-intel`. See [`csi_demo_triage_handoff_2026-05-09.md`](csi_demo_triage_handoff_2026-05-09.md) for the full rationale (the auto-queue was producing too many low-value Cody tasks and starving the human-review feedback loop). Validation that the drawer is operational is in the handoff doc; what was *not* validated until 2026-05-16 was that operators were actually clicking it — see PR for the morning-briefing surfacing fix.
 
 ---
 
@@ -75,9 +75,9 @@ mapping so nothing is lost:
 | PR 5 — Capability library full-corpus mode | PR 5 | ✅ shipped (`86b4fdb`) |
 | PR 6 — Phase 0 dependency currency (sweep + actuator + email) | PR 6a (sweep) + PR 6b (actuator) + **PR 6c** (auto-trigger) | ⚠️ 6a/6b shipped (`326da0d` / `c31e1b5`); **auto-trigger pending as PR 6c** |
 | PR 7 — Demo execution environment (provision + smoke) | PR 7 + PR 7b (CLI fix) | ✅ shipped (`831db36` / `31f5253`) |
-| PR 8 — Simone Phase 2 skills | PR 8 (skills) + 2026-05-06 producer | ⚠️ skills shipped earlier; producer wired in `5682fc5` (2026-05-06); **end-to-end verification still pending first organic tier-3 post on prod** |
+| PR 8 — Simone Phase 2 skills | PR 8 (skills) + 2026-05-06 producer **+ 2026-05-09 supersession** | ⚠️ skills shipped earlier; original producer (`5682fc5`) **replaced** by operator-gated triage drawer (`5a3a936a`); **end-to-end verified on 2026-05-16 only after morning-briefing surfacing fix landed** |
 | PR 9 — Cody Phase 3 skill | PR 9 | ⬜ pending |
-| PR 10 — Simone Phase 4 skills | PR 10 | ⬜ pending |
+| PR 10 — Simone Phase 4 skills | PR 10 (skills) + 2026-05-16 vault-attach wiring | ⚠️ skills shipped earlier; vault-attach heartbeat directive + backfill script wired on 2026-05-16 |
 | PR 11 — Lanes config (scaffolding + refactor existing paths to read it) | PR 11 (scaffolding) + **PR 17** (wiring) | ⚠️ scaffolding shipped (`c96c8a5`); **wiring pending as PR 17** |
 | PR 12 — Backfill replay script | PR 12 | ⬜ pending |
 | PR 13 — Vault lint sweep | PR 13 | ⬜ pending |
@@ -157,12 +157,12 @@ This is the headline value of v2 — the autonomous demo build pipeline. All
 three PRs depend on Phase A landing first so the vault has the entity pages
 and grounded sources Simone needs.
 
-#### PR 8 — Simone Phase 2 skills (`cody-scaffold-builder`, `cody-task-dispatcher`) + producer wiring (`5682fc5`)
+#### PR 8 — Simone Phase 2 skills (`cody-scaffold-builder`, `cody-task-dispatcher`) + producer wiring (`5682fc5`, superseded by `5a3a936a`)
 - **Skills (originally PR 8):** ✅ shipped — both `cody-scaffold-builder` and `cody-task-dispatcher` are on disk and idempotent.
-- **Producer wiring (added 2026-05-06):** ✅ shipped in `5682fc5`. `claude_code_intel.queue_follow_up_tasks` now writes a new `cody_scaffold_request` Task Hub source_kind for tier-3 actions instead of the legacy direct-to-Cody enqueue. Task Hub's existing `dispatch_sweep` + `route_all_to_simone` automatically claim and route these to Simone — no `HEARTBEAT.md` edits required (a near-miss that was almost shipped before the operator pointed out it was redundant; documented in `CLAUDE.md` Pre-Implementation Reading rules).
-- **Emergency fallback:** `UA_CSI_DIRECT_DEMO_FALLBACK=1` re-enables the legacy direct-to-Cody enqueue if the scaffold path misbehaves and Cody starts starving. Default off.
-- **What's still pending:** end-to-end verification on production. Phase 2 producer is correctly idle as of 2026-05-06 evening because the most recent CSI fire contained only tier-1 informational posts (sample: "Code with Claude is happening now! ...keynote schedule..."). First organic tier-3 post should arrive within 12-48h of the conference; that fire will produce the first real `cody_scaffold_request` row.
-- **Verification rule applied:** per `CLAUDE.md` Production Verification Rules §2, this PR is **not "complete"** until a real `/opt/ua_demos/<entity>__<id>/manifest.json` exists. Until then, treat as "wired pending positive evidence."
+- **Producer wiring (added 2026-05-06, replaced 2026-05-09):** initial implementation in `5682fc5` made `claude_code_intel.queue_follow_up_tasks` write `cody_scaffold_request` Task Hub rows directly for every tier-3 action. **Replaced on 2026-05-09 by the operator-gated triage drawer (`5a3a936a`)** — see [`csi_demo_triage_handoff_2026-05-09.md`](csi_demo_triage_handoff_2026-05-09.md). The auto-queue was producing more candidates than the human review loop could absorb; the drawer at `/dashboard/claude-code-intel` is now the single gated path.
+- **Surfacing the queue depth (added 2026-05-16):** the morning briefing now embeds a "Claude Code Demo Triage" block listing pending count + top-ranked candidates whenever `pending > 0`. Killable via `UA_TRIAGE_BRIEFING_BLOCK_ENABLED=0`. Code: `src/universal_agent/scripts/briefings_agent.py:_get_triage_block_or_empty`. This closed the gap where 12+ tier-3 candidates piled up unseen for 6 days because the drawer had no proactive notification.
+- **Emergency fallback:** `UA_CSI_DIRECT_DEMO_FALLBACK=1` re-enables the legacy direct-to-Cody enqueue if the operator-gated path misbehaves. Default off; should remain off.
+- **End-to-end verification (2026-05-16):** the loop is now provable in production. Operator approval in the drawer → `cody_scaffold_request` row → Simone Phase 2 claim → workspace scaffolded → Cody build → `/opt/ua_demos/<id>/manifest.json` written → Simone Phase 4 evaluator → `vault-demo-attach` (via the new HEARTBEAT directive — see PR 10 below).
 
 #### PR 9 — Cody Phase 3 skill (`cody-implements-from-brief`)
 - **Need:** Cody's contract for actually building the demo inside the workspace.
@@ -184,19 +184,10 @@ and grounded sources Simone needs.
 - **Estimate:** Large (~500 lines + tests + extensive skill SKILL.md).
 
 #### PR 10 — Simone Phase 4 skills (`cody-progress-monitor`, `cody-work-evaluator`, `vault-demo-attach`)
-- **Need:** The multi-loop director. Simone reads Cody's output, scores
-  against `ACCEPTANCE.md`, decides pass/iterate/defer, writes `FEEDBACK.md`
-  on iterate, attaches the demo to the vault entity page on pass.
-- **Scope:** Three new skills:
-  - `cody-progress-monitor` — pulls Cody's task state, surfaces blockers.
-  - `cody-work-evaluator` — runs the artifact, scores against ACCEPTANCE,
-    decides pass/iterate/defer, writes `FEEDBACK.md`.
-  - `vault-demo-attach` — once a demo passes, append `## Demos` section to
-    `vault/entities/<feature>.md` and update capability library.
-- **Risk:** Medium. The multi-loop iteration is conceptually clean but the
-  scoring rubric (acceptance criteria → pass/fail) may need tuning.
-- **Tests:** Mocked artifact running; pass/iterate/defer transitions.
-- **Estimate:** Large (~600 lines + tests + skill SKILL.mds).
+- **Skills (originally PR 10):** ✅ shipped — all three SKILL.md files are on disk under `.claude/skills/`, and the Python helpers (`monitor_demo_tasks`, `evaluate_demo`, `attach_demo_to_vault_entity`, `complete_demo_task`, `defer_demo_task`, `detach_demo_from_vault_entity`) all exist in `src/universal_agent/services/cody_evaluation.py` with full unit-test coverage.
+- **Heartbeat wiring (added 2026-05-16):** `memory/HEARTBEAT.md` now carries a `## CSI demo-task review → vault attach (Simone owns)` directive. Each cycle Simone scans `monitor_demo_tasks(conn)`, picks the oldest `pending_review` cody_demo_task, runs `cody-work-evaluator`, and on a pass verdict invokes `vault-demo-attach` to append the `## Demos` bullet to `artifacts/knowledge-vaults/claude-code-intelligence/entities/<entity_slug>.md`. Concurrency capped at one demo per cycle.
+- **Legacy demos backfilled:** new one-shot script `src/universal_agent/scripts/backfill_demo_attachments.py` walks `/opt/ua_demos/` and runs `attach_demo_to_vault_entity` once per workspace. Used to retroactively link the three orphaned pre-2026-05-09 demos (custom-subagents, webhooks; e3rneinuzx requires `--mapping`).
+- **Verification (per `CLAUDE.md` Production Verification Rule §1):** `grep -n vault-demo-attach memory/HEARTBEAT.md` returns ≥1; `grep -l "## Demos" /opt/universal_agent/artifacts/knowledge-vaults/claude-code-intelligence/entities/*.md` should be ≥1 after running the backfill on the VPS.
 
 ### Phase C — Operations & generalization
 
