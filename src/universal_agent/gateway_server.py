@@ -14338,44 +14338,66 @@ async def lifespan(app: FastAPI):
 
         # ── Startup Recovery: Release orphaned task assignments ──────────
         # When the gateway crashes, in-progress tasks with seized assignments
-        # are left orphaned. Release them here with a short stale threshold
-        # (5 minutes) since we KNOW the process was dead.
-        try:
-            from universal_agent import task_hub as _recovery_task_hub
-            from universal_agent.services.email_task_bridge import (
-                reconcile_terminal_email_task_mappings,
-            )
-            _recovery_conn = connect_runtime_db(get_activity_db_path())
-            _recovery_conn.row_factory = sqlite3.Row
-            _recovery_task_hub.ensure_schema(_recovery_conn)
-            _recovery_result = _recovery_task_hub.release_stale_assignments(
-                _recovery_conn,
-                agent_id_prefix=["heartbeat:", "todo:"],
-                stale_after_seconds=300,  # 5 minutes — short at startup since process was dead
-            )
-            _running_sessions = {
-                str(session.session_id or "").strip()
-                for session in _gateway_live_session_summaries()
-                if getattr(session, "session_id", None)
-            }
-            _reconciled = _recovery_task_hub.reconcile_task_lifecycle(
-                _recovery_conn,
-                running_session_ids=_running_sessions,
-            )
-            _email_mapping_reconciled = reconcile_terminal_email_task_mappings(_recovery_conn)
-            if int(_recovery_result.get("finalized") or 0) > 0:
-                logger.warning(
-                    "🔄 Startup recovery: released %d orphaned task assignment(s) (reopened=%d)",
-                    int(_recovery_result.get("finalized") or 0),
-                    int(_recovery_result.get("reopened") or 0),
+        # are left orphaned. We sweep them via release_stale_assignments,
+        # reconcile_task_lifecycle, and reconcile_terminal_email_task_mappings.
+        #
+        # ALWAYS spawn this as a background task so lifespan startup can
+        # complete promptly. On a production-sized activity_state.db (180MB+
+        # observed during the 2026-05-16 deploy hang) these synchronous
+        # SQLite queries blocked the FastAPI ``Application startup
+        # complete`` signal for >8 minutes, causing deploys to fail the
+        # gateway ``/api/v1/health`` window in deploy.yml. Recovery still
+        # runs within a few seconds of startup; the only consequence of
+        # deferring is that orphaned tasks remain pending for those few
+        # seconds.
+        async def _run_startup_recovery_sweep() -> None:
+            try:
+                from universal_agent import task_hub as _recovery_task_hub
+                from universal_agent.services.email_task_bridge import (
+                    reconcile_terminal_email_task_mappings,
                 )
-            if any(int(_reconciled.get(key) or 0) > 0 for key in ("reopened", "reviewed", "completion_flagged", "delegated_backfilled")):
-                logger.warning("Startup task lifecycle reconciliation: %s", _reconciled)
-            if any(int(_email_mapping_reconciled.get(key) or 0) > 0 for key in _email_mapping_reconciled):
-                logger.warning("Startup email mapping reconciliation: %s", _email_mapping_reconciled)
-            _recovery_conn.close()
-        except Exception as _recovery_exc:
-            logger.warning("Startup task recovery sweep failed (non-fatal): %s", _recovery_exc)
+                _recovery_conn = connect_runtime_db(get_activity_db_path())
+                _recovery_conn.row_factory = sqlite3.Row
+                _recovery_task_hub.ensure_schema(_recovery_conn)
+                _recovery_result = _recovery_task_hub.release_stale_assignments(
+                    _recovery_conn,
+                    agent_id_prefix=["heartbeat:", "todo:"],
+                    stale_after_seconds=300,  # 5 minutes — short at startup since process was dead
+                )
+                _running_sessions = {
+                    str(session.session_id or "").strip()
+                    for session in _gateway_live_session_summaries()
+                    if getattr(session, "session_id", None)
+                }
+                _reconciled = _recovery_task_hub.reconcile_task_lifecycle(
+                    _recovery_conn,
+                    running_session_ids=_running_sessions,
+                )
+                _email_mapping_reconciled = reconcile_terminal_email_task_mappings(_recovery_conn)
+                if int(_recovery_result.get("finalized") or 0) > 0:
+                    logger.warning(
+                        "🔄 Startup recovery: released %d orphaned task assignment(s) (reopened=%d)",
+                        int(_recovery_result.get("finalized") or 0),
+                        int(_recovery_result.get("reopened") or 0),
+                    )
+                if any(int(_reconciled.get(key) or 0) > 0 for key in ("reopened", "reviewed", "completion_flagged", "delegated_backfilled")):
+                    logger.warning("Startup task lifecycle reconciliation: %s", _reconciled)
+                if any(int(_email_mapping_reconciled.get(key) or 0) > 0 for key in _email_mapping_reconciled):
+                    logger.warning("Startup email mapping reconciliation: %s", _email_mapping_reconciled)
+                _recovery_conn.close()
+            except Exception as _recovery_exc:
+                logger.warning("Startup task recovery sweep failed (non-fatal): %s", _recovery_exc)
+
+        if _deployment_window_active():
+            _spawn_background_task(
+                _run_after_deployment_window("startup_recovery", _run_startup_recovery_sweep),
+                task_name="startup_recovery_sweep",
+            )
+        else:
+            _spawn_background_task(
+                _run_startup_recovery_sweep(),
+                task_name="startup_recovery_sweep",
+            )
     else:
         logger.info("💤 Heartbeat System DISABLED (feature flag)")
 
