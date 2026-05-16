@@ -8,6 +8,7 @@ Phase 3 (Cody implementation) of the v2 ClaudeDevs intelligence pipeline.
 | File | Owner | Purpose |
 |---|---|---|
 | `.claude/settings.json` | scaffold | Vanilla Claude Code settings — no UA pollution, no ZAI mapping, no hooks. |
+| `.mcp.json` | scaffold | Demo-only MCP servers (currently just Ghost for ephemeral Postgres). Separate from `.claude/settings.json`; not pollution. |
 | `BRIEF.md` | Simone | Feature briefing in plain language. Cody reads this first. |
 | `ACCEPTANCE.md` | Simone | Explicit success contract Cody must satisfy. |
 | `business_relevance.md` | Simone | Kevin-facing rationale for client engagements. |
@@ -16,7 +17,7 @@ Phase 3 (Cody implementation) of the v2 ClaudeDevs intelligence pipeline.
 | `src/` | Cody | Demo implementation. |
 | `BUILD_NOTES.md` | Cody | Documents any gaps where the official docs were unclear. **No invention.** |
 | `run_output.txt` | Cody | Captured stdout from a successful run. |
-| `manifest.json` | Cody | Metadata: versions used, endpoint hit, success status. Simone verifies this. |
+| `manifest.json` | Cody | Metadata: versions used, endpoint hit, success status. Simone verifies this. Records `ghost_databases: [...]` if any were created. |
 | `FEEDBACK.md` | Simone | Iteration directive on a failed pass; Cody reads this on the next attempt. |
 
 ## Execution invariants
@@ -35,3 +36,26 @@ Phase 3 (Cody implementation) of the v2 ClaudeDevs intelligence pipeline.
    is rejected.
 
 See `docs/proactive_signals/claudedevs_intel_v2_design.md` §3, §8, §9.
+
+## Ephemeral databases via Ghost (optional capability)
+
+If the demo needs a real Postgres (pgvector, TimescaleDB hypertables, PostGIS,
+JSONB at scale, etc.), the bundled `.mcp.json` exposes the Ghost MCP server.
+Cody can call `ghost_create`, `ghost_sql`, `ghost_schema`, `ghost_fork`, and
+`ghost_delete` directly as tools — no SDK or connection-string plumbing.
+
+**Cleanup obligation.** Ghost's free tier is 100 hours/month across the whole
+UA account. Abandoned demo databases burn that cap. Therefore:
+
+1. Every database Cody creates MUST be recorded in
+   `manifest.json.ghost_databases: ["<name1>", "<name2>"]`.
+2. On successful run, Cody MUST call `ghost_delete` on each name before
+   writing `manifest.json` (and remove the entry from the list, or leave the
+   names with a `"deleted_at"` annotation if the demo needs to show that step).
+3. On failed run, leave the databases intact and named in `manifest.json` so
+   the next iteration (or operator audit via `ghost list`) can reclaim them.
+
+The `GHOST_API_KEY` env var is injected by the UA daemon at subprocess launch
+(Infisical → `os.environ` → `_build_cli_env`). If `${GHOST_API_KEY}` resolves
+to empty, that's an Infisical bootstrap problem, not a Ghost problem — see
+`docs/operations/demo_workspace_provisioning.md` §Ephemeral databases.

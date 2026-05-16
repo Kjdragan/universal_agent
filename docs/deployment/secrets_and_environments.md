@@ -158,10 +158,19 @@ After staging, restart UA services (`sudo systemctl restart 'universal-agent-*.s
 
 ### MCP Server Credentials (`.mcp.json` placeholders)
 
-Claude Code spawns MCP servers from `.mcp.json` at the repo root. Some need real
+Claude Code spawns MCP servers from `.mcp.json` at the repo root **and** from
+demo-workspace `.mcp.json` files under `/opt/ua_demos/<id>/`. Some need real
 credentials at process start: `AGENTMAIL_API_KEY`, `DISCORD_BOT_TOKEN`,
-`HOSTINGER_API_TOKEN`, and any other MCP server's `env.<KEY>` block. **All such
-values MUST be `${VAR}` placeholders in `.mcp.json` — never literal strings.**
+`HOSTINGER_API_TOKEN`, `GHOST_API_KEY` (demo-only), and any other MCP server's
+`env.<KEY>` block. **All such values MUST be `${VAR}` placeholders in
+`.mcp.json` — never literal strings.**
+
+| Key | Where consumed | Notes |
+|---|---|---|
+| `AGENTMAIL_API_KEY` | Top-level `.mcp.json` (AgentMail server) | All UA agents |
+| `DISCORD_BOT_TOKEN` | Top-level `.mcp.json` (discord server) | All UA agents |
+| `HOSTINGER_API_TOKEN` | Top-level `.mcp.json` (hostinger-mcp) | All UA agents |
+| `GHOST_API_KEY` | `src/universal_agent/templates/ua_demos_scaffold/.mcp.json` only | Demo workspaces under `/opt/ua_demos/` — gives Cody ephemeral Postgres for demos that need pgvector / TimescaleDB / PostGIS. Not exposed to Simone, Atlas, or the UA daemon. See [Demo Workspace Provisioning §Ephemeral databases](../operations/demo_workspace_provisioning.md#step-6--optional-ephemeral-databases-via-ghost). |
 
 Why: the file is committed to git. A literal token sat in `.mcp.json:33` (the
 Hostinger one) for ~78 days because someone — likely a "fix" suggestion from
