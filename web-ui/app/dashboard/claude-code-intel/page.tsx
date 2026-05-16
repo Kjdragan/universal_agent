@@ -76,6 +76,31 @@ type KnowledgePage = {
   storage_href?: string;
 };
 
+type VaultEntity = {
+  path?: string;
+  title?: string;
+  summary?: string;
+  tags?: string[];
+  updated_at?: string;
+  kind?: string;
+  source_count?: number;
+  confidence?: string;
+  has_demos?: boolean;
+  api_url?: string;
+  storage_href?: string;
+};
+
+type Demo = {
+  demo_id?: string;
+  workspace_path?: string;
+  feature?: string;
+  endpoint_hit?: string;
+  marker_verified?: boolean;
+  timestamp?: string;
+  entity_slug?: string;
+  linked_from_entity?: boolean;
+};
+
 type Primitive = {
   kind?: string;
   title?: string;
@@ -241,6 +266,12 @@ export default function DashboardClaudeCodeIntelPage() {
   const [triageTierFilter, setTriageTierFilter] = useState<"all" | 3 | 4>("all");
   const [showDismissed, setShowDismissed] = useState(false);
   const [expandedRationaleId, setExpandedRationaleId] = useState<string | null>(null);
+  // ── Vault browser state (entities + concepts + demos) ──────────────
+  const [vaultEntities, setVaultEntities] = useState<VaultEntity[]>([]);
+  const [vaultConcepts, setVaultConcepts] = useState<VaultEntity[]>([]);
+  const [vaultDemos, setVaultDemos] = useState<Demo[]>([]);
+  const [vaultLoading, setVaultLoading] = useState(true);
+
   const [triggerStatus, setTriggerStatus] = useState<"idle" | "pending" | "accepted" | "error">("idle");
   const [triggerMessage, setTriggerMessage] = useState("");
 
@@ -298,6 +329,38 @@ export default function DashboardClaudeCodeIntelPage() {
       }
     }
     void load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Load vault entities + concepts + demos in parallel. Errors fall back
+  // to an empty list so the rest of the page still renders.
+  useEffect(() => {
+    let cancelled = false;
+    async function loadVault() {
+      setVaultLoading(true);
+      try {
+        const [entitiesRes, conceptsRes, demosRes] = await Promise.all([
+          fetch(`${API_BASE}/api/v1/dashboard/claude-code-intel/vault/entities?limit=300`, { cache: "no-store" })
+            .then((r) => r.json())
+            .catch(() => ({ entities: [] })),
+          fetch(`${API_BASE}/api/v1/dashboard/claude-code-intel/vault/concepts?limit=300`, { cache: "no-store" })
+            .then((r) => r.json())
+            .catch(() => ({ concepts: [] })),
+          fetch(`${API_BASE}/api/v1/dashboard/claude-code-intel/demos`, { cache: "no-store" })
+            .then((r) => r.json())
+            .catch(() => ({ demos: [] })),
+        ]);
+        if (cancelled) return;
+        setVaultEntities(Array.isArray(entitiesRes?.entities) ? entitiesRes.entities : []);
+        setVaultConcepts(Array.isArray(conceptsRes?.concepts) ? conceptsRes.concepts : []);
+        setVaultDemos(Array.isArray(demosRes?.demos) ? demosRes.demos : []);
+      } finally {
+        if (!cancelled) setVaultLoading(false);
+      }
+    }
+    void loadVault();
     return () => {
       cancelled = true;
     };
@@ -642,6 +705,259 @@ export default function DashboardClaudeCodeIntelPage() {
         {error ? (
           <div className="rounded-2xl border border-red-400/20 bg-red-500/10 p-4 text-sm text-red-200">{error}</div>
         ) : null}
+
+        {/* ── Vault browser: entities (grouped by kind) ─────────────── */}
+        <section className="rounded-[28px] border border-border/40 bg-card/20 p-5 backdrop-blur-xl">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Knowledge Base</div>
+              <h2 className="mt-1 text-lg font-semibold text-slate-100">Entities</h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Synthesized Anthropic-domain knowledge — features, commands, policies. Click a card to open the markdown page.
+              </p>
+            </div>
+            <div className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-slate-300">
+              {vaultLoading ? "…" : vaultEntities.length}
+            </div>
+          </div>
+
+          <div className="mt-4 space-y-3">
+            {vaultLoading && !vaultEntities.length ? (
+              <div className="text-sm text-muted-foreground">Loading vault entities…</div>
+            ) : null}
+            {!vaultLoading && !vaultEntities.length ? (
+              <div className="rounded-2xl border border-dashed border-border/40 p-4 text-sm text-muted-foreground">
+                No entity pages found in the vault yet.
+              </div>
+            ) : null}
+            {(() => {
+              if (!vaultEntities.length) return null;
+              const groups = new Map<string, VaultEntity[]>();
+              for (const entity of vaultEntities) {
+                const key = (entity.kind || "unspecified").toLowerCase();
+                const list = groups.get(key) || [];
+                list.push(entity);
+                groups.set(key, list);
+              }
+              const orderedKinds = Array.from(groups.keys()).sort();
+              return orderedKinds.map((kindKey) => {
+                const items = groups.get(kindKey) || [];
+                return (
+                  <details key={kindKey} className="rounded-2xl border border-white/8 bg-white/[0.03]" open={items.length <= 8}>
+                    <summary className="cursor-pointer select-none rounded-2xl px-4 py-3 text-sm font-medium text-slate-100 hover:bg-white/[0.05]">
+                      <span className="inline-flex items-center gap-2">
+                        <span className="rounded-full border border-cyan-400/30 bg-cyan-400/10 px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-cyan-100">
+                          {kindKey}
+                        </span>
+                        <span>{items.length} {items.length === 1 ? "page" : "pages"}</span>
+                      </span>
+                    </summary>
+                    <div className="grid gap-3 px-4 pb-4 md:grid-cols-2 xl:grid-cols-3">
+                      {items.map((entity) => {
+                        const summary = asText(entity.summary);
+                        const truncated = summary.length > 200 ? `${summary.slice(0, 200)}…` : summary;
+                        const confidenceColor =
+                          entity.confidence === "high"
+                            ? "border-emerald-400/30 text-emerald-200"
+                            : entity.confidence === "low"
+                              ? "border-red-400/30 text-red-200"
+                              : "border-amber-400/30 text-amber-200";
+                        return (
+                          <a
+                            key={asText(entity.path)}
+                            href={asText(entity.storage_href) || asText(entity.api_url)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="flex flex-col gap-2 rounded-2xl border border-white/8 bg-white/[0.04] p-3 transition hover:bg-white/[0.07]"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="text-sm font-medium text-slate-100">{entity.title || entity.path}</div>
+                              <div className="shrink-0 text-[10px] text-muted-foreground">
+                                {entity.updated_at ? formatDateTimeTz(entity.updated_at, { placeholder: entity.updated_at }) : ""}
+                              </div>
+                            </div>
+                            {truncated ? <div className="text-xs leading-5 text-slate-300">{truncated}</div> : null}
+                            <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                              {entity.confidence ? (
+                                <span className={`rounded-full border bg-white/5 px-2 py-0.5 text-[10px] ${confidenceColor}`}>
+                                  {entity.confidence}
+                                </span>
+                              ) : null}
+                              <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-slate-200">
+                                {asNumber(entity.source_count)} {asNumber(entity.source_count) === 1 ? "source" : "sources"}
+                              </span>
+                              {entity.has_demos ? (
+                                <span className="rounded-full border border-amber-400/30 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-100">
+                                  has demos
+                                </span>
+                              ) : null}
+                              {(entity.tags || [])
+                                .filter((tag) => !asText(tag).toLowerCase().startsWith("kind:"))
+                                .slice(0, 3)
+                                .map((tag) => (
+                                  <span key={`${entity.path}-${tag}`} className="rounded-full border border-white/8 px-2 py-0.5 text-[10px] text-cyan-200/90">
+                                    {tag}
+                                  </span>
+                                ))}
+                            </div>
+                          </a>
+                        );
+                      })}
+                    </div>
+                  </details>
+                );
+              });
+            })()}
+          </div>
+        </section>
+
+        {/* ── Vault browser: concepts (flat list) ───────────────────── */}
+        <section className="rounded-[28px] border border-border/40 bg-card/20 p-5 backdrop-blur-xl">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Knowledge Base</div>
+              <h2 className="mt-1 text-lg font-semibold text-slate-100">Concepts</h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Cross-cutting ideas synthesized from multiple sources — context engineering, evaluation, agent loops.
+              </p>
+            </div>
+            <div className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-slate-300">
+              {vaultLoading ? "…" : vaultConcepts.length}
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {vaultLoading && !vaultConcepts.length ? (
+              <div className="text-sm text-muted-foreground">Loading vault concepts…</div>
+            ) : null}
+            {!vaultLoading && !vaultConcepts.length ? (
+              <div className="rounded-2xl border border-dashed border-border/40 p-4 text-sm text-muted-foreground">
+                No concept pages found in the vault yet.
+              </div>
+            ) : null}
+            {vaultConcepts.map((concept) => {
+              const summary = asText(concept.summary);
+              const truncated = summary.length > 200 ? `${summary.slice(0, 200)}…` : summary;
+              return (
+                <a
+                  key={asText(concept.path)}
+                  href={asText(concept.storage_href) || asText(concept.api_url)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex flex-col gap-2 rounded-2xl border border-white/8 bg-white/[0.04] p-3 transition hover:bg-white/[0.07]"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="text-sm font-medium text-slate-100">{concept.title || concept.path}</div>
+                    <div className="shrink-0 text-[10px] text-muted-foreground">
+                      {concept.updated_at ? formatDateTimeTz(concept.updated_at, { placeholder: concept.updated_at }) : ""}
+                    </div>
+                  </div>
+                  {truncated ? <div className="text-xs leading-5 text-slate-300">{truncated}</div> : null}
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                    <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-slate-200">
+                      {asNumber(concept.source_count)} {asNumber(concept.source_count) === 1 ? "source" : "sources"}
+                    </span>
+                    {(concept.tags || [])
+                      .filter((tag) => !asText(tag).toLowerCase().startsWith("kind:"))
+                      .slice(0, 4)
+                      .map((tag) => (
+                        <span key={`${concept.path}-${tag}`} className="rounded-full border border-white/8 px-2 py-0.5 text-[10px] text-cyan-200/90">
+                          {tag}
+                        </span>
+                      ))}
+                  </div>
+                </a>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* ── Demo workspaces (built by Cody, cross-referenced against entity pages) ── */}
+        <section className="rounded-[28px] border border-border/40 bg-card/20 p-5 backdrop-blur-xl">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Workspaces</div>
+              <h2 className="mt-1 text-lg font-semibold text-slate-100">Demos</h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Built demo workspaces under /opt/ua_demos. Linked demos are referenced from their entity page's Demos section; orphans aren&apos;t.
+              </p>
+            </div>
+            <div className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-slate-300">
+              {vaultLoading ? "…" : vaultDemos.length}
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {vaultLoading && !vaultDemos.length ? (
+              <div className="text-sm text-muted-foreground">Loading demos…</div>
+            ) : null}
+            {!vaultLoading && !vaultDemos.length ? (
+              <div className="rounded-2xl border border-dashed border-border/40 p-4 text-sm text-muted-foreground">
+                No demo workspaces found under /opt/ua_demos.
+              </div>
+            ) : null}
+            {vaultDemos.map((demo) => {
+              const endpoint = asText(demo.endpoint_hit);
+              const isAnthropic = endpoint === "anthropic_native" || endpoint === "api.anthropic.com";
+              const endpointBadge = isAnthropic
+                ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-200"
+                : "border-white/12 bg-white/5 text-slate-200";
+              // Look up the entity page for this slug so the "View" link
+              // takes the operator to the canonical markdown page.
+              const slug = asText(demo.entity_slug);
+              const entityPage = slug
+                ? vaultEntities.find((e) => {
+                    const p = asText(e.path).toLowerCase();
+                    return p === `entities/${slug.toLowerCase()}.md`;
+                  })
+                : undefined;
+              const viewHref = entityPage ? asText(entityPage.storage_href) || asText(entityPage.api_url) : "";
+              return (
+                <div
+                  key={asText(demo.demo_id)}
+                  className="flex flex-col gap-2 rounded-2xl border border-white/8 bg-white/[0.04] p-3"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="text-sm font-medium text-slate-100">{demo.feature || demo.demo_id}</div>
+                    <div className="shrink-0 text-[10px] text-muted-foreground">
+                      {demo.timestamp ? formatDateTimeTz(demo.timestamp, { placeholder: demo.timestamp }) : ""}
+                    </div>
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">{demo.demo_id}</div>
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                    {endpoint ? (
+                      <span className={`rounded-full border px-2 py-0.5 text-[10px] ${endpointBadge}`}>{endpoint}</span>
+                    ) : null}
+                    {demo.marker_verified ? (
+                      <span className="rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-200">
+                        marker verified
+                      </span>
+                    ) : null}
+                    {demo.linked_from_entity && slug ? (
+                      <span className="rounded-full border border-cyan-400/30 bg-cyan-400/10 px-2 py-0.5 text-[10px] text-cyan-100">
+                        linked → {slug}
+                      </span>
+                    ) : slug ? (
+                      <span className="rounded-full border border-amber-400/30 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-100">
+                        orphan
+                      </span>
+                    ) : null}
+                  </div>
+                  {viewHref ? (
+                    <a
+                      href={viewHref}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-1 inline-flex w-fit items-center gap-1 rounded-full border border-cyan-400/25 bg-cyan-400/10 px-2.5 py-1 text-[11px] text-cyan-100 transition hover:bg-cyan-400/15"
+                    >
+                      View entity page
+                    </a>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </section>
 
         <section className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
           <div className="rounded-[28px] border border-border/40 bg-card/20 p-4 backdrop-blur-xl">
