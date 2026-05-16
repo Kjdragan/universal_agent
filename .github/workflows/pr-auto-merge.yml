@@ -2,7 +2,7 @@ name: PR Auto-Merge
 
 # Auto-enable GitHub auto-merge on PRs that:
 #   - Target main
-#   - Are from a claude/* head branch (i.e., from an AI coder)
+#   - Are from a claude/* or codie/* head branch (i.e., from an AI coder)
 #   - Are not draft
 #
 # Once auto-merge is enabled, GitHub squash-merges the PR as soon as
@@ -10,7 +10,7 @@ name: PR Auto-Merge
 # squash-merge to main triggers the existing deploy.yml -> production.
 #
 # This is the "no operator action between PR open and production" piece
-# for autonomous claude/* PRs. Tier-1 PRs that go through /ship already
+# for autonomous AI-coder PRs. Tier-1 PRs that go through /ship already
 # get auto-merge enabled by /ship itself (see .claude/commands/ship.md).
 # This workflow handles the agent path where /ship isn't invoked.
 #
@@ -22,6 +22,11 @@ name: PR Auto-Merge
 # that ff-merged feature/latest2 -> develop -> main. That model was
 # wrong for the post-2026-05-10 architecture (develop is retired, PRs
 # target main directly). This file is the corrected version.
+#
+# 2026-05-15 fix: filter only matched `claude/*` heads, leaving every
+# `codie/*` PR (the autonomous code-writer agent) stuck pending manual
+# merge. Three Codie PRs sat green-CI but unmerged for 1–2 days before
+# this was caught. Filter now matches both prefixes.
 
 on:
   pull_request_target:
@@ -36,7 +41,8 @@ jobs:
   enable-automerge:
     name: Enable auto-merge (squash)
     if: |
-      startsWith(github.event.pull_request.head.ref, 'claude/') &&
+      (startsWith(github.event.pull_request.head.ref, 'claude/') ||
+       startsWith(github.event.pull_request.head.ref, 'codie/')) &&
       !github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 5
