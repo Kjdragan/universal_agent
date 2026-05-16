@@ -33262,6 +33262,7 @@ async def websocket_stream(
 
 
 if __name__ == "__main__":
+    import socket
     import time
 
     import uvicorn
@@ -33279,20 +33280,51 @@ if __name__ == "__main__":
 ╚══════════════════════════════════════════════════════════════╝
     """)
 
-    # PR #293 added ``reuse_port=True`` to address restart-race port-bind
-    # failures, but uvicorn 0.46.0 (currently pinned in production) doesn't
-    # accept that keyword and the gateway crash-looped with TypeError. The
-    # restart-race issue is real, but the fix requires either bumping
-    # uvicorn or constructing the socket manually with SO_REUSEPORT before
-    # passing it to uvicorn.Config — not just a kwarg flip. Revert to the
-    # plain call for now; the retry-loop below already softens transient
-    # bind failures.
+    # Pre-bind the listen socket with SO_REUSEADDR + SO_REUSEPORT so that
+    # restart-race port-bind failures don't wedge the gateway.
+    #
+    # 2026-05-16 incident root cause: uvicorn 0.46.0's lifespan-then-bind
+    # ordering can leave a kernel-level orphan listen socket on :8002 after
+    # a bind failure or unclean shutdown. CLOSE-WAIT child connections
+    # anchor the socket in LISTEN state even after the owning process dies
+    # — no userspace fd holds it but the kernel keeps it alive. Every
+    # subsequent restart then hits EADDRINUSE. Recovery required a reboot
+    # because we had no root access to `ss -K` the orphan.
+    #
+    # PR #293 attempted ``reuse_port=True`` as a uvicorn.run() kwarg but
+    # uvicorn 0.46.0 doesn't accept that. The correct API is to construct
+    # the socket manually, set SO_REUSEPORT, and pass the fd via
+    # ``uvicorn.Config(fd=sock.fileno())``. With SO_REUSEPORT set on every
+    # gateway start, a future orphan socket carries the same flag, so the
+    # next start can co-bind alongside it. The orphan has no userspace
+    # accept loop, so the kernel routes incoming SYNs to whichever socket
+    # is actively accepting.
+    #
+    # SO_REUSEADDR alone is insufficient — it allows binding to a TIME_WAIT
+    # remnant but NOT to a port held by another LISTEN socket without
+    # matching REUSEPORT.
     max_retries = 5
     for attempt in range(max_retries):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            uvicorn.run(app, host=host, port=port, log_level="info")
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        except (AttributeError, OSError):
+            # SO_REUSEPORT requires Linux 3.9+; degrade gracefully on
+            # platforms that don't expose it (e.g., older kernels, BSDs).
+            pass
+        try:
+            sock.bind((host, port))
+            sock.listen(2048)
+            sock.setblocking(False)
+            config = uvicorn.Config(app, fd=sock.fileno(), log_level="info")
+            uvicorn.Server(config).run()
             break
         except OSError as e:
+            try:
+                sock.close()
+            except OSError:
+                pass
             if "address already in use" in str(e).lower() or getattr(e, "errno", None) == 98:
                 print(f"Port {port} is in use. Retrying in 2 seconds... (Attempt {attempt + 1}/{max_retries})")
                 time.sleep(2)
