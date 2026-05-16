@@ -77,45 +77,56 @@ class WorkspaceArtifacts:
 
     @property
     def brief_path(self) -> Path:
+        """Return path to BRIEF.md."""
         return self.workspace_dir / "BRIEF.md"
 
     @property
     def acceptance_path(self) -> Path:
+        """Return path to ACCEPTANCE.md."""
         return self.workspace_dir / "ACCEPTANCE.md"
 
     @property
     def business_relevance_path(self) -> Path:
+        """Return path to business_relevance.md."""
         return self.workspace_dir / "business_relevance.md"
 
     @property
     def sources_dir(self) -> Path:
+        """Return path to SOURCES/ directory."""
         return self.workspace_dir / "SOURCES"
 
     @property
     def src_dir(self) -> Path:
+        """Return path to src/ directory."""
         return self.workspace_dir / "src"
 
     @property
     def build_notes_path(self) -> Path:
+        """Return path to BUILD_NOTES.md."""
         return self.workspace_dir / "BUILD_NOTES.md"
 
     @property
     def run_output_path(self) -> Path:
+        """Return path to run_output.txt."""
         return self.workspace_dir / "run_output.txt"
 
     @property
     def manifest_path(self) -> Path:
+        """Return path to manifest.json."""
         return self.workspace_dir / "manifest.json"
 
     @property
     def feedback_path(self) -> Path:
+        """Return path to FEEDBACK.md."""
         return self.workspace_dir / "FEEDBACK.md"
 
     @property
     def settings_path(self) -> Path:
+        """Return path to .claude/settings.json."""
         return self.workspace_dir / ".claude" / "settings.json"
 
     def to_dict(self) -> dict[str, str]:
+        """Serialize all canonical paths to a string dict."""
         return {
             "workspace_dir": str(self.workspace_dir),
             "brief_path": str(self.brief_path),
@@ -132,6 +143,7 @@ class WorkspaceArtifacts:
 
 
 def workspace_for(workspace_dir: Path) -> WorkspaceArtifacts:
+    """Resolve workspace_dir and return a WorkspaceArtifacts for it."""
     return WorkspaceArtifacts(workspace_dir=workspace_dir.resolve())
 
 
@@ -147,6 +159,7 @@ class WorkspaceReadiness:
     iteration: int = 1
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize readiness result to a plain dict."""
         return {"ok": self.ok, "reasons": list(self.reasons), "iteration": self.iteration}
 
 
@@ -228,6 +241,7 @@ class BriefingBundle:
     feedback: str = ""
 
     def to_dict(self) -> dict[str, str]:
+        """Serialize briefing text fields to a plain dict."""
         return {
             "brief": self.brief,
             "acceptance": self.acceptance,
@@ -315,9 +329,11 @@ class RunResult:
 
     @property
     def ok(self) -> bool:
+        """Return True when the subprocess exited with code 0."""
         return self.return_code == 0
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize run result to a plain dict, truncating stdout/stderr to 2000 chars."""
         payload: dict[str, Any] = {
             "return_code": self.return_code,
             "stdout_excerpt": self.stdout[:2000],
@@ -604,6 +620,7 @@ class DemoManifest:
     notes: str = ""
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize manifest fields to a plain dict."""
         return {
             "demo_id": self.demo_id,
             "feature": self.feature,
@@ -622,12 +639,14 @@ class DemoManifest:
 
     @property
     def endpoint_matches_required(self) -> bool:
+        """Return True when endpoint_hit satisfies endpoint_required (or required is 'any')."""
         if not self.endpoint_required or self.endpoint_required == "any":
             return True
         return self.endpoint_required == self.endpoint_hit
 
 
 def write_manifest(workspace_dir: Path, manifest: DemoManifest) -> Path:
+    """Write manifest.json to the workspace and return its path."""
     target = workspace_for(workspace_dir).manifest_path
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
@@ -638,6 +657,7 @@ def write_manifest(workspace_dir: Path, manifest: DemoManifest) -> Path:
 
 
 def read_manifest(workspace_dir: Path) -> DemoManifest | None:
+    """Read and parse manifest.json from the workspace; return None if absent or malformed."""
     target = workspace_for(workspace_dir).manifest_path
     if not target.exists():
         return None
@@ -687,6 +707,7 @@ def append_build_note(workspace_dir: Path, note: str, *, kind: str = "gap") -> P
 
 
 def write_run_output(workspace_dir: Path, output: str) -> Path:
+    """Write run_output.txt to the workspace and return its path."""
     target = workspace_for(workspace_dir).run_output_path
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(output, encoding="utf-8")
