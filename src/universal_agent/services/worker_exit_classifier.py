@@ -71,6 +71,7 @@ class WorkerExit:
             counter. Excludes ``clean_exit_zero`` and protocol violations
             (the latter is handled by F.3's needs_review path, not the
             normal retry budget).
+
     """
 
     outcome: WorkerOutcome
@@ -122,6 +123,7 @@ def classify_worker_exit(
 
     Returns:
         A ``WorkerExit`` record.
+
     """
     if was_cancelled:
         return WorkerExit(
@@ -219,6 +221,7 @@ def park_task_for_protocol_violation(
         ``perform_task_action`` failure). Best-effort by design — F.3
         is observability + recovery routing; it must never raise into the
         spawn site's happy path.
+
     """
     tid = str(task_id or "").strip()
     if not tid:

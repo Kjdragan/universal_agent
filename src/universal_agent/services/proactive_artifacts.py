@@ -248,7 +248,6 @@ def upsert_artifact(
 
 def get_artifact(conn: sqlite3.Connection, artifact_id: str) -> Optional[dict[str, Any]]:
     """Fetch a single artifact row by ID, returning None if not found."""
-
     ensure_schema(conn)
     row = conn.execute(
         "SELECT * FROM proactive_artifacts WHERE artifact_id = ? LIMIT 1",
@@ -265,7 +264,6 @@ def list_artifacts(
     limit: int = 50,
 ) -> list[dict[str, Any]]:
     """Query artifacts with optional status and delivery_state filters, ordered by priority."""
-
     ensure_schema(conn)
     clauses: list[str] = []
     params: list[Any] = []
@@ -430,7 +428,6 @@ def find_artifact_for_reply(
     message_id: str = "",
 ) -> Optional[dict[str, Any]]:
     """Locate an artifact by matching email thread_id, message_id, or artifact ID in subject."""
-
     ensure_schema(conn)
     clean_thread = str(thread_id or "").strip()
     if clean_thread:

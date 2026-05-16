@@ -73,7 +73,8 @@ def _gh_token() -> str:
     """Resolve the GitHub token. Reads `GITHUB_TOKEN` directly — this is
     populated at service-startup by `initialize_runtime_secrets()` from
     Infisical. Never reads from `.env` directly per CLAUDE.md secrets
-    policy."""
+    policy.
+    """
     return (os.getenv("GITHUB_TOKEN") or "").strip()
 
 
@@ -196,7 +197,8 @@ def record_mission_pr(
 def _list_candidates(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     """Find vp_mission tasks that are non-terminal and have a recorded
     PR. Bounded by `_SCAN_WINDOW_DAYS` to keep the scan O(small) even as
-    the task_hub grows."""
+    the task_hub grows.
+    """
     placeholders = ",".join("?" * len(_NON_TERMINAL_STATUSES))
     rows = conn.execute(
         f"""
@@ -283,7 +285,8 @@ def _close_mission_as_merged(
 
     We use `upsert_item` directly for this reason: it does NOT enforce
     the verification gate, and the same pathway already covers happy-path
-    completion via `worker_loop.py:464`."""
+    completion via `worker_loop.py:464`.
+    """
     merged_at = pr_response.get("merged_at")
     merge_commit_sha = pr_response.get("merge_commit_sha")
     head_branch = (pr_response.get("head") or {}).get("ref")
@@ -331,7 +334,8 @@ def _mark_pr_deleted(
     """A previously-recorded PR is no longer fetchable (404). Mark the
     record so we don't keep querying it, but leave the task open — the
     operator decides via the Mark Complete card button whether the work
-    really shipped or was abandoned."""
+    really shipped or was abandoned.
+    """
     dispatch = dict(metadata.get("dispatch") or {})
     pr_meta = dict(dispatch.get("pr") or {})
     pr_meta.update({"deleted": True, "deleted_observed_at": _utc_now_iso()})

@@ -519,6 +519,7 @@ def analyze_action(
         ``RuntimeError`` if no Anthropic-compatible API key is configured.
         ``pydantic.ValidationError`` if the LLM emits malformed JSON.
         SDK exceptions on network / model errors after exhausting retries.
+
     """
     user_msg = _build_user_message(
         action=action,

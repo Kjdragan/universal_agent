@@ -52,7 +52,8 @@ _VALID_SEVERITIES = {
 def _activity_db_path() -> str:
     """Resolve the activity DB path the gateway uses. Lazy import to
     avoid pulling the heavy gateway/heartbeat module surface into
-    workers that just want to write a single row."""
+    workers that just want to write a single row.
+    """
     from universal_agent.durable.db import get_activity_db_path
     return get_activity_db_path()
 
@@ -61,7 +62,8 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     """Create the activity_events table if it doesn't exist. CREATE
     TABLE IF NOT EXISTS is cheap; we run it on every emit so a service
     pointed at a fresh DB still gets the schema. (No process-level
-    cache — that fails when tests use multiple tmp DBs.)"""
+    cache — that fails when tests use multiple tmp DBs.)
+    """
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS activity_events (

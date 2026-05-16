@@ -156,6 +156,7 @@ def is_system_healthy(
     Returns
     -------
     SystemHealthStatus with healthy=True/False and reason.
+
     """
     # Resolve thresholds
     if max_process_count <= 0:

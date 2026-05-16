@@ -95,7 +95,6 @@ def _attach_continuation_workspace_reference(
     templates over the previous directory.  It writes a manifest into the new
     run workspace and creates a symlink when the filesystem allows it.
     """
-
     metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
     continuation = metadata.get("proactive_continuation") if isinstance(metadata.get("proactive_continuation"), dict) else {}
     previous_workspace_raw = str(continuation.get("previous_workspace_dir") or "").strip()

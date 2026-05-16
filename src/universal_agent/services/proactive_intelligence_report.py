@@ -1,5 +1,4 @@
-"""
-proactive_intelligence_report.py — 3x daily hybrid intelligence reports.
+"""proactive_intelligence_report.py — 3x daily hybrid intelligence reports.
 
 Combines deterministic Python data gathering (pipeline stats, budget, utilization)
 with an LLM reasoning pass that interprets results and provides actionable
@@ -511,6 +510,7 @@ def get_utilization_stats(conn: sqlite3.Connection, *, window_hours: int = 24) -
 
     Returns:
         dict with: sample_count, avg_occupancy_pct, peak_occupancy_slots, avg_queue_depth
+
     """
     ensure_report_schema(conn)
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=window_hours)).isoformat()

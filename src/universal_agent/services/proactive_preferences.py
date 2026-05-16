@@ -256,6 +256,7 @@ def should_block_proactive_task(
     Returns:
         (should_block, reason) — ``should_block`` is True when the task
         should be silently dropped, and ``reason`` explains why.
+
     """
     ensure_schema(conn)
     model = get_preference_snapshot(conn)
