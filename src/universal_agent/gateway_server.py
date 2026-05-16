@@ -19031,26 +19031,45 @@ def _claude_code_intel_packets(limit: int = 40, *, include_empty: bool = False) 
     return packets[:raw_limit]
 
 
-def _claude_code_intel_knowledge_pages(limit: int = 200) -> list[dict[str, Any]]:
+def _claude_code_intel_knowledge_pages(
+    limit: int = 200,
+    *,
+    categories: tuple[str, ...] = ("sources",),
+) -> list[dict[str, Any]]:
+    """Return vault knowledge pages filtered by top-level vault category.
+
+    Default ``categories=("sources",)`` preserves the historic per-tweet
+    source-page behaviour used by ``GET /api/v1/dashboard/claude-code-intel``.
+    The vault-browser endpoints pass ``("entities",)`` or ``("concepts",)``
+    to surface the synthesized knowledge base. Each returned record is
+    enriched with vault-aware fields (``kind``, ``source_count``,
+    ``confidence``, ``has_demos``) so the dashboard can render rich cards
+    without re-reading the markdown body.
+    """
     vault_root = _claude_code_intel_vault_root()
     if not vault_root.exists():
         return []
     from universal_agent.wiki.core import _frontmatter_and_body, _scan_page_records
 
+    category_filter = {str(c).strip() for c in categories if str(c).strip()}
     records = []
     for record in _scan_page_records(vault_root):
-        if str(record.get("category") or "") != "sources":
+        category = str(record.get("category") or "")
+        if category_filter and category not in category_filter:
             continue
         rel_path = str(record.get("path") or "").strip()
         if not rel_path:
             continue
         page_path = vault_root / rel_path
-        meta, _ = _frontmatter_and_body(page_path)
+        meta, body = _frontmatter_and_body(page_path)
         summary_text = str(record.get("summary") or "")
         lowered_summary = summary_text.lower()
         tags = [str(tag) for tag in (meta.get("tags") or []) if str(tag).strip()]
         lowered_tags = {tag.lower() for tag in tags}
-        if (
+        # Drop sources-category pages that captured a JS-disabled X.com
+        # error page instead of real content. Only applies to ``sources``;
+        # entities/concepts are LLM-synthesized so the guard is irrelevant.
+        if category == "sources" and (
             "javascript is not available" in lowered_summary
             or "please enable javascript or switch to a supported browser" in lowered_summary
             or (
@@ -19060,6 +19079,20 @@ def _claude_code_intel_knowledge_pages(limit: int = 200) -> list[dict[str, Any]]
         ):
             continue
         link_payload = _artifact_link_payload(page_path)
+        kind_value = ""
+        for tag in tags:
+            if tag.lower().startswith("kind:"):
+                kind_value = tag.split(":", 1)[1].strip()
+                break
+        if not kind_value:
+            kind_value = str(meta.get("kind") or "").strip()
+        source_ids = meta.get("source_ids") or []
+        source_count = len(source_ids) if isinstance(source_ids, (list, tuple)) else 0
+        confidence = str(meta.get("confidence") or "").strip()
+        # ``## Demos`` is the marker the demo-attach worker writes onto
+        # entity pages when it links a demo workspace. Match start-of-line
+        # to avoid false positives from prose.
+        has_demos = bool(re.search(r"(?m)^##\s+Demos\b", body or ""))
         records.append(
             {
                 "path": rel_path,
@@ -19067,12 +19100,96 @@ def _claude_code_intel_knowledge_pages(limit: int = 200) -> list[dict[str, Any]]
                 "summary": summary_text,
                 "tags": tags,
                 "updated_at": str(meta.get("updated_at") or ""),
+                "kind": kind_value,
+                "source_count": source_count,
+                "confidence": confidence,
+                "has_demos": has_demos,
                 "api_url": link_payload["api_url"],
                 "storage_href": link_payload["storage_href"],
             }
         )
     records.sort(key=lambda item: (str(item.get("updated_at") or ""), str(item.get("title") or "")), reverse=True)
     return records[: max(1, min(limit, 500))]
+
+
+def _claude_code_intel_demos_root() -> Path:
+    """Root directory for Cody-built demo workspaces.
+
+    Defaults to ``/opt/ua_demos`` (the production VPS layout). Overridable
+    via ``UA_DEMOS_ROOT`` so tests and dev boxes can point at a tmp dir.
+    """
+    return Path(os.environ.get("UA_DEMOS_ROOT") or "/opt/ua_demos")
+
+
+_DEMO_DIR_RE = re.compile(r"^(?P<slug>.+?)__demo-(?P<n>\d+)$")
+
+
+def _claude_code_intel_demos(
+    *,
+    demos_root: Path | None = None,
+    vault_root: Path | None = None,
+) -> list[dict[str, Any]]:
+    """Walk ``/opt/ua_demos/<slug>__demo-N`` and emit a dashboard payload.
+
+    For each ``manifest.json`` we surface ``feature``, ``endpoint_hit``,
+    ``marker_verified``, ``timestamp`` plus a parsed ``entity_slug`` and
+    a cross-referenced ``linked_from_entity`` flag — the latter true iff
+    some ``entities/*.md`` page contains a ``## Demos`` section that
+    mentions the demo_id in backticks. This is the read-side companion
+    to the demo-attach worker that writes those links.
+    """
+    root = demos_root if demos_root is not None else _claude_code_intel_demos_root()
+    if not root.exists():
+        return []
+    vault = vault_root if vault_root is not None else _claude_code_intel_vault_root()
+
+    # Build the set of demo_ids that an entity page links to in its
+    # ``## Demos`` section. One pass over entities/*.md is cheaper than
+    # re-reading per demo. Tolerate a missing vault — orphan demos are
+    # still surfaced (just with linked_from_entity=False).
+    linked_demo_ids: set[str] = set()
+    entities_dir = vault / "entities" if vault else None
+    if entities_dir and entities_dir.exists():
+        demo_ref_re = re.compile(r"`([^`]+?__demo-\d+)`")
+        for entity_md in entities_dir.glob("*.md"):
+            try:
+                text = entity_md.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            # Only count references that live under a ``## Demos`` heading.
+            # Split on h2 headings and find the demos section body.
+            sections = re.split(r"(?m)^##\s+", text)
+            for section in sections[1:]:
+                if section.lower().startswith("demos"):
+                    linked_demo_ids.update(demo_ref_re.findall(section))
+
+    demos: list[dict[str, Any]] = []
+    for demo_dir in sorted(root.iterdir()):
+        if not demo_dir.is_dir():
+            continue
+        manifest_path = demo_dir / "manifest.json"
+        if not manifest_path.exists():
+            continue
+        manifest = _safe_read_json_file(manifest_path, {})
+        if not isinstance(manifest, dict):
+            manifest = {}
+        demo_id = demo_dir.name
+        slug_match = _DEMO_DIR_RE.match(demo_id)
+        entity_slug = slug_match.group("slug") if slug_match else ""
+        demos.append(
+            {
+                "demo_id": demo_id,
+                "workspace_path": str(demo_dir),
+                "feature": str(manifest.get("feature") or ""),
+                "endpoint_hit": str(manifest.get("endpoint_hit") or ""),
+                "marker_verified": bool(manifest.get("marker_verified") or False),
+                "timestamp": str(manifest.get("timestamp") or ""),
+                "entity_slug": entity_slug,
+                "linked_from_entity": demo_id in linked_demo_ids,
+            }
+        )
+    demos.sort(key=lambda item: (str(item.get("timestamp") or ""), str(item.get("demo_id") or "")), reverse=True)
+    return demos
 
 
 def _claude_code_intel_rolling_payload() -> dict[str, Any]:
@@ -19209,6 +19326,48 @@ async def dashboard_claude_code_intel_trigger(
         }
     except Exception as exc:
         return {"status": "error", "detail": f"Failed to launch pipeline: {type(exc).__name__}: {exc}"}
+
+
+# ── CSI vault-browser endpoints ──────────────────────────────────────────
+# These three GET endpoints surface the synthesized knowledge base
+# (entities + concepts + demo workspaces) on /dashboard/claude-code-intel/.
+# They are read-only siblings of the packet-centric
+# ``GET /api/v1/dashboard/claude-code-intel`` endpoint; they do not mutate
+# state and do not interact with Task Hub.
+
+
+@app.get("/api/v1/dashboard/claude-code-intel/vault/entities")
+async def dashboard_csi_vault_entities(
+    request: Request,
+    limit: int = 200,
+    kind: Optional[str] = None,
+):
+    _require_ops_auth(request)
+    pages = _claude_code_intel_knowledge_pages(limit=limit, categories=("entities",))
+    if kind:
+        kind_norm = str(kind).strip().lower()
+        pages = [p for p in pages if str(p.get("kind") or "").strip().lower() == kind_norm]
+    return {"status": "ok", "entities": pages}
+
+
+@app.get("/api/v1/dashboard/claude-code-intel/vault/concepts")
+async def dashboard_csi_vault_concepts(
+    request: Request,
+    limit: int = 200,
+    kind: Optional[str] = None,
+):
+    _require_ops_auth(request)
+    pages = _claude_code_intel_knowledge_pages(limit=limit, categories=("concepts",))
+    if kind:
+        kind_norm = str(kind).strip().lower()
+        pages = [p for p in pages if str(p.get("kind") or "").strip().lower() == kind_norm]
+    return {"status": "ok", "concepts": pages}
+
+
+@app.get("/api/v1/dashboard/claude-code-intel/demos")
+async def dashboard_csi_demos(request: Request):
+    _require_ops_auth(request)
+    return {"status": "ok", "demos": _claude_code_intel_demos()}
 
 
 # ── CSI demo triage flyout endpoints ─────────────────────────────────────
