@@ -750,20 +750,39 @@ class CronService:
         self.running = True
         self.task = asyncio.create_task(self._scheduler_loop())
         logger.info("⏱️ Chron service started (%d jobs)", len(self.jobs))
-        # Fire queued backfill runs for jobs that missed their window during restart
-        for job_id, missed_at in self._backfill_queue:
-            job = self.jobs.get(job_id)
-            if job and job.enabled and job.job_id not in self.running_jobs:
-                logger.info(
-                    "🔄 Dispatching backfill run for job %s (originally scheduled %s)",
-                    job_id,
-                    datetime.fromtimestamp(missed_at).isoformat(),
-                )
-                self.running_jobs.add(job.job_id)
-                dispatch_key = self._dispatch_key_for_job(job, reason="backfill", scheduled_at=missed_at)
-                asyncio.create_task(
-                    self._run_job(job, scheduled_at=missed_at, reason="backfill", dispatch_key=dispatch_key)
-                )
+        # Fire queued backfill runs for jobs that missed their window during
+        # restart — but ONLY if explicitly enabled via env var. Default is
+        # OFF because firing every missed heavy cron simultaneously at
+        # gateway startup starves the asyncio event loop (atlas_direct_dispatch,
+        # claude_code_intel_sync, etc. each do many HTTP calls + LLM work
+        # in-process) and the gateway can't answer /api/v1/health, causing
+        # deploy.yml health checks to time out at the 8-minute window.
+        # Missed runs resume on the next normal cron tick — typically
+        # within minutes for any frequent job. See 2026-05-16 incident.
+        backfill_enabled = str(
+            os.getenv("UA_CRON_BACKFILL_ON_RESTART") or "0"
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        if backfill_enabled:
+            for job_id, missed_at in self._backfill_queue:
+                job = self.jobs.get(job_id)
+                if job and job.enabled and job.job_id not in self.running_jobs:
+                    logger.info(
+                        "🔄 Dispatching backfill run for job %s (originally scheduled %s)",
+                        job_id,
+                        datetime.fromtimestamp(missed_at).isoformat(),
+                    )
+                    self.running_jobs.add(job.job_id)
+                    dispatch_key = self._dispatch_key_for_job(job, reason="backfill", scheduled_at=missed_at)
+                    asyncio.create_task(
+                        self._run_job(job, scheduled_at=missed_at, reason="backfill", dispatch_key=dispatch_key)
+                    )
+        elif self._backfill_queue:
+            logger.info(
+                "⏭️  Skipping %d queued backfill run(s) at startup "
+                "(UA_CRON_BACKFILL_ON_RESTART=0 by default). Missed jobs "
+                "will resume on next normal cron tick.",
+                len(self._backfill_queue),
+            )
         self._backfill_queue.clear()
 
     async def stop(self) -> None:
