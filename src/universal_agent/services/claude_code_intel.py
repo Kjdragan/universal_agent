@@ -509,6 +509,32 @@ def fetch_user_by_username_with_fallbacks(client: httpx.Client, *, token: str, u
     return _get_json_with_auth_fallbacks(client, url=url, params=params, app_bearer_token=token)
 
 
+# Tweet lookup endpoint (X API v2 GET /2/tweets/{id}).
+# Used by csi_url_judge to fetch linked tweet URLs as structured signal
+# instead of dropping them via the social-domain pre-filter. The /tweets/{id}
+# lookup costs 1 read per call and supports app-bearer + user-context auth via
+# the same fallback chain as the user/posts endpoints.
+_TWEET_LOOKUP_PARAMS: dict[str, str] = {
+    "tweet.fields": "id,text,created_at,author_id,public_metrics,entities,conversation_id,referenced_tweets",
+    "expansions": "author_id",
+    "user.fields": "id,name,username,verified",
+}
+
+
+def fetch_tweet_by_id(client: httpx.Client, *, token: str, tweet_id: str) -> dict[str, Any]:
+    resp = client.get(
+        f"https://api.x.com/2/tweets/{tweet_id}",
+        headers=_auth_headers(token),
+        params=dict(_TWEET_LOOKUP_PARAMS),
+    )
+    return _json_response(resp)
+
+
+def fetch_tweet_by_id_with_fallbacks(client: httpx.Client, *, token: str, tweet_id: str) -> dict[str, Any]:
+    url = f"https://api.x.com/2/tweets/{tweet_id}"
+    return _get_json_with_auth_fallbacks(client, url=url, params=dict(_TWEET_LOOKUP_PARAMS), app_bearer_token=token)
+
+
 def fetch_user_posts(
     client: httpx.Client,
     *,

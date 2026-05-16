@@ -143,6 +143,55 @@ PRODUCT_APP_DOMAINS = frozenset({
 })
 
 
+# Tweet-URL extraction for the X API tweet-fetch fallback (Tier B1).
+# Linked tweets carry real signal (replies, threads, quoted reactions). The
+# pre_filter_urls() pass classifies every x.com/twitter.com URL as
+# social_noise; this short-circuit pulls tweet-status URLs out first so we
+# can fetch them via the X API /2/tweets/{id} endpoint and persist the
+# tweet body as a synthesized source page. Non-tweet x.com URLs (profiles,
+# search, etc.) still flow through pre_filter_urls and remain filtered.
+_TWEET_STATUS_URL_PATTERN = re.compile(
+    r"^https?://(?:www\.)?(?:x|twitter)\.com/[^/]+/status/(\d+)",
+    re.IGNORECASE,
+)
+
+
+def parse_tweet_id_from_url(url: str) -> str | None:
+    """Extract the numeric tweet ID from an x.com/twitter.com /status/ URL."""
+    if not url:
+        return None
+    match = _TWEET_STATUS_URL_PATTERN.match(url.strip())
+    if not match:
+        return None
+    return match.group(1)
+
+
+def extract_tweet_urls(urls: list[str]) -> tuple[list[tuple[str, str]], list[str]]:
+    """Split URLs into (tweet_url_pairs, remaining_urls).
+
+    tweet_url_pairs is [(url, tweet_id), ...] for x.com/twitter.com /status/
+    URLs. remaining_urls is everything else, suitable to feed into
+    pre_filter_urls().
+    """
+    tweet_pairs: list[tuple[str, str]] = []
+    remaining: list[str] = []
+    for url in urls:
+        clean = url.strip().rstrip(".,)") if isinstance(url, str) else ""
+        if not clean:
+            continue
+        tweet_id = parse_tweet_id_from_url(clean)
+        if tweet_id:
+            tweet_pairs.append((clean, tweet_id))
+        else:
+            remaining.append(clean)
+    return tweet_pairs, remaining
+
+
+def _x_api_tweet_fetch_enabled() -> bool:
+    raw = str(os.getenv("UA_CSI_X_API_TWEET_FETCH_ENABLED") or "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
 def pre_filter_urls(urls: list[str]) -> tuple[list[str], list[EnrichmentRecord]]:
     """Pass 1: Fast deterministic filter.
 
@@ -608,6 +657,145 @@ def fetch_url_content(
     return _fetch_with_httpx(url, output_path, timeout)
 
 
+def _render_tweet_markdown(tweet_payload: dict[str, Any], url: str) -> str:
+    """Render an X API /2/tweets/{id} response as a markdown source page."""
+    data = tweet_payload.get("data") or {}
+    includes_users = (tweet_payload.get("includes") or {}).get("users") or []
+    author_lookup: dict[str, dict[str, Any]] = {}
+    for user in includes_users:
+        if isinstance(user, dict) and user.get("id"):
+            author_lookup[str(user["id"])] = user
+
+    text = str(data.get("text") or "").strip()
+    tweet_id = str(data.get("id") or "").strip()
+    created_at = str(data.get("created_at") or "").strip()
+    author_id = str(data.get("author_id") or "").strip()
+    author = author_lookup.get(author_id) or {}
+    author_handle = str(author.get("username") or "").strip()
+    author_name = str(author.get("name") or "").strip()
+    metrics = data.get("public_metrics") or {}
+    referenced = data.get("referenced_tweets") or []
+
+    header_lines = [f"# Tweet: {url}", ""]
+    if author_handle or author_name:
+        byline = f"@{author_handle}" if author_handle else ""
+        if author_name:
+            byline = f"{author_name} ({byline})" if byline else author_name
+        header_lines.append(f"- **Author**: {byline}")
+    if created_at:
+        header_lines.append(f"- **Created**: {created_at}")
+    if tweet_id:
+        header_lines.append(f"- **Tweet ID**: {tweet_id}")
+    if metrics:
+        header_lines.append(
+            "- **Metrics**: "
+            + ", ".join(f"{k}={v}" for k, v in metrics.items() if v is not None)
+        )
+    if referenced:
+        refs = [
+            f"{r.get('type', '?')}:{r.get('id', '?')}"
+            for r in referenced
+            if isinstance(r, dict)
+        ]
+        if refs:
+            header_lines.append(f"- **Referenced**: {', '.join(refs)}")
+
+    return "\n".join(header_lines) + "\n\n---\n\n" + text + "\n"
+
+
+def _fetch_tweet_via_x_api(
+    url: str,
+    tweet_id: str,
+    output_dir: Path,
+    *,
+    timeout: int,
+) -> EnrichmentRecord:
+    """Fetch one tweet via the X API and persist it as a synthesized source page.
+
+    Returns an EnrichmentRecord shaped exactly like a regular fetched URL so
+    downstream callers (build_linked_context, classifier prompts) treat it
+    identically. On any failure, returns a record with fetch_status=failed
+    and a structured skip_reason — never raises.
+    """
+    record = EnrichmentRecord(
+        url=url,
+        category="other",
+        worth_fetching=True,
+        reasoning="x_api_tweet_fetch: linked tweet body",
+        fetch_status="pending",
+    )
+
+    try:
+        from universal_agent.services.claude_code_intel import (
+            fetch_tweet_by_id_with_fallbacks,
+            get_x_bearer_token,
+        )
+    except Exception as exc:
+        record.fetch_status = "failed"
+        record.skip_reason = f"x_api_import_error:{type(exc).__name__}"
+        logger.warning("X API tweet fetch unavailable: %s", exc)
+        return record
+
+    token = get_x_bearer_token()
+    # Bearer absent AND no OAuth fallback creds → caller must downgrade to
+    # the legacy social_noise filter for this URL. We signal that via a
+    # specific skip_reason the orchestrator checks for.
+    if not token and not all(
+        str(os.getenv(key) or "").strip()
+        for key in (
+            "X_OAUTH_CONSUMER_KEY",
+            "X_OAUTH_CONSUMER_SECRET",
+            "X_OAUTH_ACCESS_TOKEN",
+            "X_OAUTH_ACCESS_TOKEN_SECRET",
+        )
+    ) and not str(os.getenv("X_OAUTH2_ACCESS_TOKEN") or "").strip():
+        record.fetch_status = "failed"
+        record.skip_reason = "x_api_no_auth"
+        return record
+
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            payload = fetch_tweet_by_id_with_fallbacks(
+                client, token=token, tweet_id=tweet_id
+            )
+    except Exception as exc:
+        record.fetch_status = "failed"
+        reason = str(exc) or type(exc).__name__
+        record.skip_reason = f"x_api_{reason[:120]}"
+        logger.warning("X API tweet fetch failed for %s: %s", url, exc)
+        return record
+
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        markdown = _render_tweet_markdown(payload, url)
+        cap = DOC_STORAGE_MAX_CHARS
+        if len(markdown) > cap:
+            markdown = markdown[:cap] + f"\n\n... [Content truncated at {cap} chars]"
+        md_path = output_dir / f"tweet_{tweet_id}.md"
+        md_path.write_text(markdown, encoding="utf-8")
+        # Also persist the raw JSON next to it for downstream debugging.
+        json_path = output_dir / f"tweet_{tweet_id}.json"
+        json_path.write_text(
+            json.dumps(
+                {k: v for k, v in payload.items() if k != "_ua_auth_mode"},
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        record.fetch_status = "fetched"
+        record.content_path = str(md_path)
+        record.content_chars = len(markdown)
+        logger.info(
+            "Fetched tweet via X API [%s] → %d chars at %s",
+            url, record.content_chars, md_path,
+        )
+    except Exception as exc:
+        record.fetch_status = "failed"
+        record.skip_reason = f"x_api_persist_error:{type(exc).__name__}"
+        logger.warning("Failed to persist X API tweet %s: %s", url, exc)
+    return record
+
+
 # ── Orchestrator ─────────────────────────────────────────────────────────────
 
 def enrich_urls(
@@ -642,9 +830,20 @@ def enrich_urls(
     if max_fetch is None:
         max_fetch = DEFAULT_MAX_FETCH
 
-    # Pass 1: fast pre-filter
-    candidates, discarded = pre_filter_urls(urls)
-    if not candidates:
+    # Pass 0: pull tweet-status URLs aside so we can fetch them via the X API
+    # /2/tweets/{id} endpoint. Without this short-circuit, pre_filter_urls()
+    # classifies every x.com/twitter.com URL as social_noise and we lose
+    # linked-tweet signal entirely. Set UA_CSI_X_API_TWEET_FETCH_ENABLED=0
+    # to disable and fall back to legacy filtering.
+    tweet_pairs: list[tuple[str, str]] = []
+    if _x_api_tweet_fetch_enabled():
+        tweet_pairs, remaining_urls = extract_tweet_urls(urls)
+    else:
+        remaining_urls = list(urls)
+
+    # Pass 1: fast pre-filter (operates only on non-tweet URLs).
+    candidates, discarded = pre_filter_urls(remaining_urls)
+    if not candidates and not tweet_pairs:
         return discarded
 
     # Pass 2: LLM judge — bypassed when trust_source is on AND env permits.
@@ -699,11 +898,38 @@ def enrich_urls(
             record.skip_reason = result.get("error", "unknown_fetch_error")
             logger.warning("Failed to fetch URL %s: %s", record.url, record.skip_reason)
 
-    all_records = discarded + records
+    # Pass 4: X API tweet fetch — synthesizes EnrichmentRecords for linked
+    # tweets that would otherwise be lost to the social_noise filter. Each
+    # tweet costs one /2/tweets/{id} read; we keep them outside the
+    # max_fetch budget because the API quota is independently rate-limited
+    # and these are not web crawls.
+    tweet_records: list[EnrichmentRecord] = []
+    for tweet_url, tweet_id in tweet_pairs:
+        url_hash = hashlib.sha256(tweet_url.encode("utf-8")).hexdigest()[:12]
+        fetch_dir = output_dir / url_hash
+        tweet_record = _fetch_tweet_via_x_api(
+            tweet_url, tweet_id, fetch_dir, timeout=timeout
+        )
+        if tweet_record.skip_reason == "x_api_no_auth":
+            # No usable creds. Downgrade this URL to the legacy filter so
+            # behavior matches the pre-Tier-B1 pipeline.
+            discarded.append(
+                EnrichmentRecord(
+                    url=tweet_url,
+                    category="social_noise",
+                    fetch_status="filtered",
+                    skip_reason="social_domain",
+                )
+            )
+            continue
+        tweet_records.append(tweet_record)
+
+    all_records = discarded + records + tweet_records
     logger.info(
-        "URL enrichment complete: %d total, %d filtered, %d judged, %d fetched",
+        "URL enrichment complete: %d total, %d filtered, %d judged, %d fetched, %d tweets via x_api",
         len(all_records), len(discarded), len(records),
         sum(1 for r in records if r.fetch_status == "fetched"),
+        sum(1 for r in tweet_records if r.fetch_status == "fetched"),
     )
     return all_records
 
