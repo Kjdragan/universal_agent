@@ -31,6 +31,7 @@ def load_workflow(path: Path) -> Dict[str, Any]:
     Raises:
         FileNotFoundError: If *path* does not exist.
         WorkflowValidationError: If the file is malformed or missing required keys.
+
     """
     import yaml  # lazy import — only needed when loading YAML files
 
@@ -62,6 +63,7 @@ def validate_workflow_dict(workflow: Dict[str, Any]) -> None:
 
     Raises:
         WorkflowValidationError: If the dict is missing required keys.
+
     """
     _validate_schema(workflow, source="inline")
 

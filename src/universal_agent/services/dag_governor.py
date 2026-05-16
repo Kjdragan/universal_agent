@@ -1,5 +1,4 @@
-"""
-DAG Concurrency Governor — manages global concurrency limits for ZAI DAG executions.
+"""DAG Concurrency Governor — manages global concurrency limits for ZAI DAG executions.
 """
 
 import asyncio

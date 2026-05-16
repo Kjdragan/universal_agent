@@ -81,6 +81,7 @@ def record_token_usage(
                 * ``cache_read_input_tokens``
                 * ``cost_usd`` / ``total_cost_usd``
                 * ``duration_ms``
+
     """
     try:
         normalized_mode = str(cody_mode or "").strip().lower()
@@ -194,6 +195,7 @@ def summarize_window(
                                   "total_cost_usd": float}, ...],
             "cody_mode_filter": str | None,
         }
+
     """
     window = get_window_state(conn)
     reset_at = window["reset_at"]

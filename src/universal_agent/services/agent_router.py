@@ -1,5 +1,4 @@
-"""
-agent_router.py — Simone-First Orchestration Router.
+"""agent_router.py — Simone-First Orchestration Router.
 
 All tasks route to Simone. She decides delegation via batch triage
 during her heartbeat cycle, using her full capabilities, skills, MCPs,

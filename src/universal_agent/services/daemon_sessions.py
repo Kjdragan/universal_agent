@@ -130,6 +130,7 @@ class DaemonSessionManager:
     agent_names : list[str] | None
         Names of agents to create daemon sessions for.
         Defaults to ``configured_daemon_agents()``.
+
     """
 
     def __init__(

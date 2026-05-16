@@ -1,5 +1,4 @@
-"""
-Capacity Governor — system-level rate limiting for agent dispatch.
+"""Capacity Governor — system-level rate limiting for agent dispatch.
 
 Sits between the dispatch pipeline and agent execution to prevent
 overloading the LLM provider API. Tracks:
@@ -57,6 +56,7 @@ DEFAULT_COOLDOWN_AFTER_429_SECONDS = 60.0
 @dataclass
 class CapacitySnapshot:
     """Point-in-time view of capacity governor state."""
+
     max_concurrent: int
     active_slots: int
     available_slots: int

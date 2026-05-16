@@ -659,6 +659,7 @@ class AgentMailService:
 
         Returns:
             Dict with message_id/draft_id and status.
+
         """
         self._assert_ready()
 

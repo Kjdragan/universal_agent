@@ -337,7 +337,8 @@ def _metadata_shape_summary(metadata: Any) -> dict[str, str]:
 
 def _sanitize_template(text: str) -> str:
     """Strip code-fences, line wrapping, and any sentence wrappers the
-    LLM might have included despite instructions."""
+    LLM might have included despite instructions.
+    """
     cleaned = text.strip()
     if cleaned.startswith("```"):
         # Strip leading + trailing fence

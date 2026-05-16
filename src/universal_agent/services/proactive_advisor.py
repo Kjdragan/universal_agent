@@ -1,5 +1,4 @@
-"""
-proactive_advisor.py — Deterministic morning-report builder for the heartbeat cycle.
+"""proactive_advisor.py — Deterministic morning-report builder for the heartbeat cycle.
 
 This module assembles a structured snapshot of Task Hub state for the heartbeat
 agent.  All logic is pure Python (no LLM calls) — the LLM only sees the

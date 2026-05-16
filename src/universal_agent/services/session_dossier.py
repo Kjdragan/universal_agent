@@ -224,6 +224,7 @@ async def generate_session_dossier(
 
     Raises:
         RuntimeError: If the LLM call fails or no API key is available.
+
     """
     if metadata is None:
         metadata = {}
@@ -315,6 +316,7 @@ async def backfill_missing_dossiers(
 
     Returns:
         Count of sessions that were successfully backfilled.
+
     """
     workspaces_dir = Path(workspaces_dir).resolve()
     if not workspaces_dir.is_dir():

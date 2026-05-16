@@ -1,5 +1,4 @@
-"""
-reflection_engine.py — 24/7 autonomous ideation engine for idle agents.
+"""reflection_engine.py — 24/7 autonomous ideation engine for idle agents.
 
 When the Task Hub dispatch queue is empty and the agent would otherwise idle,
 this engine provides an "ideation" prompt that asks the agent to:

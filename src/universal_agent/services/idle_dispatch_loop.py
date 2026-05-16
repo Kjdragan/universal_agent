@@ -48,6 +48,7 @@ def nudge_dispatch(reason: str = "external") -> None:
     ----------
     reason : str
         Human-readable reason for the nudge (logged for observability).
+
     """
     global _nudge_event, _nudge_loop
     if _nudge_event is None:
@@ -94,6 +95,7 @@ async def idle_dispatch_loop(
         Returns dict of heartbeat-registered sessions (including daemon sessions).
         Used as a fallback when no WebSocket sessions exist — ensures daemon
         sessions are discoverable by the idle dispatch loop.
+
     """
     global _nudge_event, _nudge_loop
 

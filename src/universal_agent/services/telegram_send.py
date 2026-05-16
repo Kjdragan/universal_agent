@@ -156,6 +156,7 @@ def telegram_send_sync(
     Returns:
         (True, "ok") on success.
         (False, error_description) on failure.
+
     """
     ok, _payload, err = telegram_send_with_response_sync(
         chat_id, text,
@@ -253,6 +254,7 @@ async def telegram_send_async(
     Returns:
         (True, "ok") on success.
         (False, error_description) on failure.
+
     """
     token = _resolve_token(bot_token)
     url = _api_url(token, "sendMessage")

@@ -22,6 +22,7 @@ STATUS_ERROR = "error"
 @dataclass
 class DagState:
     """State of a DAG execution."""
+
     status: str = STATUS_PENDING  # pending, running, completed, waiting_on_human, failed
     current_node: Optional[str] = None
     context: Dict[str, Any] = field(default_factory=dict)

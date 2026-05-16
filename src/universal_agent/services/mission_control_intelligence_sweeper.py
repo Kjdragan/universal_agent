@@ -287,7 +287,8 @@ class MissionControlSweeper:
 
     def _run_tier2(self, result: SweepResult) -> None:
         """Sync marker; real tier-2 synthesis lands in
-        `_run_tier2_async` (Phase 3)."""
+        `_run_tier2_async` (Phase 3).
+        """
         result.tier2_evaluated = True
 
     # ── Async tiers (LLM-driven; gateway loop awaits these) ────────────

@@ -106,7 +106,6 @@ def parse_email_triage_brief(raw: Any, *, sender_trusted: bool) -> dict[str, Any
     Returns a dict with keys: raw_text, safety_status, routing_decision,
     classification, priority, subject_summary.
     """
-
     text = str(raw or "").strip()
     parsed: dict[str, Any] = {
         "raw_text": text,
@@ -714,7 +713,6 @@ class EmailTaskBridge:
 
         Returns the mapping dict or None if no row matches.
         """
-
         row = self._conn.execute(
             "SELECT * FROM email_task_mappings WHERE task_id = ? ORDER BY updated_at DESC LIMIT 1",
             (str(task_id or "").strip(),),
@@ -729,7 +727,6 @@ class EmailTaskBridge:
 
         Returns the mapping dict or None.
         """
-
         key = str(session_key or "").strip()
         if not key:
             return None
@@ -766,7 +763,6 @@ class EmailTaskBridge:
 
     def has_ack_outbound(self, thread_id: str) -> bool:
         """Return True if an acknowledgement email was already sent for this thread."""
-
         mapping = self._get_mapping(thread_id)
         if not mapping:
             return False
@@ -777,7 +773,6 @@ class EmailTaskBridge:
 
     def has_final_outbound(self, thread_id: str) -> bool:
         """Return True if a final response email was already sent for this thread."""
-
         mapping = self._get_mapping(thread_id)
         if not mapping:
             return False
@@ -791,7 +786,6 @@ class EmailTaskBridge:
 
         Fields are set only once (idempotent re-calls do not overwrite).
         """
-
         now = _now_iso()
         self._conn.execute(
             """
@@ -821,7 +815,6 @@ class EmailTaskBridge:
         Sets final_email_sent_at, final_message_id, final_draft_id, and
         email_sent_at (idempotent — existing values are preserved).
         """
-
         now = _now_iso()
         self._conn.execute(
             """
@@ -903,7 +896,6 @@ class EmailTaskBridge:
         Clears any quarantine security_classification and relabels the
         corresponding Task Hub entry as ``open`` with ``agent-ready``.
         """
-
         thread = str(thread_id or "").strip()
         if not thread:
             return False
@@ -940,7 +932,6 @@ class EmailTaskBridge:
         ``needs_review`` on the Task Hub entry with the
         ``review-required`` label appended.
         """
-
         thread = str(thread_id or "").strip()
         if not thread:
             return False
@@ -982,7 +973,6 @@ class EmailTaskBridge:
         ``quarantine``, and updates the Task Hub entry to ``blocked``
         with the ``quarantined`` label.
         """
-
         thread = str(thread_id or "").strip()
         if not thread:
             return False
@@ -1038,6 +1028,7 @@ class EmailTaskBridge:
         Returns:
             The email thread_id if cleared, or None if the row didn't
             exist / wasn't a quarantined email / wasn't an email at all.
+
         """
         tid = str(task_id or "").strip()
         if not tid:
@@ -1217,6 +1208,7 @@ class EmailTaskBridge:
             Starting status — defaults to ``open``.  The heartbeat's
             ``claim_next_dispatch_tasks`` atomically transitions to
             ``in_progress`` when it seizes the task for execution.
+
         """
         try:
             from universal_agent.task_hub import ensure_schema, upsert_item
