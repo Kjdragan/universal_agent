@@ -24,6 +24,16 @@ mkdir -p "$APP_ROOT/logs" "$APP_ROOT/AGENT_RUN_WORKSPACES"
 chown -R ua:ua "$APP_ROOT/logs" "$APP_ROOT/AGENT_RUN_WORKSPACES" 2>/dev/null || true
 
 install -m 0644 "$UNIT_TEMPLATE_SRC" "$SYSTEMD_DIR/$UNIT_TEMPLATE_NAME"
+
+# Heartbeat during daemon-reload + enable --now so the parent SSH session sees
+# periodic output and any intermediate idle-timeout-killer doesn't drop the
+# connection mid-step. See docs/operations/2026-05-16_deploy_ssh_timeout_plan.md.
+( while true; do printf '[heartbeat install_vp_worker_services] %s\n' "$(date -Iseconds)"; sleep 30; done ) &
+HB_PID=$!
+# shellcheck disable=SC2064
+trap "kill $HB_PID 2>/dev/null || true; wait $HB_PID 2>/dev/null || true" EXIT
+
+echo "--> systemctl daemon-reload..."
 systemctl daemon-reload
 
 if [[ $# -gt 0 ]]; then

@@ -94,7 +94,15 @@ jobs:
 
           rm -f /tmp/ssh_preflight.out /tmp/ssh_preflight.err
           
-          timeout 30m ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o BatchMode=yes "$SSH_USER@$SSH_HOST" << 'EOF'
+          # ServerAliveInterval+CountMax keep the SSH session alive during long
+          # silent remote steps (systemd daemon-reload + enable --now on a busy
+          # VPS can take minutes with no output). Without these, an intermediate
+          # idle-timeout-killer drops the TCP connection and the workflow exits
+          # 255 even when the actual deploy work completes. See
+          # docs/operations/2026-05-16_deploy_ssh_timeout_plan.md (Option A).
+          # 30s keepalive × 120 max = up to 60 min of pure idle tolerance,
+          # inside the outer `timeout 30m` envelope.
+          timeout 30m ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=120 "$SSH_USER@$SSH_HOST" << 'EOF'
             # Exit immediately on error
             set -euo pipefail
             PROD_DIR="/opt/universal_agent"
