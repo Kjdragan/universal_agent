@@ -17,12 +17,15 @@ _FEEDBACK_RE = re.compile(r"^\s*([1-5])(?:\s*[-:.)]\s*|\s+)?(.*)$", re.DOTALL)
 
 @dataclass(frozen=True)
 class ParsedFeedback:
+    """Payload describing a proactive feedback event."""
+
     score: Optional[int]
     text: str
     raw_reply: str
 
 
 def parse_feedback_text(reply_text: str) -> ParsedFeedback:
+    """Emit a proactive feedback signal for the given event."""
     raw = str(reply_text or "").strip()
     if not raw:
         return ParsedFeedback(score=None, text="", raw_reply="")

@@ -138,7 +138,7 @@ def _record_outcome_impl(
     reason: str,
     agent_id: str,
 ) -> dict[str, Any]:
-    """Internal implementation — may raise."""
+    """Record the outcome row; may raise (caller handles errors)."""
     ensure_schema(conn)
 
     task_id = str(task.get("task_id") or "").strip()
@@ -231,13 +231,11 @@ def _emit_outcome_intelligence(
     outcome: dict[str, Any],
     action: str,
 ) -> None:
-    """Translate a terminal proactive-task outcome into an
-    activity_events row Mission Control's tier-1 LLM can pick up.
+    """Translate a terminal proactive-task outcome into an activity_events row.
 
-    Successes and approvals fire as `success`-severity intelligence
-    cards (the "we got something useful done" signal the operator
-    asked for). Failures and blocks fire as `warning` so the LLM still
-    surfaces them but doesn't escalate them as alarms.
+    Mission Control's tier-1 LLM will pick up the row. Successes and approvals
+    fire as ``success``-severity intelligence cards; failures and blocks fire
+    as ``warning`` so the LLM surfaces them without escalating as alarms.
     """
     from universal_agent.services.intelligence_emitter import (
         SEVERITY_SUCCESS,

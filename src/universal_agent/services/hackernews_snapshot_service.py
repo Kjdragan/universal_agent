@@ -281,6 +281,7 @@ def _normalize(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_snapshot() -> dict[str, Any]:
+    """Fetch the latest Hacker News items for the snapshot."""
     started = time.monotonic()
     errors: list[str] = []
 
@@ -351,6 +352,7 @@ def build_snapshot() -> dict[str, Any]:
 
 
 def write_snapshot(snapshot: dict[str, Any]) -> Path:
+    """Build the Hacker News snapshot payload."""
     root = resolve_artifacts_dir() / "hackernews"
     snaps = root / "snapshots"
     root.mkdir(parents=True, exist_ok=True)
@@ -376,6 +378,7 @@ def write_snapshot(snapshot: dict[str, Any]) -> Path:
 
 
 def read_latest() -> dict[str, Any] | None:
+    """Persist the snapshot batch to durable storage."""
     latest = resolve_artifacts_dir() / "hackernews" / "latest.json"
     if not latest.exists():
         return None

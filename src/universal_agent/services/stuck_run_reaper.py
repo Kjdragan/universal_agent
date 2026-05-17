@@ -55,6 +55,7 @@ class ReapedRunInfo:
     notification_message: str
 
     def to_dict(self) -> dict:
+        """Run the stuck-run reaper pass once and return a summary."""
         return {
             "run_id": self.run_id,
             "run_kind": self.run_kind,

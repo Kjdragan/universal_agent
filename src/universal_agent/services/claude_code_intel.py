@@ -133,6 +133,8 @@ action_type and let the deterministic check upgrade it if warranted.
 
 @dataclass(frozen=True)
 class ClaudeCodeIntelConfig:
+    """Runtime configuration for a Claude Code X-intelligence lane run."""
+
     handle: str = DEFAULT_HANDLE
     max_results: int = DEFAULT_MAX_RESULTS
     queue_task_hub: bool = True
@@ -142,6 +144,7 @@ class ClaudeCodeIntelConfig:
 
     @classmethod
     def from_env(cls) -> "ClaudeCodeIntelConfig":
+        """Build config from environment variables, falling back to lane YAML and defaults."""
         # Resolution order for handle:
         #   1. Explicit env UA_CLAUDE_CODE_INTEL_X_HANDLE
         #   2. First handle from intel_lanes.yaml for the active lane
@@ -174,7 +177,9 @@ class ClaudeCodeIntelConfig:
 
     @classmethod
     def all_handles_from_env(cls) -> list[str]:
-        """Return all configured handles. Resolution order:
+        """Return all configured handles.
+
+        Resolution order:
 
         1. Explicit env UA_CLAUDE_CODE_INTEL_X_HANDLES (comma-separated)
         2. intel_lanes.yaml handles for the active lane
@@ -223,6 +228,8 @@ def _all_handles_from_lane(lane_slug: str) -> list[str]:
 
 @dataclass
 class ClaudeCodeIntelRun:
+    """Result of a single Claude Code intelligence lane sync run."""
+
     ok: bool
     generated_at: str
     handle: str
@@ -239,10 +246,12 @@ class ClaudeCodeIntelRun:
 
 
 def resolve_lane_root(artifacts_root: Path | None = None) -> Path:
+    """Return the artifact directory for this intel lane's packet storage."""
     return (artifacts_root or resolve_artifacts_dir()) / "proactive" / LANE_SLUG
 
 
 def resolve_reference_kb_root(artifacts_root: Path | None = None) -> Path:
+    """Return the root directory for the reference knowledge-base JSONL files."""
     return (artifacts_root or resolve_artifacts_dir()) / "knowledge-bases" / KB_SLUG
 
 
@@ -262,6 +271,7 @@ def run_sync(
     conn: sqlite3.Connection | None = None,
     client: httpx.Client | None = None,
 ) -> ClaudeCodeIntelRun:
+    """Run a full intel lane sync: fetch posts, classify, store artifact, queue tasks."""
     start_time = time.time()
     # Allow 25 minutes to safely stay under the 30-minute cron timeout
     max_run_time_seconds = 25 * 60
@@ -495,6 +505,7 @@ def run_sync(
         return run
 
 def fetch_user_by_username(client: httpx.Client, *, token: str, username: str) -> dict[str, Any]:
+    """Fetch X user data by username via GET /2/users/by/username/{username}."""
     resp = client.get(
         f"https://api.x.com/2/users/by/username/{username}",
         headers=_auth_headers(token),
@@ -504,6 +515,7 @@ def fetch_user_by_username(client: httpx.Client, *, token: str, username: str) -
 
 
 def fetch_user_by_username_with_fallbacks(client: httpx.Client, *, token: str, username: str) -> dict[str, Any]:
+    """Fetch X user data by username with app-bearer and user-context auth fallbacks."""
     url = f"https://api.x.com/2/users/by/username/{username}"
     params = {"user.fields": "created_at,description,entities,public_metrics,verified,verified_type"}
     return _get_json_with_auth_fallbacks(client, url=url, params=params, app_bearer_token=token)
@@ -522,6 +534,7 @@ _TWEET_LOOKUP_PARAMS: dict[str, str] = {
 
 
 def fetch_tweet_by_id(client: httpx.Client, *, token: str, tweet_id: str) -> dict[str, Any]:
+    """Fetch a single tweet by ID via GET /2/tweets/{tweet_id}."""
     resp = client.get(
         f"https://api.x.com/2/tweets/{tweet_id}",
         headers=_auth_headers(token),
@@ -531,6 +544,7 @@ def fetch_tweet_by_id(client: httpx.Client, *, token: str, tweet_id: str) -> dic
 
 
 def fetch_tweet_by_id_with_fallbacks(client: httpx.Client, *, token: str, tweet_id: str) -> dict[str, Any]:
+    """Fetch a tweet by ID with app-bearer and user-context auth fallbacks."""
     url = f"https://api.x.com/2/tweets/{tweet_id}"
     return _get_json_with_auth_fallbacks(client, url=url, params=dict(_TWEET_LOOKUP_PARAMS), app_bearer_token=token)
 
@@ -543,6 +557,7 @@ def fetch_user_posts(
     max_results: int = DEFAULT_MAX_RESULTS,
     since_id: str | None = None,
 ) -> dict[str, Any]:
+    """Fetch recent posts for a user via GET /2/users/{user_id}/tweets."""
     params: dict[str, str] = {
         "max_results": str(max(5, min(int(max_results or DEFAULT_MAX_RESULTS), 100))),
         "tweet.fields": "id,text,created_at,public_metrics,entities,conversation_id,referenced_tweets,attachments",
@@ -566,6 +581,7 @@ def fetch_user_posts_with_fallbacks(
     since_id: str | None = None,
     pagination_token: str | None = None,
 ) -> dict[str, Any]:
+    """Fetch recent user posts with app-bearer and user-context auth fallbacks."""
     params: dict[str, str] = {
         "max_results": str(max(5, min(int(max_results or DEFAULT_MAX_RESULTS), 100))),
         "tweet.fields": "id,text,created_at,public_metrics,entities,conversation_id,referenced_tweets,attachments",
@@ -657,6 +673,7 @@ def fetch_all_user_posts_paginated(
 
 
 def normalize_posts(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract the `data` list from an X API response, filtering out non-dict and ID-less items."""
     data = payload.get("data")
     if not isinstance(data, list):
         return []
@@ -672,6 +689,7 @@ def normalize_posts(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def classify_post(post: dict[str, Any], *, handle: str = DEFAULT_HANDLE, linked_context: str = "") -> dict[str, Any]:
+    """Classify a single X post into a tier and action_type using heuristics then LLM."""
     post_id = str(post.get("id") or "").strip()
     text = str(post.get("text") or "").strip()
     lowered = text.lower()
@@ -816,6 +834,7 @@ def _llm_assisted_classification(*, text: str, links: list[str], heuristic: dict
 
 
 def extract_links(post: dict[str, Any]) -> list[str]:
+    """Extract deduplicated expanded URLs from a post's entities and text, dropping t.co shortlinks."""
     links: list[str] = []
     entities = post.get("entities")
     if isinstance(entities, dict):
@@ -859,6 +878,7 @@ def register_packet_artifact(
     actions: list[dict[str, Any]],
     new_posts: list[dict[str, Any]],
 ) -> str:
+    """Upsert a proactive-artifact record for this packet and return its artifact_id."""
     max_tier = max([int(action.get("tier") or 0) for action in actions] or [0])
     status = ARTIFACT_STATUS_CANDIDATE if max_tier >= 2 else ARTIFACT_STATUS_PRODUCED
     title = f"Claude Code Intel packet: @{handle}"
@@ -918,10 +938,10 @@ def _extract_title_snippet(text: str, max_len: int = 80) -> str:
 
 
 def _direct_demo_fallback_enabled() -> bool:
-    """Whether tier-3 actions also enqueue the legacy `claude_code_demo_task`
-    in addition to the new `cody_scaffold_request`. Off by default — Simone's
-    scaffold pass is the canonical path. Flip to "1" only as an emergency
-    lever if the scaffold pipeline is starving Cody.
+    """Return True when tier-3 actions should also enqueue the legacy `claude_code_demo_task`.
+
+    Off by default — the new `cody_scaffold_request` path is canonical. Flip
+    to "1" only as an emergency lever if the scaffold pipeline is starving Cody.
     """
     return os.getenv("UA_CSI_DIRECT_DEMO_FALLBACK", "0").strip().lower() in _TRUTHY
 
@@ -1044,6 +1064,7 @@ def queue_follow_up_tasks(
     actions: list[dict[str, Any]],
     lane_slug: str = "claude-code-intelligence",
 ) -> int:
+    """Enqueue tier-3+ actions as Task Hub items and return the number queued."""
     task_hub.ensure_schema(conn)
     queued = 0
     for action in actions:
@@ -1306,6 +1327,7 @@ def write_reference_kb_update(
     posts: list[dict[str, Any]],
     artifacts_root: Path | None = None,
 ) -> Path:
+    """Append classified actions and posts to the lane's reference knowledge-base JSONL file."""
     kb_root = resolve_reference_kb_root(artifacts_root)
     kb_root.mkdir(parents=True, exist_ok=True)
     index_path = kb_root / "source_index.md"

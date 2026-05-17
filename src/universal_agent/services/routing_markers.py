@@ -1,4 +1,4 @@
-"""Centralized routing markers for workflow classification.
+r"""Centralized routing markers for workflow classification.
 
 Single source of truth for keyword-based routing heuristics used by
 todo_dispatch_service and gateway_server. All markers use word-boundary
@@ -19,7 +19,7 @@ from typing import Sequence
 # ---------------------------------------------------------------------------
 
 def _compile_markers(markers: Sequence[str]) -> re.Pattern[str]:
-    """Compile marker strings into a single word-boundary regex.
+    r"""Compile marker strings into a single word-boundary regex.
 
     Multi-word markers like "code change" get internal ``\\s+`` instead of
     ``\\b``.  Single-word markers get ``\\b`` boundaries on both sides.

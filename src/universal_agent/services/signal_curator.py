@@ -1,5 +1,4 @@
-"""
-signal_curator.py — LLM-driven curator for proactive signal cards (Track 1).
+"""signal_curator.py — LLM-driven curator for proactive signal cards (Track 1).
 
 Evaluates pending signal cards using agent reasoning (not scoring heuristics)
 and promotes the best candidates to Task Hub items for autonomous execution.
@@ -146,6 +145,7 @@ def promote_cards_to_tasks(
 
     Returns:
         List of created task_ids.
+
     """
     task_hub.ensure_schema(conn)
     proactive_signals.ensure_schema(conn)

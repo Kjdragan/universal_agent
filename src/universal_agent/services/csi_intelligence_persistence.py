@@ -504,6 +504,7 @@ def apply_vault_delta_to_vault(
     Never raises on a single VaultAction error — collects per-action
     errors in ``errors`` so the caller can decide whether the partial
     write is acceptable.
+
     """
     applied: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []

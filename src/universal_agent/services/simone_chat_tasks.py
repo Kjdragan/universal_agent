@@ -46,6 +46,7 @@ def _now_iso() -> str:
 
 
 def task_id_for(session_id: str) -> str:
+    """Return the chat-task registry shared across heartbeat sessions."""
     return f"{TASK_ID_PREFIX}{session_id}"
 
 
@@ -109,7 +110,7 @@ def on_operator_message(
     text: str,
     source_page: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
-    """Hook for every inbound operator message.
+    """Handle every inbound operator message.
 
     - If no row exists yet, creates one (first message of the session).
     - If row exists in a terminal status, flips it back to `in_progress` and
@@ -151,7 +152,7 @@ def on_query_complete(
     session_id: str,
     completed: bool,
 ) -> Optional[dict[str, Any]]:
-    """Hook for the `query_complete` WebSocket emission.
+    """Handle the `query_complete` WebSocket emission.
 
     When `completed=True`, marks the row as having a completion proposal at
     `now`. Auto-complete cron later promotes proposed → completed once idle.

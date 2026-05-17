@@ -235,7 +235,7 @@ def notify_approved(spend_request: dict[str, Any]) -> dict[str, Any]:
 
 
 def maybe_notify_from_retrieve(retrieve_response: dict[str, Any]) -> Optional[dict[str, Any]]:
-    """Hook for link_bridge.retrieve_spend_request to call after a successful retrieve.
+    """Notify subscribers after link_bridge.retrieve_spend_request completes.
 
     Fires the notifier only when status == 'approved' and we haven't notified
     yet. Returns the notify result dict or None if not applicable. Never raises.

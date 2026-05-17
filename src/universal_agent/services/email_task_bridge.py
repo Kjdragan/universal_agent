@@ -106,7 +106,6 @@ def parse_email_triage_brief(raw: Any, *, sender_trusted: bool) -> dict[str, Any
     Returns a dict with keys: raw_text, safety_status, routing_decision,
     classification, priority, subject_summary.
     """
-
     text = str(raw or "").strip()
     parsed: dict[str, Any] = {
         "raw_text": text,
@@ -322,6 +321,7 @@ class EmailTaskBridge:
         db_conn: sqlite3.Connection,
         heartbeat_path: Optional[str] = None,
     ) -> None:
+        """Initialize the email-to-task bridge."""
         self._conn = db_conn
         self._heartbeat_path = heartbeat_path or self._default_heartbeat_path()
         ensure_email_task_schema(self._conn)
@@ -714,7 +714,6 @@ class EmailTaskBridge:
 
         Returns the mapping dict or None if no row matches.
         """
-
         row = self._conn.execute(
             "SELECT * FROM email_task_mappings WHERE task_id = ? ORDER BY updated_at DESC LIMIT 1",
             (str(task_id or "").strip(),),
@@ -729,7 +728,6 @@ class EmailTaskBridge:
 
         Returns the mapping dict or None.
         """
-
         key = str(session_key or "").strip()
         if not key:
             return None
@@ -766,7 +764,6 @@ class EmailTaskBridge:
 
     def has_ack_outbound(self, thread_id: str) -> bool:
         """Return True if an acknowledgement email was already sent for this thread."""
-
         mapping = self._get_mapping(thread_id)
         if not mapping:
             return False
@@ -777,7 +774,6 @@ class EmailTaskBridge:
 
     def has_final_outbound(self, thread_id: str) -> bool:
         """Return True if a final response email was already sent for this thread."""
-
         mapping = self._get_mapping(thread_id)
         if not mapping:
             return False
@@ -791,7 +787,6 @@ class EmailTaskBridge:
 
         Fields are set only once (idempotent re-calls do not overwrite).
         """
-
         now = _now_iso()
         self._conn.execute(
             """
@@ -821,7 +816,6 @@ class EmailTaskBridge:
         Sets final_email_sent_at, final_message_id, final_draft_id, and
         email_sent_at (idempotent — existing values are preserved).
         """
-
         now = _now_iso()
         self._conn.execute(
             """
@@ -903,7 +897,6 @@ class EmailTaskBridge:
         Clears any quarantine security_classification and relabels the
         corresponding Task Hub entry as ``open`` with ``agent-ready``.
         """
-
         thread = str(thread_id or "").strip()
         if not thread:
             return False
@@ -940,7 +933,6 @@ class EmailTaskBridge:
         ``needs_review`` on the Task Hub entry with the
         ``review-required`` label appended.
         """
-
         thread = str(thread_id or "").strip()
         if not thread:
             return False
@@ -982,7 +974,6 @@ class EmailTaskBridge:
         ``quarantine``, and updates the Task Hub entry to ``blocked``
         with the ``quarantined`` label.
         """
-
         thread = str(thread_id or "").strip()
         if not thread:
             return False
@@ -1038,6 +1029,7 @@ class EmailTaskBridge:
         Returns:
             The email thread_id if cleared, or None if the row didn't
             exist / wasn't a quarantined email / wasn't an email at all.
+
         """
         tid = str(task_id or "").strip()
         if not tid:
@@ -1210,13 +1202,44 @@ class EmailTaskBridge:
 
         Parameters
         ----------
+        task_id : str
+            Stable deduplication key for this task.
+        subject : str
+            Email subject used as the task title.
+        sender_email : str
+            Sender address stored in task metadata.
+        reply_text : str
+            Draft reply or body excerpt stored as task description.
+        thread_id : str
+            Provider thread identifier.
+        message_count : int
+            Number of messages in the thread (used to label updates).
+        session_key : str
+            Key identifying the email provider session.
+        workflow_run_id : str
+            Workflow run identifier for tracing.
+        workflow_attempt_id : str
+            Workflow attempt identifier for tracing.
+        provider_session_id : str
+            Provider session ID stored in metadata.
+        labels : list[str] | None
+            Task labels; defaults to ``_EMAIL_TASK_DEFAULT_LABELS``.
         priority : int | None
             Task Hub numeric priority (0-3). ``None`` falls through to
             a default of 2 (medium).
+        due_at : str | None
+            ISO timestamp for task due date, if any.
         initial_status : str
             Starting status — defaults to ``open``.  The heartbeat's
             ``claim_next_dispatch_tasks`` atomically transitions to
             ``in_progress`` when it seizes the task for execution.
+        real_thread_id : str
+            Canonical thread ID from the provider (may differ from ``thread_id``).
+        real_message_id : str
+            Canonical message ID from the provider.
+        target_agent : str | None
+            Agent to assign this task to; ``None`` uses system default.
+
         """
         try:
             from universal_agent.task_hub import ensure_schema, upsert_item

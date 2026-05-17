@@ -1,4 +1,5 @@
 """Service for managing YouTube playlists via the YouTube Data API v3.
+
 Requires OAuth2 credentials to modify user data (like deleting from a playlist).
 """
 
@@ -20,11 +21,11 @@ OAUTH2_TOKEN_URL = "https://oauth2.googleapis.com/token"
 
 
 class YouTubeOAuthError(Exception):
-    pass
+    """Raised when OAuth2 token exchange or refresh fails."""
 
 
 class YouTubeAPIError(Exception):
-    pass
+    """Raised when the YouTube Data API returns an error response."""
 
 
 def _get_access_token() -> str:

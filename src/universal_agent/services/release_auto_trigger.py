@@ -61,6 +61,7 @@ class ReleaseTrigger:
     post_url: str = ""
 
     def to_dict(self) -> dict[str, Any]:
+        """Evaluate trigger conditions and return the decision."""
         return {
             "package": self.package,
             "version": self.version,
@@ -128,13 +129,16 @@ class AutoUpgradeResult:
 
     @property
     def attempted(self) -> bool:
+        """Return a summary view of the release auto-trigger state."""
         return self.outcome is not None
 
     @property
     def overall_ok(self) -> bool:
+        """Return whether the release auto-trigger is currently armed."""
         return bool(self.outcome and self.outcome.overall_ok)
 
     def to_dict(self) -> dict[str, Any]:
+        """Return the configured release trigger thresholds."""
         return {
             "trigger": self.trigger.to_dict(),
             "attempted": self.attempted,

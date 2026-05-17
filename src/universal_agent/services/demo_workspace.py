@@ -79,6 +79,8 @@ PROFILE_REQUIRED_ENV: dict[str, str] = {
 
 @dataclass(frozen=True)
 class WorkspaceProvisionResult:
+    """Describes a demo workspace and its on-disk location."""
+
     workspace_dir: Path
     settings_path: Path
     files_written: tuple[Path, ...]
@@ -86,6 +88,7 @@ class WorkspaceProvisionResult:
     endpoint_profile: str = ENDPOINT_PROFILE_ANTHROPIC
 
     def to_dict(self) -> dict[str, object]:
+        """Return the resolved workspace path for the demo."""
         return {
             "workspace_dir": str(self.workspace_dir),
             "settings_path": str(self.settings_path),
@@ -96,7 +99,7 @@ class WorkspaceProvisionResult:
 
 
 def demos_root() -> Path:
-    """Configured demo root. Override via UA_DEMOS_ROOT for testing."""
+    """Return the configured demo root. Override via UA_DEMOS_ROOT for testing."""
     raw = str(os.getenv("UA_DEMOS_ROOT") or "").strip()
     if raw:
         return Path(raw).expanduser().resolve()

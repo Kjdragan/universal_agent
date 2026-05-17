@@ -1,5 +1,4 @@
-"""
-proactive_budget.py — Shared daily budget for the autonomous proactive pipeline.
+"""proactive_budget.py — Shared daily budget for the autonomous proactive pipeline.
 
 Both the Signal Curator (Track 1) and the Reflection Engine (Track 2) share
 a single daily budget counter.  Only tasks with source_kind in

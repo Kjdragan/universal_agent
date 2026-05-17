@@ -54,14 +54,13 @@ def _delivery_state_for_channel(record: dict, channel: str) -> Optional[dict]:
 
 
 def _row_already_delivered(record: dict, channel: str) -> bool:
-    """Return True if the row has been delivered for this channel
-    AND the delivery is still current (delivered_at >= updated_at).
+    """Return True if the row has been delivered for this channel and delivery is current.
 
-    A flapping kind that gets re-upserted with a new updated_at counts
-    as new content and would be eligible for re-delivery — except the
-    cooldown will then suppress it.  Combined with kind-upsert in
-    `_add_notification`, this gives one delivery per cooldown window
-    even under heavy churn.
+    "Current" means ``delivered_at >= updated_at``. A flapping kind that gets
+    re-upserted with a new ``updated_at`` counts as new content and is eligible
+    for re-delivery — except the cooldown will then suppress it. Combined with
+    kind-upsert in ``_add_notification``, this gives one delivery per cooldown
+    window even under heavy churn.
     """
     state = _delivery_state_for_channel(record, channel)
     if not state:
@@ -115,6 +114,8 @@ def _format_telegram_text(record: dict) -> str:
 
 
 class NotificationDispatcher:
+    """Dispatches pending notifications to email and Telegram channels."""
+
     def __init__(
         self,
         *,
@@ -127,6 +128,7 @@ class NotificationDispatcher:
         cooldown_seconds: float = _DEFAULT_COOLDOWN_SECONDS,
         now_fn: Callable[[], float] = time.time,
     ) -> None:
+        """Initialize the dispatcher with delivery callables and targeting config."""
         self._get_pending_rows = get_pending_rows
         self._mark_delivered = mark_delivered
         self._send_email = send_email
@@ -229,6 +231,7 @@ class NotificationDispatcher:
         summary["telegram_sent"] += 1
 
     async def dispatch_pending_once(self) -> dict:
+        """Dispatch all pending notifications once and return a delivery summary."""
         summary = {
             "rows_seen": 0,
             "rows_eligible": 0,
@@ -260,6 +263,7 @@ class NotificationDispatcher:
         return summary
 
     async def run_loop(self, interval_seconds: float, *, stop_event: Optional[asyncio.Event] = None) -> None:
+        """Run dispatch_pending_once on a repeating interval until stop_event is set."""
         interval = max(5.0, float(interval_seconds))
         while True:
             if stop_event is not None and stop_event.is_set():

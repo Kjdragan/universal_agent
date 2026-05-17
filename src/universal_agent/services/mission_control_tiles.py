@@ -88,6 +88,7 @@ class TileState:
     signature: str = ""
 
     def __post_init__(self) -> None:
+        """Validate color and auto-generate signature from content if not supplied."""
         if self.color not in VALID_COLORS:
             raise ValueError(
                 f"TileState.color must be one of {sorted(VALID_COLORS)}, got {self.color!r}"
@@ -118,11 +119,13 @@ class Tile:
     display_name: str = ""
 
     def compute_state(self, conn: sqlite3.Connection) -> TileState:
+        """Compute and return the current TileState for this tile."""
         raise NotImplementedError
 
     def llm_annotation_prompt(self, state: TileState) -> str:
-        """Prompt to enrich a yellow/red transition with a short LLM
-        annotation. Default implementation returns a generic prompt;
+        """Return a prompt to enrich a yellow/red transition with a short LLM annotation.
+
+        Default implementation returns a generic prompt;
         each tile may override with a domain-specific framing.
         """
         return (
@@ -151,10 +154,13 @@ class Tile:
 
 
 class GatewayTile(Tile):
+    """Tile reporting gateway liveness via recent activity-event timestamps."""
+
     name = "gateway"
     display_name = "Gateway"
 
     def compute_state(self, conn: sqlite3.Connection) -> TileState:
+        """Return green/yellow/red based on seconds since last activity event."""
         # Gateway health is derived from the most recent activity-event
         # `health_check` style heartbeat. If we have no events at all in
         # the last 5 minutes the gateway is effectively silent.
@@ -209,10 +215,13 @@ class GatewayTile(Tile):
 
 
 class DatabaseTile(Tile):
+    """Tile reporting activity-DB health via SELECT 1 latency."""
+
     name = "database"
     display_name = "Database"
 
     def compute_state(self, conn: sqlite3.Connection) -> TileState:
+        """Return green/yellow/red based on SELECT 1 round-trip latency."""
         # A trivial SELECT 1 latency check. Anything sub-100ms is green;
         # 100ms-1s is yellow (lock contention or busy WAL); >1s is red.
         import time
@@ -245,15 +254,19 @@ class DatabaseTile(Tile):
 
 
 class CsiIngesterTile(Tile):
+    """Tile reporting CSI ingester freshness based on last ingestion event age."""
+
     name = "csi_ingester"
     display_name = "CSI Ingester"
 
-    def auto_action_class(self) -> str | None:  # noqa: D401 — see docstring
+    def auto_action_class(self) -> str | None:
+        """Return 'A' — Phase 5 will trigger a csi-ingester restart for this class."""
         # Class A in Phase 5 (csi-ingester restart). Phase 1 just
         # records the intent; nothing fires.
         return "A"
 
     def compute_state(self, conn: sqlite3.Connection) -> TileState:
+        """Return green/yellow/red based on time since last CSI ingestion event."""
         # CSI is a 3x-DAILY scheduled job (cron 0 8,16,22 America/Chicago
         # = ~13:00 / 21:00 / 03:00 UTC). Worst-case gap between events is
         # 10h (22:00 → 08:00 next day, America/Chicago), so the existing
@@ -372,13 +385,17 @@ def _load_live_cron_job_ids() -> set[str] | None:
 
 
 class CronPipelinesTile(Tile):
+    """Tile reporting cron-job failure rate over the last 24 hours."""
+
     name = "cron_pipelines"
     display_name = "Cron Pipelines"
 
     def auto_action_class(self) -> str | None:
+        """Return 'B' — Phase 5 will surface a cron-restart suggestion for this class."""
         return "B"
 
     def compute_state(self, conn: sqlite3.Connection) -> TileState:
+        """Return green/yellow/red based on distinct cron-job failure count in last 24h."""
         # We count cron failures in last 24h grouped by job. Yellow = one
         # job failed once. Red = >=2 distinct jobs failing OR same job
         # failed >=3 times.
@@ -470,13 +487,17 @@ class CronPipelinesTile(Tile):
 
 
 class HeartbeatDaemonTile(Tile):
+    """Tile reporting heartbeat-daemon liveness based on tick age vs. expected interval."""
+
     name = "heartbeat_daemon"
     display_name = "Heartbeat Daemon"
 
     def auto_action_class(self) -> str | None:
+        """Return 'A' — Phase 5 will trigger a daemon restart for this class."""
         return "A"
 
     def compute_state(self, conn: sqlite3.Connection) -> TileState:
+        """Return green/yellow/red based on missed heartbeat ticks."""
         # Look for the most recent heartbeat-source activity event. If
         # the gap exceeds 2x the expected interval (default 90s), one
         # tick is missed; >=3 missed ticks (gap > ~5m) is red.
@@ -528,13 +549,17 @@ class HeartbeatDaemonTile(Tile):
 
 
 class TaskHubPressureTile(Tile):
+    """Tile reporting Task Hub queue pressure via in-progress count and stuck-claim detection."""
+
     name = "task_hub_pressure"
     display_name = "Task Hub Pressure"
 
     def auto_action_class(self) -> str | None:
+        """Return 'A' — Phase 5 will surface a queue-drain action for this class."""
         return "A"
 
     def compute_state(self, conn: sqlite3.Connection) -> TileState:
+        """Return green/yellow/red based on in-progress count and stuck-claim age."""
         # Two signals:
         #   in_progress count
         #   stuck claims = items in_progress with updated_at older than
@@ -587,10 +612,13 @@ class TaskHubPressureTile(Tile):
 
 
 class ModelUsageTodayTile(Tile):
+    """Tile reporting model-tier rate-limit events seen today."""
+
     name = "model_usage_today"
     display_name = "Model Usage Today"
 
     def compute_state(self, conn: sqlite3.Connection) -> TileState:
+        """Return green/yellow/red based on 429 rate-limit event count today."""
         # Counts 429 rate-limit error events from any model lane today.
         # We don't have a hard daily-spend table here in Phase 1, so we
         # focus on the alarm signal (rate-limiting) which is what
@@ -632,13 +660,17 @@ class ModelUsageTodayTile(Tile):
 
 
 class ProactivePipelineTile(Tile):
+    """Tile reporting proactive-pipeline throughput via Task Hub completion and failure counts."""
+
     name = "proactive_pipeline"
     display_name = "Proactive Pipeline"
 
     def auto_action_class(self) -> str | None:
+        """Return 'B' — Phase 5 will surface a pipeline-restart suggestion for this class."""
         return "B"
 
     def compute_state(self, conn: sqlite3.Connection) -> TileState:
+        """Return green/yellow/red based on proactive task completions and failures."""
         # IMPORTANT: use the canonical PROACTIVE_SOURCES set from
         # `proactive_outcome_tracker` rather than `LIKE 'proactive_%'`.
         # The LIKE pattern only catches 3 of the 13 actual proactive
@@ -745,13 +777,17 @@ class ProactivePipelineTile(Tile):
 
 
 class VPAgentHealthTile(Tile):
+    """Tile reporting VP-agent mission success/failure ratio over the last 7 days."""
+
     name = "vp_agent_health"
     display_name = "VP Agent Health"
 
     def auto_action_class(self) -> str | None:
+        """Return 'B' — Phase 5 will surface a VP-restart suggestion for this class."""
         return "B"
 
     def compute_state(self, conn: sqlite3.Connection) -> TileState:
+        """Return green/yellow/red based on per-VP failure rate over last 7 days."""
         # VP missions land in task_hub_items with source_kind='vp_mission'
         # and source_ref = vp.coder.primary | vp.general.primary.
         try:
@@ -869,6 +905,7 @@ def all_tiles() -> list[Tile]:
 
 
 def tile_by_name(name: str) -> Tile | None:
+    """Return a fresh instance of the tile whose `name` matches, or None."""
     for cls in _ALL_TILE_CLASSES:
         if cls.name == name:
             return cls()

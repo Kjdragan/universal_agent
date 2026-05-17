@@ -127,6 +127,8 @@ def _now_iso() -> str:
 
 @dataclass
 class TriageCandidate:
+    """Executes the CSI demo-triage pipeline."""
+
     post_id: str
     handle: str
     tier: int
@@ -147,6 +149,7 @@ class TriageCandidate:
     ranking_run_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        """Run the triage pass and return ranked results."""
         return {
             "post_id": self.post_id,
             "handle": self.handle,

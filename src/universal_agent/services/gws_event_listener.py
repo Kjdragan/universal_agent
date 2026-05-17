@@ -126,6 +126,7 @@ class GwsEventListener:
         dispatch_fn: DispatchFn,
         notification_sink: Optional[NotifyFn] = None,
     ) -> None:
+        """Initialize the Google Workspace event listener."""
         self._dispatch_fn = dispatch_fn
         self._notification_sink = notification_sink
         self._task: Optional[asyncio.Task] = None
@@ -144,6 +145,7 @@ class GwsEventListener:
     # ------------------------------------------------------------------
 
     async def start(self) -> None:
+        """Handle a single inbound event from Google Workspace."""
         if not self._enabled:
             logger.info(
                 "📬 gws event listener DISABLED "
@@ -170,6 +172,7 @@ class GwsEventListener:
         self._task = asyncio.create_task(self._loop(seen))
 
     async def stop(self) -> None:
+        """Start the event listener loop."""
         self._stop_event.set()
         if self._task:
             try:
@@ -183,6 +186,7 @@ class GwsEventListener:
     # ------------------------------------------------------------------
 
     def status(self) -> dict[str, Any]:
+        """Stop the event listener and release resources."""
         return {
             "enabled": self._enabled,
             "gmail_labels": _gmail_labels(),

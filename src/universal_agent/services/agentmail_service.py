@@ -407,6 +407,7 @@ class AgentMailService:
         trusted_ingress_fn: Optional[TrustedIngressFn] = None,
         priority_dispatch_fn: Optional[Any] = None,
     ) -> None:
+        """Initialize the AgentMail service with dispatch and notification hooks."""
         self._dispatch_fn = dispatch_fn
         self._dispatch_with_admission_fn = dispatch_with_admission_fn
         self._notification_sink = notification_sink
@@ -495,6 +496,7 @@ class AgentMailService:
     # ------------------------------------------------------------------
 
     async def startup(self) -> None:
+        """Start the AgentMail service, launching the WebSocket listener if enabled."""
         if not self._enabled:
             logger.info("📧 AgentMail service DISABLED (UA_AGENTMAIL_ENABLED=0)")
             return
@@ -546,6 +548,7 @@ class AgentMailService:
             self._ws_task = asyncio.create_task(self._ws_loop())
 
     async def shutdown(self) -> None:
+        """Shut down the AgentMail service and stop the WebSocket listener."""
         self._ws_stop_event.set()
         self._queue_wakeup.set()
         ws_task = self._ws_task
@@ -659,6 +662,7 @@ class AgentMailService:
 
         Returns:
             Dict with message_id/draft_id and status.
+
         """
         self._assert_ready()
 
@@ -1034,6 +1038,7 @@ class AgentMailService:
         label: Optional[str] = None,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
+        """List all threads in the inbox, optionally filtered by label."""
         result = await self.list_all_threads_detailed(label=label, limit=limit)
         return result["threads"]
 
@@ -1216,7 +1221,7 @@ class AgentMailService:
     # ------------------------------------------------------------------
 
     async def _ws_loop(self) -> None:
-        """Persistent WebSocket listener with exponential backoff reconnect."""
+        """Run a persistent WebSocket listener with exponential-backoff reconnect."""
         delay = _ws_reconnect_base()
         max_delay = _ws_reconnect_max()
 
@@ -2135,6 +2140,7 @@ class AgentMailService:
         sender: str | None = None,
         trusted_only: bool = False,
     ) -> list[dict[str, Any]]:
+        """List inbox queue items, optionally filtered by status."""
         self._ensure_queue_schema()
         clauses: list[str] = []
         params: list[Any] = []
@@ -2162,6 +2168,7 @@ class AgentMailService:
         return [self._queue_row_to_dict(row) for row in rows]
 
     def get_inbox_queue_item(self, queue_id: str) -> Optional[dict[str, Any]]:
+        """Return a single inbox queue item by id, if present."""
         self._ensure_queue_schema()
         with self._queue_connect() as conn:
             row = conn.execute(
@@ -2171,6 +2178,7 @@ class AgentMailService:
         return self._queue_row_to_dict(row) if row else None
 
     def retry_inbox_queue_item(self, queue_id: str) -> Optional[dict[str, Any]]:
+        """Retry a failed inbox queue item."""
         queue_id = str(queue_id or "").strip()
         if not queue_id:
             return None
@@ -2196,6 +2204,7 @@ class AgentMailService:
         return self.get_inbox_queue_item(queue_id)
 
     def cancel_inbox_queue_item(self, queue_id: str) -> Optional[dict[str, Any]]:
+        """Cancel a queued inbox item by id."""
         queue_id = str(queue_id or "").strip()
         if not queue_id:
             return None

@@ -70,10 +70,12 @@ def _gh_repo() -> str:
 
 
 def _gh_token() -> str:
-    """Resolve the GitHub token. Reads `GITHUB_TOKEN` directly — this is
-    populated at service-startup by `initialize_runtime_secrets()` from
-    Infisical. Never reads from `.env` directly per CLAUDE.md secrets
-    policy."""
+    """Resolve the GitHub token.
+
+    Reads ``GITHUB_TOKEN`` directly — populated at service-startup by
+    ``initialize_runtime_secrets()`` from Infisical. Never reads from ``.env``
+    directly per CLAUDE.md secrets policy.
+    """
     return (os.getenv("GITHUB_TOKEN") or "").strip()
 
 
@@ -194,9 +196,11 @@ def record_mission_pr(
 
 
 def _list_candidates(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    """Find vp_mission tasks that are non-terminal and have a recorded
-    PR. Bounded by `_SCAN_WINDOW_DAYS` to keep the scan O(small) even as
-    the task_hub grows."""
+    """Find vp_mission tasks that are non-terminal and have a recorded PR.
+
+    Bounded by ``_SCAN_WINDOW_DAYS`` to keep the scan O(small) even as the
+    task_hub grows.
+    """
     placeholders = ",".join("?" * len(_NON_TERMINAL_STATUSES))
     rows = conn.execute(
         f"""
@@ -276,14 +280,15 @@ def _close_mission_as_merged(
     metadata: dict[str, Any],
     pr_response: dict[str, Any],
 ) -> None:
-    """Stamp the PR merge info into metadata and flip the task to
-    completed. Bypasses `perform_task_action`'s email-delivery
-    verification gate — the PR merge IS the completion evidence here,
-    not an email send.
+    """Stamp the PR merge info into metadata and flip the task to completed.
 
-    We use `upsert_item` directly for this reason: it does NOT enforce
-    the verification gate, and the same pathway already covers happy-path
-    completion via `worker_loop.py:464`."""
+    Bypasses ``perform_task_action``'s email-delivery verification gate —
+    the PR merge IS the completion evidence here, not an email send.
+
+    We use ``upsert_item`` directly: it does NOT enforce the verification gate,
+    and the same pathway already covers happy-path completion via
+    ``worker_loop.py:464``.
+    """
     merged_at = pr_response.get("merged_at")
     merge_commit_sha = pr_response.get("merge_commit_sha")
     head_branch = (pr_response.get("head") or {}).get("ref")
@@ -328,10 +333,11 @@ def _mark_pr_deleted(
     task_id: str,
     metadata: dict[str, Any],
 ) -> None:
-    """A previously-recorded PR is no longer fetchable (404). Mark the
-    record so we don't keep querying it, but leave the task open — the
-    operator decides via the Mark Complete card button whether the work
-    really shipped or was abandoned."""
+    """Mark a PR as deleted after a 404 and leave the task open for operator review.
+
+    The operator decides via the Mark Complete card button whether the work
+    really shipped or was abandoned.
+    """
     dispatch = dict(metadata.get("dispatch") or {})
     pr_meta = dict(dispatch.get("pr") or {})
     pr_meta.update({"deleted": True, "deleted_observed_at": _utc_now_iso()})
@@ -350,10 +356,10 @@ def reconcile_vp_missions_with_prs(
     *,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    """Main entrypoint — run a single reconciliation pass.
+    """Run a single reconciliation pass.
 
-    Returns a counter dict for observability: keys `scanned`, `closed`,
-    `still_open`, `pr_deleted`, `errors`.
+    Returns a counter dict for observability: keys ``scanned``, ``closed``,
+    ``still_open``, ``pr_deleted``, ``errors``.
 
     `dry_run=True` logs candidates and decisions without writing
     anything. Used by the CLI for one-shot operator audits.

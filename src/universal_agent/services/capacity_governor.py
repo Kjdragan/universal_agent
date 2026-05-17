@@ -1,5 +1,4 @@
-"""
-Capacity Governor — system-level rate limiting for agent dispatch.
+"""Capacity Governor — system-level rate limiting for agent dispatch.
 
 Sits between the dispatch pipeline and agent execution to prevent
 overloading the LLM provider API. Tracks:
@@ -57,6 +56,7 @@ DEFAULT_COOLDOWN_AFTER_429_SECONDS = 60.0
 @dataclass
 class CapacitySnapshot:
     """Point-in-time view of capacity governor state."""
+
     max_concurrent: int
     active_slots: int
     available_slots: int
@@ -88,6 +88,7 @@ class CapacityGovernor:
         backoff_max: Optional[float] = None,
         cooldown_after_429: Optional[float] = None,
     ):
+        """Initialize the capacity governor."""
         self._max_concurrent = max_concurrent or int(
             os.getenv("UA_CAPACITY_MAX_CONCURRENT", str(DEFAULT_MAX_CONCURRENT))
         )
@@ -143,7 +144,7 @@ class CapacityGovernor:
     # ------------------------------------------------------------------
 
     def can_dispatch(self) -> tuple[bool, str]:
-        """Synchronous pre-flight check. Returns (allowed, reason).
+        """Perform a synchronous pre-flight check and return (allowed, reason).
 
         This is the primary gate for heartbeat and auto-refinement dispatch.
         Does NOT acquire a slot — use `acquire_slot()` for that.
@@ -378,7 +379,7 @@ class CapacityGovernor:
 # ---------------------------------------------------------------------------
 
 def check_capacity() -> tuple[bool, str]:
-    """Quick check — can we dispatch right now?"""
+    """Return whether dispatch is currently allowed."""
     return CapacityGovernor.get_instance().can_dispatch()
 
 
