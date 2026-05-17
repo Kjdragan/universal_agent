@@ -1,18 +1,30 @@
 #!/usr/bin/env bash
+# Idempotent installer for the CSI lane's systemd units.
+# Invoked from .github/workflows/deploy.yml on every push to main.
+#
+# Three responsibilities:
+#   1. Install every unit file in deployment/systemd/ to /etc/systemd/system/.
+#   2. Enable + start every timer (the .timer units in the same directory).
+#   3. Sweep /etc/systemd/system/ for csi-* units that we no longer own and
+#      disable+remove them so they stop failing silently every N minutes.
+#
+# Background on #3: prior to 2026-05-17 the repo carried 36 install_unit
+# references to unit files that had been deleted in cleanup commits but never
+# removed from the install list. The first dead reference tripped `set -e` and
+# aborted the script before any timer got enabled — that's why the YouTube
+# transcript pipeline silently rotted for 53 days. Tolerance + sweep make the
+# install path self-healing.
 set -euo pipefail
 
 ROOT_DIR="/opt/universal_agent/CSI_Ingester/development"
 SRC_DIR="${ROOT_DIR}/deployment/systemd"
+TARGET_DIR="/etc/systemd/system"
 
-# The unit-list below has drifted from on-disk source files (some units were
-# removed in cleanup commits but their entries here weren't). Without
-# tolerance for missing files, the first dead reference would abort the
-# whole script under `set -e`, leaving every later unit uninstalled. That
-# regression masked the 2026-03/05 YouTube transcript outage for ~53 days.
+# ── helpers ────────────────────────────────────────────────────────────────
 install_unit() {
   local name="$1"
   if [ -f "${SRC_DIR}/${name}" ]; then
-    cp "${SRC_DIR}/${name}" "/etc/systemd/system/${name}"
+    cp "${SRC_DIR}/${name}" "${TARGET_DIR}/${name}"
   else
     echo "WARN: install_unit skipping ${name} — source missing at ${SRC_DIR}/${name}"
   fi
@@ -20,108 +32,93 @@ install_unit() {
 
 enable_timer_if_installed() {
   local name="$1"
-  if [ -f "/etc/systemd/system/${name}" ]; then
+  if [ -f "${TARGET_DIR}/${name}" ]; then
     systemctl enable --now "${name}" || echo "WARN: failed to enable ${name}"
   else
-    echo "WARN: skipping enable for ${name} — not installed in /etc/systemd/system"
+    echo "WARN: skipping enable for ${name} — not installed in ${TARGET_DIR}"
   fi
 }
 
-install_unit "csi-rss-telegram-digest.service"
-install_unit "csi-rss-telegram-digest.timer"
-install_unit "csi-reddit-telegram-digest.service"
-install_unit "csi-reddit-telegram-digest.timer"
-install_unit "csi-playlist-tutorial-digest.service"
-install_unit "csi-playlist-tutorial-digest.timer"
-install_unit "csi-rss-semantic-enrich.service"
-install_unit "csi-rss-semantic-enrich.timer"
-install_unit "csi-rss-trend-report.service"
-install_unit "csi-rss-trend-report.timer"
-install_unit "csi-reddit-trend-report.service"
-install_unit "csi-reddit-trend-report.timer"
-install_unit "csi-rss-insight-analyst.service"
-install_unit "csi-rss-insight-analyst.timer"
-install_unit "csi-rss-reclassify-categories.service"
-install_unit "csi-rss-reclassify-categories.timer"
-install_unit "csi-category-quality-loop.service"
-install_unit "csi-category-quality-loop.timer"
-install_unit "csi-analysis-task-runner.service"
-install_unit "csi-analysis-task-runner.timer"
-install_unit "csi-analysis-task-bootstrap.service"
-install_unit "csi-analysis-task-bootstrap.timer"
-install_unit "csi-rss-quality-gate.service"
-install_unit "csi-rss-quality-gate.timer"
-install_unit "csi-replay-dlq.service"
-install_unit "csi-replay-dlq.timer"
-install_unit "csi-report-product-finalize.service"
-install_unit "csi-report-product-finalize.timer"
-install_unit "csi-daily-summary.service"
-install_unit "csi-daily-summary.timer"
-install_unit "csi-hourly-token-report.service"
-install_unit "csi-hourly-token-report.timer"
-install_unit "csi-delivery-health-canary.service"
-install_unit "csi-delivery-health-canary.timer"
-install_unit "csi-delivery-health-auto-remediate.service"
-install_unit "csi-delivery-health-auto-remediate.timer"
-install_unit "csi-delivery-slo-gatekeeper.service"
-install_unit "csi-delivery-slo-gatekeeper.timer"
-install_unit "csi-threads-token-refresh-sync.service"
-install_unit "csi-threads-token-refresh-sync.timer"
-install_unit "csi-threads-rollout-verify.service"
-install_unit "csi-threads-rollout-verify.timer"
-install_unit "csi-threads-publish-canary-verify.service"
-install_unit "csi-threads-publish-canary-verify.timer"
-install_unit "csi-threads-webhook-canary-verify.service"
-install_unit "csi-threads-webhook-canary-verify.timer"
-install_unit "csi-reddit-semantic-enrich.service"
-install_unit "csi-reddit-semantic-enrich.timer"
-install_unit "csi-threads-semantic-enrich.service"
-install_unit "csi-threads-semantic-enrich.timer"
-install_unit "csi-threads-trend-report.service"
-install_unit "csi-threads-trend-report.timer"
-install_unit "csi-global-trend-brief.service"
-install_unit "csi-global-trend-brief.timer"
-install_unit "csi-global-brief-reminder.service"
-install_unit "csi-global-brief-reminder.timer"
-install_unit "csi-db-backup.service"
-install_unit "csi-db-backup.timer"
-install_unit "csi-youtube-transcript-canary.service"
-install_unit "csi-youtube-transcript-canary.timer"
+# ── canonical list ─────────────────────────────────────────────────────────
+# Derived from `ls deployment/systemd/`. Update *here* when adding/removing
+# a unit, then the next deploy installs it and the sweep block cleans up
+# anything still living on the VPS from a prior generation.
+CANONICAL_UNITS=(
+  csi-daily-summary.service
+  csi-daily-summary.timer
+  csi-db-backup.service
+  csi-db-backup.timer
+  csi-global-trend-brief.service
+  csi-global-trend-brief.timer
+  csi-quality-assessment.service
+  csi-quality-assessment.timer
+  csi-reddit-semantic-enrich.service
+  csi-reddit-semantic-enrich.timer
+  csi-reddit-trend-report.service
+  csi-reddit-trend-report.timer
+  csi-replay-dlq.service
+  csi-replay-dlq.timer
+  csi-rss-semantic-enrich.service
+  csi-rss-semantic-enrich.timer
+  csi-rss-trend-report.service
+  csi-rss-trend-report.timer
+  csi-threads-semantic-enrich.service
+  csi-threads-semantic-enrich.timer
+  csi-threads-token-refresh-sync.service
+  csi-threads-token-refresh-sync.timer
+  csi-threads-trend-report.service
+  csi-threads-trend-report.timer
+  csi-youtube-transcript-canary.service
+  csi-youtube-transcript-canary.timer
+)
+
+# Units managed elsewhere — never sweep them even if they aren't in the
+# canonical list above. `csi-ingester.service` is the main long-running
+# service installed by a separate deploy step.
+EXEMPT_UNITS=(
+  csi-ingester.service
+  csi.target
+)
+
+# ── install ────────────────────────────────────────────────────────────────
+for unit in "${CANONICAL_UNITS[@]}"; do
+  install_unit "$unit"
+done
 
 systemctl daemon-reload
 
-# enable_timer_if_installed silently warns on dead references rather than
-# aborting under `set -e`. Every timer name below should still be listed
-# so freshly-installed units get auto-enabled the next deploy.
-enable_timer_if_installed "csi-rss-telegram-digest.timer"
-enable_timer_if_installed "csi-reddit-telegram-digest.timer"
-enable_timer_if_installed "csi-playlist-tutorial-digest.timer"
-enable_timer_if_installed "csi-rss-semantic-enrich.timer"
-enable_timer_if_installed "csi-rss-trend-report.timer"
-enable_timer_if_installed "csi-reddit-trend-report.timer"
-enable_timer_if_installed "csi-rss-insight-analyst.timer"
-enable_timer_if_installed "csi-rss-reclassify-categories.timer"
-enable_timer_if_installed "csi-category-quality-loop.timer"
-enable_timer_if_installed "csi-analysis-task-runner.timer"
-enable_timer_if_installed "csi-analysis-task-bootstrap.timer"
-enable_timer_if_installed "csi-rss-quality-gate.timer"
-enable_timer_if_installed "csi-replay-dlq.timer"
-enable_timer_if_installed "csi-report-product-finalize.timer"
-enable_timer_if_installed "csi-daily-summary.timer"
-enable_timer_if_installed "csi-hourly-token-report.timer"
-enable_timer_if_installed "csi-delivery-health-canary.timer"
-enable_timer_if_installed "csi-delivery-health-auto-remediate.timer"
-enable_timer_if_installed "csi-delivery-slo-gatekeeper.timer"
-enable_timer_if_installed "csi-threads-token-refresh-sync.timer"
-enable_timer_if_installed "csi-threads-rollout-verify.timer"
-enable_timer_if_installed "csi-threads-publish-canary-verify.timer"
-enable_timer_if_installed "csi-threads-webhook-canary-verify.timer"
-enable_timer_if_installed "csi-reddit-semantic-enrich.timer"
-enable_timer_if_installed "csi-threads-semantic-enrich.timer"
-enable_timer_if_installed "csi-threads-trend-report.timer"
-enable_timer_if_installed "csi-global-trend-brief.timer"
-enable_timer_if_installed "csi-global-brief-reminder.timer"
-enable_timer_if_installed "csi-db-backup.timer"
-enable_timer_if_installed "csi-youtube-transcript-canary.timer"
+# ── enable timers ──────────────────────────────────────────────────────────
+for unit in "${CANONICAL_UNITS[@]}"; do
+  [[ "$unit" == *.timer ]] || continue
+  enable_timer_if_installed "$unit"
+done
+
+# ── orphan sweep ───────────────────────────────────────────────────────────
+# Disable + remove any csi-*.{service,timer} in /etc/systemd/system/ that
+# isn't in the canonical or exempt list. Without this, deleted units linger
+# and continue to fire (e.g. csi-rss-quality-gate.service was failing every
+# 15 min after its backing script was deleted in commit b4248fc7).
+keep_set=" "
+for u in "${CANONICAL_UNITS[@]}" "${EXEMPT_UNITS[@]}"; do
+  keep_set+="$u "
+done
+
+shopt -s nullglob
+swept=0
+for live in "${TARGET_DIR}"/csi-*.service "${TARGET_DIR}"/csi-*.timer; do
+  name=$(basename "$live")
+  if [[ "$keep_set" != *" $name "* ]]; then
+    echo "ORPHAN_SWEEP disabling+removing ${name}"
+    systemctl disable --now "${name}" 2>/dev/null || true
+    rm -f "${live}"
+    swept=$((swept + 1))
+  fi
+done
+shopt -u nullglob
+
+if [ "$swept" -gt 0 ]; then
+  systemctl daemon-reload
+fi
+echo "ORPHAN_SWEEP_TOTAL=${swept}"
 
 echo "SYSTEMD_EXTRAS_INSTALLED=1"
