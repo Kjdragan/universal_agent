@@ -84,6 +84,7 @@ def _apply_env_defaults(path: Path) -> None:
         os.environ.setdefault(key, val)
 
 
+from _csi_retry import retry_on_transient  # noqa: E402
 from _csi_secret_resolver import resolve_token_from_infisical  # noqa: E402
 
 
@@ -96,6 +97,8 @@ def _fetch_transcript_failover(
     timeout_seconds: int,
     max_chars: int,
     min_chars: int,
+    max_retries: int = 2,
+    retry_backoff_seconds: float = 5.0,
 ) -> dict[str, Any]:
     payload = {
         "video_id": video_id,
@@ -104,12 +107,22 @@ def _fetch_transcript_failover(
         "max_chars": max_chars,
         "min_chars": min_chars,
     }
-    return post_json_with_failover(
-        endpoints=endpoints,
-        payload=payload,
-        token=token,
-        timeout_seconds=max(10, timeout_seconds + 5),
-        success_predicate=lambda result: bool(result.get("ok")) and bool(str(result.get("transcript_text") or "").strip()),
+
+    def _one_call() -> dict[str, Any]:
+        return post_json_with_failover(
+            endpoints=endpoints,
+            payload=payload,
+            token=token,
+            timeout_seconds=max(10, timeout_seconds + 5),
+            success_predicate=lambda result: bool(result.get("ok"))
+            and bool(str(result.get("transcript_text") or "").strip()),
+        )
+
+    return retry_on_transient(
+        _one_call,
+        max_retries=max_retries,
+        backoff_seconds=retry_backoff_seconds,
+        log_prefix=f"RSS_ENRICH_VID={video_id}",
     )
 
 
