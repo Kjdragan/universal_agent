@@ -1,0 +1,189 @@
+name: PR Rebase Watchdog
+
+# Heals the "auto-merge enabled but branch went DIRTY against main" failure
+# mode. When main moves forward (e.g. another PR squash-merges), open PRs
+# can become CONFLICTING. GitHub does NOT run Validate PR on conflicting
+# PRs, so auto-merge has nothing to wait on and sits silently until a human
+# notices. This workflow sweeps for that state and either rebases the
+# branch automatically (for autonomous-author branches) or comments with
+# instructions (for human-author branches).
+#
+# Triggers:
+#   - push to main → re-check ALL open auto-merge PRs (they may have just
+#     gone DIRTY)
+#   - schedule every 15 min → backstop for missed events / hiccups
+#   - workflow_dispatch → manual sweep
+#
+# Why not pull_request_target/synchronize: that fires on PR-side pushes,
+# but the DIRTY transition is caused by MAIN moving, which doesn't emit a
+# PR event. The push-to-main trigger covers the real cause.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: pr-rebase-watchdog
+  cancel-in-progress: false
+
+jobs:
+  heal-dirty-prs:
+    name: Detect & heal DIRTY auto-merge PRs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Find stuck PRs and dispatch action
+        env:
+          # AUTO_MERGE_PAT so any push-triggered downstream workflows fire
+          # (same reason as pr-auto-merge.yml). Falls back to GITHUB_TOKEN.
+          GH_TOKEN: ${{ secrets.AUTO_MERGE_PAT || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          echo "::group::Querying open auto-merge PRs with mergeStateStatus=DIRTY"
+          # GraphQL is the only way to get mergeStateStatus + autoMergeRequest
+          # together. REST PR endpoint doesn't expose mergeStateStatus.
+          gh api graphql -f query='
+            query($owner: String!, $repo: String!) {
+              repository(owner: $owner, name: $repo) {
+                pullRequests(first: 50, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) {
+                  nodes {
+                    number
+                    headRefName
+                    isDraft
+                    mergeStateStatus
+                    autoMergeRequest { enabledBy { login } }
+                    labels(first: 20) { nodes { name } }
+                  }
+                }
+              }
+            }' -F owner="${REPO%/*}" -F repo="${REPO#*/}" > prs.json
+          echo "::endgroup::"
+
+          jq -r '
+            .data.repository.pullRequests.nodes[]
+            | select(.isDraft | not)
+            | select(.autoMergeRequest != null)
+            | select(.mergeStateStatus == "DIRTY")
+            | "\(.number)\t\(.headRefName)\t\((.labels.nodes // []) | map(.name) | join(","))"
+          ' prs.json > stuck.tsv
+
+          if [ ! -s stuck.tsv ]; then
+            echo "No stuck PRs. Done."
+            exit 0
+          fi
+
+          echo "Stuck PRs:"
+          cat stuck.tsv
+
+          # Configure git for any auto-rebase commits
+          git config --global user.name "pr-rebase-watchdog[bot]"
+          git config --global user.email "pr-rebase-watchdog@users.noreply.github.com"
+
+          while IFS=$'\t' read -r pr_num head_ref labels; do
+            echo "::group::PR #${pr_num} (${head_ref})"
+            # Branch classifier:
+            #   - claude/*, worktree-* → autonomous-author, safe to auto-rebase
+            #   - kevin/*, feature/*, codie/* → human/Cody-author, comment only
+            #   - everything else → comment only (conservative default)
+            case "$head_ref" in
+              claude/*|worktree-*)
+                action="rebase"
+                ;;
+              *)
+                action="comment"
+                ;;
+            esac
+            echo "Decided action: ${action}"
+
+            if [ "$action" = "rebase" ]; then
+              # Attempt non-destructive rebase. Fresh clone each iter to
+              # avoid cross-PR worktree contamination.
+              rm -rf wt && mkdir wt && cd wt
+              # Use a token in the URL so we can force-push back.
+              auth_url="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+              git clone --no-tags --depth 50 "$auth_url" .
+              git fetch origin "$head_ref":"$head_ref"
+              git checkout "$head_ref"
+              git fetch origin main
+              if git rebase origin/main; then
+                if git push --force-with-lease origin "$head_ref"; then
+                  echo "Rebased and force-pushed PR #${pr_num} cleanly."
+                  gh pr comment "$pr_num" --repo "$REPO" --body \
+                    "🤖 **pr-rebase-watchdog**: rebased \`${head_ref}\` onto current \`main\` (branch was DIRTY against main with auto-merge enabled). Validate PR will run on the new tip."
+                else
+                  echo "Push failed for PR #${pr_num}."
+                  gh pr comment "$pr_num" --repo "$REPO" --body \
+                    "🤖 **pr-rebase-watchdog**: rebase succeeded locally but force-push to \`${head_ref}\` failed. Likely a concurrent push — will retry on next sweep."
+                fi
+              else
+                echo "Rebase conflict for PR #${pr_num}."
+                git rebase --abort || true
+                printf '%s\n' \
+                  "🤖 **pr-rebase-watchdog**: \`${head_ref}\` is DIRTY against \`main\` and auto-rebase hit real merge conflicts. Manual rebase required:" \
+                  "" \
+                  '```bash' \
+                  "git fetch origin main" \
+                  "git checkout ${head_ref}" \
+                  "git rebase origin/main" \
+                  "# resolve conflicts, then" \
+                  "git push --force-with-lease" \
+                  '```' \
+                  "" \
+                  "Auto-merge stays enabled — once the branch is mergeable again Validate PR will run and the merge will fire." \
+                  > /tmp/comment.md
+                gh pr comment "$pr_num" --repo "$REPO" --body-file /tmp/comment.md
+              fi
+              cd ..
+            else
+              # Human-author or unknown-prefix branch — comment, don't touch
+              # the branch. Use a label to avoid re-commenting on each sweep.
+              if echo "$labels" | grep -q "rebase-needed-comment"; then
+                echo "Already commented on PR #${pr_num} (label present). Skipping."
+              else
+                printf '%s\n' \
+                  "🤖 **pr-rebase-watchdog**: \`${head_ref}\` is DIRTY against \`main\` and auto-merge is enabled but blocked. Validate PR cannot run on a conflicting branch. Please rebase:" \
+                  "" \
+                  '```bash' \
+                  "git fetch origin main" \
+                  "git checkout ${head_ref}" \
+                  "git rebase origin/main" \
+                  "git push --force-with-lease" \
+                  '```' \
+                  "" \
+                  "(Comment posted once per dirty cycle — the \`rebase-needed-comment\` label suppresses repeats. Push to the branch to clear it.)" \
+                  > /tmp/comment.md
+                gh pr comment "$pr_num" --repo "$REPO" --body-file /tmp/comment.md
+                gh pr edit "$pr_num" --repo "$REPO" --add-label "rebase-needed-comment" || true
+              fi
+            fi
+            echo "::endgroup::"
+          done < stuck.tsv
+
+      - name: Clear rebase-needed-comment labels on now-clean PRs
+        env:
+          GH_TOKEN: ${{ secrets.AUTO_MERGE_PAT || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Any PR that still has the label but is no longer DIRTY → drop label.
+          gh api graphql -f query='
+            query($owner: String!, $repo: String!) {
+              repository(owner: $owner, name: $repo) {
+                pullRequests(first: 50, states: OPEN, labels: ["rebase-needed-comment"]) {
+                  nodes { number mergeStateStatus }
+                }
+              }
+            }' -F owner="${REPO%/*}" -F repo="${REPO#*/}" \
+            | jq -r '.data.repository.pullRequests.nodes[] | select(.mergeStateStatus != "DIRTY") | .number' \
+            | while read -r n; do
+                [ -n "$n" ] && gh pr edit "$n" --repo "$REPO" --remove-label "rebase-needed-comment" || true
+              done
