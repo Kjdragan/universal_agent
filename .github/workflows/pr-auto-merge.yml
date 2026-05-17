@@ -2,7 +2,7 @@ name: PR Auto-Merge
 
 # Auto-enable GitHub auto-merge on PRs that:
 #   - Target main
-#   - Are from a claude/* or codie/* head branch (i.e., from an AI coder)
+#   - Are NOT from an explicit operator branch (kevin/*, feature/*)
 #   - Are not draft
 #
 # Once auto-merge is enabled, GitHub squash-merges the PR as soon as
@@ -14,8 +14,8 @@ name: PR Auto-Merge
 # get auto-merge enabled by /ship itself (see .claude/commands/ship.md).
 # This workflow handles the agent path where /ship isn't invoked.
 #
-# Manual fallback: if a PR doesn't match the head-branch pattern below,
-# the operator merges it manually in the GitHub UI.
+# Manual fallback: operator branches (kevin/*, feature/*) are excluded so
+# the operator retains manual-merge control on their own PRs.
 #
 # 2026-05-11 design note: an earlier iteration of this workflow targeted
 # `feature/latest2` and was paired with an `auto-promote-to-prod.yml`
@@ -25,8 +25,15 @@ name: PR Auto-Merge
 #
 # 2026-05-15 fix: filter only matched `claude/*` heads, leaving every
 # `codie/*` PR (the autonomous code-writer agent) stuck pending manual
-# merge. Three Codie PRs sat green-CI but unmerged for 1–2 days before
-# this was caught. Filter now matches both prefixes.
+# merge. Three Codie PRs sat green-CI but unmerged for 1-2 days before
+# this was caught. Filter was broadened to match both prefixes.
+#
+# 2026-05-17 redesign: the allowlist approach (claude/*, codie/*) is
+# brittle — every new AI-coder naming convention breaks it silently.
+# Inverted the logic: auto-merge everything that is not an explicit
+# operator branch (kevin/*, feature/*) and not a draft. AI-coder branches
+# of any naming convention (claude/*, codie/*, worktree-*, etc.) now
+# auto-merge without requiring a workflow update when naming changes.
 
 on:
   pull_request_target:
@@ -41,8 +48,8 @@ jobs:
   enable-automerge:
     name: Enable auto-merge (squash)
     if: |
-      (startsWith(github.event.pull_request.head.ref, 'claude/') ||
-       startsWith(github.event.pull_request.head.ref, 'codie/')) &&
+      !startsWith(github.event.pull_request.head.ref, 'kevin/') &&
+      !startsWith(github.event.pull_request.head.ref, 'feature/') &&
       !github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 5
