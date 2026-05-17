@@ -69,6 +69,14 @@ class DisjointedTask(TypedDict):
     reasoning: str
 
 
+class TutorialBuildabilityResult(TypedDict):
+    """Return shape of classify_tutorial_buildability."""
+
+    buildable: bool
+    reasoning: str
+    method: str
+
+
 # ── LLM Client Helper ──────────────────────────────────────────────────────
 
 async def _get_anthropic_client() -> Any:
@@ -613,3 +621,90 @@ async def extract_disjointed_tasks(
     except Exception as exc:
         logger.warning("LLM disjointed task extraction failed (non-fatal): %s", exc)
         return [{"task_content": f"Subject: {subject}\n\n{body}", "reasoning": f"Fallback (LLM unavailable: {exc})"}]
+
+
+# ── Tutorial Buildability Judge ──────────────────────────────────────────────
+
+_TUTORIAL_BUILDABILITY_SYSTEM = """\
+You decide whether a YouTube video is a coding tutorial from which an autonomous
+coding agent could build a small but working code demo.
+
+Inputs you receive: the video title, the channel name, and a Claude-distilled
+summary of the actual transcript (~1-2 paragraphs). The summary is your primary
+signal — the title and channel are context, not evidence.
+
+Return buildable=true ONLY when ALL of the following are true:
+- The video teaches or demonstrates concrete software functionality (writing code,
+  building an agent/script/tool, integrating an API/SDK, configuring a framework,
+  etc.).
+- A reasonable engineer could replicate a working artifact (script, repo, demo,
+  notebook) from what the summary describes — even if the exact code isn't shown.
+- The summary is technical and specific, not a high-level news/opinion/commentary
+  piece that merely *mentions* tech.
+
+Return buildable=false when ANY of the following is true:
+- The summary is news, current events, geopolitics, sports, music, comedy, vlog,
+  reaction, drama, podcast chat, interview without concrete tech demo, product
+  announcement without implementation detail, or general commentary.
+- The summary is empty, vague, or lacks any concrete software/implementation
+  detail an agent could act on.
+- The video is *about* technology but doesn't demonstrate buildable functionality
+  (e.g., "the future of AI", company news, opinion piece).
+
+Be strict. False positives create wasted work for a downstream coding agent.
+When uncertain, return false.
+
+Respond with ONLY a JSON object:
+{
+  "buildable": true | false,
+  "reasoning": "1-2 sentences citing specific evidence from the summary"
+}
+"""
+
+_TUTORIAL_BUILDABILITY_USER = """\
+Title: {title}
+Channel: {channel}
+
+Transcript summary:
+{summary}
+"""
+
+
+async def classify_tutorial_buildability(
+    *,
+    title: str,
+    channel_name: str = "",
+    summary_text: str = "",
+) -> "TutorialBuildabilityResult":
+    """Ask the LLM whether a video is a code-buildable tutorial.
+
+    Returns a dict with:
+      - buildable: bool
+      - reasoning: str
+      - method: "llm" or "fallback"
+
+    On any error returns method="fallback" with buildable=False — the caller
+    should treat a fallback verdict as "skip, do not cache, retry next time".
+    """
+    try:
+        user_msg = _TUTORIAL_BUILDABILITY_USER.format(
+            title=title or "(unknown)",
+            channel=channel_name or "(unknown)",
+            summary=(summary_text or "").strip()[:4000] or "(empty)",
+        )
+        raw = await _call_llm(
+            system=_TUTORIAL_BUILDABILITY_SYSTEM,
+            user=user_msg,
+            max_tokens=400,
+        )
+        parsed = _parse_json_response(raw)
+        buildable = bool(parsed.get("buildable", False))
+        reasoning = str(parsed.get("reasoning") or "").strip()
+        return {"buildable": buildable, "reasoning": reasoning, "method": "llm"}
+    except Exception as exc:
+        logger.warning("LLM tutorial-buildability judge failed: %s", exc)
+        return {
+            "buildable": False,
+            "reasoning": f"Fallback (LLM unavailable: {exc})",
+            "method": "fallback",
+        }

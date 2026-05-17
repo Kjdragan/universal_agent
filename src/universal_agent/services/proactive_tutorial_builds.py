@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from datetime import datetime, timezone
 import hashlib
 import json
 import logging
@@ -10,8 +12,6 @@ from pathlib import Path
 import re
 import sqlite3
 from typing import Any
-
-import yaml
 
 from universal_agent.services.proactive_artifacts import (
     ARTIFACT_STATUS_CANDIDATE,
@@ -22,10 +22,9 @@ from universal_agent.services.proactive_task_builder import queue_proactive_task
 
 logger = logging.getLogger(__name__)
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_DENYLIST_FILE = _REPO_ROOT / "state" / "tutorial_build_denylist.yaml"
-
-# Categories CSI assigns that should never auto-route into tutorial-build.
+# Cheap, surgical deterministic prefilter — only meant to skip obvious-no
+# cases before invoking the LLM judge. The real decision is made by reading
+# the Claude-distilled transcript summary, not by string matching.
 _BLOCKED_CATEGORIES = frozenset(
     {
         "news",
@@ -44,38 +43,12 @@ _BLOCKED_CATEGORIES = frozenset(
     }
 )
 
-# Word-boundary tokens. Substring matching previously tripped on "api" inside
-# "rapid" / "Apia", letting news clips through.
-_POSITIVE_TITLE_TOKENS = frozenset(
-    {
-        "tutorial",
-        "walkthrough",
-        "build",
-        "building",
-        "hands-on",
-        "code",
-        "coding",
-        "python",
-        "typescript",
-        "javascript",
-        "github",
-        "repo",
-        "mcp",
-        "sdk",
-        "api",
-        "docker",
-        "agent",
-        "agents",
-    }
-)
-
 _NEGATIVE_TOKENS = frozenset(
     {
         "reaction",
         "drama",
         "podcast",
         "vlog",
-        "news",
     }
 )
 
@@ -186,17 +159,28 @@ def sync_build_oriented_csi_videos(
     for row in rows:
         subject = _json_loads_obj(row["subject_json"])
         analysis = _json_loads_obj(row["analysis_json"])
-        if not _looks_build_oriented(subject=subject, analysis=analysis, category=str(row["category"] or ""), summary=str(row["summary_text"] or "")):
+        summary = str(row["summary_text"] or "")
+        if not _looks_build_oriented(subject=subject, analysis=analysis, category=str(row["category"] or ""), summary=summary):
             continue
         video_id = str(subject.get("video_id") or row["event_id"] or "").strip()
         if not video_id:
             continue
+        title = str(subject.get("title") or subject.get("media_title") or video_id)
+        channel = str(subject.get("channel_name") or subject.get("author_name") or "")
+        if not is_video_buildable_with_judge(
+            conn,
+            video_id=video_id,
+            title=title,
+            channel_name=channel,
+            summary_text=summary,
+        ):
+            continue
         queue_tutorial_build_task(
             conn,
             video_id=video_id,
-            video_title=str(subject.get("title") or subject.get("media_title") or video_id),
+            video_title=title,
             video_url=str(subject.get("url") or ""),
-            channel_name=str(subject.get("channel_name") or subject.get("author_name") or ""),
+            channel_name=channel,
             source="csi_auto_route",
             extraction_plan=_extraction_plan_from_analysis(analysis=analysis, row=row),
             priority=3 if str(row["transcript_status"] or "").lower() == "ok" else 2,
@@ -340,36 +324,29 @@ def _build_artifact_summary(metadata: dict[str, Any]) -> str:
 
 
 def _looks_build_oriented(*, subject: dict[str, Any], analysis: dict[str, Any], category: str, summary: str) -> bool:
-    """Decide whether a CSI video should auto-route into tutorial-build.
+    """Cheap, surgical PREFILTER for the tutorial-build auto-route.
 
-    Multi-gate filter (any gate failing rejects):
-      1. Category denylist (news/politics/etc).
-      2. Channel denylist (self-learned from prior misroute parks).
-      3. Extraction plan must not be structurally empty (nothing to build).
-      4. No negative tokens (word-boundary) in title/description.
-      5. Positive token must appear in the TITLE — description noise alone
-         is too weak a signal and was the source of false positives.
+    This is intentionally narrow — it only rejects categories and tokens that
+    are clearly non-code (news, drama, podcast, vlog, …). For anything that
+    survives this gate, the real decision is made by
+    ``is_video_buildable_with_judge`` which reads CSI's Claude-distilled
+    transcript summary and asks the LLM whether this is something CODIE could
+    actually build a working code demo from.
+
+    Returning ``True`` here is necessary but not sufficient — the caller must
+    still consult the LLM judge before queueing.
     """
     cat = str(category or analysis.get("category") or "").strip().lower().replace(" ", "_")
     if cat in _BLOCKED_CATEGORIES:
         return False
 
-    channel = str(subject.get("channel_name") or subject.get("author_name") or "").strip()
-    if channel and _channel_in_denylist(channel):
-        return False
-
-    if _extraction_plan_is_empty(analysis):
-        return False
-
     title_tokens = _tokenize(str(subject.get("title") or ""))
     description_tokens = _tokenize(str(subject.get("description") or ""))
     summary_tokens = _tokenize(str(summary or ""))
-    all_tokens = title_tokens | description_tokens | summary_tokens
-
-    if all_tokens & _NEGATIVE_TOKENS:
+    if (title_tokens | description_tokens | summary_tokens) & _NEGATIVE_TOKENS:
         return False
 
-    return bool(title_tokens & _POSITIVE_TITLE_TOKENS)
+    return True
 
 
 def _tokenize(text: str) -> set[str]:
@@ -377,86 +354,141 @@ def _tokenize(text: str) -> set[str]:
     return set(_TOKEN_RE.findall((text or "").lower()))
 
 
-def _extraction_plan_is_empty(analysis: dict[str, Any]) -> bool:
-    """True when CSI tried to extract a build plan and got nothing.
-
-    Only fires when ``language`` / ``primary_language`` is *explicitly* present
-    and set to a degenerate value (e.g. ``"unknown"``) AND there are no
-    dependencies AND no implementation steps. If those keys are simply absent
-    from the analysis (e.g. the analyzer hasn't been run on this video, or a
-    different analysis schema is in use), we don't penalize — other gates
-    (category, channel, title tokens) carry the load.
-    """
-    if not isinstance(analysis, dict):
-        return False
-    has_language_key = "language" in analysis or "primary_language" in analysis
-    if not has_language_key:
-        return False
-    language = str(analysis.get("language") or analysis.get("primary_language") or "").strip().lower()
-    deps = analysis.get("dependencies")
-    steps = analysis.get("implementation_steps")
-    has_deps = isinstance(deps, list) and len(deps) > 0
-    has_steps = isinstance(steps, list) and len(steps) > 0
-    return language in {"", "unknown", "n/a", "none"} and not has_deps and not has_steps
-
-
-def _load_denylist_channels() -> list[str]:
-    """Load the channel denylist YAML, swallowing IO/parse errors."""
-    if not _DENYLIST_FILE.exists():
-        return []
-    try:
-        data = yaml.safe_load(_DENYLIST_FILE.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as exc:
-        logger.warning("tutorial-build denylist load failed: %s", exc)
-        return []
-    if not isinstance(data, dict):
-        return []
-    channels = data.get("channels")
-    if not isinstance(channels, list):
-        return []
-    return [str(c).strip() for c in channels if str(c or "").strip()]
-
-
-def _channel_in_denylist(channel: str) -> bool:
-    """Case-insensitive substring match against the denylist."""
-    if not channel:
-        return False
-    needle = channel.lower()
-    for entry in _load_denylist_channels():
-        e = entry.lower()
-        if e and (e in needle or needle in e):
-            return True
-    return False
-
-
-def record_channel_denylist_entry(channel_name: str, *, reason: str = "") -> bool:
-    """Append a channel to the tutorial-build denylist. Idempotent.
-
-    Call this when parking a tutorial-build task as a non-code misroute so the
-    same channel never re-routes. Returns True if the entry was added (or
-    already present), False on IO error.
-    """
-    clean = str(channel_name or "").strip()
-    if not clean:
-        return False
-    try:
-        _DENYLIST_FILE.parent.mkdir(parents=True, exist_ok=True)
-        existing = _load_denylist_channels()
-        if any(clean.lower() == e.lower() for e in existing):
-            return True
-        existing.append(clean)
-        header = (
-            "# Channels that have produced misrouted tutorial-build tasks.\n"
-            "# Appended automatically when Simone parks a tutorial_build task as\n"
-            "# a non-code misroute. Match is case-insensitive substring.\n"
+def _ensure_judge_table(conn: sqlite3.Connection) -> None:
+    """Idempotently create the per-video buildability verdict cache."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tutorial_build_judge (
+            video_id TEXT PRIMARY KEY,
+            buildable INTEGER NOT NULL,
+            reasoning TEXT,
+            method TEXT,
+            judged_at TEXT NOT NULL
         )
-        body = "channels:\n" + "".join(f"  - {json.dumps(c)}\n" for c in existing)
-        _DENYLIST_FILE.write_text(header + body, encoding="utf-8")
-        logger.info("Added %s to tutorial-build denylist (reason=%s)", clean, reason or "unspecified")
-        return True
-    except OSError as exc:
-        logger.warning("Failed to write tutorial-build denylist: %s", exc)
+        """
+    )
+
+
+def _get_cached_judge_verdict(conn: sqlite3.Connection, video_id: str) -> dict[str, Any] | None:
+    """Return cached verdict for a video_id, or None on miss."""
+    _ensure_judge_table(conn)
+    row = conn.execute(
+        "SELECT buildable, reasoning, method, judged_at FROM tutorial_build_judge WHERE video_id = ?",
+        (video_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "buildable": bool(row[0]),
+        "reasoning": row[1] or "",
+        "method": row[2] or "",
+        "judged_at": row[3] or "",
+    }
+
+
+def _cache_judge_verdict(
+    conn: sqlite3.Connection,
+    *,
+    video_id: str,
+    buildable: bool,
+    reasoning: str,
+    method: str,
+) -> None:
+    """Write a verdict to the cache. Last-write wins for re-judged videos."""
+    _ensure_judge_table(conn)
+    conn.execute(
+        """
+        INSERT INTO tutorial_build_judge (video_id, buildable, reasoning, method, judged_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(video_id) DO UPDATE SET
+            buildable = excluded.buildable,
+            reasoning = excluded.reasoning,
+            method = excluded.method,
+            judged_at = excluded.judged_at
+        """,
+        (
+            video_id,
+            1 if buildable else 0,
+            reasoning,
+            method,
+            datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        ),
+    )
+    conn.commit()
+
+
+def is_video_buildable_with_judge(
+    conn: sqlite3.Connection,
+    *,
+    video_id: str,
+    title: str,
+    channel_name: str,
+    summary_text: str,
+) -> bool:
+    """Return True iff the LLM judge confirms this video is a code-build candidate.
+
+    Caches verdicts per video_id. Falls back to ``False`` when the LLM is
+    unavailable — better to skip than to misroute. When the summary is empty
+    (no transcript signal), also returns ``False`` without an LLM call.
+    """
+    clean_summary = str(summary_text or "").strip()
+    if not clean_summary:
+        _cache_judge_verdict(
+            conn,
+            video_id=video_id,
+            buildable=False,
+            reasoning="no transcript summary available — cannot judge buildability",
+            method="no_summary",
+        )
         return False
+
+    cached = _get_cached_judge_verdict(conn, video_id)
+    if cached is not None:
+        return cached["buildable"]
+
+    if _judge_disabled():
+        # Without an LLM available we'd rather skip than misroute. Don't cache
+        # this verdict — re-judge once the LLM is back online.
+        logger.info("tutorial-build LLM judge disabled; skipping %s", video_id)
+        return False
+
+    try:
+        from universal_agent.services.llm_classifier import (
+            classify_tutorial_buildability,
+        )
+
+        verdict = asyncio.run(
+            classify_tutorial_buildability(
+                title=title,
+                channel_name=channel_name,
+                summary_text=clean_summary,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 — any failure means skip, never misroute
+        logger.warning("tutorial-build LLM judge failed for %s: %s", video_id, exc)
+        return False
+
+    buildable = bool(verdict.get("buildable"))
+    method = str(verdict.get("method") or "llm")
+    reasoning = str(verdict.get("reasoning") or "")
+    if method == "fallback":
+        # Fallback means the LLM call itself failed inside the classifier;
+        # don't cache so we'll retry next sync.
+        return False
+    _cache_judge_verdict(
+        conn,
+        video_id=video_id,
+        buildable=buildable,
+        reasoning=reasoning,
+        method=method,
+    )
+    return buildable
+
+
+def _judge_disabled() -> bool:
+    """Allow tests / ops to bypass the LLM judge entirely."""
+    raw = str(os.getenv("UA_TUTORIAL_BUILD_JUDGE_ENABLED", "1") or "1").strip().lower()
+    return raw in {"0", "false", "no", "off"}
 
 
 def _extraction_plan_from_analysis(*, analysis: dict[str, Any], row: Any) -> dict[str, Any]:
