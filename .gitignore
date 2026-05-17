@@ -177,3 +177,10 @@ session_workspaces/
 # markdown summaries. Treat as runtime output, regeneratable from source.
 /kb/briefings/
 /discord_intelligence/digests/
+
+# === Claude Code HUD overlay local state ===
+# Per-session, per-machine telemetry written by the Opus HUD overlay —
+# session IDs, machine-local paths, cost counters, rate-limit snapshots,
+# stdin payload cache. Has no place in version control. Previously
+# auto-committed by /ship (9 historical commits before being untracked).
+/.omc/
