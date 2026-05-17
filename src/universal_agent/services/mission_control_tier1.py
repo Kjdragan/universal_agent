@@ -251,9 +251,10 @@ def evidence_signature(evidence: dict[str, Any]) -> str:
 
 
 def _llm_prompt(evidence: dict[str, Any]) -> str:
-    """Tier-1 discovery prompt. Asks the LLM to surface meaning, NOT
-    summarize raw logs. Anchors emitted cards on stable subject entities
-    so identity continuity works across sweeps.
+    """Build the tier-1 discovery prompt.
+
+    Asks the LLM to surface meaning, not summarize raw logs. Anchors emitted
+    cards on stable subject entities so identity continuity works across sweeps.
     """
     prior_subject_ids = sorted(
         {c.get("subject_id") for c in evidence.get("prior_live_cards", []) if c.get("subject_id")}
@@ -329,10 +330,11 @@ def _llm_prompt(evidence: dict[str, Any]) -> str:
 
 
 async def discover_tier1_cards(evidence: dict[str, Any]) -> tuple[list[CardUpsert], str | None]:
-    """Call the dedicated glm-4.7 lane to discover this sweep's tier-1
-    cards. Returns (cards, model_used) on success or ([], None) on
-    failure (rate-limit, parse error, no API key, etc.) — the sweeper
-    treats failure as "skip this pass" rather than crashing.
+    """Call the glm-4.7 lane to discover this sweep's tier-1 cards.
+
+    Returns ``(cards, model_used)`` on success, or ``([], None)`` on failure
+    (rate-limit, parse error, no API key, etc.) — the sweeper treats failure
+    as "skip this pass" rather than crashing.
     """
     api_key = (
         os.getenv("ANTHROPIC_API_KEY")
@@ -465,12 +467,11 @@ def apply_tier1_discovery(
     *,
     retire_unmarked: bool = True,
 ) -> dict[str, Any]:
-    """Persist the LLM-discovered cards and retire any prior live card
-    whose subject was not re-emitted on this pass.
+    """Persist the LLM-discovered cards and retire any prior live card not re-emitted.
 
-    `retire_unmarked=True` is the standard sweep behavior — cards the
-    LLM doesn't re-emit are considered no-longer-relevant and move into
-    the Knowledge Ledger via state=retired.
+    ``retire_unmarked=True`` is the standard sweep behavior — cards the LLM
+    doesn't re-emit are considered no-longer-relevant and move into the
+    Knowledge Ledger via ``state=retired``.
 
     Returns an action summary suitable for logging.
     """

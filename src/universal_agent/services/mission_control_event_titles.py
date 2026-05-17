@@ -136,6 +136,7 @@ def _template_id(event_kind: str, shape_sig: str) -> str:
 def get_cached_template(
     conn: sqlite3.Connection, event_kind: str, shape_sig: str
 ) -> dict[str, Any] | None:
+    """Return the cached template row for the given event kind and shape signature."""
     row = conn.execute(
         """
         SELECT * FROM event_title_templates
@@ -223,11 +224,10 @@ Now generate a template for this event:
 async def generate_template_via_llm(
     sample_event: dict[str, Any],
 ) -> tuple[str, str | None]:
-    """Call the dedicated glm-4.7 lane to design a title template for
-    this event's (kind, metadata_shape) pair.
+    """Call the glm-4.7 lane to design a title template for this event's (kind, metadata_shape) pair.
 
-    Returns (template_string, model_used). On failure returns a
-    sensible fallback template + None for the model.
+    Returns ``(template_string, model_used)``. On failure returns a sensible
+    fallback template and None for the model.
     """
     kind = str(sample_event.get("kind") or "").strip() or "unknown"
     fallback = _fallback_template(sample_event)
@@ -336,9 +336,7 @@ def _metadata_shape_summary(metadata: Any) -> dict[str, str]:
 
 
 def _sanitize_template(text: str) -> str:
-    """Strip code-fences, line wrapping, and any sentence wrappers the
-    LLM might have included despite instructions.
-    """
+    """Strip code-fences, line wrapping, and sentence wrappers the LLM may have added."""
     cleaned = text.strip()
     if cleaned.startswith("```"):
         # Strip leading + trailing fence
@@ -361,10 +359,9 @@ def _sanitize_template(text: str) -> str:
 
 
 def hide_by_default(event: dict[str, Any]) -> bool:
-    """Return True if this event should be HIDDEN under the default
-    operator filter on /dashboard/events.
+    """Return True if this event should be hidden under the default operator filter.
 
-    Hidden ≠ deleted. Operator can toggle "Show All" to see them.
+    Hidden is not deleted; the operator can toggle "Show All" to see them.
 
     Hidden categories:
       - severity=info heartbeat ticks with no findings

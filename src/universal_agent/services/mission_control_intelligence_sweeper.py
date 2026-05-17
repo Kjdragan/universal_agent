@@ -96,6 +96,7 @@ class SweeperConfig:
 
     @classmethod
     def from_env(cls) -> "SweeperConfig":
+        """Construct a SweeperConfig from environment variables."""
         return cls(
             interval_seconds=_get_float_env("UA_MISSION_CONTROL_SWEEPER_INTERVAL_S", 60.0),
             tier1_floor_seconds=_get_float_env("UA_MISSION_CONTROL_TIER1_FLOOR_S", 180.0),
@@ -136,6 +137,7 @@ class MissionControlSweeper:
     """
 
     def __init__(self, config: SweeperConfig | None = None) -> None:
+        """Initialize the sweeper with the given config, or load from environment."""
         self.config = config or SweeperConfig.from_env()
 
     # ── Public API ─────────────────────────────────────────────────────
@@ -175,8 +177,7 @@ class MissionControlSweeper:
     # ── Tier handlers ──────────────────────────────────────────────────
 
     def _run_tier0(self, result: SweepResult) -> None:
-        """Tier-0 sweep: poll tiles, persist state, detect transitions,
-        auto-create infrastructure cards on yellow/red transitions.
+        """Run tier-0 sweep: poll tiles, persist state, detect transitions, auto-create cards.
 
         Errors inside an individual tile are caught and recorded in
         `result.errors` so a buggy tile cannot take out the whole tier-0
@@ -276,28 +277,24 @@ class MissionControlSweeper:
             mc_conn.close()
 
     def _run_tier1(self, result: SweepResult) -> None:
-        """Sync marker — sets `tier1_evaluated=True` so the gating
-        contract is observable in `tick()` results. The actual LLM work
-        happens in `_run_tier1_async` which the gateway loop awaits
-        AFTER calling `tick()`. We split sync/async to avoid forcing
-        every existing tick() caller (incl. tests) to deal with
-        coroutines.
+        """Set tier1_evaluated=True; real LLM work happens in _run_tier1_async.
+
+        Split sync/async so existing tick() callers (incl. tests) don't need
+        to await coroutines. The gateway loop calls _run_tier1_async after tick().
         """
         result.tier1_evaluated = True
 
     def _run_tier2(self, result: SweepResult) -> None:
-        """Sync marker; real tier-2 synthesis lands in
-        `_run_tier2_async` (Phase 3).
-        """
+        """Set tier2_evaluated=True; real synthesis lands in _run_tier2_async (Phase 3)."""
         result.tier2_evaluated = True
 
     # ── Async tiers (LLM-driven; gateway loop awaits these) ────────────
 
     async def run_async_tiers(self, result: SweepResult) -> None:
-        """Run tier-1 + tier-2 LLM passes. Called by `run_sweeper_loop`
-        AFTER the sync `tick()` returns. Gated by phase flags AND by
-        bundle-signature/cadence so we don't burn glm-4.7/opus calls
-        when nothing operationally meaningful has moved.
+        """Run tier-1 + tier-2 LLM passes after the sync tick() returns.
+
+        Gated by phase flags AND by bundle-signature/cadence so we don't burn
+        glm-4.7/opus calls when nothing operationally meaningful has moved.
 
         Cascade contract (Phase 3.5):
           - tier-1 fires first; on success, tier-2 sees the new cards
@@ -326,11 +323,9 @@ class MissionControlSweeper:
         *,
         progress: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
-        """Operator-driven full refresh: run tier-1 (cards) then tier-2
-        (Chief-of-Staff readout) NOW, bypassing the cadence gating
-        windows the natural sweeper loop honors.
+        """Run tier-1 then tier-2 immediately, bypassing normal cadence gating.
 
-        Phases reported via the optional `progress` callback:
+        Operator-driven full refresh. Phases reported via the optional `progress` callback:
           - "cards_running" — tier-1 LLM card-discovery has started
           - "readout_running" — tier-1 finished; tier-2 synthesis started
           - "completed" — tier-2 finished successfully
@@ -636,8 +631,7 @@ class MissionControlSweeper:
     # ── Tier-2 (Chief-of-Staff) cascade — Phase 3.5 ────────────────────
 
     async def _run_tier2_async(self, result: SweepResult, *, force: bool = False) -> None:
-        """Tier-2 sweep: refresh the Chief-of-Staff readout when state has
-        meaningfully moved.
+        """Refresh the Chief-of-Staff readout when operational state has meaningfully moved.
 
         Cascade triggers (any one fires it):
           - tier-0 transitioned this sweep (color flip on a tile)
@@ -751,8 +745,7 @@ class MissionControlSweeper:
 
     @staticmethod
     def _tier2_cascade_reason(result: SweepResult) -> str:
-        """Identify which cascade signal (if any) should drive a tier-2
-        refresh THIS sweep. Returns a human-readable reason string.
+        """Return the cascade reason string driving a tier-2 refresh this sweep, or '' if none.
 
         Order of precedence:
           1. Tier-0 color transitions (always interesting)
@@ -883,9 +876,10 @@ class MissionControlSweeper:
     def _persist_tile_state(
         self, conn, tile: Tile, state: TileState
     ) -> dict[str, Any]:
-        """Write the new tile state. Returns an outcome dict describing
-        what just happened so the caller can decide whether to fire
-        downstream effects (card creation, transition logging).
+        """Write the new tile state and return an outcome dict for the caller.
+
+        The caller uses the outcome to decide whether to fire downstream
+        effects (card creation, transition logging).
 
         Outcome keys:
           - signature_unchanged: bool — true when no real state change
@@ -979,10 +973,10 @@ class MissionControlSweeper:
     def _auto_create_infrastructure_card(
         self, conn, tile: Tile, state: TileState, *, trigger: str = "transition"
     ) -> None:
-        """Create or revive the infrastructure-kind tier-1 card paired
-        with this tile. Phase 1 uses the tile's mechanical status as
-        narrative; Phase 5's diagnostic mission and Phase 2's tier-1
-        discovery pass enrich it later.
+        """Create or revive the infrastructure-kind tier-1 card paired with this tile.
+
+        Phase 1 uses the tile's mechanical status as narrative; Phase 5's
+        diagnostic mission and Phase 2's tier-1 discovery pass enrich it later.
 
         `trigger` is one of:
           - "transition"        — tile changed color (was different, now non-green)
