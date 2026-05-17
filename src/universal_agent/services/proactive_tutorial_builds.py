@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
+import re
 import sqlite3
 from typing import Any
+
+import yaml
 
 from universal_agent.services.proactive_artifacts import (
     ARTIFACT_STATUS_CANDIDATE,
@@ -15,6 +19,67 @@ from universal_agent.services.proactive_artifacts import (
     upsert_artifact,
 )
 from universal_agent.services.proactive_task_builder import queue_proactive_task
+
+logger = logging.getLogger(__name__)
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_DENYLIST_FILE = _REPO_ROOT / "state" / "tutorial_build_denylist.yaml"
+
+# Categories CSI assigns that should never auto-route into tutorial-build.
+_BLOCKED_CATEGORIES = frozenset(
+    {
+        "news",
+        "politics",
+        "geopolitics",
+        "current_events",
+        "current-events",
+        "sports",
+        "music",
+        "gaming",
+        "vlog",
+        "comedy",
+        "entertainment",
+        "reaction",
+        "podcast",
+    }
+)
+
+# Word-boundary tokens. Substring matching previously tripped on "api" inside
+# "rapid" / "Apia", letting news clips through.
+_POSITIVE_TITLE_TOKENS = frozenset(
+    {
+        "tutorial",
+        "walkthrough",
+        "build",
+        "building",
+        "hands-on",
+        "code",
+        "coding",
+        "python",
+        "typescript",
+        "javascript",
+        "github",
+        "repo",
+        "mcp",
+        "sdk",
+        "api",
+        "docker",
+        "agent",
+        "agents",
+    }
+)
+
+_NEGATIVE_TOKENS = frozenset(
+    {
+        "reaction",
+        "drama",
+        "podcast",
+        "vlog",
+        "news",
+    }
+)
+
+_TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9+\-]*")
 
 
 def queue_tutorial_build_task(
@@ -275,35 +340,114 @@ def _build_artifact_summary(metadata: dict[str, Any]) -> str:
 
 
 def _looks_build_oriented(*, subject: dict[str, Any], analysis: dict[str, Any], category: str, summary: str) -> bool:
-    """Check whether a video subject matches build-oriented keyword signals."""
-    text = " ".join(
-        [
-            str(subject.get("title") or ""),
-            str(subject.get("description") or ""),
-            str(category or ""),
-            str(summary or ""),
-            json.dumps(analysis, ensure_ascii=True),
-        ]
-    ).lower()
-    positive = (
-        "tutorial",
-        "build",
-        "walkthrough",
-        "hands-on",
-        "code",
-        "coding",
-        "python",
-        "typescript",
-        "javascript",
-        "github",
-        "repo",
-        "mcp",
-        "sdk",
-        "api",
-        "docker",
-    )
-    negative = ("reaction", "drama", "news roundup", "podcast")
-    return any(token in text for token in positive) and not any(token in text for token in negative)
+    """Decide whether a CSI video should auto-route into tutorial-build.
+
+    Multi-gate filter (any gate failing rejects):
+      1. Category denylist (news/politics/etc).
+      2. Channel denylist (self-learned from prior misroute parks).
+      3. Extraction plan must not be structurally empty (nothing to build).
+      4. No negative tokens (word-boundary) in title/description.
+      5. Positive token must appear in the TITLE — description noise alone
+         is too weak a signal and was the source of false positives.
+    """
+    cat = str(category or analysis.get("category") or "").strip().lower().replace(" ", "_")
+    if cat in _BLOCKED_CATEGORIES:
+        return False
+
+    channel = str(subject.get("channel_name") or subject.get("author_name") or "").strip()
+    if channel and _channel_in_denylist(channel):
+        return False
+
+    if _extraction_plan_is_empty(analysis):
+        return False
+
+    title_tokens = _tokenize(str(subject.get("title") or ""))
+    description_tokens = _tokenize(str(subject.get("description") or ""))
+    summary_tokens = _tokenize(str(summary or ""))
+    all_tokens = title_tokens | description_tokens | summary_tokens
+
+    if all_tokens & _NEGATIVE_TOKENS:
+        return False
+
+    return bool(title_tokens & _POSITIVE_TITLE_TOKENS)
+
+
+def _tokenize(text: str) -> set[str]:
+    """Return word-boundary lowercase tokens — avoids substring false positives."""
+    return set(_TOKEN_RE.findall((text or "").lower()))
+
+
+def _extraction_plan_is_empty(analysis: dict[str, Any]) -> bool:
+    """True when CSI produced no usable build signal (nothing to implement)."""
+    if not isinstance(analysis, dict) or not analysis:
+        return True
+    language = str(analysis.get("language") or analysis.get("primary_language") or "").strip().lower()
+    deps = analysis.get("dependencies")
+    steps = analysis.get("implementation_steps")
+    has_deps = isinstance(deps, list) and len(deps) > 0
+    has_steps = isinstance(steps, list) and len(steps) > 0
+    if language in {"", "unknown", "n/a", "none"} and not has_deps and not has_steps:
+        return True
+    return False
+
+
+def _load_denylist_channels() -> list[str]:
+    """Load the channel denylist YAML, swallowing IO/parse errors."""
+    if not _DENYLIST_FILE.exists():
+        return []
+    try:
+        data = yaml.safe_load(_DENYLIST_FILE.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        logger.warning("tutorial-build denylist load failed: %s", exc)
+        return []
+    if not isinstance(data, dict):
+        return []
+    channels = data.get("channels")
+    if not isinstance(channels, list):
+        return []
+    return [str(c).strip() for c in channels if str(c or "").strip()]
+
+
+def _channel_in_denylist(channel: str) -> bool:
+    """Case-insensitive substring match against the denylist."""
+    if not channel:
+        return False
+    needle = channel.lower()
+    for entry in _load_denylist_channels():
+        e = entry.lower()
+        if e and (e in needle or needle in e):
+            return True
+    return False
+
+
+def record_channel_denylist_entry(channel_name: str, *, reason: str = "") -> bool:
+    """Append a channel to the tutorial-build denylist. Idempotent.
+
+    Call this when parking a tutorial-build task as a non-code misroute so the
+    same channel never re-routes. Returns True if the entry was added (or
+    already present), False on IO error.
+    """
+    clean = str(channel_name or "").strip()
+    if not clean:
+        return False
+    try:
+        _DENYLIST_FILE.parent.mkdir(parents=True, exist_ok=True)
+        existing = _load_denylist_channels()
+        if any(clean.lower() == e.lower() for e in existing):
+            return True
+        existing.append(clean)
+        header = (
+            "# Channels that have produced misrouted tutorial-build tasks.\n"
+            "# Appended automatically when Simone parks a tutorial_build task as\n"
+            "# a non-code misroute. Match is case-insensitive substring.\n"
+        )
+        body = "channels:\n" + "".join(f"  - {json.dumps(c)}\n" for c in existing)
+        _DENYLIST_FILE.write_text(header + body, encoding="utf-8")
+        logger.info("Added %s to tutorial-build denylist (reason=%s)", clean, reason or "unspecified")
+        return True
+    except OSError as exc:
+        logger.warning("Failed to write tutorial-build denylist: %s", exc)
+        return False
 
 
 def _extraction_plan_from_analysis(*, analysis: dict[str, Any], row: Any) -> dict[str, Any]:
