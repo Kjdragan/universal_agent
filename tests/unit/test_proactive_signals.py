@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from unittest.mock import patch
 
 from universal_agent import task_hub
 from universal_agent.proactive_signals import (
@@ -172,8 +173,15 @@ def test_sync_generated_cards_creates_artifacts_signatures_and_tutorial_tasks(tm
     conn.row_factory = sqlite3.Row
     task_hub.ensure_schema(conn)
 
-    counts = sync_generated_cards(conn, csi_db_path=csi_db)
-    repeated = sync_generated_cards(conn, csi_db_path=csi_db)
+    async def _fake_judge(*, title, channel_name, summary_text):
+        return {"buildable": True, "reasoning": "stub: code tutorial", "method": "llm"}
+
+    with patch(
+        "universal_agent.services.llm_classifier.classify_tutorial_buildability",
+        side_effect=_fake_judge,
+    ):
+        counts = sync_generated_cards(conn, csi_db_path=csi_db)
+        repeated = sync_generated_cards(conn, csi_db_path=csi_db)
     signature = get_topic_signature(conn, "video_one_1")
     artifacts = list_artifacts(conn, limit=100)
     tutorial_tasks = conn.execute(
