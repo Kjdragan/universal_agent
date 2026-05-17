@@ -1,5 +1,4 @@
-"""
-proactive_topic_tracker.py — Prevent heartbeat from repeating the same proactive investigations.
+"""proactive_topic_tracker.py — Prevent heartbeat from repeating the same proactive investigations.
 
 When the heartbeat has no Task Hub claims and enters proactive mode, the LLM
 independently decides what to investigate using the static checklist in HEARTBEAT.md.

@@ -59,9 +59,10 @@ def make_card_id(subject_kind: str, subject_id: str) -> str:
 
 @dataclass
 class CardUpsert:
-    """Input payload for `upsert_card`. Server-managed wraparound fields
-    (synthesis_history, recurrence_count, etc.) are filled in here, not
-    by callers — keeps invariants tight.
+    """Input payload for ``upsert_card``.
+
+    Server-managed wraparound fields (synthesis_history, recurrence_count,
+    etc.) are filled in here, not by callers — keeps invariants tight.
     """
 
     subject_kind: str
@@ -219,6 +220,7 @@ def retire_card(conn: sqlite3.Connection, card_id: str) -> None:
 
 
 def get_card(conn: sqlite3.Connection, card_id: str) -> dict[str, Any] | None:
+    """Return the card row for the given card_id, or None if not found."""
     row = conn.execute(
         "SELECT * FROM mission_control_cards WHERE card_id = ?",
         (card_id,),
@@ -229,7 +231,7 @@ def get_card(conn: sqlite3.Connection, card_id: str) -> dict[str, Any] | None:
 def live_card_exists_for_subject(
     conn: sqlite3.Connection, subject_kind: str, subject_id: str
 ) -> bool:
-    """True iff a card exists for this subject in current_state='live'.
+    """Return True if a live card exists for this subject.
 
     Used by the sweeper's invariant check: a non-green tile must have a
     corresponding live infrastructure card. Cheap PK lookup.
@@ -297,9 +299,10 @@ def set_card_thumbs(
 def snooze_card(
     conn: sqlite3.Connection, card_id: str, duration: str
 ) -> dict[str, Any]:
-    """Snooze a card for a fixed duration. Auto-revives on expiry
-    (consumers compare snoozed_until to now and treat the card as
-    visible-again when the timestamp has passed).
+    """Snooze a card for a fixed duration.
+
+    Auto-revives on expiry — consumers compare ``snoozed_until`` to now and
+    treat the card as visible-again when the timestamp has passed.
     """
     if duration not in VALID_SNOOZE_DURATIONS:
         raise ValueError(
@@ -479,6 +482,7 @@ def list_dispatch_history(
 
 
 def list_live_cards(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Return all cards currently in current_state='live'."""
     rows = conn.execute(
         """
         SELECT *

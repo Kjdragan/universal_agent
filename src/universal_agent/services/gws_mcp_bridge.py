@@ -1,5 +1,4 @@
-"""
-Google Workspace CLI (gws) MCP Bridge.
+"""Google Workspace CLI (gws) MCP Bridge.
 
 Manages the `gws mcp` subprocess as a stdio MCP server, providing
 Google Workspace API access (Gmail, Calendar, Drive, Sheets, Docs)
@@ -35,8 +34,7 @@ _RETRY_CODES = {429, 500, 502, 503, 504}
 
 
 def classify_gws_error(error_payload: dict[str, Any]) -> str:
-    """
-    Classify a gws JSON error payload into a short category string.
+    """Classify a gws JSON error payload into a short category string.
 
     Returns one of: "auth", "scope", "rate_limit", "transient", "permanent".
     """
@@ -169,8 +167,7 @@ def is_gws_available(config: Optional[GwsMcpConfig] = None) -> bool:
 
 
 def build_gws_mcp_server_config(config: Optional[GwsMcpConfig] = None) -> Optional[dict[str, Any]]:
-    """
-    Build the MCP server configuration dict for the gws stdio server.
+    """Build the MCP server configuration dict for the gws stdio server.
 
     Returns None if:
     - The gws_cli_enabled() feature flag is False

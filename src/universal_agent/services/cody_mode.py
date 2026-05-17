@@ -81,6 +81,7 @@ def resolve_cody_mode(
 
     Returns:
         Either ``"zai"`` or ``"anthropic"``.
+
     """
     if task:
         per_task = _normalize(task.get("cody_mode"))

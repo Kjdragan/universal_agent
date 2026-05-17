@@ -97,6 +97,7 @@ def make_llm_binary_classifier_handler(
     Args:
         llm_call: An async function ``async (prompt_text) -> response_text``
             that sends a prompt to ZAI/Claude and returns the raw text response.
+
     """
 
     async def _handler(node: Dict[str, Any], state: DagState) -> Dict[str, Any]:

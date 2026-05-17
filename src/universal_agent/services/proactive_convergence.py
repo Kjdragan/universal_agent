@@ -253,7 +253,7 @@ def detect_and_queue_convergence(
     window_hours: int = 72,
     min_channels: int = 2,
 ) -> list[dict[str, Any]]:
-    """Synchronously detect concrete convergence and abstract insights."""
+    """Detect concrete convergence and abstract insights synchronously."""
     coro = _detect_and_queue_convergence_async(
         conn,
         signature=signature,

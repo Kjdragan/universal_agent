@@ -71,6 +71,7 @@ class WorkerExit:
             counter. Excludes ``clean_exit_zero`` and protocol violations
             (the latter is handled by F.3's needs_review path, not the
             normal retry budget).
+
     """
 
     outcome: WorkerOutcome
@@ -78,6 +79,7 @@ class WorkerExit:
     is_failure: bool
 
     def to_dict(self) -> dict[str, Any]:
+        """Classify the worker exit and return the resulting decision."""
         return {
             "outcome": self.outcome,
             "is_protocol_violation": self.is_protocol_violation,
@@ -122,6 +124,7 @@ def classify_worker_exit(
 
     Returns:
         A ``WorkerExit`` record.
+
     """
     if was_cancelled:
         return WorkerExit(
@@ -219,6 +222,7 @@ def park_task_for_protocol_violation(
         ``perform_task_action`` failure). Best-effort by design — F.3
         is observability + recovery routing; it must never raise into the
         spawn site's happy path.
+
     """
     tid = str(task_id or "").strip()
     if not tid:

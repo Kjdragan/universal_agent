@@ -50,6 +50,7 @@ class SystemHealthStatus:
     notification_message: Optional[str] = None
 
     def to_dict(self) -> dict:
+        """Return whether the system is currently under load."""
         return {
             "healthy": self.healthy,
             "reason": self.reason,
@@ -156,6 +157,7 @@ def is_system_healthy(
     Returns
     -------
     SystemHealthStatus with healthy=True/False and reason.
+
     """
     # Resolve thresholds
     if max_process_count <= 0:

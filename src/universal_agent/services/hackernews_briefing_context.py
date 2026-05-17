@@ -108,7 +108,7 @@ def _is_fresh(snap: Any, now: datetime | None = None) -> bool:
 
 
 def _select_candidates(snap: dict[str, Any], watchlist: list[str]) -> list[dict[str, Any]]:
-    """Returns up to MAX_CANDIDATES deduplicated candidates, prioritized by source list."""
+    """Return up to MAX_CANDIDATES deduplicated candidates, prioritized by source list."""
     seen: set[Any] = set()
     out: list[dict[str, Any]] = []
 

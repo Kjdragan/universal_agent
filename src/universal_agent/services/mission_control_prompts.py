@@ -124,8 +124,10 @@ _PREAMBLES: dict[str, str] = {
 
 @dataclass
 class GeneratedPrompt:
-    """Output of `build_prompt`. The text is what an AI consumes; the
-    metadata is what we persist in dispatch_history for audit.
+    """Output of ``build_prompt``.
+
+    The text is what an AI consumes; the metadata is what we persist in
+    dispatch_history for audit.
     """
 
     text: str

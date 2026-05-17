@@ -64,11 +64,13 @@ def _env_int(name: str, default: int) -> int:
 
 
 def tier_gate() -> int:
-    """Configured tier floor. Override via UA_CSI_RESEARCH_TIER_GATE."""
+    """Return the configured tier floor. Override via UA_CSI_RESEARCH_TIER_GATE."""
     return _env_int("UA_CSI_RESEARCH_TIER_GATE", DEFAULT_TIER_GATE)
 
 
 class TriggerReason(str, Enum):
+    """Research-grounding policy gate for open-web search."""
+
     NO_LINKS = "no_links_in_post"
     THIN_LINKED_SOURCES = "linked_sources_thin"
     UNKNOWN_TERM = "term_not_in_vault"
@@ -125,6 +127,7 @@ class ResearchResult:
 
     @property
     def fetched_count(self) -> int:
+        """Return True when the URL is allowed by the research-grounding policy."""
         return sum(1 for s in self.sources if s.fetched)
 
 
@@ -165,6 +168,7 @@ def allowlist_rank(url: str, allowlist: list[str]) -> int:
 
 
 def is_allowed(url: str, allowlist: list[str]) -> bool:
+    """Return the canonical research-grounding allowlist."""
     return allowlist_rank(url, allowlist) >= 0
 
 

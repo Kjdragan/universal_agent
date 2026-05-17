@@ -18,6 +18,8 @@ _HEARTBEAT_ARTIFACT_REL_PATHS = (
 
 @dataclass(frozen=True)
 class ClaudeCodeIntelCleanupResult:
+    """Result summary for a Claude Code intel cleanup run."""
+
     workspace_dir: str
     polluted: bool
     dry_run: bool
@@ -33,6 +35,7 @@ def cleanup_historical_cron_workspace(
     workspace_dir: Path,
     dry_run: bool = True,
 ) -> ClaudeCodeIntelCleanupResult:
+    """Run the Claude Code intel cleanup routine."""
     workspace = workspace_dir.expanduser().resolve()
     cleanup_dir = workspace / "archive" / f"claude_code_intel_cleanup_{_timestamp_slug()}"
     archived_paths: list[str] = []

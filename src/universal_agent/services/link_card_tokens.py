@@ -118,6 +118,7 @@ def consume(token: str) -> dict[str, Any]:
     Returns:
       {"ok": True, "spend_request_id": "...", "expires_at": ..., "issued_at": ...}
       {"ok": False, "code": "not_found" | "expired" | "already_consumed", "message": "..."}
+
     """
     if not token or not isinstance(token, str):
         return {"ok": False, "code": "not_found", "message": "Token missing or invalid."}

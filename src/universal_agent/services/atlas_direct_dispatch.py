@@ -204,6 +204,7 @@ async def dispatch_atlas_candidates_once(
 
     Returns: ``{"dispatched": N, "skipped": M, "remaining_slots_at_start":
         K, "reason": <string when no dispatch>}``.
+
     """
     if dispatch_fn is None:
         from universal_agent.tools.vp_orchestration import dispatch_vp_mission

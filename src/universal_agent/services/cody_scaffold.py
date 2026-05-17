@@ -56,23 +56,28 @@ class VaultEntity:
 
     @property
     def briefing_status(self) -> str:
+        """Return the briefing_status frontmatter field, lowercased."""
         return str(self.frontmatter.get("briefing_status") or "").strip().lower()
 
     @property
     def endpoint_required(self) -> str:
+        """Return the required endpoint, defaulting to 'anthropic_native'."""
         return str(self.frontmatter.get("endpoint_required") or "anthropic_native").strip()
 
     @property
     def business_relevance(self) -> str:
+        """Return the business_relevance tier, defaulting to 'unknown'."""
         return str(self.frontmatter.get("business_relevance") or "unknown").strip().lower()
 
     @property
     def source_ids(self) -> list[str]:
+        """Return the list of source IDs from frontmatter."""
         raw = self.frontmatter.get("source_ids") or []
         return [str(s).strip() for s in raw if str(s).strip()]
 
     @property
     def tags(self) -> list[str]:
+        """Return the list of tags from frontmatter."""
         raw = self.frontmatter.get("tags") or []
         return [str(t).strip() for t in raw if str(t).strip()]
 
@@ -116,6 +121,7 @@ def _split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
 
 
 def read_entity(path: Path) -> VaultEntity:
+    """Read a vault entity page from disk and return a VaultEntity."""
     if not path.exists():
         raise FileNotFoundError(f"entity page not found: {path}")
     raw = path.read_text(encoding="utf-8")
@@ -204,6 +210,7 @@ class ScaffoldArtifacts:
     sources_copied: tuple[Path, ...]
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the artifact paths to a JSON-compatible dict."""
         return {
             "workspace_dir": str(self.workspace_dir),
             "brief_path": str(self.brief_path),
@@ -224,7 +231,7 @@ def write_brief_template(
     entity: VaultEntity,
     sources_copied: list[Path],
 ) -> Path:
-    """Author a starting BRIEF.md for Simone to refine.
+    """Write the starting BRIEF.md for Simone to refine.
 
     The template encodes everything the entity page already contains
     (title, summary, source_ids, tags, body excerpt) plus a list of
@@ -295,7 +302,7 @@ def write_acceptance_template(
     workspace: Path,
     entity: VaultEntity,
 ) -> Path:
-    """Author a starting ACCEPTANCE.md for Simone to refine."""
+    """Write the starting ACCEPTANCE.md for Simone to refine."""
     target = workspace / "ACCEPTANCE.md"
 
     min_versions = entity.frontmatter.get("min_versions") or {}
@@ -345,7 +352,7 @@ def write_business_relevance_template(
     workspace: Path,
     entity: VaultEntity,
 ) -> Path:
-    """Author a starting business_relevance.md for Simone to refine."""
+    """Write the starting business_relevance.md for Simone to refine."""
     target = workspace / "business_relevance.md"
     priority = entity.business_relevance if entity.business_relevance != "unknown" else "medium"
     body = f"""# Business Relevance: {entity.title}

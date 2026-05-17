@@ -1,5 +1,4 @@
-"""
-health_evaluator.py — LLM-powered evaluator for the heartbeat proactive advisor cycle.
+"""health_evaluator.py — LLM-powered evaluator for the heartbeat proactive advisor cycle.
 
 This module intercepts the deterministic snapshot created by `build_morning_report()`,
 compares it against the `Health_Checks_Lessons_Learned.md` document, and distills
@@ -58,10 +57,11 @@ Respond ONLY with the raw JSON object. Do not wrap it in markdown block quotes (
 """
 
 async def evaluate_health_snapshot(raw_report_dict: dict[str, Any]) -> Dict[str, Any]:
-    """
-    Asynchronously evaluates the raw morning report using an LLM to produce structured directives.
+    """Asynchronously evaluates the raw morning report using an LLM to produce structured directives.
+
     Returns:
         dict with keys: ignore, simone_directives, human_escalations
+
     """
     raw_report_text = raw_report_dict.get("report_text", "")
     

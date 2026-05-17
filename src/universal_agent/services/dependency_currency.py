@@ -113,9 +113,11 @@ class OutdatedPackage:
 
     @property
     def needs_upgrade(self) -> bool:
+        """Return the list of stale dependencies."""
         return compare_versions(self.installed, self.latest) < 0
 
     def to_dict(self) -> dict[str, Any]:
+        """Return the next stale dependency to act on, if any."""
         return {
             "name": self.name,
             "ecosystem": self.ecosystem,
@@ -424,6 +426,8 @@ def record_upgrade_failure(
 
 @dataclass(frozen=True)
 class SweepReport:
+    """Snapshot of dependency currency findings."""
+
     sweep_started_at: str
     claude_cli_version: str
     pypi_outdated: tuple[OutdatedPackage, ...]
@@ -431,13 +435,16 @@ class SweepReport:
 
     @property
     def all_outdated(self) -> list[OutdatedPackage]:
+        """Return a summary view of the dependency snapshot."""
         return list(self.pypi_outdated) + list(self.npm_outdated)
 
     @property
     def anthropic_outdated(self) -> list[OutdatedPackage]:
+        """Return the JSON payload for the dependency snapshot."""
         return [p for p in self.all_outdated if p.is_anthropic_adjacent]
 
     def to_dict(self) -> dict[str, Any]:
+        """Return the textual report for the dependency snapshot."""
         return {
             "sweep_started_at": self.sweep_started_at,
             "claude_cli_version": self.claude_cli_version,

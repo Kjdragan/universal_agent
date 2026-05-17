@@ -377,7 +377,7 @@ def _call_llm_structured(
 
 
 def _truncate(text: str, limit: int) -> str:
-    """Simple character-count truncation with marker."""
+    """Truncate text by character count and append a marker."""
     if len(text) <= limit:
         return text
     return text[:limit] + f"\n\n[... truncated, original length {len(text)} chars]"
@@ -519,6 +519,7 @@ def analyze_action(
         ``RuntimeError`` if no Anthropic-compatible API key is configured.
         ``pydantic.ValidationError`` if the LLM emits malformed JSON.
         SDK exceptions on network / model errors after exhausting retries.
+
     """
     user_msg = _build_user_message(
         action=action,

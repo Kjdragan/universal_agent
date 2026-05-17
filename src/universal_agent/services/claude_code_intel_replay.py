@@ -41,6 +41,8 @@ from universal_agent.wiki.core import (
 
 @dataclass(frozen=True)
 class ClaudeCodeIntelReplayConfig:
+    """Configuration for replaying a Claude Code intel packet through the post-fetch pipeline."""
+
     packet_dir: Path
     queue_task_hub: bool = True
     write_vault: bool = True
@@ -54,6 +56,7 @@ class ClaudeCodeIntelReplayConfig:
 
 
 def resolve_lane_root(artifacts_root: Path | None = None) -> Path:
+    """Return the artifact directory for this intel lane's packet storage."""
     return (artifacts_root or resolve_artifacts_dir()) / "proactive" / LANE_SLUG
 
 
@@ -76,6 +79,7 @@ def replay_packet(
     config: ClaudeCodeIntelReplayConfig,
     conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
+    """Re-run classify/source-expand/queue/vault phases for an existing intel packet directory."""
     packet_dir = config.packet_dir.expanduser().resolve()
     payload = load_packet(packet_dir)
     actions = list(payload["actions"])
@@ -221,6 +225,7 @@ def replay_packet(
 
 
 def load_packet(packet_dir: Path) -> dict[str, Any]:
+    """Load and validate all JSON files from a packet directory into a structured dict."""
     manifest_path = packet_dir / "manifest.json"
     raw_posts_path = packet_dir / "raw_posts.json"
     actions_path = packet_dir / "actions.json"
@@ -254,6 +259,7 @@ def load_packet(packet_dir: Path) -> dict[str, Any]:
 
 
 def write_linked_sources(*, packet_dir: Path, actions: list[dict[str, Any]]) -> Path:
+    """Deduplicate all links from actions and write them as pending linked_sources.json entries."""
     entries: list[dict[str, Any]] = []
     seen: set[str] = set()
     for action in actions:
@@ -284,6 +290,7 @@ def refine_actions_with_linked_sources(
     actions: list[dict[str, Any]],
     linked_source_entries: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    """Re-classify actions using fetched linked-source summaries; preserves originals as backup."""
     if not actions:
         return actions
     if not linked_source_entries:
@@ -337,6 +344,7 @@ def refine_actions_with_linked_sources(
 
 
 def expand_linked_sources(*, packet_dir: Path, actions: list[dict[str, Any]], enabled: bool) -> list[dict[str, Any]]:
+    """Fetch and analyze linked URLs from actions, updating linked_sources.json in place."""
     linked_sources_path = packet_dir / "linked_sources.json"
     entries = _load_json(linked_sources_path) if linked_sources_path.exists() else []
     if not isinstance(entries, list):
@@ -386,6 +394,7 @@ def expand_linked_sources(*, packet_dir: Path, actions: list[dict[str, Any]], en
 
 
 def write_implementation_opportunities(*, packet_dir: Path, actions: list[dict[str, Any]]) -> Path:
+    """Write a Markdown summary of tier-3+ actions to IMPLEMENTATION_OPPORTUNITIES.md."""
     lines = ["# Implementation Opportunities", ""]
     opportunities = [action for action in actions if int(action.get("tier") or 0) >= 3]
     if not opportunities:
@@ -764,6 +773,7 @@ def ingest_packet_into_external_vault(
     work_product_dir: Path | None,
     enabled: bool,
 ) -> dict[str, Any]:
+    """Ingest packet posts, actions, and linked sources into the external ClaudeDevs vault."""
     if not enabled:
         return {"vault_path": "", "pages": [], "email_evidence_ids": []}
 
@@ -912,6 +922,7 @@ def reconcile_packet_candidate_ledger(
     conn: sqlite3.Connection | None,
     artifacts_root: Path | None = None,
 ) -> dict[str, Any]:
+    """Re-sync Task Hub state for all actions in a packet and rebuild both ledger files."""
     packet_dir = packet_dir.expanduser().resolve()
     payload = load_packet(packet_dir)
     actions = payload["actions"]
@@ -957,6 +968,7 @@ def build_candidate_ledger(
     vault_result: dict[str, Any],
     artifacts_root: Path | None,
 ) -> dict[str, str]:
+    """Build per-packet and per-lane candidate ledgers and return their file paths."""
     entries = []
     lane_root = resolve_lane_root(artifacts_root)
     lane_ledger_dir = lane_root / "ledger"
@@ -1044,6 +1056,7 @@ def build_candidate_ledger(
 
 
 def write_replay_summary(*, packet_dir: Path, payload: dict[str, Any]) -> Path:
+    """Write the replay result payload to replay_summary.json and return its path."""
     path = packet_dir / "replay_summary.json"
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=True, sort_keys=True) + "\n", encoding="utf-8")
     return path
@@ -1074,6 +1087,7 @@ def intended_task_identity(*, post_id: str, tier: int) -> dict[str, str]:
 
 
 def lookup_task_state(conn: sqlite3.Connection | None, task_id: str) -> dict[str, Any]:
+    """Look up a Task Hub item by task_id and return it as a dict, or {} if not found."""
     if conn is None or not task_id:
         return {}
     row = conn.execute(
@@ -1091,6 +1105,7 @@ def lookup_task_state(conn: sqlite3.Connection | None, task_id: str) -> dict[str
 
 
 def lookup_task_assignments(conn: sqlite3.Connection | None, task_id: str) -> list[dict[str, Any]]:
+    """Return all task_hub_assignments rows for a task_id, ordered by start time descending."""
     if conn is None or not task_id:
         return []
     rows = conn.execute(
@@ -1107,6 +1122,7 @@ def lookup_task_assignments(conn: sqlite3.Connection | None, task_id: str) -> li
 
 
 def lookup_candidate_artifact_id(conn: sqlite3.Connection | None, *, source_kind: str, source_ref: str) -> str:
+    """Return the artifact_id for a proactive artifact matching source_kind+source_ref, or ''."""
     if conn is None or not source_kind or not source_ref:
         return ""
     try:

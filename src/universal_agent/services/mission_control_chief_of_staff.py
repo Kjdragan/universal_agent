@@ -32,10 +32,12 @@ DEFAULT_DB_FILENAME = "mission_control_chief_of_staff.db"
 
 
 def utc_now_iso() -> str:
+    """Return the current UTC time as an ISO 8601 string."""
     return datetime.now(timezone.utc).isoformat()
 
 
 def workspace_root() -> Path:
+    """Return the workspace root directory, respecting UA_WORKSPACES_DIR if set."""
     configured = os.getenv("UA_WORKSPACES_DIR")
     if configured:
         return Path(configured).expanduser().resolve()
@@ -43,6 +45,7 @@ def workspace_root() -> Path:
 
 
 def default_db_path() -> Path:
+    """Return the Chief-of-Staff SQLite database path, respecting UA_MISSION_CONTROL_COS_DB_PATH if set."""
     configured = os.getenv("UA_MISSION_CONTROL_COS_DB_PATH")
     if configured:
         return Path(configured).expanduser().resolve()
@@ -52,6 +55,7 @@ def default_db_path() -> Path:
 
 
 def open_store(db_path: Path | None = None) -> sqlite3.Connection:
+    """Open and return a WAL-mode SQLite connection to the Chief-of-Staff store."""
     path = db_path or default_db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(
@@ -67,6 +71,7 @@ def open_store(db_path: Path | None = None) -> sqlite3.Connection:
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
+    """Create the readouts and journal tables if they do not yet exist."""
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS mission_control_readouts (
@@ -139,6 +144,7 @@ def _task_summary(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def collect_task_hub_evidence(*, limit: int = 20, completed_limit: int = 12) -> dict[str, Any]:
+    """Collect Task Hub queue state and recent completions for the readout evidence bundle."""
     with connect_runtime_db(get_activity_db_path()) as conn:
         task_hub.ensure_schema(conn)
         queue = task_hub.list_agent_queue(
@@ -171,6 +177,7 @@ def collect_task_hub_evidence(*, limit: int = 20, completed_limit: int = 12) -> 
 
 
 def collect_activity_evidence(*, limit: int = 80) -> dict[str, Any]:
+    """Collect recent activity events for the readout evidence bundle."""
     try:
         with connect_runtime_db(get_activity_db_path()) as conn:
             rows = conn.execute(
@@ -210,6 +217,7 @@ def collect_activity_evidence(*, limit: int = 80) -> dict[str, Any]:
 
 
 def collect_tutorial_evidence(*, limit: int = 12) -> dict[str, Any]:
+    """Collect recent tutorial-pipeline workspace manifests for the readout evidence bundle."""
     roots = [
         workspace_root() / "youtube_tutorial_pipeline",
         workspace_root() / "tutorial_pipeline",
@@ -246,6 +254,7 @@ def collect_tutorial_evidence(*, limit: int = 12) -> dict[str, Any]:
 
 
 def collect_csi_evidence(*, limit: int = 12) -> dict[str, Any]:
+    """Collect recent CSI digest records for the readout evidence bundle."""
     db_path = workspace_root() / ".csi_digests.db"
     if not db_path.exists():
         return {"items": [], "counts": {"items": 0}}
@@ -276,6 +285,7 @@ def collect_csi_evidence(*, limit: int = 12) -> dict[str, Any]:
 
 
 def collect_workspace_artifact_evidence(*, limit: int = 18) -> dict[str, Any]:
+    """Collect recent workspace artifact manifests for the readout evidence bundle."""
     root = workspace_root()
     if not root.exists():
         return {"items": [], "counts": {"items": 0}}
@@ -325,10 +335,9 @@ def collect_mission_control_cards_evidence(
     retired_limit: int = 30,
     recurrence_threshold: int = 2,
 ) -> dict[str, Any]:
-    """Phase 3 — surface the tier-1 Mission Control cards into Chief-of-Staff
-    synthesis context.
+    """Surface tier-1 Mission Control cards into the Chief-of-Staff synthesis context.
 
-    The Phase 1/2 sweeper produces tier-1 narrative cards (LLM-discovered)
+    Phase 3 addition. The Phase 1/2 sweeper produces tier-1 narrative cards (LLM-discovered)
     and tier-0 infrastructure cards (mechanically auto-created). The
     Chief-of-Staff readout was previously written before those existed
     and synthesizes meaning from raw evidence each pass. Phase 3 feeds
@@ -495,6 +504,7 @@ def _card_row_to_summary(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
 
 
 def collect_evidence_bundle() -> dict[str, Any]:
+    """Collect and merge all evidence categories into a single bundle for LLM synthesis."""
     generated_at = utc_now_iso()
     evidence = {
         "generated_at_utc": generated_at,
@@ -632,6 +642,7 @@ def _extract_json_object(text: str) -> dict[str, Any]:
 
 
 def fallback_readout(evidence: dict[str, Any], *, error: str | None = None) -> dict[str, Any]:
+    """Build a minimal readout dict when LLM synthesis is unavailable."""
     generated_at = str(evidence.get("generated_at_utc") or utc_now_iso())
     counts = evidence.get("source_counts") if isinstance(evidence.get("source_counts"), dict) else {}
     message = "Chief-of-Staff LLM synthesis is unavailable; showing bounded evidence inventory."
@@ -661,6 +672,7 @@ def fallback_readout(evidence: dict[str, Any], *, error: str | None = None) -> d
 
 
 async def synthesize_readout(evidence: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+    """Call the LLM to synthesize a readout from evidence; return (readout_dict, model_used)."""
     api_key = (
         os.getenv("ANTHROPIC_API_KEY")
         or os.getenv("ANTHROPIC_AUTH_TOKEN")
@@ -736,6 +748,7 @@ def persist_readout(
     model: str | None,
     db_path: Path | None = None,
 ) -> dict[str, Any]:
+    """Persist a synthesized readout and its journal entry to the Chief-of-Staff store."""
     generated_at = str(readout.get("generated_at_utc") or evidence.get("generated_at_utc") or utc_now_iso())
     readout_id = str(readout.get("id") or f"mcos_{generated_at.replace(':', '').replace('+', 'Z')}")
     readout["id"] = readout_id
@@ -793,12 +806,14 @@ def persist_readout(
 
 
 async def generate_and_store_readout(*, db_path: Path | None = None) -> dict[str, Any]:
+    """Collect evidence, synthesize a readout, persist it, and return the result."""
     evidence = collect_evidence_bundle()
     readout, model = await synthesize_readout(evidence)
     return persist_readout(readout, evidence, model=model, db_path=db_path)
 
 
 def get_latest_readout(*, include_evidence: bool = False, db_path: Path | None = None) -> dict[str, Any] | None:
+    """Return the most recent readout dict from the store, or None if none exists."""
     try:
         with open_store(db_path) as conn:
             row = conn.execute(
@@ -828,6 +843,7 @@ def get_latest_readout(*, include_evidence: bool = False, db_path: Path | None =
 
 
 def get_recent_journal(*, limit: int = 20, db_path: Path | None = None) -> list[dict[str, Any]]:
+    """Return the most recent journal entries from the Chief-of-Staff store."""
     with open_store(db_path) as conn:
         rows = conn.execute(
             """

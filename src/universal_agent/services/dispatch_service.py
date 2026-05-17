@@ -289,7 +289,7 @@ def dispatch_sweep(
     forbidden_source_kinds: Optional[list[str]] = None,
     additional_running_sessions: Optional[Iterable[str]] = None,
 ) -> list[dict[str, Any]]:
-    """Generic sweep dispatch — wraps claim_next_dispatch_tasks.
+    """Run a generic sweep dispatch by wrapping claim_next_dispatch_tasks.
 
     This is the heartbeat's drop-in replacement: it rebuilds the queue and
     claims the top N tasks regardless of trigger_type.

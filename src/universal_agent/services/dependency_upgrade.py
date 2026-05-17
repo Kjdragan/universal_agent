@@ -85,6 +85,7 @@ class SmokeResult:
     skipped_reason: str = ""
 
     def to_dict(self) -> dict[str, object]:
+        """Apply the upgrade and return the resulting outcome."""
         return {
             "name": self.name,
             "ok": self.ok,
@@ -114,9 +115,11 @@ class UpgradeOutcome:
 
     @property
     def overall_ok(self) -> bool:
+        """Return a short summary describing this upgrade."""
         return self.sync_ok and self.zai_smoke.ok and self.anthropic_smoke.ok and not self.rolled_back
 
     def to_dict(self) -> dict[str, object]:
+        """Return the JSON payload describing this upgrade."""
         return {
             "package": self.package,
             "from_version": self.from_version,

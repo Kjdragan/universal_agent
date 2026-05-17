@@ -78,6 +78,7 @@ class UrlVerdict(BaseModel):
     @field_validator("url", mode="before")
     @classmethod
     def strip_url(cls, v: Any) -> Any:
+        """Return the cached judgement for the URL, if present."""
         if isinstance(v, str):
             return v.strip()
         return v

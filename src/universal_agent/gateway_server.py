@@ -12239,6 +12239,10 @@ def _calendar_register_missed_event(event: dict[str, Any]) -> None:
         existing_record["updated_at"] = datetime.now(timezone.utc).isoformat()
         superseded_ids.append(existing_id)
 
+    # If any superseded event was already notified, the operator received an
+    # alert for this job being missed.  Silently register the newer occurrence
+    # (for dashboard accuracy) but suppress the duplicate email.
+    already_notified = any(sid in _calendar_missed_notifications for sid in superseded_ids)
     for superseded_id in superseded_ids:
         _calendar_missed_notifications.discard(superseded_id)
 
@@ -12254,6 +12258,10 @@ def _calendar_register_missed_event(event: dict[str, Any]) -> None:
     if event_id in _calendar_missed_notifications:
         return
     _calendar_missed_notifications.add(event_id)
+    if already_notified:
+        # Operator already received an email for this job's missed window;
+        # update the dashboard record silently without re-blasting.
+        return
     _add_notification(
         kind="calendar_missed",
         title="Missed Scheduled Event",
@@ -12437,11 +12445,11 @@ def _calendar_project_cron_events(
     if use_projection:
         _scheduling_projection.seed_from_runtime()
         jobs = _scheduling_projection.list_cron_jobs()
-        runs = _scheduling_projection.list_cron_runs(limit=2000)
+        runs = _scheduling_projection.list_cron_runs(limit=15000)
         _scheduling_counter_inc("projection_read_hits")
     else:
         jobs = _cron_service.list_jobs() if _cron_service else []
-        runs = _cron_service.list_runs(limit=2000) if _cron_service else []
+        runs = _cron_service.list_runs(limit=15000) if _cron_service else []
     if not jobs:
         return []
     now_ts = time.time()
@@ -13254,7 +13262,7 @@ async def _calendar_apply_event_action(
             }
         if action_norm == "open_session":
             _source, _ref, scheduled_at_int = _calendar_parse_event_id(event_id)
-            runs = _cron_service.list_runs(limit=2000)
+            runs = _cron_service.list_runs(limit=15000)
             matched = _calendar_match_cron_run(
                 [r for r in runs if str(r.get("job_id") or "") == source_ref], float(scheduled_at_int)
             )
