@@ -1,19 +1,22 @@
 name: PR Auto-Merge
 
-# Auto-enable GitHub auto-merge on ALL non-draft PRs targeting main.
+# Auto-enable GitHub auto-merge on non-draft PRs targeting main,
+# EXCEPT branches that need human review before merging:
 #
-# Once auto-merge is enabled, GitHub squash-merges the PR as soon as
-# pr-validate.yml passes. The squash-merge triggers deploy.yml -> production.
+#   codie/*   — Codie (autonomous code-writer) PRs need operator review
+#   kevin/*   — operator-authored PRs, manual merge
+#   feature/* — operator-authored PRs, manual merge
 #
-# Safety is provided by pr-validate.yml (py_compile + ruff + pytest tests/unit),
-# not by branch-name filtering. If a PR passes CI it ships.
+# Everything else (claude/*, worktree-*, fix/*, docs/*, etc.) auto-merges
+# once pr-validate.yml passes. Safety is in CI, not in branch naming.
 #
 # History:
-# 2026-05-11: Original version — only triggered for claude/* heads.
-# 2026-05-15: Added codie/* after Codie PRs sat merged-but-undeployed.
-# 2026-05-17: Inverted to exclude-operator logic (kevin/*, feature/*).
-# 2026-05-17: Removed all branch filters. Operator confirmed: auto-merge
-#             everything that passes CI. No manual PR review needed.
+# 2026-05-11: Original — only triggered for claude/* heads.
+# 2026-05-15: Added codie/* after Codie PRs sat green-CI but unmerged.
+# 2026-05-17: Rewrote with inverted logic after worktree-* branches
+#             silently fell through the allowlist (PR #316 incident).
+#             Operator then clarified: Codie PRs should NOT auto-merge —
+#             keep them for review. All other non-operator branches do.
 
 on:
   pull_request_target:
@@ -27,7 +30,11 @@ permissions:
 jobs:
   enable-automerge:
     name: Enable auto-merge (squash)
-    if: "!github.event.pull_request.draft"
+    if: |
+      !startsWith(github.event.pull_request.head.ref, 'codie/') &&
+      !startsWith(github.event.pull_request.head.ref, 'kevin/') &&
+      !startsWith(github.event.pull_request.head.ref, 'feature/') &&
+      !github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
