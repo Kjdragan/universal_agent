@@ -219,6 +219,7 @@ class CalendarTaskBridge:
         db_conn: sqlite3.Connection,
         lead_minutes: int | None = None,
     ) -> None:
+        """Initialize the calendar/task bridge."""
         self._conn = db_conn
         self._lead_minutes = lead_minutes if lead_minutes is not None else _DEFAULT_LEAD_MINUTES
         ensure_calendar_task_schema(self._conn)

@@ -65,6 +65,8 @@ CONFLICT_MARKERS = (
 
 @dataclass(frozen=True)
 class LintPage:
+    """Container for vault contradiction lint findings."""
+
     rel_path: str
     abs_path: Path
     kind: str  # "entity" | "concept"
@@ -74,6 +76,7 @@ class LintPage:
 
     @property
     def stem(self) -> str:
+        """Run the lint pass and return collected issues."""
         return self.abs_path.stem
 
 
@@ -177,12 +180,15 @@ def find_candidate_pairs(pages: list[LintPage]) -> list[PairCandidate]:
 
 @dataclass(frozen=True)
 class ContradictionFinding:
+    """Detects assertion conflicts within the vault."""
+
     pair: PairCandidate
     markers_in_a: tuple[str, ...]
     markers_in_b: tuple[str, ...]
     severity: str  # "low" | "medium" | "high"
 
     def to_dict(self) -> dict[str, Any]:
+        """Run the assertion-conflict check and return findings."""
         return {
             "page_a": self.pair.a.rel_path,
             "page_b": self.pair.b.rel_path,
@@ -235,6 +241,8 @@ def analyze_pair(pair: PairCandidate) -> ContradictionFinding | None:
 
 @dataclass
 class ContradictionReport:
+    """Detects contradiction signals across vault entries."""
+
     vault_path: str
     generated_at: str
     pages_scanned: int
@@ -242,6 +250,7 @@ class ContradictionReport:
     findings: list[ContradictionFinding] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
+        """Run the contradiction check and return findings."""
         return {
             "vault_path": self.vault_path,
             "generated_at": self.generated_at,
@@ -286,6 +295,7 @@ def run_contradiction_sweep(vault_path: Path) -> ContradictionReport:
 
 
 def report_filename_for(date_str: str | None = None) -> str:
+    """Run the vault contradiction lint pass."""
     if not date_str:
         date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     return f"contradictions-{date_str}.md"

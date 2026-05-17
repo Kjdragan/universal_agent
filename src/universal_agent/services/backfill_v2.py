@@ -47,18 +47,22 @@ ARCHIVE_SUFFIX = "-v1-archive"
 
 
 def packets_root_for(artifacts_root: Path | None = None) -> Path:
+    """Return a snapshot of the current backfill state."""
     return (artifacts_root or resolve_artifacts_dir()) / "proactive" / LANE_SLUG / "packets"
 
 
 def canonical_vault_root(artifacts_root: Path | None = None) -> Path:
+    """Return the list of pending backfill items."""
     return (artifacts_root or resolve_artifacts_dir()) / "knowledge-vaults" / KB_SLUG
 
 
 def parallel_vault_root(artifacts_root: Path | None = None, *, suffix: str = DEFAULT_PARALLEL_SUFFIX) -> Path:
+    """Return aggregated counts for backfill candidates."""
     return (artifacts_root or resolve_artifacts_dir()) / "knowledge-vaults" / f"{KB_SLUG}{suffix}"
 
 
 def archive_vault_root(artifacts_root: Path | None = None) -> Path:
+    """Return the catalogue of known backfill candidates."""
     return (artifacts_root or resolve_artifacts_dir()) / "knowledge-vaults" / f"{KB_SLUG}{ARCHIVE_SUFFIX}"
 
 
@@ -93,6 +97,8 @@ def enumerate_packets(packets_root: Path) -> list[Path]:
 
 @dataclass
 class PacketReplayRecord:
+    """Snapshot of the system state used to drive the backfill plan."""
+
     packet_dir: str
     ok: bool
     error: str = ""
@@ -104,6 +110,8 @@ class PacketReplayRecord:
 
 @dataclass
 class BackfillStats:
+    """Builds a backfill plan from a snapshot of pending work."""
+
     started_at: str
     finished_at: str = ""
     packets_total: int = 0
@@ -113,6 +121,7 @@ class BackfillStats:
     records: list[PacketReplayRecord] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
+        """Run the planner and return the constructed backfill plan."""
         return {
             "started_at": self.started_at,
             "finished_at": self.finished_at,
@@ -262,6 +271,8 @@ def compute_vault_diff(canonical: Path, parallel: Path) -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class SwapResult:
+    """Orchestrates execution of a backfill plan."""
+
     canonical_path: str
     archive_path: str
     parallel_path: str
@@ -269,6 +280,7 @@ class SwapResult:
     skipped_reason: str = ""
 
     def to_dict(self) -> dict[str, Any]:
+        """Run the backfill plan and return summary results."""
         return {
             "canonical_path": self.canonical_path,
             "archive_path": self.archive_path,

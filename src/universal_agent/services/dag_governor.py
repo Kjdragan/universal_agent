@@ -1,5 +1,4 @@
-"""DAG Concurrency Governor — manages global concurrency limits for ZAI DAG executions.
-"""
+"""DAG Concurrency Governor — manages global concurrency limits for ZAI DAG executions."""
 
 import asyncio
 from contextlib import asynccontextmanager
@@ -17,6 +16,7 @@ class DagConcurrencyGovernor:
     _instance: Optional["DagConcurrencyGovernor"] = None
 
     def __init__(self, max_concurrent: Optional[int] = None):
+        """Initialize the DAG governor."""
         self._max_concurrent = max_concurrent or int(
             os.getenv("UA_DAG_MAX_CONCURRENCY", str(DEFAULT_DAG_MAX_CONCURRENCY))
         )
@@ -24,12 +24,14 @@ class DagConcurrencyGovernor:
         
     @classmethod
     def get_instance(cls, **kwargs) -> "DagConcurrencyGovernor":
+        """Attempt to acquire a DAG slot, returning True on success."""
         if cls._instance is None:
             cls._instance = cls(**kwargs)
         return cls._instance
         
     @classmethod
     def reset_instance(cls) -> None:
+        """Release the previously acquired DAG slot."""
         cls._instance = None
         
     @asynccontextmanager

@@ -1,3 +1,5 @@
+"""Rollup helpers that aggregate Claude Code intelligence findings."""
+
 from __future__ import annotations
 
 from collections import Counter
@@ -107,10 +109,12 @@ def _repo_root() -> Path:
 
 
 def capability_library_root() -> Path:
+    """Run the Claude Code intel rollup over the configured window."""
     return _repo_root() / "agent_capability_library" / "claude_code_intel"
 
 
 def rolling_root(artifacts_root: Path | None = None) -> Path:
+    """Persist the rollup result to durable storage."""
     return resolve_lane_root(artifacts_root) / "rolling"
 
 

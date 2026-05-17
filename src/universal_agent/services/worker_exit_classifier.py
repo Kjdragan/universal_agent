@@ -79,6 +79,7 @@ class WorkerExit:
     is_failure: bool
 
     def to_dict(self) -> dict[str, Any]:
+        """Classify the worker exit and return the resulting decision."""
         return {
             "outcome": self.outcome,
             "is_protocol_violation": self.is_protocol_violation,

@@ -1,3 +1,5 @@
+"""Operator-facing reporting helpers for the Claude Code intel pipeline."""
+
 from __future__ import annotations
 
 import json
@@ -29,6 +31,7 @@ def artifact_file_url(
     artifacts_root: Path | None = None,
     frontend_url: str | None = None,
 ) -> str:
+    """Collect the inputs needed for the operator report."""
     candidate = Path(path).expanduser().resolve()
     root = (artifacts_root or resolve_artifacts_dir()).resolve()
     try:
@@ -46,6 +49,7 @@ def build_operator_report(
     artifacts_root: Path | None = None,
     frontend_url: str | None = None,
 ) -> dict[str, Any]:
+    """Format the operator-facing report section."""
     packet_dir = Path(str(sync_payload.get("packet_dir") or "")).expanduser().resolve()
     post_process = dict(sync_payload.get("post_process") or {})
     root = (artifacts_root or resolve_artifacts_dir()).resolve()
@@ -244,6 +248,7 @@ def build_operator_report(
 
 
 def build_operator_email(summary: dict[str, Any]) -> tuple[str, str, str]:
+    """Build the Claude Code intel operator report."""
     subject = (
         f"[ClaudeDevs X Intel] @{summary.get('handle') or 'ClaudeDevs'} sync "
         f"({summary.get('new_post_count', 0)} new / {summary.get('action_count', 0)} actions)"

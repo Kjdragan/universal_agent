@@ -1,3 +1,5 @@
+"""Todo dispatch service: continuation references and queueing helpers."""
+
 import asyncio
 from datetime import datetime, timezone
 import json
@@ -88,7 +90,7 @@ def _attach_continuation_workspace_reference(
     current_workspace_dir: str,
     run_id: str = "",
 ) -> dict[str, Any]:
-    """Reference a prior proactive workspace from a fresh continuation run.
+    """Link a prior proactive workspace to a fresh continuation run.
 
     Continuations should get fresh execution/session context, but the agent
     needs a durable, non-clobbering handle to prior work.  This helper never
@@ -596,11 +598,14 @@ def build_todo_execution_prompt(
 
 
 class ToDoDispatchService:
+    """Coordinates todo-dispatch work across heartbeat ticks."""
+
     def __init__(
         self,
         execution_callback: Optional[Callable[[str, GatewayRequest], Awaitable[dict[str, Any]]]] = None,
         event_callback=None,
     ):
+        """Initialize the todo dispatch service."""
         self.running = False
         self.task: Optional[asyncio.Task] = None
         self.active_sessions: Dict[str, GatewaySession] = {}
@@ -611,6 +616,7 @@ class ToDoDispatchService:
         self.event_callback = event_callback
 
     async def start(self) -> None:
+        """Return the next dispatch item to process, if any."""
         if self.running:
             return
         self.running = True
@@ -618,6 +624,7 @@ class ToDoDispatchService:
         logger.info("📋 ToDo Dispatch Service started")
 
     async def stop(self) -> None:
+        """Mark the dispatch item as completed."""
         if not self.running:
             return
         self.running = False
@@ -630,6 +637,7 @@ class ToDoDispatchService:
         logger.info("📋 ToDo Dispatch Service stopped")
         
     def register_session(self, session: GatewaySession) -> None:
+        """Cancel a pending dispatch item."""
         metadata = session.metadata if isinstance(session.metadata, dict) else {}
         session_role = str(metadata.get("session_role") or "").strip().lower()
         if session_role not in {"todo_execution", "todo"}:
@@ -646,6 +654,7 @@ class ToDoDispatchService:
             })
 
     def unregister_session(self, session_id: str) -> None:
+        """Return the number of pending todo dispatch items."""
         if session_id in self.active_sessions:
             del self.active_sessions[session_id]
         if self.event_callback:
@@ -656,6 +665,7 @@ class ToDoDispatchService:
             })
 
     def request_dispatch_now(self, session_id: str) -> None:
+        """Return whether the dispatch queue is empty."""
         self.wake_sessions.add(session_id)
         if self.event_callback:
             self.event_callback({

@@ -70,7 +70,8 @@ def record_token_usage(
         conn: SQLite connection with task_hub schema applied.
         cody_mode: "zai" or "anthropic" — required so the tile can
             filter to Anthropic-only totals.
-        mission_id / task_id: provenance for audit / per-mission drill-in.
+        mission_id: provenance for audit / per-mission drill-in.
+        task_id: provenance for audit / per-mission drill-in.
         model: model identifier from the CLI's result event (e.g.
             ``"claude-opus-4-7"``, ``"glm-5.1"``).
         cost_info: the dict captured from the CLI's ``result`` event.
@@ -175,6 +176,7 @@ def summarize_window(
     """Aggregate token usage in the current tracking window.
 
     Args:
+        conn: SQLite connection with task_hub schema applied.
         cody_mode: filter to this mode. Default "anthropic" so the
             primary dashboard tile shows Anthropic Max cost. Pass
             ``None`` to aggregate across all modes.

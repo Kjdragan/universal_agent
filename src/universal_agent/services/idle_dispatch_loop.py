@@ -95,6 +95,8 @@ async def idle_dispatch_loop(
         Returns dict of heartbeat-registered sessions (including daemon sessions).
         Used as a fallback when no WebSocket sessions exist — ensures daemon
         sessions are discoverable by the idle dispatch loop.
+    todo_dispatch_service : TodoDispatchService, optional
+        Service for dispatching todo-type tasks; skipped if ``None``.
 
     """
     global _nudge_event, _nudge_loop

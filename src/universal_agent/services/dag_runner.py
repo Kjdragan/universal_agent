@@ -1,3 +1,5 @@
+"""DAG-runner primitives for orchestrating multi-step workflows."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -43,6 +45,7 @@ class DagRunner:
         *,
         max_iterations: int = _DEFAULT_MAX_ITERATIONS,
     ):
+        """Initialize the DAG runner."""
         self.workflow_def = workflow_def
         self.nodes = {n["id"]: n for n in workflow_def.get("nodes", [])}
         self.edges = workflow_def.get("edges", [])

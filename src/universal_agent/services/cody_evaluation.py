@@ -113,6 +113,7 @@ class CheckResult:
     detail: str = ""
 
     def to_dict(self) -> dict[str, Any]:
+        """Run the Cody evaluation pipeline and return the result."""
         return {"name": self.name, "ok": self.ok, "detail": self.detail}
 
 
@@ -142,6 +143,7 @@ class EvaluationReport:
     iteration: int
 
     def to_dict(self) -> dict[str, Any]:
+        """Return a summary view of the evaluation result."""
         return {
             "workspace_dir": self.workspace_dir,
             "demo_id": self.demo_id,

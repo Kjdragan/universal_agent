@@ -40,6 +40,7 @@ def _workspace_root() -> Path:
 
 
 def default_db_path() -> Path:
+    """Return a connection to the mission-control database."""
     configured = os.getenv("UA_MISSION_CONTROL_INTEL_DB_PATH")
     if configured:
         return Path(configured).expanduser().resolve()

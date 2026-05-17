@@ -84,6 +84,7 @@ def _daemon_session_id(agent_name: str, role: str) -> str:
 
 
 def configured_daemon_roles_for_agent(agent_name: str) -> tuple[str, ...]:
+    """Return the configured daemon session registry."""
     agent_norm = str(agent_name or "").strip().lower()
     return _DEFAULT_AGENT_ROLE_MAP.get(agent_norm, (DAEMON_ROLE_HEARTBEAT,))
 
@@ -139,6 +140,7 @@ class DaemonSessionManager:
         heartbeat_service: Any,
         agent_names: list[str] | None = None,
     ):
+        """Initialize the daemon-session manager."""
         self.workspaces_dir = Path(workspaces_dir)
         self.heartbeat_service = heartbeat_service
         self.agent_names = agent_names or configured_daemon_agents()
@@ -154,6 +156,7 @@ class DaemonSessionManager:
 
     @property
     def session_ids(self) -> set[str]:
+        """Return the current daemon-session state snapshot."""
         return set(self._session_ids.values())
 
     def _cleanup_stale_workspaces(self) -> int:

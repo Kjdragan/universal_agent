@@ -32,6 +32,7 @@ class IntelligenceReporter:
     """Composes review-oriented emails for proactive artifacts."""
 
     def __init__(self, conn: sqlite3.Connection) -> None:
+        """Initialize the intelligence reporter."""
         self._conn = conn
         proactive_artifacts.ensure_schema(conn)
 

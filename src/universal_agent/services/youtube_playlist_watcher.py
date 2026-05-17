@@ -179,6 +179,7 @@ class YouTubePlaylistWatcher:
         dispatch_fn: DispatchFn,
         notification_sink: Optional[NotifyFn] = None,
     ) -> None:
+        """Initialize the YouTube playlist watcher."""
         self._dispatch_fn = dispatch_fn
         self._notification_sink = notification_sink
         self._task: Optional[asyncio.Task] = None
@@ -254,6 +255,7 @@ class YouTubePlaylistWatcher:
     # ------------------------------------------------------------------
 
     async def start(self) -> None:
+        """Start the playlist watcher loop."""
         if not self._enabled:
             logger.info("📺 YouTube playlist watcher DISABLED (UA_YT_PLAYLIST_WATCHER_ENABLED=0)")
             return
@@ -317,6 +319,7 @@ class YouTubePlaylistWatcher:
         self._task = asyncio.create_task(self._loop(playlist_id, api_key, seen))
 
     async def stop(self) -> None:
+        """Stop the playlist watcher loop."""
         self._stop_event.set()
         task = self._task
         if task is not None:
@@ -331,6 +334,7 @@ class YouTubePlaylistWatcher:
     # ------------------------------------------------------------------
 
     def status(self) -> dict[str, Any]:
+        """Return the current watcher status payload."""
         playlist_id = os.getenv("YT_TUTORIALS_PLAYLIST_ID", "").strip()
         return {
             "enabled": self._enabled,

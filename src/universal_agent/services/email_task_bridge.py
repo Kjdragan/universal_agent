@@ -321,6 +321,7 @@ class EmailTaskBridge:
         db_conn: sqlite3.Connection,
         heartbeat_path: Optional[str] = None,
     ) -> None:
+        """Initialize the email-to-task bridge."""
         self._conn = db_conn
         self._heartbeat_path = heartbeat_path or self._default_heartbeat_path()
         ensure_email_task_schema(self._conn)
@@ -1201,13 +1202,43 @@ class EmailTaskBridge:
 
         Parameters
         ----------
+        task_id : str
+            Stable deduplication key for this task.
+        subject : str
+            Email subject used as the task title.
+        sender_email : str
+            Sender address stored in task metadata.
+        reply_text : str
+            Draft reply or body excerpt stored as task description.
+        thread_id : str
+            Provider thread identifier.
+        message_count : int
+            Number of messages in the thread (used to label updates).
+        session_key : str
+            Key identifying the email provider session.
+        workflow_run_id : str
+            Workflow run identifier for tracing.
+        workflow_attempt_id : str
+            Workflow attempt identifier for tracing.
+        provider_session_id : str
+            Provider session ID stored in metadata.
+        labels : list[str] | None
+            Task labels; defaults to ``_EMAIL_TASK_DEFAULT_LABELS``.
         priority : int | None
             Task Hub numeric priority (0-3). ``None`` falls through to
             a default of 2 (medium).
+        due_at : str | None
+            ISO timestamp for task due date, if any.
         initial_status : str
             Starting status — defaults to ``open``.  The heartbeat's
             ``claim_next_dispatch_tasks`` atomically transitions to
             ``in_progress`` when it seizes the task for execution.
+        real_thread_id : str
+            Canonical thread ID from the provider (may differ from ``thread_id``).
+        real_message_id : str
+            Canonical message ID from the provider.
+        target_agent : str | None
+            Agent to assign this task to; ``None`` uses system default.
 
         """
         try:

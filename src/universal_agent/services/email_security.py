@@ -91,6 +91,7 @@ class ScanResult:
     matched_patterns: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
+        """Evaluate the inbound email and return the security decision."""
         return {
             "is_suspicious": self.is_suspicious,
             "threats": self.threats,

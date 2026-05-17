@@ -62,6 +62,8 @@ Output ONLY the JSON lines, one per candidate, no preamble or wrapping array.
 
 @dataclass
 class RankingResult:
+    """Ranks demo-triage candidates by relevance signals."""
+
     run_id: str
     started_at: str
     finished_at: str
@@ -70,6 +72,7 @@ class RankingResult:
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        """Rank candidates and return them ordered by score."""
         return {
             "run_id": self.run_id,
             "started_at": self.started_at,
