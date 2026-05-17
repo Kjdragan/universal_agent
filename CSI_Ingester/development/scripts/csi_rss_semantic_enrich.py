@@ -84,23 +84,7 @@ def _apply_env_defaults(path: Path) -> None:
         os.environ.setdefault(key, val)
 
 
-def _resolve_infisical_token(keys: list[str]) -> str:
-    try:
-        from universal_agent.infisical_loader import _fetch_infisical_secrets
-    except Exception as exc:
-        print(f"RSS_ENRICH_INFISICAL_IMPORT_FAIL detail={exc!r}")
-        return ""
-    try:
-        secrets = _fetch_infisical_secrets()
-    except Exception as exc:
-        print(f"RSS_ENRICH_INFISICAL_FETCH_FAIL detail={exc!r}")
-        return ""
-    for key in keys:
-        value = str(secrets.get(key) or "").strip()
-        if value:
-            print(f"RSS_ENRICH_INFISICAL_TOKEN_SOURCE={key}")
-            return value
-    return ""
+from _csi_secret_resolver import resolve_token_from_infisical  # noqa: E402
 
 
 def _fetch_transcript_failover(
@@ -437,8 +421,9 @@ def main() -> int:
         # systemd does not wrap this unit in `infisical run`, and the env files
         # only carry Infisical *bootstrap* creds, not the resolved secrets. Pull
         # UA_INTERNAL_API_TOKEN directly so /api/v1/youtube/ingest auth succeeds.
-        transcript_token = _resolve_infisical_token(
-            ["UA_YOUTUBE_INGEST_TOKEN", "UA_INTERNAL_API_TOKEN"]
+        transcript_token = resolve_token_from_infisical(
+            ["UA_YOUTUBE_INGEST_TOKEN", "UA_INTERNAL_API_TOKEN"],
+            log_prefix="RSS_ENRICH",
         )
     transcript_timeout_seconds = _resolve_int_setting(
         ["CSI_RSS_ANALYSIS_TRANSCRIPT_TIMEOUT_SECONDS"],

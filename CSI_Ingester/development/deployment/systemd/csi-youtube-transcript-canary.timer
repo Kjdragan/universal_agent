@@ -1,0 +1,10 @@
+[Unit]
+Description=Run YouTube transcript canary hourly
+
+[Timer]
+OnCalendar=*:17
+Persistent=true
+Unit=csi-youtube-transcript-canary.service
+
+[Install]
+WantedBy=timers.target
