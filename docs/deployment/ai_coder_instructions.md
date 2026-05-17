@@ -1,7 +1,7 @@
 # AI Coder Coordination Instructions
 
 > **Audience:** Any AI coding agent (Claude Code, Codex, Cursor, etc.) working on this repository.
-> **Last updated:** 2026-05-15 (`pr-auto-merge.yml` filter widened to also match `codie/*` heads; auto-merge previously skipped Codie PRs entirely).
+> **Last updated:** 2026-05-17 (`pr-auto-merge.yml` redesigned from allowlist to exclude-list — auto-merges all non-draft PRs except `codie/*`, `kevin/*`, `feature/*`. `codie/*` excluded for operator review; all other branch names including future AI-coder conventions auto-merge without requiring a workflow edit).
 
 ## Overview
 
@@ -10,7 +10,7 @@ This repository uses a **PR-driven, automated deployment pipeline**. There are t
 | Role | Responsibility |
 |------|---------------|
 | **AI Coder** (you) | Write code on a per-task branch off `main`, commit, push, open the PR |
-| **Auto-Merge + Deploy** | `pr-auto-merge.yml` enables auto-merge for `claude/*` and `codie/*` heads; CI gates; squash-merge fires `deploy.yml` |
+| **Auto-Merge + Deploy** | `pr-auto-merge.yml` enables auto-merge for all non-draft PRs **except** `codie/*`, `kevin/*`, `feature/*`; CI gates; squash-merge fires `deploy.yml` |
 
 You are the AI Coder. You do **not** deploy directly. You branch from `main`, write code, push, and open the PR (via `/ship` or `gh pr create --base main`). The path to production is **always through a PR to `main`**.
 
@@ -29,9 +29,9 @@ You are the AI Coder. You do **not** deploy directly. You branch from `main`, wr
 ```
 
 - **Tier 1 (Kevin in Antigravity, Claude Code conversational):** branch fresh from `main` (`kevin/<task>` or `feature/<task>` by convention; the Session Baseline Cleanup ensures every new session starts on a fresh `main`). Run `/ship` when done; `/ship` opens a PR to `main`.
-- **Tier 2 (autonomous bots — CODIE, Cody scaffold-builder, scheduled VP coder):** create a dedicated branch (`<bot>/<task-id>` convention; `claude/<task>` and `codie/<task>` are the two prefixes that trigger `pr-auto-merge.yml`), worktree-isolate the work, syntax-check + unit-test in the worktree, then open a PR to `main` directly.
+- **Tier 2 (autonomous bots — CODIE, Cody scaffold-builder, scheduled VP coder):** create a dedicated branch (`<bot>/<task-id>` convention; use `claude/<task>` for Claude Code work, `codie/<task>` for Codie — note `codie/*` requires manual operator review before merge), worktree-isolate the work, syntax-check + unit-test in the worktree, then open a PR to `main` directly.
 
-Both paths arrive at the same gate: a PR to `main` with PR-Validate CI green. The `pr-auto-merge.yml` workflow enables auto-merge for `claude/*` and `codie/*` heads automatically; tier-1 PRs from `/ship` enable auto-merge the same way.
+Both paths arrive at the same gate: a PR to `main` with PR-Validate CI green. The `pr-auto-merge.yml` workflow enables auto-merge for all non-draft PRs except `codie/*`, `kevin/*`, and `feature/*`; tier-1 PRs from `/ship` enable auto-merge the same way.
 
 ### 2. Commit conventions
 
@@ -48,7 +48,7 @@ Use [conventional commit](https://www.conventionalcommits.org/) prefixes: `feat`
 ### 3. Never push to `main`
 
 - **Direct push to `main` is forbidden.** GitHub branch protection should reject it; if it doesn't, your push bypasses CI and risks shipping a SyntaxError to production.
-- **No more pseudo-trunk.** `feature/latest2` was retired 2026-05-14 (PR #273). Each task gets its own per-task branch off `main`. Tier-1 conversational sessions: `kevin/<task>` or `feature/<task>`. Tier-2 bots: `<bot>/<task-id>` (e.g. `claude/<task>` for any Claude Code agent work — this naming triggers `pr-auto-merge.yml`).
+- **No more pseudo-trunk.** `feature/latest2` was retired 2026-05-14 (PR #273). Each task gets its own per-task branch off `main`. Tier-1 conversational sessions: `kevin/<task>` or `feature/<task>`. Tier-2 bots: `<bot>/<task-id>` (e.g. `claude/<task>` for any Claude Code agent work — any prefix other than `codie/*`, `kevin/*`, `feature/*` triggers auto-merge in `pr-auto-merge.yml`).
 - **`develop`** no longer exists. If you find yourself reaching for it, you're following stale documentation — read this file's "2026-05-10 simplification" note above.
 
 ### 4. Never run deployment commands
@@ -115,7 +115,7 @@ Never `git push --force` to `main` or any shared branch.
 | Tier | Who | Branch convention | Path to `main` |
 |---|---|---|---|
 | **1 — Human-supervised conversational coding** | Kevin + Claude Code (this conversation), Antigravity, Codex when Kevin is in the loop | per-task branch off `main` (`kevin/<task>` / `feature/<task>` / `claude/<task>` for agent work) | `/ship` opens a PR to `main`; `pr-auto-merge.yml` enables auto-merge; CI runs; squash-merge fires `deploy.yml` |
-| **2 — Autonomous missions** (CODIE proactive cleanup, Cody scaffold-builder, demo-builder, scheduled VP coder, anything cron- or heartbeat-driven that mutates source) | Bots running unattended on the VPS | `<bot-name>/<task-id>` (e.g., `codie/cleanup-2026-05-10`) | Worktree → patch → syntax-check → unit tests → push to `<bot>/<task-id>` → open PR to `main` directly → CI passes → `pr-auto-merge.yml` squash-merges (for `claude/*` and `codie/*` heads); other prefixes require a manual merge |
+| **2 — Autonomous missions** (CODIE proactive cleanup, Cody scaffold-builder, demo-builder, scheduled VP coder, anything cron- or heartbeat-driven that mutates source) | Bots running unattended on the VPS | `<bot-name>/<task-id>` (e.g., `codie/cleanup-2026-05-10`) | Worktree → patch → syntax-check → unit tests → push to `<bot>/<task-id>` → open PR to `main` directly → CI passes → `pr-auto-merge.yml` squash-merges (all heads except `codie/*`, `kevin/*`, `feature/*`) |
 | **3 — GitHub branch protection** | The safety net | N/A | Enforces "no direct push to `main`" at the push level — see [`ci_cd_pipeline.md`](ci_cd_pipeline.md) |
 
 ### When in doubt

@@ -132,20 +132,34 @@ That's `/ship` in one sentence.
 
 The two scheduled jobs (`nightly-doc-drift-audit.yml`, `openclaw-release-sync.yml`) auto-merge their report PRs to `main` via `gh pr merge --squash --admin`. `deploy.yml`'s `paths-ignore` ensures these report-only commits don't trigger a production deploy.
 
-### Auto-merge for AI-coder PRs (added 2026-05-11; PAT-fixed 2026-05-11 PM; codie/* added 2026-05-15)
+### Auto-merge for AI-coder PRs (added 2026-05-11; PAT-fixed 2026-05-11 PM; codie/* 2026-05-15; inverted filter 2026-05-17)
 
-Autonomous agent PRs from a `claude/*` **or** `codie/*` head branch to `main` get auto-merge enabled automatically by `pr-auto-merge.yml`. Once `pr-validate.yml` passes, GitHub squash-merges the PR, deletes the branch, and the merge to `main` triggers `deploy.yml` → production.
+All non-draft PRs to `main` get auto-merge enabled automatically by `pr-auto-merge.yml`, **except** branches that need operator review before shipping:
 
-> **2026-05-15 fix:** the workflow filter originally matched only `claude/*` heads, leaving every `codie/*` PR (the autonomous code-writer agent) stuck pending manual merge. Three Codie PRs sat green-CI but unmerged for 1–2 days before this was caught. The filter now matches both prefixes.
+| Branch prefix | Auto-merge? | Reason |
+|---|---|---|
+| `claude/*` | ✅ Yes | Claude Code agent work |
+| `worktree-*` | ✅ Yes | Background-session worktrees |
+| any other non-draft | ✅ Yes | Future AI-coder naming auto-merges by default |
+| `codie/*` | ❌ No — manual | Operator reviews Codie's PRs before shipping |
+| `kevin/*` | ❌ No — manual | Operator-authored PRs |
+| `feature/*` | ❌ No — manual | Operator-authored PRs |
+
+Once `pr-validate.yml` passes and auto-merge is armed, GitHub squash-merges the PR, deletes the branch, and the merge to `main` triggers `deploy.yml` → production.
+
+> **2026-05-15 fix:** the original filter matched only `claude/*`, leaving `codie/*` PRs stuck. Widened to both prefixes.
+>
+> **2026-05-17 redesign (PR #317):** the allowlist (`claude/*` + `codie/*`) broke again when background sessions named branches `worktree-*` (PR #316 sat validated but unmerged). Inverted to an exclude-list: operator branches explicitly opt out (`codie/*`, `kevin/*`, `feature/*`); everything else auto-merges. `codie/*` excluded at operator request — Codie PRs go to manual review before ship.
 
 ```mermaid
 flowchart LR
-    A[Agent opens PR<br/>claude/* or codie/* → main] --> B[pr-validate.yml]
-    A --> C[pr-auto-merge.yml<br/>uses AUTO_MERGE_PAT to enable auto-merge]
-    B -->|passes| D[GitHub squash-merges]
-    C --> D
-    D --> E[deploy.yml fires on push]
-    E --> F[Production VPS]
+    A[Agent opens PR<br/>any branch → main] --> B[pr-validate.yml<br/>compile + ruff + pytest]
+    A --> C{pr-auto-merge.yml<br/>codie/* kevin/* feature/*?}
+    C -->|No — auto-merge| D[GitHub squash-merges]
+    C -->|Yes — manual review| E[Operator merges]
+    B -->|passes| D
+    D --> F[deploy.yml fires on push]
+    F --> G[Production VPS]
 ```
 
 This is the same auto-merge mechanism `/ship` uses for tier-1 PRs — `pr-auto-merge.yml` just enables it for PRs that are opened directly via `gh pr create` / GitHub API instead of through `/ship`. No operator action is required between PR open and production deploy.
@@ -195,7 +209,7 @@ What it does (four-case contract):
 
 The cleanup is best-effort: any unexpected failure prints a warning to stderr and falls through, so `claude` always launches even if git is in a state the script doesn't recognize.
 
-Closes the local-side gap in the `claude/* → PR → auto-merge → deploy` loop. Without this, after PR auto-merge GitHub deletes the remote branch but the local checkout stays put on the now-dead branch — so the next session opens on stale code (the trigger for this feature was the trimmed CLAUDE.md being silently invisible to sessions that branched off `main` before the trim landed). The cleanup makes that lag self-correct on the next session start.
+Closes the local-side gap in the `<branch> → PR → auto-merge → deploy` loop. Without this, after PR auto-merge GitHub deletes the remote branch but the local checkout stays put on the now-dead branch — so the next session opens on stale code (the trigger for this feature was the trimmed CLAUDE.md being silently invisible to sessions that branched off `main` before the trim landed). The cleanup makes that lag self-correct on the next session start.
 
 ## Summary
 
@@ -206,7 +220,7 @@ The default operating model is:
 3. code on the feature branch
 4. `gh pr create --base main --head claude/<task>` (or `/ship`)
 5. `pr-validate.yml` runs PR-Validate CI
-6. `pr-auto-merge.yml` enables GitHub auto-merge for `claude/*` and `codie/*` heads
+6. `pr-auto-merge.yml` enables GitHub auto-merge (skip if `codie/*`, `kevin/*`, or `feature/*`)
 7. on CI green, GitHub squash-merges and deletes the remote branch
 8. `deploy.yml` fires on the resulting `main` push, deploys to the VPS
 9. next session start: cleanup automatically prunes the merged local branch and lands you back on `main`

@@ -23,7 +23,7 @@ Release verification rule:
 | Name | File | Trigger | Target |
 |------|------|---------|--------|
 | `PR Validate` | `pr-validate.yml` | Pull request to `feature/latest2` or `main` | `py_compile` + `ruff check` + `pytest tests/unit` (mandatory pre-merge gate) |
-| `PR Auto-Merge` | `pr-auto-merge.yml` | Pull request to `main` from `claude/*` head branch (added 2026-05-11) | Enables GitHub auto-merge (squash + delete branch) so PR merges automatically once `Validate PR` passes. Uses `secrets.AUTO_MERGE_PAT` (fine-grained PAT) so the downstream squash-merge `push` event actually fires `deploy.yml` — see "Why a PAT" below. Tier-1 PRs through `/ship` already self-enable auto-merge. |
+| `PR Auto-Merge` | `pr-auto-merge.yml` | Pull request to `main` (any non-draft PR not from `codie/*`, `kevin/*`, or `feature/*`) | Enables GitHub auto-merge (squash + delete branch) so PR merges automatically once `Validate PR` passes. Uses `secrets.AUTO_MERGE_PAT` (fine-grained PAT) so the downstream squash-merge `push` event actually fires `deploy.yml` — see "Why a PAT" below. Tier-1 PRs through `/ship` already self-enable auto-merge. |
 | ~~`Post-Merge Deploy Dispatcher`~~ | ~~`post-merge-deploy.yml`~~ | **Deleted 2026-05-11 PM** | Was the workaround for the GITHUB_TOKEN suppression bug. With PR #232's PAT swap making `pr-auto-merge.yml` fire deploys via the natural `push` trigger, this bridge was redundant — every merge produced two Deploy runs (one from `push`, one from the bridge's `workflow_dispatch`). Removed to avoid double-deploys + Actions-tab clutter. |
 | `Deploy` | `deploy.yml` | Push to `main` (paths-ignore: docs/, **.md, reports/, state/, artifacts/), or `workflow_dispatch` | Production Service. **No concurrency guard as of 2026-05-11** — see "Concurrency caveat" below. |
 
@@ -31,8 +31,8 @@ Release verification rule:
 
 ```mermaid
 flowchart LR
-    A[Agent opens PR<br/>claude/* → main] --> B[pr-validate.yml<br/>compile + ruff + pytest]
-    A --> C[pr-auto-merge.yml<br/>uses AUTO_MERGE_PAT to enable auto-merge]
+    A[Agent opens PR<br/>any branch → main] --> B[pr-validate.yml<br/>compile + ruff + pytest]
+    A --> C[pr-auto-merge.yml<br/>enables auto-merge unless codie/*/kevin/*/feature/*]
     B -->|passes| D[GitHub squash-merges<br/>→ main]
     C --> D
     D --> E[deploy.yml fires<br/>on push to main]
@@ -43,7 +43,7 @@ flowchart LR
 
 **Tier-1 PRs (operator-driven via `/ship`):** Same flow but auto-merge is enabled by `/ship` itself, not by this workflow.
 
-**Manual fallback:** if a PR doesn't match the `claude/*` head-branch pattern, the operator merges it manually in the GitHub UI.
+**Manual fallback:** `codie/*`, `kevin/*`, and `feature/*` branches require manual merge — operator reviews before shipping. All other non-draft PRs auto-merge.
 
 #### Why a PAT (2026-05-11 PR #232)
 
