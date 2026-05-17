@@ -1,39 +1,19 @@
 name: PR Auto-Merge
 
-# Auto-enable GitHub auto-merge on PRs that:
-#   - Target main
-#   - Are NOT from an explicit operator branch (kevin/*, feature/*)
-#   - Are not draft
+# Auto-enable GitHub auto-merge on ALL non-draft PRs targeting main.
 #
 # Once auto-merge is enabled, GitHub squash-merges the PR as soon as
-# pr-validate.yml passes and any required reviews are satisfied. The
-# squash-merge to main triggers the existing deploy.yml -> production.
+# pr-validate.yml passes. The squash-merge triggers deploy.yml -> production.
 #
-# This is the "no operator action between PR open and production" piece
-# for autonomous AI-coder PRs. Tier-1 PRs that go through /ship already
-# get auto-merge enabled by /ship itself (see .claude/commands/ship.md).
-# This workflow handles the agent path where /ship isn't invoked.
+# Safety is provided by pr-validate.yml (py_compile + ruff + pytest tests/unit),
+# not by branch-name filtering. If a PR passes CI it ships.
 #
-# Manual fallback: operator branches (kevin/*, feature/*) are excluded so
-# the operator retains manual-merge control on their own PRs.
-#
-# 2026-05-11 design note: an earlier iteration of this workflow targeted
-# `feature/latest2` and was paired with an `auto-promote-to-prod.yml`
-# that ff-merged feature/latest2 -> develop -> main. That model was
-# wrong for the post-2026-05-10 architecture (develop is retired, PRs
-# target main directly). This file is the corrected version.
-#
-# 2026-05-15 fix: filter only matched `claude/*` heads, leaving every
-# `codie/*` PR (the autonomous code-writer agent) stuck pending manual
-# merge. Three Codie PRs sat green-CI but unmerged for 1-2 days before
-# this was caught. Filter was broadened to match both prefixes.
-#
-# 2026-05-17 redesign: the allowlist approach (claude/*, codie/*) is
-# brittle — every new AI-coder naming convention breaks it silently.
-# Inverted the logic: auto-merge everything that is not an explicit
-# operator branch (kevin/*, feature/*) and not a draft. AI-coder branches
-# of any naming convention (claude/*, codie/*, worktree-*, etc.) now
-# auto-merge without requiring a workflow update when naming changes.
+# History:
+# 2026-05-11: Original version — only triggered for claude/* heads.
+# 2026-05-15: Added codie/* after Codie PRs sat merged-but-undeployed.
+# 2026-05-17: Inverted to exclude-operator logic (kevin/*, feature/*).
+# 2026-05-17: Removed all branch filters. Operator confirmed: auto-merge
+#             everything that passes CI. No manual PR review needed.
 
 on:
   pull_request_target:
@@ -47,44 +27,26 @@ permissions:
 jobs:
   enable-automerge:
     name: Enable auto-merge (squash)
-    if: |
-      !startsWith(github.event.pull_request.head.ref, 'kevin/') &&
-      !startsWith(github.event.pull_request.head.ref, 'feature/') &&
-      !github.event.pull_request.draft
+    if: "!github.event.pull_request.draft"
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Enable auto-merge via gh
         env:
-          # 2026-05-11: swapped GITHUB_TOKEN -> AUTO_MERGE_PAT so the
-          # downstream squash-merge `push` event isn't suppressed by
-          # GitHub's "events triggered by GITHUB_TOKEN don't fire new
-          # workflows" rule. Falls back to GITHUB_TOKEN if the secret is
-          # not configured so the workflow stays functional (just
-          # without deploy auto-firing). See operating note in
-          # docs/06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md.
-          #
-          # 2026-05-11 PM: the post-merge-deploy.yml bridge workflow
-          # (which dispatched deploy.yml via workflow_dispatch on PR
-          # closure) was deleted — it was redundant once the PAT path
-          # started firing deploy.yml from the natural push trigger,
-          # and was producing two Deploy runs per merge. If this PAT
-          # ever expires, restore the PAT, not the bridge.
+          # AUTO_MERGE_PAT (not GITHUB_TOKEN) so the downstream squash-merge
+          # push event fires deploy.yml. GITHUB_TOKEN-triggered events don't
+          # chain to new workflow runs. Falls back to GITHUB_TOKEN if the
+          # secret is absent (workflow stays functional; deploy won't auto-fire).
           GH_TOKEN: ${{ secrets.AUTO_MERGE_PAT || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           PR_NUM="${{ github.event.pull_request.number }}"
-          # Best-effort enable. If auto-merge is already enabled or the
-          # PR is already mergeable+merged, gh exits non-zero with a
-          # message; we treat that as a soft success so a re-run on a
-          # late "synchronize" event doesn't fail the workflow.
           if gh pr merge "$PR_NUM" \
                 --auto --squash --delete-branch \
                 --repo "${{ github.repository }}"; then
             echo "Auto-merge enabled on PR #${PR_NUM} (squash, delete branch)."
           else
             echo "Note: auto-merge could not be (re-)enabled on PR #${PR_NUM}."
-            echo "      This is usually because the PR is already merged, already"
-            echo "      auto-merging, or auto-merge is disabled at the repo level."
-            echo "      Check repo Settings -> General -> 'Allow auto-merge'."
+            echo "      Usually: already merged, already auto-merging, or"
+            echo "      auto-merge disabled in repo Settings -> General."
           fi
