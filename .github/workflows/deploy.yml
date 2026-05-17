@@ -246,6 +246,19 @@ jobs:
             sudo bash "$PROD_DIR/scripts/install_vps_systemd_units.sh" --lane production --app-root "$PROD_DIR"
             echo "--> Installing canonical VP worker unit template from repo..."
             sudo bash "$PROD_DIR/scripts/install_vp_worker_services.sh" vp.coder.primary vp.general.primary
+            # Sync the CSI lane's systemd units (timers + services). Without
+            # this, edits to CSI_Ingester/development/deployment/systemd/*.{service,timer}
+            # land in the repo but never reach /etc/systemd/system/, so the
+            # timer keeps running the old unit file (e.g. the 2026-05-16
+            # YouTube-transcript outage: rss-semantic-enrich timer was
+            # disabled and the env-file fix never took effect). The install
+            # script is idempotent.
+            if [ -x "$PROD_DIR/CSI_Ingester/development/scripts/csi_install_systemd_extras.sh" ]; then
+              echo "--> Installing canonical CSI systemd units..."
+              sudo bash "$PROD_DIR/CSI_Ingester/development/scripts/csi_install_systemd_extras.sh" || echo "WARN: csi_install_systemd_extras.sh exited non-zero; investigate post-deploy"
+            else
+              echo "WARN: csi_install_systemd_extras.sh missing or not executable; CSI timers may drift"
+            fi
 
             # Capture discord-services state BEFORE the restart so the
             # post-restart health gate can distinguish "this deploy broke
