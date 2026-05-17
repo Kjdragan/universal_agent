@@ -378,17 +378,26 @@ def _tokenize(text: str) -> set[str]:
 
 
 def _extraction_plan_is_empty(analysis: dict[str, Any]) -> bool:
-    """True when CSI produced no usable build signal (nothing to implement)."""
-    if not isinstance(analysis, dict) or not analysis:
-        return True
+    """True when CSI tried to extract a build plan and got nothing.
+
+    Only fires when ``language`` / ``primary_language`` is *explicitly* present
+    and set to a degenerate value (e.g. ``"unknown"``) AND there are no
+    dependencies AND no implementation steps. If those keys are simply absent
+    from the analysis (e.g. the analyzer hasn't been run on this video, or a
+    different analysis schema is in use), we don't penalize — other gates
+    (category, channel, title tokens) carry the load.
+    """
+    if not isinstance(analysis, dict):
+        return False
+    has_language_key = "language" in analysis or "primary_language" in analysis
+    if not has_language_key:
+        return False
     language = str(analysis.get("language") or analysis.get("primary_language") or "").strip().lower()
     deps = analysis.get("dependencies")
     steps = analysis.get("implementation_steps")
     has_deps = isinstance(deps, list) and len(deps) > 0
     has_steps = isinstance(steps, list) and len(steps) > 0
-    if language in {"", "unknown", "n/a", "none"} and not has_deps and not has_steps:
-        return True
-    return False
+    return language in {"", "unknown", "n/a", "none"} and not has_deps and not has_steps
 
 
 def _load_denylist_channels() -> list[str]:
