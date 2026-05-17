@@ -52,6 +52,48 @@ STALL_TIMEOUT_SECONDS = 300
 # Maximum retries for failed CLI sessions
 MAX_RETRIES = 2
 
+# Substrings that indicate the CLI rejected our credentials. Retrying with
+# the same env is pointless — the OAuth access token has expired or the
+# API key is invalid, and only an operator re-auth can fix it. Matching is
+# case-insensitive. Keep these phrases tight to avoid false positives on
+# unrelated 401s mentioned inside generated content.
+_AUTH_FAILURE_MARKERS = (
+    "invalid authentication credentials",
+    "failed to authenticate",
+    "invalid x-api-key",
+    "authentication_error",
+)
+
+_AUTH_FAILURE_OPERATOR_HINT = (
+    "Claude CLI authentication failed (401). The Anthropic OAuth access "
+    "token on this host has likely expired and headless `claude --print` "
+    "does not refresh it. Re-auth on the VPS as the runtime user: run "
+    "`claude setup-token` (long-lived token, recommended for headless) or "
+    "`claude` to drive the interactive browser OAuth flow."
+)
+
+
+def _is_auth_failure(outcome: "MissionOutcome") -> bool:
+    """Return True if the CLI exit looks like an authentication failure.
+
+    We inspect both the top-level ``message`` (e.g. stderr summary) and the
+    ``payload.final_text`` (where the CLI's own error string lands when it
+    exits cleanly with code 1 from an auth rejection). One match in either
+    field is enough — auth failures are deterministic and not worth a
+    fuzzy threshold.
+    """
+    haystack_parts: list[str] = []
+    if outcome.message:
+        haystack_parts.append(str(outcome.message))
+    payload = outcome.payload or {}
+    final_text = payload.get("final_text")
+    if final_text:
+        haystack_parts.append(str(final_text))
+    haystack = " ".join(haystack_parts).lower()
+    if not haystack:
+        return False
+    return any(marker in haystack for marker in _AUTH_FAILURE_MARKERS)
+
 
 class ClaudeCodeCLIClient(VpClient):
     """VP client that directs Claude Code CLI sessions.
@@ -185,6 +227,27 @@ class ClaudeCodeCLIClient(VpClient):
                         cody_mode=cody_mode,
                     )
                     return outcome
+
+                # Short-circuit retries on credential failure — the same
+                # env will produce the same 401, and burning two more
+                # retries delays the operator-visible signal.
+                if _is_auth_failure(outcome):
+                    logger.error(
+                        "CLI mission %s aborted: authentication rejected by "
+                        "Anthropic API (cody_mode=%s, attempt=%d). %s",
+                        mission_id, cody_mode, attempt,
+                        _AUTH_FAILURE_OPERATOR_HINT,
+                    )
+                    enriched_payload = dict(outcome.payload or {})
+                    enriched_payload["auth_failure"] = True
+                    enriched_payload["operator_hint"] = _AUTH_FAILURE_OPERATOR_HINT
+                    return MissionOutcome(
+                        status="failed",
+                        result_ref=outcome.result_ref,
+                        message=f"{_AUTH_FAILURE_OPERATOR_HINT} "
+                                f"(original CLI error: {outcome.message})",
+                        payload=enriched_payload,
+                    )
 
                 last_outcome = outcome
                 if attempt > max_retries:
