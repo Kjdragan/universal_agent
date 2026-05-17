@@ -23,6 +23,7 @@ from universal_agent.vp.clients.base import MissionOutcome, VpClient
 from universal_agent.vp.clients.claude_cli_client import (
     ClaudeCodeCLIClient,
     _build_cli_prompt,
+    _is_auth_failure,
     _parse_payload,
 )
 
@@ -133,6 +134,101 @@ async def test_cli_client_retries_on_failure(tmp_path: Path):
     assert outcome.status == "failed"
     # With max_retries=1, we get initial attempt + 1 retry = 2 calls
     assert call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# 4b. _is_auth_failure pattern matching
+# ---------------------------------------------------------------------------
+def test_is_auth_failure_matches_final_text_401():
+    """The real failure mode: CLI exits with code 1 and 401 lands in final_text."""
+    outcome = MissionOutcome(
+        status="failed",
+        message="CLI exited with code 1",
+        payload={
+            "exit_code": 1,
+            "tool_calls": 0,
+            "final_text": "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+        },
+    )
+    assert _is_auth_failure(outcome) is True
+
+
+def test_is_auth_failure_matches_message():
+    outcome = MissionOutcome(
+        status="failed",
+        message="invalid x-api-key from upstream",
+        payload={},
+    )
+    assert _is_auth_failure(outcome) is True
+
+
+def test_is_auth_failure_is_case_insensitive():
+    outcome = MissionOutcome(
+        status="failed",
+        message="",
+        payload={"final_text": "FAILED TO AUTHENTICATE"},
+    )
+    assert _is_auth_failure(outcome) is True
+
+
+def test_is_auth_failure_no_match_on_unrelated_error():
+    outcome = MissionOutcome(
+        status="failed",
+        message="CLI session timed out after 1800s",
+        payload={"final_text": "partial response..."},
+    )
+    assert _is_auth_failure(outcome) is False
+
+
+def test_is_auth_failure_handles_empty_outcome():
+    outcome = MissionOutcome(status="failed", message="", payload={})
+    assert _is_auth_failure(outcome) is False
+
+
+# ---------------------------------------------------------------------------
+# 4c. Auth failure short-circuits retries with operator-friendly message
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_cli_client_auth_failure_short_circuits_retries(tmp_path: Path):
+    """An auth-rejection 401 must NOT trigger the retry loop — same env
+    will produce the same failure, and we want the operator to see the
+    real reason without three rounds of identical retries first."""
+    client = ClaudeCodeCLIClient()
+    mission: dict[str, Any] = {
+        "mission_id": "test-mission-auth-401",
+        "objective": "Build something",
+        "payload_json": json.dumps({"timeout_seconds": 30, "max_retries": 2}),
+    }
+
+    auth_outcome = MissionOutcome(
+        status="failed",
+        message="CLI exited with code 1",
+        result_ref=f"workspace://{tmp_path}",
+        payload={
+            "exit_code": 1,
+            "tool_calls": 0,
+            "final_text": "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+        },
+    )
+
+    call_count = 0
+
+    async def mock_execute_cli_session(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        return auth_outcome
+
+    with patch(
+        "universal_agent.vp.clients.claude_cli_client._execute_cli_session",
+        side_effect=mock_execute_cli_session,
+    ):
+        outcome = await client.run_mission(mission=mission, workspace_root=tmp_path)
+
+    assert outcome.status == "failed"
+    assert call_count == 1, "auth failure must short-circuit before any retry"
+    assert outcome.payload.get("auth_failure") is True
+    assert "setup-token" in (outcome.message or "")
+    assert "401" in (outcome.message or "") or "OAuth" in (outcome.message or "")
 
 
 # ---------------------------------------------------------------------------
