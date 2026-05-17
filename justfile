@@ -10,6 +10,16 @@
 default:
     @just --list
 
+# Reset the IDE checkout to clean main + remove any merged worktrees.
+#
+# Same script the Stop hook runs at session end (see .claude/settings.json).
+# Safe to run any time — refuses to touch unmerged work, uncommitted
+# changes, or the worktree it's running in. Use this when the IDE
+# source-control panel is showing phantom state and you just want to be
+# back on a clean main.
+cleanup:
+    @bash scripts/end_session_cleanup.sh
+
 # ---------------------------------------------------------------------------
 # Local development environment
 # ---------------------------------------------------------------------------
