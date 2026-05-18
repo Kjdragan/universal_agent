@@ -5149,16 +5149,30 @@ def get_agent_activity(conn: sqlite3.Connection) -> dict[str, Any]:
     window_1h = (now.timestamp() - 3600)
     window_24h = (now.timestamp() - 86400)
 
+    # Exclude assignments whose backing item is in a terminal state
+    # (completed/parked/cancelled). Without this filter, an assignment
+    # row left dangling in ``seized``/``running`` after the item moved
+    # to terminal status would surface as an ACTIVE ASSIGNMENT in
+    # Simone's prompt — when she tried to act on it, the lifecycle
+    # action validator would reject the now-terminal task and the
+    # mission guardrail would block her turn (the 2026-05-18 13:23
+    # Execution Missing Lifecycle Mutation regression: a proactive-codie
+    # cleanup task was serviced by Cody via PR #344, the item moved to
+    # ``completed``, but the stale assignment row kept reappearing in
+    # Simone's queue listing).
+    _terminal_placeholders = ", ".join("?" for _ in TERMINAL_STATUSES)
     active_rows = conn.execute(
-        """
+        f"""
         SELECT a.assignment_id, a.task_id, a.agent_id, a.state, a.started_at,
                i.title, i.project_key, i.priority
         FROM task_hub_assignments a
         JOIN task_hub_items i ON i.task_id = a.task_id
         WHERE a.state IN ('seized', 'running')
+          AND i.status NOT IN ({_terminal_placeholders})
         ORDER BY a.started_at DESC
         LIMIT 100
-        """
+        """,
+        tuple(TERMINAL_STATUSES),
     ).fetchall()
 
     def _count_eval(decision: str, since_ts: float) -> int:
