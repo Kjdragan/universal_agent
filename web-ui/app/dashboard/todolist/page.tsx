@@ -1551,7 +1551,7 @@ export default function ToDoListDashboardPage() {
         <div className="flex items-start justify-between gap-2 pr-6">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-1.5 mb-1">{sourceKindPill(item.source_kind)}</div>
-            <h3 className="text-[13px] font-semibold text-kcd-text truncate m-0">
+            <h3 className="text-[13px] font-semibold text-kcd-text leading-snug m-0 break-words">
               {(() => {
                 const href = item.links?.session_href || taskSourceUrl(item.task_id, item.source_kind, undefined, item.source_ref);
                 if (href) {
