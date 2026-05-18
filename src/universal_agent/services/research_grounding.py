@@ -180,15 +180,41 @@ def is_allowed(url: str, allowlist: list[str]) -> bool:
 _TERM_PATTERN = re.compile(r"\b([A-Z][a-zA-Z0-9_]{2,}|[a-z][a-zA-Z0-9_]+_[a-zA-Z0-9_]+)\b")
 
 
-def extract_candidate_terms(text: str) -> list[str]:
+_MENTION_HANDLE_RE = re.compile(r"@([A-Za-z0-9_]{1,30})")
+_HASH_TAG_RE = re.compile(r"#([A-Za-z0-9_]{1,80})")
+_URL_TOKEN_RE = re.compile(r"https?://\S+")
+
+
+def extract_candidate_terms(text: str, *, excluded_handles: set[str] | None = None) -> list[str]:
     """Extract probable feature / SDK terms from a post for grounding lookup.
 
     Conservative: prefers CamelCase identifiers and snake_case identifiers.
     Plain English words are filtered out via STOPWORDS.
+
+    Strips Twitter @-mentions, #-tags, and URL tokens before regex matching so
+    handles like ``@OniricSunset`` never get slugified into hallucinated docs
+    URLs. ``excluded_handles`` is an optional caller-supplied set of lowercased
+    @-handles to ignore even if they appear without the leading ``@`` (for
+    example the polled-handles list).
     """
     if not text:
         return []
-    candidates = _TERM_PATTERN.findall(text)
+    excluded = {h.lower().lstrip("@") for h in (excluded_handles or set())}
+
+    # Collect handles in the text so we exclude them even if a downstream
+    # regex would have caught the bare CamelCase form.
+    for match in _MENTION_HANDLE_RE.finditer(text):
+        excluded.add(match.group(1).lower())
+
+    # Strip handles, tags, and URLs entirely before tokenization. The
+    # original mentions could otherwise produce CamelCase tokens (e.g.
+    # ``@OniricSunset`` -> ``OniricSunset``) that downstream URL synthesis
+    # treats as feature names.
+    sanitized = _URL_TOKEN_RE.sub(" ", text)
+    sanitized = _MENTION_HANDLE_RE.sub(" ", sanitized)
+    sanitized = _HASH_TAG_RE.sub(" ", sanitized)
+
+    candidates = _TERM_PATTERN.findall(sanitized)
     # De-duplicate preserving order.
     seen: set[str] = set()
     out: list[str] = []
@@ -196,6 +222,8 @@ def extract_candidate_terms(text: str) -> list[str]:
         if len(term) < 3:
             continue
         if term.lower() in _TERM_STOPWORDS:
+            continue
+        if term.lower() in excluded:
             continue
         if term in seen:
             continue
@@ -240,6 +268,7 @@ def should_trigger_research(
     classifier_result: dict[str, Any] | None = None,
     existing_entity_names: set[str] | None = None,
     operator_force: bool = False,
+    excluded_handles: set[str] | None = None,
 ) -> tuple[bool, list[TriggerReason]]:
     """Apply the §6.3 trigger logic.
 
@@ -267,7 +296,10 @@ def should_trigger_research(
     # Unknown-term signal — any candidate term that isn't already an entity
     # in the vault.
     if existing_entity_names is not None:
-        terms = extract_candidate_terms(str(post.get("text") or ""))
+        terms = extract_candidate_terms(
+            str(post.get("text") or ""),
+            excluded_handles=excluded_handles,
+        )
         normalized_existing = {n.lower() for n in existing_entity_names}
         unknown = [t for t in terms if t.lower() not in normalized_existing]
         if unknown:
@@ -283,6 +315,7 @@ def build_research_request(
     existing_entity_names: set[str] | None,
     operator_force: bool = False,
     lane_slug: str = CLAUDE_CODE_LANE_KEY,
+    excluded_handles: set[str] | None = None,
 ) -> ResearchRequest | None:
     """Create a ResearchRequest if research should fire; else None."""
     triggered, reasons = should_trigger_research(
@@ -290,10 +323,16 @@ def build_research_request(
         classifier_result=classifier_result,
         existing_entity_names=existing_entity_names,
         operator_force=operator_force,
+        excluded_handles=excluded_handles,
     )
     if not triggered:
         return None
-    terms = tuple(extract_candidate_terms(str(post.get("text") or "")))
+    terms = tuple(
+        extract_candidate_terms(
+            str(post.get("text") or ""),
+            excluded_handles=excluded_handles,
+        )
+    )
     return ResearchRequest(
         post_id=str(post.get("id") or "").strip(),
         tier=int(post.get("tier") or (classifier_result or {}).get("tier") or 0),
@@ -346,6 +385,57 @@ def candidate_urls_for_term(term: str, *, allowlist: list[str]) -> list[str]:
         seen.add(url)
         out.append(url)
     return out
+
+
+# ── SPA-404 shell detection ─────────────────────────────────────────────────
+#
+# docs.anthropic.com is a Next.js SPA. Every path returns HTTP 200 with the
+# same shell HTML — the actual 404 message renders client-side after JS
+# executes. The fetcher cannot tell the page is a 404 from the HTTP status
+# alone, so we post-validate the saved markdown for two telltale signs:
+#
+#   1. The extracted prose is tiny relative to the raw fetch (mostly CSS
+#      <link> tags and <script> bundles).
+#   2. The body contains the SPA marker attributes ``data-theme="claude"``
+#      or the literal "Page not found" string that the SPA renders inside
+#      <noscript> tags.
+
+_SPA_SHELL_MARKERS = (
+    'data-theme="claude"',
+    "<noscript>page not found",
+    "anthropic.com/_next/static",
+)
+
+# Minimum prose length (in characters) for a fetched grounding source to be
+# considered legitimate. Real documentation pages are easily >1k characters
+# of body text; SPA shells extract to ~200 chars of mostly-empty markup.
+_SPA_SHELL_MIN_BODY_CHARS = 600
+
+
+def _is_spa_404_shell(*, content_path: str, content_chars: int) -> bool:
+    """Return True when the fetched grounding source is a docs SPA 404 shell."""
+    if content_chars <= 0:
+        return False
+    if content_chars >= _SPA_SHELL_MIN_BODY_CHARS:
+        # Long bodies are almost always legitimate; cheap path out.
+        if not content_path:
+            return False
+    if not content_path:
+        return False
+    try:
+        body = Path(content_path).read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return False
+    lowered = body.lower()
+    if any(marker in lowered for marker in _SPA_SHELL_MARKERS):
+        # When markers are present, also require the body to be short. The
+        # legitimate release-notes page also has Next.js markup but renders
+        # plenty of prose around it.
+        if content_chars < _SPA_SHELL_MIN_BODY_CHARS * 4:
+            return True
+    if content_chars < _SPA_SHELL_MIN_BODY_CHARS:
+        return True
+    return False
 
 
 # ── Fetch ────────────────────────────────────────────────────────────────────
@@ -417,14 +507,35 @@ def execute_research(
             result = {"ok": False, "error": str(exc)}
 
         if result.get("ok"):
+            content_path = str(result.get("path", ""))
+            content_chars = int(result.get("chars", 0))
+            if _is_spa_404_shell(content_path=content_path, content_chars=content_chars):
+                # The "fetched" body is the docs.anthropic.com SPA shell —
+                # what the synthesized URL actually points to is a 404. Drop
+                # the artifact off disk so the vault ingest can never pick it
+                # up and record the skip reason for the operator.
+                try:
+                    Path(content_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+                sources.append(
+                    ResearchSource(
+                        url=url,
+                        domain=_domain_of(url),
+                        allowlist_rank=rank,
+                        fetched=False,
+                        skip_reason="spa_404_shell",
+                    )
+                )
+                continue
             sources.append(
                 ResearchSource(
                     url=url,
                     domain=_domain_of(url),
                     allowlist_rank=rank,
                     fetched=True,
-                    content_path=str(result.get("path", "")),
-                    content_chars=int(result.get("chars", 0)),
+                    content_path=content_path,
+                    content_chars=content_chars,
                 )
             )
         else:

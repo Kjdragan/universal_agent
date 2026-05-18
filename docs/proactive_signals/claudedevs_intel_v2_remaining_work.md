@@ -1,7 +1,7 @@
 # ClaudeDevs Intel v2 — Remaining Work Plan
 
 > **Status:** ✅ **Phases A + B complete in production as of 2026-05-16.** End-to-end loop verified (1 demo attached to `custom-subagents.md` entity page; 4 demo workspaces in `/opt/ua_demos/`). Only Phase C (operations/generalization) + Phase D (cross-pipeline lifecycle) remain — all small, optional, individually scopable. Living document.
-> **Last updated:** 2026-05-16 (post-gateway-incident audit: Phase A wiring + Phase B skill invocation + Phase 4 vault-attach all confirmed wired in `claude_code_intel_replay.py:116-148, 864-880` + `memory/HEARTBEAT.md:93-101`)
+> **Last updated:** 2026-05-17 — PR 16 fix-up: research grounding URL synthesizer was producing hallucinated `docs.anthropic.com` paths from `@`-handles in tweet text. Two-layer fix shipped: pre-strip mentions/hashtags/URLs in `extract_candidate_terms`, plus SPA-404 shell post-validation. New cleanup script `csi_vault_cleanup_grounding_hallucinations.py` quarantines the affected vault pages. See PR 16 section below.
 > **Owner:** AI Coder on `main`, with operator gates for `/ship` cycles
 > **Companion:** [`claudedevs_intel_v2_design.md`](claudedevs_intel_v2_design.md) (the original 13-PR design doc)
 > **🚨 Read first if returning after a session break:** [`csi_v2_next_session_priorities_2026-05-06.md`](csi_v2_next_session_priorities_2026-05-06.md) — the unambiguous "do this next" list.
@@ -134,6 +134,10 @@ Both wiring PRs shipped and live. Phase A latent integration gaps from PRs 2, 3,
 - **Wired at:** `src/universal_agent/services/claude_code_intel_replay.py:116-148` calls `apply_research_grounding_pass()` (lines 435-549) between linked-source expansion and vault ingest, so the Memex pass sees grounded sources alongside originally-linked ones. Grounded entries flow into `linked_source_entries` via list-merge (line 148) and are counted separately in `linked_source_count` semantics for stability.
 - **Toggle:** `UA_CSI_RESEARCH_GROUNDING_WIRING_ENABLED` (defaults to ON; emergency off switch).
 - **Cost guardrail:** Trigger logic enforced at `research_grounding.build_research_request` keeps the tier ≥ 2 gate strict.
+- **Fix-up (2026-05-17):** the original deterministic URL synthesizer treated Twitter `@`-handles from tweet text as feature names — for `@OniricSunset` it emitted `docs.anthropic.com/en/docs/oniricsunset`, which docs.anthropic.com (a Next.js SPA) served as a 200 shell. The fetcher persisted ~96 KiB of CSS/JS link markup as a "Grounded source" and the vault ingester linked it from the canonical index. Fixed in two layers:
+    1. `services/research_grounding.extract_candidate_terms` now pre-strips `@<handle>`, `#<tag>`, and bare URL tokens before regex matching, and accepts an `excluded_handles` set populated from `ClaudeCodeIntelConfig.all_handles_from_env()` + the packet's polled handle so previously-known handles are filtered even when they appear bare.
+    2. `services/research_grounding._is_spa_404_shell` post-validates fetched grounding bodies and drops anything that matches the docs.anthropic.com SPA shell signature (markers + content-char floor). On detection the artifact file is also unlinked so the vault writer can't pick it up.
+- **Vault cleanup script (2026-05-17):** `src/universal_agent/scripts/csi_vault_cleanup_grounding_hallucinations.py` walks both the vault sources tree and per-packet research_grounding directories and moves SPA-shell pages under sibling `quarantine/` dirs with a `*.reason.txt` describing why. Run once on the VPS after deploy: `uv run python -m universal_agent.scripts.csi_vault_cleanup_grounding_hallucinations --dry-run` to inspect, then drop `--dry-run` to apply.
 
 ### Phase B — Demo orchestration (the Simone↔Cody loop) ✅ COMPLETE
 

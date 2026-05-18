@@ -279,3 +279,142 @@ def test_skipped_research_source_round_trip():
     record = src.to_enrichment_record()
     assert record.fetch_status == "skipped"
     assert "HTTP 404" in record.skip_reason
+
+
+# ── @-mention / hashtag filtering (regression for 2026-05-17 hallucination) ──
+
+
+def test_extract_candidate_terms_strips_at_mentions():
+    """@OniricSunset in a tweet must never produce a candidate term.
+
+    Before the fix the CamelCase regex consumed handles like
+    ``OniricSunset`` because ``\\b`` doesn't include ``@``, and downstream
+    URL synthesis emitted ``docs.anthropic.com/en/docs/oniricsunset``.
+    """
+    text = "@OniricSunset @ClaudeDevs Fix going out tomorrow."
+    terms = extract_candidate_terms(text)
+    lowered = {t.lower() for t in terms}
+    assert "oniricsunset" not in lowered
+    assert "claudedevs" not in lowered
+
+
+def test_extract_candidate_terms_strips_hashtags():
+    text = "#ClaudeCode is shipping #AgentSDK with #ToolStreaming"
+    terms = extract_candidate_terms(text)
+    lowered = {t.lower() for t in terms}
+    assert "claudecode" not in lowered
+    assert "agentsdk" not in lowered
+    assert "toolstreaming" not in lowered
+
+
+def test_extract_candidate_terms_strips_urls():
+    text = "Read the docs at https://example.com/SomeBigPath for details"
+    terms = extract_candidate_terms(text)
+    # The path slug must never become a research term.
+    assert "SomeBigPath" not in terms
+
+
+def test_extract_candidate_terms_respects_excluded_handles():
+    """Bare CamelCase matching a polled handle must be excluded."""
+    text = "Bcherny shipped a new release with NewCoolFeature"
+    terms = extract_candidate_terms(text, excluded_handles={"bcherny"})
+    lowered = {t.lower() for t in terms}
+    assert "bcherny" not in lowered
+    # Legit features still pass through.
+    assert any(t == "NewCoolFeature" for t in terms)
+
+
+def test_extract_candidate_terms_keeps_legitimate_camelcase():
+    """Real product terms must still be extracted after handle stripping."""
+    text = "@bcherny We shipped MemoryTool and FileExplorer for the Sonnet release"
+    terms = extract_candidate_terms(text)
+    assert "MemoryTool" in terms
+    assert "FileExplorer" in terms
+    assert "bcherny" not in {t.lower() for t in terms}
+
+
+def test_build_research_request_excludes_handles_from_synthesis(monkeypatch):
+    """The handle-stripping must flow through build_research_request."""
+    request = build_research_request(
+        post={
+            "id": "p1",
+            "tier": 4,
+            "links": [],
+            "text": "@OniricSunset @ClaudeDevs Fix going out tomorrow.",
+        },
+        classifier_result=None,
+        existing_entity_names=set(),
+        excluded_handles={"bcherny", "claudedevs"},
+    )
+    assert request is not None
+    lowered = {t.lower() for t in request.terms}
+    assert "oniricsunset" not in lowered
+    assert "claudedevs" not in lowered
+
+
+# ── SPA-404 shell detection ──────────────────────────────────────────────────
+
+
+def _make_spa_shell_file(tmp_path: Path, name: str = "shell.md") -> Path:
+    body = (
+        "# Source: https://docs.anthropic.com/en/docs/missing\n"
+        "<!DOCTYPE html><html class='h-screen' data-theme=\"claude\" data-mode='auto'>"
+        "<head><link rel='stylesheet' href='/_next/static/css/foo.css'/>"
+        "</head><body></body></html>\n"
+    )
+    path = tmp_path / name
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def test_is_spa_404_shell_detects_docs_anthropic_shell(tmp_path):
+    path = _make_spa_shell_file(tmp_path)
+    assert rg._is_spa_404_shell(content_path=str(path), content_chars=path.stat().st_size)
+
+
+def test_is_spa_404_shell_accepts_long_real_docs(tmp_path):
+    real_doc = tmp_path / "real.md"
+    real_doc.write_text(
+        "# Claude Code Release Notes\n\n"
+        + "This is a substantial release note describing concrete changes. "
+        * 200,
+        encoding="utf-8",
+    )
+    assert not rg._is_spa_404_shell(
+        content_path=str(real_doc), content_chars=real_doc.stat().st_size
+    )
+
+
+def test_is_spa_404_shell_handles_missing_file(tmp_path):
+    assert not rg._is_spa_404_shell(content_path="", content_chars=1000)
+    assert not rg._is_spa_404_shell(content_path=str(tmp_path / "nope.md"), content_chars=1000)
+
+
+def test_execute_research_drops_spa_shell_sources(tmp_path, monkeypatch):
+    """When fetch returns a SPA shell, the source must be marked skipped."""
+    request = ResearchRequest(
+        post_id="p1",
+        tier=4,
+        terms=("CoolFeature",),
+        reasons=(TriggerReason.UNKNOWN_TERM,),
+    )
+
+    written_files: list[Path] = []
+
+    def fake_fetch_url_content(url, category, output_dir, *, timeout=15):  # noqa: ARG001
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path = _make_spa_shell_file(output_dir, name=f"shell_{len(written_files)}.md")
+        written_files.append(path)
+        return {"ok": True, "path": str(path), "chars": path.stat().st_size}
+
+    monkeypatch.setattr(rg, "fetch_url_content", fake_fetch_url_content)
+
+    out = execute_research(request, output_dir=tmp_path, max_sources=2)
+    for source in out.sources:
+        assert source.fetched is False
+        assert source.skip_reason == "spa_404_shell"
+    # The shell artifacts must be cleaned off disk so the vault writer can't
+    # pick them up later.
+    for path in written_files:
+        assert not path.exists()
