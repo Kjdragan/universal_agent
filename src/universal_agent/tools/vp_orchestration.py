@@ -270,7 +270,9 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
         linked_task: dict[str, Any] | None = None
         th_conn = None
         try:
-            from universal_agent import task_hub  # noqa: F401 (used implicitly via resolve_cody_mode)
+            from universal_agent import (
+                task_hub,  # noqa: F401 (used implicitly via resolve_cody_mode)
+            )
             from universal_agent.durable.db import (
                 connect_runtime_db,
                 get_activity_db_path,

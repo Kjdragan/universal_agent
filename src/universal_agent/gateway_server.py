@@ -21852,7 +21852,9 @@ def _record_simone_chat_operator_message(session_id: str, text: str, source_page
     if not (session_id or "").strip() or not (text or "").strip():
         return
     try:
-        from universal_agent.services import simone_chat_tasks  # local import to avoid cycles
+        from universal_agent.services import (
+            simone_chat_tasks,  # local import to avoid cycles
+        )
         with _activity_store_lock:
             conn = _task_hub_open_conn()
             try:
@@ -24110,7 +24112,9 @@ async def dashboard_simone_chat_complete(task_id: str):
         raise HTTPException(status_code=400, detail="task_id is required")
     if not tid.startswith("simone_chat:"):
         raise HTTPException(status_code=400, detail="not a simone_chat task")
-    from universal_agent.services import simone_chat_tasks  # local import to avoid cycles
+    from universal_agent.services import (
+        simone_chat_tasks,  # local import to avoid cycles
+    )
     with _activity_store_lock:
         conn = _task_hub_open_conn()
         try:
