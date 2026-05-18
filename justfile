@@ -131,12 +131,36 @@ lint-pr-scope:
 format:
     uv run --frozen ruff format .
 
-# Pre-ship: lint (changed-file scope) + unit tests + architecture canvas
-# pointer verify. These are the gates pr-validate.yml runs in CI; the
-# whole-repo `lint` recipe deliberately is NOT chained here because it
-# includes pre-existing rot the CI gate carves out.
-preship: lint-pr-scope test canvas-verify
-    @echo "✅ pr-scope lint + unit tests + canvas pointers green. Safe to /ship."
+# Resolve dependencies against `uv.lock` so the worktree's `.venv`
+# matches what CI provisions. Required as the first preship step
+# because a stale local `.venv` (e.g. carried over from another branch
+# or an older Python pin) makes pytest fail in ways CI doesn't
+# reproduce. Mirrors pr-validate.yml's "Install project dependencies".
+sync:
+    uv sync --frozen 2>&1 | tail -5
+
+# Run unit tests in a CI-equivalent environment. Specifically, this
+# strips `UA_RUNTIME_STAGE` (which is set to `development` in operator
+# shells via .env and flips production-default feature gates OFF for
+# local dev — `should_run_loop("dispatch_stale_sweep", prod_default=True)`
+# is the obvious case). CI never sets UA_RUNTIME_STAGE, so unit tests
+# that rely on the production-default behavior pass there but fail
+# locally in ways that look like "flaky tests" but are really a
+# `.env`-vs-CI mismatch. Use this recipe whenever you want pytest to
+# reproduce what pr-validate.yml will see.
+test-ci-env:
+    env -u UA_RUNTIME_STAGE -u UA_DEV_HEARTBEAT_FORCE_ON -u UA_DEV_DISPATCH_FORCE_ON -u UA_DEV_AGENTMAIL_FORCE_ON \
+        PYTHONPATH=src uv run --frozen pytest tests/unit -x -q
+
+# Pre-ship: venv sync + lint (changed-file scope) + unit tests in
+# CI-equivalent env + architecture canvas pointer verify. These are the
+# gates pr-validate.yml runs in CI; the whole-repo `lint` recipe and the
+# regular `test` recipe are deliberately NOT chained here — the first
+# includes pre-existing rot the CI gate carves out, the second inherits
+# the operator's UA_RUNTIME_STAGE=development which flips production-
+# default feature gates OFF and makes tests that pass in CI fail locally.
+preship: sync lint-pr-scope test-ci-env canvas-verify
+    @echo "✅ venv synced + pr-scope lint + ci-env unit tests + canvas pointers green. Safe to /ship."
 
 # ---------------------------------------------------------------------------
 # Architecture Canvas
