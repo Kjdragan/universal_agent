@@ -217,6 +217,13 @@ def test_replay_fetches_linked_sources_and_writes_metadata(monkeypatch, tmp_path
 
 
 def test_replay_skips_tco_redirects_into_browser_gated_x_pages(monkeypatch, tmp_path: Path) -> None:
+    # Research grounding (PR 16) fires for tier-2 actions whose linked sources
+    # are thin — it would fetch additional grounded sources here and ingest
+    # them as `linked_source_*` pages, defeating the assertion below. The
+    # grounding behavior is exercised in `test_csi_research_grounding_wiring`;
+    # this test focuses on the t.co → x.com skip path, so isolate it.
+    monkeypatch.setenv("UA_CSI_RESEARCH_GROUNDING_WIRING_ENABLED", "0")
+
     calls: list[tuple[str, str]] = []
 
     def fake_ingest(*, vault_slug: str, source_title: str, source_content: str, source_id: str | None = None, root_override: str | None = None):
