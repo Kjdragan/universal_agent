@@ -526,17 +526,32 @@ def _safe_filename(url: str, category: str) -> str:
     return f"{name}.md"
 
 
+_DEFUDDLE_CLI_ARGV = ("npx", "-y", "defuddle-cli@latest", "parse", "--markdown")
+"""Canonical defuddle-cli invocation.
+
+The CLI requires a ``parse`` subcommand (URL as positional source) and a
+``--markdown`` flag. Without the subcommand the CLI silently fails with
+``error: unknown command``, which the legacy invocation triggered for every
+URL — every fetch fell through to the raw-HTML httpx fallback. See PR #332
+and the regression test in ``tests/unit/test_research_grounding.py``.
+"""
+
+
 def _fetch_with_defuddle(url: str, output_path: Path, timeout: int) -> dict[str, Any]:
     """Try to fetch and convert to markdown using defuddle CLI."""
     try:
         result = sp.run(
-            ["npx", "-y", "defuddle-cli@latest", url],
+            [*_DEFUDDLE_CLI_ARGV, url],
             capture_output=True,
             text=True,
             timeout=timeout + 10,
             env={**os.environ, "NODE_NO_WARNINGS": "1"},
         )
         if result.returncode == 0 and result.stdout.strip():
+            # ``parse --markdown`` emits markdown directly, but defuddle has
+            # historically also exposed a ``--json`` mode whose payload wraps
+            # the content. Keep the JSON-decode try block as defensive
+            # parsing in case the CLI ever flips its default.
             try:
                 data = json.loads(result.stdout)
                 content = data.get("content") or data.get("markdown") or result.stdout
