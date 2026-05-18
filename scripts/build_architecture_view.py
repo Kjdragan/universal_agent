@@ -148,20 +148,30 @@ def verify_pointers(exhibits: list[dict]) -> tuple[dict[str, PointerStatus], int
     statuses: dict[str, PointerStatus] = {}
     stale = 0
     missing = 0
+
+    def _record(src: str) -> None:
+        nonlocal stale, missing
+        if src in statuses:
+            return
+        s = check_pointer(src)
+        statuses[src] = s
+        if not s.exists:
+            missing += 1
+        elif s.badge in ("red", "amber"):
+            stale += 1
+
     for ex in exhibits:
-        nodes = ex.get("nodes", []) + ex.get("bands", [])
-        for n in nodes:
+        # Top-level exhibit source: (E2/E3/E5/E6/E7 style)
+        for src in ex.get("source", []) or []:
+            _record(src)
+        # Per-node sources (E1 style)
+        for n in ex.get("nodes", []) or []:
             for src in n.get("source", []) or []:
-                if src in statuses:
-                    continue
-                s = check_pointer(src)
-                statuses[src] = s
-                if not s.exists:
-                    missing += 1
-                elif s.badge == "red":
-                    stale += 1
-                elif s.badge == "amber":
-                    stale += 1
+                _record(src)
+        # Per-band sources (E4 style)
+        for b in ex.get("bands", []) or []:
+            for src in b.get("source", []) or []:
+                _record(src)
     return statuses, stale, missing
 
 
@@ -401,6 +411,101 @@ def render_glossary_legend(exhibit: dict, build: BuildResult) -> str:
 """
 
 
+def _render_exhibit_pointers(exhibit: dict, statuses: dict[str, PointerStatus]) -> str:
+    """Inline pointer block used by mermaid_panel / html_grid / html_list exhibits."""
+    sources = exhibit.get("source", []) or []
+    if not sources:
+        return ""
+    items = "".join(
+        f'<li><code>{html.escape(p)}</code> {badge_html(statuses[p])}</li>'
+        for p in sources
+    )
+    doc = exhibit.get("canonical_doc", "")
+    doc_link = (
+        f'<a class="canonical-link" href="../../{doc}" target="_blank">{html.escape(doc)}</a>'
+        if doc else ""
+    )
+    return f"""
+    <details class="exhibit-pointers">
+      <summary>Source pointers · canonical doc</summary>
+      <ul class="pointers">{items}</ul>
+      {doc_link}
+    </details>
+    """
+
+
+def render_mermaid_panel(exhibit: dict, statuses: dict[str, PointerStatus]) -> str:
+    mermaid_src = (exhibit.get("mermaid") or "").strip()
+    area = exhibit.get("grid_area", "")
+    return f"""
+<section class="exhibit mermaid-panel area-{area}" id="exhibit-{exhibit['id']}">
+  <header class="ex-header">
+    <h2>{html.escape(exhibit['title'])}</h2>
+    <p class="ex-desc">{html.escape(exhibit['description'].strip())}</p>
+  </header>
+  <div class="mermaid-frame">
+    <div class="mermaid">{html.escape(mermaid_src)}</div>
+  </div>
+  {_render_exhibit_pointers(exhibit, statuses)}
+</section>
+"""
+
+
+def render_html_grid(exhibit: dict, statuses: dict[str, PointerStatus]) -> str:
+    items = exhibit.get("inputs", [])
+    cards = "".join(
+        f"""
+        <article class="input-card" style="--accent:{i.get('color','#7fb8d4')}">
+          <header>
+            <h4>{html.escape(i['label'])}</h4>
+            <span class="kind">{html.escape(i.get('kind',''))}</span>
+          </header>
+          <p class="trigger"><b>Trigger:</b> {html.escape(i.get('trigger',''))}</p>
+          <p class="handler"><b>Handler:</b> <code>{html.escape(i.get('handler',''))}</code></p>
+          <p class="transform">{html.escape(i.get('transform',''))}</p>
+        </article>
+        """
+        for i in items
+    )
+    area = exhibit.get("grid_area", "")
+    return f"""
+<section class="exhibit input-grid area-{area}" id="exhibit-{exhibit['id']}">
+  <header class="ex-header">
+    <h2>{html.escape(exhibit['title'])}</h2>
+    <p class="ex-desc">{html.escape(exhibit['description'].strip())}</p>
+  </header>
+  <div class="inputs-grid-inner">{cards}</div>
+  {_render_exhibit_pointers(exhibit, statuses)}
+</section>
+"""
+
+
+def render_html_list(exhibit: dict, statuses: dict[str, PointerStatus]) -> str:
+    surfaces = exhibit.get("surfaces", [])
+    rows = "".join(
+        f"""
+        <li class="surface-row {'self-row' if s.get('self') else ''}">
+          <span class="surface-name">{html.escape(s['name'])}</span>
+          <code class="surface-route">{html.escape(s.get('route',''))}</code>
+          <span class="surface-purpose">{html.escape(s.get('purpose',''))}</span>
+          {'<span class="hq-pill">HQ</span>' if s.get('hq') else ''}
+        </li>
+        """
+        for s in surfaces
+    )
+    area = exhibit.get("grid_area", "")
+    return f"""
+<section class="exhibit surface-list area-{area}" id="exhibit-{exhibit['id']}">
+  <header class="ex-header">
+    <h2>{html.escape(exhibit['title'])}</h2>
+    <p class="ex-desc">{html.escape(exhibit['description'].strip())}</p>
+  </header>
+  <ul class="surfaces">{rows}</ul>
+  {_render_exhibit_pointers(exhibit, statuses)}
+</section>
+"""
+
+
 def render_drilldown_templates(drilldowns: dict[str, str]) -> str:
     parts = []
     for stem, content in drilldowns.items():
@@ -475,85 +580,189 @@ body {
 
 .canvas {
   display: grid;
-  grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
-  grid-template-rows: auto auto;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: auto;
   gap: 18px;
   padding: 18px;
-  max-width: 1900px;
+  max-width: 2000px;
   margin: 0 auto;
 }
-.canvas .hero {
-  grid-column: 1 / -1;
-  grid-row: 1;
-}
-.canvas .envs {
-  grid-column: 2;
-  grid-row: 2;
-}
-.canvas .footer-rail {
-  grid-column: 1 / -1;
-  grid-row: 3;
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
-  gap: 18px;
-}
-/* When there are only 3 exhibits in v1, hero spans top row, envs sits right of mid, glossary spans bottom */
-.canvas .placeholder {
-  grid-column: 1;
-  grid-row: 2;
-  align-self: stretch;
-  display: flex;
-  flex-direction: column;
-}
-.roadmap-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin-top: 4px;
-  flex: 1;
-  align-content: start;
-}
-.roadmap-card {
-  border: 1px dashed var(--rule);
+.canvas .hero       { grid-column: 1 / -1; }
+.canvas .footer-rail { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 18px; }
+.canvas .area-mid_left    { grid-column: 1; }
+.canvas .area-mid_center  { grid-column: 2; }
+.canvas .area-mid_right   { grid-column: 3; }
+.canvas .area-lower_left  { grid-column: 1; }
+.canvas .area-lower_center { grid-column: 2; }
+.canvas .area-lower_right { grid-column: 3; }
+
+/* Each exhibit cell uses full available height for tidy alignment */
+.canvas .exhibit { align-self: stretch; }
+
+/* ----- Mermaid panel (E2 / E3 / E7) ----- */
+.mermaid-panel .mermaid-frame {
+  background: var(--bg);
+  border: 1px solid var(--rule);
   border-radius: 8px;
-  padding: 10px 12px 12px;
-  background: linear-gradient(180deg, #fdfbf5 0%, #f7f3e8 100%);
-  position: relative;
+  padding: 10px;
+  overflow: auto;
+  max-height: 520px;
+}
+.mermaid-panel .mermaid {
+  text-align: center;
+}
+.mermaid-panel .mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* ----- Inputs grid (E5) ----- */
+.input-grid .inputs-grid-inner {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  margin-top: 4px;
+}
+.input-card {
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  padding: 9px 11px;
+  background: linear-gradient(180deg, #fdfbf5 0%, #f9f5ea 100%);
+  font-size: 12px;
+}
+.input-card { border-left-color: var(--accent); }
+.input-card { border-left: 3px solid var(--accent); }
+.input-card[style*="--accent"] { border-left-color: var(--accent); }
+.input-card header {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  gap: 6px;
 }
-.roadmap-card.phase-2 { border-left: 3px solid var(--cool); }
-.roadmap-card.phase-3 { border-left: 3px solid var(--warm); }
-.roadmap-card.phase-4 { border-left: 3px solid var(--coral); }
-.roadmap-card .phase-tag {
-  font-size: 9.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--muted);
-  font-weight: 600;
-}
-.roadmap-card h4 {
+.input-card h4 {
   margin: 0;
   font-size: 13px;
   font-weight: 600;
-  letter-spacing: -0.005em;
 }
-.roadmap-card p {
+.input-card .kind {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  font-family: ui-monospace, monospace;
+}
+.input-card p {
+  margin: 2px 0;
+  font-size: 11.5px;
+  color: var(--ink);
+}
+.input-card code {
+  font-size: 11px;
+  background: rgba(0,0,0,0.04);
+  padding: 0 4px;
+  border-radius: 3px;
+}
+.input-card .transform { color: var(--muted); margin-top: 4px; font-style: italic; }
+.input-card[style*="--accent"] { border-left: 3px solid var(--accent); }
+.input-card { border-left: 3px solid var(--accent, #5b6bd4); }
+
+/* ----- Surfaces list (E6) ----- */
+.surface-list .surfaces {
+  list-style: none;
   margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 520px;
+  overflow-y: auto;
+}
+.surface-row {
+  display: grid;
+  grid-template-columns: 160px 1fr auto;
+  gap: 10px;
+  align-items: baseline;
+  padding: 6px 8px;
+  border-bottom: 1px dashed rgba(0,0,0,0.05);
+  font-size: 12px;
+}
+.surface-row .surface-name {
+  font-weight: 600;
+  color: var(--ink);
+  font-size: 12.5px;
+}
+.surface-row .surface-route {
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--accent);
+  grid-column: 1 / 2;
+}
+.surface-row {
+  grid-template-columns: minmax(160px, max-content) 1fr auto;
+}
+.surface-row .surface-purpose {
   font-size: 11.5px;
   color: var(--muted);
-  line-height: 1.4;
+  grid-column: 2 / 3;
 }
-.roadmap-card .renderer {
-  margin-top: auto;
-  align-self: flex-start;
-  font-size: 10px;
-  font-family: ui-monospace, monospace;
+.surface-row .hq-pill {
+  background: var(--warm);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 6px;
+  letter-spacing: 0.04em;
+  align-self: center;
+}
+.surface-row.self-row { background: linear-gradient(90deg, rgba(91,107,212,0.06) 0%, transparent 100%); }
+.surface-row.self-row .surface-name::after { content: " ★"; color: var(--accent); }
+
+/* Common: exhibit-level pointers details */
+.exhibit-pointers {
+  margin-top: 10px;
+  border-top: 1px dashed var(--rule);
+  padding-top: 8px;
+  font-size: 12px;
+}
+.exhibit-pointers > summary {
+  cursor: pointer;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
   color: var(--muted);
-  background: rgba(0,0,0,0.04);
-  padding: 1px 6px;
-  border-radius: 4px;
+}
+.exhibit-pointers .pointers {
+  list-style: none;
+  margin: 6px 0 4px;
+  padding: 0;
+  font-family: ui-monospace, monospace;
+  font-size: 11.5px;
+}
+.exhibit-pointers .pointers li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+.exhibit-pointers .canonical-link {
+  display: inline-block;
+  margin-top: 4px;
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 11.5px;
+}
+.exhibit-pointers .canonical-link:hover { text-decoration: underline; }
+
+.missing-exhibit {
+  background: rgba(196, 78, 78, 0.05);
+  border: 1px dashed var(--red);
+  border-radius: 10px;
+  padding: 18px;
+  font-family: ui-monospace, monospace;
+  color: var(--red);
 }
 
 .exhibit {
@@ -1013,6 +1222,15 @@ document.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
   if (window.mermaid) {
     mermaid.initialize({ startOnLoad: false, theme: 'neutral', securityLevel: 'loose' });
+    // Render every page-level Mermaid panel (E2/E3/E7). Drawer-internal
+    // diagrams live inside #drawer-mermaid and are rendered lazily when the
+    // drawer opens (see openDrawer above) — exclude them here to avoid
+    // double-processing.
+    try {
+      mermaid.run({ querySelector: '.mermaid-panel .mermaid' });
+    } catch (e) {
+      console.error('mermaid.run failed for page-level diagrams', e);
+    }
   }
 });
 """
@@ -1020,11 +1238,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
 def render_html(exhibits: list[dict], drilldowns: dict[str, str], build: BuildResult, rough_js: str, mermaid_js: str) -> str:
     by_id = {e["id"]: e for e in exhibits}
-    hero_html = render_hero(by_id["e01_flow_spine"], build.pointer_statuses) if "e01_flow_spine" in by_id else "<div class='exhibit'>missing e01_flow_spine</div>"
-    envs_html = render_claude_envs(by_id["e04_claude_envs"], build.pointer_statuses) if "e04_claude_envs" in by_id else "<div class='exhibit'>missing e04_claude_envs</div>"
+
+    def _section(eid: str, render_fn) -> str:
+        if eid not in by_id:
+            return f"<div class='exhibit missing-exhibit'>missing {eid}</div>"
+        return render_fn(by_id[eid], build.pointer_statuses)
+
+    hero_html = _section("e01_flow_spine", render_hero)
+    intel_html = _section("e02_intelligence", render_mermaid_panel)
+    knowledge_html = _section("e03_knowledge", render_mermaid_panel)
+    envs_html = _section("e04_claude_envs", render_claude_envs)
+    inputs_html = _section("e05_inputs", render_html_grid)
+    surfaces_html = _section("e06_surfaces", render_html_list)
+    ops_html = _section("e07_ops", render_mermaid_panel)
     glossary_html = render_glossary_legend(by_id["e08_glossary_legend"], build) if "e08_glossary_legend" in by_id else "<div class='exhibit'>missing e08_glossary_legend</div>"
 
-    placeholder_html = """
+    _unused_legacy_placeholder = """
 <section class="exhibit placeholder">
   <header class="ex-header">
     <h2>Roadmap — Phases 2 & 3</h2>
@@ -1090,7 +1319,7 @@ See <code>docs/02_Subsystems/Architecture_Canvas_View.md</code> §4 for the phas
 <body>
 <header class="page-header">
   <h1>Universal Agent — Architecture Canvas</h1>
-  <span class="subtitle">v1 · Hero + Claude Envs + Glossary</span>
+  <span class="subtitle">Phase 1+2+3 · Flow-Spine · Intelligence · Knowledge · Envs · Inputs · Surfaces · Ops · Glossary</span>
   <span class="build-pill">
     {html.escape(build.generated_at)} · {html.escape(build.git_sha[:8] if build.git_sha else 'no-sha')}
     <span class="stale {stale_class}">stale: {build.stale_count} · missing: {build.missing_count}</span>
@@ -1099,8 +1328,12 @@ See <code>docs/02_Subsystems/Architecture_Canvas_View.md</code> §4 for the phas
 
 <main class="canvas">
   {hero_html}
-  {placeholder_html}
+  {intel_html}
+  {knowledge_html}
   {envs_html}
+  {inputs_html}
+  {surfaces_html}
+  {ops_html}
   {glossary_html}
 </main>
 

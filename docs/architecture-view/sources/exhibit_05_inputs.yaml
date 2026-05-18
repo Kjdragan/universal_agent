@@ -1,0 +1,95 @@
+id: e05_inputs
+title: "Inputs Catalog"
+renderer: html_grid
+grid_area: "lower_left"
+description: |
+  Every channel that produces work for the system. Each badge identifies the
+  trigger, the file that handles ingress, and the typical transformation
+  into a Task Hub row.
+
+source:
+  - src/universal_agent/agentmail_official.py
+  - src/universal_agent/heartbeat_service.py
+  - src/universal_agent/hooks_service.py
+  - src/universal_agent/gateway_server.py
+  - src/universal_agent/services/proactive_advisor.py
+
+canonical_doc: docs/01_Architecture/000_PIPELINE_MASTERPIECE.md
+
+inputs:
+  - label: "Email"
+    kind: "external · sync"
+    color: "#7fb8d4"
+    trigger: "AgentMail WebSocket inbound"
+    handler: "agentmail_official.py + email_task_bridge.py"
+    transform: "Thread mapping dedups; creates or updates a Task Hub row"
+
+  - label: "Discord"
+    kind: "external · webhook"
+    color: "#7d6ec4"
+    trigger: "Discord webhook from monitored servers"
+    handler: "hooks_service.py + Discord intel pipeline"
+    transform: "Signal-detection → relevance filter → Task Hub (or store-but-hide)"
+
+  - label: "Telegram"
+    kind: "external · bot"
+    color: "#7fb8d4"
+    trigger: "Telegram Bot polling"
+    handler: "mcp_server_telegram.py + telegram bridge"
+    transform: "Message → Task Hub or Simone sidebar"
+
+  - label: "Calendar"
+    kind: "external · webhook"
+    color: "#d4a44e"
+    trigger: "Google Calendar event hook"
+    handler: "hooks_service.py + calendar_task_bridge.py"
+    transform: "Scheduled task with due_at = event start"
+
+  - label: "YouTube"
+    kind: "external · webhook"
+    color: "#c47d6e"
+    trigger: "YouTube ingest webhook"
+    handler: "hooks_service.py + tutorial-creation skill"
+    transform: "Concept doc + optional runnable demo task"
+
+  - label: "Dashboard"
+    kind: "operator · sync"
+    color: "#3fae6a"
+    trigger: "Mission Control / Task Hub UI"
+    handler: "gateway_server.py dispatch_immediate / dispatch_on_approval"
+    transform: "Forces immediate claim; skips queue wait"
+
+  - label: "Heartbeat"
+    kind: "internal · timer"
+    color: "#7fb8d4"
+    trigger: "Event-loop sweep every ~30 min"
+    handler: "heartbeat_service.py + process_heartbeat.py"
+    transform: "Pulls eligible Task Hub rows; routes to Simone"
+
+  - label: "Cron"
+    kind: "internal · schedule"
+    color: "#d4a44e"
+    trigger: "Persisted cron jobs"
+    handler: "cron_service.py + gateway_server._register_system_cron_job"
+    transform: "Fires scheduled work (CSI poll, vault lint, briefings)"
+
+  - label: "Proactive Advisor"
+    kind: "internal · injection"
+    color: "#3fae6a"
+    trigger: "Morning report build during heartbeat"
+    handler: "services/proactive_advisor.py"
+    transform: "Injects stale/expiring context into Simone's heartbeat prompt"
+
+  - label: "Reflection Engine"
+    kind: "internal · autonomous"
+    color: "#7d6ec4"
+    trigger: "Queue empty between 22:00–07:00 local"
+    handler: "services/reflection_engine.py"
+    transform: "Seeds proactive next-step tasks from completion history"
+
+  - label: "Webhook (generic)"
+    kind: "external · webhook"
+    color: "#c47d6e"
+    trigger: "Arbitrary integration endpoints"
+    handler: "hooks_service.py custom routes"
+    transform: "Normalises payload → Task Hub row with deduplication"

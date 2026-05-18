@@ -1,0 +1,47 @@
+id: e07_ops
+title: "Ops / Ship Pipeline"
+renderer: mermaid_panel
+grid_area: "lower_right"
+description: |
+  How code reaches production. Every branch → PR → main → deploy. The PR
+  Auto-Merge action enables squash-merge automatically EXCEPT for branches
+  matching codie/*, kevin/*, feature/* — those require manual review.
+  Docs-only commits skip the deploy via paths-ignore.
+
+source:
+  - .github/workflows/pr-validate.yml
+  - .github/workflows/pr-auto-merge.yml
+  - .github/workflows/deploy.yml
+  - scripts/install_vps_systemd_units.sh
+
+canonical_doc: docs/deployment/ci_cd_pipeline.md
+
+mermaid: |
+  flowchart TB
+      classDef local fill:#e0efd9,stroke:#3fae6a,color:#1a4a2a
+      classDef ci fill:#fef3d5,stroke:#d4a44e,color:#5a3e0a
+      classDef gate fill:#fbe8d9,stroke:#c47d6e,color:#5a1f10
+      classDef deploy fill:#ecd9f4,stroke:#7d6ec4,color:#2a1040
+
+      BR[Feature branch<br/>claude/* · worktree-* · kevin/*<br/>codie/* · feature/*]:::local
+      PR[gh pr create --base main<br/>or /ship slash-command]:::local
+      BR --> PR
+
+      PR --> VAL[pr-validate.yml<br/>py_compile · ruff · pytest tests/unit<br/>.bak / .swp / .orig tripwire]:::ci
+
+      VAL -- pass --> AUTO{pr-auto-merge.yml<br/>branch in exclusion list?}:::gate
+      VAL -- fail --> FIX[Fix and push again<br/>ci-failure-issue.yml files issue]:::ci
+      FIX --> VAL
+
+      AUTO -- codie/* · kevin/* · feature/* --> MANUAL[Manual review required<br/>operator merges by hand]:::gate
+      AUTO -- everything else --> ARMED[Auto-merge SQUASH armed<br/>uses AUTO_MERGE_PAT]:::gate
+
+      ARMED -- CI green --> SQUASH[GitHub squash-merge to main]
+      MANUAL --> SQUASH
+
+      SQUASH --> CHANGED{Changed files<br/>only docs/*.md/state/?}
+      CHANGED -- yes --> NODEP[deploy.yml skipped<br/>paths-ignore]:::deploy
+      CHANGED -- no --> DEPLOY[deploy.yml fires<br/>Tailscale OAuth → SSH VPS]:::deploy
+
+      DEPLOY --> RESTART[systemd restart<br/>gateway · api · web-ui<br/>VP workers · bots]:::deploy
+      RESTART --> LIVE[Production live<br/>/api/v1/version SHA check]:::deploy

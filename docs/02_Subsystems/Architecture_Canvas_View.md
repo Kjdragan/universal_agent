@@ -82,29 +82,32 @@ The Architecture Canvas is that picture. It is **not** a dashboard (no live data
 - [x] This plan doc
 - [x] Playwright screenshot verification
 
-### Phase 2 — Intelligence + Knowledge (E2, E3)
+### Phase 2 — Intelligence + Knowledge (E2, E3) — **SHIPPED 2026-05-18**
 
-**Trigger:** v1 shipped, dashboard link wired, operator has used it ≥3× without confusion.
+**Scope:** CSI pipeline drill-down (Phase 0–5 of CSI v2) and Knowledge plane (Wiki + Memory + Vault relationships). Both rendered inline as Mermaid panels.
 
-**Scope:** Add CSI pipeline drill-down (Phase 0–5 of CSI v2) and Knowledge plane (Wiki + Memory + Vault relationships). Both are Mermaid (high-churn — CSI changes most weeks).
+**Deliverables:**
+- [x] `docs/architecture-view/sources/exhibit_02_intelligence.yaml` — CSI v2 flow (polling → enrichment → min-signal gate → Memex → demo workspace → ledger)
+- [x] `docs/architecture-view/sources/exhibit_03_knowledge.yaml` — External vault + internal memory + auto-flush + vector index + query interface
 
-**Estimated effort:** ~2h author + verify.
+### Phase 3 — Inputs + Surfaces + Ops (E5, E6, E7) — **SHIPPED 2026-05-18**
 
-### Phase 3 — Inputs + Surfaces + Ops (E5, E6, E7)
+**Scope:** What feeds the system, what surfaces consume the system, how the system ships.
 
-**Trigger:** Phase 2 verified.
+**Deliverables:**
+- [x] `docs/architecture-view/sources/exhibit_05_inputs.yaml` — 11 input channels (email/discord/telegram/calendar/youtube/dashboard/heartbeat/cron/proactive/reflection/webhook), new `html_grid` renderer
+- [x] `docs/architecture-view/sources/exhibit_06_surfaces.yaml` — 16 dashboard surfaces with route + purpose + HQ flag, new `html_list` renderer (includes the Architecture Canvas as a self-referential row marked ★)
+- [x] `docs/architecture-view/sources/exhibit_07_ops.yaml` — Branch → PR → pr-validate → pr-auto-merge → squash → deploy.yml → systemd restart, with the codie/kevin/feature auto-merge exclusion list
 
-**Scope:** The "what feeds the system" + "what surfaces consume the system" + "how the system ships" rail. Mostly HTML panels + one Mermaid for the deploy pipeline.
-
-**Estimated effort:** ~3h author + verify (E7 deploy pipeline requires reading `.github/workflows/` and rendering the auto-merge / pr-validate / deploy.yml graph).
+**Renderer extensions:** new `mermaid_panel`, `html_grid`, `html_list` renderers in `scripts/build_architecture_view.py`. Layout migrated to 3-column grid for mid + lower rows.
 
 ### Phase 4 — Wiring (operational integration)
 
-**Scope:**
-- Add a "Architecture" link in the Mission Control dashboard pointing to `/architecture-map.html`.
-- Add a "Architecture" link in the Task Hub dashboard.
-- Register a weekly cron via `gateway_server._register_system_cron_job` to re-run the build script and report any new stale pointers via the existing notification dispatcher.
-- Pre-commit hook entry in `.pre-commit-config.yaml` (or `Makefile` if pre-commit isn't yet wired): runs the build script when files under `docs/architecture-view/` change.
+**Status:**
+- [x] **Dashboard sidebar link** — `web-ui/components/dashboard/GlobalSidebar.tsx` exposes "Architecture Map" in the Operations group (shipped in PR #342, 2026-05-18).
+- [x] **`just canvas` / `just canvas-verify` recipes** — added to `justfile`. Run `just canvas` to rebuild; `just canvas-verify` checks pointers without re-rendering.
+- [ ] **Pre-commit hook (deferred).** Repo currently has no `.pre-commit-config.yaml`. Adding one project-wide is out of scope for this PR. Workaround: run `just canvas-verify` manually before pushing, or chain it into `just preship` once you want it on the critical path.
+- [ ] **Weekly drift cron (deferred — requires operator sign-off).** Cron registration goes through `gateway_server._register_system_cron_job`. Suggested cadence: Mondays 06:30 America/Chicago (active hours, content-generation-adjacent). Suggested action: run `just canvas-verify` and post any newly red/missing pointer paths via `notification_dispatcher.py`. Not auto-registered here — the operator should choose the cadence + decide whether the notification should fire as an email or a Mission Control event.
 
 ### Phase 5 — Optional polish
 

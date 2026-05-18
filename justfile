@@ -110,3 +110,19 @@ format:
 # Pre-ship: lint + unit tests, the same gates as pr-validate.yml.
 preship: lint test
     @echo "✅ Lint + unit tests green. Safe to /ship."
+
+# ---------------------------------------------------------------------------
+# Architecture Canvas
+# ---------------------------------------------------------------------------
+
+# Rebuild the Architecture Canvas HTML (docs/architecture-view/output/ +
+# web-ui/public/ mirror). Vendors rough.js + mermaid.min.js on first run.
+# Exits non-zero on missing source pointers.
+#
+# See: docs/02_Subsystems/Architecture_Canvas_View.md
+canvas:
+    uv run scripts/build_architecture_view.py
+
+# Verify pointers without re-rendering. Use as a pre-commit guard.
+canvas-verify:
+    uv run scripts/build_architecture_view.py --verify-only
