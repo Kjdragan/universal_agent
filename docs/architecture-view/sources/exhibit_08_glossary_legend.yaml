@@ -1,0 +1,56 @@
+id: e08_glossary_legend
+title: "Glossary & Legend"
+renderer: html_panel
+grid_area: "footer"
+description: |
+  Bottom rail with two sections — a glossary of the canonical domain terms used
+  throughout the canvas, and a legend explaining the visual encoding (color, freshness
+  badges, edge styles).
+
+glossary:
+  - term: "Task Hub"
+    definition: "Central SQLite-backed state machine for all units of work. File: src/universal_agent/task_hub.py."
+  - term: "Simone"
+    definition: "Primary orchestrator agent. Receives 100% of dispatched tasks via route_all_to_simone, triages and delegates."
+  - term: "VP (Virtual Professional)"
+    definition: "Specialist sub-agent for delegated work. Two production lanes: vp.coder.primary, vp.general.primary."
+  - term: "Cody"
+    definition: "Code-author principal. Spawns per-task Claude CLI subprocesses. Default mode = Anthropic Max since 2026-05-11."
+  - term: "Atlas"
+    definition: "General-purpose principal. Direct-dispatch lane for non-coding missions."
+  - term: "Heartbeat"
+    definition: "Two layers: process_heartbeat.py (OS-level liveness file) and heartbeat_service.py (event-loop sweep, every ~30 min)."
+  - term: "CSI / ClaudeDevs"
+    definition: "Claude Code intelligence pipeline — official X polling, packet creation, vault population, candidate ledgers, demo workspace scaffolding."
+  - term: "LLM Wiki"
+    definition: "External knowledge vault + derived internal memory vault. Append-dominant Memex primitives: CREATE / EXTEND / REVISE."
+  - term: "Task Hub state"
+    definition: "open · in_progress · scheduled · delegated · pending_review · needs_review · blocked · completed · parked."
+  - term: "completion_token"
+    definition: "Idempotency token written when a task moves to completed; prevents re-entry to open."
+  - term: "Mission Control"
+    definition: "Operator dashboard at /dashboard. Three-tier: traffic-light tiles, LLM narrative cards, Chief-of-Staff readout."
+  - term: "Reflection Engine"
+    definition: "Overnight (10pm–7am) autonomous loop that seeds proactive tasks from completion history when queue is empty."
+  - term: "Demo workspace"
+    definition: "Per-task isolated dir under /opt/ua_demos/<id>/ with vanilla .claude/settings.json. Demos a Claude feature end-to-end."
+  - term: "Ghost.build"
+    definition: "Hosted Postgres-with-extensions exposed to Cody as MCP tool calls inside demo workspaces only (not UA proper)."
+
+legend:
+  freshness:
+    - {color: "#3fae6a", label: "Green", meaning: "Source touched within last 30 days"}
+    - {color: "#d4a44e", label: "Amber", meaning: "Source touched 30–90 days ago"}
+    - {color: "#c44e4e", label: "Red", meaning: "Source touched >90 days ago, or path missing"}
+  edges:
+    - {style: "solid", meaning: "Synchronous / direct call"}
+    - {style: "dashed", meaning: "Asynchronous / feedback loop"}
+  click_hints:
+    - "Click any flow-spine stage → right-rail side drawer with drill-down + source pointers"
+    - "Click a source path → opens canonical doc location (where wired)"
+
+build_metadata:
+  # Populated at build time by scripts/build_architecture_view.py
+  generated_at: null
+  git_sha: null
+  stale_pointer_count: null

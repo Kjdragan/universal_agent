@@ -1,0 +1,75 @@
+id: e04_claude_envs
+title: "Claude Execution Environments"
+renderer: html_panel
+grid_area: "mid_right"  # right cell of mid row
+description: |
+  UA runs three distinct Claude execution profiles across the VPS and Kevin's desktop.
+  Mistaking one for another is the #1 source of confusion in this system (per CLAUDE.md).
+  This exhibit makes the boundaries visible at a glance.
+
+bands:
+  - id: autonomous_zai
+    label: "Autonomous services"
+    endpoint: "api.z.ai"
+    auth: "ZAI proxy (Infisical-injected env)"
+    models: "GLM-5.x"
+    color: "#7fb8d4"  # cool blue
+    runs:
+      - "Simone heartbeats"
+      - "Atlas (general)"
+      - "dispatch_sweep"
+      - "ClaudeDevs intel cron"
+      - "AgentMail polling"
+    source:
+      - src/universal_agent/infisical_loader.py
+    canonical_doc: docs/06_Deployment_And_Environments/10_Interactive_Coding_Environment.md
+    blurb: |
+      Cheap GLM inference for the 24/7 fleet. ANTHROPIC_BASE_URL routes to ZAI;
+      ANTHROPIC_AUTH_TOKEN is the ZAI key. Set at service-start by
+      initialize_runtime_secrets() — NOT via user-global settings.json.
+
+  - id: interactive_anthropic
+    label: "Interactive coding"
+    endpoint: "api.anthropic.com"
+    auth: "Max plan OAuth"
+    models: "Opus 4.7 · Sonnet 4.6 · Haiku 4.5"
+    color: "#d4a44e"  # warm gold
+    runs:
+      - "Antigravity terminal"
+      - "Claude Code CLI (claude)"
+      - "Antigravity IDE side panel"
+      - "claude --bg sessions"
+    source:
+      - scripts/claude_with_mcp_env.sh
+    canonical_doc: docs/06_Deployment_And_Environments/10_Interactive_Coding_Environment.md
+    blurb: |
+      Kevin's interactive sessions. `claude` is aliased to claude_with_mcp_env.sh
+      which strips ANTHROPIC_* (so OAuth wins) and bootstraps Infisical for MCP
+      placeholder resolution. Use the `zai` shell function to opt into cheap mode.
+
+  - id: cody_per_task
+    label: "Cody per-task subprocesses"
+    endpoint: "api.anthropic.com (default since 2026-05-11)"
+    auth: "Max plan OAuth"
+    models: "Opus 4.7 · Sonnet 4.6 · Haiku 4.5"
+    color: "#c47d6e"  # warm coral
+    runs:
+      - "Every Cody mission (demo + in-env)"
+      - "Override via task.cody_mode field"
+      - "Or dashboard cody_default_mode setting"
+      - "Or UA_CODY_DEFAULT_MODE env"
+    source:
+      - src/universal_agent/services/cody_mode.py
+      - src/universal_agent/vp/clients/claude_cli_client.py
+    canonical_doc: docs/06_Deployment_And_Environments/10_Interactive_Coding_Environment.md
+    blurb: |
+      Cody spawns one Claude CLI subprocess per task. _build_cli_env scrubs every
+      ANTHROPIC_* var when cody_mode=="anthropic", force-enables
+      CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1, and the subprocess uses Max plan OAuth.
+      Flippable per-task or globally; default landed 2026-05-11.
+
+key_principles:
+  - "ZAI vars are injected by Python at service-start, NOT by ~/.claude/settings.json"
+  - "Interactive `claude` strips ANTHROPIC_* so OAuth wins"
+  - "Cody's per-task subprocess does the same scrub via _build_cli_env"
+  - "Web-fetch tool selection follows the same boundary: autonomous → ZAI MCPs, interactive/demo → Claude built-ins"

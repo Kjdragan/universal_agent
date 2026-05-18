@@ -1,0 +1,29 @@
+flowchart LR
+    classDef src fill:#e8f4fa,stroke:#7fb8d4,color:#1a3a4a
+    classDef hub fill:#fef3d5,stroke:#d4a44e,color:#5a3e0a
+
+    subgraph EXT["External world"]
+        E1[Email replies]:::src
+        E2[Discord messages]:::src
+        E3[Google Calendar]:::src
+        E4[YouTube webhook]:::src
+        E5[Dashboard 'Start Now']:::src
+        E6[Time / schedule]:::src
+    end
+
+    E1 --> AM[agentmail_official.py<br/>WebSocket listener]
+    E2 --> HK[hooks_service.py<br/>webhook handlers]
+    E3 --> HK
+    E4 --> HK
+    E5 --> GW[gateway_server.py<br/>dispatch_immediate]
+    E6 --> HB[heartbeat_service.py<br/>scheduled sweep]
+    E6 --> PH[process_heartbeat.py<br/>OS-level liveness]
+
+    AM --> EB[email_task_bridge.py<br/>thread dedup]
+
+    EB --> TH[(Task Hub<br/>runtime_state.db)]:::hub
+    HK --> TH
+    GW --> TH
+    HB --> TH
+
+    PH -.alive signal.-> HB
