@@ -17,8 +17,8 @@ Verifies the resolver, schema persistence, and CLI env-scrub behavior.
 
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
+import sqlite3
 
 import pytest
 
@@ -30,7 +30,6 @@ from universal_agent.services.cody_mode import (
     set_default_mode,
 )
 from universal_agent.vp.clients.claude_cli_client import _build_cli_env
-
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
 

@@ -20,8 +20,8 @@ from __future__ import annotations
 
 import sqlite3
 import time
-import uuid
 from typing import Any
+import uuid
 
 import pytest
 

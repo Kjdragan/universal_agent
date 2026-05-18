@@ -48,7 +48,6 @@ from universal_agent.services.worker_exit_classifier import (
     task_was_closed_normally,
 )
 
-
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
 
@@ -399,10 +398,10 @@ def test_cli_classification_timeout_via_payload_marker(
 
 def test_classify_and_route_cli_exit_skips_when_no_task_id() -> None:
     """No linked task_id => no DB calls, no exception."""
+    from universal_agent.vp.clients.base import MissionOutcome
     from universal_agent.vp.clients.claude_cli_client import (
         _classify_and_route_cli_exit,
     )
-    from universal_agent.vp.clients.base import MissionOutcome
 
     outcome = MissionOutcome(
         status="completed",
@@ -423,10 +422,10 @@ def test_classify_and_route_cli_exit_parks_on_protocol_violation(
 ) -> None:
     """E2E: feed the helper a clean-exit MissionOutcome + a still-open
     task, and verify F.3 lands the task in needs_review."""
+    from universal_agent.vp.clients.base import MissionOutcome
     from universal_agent.vp.clients.claude_cli_client import (
         _classify_and_route_cli_exit,
     )
-    from universal_agent.vp.clients.base import MissionOutcome
 
     _seed_task_and_assignment(
         conn, task_id="task:cli-route", assignment_id="asg-cli-route",
