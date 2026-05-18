@@ -30,7 +30,6 @@ from universal_agent.services.cron_task_hub_link import (
     ensure_cron_task_link,
 )
 
-
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
 

@@ -31,7 +31,6 @@ from universal_agent.tools.task_hub_simone_verbs import (
     task_request_revision_wrapper,
 )
 
-
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
 
