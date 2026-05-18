@@ -2,7 +2,10 @@ name: CI Failure Issue Filer
 
 # Surfaces failed workflow runs as GitHub issues so the operator (and any
 # AI session reading the issue feed) discovers them immediately instead of
-# learning hours later that PR #N's Validate run failed silently.
+# learning hours later that PR #N's Validate run failed silently. Also
+# auto-closes those issues once a subsequent run of the SAME workflow on
+# the SAME branch turns green — closes the loop so the operator doesn't
+# accumulate stale issues for problems that were already fixed.
 #
 # Background (observed 2026-05-11): PR #221 had a failing `Validate PR`
 # run that sat unnoticed for hours. The operator's prompt — "Do we not
@@ -104,3 +107,64 @@ jobs:
             --title "${TITLE} — run_id=${RUN_ID}" \
             --body-file /tmp/issue-body.md \
             --label ci-failure
+
+  close-issue:
+    # Mirror of file-issue but for the "CI flipped green on this branch+workflow"
+    # signal. Closes any open ci-failure issues whose title matches the same
+    # workflow + branch as this successful run. Match is by branch, not SHA —
+    # PR #350's failure was filed for commit 75f54a48 but the green re-run
+    # was on 8f450812 (same branch, different SHA), and the underlying
+    # problem was resolved either way. Branch-level match handles that case.
+    #
+    # Without this job, ci-failure issues accumulate forever as historical
+    # debris even though their root cause merged; the operator has to close
+    # them by hand. Observed: PR #351 sat open after PR #350's success.
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Close any ci-failure issues for this workflow + branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${HEAD_SHA:0:7}"
+          # Title format from file-issue above:
+          #   "[ci-watchdog] {WORKFLOW_NAME} failed on {HEAD_BRANCH} ({sha}) — run_id={N}"
+          # We match on the unique substring "{WORKFLOW_NAME} failed on {HEAD_BRANCH}"
+          # which is stable across SHA changes for the same branch+workflow.
+          #
+          # List all open ci-failure issues, then filter in shell. This is
+          # more robust than gh's `--search` for branch names containing
+          # slashes or other special characters.
+          OPEN_JSON=$(gh issue list \
+            --repo "${REPO}" \
+            --label ci-failure \
+            --state open \
+            --limit 100 \
+            --json number,title)
+
+          # JQ extracts numbers whose title contains both the workflow name
+          # and "failed on $HEAD_BRANCH". Using `contains` not `==` so we
+          # match the full descriptive title.
+          MATCHES=$(echo "$OPEN_JSON" | jq -r \
+            --arg wf "${WORKFLOW_NAME} failed on ${HEAD_BRANCH}" \
+            '.[] | select(.title | contains($wf)) | .number')
+
+          if [ -z "$MATCHES" ]; then
+            echo "No open ci-failure issues to close for ${WORKFLOW_NAME} on ${HEAD_BRANCH}."
+            exit 0
+          fi
+
+          for NUM in $MATCHES; do
+            echo "Closing issue #${NUM} (workflow=${WORKFLOW_NAME} now green on ${HEAD_BRANCH} @ ${SHORT_SHA})"
+            gh issue comment "$NUM" --repo "${REPO}" --body \
+              "Auto-resolved: [${WORKFLOW_NAME}](${RUN_URL}) succeeded on branch \`${HEAD_BRANCH}\` at \`${SHORT_SHA}\` (run ${RUN_ID})."
+            gh issue close "$NUM" --repo "${REPO}" --reason completed
+          done
