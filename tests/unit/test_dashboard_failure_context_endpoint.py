@@ -18,14 +18,13 @@ import asyncio
 import sqlite3
 from typing import Any
 
-import pytest
 from fastapi import HTTPException
+import pytest
 
 from universal_agent import task_hub
 from universal_agent.gateway_server import (
     dashboard_todolist_get_failure_context,
 )
-
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
 

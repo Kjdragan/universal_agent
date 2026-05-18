@@ -17,8 +17,8 @@ covers the follow-up cleanup added on top of that:
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 from datetime import datetime, timezone
+import sqlite3
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -29,7 +29,6 @@ from universal_agent.services.email_task_bridge import (
     _deterministic_task_id,
     ensure_email_task_schema,
 )
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────
 

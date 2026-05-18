@@ -51,7 +51,6 @@ from universal_agent.services.worker_exit_classifier import (
     task_was_closed_normally,
 )
 
-
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
 
