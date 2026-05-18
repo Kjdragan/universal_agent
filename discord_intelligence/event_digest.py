@@ -209,7 +209,7 @@ async def run_pipeline():
                             svc = AgentMailService()
                             await svc.startup()
                             if svc._started:
-                                target_email = os.getenv("UA_USER_EMAIL", "kevin.dragan@outlook.com")
+                                target_email = os.getenv("UA_USER_EMAIL", "kevinjdragan@gmail.com")
                                 await svc.send_email(
                                     to=target_email,
                                     subject=f"Discord Insight: Action Items from {event['name']}",
