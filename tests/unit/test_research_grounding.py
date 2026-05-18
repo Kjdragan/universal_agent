@@ -390,6 +390,65 @@ def test_is_spa_404_shell_handles_missing_file(tmp_path):
     assert not rg._is_spa_404_shell(content_path=str(tmp_path / "nope.md"), content_chars=1000)
 
 
+# ── Raw-HTML dump detection (regression for 200KB httpx fallback bug) ────────
+
+
+def test_is_spa_404_shell_detects_large_raw_html_dump(tmp_path):
+    """200KB raw HTML — what httpx writes when defuddle is unavailable."""
+    path = tmp_path / "dump.md"
+    body = (
+        "# Source: https://docs.anthropic.com/en/release-notes/claude-code\n\n"
+        "<!DOCTYPE html>\n"
+        "<html lang='en' data-color-mode='auto'>\n"
+        "<head>\n"
+        + "\n".join(
+            f"<link rel='stylesheet' href='https://example.com/static/{i}.css'/>"
+            for i in range(200)
+        )
+        + "\n</head>\n<body>"
+        + ("legitimate prose " * 5000)
+        + "</body></html>\n"
+    )
+    path.write_text(body, encoding="utf-8")
+    assert rg._is_spa_404_shell(content_path=str(path), content_chars=path.stat().st_size)
+
+
+def test_is_spa_404_shell_detects_html_via_tag_density(tmp_path):
+    """No DOCTYPE but a flood of <link>/<script>/<meta> tags up top."""
+    path = tmp_path / "dense.md"
+    header_tags = "\n".join(
+        f"<link rel='stylesheet' href='/a/{i}.css'/>" for i in range(20)
+    )
+    body = f"# Source: https://github.com/x/y\n\n{header_tags}\n\n" + ("a " * 2000)
+    path.write_text(body, encoding="utf-8")
+    assert rg._is_spa_404_shell(content_path=str(path), content_chars=path.stat().st_size)
+
+
+def test_is_spa_404_shell_accepts_legitimate_markdown(tmp_path):
+    """Real defuddle-extracted markdown must pass through unmolested."""
+    path = tmp_path / "real.md"
+    path.write_text(
+        "# Source: https://docs.anthropic.com/en/release-notes/claude-code\n\n"
+        "## v2.1.139 — 2026-05-11\n\n"
+        "- Added the `claude agents` subcommand for session-roster management.\n"
+        "- Fixed an issue where the agent panel would lose focus on resize.\n\n"
+        + ("Detailed release-note prose. " * 200),
+        encoding="utf-8",
+    )
+    assert not rg._is_spa_404_shell(content_path=str(path), content_chars=path.stat().st_size)
+
+
+def test_looks_like_raw_html_unit():
+    assert rg._looks_like_raw_html("# Source: x\n\n<!DOCTYPE html>\n<html>\n")
+    assert rg._looks_like_raw_html("<HTML lang='en'><head><title>x</title></head>")
+    # Markdown that mentions ``<html>`` only inline (backticked, not the literal
+    # opening tag form ``<html `` or ``<html>`` at line start) should not flag.
+    assert not rg._looks_like_raw_html(
+        "# Real Docs\n\nSome prose about the HTML5 spec; nothing to see here.\n"
+    )
+    assert not rg._looks_like_raw_html("")
+
+
 def test_execute_research_drops_spa_shell_sources(tmp_path, monkeypatch):
     """When fetch returns a SPA shell, the source must be marked skipped."""
     request = ResearchRequest(
