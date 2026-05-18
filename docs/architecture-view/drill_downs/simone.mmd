@@ -1,0 +1,27 @@
+sequenceDiagram
+    autonumber
+    participant HB as heartbeat_service
+    participant DS as dispatch_service
+    participant AR as agent_router
+    participant TH as Task Hub (SQLite)
+    participant SIM as Simone (Claude Code)
+    participant VP as VP / Cody
+
+    HB->>DS: dispatch_sweep()
+    DS->>TH: claim_next_dispatch_tasks(limit=N)
+    TH-->>DS: [task_ids in_progress]
+    DS->>AR: route_all_to_simone(task_ids)
+    AR->>SIM: heartbeat injection with batch context
+    SIM->>SIM: triage in-context
+    alt simple / answerable
+        SIM->>TH: mark task completed (with completion_token)
+    else needs specialist
+        SIM->>TH: mark task delegated
+        TH->>VP: claim delegated task
+        VP-->>TH: mission finished → pending_review
+        SIM->>SIM: next heartbeat sweep
+        SIM->>TH: sign off → completed
+    else needs human
+        SIM->>TH: mark task needs_review
+        SIM->>SIM: draft email reply (AgentMail)
+    end

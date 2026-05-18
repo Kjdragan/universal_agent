@@ -1,0 +1,195 @@
+# Architecture Canvas View
+
+> **Status:** v1 shipping 2026-05-17 (Hero + 2 satellites). Full 9-exhibit plan tracked here so phases aren't lost.
+> **Owner:** Kevin (operator), Claude (build & maintenance).
+> **Surface:** Single self-contained HTML at `docs/architecture-view/output/architecture-map.html`, also copied to `web-ui/public/architecture-map.html` for dashboard linking.
+
+## 1. Why this exists
+
+UA has ~25 active subsystems documented across 200+ markdown files. The canonical *prose* view is [`docs/01_Architecture/000_PIPELINE_MASTERPIECE.md`](../01_Architecture/000_PIPELINE_MASTERPIECE.md). The canonical *runtime-state* view is Mission Control. Neither answers the question:
+
+> _"Show me how the pieces actually fit together, in one picture I can explore in a window."_
+
+The Architecture Canvas is that picture. It is **not** a dashboard (no live data), **not** a docs replacement (it links to docs), **not** a code browser (it links to code). It is a **navigable architecture map** with the following non-negotiables:
+
+1. **Beautiful** — Excalidraw-style hero diagrams (via `rough.js`), Figma-canvas-feel widescreen layout, dense exhibit grid.
+2. **Anti-rot** — every box has a `source:` pointer to a file/dir/doc. A build script verifies pointers exist, captures git-last-touched dates, and renders a freshness badge inline. Stale pointers fail the pre-commit hook.
+3. **Portable** — single self-contained HTML file. Drag into any browser, works offline, share with anyone.
+4. **Linkable** — also served at `/architecture-map.html` so Mission Control and the dashboard can link to it.
+
+## 2. Locked design decisions
+
+| Decision | Choice | Rationale |
+|---|---|---|
+| **Gap addressed** | Architecture map | Mission Control = state; mkdocs = prose; gap = visual relationships |
+| **Scope** | Tiered: overview + drill-downs | 25 subsystems can't fit one diagram readably |
+| **Source of truth** | Hybrid — hand-authored boxes + verified `source:` pointers | Pure-generated misses intent; pure-authored rots |
+| **Renderer split** | Excalidraw aesthetic via `rough.js` for hero; Mermaid for drill-downs | Hero is low-churn (quarterly), drill-downs are high-churn (per-PR) |
+| **Mental model** | Flow-spine + constellation overlay | Captures narrative AND inventory |
+| **Chassis** | HTML/CSS grid with embedded panels | True Figma-canvas feel; each exhibit independently editable |
+| **Hosting** | Single self-contained HTML + dashboard link | Portable AND integrated |
+| **Drill-down UX** | Right-rail side drawer (~40% width) | Canvas stays visible; spatial orientation preserved |
+| **Build pipeline** | Python script + pre-commit + weekly cron + visible freshness badges | Anti-rot promise enforceable |
+| **Freshness thresholds** | Green <30d, amber 30–90d, red >90d or missing | Matches typical PR cadence |
+
+## 3. Exhibit inventory (full 9-exhibit plan)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  E1 — TASK FLOW-SPINE (hero, rough.js)                          │
+│  Ingress → Task Hub → Simone → VPs/Cody → Completion/Reflection │
+├──────────────────────┬──────────────────────┬───────────────────┤
+│  E2 — INTELLIGENCE   │  E3 — KNOWLEDGE      │  E4 — CLAUDE ENVS │
+│  (CSI pipeline,      │  (LLM Wiki, Memory,  │  (ZAI / Max /     │
+│   Mermaid)           │   Vault, Mermaid)    │   Cody per-task)  │
+├──────────────────────┼──────────────────────┼───────────────────┤
+│  E5 — INPUTS         │  E6 — OPERATING      │  E7 — OPS / SHIP  │
+│  (email, discord,    │  SURFACES (Mission   │  (branches, CI,   │
+│   webhooks, cron)    │  Control, dashboard) │  deploy, Infisical│
+├──────────────────────┴──────────────────────┴───────────────────┤
+│  E8 — GLOSSARY                     E9 — LEGEND & FRESHNESS      │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+| # | Exhibit | Renderer | Anchor source | Anchor canonical doc |
+|---|---|---|---|---|
+| E1 | Task Flow-Spine | rough.js + SVG | `src/universal_agent/task_hub.py` | [`01_Architecture/000_PIPELINE_MASTERPIECE.md`](../01_Architecture/000_PIPELINE_MASTERPIECE.md) |
+| E2 | Intelligence Pipeline (CSI) | Mermaid | `src/universal_agent/services/claude_code_intel.py` | [`02_Subsystems/ClaudeDevs_X_Intelligence_System.md`](ClaudeDevs_X_Intelligence_System.md) |
+| E3 | Knowledge Plane (Wiki + Memory) | Mermaid | `src/universal_agent/memory/` | [`02_Subsystems/LLM_Wiki_System.md`](LLM_Wiki_System.md), [`02_Subsystems/Memory_System.md`](Memory_System.md) |
+| E4 | Claude Execution Environments | HTML banded panel | `src/universal_agent/services/cody_mode.py` | [`06_Deployment_And_Environments/10_Interactive_Coding_Environment.md`](../06_Deployment_And_Environments/10_Interactive_Coding_Environment.md) |
+| E5 | Inputs Catalog | HTML badge grid | `src/universal_agent/hooks_service.py`, `agentmail_official.py` | [`01_Architecture/000_PIPELINE_MASTERPIECE.md`](../01_Architecture/000_PIPELINE_MASTERPIECE.md) §2 |
+| E6 | Operating Surfaces | HTML list | `web-ui/`, `src/universal_agent/gateway_server.py` | [`02_Subsystems/Task_Hub_Dashboard.md`](Task_Hub_Dashboard.md), [`02_Subsystems/Mission_Control_Intelligence_System.md`](Mission_Control_Intelligence_System.md) |
+| E7 | Ops / Ship Pipeline | Mermaid | `.github/workflows/deploy.yml`, `pr-validate.yml` | [`deployment/ci_cd_pipeline.md`](../deployment/ci_cd_pipeline.md), [`06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md`](../06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md) |
+| E8 | Glossary | HTML rail | Distilled terms from `docs/Glossary.md` and `CLAUDE.md` | [`docs/Glossary.md`](../Glossary.md) |
+| E9 | Legend & Freshness | HTML rail | Build script self-reports | (this doc) |
+
+## 4. Phased delivery roadmap
+
+### Phase 1 — v1 (this PR, 2026-05-17)
+
+**Ships:** E1 (Task Flow-Spine, hero) + E4 (Claude Envs band) + E8/E9 (Glossary + Legend) + the full build pipeline.
+
+**Why this cut:** smallest surface that proves all four non-negotiables — beautiful (E1), anti-rot (build script + freshness badges), portable (self-contained HTML), linkable (copied into `web-ui/public/`).
+
+**Deliverables:**
+- [x] `docs/architecture-view/sources/exhibit_01_flow_spine.yaml`
+- [x] `docs/architecture-view/sources/exhibit_04_claude_envs.yaml`
+- [x] `docs/architecture-view/sources/exhibit_08_glossary_legend.yaml`
+- [x] `docs/architecture-view/drill_downs/{ingress,task_hub,simone,vps_cody,completion}.mmd`
+- [x] `scripts/build_architecture_view.py`
+- [x] `docs/architecture-view/output/architecture-map.html`
+- [x] `web-ui/public/architecture-map.html`
+- [x] This plan doc
+- [x] Playwright screenshot verification
+
+### Phase 2 — Intelligence + Knowledge (E2, E3)
+
+**Trigger:** v1 shipped, dashboard link wired, operator has used it ≥3× without confusion.
+
+**Scope:** Add CSI pipeline drill-down (Phase 0–5 of CSI v2) and Knowledge plane (Wiki + Memory + Vault relationships). Both are Mermaid (high-churn — CSI changes most weeks).
+
+**Estimated effort:** ~2h author + verify.
+
+### Phase 3 — Inputs + Surfaces + Ops (E5, E6, E7)
+
+**Trigger:** Phase 2 verified.
+
+**Scope:** The "what feeds the system" + "what surfaces consume the system" + "how the system ships" rail. Mostly HTML panels + one Mermaid for the deploy pipeline.
+
+**Estimated effort:** ~3h author + verify (E7 deploy pipeline requires reading `.github/workflows/` and rendering the auto-merge / pr-validate / deploy.yml graph).
+
+### Phase 4 — Wiring (operational integration)
+
+**Scope:**
+- Add a "Architecture" link in the Mission Control dashboard pointing to `/architecture-map.html`.
+- Add a "Architecture" link in the Task Hub dashboard.
+- Register a weekly cron via `gateway_server._register_system_cron_job` to re-run the build script and report any new stale pointers via the existing notification dispatcher.
+- Pre-commit hook entry in `.pre-commit-config.yaml` (or `Makefile` if pre-commit isn't yet wired): runs the build script when files under `docs/architecture-view/` change.
+
+### Phase 5 — Optional polish
+
+- Search box across exhibits (Cmd/Ctrl+K).
+- "Show only stale" filter.
+- Color-coded "what changed in the last PR" overlay (read `git log --since` and highlight boxes whose `source:` was touched).
+
+## 5. Pointer YAML schema
+
+Every exhibit YAML follows this shape:
+
+```yaml
+id: e01_flow_spine
+title: "Task Flow-Spine"
+renderer: rough_svg          # rough_svg | mermaid | html_panel
+description: |
+  Ingress → Task Hub → Simone → VPs/Cody → Completion/Reflection.
+  The dominant horizontal axis of the canvas.
+
+nodes:
+  - id: ingress
+    label: "Ingress"
+    source:
+      - src/universal_agent/agentmail_official.py
+      - src/universal_agent/hooks_service.py
+      - src/universal_agent/heartbeat_service.py
+    canonical_doc: docs/01_Architecture/000_PIPELINE_MASTERPIECE.md#2-input-triggers--ingress
+    drilldown: docs/architecture-view/drill_downs/ingress.mmd
+    blurb: "AgentMail websocket, hooks_service webhooks, and process_heartbeat timers funnel work into the Task Hub."
+
+  - id: task_hub
+    label: "Task Hub"
+    source:
+      - src/universal_agent/task_hub.py
+    canonical_doc: docs/01_Architecture/000_PIPELINE_MASTERPIECE.md#3-the-task-hub--life-cycle
+    drilldown: docs/architecture-view/drill_downs/task_hub.mmd
+    blurb: "Central state machine (open → in_progress → delegated → pending_review → completed/parked) backed by runtime_state.db."
+
+  # ... more nodes
+```
+
+Build script reads this, validates each `source:` path, captures `git log -1 --format=%cI`, computes age in days, emits a green/amber/red badge per node in the rendered HTML.
+
+## 6. Build & verification
+
+### Manual rebuild
+
+```bash
+uv run python scripts/build_architecture_view.py
+```
+
+Outputs:
+- `docs/architecture-view/output/architecture-map.html` (canonical, ~750KB self-contained)
+- `web-ui/public/architecture-map.html` (mirror for dashboard linking)
+
+Exits non-zero if any `source:` path no longer exists.
+
+### Pre-commit hook (Phase 4)
+
+```yaml
+# .pre-commit-config.yaml
+- repo: local
+  hooks:
+    - id: architecture-view-build
+      name: Rebuild architecture canvas
+      entry: uv run python scripts/build_architecture_view.py --verify-only
+      language: system
+      files: ^docs/architecture-view/
+      pass_filenames: false
+```
+
+### Weekly drift cron (Phase 4)
+
+Registered via `gateway_server._register_system_cron_job` per CLAUDE.md rule. Runs Mondays 06:30 America/Chicago (within active hours; respects dormancy default — this is content-generation-adjacent, so it fires during waking hours). Reports any newly red pointers via `notification_dispatcher.py`.
+
+## 7. Open follow-ups
+
+- **Dashboard wiring** — Phase 4. The HTML exists in `web-ui/public/`; the dashboard link is not yet added. When wired, the link should sit in the global sidenav near "Mission Control."
+- **Cron registration** — Phase 4. Until then, manual rebuild only.
+- **E2/E3/E5/E6/E7 authoring** — Phases 2 & 3.
+- **Pre-commit hook** — Phase 4.
+
+## 8. References
+
+- [`docs/01_Architecture/000_PIPELINE_MASTERPIECE.md`](../01_Architecture/000_PIPELINE_MASTERPIECE.md) — prose narrative of the task lifecycle (E1 is the visual companion).
+- [`docs/01_Architecture/05_Simone_First_Orchestration.md`](../01_Architecture/05_Simone_First_Orchestration.md) — Simone routing model.
+- [`docs/06_Deployment_And_Environments/10_Interactive_Coding_Environment.md`](../06_Deployment_And_Environments/10_Interactive_Coding_Environment.md) — Claude environments (E4 is the visual companion).
+- [`docs/02_Subsystems/Task_Hub_Dashboard.md`](Task_Hub_Dashboard.md) — Mission Control / Task Hub UI (E6 anchor).

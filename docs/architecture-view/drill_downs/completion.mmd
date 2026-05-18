@@ -1,0 +1,18 @@
+flowchart LR
+    classDef terminal fill:#d8efde,stroke:#3fae6a,color:#1a4a2a
+    classDef park fill:#f0e0e0,stroke:#c44e4e,color:#5a1010
+    classDef proactive fill:#e8e0f0,stroke:#7d6ec4,color:#1a1040
+
+    PR[pending_review] --> SIM[Simone sign-off<br/>next heartbeat sweep]
+    SIM -->|accept| COMP[completed<br/>+ completion_token]:::terminal
+    SIM -->|reject| BACK[in_progress<br/>back to specialist]
+    SIM -->|abandon| PARK[parked]:::park
+
+    COMP --> HIST[Completion history<br/>read model]
+    HIST --> RE[Reflection Engine<br/>22:00–07:00 local]:::proactive
+    HIST --> MR[Morning Report<br/>06:30 local]:::proactive
+
+    RE -->|queue empty<br/>+ nightly budget| SEED[Seed proactive tasks<br/>back to Ingress]:::proactive
+    MR -->|context injection| SIM_NEXT[Tomorrow's Simone<br/>triage cycle]:::proactive
+
+    SEED -.feeds back.-> ING[(Ingress)]

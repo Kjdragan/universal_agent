@@ -1,0 +1,26 @@
+flowchart TB
+    classDef anthropic fill:#fef3d5,stroke:#d4a44e,color:#5a3e0a
+    classDef zai fill:#e8f4fa,stroke:#7fb8d4,color:#1a3a4a
+    classDef decision fill:#fbe8d9,stroke:#c47d6e,color:#5a1f10
+
+    SIM[Simone delegates<br/>vp_mission task] --> CLAIM[VP / Cody claims task]
+    CLAIM --> MODE{cody_mode<br/>resolution}:::decision
+
+    MODE -- "task.cody_mode<br/>(per-task override)" --> RESOLVED
+    MODE -- "cody_default_mode<br/>(DB setting)" --> RESOLVED
+    MODE -- "UA_CODY_DEFAULT_MODE<br/>(env)" --> RESOLVED
+    MODE -- "hardcoded fallback<br/>= anthropic (2026-05-11)" --> RESOLVED
+
+    RESOLVED[Resolved mode] --> ENV{mode == ?}
+
+    ENV -- anthropic --> SCRUB[claude_cli_client<br/>strips ANTHROPIC_* vars<br/>force CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1]:::anthropic
+    SCRUB --> MAX[Spawn `claude` subprocess<br/>OAuth → api.anthropic.com<br/>Opus / Sonnet / Haiku]:::anthropic
+
+    ENV -- zai --> ZENV[Keep ZAI env vars]:::zai
+    ZENV --> ZAI_PROXY[Spawn `claude` subprocess<br/>→ api.z.ai<br/>GLM-5.x]:::zai
+
+    MAX --> WORK[Cody executes mission<br/>per BRIEF.md + ACCEPTANCE.md]
+    ZAI_PROXY --> WORK
+
+    WORK --> DONE[manifest.json written<br/>task → pending_review]
+    DONE --> SIGN[Simone sign-off<br/>next heartbeat sweep]

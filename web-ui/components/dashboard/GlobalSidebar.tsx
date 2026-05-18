@@ -30,6 +30,7 @@ import {
   Settings,
   Wrench,
   FolderOpen,
+  Workflow,
   Menu,
   X,
   type LucideIcon,
@@ -67,6 +68,7 @@ const NAV_GROUPS: NavGroup[] = [
       { href: "/dashboard/sessions", label: "Sessions", icon: Clipboard },
       { href: "/dashboard/heartbeats", label: "Heartbeats", icon: HeartPulse },
       { href: "/dashboard/agent-flow", label: "Agent Flow", icon: Orbit },
+      { href: "/architecture-map.html", label: "Architecture Map", icon: Workflow, external: true },
     ],
   },
   {

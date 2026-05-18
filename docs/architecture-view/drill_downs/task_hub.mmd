@@ -1,0 +1,29 @@
+stateDiagram-v2
+    direction TB
+
+    [*] --> open : new task created
+    open --> in_progress : claim_next_dispatch_tasks
+    open --> scheduled : due_at in future
+    scheduled --> open : due_at reached
+    in_progress --> delegated : Simone delegates to VP
+    in_progress --> needs_review : ask human
+    in_progress --> blocked : missing dependency
+    delegated --> pending_review : VP finishes mission
+    pending_review --> completed : Simone signs off
+    pending_review --> in_progress : Simone rejects
+    needs_review --> in_progress : human responds
+    blocked --> in_progress : dependency cleared
+    in_progress --> completed : direct finish (no delegation)
+    in_progress --> parked : Simone shelves it
+    completed --> [*] : completion_token written
+    parked --> [*] : terminal (until manual revive)
+
+    note right of completed
+        completion_token prevents
+        accidental re-entry to open
+    end note
+
+    note left of in_progress
+        seizure_state column
+        prevents double-dispatch
+    end note

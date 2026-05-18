@@ -1,0 +1,93 @@
+id: e01_flow_spine
+title: "Task Flow-Spine"
+renderer: rough_svg
+grid_area: "hero"  # spans full top row of canvas grid
+description: |
+  The dominant horizontal axis of the canvas. Shows the journey of a unit of work
+  from ingress through Task Hub state machine, Simone-First triage, optional VP/Cody
+  delegation, and back to Simone for sign-off and completion.
+
+  Click any stage to open a right-rail side drawer with the Mermaid drill-down,
+  source-file pointers (with freshness badges), and a link to the canonical doc.
+
+nodes:
+  - id: ingress
+    label: "Ingress"
+    subtitle: "AgentMail · Hooks · Heartbeat"
+    source:
+      - src/universal_agent/agentmail_official.py
+      - src/universal_agent/hooks_service.py
+      - src/universal_agent/heartbeat_service.py
+      - src/universal_agent/process_heartbeat.py
+    canonical_doc: docs/01_Architecture/000_PIPELINE_MASTERPIECE.md
+    canonical_anchor: "#2-input-triggers--ingress"
+    drilldown: docs/architecture-view/drill_downs/ingress.mmd
+    blurb: |
+      Inbound work arrives via AgentMail websocket (email), hooks_service (webhooks
+      and Calendar/YouTube triggers), or the heartbeat timers that sweep for due
+      scheduled tasks. All paths normalise into Task Hub rows.
+
+  - id: task_hub
+    label: "Task Hub"
+    subtitle: "State machine + dedup"
+    source:
+      - src/universal_agent/task_hub.py
+    canonical_doc: docs/01_Architecture/000_PIPELINE_MASTERPIECE.md
+    canonical_anchor: "#3-the-task-hub--life-cycle"
+    drilldown: docs/architecture-view/drill_downs/task_hub.mmd
+    blurb: |
+      Central nervous system backed by runtime_state.db. Enforces state transitions
+      (open → in_progress → delegated → pending_review → completed/parked), prevents
+      double-dispatch via seizure_state, and dedupes email threads through email_task_bridge.
+
+  - id: simone
+    label: "Simone"
+    subtitle: "Sweep · Route · Triage"
+    source:
+      - src/universal_agent/services/dispatch_service.py
+      - src/universal_agent/services/agent_router.py
+      - src/universal_agent/heartbeat_service.py
+    canonical_doc: docs/01_Architecture/05_Simone_First_Orchestration.md
+    drilldown: docs/architecture-view/drill_downs/simone.mmd
+    blurb: |
+      Every heartbeat sweep pulls eligible tasks via claim_next_dispatch_tasks and
+      assigns 100% to Simone (route_all_to_simone). Simone evaluates the batch,
+      handles what she can in-context, and delegates the rest as vp_mission tasks.
+
+  - id: vps_cody
+    label: "VPs / Cody"
+    subtitle: "Anthropic Max (default) · ZAI (override)"
+    source:
+      - src/universal_agent/services/cody_mode.py
+      - src/universal_agent/services/cody_implementation.py
+      - src/universal_agent/services/cody_dispatch.py
+      - src/universal_agent/services/atlas_direct_dispatch.py
+    canonical_doc: docs/01_Architecture/03_VP_Workers_And_Delegation.md
+    drilldown: docs/architecture-view/drill_downs/vps_cody.mmd
+    blurb: |
+      Specialist agents claim delegated work. Cody runs per-task Claude CLI
+      subprocesses; default mode is Anthropic Max (since 2026-05-11). Atlas
+      handles general-purpose missions. On completion the task flips to
+      pending_review for Simone sign-off.
+
+  - id: completion
+    label: "Completion"
+    subtitle: "Sign-off · Park · Reflection"
+    source:
+      - src/universal_agent/task_hub.py
+      - src/universal_agent/services/reflection_engine.py
+      - src/universal_agent/proactive_signals.py
+    canonical_doc: docs/02_Subsystems/Proactive_Pipeline.md
+    drilldown: docs/architecture-view/drill_downs/completion.mmd
+    blurb: |
+      Simone reviews pending_review work, signs off (→ completed with completion_token)
+      or rejects (→ in_progress / parked). The Reflection Engine consumes completion
+      history overnight to seed proactive next-step tasks, feeding back into Ingress.
+
+edges:
+  - {from: ingress, to: task_hub, label: ""}
+  - {from: task_hub, to: simone, label: "sweep"}
+  - {from: simone, to: vps_cody, label: "delegate"}
+  - {from: vps_cody, to: completion, label: "pending_review"}
+  - {from: simone, to: completion, label: "direct"}
+  - {from: completion, to: ingress, label: "reflection", style: "dashed"}
