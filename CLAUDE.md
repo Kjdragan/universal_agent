@@ -67,6 +67,31 @@ When executing on the VPS (`uaonvps`), agents have direct, native filesystem acc
 - **Capability Implication**: **Never** build custom "file fetcher" tools or syncing scripts to move files from the desktop to the VPS for agent tasks. Instead, simply refer to the absolute `/home/kjdragan/...` path directly. Standard OS operations (`cat`, Python `open()`, etc.) will seamlessly resolve over the SSHFS mount.
 - **Architectural Tenet**: This demonstrates the core design philosophy of "expanding system capabilities at the OS level" rather than building complex, brittle agent workarounds.
 
+## Self-Service Infisical Secret Access
+
+You have machine-identity Infisical creds pre-loaded in your shell — use them to fetch secrets yourself instead of asking the operator. Sources: Kevin's desktop `~/.config/ua/infisical-machine-id`, VPS `/opt/universal_agent/.env`. Both export `INFISICAL_CLIENT_ID` / `INFISICAL_CLIENT_SECRET` / `INFISICAL_PROJECT_ID`. The interactive user-CLI session at `~/.infisical/infisical-config.json` is flaky for headless calls — **DO NOT rely on it; always use universal-auth (machine-identity)**.
+
+**Inject every secret into a child process (preferred pattern):**
+```bash
+TOK=$(infisical login --method=universal-auth \
+        --client-id="$INFISICAL_CLIENT_ID" \
+        --client-secret="$INFISICAL_CLIENT_SECRET" --plain --silent)
+INFISICAL_TOKEN="$TOK" infisical run \
+    --projectId="$INFISICAL_PROJECT_ID" --env=development --silent -- \
+    <your command>
+```
+
+**Single-key read:** swap `run … -- <cmd>` for `secrets get KEY_NAME --plain --silent` (token + projectId/env flags stay the same).
+
+**Guardrails — NON-NEGOTIABLE:**
+- **NEVER print secret VALUES to chat.** `infisical secrets` with `--plain` dumps `KEY=VALUE` pairs (not just keys). Filter with `awk -F= '{print $1}'` when you only want to enumerate names.
+- Prefer `infisical run -- CMD` over fetching to shell variables — the secret stays inside the child process and never lands in your env or command history.
+- Ask the operator before reading production secrets if the task could be done in dev.
+- Never `infisical secrets set` / delete / rotate without explicit operator approval.
+- For UA's own Python services, the canonical bootstrap is still `initialize_runtime_secrets()` — use the CLI only for ad-hoc diagnostics, script invocations, and one-off lookups.
+
+Also note: bare `claude` on Kevin's desktop lazy-loads `HOSTINGER_API_TOKEN` (and only that) via `_ua_load_mcp_secrets` in `~/.bashrc`, cached at `~/.cache/ua/hostinger_token`. Replaced the eager `infisical secrets get` block on 2026-05-17 because it was hanging Antigravity terminals on an interactive arrow-key prompt that `--silent` didn't suppress. If MCP Hostinger stops resolving, the user can `rm ~/.cache/ua/hostinger_token` to force refresh on next `claude` launch.
+
 ## Key Commands
 - Install deps: `uv sync`
 - Run app: `uv run python -m src.universal_agent.main`
