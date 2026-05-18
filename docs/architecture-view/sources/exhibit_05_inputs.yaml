@@ -13,6 +13,11 @@ source:
   - src/universal_agent/hooks_service.py
   - src/universal_agent/gateway_server.py
   - src/universal_agent/services/proactive_advisor.py
+  - src/universal_agent/services/youtube_playlist_watcher.py
+  - src/universal_agent/youtube_ingest.py
+  - src/universal_agent/scripts/youtube_daily_digest.py
+  - src/universal_agent/scripts/youtube_provision_digest_playlists.py
+  - src/universal_agent/scripts/schedule_youtube_digest.py
 
 canonical_doc: docs/01_Architecture/000_PIPELINE_MASTERPIECE.md
 
@@ -45,12 +50,12 @@ inputs:
     handler: "hooks_service.py + calendar_task_bridge.py"
     transform: "Scheduled task with due_at = event start"
 
-  - label: "YouTube"
-    kind: "external · webhook"
+  - label: "YouTube · Tutorials"
+    kind: "internal · cron + webhook"
     color: "#c47d6e"
-    trigger: "YouTube ingest webhook"
-    handler: "hooks_service.py + tutorial-creation skill"
-    transform: "Concept doc + optional runnable demo task"
+    trigger: "Daily digest cron 06:00 CT (yesterday-shift) + playlist watcher + manual /api/v1/hooks/youtube/dispatch"
+    handler: "scripts/youtube_daily_digest.py · services/youtube_playlist_watcher.py · hooks_service.py"
+    transform: "Zero-quota DB dedup → ranked candidates → top-N auto-dispatch → tutorial run (concept doc + optional repo bootstrap). See docs/03_Operations/99_Tutorial_Pipeline_Architecture_And_Operations.md."
 
   - label: "Dashboard"
     kind: "operator · sync"

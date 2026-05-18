@@ -30,4 +30,5 @@ surfaces:
   - { name: "Cody Mode & Usage", route: "/dashboard/cody", purpose: "Cody mode tile (Anthropic Max / ZAI) · per-task overrides · token usage", hq: false }
   - { name: "Cron Jobs", route: "/dashboard/cron-jobs", purpose: "Scheduled task roster · last-run · reschedule controls", hq: true }
   - { name: "Approvals", route: "/dashboard/approvals", purpose: "Pending decisions · external_effect_policy gates", hq: false }
+  - { name: "Tutorials", route: "/dashboard/tutorials", purpose: "YouTube tutorial pipeline · runs · review jobs · bootstrap jobs · notifications · per-video dedup", hq: false }
   - { name: "Architecture Map", route: "/architecture-map.html", purpose: "This canvas. Self-contained HTML, opens in new tab.", hq: false, self: true }
