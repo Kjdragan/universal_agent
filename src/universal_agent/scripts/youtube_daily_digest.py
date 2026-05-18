@@ -79,7 +79,7 @@ DIGEST_PIPELINE_DEFAULT = "map_reduce"
 DIGEST_MAP_MODEL_DEFAULT = "glm-4.5-air"
 DIGEST_MAP_CONCURRENCY_DEFAULT = 3
 DIGEST_MAP_TIMEOUT_SECONDS_DEFAULT = 180
-DIGEST_MAP_MAX_TOKENS_DEFAULT = 4000
+DIGEST_MAP_MAX_TOKENS_DEFAULT = 6000  # raised from 4000 alongside the 50% retell target — longest videos in the playlist need ~5300 tokens of headroom
 DIGEST_MAP_TRANSCRIPT_CHAR_LIMIT_DEFAULT = 50_000
 # Reduce-step model defaults. Reduce sees only titles + per-video classifications
 # + thesis lines (no full retellings), so context stays small.
@@ -193,7 +193,7 @@ Here are the videos:
 RETELL_PROMPT = """You are a technical knowledge synthesizer. You will be given the transcript and metadata for ONE YouTube video. Produce a "Compressed Retelling" that lets the reader skip watching the video while preserving its substance.
 
 REQUIREMENTS:
-- Length target: roughly 30-40% of the original transcript length. Be substantial, NOT a short summary. If the transcript is ~3000 words, your retelling should be ~900-1200 words.
+- Length target: roughly 50% of the original transcript length. Be substantial, NOT a short summary. If the transcript is ~3000 words, your retelling should be ~1500 words. Err toward more detail rather than less — preserve every concrete example, number, named tool, and "this works because" explanation.
 - Reproduce the speaker's argument in your own words, preserving the order and structure of their reasoning.
 - Preserve all specific examples, numbers, quoted phrases, library/tool names, file paths, code snippets, product names, and "this works because..." explanations. These details are what distinguish a retelling from a summary.
 - Do NOT add commentary, opinion, cross-references to other videos, or business context.
