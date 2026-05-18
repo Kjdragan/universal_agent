@@ -1386,6 +1386,77 @@ def _load_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _try_x_api_tweet_self_ref(
+    *, final_url: str, entry: dict[str, Any], source_dir: Path, timeout: int = 15
+) -> tuple[str, dict[str, Any]] | None:
+    """Try to fetch a redirected-to x.com tweet via the X API.
+
+    When a t.co (or other) link resolves to ``x.com/<handle>/status/<id>``,
+    the standard browser-style fetch returns the JavaScript-gated SPA chrome
+    and the link gets marked ``browser_gated_x_page``. But this lane already
+    has X API credentials for polling the canonical handles — fetching one
+    referenced tweet via ``/2/tweets/{id}`` is the same API call that built
+    the rest of the packet. Surfacing the tweet body is the entire point of
+    a strategic-follow-up signal.
+
+    Returns ``(content, metadata)`` on success, or ``None`` if the URL is
+    not a tweet status URL OR the X API path fails. On ``None`` the caller
+    falls through to the legacy skip path so nothing regresses.
+
+    Off switch: ``UA_CSI_LINKED_X_SELF_REF_ENABLED=0``.
+    """
+    if str(os.getenv("UA_CSI_LINKED_X_SELF_REF_ENABLED") or "1").strip().lower() in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }:
+        return None
+    try:
+        from universal_agent.services.csi_url_judge import (
+            _fetch_tweet_via_x_api,
+            parse_tweet_id_from_url,
+        )
+    except Exception:
+        return None
+    tweet_id = parse_tweet_id_from_url(final_url)
+    if not tweet_id:
+        return None
+    try:
+        record = _fetch_tweet_via_x_api(
+            final_url, tweet_id, source_dir, timeout=timeout
+        )
+    except Exception:
+        return None
+    if str(record.fetch_status or "") != "fetched":
+        return None
+    content_path = str(record.content_path or "").strip()
+    if not content_path:
+        return None
+    try:
+        content = Path(content_path).read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return None
+    if not content.strip():
+        return None
+    metadata: dict[str, Any] = {
+        "url": entry.get("url") or final_url,
+        "final_url": final_url,
+        "post_id": entry.get("post_id") or "",
+        "tier": int(entry.get("tier") or 0),
+        "action_type": entry.get("action_type") or "",
+        "content_type": "text/markdown",
+        "http_status": 200,
+        "source_type": "x_tweet",
+        "domain": "x.com",
+        "tweet_id": tweet_id,
+        "title": f"x.com tweet {tweet_id}",
+        "fetch_method": "x_api_self_ref",
+        "summary_excerpt": _summary_excerpt(content),
+    }
+    return content, metadata
+
+
 def _fetch_linked_source(*, client: httpx.Client, url: str, entry: dict[str, Any], source_dir: Path) -> None:
     metadata: dict[str, Any] = {
         "url": url,
@@ -1409,6 +1480,29 @@ def _fetch_linked_source(*, client: httpx.Client, url: str, entry: dict[str, Any
             entry["fetch_status"] = "error"
             entry["error"] = f"HTTP {resp.status_code}"
         elif skip_reason := _detect_unusable_link_capture(url=str(resp.url), body=body, metadata=metadata):
+            # Before accepting the skip, try the X API self-reference path for
+            # tweet status URLs. The lane already has the auth that handles
+            # this; the legacy skip would lose strategic-follow-up signal.
+            x_self_ref = _try_x_api_tweet_self_ref(
+                final_url=str(resp.url), entry=entry, source_dir=source_dir
+            )
+            if x_self_ref is not None:
+                content, x_metadata = x_self_ref
+                metadata.update(x_metadata)
+                entry["title"] = metadata.get("title") or entry.get("title")
+                entry["fetch_status"] = "fetched"
+                entry["skip_reason"] = ""
+                analysis = _linked_source_analysis(
+                    entry=entry, content=content, metadata=metadata
+                )
+                _write_linked_source_files(
+                    source_dir=source_dir,
+                    entry=entry,
+                    content=content,
+                    analysis=analysis,
+                    metadata=metadata,
+                )
+                return
             entry["fetch_status"] = "skipped"
             entry["skip_reason"] = skip_reason
             analysis = _linked_source_analysis(entry=entry, content="", metadata=metadata)
