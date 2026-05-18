@@ -101,13 +101,16 @@ The Architecture Canvas is that picture. It is **not** a dashboard (no live data
 
 **Renderer extensions:** new `mermaid_panel`, `html_grid`, `html_list` renderers in `scripts/build_architecture_view.py`. Layout migrated to 3-column grid for mid + lower rows.
 
-### Phase 4 — Wiring (operational integration)
+### Phase 4 — Wiring (operational integration) — **COMPLETE 2026-05-18**
 
 **Status:**
-- [x] **Dashboard sidebar link** — `web-ui/components/dashboard/GlobalSidebar.tsx` exposes "Architecture Map" in the Operations group (shipped in PR #342, 2026-05-18).
-- [x] **`just canvas` / `just canvas-verify` recipes** — added to `justfile`. Run `just canvas` to rebuild; `just canvas-verify` checks pointers without re-rendering.
-- [ ] **Pre-commit hook (deferred).** Repo currently has no `.pre-commit-config.yaml`. Adding one project-wide is out of scope for this PR. Workaround: run `just canvas-verify` manually before pushing, or chain it into `just preship` once you want it on the critical path.
-- [ ] **Weekly drift cron (deferred — requires operator sign-off).** Cron registration goes through `gateway_server._register_system_cron_job`. Suggested cadence: Mondays 06:30 America/Chicago (active hours, content-generation-adjacent). Suggested action: run `just canvas-verify` and post any newly red/missing pointer paths via `notification_dispatcher.py`. Not auto-registered here — the operator should choose the cadence + decide whether the notification should fire as an email or a Mission Control event.
+- [x] **Dashboard sidebar link** — `web-ui/components/dashboard/GlobalSidebar.tsx` exposes "Architecture Map" in the Operations group (shipped in PR #342).
+- [x] **`just canvas` / `just canvas-verify` recipes** — added to `justfile`. `just canvas` rebuilds; `just canvas-verify` checks pointers without re-rendering.
+- [x] **`just preship` chains `canvas-verify`** — the operator-side pre-ship gate now includes pointer verification alongside lint + unit tests.
+- [x] **PR Validate CI step** — `.github/workflows/pr-validate.yml` runs `--verify-only` automatically on every PR that touches `docs/architecture-view/` or `scripts/build_architecture_view.py`. PRs that don't touch the canvas pay zero cost; PRs that do are blocked on missing pointers.
+- [x] **Weekly drift cron** — registered via `_ensure_architecture_canvas_drift_cron_job` in `gateway_server.py`. Default schedule **Mondays 06:30 America/Chicago** (active hours; content-generation-adjacent under the dormancy default). Implementation: `src/universal_agent/scripts/architecture_canvas_drift_check.py` runs `--verify-only`, exits non-zero on **missing** pointers (surfaces as a failed cron tick on `/dashboard/cron-jobs`), writes `artifacts/architecture-canvas-drift/<date>.md` on **stale** pointers (exits 0; staleness is signal not failure), and is silent when everything is green. Env-controlled: `UA_ARCH_CANVAS_DRIFT_ENABLED`, `UA_ARCH_CANVAS_DRIFT_CRON`, `UA_ARCH_CANVAS_DRIFT_TIMEZONE`.
+
+**Why these notification choices.** Missing pointers route through cron-health because `/dashboard/cron-jobs` is already the canonical "did this scheduled job fail?" surface — no new UI needed. Stale pointers route to a dated markdown artifact because (a) email is quarantine-prone for this account, (b) Mission Control narrative cards are LLM-curated and overkill for a deterministic per-week drift report, and (c) the artifact format is self-explanatory and a natural place for the next operator pass to start fixing. The operator opens `artifacts/architecture-canvas-drift/YYYY-MM-DD.md` directly when they see a recent run on the cron-jobs page; no new UI required.
 
 ### Phase 5 — Optional polish
 

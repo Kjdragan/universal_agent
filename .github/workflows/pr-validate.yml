@@ -129,6 +129,26 @@ jobs:
             exit 1
           fi
 
+      - name: Architecture canvas pointer verify (only when canvas touched)
+        run: |
+          # Anti-rot gate for the Architecture Canvas. Only fires when this
+          # PR touches the canvas sources, drill-downs, or build script —
+          # untouched PRs don't pay the cost. Failures here mean a `source:`
+          # pointer in a YAML exhibit references a path that no longer
+          # exists on disk; fix the YAML or remove the dead reference.
+          # See: docs/02_Subsystems/Architecture_Canvas_View.md §6.
+          CANVAS_TOUCHED=$(git diff --name-only --diff-filter=AMR \
+              "origin/${{ github.base_ref }}...HEAD" \
+              | grep -E '^(docs/architecture-view/|scripts/build_architecture_view\.py$)' \
+              || true)
+          if [ -z "$CANVAS_TOUCHED" ]; then
+            echo "Canvas not touched in this PR; skipping pointer verify."
+            exit 0
+          fi
+          echo "Canvas-touching files in PR:"
+          echo "$CANVAS_TOUCHED" | sed 's/^/  /'
+          uv run scripts/build_architecture_view.py --verify-only
+
       - name: Ruff check (changed files only, errors-only gate)
         if: steps.changed.outputs.files != ''
         run: |

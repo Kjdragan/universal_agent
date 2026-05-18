@@ -107,9 +107,10 @@ lint:
 format:
     uv run --frozen ruff format .
 
-# Pre-ship: lint + unit tests, the same gates as pr-validate.yml.
-preship: lint test
-    @echo "✅ Lint + unit tests green. Safe to /ship."
+# Pre-ship: lint + unit tests + architecture canvas pointer verify, the
+# same gates as pr-validate.yml.
+preship: lint test canvas-verify
+    @echo "✅ Lint + unit tests + canvas pointers green. Safe to /ship."
 
 # ---------------------------------------------------------------------------
 # Architecture Canvas
