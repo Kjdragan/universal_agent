@@ -22,6 +22,7 @@ Playlist IDs are stored in Infisical as <DAY>_YT_PLAYLIST:
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import json
 import logging
@@ -60,6 +61,59 @@ logger = logging.getLogger(__name__)
 
 DAYS = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]
 POCKET_SCHEMA_VERSION = 1
+
+# ---------------------------------------------------------------------------
+# Map-reduce pipeline defaults (all overridable via env var)
+# ---------------------------------------------------------------------------
+# Pipeline selector: "map_reduce" (default, per-video retell + meta-synthesis)
+#                    "single_call" (legacy one-LLM-call shape; kept for fallback + A/B)
+DIGEST_PIPELINE_DEFAULT = "map_reduce"
+# Map-step model defaults. We hardcode glm-4.5-air (haiku-equivalent on Z.AI) for
+# the map step rather than calling resolve_model("haiku"), because resolve_model
+# globally points haiku at glm-5-turbo to dodge a historical preflight wedge
+# (see model_resolution.py:11-30). Probe 2026-05-18 showed glm-4.5-air is stable
+# at concurrency 1-3 for digest-shape prompts and ~30% faster per call than
+# glm-5-turbo. Both models share the same account-level Fair-Usage-Policy
+# throttle (Z.AI error 1313) when concurrency >= 5, so concurrency caps below
+# are conservative.
+DIGEST_MAP_MODEL_DEFAULT = "glm-4.5-air"
+DIGEST_MAP_CONCURRENCY_DEFAULT = 3
+DIGEST_MAP_TIMEOUT_SECONDS_DEFAULT = 180
+DIGEST_MAP_MAX_TOKENS_DEFAULT = 4000
+DIGEST_MAP_TRANSCRIPT_CHAR_LIMIT_DEFAULT = 50_000
+# Reduce-step model defaults. Reduce sees only titles + per-video classifications
+# + thesis lines (no full retellings), so context stays small.
+DIGEST_REDUCE_MODEL_TIER_DEFAULT = "opus"  # → glm-5.1 today
+DIGEST_REDUCE_TIMEOUT_SECONDS_DEFAULT = 600
+DIGEST_REDUCE_MAX_TOKENS_DEFAULT = 8000
+
+
+@dataclass
+class VideoTranscriptPayload:
+    """Per-video data passed into both pipelines.
+
+    `transcript_text` is empty when only metadata was available — the map step
+    will handle that case by emitting a metadata-only classification."""
+    video_id: str
+    title: str
+    transcript_text: str
+    is_metadata_only: bool = False
+    original_item: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class MapResult:
+    """Output of a single map-step call (one video → one retell + classification)."""
+    video_id: str
+    title: str
+    retell_markdown: str
+    thesis_line: str
+    classification: dict[str, Any]
+    error: str | None = None
+    elapsed_seconds: float = 0.0
+    map_model: str = ""
+
+
 
 SYNTHESIS_PROMPT = """You are an expert technical researcher and knowledge synthesizer.
 You are given the transcripts and metadata of several YouTube videos that the user queued up to watch today.
@@ -116,11 +170,123 @@ Here are the videos:
 
 
 # ---------------------------------------------------------------------------
+# Map-step prompt: produces a per-video retelling + classification.
+#
+# Output contract (strict):
+#   1. Markdown "## <title>" heading
+#   2. ### Retelling section (30-40% length retelling, NOT a summary)
+#   3. ### Actionable Insights section (bullets)
+#   4. ### Thesis (single short sentence — fed to the reducer for cross-video themes)
+#   5. ```per_video_classification JSON fenced block (parsed by code, stripped from email)
+#
+# The map LLM does NOT see other videos and is told NOT to draw cross-video themes —
+# that's the reducer's job.
+# ---------------------------------------------------------------------------
+RETELL_PROMPT = """You are a technical knowledge synthesizer. You will be given the transcript and metadata for ONE YouTube video. Produce a "Compressed Retelling" that lets the reader skip watching the video while preserving its substance.
+
+REQUIREMENTS:
+- Length target: roughly 30-40% of the original transcript length. Be substantial, NOT a short summary. If the transcript is ~3000 words, your retelling should be ~900-1200 words.
+- Reproduce the speaker's argument in your own words, preserving the order and structure of their reasoning.
+- Preserve all specific examples, numbers, quoted phrases, library/tool names, file paths, code snippets, product names, and "this works because..." explanations. These details are what distinguish a retelling from a summary.
+- Do NOT add commentary, opinion, cross-references to other videos, or business context.
+- If the transcript text is "[Metadata-only — transcript unavailable]", produce only a one-paragraph note based on the title and stop. Mark the classification's `evidence_quality` as `metadata_only` and `reason` explaining that no transcript was available.
+
+REQUIRED OUTPUT FORMAT (markdown — do not deviate):
+
+## <video title>
+
+**Video ID:** <video_id>
+
+### Retelling
+<the 30-40% length retelling>
+
+### Actionable Insights
+- <concrete thing a reader could do>
+- <another bullet>
+
+### Thesis
+<one short sentence — the core claim or core takeaway of the video, 15-30 words>
+
+```per_video_classification
+{
+  "video_id": "<video_id>",
+  "value_score": <integer 0-100>,
+  "value_tier": "<high|medium|low>",
+  "code_implementation_prospect": <true|false>,
+  "concept_only": <true|false>,
+  "evidence_quality": "<transcript|metadata_only|mixed>",
+  "reason": "<short reason grounded in the transcript>"
+}
+```
+
+INPUT FOLLOWS:
+"""
+
+
+# ---------------------------------------------------------------------------
+# Reduce-step prompt: sees only titles + classifications + thesis lines (NOT
+# full retellings), produces the meta-synthesis (cross-video themes, learning
+# insights, neglected opportunities) and the final ranked `youtube_digest_decisions`
+# JSON block. Python code assembles the final markdown by sandwiching the
+# retellings between the meta-synthesis and the JSON block.
+# ---------------------------------------------------------------------------
+REDUCE_PROMPT = """You are a senior technical analyst preparing a "Daily YouTube Digest" for a busy operator. You have ALREADY received per-video retellings from a map step; do NOT re-summarize the videos. Your job is meta-synthesis across them.
+
+Below is the structured roll-up of every video in today's digest (titles, one-sentence theses, value scores, tiers, evidence quality, and the map-step's reasoning). Use this as your input.
+
+Produce exactly the following markdown, in order:
+
+1. A single H1 title line: `# Daily YouTube Digest: <day_name>, <date_str>`
+2. `## Meta-Synthesis: Daily Digest`
+3. `### Cross-Video Themes` — 3-7 themes that appear across multiple videos. Each theme is one short paragraph naming the relevant videos.
+4. `### Learning Insights` — 2-5 non-obvious technical insights that wouldn't be apparent from any single video.
+5. `### Neglected Opportunities` — 1-3 gaps (topics that should have been discussed but weren't).
+6. Then a single fenced JSON block labeled exactly `youtube_digest_decisions` with this shape (one entry per video, sorted by value_score descending):
+
+```youtube_digest_decisions
+{{
+  "ranked_videos": [
+    {{
+      "rank": 1,
+      "video_id": "string",
+      "title": "string",
+      "value_score": <int 0-100>,
+      "value_tier": "high|medium|low",
+      "code_implementation_prospect": <bool>,
+      "concept_only": <bool>,
+      "tutorial_candidate": <bool>,
+      "recommended_tutorial_mode": "explainer_plus_code|concept_only|none",
+      "evidence_quality": "transcript|metadata_only|mixed",
+      "reason": "short reason from the map step's classification"
+    }}
+  ]
+}}
+```
+
+JSON rules:
+- `tutorial_candidate` may be true only when `code_implementation_prospect` is true.
+- `recommended_tutorial_mode` must be `explainer_plus_code` for tutorial_candidates, `concept_only` otherwise.
+- Include every video from the input exactly once.
+- Use the value_score and value_tier from the map-step input; do NOT re-score from scratch.
+
+DAY_NAME: {day_name}
+DATE: {date_str}
+VIDEO COUNT: {video_count}
+
+PER-VIDEO ROLL-UP:
+{rollup_json}
+"""
+
+
+# ---------------------------------------------------------------------------
 # LLM synthesis
 # ---------------------------------------------------------------------------
 
-async def _generate_digest_content(full_prompt: str) -> str:
-    """Generate digest synthesis through the Anthropic-compatible ZAI path."""
+def _build_anthropic_client_for_zai(timeout_seconds: float) -> AsyncAnthropic:
+    """Build a configured AsyncAnthropic client. Routes to Z.AI proxy if the
+    configured key looks like a ZAI key; otherwise falls through to the SDK
+    default (api.anthropic.com).
+    """
     api_key = (
         os.getenv("ANTHROPIC_API_KEY")
         or os.getenv("ANTHROPIC_AUTH_TOKEN")
@@ -128,60 +294,493 @@ async def _generate_digest_content(full_prompt: str) -> str:
     )
     if not api_key:
         raise RuntimeError("No ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or ZAI_API_KEY configured")
-
-    model = os.getenv("UA_YOUTUBE_DIGEST_MODEL") or resolve_model("opus")
-    client_kwargs: dict[str, Any] = {
+    kwargs: dict[str, Any] = {
         "api_key": api_key,
         "max_retries": 0,
-        "timeout": float(os.getenv("UA_YOUTUBE_DIGEST_LLM_TIMEOUT_SECONDS", "900")),
+        "timeout": float(timeout_seconds),
     }
     base_url = os.getenv("ANTHROPIC_BASE_URL")
     if base_url:
-        client_kwargs["base_url"] = base_url
+        kwargs["base_url"] = base_url
     elif os.getenv("ZAI_API_KEY") and api_key == os.getenv("ZAI_API_KEY"):
-        client_kwargs["base_url"] = "https://api.z.ai/api/anthropic"
+        kwargs["base_url"] = "https://api.z.ai/api/anthropic"
+    return AsyncAnthropic(**kwargs)
 
-    client = AsyncAnthropic(**client_kwargs)
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    """Detect Z.AI rate-limit / Fair-Usage-Policy responses worth retrying.
+
+    Z.AI returns:
+      - HTTP 429 with various messages ("Too many requests", "high concurrency")
+      - HTTP 429 with FUP code 1313 ("Fair Usage Policy", "request frequency has been limited")
+    All of the above are retry-eligible.
+    """
+    err_str = str(exc).lower()
+    return (
+        "429" in err_str
+        or "too many requests" in err_str
+        or "high concurrency" in err_str
+        or "fair usage policy" in err_str
+        or "1313" in err_str
+    )
+
+
+async def _zai_call_with_retry(
+    *,
+    client: AsyncAnthropic,
+    model: str,
+    prompt: str,
+    max_tokens: int,
+    context: str,
+    max_retries: int = 5,
+    temperature: float = 0.4,
+) -> str:
+    """Send one messages.create() call to Z.AI with the global rate limiter
+    and a 429/FUP-aware retry loop. Returns the concatenated text response.
+
+    All non-rate-limit errors are re-raised immediately.
+    """
     limiter = ZAIRateLimiter.get_instance()
-    max_retries = int(os.getenv("UA_YOUTUBE_DIGEST_LLM_MAX_RETRIES", "5"))
-    max_tokens = int(os.getenv("UA_YOUTUBE_DIGEST_MAX_TOKENS", "12000"))
-    context = "youtube_daily_digest"
     last_error: Exception | None = None
-
-    logger.info("Generating Meta-Synthesis with Anthropic-compatible model=%s...", model)
     for attempt in range(max_retries):
         async with limiter.acquire(context):
             try:
                 response = await client.messages.create(
                     model=model,
                     max_tokens=max_tokens,
-                    temperature=0.4,
-                    messages=[{"role": "user", "content": full_prompt}],
+                    temperature=temperature,
+                    messages=[{"role": "user", "content": prompt}],
                 )
                 await limiter.record_success()
                 text = "".join(getattr(block, "text", "") for block in response.content).strip()
                 if not text:
-                    raise RuntimeError("LLM returned an empty digest response")
+                    raise RuntimeError(f"LLM returned an empty response (context={context})")
                 return text
             except Exception as exc:
                 last_error = exc
-                error_str = str(exc).lower()
-                if "429" not in error_str and "too many requests" not in error_str and "high concurrency" not in error_str:
+                if not _is_rate_limit_error(exc):
                     raise
                 await limiter.record_429(context)
                 if attempt >= max_retries - 1:
                     break
                 delay = limiter.get_backoff(attempt)
                 logger.warning(
-                    "Digest LLM rate limited; retrying in %.1fs (attempt %d/%d): %s",
+                    "ZAI rate-limited at context=%s; retrying in %.1fs (attempt %d/%d): %s",
+                    context,
                     delay,
                     attempt + 1,
                     max_retries,
-                    exc,
+                    str(exc)[:200],
                 )
                 await asyncio.sleep(delay)
+    raise RuntimeError(
+        f"ZAI call failed after {max_retries} attempts at context={context}: {last_error}"
+    )
 
-    raise RuntimeError(f"Digest LLM synthesis failed after {max_retries} attempts: {last_error}")
+
+# ---------------------------------------------------------------------------
+# Map / Reduce pipeline primitives
+# ---------------------------------------------------------------------------
+
+_PER_VIDEO_CLASSIFICATION_PATTERN = re.compile(
+    r"```per_video_classification\s*(.*?)\s*```",
+    flags=re.DOTALL | re.IGNORECASE,
+)
+_THESIS_LINE_PATTERN = re.compile(
+    r"### Thesis\s*\n+(.+?)(?:\n{2,}|\Z)",
+    flags=re.DOTALL,
+)
+
+
+def _parse_map_output(raw_text: str, *, video_id: str, fallback_title: str) -> dict[str, Any]:
+    """Parse a single map-step LLM response into (clean_markdown, thesis, classification).
+
+    On any parse failure, returns a best-effort classification so the digest
+    can still proceed (the reducer ranks low-confidence entries near the
+    bottom and the dispatch gate further filters them out).
+    """
+    # Extract classification block
+    classification: dict[str, Any] = {}
+    match = _PER_VIDEO_CLASSIFICATION_PATTERN.search(raw_text)
+    if match:
+        try:
+            classification = json.loads(match.group(1))
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "Map step %s: failed to parse per_video_classification JSON: %s",
+                video_id,
+                exc,
+            )
+            classification = {}
+    if not isinstance(classification, dict):
+        classification = {}
+    classification.setdefault("video_id", video_id)
+    classification.setdefault("value_score", 0)
+    classification.setdefault("value_tier", "unknown")
+    classification.setdefault("code_implementation_prospect", False)
+    classification.setdefault("concept_only", True)
+    classification.setdefault("evidence_quality", "unknown")
+    classification.setdefault("reason", "")
+
+    # Extract thesis
+    thesis = ""
+    thesis_match = _THESIS_LINE_PATTERN.search(raw_text)
+    if thesis_match:
+        thesis = thesis_match.group(1).strip()
+    if not thesis:
+        thesis = classification.get("reason") or fallback_title
+
+    # Strip the classification block from the markdown (we'll re-emit it from
+    # the reducer's structured output, not from per-video raw blocks).
+    clean_markdown = _PER_VIDEO_CLASSIFICATION_PATTERN.sub("", raw_text).strip()
+
+    return {
+        "retell_markdown": clean_markdown,
+        "thesis_line": thesis,
+        "classification": classification,
+    }
+
+
+async def _retell_one_video(
+    *,
+    client: AsyncAnthropic,
+    model: str,
+    video: VideoTranscriptPayload,
+    max_tokens: int,
+    transcript_char_limit: int,
+) -> MapResult:
+    """One map call: turn one video's transcript into a Compressed Retelling +
+    structured classification. Errors are caught and converted into a
+    metadata-only MapResult so the digest run can finish even if one or two
+    videos fail."""
+    started = datetime.now(timezone.utc)
+    transcript_text = video.transcript_text or ""
+    if transcript_text and len(transcript_text) > transcript_char_limit:
+        transcript_text = transcript_text[: transcript_char_limit] + "... [TRUNCATED]"
+    if video.is_metadata_only or not transcript_text:
+        transcript_text = "[Metadata-only — transcript unavailable]"
+
+    prompt_body = (
+        f"TITLE: {video.title}\n"
+        f"VIDEO ID: {video.video_id}\n"
+        f"TRANSCRIPT:\n{transcript_text}\n"
+    )
+    prompt = RETELL_PROMPT + prompt_body
+    context = f"youtube_digest_map:{video.video_id}"
+
+    try:
+        raw_text = await _zai_call_with_retry(
+            client=client,
+            model=model,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            context=context,
+        )
+        elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+        parsed = _parse_map_output(raw_text, video_id=video.video_id, fallback_title=video.title)
+        return MapResult(
+            video_id=video.video_id,
+            title=video.title,
+            retell_markdown=parsed["retell_markdown"],
+            thesis_line=parsed["thesis_line"],
+            classification=parsed["classification"],
+            elapsed_seconds=elapsed,
+            map_model=model,
+        )
+    except Exception as exc:
+        elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+        logger.error("Map step failed for %s after %.1fs: %s", video.video_id, elapsed, exc)
+        fallback_md = (
+            f"## {video.title}\n\n"
+            f"**Video ID:** {video.video_id}\n\n"
+            f"### Retelling\n\n"
+            f"_Map-step retelling failed: {exc}. Tutorial pipeline dispatch will skip this video._\n"
+        )
+        return MapResult(
+            video_id=video.video_id,
+            title=video.title,
+            retell_markdown=fallback_md,
+            thesis_line="(map step failed — see digest log)",
+            classification={
+                "video_id": video.video_id,
+                "value_score": 0,
+                "value_tier": "unknown",
+                "code_implementation_prospect": False,
+                "concept_only": True,
+                "evidence_quality": "unknown",
+                "reason": f"Map step error: {type(exc).__name__}",
+            },
+            error=str(exc),
+            elapsed_seconds=elapsed,
+            map_model=model,
+        )
+
+
+async def _map_retell_videos(
+    videos: list[VideoTranscriptPayload],
+    *,
+    model: str | None = None,
+    concurrency: int | None = None,
+    timeout_seconds: int | None = None,
+    max_tokens: int | None = None,
+    transcript_char_limit: int | None = None,
+) -> list[MapResult]:
+    """Run the map step over all videos with bounded concurrency.
+
+    The internal semaphore bounds how many tasks we *try* to run in parallel.
+    The global ZAIRateLimiter (`ZAI_MAX_CONCURRENT`, default 2) bounds how
+    many of those actually hit the Z.AI proxy at once. So the effective
+    parallelism is min(internal_semaphore, ZAI_MAX_CONCURRENT).
+    """
+    resolved_model = (
+        model
+        or os.getenv("UA_YOUTUBE_DIGEST_MAP_MODEL")
+        or DIGEST_MAP_MODEL_DEFAULT
+    )
+    resolved_concurrency = max(
+        1,
+        int(
+            concurrency
+            if concurrency is not None
+            else os.getenv("UA_YOUTUBE_DIGEST_MAP_CONCURRENCY", str(DIGEST_MAP_CONCURRENCY_DEFAULT))
+        ),
+    )
+    resolved_timeout = int(
+        timeout_seconds
+        if timeout_seconds is not None
+        else os.getenv("UA_YOUTUBE_DIGEST_MAP_TIMEOUT_SECONDS", str(DIGEST_MAP_TIMEOUT_SECONDS_DEFAULT))
+    )
+    resolved_max_tokens = int(
+        max_tokens
+        if max_tokens is not None
+        else os.getenv("UA_YOUTUBE_DIGEST_MAP_MAX_TOKENS", str(DIGEST_MAP_MAX_TOKENS_DEFAULT))
+    )
+    resolved_char_limit = int(
+        transcript_char_limit
+        if transcript_char_limit is not None
+        else os.getenv(
+            "UA_YOUTUBE_DIGEST_MAP_TRANSCRIPT_CHAR_LIMIT",
+            str(DIGEST_MAP_TRANSCRIPT_CHAR_LIMIT_DEFAULT),
+        )
+    )
+
+    logger.info(
+        "Map step: model=%s videos=%d concurrency=%d timeout=%ds max_tokens=%d",
+        resolved_model,
+        len(videos),
+        resolved_concurrency,
+        resolved_timeout,
+        resolved_max_tokens,
+    )
+
+    client = _build_anthropic_client_for_zai(timeout_seconds=resolved_timeout)
+    semaphore = asyncio.Semaphore(resolved_concurrency)
+
+    async def _bounded(v: VideoTranscriptPayload) -> MapResult:
+        async with semaphore:
+            return await _retell_one_video(
+                client=client,
+                model=resolved_model,
+                video=v,
+                max_tokens=resolved_max_tokens,
+                transcript_char_limit=resolved_char_limit,
+            )
+
+    results = await asyncio.gather(*[_bounded(v) for v in videos])
+    # Surface aggregate stats in the log so operators can spot regressions.
+    successes = [r for r in results if r.error is None]
+    failures = [r for r in results if r.error is not None]
+    if successes:
+        elapsed_list = sorted(r.elapsed_seconds for r in successes)
+        median = elapsed_list[len(elapsed_list) // 2]
+        logger.info(
+            "Map step complete: %d ok / %d failed; latency min=%.1fs p50=%.1fs max=%.1fs",
+            len(successes),
+            len(failures),
+            min(elapsed_list),
+            median,
+            max(elapsed_list),
+        )
+    else:
+        logger.error("Map step complete: 0 ok / %d failed (all videos failed)", len(failures))
+    return results
+
+
+async def _reduce_meta_synthesize(
+    map_results: list[MapResult],
+    *,
+    day_name: str,
+    date_str: str,
+    model_tier: str | None = None,
+    timeout_seconds: int | None = None,
+    max_tokens: int | None = None,
+) -> str:
+    """One reduce call: meta-synthesis across all per-video classifications.
+
+    The reducer sees only titles + thesis lines + classifications (NOT full
+    retellings), so context stays small even on 30+ video days.
+    """
+    resolved_model = (
+        os.getenv("UA_YOUTUBE_DIGEST_REDUCE_MODEL")
+        or resolve_model(model_tier or DIGEST_REDUCE_MODEL_TIER_DEFAULT)
+    )
+    resolved_timeout = int(
+        timeout_seconds
+        if timeout_seconds is not None
+        else os.getenv(
+            "UA_YOUTUBE_DIGEST_REDUCE_TIMEOUT_SECONDS",
+            str(DIGEST_REDUCE_TIMEOUT_SECONDS_DEFAULT),
+        )
+    )
+    resolved_max_tokens = int(
+        max_tokens
+        if max_tokens is not None
+        else os.getenv("UA_YOUTUBE_DIGEST_REDUCE_MAX_TOKENS", str(DIGEST_REDUCE_MAX_TOKENS_DEFAULT))
+    )
+
+    rollup = [
+        {
+            "video_id": r.video_id,
+            "title": r.title,
+            "thesis": r.thesis_line,
+            "value_score": r.classification.get("value_score", 0),
+            "value_tier": r.classification.get("value_tier", "unknown"),
+            "code_implementation_prospect": bool(
+                r.classification.get("code_implementation_prospect", False)
+            ),
+            "concept_only": bool(r.classification.get("concept_only", True)),
+            "evidence_quality": r.classification.get("evidence_quality", "unknown"),
+            "reason": r.classification.get("reason", ""),
+        }
+        for r in map_results
+    ]
+    rollup_json = json.dumps(rollup, indent=2, ensure_ascii=False)
+    prompt = REDUCE_PROMPT.format(
+        day_name=day_name.title(),
+        date_str=date_str,
+        video_count=len(map_results),
+        rollup_json=rollup_json,
+    )
+
+    logger.info(
+        "Reduce step: model=%s timeout=%ds max_tokens=%d rollup_chars=%d",
+        resolved_model,
+        resolved_timeout,
+        resolved_max_tokens,
+        len(rollup_json),
+    )
+
+    client = _build_anthropic_client_for_zai(timeout_seconds=resolved_timeout)
+    return await _zai_call_with_retry(
+        client=client,
+        model=resolved_model,
+        prompt=prompt,
+        max_tokens=resolved_max_tokens,
+        context="youtube_digest_reduce",
+    )
+
+
+def _assemble_map_reduce_digest(
+    *,
+    reduce_output: str,
+    map_results: list[MapResult],
+) -> str:
+    """Combine the reducer's meta-synthesis (markdown + JSON block) with the
+    map-step retellings into the final digest content. The retellings get
+    inserted BEFORE the youtube_digest_decisions JSON block so the email
+    body (`_strip_digest_decision_blocks`) carries them and the dispatch
+    parser (`_extract_decision_json`) still finds the JSON at the end.
+    """
+    retellings_md = "\n\n---\n\n".join(r.retell_markdown for r in map_results)
+    section = f"\n\n---\n\n## Per-Video Retellings\n\n{retellings_md}\n\n---\n\n"
+    json_block_match = re.search(
+        r"```(?:youtube_digest_decisions|json)\s*",
+        reduce_output,
+        flags=re.IGNORECASE,
+    )
+    if json_block_match:
+        head = reduce_output[: json_block_match.start()].rstrip()
+        tail = reduce_output[json_block_match.start():]
+        return f"{head}{section}{tail}"
+    # No JSON block in reducer output (shouldn't happen but fall back gracefully).
+    return f"{reduce_output.rstrip()}{section}"
+
+
+async def _generate_digest_content_map_reduce(
+    *,
+    videos: list[VideoTranscriptPayload],
+    day_name: str,
+    date_str: str,
+) -> str:
+    """Map-reduce pipeline entry point. Parallel per-video retellings, then
+    one reduce call for meta-synthesis + ranked JSON decision block."""
+    map_results = await _map_retell_videos(videos)
+    reduce_output = await _reduce_meta_synthesize(
+        map_results,
+        day_name=day_name,
+        date_str=date_str,
+    )
+    return _assemble_map_reduce_digest(reduce_output=reduce_output, map_results=map_results)
+
+
+async def _generate_digest_content_single_call(full_prompt: str) -> str:
+    """Legacy single-LLM-call digest synthesis. Kept for fallback and for
+    A/B comparison against the new map-reduce path. Hits one big-context
+    glm-5.1 call with all transcripts concatenated.
+    """
+    model = os.getenv("UA_YOUTUBE_DIGEST_MODEL") or resolve_model("opus")
+    timeout_seconds = float(os.getenv("UA_YOUTUBE_DIGEST_LLM_TIMEOUT_SECONDS", "900"))
+    max_retries = int(os.getenv("UA_YOUTUBE_DIGEST_LLM_MAX_RETRIES", "5"))
+    max_tokens = int(os.getenv("UA_YOUTUBE_DIGEST_MAX_TOKENS", "12000"))
+
+    client = _build_anthropic_client_for_zai(timeout_seconds=timeout_seconds)
+    logger.info("Single-call digest synthesis with model=%s...", model)
+    return await _zai_call_with_retry(
+        client=client,
+        model=model,
+        prompt=full_prompt,
+        max_tokens=max_tokens,
+        context="youtube_daily_digest",
+        max_retries=max_retries,
+    )
+
+
+async def _generate_digest_content(
+    *,
+    full_prompt: str | None = None,
+    videos: list[VideoTranscriptPayload] | None = None,
+    day_name: str | None = None,
+    date_str: str | None = None,
+    pipeline_override: str | None = None,
+) -> str:
+    """Dispatcher for digest synthesis. Picks pipeline based on
+    `UA_YOUTUBE_DIGEST_PIPELINE` env var (or explicit override).
+
+    - `map_reduce` (default): requires `videos`, `day_name`, `date_str`.
+    - `single_call`: requires `full_prompt`.
+    """
+    pipeline = (
+        pipeline_override
+        or os.getenv("UA_YOUTUBE_DIGEST_PIPELINE", DIGEST_PIPELINE_DEFAULT)
+    ).strip().lower()
+    if pipeline == "single_call":
+        if full_prompt is None:
+            raise ValueError("single_call pipeline requires full_prompt")
+        return await _generate_digest_content_single_call(full_prompt)
+    if pipeline != "map_reduce":
+        logger.warning(
+            "Unknown UA_YOUTUBE_DIGEST_PIPELINE=%r; falling back to map_reduce",
+            pipeline,
+        )
+    if videos is None or day_name is None or date_str is None:
+        raise ValueError(
+            "map_reduce pipeline requires videos, day_name, and date_str"
+        )
+    return await _generate_digest_content_map_reduce(
+        videos=videos,
+        day_name=day_name,
+        date_str=date_str,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -882,6 +1481,7 @@ def process_daily_digest(
     items = new_items
 
     transcripts: list[str] = []
+    transcript_payloads: list[VideoTranscriptPayload] = []
     processed_items: list[dict] = []
     video_titles: list[str] = []
 
@@ -920,6 +1520,15 @@ def process_daily_digest(
                 text = text[:50000] + "... [TRUNCATED]"
 
             transcripts.append(f"Title: {title}\nVideo ID: {video_id}\nTranscript:\n{text}\n")
+            transcript_payloads.append(
+                VideoTranscriptPayload(
+                    video_id=video_id,
+                    title=title,
+                    transcript_text=text,
+                    is_metadata_only=False,
+                    original_item=item,
+                )
+            )
             processed_items.append(item)
         else:
             if result:
@@ -938,6 +1547,15 @@ def process_daily_digest(
             # Metadata-only fallback: use title for synthesis (playlist API doesn't return description)
             fallback_text = f"[Metadata-only — transcript unavailable]\n\nTitle: {title}"
             transcripts.append(f"Title: {title}\nVideo ID: {video_id}\n{fallback_text}\n")
+            transcript_payloads.append(
+                VideoTranscriptPayload(
+                    video_id=video_id,
+                    title=title,
+                    transcript_text="",
+                    is_metadata_only=True,
+                    original_item=item,
+                )
+            )
             processed_items.append(item)
             logger.info("Using metadata-only fallback for %s", video_id)
 
@@ -945,16 +1563,30 @@ def process_daily_digest(
         logger.info("No transcripts could be extracted. Exiting.")
         return
 
+    # date_str is needed by both the map_reduce pipeline (passed to the reducer
+    # for the H1 title line) and by artifact path construction below.
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    pipeline = os.getenv("UA_YOUTUBE_DIGEST_PIPELINE", DIGEST_PIPELINE_DEFAULT).strip().lower()
     full_prompt = SYNTHESIS_PROMPT + "\n\n---\n\n".join(transcripts)
 
     try:
-        digest_content = asyncio.run(_generate_digest_content(full_prompt))
+        if pipeline == "single_call":
+            digest_content = asyncio.run(
+                _generate_digest_content(full_prompt=full_prompt, pipeline_override="single_call")
+            )
+        else:
+            digest_content = asyncio.run(
+                _generate_digest_content(
+                    videos=transcript_payloads,
+                    day_name=day_name,
+                    date_str=date_str,
+                )
+            )
     except Exception as e:
-        logger.error("Failed to generate digest content with LLM: %s", e)
+        logger.error("Failed to generate digest content with LLM (pipeline=%s): %s", pipeline, e)
         return
 
     # Save Artifact to the persistent daily_digests workspace
-    date_str = datetime.now().strftime("%Y-%m-%d")
     artifacts_dir = _digest_artifacts_dir()
     artifacts_dir.mkdir(parents=True, exist_ok=True)
 
