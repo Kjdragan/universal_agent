@@ -387,18 +387,25 @@ def candidate_urls_for_term(term: str, *, allowlist: list[str]) -> list[str]:
     return out
 
 
-# ── SPA-404 shell detection ─────────────────────────────────────────────────
+# ── Unusable-grounding-source detection ─────────────────────────────────────
 #
-# docs.anthropic.com is a Next.js SPA. Every path returns HTTP 200 with the
-# same shell HTML — the actual 404 message renders client-side after JS
-# executes. The fetcher cannot tell the page is a 404 from the HTTP status
-# alone, so we post-validate the saved markdown for two telltale signs:
+# Two failure modes the grounding fetcher can produce:
 #
-#   1. The extracted prose is tiny relative to the raw fetch (mostly CSS
-#      <link> tags and <script> bundles).
-#   2. The body contains the SPA marker attributes ``data-theme="claude"``
-#      or the literal "Page not found" string that the SPA renders inside
-#      <noscript> tags.
+#   1. SPA 404 shell. docs.anthropic.com is a Next.js SPA — every path
+#      returns HTTP 200 with the same shell HTML and renders the 404 only
+#      after JS executes. ``data-theme="claude"`` and ``_next/static``
+#      markers identify it.
+#   2. Raw HTML dump. ``csi_url_judge._fetch_with_httpx`` saves the response
+#      body straight into a ``.md`` file when ``defuddle`` is unavailable on
+#      the host. The saved file is 200KB of ``<!DOCTYPE html>``, ``<link>``
+#      tags, and JS bundles with little or no prose. This happens on the
+#      VPS where the defuddle CLI is not installed, so EVERY grounded
+#      source ends up as a raw HTML dump regardless of whether the URL was
+#      a real docs page or an SPA 404.
+#
+# Both cases are unusable as grounding context for the LLM (and worse,
+# poison the vault if ingested), so we reject them with the same predicate
+# and let the operator/cleanup script quarantine them.
 
 _SPA_SHELL_MARKERS = (
     'data-theme="claude"',
@@ -411,21 +418,65 @@ _SPA_SHELL_MARKERS = (
 # of body text; SPA shells extract to ~200 chars of mostly-empty markup.
 _SPA_SHELL_MIN_BODY_CHARS = 600
 
+# When fetched content is raw HTML masquerading as markdown, the file
+# typically opens with a ``# Source: <url>`` line written by the fetcher
+# followed almost immediately by a ``<!DOCTYPE html>`` declaration. Real
+# defuddle-extracted markdown never contains DOCTYPE in the header.
+_RAW_HTML_HEADER_MARKERS = (
+    "<!doctype html>",
+    "<html ",
+    "<html>",
+    "<html\n",
+)
+
+# When inspecting an arbitrary 1KB slice of body, this many HTML-tag
+# fragments strongly suggests we're looking at raw markup, not prose.
+_RAW_HTML_TAG_DENSITY_THRESHOLD = 8
+
+
+def _looks_like_raw_html(body: str) -> bool:
+    """Return True when the saved body is raw HTML rather than extracted prose.
+
+    Independent of size — a 200KB raw-HTML dump and a 2KB raw-HTML stub
+    both qualify. The fetcher pipeline expects extracted markdown; HTML
+    markup landing on disk means defuddle silently failed and httpx fell
+    through to writing the raw response body.
+    """
+    if not body:
+        return False
+    lowered = body.lower()
+    # Examine the first ~2KB so we ignore any spurious HTML appearing inside
+    # legitimate markdown code blocks deep in the document.
+    head = lowered[:2048]
+    if any(marker in head for marker in _RAW_HTML_HEADER_MARKERS):
+        return True
+    # Tag-density check on the same head slice. Real markdown rarely has
+    # more than a handful of HTML tags; raw documents have hundreds.
+    tag_hits = head.count("<link ") + head.count("<script") + head.count("<meta ")
+    if tag_hits >= _RAW_HTML_TAG_DENSITY_THRESHOLD:
+        return True
+    return False
+
 
 def _is_spa_404_shell(*, content_path: str, content_chars: int) -> bool:
-    """Return True when the fetched grounding source is a docs SPA 404 shell."""
+    """Return True when the fetched grounding source is unusable.
+
+    Despite the legacy name (kept stable for the cleanup script), this
+    predicate now also catches raw HTML dumps, since both failure modes
+    poison the vault identically.
+    """
     if content_chars <= 0:
         return False
-    if content_chars >= _SPA_SHELL_MIN_BODY_CHARS:
-        # Long bodies are almost always legitimate; cheap path out.
-        if not content_path:
-            return False
     if not content_path:
         return False
     try:
         body = Path(content_path).read_text(encoding="utf-8", errors="ignore")
     except Exception:
         return False
+    # Raw HTML masquerading as markdown — common when defuddle is
+    # unavailable. Independent of size.
+    if _looks_like_raw_html(body):
+        return True
     lowered = body.lower()
     if any(marker in lowered for marker in _SPA_SHELL_MARKERS):
         # When markers are present, also require the body to be short. The

@@ -556,7 +556,14 @@ def _fetch_with_defuddle(url: str, output_path: Path, timeout: int) -> dict[str,
 
 
 def _fetch_with_httpx(url: str, output_path: Path, timeout: int) -> dict[str, Any]:
-    """Fallback: fetch with httpx and save raw content."""
+    """Fallback: fetch with httpx and save raw content.
+
+    Note: this writes the raw HTML response body to disk. Downstream consumers
+    that expect extracted markdown (e.g. research_grounding) must validate the
+    body — see research_grounding._looks_like_raw_html. When defuddle is
+    unavailable on the host (no ``npx``/``defuddle-cli``), every URL falls
+    through this path and the saved file is HTML markup, not prose.
+    """
     try:
         with httpx.Client(timeout=timeout, follow_redirects=True) as client:
             resp = client.get(url, headers={
@@ -570,6 +577,16 @@ def _fetch_with_httpx(url: str, output_path: Path, timeout: int) -> dict[str, An
                 if len(text) > cap:
                     text = text[:cap] + f"\n\n... [Content truncated at {cap} chars]"
                 output_path.write_text(f"# Source: {url}\n\n{text}", encoding="utf-8")
+                # Operator-visible signal: when this fires for every URL on a
+                # host, defuddle is missing or broken and downstream consumers
+                # are getting raw HTML they need to validate themselves.
+                if "<!doctype html>" in text[:2048].lower():
+                    logger.warning(
+                        "csi_url_judge._fetch_with_httpx: defuddle fallback saved raw HTML for %s "
+                        "(file=%s). Downstream consumers must validate this is not markup-only content.",
+                        url,
+                        output_path,
+                    )
                 return {"ok": True, "path": str(output_path), "method": "httpx", "chars": len(text)}
             return {"ok": False, "error": f"HTTP {resp.status_code}"}
     except httpx.TimeoutException:
