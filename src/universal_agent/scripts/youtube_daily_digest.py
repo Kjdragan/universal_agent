@@ -361,15 +361,62 @@ def _rank_digest_decisions(decisions: dict[str, Any], processed_items: list[dict
     return {"ranked_videos": ranked}
 
 
+DEMO_GATE_MIN_SCORE_DEFAULT = 70
+_DEMO_GATE_REJECT_EVIDENCE = {"metadata_only"}
+_DEMO_GATE_REJECT_TIERS = {"low", "unknown"}
+
+
+def _is_demo_worthy(row: dict[str, Any], *, min_score: int) -> tuple[bool, str]:
+    """Deterministic guardrails around the LLM's `code_implementation_prospect=true`.
+
+    The LLM is allowed to nominate candidates, but we don't dispatch a tutorial
+    pipeline run unless three additional signals (all present in the digest
+    decisions JSON the LLM already emits) agree the video is build-tutorial
+    material. Each signal can be tuned via env var.
+    """
+    if not _coerce_bool(row.get("code_implementation_prospect")):
+        return False, "not_code_implementation_prospect"
+    evidence = str(row.get("evidence_quality") or "").strip().lower()
+    if evidence in _DEMO_GATE_REJECT_EVIDENCE:
+        return False, f"evidence_quality={evidence or 'unknown'}"
+    score = int(row.get("value_score") or 0)
+    if score < min_score:
+        return False, f"value_score={score}<min={min_score}"
+    tier = str(row.get("value_tier") or "").strip().lower()
+    if tier in _DEMO_GATE_REJECT_TIERS:
+        return False, f"value_tier={tier or 'unknown'}"
+    return True, "ok"
+
+
 def _select_tutorial_dispatch_candidates(
     decisions: dict[str, Any],
     *,
     top_n: int,
+    min_score: int | None = None,
 ) -> list[dict[str, Any]]:
-    if top_n <= 0:
-        return []
-    candidates = [row for row in decisions.get("ranked_videos", []) if row.get("code_implementation_prospect") is True]
-    return candidates[:top_n]
+    """Annotate every ranked row with a `dispatch_*` triplet and return only
+    the top-N rows that pass the deterministic demo-worthiness gate.
+
+    Side-effect: each ranked row in `decisions["ranked_videos"]` gains
+    `dispatch_eligible`, `dispatch_reject_reason`, and `dispatch_status`
+    fields so the saved candidates JSON and the human-facing email both
+    surface why a video was (or wasn't) sent to the tutorial pipeline.
+    """
+    threshold = DEMO_GATE_MIN_SCORE_DEFAULT if min_score is None else max(0, int(min_score))
+    selected: list[dict[str, Any]] = []
+    for row in decisions.get("ranked_videos", []):
+        ok, reason = _is_demo_worthy(row, min_score=threshold)
+        row["dispatch_eligible"] = ok
+        row["dispatch_reject_reason"] = "" if ok else reason
+        if top_n <= 0 or not ok:
+            row["dispatch_status"] = "rejected" if not ok else "disabled_top_n_zero"
+            continue
+        if len(selected) < top_n:
+            row["dispatch_status"] = "selected"
+            selected.append(row)
+        else:
+            row["dispatch_status"] = "eligible_overflow"
+    return selected
 
 
 def _save_tutorial_candidates(
@@ -507,18 +554,22 @@ def _dispatch_tutorial_candidates(
 
 def _format_tutorial_dispatch_summary(
     *,
+    decisions: dict[str, Any],
     selected: list[dict[str, Any]],
     dispatch_results: list[dict[str, Any]],
     candidates_path: Path,
     dispatch_path: Path | None,
     top_n: int,
+    min_score: int,
     dry_run: bool,
 ) -> str:
     """Build the human-facing tutorial pipeline section for the digest email/artifact."""
     lines = [
         "## YouTube Tutorial Pipeline Dispatch",
         "",
-        f"Automation target: top {max(0, top_n)} code implementation prospects.",
+        f"Automation target: top {max(0, top_n)} code implementation prospects "
+        f"(deterministic demo-worthiness gate: score >= {min_score}, "
+        f"value_tier not in {{low, unknown}}, evidence_quality != metadata_only).",
     ]
     if dry_run:
         lines.append("Mode: dry run; no tutorial pipeline dispatches were sent.")
@@ -526,7 +577,7 @@ def _format_tutorial_dispatch_summary(
         lines.extend(
             [
                 "",
-                "No videos were selected for the tutorial pipeline because no ranked video was classified as a code implementation prospect.",
+                "No videos were sent to the tutorial pipeline. Either no ranked video was a code-implementation prospect, or every prospect was rejected by the demo-worthiness gate (see below).",
             ]
         )
     else:
@@ -542,6 +593,30 @@ def _format_tutorial_dispatch_summary(
                 f"({video_id}) — score {row.get('value_score')}; {status}. "
                 f"Reason: {row.get('reason') or 'classified as a code implementation prospect.'}"
             )
+
+    rejected = [
+        row
+        for row in decisions.get("ranked_videos", [])
+        if _coerce_bool(row.get("code_implementation_prospect"))
+        and row.get("dispatch_status") == "rejected"
+    ]
+    if rejected:
+        lines.extend(
+            [
+                "",
+                "Rejected by demo-worthiness gate (LLM marked code-prospect, but deterministic checks disagreed):",
+            ]
+        )
+        for row in rejected[:10]:
+            video_id = str(row.get("video_id") or "")
+            lines.append(
+                "- "
+                f"#{row.get('rank')} {row.get('title') or video_id} "
+                f"({video_id}) — score {row.get('value_score')}, "
+                f"tier {row.get('value_tier')}, evidence {row.get('evidence_quality')}; "
+                f"reject_reason: {row.get('dispatch_reject_reason') or 'unknown'}."
+            )
+
     lines.extend(["", f"Decision artifact: `{candidates_path}`"])
     if dispatch_path:
         lines.append(f"Dispatch results: `{dispatch_path}`")
@@ -895,6 +970,16 @@ def process_daily_digest(
     except ValueError:
         logger.warning("Invalid UA_YOUTUBE_DIGEST_AUTO_TUTORIAL_TOP_N; defaulting to 4")
         configured_top_n = 4
+    try:
+        configured_min_score = int(
+            os.getenv("UA_YOUTUBE_DIGEST_DEMO_GATE_MIN_SCORE", str(DEMO_GATE_MIN_SCORE_DEFAULT))
+        )
+    except ValueError:
+        logger.warning(
+            "Invalid UA_YOUTUBE_DIGEST_DEMO_GATE_MIN_SCORE; defaulting to %d",
+            DEMO_GATE_MIN_SCORE_DEFAULT,
+        )
+        configured_min_score = DEMO_GATE_MIN_SCORE_DEFAULT
     decisions = _rank_digest_decisions(
         _extract_decision_json(digest_content),
         processed_items,
@@ -902,6 +987,7 @@ def process_daily_digest(
     selected_tutorial_candidates = _select_tutorial_dispatch_candidates(
         decisions,
         top_n=configured_top_n,
+        min_score=configured_min_score,
     )
     candidates_path = _save_tutorial_candidates(
         day_name=day_name,
@@ -927,11 +1013,13 @@ def process_daily_digest(
         logger.info("Saved tutorial dispatch results: %s", dispatch_path)
 
     tutorial_dispatch_summary = _format_tutorial_dispatch_summary(
+        decisions=decisions,
         selected=selected_tutorial_candidates,
         dispatch_results=dispatch_results,
         candidates_path=candidates_path,
         dispatch_path=dispatch_path,
         top_n=configured_top_n,
+        min_score=configured_min_score,
         dry_run=dry_run,
     )
     full_content = (
