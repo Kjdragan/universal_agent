@@ -90,7 +90,7 @@ def _write_drift_report(stale: int, missing: int, statuses: dict[str, Any]) -> P
     body_parts = [
         f"# Architecture Canvas drift report — {date_str}",
         "",
-        f"- Stale pointers (amber/red, >30 days untouched): **{stale}**",
+        f"- Stale pointers (amber/red, >60 days untouched): **{stale}**",
         f"- Missing pointers (path no longer exists): **{missing}**",
         "",
     ]

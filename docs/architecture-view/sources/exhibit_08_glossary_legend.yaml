@@ -39,9 +39,9 @@ glossary:
 
 legend:
   freshness:
-    - {color: "#3fae6a", label: "Green", meaning: "Source touched within last 30 days"}
-    - {color: "#d4a44e", label: "Amber", meaning: "Source touched 30–90 days ago"}
-    - {color: "#c44e4e", label: "Red", meaning: "Source touched >90 days ago, or path missing"}
+    - {color: "#3fae6a", label: "Green", meaning: "Source touched within last 60 days"}
+    - {color: "#d4a44e", label: "Amber", meaning: "Source touched 60–180 days ago"}
+    - {color: "#c44e4e", label: "Red", meaning: "Source touched >180 days ago, or path missing"}
   edges:
     - {style: "solid", meaning: "Synchronous / direct call"}
     - {style: "dashed", meaning: "Asynchronous / feedback loop"}
