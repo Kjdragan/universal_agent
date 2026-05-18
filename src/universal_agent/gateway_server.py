@@ -18447,6 +18447,9 @@ def _ensure_youtube_daily_digest_cron_job() -> Optional[dict[str, Any]]:
             "FRIDAY_YT_PLAYLIST",
             "SATURDAY_YT_PLAYLIST",
             "SUNDAY_YT_PLAYLIST",
+            "YOUTUBE_OAUTH_CLIENT_ID",
+            "YOUTUBE_OAUTH_CLIENT_SECRET",
+            "YOUTUBE_OAUTH_REFRESH_TOKEN",
         ],
     }
     updates = {

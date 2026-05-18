@@ -98,6 +98,14 @@ Also note: bare `claude` on Kevin's desktop lazy-loads `HOSTINGER_API_TOKEN` (an
 - Run tests: `uv run pytest`
 - Lint/format (if configured): `uv run ruff check .` / `uv run ruff format .`
 
+## VPS Autonomy (MUST READ)
+
+You have direct SSH access to the VPS as `ua@uaonvps` and full SSHFS at `/home/kjdragan/...`. **Do not hand the operator commands you can run yourself.** Asking "should I run X?" or "please run X" when X is a non-destructive, fully-scriptable command burns operator time and is explicitly disallowed.
+
+Default to running it. Stop and ask first only for: destructive operations (deletes, force-pushes, dropping data), operations that incur real cost the operator hasn't already authorized, anything that mutates external accounts (Google, GitHub, Stripe), or operations that touch production secrets in a way that could leak credentials into the transcript.
+
+Diagnostic reads, log tails, manual cron triggers, status checks, restarting `universal-agent.service` after a change you just made, and similar operational steps: just do them, narrate the result.
+
 ## Git Workflow (MUST READ)
 - Read [`docs/deployment/ai_coder_instructions.md`](docs/deployment/ai_coder_instructions.md) before your first commit. It defines branch discipline, commit conventions, `/ship` handoff, and the **Agent-Type → Workflow Matrix**.
 - **Branch model:** any branch → PR → `main` → Deploy. `develop` retired 2026-05-10. See [`04_Branching_And_Release_Workflow`](docs/06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md).
