@@ -306,6 +306,7 @@ async def _execute_cli_session(
             stderr=asyncio.subprocess.PIPE,
             cwd=str(workspace_dir),
             env=env,
+            start_new_session=True,
         )
     except FileNotFoundError:
         return MissionOutcome(
