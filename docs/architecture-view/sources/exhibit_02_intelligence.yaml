@@ -1,0 +1,49 @@
+id: e02_intelligence
+title: "Intelligence Pipeline (CSI v2)"
+renderer: mermaid_panel
+grid_area: "mid_left"
+description: |
+  The ClaudeDevs X intelligence lane: polls official handles, classifies links,
+  populates the wiki (Memex CREATE/EXTEND/REVISE), scaffolds demo workspaces for
+  release announcements, and ranks/files candidates for delivery. Phases 0–5 of
+  CSI v2 with the Phase 0 dependency-currency actuator.
+
+source:
+  - src/universal_agent/services/claude_code_intel.py
+  - src/universal_agent/services/csi_url_judge.py
+  - src/universal_agent/services/claude_code_intel_replay.py
+  - src/universal_agent/services/cody_scaffold.py
+  - src/universal_agent/services/dependency_currency.py
+
+canonical_doc: docs/02_Subsystems/ClaudeDevs_X_Intelligence_System.md
+
+mermaid: |
+  flowchart TB
+      classDef poll fill:#e8f4fa,stroke:#7fb8d4,color:#1a3a4a
+      classDef judge fill:#fef3d5,stroke:#d4a44e,color:#5a3e0a
+      classDef vault fill:#e0efd9,stroke:#3fae6a,color:#1a4a2a
+      classDef demo fill:#fbe8d9,stroke:#c47d6e,color:#5a1f10
+      classDef ledger fill:#ecd9f4,stroke:#7d6ec4,color:#2a1040
+
+      POLL[Phase 1: X API polling<br/>@ClaudeDevs · @bcherny<br/>cron 2×/day]:::poll
+      ENRICH[Phase 2: linked-source enrichment<br/>3-pass URL judge → fetch]:::judge
+      RELEASE{Release<br/>announcement?}:::judge
+
+      POLL --> ENRICH
+      ENRICH --> RELEASE
+
+      RELEASE -- yes --> DEPCUR[Phase 0: dependency-currency<br/>bump pyproject.toml + smoke]:::poll
+      RELEASE -- no --> MINSIG{Phase 3: tier-1<br/>min-signal gate}:::judge
+
+      MINSIG -- below gate --> DROP[drop / store-but-hide]
+      MINSIG -- pass --> MEMEX[Phase 4: wiki Memex<br/>CREATE / EXTEND / REVISE<br/>entities · concepts · analyses]:::vault
+
+      MEMEX --> ENTITY[(External knowledge vault<br/>entities/ · concepts/)]:::vault
+      ENTITY -- briefing_status: pending --> SCAFFOLD[Phase 5a: demo workspace scaffold<br/>SOURCES · BRIEF · ACCEPTANCE]:::demo
+      SCAFFOLD --> CODY[Cody implementation loop<br/>manifest.json artifact]:::demo
+      CODY --> EVAL{cody-work-evaluator<br/>pass / iterate / defer}:::demo
+      EVAL -- pass --> ATTACH[vault-demo-attach<br/>capability library]:::ledger
+      EVAL -- iterate --> CODY
+      EVAL -- defer --> LEDGER[(Candidate ledger<br/>delivery verification)]:::ledger
+      ATTACH --> LEDGER
+      DEPCUR --> LEDGER

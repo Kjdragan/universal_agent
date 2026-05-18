@@ -1,0 +1,33 @@
+id: e06_surfaces
+title: "Operating Surfaces"
+renderer: html_list
+grid_area: "lower_center"
+description: |
+  Dashboard surfaces the operator uses to watch and steer the system. The web-ui
+  is a Next.js app served from web-ui/app/; gateway_server.py provides the
+  backend APIs. Authentication is owner-tier with optional HQ gating.
+
+source:
+  - src/universal_agent/gateway_server.py
+  - src/universal_agent/task_hub.py
+  - src/universal_agent/services/mission_control_intelligence_sweeper.py
+
+canonical_doc: docs/02_Subsystems/Task_Hub_Dashboard.md
+
+surfaces:
+  - { name: "Mission Control", route: "/dashboard/mission-control", purpose: "Three-tier intelligence — traffic-light tiles, LLM narrative cards, Chief-of-Staff readout", hq: false }
+  - { name: "Mission Control · Ledger", route: "/dashboard/mission-control/ledger", purpose: "Retired/archived narrative cards · recurrence · operator comments", hq: true }
+  - { name: "Task Hub · To Do", route: "/dashboard/todolist", purpose: "Kanban of all open work · dispatcher health · forensic history", hq: false }
+  - { name: "Kanban Board", route: "/dashboard/kanban", purpose: "Per-lane drag-and-drop board for prioritised work", hq: false }
+  - { name: "Agent Flow", route: "/dashboard/agent-flow", purpose: "Live execution spotlight · replay timeline · thinking + tool events", hq: false }
+  - { name: "Sessions", route: "/dashboard/sessions", purpose: "Active and historical agent sessions · workspace links", hq: false }
+  - { name: "Heartbeats", route: "/dashboard/heartbeats", purpose: "Heartbeat daemon health · sweep cadence · CapacityGovernor state", hq: true }
+  - { name: "Mail", route: "/dashboard/mail", purpose: "Inbound/outbound email history · thread → Task Hub linkage", hq: false }
+  - { name: "Calendar", route: "/dashboard/calendar", purpose: "Scheduled tasks with due_at · upcoming reminders", hq: false }
+  - { name: "Events", route: "/dashboard/events", purpose: "Smart event titles · hide-by-default filter · raw activity behind links", hq: false }
+  - { name: "CSI Feed", route: "/dashboard/csi", purpose: "ClaudeDevs intelligence packets · capability library · vault search", hq: false }
+  - { name: "Discord Intel", route: "/dashboard/discord", purpose: "Discord signal feed · relevance toggle · channel watchlist", hq: false }
+  - { name: "Cody Mode & Usage", route: "/dashboard/cody", purpose: "Cody mode tile (Anthropic Max / ZAI) · per-task overrides · token usage", hq: false }
+  - { name: "Cron Jobs", route: "/dashboard/cron-jobs", purpose: "Scheduled task roster · last-run · reschedule controls", hq: true }
+  - { name: "Approvals", route: "/dashboard/approvals", purpose: "Pending decisions · external_effect_policy gates", hq: false }
+  - { name: "Architecture Map", route: "/architecture-map.html", purpose: "This canvas. Self-contained HTML, opens in new tab.", hq: false, self: true }

@@ -65,85 +65,189 @@ body {
 
 .canvas {
   display: grid;
-  grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
-  grid-template-rows: auto auto;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: auto;
   gap: 18px;
   padding: 18px;
-  max-width: 1900px;
+  max-width: 2000px;
   margin: 0 auto;
 }
-.canvas .hero {
-  grid-column: 1 / -1;
-  grid-row: 1;
-}
-.canvas .envs {
-  grid-column: 2;
-  grid-row: 2;
-}
-.canvas .footer-rail {
-  grid-column: 1 / -1;
-  grid-row: 3;
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
-  gap: 18px;
-}
-/* When there are only 3 exhibits in v1, hero spans top row, envs sits right of mid, glossary spans bottom */
-.canvas .placeholder {
-  grid-column: 1;
-  grid-row: 2;
-  align-self: stretch;
-  display: flex;
-  flex-direction: column;
-}
-.roadmap-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin-top: 4px;
-  flex: 1;
-  align-content: start;
-}
-.roadmap-card {
-  border: 1px dashed var(--rule);
+.canvas .hero       { grid-column: 1 / -1; }
+.canvas .footer-rail { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 18px; }
+.canvas .area-mid_left    { grid-column: 1; }
+.canvas .area-mid_center  { grid-column: 2; }
+.canvas .area-mid_right   { grid-column: 3; }
+.canvas .area-lower_left  { grid-column: 1; }
+.canvas .area-lower_center { grid-column: 2; }
+.canvas .area-lower_right { grid-column: 3; }
+
+/* Each exhibit cell uses full available height for tidy alignment */
+.canvas .exhibit { align-self: stretch; }
+
+/* ----- Mermaid panel (E2 / E3 / E7) ----- */
+.mermaid-panel .mermaid-frame {
+  background: var(--bg);
+  border: 1px solid var(--rule);
   border-radius: 8px;
-  padding: 10px 12px 12px;
-  background: linear-gradient(180deg, #fdfbf5 0%, #f7f3e8 100%);
-  position: relative;
+  padding: 10px;
+  overflow: auto;
+  max-height: 520px;
+}
+.mermaid-panel .mermaid {
+  text-align: center;
+}
+.mermaid-panel .mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* ----- Inputs grid (E5) ----- */
+.input-grid .inputs-grid-inner {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  margin-top: 4px;
+}
+.input-card {
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  padding: 9px 11px;
+  background: linear-gradient(180deg, #fdfbf5 0%, #f9f5ea 100%);
+  font-size: 12px;
+}
+.input-card { border-left-color: var(--accent); }
+.input-card { border-left: 3px solid var(--accent); }
+.input-card[style*="--accent"] { border-left-color: var(--accent); }
+.input-card header {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  gap: 6px;
 }
-.roadmap-card.phase-2 { border-left: 3px solid var(--cool); }
-.roadmap-card.phase-3 { border-left: 3px solid var(--warm); }
-.roadmap-card.phase-4 { border-left: 3px solid var(--coral); }
-.roadmap-card .phase-tag {
-  font-size: 9.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--muted);
-  font-weight: 600;
-}
-.roadmap-card h4 {
+.input-card h4 {
   margin: 0;
   font-size: 13px;
   font-weight: 600;
-  letter-spacing: -0.005em;
 }
-.roadmap-card p {
+.input-card .kind {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  font-family: ui-monospace, monospace;
+}
+.input-card p {
+  margin: 2px 0;
+  font-size: 11.5px;
+  color: var(--ink);
+}
+.input-card code {
+  font-size: 11px;
+  background: rgba(0,0,0,0.04);
+  padding: 0 4px;
+  border-radius: 3px;
+}
+.input-card .transform { color: var(--muted); margin-top: 4px; font-style: italic; }
+.input-card[style*="--accent"] { border-left: 3px solid var(--accent); }
+.input-card { border-left: 3px solid var(--accent, #5b6bd4); }
+
+/* ----- Surfaces list (E6) ----- */
+.surface-list .surfaces {
+  list-style: none;
   margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 520px;
+  overflow-y: auto;
+}
+.surface-row {
+  display: grid;
+  grid-template-columns: 160px 1fr auto;
+  gap: 10px;
+  align-items: baseline;
+  padding: 6px 8px;
+  border-bottom: 1px dashed rgba(0,0,0,0.05);
+  font-size: 12px;
+}
+.surface-row .surface-name {
+  font-weight: 600;
+  color: var(--ink);
+  font-size: 12.5px;
+}
+.surface-row .surface-route {
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--accent);
+  grid-column: 1 / 2;
+}
+.surface-row {
+  grid-template-columns: minmax(160px, max-content) 1fr auto;
+}
+.surface-row .surface-purpose {
   font-size: 11.5px;
   color: var(--muted);
-  line-height: 1.4;
+  grid-column: 2 / 3;
 }
-.roadmap-card .renderer {
-  margin-top: auto;
-  align-self: flex-start;
-  font-size: 10px;
-  font-family: ui-monospace, monospace;
+.surface-row .hq-pill {
+  background: var(--warm);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 6px;
+  letter-spacing: 0.04em;
+  align-self: center;
+}
+.surface-row.self-row { background: linear-gradient(90deg, rgba(91,107,212,0.06) 0%, transparent 100%); }
+.surface-row.self-row .surface-name::after { content: " ★"; color: var(--accent); }
+
+/* Common: exhibit-level pointers details */
+.exhibit-pointers {
+  margin-top: 10px;
+  border-top: 1px dashed var(--rule);
+  padding-top: 8px;
+  font-size: 12px;
+}
+.exhibit-pointers > summary {
+  cursor: pointer;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
   color: var(--muted);
-  background: rgba(0,0,0,0.04);
-  padding: 1px 6px;
-  border-radius: 4px;
+}
+.exhibit-pointers .pointers {
+  list-style: none;
+  margin: 6px 0 4px;
+  padding: 0;
+  font-family: ui-monospace, monospace;
+  font-size: 11.5px;
+}
+.exhibit-pointers .pointers li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+.exhibit-pointers .canonical-link {
+  display: inline-block;
+  margin-top: 4px;
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 11.5px;
+}
+.exhibit-pointers .canonical-link:hover { text-decoration: underline; }
+
+.missing-exhibit {
+  background: rgba(196, 78, 78, 0.05);
+  border: 1px dashed var(--red);
+  border-radius: 10px;
+  padding: 18px;
+  font-family: ui-monospace, monospace;
+  color: var(--red);
 }
 
 .exhibit {
@@ -428,10 +532,10 @@ body {
 <body>
 <header class="page-header">
   <h1>Universal Agent — Architecture Canvas</h1>
-  <span class="subtitle">v1 · Hero + Claude Envs + Glossary</span>
+  <span class="subtitle">Phase 1+2+3 · Flow-Spine · Intelligence · Knowledge · Envs · Inputs · Surfaces · Ops · Glossary</span>
   <span class="build-pill">
-    2026-05-18T04:00:45Z · 17c1e2d8
-    <span class="stale zero">stale: 0 · missing: 0</span>
+    2026-05-18T13:50:32Z · 27fb8e5f
+    <span class="stale ">stale: 2 · missing: 0</span>
   </span>
 </header>
 
@@ -447,54 +551,117 @@ delegation, and back to Simone for sign-off and completion.
 Click any stage to open a right-rail side drawer with the Mermaid drill-down,
 source-file pointers (with freshness badges), and a link to the canonical doc.</p>
   </header>
-  <div class="rough-hero" data-spec='{&quot;nodes&quot;: [{&quot;id&quot;: &quot;ingress&quot;, &quot;label&quot;: &quot;Ingress&quot;, &quot;subtitle&quot;: &quot;AgentMail \u00b7 Hooks \u00b7 Heartbeat&quot;, &quot;x&quot;: 20, &quot;y&quot;: 40, &quot;w&quot;: 180, &quot;h&quot;: 120}, {&quot;id&quot;: &quot;task_hub&quot;, &quot;label&quot;: &quot;Task Hub&quot;, &quot;subtitle&quot;: &quot;State machine + dedup&quot;, &quot;x&quot;: 270, &quot;y&quot;: 40, &quot;w&quot;: 180, &quot;h&quot;: 120}, {&quot;id&quot;: &quot;simone&quot;, &quot;label&quot;: &quot;Simone&quot;, &quot;subtitle&quot;: &quot;Sweep \u00b7 Route \u00b7 Triage&quot;, &quot;x&quot;: 520, &quot;y&quot;: 40, &quot;w&quot;: 180, &quot;h&quot;: 120}, {&quot;id&quot;: &quot;vps_cody&quot;, &quot;label&quot;: &quot;VPs / Cody&quot;, &quot;subtitle&quot;: &quot;Anthropic Max (default) \u00b7 ZAI (override)&quot;, &quot;x&quot;: 770, &quot;y&quot;: 40, &quot;w&quot;: 210, &quot;h&quot;: 120}, {&quot;id&quot;: &quot;completion&quot;, &quot;label&quot;: &quot;Completion&quot;, &quot;subtitle&quot;: &quot;Sign-off \u00b7 Park \u00b7 Reflection&quot;, &quot;x&quot;: 1050, &quot;y&quot;: 40, &quot;w&quot;: 180, &quot;h&quot;: 120}], &quot;edges&quot;: [{&quot;from&quot;: &quot;ingress&quot;, &quot;to&quot;: &quot;task_hub&quot;, &quot;label&quot;: &quot;&quot;, &quot;style&quot;: &quot;solid&quot;, &quot;loopback&quot;: false, &quot;x1&quot;: 200, &quot;y1&quot;: 100, &quot;x2&quot;: 270, &quot;y2&quot;: 100}, {&quot;from&quot;: &quot;task_hub&quot;, &quot;to&quot;: &quot;simone&quot;, &quot;label&quot;: &quot;sweep&quot;, &quot;style&quot;: &quot;solid&quot;, &quot;loopback&quot;: false, &quot;x1&quot;: 450, &quot;y1&quot;: 100, &quot;x2&quot;: 520, &quot;y2&quot;: 100}, {&quot;from&quot;: &quot;simone&quot;, &quot;to&quot;: &quot;vps_cody&quot;, &quot;label&quot;: &quot;delegate&quot;, &quot;style&quot;: &quot;solid&quot;, &quot;loopback&quot;: false, &quot;x1&quot;: 700, &quot;y1&quot;: 100, &quot;x2&quot;: 770, &quot;y2&quot;: 100}, {&quot;from&quot;: &quot;vps_cody&quot;, &quot;to&quot;: &quot;completion&quot;, &quot;label&quot;: &quot;pending_review&quot;, &quot;style&quot;: &quot;solid&quot;, &quot;loopback&quot;: false, &quot;x1&quot;: 980, &quot;y1&quot;: 100, &quot;x2&quot;: 1050, &quot;y2&quot;: 100}, {&quot;from&quot;: &quot;simone&quot;, &quot;to&quot;: &quot;completion&quot;, &quot;label&quot;: &quot;direct&quot;, &quot;style&quot;: &quot;solid&quot;, &quot;loopback&quot;: false, &quot;x1&quot;: 700, &quot;y1&quot;: 100, &quot;x2&quot;: 1050, &quot;y2&quot;: 100}, {&quot;from&quot;: &quot;completion&quot;, &quot;to&quot;: &quot;ingress&quot;, &quot;label&quot;: &quot;reflection&quot;, &quot;style&quot;: &quot;dashed&quot;, &quot;loopback&quot;: true, &quot;x1&quot;: 1140, &quot;y1&quot;: 160, &quot;x2&quot;: 110, &quot;y2&quot;: 160}], &quot;canvas_w&quot;: 1250, &quot;canvas_h&quot;: 300, &quot;drawer&quot;: {&quot;ingress&quot;: {&quot;label&quot;: &quot;Ingress&quot;, &quot;blurb&quot;: &quot;Inbound work arrives via AgentMail websocket (email), hooks_service (webhooks\nand Calendar/YouTube triggers), or the heartbeat timers that sweep for due\nscheduled tasks. All paths normalise into Task Hub rows.\n&quot;, &quot;canonical_doc&quot;: &quot;docs/01_Architecture/000_PIPELINE_MASTERPIECE.md&quot;, &quot;canonical_anchor&quot;: &quot;#2-input-triggers--ingress&quot;, &quot;drilldown&quot;: &quot;docs/architecture-view/drill_downs/ingress.mmd&quot;, &quot;drilldown_id&quot;: &quot;ingress&quot;, &quot;pointers&quot;: [{&quot;path&quot;: &quot;src/universal_agent/agentmail_official.py&quot;, &quot;badge&quot;: &quot;green&quot;, &quot;days_ago&quot;: 30, &quot;exists&quot;: true}, {&quot;path&quot;: &quot;src/universal_agent/hooks_service.py&quot;, &quot;badge&quot;: &quot;green&quot;, &quot;days_ago&quot;: 17, &quot;exists&quot;: true}, {&quot;path&quot;: &quot;src/universal_agent/heartbeat_service.py&quot;, &quot;badge&quot;: &quot;green&quot;, &quot;days_ago&quot;: 6, &quot;exists&quot;: true}, {&quot;path&quot;: &quot;src/universal_agent/process_heartbeat.py&quot;, &quot;badge&quot;: &quot;green&quot;, &quot;days_ago&quot;: 20, &quot;exists&quot;: true}]}, &quot;task_hub&quot;: {&quot;label&quot;: &quot;Task Hub&quot;, &quot;blurb&quot;: &quot;Central nervous system backed by runtime_state.db. Enforces state transitions\n(open \u2192 in_progress \u2192 delegated \u2192 pending_review \u2192 completed/parked), prevents\ndouble-dispatch via seizure_state, and dedupes email threads through email_task_bridge.\n&quot;, &quot;canonical_doc&quot;: &quot;docs/01_Architecture/000_PIPELINE_MASTERPIECE.md&quot;, &quot;canonical_anchor&quot;: &quot;#3-the-task-hub--life-cycle&quot;, &quot;drilldown&quot;: &quot;docs/architecture-view/drill_downs/task_hub.mmd&quot;, &quot;drilldown_id&quot;: &quot;task_hub&quot;, &quot;pointers&quot;: [{&quot;path&quot;: &quot;src/universal_agent/task_hub.py&quot;, &quot;badge&quot;: &quot;green&quot;, &quot;days_ago&quot;: 6, &quot;exists&quot;: true}]}, &quot;simone&quot;: {&quot;label&quot;: &quot;Simone&quot;, &quot;blurb&quot;: &quot;Every heartbeat sweep pulls eligible tasks via claim_next_dispatch_tasks and\nassigns 100% to Simone (route_all_to_simone). Simone evaluates the batch,\nhandles what she can in-context, and delegates the rest as vp_mission tasks.\n&quot;, &quot;canonical_doc&quot;: &quot;docs/01_Architecture/05_Simone_First_Orchestration.md&quot;, &quot;canonical_anchor&quot;: &quot;&quot;, &quot;drilldown&quot;: &quot;docs/architecture-view/drill_downs/simone.mmd&quot;, &quot;drilldown_id&quot;: &quot;simone&quot;, &quot;pointers&quot;: [{&quot;path&quot;: &quot;src/universal_agent/services/dispatch_service.py&quot;, &quot;badge&quot;: &quot;green&quot;, &quot;days_ago&quot;: 1, &quot;exists&quot;: true}, {&quot;path&quot;: &quot;src/universal_agent/services/agent_router.py&quot;, &quot;badge&quot;: &quot;green&quot;, &quot;days_ago&quot;: 1, &quot;exists&quot;: true}, {&quot;path&quot;: &quot;src/universal_agent/heartbeat_service.py&quot;, &quot;badge&quot;: &quot;green&quot;, &quot;days_ago&quot;: 6, &quot;exists&quot;: true}]}, &quot;vps_cody&quot;: {&quot;label&quot;: &quot;VPs / Cody&quot;, &quot;blurb&quot;: &quot;Specialist agents claim delegated work. Cody runs per-task Claude CLI\nsubprocesses; default mode is Anthropic Max (since 2026-05-11). Atlas\nhandles general-purpose missions. On completion the task flips to\npending_review for Simone sign-off.\n&quot;, &quot;canonical_doc&quot;: &quot;docs/01_Architecture/03_VP_Workers_And_Delegation.md&quot;, &quot;canonical_anchor&quot;: &quot;&quot;, &quot;drilldown&quot;: &quot;docs/architecture-view/drill_downs/vps_cody.mmd&quot;, &quot;drilldown_id&quot;: &quot;vps_cody&quot;, &quot;pointers&quot;: [{&quot;path&quot;: &quot;src/universal_agent/services/cody_mode.py&quot;, &quot;badge&quot;: &quot;green&quot;, &quot;days_ago&quot;: 1, &quot;exists&quot;: true}, {&quot;path&quot;: &quot;src/universal_agent/services/cody_implementation.py&quot;, &quot;badge&quot;: &quot;green&quot;, &quot;days_ago&quot;: 1, &quot;exists&quot;: true}, {&quot;path&quot;: &quot;src/universal_agent/services/cody_dispatch.py&quot;, &quot;badge&quot;: &quot;green&quot;, &quot;days_ago&quot;: 12, &quot;exists&quot;: true}, {&quot;path&quot;: &quot;src/universal_agent/services/atlas_direct_dispatch.py&quot;, &quot;badge&quot;: &quot;green&quot;, &quot;days_ago&quot;: 1, &quot;exists&quot;: true}]}, &quot;completion&quot;: {&quot;label&quot;: &quot;Completion&quot;, &quot;blurb&quot;: &quot;Simone reviews pending_review work, signs off (\u2192 completed with completion_token)\nor rejects (\u2192 in_progress / parked). The Reflection Engine consumes completion\nhistory overnight to seed proactive next-step tasks, feeding back into Ingress.\n&quot;, &quot;canonical_doc&quot;: &quot;docs/02_Subsystems/Proactive_Pipeline.md&quot;, &quot;canonical_anchor&quot;: &quot;&quot;, &quot;drilldown&quot;: &quot;docs/architecture-view/drill_downs/completion.mmd&quot;, &quot;drilldown_id&quot;: &quot;completion&quot;, &quot;pointers&quot;: [{&quot;path&quot;: &quot;src/universal_agent/task_hub.py&quot;, &quot;badge&quot;: &quot;green&quot;, &quot;days_ago&quot;: 6, &quot;exists&quot;: true}, {&quot;path&quot;: &quot;src/universal_agent/services/reflection_engine.py&quot;, &quot;badge&quot;: &quot;green&quot;, &quot;days_ago&quot;: 1, &quot;exists&quot;: true}, {&quot;path&quot;: &quot;src/universal_agent/proactive_signals.py&quot;, &quot;badge&quot;: &quot;green&quot;, &quot;days_ago&quot;: 15, &quot;exists&quot;: true}]}}}'></div>
+  <div class="rough-hero" data-spec='{&quot;nodes&quot;: [{&quot;id&quot;: &quot;ingress&quot;, &quot;label&quot;: &quot;Ingress&quot;, &quot;subtitle&quot;: &quot;AgentMail \u00b7 Hooks \u00b7 Heartbeat&quot;, &quot;x&quot;: 20, &quot;y&quot;: 40, &quot;w&quot;: 180, &quot;h&quot;: 120}, {&quot;id&quot;: &quot;task_hub&quot;, &quot;label&quot;: &quot;Task Hub&quot;, &quot;subtitle&quot;: &quot;State machine + dedup&quot;, &quot;x&quot;: 270, &quot;y&quot;: 40, &quot;w&quot;: 180, &quot;h&quot;: 120}, {&quot;id&quot;: &quot;simone&quot;, &quot;label&quot;: &quot;Simone&quot;, &quot;subtitle&quot;: &quot;Sweep \u00b7 Route \u00b7 Triage&quot;, &quot;x&quot;: 520, &quot;y&quot;: 40, &quot;w&quot;: 180, &quot;h&quot;: 120}, {&quot;id&quot;: &quot;vps_cody&quot;, &quot;label&quot;: &quot;VPs / Cody&quot;, &quot;subtitle&quot;: &quot;Anthropic Max (default) \u00b7 ZAI (override)&quot;, &quot;x&quot;: 770, &quot;y&quot;: 40, &quot;w&quot;: 210, &quot;h&quot;: 120}, {&quot;id&quot;: &quot;completion&quot;, &quot;label&quot;: &quot;Completion&quot;, &quot;subtitle&quot;: &quot;Sign-off \u00b7 Park \u00b7 Reflection&quot;, &quot;x&quot;: 1050, &quot;y&quot;: 40, &quot;w&quot;: 180, &quot;h&quot;: 120}], &quot;edges&quot;: [{&quot;from&quot;: &quot;ingress&quot;, &quot;to&quot;: &quot;task_hub&quot;, &quot;label&quot;: &quot;&quot;, &quot;style&quot;: &quot;solid&quot;, &quot;loopback&quot;: false, &quot;x1&quot;: 200, &quot;y1&quot;: 100, &quot;x2&quot;: 270, &quot;y2&quot;: 100}, {&quot;from&quot;: &quot;task_hub&quot;, &quot;to&quot;: &quot;simone&quot;, &quot;label&quot;: &quot;sweep&quot;, &quot;style&quot;: &quot;solid&quot;, &quot;loopback&quot;: false, &quot;x1&quot;: 450, &quot;y1&quot;: 100, &quot;x2&quot;: 520, &quot;y2&quot;: 100}, {&quot;from&quot;: &quot;simone&quot;, &quot;to&quot;: &quot;vps_cody&quot;, &quot;label&quot;: &quot;delegate&quot;, &quot;style&quot;: &quot;solid&quot;, &quot;loopback&quot;: false, &quot;x1&quot;: 700, &quot;y1&quot;: 100, &quot;x2&quot;: 770, &quot;y2&quot;: 100}, {&quot;from&quot;: &quot;vps_cody&quot;, &quot;to&quot;: &quot;completion&quot;, &quot;label&quot;: &quot;pending_review&quot;, &quot;style&quot;: &quot;solid&quot;, &quot;loopback&quot;: false, &quot;x1&quot;: 980, &quot;y1&quot;: 100, &quot;x2&quot;: 1050, &quot;y2&quot;: 100}, {&quot;from&quot;: &quot;simone&quot;, &quot;to&quot;: &quot;completion&quot;, &quot;label&quot;: &quot;direct&quot;, &quot;style&quot;: &quot;solid&quot;, &quot;loopback&quot;: false, &quot;x1&quot;: 700, &quot;y1&quot;: 100, &quot;x2&quot;: 1050, &quot;y2&quot;: 100}, {&quot;from&quot;: &quot;completion&quot;, &quot;to&quot;: &quot;ingress&quot;, &quot;label&quot;: &quot;reflection&quot;, &quot;style&quot;: &quot;dashed&quot;, &quot;loopback&quot;: true, &quot;x1&quot;: 1140, &quot;y1&quot;: 160, &quot;x2&quot;: 110, &quot;y2&quot;: 160}], &quot;canvas_w&quot;: 1250, &quot;canvas_h&quot;: 300, &quot;drawer&quot;: {&quot;ingress&quot;: {&quot;label&quot;: &quot;Ingress&quot;, &quot;blurb&quot;: &quot;Inbound work arrives via AgentMail websocket (email), hooks_service (webhooks\nand Calendar/YouTube triggers), or the heartbeat timers that sweep for due\nscheduled tasks. All paths normalise into Task Hub rows.\n&quot;, &quot;canonical_doc&quot;: &quot;docs/01_Architecture/000_PIPELINE_MASTERPIECE.md&quot;, &quot;canonical_anchor&quot;: &quot;#2-input-triggers--ingress&quot;, &quot;drilldown&quot;: &quot;docs/architecture-view/drill_downs/ingress.mmd&quot;, &quot;drilldown_id&quot;: &quot;ingress&quot;, &quot;pointers&quot;: [{&quot;path&quot;: &quot;src/universal_agent/agentmail_official.py&quot;, &quot;badge&quot;: &quot;amber&quot;, &quot;days_ago&quot;: 31, &quot;exists&quot;: true}, {&quot;path&quot;: &quot;src/universal_agent/hooks_service.py&quot;, &quot;badge&quot;: &quot;green&quot;, &quot;days_ago&quot;: 17, &quot;exists&quot;: true}, {&quot;path&quot;: &quot;src/universal_agent/heartbeat_service.py&quot;, &quot;badge&quot;: &quot;green&quot;, &quot;days_ago&quot;: 6, &quot;exists&quot;: true}, {&quot;path&quot;: &quot;src/universal_agent/process_heartbeat.py&quot;, &quot;badge&quot;: &quot;green&quot;, &quot;days_ago&quot;: 21, &quot;exists&quot;: true}]}, &quot;task_hub&quot;: {&quot;label&quot;: &quot;Task Hub&quot;, &quot;blurb&quot;: &quot;Central nervous system backed by runtime_state.db. Enforces state transitions\n(open \u2192 in_progress \u2192 delegated \u2192 pending_review \u2192 completed/parked), prevents\ndouble-dispatch via seizure_state, and dedupes email threads through email_task_bridge.\n&quot;, &quot;canonical_doc&quot;: &quot;docs/01_Architecture/000_PIPELINE_MASTERPIECE.md&quot;, &quot;canonical_anchor&quot;: &quot;#3-the-task-hub--life-cycle&quot;, &quot;drilldown&quot;: &quot;docs/architecture-view/drill_downs/task_hub.mmd&quot;, &quot;drilldown_id&quot;: &quot;task_hub&quot;, &quot;pointers&quot;: [{&quot;path&quot;: &quot;src/universal_agent/task_hub.py&quot;, &quot;badge&quot;: &quot;green&quot;, &quot;days_ago&quot;: 6, &quot;exists&quot;: true}]}, &quot;simone&quot;: {&quot;label&quot;: &quot;Simone&quot;, &quot;blurb&quot;: &quot;Every heartbeat sweep pulls eligible tasks via claim_next_dispatch_tasks and\nassigns 100% to Simone (route_all_to_simone). Simone evaluates the batch,\nhandles what she can in-context, and delegates the rest as vp_mission tasks.\n&quot;, &quot;canonical_doc&quot;: &quot;docs/01_Architecture/05_Simone_First_Orchestration.md&quot;, &quot;canonical_anchor&quot;: &quot;&quot;, &quot;drilldown&quot;: &quot;docs/architecture-view/drill_downs/simone.mmd&quot;, &quot;drilldown_id&quot;: &quot;simone&quot;, &quot;pointers&quot;: [{&quot;path&quot;: &quot;src/universal_agent/services/dispatch_service.py&quot;, &quot;badge&quot;: &quot;green&quot;, &quot;days_ago&quot;: 1, &quot;exists&quot;: true}, {&quot;path&quot;: &quot;src/universal_agent/services/agent_router.py&quot;, &quot;badge&quot;: &quot;green&quot;, &quot;days_ago&quot;: 1, &quot;exists&quot;: true}, {&quot;path&quot;: &quot;src/universal_agent/heartbeat_service.py&quot;, &quot;badge&quot;: &quot;green&quot;, &quot;days_ago&quot;: 6, &quot;exists&quot;: true}]}, &quot;vps_cody&quot;: {&quot;label&quot;: &quot;VPs / Cody&quot;, &quot;blurb&quot;: &quot;Specialist agents claim delegated work. Cody runs per-task Claude CLI\nsubprocesses; default mode is Anthropic Max (since 2026-05-11). Atlas\nhandles general-purpose missions. On completion the task flips to\npending_review for Simone sign-off.\n&quot;, &quot;canonical_doc&quot;: &quot;docs/01_Architecture/03_VP_Workers_And_Delegation.md&quot;, &quot;canonical_anchor&quot;: &quot;&quot;, &quot;drilldown&quot;: &quot;docs/architecture-view/drill_downs/vps_cody.mmd&quot;, &quot;drilldown_id&quot;: &quot;vps_cody&quot;, &quot;pointers&quot;: [{&quot;path&quot;: &quot;src/universal_agent/services/cody_mode.py&quot;, &quot;badge&quot;: &quot;green&quot;, &quot;days_ago&quot;: 1, &quot;exists&quot;: true}, {&quot;path&quot;: &quot;src/universal_agent/services/cody_implementation.py&quot;, &quot;badge&quot;: &quot;green&quot;, &quot;days_ago&quot;: 1, &quot;exists&quot;: true}, {&quot;path&quot;: &quot;src/universal_agent/services/cody_dispatch.py&quot;, &quot;badge&quot;: &quot;green&quot;, &quot;days_ago&quot;: 12, &quot;exists&quot;: true}, {&quot;path&quot;: &quot;src/universal_agent/services/atlas_direct_dispatch.py&quot;, &quot;badge&quot;: &quot;green&quot;, &quot;days_ago&quot;: 1, &quot;exists&quot;: true}]}, &quot;completion&quot;: {&quot;label&quot;: &quot;Completion&quot;, &quot;blurb&quot;: &quot;Simone reviews pending_review work, signs off (\u2192 completed with completion_token)\nor rejects (\u2192 in_progress / parked). The Reflection Engine consumes completion\nhistory overnight to seed proactive next-step tasks, feeding back into Ingress.\n&quot;, &quot;canonical_doc&quot;: &quot;docs/02_Subsystems/Proactive_Pipeline.md&quot;, &quot;canonical_anchor&quot;: &quot;&quot;, &quot;drilldown&quot;: &quot;docs/architecture-view/drill_downs/completion.mmd&quot;, &quot;drilldown_id&quot;: &quot;completion&quot;, &quot;pointers&quot;: [{&quot;path&quot;: &quot;src/universal_agent/task_hub.py&quot;, &quot;badge&quot;: &quot;green&quot;, &quot;days_ago&quot;: 6, &quot;exists&quot;: true}, {&quot;path&quot;: &quot;src/universal_agent/services/reflection_engine.py&quot;, &quot;badge&quot;: &quot;green&quot;, &quot;days_ago&quot;: 1, &quot;exists&quot;: true}, {&quot;path&quot;: &quot;src/universal_agent/proactive_signals.py&quot;, &quot;badge&quot;: &quot;green&quot;, &quot;days_ago&quot;: 15, &quot;exists&quot;: true}]}}}'></div>
 </section>
 
   
-<section class="exhibit placeholder">
+<section class="exhibit mermaid-panel area-mid_left" id="exhibit-e02_intelligence">
   <header class="ex-header">
-    <h2>Roadmap — Phases 2 & 3</h2>
-    <p class="ex-desc">Six more exhibits will fill out the canvas. v1 ships the hero, Claude environments, glossary, and the verified-pointer pipeline.
-See <code>docs/02_Subsystems/Architecture_Canvas_View.md</code> §4 for the phased plan.</p>
+    <h2>Intelligence Pipeline (CSI v2)</h2>
+    <p class="ex-desc">The ClaudeDevs X intelligence lane: polls official handles, classifies links,
+populates the wiki (Memex CREATE/EXTEND/REVISE), scaffolds demo workspaces for
+release announcements, and ranks/files candidates for delivery. Phases 0–5 of
+CSI v2 with the Phase 0 dependency-currency actuator.</p>
   </header>
-  <div class="roadmap-grid">
-    <article class="roadmap-card phase-2">
-      <span class="phase-tag">Phase 2</span>
-      <h4>E2 — Intelligence Pipeline</h4>
-      <p>CSI / ClaudeDevs X intel — official polling, vault population, demo workspaces.</p>
-      <span class="renderer">Mermaid</span>
-    </article>
-    <article class="roadmap-card phase-2">
-      <span class="phase-tag">Phase 2</span>
-      <h4>E3 — Knowledge Plane</h4>
-      <p>LLM Wiki + Memory + Vault relationships. Append-dominant Memex primitives.</p>
-      <span class="renderer">Mermaid</span>
-    </article>
-    <article class="roadmap-card phase-3">
-      <span class="phase-tag">Phase 3</span>
-      <h4>E5 — Inputs Catalog</h4>
-      <p>Email, Discord, Telegram, webhooks, cron — every ingress channel at a glance.</p>
-      <span class="renderer">HTML grid</span>
-    </article>
-    <article class="roadmap-card phase-3">
-      <span class="phase-tag">Phase 3</span>
-      <h4>E6 — Operating Surfaces</h4>
-      <p>Mission Control, Task Hub Dashboard, ledger, events — what surfaces consume the system.</p>
-      <span class="renderer">HTML list</span>
-    </article>
-    <article class="roadmap-card phase-3">
-      <span class="phase-tag">Phase 3</span>
-      <h4>E7 — Ops / Ship Pipeline</h4>
-      <p>Branches → PR → auto-merge → deploy.yml → VPS. Auto-merge allowlist visualised.</p>
-      <span class="renderer">Mermaid</span>
-    </article>
-    <article class="roadmap-card phase-4">
-      <span class="phase-tag">Phase 4</span>
-      <h4>Wiring</h4>
-      <p>Dashboard link from Mission Control, weekly drift cron, pre-commit hook on the build script.</p>
-      <span class="renderer">Operational</span>
-    </article>
+  <div class="mermaid-frame">
+    <div class="mermaid">flowchart TB
+    classDef poll fill:#e8f4fa,stroke:#7fb8d4,color:#1a3a4a
+    classDef judge fill:#fef3d5,stroke:#d4a44e,color:#5a3e0a
+    classDef vault fill:#e0efd9,stroke:#3fae6a,color:#1a4a2a
+    classDef demo fill:#fbe8d9,stroke:#c47d6e,color:#5a1f10
+    classDef ledger fill:#ecd9f4,stroke:#7d6ec4,color:#2a1040
+
+    POLL[Phase 1: X API polling&lt;br/&gt;@ClaudeDevs · @bcherny&lt;br/&gt;cron 2×/day]:::poll
+    ENRICH[Phase 2: linked-source enrichment&lt;br/&gt;3-pass URL judge → fetch]:::judge
+    RELEASE{Release&lt;br/&gt;announcement?}:::judge
+
+    POLL --&gt; ENRICH
+    ENRICH --&gt; RELEASE
+
+    RELEASE -- yes --&gt; DEPCUR[Phase 0: dependency-currency&lt;br/&gt;bump pyproject.toml + smoke]:::poll
+    RELEASE -- no --&gt; MINSIG{Phase 3: tier-1&lt;br/&gt;min-signal gate}:::judge
+
+    MINSIG -- below gate --&gt; DROP[drop / store-but-hide]
+    MINSIG -- pass --&gt; MEMEX[Phase 4: wiki Memex&lt;br/&gt;CREATE / EXTEND / REVISE&lt;br/&gt;entities · concepts · analyses]:::vault
+
+    MEMEX --&gt; ENTITY[(External knowledge vault&lt;br/&gt;entities/ · concepts/)]:::vault
+    ENTITY -- briefing_status: pending --&gt; SCAFFOLD[Phase 5a: demo workspace scaffold&lt;br/&gt;SOURCES · BRIEF · ACCEPTANCE]:::demo
+    SCAFFOLD --&gt; CODY[Cody implementation loop&lt;br/&gt;manifest.json artifact]:::demo
+    CODY --&gt; EVAL{cody-work-evaluator&lt;br/&gt;pass / iterate / defer}:::demo
+    EVAL -- pass --&gt; ATTACH[vault-demo-attach&lt;br/&gt;capability library]:::ledger
+    EVAL -- iterate --&gt; CODY
+    EVAL -- defer --&gt; LEDGER[(Candidate ledger&lt;br/&gt;delivery verification)]:::ledger
+    ATTACH --&gt; LEDGER
+    DEPCUR --&gt; LEDGER</div>
   </div>
+  
+    <details class="exhibit-pointers">
+      <summary>Source pointers · canonical doc</summary>
+      <ul class="pointers"><li><code>src/universal_agent/services/claude_code_intel.py</code> <span class="badge" style="background:#3fae6a" title="src/universal_agent/services/claude_code_intel.py — 1d">1d</span></li><li><code>src/universal_agent/services/csi_url_judge.py</code> <span class="badge" style="background:#3fae6a" title="src/universal_agent/services/csi_url_judge.py — today">today</span></li><li><code>src/universal_agent/services/claude_code_intel_replay.py</code> <span class="badge" style="background:#3fae6a" title="src/universal_agent/services/claude_code_intel_replay.py — today">today</span></li><li><code>src/universal_agent/services/cody_scaffold.py</code> <span class="badge" style="background:#3fae6a" title="src/universal_agent/services/cody_scaffold.py — 1d">1d</span></li><li><code>src/universal_agent/services/dependency_currency.py</code> <span class="badge" style="background:#3fae6a" title="src/universal_agent/services/dependency_currency.py — 1d">1d</span></li></ul>
+      <a class="canonical-link" href="../../docs/02_Subsystems/ClaudeDevs_X_Intelligence_System.md" target="_blank">docs/02_Subsystems/ClaudeDevs_X_Intelligence_System.md</a>
+    </details>
+    
+</section>
+
+  
+<section class="exhibit mermaid-panel area-mid_center" id="exhibit-e03_knowledge">
+  <header class="ex-header">
+    <h2>Knowledge Plane (Wiki + Memory)</h2>
+    <p class="ex-desc">Two coupled vaults — the external knowledge vault populated by intelligence
+lanes (CSI, Discord, Hacker News), and the internal memory vault derived
+from session evidence. Append-dominant Memex primitives. Auto-flush at
+150k tokens. Vector indexes for retrieval.</p>
+  </header>
+  <div class="mermaid-frame">
+    <div class="mermaid">flowchart LR
+    classDef ext fill:#e0efd9,stroke:#3fae6a,color:#1a4a2a
+    classDef int fill:#e8f4fa,stroke:#7fb8d4,color:#1a3a4a
+    classDef flush fill:#fef3d5,stroke:#d4a44e,color:#5a3e0a
+    classDef llm fill:#ecd9f4,stroke:#7d6ec4,color:#2a1040
+
+    subgraph EXT[&quot;External knowledge vault&quot;]
+        RAW[raw/&lt;br/&gt;immutable sources]:::ext
+        ENTITIES[entities/&lt;br/&gt;people · orgs · tools]:::ext
+        CONCEPTS[concepts/&lt;br/&gt;recurring topics]:::ext
+        ANALYSES[analyses/&lt;br/&gt;synthesis docs]:::ext
+    end
+
+    subgraph INT[&quot;Internal memory vault&quot;]
+        ACTIVE[MEMORY.md&lt;br/&gt;active context]:::int
+        CORE[(agent_core.db&lt;br/&gt;SQLite)]:::int
+        VEC[(Vector index&lt;br/&gt;Chroma / LanceDB)]:::int
+        ARCHIVE[Daily archival logs]:::int
+    end
+
+    RAW --&gt; ENTITIES
+    RAW --&gt; CONCEPTS
+    ENTITIES --&gt; ANALYSES
+    CONCEPTS --&gt; ANALYSES
+
+    MEMEX[Memex primitives&lt;br/&gt;CREATE · EXTEND · REVISE]:::llm
+    MEMEX -.append-dominant.-&gt; RAW
+    MEMEX -.append-dominant.-&gt; ENTITIES
+
+    ACTIVE --&gt; PROJ[wiki/projection.py&lt;br/&gt;auto-sync on append]:::llm
+    PROJ --&gt; ENTITIES
+
+    ACTIVE --&gt; FLUSH{150k-token&lt;br/&gt;threshold?}:::flush
+    FLUSH -- yes --&gt; AF[memory_flush.py&lt;br/&gt;analysis loop +&lt;br/&gt;archival_memory_insert]:::flush
+    AF --&gt; ARCHIVE
+    AF --&gt; VEC
+
+    QUERY[Wiki query&lt;br/&gt;cited answers]:::llm
+    VEC --&gt; QUERY
+    ANALYSES --&gt; QUERY
+    CORE --&gt; QUERY</div>
+  </div>
+  
+    <details class="exhibit-pointers">
+      <summary>Source pointers · canonical doc</summary>
+      <ul class="pointers"><li><code>src/universal_agent/wiki/core.py</code> <span class="badge" style="background:#3fae6a" title="src/universal_agent/wiki/core.py — 13d">13d</span></li><li><code>src/universal_agent/wiki/projection.py</code> <span class="badge" style="background:#d4a44e" title="src/universal_agent/wiki/projection.py — 41d">41d</span></li><li><code>src/universal_agent/wiki/llm.py</code> <span class="badge" style="background:#3fae6a" title="src/universal_agent/wiki/llm.py — 16d">16d</span></li><li><code>src/universal_agent/memory/memory_store.py</code> <span class="badge" style="background:#3fae6a" title="src/universal_agent/memory/memory_store.py — 21d">21d</span></li><li><code>src/universal_agent/memory/memory_flush.py</code> <span class="badge" style="background:#3fae6a" title="src/universal_agent/memory/memory_flush.py — 21d">21d</span></li></ul>
+      <a class="canonical-link" href="../../docs/02_Subsystems/LLM_Wiki_System.md" target="_blank">docs/02_Subsystems/LLM_Wiki_System.md</a>
+    </details>
+    
 </section>
 
   
@@ -580,6 +747,312 @@ Flippable per-task or globally; default landed 2026-05-11.</p>
 </section>
 
   
+<section class="exhibit input-grid area-lower_left" id="exhibit-e05_inputs">
+  <header class="ex-header">
+    <h2>Inputs Catalog</h2>
+    <p class="ex-desc">Every channel that produces work for the system. Each badge identifies the
+trigger, the file that handles ingress, and the typical transformation
+into a Task Hub row.</p>
+  </header>
+  <div class="inputs-grid-inner">
+        <article class="input-card" style="--accent:#7fb8d4">
+          <header>
+            <h4>Email</h4>
+            <span class="kind">external · sync</span>
+          </header>
+          <p class="trigger"><b>Trigger:</b> AgentMail WebSocket inbound</p>
+          <p class="handler"><b>Handler:</b> <code>agentmail_official.py + email_task_bridge.py</code></p>
+          <p class="transform">Thread mapping dedups; creates or updates a Task Hub row</p>
+        </article>
+        
+        <article class="input-card" style="--accent:#7d6ec4">
+          <header>
+            <h4>Discord</h4>
+            <span class="kind">external · webhook</span>
+          </header>
+          <p class="trigger"><b>Trigger:</b> Discord webhook from monitored servers</p>
+          <p class="handler"><b>Handler:</b> <code>hooks_service.py + Discord intel pipeline</code></p>
+          <p class="transform">Signal-detection → relevance filter → Task Hub (or store-but-hide)</p>
+        </article>
+        
+        <article class="input-card" style="--accent:#7fb8d4">
+          <header>
+            <h4>Telegram</h4>
+            <span class="kind">external · bot</span>
+          </header>
+          <p class="trigger"><b>Trigger:</b> Telegram Bot polling</p>
+          <p class="handler"><b>Handler:</b> <code>mcp_server_telegram.py + telegram bridge</code></p>
+          <p class="transform">Message → Task Hub or Simone sidebar</p>
+        </article>
+        
+        <article class="input-card" style="--accent:#d4a44e">
+          <header>
+            <h4>Calendar</h4>
+            <span class="kind">external · webhook</span>
+          </header>
+          <p class="trigger"><b>Trigger:</b> Google Calendar event hook</p>
+          <p class="handler"><b>Handler:</b> <code>hooks_service.py + calendar_task_bridge.py</code></p>
+          <p class="transform">Scheduled task with due_at = event start</p>
+        </article>
+        
+        <article class="input-card" style="--accent:#c47d6e">
+          <header>
+            <h4>YouTube</h4>
+            <span class="kind">external · webhook</span>
+          </header>
+          <p class="trigger"><b>Trigger:</b> YouTube ingest webhook</p>
+          <p class="handler"><b>Handler:</b> <code>hooks_service.py + tutorial-creation skill</code></p>
+          <p class="transform">Concept doc + optional runnable demo task</p>
+        </article>
+        
+        <article class="input-card" style="--accent:#3fae6a">
+          <header>
+            <h4>Dashboard</h4>
+            <span class="kind">operator · sync</span>
+          </header>
+          <p class="trigger"><b>Trigger:</b> Mission Control / Task Hub UI</p>
+          <p class="handler"><b>Handler:</b> <code>gateway_server.py dispatch_immediate / dispatch_on_approval</code></p>
+          <p class="transform">Forces immediate claim; skips queue wait</p>
+        </article>
+        
+        <article class="input-card" style="--accent:#7fb8d4">
+          <header>
+            <h4>Heartbeat</h4>
+            <span class="kind">internal · timer</span>
+          </header>
+          <p class="trigger"><b>Trigger:</b> Event-loop sweep every ~30 min</p>
+          <p class="handler"><b>Handler:</b> <code>heartbeat_service.py + process_heartbeat.py</code></p>
+          <p class="transform">Pulls eligible Task Hub rows; routes to Simone</p>
+        </article>
+        
+        <article class="input-card" style="--accent:#d4a44e">
+          <header>
+            <h4>Cron</h4>
+            <span class="kind">internal · schedule</span>
+          </header>
+          <p class="trigger"><b>Trigger:</b> Persisted cron jobs</p>
+          <p class="handler"><b>Handler:</b> <code>cron_service.py + gateway_server._register_system_cron_job</code></p>
+          <p class="transform">Fires scheduled work (CSI poll, vault lint, briefings)</p>
+        </article>
+        
+        <article class="input-card" style="--accent:#3fae6a">
+          <header>
+            <h4>Proactive Advisor</h4>
+            <span class="kind">internal · injection</span>
+          </header>
+          <p class="trigger"><b>Trigger:</b> Morning report build during heartbeat</p>
+          <p class="handler"><b>Handler:</b> <code>services/proactive_advisor.py</code></p>
+          <p class="transform">Injects stale/expiring context into Simone&#x27;s heartbeat prompt</p>
+        </article>
+        
+        <article class="input-card" style="--accent:#7d6ec4">
+          <header>
+            <h4>Reflection Engine</h4>
+            <span class="kind">internal · autonomous</span>
+          </header>
+          <p class="trigger"><b>Trigger:</b> Queue empty between 22:00–07:00 local</p>
+          <p class="handler"><b>Handler:</b> <code>services/reflection_engine.py</code></p>
+          <p class="transform">Seeds proactive next-step tasks from completion history</p>
+        </article>
+        
+        <article class="input-card" style="--accent:#c47d6e">
+          <header>
+            <h4>Webhook (generic)</h4>
+            <span class="kind">external · webhook</span>
+          </header>
+          <p class="trigger"><b>Trigger:</b> Arbitrary integration endpoints</p>
+          <p class="handler"><b>Handler:</b> <code>hooks_service.py custom routes</code></p>
+          <p class="transform">Normalises payload → Task Hub row with deduplication</p>
+        </article>
+        </div>
+  
+    <details class="exhibit-pointers">
+      <summary>Source pointers · canonical doc</summary>
+      <ul class="pointers"><li><code>src/universal_agent/agentmail_official.py</code> <span class="badge" style="background:#d4a44e" title="src/universal_agent/agentmail_official.py — 31d">31d</span></li><li><code>src/universal_agent/heartbeat_service.py</code> <span class="badge" style="background:#3fae6a" title="src/universal_agent/heartbeat_service.py — 6d">6d</span></li><li><code>src/universal_agent/hooks_service.py</code> <span class="badge" style="background:#3fae6a" title="src/universal_agent/hooks_service.py — 17d">17d</span></li><li><code>src/universal_agent/gateway_server.py</code> <span class="badge" style="background:#3fae6a" title="src/universal_agent/gateway_server.py — 1d">1d</span></li><li><code>src/universal_agent/services/proactive_advisor.py</code> <span class="badge" style="background:#3fae6a" title="src/universal_agent/services/proactive_advisor.py — 1d">1d</span></li></ul>
+      <a class="canonical-link" href="../../docs/01_Architecture/000_PIPELINE_MASTERPIECE.md" target="_blank">docs/01_Architecture/000_PIPELINE_MASTERPIECE.md</a>
+    </details>
+    
+</section>
+
+  
+<section class="exhibit surface-list area-lower_center" id="exhibit-e06_surfaces">
+  <header class="ex-header">
+    <h2>Operating Surfaces</h2>
+    <p class="ex-desc">Dashboard surfaces the operator uses to watch and steer the system. The web-ui
+is a Next.js app served from web-ui/app/; gateway_server.py provides the
+backend APIs. Authentication is owner-tier with optional HQ gating.</p>
+  </header>
+  <ul class="surfaces">
+        <li class="surface-row ">
+          <span class="surface-name">Mission Control</span>
+          <code class="surface-route">/dashboard/mission-control</code>
+          <span class="surface-purpose">Three-tier intelligence — traffic-light tiles, LLM narrative cards, Chief-of-Staff readout</span>
+          
+        </li>
+        
+        <li class="surface-row ">
+          <span class="surface-name">Mission Control · Ledger</span>
+          <code class="surface-route">/dashboard/mission-control/ledger</code>
+          <span class="surface-purpose">Retired/archived narrative cards · recurrence · operator comments</span>
+          <span class="hq-pill">HQ</span>
+        </li>
+        
+        <li class="surface-row ">
+          <span class="surface-name">Task Hub · To Do</span>
+          <code class="surface-route">/dashboard/todolist</code>
+          <span class="surface-purpose">Kanban of all open work · dispatcher health · forensic history</span>
+          
+        </li>
+        
+        <li class="surface-row ">
+          <span class="surface-name">Kanban Board</span>
+          <code class="surface-route">/dashboard/kanban</code>
+          <span class="surface-purpose">Per-lane drag-and-drop board for prioritised work</span>
+          
+        </li>
+        
+        <li class="surface-row ">
+          <span class="surface-name">Agent Flow</span>
+          <code class="surface-route">/dashboard/agent-flow</code>
+          <span class="surface-purpose">Live execution spotlight · replay timeline · thinking + tool events</span>
+          
+        </li>
+        
+        <li class="surface-row ">
+          <span class="surface-name">Sessions</span>
+          <code class="surface-route">/dashboard/sessions</code>
+          <span class="surface-purpose">Active and historical agent sessions · workspace links</span>
+          
+        </li>
+        
+        <li class="surface-row ">
+          <span class="surface-name">Heartbeats</span>
+          <code class="surface-route">/dashboard/heartbeats</code>
+          <span class="surface-purpose">Heartbeat daemon health · sweep cadence · CapacityGovernor state</span>
+          <span class="hq-pill">HQ</span>
+        </li>
+        
+        <li class="surface-row ">
+          <span class="surface-name">Mail</span>
+          <code class="surface-route">/dashboard/mail</code>
+          <span class="surface-purpose">Inbound/outbound email history · thread → Task Hub linkage</span>
+          
+        </li>
+        
+        <li class="surface-row ">
+          <span class="surface-name">Calendar</span>
+          <code class="surface-route">/dashboard/calendar</code>
+          <span class="surface-purpose">Scheduled tasks with due_at · upcoming reminders</span>
+          
+        </li>
+        
+        <li class="surface-row ">
+          <span class="surface-name">Events</span>
+          <code class="surface-route">/dashboard/events</code>
+          <span class="surface-purpose">Smart event titles · hide-by-default filter · raw activity behind links</span>
+          
+        </li>
+        
+        <li class="surface-row ">
+          <span class="surface-name">CSI Feed</span>
+          <code class="surface-route">/dashboard/csi</code>
+          <span class="surface-purpose">ClaudeDevs intelligence packets · capability library · vault search</span>
+          
+        </li>
+        
+        <li class="surface-row ">
+          <span class="surface-name">Discord Intel</span>
+          <code class="surface-route">/dashboard/discord</code>
+          <span class="surface-purpose">Discord signal feed · relevance toggle · channel watchlist</span>
+          
+        </li>
+        
+        <li class="surface-row ">
+          <span class="surface-name">Cody Mode &amp; Usage</span>
+          <code class="surface-route">/dashboard/cody</code>
+          <span class="surface-purpose">Cody mode tile (Anthropic Max / ZAI) · per-task overrides · token usage</span>
+          
+        </li>
+        
+        <li class="surface-row ">
+          <span class="surface-name">Cron Jobs</span>
+          <code class="surface-route">/dashboard/cron-jobs</code>
+          <span class="surface-purpose">Scheduled task roster · last-run · reschedule controls</span>
+          <span class="hq-pill">HQ</span>
+        </li>
+        
+        <li class="surface-row ">
+          <span class="surface-name">Approvals</span>
+          <code class="surface-route">/dashboard/approvals</code>
+          <span class="surface-purpose">Pending decisions · external_effect_policy gates</span>
+          
+        </li>
+        
+        <li class="surface-row self-row">
+          <span class="surface-name">Architecture Map</span>
+          <code class="surface-route">/architecture-map.html</code>
+          <span class="surface-purpose">This canvas. Self-contained HTML, opens in new tab.</span>
+          
+        </li>
+        </ul>
+  
+    <details class="exhibit-pointers">
+      <summary>Source pointers · canonical doc</summary>
+      <ul class="pointers"><li><code>src/universal_agent/gateway_server.py</code> <span class="badge" style="background:#3fae6a" title="src/universal_agent/gateway_server.py — 1d">1d</span></li><li><code>src/universal_agent/task_hub.py</code> <span class="badge" style="background:#3fae6a" title="src/universal_agent/task_hub.py — 6d">6d</span></li><li><code>src/universal_agent/services/mission_control_intelligence_sweeper.py</code> <span class="badge" style="background:#3fae6a" title="src/universal_agent/services/mission_control_intelligence_sweeper.py — 1d">1d</span></li></ul>
+      <a class="canonical-link" href="../../docs/02_Subsystems/Task_Hub_Dashboard.md" target="_blank">docs/02_Subsystems/Task_Hub_Dashboard.md</a>
+    </details>
+    
+</section>
+
+  
+<section class="exhibit mermaid-panel area-lower_right" id="exhibit-e07_ops">
+  <header class="ex-header">
+    <h2>Ops / Ship Pipeline</h2>
+    <p class="ex-desc">How code reaches production. Every branch → PR → main → deploy. The PR
+Auto-Merge action enables squash-merge automatically EXCEPT for branches
+matching codie/*, kevin/*, feature/* — those require manual review.
+Docs-only commits skip the deploy via paths-ignore.</p>
+  </header>
+  <div class="mermaid-frame">
+    <div class="mermaid">flowchart TB
+    classDef local fill:#e0efd9,stroke:#3fae6a,color:#1a4a2a
+    classDef ci fill:#fef3d5,stroke:#d4a44e,color:#5a3e0a
+    classDef gate fill:#fbe8d9,stroke:#c47d6e,color:#5a1f10
+    classDef deploy fill:#ecd9f4,stroke:#7d6ec4,color:#2a1040
+
+    BR[Feature branch&lt;br/&gt;claude/* · worktree-* · kevin/*&lt;br/&gt;codie/* · feature/*]:::local
+    PR[gh pr create --base main&lt;br/&gt;or /ship slash-command]:::local
+    BR --&gt; PR
+
+    PR --&gt; VAL[pr-validate.yml&lt;br/&gt;py_compile · ruff · pytest tests/unit&lt;br/&gt;.bak / .swp / .orig tripwire]:::ci
+
+    VAL -- pass --&gt; AUTO{pr-auto-merge.yml&lt;br/&gt;branch in exclusion list?}:::gate
+    VAL -- fail --&gt; FIX[Fix and push again&lt;br/&gt;ci-failure-issue.yml files issue]:::ci
+    FIX --&gt; VAL
+
+    AUTO -- codie/* · kevin/* · feature/* --&gt; MANUAL[Manual review required&lt;br/&gt;operator merges by hand]:::gate
+    AUTO -- everything else --&gt; ARMED[Auto-merge SQUASH armed&lt;br/&gt;uses AUTO_MERGE_PAT]:::gate
+
+    ARMED -- CI green --&gt; SQUASH[GitHub squash-merge to main]
+    MANUAL --&gt; SQUASH
+
+    SQUASH --&gt; CHANGED{Changed files&lt;br/&gt;only docs/*.md/state/?}
+    CHANGED -- yes --&gt; NODEP[deploy.yml skipped&lt;br/&gt;paths-ignore]:::deploy
+    CHANGED -- no --&gt; DEPLOY[deploy.yml fires&lt;br/&gt;Tailscale OAuth → SSH VPS]:::deploy
+
+    DEPLOY --&gt; RESTART[systemd restart&lt;br/&gt;gateway · api · web-ui&lt;br/&gt;VP workers · bots]:::deploy
+    RESTART --&gt; LIVE[Production live&lt;br/&gt;/api/v1/version SHA check]:::deploy</div>
+  </div>
+  
+    <details class="exhibit-pointers">
+      <summary>Source pointers · canonical doc</summary>
+      <ul class="pointers"><li><code>.github/workflows/pr-validate.yml</code> <span class="badge" style="background:#3fae6a" title=".github/workflows/pr-validate.yml — 5d">5d</span></li><li><code>.github/workflows/pr-auto-merge.yml</code> <span class="badge" style="background:#3fae6a" title=".github/workflows/pr-auto-merge.yml — 1d">1d</span></li><li><code>.github/workflows/deploy.yml</code> <span class="badge" style="background:#3fae6a" title=".github/workflows/deploy.yml — 1d">1d</span></li><li><code>scripts/install_vps_systemd_units.sh</code> <span class="badge" style="background:#3fae6a" title="scripts/install_vps_systemd_units.sh — 1d">1d</span></li></ul>
+      <a class="canonical-link" href="../../docs/deployment/ci_cd_pipeline.md" target="_blank">docs/deployment/ci_cd_pipeline.md</a>
+    </details>
+    
+</section>
+
+  
 <section class="exhibit footer-rail" id="exhibit-e08_glossary_legend">
   <div class="rail-cell glossary">
     <h3>Glossary</h3>
@@ -595,9 +1068,9 @@ Flippable per-task or globally; default landed 2026-05-11.</p>
     <ul class="legend-list"><li>Click any flow-spine stage → right-rail side drawer with drill-down + source pointers</li><li>Click a source path → opens canonical doc location (where wired)</li></ul>
     <h4>Build</h4>
     <ul class="legend-list build-meta">
-      <li>Generated: <code>2026-05-18T04:00:45Z</code></li>
-      <li>Git SHA: <code>17c1e2d8f69ff431f5f745961bfb6e04c5ddf59d</code></li>
-      <li>Stale pointers: <code>0</code></li>
+      <li>Generated: <code>2026-05-18T13:50:32Z</code></li>
+      <li>Git SHA: <code>27fb8e5fea087c820ccf1b5afea2b8008459a286</code></li>
+      <li>Stale pointers: <code>2</code></li>
       <li>Missing pointers: <code>0</code></li>
     </ul>
   </div>
@@ -2970,6 +3443,15 @@ document.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
   if (window.mermaid) {
     mermaid.initialize({ startOnLoad: false, theme: 'neutral', securityLevel: 'loose' });
+    // Render every page-level Mermaid panel (E2/E3/E7). Drawer-internal
+    // diagrams live inside #drawer-mermaid and are rendered lazily when the
+    // drawer opens (see openDrawer above) — exclude them here to avoid
+    // double-processing.
+    try {
+      mermaid.run({ querySelector: '.mermaid-panel .mermaid' });
+    } catch (e) {
+      console.error('mermaid.run failed for page-level diagrams', e);
+    }
   }
 });
 </script>

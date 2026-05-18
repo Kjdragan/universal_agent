@@ -1,0 +1,61 @@
+id: e03_knowledge
+title: "Knowledge Plane (Wiki + Memory)"
+renderer: mermaid_panel
+grid_area: "mid_center"
+description: |
+  Two coupled vaults — the external knowledge vault populated by intelligence
+  lanes (CSI, Discord, Hacker News), and the internal memory vault derived
+  from session evidence. Append-dominant Memex primitives. Auto-flush at
+  150k tokens. Vector indexes for retrieval.
+
+source:
+  - src/universal_agent/wiki/core.py
+  - src/universal_agent/wiki/projection.py
+  - src/universal_agent/wiki/llm.py
+  - src/universal_agent/memory/memory_store.py
+  - src/universal_agent/memory/memory_flush.py
+
+canonical_doc: docs/02_Subsystems/LLM_Wiki_System.md
+
+mermaid: |
+  flowchart LR
+      classDef ext fill:#e0efd9,stroke:#3fae6a,color:#1a4a2a
+      classDef int fill:#e8f4fa,stroke:#7fb8d4,color:#1a3a4a
+      classDef flush fill:#fef3d5,stroke:#d4a44e,color:#5a3e0a
+      classDef llm fill:#ecd9f4,stroke:#7d6ec4,color:#2a1040
+
+      subgraph EXT["External knowledge vault"]
+          RAW[raw/<br/>immutable sources]:::ext
+          ENTITIES[entities/<br/>people · orgs · tools]:::ext
+          CONCEPTS[concepts/<br/>recurring topics]:::ext
+          ANALYSES[analyses/<br/>synthesis docs]:::ext
+      end
+
+      subgraph INT["Internal memory vault"]
+          ACTIVE[MEMORY.md<br/>active context]:::int
+          CORE[(agent_core.db<br/>SQLite)]:::int
+          VEC[(Vector index<br/>Chroma / LanceDB)]:::int
+          ARCHIVE[Daily archival logs]:::int
+      end
+
+      RAW --> ENTITIES
+      RAW --> CONCEPTS
+      ENTITIES --> ANALYSES
+      CONCEPTS --> ANALYSES
+
+      MEMEX[Memex primitives<br/>CREATE · EXTEND · REVISE]:::llm
+      MEMEX -.append-dominant.-> RAW
+      MEMEX -.append-dominant.-> ENTITIES
+
+      ACTIVE --> PROJ[wiki/projection.py<br/>auto-sync on append]:::llm
+      PROJ --> ENTITIES
+
+      ACTIVE --> FLUSH{150k-token<br/>threshold?}:::flush
+      FLUSH -- yes --> AF[memory_flush.py<br/>analysis loop +<br/>archival_memory_insert]:::flush
+      AF --> ARCHIVE
+      AF --> VEC
+
+      QUERY[Wiki query<br/>cited answers]:::llm
+      VEC --> QUERY
+      ANALYSES --> QUERY
+      CORE --> QUERY
