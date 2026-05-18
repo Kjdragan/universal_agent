@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 
 from universal_agent.services import claude_code_intel_replay as ccir
+from universal_agent.services import csi_url_judge as cuj  # noqa: F401 — imported so monkeypatch can resolve submodule attrs
 
 
 class _StubXApiRecord:
