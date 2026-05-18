@@ -224,12 +224,34 @@ async def _run_one(spec: RunSpec, payloads: list[ydd.VideoTranscriptPayload], *,
                 reduce_output=reduce_output,
                 map_results=map_results,
             )
+            # Error-class breakdown lets us correlate model+concurrency choice
+            # with the actual rate-limit error surface (e.g. does glm-4.5-air
+            # generate more or fewer FUP 429s than glm-5-turbo at conc=3?).
+            error_class_breakdown: dict[str, int] = {}
+            for r in map_results:
+                cls = r.last_error_class
+                if cls:
+                    error_class_breakdown[cls] = error_class_breakdown.get(cls, 0) + 1
             map_metrics = {
                 "videos": len(map_results),
                 "ok": sum(1 for r in map_results if r.error is None),
                 "failed": sum(1 for r in map_results if r.error is not None),
                 "latency_seconds": [r.elapsed_seconds for r in map_results],
                 "map_model": map_results[0].map_model if map_results else None,
+                "total_retries": sum(r.retries for r in map_results),
+                "total_rate_limit_hits": sum(r.rate_limit_hits for r in map_results),
+                "error_class_breakdown": error_class_breakdown,
+                "per_video_retries": [
+                    {
+                        "video_id": r.video_id,
+                        "retries": r.retries,
+                        "rate_limit_hits": r.rate_limit_hits,
+                        "last_error_class": r.last_error_class,
+                        "ok": r.error is None,
+                        "elapsed_seconds": r.elapsed_seconds,
+                    }
+                    for r in map_results
+                ],
             }
         elapsed = time.perf_counter() - started
         return {
