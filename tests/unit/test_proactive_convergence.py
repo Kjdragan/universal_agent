@@ -222,6 +222,100 @@ async def test_track_b_ideation_synthesis_returns_empty_on_bad_json():
     with patch("universal_agent.services.llm_classifier._call_llm", new_callable=AsyncMock) as mock_llm:
         mock_llm.return_value = "not json"
         results = await track_b_ideation_synthesis(batch)
-        
+
     assert results == []
+
+
+# === Framing-clause regression (2026-05-18 incident) ===
+#
+# Three Simone-authored emails on 2026-05-18 opened with "here's the X you
+# asked for" framing even though every one was triggered by the
+# csi_convergence_sync cron, not by Kevin. Root cause: the proactive task
+# description omitted any framing directive, so the executing LLM defaulted
+# to operator-requested phrasing. These tests pin the corrective directive
+# into both brief task description builders so it can't silently regress.
+
+
+_REQUIRED_FRAMING_PHRASES = (
+    "FRAMING:",
+    "csi_convergence_sync",
+    "Kevin did not ask for this",
+    "Do NOT say 'as you requested'",
+    "proactive discovery",
+)
+
+_BANNED_OPERATOR_REQUESTED_PHRASES = (
+    "make it suitable for Simone review email.",
+)
+
+
+def test_convergence_brief_description_has_proactive_framing_clause():
+    from universal_agent.services.proactive_convergence import _brief_task_description
+
+    signatures = [
+        {
+            "video_id": "v1",
+            "channel_id": "c1",
+            "channel_name": "Channel One",
+            "video_title": "MCP servers",
+            "video_url": "https://youtube.test/v1",
+            "key_claims": ["x"],
+        },
+        {
+            "video_id": "v2",
+            "channel_id": "c2",
+            "channel_name": "Channel Two",
+            "video_title": "MCP again",
+            "video_url": "https://youtube.test/v2",
+            "key_claims": ["y"],
+        },
+    ]
+    desc = _brief_task_description(primary_topic="MCP servers", signatures=signatures)
+
+    for phrase in _REQUIRED_FRAMING_PHRASES:
+        assert phrase in desc, f"convergence brief description missing required clause: {phrase!r}"
+    for banned in _BANNED_OPERATOR_REQUESTED_PHRASES:
+        assert banned not in desc, (
+            f"convergence brief description still contains banned operator-requested phrasing: {banned!r}"
+        )
+
+
+def test_insight_brief_description_has_proactive_framing_clause(tmp_path):
+    from universal_agent.services.proactive_convergence import create_insight_brief_task
+
+    db_path = tmp_path / "activity.db"
+    signatures = [
+        {
+            "video_id": "v1",
+            "channel_id": "c1",
+            "channel_name": "Channel One",
+            "video_title": "Trend A",
+            "video_url": "https://youtube.test/v1",
+            "key_claims": ["a"],
+        },
+        {
+            "video_id": "v2",
+            "channel_id": "c2",
+            "channel_name": "Channel Two",
+            "video_title": "Trend B",
+            "video_url": "https://youtube.test/v2",
+            "key_claims": ["b"],
+        },
+    ]
+    with _connect(db_path) as conn:
+        result = create_insight_brief_task(
+            conn,
+            narrative="A non-obvious macro-trend across AI tooling",
+            value="High — informs next quarter strategy",
+            signatures=signatures,
+        )
+        task = task_hub.get_item(conn, result["task"]["task_id"])
+
+    desc = task["description"]
+    for phrase in _REQUIRED_FRAMING_PHRASES:
+        assert phrase in desc, f"insight brief description missing required clause: {phrase!r}"
+    for banned in _BANNED_OPERATOR_REQUESTED_PHRASES:
+        assert banned not in desc, (
+            f"insight brief description still contains banned operator-requested phrasing: {banned!r}"
+        )
 
