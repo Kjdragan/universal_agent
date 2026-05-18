@@ -15981,6 +15981,63 @@ async def delegation_history(request: Request, limit: int = 20):
     return {"missions": missions, "total": len(missions)}
 
 
+@app.get("/api/v1/ops/proactive_health")
+async def ops_proactive_health(request: Request):
+    """Layer-1 + Layer-2 watchdog snapshot for proactive activities.
+
+    Layer 1: cron registry, stale in-progress tasks, parked-task counts.
+    Layer 2: pipeline-invariant findings (e.g. youtube_transcript_coverage).
+
+    Designed to be called every Simone heartbeat and folded into
+    ``work_products/heartbeat_findings_latest.json`` under
+    ``category='proactive_health'``.  Read-only; no mutations.
+    """
+    _require_ops_auth(request)
+
+    from universal_agent.services.proactive_health import build_proactive_health_payload
+
+    activity_conn: Optional[sqlite3.Connection] = None
+    cron_jobs: list[Any] = []
+    csi_db_path: Optional[Path] = None
+    try:
+        activity_conn = _task_hub_open_conn()
+    except Exception:  # noqa: BLE001
+        logger.warning("proactive_health: failed to open activity store", exc_info=True)
+    try:
+        cron_jobs = list(_cron_service.list_jobs()) if _cron_service else []
+    except Exception:  # noqa: BLE001
+        logger.warning("proactive_health: failed to list cron jobs", exc_info=True)
+    try:
+        csi_db_path = _csi_default_db_path()
+    except Exception:  # noqa: BLE001
+        logger.warning("proactive_health: failed to resolve CSI DB path", exc_info=True)
+
+    try:
+        payload = build_proactive_health_payload(
+            activity_conn=activity_conn,
+            cron_jobs=cron_jobs,
+            csi_db_path=csi_db_path,
+        )
+    except Exception as exc:  # noqa: BLE001 — watchdog must degrade, not crash
+        logger.warning("proactive_health: aggregator raised", exc_info=True)
+        payload = {
+            "overall_status": "warn",
+            "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+            "crons": [],
+            "stale_tasks": {"count": 0, "samples": [], "error": str(exc)},
+            "parked_tasks": {"count": 0, "samples": []},
+            "invariants": [],
+            "error": f"aggregator_failure: {type(exc).__name__}",
+        }
+    finally:
+        if activity_conn is not None:
+            try:
+                activity_conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+    return payload
+
+
 class FactoryUpdateRequest(BaseModel):
     """Request to trigger a factory self-update via delegation bus."""
     target_factory_id: Optional[str] = None  # None = broadcast to all workers
