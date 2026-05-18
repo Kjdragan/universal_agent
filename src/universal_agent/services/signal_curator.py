@@ -32,7 +32,51 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 DEFAULT_MIN_CARDS = 10
 DEFAULT_MIN_HOURS = 12
+DEFAULT_MAX_OPEN_SIGNALS = 10
+DEFAULT_MAX_DISPATCH_QUEUE = 20
 _LAST_RUN_KEY = "signal_curator_last_run"
+
+
+def _proactive_queue_under_pressure(conn: sqlite3.Connection) -> tuple[bool, str]:
+    """Detect backpressure on the downstream task pipeline.
+
+    Returns ``(pressured, reason)``. The curator should skip its run
+    when either:
+      - Open/in-flight proactive_signal tasks exceed
+        ``UA_CURATOR_MAX_OPEN_SIGNALS`` (default: 10), or
+      - Eligible items in ``task_hub_dispatch_queue`` exceed
+        ``UA_CURATOR_MAX_DISPATCH_QUEUE`` (default: 20).
+
+    The goal is to avoid stacking new auto-promoted work onto a queue
+    that's already backed up — Simone's effective concurrency is 1.
+    """
+    max_open_signals = _parse_int_env("UA_CURATOR_MAX_OPEN_SIGNALS", DEFAULT_MAX_OPEN_SIGNALS)
+    max_dispatch_pending = _parse_int_env("UA_CURATOR_MAX_DISPATCH_QUEUE", DEFAULT_MAX_DISPATCH_QUEUE)
+
+    open_row = conn.execute(
+        """
+        SELECT COUNT(*) AS cnt FROM task_hub_items
+        WHERE source_kind = 'proactive_signal'
+          AND status IN ('open', 'in_progress', 'needs_review')
+        """,
+    ).fetchone()
+    open_count = int(open_row["cnt"]) if open_row and "cnt" in open_row.keys() else int(open_row[0] if open_row else 0)
+    if open_count > max_open_signals:
+        return True, f"open_proactive_signals={open_count}>{max_open_signals}"
+
+    try:
+        depth_row = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM task_hub_dispatch_queue WHERE eligible = 1",
+        ).fetchone()
+    except sqlite3.OperationalError:
+        # Older DBs may lack the dispatch queue or the eligible column;
+        # in that case treat as no backpressure.
+        return False, ""
+    depth_count = int(depth_row["cnt"]) if depth_row and "cnt" in depth_row.keys() else int(depth_row[0] if depth_row else 0)
+    if depth_count > max_dispatch_pending:
+        return True, f"dispatch_queue_depth={depth_count}>{max_dispatch_pending}"
+
+    return False, ""
 
 
 def _parse_int_env(key: str, default: int) -> int:
@@ -73,6 +117,18 @@ def should_run_curation(conn: sqlite3.Connection) -> bool:
 
     # Never run if there are zero cards
     if pending_count == 0:
+        return False
+
+    # Backpressure: skip if the downstream queue is already saturated.
+    # Auto-curator output goes straight into Task Hub, so adding more
+    # when Simone is backed up just lengthens latency for everything.
+    pressured, pressure_reason = _proactive_queue_under_pressure(conn)
+    if pressured:
+        logger.info(
+            "Signal curator skipping run due to backpressure: %s (pending_cards=%d)",
+            pressure_reason,
+            pending_count,
+        )
         return False
 
     # Check card count threshold
