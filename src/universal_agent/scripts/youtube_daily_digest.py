@@ -103,7 +103,12 @@ class VideoTranscriptPayload:
 
 @dataclass
 class MapResult:
-    """Output of a single map-step call (one video → one retell + classification)."""
+    """Output of a single map-step call (one video → one retell + classification).
+
+    `retries` / `rate_limit_hits` / `last_error_class` are populated for every
+    call (success or failure) so the comparison harness can correlate model
+    choice + concurrency level with the rate-limit error surface.
+    """
     video_id: str
     title: str
     retell_markdown: str
@@ -112,6 +117,9 @@ class MapResult:
     error: str | None = None
     elapsed_seconds: float = 0.0
     map_model: str = ""
+    retries: int = 0  # number of retry attempts before success (0 if first call worked)
+    rate_limit_hits: int = 0  # how many of those retries were due to 429/FUP
+    last_error_class: str = ""  # class name of last (or final-failing) exception
 
 
 
@@ -334,14 +342,23 @@ async def _zai_call_with_retry(
     context: str,
     max_retries: int = 5,
     temperature: float = 0.4,
+    stats_out: dict[str, Any] | None = None,
 ) -> str:
     """Send one messages.create() call to Z.AI with the global rate limiter
     and a 429/FUP-aware retry loop. Returns the concatenated text response.
 
     All non-rate-limit errors are re-raised immediately.
+
+    If `stats_out` is provided, it is populated in-place with:
+      - retries: int (number of retry attempts; 0 if first call succeeded)
+      - rate_limit_hits: int (subset of retries triggered by 429/FUP)
+      - last_error_class: str (class name of the most recent exception, "" if none)
+    The caller can use these to correlate model+concurrency choices with the
+    actual rate-limit error surface, especially in the A/B comparison harness.
     """
     limiter = ZAIRateLimiter.get_instance()
     last_error: Exception | None = None
+    rate_limit_hits = 0
     for attempt in range(max_retries):
         async with limiter.acquire(context):
             try:
@@ -355,11 +372,20 @@ async def _zai_call_with_retry(
                 text = "".join(getattr(block, "text", "") for block in response.content).strip()
                 if not text:
                     raise RuntimeError(f"LLM returned an empty response (context={context})")
+                if stats_out is not None:
+                    stats_out["retries"] = attempt
+                    stats_out["rate_limit_hits"] = rate_limit_hits
+                    stats_out["last_error_class"] = ""
                 return text
             except Exception as exc:
                 last_error = exc
                 if not _is_rate_limit_error(exc):
+                    if stats_out is not None:
+                        stats_out["retries"] = attempt
+                        stats_out["rate_limit_hits"] = rate_limit_hits
+                        stats_out["last_error_class"] = type(exc).__name__
                     raise
+                rate_limit_hits += 1
                 await limiter.record_429(context)
                 if attempt >= max_retries - 1:
                     break
@@ -373,6 +399,10 @@ async def _zai_call_with_retry(
                     str(exc)[:200],
                 )
                 await asyncio.sleep(delay)
+    if stats_out is not None:
+        stats_out["retries"] = max_retries - 1
+        stats_out["rate_limit_hits"] = rate_limit_hits
+        stats_out["last_error_class"] = type(last_error).__name__ if last_error else ""
     raise RuntimeError(
         f"ZAI call failed after {max_retries} attempts at context={context}: {last_error}"
     )
@@ -468,6 +498,7 @@ async def _retell_one_video(
     prompt = RETELL_PROMPT + prompt_body
     context = f"youtube_digest_map:{video.video_id}"
 
+    stats: dict[str, Any] = {}
     try:
         raw_text = await _zai_call_with_retry(
             client=client,
@@ -475,6 +506,7 @@ async def _retell_one_video(
             prompt=prompt,
             max_tokens=max_tokens,
             context=context,
+            stats_out=stats,
         )
         elapsed = (datetime.now(timezone.utc) - started).total_seconds()
         parsed = _parse_map_output(raw_text, video_id=video.video_id, fallback_title=video.title)
@@ -486,6 +518,9 @@ async def _retell_one_video(
             classification=parsed["classification"],
             elapsed_seconds=elapsed,
             map_model=model,
+            retries=int(stats.get("retries", 0)),
+            rate_limit_hits=int(stats.get("rate_limit_hits", 0)),
+            last_error_class=str(stats.get("last_error_class", "")),
         )
     except Exception as exc:
         elapsed = (datetime.now(timezone.utc) - started).total_seconds()
@@ -513,6 +548,9 @@ async def _retell_one_video(
             error=str(exc),
             elapsed_seconds=elapsed,
             map_model=model,
+            retries=int(stats.get("retries", 0)),
+            rate_limit_hits=int(stats.get("rate_limit_hits", 0)),
+            last_error_class=str(stats.get("last_error_class", "") or type(exc).__name__),
         )
 
 
@@ -590,19 +628,37 @@ async def _map_retell_videos(
     # Surface aggregate stats in the log so operators can spot regressions.
     successes = [r for r in results if r.error is None]
     failures = [r for r in results if r.error is not None]
+    total_retries = sum(r.retries for r in results)
+    total_rate_limit_hits = sum(r.rate_limit_hits for r in results)
+    error_class_breakdown: dict[str, int] = {}
+    for r in results:
+        cls = r.last_error_class
+        if cls:
+            error_class_breakdown[cls] = error_class_breakdown.get(cls, 0) + 1
     if successes:
         elapsed_list = sorted(r.elapsed_seconds for r in successes)
         median = elapsed_list[len(elapsed_list) // 2]
         logger.info(
-            "Map step complete: %d ok / %d failed; latency min=%.1fs p50=%.1fs max=%.1fs",
+            "Map step complete: %d ok / %d failed; latency min=%.1fs p50=%.1fs max=%.1fs; "
+            "retries=%d (%d rate_limit); error_classes=%s",
             len(successes),
             len(failures),
             min(elapsed_list),
             median,
             max(elapsed_list),
+            total_retries,
+            total_rate_limit_hits,
+            error_class_breakdown or "none",
         )
     else:
-        logger.error("Map step complete: 0 ok / %d failed (all videos failed)", len(failures))
+        logger.error(
+            "Map step complete: 0 ok / %d failed (all videos failed); "
+            "retries=%d (%d rate_limit); error_classes=%s",
+            len(failures),
+            total_retries,
+            total_rate_limit_hits,
+            error_class_breakdown or "none",
+        )
     return results
 
 
