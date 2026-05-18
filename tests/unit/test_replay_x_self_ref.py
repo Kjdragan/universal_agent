@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from universal_agent.services import claude_code_intel_replay as ccir
-from universal_agent.services import csi_url_judge as cuj  # noqa: F401 — imported so monkeypatch can resolve submodule attrs
+from universal_agent.services import csi_url_judge as cuj
 
 
 class _StubXApiRecord:
@@ -53,10 +53,7 @@ def test_try_x_api_tweet_self_ref_disabled_by_env(monkeypatch, tmp_path):
 
 def test_try_x_api_tweet_self_ref_returns_none_for_non_tweet_urls(monkeypatch, tmp_path):
     """A x.com URL that isn't /status/<id> must not be misrouted."""
-    monkeypatch.setattr(
-        "universal_agent.services.csi_url_judge.parse_tweet_id_from_url",
-        lambda url: None,
-    )
+    monkeypatch.setattr(cuj, "parse_tweet_id_from_url", lambda url: None)
     assert (
         ccir._try_x_api_tweet_self_ref(
             final_url="https://x.com/bcherny",
@@ -71,12 +68,10 @@ def test_try_x_api_tweet_self_ref_success(monkeypatch, tmp_path):
     """Happy path: tweet ID parsed, X API returns fetched, content returned."""
     tweet_md = _write_tweet_md(tmp_path, tweet_id="999", text="Real tweet body prose.")
 
+    monkeypatch.setattr(cuj, "parse_tweet_id_from_url", lambda url: "999")
     monkeypatch.setattr(
-        "universal_agent.services.csi_url_judge.parse_tweet_id_from_url",
-        lambda url: "999",
-    )
-    monkeypatch.setattr(
-        "universal_agent.services.csi_url_judge._fetch_tweet_via_x_api",
+        cuj,
+        "_fetch_tweet_via_x_api",
         lambda url, tweet_id, source_dir, *, timeout: _StubXApiRecord(
             content_path=str(tweet_md), content_chars=tweet_md.stat().st_size
         ),
@@ -105,12 +100,10 @@ def test_try_x_api_tweet_self_ref_returns_none_on_x_api_failure(monkeypatch, tmp
         content_chars = 0
         skip_reason = "x_api_no_auth"
 
+    monkeypatch.setattr(cuj, "parse_tweet_id_from_url", lambda url: "999")
     monkeypatch.setattr(
-        "universal_agent.services.csi_url_judge.parse_tweet_id_from_url",
-        lambda url: "999",
-    )
-    monkeypatch.setattr(
-        "universal_agent.services.csi_url_judge._fetch_tweet_via_x_api",
+        cuj,
+        "_fetch_tweet_via_x_api",
         lambda url, tweet_id, source_dir, *, timeout: FailedRecord(),
     )
 
@@ -126,12 +119,10 @@ def test_try_x_api_tweet_self_ref_returns_none_on_x_api_failure(monkeypatch, tmp
 
 def test_try_x_api_tweet_self_ref_handles_missing_content_file(monkeypatch, tmp_path):
     """X API claims success but content file doesn't exist — return None."""
+    monkeypatch.setattr(cuj, "parse_tweet_id_from_url", lambda url: "999")
     monkeypatch.setattr(
-        "universal_agent.services.csi_url_judge.parse_tweet_id_from_url",
-        lambda url: "999",
-    )
-    monkeypatch.setattr(
-        "universal_agent.services.csi_url_judge._fetch_tweet_via_x_api",
+        cuj,
+        "_fetch_tweet_via_x_api",
         lambda url, tweet_id, source_dir, *, timeout: _StubXApiRecord(
             content_path=str(tmp_path / "nope.md")
         ),
@@ -169,11 +160,11 @@ def test_fetch_linked_source_uses_x_self_ref_for_browser_gated_tweets(monkeypatc
 
     # Wire up X API success.
     monkeypatch.setattr(
-        "universal_agent.services.csi_url_judge.parse_tweet_id_from_url",
-        lambda url: "888" if "888" in url else None,
+        cuj, "parse_tweet_id_from_url", lambda url: "888" if "888" in url else None
     )
     monkeypatch.setattr(
-        "universal_agent.services.csi_url_judge._fetch_tweet_via_x_api",
+        cuj,
+        "_fetch_tweet_via_x_api",
         lambda url, tweet_id, source_dir, *, timeout: _StubXApiRecord(
             content_path=str(tweet_md), content_chars=tweet_md.stat().st_size
         ),
