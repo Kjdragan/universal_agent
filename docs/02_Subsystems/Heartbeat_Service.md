@@ -294,3 +294,32 @@ Heartbeat is not a fallback executor for trusted email work. If the ToDo runtime
 | [Heartbeat Issue Mediation and Auto-Triage (2026-03-12)](../03_Operations/95_Heartbeat_Issue_Mediation_And_Auto_Triage_2026-03-12.md) | Full mediation contract: notification model, Simone dispatch, operator escalation, UI badges |
 | [Factory Delegation, Heartbeat, and Registry (2026-03-06)](../03_Operations/88_Factory_Delegation_Heartbeat_And_Registry_Source_Of_Truth_2026-03-06.md) | Redis transport, factory heartbeat (VP fleet registration), delegation context |
 | [Heartbeat Debug Fixes (2026-02-05)](../03_Operations/01_Heartbeat_Debug_Fixes.md) | Historical: no-op strictness, text dedup, UI visibility fixes |
+
+## 11. Proactive Activity Watchdog
+
+The heartbeat integrates with the **Proactive Activity Watchdog** framework, a two-layer health check that goes beyond process-level liveness to verify pipeline output quality.
+
+### How it integrates
+
+Each heartbeat cycle, Simone calls `GET /api/v1/ops/proactive_health` and folds the response into `work_products/heartbeat_findings_latest.json` under `category='proactive_health'`. This makes critical pipeline issues visible in the heartbeat response without opening the JSON manually.
+
+### What it checks
+
+| Layer | Checks | Purpose |
+|---|---|---|
+| Layer 1 — Process liveness | Cron registry snapshot, stale in-progress tasks (past `UA_TASK_STALE_MIN_AGE_MINUTES`), parked `needs_review` tasks | Catches crons not firing, workers stuck mid-task, protocol violations |
+| Layer 2 — Pipeline invariants | Owner-declared post-conditions (e.g., YouTube transcript coverage, enrichment cross-table consistency) | Catches pipelines that exit cleanly but leave corrupt or missing output |
+
+### Why this exists
+
+Motivated by a 2026-05-18 incident where the YouTube digest pipeline exited 0 every night for 7 days, yet 100% of generated cards had `transcript_status='missing'` due to a cross-table architectural drift. No process-level health check would have caught this — the watchdog pipeline-invariant layer exists specifically to detect semantic failures in otherwise successful output.
+
+### Findings integration
+
+Watchdog findings use the same `HeartbeatFinding` schema as other heartbeat findings (see Section 6) with `category='proactive_health'`. They flow through the same mediation pipeline (Section 7) and appear in the heartbeat findings JSON alongside system health checks.
+
+### Related documentation
+
+| Document | Scope |
+|---|---|
+| [Proactive Activity Watchdog](../03_Operations/132_Proactive_Health_Watchdog.md) | Canonical architecture, invariant authoring runbook, endpoint contract |
