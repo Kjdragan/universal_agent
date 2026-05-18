@@ -3,12 +3,15 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import hashlib
 import json
+import logging
 from pathlib import Path
 import re
 import sqlite3
 from typing import Any, Optional
 
 from universal_agent import task_hub
+
+logger = logging.getLogger(__name__)
 
 CARD_STATUS_PENDING = "pending"
 CARD_STATUS_APPROVED = "approved"
@@ -628,6 +631,20 @@ def _discord_actions(topic: str) -> list[dict[str, str]]:
     ]
 
 
+def _resolve_followup_priority(*, card: dict[str, Any], actor: str) -> int:
+    """Resolve task priority for a proactive-signal follow-up.
+
+    Operator-clicked actions (``actor='dashboard_user'``) are boosted to
+    priority 1 so they jump ahead of auto-promoted background tasks in
+    the dispatch queue. The user's explicit click is a stronger signal
+    than the curator's auto-pick. Other actors honor the card's declared
+    priority (clamped to 1-4).
+    """
+    if actor == "dashboard_user":
+        return 1
+    return max(1, min(4, int(card.get("priority") or 2)))
+
+
 def _create_followup_task(
     conn: sqlite3.Connection,
     *,
@@ -661,7 +678,7 @@ def _create_followup_task(
             "title": f"{action_label}: {card.get('title')}",
             "description": description,
             "project_key": "proactive",
-            "priority": max(1, min(4, int(card.get("priority") or 2))),
+            "priority": _resolve_followup_priority(card=card, actor=actor),
             "labels": ["proactive-signal", str(card.get("source") or "signal"), str(action.get("id") or "action")],
             "status": task_hub.TASK_STATUS_OPEN,
             "agent_ready": str(action.get("id") or "") != "track_topic",
