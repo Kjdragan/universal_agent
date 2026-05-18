@@ -2285,6 +2285,27 @@ class HeartbeatService:
                         except Exception as _sc_exc:
                             logger.debug("Signal curator unavailable: %s", _sc_exc)
                         # ────────────────────────────────────────────────────
+
+                        # ──── needs_review SLA reaper ───────────────────────
+                        # Recover tasks that fell through to needs_review
+                        # without an explicit close. Safe to run on every
+                        # heartbeat — it's a single indexed query + bounded
+                        # update. Operator-gated dispositions are left alone.
+                        try:
+                            from universal_agent.services.needs_review_reaper import (
+                                reap_stale_needs_review,
+                            )
+                            _reaper_summary = reap_stale_needs_review(conn)
+                            if _reaper_summary.get("recovered"):
+                                logger.info(
+                                    "needs_review reaper recovered %d task(s) for %s: %s",
+                                    _reaper_summary["recovered"],
+                                    session.session_id,
+                                    _reaper_summary["recovered_ids"],
+                                )
+                        except Exception as _rr_exc:
+                            logger.debug("needs_review reaper unavailable: %s", _rr_exc)
+                        # ────────────────────────────────────────────────────
                     else:
                         logger.info(
                             "Skipping proactive advisor for %s (task-focused mode, %d tasks claimed)",
