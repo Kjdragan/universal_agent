@@ -21,6 +21,7 @@ import sys
 
 from universal_agent.services.csi_demo_triage_policy import (
     DEFAULT_POLICIES,
+    StaleTierPolicy,
     apply_policies,
     policy_auto_apply_enabled,
 )
@@ -47,7 +48,67 @@ def _parse_args() -> argparse.Namespace:
             "policy via env flip without touching crontab."
         ),
     )
+    parser.add_argument(
+        "--age-days",
+        type=int,
+        default=None,
+        help=(
+            "Override max age in days. Default uses the configured policy "
+            "(14 days for tier-3). Lower for one-time aggressive sweeps; "
+            "raise to be more conservative."
+        ),
+    )
+    parser.add_argument(
+        "--max-score",
+        type=float,
+        default=None,
+        help=(
+            "Override max ranking_score for dismissal. Candidates with score "
+            "<= this OR NULL get dismissed. Default 5.0 for tier-3."
+        ),
+    )
+    parser.add_argument(
+        "--tier",
+        type=int,
+        default=None,
+        choices=[3, 4],
+        help=(
+            "Override which tier the policy targets. Default is the "
+            "configured policy (tier 3). Pass 4 ONLY for explicit one-time "
+            "purges of stale tier-4 candidates — operator-driven, not the "
+            "automatic default."
+        ),
+    )
+    parser.add_argument(
+        "--policy-name",
+        default=None,
+        help=(
+            "Override the policy name used in decided_by stamps. Useful for "
+            "one-off sweeps so the audit trail distinguishes them from the "
+            "default policy. Default: 'stale-tier-N-override' when other "
+            "overrides are provided, else the configured policy name."
+        ),
+    )
     return parser.parse_args()
+
+
+def _custom_policy_from_args(args: argparse.Namespace) -> StaleTierPolicy | None:
+    """Build a one-off StaleTierPolicy when the operator passed overrides."""
+    overrides = (args.age_days, args.max_score, args.tier)
+    if all(o is None for o in overrides):
+        return None
+    base = DEFAULT_POLICIES[0]
+    tier = args.tier if args.tier is not None else base.tier
+    max_age = args.age_days if args.age_days is not None else base.max_age_days
+    max_score = args.max_score if args.max_score is not None else base.max_ranking_score
+    name = args.policy_name or f"stale-tier-{tier}-override"
+    return StaleTierPolicy(
+        name=name,
+        tier=tier,
+        max_age_days=max_age,
+        max_ranking_score=max_score,
+        decided_by=f"auto-policy:{name}",
+    )
 
 
 def main() -> int:
@@ -64,7 +125,17 @@ def main() -> int:
     else:
         dry_run = not args.apply
 
-    report = apply_policies(dry_run=dry_run)
+    custom = _custom_policy_from_args(args)
+    policies = (custom,) if custom is not None else None
+    if custom is not None:
+        print(
+            f"using one-off policy: tier={custom.tier} "
+            f"max_age={custom.max_age_days}d max_score={custom.max_ranking_score} "
+            f"name={custom.name}",
+            file=sys.stderr,
+        )
+
+    report = apply_policies(dry_run=dry_run, policies=policies)
 
     if args.json:
         print(json.dumps(report, indent=2, ensure_ascii=True, sort_keys=True))
