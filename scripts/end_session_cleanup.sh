@@ -110,6 +110,35 @@ fi
 git worktree prune
 
 # ---------------------------------------------------------------------------
+# Step 1b — sweep true orphan dirs (.git link severed, git has no record)
+#
+# A directory under .claude/worktrees/ that (a) is NOT in `git worktree list`
+# AND (b) has no .git file/link inside it cannot possibly hold trackable work
+# — git has no idea it exists. The IDE's Source Control panel may still
+# discover it via filesystem scan and inflate the "changed files" count to
+# the thousands. Safe to remove.
+# ---------------------------------------------------------------------------
+if [ -d "$REPO_ROOT/.claude/worktrees" ]; then
+  known_worktrees=$(git worktree list --porcelain | awk '/^worktree / {print $2}')
+  for wt in "$REPO_ROOT"/.claude/worktrees/*/; do
+    [ -d "$wt" ] || continue
+    wt_path="${wt%/}"
+    if [ "$wt_path" = "$SELF_WORKTREE" ]; then
+      continue
+    fi
+    if echo "$known_worktrees" | grep -qxF "$wt_path"; then
+      continue
+    fi
+    if [ -e "$wt_path/.git" ]; then
+      log "orphan candidate $wt_path has a .git link git doesn't recognise — keeping (manual review)"
+      continue
+    fi
+    log "orphan dir $wt_path has no .git link and is unknown to git — removing"
+    rm -rf "$wt_path" 2>&1 | sed 's/^/  /' || true
+  done
+fi
+
+# ---------------------------------------------------------------------------
 # Step 2 — get the parent checkout back on main if its branch is merged
 # ---------------------------------------------------------------------------
 current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
