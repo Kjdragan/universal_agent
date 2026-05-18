@@ -342,6 +342,84 @@ def test_dispatcher_raises_when_missing_required_args():
 
 
 @pytest.mark.asyncio
+async def test_retell_one_video_tracks_rate_limit_retries(monkeypatch):
+    """Verify a 429-then-success sequence is reflected in MapResult.retries
+    and MapResult.rate_limit_hits so the comparison harness can correlate
+    model+concurrency choices with rate-limit error surfaces."""
+    call_log: list[int] = []
+    canned_success = """## Test
+
+**Video ID:** vid
+
+### Retelling
+body.
+
+### Thesis
+Short thesis.
+
+```per_video_classification
+{
+  "video_id": "vid",
+  "value_score": 70,
+  "value_tier": "high",
+  "code_implementation_prospect": true,
+  "concept_only": false,
+  "evidence_quality": "transcript",
+  "reason": "Concrete."
+}
+```
+"""
+
+    class _Block:
+        def __init__(self, text: str): self.text = text
+
+    class _Resp:
+        def __init__(self, text: str): self.content = [_Block(text)]
+
+    class _Messages:
+        async def create(self, **kwargs):
+            call_log.append(len(call_log))
+            # First two attempts return 429 / FUP 1313; third succeeds.
+            if len(call_log) <= 2:
+                raise Exception(
+                    "Error code: 429 - {'error': {'code': '1313', 'message': 'Fair Usage Policy'}}"
+                )
+            return _Resp(canned_success)
+
+    class _Client:
+        messages = _Messages()
+
+    class _NoopLimiter:
+        def acquire(self, *a, **k):
+            class _Ctx:
+                async def __aenter__(_self): return None
+                async def __aexit__(_self, *a): return False
+            return _Ctx()
+        async def record_success(self): pass
+        async def record_429(self, *a): pass
+        def get_backoff(self, attempt): return 0.0
+
+    monkeypatch.setattr(ydd.ZAIRateLimiter, "get_instance", lambda: _NoopLimiter())
+    # Patch asyncio.sleep to a no-op coroutine so the test doesn't actually
+    # wait. Must NOT reference the real asyncio.sleep here or we recurse.
+    async def _noop_sleep(_s):
+        return None
+    monkeypatch.setattr(ydd.asyncio, "sleep", _noop_sleep)
+
+    result = await ydd._retell_one_video(
+        client=_Client(),
+        model="glm-4.5-air",
+        video=ydd.VideoTranscriptPayload(video_id="vid", title="T", transcript_text="t"),
+        max_tokens=2000,
+        transcript_char_limit=50_000,
+    )
+    assert result.error is None
+    assert result.retries == 2, f"expected 2 retries, got {result.retries}"
+    assert result.rate_limit_hits == 2, f"expected 2 rate-limit hits, got {result.rate_limit_hits}"
+    assert result.last_error_class == ""  # cleared on eventual success
+
+
+@pytest.mark.asyncio
 async def test_map_step_respects_concurrency_semaphore(monkeypatch):
     """At map_concurrency=2 we should never have >2 in-flight calls at once."""
     in_flight = 0
