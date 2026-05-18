@@ -200,7 +200,7 @@ def test_codie_proactive_cleanup_is_observed(monkeypatch):
 
 ### Part D — Canonical doc + index updates
 
-#### New file: `docs/03_Operations/108_Task_Hub_Observability_Protocol.md`
+#### New file: `docs/03_Operations/129_Task_Hub_Observability_Protocol.md`
 
 Structure:
 
@@ -231,18 +231,18 @@ In the "Pre-Implementation Reading — DO NOT SKIP" table (current location: `CL
 | If you're about to propose | Read first |
 |---|---|
 | ... existing rows ... | ... |
-| **A new cron job, scheduled task, webhook handler, or any new async unit of work** | **`docs/03_Operations/108_Task_Hub_Observability_Protocol.md` — the protocol is mandatory for new tasks. Use the helper API; don't bypass.** |
+| **A new cron job, scheduled task, webhook handler, or any new async unit of work** | **`docs/03_Operations/129_Task_Hub_Observability_Protocol.md` — the protocol is mandatory for new tasks. Use the helper API; don't bypass.** |
 
 Place it logically near the other "task hub" rows.
 
 #### `docs/Documentation_Status.md` update
 
-Prepend a new entry to the rolling "Last updated" block following the existing pattern (2-3 paragraphs covering: Ship 4 LLM cron wiring, 4 housekeeping crons flipped, new 108 canonical doc + checklist + worked examples, CLAUDE.md row addition, test counts).
+Prepend a new entry to the rolling "Last updated" block following the existing pattern (2-3 paragraphs covering: Ship 4 LLM cron wiring, 4 housekeeping crons flipped, new 129 canonical doc + checklist + worked examples, CLAUDE.md row addition, test counts).
 
 #### `docs/README.md` update
 
 Find the "3. Operations" or "03_Operations" section and add a link to the new doc:
-- `**[Task Hub Observability Protocol](03_Operations/108_Task_Hub_Observability_Protocol.md)**: Canonical standard for the observability + recovery wiring that every async unit of work must follow.`
+- `**[Task Hub Observability Protocol](03_Operations/129_Task_Hub_Observability_Protocol.md)**: Canonical standard for the observability + recovery wiring that every async unit of work must follow.`
 
 ### Part E — Verification + ship
 
@@ -265,7 +265,7 @@ Find the "3. Operations" or "03_Operations" section and add a link to the new do
    ```
    git add src/universal_agent/cron_service.py src/universal_agent/gateway_server.py \
            tests/unit/test_cron_llm_path_f_observability.py tests/unit/test_cron_task_hub_linkage.py \
-           docs/03_Operations/108_Task_Hub_Observability_Protocol.md \
+           docs/03_Operations/129_Task_Hub_Observability_Protocol.md \
            docs/Documentation_Status.md docs/README.md CLAUDE.md
    git commit -m "feat(hermes-f-final): LLM crons + housekeeping opt-in + Task Hub Observability Protocol doc"
    ```
@@ -320,7 +320,7 @@ Three pieces:
    "they don't produce work product" rationale was the wrong frame —
    meta-observability ("is the dispatcher itself alive?") matters too.
 
-3. **Canonical doc**: `docs/03_Operations/108_Task_Hub_Observability_Protocol.md`
+3. **Canonical doc**: `docs/03_Operations/129_Task_Hub_Observability_Protocol.md`
    — formalizes the six-rule standard for ALL new async work in this
    repo: identity, claim ledger, run history, subprocess identity,
    protocol violation routing, standard recovery verbs. Includes
@@ -329,7 +329,7 @@ Three pieces:
    new task type, and cross-refs to existing canonical docs.
 
    `CLAUDE.md` Pre-Implementation Reading table gains a row pointing
-   at the new 108 doc as MANDATORY reading before proposing any new
+   at the new 129 doc as MANDATORY reading before proposing any new
    async unit. Indexes updated in `docs/README.md` and
    `docs/Documentation_Status.md`.
 
@@ -361,7 +361,7 @@ Closes Phase F observability coverage AND codifies the Task Hub Observability Pr
 Three pieces — see commit message for full detail:
 1. LLM cron path wiring (mirrors `!script` branch from PR #238)
 2. 4 housekeeping crons flipped to opt-in
-3. New canonical doc `108_Task_Hub_Observability_Protocol.md` + CLAUDE.md row + index updates
+3. New canonical doc `129_Task_Hub_Observability_Protocol.md` + CLAUDE.md row + index updates
 
 ## Why this matters
 
