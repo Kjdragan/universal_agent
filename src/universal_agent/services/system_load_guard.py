@@ -15,7 +15,7 @@ When thresholds are exceeded, the guard returns structured information
 investigate.  It does NOT kill processes — that's the reaper's job.
 
 Configuration via environment variables:
-  - UA_MAX_PROCESS_COUNT (default: 100) — per-user process count ceiling
+  - UA_MAX_PROCESS_COUNT (default: 250) — per-user process count ceiling
   - UA_MAX_SWAP_PCT (default: 85.0) — swap usage percentage ceiling
 """
 
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 # ── Defaults ─────────────────────────────────────────────────────────────────
 
-DEFAULT_MAX_PROCESS_COUNT = 100
+DEFAULT_MAX_PROCESS_COUNT = 250
 DEFAULT_MAX_SWAP_PCT = 85.0
 
 
