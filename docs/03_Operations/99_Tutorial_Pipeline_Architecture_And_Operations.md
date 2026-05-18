@@ -24,7 +24,7 @@ Playlist Watch → New Video Detection → Webhook Dispatch → Agent Session
 | Hooks Service | `hooks_service.py` | Receives webhook events, manages dispatch queue, throttling, retry policies |
 | Gateway Server | `gateway_server.py` | Notification system, tutorial dashboard API, persistence |
 | YouTube Ingestion | `youtube_ingest.py` | Fetches transcripts via rotating residential proxy (Webshare or DataImpulse, selected by `PROXY_PROVIDER`) |
-| Telegram Notifier | `services/tutorial_telegram_notifier.py` | Per-video dedup Telegram alerts for tutorial events |
+| Telegram Notifier | `services/notification_dispatcher.py` + `services/telegram_send.py` | Generic out-of-band Telegram delivery; per-video dedup is upstream via `_add_notification()` video-level upsert in `gateway_server.py` |
 | Dashboard (Tutorials) | `web-ui/app/dashboard/tutorials/page.tsx` | Tutorial runs, review jobs, bootstrap jobs, notifications with client-side dedup |
 | Dashboard (Main) | `web-ui/app/dashboard/page.tsx` | Notification panel with video-level dedup |
 
@@ -240,9 +240,13 @@ The `visibleNotifications` memo in the dashboard page applies a post-filter dedu
 
 The tutorials tab has its own `visibleNotifications` memo that uses `notificationEntityKey()` to group by video and keeps only the latest notification per entity.
 
-### 3.4 Telegram — Per-Video Cooldown (`tutorial_telegram_notifier.py`)
+### 3.4 Telegram delivery — generic dispatcher + upstream upsert dedup
 
-`TutorialTelegramNotifier.maybe_send()` implements per-video dedup for `youtube_tutorial_ready` and `youtube_playlist_new_video` kinds using a TTL cache, preventing duplicate Telegram messages within a cooldown window.
+Telegram messages for `youtube_tutorial_ready` and `youtube_playlist_new_video` notifications are sent by the generic `NotificationDispatcher` (`services/notification_dispatcher.py`), not a tutorial-specific notifier. The dispatcher polls the `notifications` table for undelivered high-severity rows on a fixed interval (`UA_NOTIFICATION_DISPATCHER_INTERVAL_SECONDS`, default 30s) and delivers each row via `telegram_send_async` from `services/telegram_send.py`.
+
+Per-video dedup is **upstream** of the dispatcher, not inside it. `_add_notification()` in `gateway_server.py` upserts using `notificationEntityKey()` so that as a single `video_id` progresses through pipeline stages (`new_video` → `started` → `progress` → `ready`), only the latest notification per video sits in the undelivered queue. The dispatcher's `UA_NOTIFICATION_DISPATCHER_COOLDOWN_SECONDS` (default 300s) is a global flap-protection floor, not a per-video TTL.
+
+Test coverage: `tests/unit/test_tutorial_notification_dedup.py` exercises the video-level upsert path in `_add_notification()`.
 
 ---
 
@@ -408,11 +412,11 @@ Optional video/vision analysis in `youtube-tutorial-creation` is gated to `conce
 | `tests/unit/test_youtube_daily_digest_email_failures.py` | Email delivery → processed-videos DB write gating (success path, failure path, no-email mode). |
 | `src/universal_agent/scripts/vp_coder_workspace_pruner.py` | Weekly archive of stale VP-coder workspace subdirectories (7-day default retention) |
 | `src/universal_agent/services/youtube_playlist_watcher.py` | Playlist polling |
-| `src/universal_agent/services/tutorial_telegram_notifier.py` | Telegram notification sink with per-video dedup |
+| `src/universal_agent/services/notification_dispatcher.py` | Generic out-of-band notification dispatcher (Telegram + email) for undelivered high-severity rows; polls every `UA_NOTIFICATION_DISPATCHER_INTERVAL_SECONDS` (default 30s) |
+| `src/universal_agent/services/telegram_send.py` | Low-level Telegram send utility with retry policy, rate-limit awareness, structured logging |
 | `web-ui/app/dashboard/page.tsx` | Main dashboard with notification dedup |
 | `web-ui/app/dashboard/tutorials/page.tsx` | Tutorials tab with entity-level dedup |
 | `tests/unit/test_tutorial_notification_dedup.py` | Backend video-level dedup tests |
-| `tests/unit/test_tutorial_telegram_dedup.py` | Telegram notifier dedup tests |
 | `scripts/check_proxy.py` | Provider-agnostic proxy connectivity diagnostic (TCP, HTTP, HTTPS, YouTube) |
 | `scripts/purge_youtube_backlog.py` | Operational script: reset playlist watcher state, finalize stale runs, purge pending signal cards |
 | `.claude/skills/youtube-tutorial-creation/scripts/extract_description_links.py` | LLM-judged URL classification and content extraction from video descriptions |
