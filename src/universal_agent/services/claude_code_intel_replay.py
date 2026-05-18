@@ -381,6 +381,33 @@ def expand_linked_sources(*, packet_dir: Path, actions: list[dict[str, Any]], en
             entry["source_path"] = str(source_dir / "source.md")
             entry["analysis_path"] = str(source_dir / "analysis.md")
             if _should_skip_link_fetch(url):
+                # x.com /status/<id> URLs would otherwise be pre-filtered as
+                # "unsupported_or_opaque_source" before _fetch_linked_source
+                # ever runs, so the in-flight Move-2 X-API self-ref logic
+                # would never get a chance. Try the X-API tweet fetch here
+                # directly when the URL parses as a tweet status; on failure,
+                # fall through to the legacy skip behavior. This also covers
+                # the case where the action's links list contains a direct
+                # x.com URL (no t.co redirect).
+                x_self_ref = _try_x_api_tweet_self_ref(
+                    final_url=url, entry=entry, source_dir=source_dir
+                )
+                if x_self_ref is not None:
+                    content, metadata = x_self_ref
+                    entry["title"] = metadata.get("title") or entry.get("title") or ""
+                    entry["fetch_status"] = "fetched"
+                    entry["skip_reason"] = ""
+                    analysis = _linked_source_analysis(
+                        entry=entry, content=content, metadata=metadata
+                    )
+                    _write_linked_source_files(
+                        source_dir=source_dir,
+                        entry=entry,
+                        content=content,
+                        analysis=analysis,
+                        metadata=metadata,
+                    )
+                    continue
                 entry["fetch_status"] = "skipped"
                 entry["skip_reason"] = "unsupported_or_opaque_source"
                 _write_linked_source_files(source_dir=source_dir, entry=entry, content="", analysis=_linked_source_analysis(entry=entry, content="", metadata={}))
