@@ -23,9 +23,9 @@ operator telemetry, not a correctness gate.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import logging
 import sqlite3
-from datetime import datetime, timezone
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)

@@ -62,8 +62,8 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-import uuid
 from typing import Any, Optional
+import uuid
 
 from universal_agent import task_hub
 
