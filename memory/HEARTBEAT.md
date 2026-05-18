@@ -72,6 +72,15 @@ This file controls proactive heartbeat behavior. Keep items concrete and actiona
   - Summarize as a compact table: metric | value | status (OK/WARN/CRITICAL)
   - Thresholds: CPU load > 2x cores = WARN, RAM > 85% = WARN, Disk > 80% = WARN
   - Write the report to `work_products/system_health_latest.md` (overwrite each cycle).
+<!-- scope:hq -->
+- [ ] Proactive Activity Watchdog (run every heartbeat cycle) — catches pipelines that exited cleanly but produced incoherent output (the failure mode behind the 2026-05-18 YouTube `transcript_status='missing'` 38/38 incident).
+    1. Call `GET /api/v1/ops/proactive_health` (ops-auth required). The endpoint composes Layer 1 (cron registry, stale `in_progress` tasks past `UA_TASK_STALE_MIN_AGE_MINUTES`, parked `needs_review` tasks) and Layer 2 (pipeline invariants — e.g. `youtube_transcript_coverage`).
+    2. Append every entry from `invariants[]` to `findings[]` in `work_products/heartbeat_findings_latest.json` verbatim — the response already uses the canonical `HeartbeatFinding` schema with `category="proactive_health"`. Do not transform fields; the only merge step is appending.
+    3. Bump `overall_status` to the worst-of (existing-status, response's `overall_status`). `warn` beats `ok`; `critical` beats everything.
+    4. If `overall_status` from this section is `warn` or `critical`, surface a one-line summary in the heartbeat response noting the worst metric_key and the runbook_command, so the operator can act without opening the JSON.
+    5. **Do not** invoke the invariant probes directly from the heartbeat shell — call the endpoint. Probes can mutate over time as pipeline owners register new ones; the endpoint is the stable contract.
+    6. If the endpoint returns 5xx, log a `warn` finding with `metric_key='proactive_health_endpoint_down'` and `runbook_command='journalctl -u universal-agent-gateway --since "10 min ago" --no-pager'`. Do not block the rest of the heartbeat on this.
+    7. Canonical reference: [`docs/03_Operations/132_Proactive_Health_Watchdog.md`](../docs/03_Operations/132_Proactive_Health_Watchdog.md). Authoring a new invariant: same doc, "Authoring runbook" section.
 <!-- scope:all -->
 - [ ] Mission Control build kickoff
   - Confirm first concrete milestone and produce a short execution checklist.
