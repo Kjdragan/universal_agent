@@ -54,17 +54,54 @@ class ClaudeGeneralistClient(VpClient):
         finally:
             await adapter.close()
 
+        # SDK-path poison-pill parking — see services/sdk_timeout_park.
+        _task_id = str(payload.get("task_id") or "").strip() if isinstance(payload, dict) else ""
+        _mission_id = str(mission.get("mission_id") or "")
+        outcome_payload: dict[str, Any] = {"trace_id": trace_id, "final_text": final_text}
+
         if error_text:
+            try:
+                from universal_agent.services.sdk_timeout_park import (
+                    is_sdk_timeout,
+                    record_sdk_timeout_and_maybe_park,
+                    reset_sdk_timeout_counter,
+                )
+                if is_sdk_timeout(error_text):
+                    parked, count = record_sdk_timeout_and_maybe_park(
+                        task_id=_task_id,
+                        mission_id=_mission_id,
+                        error_text=error_text,
+                    )
+                    outcome_payload["sdk_consecutive_timeouts"] = count
+                    if parked:
+                        outcome_payload["sdk_parked_for_review"] = True
+                        error_text = (
+                            f"{error_text} "
+                            f"[parked after {count} consecutive SDK timeouts]"
+                        )
+                else:
+                    reset_sdk_timeout_counter(task_id=_task_id, mission_id=_mission_id)
+            except Exception:
+                pass
             return MissionOutcome(
                 status="failed",
                 result_ref=f"workspace://{workspace_dir}",
                 message=error_text,
-                payload={"trace_id": trace_id, "final_text": final_text},
+                payload=outcome_payload,
             )
+
+        try:
+            from universal_agent.services.sdk_timeout_park import (
+                reset_sdk_timeout_counter,
+            )
+            reset_sdk_timeout_counter(task_id=_task_id, mission_id=_mission_id)
+        except Exception:
+            pass
+
         return MissionOutcome(
             status="completed",
             result_ref=f"workspace://{workspace_dir}",
-            payload={"trace_id": trace_id, "final_text": final_text},
+            payload=outcome_payload,
         )
 
 
