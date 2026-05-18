@@ -133,7 +133,7 @@ async def _generate_digest_content(full_prompt: str) -> str:
     client_kwargs: dict[str, Any] = {
         "api_key": api_key,
         "max_retries": 0,
-        "timeout": float(os.getenv("UA_YOUTUBE_DIGEST_LLM_TIMEOUT_SECONDS", "180")),
+        "timeout": float(os.getenv("UA_YOUTUBE_DIGEST_LLM_TIMEOUT_SECONDS", "900")),
     }
     base_url = os.getenv("ANTHROPIC_BASE_URL")
     if base_url:

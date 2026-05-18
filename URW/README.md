@@ -48,7 +48,7 @@ PYTHONPATH=src uv run python URW/phase0_runner.py \
 ```bash
 PYTHONPATH=src uv run python URW/phase1_receipt_runner.py \
   --workspace ./urw_phase1_workspace_run2 \
-  --to kevin.dragan@outlook.com \
+  --to kevinjdragan@gmail.com \
   --connection "clearspring-cg / all-clearspring-cg"
 ```
 
