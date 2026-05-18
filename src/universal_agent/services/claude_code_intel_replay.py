@@ -199,6 +199,7 @@ def replay_packet(
         "vault_path": vault_result.get("vault_path") or "",
         "wiki_pages": vault_result.get("pages") or [],
         "email_evidence_ids": vault_result.get("email_evidence_ids") or [],
+        "tier1_skipped_count": int(vault_result.get("tier1_skipped_count") or 0),
     }
     write_replay_summary(packet_dir=packet_dir, payload=result)
 
@@ -783,6 +784,57 @@ def apply_memex_pass(
     return results
 
 
+_TIER1_VERSION_PATTERN = re.compile(r"\bv?\d+\.\d+(?:\.\d+)?\b")
+
+_TIER1_SIGNAL_CONTENT_KINDS = frozenset(
+    {
+        "product_capability",
+        "release_announcement",
+        "usage_tip",
+        "feature_announcement",
+        "bug_fix",
+        "migration_note",
+    }
+)
+
+
+def _tier1_min_signal_enabled() -> bool:
+    raw = str(os.getenv("UA_CSI_TIER1_MIN_SIGNAL_ENABLED") or "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _tier1_has_signal(action: dict[str, Any]) -> bool:
+    """Return True when a tier-1 action is worth a vault page.
+
+    Tier 1 is the "digest" bucket — most entries here are conversational
+    community replies that carry zero durable intelligence ("Working on
+    it!", "Tell me more"). Writing a wiki page for each pollutes the vault
+    index without adding signal.
+
+    A tier-1 action qualifies for a vault page when at least one of:
+    - It has linked URLs.
+    - It has matched-term hits from the triage classifier.
+    - Its text mentions an explicit version number (``v1.2.3`` style).
+    - Its classifier-tagged content_kind is on the signal allowlist
+      (product_capability, release_announcement, usage_tip, ...).
+    """
+    links = action.get("links") or []
+    if any(str(link).strip() for link in links):
+        return True
+    matched = action.get("matched_terms") or []
+    if any(str(term).strip() for term in matched):
+        return True
+    text = str(action.get("text") or "")
+    if _TIER1_VERSION_PATTERN.search(text):
+        return True
+    classifier = action.get("classifier") or {}
+    if isinstance(classifier, dict):
+        content_kind = str(classifier.get("content_kind") or "").strip().lower()
+        if content_kind in _TIER1_SIGNAL_CONTENT_KINDS:
+            return True
+    return False
+
+
 def ingest_packet_into_external_vault(
     *,
     packet_dir: Path,
@@ -815,11 +867,27 @@ def ingest_packet_into_external_vault(
     work_product_pages: list[str] = []
     action_map = {str(a.get("post_id") or "").strip(): dict(a) for a in actions if str(a.get("post_id") or "").strip()}
 
+    tier1_gate_enabled = _tier1_min_signal_enabled()
+    tier1_skipped_count = 0
     for post in posts:
         post_id = str(post.get("id") or "").strip()
         if not post_id:
             continue
         action = action_map.get(post_id, {})
+        # Tier-1 min-signal gate: most tier-1 actions are conversational
+        # chatter ("Working on it!"). Writing a wiki page for each pollutes
+        # the vault index without adding intelligence. Tier-1 entries pass
+        # the gate only when they carry a link, matched term, version
+        # string, or a classifier content_kind on the signal allowlist.
+        # Higher tiers always pass.
+        action_tier = int(action.get("tier") or 0)
+        if (
+            tier1_gate_enabled
+            and action_tier == 1
+            and not _tier1_has_signal(action)
+        ):
+            tier1_skipped_count += 1
+            continue
         content = _post_source_markdown(handle=handle, post=post, action=action)
         result = wiki_ingest_external_source(
             vault_slug=KB_SLUG,
@@ -936,6 +1004,7 @@ def ingest_packet_into_external_vault(
         "work_product_pages": work_product_pages,
         "email_evidence_ids": email_evidence_ids,
         "memex_actions": memex_actions,
+        "tier1_skipped_count": tier1_skipped_count,
     }
 def reconcile_packet_candidate_ledger(
     *,
