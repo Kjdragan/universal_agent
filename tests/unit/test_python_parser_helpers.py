@@ -1,8 +1,8 @@
 """Tests for python_parser helper methods and edge cases."""
 
 import ast
-import tempfile
 from pathlib import Path
+import tempfile
 
 import pytest
 
