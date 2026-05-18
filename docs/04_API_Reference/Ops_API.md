@@ -789,3 +789,46 @@ Related services:
 - `docs/02_Flows/07_WebSocket_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md` — WebSocket details
 - `docs/02_Flows/08_Gateway_And_Web_UI_Auth_And_Session_Security_Source_Of_Truth_2026-03-06.md` — Auth flows
 - `docs/04_API_Reference/` — Other API documentation
+
+## 38. Proactive Health
+
+The proactive health endpoint composes process-liveness and pipeline-invariant checks into a single `HeartbeatFinding`-shaped payload for heartbeat consumption.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/ops/proactive_health` | GET | Two-layer health check: process liveness + pipeline invariants |
+
+### Response Schema
+
+```json
+{
+  "overall_status": "ok | warn | critical",
+  "generated_at_utc": "ISO-8601 UTC timestamp",
+  "crons": [
+    {"job_id": "...", "enabled": true, "cron_expr": "...", "last_run_at": "...", "last_outcome": "ok", "next_run_at": "..."}
+  ],
+  "stale_tasks": {"count": 0, "samples": [], "threshold_minutes": 180},
+  "parked_tasks": {"count": 0, "samples": []},
+  "invariants": [
+    {
+      "finding_id": "invariant:youtube_transcript_coverage",
+      "category": "proactive_health",
+      "severity": "critical",
+      "metric_key": "youtube_transcript_coverage",
+      "observed_value": {},
+      "title": "...",
+      "recommendation": "...",
+      "runbook_command": "..."
+    }
+  ]
+}
+```
+
+`overall_status` derivation: `critical` if any invariant has severity=critical or stale_tasks >= 3; `warn` if any invariant has severity=warn or stale_tasks >= 1 or parked_tasks >= 1; otherwise `ok`.
+
+Requires ops auth. Read-only. Degrades to 200 with `overall_status=warn` on aggregator failure (never crashes the heartbeat).
+
+Related documentation:
+- `docs/03_Operations/132_Proactive_Health_Watchdog.md` — canonical architecture and authoring runbook
+- `src/universal_agent/services/proactive_health.py` — aggregator implementation
+- `src/universal_agent/services/pipeline_invariants.py` — invariant runner and registry
