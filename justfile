@@ -99,17 +99,44 @@ test:
 test-one TEST:
     PYTHONPATH=src uv run --frozen pytest {{TEST}} -x -q
 
-# Lint.
+# Whole-repo ruff scan (all rules, all files). Surfaces pre-existing rot
+# the codebase has accumulated. Use this when you want a full picture;
+# do NOT chain it into preship — it includes ~8000 legacy findings the
+# CI gate explicitly carves out.
 lint:
     uv run --frozen ruff check .
+
+# Lint with the SAME scope CI uses: errors-only rules, changed Python
+# files only, evaluated against origin/main. This is what pr-validate.yml
+# runs; mirroring it here means `just preship` actually matches CI.
+# See: .github/workflows/pr-validate.yml § "Ruff check (changed files only)".
+lint-pr-scope:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    git fetch origin main --quiet 2>/dev/null || true
+    CHANGED=$(git diff --name-only --diff-filter=AMR origin/main...HEAD -- '*.py' || true)
+    if [ -z "$CHANGED" ]; then
+      echo "No Python files changed vs origin/main; nothing for pr-scope ruff to check."
+      exit 0
+    fi
+    echo "Linting (pr-scope, errors-only) on changed .py files:"
+    echo "$CHANGED" | sed 's/^/  /'
+    uv run --frozen ruff check \
+        --select E9,F \
+        --ignore E402,F401,F541,F811,F841 \
+        --no-cache \
+        $CHANGED
 
 # Auto-format.
 format:
     uv run --frozen ruff format .
 
-# Pre-ship: lint + unit tests, the same gates as pr-validate.yml.
-preship: lint test
-    @echo "✅ Lint + unit tests green. Safe to /ship."
+# Pre-ship: lint (changed-file scope) + unit tests + architecture canvas
+# pointer verify. These are the gates pr-validate.yml runs in CI; the
+# whole-repo `lint` recipe deliberately is NOT chained here because it
+# includes pre-existing rot the CI gate carves out.
+preship: lint-pr-scope test canvas-verify
+    @echo "✅ pr-scope lint + unit tests + canvas pointers green. Safe to /ship."
 
 # ---------------------------------------------------------------------------
 # Architecture Canvas

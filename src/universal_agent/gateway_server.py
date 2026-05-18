@@ -14462,6 +14462,7 @@ async def lifespan(app: FastAPI):
                 _ensure_proactive_artifact_digest_cron_job()
                 _ensure_vp_coder_workspace_pruning_cron_job()
                 _ensure_vp_mission_pr_reconciler_cron_job()
+                _ensure_architecture_canvas_drift_cron_job()
                 _ensure_hackernews_snapshot_cron_job()
                 _ensure_atlas_direct_dispatch_cron_job()
                 _ensure_simone_chat_autocomplete_cron_job()
@@ -18235,6 +18236,41 @@ def _ensure_vp_coder_workspace_pruning_cron_job() -> Optional[dict[str, Any]]:
         timezone_env_var="UA_VP_CODER_WORKSPACE_PRUNING_TIMEZONE",
         # Ship 4 (Task Hub Observability Protocol): opted IN. Even GC
         # sweeps benefit from "did it run cleanly?" visibility.
+    )
+
+
+def _ensure_architecture_canvas_drift_cron_job() -> Optional[dict[str, Any]]:
+    """Weekly anti-rot sweep for the Architecture Canvas pointer pipeline.
+
+    Mondays 06:30 America/Chicago (active hours; content-generation-
+    adjacent so dormancy applies and we wake AFTER 06:00). Re-runs
+    `scripts/build_architecture_view.py --verify-only` and:
+
+      - exits non-zero if any `source:` path is missing (cron tick fails
+        → visible in /dashboard/cron-jobs)
+      - writes `artifacts/architecture-canvas-drift/<date>.md` when stale
+        pointers (>30d untouched) exist, exits 0 so the tick is "clean"
+      - silent when everything is green
+
+    See: docs/02_Subsystems/Architecture_Canvas_View.md §4 Phase 4.
+
+    `skip_task_hub_link=True` — this is a sweep, not a work-producing
+    job. We do NOT want every Monday tick creating a new task_hub row.
+    """
+    return _register_system_cron_job(
+        system_job="architecture_canvas_drift",
+        default_cron="30 6 * * 1",
+        default_timezone="America/Chicago",
+        command="!script universal_agent.scripts.architecture_canvas_drift_check",
+        description=(
+            "Weekly Architecture Canvas pointer drift check; fails the tick "
+            "on missing pointers, writes a markdown report on staleness."
+        ),
+        timeout_seconds=120,
+        enabled=_proactive_cron_enabled("UA_ARCH_CANVAS_DRIFT_ENABLED"),
+        cron_env_var="UA_ARCH_CANVAS_DRIFT_CRON",
+        timezone_env_var="UA_ARCH_CANVAS_DRIFT_TIMEZONE",
+        skip_task_hub_link=True,
     )
 
 

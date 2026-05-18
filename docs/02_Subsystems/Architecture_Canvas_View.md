@@ -101,13 +101,16 @@ The Architecture Canvas is that picture. It is **not** a dashboard (no live data
 
 **Renderer extensions:** new `mermaid_panel`, `html_grid`, `html_list` renderers in `scripts/build_architecture_view.py`. Layout migrated to 3-column grid for mid + lower rows.
 
-### Phase 4 — Wiring (operational integration)
+### Phase 4 — Wiring (operational integration) — **COMPLETE 2026-05-18**
 
 **Status:**
-- [x] **Dashboard sidebar link** — `web-ui/components/dashboard/GlobalSidebar.tsx` exposes "Architecture Map" in the Operations group (shipped in PR #342, 2026-05-18).
-- [x] **`just canvas` / `just canvas-verify` recipes** — added to `justfile`. Run `just canvas` to rebuild; `just canvas-verify` checks pointers without re-rendering.
-- [ ] **Pre-commit hook (deferred).** Repo currently has no `.pre-commit-config.yaml`. Adding one project-wide is out of scope for this PR. Workaround: run `just canvas-verify` manually before pushing, or chain it into `just preship` once you want it on the critical path.
-- [ ] **Weekly drift cron (deferred — requires operator sign-off).** Cron registration goes through `gateway_server._register_system_cron_job`. Suggested cadence: Mondays 06:30 America/Chicago (active hours, content-generation-adjacent). Suggested action: run `just canvas-verify` and post any newly red/missing pointer paths via `notification_dispatcher.py`. Not auto-registered here — the operator should choose the cadence + decide whether the notification should fire as an email or a Mission Control event.
+- [x] **Dashboard sidebar link** — `web-ui/components/dashboard/GlobalSidebar.tsx` exposes "Architecture Map" in the Operations group (shipped in PR #342).
+- [x] **`just canvas` / `just canvas-verify` recipes** — added to `justfile`. `just canvas` rebuilds; `just canvas-verify` checks pointers without re-rendering.
+- [x] **`just preship` chains `canvas-verify`** — the operator-side pre-ship gate now includes pointer verification alongside lint + unit tests.
+- [x] **PR Validate CI step** — `.github/workflows/pr-validate.yml` runs `--verify-only` automatically on every PR that touches `docs/architecture-view/` or `scripts/build_architecture_view.py`. PRs that don't touch the canvas pay zero cost; PRs that do are blocked on missing pointers.
+- [x] **Weekly drift cron** — registered via `_ensure_architecture_canvas_drift_cron_job` in `gateway_server.py`. Default schedule **Mondays 06:30 America/Chicago** (active hours; content-generation-adjacent under the dormancy default). Implementation: `src/universal_agent/scripts/architecture_canvas_drift_check.py` runs `--verify-only`, exits non-zero on **missing** pointers (surfaces as a failed cron tick on `/dashboard/cron-jobs`), writes `artifacts/architecture-canvas-drift/<date>.md` on **stale** pointers (exits 0; staleness is signal not failure), and is silent when everything is green. Env-controlled: `UA_ARCH_CANVAS_DRIFT_ENABLED`, `UA_ARCH_CANVAS_DRIFT_CRON`, `UA_ARCH_CANVAS_DRIFT_TIMEZONE`.
+
+**Why these notification choices.** Missing pointers route through cron-health because `/dashboard/cron-jobs` is already the canonical "did this scheduled job fail?" surface — no new UI needed. Stale pointers route to a dated markdown artifact because (a) email is quarantine-prone for this account, (b) Mission Control narrative cards are LLM-curated and overkill for a deterministic per-week drift report, and (c) the artifact format is self-explanatory and a natural place for the next operator pass to start fixing. The operator opens `artifacts/architecture-canvas-drift/YYYY-MM-DD.md` directly when they see a recent run on the cron-jobs page; no new UI required.
 
 ### Phase 5 — Optional polish
 
@@ -182,6 +185,23 @@ Exits non-zero if any `source:` path no longer exists.
 ### Weekly drift cron (Phase 4)
 
 Registered via `gateway_server._register_system_cron_job` per CLAUDE.md rule. Runs Mondays 06:30 America/Chicago (within active hours; respects dormancy default — this is content-generation-adjacent, so it fires during waking hours). Reports any newly red pointers via `notification_dispatcher.py`.
+
+## 6.5 Lessons learned (PR #350 close-out)
+
+The Phase 4 close-out PR caught a quality-gate failure in CI that's worth recording so the same class of mistake doesn't recur.
+
+**What happened.** The first revision of `src/universal_agent/scripts/architecture_canvas_drift_check.py` shelled out to the build script via `subprocess.run(["uv", "run", "scripts/build_architecture_view.py", "--verify-only"])`. That tripped `tests/unit/test_task_observability_coverage.py::test_subprocess_spawns_use_observability_protocol` — an AST-based ratchet that scans every file under `src/universal_agent/` for subprocess-spawn calls and requires either a compliant-helper import (from `services.worker_exit_classifier`, `services.cron_task_hub_link`, or `task_hub.record_worker_pid`) OR an entry in `tests/unit/task_observability_coverage_allowlist.txt`. The script had neither, so CI blocked merge of PR #350.
+
+**Root cause — two layers.**
+1. **Code:** the drift script reached for `subprocess.run` reflexively because the build script is "script-shaped." The build module is pure Python — there was no need to spawn anything. Importing the verification functions directly is the right pattern.
+2. **Process:** `just preship` was advertised as "the same gates as pr-validate.yml" but the recipe chained `just lint` (whole-repo ruff scan) which surfaces ~8000 lines of pre-existing rot the CI gate explicitly carves out. Running preship locally before pushing would therefore have failed for unrelated reasons, masking the protocol-test signal.
+
+**Durable fixes (this PR).**
+- Drift script now uses `importlib.util.spec_from_file_location` to load `scripts/build_architecture_view.py` as a module and calls its `load_exhibits()` + `verify_pointers()` directly. No subprocess; protocol test passes.
+- Important importlib gotcha captured in code comments: the loaded module **must** be registered in `sys.modules` BEFORE `exec_module` runs, otherwise `@dataclass` decoration fails on Python 3.13 with `AttributeError: 'NoneType' object has no attribute '__dict__'` inside `dataclasses._is_type`.
+- `justfile` adds a `lint-pr-scope` recipe that mirrors `pr-validate.yml` exactly (errors-only rules, changed-file scope vs `origin/main`). `preship` now chains `lint-pr-scope + test + canvas-verify` instead of the whole-repo `lint`. The whole-repo `lint` recipe stays available for operators who want to audit accumulated rot, but the comment now warns against chaining it into preship.
+
+**What to do for future cron-scripts.** Any new file under `src/universal_agent/scripts/` that wants to invoke another Python script should prefer `importlib.util` import over `subprocess.run` — the protocol test will fail every PR that spawns subprocesses without compliant-helper wiring, and 95% of the time the simpler answer is "don't spawn." Reach for `subprocess` only when you're actually invoking an external binary or running code in a different runtime.
 
 ## 7. Open follow-ups
 
