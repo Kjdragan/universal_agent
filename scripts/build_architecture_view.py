@@ -46,8 +46,14 @@ VENDOR_DIR = REPO_ROOT / "docs" / "architecture-view" / "vendor"
 ROUGH_URL = "https://cdn.jsdelivr.net/npm/roughjs@4.6.6/bundled/rough.min.js"
 MERMAID_URL = "https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"
 
-GREEN = 30   # days
-AMBER = 90   # days
+# Freshness thresholds — calibrated to stable-codebase cadence. With ~33
+# pointers across 25+ subsystems, expecting every file to be touched
+# monthly is unrealistic; a 30/90 setting flooded the legend with amber
+# on day one of v1 while the underlying code was simply stable. 60/180
+# still flags genuine drift (any file untouched for 6 months is worth a
+# look) without crying wolf on healthy stability.
+GREEN = 60   # days — touched within the last 2 months
+AMBER = 180  # days — touched within the last 6 months
 
 
 @dataclass

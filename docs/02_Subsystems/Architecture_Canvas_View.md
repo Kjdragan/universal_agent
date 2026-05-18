@@ -30,7 +30,7 @@ The Architecture Canvas is that picture. It is **not** a dashboard (no live data
 | **Hosting** | Single self-contained HTML + dashboard link | Portable AND integrated |
 | **Drill-down UX** | Right-rail side drawer (~40% width) | Canvas stays visible; spatial orientation preserved |
 | **Build pipeline** | Python script + pre-commit + weekly cron + visible freshness badges | Anti-rot promise enforceable |
-| **Freshness thresholds** | Green <30d, amber 30–90d, red >90d or missing | Matches typical PR cadence |
+| **Freshness thresholds** | Green ≤60d, amber 60–180d, red >180d or missing | Calibrated 2026-05-18 from initial 30/90 after the v1 build pinned 2 healthy/stable files as amber on day one. Stable subsystem code shouldn't be touched monthly; 60/180 still flags genuine drift (untouched for 6+ months is worth a look) without crying wolf on healthy stability. |
 
 ## 3. Exhibit inventory (full 9-exhibit plan)
 
