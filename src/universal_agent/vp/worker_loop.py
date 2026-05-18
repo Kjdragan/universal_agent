@@ -56,6 +56,12 @@ def _extract_first_target_path(constraints: dict[str, Any]) -> str:
 # ── GitHub repo for doc-maintenance PRs ──────────────────────────────────────
 _GH_REPO = os.getenv("UA_GH_REPO", "Kjdragan/universal_agent")
 
+# Default PR base for the post-mission doc-maintenance hook. ``develop`` was
+# retired 2026-05-10 in favor of a main-only branching model — see
+# docs/06_Deployment_And_Environments/04_Branching_And_Release_Workflow.md.
+# Operator-overridable for staging environments via UA_GH_PR_BASE_BRANCH.
+_PR_BASE_BRANCH = os.getenv("UA_GH_PR_BASE_BRANCH", "main")
+
 
 def _post_mission_push_pr_merge(*, workspace_root: str, mission_id: str) -> None:
     """Push the agent's doc branch, create a PR, and squash-merge it.
@@ -80,14 +86,19 @@ def _post_mission_push_pr_merge(*, workspace_root: str, mission_id: str) -> None
         logger.info("Post-mission hook: not on a docs/ branch (%s), skipping push", branch)
         return
 
-    # 2. Check if there are commits on this branch that aren't on develop
+    # 2. Check if there are commits on this branch that aren't on the
+    # PR base. ``develop`` retired 2026-05-10; default base is ``main``
+    # (see module-level ``_PR_BASE_BRANCH``).
     result = subprocess.run(
-        ["git", "log", "develop..HEAD", "--oneline"],
+        ["git", "log", f"{_PR_BASE_BRANCH}..HEAD", "--oneline"],
         capture_output=True, text=True, cwd=cwd,
     )
     commits = result.stdout.strip()
     if not commits:
-        logger.info("Post-mission hook: no new commits on %s vs develop, skipping", branch)
+        logger.info(
+            "Post-mission hook: no new commits on %s vs %s, skipping",
+            branch, _PR_BASE_BRANCH,
+        )
         return
 
     logger.info("Post-mission hook [%s]: pushing branch %s (%d commits)",
@@ -124,7 +135,7 @@ def _post_mission_push_pr_merge(*, workspace_root: str, mission_id: str) -> None
     pr_body = json.dumps({
         "title": commit_title,
         "head": branch,
-        "base": "develop",
+        "base": _PR_BASE_BRANCH,
         "body": f"Automated doc maintenance (mission {mission_id}).",
     }).encode()
 
@@ -206,10 +217,13 @@ def _post_mission_push_pr_merge(*, workspace_root: str, mission_id: str) -> None
     except Exception as exc:
         logger.warning("Post-mission hook: merge failed: %s", exc)
 
-    # 7. Switch back to develop so the next mission starts clean
-    subprocess.run(["git", "checkout", "develop"], capture_output=True, cwd=cwd)
-    subprocess.run(["git", "pull", "origin", "develop"], capture_output=True, cwd=cwd)
-    logger.info("Post-mission hook: switched back to develop, ready for next mission")
+    # 7. Switch back to the PR base so the next mission starts clean
+    subprocess.run(["git", "checkout", _PR_BASE_BRANCH], capture_output=True, cwd=cwd)
+    subprocess.run(["git", "pull", "origin", _PR_BASE_BRANCH], capture_output=True, cwd=cwd)
+    logger.info(
+        "Post-mission hook: switched back to %s, ready for next mission",
+        _PR_BASE_BRANCH,
+    )
 
 
 class VpWorkerLoop:
