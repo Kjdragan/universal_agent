@@ -77,6 +77,22 @@ class MissionGuardrailTracker:
         self.gmail_send_count = 0
         self.successful_vp_dispatches: list[dict[str, Any]] = []
 
+    @property
+    def _vp_dispatch_attempted(self) -> bool:
+        """Return True when any vp_dispatch_mission tool call was recorded.
+
+        The richer ``successful_vp_dispatches`` list only fires when the
+        result payload exposes ``mission_id`` (and isn't explicitly
+        ``ok=False``). The 2026-05-18 Simone failures showed those
+        conditions can be missed even when the dispatch did succeed and
+        the downstream VP delivered a status email — leaving the email
+        contract unsatisfied for what is genuinely a delegation. Falling
+        back to the recorded tool-call name is more permissive but
+        captures the operator intent: Simone called the dispatch tool,
+        so she is delegating the final delivery.
+        """
+        return any("vp_dispatch_mission" in str(name or "").lower() for name in self.tool_names)
+
     def record_tool_call(self, tool_name: str, *, tool_input: Any = None) -> None:
         name = str(tool_name or "").strip()
         if not name:
@@ -162,7 +178,7 @@ class MissionGuardrailTracker:
                     if "delegate" in lifecycle_actions:
                         stage_status = "delegated"
                         terminal = False
-                    elif self.successful_vp_dispatches:
+                    elif self.successful_vp_dispatches or self._vp_dispatch_attempted:
                         stage_status = "auto_delegate"
                         terminal = False
                     elif any(action in lifecycle_actions for action in ("review", "block", "park")):
@@ -199,7 +215,7 @@ class MissionGuardrailTracker:
             if "delegate" in lifecycle_actions:
                 stage_status = "delegated"
                 terminal = False
-            elif self.successful_vp_dispatches:
+            elif self.successful_vp_dispatches or self._vp_dispatch_attempted:
                 stage_status = "auto_delegate"
                 terminal = False
             elif not any(action in lifecycle_actions for action in ("review", "complete", "block", "park", "approve")):
