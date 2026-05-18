@@ -461,12 +461,32 @@ def apply_research_grounding_pass(
     """
     # Lazy-import so the replay module doesn't pull research_grounding's
     # transitive deps (csi_url_judge, intel_lanes) when grounding is off.
+    from universal_agent.services.claude_code_intel import ClaudeCodeIntelConfig
     from universal_agent.services.research_grounding import (
         build_research_request,
         execute_research,
     )
 
     existing_entity_names = _existing_entity_names(vault_root)
+
+    # Build the "polled handles" exclusion set so X handles never get
+    # slugified into hallucinated docs URLs. Includes the configured handle
+    # list plus the handle attached to this packet (read from manifest).
+    excluded_handles: set[str] = set()
+    try:
+        for handle in ClaudeCodeIntelConfig.all_handles_from_env():
+            if handle:
+                excluded_handles.add(handle.lower())
+    except Exception:
+        pass
+    try:
+        manifest_path = packet_dir / "manifest.json"
+        if manifest_path.exists():
+            manifest_handle = str(_load_json(manifest_path).get("handle") or "").strip().lower()
+            if manifest_handle:
+                excluded_handles.add(manifest_handle)
+    except Exception:
+        pass
 
     # Pre-index linked sources per post so we can reason about per-post
     # link coverage when computing the THIN_LINKED_SOURCES signal.
@@ -502,6 +522,7 @@ def apply_research_grounding_pass(
                 },
                 classifier_result=classifier_result,
                 existing_entity_names=existing_entity_names,
+                excluded_handles=excluded_handles,
             )
         except Exception as exc:
             import logging
