@@ -170,6 +170,10 @@ Digest text.
 
 
 def test_digest_decisions_dispatch_code_prospects_even_without_secondary_tutorial_flag():
+    """The demo-worthiness gate keys off `code_implementation_prospect` (and
+    score/tier/evidence), NOT `tutorial_candidate`. Even when the LLM marks
+    `tutorial_candidate=false`, a code-prospect row that clears the
+    score/tier/evidence checks should still be dispatched."""
     decisions = youtube_daily_digest._rank_digest_decisions(
         {
             "ranked_videos": [
@@ -177,6 +181,8 @@ def test_digest_decisions_dispatch_code_prospects_even_without_secondary_tutoria
                     "video_id": "code",
                     "title": "Code Prospect",
                     "value_score": 80,
+                    "value_tier": "high",
+                    "evidence_quality": "transcript",
                     "code_implementation_prospect": True,
                     "concept_only": False,
                     "tutorial_candidate": False,
@@ -234,6 +240,19 @@ def test_format_tutorial_dispatch_summary_lists_selected_videos(tmp_path):
     dispatch_path = tmp_path / "dispatch.json"
 
     summary = youtube_daily_digest._format_tutorial_dispatch_summary(
+        decisions={
+            "ranked_videos": [
+                {
+                    "rank": 2,
+                    "title": "Build Agent",
+                    "video_id": "abc123",
+                    "value_score": 91,
+                    "reason": "Runnable coding walkthrough.",
+                    "code_implementation_prospect": True,
+                    "dispatch_status": "selected",
+                }
+            ]
+        },
         selected=[
             {
                 "rank": 2,
@@ -247,6 +266,7 @@ def test_format_tutorial_dispatch_summary_lists_selected_videos(tmp_path):
         candidates_path=candidates_path,
         dispatch_path=dispatch_path,
         top_n=4,
+        min_score=70,
         dry_run=False,
     )
 
