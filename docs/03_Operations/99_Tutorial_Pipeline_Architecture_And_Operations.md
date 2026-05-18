@@ -3,7 +3,7 @@
 > **Canonical source-of-truth** for the YouTube Tutorial Pipeline. All other
 > tutorial-related documentation should reference this file.
 >
-> **Last updated:** 2026-05-05 — Added yesterday-shift day mapping, email delivery safeguard, playlist provisioning utility, cron registration script, and VP coder workspace pruner documentation.
+> **Last updated:** 2026-05-18 — Daily Digest now ships on a **map-reduce pipeline** (per-video retell on `glm-4.5-air` @ conc=3, meta-synthesis on `glm-5.1`), with the per-video prompt asking for a **50% length retelling** instead of a "concise summary". Tutorial dispatch now passes through a deterministic **demo-worthiness gate** (score ≥ 70, value_tier ≠ low/unknown, evidence_quality ≠ metadata_only). `required_secrets` preflight now includes `YOUTUBE_OAUTH_*`. Per-call retry / FUP-1313 telemetry surfaces in `MapResult` and the comparison harness. PRs #356, #357, #360, #361, #363.
 
 ## 1. Pipeline Overview
 
@@ -34,9 +34,28 @@ The Daily YouTube Digest cron uses day-specific playlists as incoming queues. Pr
 
 It fetches the playlist (costing 1 API unit) and deduplicates videos against `youtube_ingestion_state.db` using a composite key of `(video_id, day)`. This allows you to process a video on the `MONDAY_YT_PLAYLIST` and re-process the exact same video on the `WEDNESDAY_YT_PLAYLIST` without conflict, while strictly deduplicating within the same day.
 
-Digest synthesis uses the repository's Anthropic-compatible ZAI inference path, defaulting to `glm-5-turbo` via `resolve_model("sonnet")` unless `UA_YOUTUBE_DIGEST_MODEL` overrides it.
+**Digest synthesis runs on a two-step map-reduce pipeline (as of 2026-05-18).** See `src/universal_agent/scripts/youtube_daily_digest.py:_generate_digest_content` for the dispatcher.
 
-The digest LLM now produces both human-readable markdown and a structured `youtube_digest_decisions` block. The code normalizes that block, sorts videos by `value_score`, saves a candidate artifact, and dispatches the highest-value `code_implementation_prospect=true` videos to the YouTube tutorial pipeline. The machine-readable decision block is stripped from the human-facing digest/email; the email instead includes a compact "YouTube Tutorial Pipeline Dispatch" section listing selected videos and hook acceptance status.
+- **Map step** (per-video, parallel): one LLM call per video on `glm-4.5-air` (haiku-tier Z.AI) producing a 50%-length "Compressed Retelling" plus a `per_video_classification` JSON block. Bounded by an internal semaphore (`UA_YOUTUBE_DIGEST_MAP_CONCURRENCY`, default `3`) AND the global `ZAIRateLimiter` (`ZAI_MAX_CONCURRENT`, default `2`). Effective parallelism is `min(internal, global)`. The retell prompt explicitly asks for ~50% of source length and to preserve specific numbers, examples, tool names, and "this works because" explanations — see `RETELL_PROMPT`.
+- **Reduce step** (single call): one LLM call on `glm-5.1` (opus-tier Z.AI) that sees only titles + thesis lines + per-video classifications (NOT full retellings), so context stays small. Emits the cross-video meta-synthesis (themes / learning insights / neglected opportunities) and the ranked `youtube_digest_decisions` JSON block.
+- **Assembly** is deterministic Python (`_assemble_map_reduce_digest`): meta-synthesis + retellings + JSON block, in that order, so `_extract_decision_json` keeps working unchanged.
+
+**Legacy single-call path** (one big-context glm-5.1 call with all transcripts concatenated) stays available behind `UA_YOUTUBE_DIGEST_PIPELINE=single_call` for A/B testing and fallback.
+
+**Per-call telemetry** (added in PR #361): every `MapResult` carries `retries`, `rate_limit_hits`, and `last_error_class`. These get aggregated in the map-step log and surface in the comparison harness's `map_metrics.error_class_breakdown` so the operator can correlate model+concurrency choices with the actual rate-limit surface.
+
+**Comparison harness.** `src/universal_agent/scripts/youtube_digest_compare.py` runs multiple labeled (pipeline, model, concurrency) configs against the SAME input transcripts (loaded from a repopulate pocket) and dumps side-by-side outputs to `AGENT_RUN_WORKSPACES/daily_digests/comparison_<date>_<DAY>/` for human review. Used 2026-05-18 to confirm `glm-4.5-air@conc=3` produces excellent retell depth at 0 retries / 0 FUP hits vs `glm-5-turbo@conc=3` at 2× wall time.
+
+**Deterministic demo-worthiness gate before dispatch** (added in PR #357, `_select_tutorial_dispatch_candidates`): even when the LLM marks `code_implementation_prospect=true`, dispatch only fires when ALL of:
+- `value_score ≥ UA_YOUTUBE_DIGEST_DEMO_GATE_MIN_SCORE` (default `70`)
+- `value_tier not in {low, unknown}`
+- `evidence_quality != metadata_only`
+
+Rejected candidates appear in the digest email under a separate "Rejected by demo-worthiness gate" block with the specific reason; the rejection state is also written to `tutorial_candidates.json` for post-hoc audit.
+
+**Cron preflight `required_secrets`** (PR #356 hardening). The digest cron's metadata declares the 7 day-specific `<DAY>_YT_PLAYLIST` keys AND `YOUTUBE_OAUTH_CLIENT_ID` / `YOUTUBE_OAUTH_CLIENT_SECRET` / `YOUTUBE_OAUTH_REFRESH_TOKEN`. Missing secrets surface as a `cron_run_failed` dashboard alert at preflight time instead of a silent runtime crash. (Was the 2026-05-18 root cause: production Infisical env had no `YOUTUBE_OAUTH_*` keys; dev had them but the Google refresh token was revoked. Both restored by mirroring CLIENT_ID/SECRET dev→prod and running `youtube_oauth2_setup.py` against `INFISICAL_ENVIRONMENT=production`.)
+
+The digest LLM (reduce step in map-reduce mode, single LLM call in legacy mode) produces both human-readable markdown and a structured `youtube_digest_decisions` block. The code normalizes that block, sorts videos by `value_score`, saves a candidate artifact, and dispatches `code_implementation_prospect=true` videos that pass the demo-worthiness gate to the YouTube tutorial pipeline. The machine-readable decision block is stripped from the human-facing digest/email; the email instead includes a compact "YouTube Tutorial Pipeline Dispatch" section listing selected videos and hook acceptance status, plus the rejection block when applicable.
 
 **Yesterday-shift day mapping.** The cron fires the morning *after* content collection. Tuesday's run reads `MONDAY_YT_PLAYLIST` (yesterday's playlist), not Tuesday's. The script computes `DAYS[(now - 1 day).weekday()]` automatically. Manual reruns via `--day` bypass this shift and target the exact day specified.
 
@@ -59,19 +78,35 @@ sequenceDiagram
     participant Cron as youtube_daily_digest.py
     participant YT as YouTube playlist
     participant DB as youtube_ingestion_state.db
+    participant Map as Map step<br/>(glm-4.5-air, conc=3)
+    participant Reduce as Reduce step<br/>(glm-5.1, 1 call)
+    participant Gate as Demo-worthiness gate
     participant FS as daily_digests artifacts
     participant Hooks as /api/v1/hooks/youtube/manual
     participant CSI as CSI digests DB
 
     Cron->>YT: Read day playlist items
     Cron->>DB: Filter unprocessed (video_id, day)
-    Cron->>Cron: Ingest transcripts / metadata fallbacks
-    Cron->>Cron: Generate ranked digest + structured decisions via ZAI model
+    Cron->>Cron: Ingest transcripts / metadata fallbacks<br/>(build VideoTranscriptPayload list)
+    par Per-video retelling
+        Cron->>Map: video 1 → 50% retell + classification
+    and
+        Cron->>Map: video 2 → 50% retell + classification
+    and
+        Cron->>Map: video N → 50% retell + classification
+    end
+    Note over Map: ZAIRateLimiter caps real<br/>parallelism at ZAI_MAX_CONCURRENT
+    Map-->>Cron: list[MapResult] (retell_md, thesis, classification,<br/>retries, rate_limit_hits, last_error_class)
+    Cron->>Reduce: titles + theses + classifications (small context)
+    Reduce-->>Cron: meta-synthesis markdown + youtube_digest_decisions JSON
+    Cron->>Cron: Assemble final digest (meta + retellings + JSON)
+    Cron->>Gate: score ≥ 70 ∧ tier ∉ {low,unknown} ∧ evidence ≠ metadata_only
+    Gate-->>Cron: selected + rejected (with reason)
     Cron->>FS: Save Digest.md and tutorial_candidates.json
-    Cron->>Hooks: Dispatch top code implementation prospects only
+    Cron->>Hooks: Dispatch only gate-approved code_implementation_prospects
     Cron->>FS: Save {date}_{DAY}_playlist_pocket.json
     Cron->>CSI: Emit daily digest record
-    Cron->>DB: Save processed state (INSERT OR REPLACE)
+    Cron->>DB: Save processed state (INSERT OR REPLACE) — gated on email success
 ```
 
 Candidate files live under:
@@ -325,12 +360,31 @@ After tutorial generation, the pipeline can automatically create a GitHub reposi
 | `DATAIMPULSE_USER` | — | DataImpulse proxy username |
 | `DATAIMPULSE_PASS` | — | DataImpulse proxy password |
 
-### Daily Digest Auto Tutorial Dispatch
+### Daily Digest Pipeline (map-reduce, as of 2026-05-18)
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `UA_YOUTUBE_DIGEST_AUTO_TUTORIAL_TOP_N` | `4` | Max ranked code implementation prospects to dispatch per digest run |
-| `UA_YOUTUBE_DIGEST_TUTORIAL_HOOK_URL` | `UA_GATEWAY_URL + /api/v1/hooks/youtube/manual` | Optional explicit manual YouTube hook URL for digest dispatch |
-| `UA_HOOKS_TOKEN` | — | Required bearer token for digest-to-hook dispatch |
+| `UA_YOUTUBE_DIGEST_PIPELINE` | `map_reduce` | `map_reduce` (per-video retell + meta-synthesis) or `single_call` (legacy one-LLM-call shape, kept for A/B + fallback). |
+| `UA_YOUTUBE_DIGEST_MAP_MODEL` | `glm-4.5-air` | Map-step model. Z.AI haiku-tier. Set to `glm-5-turbo` for sonnet-tier polish (~2× wall time). |
+| `UA_YOUTUBE_DIGEST_MAP_CONCURRENCY` | `3` | Internal semaphore for parallel per-video calls. Effective parallelism is `min(this, ZAI_MAX_CONCURRENT)`. Pushing above 3 risks Z.AI FUP 1313 throttling at the account level. |
+| `UA_YOUTUBE_DIGEST_MAP_TIMEOUT_SECONDS` | `180` | Per-map-call timeout. Plenty of headroom — observed glm-4.5-air p50 is ~20s, max ~30s. |
+| `UA_YOUTUBE_DIGEST_MAP_MAX_TOKENS` | `6000` | Per-map-call output cap. Bumped from 4000 alongside the 50% retell target to fit retellings of the longest playlist videos (~5300 output tokens worst case). |
+| `UA_YOUTUBE_DIGEST_MAP_TRANSCRIPT_CHAR_LIMIT` | `50000` | Max source-transcript chars fed to a single map call (truncated above this). |
+| `UA_YOUTUBE_DIGEST_REDUCE_MODEL` | `resolve_model("opus")` → `glm-5.1` | Reduce-step model. Single small-context call (titles + classifications + theses only). |
+| `UA_YOUTUBE_DIGEST_REDUCE_TIMEOUT_SECONDS` | `600` | Per-reduce-call timeout. |
+| `UA_YOUTUBE_DIGEST_REDUCE_MAX_TOKENS` | `8000` | Per-reduce-call output cap. |
+| `UA_YOUTUBE_DIGEST_LLM_TIMEOUT_SECONDS` | `900` | Legacy single-call timeout (only consulted when `UA_YOUTUBE_DIGEST_PIPELINE=single_call`). |
+| `UA_YOUTUBE_DIGEST_LLM_MAX_RETRIES` | `5` | Retry budget for 429/FUP 1313 backoff on every ZAI call. |
+| `UA_YOUTUBE_DIGEST_MODEL` | — | Legacy override for single-call path. Map-reduce path ignores this; use `UA_YOUTUBE_DIGEST_MAP_MODEL` / `UA_YOUTUBE_DIGEST_REDUCE_MODEL` instead. |
+| `UA_YOUTUBE_DIGEST_MAX_TOKENS` | `12000` | Legacy max-tokens override for single-call path. |
+| `ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY` / `ZAI_API_KEY` | — | Inference credentials. When the resolved key matches `ZAI_API_KEY`, base_url is auto-set to `https://api.z.ai/api/anthropic`. |
+
+### Daily Digest Auto Tutorial Dispatch + Demo-Worthiness Gate
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `UA_YOUTUBE_DIGEST_AUTO_TUTORIAL_TOP_N` | `4` | Max gate-approved code-implementation prospects to dispatch per digest run. |
+| `UA_YOUTUBE_DIGEST_DEMO_GATE_MIN_SCORE` | `70` | Deterministic gate (see PR #357). Reject any candidate with `value_score < this`, regardless of LLM rating. Also rejects `value_tier in {low, unknown}` and `evidence_quality == metadata_only`. |
+| `UA_YOUTUBE_DIGEST_TUTORIAL_HOOK_URL` | `UA_GATEWAY_URL + /api/v1/hooks/youtube/manual` | Optional explicit manual YouTube hook URL for digest dispatch. |
+| `UA_HOOKS_TOKEN` | — | Required bearer token for digest-to-hook dispatch. |
 
 Optional video/vision analysis in `youtube-tutorial-creation` is gated to `concept_plus_implementation` runs. `concept_only` runs use transcript and metadata evidence and set visual extraction to `not_attempted`.
 
@@ -344,9 +398,14 @@ Optional video/vision analysis in `youtube-tutorial-creation` is gated to `conce
 | `src/universal_agent/gateway_server.py` | Notification CRUD, tutorial dashboard API, dedup constants |
 | `src/universal_agent/youtube_ingest.py` | Transcript fetching via rotating residential proxy (Webshare or DataImpulse) |
 | `src/universal_agent/youtube_mode_utils.py` | Shared concept-only vs code-worthy mode inference used by CSI signal ingest, hooks, gateway tutorial indexing, and playlist watching |
-| `src/universal_agent/scripts/youtube_daily_digest.py` | Daily playlist digest, ranked tutorial-candidate decisions, and bounded code-prospect dispatch |
+| `src/universal_agent/scripts/youtube_daily_digest.py` | Daily playlist digest. Hosts the map-reduce dispatcher (`_generate_digest_content`), map step (`_map_retell_videos` / `_retell_one_video`), reduce step (`_reduce_meta_synthesize`), demo-worthiness gate (`_select_tutorial_dispatch_candidates`), ranked tutorial-candidate persistence, and bounded code-prospect dispatch. Legacy single-call path retained as `_generate_digest_content_single_call`. |
+| `src/universal_agent/scripts/youtube_digest_compare.py` | A/B comparison harness. Loads a repopulate pocket, re-ingests transcripts, runs an arbitrary list of `(pipeline, map_model, map_concurrency)` configs against identical input, dumps per-run `digest.md` + `run_metadata.json` plus a cross-run `classifications_diff.json` and `index.json`. Used to evaluate model+concurrency choices without touching the live cron. |
 | `src/universal_agent/scripts/youtube_provision_digest_playlists.py` | One-shot utility: discovers "\<Day\> Digest" playlists via YouTube Data API and upserts IDs to Infisical |
 | `src/universal_agent/scripts/schedule_youtube_digest.py` | Registers/updates the `daily_youtube_digest` cron job (called by gateway boot helper) |
+| `tests/unit/test_youtube_daily_digest_map_reduce.py` | Map-reduce coverage: per_video_classification parsing, Z.AI rate-limit/FUP detection, digest assembly, map happy/failure paths, dispatcher routing, semaphore enforcement, retry-counting telemetry. |
+| `tests/unit/test_youtube_daily_digest_demo_gate.py` | Deterministic demo-worthiness gate: score/tier/evidence rejection rules, top-N overflow, reject-reason annotation, env-driven min-score override. |
+| `tests/unit/test_youtube_daily_digest_pockets.py` | Repopulate pocket persistence + restore, candidates artifact shape, dispatch dry-run, decision JSON stripping. |
+| `tests/unit/test_youtube_daily_digest_email_failures.py` | Email delivery → processed-videos DB write gating (success path, failure path, no-email mode). |
 | `src/universal_agent/scripts/vp_coder_workspace_pruner.py` | Weekly archive of stale VP-coder workspace subdirectories (7-day default retention) |
 | `src/universal_agent/services/youtube_playlist_watcher.py` | Playlist polling |
 | `src/universal_agent/services/tutorial_telegram_notifier.py` | Telegram notification sink with per-video dedup |
