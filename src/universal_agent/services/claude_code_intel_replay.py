@@ -551,6 +551,13 @@ def apply_research_grounding_pass(
             continue
 
         for source in result.sources:
+            # Embed an 8-char URL hash in the title so the vault slugifier
+            # (which truncates the title at 50 chars) produces distinct
+            # filenames for distinct URLs sharing the same domain. Without
+            # this two grounded sources from docs.anthropic.com collapse to
+            # the same on-disk page and the second ingest silently overwrites
+            # the first.
+            url_hash = hashlib.sha256(source.url.encode("utf-8")).hexdigest()[:8]
             entry = {
                 "url": source.url,
                 "post_id": post_id,
@@ -560,7 +567,7 @@ def apply_research_grounding_pass(
                 "source_path": source.content_path,
                 "analysis_path": "",
                 "metadata_path": "",
-                "title": f"Grounded source ({source.domain})",
+                "title": f"Grounded source {url_hash} ({source.domain})",
                 "provenance_kind": "research_grounded",
                 "research_request_reasons": [r.value for r in request.reasons],
                 "allowlist_rank": source.allowlist_rank,
@@ -996,9 +1003,17 @@ def ingest_packet_into_external_vault(
 
             logging.getLogger(__name__).exception("apply_memex_pass failed; vault sources still written")
 
+    # Order-preserving dedup. The vault slugifier collapses titles that
+    # share a 50-char prefix, so historically two grounded sources with
+    # different URLs but the same domain would both ingest into the same
+    # file — the loop above appended the same path twice. The grounded-
+    # source title now embeds a URL hash so this should be rare, but
+    # dedup defensively so the operator's wiki_pages count never lies.
+    deduped_pages = list(dict.fromkeys(pages))
+
     return {
         "vault_path": str(context.path),
-        "pages": pages,
+        "pages": deduped_pages,
         "post_pages_by_post_id": post_pages_by_post_id,
         "linked_pages_by_post_id": linked_pages_by_post_id,
         "work_product_pages": work_product_pages,
