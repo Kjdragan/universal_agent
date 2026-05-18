@@ -57,7 +57,10 @@ def digest_module(monkeypatch, tmp_path):
         },
     )
 
-    async def _fake_generate(prompt: str) -> str:
+    async def _fake_generate(**kwargs) -> str:
+        # Accepts both legacy (full_prompt=...) and new map_reduce
+        # (videos=..., day_name=..., date_str=...) keyword signatures so the
+        # outer orchestration test doesn't care which pipeline ran.
         return "# Fake Digest\n\nSummary content.\n\n```json\n{\"decisions\": []}\n```"
 
     monkeypatch.setattr(ydd, "_generate_digest_content", _fake_generate)
