@@ -46,7 +46,7 @@ def main():
                 if input_el.is_enabled(timeout=500):
                     print("✅ Input is enabled!")
                     break
-            except:
+            except (TimeoutError, OSError):
                 pass
             time.sleep(1)
             if i % 5 == 0:
