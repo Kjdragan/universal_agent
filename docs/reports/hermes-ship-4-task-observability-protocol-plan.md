@@ -242,7 +242,7 @@ Prepend a new entry to the rolling "Last updated" block following the existing p
 #### `docs/README.md` update
 
 Find the "3. Operations" or "03_Operations" section and add a link to the new doc:
-- `**[Task Hub Observability Protocol](03_Operations/129_Task_Hub_Observability_Protocol.md)**: Canonical standard for the observability + recovery wiring that every async unit of work must follow.`
+- `**[Task Hub Observability Protocol](../03_Operations/129_Task_Hub_Observability_Protocol.md)**: Canonical standard for the observability + recovery wiring that every async unit of work must follow.`
 
 ### Part E — Verification + ship
 
