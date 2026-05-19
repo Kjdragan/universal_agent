@@ -136,7 +136,9 @@ def test_morning_briefing_stale_emits_warn(tmp_path: Path, monkeypatch) -> None:
     target = base / "autonomous-briefings" / today_dt.strftime("%Y-%m-%d") / "DAILY_BRIEFING.md"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("# stale")
-    six_hours_ago = time.time() - 6 * 3600
+    # Anchor mtime to the mocked "now" so the freshness math doesn't depend
+    # on the real wall clock at test-run time.
+    six_hours_ago = today_dt.timestamp() - 6 * 3600
     os.utime(target, (six_hours_ago, six_hours_ago))
     findings = run_invariants({"artifacts_dir": base})
     matches = _only(findings, "morning_briefing_freshness")
@@ -232,13 +234,16 @@ def test_hn_fresh_snapshot_emits_nothing(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_hn_old_snapshot_emits_warn(tmp_path: Path, monkeypatch) -> None:
-    _set_now(monkeypatch, datetime(2026, 5, 19, 14, 0, tzinfo=HOUSTON))
+    fake_now = datetime(2026, 5, 19, 14, 0, tzinfo=HOUSTON)
+    _set_now(monkeypatch, fake_now)
     base = tmp_path / "artifacts"
     snaps = base / "hackernews" / "snapshots"
     snaps.mkdir(parents=True)
     f = snaps / "20260519100000.json"
     f.write_text("{}")
-    ninety_min_ago = time.time() - 90 * 60
+    # Anchor mtime to the mocked "now" so the age math doesn't depend on
+    # the real wall clock at test-run time.
+    ninety_min_ago = fake_now.timestamp() - 90 * 60
     os.utime(f, (ninety_min_ago, ninety_min_ago))
     findings = run_invariants({"artifacts_dir": base})
     matches = _only(findings, "hackernews_snapshot_cadence")
