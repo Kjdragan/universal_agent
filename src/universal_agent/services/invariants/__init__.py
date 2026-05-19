@@ -14,4 +14,7 @@ Authoring a new invariant:
 
 from __future__ import annotations
 
-from universal_agent.services.invariants import youtube_invariants  # noqa: F401
+from universal_agent.services.invariants import (  # noqa: F401
+    proactive_pipeline_invariants,
+    youtube_invariants,
+)
