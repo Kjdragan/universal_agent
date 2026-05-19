@@ -187,8 +187,23 @@ def build_proactive_health_payload(
 
     crons = _summarize_cron_jobs(cron_jobs or [])
 
+    # Resolve the canonical artifacts directory once. Imported lazily because
+    # it touches env vars + filesystem; we never want this to crash the
+    # aggregator on a fresh dev box.
+    artifacts_dir: Optional[Path] = None
+    try:
+        from universal_agent.artifacts import resolve_artifacts_dir
+        artifacts_dir = resolve_artifacts_dir()
+    except Exception:  # noqa: BLE001
+        artifacts_dir = None
+
     invariant_findings = pipeline_invariants.run_invariants(
-        {"csi_db_path": csi_db_path, "runtime_conn": runtime_conn}
+        {
+            "csi_db_path": csi_db_path,
+            "runtime_conn": runtime_conn,
+            "activity_conn": activity_conn,
+            "artifacts_dir": artifacts_dir,
+        }
     )
 
     overall = _derive_overall_status(
