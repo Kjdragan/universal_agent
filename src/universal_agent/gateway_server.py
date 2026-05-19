@@ -14236,6 +14236,28 @@ async def lifespan(app: FastAPI):
     ensure_schema(main_module.runtime_db_conn)
     _ensure_activity_schema(main_module.runtime_db_conn)
     _activity_prune_old(main_module.runtime_db_conn)
+
+    # Pre-warm SQLite page cache for the dashboard hot paths. The first
+    # request after restart was paying 12–15s of cold-page cost on the
+    # observed slow endpoints; this warmup drops that to single-digit
+    # seconds. Best-effort: never raises, summary is logged for visibility.
+    try:
+        from universal_agent.services.dashboard_prewarm import prewarm_dashboard_db
+
+        def _prewarm_open() -> sqlite3.Connection:
+            return _activity_connect()
+
+        _prewarm_summary = prewarm_dashboard_db(_prewarm_open)
+        logger.info(
+            "🔥 Dashboard pre-warm: db_warmed=%s duration_ms=%.1f tables_warmed=%s tables_failed=%s",
+            _prewarm_summary.get("db_warmed"),
+            float(_prewarm_summary.get("duration_ms") or 0.0),
+            _prewarm_summary.get("tables_warmed") or [],
+            list((_prewarm_summary.get("tables_failed") or {}).keys()),
+        )
+    except Exception as _prewarm_exc:  # noqa: BLE001 — defensive at boot
+        logger.warning("Dashboard pre-warm failed (non-fatal): %s", _prewarm_exc)
+
     persisted_notifications = _load_notifications_from_activity_store(_notifications_max)
     if persisted_notifications:
         _notifications[:] = list(reversed(persisted_notifications))
