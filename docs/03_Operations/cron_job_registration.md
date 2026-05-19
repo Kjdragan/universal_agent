@@ -1,6 +1,6 @@
 # Cron Job Registration — Source of Truth & First-Boot Fallback
 
-> **Last updated:** 2026-05-04 — established after the proactive-robustness
+> **Last updated:** 2026-05-19 — established after the proactive-robustness
 > work (commits `825e608e` through `15ccbc4e`) made all proactive cron jobs
 > idempotently re-registerable at gateway boot.
 
@@ -23,6 +23,7 @@ _ensure_proactive_report_morning_cron_job()
 _ensure_proactive_report_midday_cron_job()
 _ensure_proactive_report_afternoon_cron_job()
 _ensure_proactive_artifact_digest_cron_job()
+_ensure_simone_chat_autocomplete_cron_job()
 ```
 
 Each helper is **idempotent**: it looks up the existing job by
@@ -121,6 +122,37 @@ This guard does NOT apply to internal periodic loops (heartbeat,
 factory-staleness sweep, `_vp_stale_reconcile_loop`) — those run as
 async tasks in the gateway lifespan, not as cron rows.
 
+## Lightweight cron path
+
+**Added in PR #379 (2026-05-19).** The standard cron path runs through
+`gateway.create_session()` before every cron tick, which synchronously
+discovers Composio apps, builds a ~54 KB capability snapshot, loads SOUL,
+and registers a session dossier — blocking the gateway asyncio event loop
+for 3–14 seconds per tick. For high-frequency housekeeping crons that
+only need a simple `!script` subprocess, this overhead is unnecessary
+and causes visible latency (the dashboard's 4 s `/api/v1/version` health
+check times out, surfacing the red "Gateway unreachable" banner).
+
+The **lightweight path** bypasses `create_session` entirely. When a cron
+job is registered with `lightweight=True` in its metadata, `_run_job`
+runs the `!script` command directly via subprocess, reusing the existing
+persist/finalize/cleanup logic but skipping session bootstrap.
+
+**Registration:** pass `lightweight=True` to `_register_system_cron_job`.
+The cron service validates at registration time that the command starts
+with `!script` — misconfigured lightweight jobs raise `ValueError` at
+gateway startup (fail-fast).
+
+**Current lightweight jobs:**
+- `simone_chat_auto_complete` (every 60 s) — runs a 5-line SQL UPDATE to
+  finalize stale in-progress chat sessions. Does not need LLM access or
+  session context.
+
+**When to use lightweight:** pure housekeeping crons that run simple
+database updates, file operations, or other non-LLM work at high
+frequency (1–5 min intervals). Do NOT use for LLM-bound jobs that need
+session context, capability injection, or agent identity.
+
 ## Disabling a job in production
 
 Every `_ensure_*` helper is gated by an `<env>_enabled()` flag, so any
@@ -141,6 +173,7 @@ job can be disabled at deploy time by adding the env var to `.env`
 | `proactive_artifact_digest` | `UA_PROACTIVE_ARTIFACT_DIGEST_ENABLED=0` |
 | `hackernews_snapshot` | `UA_HACKERNEWS_SNAPSHOT_ENABLED=0` |
 | `atlas_direct_dispatch` (Hermes Phase C, default OFF) | `UA_ATLAS_DIRECT_DISPATCH_ENABLED=0` |
+| `simone_chat_auto_complete` (lightweight, always on) | `UA_SIMONE_CHAT_AUTOCOMPLETE_ENABLED=0` |
 
 > **`atlas_direct_dispatch` (Hermes Phase C, PR #221):** independent
 > dispatcher that bypasses Simone's heartbeat throttle for tasks tagged
