@@ -2478,6 +2478,58 @@ class HeartbeatService:
                 },
             )
 
+            # Proactive health pre-flight — runs every tick regardless of
+            # skip-mode so the watchdog can't be silenced by an empty Task Hub.
+            # Best-effort: errors are logged but never block the heartbeat.
+            try:
+                from universal_agent import gateway_server as _gs
+                from universal_agent.services.proactive_health import (
+                    build_proactive_health_payload,
+                )
+                from universal_agent.services.proactive_health_notifier import (
+                    run_pre_flight_check,
+                )
+
+                def _build_payload():
+                    activity_path = get_activity_db_path()
+                    activity_conn = connect_runtime_db(activity_path)
+                    activity_conn.row_factory = sqlite3.Row  # type: ignore[attr-defined]
+                    try:
+                        cron_jobs = (
+                            list(_gs._cron_service.list_jobs())
+                            if getattr(_gs, "_cron_service", None)
+                            else []
+                        )
+                        csi_db_path = None
+                        if hasattr(_gs, "_csi_default_db_path"):
+                            try:
+                                csi_db_path = _gs._csi_default_db_path()
+                            except Exception:  # noqa: BLE001
+                                csi_db_path = None
+                        return build_proactive_health_payload(
+                            activity_conn=activity_conn,
+                            cron_jobs=cron_jobs,
+                            csi_db_path=csi_db_path,
+                        )
+                    finally:
+                        try:
+                            activity_conn.close()
+                        except Exception:  # noqa: BLE001
+                            pass
+
+                await run_pre_flight_check(
+                    workspace_dir=Path(str(session.workspace_dir)),
+                    payload_builder=_build_payload,
+                    agentmail_service=getattr(_gs, "_agentmail_service", None),
+                    notifications_list=getattr(_gs, "_notifications", None),
+                    add_notification_fn=getattr(_gs, "_add_notification", None),
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Heartbeat proactive-health pre-flight failed (non-fatal)",
+                    exc_info=True,
+                )
+
             if should_skip_agent_run:
                 full_response = schedule.ok_tokens[0] if schedule.ok_tokens else DEFAULT_OK_TOKENS[0]
                 logger.info(
