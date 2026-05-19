@@ -6,8 +6,8 @@
 
 By default, every cron job, polling loop, scheduled GitHub Actions workflow, or background service in this repo runs **only during waking hours** in Houston time:
 
-> **Active window: 6:00 AM → 9:00 PM Houston time (CDT/CST).**
-> **Dormant window: 9:00 PM → 6:00 AM Houston time.**
+> **Active window: 6:00 AM → 10:00 PM Houston time (CDT/CST).**
+> **Dormant window: 10:00 PM → 6:00 AM Houston time.**
 
 In UTC the active window translates to (DST-aware):
 - **Summer (CDT, UTC-5):** 11:00–02:00 UTC
@@ -29,7 +29,7 @@ Default-dormant moves the operating tempo to the operator's actual day.
 
 The dormancy default exists to suppress **wasteful work** — crons that burn quota or tokens to produce material no human will read until morning. It is **not** a license to turn off production-health automation overnight.
 
-**Subject to dormancy (default 6 AM – 9 PM Houston):**
+**Subject to dormancy (default 6 AM – 10 PM Houston):**
 
 - Content-generation crons: HackerNews snapshot, briefing materials, proactive reports, doc drift audit, openclaw release sync, intel pipeline material production
 - Quota-burning polls: scheduled LLM runs that synthesize observations into briefings
@@ -64,10 +64,11 @@ These services run inside the dormancy window with documented justification:
 | `nightly_wiki` | 3:15 AM Houston | Generates overnight wiki output that `morning_briefing` (6:30 AM) reads. Dormancy-window run gives the briefing fresh material. Exception #1 (downstream consumer). See [`gateway_server.py:18217`](../../src/universal_agent/gateway_server.py#L18217). |
 | `atlas_direct_dispatch` | Every 60s, 24/7, UTC | Hermes Phase C (PR #221) — independent dispatcher for tasks tagged `metadata.preferred_vp = "vp.general.primary"`. Exception #3 (latency-sensitive): Atlas-eligible tasks must dispatch within ~60s of being queued; waiting until 6 AM defeats the purpose. **Default OFF** via `UA_ATLAS_DIRECT_DISPATCH_ENABLED=0` — operator opts in after dry-run, so the 24/7 schedule has zero quota cost until enabled. The cron registration also goes through `_proactive_cron_enabled`, AND the script itself re-checks the env var before doing any work (belt-and-suspenders against accidental activation). See [`gateway_server.py:_ensure_atlas_direct_dispatch_cron_job`](../../src/universal_agent/gateway_server.py) and [`docs/reports/hermes-adaptation-phased-plan-2026-05-10.md`](../reports/hermes-adaptation-phased-plan-2026-05-10.md) § Phase C. |
 | `simone_chat_auto_complete` | Every 60s, 24/7, UTC | Mission-control PR #255 — pure-SQLite housekeeping that promotes `simone_chat` Task Hub rows from `status="in_progress"` to `status="completed"` once Simone has proposed completion and the operator has been silent past `UA_SIMONE_CHAT_IDLE_MINUTES` (default 10). **No LLM tokens, no external API, no network egress** — the work is a `UPDATE ... WHERE` on the activity DB. Exception #3 (latency-sensitive operator-facing state): a chat started at 8:55 PM has its 10-minute silence window cross into the dormant period; running only in active hours leaves rows in `in_progress` overnight and pollutes the dashboard the operator opens at 6 AM. Registered with `skip_task_hub_link=True` (Observability Protocol exemption — re-emitting Task Hub events for a job that IS Task Hub state-management would be circular). See [`gateway_server.py:_ensure_simone_chat_autocomplete_cron_job`](../../src/universal_agent/gateway_server.py) and [`src/universal_agent/scripts/simone_chat_auto_complete.py`](../../src/universal_agent/scripts/simone_chat_auto_complete.py). |
+| `heartbeat` + `proactive_health_watchdog` (pre-flight) | Every heartbeat tick, 24/7 | The Simone heartbeat is the runtime tick driver and is not a cron job; it fires on its own schedule (every ~30m) regardless of clock. Embedded in every tick — full, quick, and skip alike — is the `proactive_health_notifier.run_pre_flight_check` call ([`heartbeat_service.py:_run_heartbeat`](../../src/universal_agent/heartbeat_service.py) just after the "Heartbeat started" broadcast). This is a **health/infrastructure handler**, not content generation: it polls task_hub stale/parked counts, calls every registered pipeline invariant, writes `work_products/proactive_health_latest.json`, and emails Kevin on first occurrence of a new critical finding (with 6h per-finding-id cooldown). Exception #3 (latency-sensitive incident response): a pipeline breaking at 11 PM should email Kevin by 11:30 PM, not silently wait until 6 AM. Default ON; can be disabled per-knob via `UA_HEARTBEAT_PROACTIVE_HEALTH_ENABLED=0` (master), `UA_HEARTBEAT_PROACTIVE_HEALTH_EMAIL_CRITICAL=0` (mute email only — sidecar artifact still written). See [`src/universal_agent/services/proactive_health_notifier.py`](../../src/universal_agent/services/proactive_health_notifier.py) and the canonical doc [`docs/03_Operations/132_Proactive_Health_Watchdog.md`](../03_Operations/132_Proactive_Health_Watchdog.md). |
 
 ## Active-hour services (subject to dormancy default)
 
-These run only during 6 AM – 9 PM Houston:
+These run only during 6 AM – 10 PM Houston:
 
 All times Houston (America/Chicago) unless noted. Schedules spread on 2026-05-11 — see "Cron spread (2026-05-11)" below for rationale.
 
@@ -80,7 +81,7 @@ All times Houston (America/Chicago) unless noted. Schedules spread on 2026-05-11
 | `proactive_report_midday` | 12:05 PM daily | [`gateway_server.py`](../../src/universal_agent/gateway_server.py) |
 | `proactive_report_afternoon` | 4:05 PM daily | [`gateway_server.py`](../../src/universal_agent/gateway_server.py) |
 | `vp_coder_workspace_pruning` | Sun 5:05 PM (weekly) | [`gateway_server.py`](../../src/universal_agent/gateway_server.py) |
-| `hackernews_snapshot` | every 30m, 6 AM–9 PM (at :00 and :30) | [`gateway_server.py`](../../src/universal_agent/gateway_server.py) |
+| `hackernews_snapshot` | every 30m, 6 AM–10 PM (at :00 and :30) | [`gateway_server.py`](../../src/universal_agent/gateway_server.py) |
 
 GitHub Actions schedules (UTC, no DST handling):
 

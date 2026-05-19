@@ -148,7 +148,7 @@ The ClaudeDevs X intel pipeline is undergoing a v2 rebuild. Two living docs trac
 
 ## Operating Hours / Dormancy Default
 
-**Active window: 6:00 AM – 9:00 PM Houston time.** **Dormant: 9:00 PM – 6:00 AM.**
+**Active window: 6:00 AM – 10:00 PM Houston time.** **Dormant: 10:00 PM – 6:00 AM.**
 
 Default applies to **content-generation** work only — cron jobs / polling loops / scheduled GHA workflows that burn quota to produce intelligence nobody reads until morning. Use `default_timezone="America/Chicago"` (or `TZ=America/Chicago`) so DST handles itself; GitHub Actions schedules are UTC-only — express in UTC and accept the 1h DST drift.
 

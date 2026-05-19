@@ -1,7 +1,7 @@
 """Pin the operating-hours dormancy default for system cron jobs.
 
 Policy: cron schedules registered in `gateway_server.py:_ensure_*_cron_job`
-must fall inside the active window (6 AM – 9 PM Houston, America/Chicago)
+must fall inside the active window (6 AM – 10 PM Houston, America/Chicago)
 unless they're documented as an exception in
 `docs/operations/operating_hours_dormancy.md`.
 
@@ -12,7 +12,7 @@ side-effects); instead it does string-grep against the source file,
 which is good enough for catching the static `default_cron=` literals.
 
 The active window in cron-hour terms (Chicago TZ): hours 6, 7, 8, ...,
-20 are active. Hours 21, 22, 23, 0, 1, 2, 3, 4, 5 are dormant.
+21 are active. Hours 22, 23, 0, 1, 2, 3, 4, 5 are dormant.
 """
 from __future__ import annotations
 
@@ -52,9 +52,9 @@ DOCUMENTED_EXCEPTIONS = {
 }
 
 # Hours considered active in America/Chicago. 6 AM start (operator wakes),
-# 9 PM cutoff (last tick at 8:30 PM is fine; 21:00 itself is the start of
-# dormancy). So active hours are [6, 7, 8, ..., 20].
-ACTIVE_HOURS = set(range(6, 21))
+# 10 PM cutoff (last tick at 9:30 PM is fine; 22:00 itself is the start of
+# dormancy). So active hours are [6, 7, 8, ..., 21].
+ACTIVE_HOURS = set(range(6, 22))
 
 
 def _extract_cron_registrations(content: str) -> list[tuple[str, str, str]]:
@@ -126,7 +126,7 @@ def test_dormancy_doc_exists() -> None:
         f"canonical doc. CLAUDE.md links to it."
     )
     body = DORMANCY_DOC.read_text(encoding="utf-8")
-    assert "6:00 AM" in body and "9:00 PM" in body, (
+    assert "6:00 AM" in body and "10:00 PM" in body, (
         "Dormancy doc must state the active window in plain English"
     )
 
@@ -139,7 +139,7 @@ def test_claude_md_links_to_dormancy_doc() -> None:
     """
     body = Path("CLAUDE.md").read_text(encoding="utf-8")
     assert "operating_hours_dormancy.md" in body
-    assert "6:00 AM" in body and "9:00 PM" in body
+    assert "6:00 AM" in body and "10:00 PM" in body
     assert "Houston" in body
 
 
@@ -190,12 +190,14 @@ def test_hackernews_snapshot_uses_active_hour_range() -> None:
     """
     content = GATEWAY_SERVER.read_text(encoding="utf-8")
     assert (
-        'default_cron="0,30 6-20 * * *"' in content
+        'default_cron="0,30 6-21 * * *"' in content
         and '"hackernews_snapshot"' in content
     ), (
-        "hackernews_snapshot must default to '0,30 6-20 * * *' America/Chicago "
-        "(2026-05-10 dormancy default). Pre-2026-05-10 it was '*/30 * * * *' UTC; "
-        "if you need to change it, update docs/operations/operating_hours_dormancy.md."
+        "hackernews_snapshot must default to '0,30 6-21 * * *' America/Chicago "
+        "(2026-05-19 dormancy widened to 6 AM–10 PM Houston). Pre-2026-05-10 "
+        "it was '*/30 * * * *' UTC; 2026-05-10 through 2026-05-19 it was "
+        "'0,30 6-20 * * *'. If you need to change it, update "
+        "docs/operations/operating_hours_dormancy.md."
     )
 
 

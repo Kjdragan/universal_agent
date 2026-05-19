@@ -18698,10 +18698,10 @@ def _ensure_hackernews_snapshot_cron_job() -> Optional[dict[str, Any]]:
     # actually moved on the front page overnight.
     return _register_system_cron_job(
         system_job="hackernews_snapshot",
-        default_cron="0,30 6-20 * * *",
+        default_cron="0,30 6-21 * * *",
         default_timezone="America/Chicago",
         command="!script universal_agent.scripts.hackernews_snapshot",
-        description="Half-hourly Hacker News snapshot (active hours only: 6 AM–9 PM Houston).",
+        description="Half-hourly Hacker News snapshot (active hours only: 6 AM–10 PM Houston).",
         timeout_seconds=300,
         enabled=_proactive_cron_enabled("UA_HACKERNEWS_SNAPSHOT_ENABLED"),
         cron_env_var="UA_HACKERNEWS_SNAPSHOT_CRON",
