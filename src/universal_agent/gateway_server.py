@@ -12769,9 +12769,9 @@ def _calendar_project_task_events(
     try:
         conn = _task_hub_open_conn()
         try:
-            start_iso = datetime.fromtimestamp(start_ts, timezone.utc).isoformat()
-            end_iso = datetime.fromtimestamp(end_ts, timezone.utc).isoformat()
-            # Tasks with due_at in the calendar window OR overdue (due_at < now, not completed)
+            # Tasks with due_at in the calendar window OR overdue (due_at < now, not completed).
+            # The window filter is applied in Python below (is_in_window / is_overdue) so the
+            # SQL pulls the full due_at-bearing set and lets the loop classify.
             rows = conn.execute(
                 """
                 SELECT task_id, source_kind, source_ref, title, description,
@@ -16767,12 +16767,23 @@ async def upload_session_file(
     is_text = ext in _TEXT_EXTENSIONS
     is_image = ext in _IMAGE_EXTENSIONS
 
+    # ``_ALLOWED_EXTENSIONS = _TEXT_EXTENSIONS | _IMAGE_EXTENSIONS`` makes the
+    # text/image dichotomy exhaustive *today*, but check ``is_image`` explicitly
+    # so future expansions of the allowlist don't silently mislabel new file
+    # kinds as "image".
+    if is_text:
+        type_label = "text"
+    elif is_image:
+        type_label = "image"
+    else:
+        type_label = "file"
+
     result: dict = {
         "status": "ok",
         "filename": dest.name,
         "path": relative_path,
         "size": len(content_bytes),
-        "type": "text" if is_text else "image",
+        "type": type_label,
     }
 
     # For text files, also return content so frontend can inject it
