@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import { LayoutDashboard } from "lucide-react";
 import SimoneChatBar from "@/components/dashboard/SimoneChatBar";
 import { GlobalSidebar } from "@/components/dashboard/GlobalSidebar";
+import { ServiceStatusBanner } from "@/components/dashboard/ServiceStatusBanner";
 
 /* ------------------------------------------------------------------ */
 /* Types                                                               */
@@ -205,6 +206,9 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
           <span>⚠️</span>
         </div>
       )}
+
+      {/* Gateway availability banner — shows during deploy warm-up or when API is unreachable. */}
+      <ServiceStatusBanner />
 
       <div className="flex flex-1 overflow-hidden relative">
         <GlobalSidebar ownerId={session.owner_id || ownerId} showCorporationNav={showCorporationNav} />
