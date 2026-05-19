@@ -118,6 +118,23 @@ class CSIService:
         if endpoint and secret:
             self.emitter = UAEmitter(endpoint=endpoint, shared_secret=secret, instance_id=self.config.instance_id)
         else:
+            # Startup guard — previously the absence of these two values caused
+            # batch_brief to silently no-op for ~65 days (2026-03-15 cleanup
+            # commit removed the legacy per-event emission path without ensuring
+            # the new aggregator could actually reach UA Gateway). Log loudly so
+            # an operator notices on next deploy / restart.
+            missing = []
+            if not endpoint:
+                missing.append("CSI_UA_ENDPOINT")
+            if not secret:
+                missing.append("CSI_UA_SHARED_SECRET")
+            logger.critical(
+                "CSI emitter NOT configured — batch_brief will skip emission. "
+                "Missing env vars: %s. Events will pile up at delivered=0 until "
+                "this is fixed. Set values in /opt/universal_agent/CSI_Ingester/"
+                "development/deployment/systemd/csi-ingester.env then restart.",
+                ", ".join(missing),
+            )
             self.emitter = None
 
     def _poll_interval_for_adapter(self, name: str) -> float:

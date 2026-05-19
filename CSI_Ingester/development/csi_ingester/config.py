@@ -107,25 +107,31 @@ class CSIConfig:
         return 3
 
     @property
-    def gemini_api_key(self) -> str:
-        return (os.getenv("CSI_GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY") or "").strip()
+    def zai_api_key(self) -> str:
+        """Z.AI API key for batch_brief summarisation.
+
+        Resolution order: ``CSI_ZAI_API_KEY`` → ``ZAI_API_KEY``. Empty means
+        skip LLM and use the plain-text fallback brief.
+        """
+        return (os.getenv("CSI_ZAI_API_KEY") or os.getenv("ZAI_API_KEY") or "").strip()
 
     @property
-    def gemini_model(self) -> str:
-        """Gemini model for batch briefs.
+    def zai_model(self) -> str:
+        """Z.AI model for batch briefs.
 
-        Default: gemini-3-flash-preview
-        Low-cost alternative: gemini-3.1-flash-lite-preview (set via CSI_GEMINI_MODEL)
+        Default: ``glm-4.5-air`` (haiku-tier, fast/cheap). Lane is occasionally
+        flaky; ``batch_brief.run_batch_cycle`` falls back to plain-text on
+        failure so a hang here doesn't block delivery.
         """
-        env = (os.getenv("CSI_GEMINI_MODEL") or "").strip()
+        env = (os.getenv("CSI_ZAI_MODEL") or "").strip()
         if env:
             return env
         raw_delivery = self.raw.get("delivery", {})
         if isinstance(raw_delivery, dict):
-            val = raw_delivery.get("gemini_model")
+            val = raw_delivery.get("zai_model")
             if val:
                 return str(val).strip()
-        return "gemini-3-flash-preview"
+        return "glm-4.5-air"
 
 
 def load_config(config_path: str | None = None) -> CSIConfig:
