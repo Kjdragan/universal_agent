@@ -18588,6 +18588,7 @@ def _register_system_cron_job(
     timezone_env_var: str | None = None,
     required_secrets: list[str] | None = None,
     skip_task_hub_link: bool = False,
+    lightweight: bool = False,
 ) -> Optional[dict[str, Any]]:
     """Idempotent boot-time helper for proactive cron jobs.
 
@@ -18602,9 +18603,24 @@ def _register_system_cron_job(
     produce artifacts (briefings, snapshots, digests) should leave
     this False — the auto-link gives them F.1/F.3 observability.
 
+    `lightweight=True` skips the heavyweight Claude-session bootstrap
+    (Composio session creation, capability snapshot injection, SOUL
+    load, dossier registration) for crons whose ``!script`` body is
+    pure stdlib + sqlite3 housekeeping that doesn't need an agent
+    session at all. Without this, every per-minute housekeeping tick
+    stalls the gateway event loop for several seconds — causing
+    dashboard /version timeouts. Only valid with ``!script`` commands.
+    See ``plans/fix-2-lightweight-cron-path.md``.
+
     Returns the job dict on success, or `None` when disabled or the
     cron service is unavailable.
     """
+    # Validate misconfigurations BEFORE the service-availability short-circuit
+    # so a bad registration raises at startup instead of silently returning None.
+    if lightweight and not command.strip().startswith("!script "):
+        raise ValueError(
+            f"lightweight=True requires a `!script` command, got: {command!r}"
+        )
     if not _cron_service or not enabled:
         return None
     cron_expr = (
@@ -18628,6 +18644,8 @@ def _register_system_cron_job(
         metadata["required_secrets"] = list(required_secrets)
     if skip_task_hub_link:
         metadata["skip_task_hub_link"] = True
+    if lightweight:
+        metadata["lightweight"] = True
     updates = {
         "user_id": "cron_system",
         "workspace_dir": workspace_dir,
@@ -18795,6 +18813,7 @@ def _ensure_simone_chat_autocomplete_cron_job() -> Optional[dict[str, Any]]:
         enabled=True,
         cron_env_var="UA_SIMONE_CHAT_AUTOCOMPLETE_CRON",
         skip_task_hub_link=True,
+        lightweight=True,
     )
 
 
