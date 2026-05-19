@@ -212,7 +212,7 @@ class CCBot(commands.Bot):
             await channel.send(f"❌ Declined event: `{event_name}`")
             try:
                 await msg.delete()
-            except:
+            except discord.HTTPException:
                 pass
             return
             

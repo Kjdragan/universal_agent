@@ -30,7 +30,7 @@ def main():
         try:
             client.agents.delete(AGENT_NAME)
             print("   Deleted existing agent")
-        except (ConnectionError, OSError):
+        except Exception:
             pass
         
         agent = client.agents.create(
