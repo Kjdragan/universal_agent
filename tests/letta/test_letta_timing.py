@@ -27,7 +27,7 @@ def main():
     print("\n1. Creating fresh agent...")
     try:
         client.agents.delete(AGENT_NAME)
-    except:
+    except Exception:
         pass
     
     agent = client.agents.create(

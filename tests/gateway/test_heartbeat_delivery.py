@@ -59,7 +59,7 @@ class GatewayManager:
             try:
                 with open(f"/tmp/gw_{GATEWAY_PORT}.err", "r") as f:
                     logger.error(f"Gateway STDERR:\n{f.read()}")
-            except: pass
+            except (IOError, OSError): pass
             raise RuntimeError("Gateway failed to start")
         logger.info("Gateway started.")
 
