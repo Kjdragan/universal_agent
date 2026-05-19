@@ -18,10 +18,10 @@ from csi_ingester.store import events as event_store
 
 logger = logging.getLogger(__name__)
 
-# ── Gemini Flash summarisation ───────────────────────────────────────────
+# ── Z.AI summarisation (haiku-tier glm-4.5-air via Anthropic-compatible API) ─
 
-_GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
-_DEFAULT_MODEL = "gemini-3-flash-preview"
+_ZAI_BASE = "https://api.z.ai/api/anthropic"
+_DEFAULT_MODEL = "glm-4.5-air"
 
 _SYSTEM_PROMPT = """\
 You are a concise trend analyst.  Given a batch of creator-signal events
@@ -51,24 +51,43 @@ def _build_prompt(rows: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-async def _call_gemini(api_key: str, prompt: str, *, model: str = _DEFAULT_MODEL, timeout: int = 60) -> str:
-    """Call Gemini Flash and return the generated text."""
-    payload = {
-        "system_instruction": {"parts": [{"text": _SYSTEM_PROMPT}]},
-        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 2048},
+async def _call_zai(api_key: str, prompt: str, *, model: str = _DEFAULT_MODEL, timeout: int = 60) -> str:
+    """Call Z.AI's Anthropic-compatible chat API and return the generated text.
+
+    Default model is ``glm-4.5-air`` (haiku-tier). The lane is known to be
+    occasionally flaky (~6 min hangs documented in
+    ``src/universal_agent/utils/model_resolution.py``), so the timeout is
+    bounded and the caller falls back to ``_fallback_brief`` on any failure.
+    """
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
     }
-    url = f"{_GEMINI_BASE}/{model}:generateContent?key={api_key}"
+    payload = {
+        "model": model,
+        "max_tokens": 2048,
+        "temperature": 0.3,
+        "system": _SYSTEM_PROMPT,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    url = f"{_ZAI_BASE}/v1/messages"
     async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(url, json=payload)
+        resp = await client.post(url, headers=headers, json=payload)
         resp.raise_for_status()
         body = resp.json()
-    # Extract text from Gemini response
-    candidates = body.get("candidates", [])
-    if not candidates:
-        raise ValueError("Gemini returned no candidates")
-    parts = candidates[0].get("content", {}).get("parts", [])
-    return "".join(p.get("text", "") for p in parts).strip()
+    content_blocks = body.get("content") or []
+    if not content_blocks:
+        raise ValueError("Z.AI returned no content blocks")
+    text_parts = [
+        str(block.get("text") or "")
+        for block in content_blocks
+        if isinstance(block, dict) and block.get("type") == "text"
+    ]
+    text = "".join(text_parts).strip()
+    if not text:
+        raise ValueError("Z.AI returned empty text")
+    return text
 
 
 def _fallback_brief(rows: list[dict[str, Any]]) -> str:
@@ -158,20 +177,20 @@ async def run_batch_cycle(
     event_ids = [r["event_id"] for r in rows]
 
     # ── Generate Markdown brief ──
-    gemini_key = config.gemini_api_key
+    zai_key = config.zai_api_key
     prompt = _build_prompt(rows)
     brief_md: str
     llm_used = False
 
-    if gemini_key:
+    if zai_key:
         try:
-            brief_md = await _call_gemini(gemini_key, prompt, model=config.gemini_model)
+            brief_md = await _call_zai(zai_key, prompt, model=config.zai_model)
             llm_used = True
         except Exception as exc:
-            logger.warning("Gemini batch brief failed, using fallback: %s", exc)
+            logger.warning("Z.AI batch brief failed, using fallback: %s", exc)
             brief_md = _fallback_brief(rows)
     else:
-        logger.info("No Gemini API key configured; using plain-text batch brief")
+        logger.info("No Z.AI API key configured; using plain-text batch brief")
         brief_md = _fallback_brief(rows)
 
     # Extract headline from brief — find first heading with real content

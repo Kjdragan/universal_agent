@@ -118,8 +118,8 @@ class TestRunBatchCycle:
         _insert_event(conn, "e1")  # Only 1 event, threshold is 3
         config = MagicMock()
         config.batch_min_events = 3
-        config.gemini_api_key = ""
-        config.gemini_model = "gemini-3-flash-preview"
+        config.zai_api_key = ""
+        config.zai_model = "glm-4.5-air"
         config.batch_interval_seconds = 7200
 
         result = await run_batch_cycle(conn=conn, config=config, emitter=None)
@@ -133,8 +133,8 @@ class TestRunBatchCycle:
             _insert_event(conn, f"e{i}", title=f"Video {i}", source="youtube_channel_rss")
         config = MagicMock()
         config.batch_min_events = 3
-        config.gemini_api_key = ""
-        config.gemini_model = "gemini-3-flash-preview"
+        config.zai_api_key = ""
+        config.zai_model = "glm-4.5-air"
         config.batch_interval_seconds = 7200
 
         result = await run_batch_cycle(conn=conn, config=config, emitter=None)
@@ -148,26 +148,26 @@ class TestRunBatchCycle:
         assert len(remaining) == 0
 
     @pytest.mark.asyncio
-    async def test_calls_gemini_when_key_set(self, conn: sqlite3.Connection) -> None:
+    async def test_calls_zai_when_key_set(self, conn: sqlite3.Connection) -> None:
         for i in range(3):
             _insert_event(conn, f"e{i}", title=f"V{i}")
         config = MagicMock()
         config.batch_min_events = 3
-        config.gemini_api_key = "fake-key"
-        config.gemini_model = "gemini-3-flash-preview"
+        config.zai_api_key = "fake-key"
+        config.zai_model = "glm-4.5-air"
         config.batch_interval_seconds = 7200
 
-        with patch("csi_ingester.batch_brief._call_gemini", new_callable=AsyncMock) as mock_gemini:
-            mock_gemini.return_value = "# AI Trends Digest\n\nThree new signals detected."
+        with patch("csi_ingester.batch_brief._call_zai", new_callable=AsyncMock) as mock_zai:
+            mock_zai.return_value = "# AI Trends Digest\n\nThree new signals detected."
             result = await run_batch_cycle(conn=conn, config=config, emitter=None)
 
         assert result["status"] == "generated"
         assert result["llm_used"] is True
         assert result["brief_headline"] == "AI Trends Digest"
-        mock_gemini.assert_called_once()
+        mock_zai.assert_called_once()
         # Check model was passed
-        call_kwargs = mock_gemini.call_args
-        assert call_kwargs.kwargs["model"] == "gemini-3-flash-preview"
+        call_kwargs = mock_zai.call_args
+        assert call_kwargs.kwargs["model"] == "glm-4.5-air"
 
     @pytest.mark.asyncio
     async def test_fallback_on_llm_failure(self, conn: sqlite3.Connection) -> None:
@@ -175,12 +175,12 @@ class TestRunBatchCycle:
             _insert_event(conn, f"e{i}", title=f"V{i}")
         config = MagicMock()
         config.batch_min_events = 3
-        config.gemini_api_key = "fake-key"
-        config.gemini_model = "gemini-3-flash-preview"
+        config.zai_api_key = "fake-key"
+        config.zai_model = "glm-4.5-air"
         config.batch_interval_seconds = 7200
 
-        with patch("csi_ingester.batch_brief._call_gemini", new_callable=AsyncMock) as mock_gemini:
-            mock_gemini.side_effect = Exception("API error")
+        with patch("csi_ingester.batch_brief._call_zai", new_callable=AsyncMock) as mock_zai:
+            mock_zai.side_effect = Exception("API error")
             result = await run_batch_cycle(conn=conn, config=config, emitter=None)
 
         assert result["status"] == "generated"
@@ -193,8 +193,8 @@ class TestRunBatchCycle:
             _insert_event(conn, f"e{i}", title=f"V{i}")
         config = MagicMock()
         config.batch_min_events = 3
-        config.gemini_api_key = ""
-        config.gemini_model = "gemini-3-flash-preview"
+        config.zai_api_key = ""
+        config.zai_model = "glm-4.5-air"
         config.batch_interval_seconds = 7200
 
         emitter = MagicMock()
@@ -207,20 +207,20 @@ class TestRunBatchCycle:
         emitter.emit_with_retries.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_uses_lite_model(self, conn: sqlite3.Connection) -> None:
-        """Test that an alternative model like gemini-3.1-flash-lite-preview is passed."""
+    async def test_uses_alt_zai_model(self, conn: sqlite3.Connection) -> None:
+        """Test that an alternative Z.AI model (e.g. glm-5-turbo) is passed through."""
         for i in range(3):
             _insert_event(conn, f"e{i}", title=f"V{i}")
         config = MagicMock()
         config.batch_min_events = 3
-        config.gemini_api_key = "fake-key"
-        config.gemini_model = "gemini-3.1-flash-lite-preview"
+        config.zai_api_key = "fake-key"
+        config.zai_model = "glm-5-turbo"
         config.batch_interval_seconds = 7200
 
-        with patch("csi_ingester.batch_brief._call_gemini", new_callable=AsyncMock) as mock_gemini:
-            mock_gemini.return_value = "# Lite Brief\n\nQuick summary."
+        with patch("csi_ingester.batch_brief._call_zai", new_callable=AsyncMock) as mock_zai:
+            mock_zai.return_value = "# Alt Brief\n\nQuick summary."
             result = await run_batch_cycle(conn=conn, config=config, emitter=None)
 
-        call_kwargs = mock_gemini.call_args
-        assert call_kwargs.kwargs["model"] == "gemini-3.1-flash-lite-preview"
+        call_kwargs = mock_zai.call_args
+        assert call_kwargs.kwargs["model"] == "glm-5-turbo"
         assert result["llm_used"] is True
