@@ -167,7 +167,7 @@ class AgentBridge:
             if input_match:
                 try:
                     input_data = input_match.group(1)[:500]  # Truncate
-                except:
+                except (TypeError, IndexError):
                     pass
             
             await manager.send_message(websocket, {
