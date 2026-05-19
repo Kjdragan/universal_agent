@@ -1398,6 +1398,172 @@ class CronService:
                         workflow_run_id=workflow_run_id,
                         workflow_attempt_id=workflow_attempt_id,
                     )
+                elif (job.metadata or {}).get("lightweight"):
+                    # Lightweight cron path. Pure-stdlib + sqlite3 housekeeping
+                    # crons (e.g. simone_chat_auto_complete) bypass the
+                    # heavyweight Claude-session bootstrap — Composio session
+                    # creation, capability snapshot injection (~54 KB), SOUL
+                    # load, dossier registration — that the standard cron path
+                    # runs before every `!script` subprocess. That bootstrap
+                    # synchronously stalls the gateway event loop for several
+                    # seconds per cron tick, blowing past the dashboard's 4 s
+                    # `/api/v1/version` client timeout and surfacing the red
+                    # "Gateway unreachable" banner. See
+                    # ``plans/fix-2-lightweight-cron-path.md``.
+                    raw_command = job.command.strip()
+                    if not raw_command.startswith("!script "):
+                        raise RuntimeError(
+                            "lightweight=True only supports `!script` commands, "
+                            f"got: {raw_command!r}"
+                        )
+                    script_path = raw_command.replace("!script ", "", 1).strip()
+                    logger.info(
+                        "Chron job %s executing lightweight script: %s",
+                        job.job_id, script_path,
+                    )
+
+                    import subprocess as _lw_subprocess
+                    import sys as _lw_sys
+
+                    _lw_env = os.environ.copy()
+                    _lw_cwd = (
+                        str(job.workspace_dir_resolved)
+                        if hasattr(job, "workspace_dir_resolved")
+                        else str(Path(__file__).resolve().parents[2])
+                    )
+                    _lw_project_src = str(Path(__file__).resolve().parents[1])
+                    _lw_env["PYTHONPATH"] = (
+                        f"{_lw_project_src}:{_lw_env.get('PYTHONPATH', '')}"
+                    )
+
+                    if workflow_run_id and workflow_attempt_id:
+                        self._workflow_admission_service().mark_running(
+                            workflow_run_id,
+                            attempt_id=workflow_attempt_id,
+                            provider_session_id=None,
+                            summary={
+                                "job_id": job.job_id,
+                                "reason": reason,
+                                "workspace_dir": job.workspace_dir,
+                                "lightweight": True,
+                            },
+                        )
+
+                    _lw_proc = await asyncio.create_subprocess_exec(
+                        _lw_sys.executable,
+                        "-m",
+                        script_path.replace("/", ".").replace(".py", ""),
+                        stdout=_lw_subprocess.PIPE,
+                        stderr=_lw_subprocess.PIPE,
+                        cwd=_lw_cwd,
+                        env=_lw_env,
+                    )
+                    _lw_was_timeout_killed = False
+                    try:
+                        _lw_stdout, _lw_stderr = await asyncio.wait_for(
+                            _lw_proc.communicate(), timeout=timeout_seconds
+                        )
+                    except asyncio.TimeoutError:
+                        _lw_was_timeout_killed = True
+                        with contextlib.suppress(ProcessLookupError):
+                            _lw_proc.kill()
+                        try:
+                            _lw_stdout, _lw_stderr = await asyncio.wait_for(
+                                _lw_proc.communicate(), timeout=5
+                            )
+                        except Exception:
+                            _lw_stdout, _lw_stderr = b"", b""
+                        _lw_text = (
+                            _lw_stdout.decode(errors="replace")
+                            + "\n"
+                            + _lw_stderr.decode(errors="replace")
+                        )
+                        _persist_cron_run_output(
+                            job.workspace_dir,
+                            job.job_id,
+                            record.run_id,
+                            _lw_proc.returncode,
+                            _lw_text,
+                        )
+                        record.output_preview = _lw_text[:400]
+                        raise
+
+                    _lw_exit_code = _lw_proc.returncode
+                    _lw_text = (
+                        _lw_stdout.decode(errors="replace")
+                        + "\n"
+                        + _lw_stderr.decode(errors="replace")
+                    )
+                    _persist_cron_run_output(
+                        job.workspace_dir,
+                        job.job_id,
+                        record.run_id,
+                        _lw_exit_code,
+                        _lw_text,
+                    )
+
+                    if _lw_exit_code == 0:
+                        record.status = "success"
+                        record.output_preview = _lw_text[:400]
+                    elif (
+                        _lw_exit_code is not None
+                        and _lw_exit_code < 0
+                        and _is_deploy_window_active()
+                    ):
+                        # Mirror the heavyweight `!script` deploy-window
+                        # handling: signal-killed during a deploy restart is
+                        # a benign cancellation, not a real failure.
+                        _lw_signal = -_lw_exit_code
+                        record.status = "cancelled"
+                        record.error = (
+                            f"subprocess killed by signal {_lw_signal} "
+                            "during deploy restart (will re-fire on next gateway boot)"
+                        )
+                        record.output_preview = _lw_text[:400]
+                        try:
+                            job.next_run_at = (
+                                time.time() + _DEPLOY_CANCEL_BACKFILL_OFFSET_SEC
+                            )
+                            self.store.save_jobs(self.jobs.values())
+                        except Exception as _lw_backfill_exc:  # noqa: BLE001
+                            logger.warning(
+                                "Lightweight cron %s: failed to advance next_run_at "
+                                "after deploy-cancellation: %s",
+                                job.job_id,
+                                _lw_backfill_exc,
+                            )
+                    else:
+                        record.status = "error"
+                        record.error = f"Script exited with {_lw_exit_code}"
+                        record.output_preview = _lw_text[:400]
+
+                    record.finished_at = time.time()
+
+                    class _LightweightResult:
+                        def __init__(self, text: str) -> None:
+                            self.response_text = text
+                            self.session_id = ""
+
+                    self._persist_run_output(
+                        job, record, _LightweightResult(_lw_text)
+                    )
+                    _lw_failure_class = (
+                        "cancelled"
+                        if record.status == "cancelled"
+                        else "script_exit_error"
+                    )
+                    self._finalize_workflow_attempt(
+                        job=job,
+                        record=record,
+                        scheduled_at=scheduled_at,
+                        reason=reason,
+                        dispatch_key=dispatch_key,
+                        workflow_run_id=workflow_run_id,
+                        workflow_attempt_id=workflow_attempt_id,
+                        failure_reason=record.error,
+                        failure_class=_lw_failure_class,
+                        retryable=(record.status == "error"),
+                    )
                 else:
                     configured_retries = 2
                     retries_raw = (os.getenv("UA_CRON_DB_LOCK_RETRIES") or "").strip()
