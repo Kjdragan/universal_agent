@@ -16304,11 +16304,22 @@ async def ops_proactive_health(request: Request):
     except Exception:  # noqa: BLE001
         logger.warning("proactive_health: failed to resolve CSI DB path", exc_info=True)
 
+    # Defense-in-depth: if `_cron_service` is None (startup race) or its
+    # in-memory `jobs` dict is empty, fall back to the persistence file so
+    # Layer-1 cron staleness never goes invisible.
+    cron_persistence_path: Optional[Path] = None
+    try:
+        if _cron_service is not None:
+            cron_persistence_path = _cron_service.store.jobs_path
+    except Exception:  # noqa: BLE001
+        cron_persistence_path = None
+
     try:
         payload = build_proactive_health_payload(
             activity_conn=activity_conn,
             cron_jobs=cron_jobs,
             csi_db_path=csi_db_path,
+            cron_persistence_path=cron_persistence_path,
         )
     except Exception as exc:  # noqa: BLE001 — watchdog must degrade, not crash
         logger.warning("proactive_health: aggregator raised", exc_info=True)

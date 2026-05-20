@@ -152,6 +152,29 @@ def _derive_overall_status(
     return "ok"
 
 
+def _load_cron_jobs_from_persistence(path: Path) -> List[Any]:
+    """Read `cron_jobs.json` directly and return CronJob objects.
+
+    Used by the heartbeat pre-flight, which runs in a daemon subprocess
+    whose freshly-imported `gateway_server` module has no `_cron_service`
+    instance.  Without this fallback the sidecar would always show
+    `crons: []` and Layer-1 cron staleness would be invisible.
+    """
+    if not path.exists():
+        return []
+    try:
+        from universal_agent.cron_service import CronStore
+        store = CronStore(path, path.parent / "cron_runs.jsonl")
+        return list(store.load_jobs().values())
+    except Exception:  # noqa: BLE001 — watchdog must degrade, not crash
+        logger.warning(
+            "proactive_health: failed to load cron jobs from persistence file %s",
+            path,
+            exc_info=True,
+        )
+        return []
+
+
 def build_proactive_health_payload(
     *,
     activity_conn: Optional[sqlite3.Connection],
@@ -159,6 +182,7 @@ def build_proactive_health_payload(
     csi_db_path: Optional[Path] = None,
     runtime_conn: Optional[sqlite3.Connection] = None,
     stale_minutes: Optional[int] = None,
+    cron_persistence_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Compose the full payload returned by /api/v1/ops/proactive_health.
 
@@ -166,11 +190,16 @@ def build_proactive_health_payload(
       activity_conn: Connection to the activity / task_hub store. None → empty
         stale/parked sections (still serves invariants).
       cron_jobs: Iterable of cron job objects (each .to_dict() compatible) or
-        dicts. None → empty crons section.
+        dicts. None / empty → fall back to ``cron_persistence_path`` if
+        provided, else empty crons section.
       csi_db_path: Path to the CSI sqlite DB. Forwarded to invariant probes
         in the context dict.
       runtime_conn: Optional runtime DB connection forwarded to probes.
       stale_minutes: Override the stale threshold (test-only).
+      cron_persistence_path: Path to `cron_jobs.json`. Used as a fallback
+        when ``cron_jobs`` is None or empty — necessary because the
+        heartbeat pre-flight runs in a daemon subprocess that cannot reach
+        the gateway's in-memory ``CronService`` instance.
 
     The function never raises on a sub-query failure — it surfaces partial
     state in the response so the watchdog stays useful even when one
@@ -185,7 +214,10 @@ def build_proactive_health_payload(
         stale = {"count": 0, "samples": [], "threshold_minutes": threshold}
         parked = {"count": 0, "samples": []}
 
-    crons = _summarize_cron_jobs(cron_jobs or [])
+    materialized_cron_jobs = list(cron_jobs) if cron_jobs else []
+    if not materialized_cron_jobs and cron_persistence_path is not None:
+        materialized_cron_jobs = _load_cron_jobs_from_persistence(cron_persistence_path)
+    crons = _summarize_cron_jobs(materialized_cron_jobs)
 
     # Resolve the canonical artifacts directory once. Imported lazily because
     # it touches env vars + filesystem; we never want this to crash the

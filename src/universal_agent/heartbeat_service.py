@@ -2506,10 +2506,25 @@ class HeartbeatService:
                                 csi_db_path = _gs._csi_default_db_path()
                             except Exception:  # noqa: BLE001
                                 csi_db_path = None
+                        # Heartbeats run in daemon subprocesses where the
+                        # freshly-imported gateway_server module has no
+                        # _cron_service instance. Pass the persistence file
+                        # path so the aggregator can fall back to disk.
+                        # session.workspace_dir lives under
+                        # AGENT_RUN_WORKSPACES/run_daemon_simone_heartbeat_*/ ;
+                        # cron_jobs.json sits in the parent
+                        # AGENT_RUN_WORKSPACES/ directory.
+                        cron_persistence_path = None
+                        try:
+                            ws_parent = Path(str(session.workspace_dir)).parent
+                            cron_persistence_path = ws_parent / "cron_jobs.json"
+                        except Exception:  # noqa: BLE001
+                            cron_persistence_path = None
                         return build_proactive_health_payload(
                             activity_conn=activity_conn,
                             cron_jobs=cron_jobs,
                             csi_db_path=csi_db_path,
+                            cron_persistence_path=cron_persistence_path,
                         )
                     finally:
                         try:
