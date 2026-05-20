@@ -1,6 +1,6 @@
 # 132 — Proactive Activity Watchdog
 
-**Last updated:** 2026-05-18 (initial commit)
+**Last updated:** 2026-05-20 — Expanded from 2 to 10 invariants; added manual test endpoint, skip-reason logging, runtime_state.db plumbing fix.
 
 A two-layer watchdog that runs every Simone heartbeat. It exists because the YouTube digest pipeline silently produced 38/38 cards with `transcript_status='missing'` over a 7-day window — including cards whose ingest demonstrably succeeded — while every process-level health signal stayed green.
 
@@ -109,12 +109,56 @@ def _probe(ctx):
 
 ### Built-in invariants
 
+Ten invariants ship today. Each fails open (returns no finding when the data store isn't deployed yet) and has a time-of-day gate so probes don't false-fire before the underlying cron has had a chance to run.
+
 | ID | Severity | Catches |
 |---|---|---|
 | `youtube_enrichment_coverage` | critical | The exact original 38/38 failure mode: events arrived in `events` but few/none have a matching row in `rss_event_analysis`. Triggers when ingest succeeded but enrichment never wrote (or wrote to a different table like `csi_digests`). |
 | `youtube_transcript_coverage` | critical | Enrichment ran and wrote rows, but most carry `transcript_status != 'ok'`. The fine-grained companion to `youtube_enrichment_coverage`. |
+| `morning_briefing_freshness` | warn | Today's `artifacts/autonomous-briefings/<YYYY-MM-DD>/DAILY_BRIEFING.md` is missing after the 6:30 AM Houston cron. Probe only checks existence at today's-dated path — mtime is irrelevant once the parent dir is today-scoped. |
+| `proactive_artifact_digest_delivery` | warn | `proactive_artifact_emails` (in `runtime_state.db`) has no row sent within the last 30h. Means the 8:35 AM digest stopped emailing Kevin. |
+| `hackernews_snapshot_cadence` | warn | No HN snapshot under `artifacts/hackernews/snapshots/` in the last 45 min during active hours (6 AM – 9:30 PM Houston). |
+| `csi_convergence_sync_freshness` | warn | `MAX(detected_at)` on `proactive_convergence_events` older than 90 min (one missed 30-min cycle of grace). |
+| `nightly_wiki_persistent_silence` | warn | No `artifacts/nightly_wikis/*_wiki_*` file produced in the last 7 days. Single quiet nights are legitimate (cron is "produce only on fresh signal"); a week of silence is stuck. |
+| `proactive_reports_daily_trio` | warn | Fewer than 2 of the 3 daily `proactive_intelligence_reports` rows (morning / midday / afternoon) created today by 5 PM Houston. 1 missed slot is tolerated as routine API blip. |
+| `claude_code_intel_packet_freshness` | warn | Newest packet under `artifacts/proactive/claude_code_intel/packets/` is more than 9h old during active hours. Means the 8 AM / 4 PM / 10 PM cron is failing. |
+| `csi_demo_triage_rank_artifact` | critical | `proactive_artifacts` has no row with `artifact_type='csi_demo_triage_run'` newer than 6h during active hours. Twice-daily cron — operator loses ranked CSI demo candidates. |
+| `paper_to_podcast_email_delivery` | critical | No `proactive_artifact_emails` row with `subject LIKE '%Papers%'` to `kevinjdragan@gmail.com` in last 30h. Operator's daily research-podcast pipeline silent. |
+| `vault_lint_contradictions_monthly` | warn | No `artifacts/knowledge-vaults/*/contradiction-report-*.md` file dated current month, checked after the 2nd of the month. |
 
-Together these two cover both halves of the original incident: "enrichment never wrote" (caught by `youtube_enrichment_coverage`) and "enrichment wrote bad statuses" (caught by `youtube_transcript_coverage`). On any given heartbeat, either or both may fire depending on the failure shape.
+### Deliberately skipped (process-liveness only)
+
+Six proactive systems have **process-liveness coverage** via Layer 1 (cron last-run / stale tasks / parked tasks) but **no content invariant**. Documented here so the gaps are explicit:
+
+| System | Reason |
+|---|---|
+| `vp_mission_pr_reconciler` | Pure Task Hub state mutation (in_progress → completed for merged PRs). No durable artifact or table row that uniquely identifies a successful run. |
+| `vp_coder_workspace_pruning` | Mutates filesystem only (deletes stale workspace subdirs). Success leaves no trace. |
+| `simone_chat_auto_complete` | Same shape — promotes `simone_chat` Task Hub rows in place; no artifact. |
+| `atlas_direct_dispatch` | Default OFF (`UA_ATLAS_DIRECT_DISPATCH_ENABLED=0`). Will add probe conditional on enablement once operator activates. |
+| `autonomous_daily_briefing` | Default OFF. Probe would be identical to `morning_briefing_freshness` — add when enabled. |
+| `architecture_canvas_drift` | Silent-success cron: only emits a file when drift detected. A probe that fires on missing file would alarm on every healthy week. Needs an exit-code probe instead — deferred. |
+
+### Manual email-test endpoint
+
+For operator verification that the email path is alive without waiting for a real critical finding:
+
+```bash
+curl -X POST -H "Authorization: Bearer $UA_OPS_TOKEN" \
+  "http://127.0.0.1:8002/api/v1/ops/proactive_health/email_test?confirm=true&note=verify"
+```
+
+Requires `_require_ops_auth` + `?confirm=true`. Synthesizes a `[TEST]`-prefixed critical finding and routes through the same `send_email` path the watchdog uses. Returns `{sent: bool, ...}`. Bypasses dedup so repeated calls work.
+
+### Skipped-notification observability
+
+When the notifier can't email (e.g. `agentmail_service is None` during startup race), it logs at WARNING:
+
+```
+proactive_health: notification SKIPPED — reason=agentmail_service=None (gateway race or init pending), fingerprint='invariant:youtube_enrichment_coverage', consecutive=3
+```
+
+The `consecutive=N` counter increments per blocked tick per finding fingerprint and resets on the next successful send. Grep `journalctl -p warning | grep 'proactive_health: notification SKIPPED'` to spot blocked-email evidence.
 
 ## Use from Ralph loops (and other long-running work)
 
@@ -180,11 +224,16 @@ Simone calls `GET /api/v1/ops/proactive_health` every cycle and folds the respon
 |---|---|
 | `src/universal_agent/services/pipeline_invariants.py` | Registry + runner |
 | `src/universal_agent/services/invariants/__init__.py` | Triggers registration of built-in invariants |
-| `src/universal_agent/services/invariants/youtube_invariants.py` | `youtube_transcript_coverage` invariant |
-| `src/universal_agent/services/proactive_health.py` | Layer-1 + Layer-2 aggregator |
-| `src/universal_agent/gateway_server.py` | Route handler for `GET /api/v1/ops/proactive_health` |
+| `src/universal_agent/services/invariants/youtube_invariants.py` | `youtube_*` invariants (2) |
+| `src/universal_agent/services/invariants/proactive_pipeline_invariants.py` | All other invariants (10) |
+| `src/universal_agent/services/proactive_health.py` | Layer-1 + Layer-2 aggregator. Opens runtime_state.db connection internally for proactive_* probes. |
+| `src/universal_agent/services/proactive_health_notifier.py` | Heartbeat pre-flight + email-on-critical notifier. Includes manual test endpoint helper and skip-reason logging. |
+| `src/universal_agent/gateway_server.py` | Route handlers for `GET /api/v1/ops/proactive_health` and `POST /api/v1/ops/proactive_health/email_test` |
+| `src/universal_agent/heartbeat_service.py` | Wires the pre-flight into `_run_heartbeat` before the skip-mode branch |
 | `tests/unit/test_pipeline_invariants.py` | Runner unit tests |
 | `tests/unit/test_youtube_transcript_coverage_invariant.py` | YouTube invariant integration test |
+| `tests/unit/test_proactive_pipeline_invariants.py` | All other invariants' unit tests |
+| `tests/unit/test_proactive_health_notifier.py` | Notifier + manual-test-helper tests |
 | `tests/unit/test_proactive_health_payload.py` | Aggregator payload unit tests |
-| `tests/gateway/test_proactive_health_endpoint.py` | Endpoint integration tests |
+| `tests/gateway/test_proactive_health_endpoint.py` | Endpoint integration tests (GET + email_test POST) |
 | `memory/HEARTBEAT.md` § Proactive Activity Watchdog | Simone's directive |
