@@ -44,6 +44,7 @@ src/universal_agent/services/dependency_upgrade.py
 src/universal_agent/services/gws_calendar_context.py
 src/universal_agent/services/gws_event_listener.py
 src/universal_agent/services/hackernews_snapshot_service.py
+src/universal_agent/services/invariants/zai_inference_health.py
 src/universal_agent/templates/_smoke_demo/smoke.py
 src/universal_agent/tools/link_bridge.py
 src/universal_agent/tools/pdf_bridge.py
