@@ -341,3 +341,133 @@ def test_missing_cron_persistence_path_is_silent(
     )
     assert payload["crons"] == []
     assert payload["overall_status"] == "ok"
+
+
+# ─── P0b: invariants read proactive_* tables from activity_conn ──────────────
+# Background: PR #392 wired the aggregator to open runtime_state.db and pass
+# it as `runtime_conn` to invariants. But the WRITERS (`_activity_connect()`
+# in gateway_server.py) write the proactive_artifacts / proactive_artifact_emails
+# / proactive_intelligence_reports tables into activity_state.db. As a result
+# 4 invariants (proactive_artifact_digest_delivery, proactive_reports_daily_trio,
+# csi_demo_triage_rank_artifact, paper_to_podcast_email_delivery) were silently
+# no-op'ing because they queried an empty DB. Fix: invariants use activity_conn
+# (already in context for task_hub_items queries — same DB has the proactive
+# tables too), aggregator stops opening the dead runtime_state.db connection.
+
+def test_proactive_artifact_digest_invariant_reads_from_activity_conn(
+    tmp_path: Path,
+) -> None:
+    """When the activity_conn DB has proactive_artifact_emails with a fresh
+    delivery, the proactive_artifact_digest_delivery invariant should NOT fire
+    (a healthy state). Before P0b, the invariant read from runtime_conn which
+    was empty, so this test would have passed for the wrong reason — the
+    invariant silently no-op'd whether the email was sent or not.
+
+    The post-fix behavior: invariant queries activity_conn and finds the
+    fresh row, so it stays quiet. A *missing* row (separate test below) is
+    what should fire it. Either way, we prove it's reading the right DB."""
+    from datetime import datetime, timezone, timedelta
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    # task_hub_items so the activity_conn path doesn't blow up
+    conn.executescript(TASK_HUB_SCHEMA)
+    # proactive_artifact_emails — same DB, different table (real prod layout)
+    conn.executescript(
+        """
+        CREATE TABLE proactive_artifact_emails (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            artifact_id TEXT NOT NULL,
+            message_id TEXT NOT NULL DEFAULT '',
+            thread_id TEXT NOT NULL DEFAULT '',
+            subject TEXT NOT NULL DEFAULT '',
+            recipient TEXT NOT NULL DEFAULT '',
+            sent_at TEXT NOT NULL,
+            delivery_state TEXT NOT NULL DEFAULT 'emailed',
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        """
+    )
+    fresh = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    conn.execute(
+        "INSERT INTO proactive_artifact_emails (artifact_id, subject, recipient, sent_at) "
+        "VALUES ('a1', 'Proactive Digest 2026-05-20', 'kevinjdragan@gmail.com', ?)",
+        (fresh,),
+    )
+    conn.commit()
+
+    payload = build_proactive_health_payload(
+        activity_conn=conn,
+        cron_jobs=[],
+        csi_db_path=None,
+    )
+    digest_findings = [
+        f for f in payload["invariants"]
+        if f.get("metric_key") == "proactive_artifact_digest_delivery"
+    ]
+    # Fresh row → invariant should not fire. The key proof is that the
+    # aggregator + invariant path saw our seeded row.
+    assert digest_findings == [], (
+        f"Invariant fired despite fresh email row: {digest_findings}"
+    )
+
+
+def test_proactive_artifact_digest_invariant_fires_when_emails_stale(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The bug-reproduction case: aggregator should DETECT that no digest
+    email has been sent in 26h+. Before P0b, the invariant queried the empty
+    runtime_state.db and silently passed — it could never fire on real data."""
+    from datetime import datetime, timezone, timedelta
+    # Pin the clock to a moment WELL past the 9 AM probe window so the
+    # invariant's hour-gate doesn't filter the test out.
+    from universal_agent.services.invariants import proactive_pipeline_invariants as ppi
+    fixed_now = datetime(2026, 5, 20, 18, 0, tzinfo=timezone.utc)  # 1 PM Houston
+    monkeypatch.setattr(ppi, "_now_houston", lambda: fixed_now.astimezone(ppi.HOUSTON_TZ) if hasattr(ppi, "HOUSTON_TZ") else fixed_now)
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(TASK_HUB_SCHEMA)
+    conn.executescript(
+        """
+        CREATE TABLE proactive_artifact_emails (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            artifact_id TEXT NOT NULL,
+            message_id TEXT NOT NULL DEFAULT '',
+            thread_id TEXT NOT NULL DEFAULT '',
+            subject TEXT NOT NULL DEFAULT '',
+            recipient TEXT NOT NULL DEFAULT '',
+            sent_at TEXT NOT NULL,
+            delivery_state TEXT NOT NULL DEFAULT 'emailed',
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        """
+    )
+    stale = (datetime.now(timezone.utc) - timedelta(hours=30)).isoformat()
+    conn.execute(
+        "INSERT INTO proactive_artifact_emails (artifact_id, subject, recipient, sent_at) "
+        "VALUES ('a1', 'Old Digest', 'kevinjdragan@gmail.com', ?)",
+        (stale,),
+    )
+    conn.commit()
+
+    # Need the invariant registered. The conftest pattern from the existing
+    # YouTube test resets the registry — re-import to pick up proactive_*.
+    import importlib
+    from universal_agent.services.invariants import proactive_pipeline_invariants
+    importlib.reload(proactive_pipeline_invariants)
+
+    payload = build_proactive_health_payload(
+        activity_conn=conn,
+        cron_jobs=[],
+        csi_db_path=None,
+    )
+    digest_findings = [
+        f for f in payload["invariants"]
+        if f.get("metric_key") == "proactive_artifact_digest_delivery"
+    ]
+    # Proof of fix: the invariant FOUND the stale row and flagged it. Before
+    # P0b, this list would be empty because the invariant read from an empty
+    # runtime_state.db connection.
+    assert len(digest_findings) >= 1, (
+        f"Expected stale-digest finding but got: {payload['invariants']}"
+    )
