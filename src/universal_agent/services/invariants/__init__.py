@@ -15,6 +15,7 @@ Authoring a new invariant:
 from __future__ import annotations
 
 from universal_agent.services.invariants import (  # noqa: F401
+    csi_source_liveness,
     proactive_pipeline_invariants,
     youtube_invariants,
 )
