@@ -211,3 +211,133 @@ def test_no_activity_conn_still_returns_payload(tmp_path: Path) -> None:
     assert payload["overall_status"] == "ok"
     assert payload["stale_tasks"]["count"] == 0
     assert payload["parked_tasks"]["count"] == 0
+
+
+# ─── Persistence-file fallback for cron_jobs ─────────────────────────────────
+# Background: Simone heartbeat daemons run with a freshly imported
+# `gateway_server` module whose `_cron_service` module-level var is None.
+# That made `cron_jobs=[]` the only thing the aggregator ever saw from the
+# heartbeat path — Layer-1 (cron last-run staleness) was invisible.
+# Fix: aggregator accepts an optional `cron_persistence_path` and reads
+# `cron_jobs.json` directly when no in-memory jobs are supplied.
+
+def _write_cron_jobs_json(path: Path, jobs: list[dict]) -> None:
+    import json
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"jobs": jobs}, indent=2))
+
+
+def test_payload_reads_crons_from_persistence_when_no_inmemory_jobs(
+    activity_conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    cron_path = tmp_path / "cron_jobs.json"
+    _write_cron_jobs_json(
+        cron_path,
+        [
+            {
+                "job_id": "morning_briefing",
+                "user_id": "system",
+                "workspace_dir": None,
+                "command": "echo hi",
+                "description": "",
+                "cron_expr": "30 6 * * *",
+                "every_seconds": 0,
+                "timezone": "UTC",
+                "run_at": None,
+                "enabled": True,
+                "delete_after_run": False,
+                "model": None,
+                "timeout_seconds": None,
+                "catch_up_on_restart": False,
+                "metadata": {},
+                "last_run_at": 1779278400.0,
+                "last_outcome": "success",
+                "next_run_at": None,
+            },
+            {
+                "job_id": "atlas_direct_dispatch",
+                "user_id": "system",
+                "workspace_dir": None,
+                "command": "echo hi",
+                "description": "",
+                "cron_expr": "*/1 * * * *",
+                "every_seconds": 0,
+                "timezone": "UTC",
+                "run_at": None,
+                "enabled": True,
+                "delete_after_run": False,
+                "model": None,
+                "timeout_seconds": None,
+                "catch_up_on_restart": False,
+                "metadata": {},
+                "last_run_at": 1779299100.0,
+                "last_outcome": "success",
+                "next_run_at": None,
+            },
+        ],
+    )
+
+    payload = build_proactive_health_payload(
+        activity_conn=activity_conn,
+        cron_jobs=None,
+        csi_db_path=None,
+        cron_persistence_path=cron_path,
+    )
+    job_ids = [c["job_id"] for c in payload["crons"]]
+    assert "morning_briefing" in job_ids
+    assert "atlas_direct_dispatch" in job_ids
+    assert len(payload["crons"]) == 2
+
+
+def test_in_memory_cron_jobs_take_precedence_over_persistence(
+    activity_conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    cron_path = tmp_path / "cron_jobs.json"
+    _write_cron_jobs_json(
+        cron_path,
+        [
+            {
+                "job_id": "from_disk",
+                "user_id": "system",
+                "workspace_dir": None,
+                "command": "echo hi",
+                "description": "",
+                "cron_expr": "0 * * * *",
+                "every_seconds": 0,
+                "timezone": "UTC",
+                "run_at": None,
+                "enabled": True,
+                "delete_after_run": False,
+                "model": None,
+                "timeout_seconds": None,
+                "catch_up_on_restart": False,
+                "metadata": {},
+                "last_run_at": None,
+                "last_outcome": None,
+                "next_run_at": None,
+            }
+        ],
+    )
+
+    payload = build_proactive_health_payload(
+        activity_conn=activity_conn,
+        cron_jobs=[_FakeJob("from_memory")],
+        csi_db_path=None,
+        cron_persistence_path=cron_path,
+    )
+    job_ids = [c["job_id"] for c in payload["crons"]]
+    assert job_ids == ["from_memory"]
+    assert "from_disk" not in job_ids
+
+
+def test_missing_cron_persistence_path_is_silent(
+    activity_conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    payload = build_proactive_health_payload(
+        activity_conn=activity_conn,
+        cron_jobs=None,
+        csi_db_path=None,
+        cron_persistence_path=tmp_path / "does_not_exist.json",
+    )
+    assert payload["crons"] == []
+    assert payload["overall_status"] == "ok"
