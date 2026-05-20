@@ -197,14 +197,45 @@ def build_proactive_health_payload(
     except Exception:  # noqa: BLE001
         artifacts_dir = None
 
-    invariant_findings = pipeline_invariants.run_invariants(
-        {
-            "csi_db_path": csi_db_path,
-            "runtime_conn": runtime_conn,
-            "activity_conn": activity_conn,
-            "artifacts_dir": artifacts_dir,
-        }
-    )
+    # Open a dedicated runtime_state.db connection for invariants that query
+    # proactive_artifacts / proactive_intelligence_reports / proactive_artifact_emails.
+    # These tables live in runtime_state.db, NOT activity_events.db — earlier
+    # invariants in PR #376 silently no-op'd because they queried the wrong DB.
+    # If caller provided runtime_conn, use it (legacy + test path). Otherwise
+    # open one locally and close before returning.
+    runtime_conn_opened_locally = False
+    if runtime_conn is None:
+        try:
+            from universal_agent.durable.db import (
+                connect_runtime_db,
+                get_runtime_db_path,
+            )
+            runtime_conn = connect_runtime_db(get_runtime_db_path())
+            runtime_conn.row_factory = sqlite3.Row
+            runtime_conn_opened_locally = True
+        except Exception:  # noqa: BLE001 — best-effort
+            logger.warning(
+                "proactive_health: failed to open runtime_state.db; "
+                "proactive_* invariants will stay quiet",
+                exc_info=True,
+            )
+            runtime_conn = None
+
+    try:
+        invariant_findings = pipeline_invariants.run_invariants(
+            {
+                "csi_db_path": csi_db_path,
+                "runtime_conn": runtime_conn,
+                "activity_conn": activity_conn,
+                "artifacts_dir": artifacts_dir,
+            }
+        )
+    finally:
+        if runtime_conn_opened_locally and runtime_conn is not None:
+            try:
+                runtime_conn.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     overall = _derive_overall_status(
         invariant_findings,
