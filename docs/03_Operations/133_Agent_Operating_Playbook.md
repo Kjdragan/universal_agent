@@ -159,9 +159,74 @@ Before starting [TASK]:
 
 ---
 
-## 7. Meta-rule: this doc is dynamic
+## 7. What worked this session (PRs #395-#401) — proof the playbook holds up
 
-When I make a new mistake in this codebase that the playbook didn't catch, the very next action — before declaring the bug fixed — is to add an entry to § 1 and § 6 covering the new failure mode. The playbook only earns its keep if it grows with the next session's mistakes. Do not skip this step. Append to the existing structure; never replace.
+The playbook above was authored mid-session as a retrospective on the bugs that motivated the holistic restoration. The SECOND half of the session (PRs #395-#401) then executed the actual fix using the playbook's prescriptions. This section captures what worked — so the next session has positive examples, not just failure modes.
+
+### 7.1 Holistic inventory BEFORE proposing any fix
+
+Started with an Explore subagent enumerating every proactive system in the codebase (cron jobs, CSI adapters, polling schedulers, heartbeat-driven activities, GHA workflows). Returned a compact 36-row table mapping each to its expected output evidence and current watchdog coverage. **Then** cross-referenced against live production: per-source 7-day event counts, sidecar JSON dump, DB scans for proactive_artifacts table location. Only after both passes was the plan written.
+
+Result: caught structural bugs in the watchdog FRAMEWORK (P0a empty `crons[]`, P0b wrong DB) that two prior PRs had failed to detect. Without the inventory, the session would have repeated the "fix one finding at a time" pattern that put us in this hole.
+
+**Habit:** for any restoration / refactor / coverage initiative, spawn `Explore` first. Do NOT propose anything until you have the inventory.
+
+### 7.2 TDD with Prove-It Pattern caught real bugs before they shipped
+
+Every one of the six PRs (#395-#400) was authored failing-test-first:
+- P0a: 3 new tests RED with `TypeError: unexpected keyword 'cron_persistence_path'` before adding the parameter
+- P0b: 2 new end-to-end tests proved the bug ("stale email row in activity_state.db → invariant should fire but doesn't") before the fix
+- P0c: 4 tests RED with `TypeError: unexpected keyword 'task_hub_emit_fn'` before adding the parameter
+- P1a: 9 tests covering fresh/stale/never_seen/missing-db states
+- P1b: 12 tests covering all failure modes including malformed cron_expr resilience
+- P3: 6 tests covering single-tick-no-emit, escalate-at-threshold, no-re-emit-on-4th, counter-reset-on-absence
+
+Each PR's GREEN result was verified by running the watchdog test suite (74 → 80 → 89 → 101 → 106 tests). Not a single test was written after-the-fix.
+
+**Habit:** RED test must produce a meaningful failure message (TypeError on missing param, AssertionError on wrong value). A test that fails for the wrong reason proves nothing.
+
+### 7.3 Source-driven verification of writer → reader DB path
+
+For P0b (the wrong-DB bug), the playbook's lesson said "verify against the actual code, not against a prior PR's framing." Concrete execution: grepped for `INSERT INTO proactive_artifacts` to find the writer in `services/proactive_artifacts.py:205`, traced its `conn` parameter up to `_activity_connect()` in `gateway_server.py:9277`, confirmed it opens `activity_state.db` via `get_activity_db_path()`. Only THEN was the fix written.
+
+**Result:** ended a two-PR cycle (PR #376 → #392) of "fix the wrong DB" by reading code, not prior PR descriptions.
+
+**Habit:** when reviewing a "fixed in PR #X" bug, grep for the ACTUAL function `PR #X` modified and read its current body. Function signatures lie if a PR was later modified; bodies don't.
+
+### 7.4 Stack PRs by structural dependency, ship incrementally
+
+Six PRs in strict order (P0a → P0b → P0c → P1a → P1b → P3), each shippable independently. P0a unblocked P1b (cron list now visible). P0c gave P3 a channel to escalate to. Without the strict order, P1a's findings would have landed on a watchdog that was still partially blind — exactly the failure mode the playbook warned about.
+
+Each PR ~50-300 lines, single-concept, with its own test scope. Auto-merge fired on each as PR-Validate passed.
+
+**Habit:** if the plan has phases, the PRs have phases. Resist the urge to bundle "while I'm in this file" changes. The Doc 132 update became its own PR (#401) for the same reason — code review effort scales with diff size, and bundling makes everything harder.
+
+### 7.5 Production verification AFTER deploy, not just locally
+
+Per CLAUDE.md Rule A (Ship-then-Verify): every merged PR was verified on live prod via SSH+SQL on the VPS, not just via `pytest` locally. Specific checks performed:
+- `/api/v1/version` confirming the deployed SHA matched the merge
+- `cat proactive_health_latest.json` parsed via Python — confirmed `crons: 22` (was 0), invariant findings shape, parked_tasks count
+- `sqlite3 task_hub_items` query — confirmed 2 `proactive_health:*` rows with `needs_review` status created by P0c
+
+The `csi_source_liveness` invariant from P1a was observed FIRING on prod within 3 minutes of deploy — that's the closest thing to a smoke test the system supports.
+
+**Habit:** after auto-merge, wait for deploy SHA on prod, then re-run the same query you used to diagnose the bug. If it now returns the expected fix-state, declare done; if not, treat it as a new bug.
+
+### 7.6 Doc updates as deliverable, not afterthought
+
+Doc 132 (Proactive Health Watchdog) got its update IN THE SAME SESSION as the code, shipped as PR #401. Banner reflects the six-PR work, invariant table grew 10→13, new "Closed-loop notification architecture" section with Mermaid diagram. Doc 133 (this file) updated with this section in the same window.
+
+Cost ~30 minutes of doc work. Avoided the doc-drift mode CLAUDE.md mandates against.
+
+**Habit:** the same PR or a tightly-following PR. Never "I'll update the doc later" — that turns into stale docs that contradict shipped code, which is what the playbook's failure mode #1.5 was about.
+
+---
+
+## 8. Meta-rule: this doc is dynamic
+
+When I make a new mistake in this codebase that the playbook didn't catch, the very next action — before declaring the bug fixed — is to add an entry to § 1 and § 6 covering the new failure mode. Similarly, when a habit from § 2-§ 7 demonstrably catches a bug or accelerates work, add a concrete example to § 7 so future sessions see what GOOD looks like, not just what BAD looks like.
+
+The playbook only earns its keep if it grows with each session — both the mistakes and the wins.
 
 ---
 
