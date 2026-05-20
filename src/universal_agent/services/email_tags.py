@@ -168,14 +168,23 @@ def format_tagged_subject(
 
 
 def _houston_now_iso() -> str:
-    """Return the current time in America/Chicago as an ISO-ish string."""
+    """Return the current time as an operator-friendly Houston-local string.
+
+    Format: ``5:05 PM Wed May 20 CDT`` (or ``CST`` outside DST).  This
+    matches the operator memory entry that mandates Houston-time display
+    rather than raw UTC or ISO offset format.  The helper retains its
+    historical name (``..._iso``) for backwards compatibility — the
+    suffix is misleading, but renaming would touch unrelated callers.
+    """
     if ZoneInfo is None:  # pragma: no cover
-        return datetime.now().isoformat(timespec="seconds")
-    return (
-        datetime.now(ZoneInfo("America/Chicago"))
-        .replace(microsecond=0)
-        .isoformat()
-    )
+        return datetime.now().strftime("%-I:%M %p %a %b %-d")
+    local = datetime.now(ZoneInfo("America/Chicago"))
+    # %-I drops the leading zero on the hour (POSIX).  Some non-POSIX
+    # platforms reject the GNU extensions; fall back to manual stripping.
+    try:
+        return local.strftime("%-I:%M %p %a %b %-d %Z")
+    except ValueError:  # pragma: no cover
+        return local.strftime("%I:%M %p %a %b %d %Z").lstrip("0")
 
 
 def _related_to_str(related: Optional[Iterable[str]]) -> str:
@@ -203,7 +212,7 @@ def format_body_header(
         Tags: ACTION/KIND
         Source: <source>
         Related: <related-1>, <related-2>      (omitted if no related items)
-        Time: 2026-05-19T15:42:00-05:00         (omitted if include_timestamp=False)
+        Time: 3:42 PM Mon May 19 CDT             (omitted if include_timestamp=False)
         ---
 
     Args:
