@@ -242,44 +242,18 @@ INPUT FOLLOWS:
 # JSON block. Python code assembles the final markdown by sandwiching the
 # retellings between the meta-synthesis and the JSON block.
 # ---------------------------------------------------------------------------
-REDUCE_PROMPT = """You are a senior technical analyst preparing a "Daily YouTube Digest" for a busy operator. You have ALREADY received per-video retellings from a map step; do NOT re-summarize the videos. Your job is meta-synthesis across them.
+REDUCE_PROMPT = """You are a senior technical analyst preparing a "Daily YouTube Digest" for a busy operator. You have ALREADY received per-video retellings from a map step; do NOT re-summarize the videos. Your job is ONLY meta-synthesis across them.
 
-Below is the structured roll-up of every video in today's digest (titles, one-sentence theses, value scores, tiers, evidence quality, and the map-step's reasoning). Use this as your input.
+Below is the structured roll-up of every video in today's digest (titles, one-sentence theses, value scores, tiers, evidence quality, and the map-step's reasoning). Use this as your input to spot patterns across videos.
 
-Produce exactly the following markdown, in order:
+Produce exactly the following markdown, in this order — and NOTHING ELSE (no H1 title, no JSON blocks, no per-video sections):
 
-1. A single H1 title line: `# Daily YouTube Digest: <day_name>, <date_str>`
-2. `## Meta-Synthesis: Daily Digest`
-3. `### Cross-Video Themes` — 3-7 themes that appear across multiple videos. Each theme is one short paragraph naming the relevant videos.
-4. `### Learning Insights` — 2-5 non-obvious technical insights that wouldn't be apparent from any single video.
-5. `### Neglected Opportunities` — 1-3 gaps (topics that should have been discussed but weren't).
-6. Then a single fenced JSON block labeled exactly `youtube_digest_decisions` with this shape (one entry per video, sorted by value_score descending):
+1. `## Meta-Synthesis: Daily Digest`
+2. `### Cross-Video Themes` — 3-7 themes that appear across multiple videos. Each theme is one short paragraph naming the relevant videos.
+3. `### Learning Insights` — 2-5 non-obvious technical insights that wouldn't be apparent from any single video.
+4. `### Neglected Opportunities` — 1-3 gaps (topics that should have been discussed but weren't).
 
-```youtube_digest_decisions
-{{
-  "ranked_videos": [
-    {{
-      "rank": 1,
-      "video_id": "string",
-      "title": "string",
-      "value_score": <int 0-100>,
-      "value_tier": "high|medium|low",
-      "code_implementation_prospect": <bool>,
-      "concept_only": <bool>,
-      "tutorial_candidate": <bool>,
-      "recommended_tutorial_mode": "explainer_plus_code|concept_only|none",
-      "evidence_quality": "transcript|metadata_only|mixed",
-      "reason": "short reason from the map step's classification"
-    }}
-  ]
-}}
-```
-
-JSON rules:
-- `tutorial_candidate` may be true only when `code_implementation_prospect` is true.
-- `recommended_tutorial_mode` must be `explainer_plus_code` for tutorial_candidates, `concept_only` otherwise.
-- Include every video from the input exactly once.
-- Use the value_score and value_tier from the map-step input; do NOT re-score from scratch.
+The H1 title and the ranked-decisions JSON block are constructed deterministically by code from the map-step output — do NOT emit either.
 
 DAY_NAME: {day_name}
 DATE: {date_str}
@@ -740,30 +714,80 @@ async def _reduce_meta_synthesize(
     )
 
 
+def _build_decisions_json_block(map_results: list[MapResult]) -> str:
+    """Build the youtube_digest_decisions JSON block deterministically from
+    the map-step's structured per-video classifications.
+
+    Replaces the previous design where we asked the reducer LLM to re-emit
+    this block. That was unreliable — the LLM sometimes dropped the block
+    or produced malformed JSON, which silently fell through to all-zero
+    fallback classifications and caused the demo-worthiness gate to reject
+    every video.  See 2026-05-20 TUESDAY digest investigation for the
+    incident this replaces.
+
+    Each ranked entry derives directly from a MapResult.classification dict,
+    which the map LLM has already populated alongside the retelling.  Rank
+    is assigned by sorting on value_score (descending), with tutorial_candidate
+    + recommended_tutorial_mode computed from code_implementation_prospect.
+    """
+    ranked: list[dict[str, Any]] = []
+    for r in map_results:
+        cls = r.classification or {}
+        code_prospect = _coerce_bool(cls.get("code_implementation_prospect"))
+        concept_only = _coerce_bool(cls.get("concept_only")) or not code_prospect
+        tutorial_candidate = code_prospect
+        recommended_mode = (
+            "explainer_plus_code"
+            if tutorial_candidate
+            else ("concept_only" if concept_only else "none")
+        )
+        ranked.append({
+            "video_id": r.video_id,
+            "title": r.title,
+            "value_score": _coerce_score(cls.get("value_score")),
+            "value_tier": str(cls.get("value_tier") or "").strip().lower() or "unknown",
+            "code_implementation_prospect": code_prospect,
+            "concept_only": concept_only,
+            "tutorial_candidate": tutorial_candidate,
+            "recommended_tutorial_mode": recommended_mode,
+            "evidence_quality": str(cls.get("evidence_quality") or "").strip().lower() or "unknown",
+            "reason": str(cls.get("reason") or "").strip(),
+        })
+    # Sort by score descending and stamp 1-indexed rank.
+    ranked.sort(key=lambda row: int(row.get("value_score") or 0), reverse=True)
+    for idx, row in enumerate(ranked, start=1):
+        row["rank"] = idx
+    body = json.dumps({"ranked_videos": ranked}, indent=2, ensure_ascii=False)
+    return f"```youtube_digest_decisions\n{body}\n```"
+
+
 def _assemble_map_reduce_digest(
     *,
     reduce_output: str,
     map_results: list[MapResult],
 ) -> str:
-    """Combine the reducer's meta-synthesis (markdown + JSON block) with the
-    map-step retellings into the final digest content. The retellings get
-    inserted BEFORE the youtube_digest_decisions JSON block so the email
-    body (`_strip_digest_decision_blocks`) carries them and the dispatch
-    parser (`_extract_decision_json`) still finds the JSON at the end.
+    """Build the final digest markdown deterministically:
+
+      <reducer meta-synthesis>
+      --- Per-Video Retellings ---
+      <each MapResult.retell_markdown joined by --->
+      --- youtube_digest_decisions JSON block ---
+
+    The reducer output is meta-synthesis prose ONLY (per REDUCE_PROMPT).
+    The JSON block is built in Python from the map-step classifications,
+    NOT from the reducer's output. The H1 title is added by the caller
+    (process_daily_digest) — neither this function nor the reducer emit it.
     """
     retellings_md = "\n\n---\n\n".join(r.retell_markdown for r in map_results)
-    section = f"\n\n---\n\n## Per-Video Retellings\n\n{retellings_md}\n\n---\n\n"
-    json_block_match = re.search(
-        r"```(?:youtube_digest_decisions|json)\s*",
-        reduce_output,
-        flags=re.IGNORECASE,
+    decisions_block = _build_decisions_json_block(map_results)
+    return (
+        f"{reduce_output.rstrip()}\n\n"
+        f"---\n\n"
+        f"## Per-Video Retellings\n\n"
+        f"{retellings_md}\n\n"
+        f"---\n\n"
+        f"{decisions_block}\n"
     )
-    if json_block_match:
-        head = reduce_output[: json_block_match.start()].rstrip()
-        tail = reduce_output[json_block_match.start():]
-        return f"{head}{section}{tail}"
-    # No JSON block in reducer output (shouldn't happen but fall back gracefully).
-    return f"{reduce_output.rstrip()}{section}"
 
 
 async def _generate_digest_content_map_reduce(
