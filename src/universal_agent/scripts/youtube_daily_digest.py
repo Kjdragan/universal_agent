@@ -780,12 +780,15 @@ def _assemble_map_reduce_digest(
     """
     retellings_md = "\n\n---\n\n".join(r.retell_markdown for r in map_results)
     decisions_block = _build_decisions_json_block(map_results)
+    # No `---` between retellings and the JSON block: the JSON block is
+    # stripped from the human-facing email by `_strip_digest_decision_blocks`,
+    # which would leave the separator orphaned and render as a double `---`
+    # next to the wrapper's separator before the tutorial-dispatch section.
     return (
         f"{reduce_output.rstrip()}\n\n"
         f"---\n\n"
         f"## Per-Video Retellings\n\n"
         f"{retellings_md}\n\n"
-        f"---\n\n"
         f"{decisions_block}\n"
     )
 
