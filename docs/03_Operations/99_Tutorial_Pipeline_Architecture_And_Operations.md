@@ -3,7 +3,7 @@
 > **Canonical source-of-truth** for the YouTube Tutorial Pipeline. All other
 > tutorial-related documentation should reference this file.
 >
-> **Last updated:** 2026-05-18 — Daily Digest now ships on a **map-reduce pipeline** (per-video retell on `glm-4.5-air` @ conc=3, meta-synthesis on `glm-5.1`), with the per-video prompt asking for a **50% length retelling** instead of a "concise summary". Tutorial dispatch now passes through a deterministic **demo-worthiness gate** (score ≥ 70, value_tier ≠ low/unknown, evidence_quality ≠ metadata_only). `required_secrets` preflight now includes `YOUTUBE_OAUTH_*`. Per-call retry / FUP-1313 telemetry surfaces in `MapResult` and the comparison harness. PRs #356, #357, #360, #361, #363.
+> **Last updated:** 2026-05-19 — Added **delivery-reminder signals** (Telegram + dashboard tile) that fire when the digest email is accepted by AgentMail, both self-expiring after `UA_DIGEST_REMINDER_TTL_MINUTES` (default 90).  Earlier 2026-05-18: Daily Digest ships on a **map-reduce pipeline** (per-video retell on `glm-4.5-air` @ conc=3, meta-synthesis on `glm-5.1`), with the per-video prompt asking for a **50% length retelling** instead of a "concise summary". Tutorial dispatch now passes through a deterministic **demo-worthiness gate** (score ≥ 70, value_tier ≠ low/unknown, evidence_quality ≠ metadata_only). `required_secrets` preflight now includes `YOUTUBE_OAUTH_*`. Per-call retry / FUP-1313 telemetry surfaces in `MapResult` and the comparison harness. PRs #356, #357, #360, #361, #363.
 
 ## 1. Pipeline Overview
 
@@ -60,6 +60,13 @@ The digest LLM (reduce step in map-reduce mode, single LLM call in legacy mode) 
 **Yesterday-shift day mapping.** The cron fires the morning *after* content collection. Tuesday's run reads `MONDAY_YT_PLAYLIST` (yesterday's playlist), not Tuesday's. The script computes `DAYS[(now - 1 day).weekday()]` automatically. Manual reruns via `--day` bypass this shift and target the exact day specified.
 
 **Email delivery safeguard.** When email delivery is enabled (`--email-to`), the processed-videos database write is gated on successful delivery. If the email send fails, the script emits a `proactive_delivery_failed` stderr tag (captured by the cron service into `cron_runs.jsonl`) and **skips** the DB write, so the next scheduled run will retry the same videos. This prevents burning videos with no delivery path.
+
+**Delivery-reminder signals (added 2026-05-19).** AgentMail returning 200 OK is not the same as "the operator saw the digest." On 2026-05-19 a perfectly-delivered digest looked like a 13-hour silent failure because nothing surfaced "we sent it" to the operator's second channel. To fix this, the script now calls `services/digest_delivery_reminder.send_digest_delivery_reminder()` immediately after AgentMail accepts the message. That helper emits **two** short-lived signals and never raises:
+
+1. **Telegram ping** — a short message to `TELEGRAM_CHAT_ID` (or `UA_OPERATOR_TELEGRAM_CHAT_ID`) with subject / recipient / Houston-local send time.  The Telegram `message_id` is recorded in `digest_telegram_reminders` (SQLite) so the gateway's `_digest_reminder_dismissal_sweep` loop can call Telegram `deleteMessage` exactly once when the TTL elapses.  **The bot has no Gmail / AgentMail surface**; it only ever deletes its own Telegram messages.
+2. **Dashboard tile** — an `activity_events` row with `kind=daily_digest_delivered` and `expires_at = now + TTL`.  The gateway's `_query_activity_events` hides rows past `expires_at`, and `_purge_expired_activity_events_once` (every 5 minutes via the `_digest_expired_notifications_sweep` loop) deletes them physically.  The dashboard also filters expired rows client-side as belt-and-suspenders.
+
+TTL defaults to 90 minutes and is tunable via `UA_DIGEST_REMINDER_TTL_MINUTES`.  If the reminder service raises for any reason, the digest cron continues unaffected — videos still get marked processed and the next cron tick is unimpacted.  See `tests/unit/test_digest_delivery_reminder.py` and `tests/unit/test_youtube_daily_digest_delivery_reminders.py` for the contracts.
 
 **Playlist provisioning.** `youtube_provision_digest_playlists.py` is a one-shot utility that discovers the user's "\<Day\> Digest" playlists via the YouTube Data API and upserts their IDs to Infisical as `\<DAY\>_YT_PLAYLIST`. Run it once after creating the 7 day-named playlists:
 
