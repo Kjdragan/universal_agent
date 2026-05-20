@@ -169,7 +169,7 @@ def test_morning_briefing_silent_without_artifacts_dir(monkeypatch) -> None:
 
 def test_digest_recent_emits_nothing(monkeypatch) -> None:
     _set_now(monkeypatch, datetime(2026, 5, 19, 10, 0, tzinfo=HOUSTON))
-    conn = _seeded_activity_conn()
+    conn = _seeded_proactive_artifacts_conn()
     now_utc = datetime.now(UTC)
     conn.execute(
         "INSERT INTO proactive_artifact_emails (artifact_id, recipient, sent_at) "
@@ -177,13 +177,13 @@ def test_digest_recent_emits_nothing(monkeypatch) -> None:
         ((now_utc - timedelta(hours=1)).isoformat(),),
     )
     conn.commit()
-    findings = run_invariants({"runtime_conn": conn})
+    findings = run_invariants({"activity_conn": conn})
     assert _only(findings, "proactive_artifact_digest_delivery") == []
 
 
 def test_digest_old_emits_warn(monkeypatch) -> None:
     _set_now(monkeypatch, datetime(2026, 5, 19, 10, 0, tzinfo=HOUSTON))
-    conn = _seeded_activity_conn()
+    conn = _seeded_proactive_artifacts_conn()
     old = datetime.now(UTC) - timedelta(hours=40)
     conn.execute(
         "INSERT INTO proactive_artifact_emails (artifact_id, recipient, sent_at) "
@@ -191,7 +191,7 @@ def test_digest_old_emits_warn(monkeypatch) -> None:
         (old.isoformat(),),
     )
     conn.commit()
-    findings = run_invariants({"runtime_conn": conn})
+    findings = run_invariants({"activity_conn": conn})
     matches = _only(findings, "proactive_artifact_digest_delivery")
     assert len(matches) == 1
     assert matches[0].severity == "warn"
@@ -199,14 +199,14 @@ def test_digest_old_emits_warn(monkeypatch) -> None:
 
 def test_digest_empty_table_stays_quiet(monkeypatch) -> None:
     _set_now(monkeypatch, datetime(2026, 5, 19, 10, 0, tzinfo=HOUSTON))
-    conn = _seeded_activity_conn()
-    findings = run_invariants({"runtime_conn": conn})
+    conn = _seeded_proactive_artifacts_conn()
+    findings = run_invariants({"activity_conn": conn})
     assert _only(findings, "proactive_artifact_digest_delivery") == []
 
 
 def test_digest_silent_before_9am(monkeypatch) -> None:
     _set_now(monkeypatch, datetime(2026, 5, 19, 8, 0, tzinfo=HOUSTON))
-    conn = _seeded_activity_conn()
+    conn = _seeded_proactive_artifacts_conn()
     old = datetime.now(UTC) - timedelta(hours=40)
     conn.execute(
         "INSERT INTO proactive_artifact_emails (artifact_id, recipient, sent_at) "
@@ -214,7 +214,7 @@ def test_digest_silent_before_9am(monkeypatch) -> None:
         (old.isoformat(),),
     )
     conn.commit()
-    findings = run_invariants({"runtime_conn": conn})
+    findings = run_invariants({"activity_conn": conn})
     assert _only(findings, "proactive_artifact_digest_delivery") == []
 
 
@@ -277,7 +277,7 @@ def test_hn_silent_in_early_6am_window(tmp_path: Path, monkeypatch) -> None:
 
 def test_csi_convergence_fresh_emits_nothing(monkeypatch) -> None:
     _set_now(monkeypatch, datetime(2026, 5, 19, 14, 0, tzinfo=HOUSTON))
-    conn = _seeded_activity_conn()
+    conn = _seeded_proactive_artifacts_conn()
     conn.execute(
         "INSERT INTO proactive_convergence_events (event_id, primary_topic, detected_at) "
         "VALUES ('e1', 'MCP', ?)",
@@ -290,7 +290,7 @@ def test_csi_convergence_fresh_emits_nothing(monkeypatch) -> None:
 
 def test_csi_convergence_stale_emits_warn(monkeypatch) -> None:
     _set_now(monkeypatch, datetime(2026, 5, 19, 14, 0, tzinfo=HOUSTON))
-    conn = _seeded_activity_conn()
+    conn = _seeded_proactive_artifacts_conn()
     conn.execute(
         "INSERT INTO proactive_convergence_events (event_id, primary_topic, detected_at) "
         "VALUES ('e1', 'MCP', ?)",
@@ -305,7 +305,7 @@ def test_csi_convergence_stale_emits_warn(monkeypatch) -> None:
 
 def test_csi_convergence_empty_table_stays_quiet(monkeypatch) -> None:
     _set_now(monkeypatch, datetime(2026, 5, 19, 14, 0, tzinfo=HOUSTON))
-    conn = _seeded_activity_conn()
+    conn = _seeded_proactive_artifacts_conn()
     findings = run_invariants({"activity_conn": conn})
     assert _only(findings, "csi_convergence_sync_freshness") == []
 
@@ -381,12 +381,26 @@ def test_nightly_wiki_silent_without_artifacts_dir(monkeypatch) -> None:
 # earlier 5.
 
 
-def _seeded_runtime_conn() -> sqlite3.Connection:
-    """In-memory runtime_state.db with the proactive tables this PR queries."""
+def _seeded_proactive_artifacts_conn() -> sqlite3.Connection:
+    """In-memory activity DB seeded with proactive_intelligence_reports +
+    proactive_artifacts + proactive_artifact_emails + proactive_convergence_events.
+    Used by the WS3 invariants AND the csi_convergence invariant (P0b: all
+    invariants now use the same activity_conn key)."""
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.executescript(
         """
+        CREATE TABLE proactive_convergence_events (
+            event_id TEXT PRIMARY KEY,
+            primary_topic TEXT NOT NULL,
+            video_ids_json TEXT NOT NULL DEFAULT '[]',
+            channel_names_json TEXT NOT NULL DEFAULT '[]',
+            brief_task_id TEXT NOT NULL DEFAULT '',
+            artifact_id TEXT NOT NULL DEFAULT '',
+            feedback_score INTEGER,
+            detected_at TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
         CREATE TABLE proactive_intelligence_reports (
             report_id TEXT PRIMARY KEY,
             period TEXT NOT NULL,
@@ -442,7 +456,7 @@ def _seeded_runtime_conn() -> sqlite3.Connection:
 
 def test_proactive_reports_daily_trio_all_present_quiet(monkeypatch) -> None:
     _set_now(monkeypatch, datetime(2026, 5, 19, 18, 0, tzinfo=HOUSTON))
-    conn = _seeded_runtime_conn()
+    conn = _seeded_proactive_artifacts_conn()
     today = "2026-05-19"
     for period in ["morning", "midday", "afternoon"]:
         conn.execute(
@@ -451,13 +465,13 @@ def test_proactive_reports_daily_trio_all_present_quiet(monkeypatch) -> None:
             (f"r_{period}", period, f"{today}T12:00:00", f"{today}T12:00:00"),
         )
     conn.commit()
-    findings = run_invariants({"runtime_conn": conn})
+    findings = run_invariants({"activity_conn": conn})
     assert _only(findings, "proactive_reports_daily_trio") == []
 
 
 def test_proactive_reports_daily_trio_only_one_fires_warn(monkeypatch) -> None:
     _set_now(monkeypatch, datetime(2026, 5, 19, 18, 0, tzinfo=HOUSTON))
-    conn = _seeded_runtime_conn()
+    conn = _seeded_proactive_artifacts_conn()
     today = "2026-05-19"
     conn.execute(
         "INSERT INTO proactive_intelligence_reports "
@@ -465,7 +479,7 @@ def test_proactive_reports_daily_trio_only_one_fires_warn(monkeypatch) -> None:
         (f"{today}T07:05:00", f"{today}T07:05:00"),
     )
     conn.commit()
-    findings = run_invariants({"runtime_conn": conn})
+    findings = run_invariants({"activity_conn": conn})
     matches = _only(findings, "proactive_reports_daily_trio")
     assert len(matches) == 1
     obs = matches[0].observed_value
@@ -477,7 +491,7 @@ def test_proactive_reports_daily_trio_only_one_fires_warn(monkeypatch) -> None:
 def test_proactive_reports_daily_trio_two_of_three_stays_quiet(monkeypatch) -> None:
     """Tolerate 1 missed slot as routine API blip."""
     _set_now(monkeypatch, datetime(2026, 5, 19, 18, 0, tzinfo=HOUSTON))
-    conn = _seeded_runtime_conn()
+    conn = _seeded_proactive_artifacts_conn()
     today = "2026-05-19"
     for period in ["morning", "midday"]:
         conn.execute(
@@ -486,14 +500,14 @@ def test_proactive_reports_daily_trio_two_of_three_stays_quiet(monkeypatch) -> N
             (f"r_{period}", period, f"{today}T12:00:00", f"{today}T12:00:00"),
         )
     conn.commit()
-    findings = run_invariants({"runtime_conn": conn})
+    findings = run_invariants({"activity_conn": conn})
     assert _only(findings, "proactive_reports_daily_trio") == []
 
 
 def test_proactive_reports_daily_trio_silent_before_5pm(monkeypatch) -> None:
     _set_now(monkeypatch, datetime(2026, 5, 19, 14, 0, tzinfo=HOUSTON))
-    conn = _seeded_runtime_conn()
-    findings = run_invariants({"runtime_conn": conn})
+    conn = _seeded_proactive_artifacts_conn()
+    findings = run_invariants({"activity_conn": conn})
     assert _only(findings, "proactive_reports_daily_trio") == []
 
 
@@ -545,7 +559,7 @@ def test_claude_code_intel_silent_during_dormancy(tmp_path: Path, monkeypatch) -
 
 def test_csi_demo_triage_rank_recent_quiet(monkeypatch) -> None:
     _set_now(monkeypatch, datetime(2026, 5, 19, 16, 0, tzinfo=HOUSTON))
-    conn = _seeded_runtime_conn()
+    conn = _seeded_proactive_artifacts_conn()
     recent_iso = (datetime.now(UTC) - timedelta(hours=2)).isoformat()
     conn.execute(
         "INSERT INTO proactive_artifacts (artifact_id, artifact_type, source_kind, "
@@ -554,13 +568,13 @@ def test_csi_demo_triage_rank_recent_quiet(monkeypatch) -> None:
         (recent_iso, recent_iso),
     )
     conn.commit()
-    findings = run_invariants({"runtime_conn": conn})
+    findings = run_invariants({"activity_conn": conn})
     assert _only(findings, "csi_demo_triage_rank_artifact") == []
 
 
 def test_csi_demo_triage_rank_stale_fires_critical(monkeypatch) -> None:
     _set_now(monkeypatch, datetime(2026, 5, 19, 16, 0, tzinfo=HOUSTON))
-    conn = _seeded_runtime_conn()
+    conn = _seeded_proactive_artifacts_conn()
     old_iso = (datetime.now(UTC) - timedelta(hours=12)).isoformat()
     conn.execute(
         "INSERT INTO proactive_artifacts (artifact_id, artifact_type, source_kind, "
@@ -569,7 +583,7 @@ def test_csi_demo_triage_rank_stale_fires_critical(monkeypatch) -> None:
         (old_iso, old_iso),
     )
     conn.commit()
-    findings = run_invariants({"runtime_conn": conn})
+    findings = run_invariants({"activity_conn": conn})
     matches = _only(findings, "csi_demo_triage_rank_artifact")
     assert len(matches) == 1
     assert matches[0].severity == "critical"
@@ -578,8 +592,8 @@ def test_csi_demo_triage_rank_stale_fires_critical(monkeypatch) -> None:
 def test_csi_demo_triage_rank_empty_table_stays_quiet(monkeypatch) -> None:
     """No rows of this artifact_type yet — feature not active, stay quiet."""
     _set_now(monkeypatch, datetime(2026, 5, 19, 16, 0, tzinfo=HOUSTON))
-    conn = _seeded_runtime_conn()
-    findings = run_invariants({"runtime_conn": conn})
+    conn = _seeded_proactive_artifacts_conn()
+    findings = run_invariants({"activity_conn": conn})
     assert _only(findings, "csi_demo_triage_rank_artifact") == []
 
 
@@ -588,7 +602,7 @@ def test_csi_demo_triage_rank_empty_table_stays_quiet(monkeypatch) -> None:
 
 def test_paper_to_podcast_recent_email_quiet(monkeypatch) -> None:
     _set_now(monkeypatch, datetime(2026, 5, 19, 8, 0, tzinfo=HOUSTON))
-    conn = _seeded_runtime_conn()
+    conn = _seeded_proactive_artifacts_conn()
     recent_iso = (datetime.now(UTC) - timedelta(hours=10)).isoformat()
     conn.execute(
         "INSERT INTO proactive_artifact_emails (artifact_id, recipient, subject, sent_at) "
@@ -596,13 +610,13 @@ def test_paper_to_podcast_recent_email_quiet(monkeypatch) -> None:
         (recent_iso,),
     )
     conn.commit()
-    findings = run_invariants({"runtime_conn": conn})
+    findings = run_invariants({"activity_conn": conn})
     assert _only(findings, "paper_to_podcast_email_delivery") == []
 
 
 def test_paper_to_podcast_old_email_fires_critical(monkeypatch) -> None:
     _set_now(monkeypatch, datetime(2026, 5, 19, 8, 0, tzinfo=HOUSTON))
-    conn = _seeded_runtime_conn()
+    conn = _seeded_proactive_artifacts_conn()
     old_iso = (datetime.now(UTC) - timedelta(hours=48)).isoformat()
     conn.execute(
         "INSERT INTO proactive_artifact_emails (artifact_id, recipient, subject, sent_at) "
@@ -610,7 +624,7 @@ def test_paper_to_podcast_old_email_fires_critical(monkeypatch) -> None:
         (old_iso,),
     )
     conn.commit()
-    findings = run_invariants({"runtime_conn": conn})
+    findings = run_invariants({"activity_conn": conn})
     matches = _only(findings, "paper_to_podcast_email_delivery")
     assert len(matches) == 1
     assert matches[0].severity == "critical"
@@ -618,8 +632,8 @@ def test_paper_to_podcast_old_email_fires_critical(monkeypatch) -> None:
 
 def test_paper_to_podcast_empty_table_stays_quiet(monkeypatch) -> None:
     _set_now(monkeypatch, datetime(2026, 5, 19, 8, 0, tzinfo=HOUSTON))
-    conn = _seeded_runtime_conn()
-    findings = run_invariants({"runtime_conn": conn})
+    conn = _seeded_proactive_artifacts_conn()
+    findings = run_invariants({"activity_conn": conn})
     assert _only(findings, "paper_to_podcast_email_delivery") == []
 
 

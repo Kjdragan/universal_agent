@@ -157,16 +157,18 @@ def morning_briefing_freshness(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "pipeline": "proactive_artifact_digest",
         "cron_expr": "35 8 * * *",
         "tables": ["proactive_artifact_emails"],
-        "db": "runtime_state.db",
+        "db": "activity_state.db",
         "design_note": (
-            "Probe corrected 2026-05-20 (WS3): was reading from activity_conn "
-            "(activity_events.db) which never had the proactive_artifact_emails "
-            "table — silently no-op'd since PR #376. Now uses runtime_conn."
+            "Probe corrected 2026-05-20 (P0b): writers use _activity_connect() "
+            "→ activity_state.db. PR #376 wrote to runtime_conn (runtime_state.db), "
+            "PR #392 then opened a separate runtime_conn — still wrong DB. "
+            "P0b: invariants use activity_conn which already points at "
+            "activity_state.db (same DB as task_hub_items). No parallel plumbing."
         ),
     },
 )
 def proactive_artifact_digest_delivery(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    conn = ctx.get("runtime_conn")
+    conn = ctx.get("activity_conn")
     if conn is None:
         return None
     # Only probe after the 8:35 AM tick so a fresh morning doesn't false-fire.
@@ -455,11 +457,11 @@ def nightly_wiki_persistent_silence(ctx: Dict[str, Any]) -> Optional[Dict[str, A
         "cron_exprs": ["5 7 * * *", "5 12 * * *", "5 16 * * *"],
         "tz": "America/Chicago",
         "tables": ["proactive_intelligence_reports"],
-        "db": "runtime_state.db",
+        "db": "activity_state.db",
     },
 )
 def proactive_reports_daily_trio(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    conn = ctx.get("runtime_conn")
+    conn = ctx.get("activity_conn")
     if conn is None:
         return None
     now = _now_houston()
@@ -593,12 +595,12 @@ def claude_code_intel_packet_freshness(ctx: Dict[str, Any]) -> Optional[Dict[str
         "cron_expr": "5 10,15 * * *",
         "tz": "America/Chicago",
         "tables": ["proactive_artifacts"],
-        "db": "runtime_state.db",
+        "db": "activity_state.db",
         "artifact_type": "csi_demo_triage_run",
     },
 )
 def csi_demo_triage_rank_artifact(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    conn = ctx.get("runtime_conn")
+    conn = ctx.get("activity_conn")
     if conn is None:
         return None
     now = _now_houston()
@@ -684,11 +686,11 @@ def csi_demo_triage_rank_artifact(ctx: Dict[str, Any]) -> Optional[Dict[str, Any
         "cron_expr": "0 21 * * *",
         "tz": "America/Chicago",
         "tables": ["proactive_artifact_emails"],
-        "db": "runtime_state.db",
+        "db": "activity_state.db",
     },
 )
 def paper_to_podcast_email_delivery(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    conn = ctx.get("runtime_conn")
+    conn = ctx.get("activity_conn")
     if conn is None:
         return None
     now = _now_houston()
