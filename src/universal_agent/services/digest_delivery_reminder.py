@@ -116,6 +116,30 @@ def _resolve_chat_id(override: Optional[str | int]) -> Optional[str]:
     return None
 
 
+def _resolve_bot_token(override: Optional[str]) -> Optional[str]:
+    """Resolve the bot token to use for sending the digest reminder.
+
+    Priority: explicit override > UA_OPERATOR_TELEGRAM_BOT_TOKEN > TELEGRAM_BOT_TOKEN.
+
+    Background: the generic ``TELEGRAM_BOT_TOKEN`` (``@ClaudeKevBot``) is not
+    a member of the operator's "UA Tutorial Feed" channel where the digest
+    reminders are intended to land — sending against that bot returns HTTP
+    400 "chat not found".  ``@KDUniversalAgent_bot`` (the CSI Reddit/RSS
+    bot) IS a member and is the correct sender for operator-facing channel
+    pings.  Surfacing the choice via ``UA_OPERATOR_TELEGRAM_BOT_TOKEN``
+    keeps the chat<->bot pairing explicit and reversible without code edits.
+    """
+    if override:
+        text = str(override).strip()
+        if text:
+            return text
+    for env_name in ("UA_OPERATOR_TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_TOKEN"):
+        raw = (os.getenv(env_name) or "").strip()
+        if raw:
+            return raw
+    return None
+
+
 def _format_houston(dt_utc: datetime) -> str:
     """e.g. '6:14 AM Tue May 19 CDT' — Houston-local, never UTC."""
     local = dt_utc.astimezone(HOUSTON_TZ)
@@ -281,7 +305,7 @@ def send_digest_delivery_reminder(
         try:
             ok, payload, err = telegram_send_with_response_sync(
                 chat_id, text,
-                bot_token=bot_token,
+                bot_token=_resolve_bot_token(bot_token),
                 disable_preview=True,
             )
             telegram_ok = bool(ok)
