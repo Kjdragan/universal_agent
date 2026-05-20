@@ -74,7 +74,7 @@ These are the authoritative references for each subsystem. When any other docume
 |---|---------|
 | 07 | WebSocket Architecture (`02_Flows/`) |
 | 08 | Auth & Session Security (`02_Flows/`) |
-| 82 | Email / AgentMail — includes pre-triage deterministic security screening (injection scanner, @agentmail.to auto-quarantine, sender reputation auto-escalation), multi-inbox VP routing (Cody/Atlas direct engagement), CC protocol, FYI suppression, trusted non-action reply auto-completion, stale failed queue auto-cancellation |
+| 82 | Email / AgentMail — includes outbound subject-tag system (`[ACTION/KIND]` + body banner, 2026-05-19), pre-triage deterministic security screening (injection scanner, @agentmail.to auto-quarantine, sender reputation auto-escalation), multi-inbox VP routing (Cody/Atlas direct engagement), CC protocol, FYI suppression, trusted non-action reply auto-completion, stale failed queue auto-cancellation |
 | 83 | Webhooks |
 | 85 | Infisical Secrets |
 | 86 | Residential Proxy — dual-provider architecture (Webshare + DataImpulse), `PROXY_PROVIDER` selection, approved paths, YouTube guardrails |

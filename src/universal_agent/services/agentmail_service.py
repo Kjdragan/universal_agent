@@ -36,6 +36,12 @@ from typing import Any, Callable, Coroutine, Optional
 import uuid
 
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+from universal_agent.services.email_tags import (
+    ActionTag,
+    KindTag,
+    format_body_header,
+    format_tagged_subject,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -647,6 +653,10 @@ class AgentMailService:
         labels: Optional[list[str]] = None,
         force_send: bool = False,
         require_approval: bool = False,
+        action: ActionTag | str | None = None,
+        kind: KindTag | str | None = None,
+        source: str | None = None,
+        related: list[str] | str | None = None,
     ) -> dict[str, Any]:
         """Send an email or create a draft when explicit approval is required.
 
@@ -659,12 +669,39 @@ class AgentMailService:
             labels: Optional labels to apply.
             force_send: Legacy/direct-send override.
             require_approval: When true, create a review draft instead of sending immediately.
+            action: Optional ActionTag (FYI / ACTION / DECISION / QUESTION). When
+                provided together with ``kind``, the subject is prefixed
+                ``[ACTION/KIND]`` and a banner is injected at the top of the
+                body. Callsites that do not pass both action+kind continue to
+                send uncategorized — the prefix/banner are pure additions.
+            kind: Optional KindTag (DIGEST / TUTORIAL / PROACTIVE / INCIDENT /
+                CRON / SYSTEM / DEPLOY).
+            source: Optional short string identifying the producer
+                (e.g. ``"youtube_daily_digest cron"``); rendered in the banner.
+            related: Optional related references (PR numbers, ticket IDs,
+                file paths). May be a list or a single pre-joined string.
 
         Returns:
             Dict with message_id/draft_id and status.
 
         """
         self._assert_ready()
+
+        # Apply tags BEFORE the draft-vs-send branching so both paths get
+        # the same prefixed subject and banner. Tagging is opt-in: both
+        # action AND kind must be supplied — otherwise leave the caller's
+        # subject/body untouched (backward compatible).
+        if action is not None and kind is not None:
+            subject = format_tagged_subject(action, kind, subject)
+            html_banner, text_banner = format_body_header(
+                action, kind, source or "", related=related,
+            )
+            text = text_banner + (text or "")
+            if html:
+                html = html_banner + html
+            else:
+                # If the caller only sent plaintext, keep it that way.
+                pass
 
         if require_approval:
             return await self._create_draft(
