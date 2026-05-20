@@ -361,3 +361,186 @@ async def test_no_agentmail_service_still_writes_sidecar(tmp_path):
 
 def test_default_cooldown_is_6h():
     assert DEFAULT_COOLDOWN_SECONDS == 21600
+
+
+# === Skip-logging diagnostics (WS1, 2026-05-20) ===
+#
+# The 2026-05-19 production check revealed the notifier silently skipped emails
+# when `_agentmail_service` was None — no log line, no counter. These tests pin
+# the new diagnostic behavior so a future regression that re-silences the skip
+# path fails loudly.
+
+
+@pytest.fixture(autouse=True)
+def _reset_skip_counter():
+    """Each test starts with an empty consecutive-skip counter."""
+    notifier._skipped_consecutive.clear()
+    yield
+    notifier._skipped_consecutive.clear()
+
+
+@pytest.mark.asyncio
+async def test_skip_logs_warning_when_agentmail_is_none(
+    tmp_path, caplog, notifications_list, add_notification_fn
+):
+    import logging
+
+    caplog.set_level(logging.WARNING, logger="universal_agent.services.proactive_health_notifier")
+    await run_pre_flight_check(
+        workspace_dir=tmp_path,
+        payload_builder=_critical_payload,
+        agentmail_service=None,  # the production failure mode
+        notifications_list=notifications_list,
+        add_notification_fn=add_notification_fn,
+    )
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    skip_records = [r for r in warnings if "SKIPPED" in r.getMessage()]
+    assert len(skip_records) >= 1, f"expected a SKIPPED warning, got {[r.getMessage() for r in warnings]}"
+    msg = skip_records[0].getMessage()
+    assert "agentmail_service" in msg
+    assert "consecutive=1" in msg
+    # Sidecar still written even when email path blocked.
+    assert (tmp_path / "work_products" / "proactive_health_latest.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_skip_counter_increments_across_consecutive_calls(
+    tmp_path, notifications_list, add_notification_fn
+):
+    # Three consecutive blocked ticks should produce consecutive=1, 2, 3.
+    for _ in range(3):
+        await run_pre_flight_check(
+            workspace_dir=tmp_path,
+            payload_builder=_critical_payload,
+            agentmail_service=None,
+            notifications_list=notifications_list,
+            add_notification_fn=add_notification_fn,
+        )
+    # The fake fingerprint from _critical_payload defaults to
+    # "invariant:youtube_enrichment_coverage".
+    fp = "invariant:youtube_enrichment_coverage"
+    assert notifier._skipped_consecutive[fp] == 3
+
+
+@pytest.mark.asyncio
+async def test_skip_counter_resets_on_successful_send(
+    tmp_path, fake_agentmail, notifications_list, add_notification_fn
+):
+    # First call with no agentmail → bumps counter.
+    await run_pre_flight_check(
+        workspace_dir=tmp_path,
+        payload_builder=_critical_payload,
+        agentmail_service=None,
+        notifications_list=notifications_list,
+        add_notification_fn=add_notification_fn,
+    )
+    fp = "invariant:youtube_enrichment_coverage"
+    assert notifier._skipped_consecutive[fp] == 1
+
+    # Second call with working agentmail → email sends, counter resets.
+    await run_pre_flight_check(
+        workspace_dir=tmp_path,
+        payload_builder=_critical_payload,
+        agentmail_service=fake_agentmail,
+        notifications_list=notifications_list,
+        add_notification_fn=add_notification_fn,
+    )
+    fake_agentmail.send_email.assert_awaited_once()
+    assert fp not in notifier._skipped_consecutive
+
+
+@pytest.mark.asyncio
+async def test_lazy_fallback_resolves_agentmail_via_gateway(
+    tmp_path, monkeypatch, fake_agentmail, notifications_list, add_notification_fn
+):
+    """If the caller passed None but gateway_server._agentmail_service is set,
+    the notifier should fall through and use it instead of skipping."""
+    import sys
+    import types
+
+    fake_gateway = types.ModuleType("universal_agent.gateway_server")
+    fake_gateway._agentmail_service = fake_agentmail
+    monkeypatch.setitem(sys.modules, "universal_agent.gateway_server", fake_gateway)
+
+    await run_pre_flight_check(
+        workspace_dir=tmp_path,
+        payload_builder=_critical_payload,
+        agentmail_service=None,  # passed None
+        notifications_list=notifications_list,
+        add_notification_fn=add_notification_fn,
+    )
+    # Lazy fallback found the gateway-side instance and used it.
+    fake_agentmail.send_email.assert_awaited_once()
+    assert len(notifications_list) == 1
+
+
+# === Manual test endpoint helper (send_test_critical_email) ===
+
+
+@pytest.mark.asyncio
+async def test_send_test_critical_email_uses_agentmail_and_returns_sent(fake_agentmail):
+    from universal_agent.services.proactive_health_notifier import (
+        send_test_critical_email,
+    )
+
+    result = await send_test_critical_email(agentmail_service=fake_agentmail, note="ping")
+    assert result["sent"] is True
+    assert result["to"] == KEVIN_EMAIL
+    assert result["subject"].startswith("[Proactive Health CRITICAL]")
+    assert "[TEST]" in result["subject"]
+    fake_agentmail.send_email.assert_awaited_once()
+    call = fake_agentmail.send_email.call_args
+    assert "[TEST]" in call.kwargs["text"]
+    assert "ping" in call.kwargs["text"]
+
+
+@pytest.mark.asyncio
+async def test_send_test_critical_email_handles_send_failure(fake_agentmail):
+    from universal_agent.services.proactive_health_notifier import (
+        send_test_critical_email,
+    )
+
+    fake_agentmail.send_email.side_effect = RuntimeError("smtp down")
+    result = await send_test_critical_email(agentmail_service=fake_agentmail)
+    assert result["sent"] is False
+    assert "smtp down" in result["reason"]
+
+
+@pytest.mark.asyncio
+async def test_send_test_critical_email_falls_back_via_gateway(
+    monkeypatch, fake_agentmail
+):
+    """If no agentmail passed and gateway has it, fall back automatically."""
+    import sys
+    import types
+
+    from universal_agent.services.proactive_health_notifier import (
+        send_test_critical_email,
+    )
+
+    fake_gateway = types.ModuleType("universal_agent.gateway_server")
+    fake_gateway._agentmail_service = fake_agentmail
+    monkeypatch.setitem(sys.modules, "universal_agent.gateway_server", fake_gateway)
+
+    result = await send_test_critical_email(agentmail_service=None)
+    assert result["sent"] is True
+    fake_agentmail.send_email.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_send_test_critical_email_returns_unsent_when_no_agentmail(monkeypatch):
+    """No injected agentmail AND no gateway fallback → returns sent=False with reason."""
+    import sys
+    import types
+
+    from universal_agent.services.proactive_health_notifier import (
+        send_test_critical_email,
+    )
+
+    fake_gateway = types.ModuleType("universal_agent.gateway_server")
+    fake_gateway._agentmail_service = None
+    monkeypatch.setitem(sys.modules, "universal_agent.gateway_server", fake_gateway)
+
+    result = await send_test_critical_email(agentmail_service=None)
+    assert result["sent"] is False
+    assert "agentmail_service=None" in result["reason"]

@@ -31,6 +31,41 @@ DEFAULT_COOLDOWN_SECONDS = 21600  # 6h
 KEVIN_EMAIL = "kevinjdragan@gmail.com"
 NOTIFICATION_KIND_PREFIX = "proactive_health_critical"
 
+# Module-level counter tracking consecutive skipped notifications per finding
+# fingerprint. Lets operators grep journalctl for "consecutive=N" to spot
+# long-running blocked email paths. Reset to 0 when a finding successfully
+# notifies (or when the finding stops appearing in payloads — implicitly,
+# since we only increment on observed skips).
+_skipped_consecutive: dict[str, int] = {}
+
+
+def _reset_skipped(fingerprint: str) -> None:
+    """Drop a fingerprint from the consecutive-skip counter (called on send)."""
+    _skipped_consecutive.pop(fingerprint, None)
+
+
+def _bump_skipped(fingerprint: str) -> int:
+    """Increment and return the consecutive-skip counter for a fingerprint."""
+    _skipped_consecutive[fingerprint] = _skipped_consecutive.get(fingerprint, 0) + 1
+    return _skipped_consecutive[fingerprint]
+
+
+def _resolve_agentmail_service_via_gateway() -> Optional[Any]:
+    """Lazy lookup against gateway_server._agentmail_service.
+
+    The heartbeat wires this in at tick time via getattr; if the gateway's
+    init hadn't completed at the first tick (race between
+    `_start_heartbeat_service()` and `_agentmail_service = AgentMailService(...)`)
+    the passed-in value is None. Re-resolving at notify time gives us one
+    more chance before logging the skip. Best-effort — never raises.
+    """
+    try:
+        import importlib
+        gs = importlib.import_module("universal_agent.gateway_server")
+        return getattr(gs, "_agentmail_service", None)
+    except Exception:  # noqa: BLE001
+        return None
+
 
 def _truthy(value: Optional[str], default: bool) -> bool:
     if value is None:
@@ -184,6 +219,10 @@ async def _notify_critical(
         logger.warning("proactive_health: send_email failed for %s", finding_id, exc_info=True)
         return False
 
+    # Email landed — reset the consecutive-skip counter for this fingerprint
+    # so the next blocked tick starts counting from 1.
+    _reset_skipped(finding_id)
+
     # Record for dedup tracking.
     try:
         add_notification_fn(
@@ -234,8 +273,39 @@ async def run_pre_flight_check(
 
     _write_sidecar(workspace_dir, payload)
 
+    # If email is disabled OR plumbing isn't ready, log explicitly per
+    # critical finding so the operator can grep for blocked-email evidence.
+    # This is the diagnostic fix for the 2026-05-20 race where the heartbeat
+    # fires before gateway_server._agentmail_service is initialized.
     if not _email_enabled() or agentmail_service is None or add_notification_fn is None:
-        return payload
+        # One last attempt to resolve _agentmail_service via gateway_server
+        # in case the wire-in raced with lifespan init.
+        if agentmail_service is None:
+            resolved = _resolve_agentmail_service_via_gateway()
+            if resolved is not None:
+                agentmail_service = resolved
+
+        if not _email_enabled() or agentmail_service is None or add_notification_fn is None:
+            criticals = _critical_invariants(payload)
+            for f in criticals:
+                fp = str(f.get("finding_id") or f.get("metric_key") or "unknown")
+                consecutive = _bump_skipped(fp)
+                if not _email_enabled():
+                    reason = "email_disabled (UA_HEARTBEAT_PROACTIVE_HEALTH_EMAIL_CRITICAL=0)"
+                elif agentmail_service is None and add_notification_fn is None:
+                    reason = "agentmail_service=None AND add_notification_fn=None"
+                elif agentmail_service is None:
+                    reason = "agentmail_service=None (gateway race or init pending)"
+                else:
+                    reason = "add_notification_fn=None"
+                logger.warning(
+                    "proactive_health: notification SKIPPED — reason=%s, "
+                    "fingerprint=%r, consecutive=%d",
+                    reason,
+                    fp,
+                    consecutive,
+                )
+            return payload
 
     cooldown = _cooldown_seconds()
     generated_at = str(payload.get("generated_at_utc") or datetime.now(timezone.utc).isoformat())
@@ -257,3 +327,65 @@ async def run_pre_flight_check(
     if sent_count:
         logger.info("proactive_health: emailed %d new critical finding(s)", sent_count)
     return payload
+
+
+async def send_test_critical_email(
+    *,
+    agentmail_service: Optional[_AgentMailLike],
+    note: str = "",
+) -> dict[str, Any]:
+    """Bypass-dedup synthetic critical-email send, for operator verification.
+
+    Used by the POST /api/v1/ops/proactive_health/email_test endpoint. Builds
+    a clearly-labeled fake finding, calls the real send path, returns a
+    structured result so the endpoint can report what happened.
+
+    Never raises — wraps the send in try/except and returns the exception
+    name in the dict on failure.
+    """
+    if agentmail_service is None:
+        agentmail_service = _resolve_agentmail_service_via_gateway()
+    if agentmail_service is None:
+        return {
+            "sent": False,
+            "reason": "agentmail_service=None (gateway init pending or disabled)",
+        }
+
+    ts = datetime.now(timezone.utc).isoformat()
+    finding = {
+        "finding_id": f"manual_test_{int(time.time())}",
+        "category": "proactive_health",
+        "severity": "critical",
+        "metric_key": "manual_test",
+        "title": "[TEST] Manual proactive_health email verification",
+        "recommendation": (
+            "[TEST] This is a synthetic notification triggered via "
+            "POST /api/v1/ops/proactive_health/email_test. If you received "
+            "this, the watchdog's email path is working end-to-end. "
+            + (f"Note: {note}" if note else "")
+        ),
+        "runbook_command": "(no runbook — this is a test ping)",
+        "observed_value": {"trigger": "manual_test_endpoint", "timestamp": ts},
+        "metadata": {"test": True},
+    }
+    subject, text = _format_email(finding, ts)
+    try:
+        await agentmail_service.send_email(
+            to=KEVIN_EMAIL,
+            subject=subject,
+            text=text,
+            force_send=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "proactive_health: test email failed (%s)", type(exc).__name__, exc_info=True
+        )
+        return {"sent": False, "reason": f"{type(exc).__name__}: {exc}"}
+
+    logger.info("proactive_health: test email sent to %s", KEVIN_EMAIL)
+    return {
+        "sent": True,
+        "to": KEVIN_EMAIL,
+        "subject": subject,
+        "finding_id": finding["finding_id"],
+    }
