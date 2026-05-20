@@ -17,6 +17,7 @@ from __future__ import annotations
 from universal_agent.services.invariants import (  # noqa: F401
     cron_staleness,
     csi_source_liveness,
+    disk_usage_health,
     proactive_pipeline_invariants,
     youtube_invariants,
     zai_inference_health,
