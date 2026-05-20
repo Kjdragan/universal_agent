@@ -10018,7 +10018,16 @@ async def _digest_reminder_dismissal_sweep(stop_event: asyncio.Event) -> None:
         try:
             due = await asyncio.to_thread(_claim_due_telegram_reminders)
             if due:
-                token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+                # Same fallback chain as digest_delivery_reminder._resolve_bot_token:
+                # UA_OPERATOR_TELEGRAM_BOT_TOKEN takes priority because the
+                # generic TELEGRAM_BOT_TOKEN (@ClaudeKevBot) is not a member of
+                # the "UA Tutorial Feed" channel where digest reminders land.
+                # Without this fallback the deleteMessage will fail with 400
+                # "chat not found" and the reminders will persist past TTL.
+                token = (
+                    (os.getenv("UA_OPERATOR_TELEGRAM_BOT_TOKEN") or "").strip()
+                    or (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+                )
                 if not token:
                     # Token missing: mark rows as skipped so we don't retry forever.
                     for row_id, _chat, _msg in due:
