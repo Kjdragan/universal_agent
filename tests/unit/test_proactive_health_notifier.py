@@ -544,3 +544,102 @@ async def test_send_test_critical_email_returns_unsent_when_no_agentmail(monkeyp
     result = await send_test_critical_email(agentmail_service=None)
     assert result["sent"] is False
     assert "agentmail_service=None" in result["reason"]
+
+
+# ─── P0c: task_hub emission so critical findings persist past one tick ────────
+# Background: PR #389 added per-finding email + 6h dedup. Email is necessary
+# but not sufficient — emails get archived/ignored. Findings should also park
+# a `needs_review` row in Task Hub so Simone has a persistent backlog of
+# unresolved criticals. This closes the loop the original HEARTBEAT.md
+# directive failed to close (Simone wasn't auto-emitting Task Hub rows for
+# findings even though she had access to them).
+
+@pytest.mark.asyncio
+async def test_critical_finding_emits_task_hub_row(
+    tmp_path, fake_agentmail, notifications_list, add_notification_fn
+):
+    """When task_hub_emit_fn is provided, the notifier passes each critical
+    finding to it. Lets the caller wire actual Task Hub upsert without the
+    notifier importing gateway_server / task_hub modules directly."""
+    emitted: list[dict] = []
+
+    def _emit(finding: dict) -> None:
+        emitted.append(finding)
+
+    await run_pre_flight_check(
+        workspace_dir=tmp_path,
+        payload_builder=_critical_payload,
+        agentmail_service=fake_agentmail,
+        notifications_list=notifications_list,
+        add_notification_fn=add_notification_fn,
+        task_hub_emit_fn=_emit,
+    )
+    assert len(emitted) == 1
+    assert emitted[0]["metric_key"] == "youtube_enrichment_coverage"
+    assert emitted[0]["severity"] == "critical"
+
+
+@pytest.mark.asyncio
+async def test_task_hub_emit_fn_failure_does_not_crash(
+    tmp_path, fake_agentmail, notifications_list, add_notification_fn
+):
+    """The notifier must never crash the heartbeat. If task_hub_emit_fn raises,
+    it logs and continues. Email still gets sent."""
+    def _emit_boom(finding: dict) -> None:
+        raise RuntimeError("simulated task_hub DB locked")
+
+    await run_pre_flight_check(
+        workspace_dir=tmp_path,
+        payload_builder=_critical_payload,
+        agentmail_service=fake_agentmail,
+        notifications_list=notifications_list,
+        add_notification_fn=add_notification_fn,
+        task_hub_emit_fn=_emit_boom,
+    )
+    # Email still sent despite the emit failure.
+    fake_agentmail.send_email.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_no_task_hub_emit_fn_is_backwards_compatible(
+    tmp_path, fake_agentmail, notifications_list, add_notification_fn
+):
+    """Existing callers that don't pass task_hub_emit_fn keep working (the
+    parameter is optional). Email still sent, sidecar still written."""
+    await run_pre_flight_check(
+        workspace_dir=tmp_path,
+        payload_builder=_critical_payload,
+        agentmail_service=fake_agentmail,
+        notifications_list=notifications_list,
+        add_notification_fn=add_notification_fn,
+        # task_hub_emit_fn omitted entirely
+    )
+    fake_agentmail.send_email.assert_awaited_once()
+    assert (tmp_path / "work_products" / "proactive_health_latest.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_task_hub_emit_runs_even_when_email_skipped(
+    tmp_path, notifications_list, add_notification_fn, caplog
+):
+    """If email plumbing is broken (no agentmail_service) but task_hub_emit_fn
+    is wired, the Task Hub row should still be created. Email and task hub
+    are independent escalation channels — losing one shouldn't lose both."""
+    import logging
+    caplog.set_level(logging.WARNING)
+    emitted: list[dict] = []
+
+    def _emit(finding: dict) -> None:
+        emitted.append(finding)
+
+    await run_pre_flight_check(
+        workspace_dir=tmp_path,
+        payload_builder=_critical_payload,
+        agentmail_service=None,  # no email path
+        notifications_list=notifications_list,
+        add_notification_fn=add_notification_fn,
+        task_hub_emit_fn=_emit,
+    )
+    # Email path skipped (logged) but task_hub_emit_fn still fired
+    assert len(emitted) == 1
+    assert any("SKIPPED" in r.getMessage() for r in caplog.records)
