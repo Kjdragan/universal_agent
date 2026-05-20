@@ -45,6 +45,13 @@ NIGHTLY_WIKI_WINDOW_END_HOUR = 5
 # on every signal-light day.
 NIGHTLY_WIKI_QUIET_DAYS_FLOOR = 7
 
+# WS3 thresholds (added 2026-05-20).
+PROACTIVE_REPORTS_MIN_TODAY = 2  # at least 2 of 3 daily reports must exist
+CLAUDE_CODE_INTEL_MAX_AGE_HOURS = 9.0  # active-hour cron runs 8 AM / 4 PM / 10 PM Houston
+CSI_DEMO_TRIAGE_MAX_AGE_HOURS = 6.0  # twice-daily cron
+PAPER_TO_PODCAST_MAX_AGE_HOURS = 30.0  # daily 9 PM Houston + 6h grace
+VAULT_LINT_DAY_OF_MONTH_GATE = 2  # only probe after the 2nd to give the 1st's cron full day
+
 
 def _today_houston() -> str:
     return datetime.now(HOUSTON_TZ).strftime("%Y-%m-%d")
@@ -136,22 +143,30 @@ def morning_briefing_freshness(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "Cron `proactive_artifact_digest` runs at 8:35 AM Houston daily and "
         "emails Kevin a digest of new CODIE PRs, tutorial builds, and "
         "convergence insights via AgentMail. Delivery is recorded in the "
-        "proactive_artifact_emails table. If no row exists in the last 24h, "
-        "the operator's only push channel for these artifacts has gone silent."
+        "proactive_artifact_emails table in runtime_state.db. If no row "
+        "exists in the last 24h+grace, the operator's only push channel "
+        "for these artifacts has gone silent."
     ),
     severity="warn",
     runbook_command=(
-        "sqlite3 \"$UA_ACTIVITY_DB_PATH\" \"SELECT sent_at, recipient, subject "
-        "FROM proactive_artifact_emails ORDER BY sent_at DESC LIMIT 5;\""
+        "sqlite3 /opt/universal_agent/workspaces/runtime_state.db "
+        "\"SELECT sent_at, recipient, subject FROM proactive_artifact_emails "
+        "ORDER BY sent_at DESC LIMIT 5;\""
     ),
     metadata={
         "pipeline": "proactive_artifact_digest",
         "cron_expr": "35 8 * * *",
         "tables": ["proactive_artifact_emails"],
+        "db": "runtime_state.db",
+        "design_note": (
+            "Probe corrected 2026-05-20 (WS3): was reading from activity_conn "
+            "(activity_events.db) which never had the proactive_artifact_emails "
+            "table — silently no-op'd since PR #376. Now uses runtime_conn."
+        ),
     },
 )
 def proactive_artifact_digest_delivery(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    conn = ctx.get("activity_conn")
+    conn = ctx.get("runtime_conn")
     if conn is None:
         return None
     # Only probe after the 8:35 AM tick so a fresh morning doesn't false-fire.
@@ -411,3 +426,380 @@ def nightly_wiki_persistent_silence(ctx: Dict[str, Any]) -> Optional[Dict[str, A
             ),
         }
     return None
+
+
+# ---------------------------------------------------------------------------
+# 6. proactive_reports daily trio (morning + midday + afternoon)
+# ---------------------------------------------------------------------------
+
+
+@invariant(
+    id="proactive_reports_daily_trio",
+    title="At least 2 of 3 daily proactive reports created today",
+    description=(
+        "Crons `proactive_report_morning` (7:05 AM), `proactive_report_midday` "
+        "(12:05 PM), `proactive_report_afternoon` (4:05 PM) each insert a row "
+        "into `proactive_intelligence_reports`. If fewer than 2 of 3 today's "
+        "rows exist by 5 PM Houston, the three-time-a-day intel rhythm is "
+        "broken. We tolerate 1 missed slot as routine ZAI-quota / API blip; "
+        "2+ missing means the pipeline is degraded."
+    ),
+    severity="warn",
+    runbook_command=(
+        "sqlite3 /opt/universal_agent/workspaces/runtime_state.db "
+        "\"SELECT period, COUNT(*) FROM proactive_intelligence_reports "
+        "WHERE DATE(created_at) = DATE('now') GROUP BY period;\""
+    ),
+    metadata={
+        "pipeline": "proactive_report_morning|midday|afternoon",
+        "cron_exprs": ["5 7 * * *", "5 12 * * *", "5 16 * * *"],
+        "tz": "America/Chicago",
+        "tables": ["proactive_intelligence_reports"],
+        "db": "runtime_state.db",
+    },
+)
+def proactive_reports_daily_trio(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    conn = ctx.get("runtime_conn")
+    if conn is None:
+        return None
+    now = _now_houston()
+    # Only probe after the 4:05 PM cron should have fired + 1h grace.
+    if now.hour < 17:
+        return None
+    today = _today_houston()
+    try:
+        rows = conn.execute(
+            "SELECT period, COUNT(*) AS n FROM proactive_intelligence_reports "
+            "WHERE DATE(created_at) = ? GROUP BY period",
+            (today,),
+        ).fetchall()
+    except sqlite3.Error as exc:
+        logger.debug("proactive_reports_daily_trio: query failed (%s)", exc)
+        return None
+    periods_present = {str(r[0]).lower() for r in (rows or [])}
+    counts_today = sum(int(r[1] or 0) for r in (rows or []))
+    if counts_today >= PROACTIVE_REPORTS_MIN_TODAY:
+        return None
+    expected = {"morning", "midday", "afternoon"}
+    missing = sorted(expected - periods_present)
+    return {
+        "observed_value": {
+            "today": today,
+            "reports_today": counts_today,
+            "periods_present": sorted(periods_present),
+            "periods_missing": missing,
+        },
+        "message": (
+            f"Only {counts_today} proactive_intelligence_reports row(s) for {today} "
+            f"(need >= {PROACTIVE_REPORTS_MIN_TODAY}). Missing periods: {missing}. "
+            "The three-times-a-day intel rhythm is degraded."
+        ),
+        "threshold_text": f">= {PROACTIVE_REPORTS_MIN_TODAY} of 3 reports per day",
+    }
+
+
+# ---------------------------------------------------------------------------
+# 7. claude_code_intel packet freshness
+# ---------------------------------------------------------------------------
+
+
+@invariant(
+    id="claude_code_intel_packet_freshness",
+    title="claude_code_intel produced a packet in the last 9h",
+    description=(
+        "Cron `claude_code_intel_sync` runs at 8 AM, 4 PM, and 10 PM Houston "
+        "and writes JSON packets to artifacts/proactive/claude_code_intel/"
+        "packets/. If no packet has appeared in the last 9h during active "
+        "hours, the polling pipeline has stalled."
+    ),
+    severity="warn",
+    runbook_command=(
+        "ls -lt /opt/universal_agent/artifacts/proactive/claude_code_intel/packets/ | head -10; "
+        "journalctl -u universal-agent-gateway --since '12 hours ago' | grep -i claude_code_intel"
+    ),
+    metadata={
+        "pipeline": "claude_code_intel_sync",
+        "cron_expr": "0 8,16,22 * * *",
+        "tz": "America/Chicago",
+    },
+)
+def claude_code_intel_packet_freshness(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    artifacts_dir = ctx.get("artifacts_dir")
+    if artifacts_dir is None:
+        return None
+    packets_dir = Path(artifacts_dir) / "proactive" / "claude_code_intel" / "packets"
+    if not packets_dir.exists():
+        return None
+    now = _now_houston()
+    # Only meaningful during active hours; quiet during dormancy (10 PM – 6 AM Houston)
+    if not (6 <= now.hour <= 21):
+        return None
+    # First 30 min after 6 AM allows the overnight gap (last cron 10 PM yesterday).
+    if now.hour == 6 and now.minute < 30:
+        return None
+    files = [p for p in packets_dir.iterdir() if p.is_file()]
+    if not files:
+        # Fresh box, no packets yet — don't false-fire.
+        return None
+    newest = max(files, key=lambda p: p.stat().st_mtime)
+    newest_mtime = datetime.fromtimestamp(newest.stat().st_mtime, tz=HOUSTON_TZ)
+    age_hours = (now - newest_mtime).total_seconds() / 3600.0
+    if age_hours > CLAUDE_CODE_INTEL_MAX_AGE_HOURS:
+        return {
+            "observed_value": {
+                "newest_file": newest.name,
+                "age_hours": round(age_hours, 2),
+                "file_count": len(files),
+            },
+            "message": (
+                f"Newest claude_code_intel packet is {age_hours:.1f}h old "
+                f"(threshold {CLAUDE_CODE_INTEL_MAX_AGE_HOURS:.0f}h). "
+                "Likely the 8/16/22 cron is failing — packets are the "
+                "operator's main signal for new Claude Code releases."
+            ),
+            "threshold_text": (
+                f"newest packet mtime within last {CLAUDE_CODE_INTEL_MAX_AGE_HOURS:.0f}h "
+                "during active hours"
+            ),
+        }
+    return None
+
+
+# ---------------------------------------------------------------------------
+# 8. csi_demo_triage_rank artifact freshness
+# ---------------------------------------------------------------------------
+
+
+@invariant(
+    id="csi_demo_triage_rank_artifact",
+    title="csi_demo_triage_rank produced an artifact in last 6h (active hours)",
+    description=(
+        "Cron `csi_demo_triage_rank` runs at 10:05 AM and 3:05 PM Houston "
+        "and inserts an LLM-ranked candidate list into the proactive_artifacts "
+        "table with artifact_type='csi_demo_triage_run'. Twice-daily cadence "
+        "means a 6h gap is the maximum acceptable during active hours; "
+        "longer than that means the ranking pipeline is broken — operator "
+        "loses visibility into ranked CSI demo candidates."
+    ),
+    severity="critical",
+    runbook_command=(
+        "sqlite3 /opt/universal_agent/workspaces/runtime_state.db "
+        "\"SELECT artifact_id, title, created_at FROM proactive_artifacts "
+        "WHERE artifact_type='csi_demo_triage_run' "
+        "ORDER BY created_at DESC LIMIT 5;\""
+    ),
+    metadata={
+        "pipeline": "csi_demo_triage_rank",
+        "cron_expr": "5 10,15 * * *",
+        "tz": "America/Chicago",
+        "tables": ["proactive_artifacts"],
+        "db": "runtime_state.db",
+        "artifact_type": "csi_demo_triage_run",
+    },
+)
+def csi_demo_triage_rank_artifact(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    conn = ctx.get("runtime_conn")
+    if conn is None:
+        return None
+    now = _now_houston()
+    # Only probe during active hours. Skip first 30 min after 6 AM to allow
+    # the overnight gap from yesterday's 3:05 PM run.
+    if not (6 <= now.hour <= 21):
+        return None
+    if now.hour == 6 and now.minute < 30:
+        return None
+    # Probe only after the first daily run (10:05 AM); earlier we have no
+    # ground truth for today.
+    if now.hour < 11:
+        return None
+    try:
+        row = conn.execute(
+            "SELECT MAX(created_at) AS latest, COUNT(*) AS total "
+            "FROM proactive_artifacts "
+            "WHERE artifact_type = 'csi_demo_triage_run'"
+        ).fetchone()
+    except sqlite3.Error as exc:
+        logger.debug("csi_demo_triage_rank_artifact: query failed (%s)", exc)
+        return None
+    if row is None:
+        return None
+    try:
+        total = int(row["total"] or 0)
+        latest_raw = row["latest"]
+    except (TypeError, KeyError, IndexError):
+        latest_raw = row[0] if row else None
+        total = int(row[1] or 0) if row and len(row) > 1 else 0
+    if total == 0:
+        # No rows of this type at all — treat as not-yet-deployed-feature,
+        # stay quiet rather than alarm. The feature gets exercised once
+        # the operator actually approves a csi_demo_triage_rank cron run.
+        return None
+    latest = _parse_iso(latest_raw)
+    if latest is None:
+        return None
+    age_hours = (datetime.now(timezone.utc) - latest).total_seconds() / 3600.0
+    if age_hours > CSI_DEMO_TRIAGE_MAX_AGE_HOURS:
+        return {
+            "observed_value": {
+                "latest_created_at": latest.isoformat(),
+                "age_hours": round(age_hours, 2),
+                "total_artifacts": total,
+            },
+            "message": (
+                f"Latest csi_demo_triage_run artifact is {age_hours:.1f}h old "
+                f"(threshold {CSI_DEMO_TRIAGE_MAX_AGE_HOURS:.0f}h). The 10:05 AM / "
+                "3:05 PM Houston twice-daily cadence has stalled — operator "
+                "loses ranked CSI demo candidates."
+            ),
+            "threshold_text": f"age <= {CSI_DEMO_TRIAGE_MAX_AGE_HOURS:.0f}h during active hours",
+        }
+    return None
+
+
+# ---------------------------------------------------------------------------
+# 9. paper_to_podcast_daily email delivery
+# ---------------------------------------------------------------------------
+
+
+@invariant(
+    id="paper_to_podcast_email_delivery",
+    title="paper_to_podcast emailed Kevin in last 30h",
+    description=(
+        "Cron `paper_to_podcast_daily` runs at 9 PM Houston daily, generates "
+        "a podcast.mp3 + quiz + flashcards from the day's arXiv papers, and "
+        "emails the bundle to kevinjdragan@gmail.com. Delivery is recorded "
+        "in `proactive_artifact_emails` with subject prefix \"Papers\". "
+        "Daily cadence + 6h grace = 30h max acceptable age. Critical because "
+        "this is the operator's daily research-podcast pipeline — silent "
+        "failure means he doesn't notice for days."
+    ),
+    severity="critical",
+    runbook_command=(
+        "sqlite3 /opt/universal_agent/workspaces/runtime_state.db "
+        "\"SELECT sent_at, recipient, subject FROM proactive_artifact_emails "
+        "WHERE subject LIKE '%Papers%' ORDER BY sent_at DESC LIMIT 5;\""
+    ),
+    metadata={
+        "pipeline": "paper_to_podcast_daily",
+        "cron_expr": "0 21 * * *",
+        "tz": "America/Chicago",
+        "tables": ["proactive_artifact_emails"],
+        "db": "runtime_state.db",
+    },
+)
+def paper_to_podcast_email_delivery(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    conn = ctx.get("runtime_conn")
+    if conn is None:
+        return None
+    now = _now_houston()
+    # Probe only after 6 AM Houston (the morning after the 9 PM cron should
+    # have fired). Before 6 AM the "30h" lookback overlaps the current cycle.
+    if now.hour < 6:
+        return None
+    try:
+        row = conn.execute(
+            "SELECT MAX(sent_at) AS last_sent, COUNT(*) AS total "
+            "FROM proactive_artifact_emails "
+            "WHERE recipient = 'kevinjdragan@gmail.com' "
+            "  AND subject LIKE '%Papers%'"
+        ).fetchone()
+    except sqlite3.Error as exc:
+        logger.debug("paper_to_podcast_email_delivery: query failed (%s)", exc)
+        return None
+    if row is None:
+        return None
+    try:
+        total = int(row["total"] or 0)
+        last_sent_raw = row["last_sent"]
+    except (TypeError, KeyError, IndexError):
+        last_sent_raw = row[0] if row else None
+        total = int(row[1] or 0) if row and len(row) > 1 else 0
+    if total == 0:
+        # Pipeline hasn't been activated yet on this box — stay quiet.
+        return None
+    last_sent = _parse_iso(last_sent_raw)
+    if last_sent is None:
+        return None
+    age_hours = (datetime.now(timezone.utc) - last_sent).total_seconds() / 3600.0
+    if age_hours > PAPER_TO_PODCAST_MAX_AGE_HOURS:
+        return {
+            "observed_value": {
+                "last_sent_at": last_sent.isoformat(),
+                "age_hours": round(age_hours, 2),
+                "total_rows": total,
+            },
+            "message": (
+                f"Last paper_to_podcast email was {age_hours:.1f}h ago "
+                f"(threshold {PAPER_TO_PODCAST_MAX_AGE_HOURS:.0f}h). The 9 PM Houston "
+                "daily cron has failed — Kevin isn't getting his daily research "
+                "podcast bundle."
+            ),
+            "threshold_text": f"last sent within last {PAPER_TO_PODCAST_MAX_AGE_HOURS:.0f}h",
+        }
+    return None
+
+
+# ---------------------------------------------------------------------------
+# 10. vault_lint_contradictions monthly cadence
+# ---------------------------------------------------------------------------
+
+
+@invariant(
+    id="vault_lint_contradictions_monthly",
+    title="Vault contradiction report exists for current month",
+    description=(
+        "Cron `vault_lint_contradictions` runs on the 1st of each month at "
+        "7:00 AM Houston and writes "
+        "artifacts/knowledge-vaults/*/contradiction-report-*.md. The probe "
+        "fires after the 2nd of the month if no report covers the current "
+        "month — one full day grace gives the cron time to complete."
+    ),
+    severity="warn",
+    runbook_command=(
+        "ls -lt /opt/universal_agent/artifacts/knowledge-vaults/*/contradiction-report-*.md 2>/dev/null | head; "
+        "journalctl -u universal-agent-gateway --since '$(date -d \"1 day ago\")' | grep -i vault_lint"
+    ),
+    metadata={
+        "pipeline": "vault_lint_contradictions",
+        "cron_expr": "0 7 1 * *",
+        "tz": "America/Chicago",
+    },
+)
+def vault_lint_contradictions_monthly(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    artifacts_dir = ctx.get("artifacts_dir")
+    if artifacts_dir is None:
+        return None
+    vault_root = Path(artifacts_dir) / "knowledge-vaults"
+    if not vault_root.exists():
+        return None
+    now = _now_houston()
+    # Only probe after the 2nd of the month so the 1st's cron has full grace.
+    if now.day < VAULT_LINT_DAY_OF_MONTH_GATE:
+        return None
+    # Look for any contradiction-report-* file across all vault subdirs.
+    candidates = list(vault_root.glob("*/contradiction-report-*.md"))
+    if not candidates:
+        # Probe stays quiet if the directory is empty — vault may not be
+        # provisioned yet. Operator will discover by other means.
+        return None
+    newest = max(candidates, key=lambda p: p.stat().st_mtime)
+    newest_mtime = datetime.fromtimestamp(newest.stat().st_mtime, tz=HOUSTON_TZ)
+    # "Current month" means newest mtime year+month should match now's year+month.
+    if newest_mtime.year == now.year and newest_mtime.month == now.month:
+        return None
+    age_days = (now - newest_mtime).total_seconds() / 86400.0
+    return {
+        "observed_value": {
+            "newest_file": str(newest),
+            "newest_mtime": newest_mtime.isoformat(),
+            "age_days": round(age_days, 1),
+            "current_month": now.strftime("%Y-%m"),
+        },
+        "message": (
+            f"No contradiction report for {now.strftime('%Y-%m')}. Newest "
+            f"report is {age_days:.0f}d old. The monthly 1st-of-month cron "
+            "may have failed — vault contradiction sweep won't run again "
+            "for another month."
+        ),
+        "threshold_text": "≥1 contradiction-report-*.md file dated current month",
+    }

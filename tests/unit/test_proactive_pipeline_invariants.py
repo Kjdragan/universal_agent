@@ -177,7 +177,7 @@ def test_digest_recent_emits_nothing(monkeypatch) -> None:
         ((now_utc - timedelta(hours=1)).isoformat(),),
     )
     conn.commit()
-    findings = run_invariants({"activity_conn": conn})
+    findings = run_invariants({"runtime_conn": conn})
     assert _only(findings, "proactive_artifact_digest_delivery") == []
 
 
@@ -191,7 +191,7 @@ def test_digest_old_emits_warn(monkeypatch) -> None:
         (old.isoformat(),),
     )
     conn.commit()
-    findings = run_invariants({"activity_conn": conn})
+    findings = run_invariants({"runtime_conn": conn})
     matches = _only(findings, "proactive_artifact_digest_delivery")
     assert len(matches) == 1
     assert matches[0].severity == "warn"
@@ -200,7 +200,7 @@ def test_digest_old_emits_warn(monkeypatch) -> None:
 def test_digest_empty_table_stays_quiet(monkeypatch) -> None:
     _set_now(monkeypatch, datetime(2026, 5, 19, 10, 0, tzinfo=HOUSTON))
     conn = _seeded_activity_conn()
-    findings = run_invariants({"activity_conn": conn})
+    findings = run_invariants({"runtime_conn": conn})
     assert _only(findings, "proactive_artifact_digest_delivery") == []
 
 
@@ -214,7 +214,7 @@ def test_digest_silent_before_9am(monkeypatch) -> None:
         (old.isoformat(),),
     )
     conn.commit()
-    findings = run_invariants({"activity_conn": conn})
+    findings = run_invariants({"runtime_conn": conn})
     assert _only(findings, "proactive_artifact_digest_delivery") == []
 
 
@@ -372,3 +372,323 @@ def test_nightly_wiki_silent_without_artifacts_dir(monkeypatch) -> None:
     _set_now(monkeypatch, datetime(2026, 5, 19, 8, 0, tzinfo=HOUSTON))
     findings = run_invariants({"artifacts_dir": None})
     assert _only(findings, "nightly_wiki_persistent_silence") == []
+
+
+# === WS3 invariants (2026-05-20) ===
+#
+# Five new invariants for the remaining proactive pipelines that have durable
+# output traces. Each follows the same fail-open + time-gate patterns as the
+# earlier 5.
+
+
+def _seeded_runtime_conn() -> sqlite3.Connection:
+    """In-memory runtime_state.db with the proactive tables this PR queries."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE proactive_intelligence_reports (
+            report_id TEXT PRIMARY KEY,
+            period TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            stats_json TEXT NOT NULL DEFAULT '{}',
+            analysis TEXT NOT NULL DEFAULT '',
+            email_message_id TEXT DEFAULT '',
+            email_thread_id TEXT DEFAULT '',
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE proactive_artifacts (
+            artifact_id TEXT PRIMARY KEY,
+            artifact_type TEXT NOT NULL,
+            source_kind TEXT NOT NULL,
+            source_ref TEXT NOT NULL DEFAULT '',
+            title TEXT NOT NULL,
+            summary TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'produced',
+            delivery_state TEXT NOT NULL DEFAULT 'not_surfaced',
+            priority INTEGER NOT NULL DEFAULT 2,
+            artifact_uri TEXT NOT NULL DEFAULT '',
+            artifact_path TEXT NOT NULL DEFAULT '',
+            source_url TEXT NOT NULL DEFAULT '',
+            topic_tags_json TEXT NOT NULL DEFAULT '[]',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            feedback_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            surfaced_at TEXT NOT NULL DEFAULT '',
+            accepted_at TEXT NOT NULL DEFAULT '',
+            rejected_at TEXT NOT NULL DEFAULT '',
+            archived_at TEXT NOT NULL DEFAULT ''
+        );
+        CREATE TABLE proactive_artifact_emails (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            artifact_id TEXT NOT NULL,
+            message_id TEXT NOT NULL DEFAULT '',
+            thread_id TEXT NOT NULL DEFAULT '',
+            subject TEXT NOT NULL DEFAULT '',
+            recipient TEXT NOT NULL DEFAULT '',
+            sent_at TEXT NOT NULL,
+            delivery_state TEXT NOT NULL DEFAULT 'emailed',
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        """
+    )
+    conn.commit()
+    return conn
+
+
+# --- 6. proactive_reports_daily_trio ---
+
+
+def test_proactive_reports_daily_trio_all_present_quiet(monkeypatch) -> None:
+    _set_now(monkeypatch, datetime(2026, 5, 19, 18, 0, tzinfo=HOUSTON))
+    conn = _seeded_runtime_conn()
+    today = "2026-05-19"
+    for period in ["morning", "midday", "afternoon"]:
+        conn.execute(
+            "INSERT INTO proactive_intelligence_reports "
+            "(report_id, period, timestamp, created_at) VALUES (?, ?, ?, ?)",
+            (f"r_{period}", period, f"{today}T12:00:00", f"{today}T12:00:00"),
+        )
+    conn.commit()
+    findings = run_invariants({"runtime_conn": conn})
+    assert _only(findings, "proactive_reports_daily_trio") == []
+
+
+def test_proactive_reports_daily_trio_only_one_fires_warn(monkeypatch) -> None:
+    _set_now(monkeypatch, datetime(2026, 5, 19, 18, 0, tzinfo=HOUSTON))
+    conn = _seeded_runtime_conn()
+    today = "2026-05-19"
+    conn.execute(
+        "INSERT INTO proactive_intelligence_reports "
+        "(report_id, period, timestamp, created_at) VALUES ('r1', 'morning', ?, ?)",
+        (f"{today}T07:05:00", f"{today}T07:05:00"),
+    )
+    conn.commit()
+    findings = run_invariants({"runtime_conn": conn})
+    matches = _only(findings, "proactive_reports_daily_trio")
+    assert len(matches) == 1
+    obs = matches[0].observed_value
+    assert obs["reports_today"] == 1
+    assert "midday" in obs["periods_missing"]
+    assert "afternoon" in obs["periods_missing"]
+
+
+def test_proactive_reports_daily_trio_two_of_three_stays_quiet(monkeypatch) -> None:
+    """Tolerate 1 missed slot as routine API blip."""
+    _set_now(monkeypatch, datetime(2026, 5, 19, 18, 0, tzinfo=HOUSTON))
+    conn = _seeded_runtime_conn()
+    today = "2026-05-19"
+    for period in ["morning", "midday"]:
+        conn.execute(
+            "INSERT INTO proactive_intelligence_reports "
+            "(report_id, period, timestamp, created_at) VALUES (?, ?, ?, ?)",
+            (f"r_{period}", period, f"{today}T12:00:00", f"{today}T12:00:00"),
+        )
+    conn.commit()
+    findings = run_invariants({"runtime_conn": conn})
+    assert _only(findings, "proactive_reports_daily_trio") == []
+
+
+def test_proactive_reports_daily_trio_silent_before_5pm(monkeypatch) -> None:
+    _set_now(monkeypatch, datetime(2026, 5, 19, 14, 0, tzinfo=HOUSTON))
+    conn = _seeded_runtime_conn()
+    findings = run_invariants({"runtime_conn": conn})
+    assert _only(findings, "proactive_reports_daily_trio") == []
+
+
+# --- 7. claude_code_intel_packet_freshness ---
+
+
+def test_claude_code_intel_recent_packet_quiet(tmp_path: Path, monkeypatch) -> None:
+    fake_now = datetime(2026, 5, 19, 14, 0, tzinfo=HOUSTON)
+    _set_now(monkeypatch, fake_now)
+    base = tmp_path / "artifacts"
+    pkts = base / "proactive" / "claude_code_intel" / "packets"
+    pkts.mkdir(parents=True)
+    f = pkts / "packet_001.json"
+    f.write_text("{}")
+    fresh_mtime = fake_now.timestamp() - 3600  # 1h ago
+    os.utime(f, (fresh_mtime, fresh_mtime))
+    findings = run_invariants({"artifacts_dir": base})
+    assert _only(findings, "claude_code_intel_packet_freshness") == []
+
+
+def test_claude_code_intel_stale_packet_fires(tmp_path: Path, monkeypatch) -> None:
+    fake_now = datetime(2026, 5, 19, 14, 0, tzinfo=HOUSTON)
+    _set_now(monkeypatch, fake_now)
+    base = tmp_path / "artifacts"
+    pkts = base / "proactive" / "claude_code_intel" / "packets"
+    pkts.mkdir(parents=True)
+    f = pkts / "packet_001.json"
+    f.write_text("{}")
+    twelve_hours_ago = fake_now.timestamp() - 12 * 3600
+    os.utime(f, (twelve_hours_ago, twelve_hours_ago))
+    findings = run_invariants({"artifacts_dir": base})
+    matches = _only(findings, "claude_code_intel_packet_freshness")
+    assert len(matches) == 1
+    assert matches[0].severity == "warn"
+    assert matches[0].observed_value["age_hours"] >= 9
+
+
+def test_claude_code_intel_silent_during_dormancy(tmp_path: Path, monkeypatch) -> None:
+    _set_now(monkeypatch, datetime(2026, 5, 19, 23, 0, tzinfo=HOUSTON))
+    base = tmp_path / "artifacts"
+    pkts = base / "proactive" / "claude_code_intel" / "packets"
+    pkts.mkdir(parents=True)
+    findings = run_invariants({"artifacts_dir": base})
+    assert _only(findings, "claude_code_intel_packet_freshness") == []
+
+
+# --- 8. csi_demo_triage_rank_artifact ---
+
+
+def test_csi_demo_triage_rank_recent_quiet(monkeypatch) -> None:
+    _set_now(monkeypatch, datetime(2026, 5, 19, 16, 0, tzinfo=HOUSTON))
+    conn = _seeded_runtime_conn()
+    recent_iso = (datetime.now(UTC) - timedelta(hours=2)).isoformat()
+    conn.execute(
+        "INSERT INTO proactive_artifacts (artifact_id, artifact_type, source_kind, "
+        "title, created_at, updated_at) VALUES "
+        "('a1', 'csi_demo_triage_run', 'cron', 'rank', ?, ?)",
+        (recent_iso, recent_iso),
+    )
+    conn.commit()
+    findings = run_invariants({"runtime_conn": conn})
+    assert _only(findings, "csi_demo_triage_rank_artifact") == []
+
+
+def test_csi_demo_triage_rank_stale_fires_critical(monkeypatch) -> None:
+    _set_now(monkeypatch, datetime(2026, 5, 19, 16, 0, tzinfo=HOUSTON))
+    conn = _seeded_runtime_conn()
+    old_iso = (datetime.now(UTC) - timedelta(hours=12)).isoformat()
+    conn.execute(
+        "INSERT INTO proactive_artifacts (artifact_id, artifact_type, source_kind, "
+        "title, created_at, updated_at) VALUES "
+        "('a1', 'csi_demo_triage_run', 'cron', 'rank', ?, ?)",
+        (old_iso, old_iso),
+    )
+    conn.commit()
+    findings = run_invariants({"runtime_conn": conn})
+    matches = _only(findings, "csi_demo_triage_rank_artifact")
+    assert len(matches) == 1
+    assert matches[0].severity == "critical"
+
+
+def test_csi_demo_triage_rank_empty_table_stays_quiet(monkeypatch) -> None:
+    """No rows of this artifact_type yet — feature not active, stay quiet."""
+    _set_now(monkeypatch, datetime(2026, 5, 19, 16, 0, tzinfo=HOUSTON))
+    conn = _seeded_runtime_conn()
+    findings = run_invariants({"runtime_conn": conn})
+    assert _only(findings, "csi_demo_triage_rank_artifact") == []
+
+
+# --- 9. paper_to_podcast_email_delivery ---
+
+
+def test_paper_to_podcast_recent_email_quiet(monkeypatch) -> None:
+    _set_now(monkeypatch, datetime(2026, 5, 19, 8, 0, tzinfo=HOUSTON))
+    conn = _seeded_runtime_conn()
+    recent_iso = (datetime.now(UTC) - timedelta(hours=10)).isoformat()
+    conn.execute(
+        "INSERT INTO proactive_artifact_emails (artifact_id, recipient, subject, sent_at) "
+        "VALUES ('a1', 'kevinjdragan@gmail.com', 'Daily Papers Brief', ?)",
+        (recent_iso,),
+    )
+    conn.commit()
+    findings = run_invariants({"runtime_conn": conn})
+    assert _only(findings, "paper_to_podcast_email_delivery") == []
+
+
+def test_paper_to_podcast_old_email_fires_critical(monkeypatch) -> None:
+    _set_now(monkeypatch, datetime(2026, 5, 19, 8, 0, tzinfo=HOUSTON))
+    conn = _seeded_runtime_conn()
+    old_iso = (datetime.now(UTC) - timedelta(hours=48)).isoformat()
+    conn.execute(
+        "INSERT INTO proactive_artifact_emails (artifact_id, recipient, subject, sent_at) "
+        "VALUES ('a1', 'kevinjdragan@gmail.com', 'Daily Papers Brief', ?)",
+        (old_iso,),
+    )
+    conn.commit()
+    findings = run_invariants({"runtime_conn": conn})
+    matches = _only(findings, "paper_to_podcast_email_delivery")
+    assert len(matches) == 1
+    assert matches[0].severity == "critical"
+
+
+def test_paper_to_podcast_empty_table_stays_quiet(monkeypatch) -> None:
+    _set_now(monkeypatch, datetime(2026, 5, 19, 8, 0, tzinfo=HOUSTON))
+    conn = _seeded_runtime_conn()
+    findings = run_invariants({"runtime_conn": conn})
+    assert _only(findings, "paper_to_podcast_email_delivery") == []
+
+
+# --- 10. vault_lint_contradictions_monthly ---
+
+
+def test_vault_lint_current_month_present_quiet(tmp_path: Path, monkeypatch) -> None:
+    today_dt = datetime(2026, 5, 19, 8, 0, tzinfo=HOUSTON)
+    _set_now(monkeypatch, today_dt)
+    base = tmp_path / "artifacts"
+    vault = base / "knowledge-vaults" / "claude-code-intelligence"
+    vault.mkdir(parents=True)
+    f = vault / "contradiction-report-2026-05-01.md"
+    f.write_text("# report")
+    # Set mtime to within current month (May 2026).
+    may_5 = datetime(2026, 5, 5, 12, 0, tzinfo=HOUSTON).timestamp()
+    os.utime(f, (may_5, may_5))
+    findings = run_invariants({"artifacts_dir": base})
+    assert _only(findings, "vault_lint_contradictions_monthly") == []
+
+
+def test_vault_lint_no_current_month_report_fires(tmp_path: Path, monkeypatch) -> None:
+    today_dt = datetime(2026, 5, 19, 8, 0, tzinfo=HOUSTON)
+    _set_now(monkeypatch, today_dt)
+    base = tmp_path / "artifacts"
+    vault = base / "knowledge-vaults" / "claude-code-intelligence"
+    vault.mkdir(parents=True)
+    f = vault / "contradiction-report-2026-04-01.md"
+    f.write_text("# april report")
+    april_1 = datetime(2026, 4, 1, 12, 0, tzinfo=HOUSTON).timestamp()
+    os.utime(f, (april_1, april_1))
+    findings = run_invariants({"artifacts_dir": base})
+    matches = _only(findings, "vault_lint_contradictions_monthly")
+    assert len(matches) == 1
+    assert matches[0].observed_value["current_month"] == "2026-05"
+
+
+def test_vault_lint_silent_on_first_of_month(tmp_path: Path, monkeypatch) -> None:
+    """Probe stays quiet on the 1st to give the day's cron time to run."""
+    _set_now(monkeypatch, datetime(2026, 5, 1, 8, 0, tzinfo=HOUSTON))
+    base = tmp_path / "artifacts"
+    (base / "knowledge-vaults" / "anything").mkdir(parents=True)
+    findings = run_invariants({"artifacts_dir": base})
+    assert _only(findings, "vault_lint_contradictions_monthly") == []
+
+
+def test_vault_lint_empty_dir_stays_quiet(tmp_path: Path, monkeypatch) -> None:
+    _set_now(monkeypatch, datetime(2026, 5, 19, 8, 0, tzinfo=HOUSTON))
+    base = tmp_path / "artifacts"
+    (base / "knowledge-vaults" / "anything").mkdir(parents=True)
+    findings = run_invariants({"artifacts_dir": base})
+    assert _only(findings, "vault_lint_contradictions_monthly") == []
+
+
+# === Registration assertion includes all 10 invariants ===
+
+
+def test_all_ten_invariants_register_on_import() -> None:
+    ids = {inv.id for inv in pi.get_registered_invariants()}
+    expected = {
+        "morning_briefing_freshness",
+        "proactive_artifact_digest_delivery",
+        "hackernews_snapshot_cadence",
+        "csi_convergence_sync_freshness",
+        "nightly_wiki_persistent_silence",
+        "proactive_reports_daily_trio",
+        "claude_code_intel_packet_freshness",
+        "csi_demo_triage_rank_artifact",
+        "paper_to_podcast_email_delivery",
+        "vault_lint_contradictions_monthly",
+    }
+    assert expected.issubset(ids)
