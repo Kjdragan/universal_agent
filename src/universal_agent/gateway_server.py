@@ -16060,6 +16060,45 @@ async def ops_proactive_health(request: Request):
     return payload
 
 
+@app.post("/api/v1/ops/proactive_health/email_test")
+async def ops_proactive_health_email_test(
+    request: Request,
+    confirm: bool = False,
+    note: str = "",
+):
+    """Manual email-deliverability test for the proactive_health notifier.
+
+    Synthesizes a clearly-labeled [TEST] critical finding and sends it via
+    the same AgentMail path real critical findings use, bypassing the 6h
+    dedup. Lets the operator verify the email path is alive without waiting
+    for a real critical to flip.
+
+    Requires ``?confirm=true`` to prevent accidental triggering (e.g. a
+    misconfigured monitoring poll). Auth uses the same ops-token convention
+    as the other /api/v1/ops/* endpoints.
+    """
+    _require_ops_auth(request)
+    if not confirm:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Refusing to send test email without explicit confirmation. "
+                "Re-call with ?confirm=true to trigger."
+            ),
+        )
+
+    from universal_agent.services.proactive_health_notifier import (
+        send_test_critical_email,
+    )
+
+    agentmail_service = globals().get("_agentmail_service")
+    result = await send_test_critical_email(
+        agentmail_service=agentmail_service,
+        note=str(note or "").strip(),
+    )
+    return result
+
+
 class FactoryUpdateRequest(BaseModel):
     """Request to trigger a factory self-update via delegation bus."""
     target_factory_id: Optional[str] = None  # None = broadcast to all workers
