@@ -81,6 +81,7 @@ This file controls proactive heartbeat behavior. Keep items concrete and actiona
     5. **Do not** invoke the invariant probes directly from the heartbeat shell — call the endpoint. Probes can mutate over time as pipeline owners register new ones; the endpoint is the stable contract.
     6. If the endpoint returns 5xx, log a `warn` finding with `metric_key='proactive_health_endpoint_down'` and `runbook_command='journalctl -u universal-agent-gateway --since "10 min ago" --no-pager'`. Do not block the rest of the heartbeat on this.
     7. Canonical reference: [`docs/03_Operations/132_Proactive_Health_Watchdog.md`](../docs/03_Operations/132_Proactive_Health_Watchdog.md). Authoring a new invariant: same doc, "Authoring runbook" section.
+    8. **Triage `proactive_health:*` Task Hub rows.** Since 2026-05-20 (P0c) the heartbeat pre-flight automatically parks a `needs_review` row in Task Hub for every critical finding (`task_id = proactive_health:<finding_id>`, `source_kind = proactive_health`). When you encounter one in your sweep: read `metadata.runbook_command` and `metadata.recommendation`, investigate the underlying pipeline, and either (a) mark `status=completed` with a comment summarizing the fix, or (b) mark `status=blocked` with the operator-blocker reason. Do NOT mass-clear `proactive_health:*` rows without investigation — they represent real production pipeline failures the watchdog detected.
 <!-- scope:all -->
 - [ ] Mission Control build kickoff
   - Confirm first concrete milestone and produce a short execution checklist.
