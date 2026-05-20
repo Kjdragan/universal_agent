@@ -618,6 +618,201 @@ async def test_no_task_hub_emit_fn_is_backwards_compatible(
     assert (tmp_path / "work_products" / "proactive_health_latest.json").exists()
 
 
+# ─── P3: warn-severity escalation via Task Hub (no email) ────────────────────
+
+
+def _warn_payload(finding_id: str = "morning_briefing_freshness") -> dict:
+    return {
+        "overall_status": "warn",
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "crons": [],
+        "stale_tasks": {"count": 0, "samples": []},
+        "parked_tasks": {"count": 0, "samples": []},
+        "invariants": [
+            {
+                "finding_id": f"invariant:{finding_id}",
+                "category": "proactive_health",
+                "severity": "warn",
+                "metric_key": finding_id,
+                "observed_value": {"today": "2026-05-20"},
+                "title": "Test warn invariant",
+                "recommendation": "investigate",
+                "runbook_command": "ls -la artifacts/",
+                "metadata": {},
+            }
+        ],
+    }
+
+
+@pytest.fixture(autouse=True)
+def _reset_warn_counter():
+    """Each test starts with a fresh consecutive-warn counter."""
+    notifier._consecutive_warns.clear()
+    yield
+    notifier._consecutive_warns.clear()
+
+
+@pytest.mark.asyncio
+async def test_single_warn_tick_does_not_escalate(
+    tmp_path, fake_agentmail, notifications_list, add_notification_fn
+):
+    """A warn finding seen ONCE should NOT park a Task Hub row. The
+    escalation threshold is 3 consecutive ticks by default — transient
+    warns shouldn't pollute the backlog."""
+    emitted: list[dict] = []
+    await run_pre_flight_check(
+        workspace_dir=tmp_path,
+        payload_builder=_warn_payload,
+        agentmail_service=fake_agentmail,
+        notifications_list=notifications_list,
+        add_notification_fn=add_notification_fn,
+        task_hub_emit_fn=emitted.append,
+    )
+    assert emitted == []  # warns don't emit on first sighting
+    fake_agentmail.send_email.assert_not_called()  # warns never email
+
+
+@pytest.mark.asyncio
+async def test_warn_escalates_at_threshold(
+    tmp_path, fake_agentmail, notifications_list, add_notification_fn, monkeypatch
+):
+    """A warn finding observed 3 consecutive ticks should park ONE Task Hub row
+    on the 3rd tick — not before, and not again on tick 4+."""
+    monkeypatch.setenv("UA_HEARTBEAT_PROACTIVE_HEALTH_WARN_ESCALATION_THRESHOLD", "3")
+    emitted: list[dict] = []
+
+    # Tick 1, 2 — should NOT emit
+    for _ in range(2):
+        await run_pre_flight_check(
+            workspace_dir=tmp_path,
+            payload_builder=_warn_payload,
+            agentmail_service=fake_agentmail,
+            notifications_list=notifications_list,
+            add_notification_fn=add_notification_fn,
+            task_hub_emit_fn=emitted.append,
+        )
+    assert emitted == []
+
+    # Tick 3 — escalates
+    await run_pre_flight_check(
+        workspace_dir=tmp_path,
+        payload_builder=_warn_payload,
+        agentmail_service=fake_agentmail,
+        notifications_list=notifications_list,
+        add_notification_fn=add_notification_fn,
+        task_hub_emit_fn=emitted.append,
+    )
+    assert len(emitted) == 1
+    assert emitted[0]["severity"] == "warn"
+    assert emitted[0]["metric_key"] == "morning_briefing_freshness"
+
+    # Tick 4, 5 — NOT re-emitted (Task Hub upsert handles persistence
+    # on the consumer side; notifier only emits once per crossing).
+    for _ in range(2):
+        await run_pre_flight_check(
+            workspace_dir=tmp_path,
+            payload_builder=_warn_payload,
+            agentmail_service=fake_agentmail,
+            notifications_list=notifications_list,
+            add_notification_fn=add_notification_fn,
+            task_hub_emit_fn=emitted.append,
+        )
+    assert len(emitted) == 1  # still only the one
+
+
+@pytest.mark.asyncio
+async def test_warn_disappears_resets_counter(
+    tmp_path, fake_agentmail, notifications_list, add_notification_fn, monkeypatch
+):
+    """If a warn fires twice then the issue resolves and it disappears, the
+    counter must RESET. If the warn comes back later, it starts from 1 not
+    from 3 — otherwise a flapping warn would immediately escalate on its
+    second flare."""
+    monkeypatch.setenv("UA_HEARTBEAT_PROACTIVE_HEALTH_WARN_ESCALATION_THRESHOLD", "3")
+    emitted: list[dict] = []
+
+    # Two warn ticks
+    for _ in range(2):
+        await run_pre_flight_check(
+            workspace_dir=tmp_path,
+            payload_builder=_warn_payload,
+            agentmail_service=fake_agentmail,
+            notifications_list=notifications_list,
+            add_notification_fn=add_notification_fn,
+            task_hub_emit_fn=emitted.append,
+        )
+    assert emitted == []
+
+    # Resolution tick — no warn in payload
+    await run_pre_flight_check(
+        workspace_dir=tmp_path,
+        payload_builder=_ok_payload,  # imported at top of file
+        agentmail_service=fake_agentmail,
+        notifications_list=notifications_list,
+        add_notification_fn=add_notification_fn,
+        task_hub_emit_fn=emitted.append,
+    )
+    # Counter for morning_briefing_freshness should be gone.
+    assert "invariant:morning_briefing_freshness" not in notifier._consecutive_warns
+
+    # Warn flares again — should be tick 1 of 3, not immediate escalation
+    await run_pre_flight_check(
+        workspace_dir=tmp_path,
+        payload_builder=_warn_payload,
+        agentmail_service=fake_agentmail,
+        notifications_list=notifications_list,
+        add_notification_fn=add_notification_fn,
+        task_hub_emit_fn=emitted.append,
+    )
+    assert emitted == []  # still no emission — counter restarted
+
+
+@pytest.mark.asyncio
+async def test_warn_escalation_independent_of_email_path(
+    tmp_path, notifications_list, add_notification_fn, monkeypatch
+):
+    """Warn escalation must run even when the email channel is broken (no
+    agentmail_service). Task Hub is the warn-tier escalation surface, not
+    a fallback for blocked emails."""
+    monkeypatch.setenv("UA_HEARTBEAT_PROACTIVE_HEALTH_WARN_ESCALATION_THRESHOLD", "2")
+    emitted: list[dict] = []
+
+    for _ in range(2):
+        await run_pre_flight_check(
+            workspace_dir=tmp_path,
+            payload_builder=_warn_payload,
+            agentmail_service=None,
+            notifications_list=notifications_list,
+            add_notification_fn=add_notification_fn,
+            task_hub_emit_fn=emitted.append,
+        )
+    assert len(emitted) == 1
+    assert emitted[0]["severity"] == "warn"
+
+
+@pytest.mark.asyncio
+async def test_warn_never_emails_even_at_escalation(
+    tmp_path, fake_agentmail, notifications_list, add_notification_fn, monkeypatch
+):
+    """Warn escalation parks Task Hub rows but NEVER sends email. Warn-tier
+    emails would noise out the critical-tier alerts Kevin needs to act on."""
+    monkeypatch.setenv("UA_HEARTBEAT_PROACTIVE_HEALTH_WARN_ESCALATION_THRESHOLD", "2")
+    emitted: list[dict] = []
+
+    for _ in range(3):
+        await run_pre_flight_check(
+            workspace_dir=tmp_path,
+            payload_builder=_warn_payload,
+            agentmail_service=fake_agentmail,
+            notifications_list=notifications_list,
+            add_notification_fn=add_notification_fn,
+            task_hub_emit_fn=emitted.append,
+        )
+    # Task Hub row created at tick 2 — but ZERO emails sent.
+    assert len(emitted) >= 1
+    fake_agentmail.send_email.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_task_hub_emit_runs_even_when_email_skipped(
     tmp_path, notifications_list, add_notification_fn, caplog
