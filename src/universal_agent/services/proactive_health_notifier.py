@@ -250,6 +250,27 @@ async def _notify_critical(
     return True
 
 
+def _emit_to_task_hub(
+    findings: list[dict[str, Any]],
+    task_hub_emit_fn: Optional[Callable[[dict[str, Any]], None]],
+) -> None:
+    """Best-effort: park a Task Hub row for each critical finding so it persists
+    past one heartbeat. Independent of email — losing the email channel must
+    not lose the persistent backlog. Never raises."""
+    if task_hub_emit_fn is None:
+        return
+    for f in findings:
+        try:
+            task_hub_emit_fn(f)
+        except Exception:  # noqa: BLE001 — never crash the heartbeat
+            fp = str(f.get("finding_id") or f.get("metric_key") or "unknown")
+            logger.warning(
+                "proactive_health: task_hub_emit_fn failed for %s",
+                fp,
+                exc_info=True,
+            )
+
+
 async def run_pre_flight_check(
     *,
     workspace_dir: Path,
@@ -257,6 +278,7 @@ async def run_pre_flight_check(
     agentmail_service: Optional[_AgentMailLike],
     notifications_list: Optional[list[dict[str, Any]]],
     add_notification_fn: Optional[Callable[..., dict[str, Any]]],
+    task_hub_emit_fn: Optional[Callable[[dict[str, Any]], None]] = None,
 ) -> dict[str, Any]:
     """Run the proactive watchdog as a pre-flight before any agent invocation.
 
@@ -311,6 +333,10 @@ async def run_pre_flight_check(
                     fp,
                     consecutive,
                 )
+            # Task Hub channel is independent of email. Even when email is
+            # blocked, park a `needs_review` row for each critical so the
+            # finding survives past this heartbeat.
+            _emit_to_task_hub(criticals, task_hub_emit_fn)
             return payload
 
     cooldown = _cooldown_seconds()
@@ -318,7 +344,11 @@ async def run_pre_flight_check(
     notifications = notifications_list if notifications_list is not None else []
 
     sent_count = 0
-    for finding in _critical_invariants(payload):
+    criticals_this_tick = _critical_invariants(payload)
+    # Park Task Hub rows up front so the persistent backlog reflects every
+    # critical, independent of whether email succeeds or hits cooldown.
+    _emit_to_task_hub(criticals_this_tick, task_hub_emit_fn)
+    for finding in criticals_this_tick:
         sent = await _notify_critical(
             finding=finding,
             payload_generated_at=generated_at,
