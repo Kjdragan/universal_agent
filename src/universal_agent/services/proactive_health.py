@@ -241,12 +241,24 @@ def build_proactive_health_payload(
     # parallel plumbing. The `runtime_conn` parameter is kept for backwards
     # compatibility with callers that pass it explicitly, but the aggregator
     # no longer opens one itself.
+    # Pass materialized_cron_jobs (post-fallback to persistence file) so the
+    # cron_staleness invariant can walk every enabled cron. Coerce each row
+    # to a dict here once so the invariant doesn't have to re-handle
+    # to_dict() failure paths.
+    cron_jobs_for_invariants: list[Dict[str, Any]] = []
+    for job in materialized_cron_jobs or ():
+        try:
+            cron_jobs_for_invariants.append(job.to_dict() if hasattr(job, "to_dict") else dict(job))
+        except Exception:  # noqa: BLE001
+            continue
+
     invariant_findings = pipeline_invariants.run_invariants(
         {
             "csi_db_path": csi_db_path,
             "runtime_conn": runtime_conn,
             "activity_conn": activity_conn,
             "artifacts_dir": artifacts_dir,
+            "cron_jobs": cron_jobs_for_invariants,
         }
     )
 
