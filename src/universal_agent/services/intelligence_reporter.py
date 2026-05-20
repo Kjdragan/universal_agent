@@ -11,6 +11,7 @@ from typing import Any
 
 from universal_agent import task_hub
 from universal_agent.services import proactive_artifacts
+from universal_agent.services.email_tags import ActionTag, KindTag
 from universal_agent.services.proactive_preferences import (
     build_weekly_preference_report,
     score_artifact_for_review,
@@ -157,6 +158,10 @@ class IntelligenceReporter:
             html=payload.html,
             force_send=True,
             require_approval=False,
+            action=ActionTag.DECISION,
+            kind=KindTag.PROACTIVE,
+            source="intelligence_reporter.send_review_email",
+            related=[f"artifact_id={artifact_id}"],
         )
         proactive_artifacts.record_email_delivery(
             self._conn,
@@ -190,6 +195,10 @@ class IntelligenceReporter:
             html=payload.html,
             force_send=True,
             require_approval=False,
+            action=ActionTag.FYI,
+            kind=KindTag.DIGEST,
+            source="intelligence_reporter.send_daily_digest",
+            related=[f"artifact_id={payload.artifact_id}"],
         )
         proactive_artifacts.record_email_delivery(
             self._conn,
@@ -217,6 +226,10 @@ class IntelligenceReporter:
             html=payload.html,
             force_send=True,
             require_approval=False,
+            action=ActionTag.FYI,
+            kind=KindTag.DIGEST,
+            source="intelligence_reporter.send_weekly_preference_report",
+            related=[f"artifact_id={payload.artifact_id}"],
         )
         proactive_artifacts.record_email_delivery(
             self._conn,

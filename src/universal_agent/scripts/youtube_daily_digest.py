@@ -49,6 +49,7 @@ from universal_agent.services.agentmail_service import AgentMailService
 from universal_agent.services.digest_delivery_reminder import (
     send_digest_delivery_reminder,
 )
+from universal_agent.services.email_tags import ActionTag, KindTag
 from universal_agent.services.youtube_playlist_manager import (
     YouTubeAPIError,
     YouTubeOAuthError,
@@ -1760,6 +1761,10 @@ def process_daily_digest(
                     text=full_content,
                     force_send=True,
                     require_approval=False,
+                    action=ActionTag.FYI,
+                    kind=KindTag.DIGEST,
+                    source="youtube_daily_digest cron",
+                    related=[f"day={day_name}", f"date={date_str}"],
                 )
             finally:
                 await mail.shutdown()
