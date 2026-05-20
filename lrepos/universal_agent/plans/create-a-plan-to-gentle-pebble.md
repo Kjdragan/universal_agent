@@ -211,6 +211,47 @@ Nothing in this plan creates a second watchdog process or a parallel telemetry p
 
 ---
 
+## §7 — P2 Investigation findings (2026-05-20 19:00 UTC)
+
+After P0a–P1b shipped, diagnosed the three currently-dead adapters via SSH/SQL on prod (no sudo for csi-ingester logs):
+
+**Adapter state (last event UTC):**
+| Adapter | Last event | Silence | Cadence config |
+|---|---|---|---|
+| youtube_channel_rss | 2026-05-18 23:31 | ~43h | Time-gated CT hours [2,6,8,10,12,14,16,18,20], 90 min min interval |
+| threads_trends_broad | 2026-05-18 20:47 | ~46h | 1800s poll |
+| reddit_discovery | 2026-05-12 06:30 | ~8 days | 28800s poll (3x/day) |
+| youtube_playlist | (never seen) | n/a | `enabled: false` in config — deliberate, not a failure |
+| threads_owned, threads_trends_seeded | (never seen) | n/a | Config enabled but no recent events; needs investigation post-restart |
+
+**csi-ingester service state:**
+- Up since 2026-05-19 02:24 UTC (1d 16h) — never restarted during the silence
+- Memory 103 MB, CPU 5min/40h — VERY low utilization (smoking gun: adapters not actually polling)
+- 0 dead_letter rows in csi.db (adapters aren't erroring INTO the dead-letter queue)
+- 6 csi_poll_errors total over the lifetime (low)
+- HTTP /metrics shows polling alive (498 cycles, 3459 events) — but those are aggregate, hackernews is doing the work
+- 444 YouTube channels all active in DB; no config drift
+
+**Diagnosis:** the three silent adapters appear to have entered a state where the polling scheduler skips them, but no exception was thrown into dead_letter. Could be:
+- (a) Per-adapter loop task died silently; remaining adapters continued
+- (b) Adapter-internal time-gate or rate-limit state got confused and stays skipped
+- (c) Shared upstream (proxy, rate-limit cache) is broken silently
+
+**Operator action required (blocked on sudo):**
+```
+sudo systemctl restart csi-ingester
+```
+`ua` user does NOT have sudo for csi-ingester (only staging-* services). The restart should clear in-memory adapter state and recover three adapters. If silence persists post-restart, deeper investigation needs csi-ingester journal access (add `ua` to `systemd-journal` group, or get sudo for `journalctl -u csi-ingester`).
+
+**Watchdog coverage going forward:** PRs #398 (P1a csi_source_liveness) + #397 (P0c task_hub emission) means this exact failure mode will auto-surface on every heartbeat once deployed:
+- csi_source_liveness will fire as `critical` listing the stale sources
+- A `proactive_health:invariant:csi_source_liveness` row will park in Task Hub
+- The row's metadata will include the runbook command Kevin can paste
+
+So P2's structural fix is shipped via P1a; the *current* dead adapters are an operational restart away.
+
+---
+
 ## §A — Archived: Original close-out plan (WS1–WS4)
 
 (Kept for traceability. All WS1–WS4 items shipped in PRs #367, #370, #372, #374, #376, #389, #390, #392. The plumbing bugs found in §2 above are gaps in those PRs, not unshipped work.)
