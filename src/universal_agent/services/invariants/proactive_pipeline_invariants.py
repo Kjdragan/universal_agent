@@ -39,6 +39,11 @@ HACKERNEWS_ACTIVE_HOUR_MAX = 21  # inclusive (last tick :30 of hour 21 = 9:30 PM
 CSI_CONVERGENCE_MAX_AGE_MINUTES = 90.0  # one missed cycle of grace
 PROACTIVE_DIGEST_MAX_AGE_HOURS = 30.0  # 24h + 6h grace
 NIGHTLY_WIKI_WINDOW_END_HOUR = 5
+# `nightly_wiki` cron is "produce only when fresh CSI signals" — quiet
+# nights with no inputs are legitimate. Only fire if NO wiki has appeared
+# for this many days, which catches a stuck pipeline without false-firing
+# on every signal-light day.
+NIGHTLY_WIKI_QUIET_DAYS_FLOOR = 7
 
 
 def _today_houston() -> str:
@@ -71,17 +76,21 @@ def _parse_iso(value: Any) -> Optional[datetime]:
 
 @invariant(
     id="morning_briefing_freshness",
-    title="Morning briefing artifact generated within last 4h after 6:30 AM",
+    title="Today's morning briefing artifact exists",
     description=(
         "Cron `morning_briefing` runs at 6:30 AM Houston daily and writes "
-        "artifacts/autonomous-briefings/<YYYY-MM-DD>/DAILY_BRIEFING.md. If "
-        "this file is missing or stale by mid-morning, Kevin's morning "
-        "briefing has silently failed."
+        "artifacts/autonomous-briefings/<YYYY-MM-DD>/DAILY_BRIEFING.md. The "
+        "today-dated parent directory is itself the freshness gate — if the "
+        "file exists at today's path, it was written today. We only check "
+        "existence, not mtime: the 6:30 AM cron fires once per day, so by "
+        "afternoon the file is legitimately many hours old."
     ),
     severity="warn",
     runbook_command=(
-        "ls -la artifacts/autonomous-briefings/$(date +%Y-%m-%d)/DAILY_BRIEFING.md "
-        "2>&1; tail -5 logs/cron_morning_briefing*.log 2>/dev/null"
+        "ls -la artifacts/autonomous-briefings/$(TZ=America/Chicago date +%Y-%m-%d)/"
+        "DAILY_BRIEFING.md 2>&1; "
+        "journalctl -u universal-agent-gateway --since 'today 06:00' --no-pager | "
+        "grep -i morning_briefing"
     ),
     metadata={
         "pipeline": "morning_briefing",
@@ -110,25 +119,7 @@ def morning_briefing_freshness(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 f"No DAILY_BRIEFING.md for {today}. The 6:30 AM morning_briefing "
                 "cron may have failed silently. Kevin will have no briefing on his phone."
             ),
-            "threshold_text": (
-                f"exists AND age <= {MORNING_BRIEFING_MAX_AGE_HOURS:.0f}h after 6:30 AM Houston"
-            ),
-        }
-    mtime = datetime.fromtimestamp(briefing.stat().st_mtime, tz=HOUSTON_TZ)
-    age_hours = (now - mtime).total_seconds() / 3600.0
-    if age_hours > MORNING_BRIEFING_MAX_AGE_HOURS:
-        return {
-            "observed_value": {
-                "today": today,
-                "path": str(briefing),
-                "age_hours": round(age_hours, 2),
-            },
-            "message": (
-                f"Today's morning briefing is {age_hours:.1f}h old "
-                f"(threshold {MORNING_BRIEFING_MAX_AGE_HOURS:.0f}h). Likely a stale "
-                "file from a previous cycle — today's run probably failed."
-            ),
-            "threshold_text": f"age <= {MORNING_BRIEFING_MAX_AGE_HOURS:.0f}h",
+            "threshold_text": "exists at today's path after 6:30 AM Houston",
         }
     return None
 
@@ -354,26 +345,35 @@ def csi_convergence_sync_freshness(ctx: Dict[str, Any]) -> Optional[Dict[str, An
 
 
 @invariant(
-    id="nightly_wiki_daily_output",
-    title="Nightly wiki artifact written by 5 AM Houston",
+    id="nightly_wiki_persistent_silence",
+    title="Nightly wiki produced output within last 7 days",
     description=(
-        "Cron `nightly_wiki` runs at 3:15 AM Houston (dormancy exception) and "
-        "writes artifacts/nightly_wikis/<YYYY-MM-DD>_wiki_*.md|png. If no file "
-        "appears for today by ~5 AM, morning_briefing will read stale wiki "
-        "material — degrading the daily briefing operator reads at 6:30 AM."
+        "Cron `nightly_wiki` runs at 3:15 AM Houston and writes "
+        "artifacts/nightly_wikis/<YYYY-MM-DD>_wiki_*.md|png ONLY when fresh "
+        "CSI signals warrant a wiki. Quiet nights with no signal are "
+        "legitimate (cron exits clean_exit_zero with no file). We only fire "
+        "if NO wiki has appeared in the last 7 days — which catches a stuck "
+        "agent or stuck upstream signal pipeline without false-firing on "
+        "individual signal-light days."
     ),
     severity="warn",
     runbook_command=(
-        "ls -lt artifacts/nightly_wikis/$(date +%Y-%m-%d)_wiki_* 2>/dev/null; "
-        "tail -20 logs/cron_nightly_wiki*.log 2>/dev/null"
+        "ls -lt artifacts/nightly_wikis/ 2>/dev/null | head; "
+        "journalctl -u universal-agent-gateway --since '8 days ago' --no-pager | "
+        "grep -i nightly_wiki | tail -20"
     ),
     metadata={
         "pipeline": "nightly_wiki",
         "cron_expr": "15 3 * * *",
         "tz": "America/Chicago",
+        "design_note": (
+            "Probe changed 2026-05-20: was 'file for today exists' which "
+            "false-fired on every signal-quiet day. Now checks for persistent "
+            "silence across NIGHTLY_WIKI_QUIET_DAYS_FLOOR days."
+        ),
     },
 )
-def nightly_wiki_daily_output(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def nightly_wiki_persistent_silence(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     artifacts_dir = ctx.get("artifacts_dir")
     if artifacts_dir is None:
         return None
@@ -381,23 +381,33 @@ def nightly_wiki_daily_output(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not base.exists():
         return None
     now = _now_houston()
-    # Only meaningful after 5 AM Houston — give the 3:15 AM cron ~2 hours.
-    deadline = now.replace(hour=NIGHTLY_WIKI_WINDOW_END_HOUR, minute=0, second=0, microsecond=0)
-    if now < deadline:
+    # Walk all wiki files and find the most recent mtime. If newest is older
+    # than NIGHTLY_WIKI_QUIET_DAYS_FLOOR days, the pipeline is stuck.
+    wiki_files = list(base.glob("*_wiki_*"))
+    if not wiki_files:
+        # Truly fresh / never-deployed box. Empty dir is informational only,
+        # not a finding.
         return None
-    today = _today_houston()
-    today_files = list(base.glob(f"{today}_wiki_*"))
-    if not today_files:
+    newest = max(wiki_files, key=lambda p: p.stat().st_mtime)
+    newest_mtime = datetime.fromtimestamp(newest.stat().st_mtime, tz=HOUSTON_TZ)
+    quiet_days = (now - newest_mtime).total_seconds() / 86400.0
+    if quiet_days > NIGHTLY_WIKI_QUIET_DAYS_FLOOR:
         return {
             "observed_value": {
-                "today": today,
+                "newest_file": newest.name,
+                "newest_mtime": newest_mtime.isoformat(),
+                "quiet_days": round(quiet_days, 1),
                 "dir": str(base),
-                "expected_glob": f"{today}_wiki_*",
             },
             "message": (
-                f"No nightly_wiki artifacts for {today}. The 3:15 AM cron failed "
-                "or didn't run — morning_briefing will fall back to stale wiki material."
+                f"No nightly_wiki output in {quiet_days:.1f} days "
+                f"(threshold {NIGHTLY_WIKI_QUIET_DAYS_FLOOR}d). Either the "
+                "agent is stuck or the upstream CSI signal pipeline has dried "
+                "up. Inspect cron run logs and signal feed before assuming "
+                "this is normal."
             ),
-            "threshold_text": f"≥1 file matching {today}_wiki_* by 5 AM Houston",
+            "threshold_text": (
+                f"newest wiki mtime within last {NIGHTLY_WIKI_QUIET_DAYS_FLOOR}d"
+            ),
         }
     return None
