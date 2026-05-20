@@ -25,6 +25,8 @@ from pathlib import Path
 import time
 from typing import Any, Awaitable, Callable, Iterable, Optional, Protocol
 
+from universal_agent.services.email_tags import ActionTag, KindTag
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_COOLDOWN_SECONDS = 21600  # 6h
@@ -214,6 +216,10 @@ async def _notify_critical(
             subject=subject,
             text=text,
             force_send=True,
+            action=ActionTag.ACTION,
+            kind=KindTag.INCIDENT,
+            source="proactive_health_notifier",
+            related=[f"finding_id={finding_id}"],
         )
     except Exception:  # noqa: BLE001 — never crash the heartbeat over a send failure
         logger.warning("proactive_health: send_email failed for %s", finding_id, exc_info=True)
@@ -375,6 +381,9 @@ async def send_test_critical_email(
             subject=subject,
             text=text,
             force_send=True,
+            action=ActionTag.FYI,
+            kind=KindTag.INCIDENT,
+            source="proactive_health_notifier (manual test)",
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning(

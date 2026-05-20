@@ -1,6 +1,6 @@
 # Email Architecture and AgentMail Source of Truth
 
-> **Last updated: 2026-05-01** — added pre-triage deterministic security screening (injection scanner, unknown @agentmail.to auto-quarantine, sender reputation tracking with auto-escalation) so malicious content is blocked before reaching the triage LLM.
+> **Last updated: 2026-05-19** — added outbound subject-tag system (`[ACTION/KIND] subject` + body banner) so the operator can eyeball-triage their inbox. See `Outbound Subject Tagging` section. Prior: 2026-05-01 added pre-triage deterministic security screening (injection scanner, unknown @agentmail.to auto-quarantine, sender reputation tracking with auto-escalation).
 
 ## Purpose
 
@@ -527,6 +527,101 @@ To bypass this limitation, we provide specialized Python wrappers in the local t
 - `agentmail_reply_with_local_attachments`
 
 These bridge tools accept an `attachment_paths` array containing absolute paths to the local files instead of requiring Base64 conversion via `prepare_agentmail_attachment`. The backend securely loads the files into memory and sends them directly to the programmatic AgentMail HTTP API.
+
+---
+
+## Outbound Subject Tagging
+
+> **Status:** Active since 2026-05-19. Lives in `src/universal_agent/services/email_tags.py`. Opt-in per callsite — un-tagged sends remain backward compatible.
+
+### Motivation
+
+The operator gets a high volume of outbound email from UA principals (Simone, Codie, Atlas, dispatch sweep, ClaudeDevs intel, deploy/CI watchers, daily digests, weekly preference reports). Without a tag scheme, eyeball-triaging the inbox requires opening each message to figure out: is this actionable, FYI, an incident, a Codie suggestion, or a digest?
+
+### The 2-Dimension Scheme
+
+Two closed enums (intentionally small, no improvising):
+
+| Dimension | Values | Meaning |
+|---|---|---|
+| `ActionTag` (4) | `FYI`, `ACTION`, `DECISION`, `QUESTION` | What response, if any, is required |
+| `KindTag` (7) | `DIGEST`, `TUTORIAL`, `PROACTIVE`, `INCIDENT`, `CRON`, `SYSTEM`, `DEPLOY` | What kind of content the email contains |
+
+4 × 7 = 28 combos. Adding a new value requires editing the enum (and one PR review pass) — never improvise free-form tag strings.
+
+### Subject Format
+
+```
+[<ACTION>/<KIND>] <existing subject>
+```
+
+Examples:
+- `[FYI/DIGEST] Daily YouTube Digest: Monday`
+- `[DECISION/PROACTIVE] Codie proposes consolidating import ordering across 3 services`
+- `[ACTION/INCIDENT] CI failed on PR #364`
+- `[FYI/DEPLOY] Production deploy succeeded — sha=6f2e321f`
+- `[ACTION/DEPLOY] Production deploy FAILED — see workflow run 26052...`
+- `[QUESTION/PROACTIVE] Which import-ordering convention should I follow?`
+
+### Body Banner
+
+When tags are set, the wrapper injects a banner at the top of both the HTML and plaintext body:
+
+```
+Tags: ACTION/INCIDENT
+Source: proactive_health_notifier
+Related: finding_id=watchdog.heartbeat.idle
+Time: 2026-05-19T15:42:00-05:00
+---
+```
+
+`Related:` is optional context the caller passes (PR numbers, ticket IDs, file paths, artifact IDs). Time is Houston-local for operator readability.
+
+### Wrapper API
+
+`AgentMailService.send_email()` accepts four new optional kwargs:
+
+| Kwarg | Type | Notes |
+|---|---|---|
+| `action` | `ActionTag \| str \| None` | Required to enable tagging |
+| `kind` | `KindTag \| str \| None` | Required to enable tagging |
+| `source` | `str \| None` | Short producer identifier rendered in the banner |
+| `related` | `list[str] \| str \| None` | Optional related references |
+
+Tagging is gated on `action is not None AND kind is not None`. Partial tags are ignored (treated as un-tagged). Invalid enum strings raise `ValueError` at the call. The wrapper is **idempotent** — a subject that already starts with `[X/Y]` is left alone (catches accidental re-sends or replies).
+
+### Migrated Callsites (v1)
+
+| File | Tag | Source |
+|---|---|---|
+| `scripts/youtube_daily_digest.py` | `FYI/DIGEST` | `youtube_daily_digest cron` |
+| `services/intelligence_reporter.py::send_daily_digest` | `FYI/DIGEST` | `intelligence_reporter.send_daily_digest` |
+| `services/intelligence_reporter.py::send_weekly_preference_report` | `FYI/DIGEST` | `intelligence_reporter.send_weekly_preference_report` |
+| `services/intelligence_reporter.py::send_review_email` | `DECISION/PROACTIVE` | `intelligence_reporter.send_review_email` |
+| `services/proactive_health_notifier.py` (live alerts) | `ACTION/INCIDENT` | `proactive_health_notifier` |
+| `services/proactive_health_notifier.py` (test endpoint) | `FYI/INCIDENT` | `proactive_health_notifier (manual test)` |
+
+Less-frequent callsites (`hooks.py`, `cli_io.py`, `dependency_upgrade.py`, etc.) remain un-tagged for now and continue to work unchanged. Migration is mechanical — pass `action=`, `kind=`, `source=` to the existing `send_email` call.
+
+### Recommended Gmail Filters
+
+These six filters auto-apply a color label per KIND so the inbox segments visually. Paste into Gmail Settings → Filters → Create new:
+
+| Search query | Label (color) |
+|---|---|
+| `subject:[FYI/DIGEST] OR subject:[ACTION/DIGEST]` | `UA/Digest` (blue) |
+| `subject:[FYI/INCIDENT] OR subject:[ACTION/INCIDENT]` | `UA/Incident` (red) |
+| `subject:[DECISION/PROACTIVE] OR subject:[QUESTION/PROACTIVE] OR subject:[ACTION/PROACTIVE]` | `UA/Proactive` (orange) |
+| `subject:[ACTION/DEPLOY] OR subject:[FYI/DEPLOY]` | `UA/Deploy` (purple) |
+| `subject:[FYI/CRON] OR subject:[ACTION/CRON]` | `UA/Cron` (gray) |
+| `subject:[FYI/SYSTEM] OR subject:[ACTION/SYSTEM] OR subject:[FYI/TUTORIAL]` | `UA/System` (green) |
+
+### Implementation Files
+
+- `src/universal_agent/services/email_tags.py` — enums, `format_tagged_subject`, `format_body_header`.
+- `src/universal_agent/services/agentmail_service.py::send_email` — wrapper that prefixes the subject and prepends the banner when both `action` and `kind` are supplied.
+- `tests/unit/test_email_tags.py` — enum + helper unit tests.
+- `tests/unit/test_agentmail_send_tagged.py` — integration tests covering both the tagged and backward-compat paths.
 
 ---
 
