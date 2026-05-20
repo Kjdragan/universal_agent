@@ -410,12 +410,21 @@ def test_model_usage_tile_green_with_no_rate_limits(activity_db):
 
 
 def test_model_usage_tile_yellow_with_a_few_rate_limits(activity_db):
+    # Anchor to noon UTC today so the inserted row is unambiguously
+    # "today" for the tile's `created_at > date('now')` SQL filter,
+    # regardless of when CI happens to run. Using a relative offset
+    # like `_iso_minutes_ago(30)` flakes around UTC midnight.
+    today_noon_utc = (
+        datetime.now(timezone.utc)
+        .replace(hour=12, minute=0, second=0, microsecond=0)
+        .strftime("%Y-%m-%d %H:%M:%S")
+    )
     for i in range(2):
         _insert_event(
             activity_db,
             id=f"rl_{i}",
             summary="Got 429 from upstream",
-            created_at=_iso_minutes_ago(30),
+            created_at=today_noon_utc,
         )
     state = ModelUsageTodayTile().compute_state(activity_db)
     assert state.color == COLOR_YELLOW
