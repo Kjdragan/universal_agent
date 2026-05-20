@@ -29,6 +29,9 @@ from universal_agent.services.hackernews_snapshot_service import (
     DEFAULT_TOPICS,
     _load_watchlist,
 )
+from universal_agent.services.watchdog_briefing_context import (
+    build_briefing_block as build_watchdog_briefing_block,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +132,21 @@ def _get_triage_block_or_empty() -> str:
         return ""
 
 
+def _get_watchdog_block_or_empty() -> str:
+    """Return the watchdog briefing block, or "" on kill switch / no findings.
+
+    Kill switch: `UA_BRIEFING_WATCHDOG_BLOCK_ENABLED=0` disables. Any helper
+    failure is swallowed — the briefing must never break because the
+    watchdog query did. P6 (2026-05-20): closes the integration gap where
+    Simone's morning digest had zero awareness of active watchdog findings.
+    """
+    try:
+        return build_watchdog_briefing_block()
+    except Exception as exc:  # noqa: BLE001 — never let watchdog break the briefing
+        logger.warning("Watchdog briefing block helper crashed: %s", exc)
+        return ""
+
+
 def _build_objective(
     *,
     telemetry_json: str,
@@ -137,6 +155,7 @@ def _build_objective(
     artifacts_dir: str,
     today: str,
     triage_block: str = "",
+    watchdog_block: str = "",
 ) -> str:
     """Assemble the briefing prompt from the context sources.
 
@@ -154,6 +173,23 @@ def _build_objective(
             "\n- Surface the demo-triage queue depth at the top of the briefing if non-empty. "
             "The operator approval drawer is the only path from a tier-3 candidate to Cody — "
             "if pending count is growing, call it out as an action item for Kevin."
+        )
+
+    # P6 (2026-05-20): watchdog block. The watchdog parks proactive_health:*
+    # Task Hub rows for every critical finding and escalates persistent warns
+    # after 3 ticks. Without surfacing this in the briefing the operator can
+    # have hours-old critical alerts that never reach the morning report.
+    watchdog_section = ""
+    watchdog_instructions = ""
+    if watchdog_block:
+        watchdog_section = f"\n\n{watchdog_block}\n"
+        watchdog_instructions = (
+            "\n- **Lead the briefing with a Watchdog Status section.** Critical findings ARE the "
+            "operator's top priority for the day — surface every CRITICAL row from the watchdog "
+            "block prominently with its runbook command. Warn-tier findings get a brief mention. "
+            "The Task Hub backlog (`proactive_health:*` rows) is the actionable list of unresolved "
+            "issues — quote the task_ids so the operator can triage from the dashboard. If the "
+            "watchdog reports `overall: ok` and the backlog is empty, say so in one line and move on."
         )
 
     hn_section = ""
@@ -187,13 +223,13 @@ Here is the external Nightly Wiki Proactive Generation output (if any):
 ```markdown
 {wiki_content}
 ```
-{triage_section}{hn_section}
+{watchdog_section}{triage_section}{hn_section}
 Instructions:
 - Summarize tasks completed, attempted, and failed.
 - Include links/paths to any artifacts produced.
 - MUST explicitly include a "Latest Proactive Knowledge Base Additions" section referencing the Nightly Wiki external paths and files if any are provided.
 - Highlight any items requiring user decisions.
-- If there are data quality warnings, mention them.{triage_instructions}{hn_instructions}
+- If there are data quality warnings, mention them.{watchdog_instructions}{triage_instructions}{hn_instructions}
 
 Write a concise markdown report to '{artifacts_dir}/autonomous-briefings/{today}/DAILY_BRIEFING.md'.
 Make sure to provide a short completion message suitable for a dashboard notification.
@@ -256,6 +292,15 @@ async def main():
     else:
         logger.info("Triage briefing block omitted (kill switch / nothing pending)")
 
+    # P6 (2026-05-20): watchdog block. Surfaces current proactive_health
+    # findings + task_hub backlog so the briefing reflects what the watchdog
+    # has been detecting all morning.
+    watchdog_block = _get_watchdog_block_or_empty()
+    if watchdog_block:
+        logger.info("Watchdog briefing block included (~%d chars)", len(watchdog_block))
+    else:
+        logger.info("Watchdog briefing block omitted (kill switch / healthy state / no findings)")
+
     objective = _build_objective(
         telemetry_json=telemetry_json,
         wiki_content=wiki_content,
@@ -263,6 +308,7 @@ async def main():
         artifacts_dir=artifacts_dir,
         today=today,
         triage_block=triage_block,
+        watchdog_block=watchdog_block,
     )
 
     logger.info("Dispatching mission to vp.general.primary...")
