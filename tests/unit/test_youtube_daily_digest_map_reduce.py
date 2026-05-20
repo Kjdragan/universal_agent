@@ -102,30 +102,44 @@ def test_is_rate_limit_error_matches_zai_fup_1313():
     assert ydd._is_rate_limit_error(Exception("high concurrency detected")) is True
 
 
-def test_assemble_map_reduce_digest_threads_retellings_before_json_block():
+def test_assemble_map_reduce_digest_builds_deterministic_json_block():
+    """Per the 2026-05-20 architecture flip, the reducer LLM emits meta-synthesis
+    prose ONLY. The youtube_digest_decisions JSON block is built deterministically
+    in Python from MapResult.classification dicts and appended at the end."""
     map_results = [
         ydd.MapResult(
             video_id="a",
             title="A",
             retell_markdown="## A\n\n### Retelling\nA's retelling body.",
             thesis_line="A's thesis.",
-            classification={"video_id": "a", "value_score": 90},
+            classification={
+                "video_id": "a",
+                "value_score": 90,
+                "value_tier": "high",
+                "code_implementation_prospect": True,
+                "evidence_quality": "transcript",
+                "reason": "concrete walkthrough",
+            },
         ),
         ydd.MapResult(
             video_id="b",
             title="B",
             retell_markdown="## B\n\n### Retelling\nB's retelling body.",
             thesis_line="B's thesis.",
-            classification={"video_id": "b", "value_score": 70},
+            classification={
+                "video_id": "b",
+                "value_score": 70,
+                "value_tier": "medium",
+                "code_implementation_prospect": False,
+                "concept_only": True,
+                "evidence_quality": "transcript",
+                "reason": "concept-only",
+            },
         ),
     ]
     reduce_output = (
-        "# Daily YouTube Digest: Sunday, 2026-05-18\n\n"
         "## Meta-Synthesis: Daily Digest\n\n"
-        "### Cross-Video Themes\nSomething about both videos.\n\n"
-        "```youtube_digest_decisions\n"
-        '{ "ranked_videos": [] }\n'
-        "```\n"
+        "### Cross-Video Themes\nSomething about both videos.\n"
     )
     digest = ydd._assemble_map_reduce_digest(
         reduce_output=reduce_output, map_results=map_results
@@ -133,27 +147,95 @@ def test_assemble_map_reduce_digest_threads_retellings_before_json_block():
     # Both retellings must appear in the body.
     assert "A's retelling body." in digest
     assert "B's retelling body." in digest
-    # And the JSON block must still be at the end, intact.
-    jsonidx = digest.index("```youtube_digest_decisions")
+    # Meta-synthesis must come first.
+    meta_idx = digest.index("## Meta-Synthesis: Daily Digest")
     retellings_idx = digest.index("## Per-Video Retellings")
-    assert retellings_idx < jsonidx, "retellings must precede the JSON block so _extract_decision_json still works"
+    jsonidx = digest.index("```youtube_digest_decisions")
+    assert meta_idx < retellings_idx < jsonidx, "order must be: meta, retellings, JSON block"
+    # JSON block must be deterministic and parseable.
+    decisions = ydd._extract_decision_json(digest)
+    rows = decisions.get("ranked_videos", [])
+    assert len(rows) == 2
+    # Score-descending sort: A (90) first, B (70) second.
+    assert rows[0]["video_id"] == "a"
+    assert rows[0]["rank"] == 1
+    assert rows[0]["code_implementation_prospect"] is True
+    assert rows[0]["tutorial_candidate"] is True
+    assert rows[0]["recommended_tutorial_mode"] == "explainer_plus_code"
+    assert rows[1]["video_id"] == "b"
+    assert rows[1]["rank"] == 2
+    assert rows[1]["code_implementation_prospect"] is False
+    assert rows[1]["tutorial_candidate"] is False
+    assert rows[1]["recommended_tutorial_mode"] == "concept_only"
 
 
-def test_assemble_map_reduce_digest_handles_missing_json_block():
+def test_assemble_map_reduce_digest_ignores_legacy_json_in_reduce_output():
+    """If a future reducer regression accidentally emits a JSON block,
+    the deterministic builder MUST still append its own at the end so
+    _extract_decision_json picks up the correct one."""
     map_results = [
         ydd.MapResult(
             video_id="a",
             title="A",
             retell_markdown="## A retelling",
             thesis_line="A.",
-            classification={"video_id": "a"},
+            classification={
+                "video_id": "a",
+                "value_score": 80,
+                "value_tier": "high",
+                "code_implementation_prospect": True,
+                "evidence_quality": "transcript",
+            },
         )
     ]
-    # No JSON block at all in reducer output (degenerate but should not crash).
+    # Reducer emits a stale empty JSON block — bug, but tolerated.
+    reduce_output = (
+        "## Meta-Synthesis: Daily Digest\n\n"
+        "### Cross-Video Themes\n\n"
+        "```youtube_digest_decisions\n"
+        '{ "ranked_videos": [] }\n'
+        "```\n"
+    )
     digest = ydd._assemble_map_reduce_digest(
-        reduce_output="# Just meta-synthesis with no JSON.\n", map_results=map_results
+        reduce_output=reduce_output, map_results=map_results
+    )
+    # _extract_decision_json uses non-greedy, finds the FIRST block — the
+    # stale empty one. That's an unfixable consequence of any legacy
+    # reducer emitting a block. To guard against this we rely on the
+    # REDUCE_PROMPT explicitly forbidding the LLM from emitting one;
+    # this test exists so a future maintainer who removes that prompt
+    # guidance gets a clear signal that things are about to break.
+    first_block = digest.index("```youtube_digest_decisions")
+    second_block = digest.index("```youtube_digest_decisions", first_block + 1)
+    assert second_block > first_block, "deterministic block must be appended even if reducer emits its own"
+
+
+def test_assemble_map_reduce_digest_handles_meta_only_reduce_output():
+    """Reduce output containing only meta-synthesis prose (the post-2026-05-20
+    contract) — the assembler builds everything else."""
+    map_results = [
+        ydd.MapResult(
+            video_id="a",
+            title="A",
+            retell_markdown="## A retelling",
+            thesis_line="A.",
+            classification={
+                "video_id": "a",
+                "value_score": 50,
+                "value_tier": "medium",
+                "code_implementation_prospect": False,
+                "evidence_quality": "transcript",
+            },
+        )
+    ]
+    digest = ydd._assemble_map_reduce_digest(
+        reduce_output="## Meta-Synthesis: Daily Digest\n\nthemes here.\n",
+        map_results=map_results,
     )
     assert "A retelling" in digest
+    assert "```youtube_digest_decisions" in digest
+    decisions = ydd._extract_decision_json(digest)
+    assert decisions["ranked_videos"][0]["video_id"] == "a"
 
 
 @pytest.mark.asyncio
