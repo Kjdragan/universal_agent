@@ -318,7 +318,7 @@ class QueueLogHandler(logging.Handler):
         self.queue = queue
         self.loop = asyncio.get_running_loop()
 
-    def emit(self, record: logging.LogRecord):
+    def emit(self, record: logging.LogRecord) -> None:
         try:
             msg = self.format(record)
             event = AgentEvent(
@@ -354,7 +354,7 @@ class StreamCapture:
         self.log_handler = log_handler
         self.loop = asyncio.get_running_loop()
 
-    def write(self, text: str):
+    def write(self, text: str) -> None:
         # Mirror to original stream
         self.stream.write(text)
 
@@ -441,13 +441,13 @@ class StreamCapture:
                 except Exception:
                     pass
 
-    def flush(self):
+    def flush(self) -> None:
         self.stream.flush()
 
-    def isatty(self):
+    def isatty(self) -> bool:
         return getattr(self.stream, "isatty", lambda: False)()
 
-    def fileno(self):
+    def fileno(self) -> int:
         return self.stream.fileno()
 
 
@@ -873,12 +873,12 @@ def get_compaction_stats() -> dict:
     }
 
 
-def configure_logfire():
+def configure_logfire() -> None:
     """Configure Logfire for tracing if token is available."""
     if not LOGFIRE_TOKEN:
         return False
 
-    def scrubbing_callback(m: logfire.ScrubMatch):
+    def scrubbing_callback(m: logfire.ScrubMatch) -> Optional[Any]:
         if not m.path:
             return None
         last_key = m.path[-1]
@@ -1093,7 +1093,7 @@ async def observe_and_save_search_results(
             if "results" in payload and isinstance(payload["results"], dict):
                 search_data = payload["results"]
 
-            def safe_get_list(data, key):
+            def safe_get_list(data: dict[str, Any], key: str) -> list[Any]:
                 val = data.get(key, [])
                 if isinstance(val, dict):
                     return list(val.values())
@@ -1950,7 +1950,7 @@ class UniversalAgent:
         try:
             from mcp_server import set_mcp_log_callback
 
-            def mcp_bridge_sync(msg, level, prefix=""):
+            def mcp_bridge_sync(msg: str, level: str, prefix: str = "") -> None:
                 if self._event_queue:
                     try:
                         loop = asyncio.get_running_loop()
@@ -1986,7 +1986,7 @@ class UniversalAgent:
         run_log_file = open(run_log_path, "a")
         journal_file = open(journal_path, "a", encoding="utf-8")
 
-        def log_to_journal(event: AgentEvent):
+        def log_to_journal(event: AgentEvent) -> None:
             """Helper to log high-level activity to the journal."""
             try:
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -2043,7 +2043,7 @@ class UniversalAgent:
         os.dup2(run_log_file.fileno(), 1)
         os.dup2(run_log_file.fileno(), 2)
 
-        async def sdk_worker():
+        async def sdk_worker() -> None:
             """Worker to consume SDK events and push to queue."""
             print(
                 "DEBUG CORE: sdk_worker started. Calling _run_conversation...",
@@ -2340,7 +2340,7 @@ class UniversalAgent:
                     usage_source = getattr(msg, "usage", None)
                     if usage_source:
 
-                        def get_val(obj, key):
+                        def get_val(obj: Any, key: str) -> int:
                             if isinstance(obj, dict):
                                 return obj.get(key, 0)
                             return getattr(obj, key, 0)
@@ -2476,7 +2476,7 @@ class UniversalAgent:
                     usage_source = getattr(msg, "usage", None)
                     if usage_source:
 
-                        def get_val(obj, key):
+                        def get_val(obj: Any, key: str) -> int:
                             if isinstance(obj, dict):
                                 return obj.get(key, 0)
                             return getattr(obj, key, 0)
