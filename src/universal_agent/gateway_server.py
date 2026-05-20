@@ -9307,13 +9307,30 @@ def _ensure_activity_schema(conn: sqlite3.Connection) -> None:
             actions_json TEXT NOT NULL DEFAULT '[]',
             metadata_json TEXT NOT NULL DEFAULT '{}',
             channels_json TEXT NOT NULL DEFAULT '[]',
-            email_targets_json TEXT NOT NULL DEFAULT '[]'
+            email_targets_json TEXT NOT NULL DEFAULT '[]',
+            expires_at TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_activity_events_created_at ON activity_events(created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_activity_events_source_domain ON activity_events(source_domain, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_activity_events_kind ON activity_events(kind, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_activity_events_status ON activity_events(status, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_activity_events_requires_action ON activity_events(requires_action, created_at DESC);
+
+        -- Digest delivery reminder scheduler (written by the digest cron,
+        -- consumed by _digest_reminder_dismissal_sweep).  Each row records
+        -- a Telegram message we sent that must self-delete at dismiss_at.
+        CREATE TABLE IF NOT EXISTS digest_telegram_reminders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id TEXT NOT NULL,
+            message_id INTEGER NOT NULL,
+            dismiss_at TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            dismissed_at TEXT,
+            dismiss_status TEXT,
+            UNIQUE(chat_id, message_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_digest_telegram_reminders_dismiss_at
+            ON digest_telegram_reminders(dismiss_at) WHERE dismissed_at IS NULL;
 
         CREATE TABLE IF NOT EXISTS activity_event_audit (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -9398,6 +9415,23 @@ def _ensure_activity_schema(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE csi_specialist_loops ADD COLUMN suppressed_until TEXT"
         )
+    # In-place migration: pre-existing activity DBs lack the expires_at column
+    # introduced 2026-05-19 for short-lived delivery-reminder notifications.
+    # The partial index can only be created after the column exists, so
+    # both the ALTER and the index creation live in this branch.
+    try:
+        activity_cols = {
+            str(row["name"]) for row in
+            conn.execute("PRAGMA table_info(activity_events)").fetchall()
+        }
+        if "expires_at" not in activity_cols:
+            conn.execute("ALTER TABLE activity_events ADD COLUMN expires_at TEXT")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_activity_events_expires_at "
+            "ON activity_events(expires_at) WHERE expires_at IS NOT NULL"
+        )
+    except Exception as exc:
+        logger.debug("activity_events expires_at migration skipped: %s", exc)
     # Task hub tables share the activity DB operational plane.
     task_hub.ensure_schema(conn)
     conn.commit()
@@ -9814,6 +9848,10 @@ def _activity_prune_old(conn: sqlite3.Connection) -> None:
             f"-{int(_activity_notification_auto_read_hours)} hours",
         ),
     )
+    expired_now = conn.execute(
+        "DELETE FROM activity_events WHERE expires_at IS NOT NULL AND expires_at <= ?",
+        (now_iso,),
+    )
     c1 = conn.execute(
         "DELETE FROM activity_events WHERE created_at < datetime('now', ?)",
         (f"-{int(_activity_events_retention_days)} days",),
@@ -9827,7 +9865,7 @@ def _activity_prune_old(conn: sqlite3.Connection) -> None:
         (f"-{int(_activity_evaluations_retention_days)} days",),
     )
     conn.commit()
-    changed = (auto_read.rowcount or 0) + (c1.rowcount or 0) + (c2.rowcount or 0) + (c3.rowcount or 0)
+    changed = (auto_read.rowcount or 0) + (expired_now.rowcount or 0) + (c1.rowcount or 0) + (c2.rowcount or 0) + (c3.rowcount or 0)
     if changed > 0:
         try:
             # Reclaim pages incrementally to prevent locking the database
@@ -9841,6 +9879,198 @@ def _activity_prune_old(conn: sqlite3.Connection) -> None:
             )
         except Exception as exc:
             logger.debug("Activity DB incremental_vacuum skipped: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Delivery-reminder TTL sweeps
+# ---------------------------------------------------------------------------
+# Two background loops cooperate to age out short-lived delivery reminders
+# (e.g. "Daily YouTube Digest delivered" notifications) after their
+# expires_at:
+#
+#   1. _digest_expired_notifications_sweep — every 5 minutes, deletes any
+#      activity_events row whose expires_at has elapsed.  Belt-and-suspenders
+#      with the inline _activity_prune_old call (which only fires when
+#      another upsert happens to land).
+#
+#   2. _digest_reminder_dismissal_sweep — every minute, finds Telegram
+#      reminders past their dismiss_at and calls deleteMessage against the
+#      Telegram API.  Survives gateway restarts because the schedule is
+#      sqlite-persisted by services/digest_delivery_reminder.py.
+#
+# HARD CONSTRAINT: the dismissal sweep MUST only ever call Telegram's
+# deleteMessage against (chat_id, message_id) rows it wrote itself; it has
+# no Gmail / AgentMail surface whatsoever.
+
+_digest_expired_sweep_interval_seconds = max(
+    60, int(os.getenv("UA_DIGEST_EXPIRED_SWEEP_INTERVAL_SECONDS", "300") or 300)
+)
+_digest_reminder_dismissal_interval_seconds = max(
+    30, int(os.getenv("UA_DIGEST_REMINDER_DISMISSAL_INTERVAL_SECONDS", "60") or 60)
+)
+_digest_expired_sweep_task: Optional[asyncio.Task] = None
+_digest_expired_sweep_stop: Optional[asyncio.Event] = None
+_digest_reminder_dismissal_task: Optional[asyncio.Task] = None
+_digest_reminder_dismissal_stop: Optional[asyncio.Event] = None
+
+
+def _purge_expired_activity_events_once() -> int:
+    """Delete rows whose expires_at has elapsed.  Returns the row count."""
+    try:
+        with _activity_store_lock:
+            conn = _activity_connect()
+            try:
+                _ensure_activity_schema(conn)
+                cur = conn.execute(
+                    "DELETE FROM activity_events WHERE expires_at IS NOT NULL AND expires_at <= ?",
+                    (_utc_now_iso(),),
+                )
+                conn.commit()
+                return int(cur.rowcount or 0)
+            finally:
+                conn.close()
+    except Exception as exc:
+        logger.debug("Expired-activity sweep failed: %s", exc)
+        return 0
+
+
+async def _digest_expired_notifications_sweep(stop_event: asyncio.Event) -> None:
+    """Periodically purge activity_events rows whose expires_at has passed."""
+    while not stop_event.is_set():
+        try:
+            removed = await asyncio.to_thread(_purge_expired_activity_events_once)
+            if removed:
+                logger.info("Digest TTL sweep removed %d expired notification(s)", removed)
+        except Exception:
+            logger.exception("Digest expired-notifications sweep tick failed")
+        try:
+            await asyncio.wait_for(
+                stop_event.wait(),
+                timeout=float(_digest_expired_sweep_interval_seconds),
+            )
+        except asyncio.TimeoutError:
+            continue
+
+
+def _claim_due_telegram_reminders() -> list[tuple[int, str, int]]:
+    """Return (row_id, chat_id, message_id) tuples for reminders due for dismissal."""
+    try:
+        with _activity_store_lock:
+            conn = _activity_connect()
+            try:
+                _ensure_activity_schema(conn)
+                rows = conn.execute(
+                    """
+                    SELECT id, chat_id, message_id
+                    FROM digest_telegram_reminders
+                    WHERE dismissed_at IS NULL AND dismiss_at <= ?
+                    LIMIT 50
+                    """,
+                    (_utc_now_iso(),),
+                ).fetchall()
+                return [
+                    (int(r["id"]), str(r["chat_id"]), int(r["message_id"]))
+                    for r in rows
+                ]
+            finally:
+                conn.close()
+    except Exception as exc:
+        logger.debug("Claiming due Telegram reminders failed: %s", exc)
+        return []
+
+
+def _mark_telegram_reminder_dismissed(row_id: int, *, status: str) -> None:
+    try:
+        with _activity_store_lock:
+            conn = _activity_connect()
+            try:
+                _ensure_activity_schema(conn)
+                conn.execute(
+                    "UPDATE digest_telegram_reminders "
+                    "SET dismissed_at = ?, dismiss_status = ? WHERE id = ?",
+                    (_utc_now_iso(), str(status or "unknown")[:64], int(row_id)),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+    except Exception as exc:
+        logger.debug("Marking Telegram reminder dismissed failed (row_id=%s): %s", row_id, exc)
+
+
+async def _digest_reminder_dismissal_sweep(stop_event: asyncio.Event) -> None:
+    """Periodically delete Telegram reminder messages past their TTL.
+
+    Iterates rows from the digest_telegram_reminders table and calls
+    Telegram's deleteMessage for each.  The bot only ever deletes its own
+    messages (the (chat_id, message_id) tuples it persisted itself); there
+    is no Gmail / AgentMail surface in this loop by design.
+    """
+    # Lazy import to avoid coupling test runs that don't exercise this loop.
+    try:
+        import httpx as _httpx
+    except Exception:
+        logger.warning("httpx unavailable; digest reminder dismissal sweep disabled")
+        return
+
+    api_base = "https://api.telegram.org/bot{token}/deleteMessage"
+
+    while not stop_event.is_set():
+        try:
+            due = await asyncio.to_thread(_claim_due_telegram_reminders)
+            if due:
+                token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+                if not token:
+                    # Token missing: mark rows as skipped so we don't retry forever.
+                    for row_id, _chat, _msg in due:
+                        await asyncio.to_thread(
+                            _mark_telegram_reminder_dismissed,
+                            row_id,
+                            status="skipped_no_token",
+                        )
+                else:
+                    url = api_base.format(token=token)
+                    async with _httpx.AsyncClient(timeout=10.0) as client:
+                        for row_id, chat_id, message_id in due:
+                            outcome = "unknown"
+                            try:
+                                resp = await client.post(
+                                    url,
+                                    json={"chat_id": chat_id, "message_id": int(message_id)},
+                                )
+                                if resp.is_success:
+                                    outcome = "deleted"
+                                elif 400 <= resp.status_code < 500:
+                                    # 400-class is non-retryable (e.g. message
+                                    # already deleted, or older than 48h).
+                                    # Mark as terminal so we don't loop forever.
+                                    outcome = f"http_{resp.status_code}"
+                                else:
+                                    # 5xx: leave row open so we retry on the next sweep.
+                                    logger.warning(
+                                        "deleteMessage server error chat_id=%s msg_id=%s status=%d",
+                                        chat_id, message_id, resp.status_code,
+                                    )
+                                    continue
+                            except Exception as exc:
+                                logger.warning(
+                                    "deleteMessage exception chat_id=%s msg_id=%s: %s",
+                                    chat_id, message_id, exc,
+                                )
+                                continue
+                            await asyncio.to_thread(
+                                _mark_telegram_reminder_dismissed,
+                                row_id,
+                                status=outcome,
+                            )
+        except Exception:
+            logger.exception("Digest reminder dismissal sweep tick failed")
+        try:
+            await asyncio.wait_for(
+                stop_event.wait(),
+                timeout=float(_digest_reminder_dismissal_interval_seconds),
+            )
+        except asyncio.TimeoutError:
+            continue
 
 
 def _activity_upsert_record(record: dict[str, Any]) -> None:
@@ -10327,6 +10557,11 @@ def _query_activity_events(
         if apply_default_window and since is None and until is None:
             where.append("created_at >= datetime('now', ?)")
             params.append(f"-{int(_activity_events_default_window_days)} days")
+        # Hide rows whose short-lived TTL has elapsed.  expires_at is NULL
+        # for the overwhelming majority of notifications; only delivery
+        # reminders (and any future opt-in transient kinds) set it.
+        where.append("(expires_at IS NULL OR expires_at > ?)")
+        params.append(_utc_now_iso())
         where_sql = f"WHERE {' AND '.join(where)}" if where else ""
         rows = conn.execute(
             f"""
@@ -14991,9 +15226,35 @@ async def lifespan(app: FastAPI):
         else:
             logger.info("⏸️  Mission Control sweeper disabled (UA_MC_PHASE_1_ENABLED unset)")
 
+    # --- Digest delivery-reminder TTL sweeps ---
+    # Two cheap loops: one purges expired activity_events rows, the other
+    # deletes self-expiring Telegram reminders.  See _digest_*_sweep above.
+    global _digest_expired_sweep_task, _digest_expired_sweep_stop
+    global _digest_reminder_dismissal_task, _digest_reminder_dismissal_stop
+    try:
+        _digest_expired_sweep_stop = asyncio.Event()
+        _digest_expired_sweep_task = asyncio.create_task(
+            _digest_expired_notifications_sweep(_digest_expired_sweep_stop)
+        )
+        _digest_reminder_dismissal_stop = asyncio.Event()
+        _digest_reminder_dismissal_task = asyncio.create_task(
+            _digest_reminder_dismissal_sweep(_digest_reminder_dismissal_stop)
+        )
+        logger.info(
+            "🕒 Digest TTL sweeps enabled (expired_purge=%ds, telegram_dismiss=%ds)",
+            _digest_expired_sweep_interval_seconds,
+            _digest_reminder_dismissal_interval_seconds,
+        )
+    except Exception:
+        logger.exception("Failed to start digest TTL sweep loops")
+
     yield
     
     # Cleanup
+    if _digest_expired_sweep_stop is not None:
+        _digest_expired_sweep_stop.set()
+    if _digest_reminder_dismissal_stop is not None:
+        _digest_reminder_dismissal_stop.set()
     if _vp_event_bridge_stop_event is not None:
         _vp_event_bridge_stop_event.set()
     if _vp_event_bridge_task is not None:
@@ -24602,6 +24863,10 @@ async def dashboard_notifications(
                     "channels": ["dashboard"],
                     "email_targets": [],
                     "metadata": item.get("metadata") if isinstance(item.get("metadata"), dict) else {},
+                    "expires_at": (
+                        (item.get("metadata") or {}).get("expires_at")
+                        if isinstance(item.get("metadata"), dict) else None
+                    ),
                 }
             )
         notifications = _filter_superseded_tutorial_notifications(notifications)

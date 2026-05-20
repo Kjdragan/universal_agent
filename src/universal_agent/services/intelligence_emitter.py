@@ -20,6 +20,11 @@ Design contract:
     dependency for the heartbeat/cron services that already feed it).
   - Schema-compatible: writes the same column shape the gateway reads,
     so the dashboard doesn't need a migration to surface these.
+
+Schema evolution (2026-05-19): added ``expires_at`` column (nullable
+TEXT, ISO UTC) used by short-lived delivery-reminder notifications.
+The gateway filters rows past ``expires_at`` from dashboard queries and
+its periodic purge sweep deletes them.
 """
 from __future__ import annotations
 
@@ -65,6 +70,10 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     ``CREATE TABLE IF NOT EXISTS`` is cheap; we run it on every emit so a
     service pointed at a fresh DB still gets the schema. No process-level
     cache — that fails when tests use multiple tmp DBs.
+
+    Also performs an in-place migration to add the ``expires_at`` column
+    on databases created before 2026-05-19.  ``ALTER TABLE ... ADD COLUMN``
+    is idempotent here because we check ``PRAGMA table_info`` first.
     """
     conn.executescript(
         """
@@ -86,7 +95,8 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             actions_json TEXT NOT NULL DEFAULT '[]',
             metadata_json TEXT NOT NULL DEFAULT '{}',
             channels_json TEXT NOT NULL DEFAULT '[]',
-            email_targets_json TEXT NOT NULL DEFAULT '[]'
+            email_targets_json TEXT NOT NULL DEFAULT '[]',
+            expires_at TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_activity_events_created_at
             ON activity_events(created_at DESC);
@@ -96,6 +106,20 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             ON activity_events(kind, created_at DESC);
         """
     )
+    # In-place migration: pre-existing DBs may not have the expires_at
+    # column.  The partial index can only be created AFTER the column
+    # exists, so it lives below the migration check rather than in the
+    # executescript above.
+    try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(activity_events)").fetchall()}
+        if "expires_at" not in cols:
+            conn.execute("ALTER TABLE activity_events ADD COLUMN expires_at TEXT")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_activity_events_expires_at "
+            "ON activity_events(expires_at) WHERE expires_at IS NOT NULL"
+        )
+    except Exception as exc:
+        logger.debug("activity_events expires_at migration check failed: %s", exc)
 
 
 def emit_intelligence_event(
@@ -108,6 +132,7 @@ def emit_intelligence_event(
     metadata: dict[str, Any] | None = None,
     full_message: str | None = None,
     requires_action: bool = False,
+    expires_at: str | None = None,
     db_path: str | None = None,
 ) -> str | None:
     """Write an intelligence-grade event into the activity_events table.
@@ -121,28 +146,12 @@ def emit_intelligence_event(
     failed (the caller should NOT depend on this — the function never
     raises, by contract).
 
-    Caller examples:
-
-        # Proactive intelligence report just landed
-        emit_intelligence_event(
-            source_domain="proactive_report",
-            kind="intelligence_report_generated",
-            title=f"Intelligence report ready ({period})",
-            summary=f"3 recommendations, {n_signals} signals analyzed.",
-            severity=SEVERITY_INFO,
-            metadata={"report_id": report_id, "period": period},
-        )
-
-        # Cron job succeeded and produced an artifact
-        emit_intelligence_event(
-            source_domain="cron",
-            kind="cron_job_success",
-            title=f"Cron `{job_id}` completed",
-            summary=f"Wrote {artifact_count} artifact(s) in {duration_s:.1f}s.",
-            severity=SEVERITY_SUCCESS,
-            metadata={"job_id": job_id, "duration_s": duration_s,
-                      "artifacts": artifacts},
-        )
+    Args:
+        expires_at: Optional ISO-8601 UTC timestamp.  When set, the
+            gateway filters this row out of dashboard queries past that
+            time and the periodic purge sweep deletes it.  Used by
+            short-lived delivery reminders (see
+            ``services/digest_delivery_reminder.py``).
     """
     if severity not in _VALID_SEVERITIES:
         logger.warning("emit_intelligence_event: unknown severity %r, "
@@ -166,8 +175,8 @@ def emit_intelligence_event(
                     full_message, severity, status, requires_action,
                     session_id, created_at, updated_at,
                     entity_ref_json, actions_json, metadata_json,
-                    channels_json, email_targets_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    channels_json, email_targets_json, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event_id,
@@ -188,6 +197,7 @@ def emit_intelligence_event(
                     json.dumps(metadata or {}, default=str),
                     "[]",
                     "[]",
+                    expires_at,
                 ),
             )
         finally:

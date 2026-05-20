@@ -46,6 +46,9 @@ from anthropic import AsyncAnthropic
 from universal_agent.infisical_loader import initialize_runtime_secrets
 from universal_agent.rate_limiter import ZAIRateLimiter
 from universal_agent.services.agentmail_service import AgentMailService
+from universal_agent.services.digest_delivery_reminder import (
+    send_digest_delivery_reminder,
+)
 from universal_agent.services.youtube_playlist_manager import (
     YouTubeAPIError,
     YouTubeOAuthError,
@@ -1764,6 +1767,25 @@ def process_daily_digest(
             asyncio.run(_send())
             logger.info("Email sent successfully.")
             email_succeeded = True
+            try:
+                from datetime import datetime as _dt, timezone as _tz
+                reminder = send_digest_delivery_reminder(
+                    subject=f"Daily YouTube Digest: {day_name.title()}",
+                    recipient=email_to,
+                    sent_at_utc=_dt.now(_tz.utc),
+                )
+                logger.info(
+                    "Delivery reminder fired: telegram_ok=%s telegram_message_id=%s dashboard_event_id=%s expires_at=%s",
+                    reminder.telegram_ok,
+                    reminder.telegram_message_id,
+                    reminder.dashboard_event_id,
+                    reminder.expires_at_iso,
+                )
+            except Exception as reminder_exc:
+                # Reminder failure is best-effort; never break the digest flow.
+                logger.warning(
+                    "Delivery reminder fan-out failed (non-fatal): %s", reminder_exc,
+                )
         except Exception as e:
             logger.error("Failed to send email: %s", e)
             _emit_proactive_delivery_failure(
