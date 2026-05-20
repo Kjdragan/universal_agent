@@ -40,6 +40,10 @@ type DashboardNotification = {
   created_at: string;
   session_id?: string | null;
   metadata?: Record<string, unknown>;
+  // Optional ISO UTC timestamp.  When present, the dashboard hides this
+  // notification past expires_at — short-lived delivery reminders set
+  // this so they auto-clear after a TTL (default 90 minutes).
+  expires_at?: string | null;
 };
 
 type TutorialProgressEntry = {
@@ -157,6 +161,13 @@ function normalizeNotification(value: unknown): DashboardNotification | null {
   const id = asText(row.id);
   if (!id) return null;
 
+  const metadata = asRecord(row.metadata);
+  // expires_at can ride either as a top-level field (future API shape) or
+  // nested in metadata (current shape from the activity DB JSON column).
+  const expiresAt =
+    asText(row.expires_at) ||
+    asText(metadata.expires_at) ||
+    null;
   return {
     id,
     title: asText(row.title) || "(untitled notification)",
@@ -167,8 +178,16 @@ function normalizeNotification(value: unknown): DashboardNotification | null {
     status: asText(row.status) || "new",
     created_at: asText(row.created_at),
     session_id: asText(row.session_id) || null,
-    metadata: asRecord(row.metadata),
+    metadata,
+    expires_at: expiresAt,
   };
+}
+
+function isNotificationExpired(n: DashboardNotification, now: number): boolean {
+  if (!n.expires_at) return false;
+  const ts = Date.parse(n.expires_at);
+  if (Number.isNaN(ts)) return false;
+  return ts <= now;
 }
 
 // ── Notification filter categories ──────────────────────────────────────────
@@ -444,11 +463,13 @@ export default function DashboardPage() {
           ...((summaryData && (summaryData as Partial<SummaryResponse>).notifications) || {}),
         },
       });
+      const nowMs = Date.now();
       const normalizedNotifications: DashboardNotification[] = Array.isArray(notificationsData.notifications)
         ? notificationsData.notifications
           .map(normalizeNotification)
           .filter((item: DashboardNotification | null): item is DashboardNotification => Boolean(item))
           .filter((item: DashboardNotification) => item.status !== "dismissed" && item.status !== "resolved")
+          .filter((item: DashboardNotification) => !isNotificationExpired(item, nowMs))
         : [];
       setNotifications(normalizedNotifications);
       setVpSessions(Array.isArray(vpSessionsData.sessions) ? vpSessionsData.sessions : []);
