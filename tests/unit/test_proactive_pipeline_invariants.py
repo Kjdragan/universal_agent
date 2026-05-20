@@ -94,7 +94,7 @@ def test_all_five_invariants_register_on_import() -> None:
         "proactive_artifact_digest_delivery",
         "hackernews_snapshot_cadence",
         "csi_convergence_sync_freshness",
-        "nightly_wiki_daily_output",
+        "nightly_wiki_persistent_silence",
     }.issubset(ids)
 
 
@@ -129,21 +129,24 @@ def test_morning_briefing_missing_emits_warn(tmp_path: Path, monkeypatch) -> Non
     assert "No DAILY_BRIEFING.md" in (matches[0].recommendation or "")
 
 
-def test_morning_briefing_stale_emits_warn(tmp_path: Path, monkeypatch) -> None:
-    today_dt = datetime(2026, 5, 19, 11, 0, tzinfo=HOUSTON)
+def test_morning_briefing_existing_file_with_old_mtime_stays_quiet(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The 6:30 AM cron fires once per day. By afternoon today's file is
+    legitimately 6+ hours old. We should NOT fire — the today-dated parent
+    directory IS the freshness gate. Probe corrected 2026-05-20 after a live
+    false positive (13.5h-old file at 8 PM Houston)."""
+    today_dt = datetime(2026, 5, 19, 18, 0, tzinfo=HOUSTON)  # 6 PM Houston
     _set_now(monkeypatch, today_dt)
     base = tmp_path / "artifacts"
     target = base / "autonomous-briefings" / today_dt.strftime("%Y-%m-%d") / "DAILY_BRIEFING.md"
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("# stale")
-    # Anchor mtime to the mocked "now" so the freshness math doesn't depend
-    # on the real wall clock at test-run time.
-    six_hours_ago = today_dt.timestamp() - 6 * 3600
-    os.utime(target, (six_hours_ago, six_hours_ago))
+    target.write_text("# briefing produced at 6:30 AM")
+    # mtime is 11h ago (6:30 AM Houston this morning) — legitimate.
+    eleven_hours_ago = today_dt.timestamp() - 11 * 3600
+    os.utime(target, (eleven_hours_ago, eleven_hours_ago))
     findings = run_invariants({"artifacts_dir": base})
-    matches = _only(findings, "morning_briefing_freshness")
-    assert len(matches) == 1
-    assert "old" in (matches[0].recommendation or "")
+    assert _only(findings, "morning_briefing_freshness") == []
 
 
 def test_morning_briefing_silent_before_630am(tmp_path: Path, monkeypatch) -> None:
@@ -307,42 +310,65 @@ def test_csi_convergence_empty_table_stays_quiet(monkeypatch) -> None:
     assert _only(findings, "csi_convergence_sync_freshness") == []
 
 
-# === 5. nightly_wiki_daily_output ===
+# === 5. nightly_wiki_persistent_silence ===
+#
+# Probe redesigned 2026-05-20 after WS2 live investigation revealed the
+# nightly_wiki cron is "produce only when fresh CSI signals" — quiet days
+# are legitimate. Old probe ("file for today exists") false-fired on every
+# signal-light day. New probe fires only if NO wiki has been produced in
+# the last 7 days.
 
 
-def test_nightly_wiki_present_emits_nothing(tmp_path: Path, monkeypatch) -> None:
+def test_nightly_wiki_recent_file_keeps_quiet(tmp_path: Path, monkeypatch) -> None:
+    """A wiki produced 2 days ago means the pipeline is healthy; today
+    having no wiki is fine (cron's nothing-to-do case)."""
+    today_dt = datetime(2026, 5, 19, 8, 0, tzinfo=HOUSTON)
+    _set_now(monkeypatch, today_dt)
+    base = tmp_path / "artifacts"
+    wiki = base / "nightly_wikis"
+    wiki.mkdir(parents=True)
+    f = wiki / "2026-05-17_wiki_report_TOP.md"
+    f.write_text("# wiki from 2 days ago")
+    # Anchor mtime 2 days back from the mocked now.
+    two_days_ago = today_dt.timestamp() - 2 * 86400
+    os.utime(f, (two_days_ago, two_days_ago))
+    findings = run_invariants({"artifacts_dir": base})
+    assert _only(findings, "nightly_wiki_persistent_silence") == []
+
+
+def test_nightly_wiki_no_files_at_all_stays_quiet(tmp_path: Path, monkeypatch) -> None:
+    """Empty dir = fresh-box / never-deployed scenario, not a finding."""
     _set_now(monkeypatch, datetime(2026, 5, 19, 8, 0, tzinfo=HOUSTON))
     base = tmp_path / "artifacts"
     wiki = base / "nightly_wikis"
     wiki.mkdir(parents=True)
-    today_str = datetime(2026, 5, 19).strftime("%Y-%m-%d")
-    (wiki / f"{today_str}_wiki_report_TOP.md").write_text("# wiki")
     findings = run_invariants({"artifacts_dir": base})
-    assert _only(findings, "nightly_wiki_daily_output") == []
+    assert _only(findings, "nightly_wiki_persistent_silence") == []
 
 
-def test_nightly_wiki_missing_emits_warn(tmp_path: Path, monkeypatch) -> None:
-    _set_now(monkeypatch, datetime(2026, 5, 19, 8, 0, tzinfo=HOUSTON))
+def test_nightly_wiki_persistent_silence_emits_warn(tmp_path: Path, monkeypatch) -> None:
+    """Newest wiki >7 days old = stuck. THIS is what the probe should catch
+    (e.g. the 2026-05-20 live state where newest wiki was 14 days old)."""
+    today_dt = datetime(2026, 5, 19, 8, 0, tzinfo=HOUSTON)
+    _set_now(monkeypatch, today_dt)
     base = tmp_path / "artifacts"
     wiki = base / "nightly_wikis"
     wiki.mkdir(parents=True)
-    (wiki / "2026-05-18_wiki_report_TOP.md").write_text("# old wiki")
+    f = wiki / "2026-05-05_wiki_report_TOP.md"
+    f.write_text("# very old wiki")
+    fourteen_days_ago = today_dt.timestamp() - 14 * 86400
+    os.utime(f, (fourteen_days_ago, fourteen_days_ago))
     findings = run_invariants({"artifacts_dir": base})
-    matches = _only(findings, "nightly_wiki_daily_output")
+    matches = _only(findings, "nightly_wiki_persistent_silence")
     assert len(matches) == 1
     assert matches[0].severity == "warn"
-
-
-def test_nightly_wiki_silent_before_5am(tmp_path: Path, monkeypatch) -> None:
-    _set_now(monkeypatch, datetime(2026, 5, 19, 4, 0, tzinfo=HOUSTON))
-    base = tmp_path / "artifacts"
-    wiki = base / "nightly_wikis"
-    wiki.mkdir(parents=True)
-    findings = run_invariants({"artifacts_dir": base})
-    assert _only(findings, "nightly_wiki_daily_output") == []
+    obs = matches[0].observed_value
+    assert obs["quiet_days"] >= 14
+    assert "very old wiki" not in matches[0].recommendation  # not the file contents
+    assert "stuck" in (matches[0].recommendation or "").lower()
 
 
 def test_nightly_wiki_silent_without_artifacts_dir(monkeypatch) -> None:
     _set_now(monkeypatch, datetime(2026, 5, 19, 8, 0, tzinfo=HOUSTON))
     findings = run_invariants({"artifacts_dir": None})
-    assert _only(findings, "nightly_wiki_daily_output") == []
+    assert _only(findings, "nightly_wiki_persistent_silence") == []
