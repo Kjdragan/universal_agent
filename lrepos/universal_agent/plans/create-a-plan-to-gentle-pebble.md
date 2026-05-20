@@ -252,6 +252,25 @@ So P2's structural fix is shipped via P1a; the *current* dead adapters are an op
 
 ---
 
+## §8 — P4 (added 2026-05-20 PM): ZAI inference health invariant
+
+Operator surfaced a new concern after P0-P3 shipped: as background processes multiply, we risk ZAI rate-limit / Fair-Use-Policy trips that could throttle or even ban the subscription. The watchdog had zero visibility into this — `ZAIRateLimiter` tracked 429s in singleton memory only, FUP signals weren't classified as a distinct event class, and the heartbeat daemon (subprocess) couldn't see the rate-limiter state at all.
+
+**P4 (PR #402)** closes the gap:
+
+- **Rate limiter** (`rate_limiter.py`): persistent JSON snapshot at `AGENT_RUN_WORKSPACES/zai_inference_state.json` written atomically after every `record_429` / `record_success` / `record_fup_signal`. New `record_fup_signal(context, error_snippet)` distinct from `record_429`. Retry wrapper detects FUP keywords first and bails (no retry — retrying worsens ban risk).
+- **New invariant** `zai_inference_health` reads the snapshot + counts UA Python processes via `pgrep`. Strict thresholds per operator direction:
+  - 3+ consecutive 429s → CRITICAL
+  - ANY FUP event in last 30 min → CRITICAL (sharp window; alert clears once danger cools)
+  - `backoff_floor` saturated → CRITICAL
+  - UA Python proc count > 30 → WARN
+- **Framework change** (`pipeline_invariants.py`): `_build_finding` respects per-finding `severity_override`. Lets one invariant emit critical for dangerous conditions and warn for the lighter process-count condition without splitting into multiple invariants.
+- **Watchdog cost**: 1 KB JSON read + 1 `pgrep` call per heartbeat. No AI inference, no DB writes. The watchdog cannot contribute to the load it monitors.
+
+**Follow-up tied to first real FUP observation**: ship a regression test pinning the exact ZAI FUP error text and refine `FUP_KEYWORDS` if needed.
+
+---
+
 ## §A — Archived: Original close-out plan (WS1–WS4)
 
 (Kept for traceability. All WS1–WS4 items shipped in PRs #367, #370, #372, #374, #376, #389, #390, #392. The plumbing bugs found in §2 above are gaps in those PRs, not unshipped work.)
