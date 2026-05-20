@@ -19,4 +19,5 @@ from universal_agent.services.invariants import (  # noqa: F401
     csi_source_liveness,
     proactive_pipeline_invariants,
     youtube_invariants,
+    zai_inference_health,
 )

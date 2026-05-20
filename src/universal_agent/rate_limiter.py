@@ -16,7 +16,10 @@ Configuration (environment variables):
 
 import asyncio
 from contextlib import asynccontextmanager
+import json
+import logging
 import os
+from pathlib import Path
 import random
 import time
 from typing import Optional
@@ -25,6 +28,50 @@ try:
     import logfire
 except ImportError:
     logfire = None
+
+logger = logging.getLogger(__name__)
+
+
+# Fair-Use-Policy / concurrency-violation keywords that bump a generic 429
+# or 4xx into the CRITICAL "respond NOW" tier per operator 2026-05-20.
+# Lowercase matching. Refine after first real FUP response from ZAI.
+FUP_KEYWORDS = frozenset({
+    "fair use",
+    "fair-use",
+    "fup",
+    "policy violation",
+    "policy-violation",
+    "abuse",
+    "concurrency limit",
+    "weekly limit",
+    "account suspended",
+    "account flagged",
+    "1313",
+})
+
+
+def _is_fup_error(error_str: str) -> bool:
+    if not error_str:
+        return False
+    lower = error_str.lower()
+    return any(kw in lower for kw in FUP_KEYWORDS)
+
+
+def _get_state_path() -> Path:
+    """Where the rate-limiter persists its snapshot.
+
+    Daemon subprocesses (heartbeat, csi-ingester) get a freshly-imported
+    `rate_limiter` module with a fresh singleton instance — they need to
+    read state from disk, not memory. The watchdog probe lives in a
+    subprocess too.
+    """
+    env = os.getenv("UA_ZAI_INFERENCE_STATE_PATH")
+    if env:
+        return Path(env)
+    # rate_limiter.py is at src/universal_agent/rate_limiter.py;
+    # repo root is parents[2].
+    repo_root = Path(__file__).resolve().parents[2]
+    return repo_root / "AGENT_RUN_WORKSPACES" / "zai_inference_state.json"
 
 
 class ZAIRateLimiter:
@@ -53,9 +100,16 @@ class ZAIRateLimiter:
         self._semaphore = asyncio.Semaphore(self._max_concurrent)
         self._backoff_floor = self._initial_backoff
         self._last_429_time = 0.0
+        self._last_success_time = 0.0
         self._consecutive_429s = 0
         self._total_429s = 0
         self._total_requests = 0
+        # FUP tracking (P4 2026-05-20): critical-immediate tier for
+        # fair-use-policy / concurrency-violation signals from ZAI.
+        self._total_fup_events = 0
+        self._last_fup_time = 0.0
+        self._last_fup_snippet = ""
+        self._last_fup_context = ""
         
         # Minimum inter-request spacing to avoid burst rate limits
         self._min_request_interval = float(os.getenv("ZAI_MIN_INTERVAL", "0.5"))
@@ -86,14 +140,14 @@ class ZAIRateLimiter:
     async def record_429(self, context: str = ""):
         """
         Called when a 429 is received. Adjusts adaptive backoff.
-        
+
         Args:
             context: Optional context string for logging (e.g., section name)
         """
         async with self._state_lock:
             now = time.time()
             self._total_429s += 1
-            
+
             # If 429s are happening within 10s of each other, they're related
             if now - self._last_429_time < 10:
                 self._consecutive_429s += 1
@@ -102,9 +156,9 @@ class ZAIRateLimiter:
             else:
                 self._consecutive_429s = 1
                 self._backoff_floor = self._initial_backoff
-            
+
             self._last_429_time = now
-            
+
             if logfire:
                 logfire.warn(
                     "zai_rate_limit_hit",
@@ -113,14 +167,75 @@ class ZAIRateLimiter:
                     total_429s=self._total_429s,
                     backoff_floor=self._backoff_floor,
                 )
-    
+            self._persist_snapshot()
+
     async def record_success(self):
         """Called on successful request. Gradually lowers backoff floor."""
         async with self._state_lock:
             self._total_requests += 1
+            self._last_success_time = time.time()
             # Slowly decay the floor back to initial
             self._backoff_floor = max(self._initial_backoff, self._backoff_floor * 0.9)
             self._consecutive_429s = max(0, self._consecutive_429s - 1)
+            self._persist_snapshot()
+
+    async def record_fup_signal(self, context: str = "", error_snippet: str = ""):
+        """Called when a Fair-Use-Policy / concurrency-violation signal is
+        detected from ZAI. Distinct from 429 because the response is to
+        STOP, not retry. The watchdog escalates this as CRITICAL with
+        no grace period.
+        """
+        async with self._state_lock:
+            now = time.time()
+            self._total_fup_events += 1
+            self._last_fup_time = now
+            self._last_fup_snippet = (error_snippet or "")[:500]
+            self._last_fup_context = (context or "")[:200]
+            if logfire:
+                logfire.error(
+                    "zai_fup_signal",
+                    context=context,
+                    total_fup_events=self._total_fup_events,
+                    error_snippet=self._last_fup_snippet,
+                )
+            logger.error(
+                "ZAI FUP signal detected — context=%s snippet=%r total=%d",
+                context,
+                self._last_fup_snippet,
+                self._total_fup_events,
+            )
+            self._persist_snapshot()
+
+    def _persist_snapshot(self) -> None:
+        """Atomic write of current state to the snapshot JSON.
+
+        Called under `_state_lock` from each `record_*` method. Sync I/O
+        on a ~1 KB file is microsecond-scale; no event-loop concern.
+        Atomic via temp-file + os.replace so the watchdog never reads a
+        half-written file.
+        """
+        path = _get_state_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "max_concurrent": self._max_concurrent,
+                "backoff_floor": self._backoff_floor,
+                "consecutive_429s": self._consecutive_429s,
+                "total_429s": self._total_429s,
+                "total_requests": self._total_requests,
+                "total_fup_events": self._total_fup_events,
+                "last_429_at": self._last_429_time or None,
+                "last_success_at": self._last_success_time or None,
+                "last_fup_at": self._last_fup_time or None,
+                "last_fup_snippet": self._last_fup_snippet,
+                "last_fup_context": self._last_fup_context,
+                "snapshot_written_at": time.time(),
+            }
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            tmp.write_text(json.dumps(payload))
+            os.replace(tmp, path)
+        except Exception:  # noqa: BLE001 — never crash the rate limiter over a snapshot write
+            logger.warning("rate_limiter snapshot persist failed", exc_info=True)
     
     def get_backoff(self, attempt: int) -> float:
         """
@@ -212,13 +327,22 @@ async def with_rate_limit_retry(
                 await limiter.record_success()
                 return result
             except Exception as e:
-                error_str = str(e).lower()
-                is_rate_limit = "429" in error_str or "too many requests" in error_str
-                
+                error_str = str(e)
+                error_lower = error_str.lower()
+
+                # P4 (2026-05-20): FUP detection takes precedence over generic
+                # 429 handling. FUP = stop, do NOT retry — retrying makes the
+                # ban risk worse. Watchdog escalates as critical.
+                if _is_fup_error(error_lower):
+                    await limiter.record_fup_signal(context, error_str)
+                    raise
+
+                is_rate_limit = "429" in error_lower or "too many requests" in error_lower
+
                 if is_rate_limit:
                     await limiter.record_429(context)
                     last_error = e
-                    
+
                     if attempt < max_retries - 1:
                         delay = limiter.get_backoff(attempt)
                         print(f"  ⚠️ [429] Rate limited ({context}). Backoff: {delay:.1f}s (Attempt {attempt+1}/{max_retries})")

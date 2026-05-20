@@ -130,10 +130,18 @@ def _build_finding(
     extra_metadata = dict(inv.metadata)
     extra_metadata.update(result.get("metadata") or {})
     extra_metadata["invariant_id"] = inv.id
+    # P4 (2026-05-20): allow a probe to override the declared severity
+    # per-finding (e.g. zai_inference_health declares critical for the
+    # FUP / sustained-429 cases but downgrades to warn when only the
+    # process-count condition fires). Probes that don't set
+    # `severity_override` keep the static value from the decorator.
+    severity = result.get("severity_override") or inv.severity
+    if severity not in _VALID_SEVERITIES:
+        severity = inv.severity
     return HeartbeatFinding(
         finding_id=f"invariant:{inv.id}",
         category=CATEGORY,
-        severity=inv.severity,
+        severity=severity,
         metric_key=inv.id,
         observed_value=observed,
         threshold_text=threshold_text,
