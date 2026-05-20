@@ -229,45 +229,26 @@ def build_proactive_health_payload(
     except Exception:  # noqa: BLE001
         artifacts_dir = None
 
-    # Open a dedicated runtime_state.db connection for invariants that query
-    # proactive_artifacts / proactive_intelligence_reports / proactive_artifact_emails.
-    # These tables live in runtime_state.db, NOT activity_events.db — earlier
-    # invariants in PR #376 silently no-op'd because they queried the wrong DB.
-    # If caller provided runtime_conn, use it (legacy + test path). Otherwise
-    # open one locally and close before returning.
-    runtime_conn_opened_locally = False
-    if runtime_conn is None:
-        try:
-            from universal_agent.durable.db import (
-                connect_runtime_db,
-                get_runtime_db_path,
-            )
-            runtime_conn = connect_runtime_db(get_runtime_db_path())
-            runtime_conn.row_factory = sqlite3.Row
-            runtime_conn_opened_locally = True
-        except Exception:  # noqa: BLE001 — best-effort
-            logger.warning(
-                "proactive_health: failed to open runtime_state.db; "
-                "proactive_* invariants will stay quiet",
-                exc_info=True,
-            )
-            runtime_conn = None
-
-    try:
-        invariant_findings = pipeline_invariants.run_invariants(
-            {
-                "csi_db_path": csi_db_path,
-                "runtime_conn": runtime_conn,
-                "activity_conn": activity_conn,
-                "artifacts_dir": artifacts_dir,
-            }
-        )
-    finally:
-        if runtime_conn_opened_locally and runtime_conn is not None:
-            try:
-                runtime_conn.close()
-            except Exception:  # noqa: BLE001
-                pass
+    # P0b note (2026-05-20): the previous code opened a separate
+    # runtime_state.db connection here for invariants that query
+    # proactive_artifacts / proactive_artifact_emails / proactive_intelligence_reports.
+    # That was wrong twice: PR #376 used activity_events.db (no proactive
+    # tables), PR #392 used runtime_state.db (also no proactive tables).
+    # The actual writers (`_activity_connect()` in gateway_server.py) write
+    # those tables into activity_state.db, which is exactly what
+    # `activity_conn` points at in both the heartbeat and gateway endpoint
+    # paths. Invariants now use `activity_conn` directly — one DB, no
+    # parallel plumbing. The `runtime_conn` parameter is kept for backwards
+    # compatibility with callers that pass it explicitly, but the aggregator
+    # no longer opens one itself.
+    invariant_findings = pipeline_invariants.run_invariants(
+        {
+            "csi_db_path": csi_db_path,
+            "runtime_conn": runtime_conn,
+            "activity_conn": activity_conn,
+            "artifacts_dir": artifacts_dir,
+        }
+    )
 
     overall = _derive_overall_status(
         invariant_findings,
