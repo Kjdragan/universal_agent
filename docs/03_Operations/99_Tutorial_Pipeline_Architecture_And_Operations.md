@@ -3,7 +3,7 @@
 > **Canonical source-of-truth** for the YouTube Tutorial Pipeline. All other
 > tutorial-related documentation should reference this file.
 >
-> **Last updated:** 2026-05-19 — Added **delivery-reminder signals** (Telegram + dashboard tile) that fire when the digest email is accepted by AgentMail, both self-expiring after `UA_DIGEST_REMINDER_TTL_MINUTES` (default 90).  Earlier 2026-05-18: Daily Digest ships on a **map-reduce pipeline** (per-video retell on `glm-4.5-air` @ conc=3, meta-synthesis on `glm-5.1`), with the per-video prompt asking for a **50% length retelling** instead of a "concise summary". Tutorial dispatch now passes through a deterministic **demo-worthiness gate** (score ≥ 70, value_tier ≠ low/unknown, evidence_quality ≠ metadata_only). `required_secrets` preflight now includes `YOUTUBE_OAUTH_*`. Per-call retry / FUP-1313 telemetry surfaces in `MapResult` and the comparison harness. PRs #356, #357, #360, #361, #363.
+> **Last updated:** 2026-05-20 — **Tier A scoring rubric** added inline to `RETELL_PROMPT` with anchored buckets (90-100 / 75-89 / 60-74 / 40-59 / 20-39 / 0-19) + disqualifier caps (sales-pitch / view-count / metadata-only) + explicit "do not default to 95" guidance.  Addresses score saturation surfaced by the 2026-05-20 WEDNESDAY dry-run (12 of 29 videos got 95).  See § 1.1B for the full multi-tier roadmap (Tier A current, Tier B/C/D deferred). Earlier 2026-05-20: deterministic `youtube_digest_decisions` JSON block built from `MapResult` classifications in Python (PR #407) so reducer LLM failures can no longer drop tutorial dispatch to zero; orphan `---` removed + Houston-friendly banner time (PR #408).  2026-05-19: delivery-reminder signals (Telegram + dashboard tile) with `UA_DIGEST_REMINDER_TTL_MINUTES` (default 90).  2026-05-18: Daily Digest ships on a **map-reduce pipeline** (per-video retell on `glm-4.5-air` @ conc=3, meta-synthesis on `glm-5.1`), 50%-length retelling, deterministic **demo-worthiness gate** (score ≥ 70, value_tier ≠ low/unknown, evidence_quality ≠ metadata_only). `required_secrets` preflight includes `YOUTUBE_OAUTH_*`. PRs #356, #357, #360, #361, #363, #391, #393, #394, #407, #408.
 
 ## 1. Pipeline Overview
 
@@ -155,6 +155,92 @@ PYTHONPATH=src uv run python -m universal_agent.scripts.youtube_daily_digest --r
 > different state storage, and require independent operational management.
 > Failing to reset BOTH systems (e.g., during a proxy provider switch) will
 > result in stale state in one pipeline while the other is clean.
+
+### 1.1B Scoring Rubric — Tier A (current) and the deferred Tier B/C/D roadmap
+
+The map-step LLM (`glm-4.5-air`) assigns `value_score` (0-100), `value_tier`,
+and `code_implementation_prospect` to each ingested video. Those structured
+fields drive the deterministic **demo-worthiness gate** in
+`_select_tutorial_dispatch_candidates`, which decides what gets dispatched
+to the tutorial pipeline. The gate only works as a discriminator if scores
+actually spread across 0-100. The 2026-05-20 WEDNESDAY dry-run smoke
+exposed a saturation regression: 12 of 29 videos got `value_score=95`, so
+with `top_n=4` the tutorial dispatch became effectively arbitrary among
+ties.
+
+**Tier A — Inline anchored rubric (shipped 2026-05-20)**
+
+`RETELL_PROMPT` now contains an explicit SCORING RUBRIC section with:
+
+- **Anchored buckets** with named examples of what each range earns:
+  - `90-100` Concrete build tutorial with named files, commands, visible code
+  - `75-89` Strong technical explainer with named tools / mechanism explanations
+  - `60-74` Educational explainer at the conceptual level (no code shown)
+  - `40-59` Survey / overview / opinion / commentary
+  - `20-39` Sales / marketing / promotional content
+  - `0-19` Off-topic, clickbait, low-signal
+
+- **Disqualifier caps** that override bucket selection:
+  - Sales-pitch framing ("Make $X with...", "Anyone can start...") → CAP 50
+  - View-count / "going viral" focus → CAP 50
+  - Affiliate-link dominant CTA → CAP 50
+  - Transcript metadata-only → CAP 30 + `evidence_quality="metadata_only"`
+
+- **Tier–score agreement rule**:
+  - `high` requires `score >= 75`, `medium` `50 ≤ score < 75`, `low` `score < 50`
+
+- **Code implementation prospect tightened**: `True` only when an automated
+  build agent could realistically attempt to reproduce the result (named tools,
+  commands, config, file paths). Concept explainers default to `False`.
+
+- **Explicit "do not default to 95"** admonition.
+
+The rubric lives inline in `src/universal_agent/scripts/youtube_daily_digest.py`
+under the `RETELL_PROMPT` definition. Edits are PRs against that file.
+
+**Tier B — Extract `youtube_scoring_rubric.md` (deferred)**
+
+Move the SCORING RUBRIC section to its own markdown file in the repo and
+have `RETELL_PROMPT` include it via `.format()`. Benefit: single editable
+source-of-truth where each rubric tweak is a one-file PR.
+
+**Trigger condition**: 1-2 weeks of post-Tier-A score-distribution data
+from real cron runs. If Tier A alone fixes saturation, Tier B is purely a
+cleanup. If saturation persists, Tier B + Tier C together become the path.
+
+**Tier C — Labeled-outcomes store (deferred)**
+
+A new schema (or use the existing CSI activity DB) capturing per-video
+downstream outcomes:
+
+- Did Cody produce a runnable demo for this dispatched video?  Available
+  via `manifest.json` + `run_output.txt` already produced by
+  `cody-implements-from-brief`.
+- Operator marks on the dashboard tile: "worth my time" vs "skip these".
+- Recall signal: were any videos the gate REJECTED later found to be
+  high-value? (Would need a dashboard "shoulda-dispatched" surface.)
+
+**Trigger condition**: after Tier A measurement period. If saturation still
+biases dispatch toward arbitrary ties, we need outcome data to learn from.
+
+**Tier D — Rubric-tuner agent (deferred, depends on B + C)**
+
+A weekly Claude Code session that reads the labeled-outcomes store from
+Tier C, identifies miscalls (high score → useless demo; low score → great
+video), and proposes rubric edits to the file from Tier B as a PR for
+operator review. **This is where a Claude Code skill genuinely fits**: a
+meta-skill that tunes the rubric. The ranking itself stays a deterministic
+SDK call.
+
+**Tier D explicitly is NOT "a ranking skill that learns"** — ranking is
+synchronous and deterministic. The "learning" is an offline weekly loop
+that edits the prompt the next cron uses.
+
+**Why we don't promote a tier without measurement**: rubric churn without
+a baseline makes regressions hard to diagnose. The Tier A roadmap is also
+documented inline above `RETELL_PROMPT` in
+`src/universal_agent/scripts/youtube_daily_digest.py` so future maintainers
+encounter the plan before editing scoring guidance.
 
 ### 1.1 Dual-Pipeline Architecture
 
