@@ -134,27 +134,49 @@ def _is_zai_url(url: str) -> bool:
 
 # ── Caller attribution ────────────────────────────────────────────────────
 
+# Frame-path fragments to skip when walking the stack. These are framework
+# / SDK internals that we want to walk PAST to find the actual UA caller
+# that issued the ZAI request.
 _SKIP_FRAME_FRAGMENTS = (
     "/httpx/",
     "/anyio/",
     "/asyncio/",
+    "/.venv/",                 # any virtualenv path
+    "/site-packages/",         # any pip-installed dependency
+    "/anthropic/",             # Anthropic SDK (used for ZAI's Anthropic-compatible endpoint)
+    "/openai/",                # OpenAI SDK (used for ZAI's OpenAI-compatible endpoint)
+    "/google/genai/",          # google-genai SDK
+    "/google/generativeai/",   # legacy google-generativeai
     "zai_observability.py",
 )
 
 
 def _identify_caller() -> str:
+    """Walk the stack to find the first frame OUTSIDE framework/SDK code.
+    Returns a path relative to universal_agent/ if the caller is a UA
+    source file. Best-effort — never raises.
+
+    Note: the universal_agent project tree contains `.venv/` so naive
+    `"universal_agent" in filename` checks match SDK frames inside the
+    venv. The skip list above filters those out so we land on the
+    actual UA module that issued the call (e.g. cody_implementation,
+    mission_control_tier1, briefings_agent).
+    """
     try:
         stack = traceback.extract_stack()
         for frame in reversed(stack):
             filename = frame.filename
             if any(skip in filename for skip in _SKIP_FRAME_FRAGMENTS):
                 continue
-            if "universal_agent" in filename:
-                parts = filename.split("universal_agent/")
+            # Only treat as a UA-source frame if it's actually under the
+            # source tree, not the venv. The skip list already excludes
+            # .venv/ and site-packages, so any frame matching
+            # "universal_agent/" here is a real UA-source file.
+            if "/universal_agent/" in filename:
+                parts = filename.split("/universal_agent/")
                 if len(parts) > 1:
                     return f"universal_agent/{parts[-1]}"
-            if "site-packages" in filename:
-                continue
+            # Non-UA, non-framework frame (e.g. user script, REPL).
             parts = filename.split("/")
             if len(parts) >= 2:
                 return "/".join(parts[-2:])
