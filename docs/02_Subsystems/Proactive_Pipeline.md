@@ -899,7 +899,7 @@ is advisory, never blocks heartbeat execution.
 | File | Role |
 |------|------|
 | [`nightly_wiki_agent.py`](../../src/universal_agent/scripts/nightly_wiki_agent.py) | Nightly proactive wiki creation — selects pending signal cards, dispatches VP missions to build NLM-backed knowledge bases (cron: 03:15 CST) |
-| [`briefings_agent.py`](../../src/universal_agent/scripts/briefings_agent.py) | Morning autonomous briefing — fetches telemetry and nightly wiki output, generates daily briefing report (cron: 06:30 CST) |
+| [`briefings_agent.py`](../../src/universal_agent/scripts/briefings_agent.py) | Morning autonomous briefing — fetches telemetry, nightly wiki output, Hacker News evidence block (Phase 2 Lane A), ClaudeDevs demo-triage queue status, and proactive-health watchdog findings. Dispatches a VP mission to write the briefing markdown (cron: 06:30 CST) |
 | [`claude_code_intel_sync.py`](../../src/universal_agent/scripts/claude_code_intel_sync.py) | Twice-daily Claude Code X intelligence poller — runs through Chron, uses `X_BEARER_TOKEN`, and produces durable packets under `<UA_ARTIFACTS_DIR>/proactive/claude_code_intel/` |
 | [`claude_code_intel_replay_packet.py`](../../src/universal_agent/scripts/claude_code_intel_replay_packet.py) | Replay/backfill entry point — reprocesses an existing Claude Code Intel packet into the external vault, candidate ledger, and optional Task Hub reconciliation |
 | [`schedule_nightly_wiki.py`](../../src/universal_agent/scripts/schedule_nightly_wiki.py) | One-time setup script that registers the nightly wiki and morning briefing cron jobs via CronService |
@@ -936,7 +936,7 @@ is advisory, never blocks heartbeat execution.
 | `EmailTaskBridge.materialize()` | `email_task_bridge.py` | Email → Task Hub entry |
 | `MemoryOrchestrator` | `memory/orchestrator.py` | Unified memory read/write/search |
 | `main()` (nightly_wiki_agent) | `scripts/nightly_wiki_agent.py` | Loads pending signal cards, dispatches proactive wiki VP mission with NLM-first pipeline |
-| `main()` (briefings_agent) | `scripts/briefings_agent.py` | Fetches telemetry + nightly wiki output, dispatches morning briefing VP mission |
+| `main()` (briefings_agent) | `scripts/briefings_agent.py` | Assembles briefing prompt from telemetry + nightly wiki + HN evidence block + demo-triage queue block + watchdog findings block; dispatches morning briefing VP mission |
 | `main()` (schedule_nightly_wiki) | `scripts/schedule_nightly_wiki.py` | Upserts nightly_wiki and morning_briefing cron jobs via CronStore |
 
 ---
@@ -1004,7 +1004,7 @@ flowchart TD
 | 10 | **HEARTBEAT.md Instructions** | Standing instructions file | Each heartbeat cycle | `heartbeat_service.py` |
 | 11 | **Priority Classifier** | Deterministic Python gate | N/A (inline) | `priority_classifier.py` |
 | 12 | **Nightly Wiki Creation** | Cron (03:15 CST daily) | Once per night | `scripts/nightly_wiki_agent.py` |
-| 13 | **Morning Briefing** | Cron (06:30 CST daily) | Once per morning | `scripts/briefings_agent.py` |
+| 13 | **Morning Briefing** (telemetry + wiki + HN + triage + watchdog) | Cron (06:30 CST daily) | Once per morning | `scripts/briefings_agent.py` |
 | 14 | **Proactive Artifact Digest** | Cron (08:00 CST daily) | Once per morning | `scripts/proactive_digest_agent.py` |
 
 > [!NOTE]
