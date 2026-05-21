@@ -521,4 +521,18 @@ def initialize_runtime_secrets(
             errors=tuple(errors),
         )
         _BOOTSTRAP_RESULT = result
+
+        # P7 (2026-05-21): install universal ZAI HTTP observability hooks.
+        # Monkey-patches httpx.Client/AsyncClient __init__ so every outbound
+        # request to api.z.ai gets captured into a rolling JSONL — closes
+        # the P4 instrumentation gap where 8+ files bypassed ZAIRateLimiter.
+        # Best-effort: failure here must NOT break runtime bootstrap.
+        try:
+            from universal_agent.services.zai_observability import (
+                install_zai_observability,
+            )
+            install_zai_observability()
+        except Exception:  # noqa: BLE001 — never break bootstrap over observability
+            pass
+
         return result
