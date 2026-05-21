@@ -186,13 +186,61 @@ Here are the videos:
 #
 # Output contract (strict):
 #   1. Markdown "## <title>" heading
-#   2. ### Retelling section (30-40% length retelling, NOT a summary)
+#   2. ### Retelling section (50% length retelling, NOT a summary)
 #   3. ### Actionable Insights section (bullets)
 #   4. ### Thesis (single short sentence — fed to the reducer for cross-video themes)
 #   5. ```per_video_classification JSON fenced block (parsed by code, stripped from email)
 #
 # The map LLM does NOT see other videos and is told NOT to draw cross-video themes —
 # that's the reducer's job.
+#
+# ===========================================================================
+# SCORING RUBRIC ROADMAP (recorded 2026-05-20 after the saturation regression)
+# ===========================================================================
+# The 2026-05-20 WEDNESDAY dry-run smoke surfaced score saturation: 12 of 29
+# videos got value_score=95 from the map LLM. With 8 candidates tied at 95
+# and top_n=4, tutorial dispatch becomes effectively arbitrary among ties.
+# The discriminator we built (demo-worthiness gate on value_score >= 70) only
+# works if scores actually spread across 0-100.
+#
+# Improvement plan (live tiers vs deferred tiers):
+#
+#   Tier A — TIGHTEN RUBRIC IN PROMPT (CURRENT STATE, shipped 2026-05-20)
+#     Inline anchored buckets + disqualifier caps + explicit "do not default
+#     to 95" guidance directly in this RETELL_PROMPT.  Lowest cost; works
+#     within the existing single-call map step.  See the SCORING RUBRIC
+#     section of the prompt below.
+#
+#   Tier B — EXTRACT RUBRIC TO ITS OWN FILE (deferred)
+#     Move the scoring section into `youtube_scoring_rubric.md` in the repo;
+#     RETELL_PROMPT includes it verbatim via .format().  Single editable
+#     source-of-truth for what scores mean; each rubric change becomes a
+#     reviewable PR.  Trigger condition: do Tier A first and measure score
+#     distribution across 1-2 weeks before committing to file extraction.
+#
+#   Tier C — LABELED OUTCOMES STORE (deferred)
+#     New schema capturing per-video downstream outcomes:
+#       - did Cody produce a runnable demo for this dispatched video?
+#         (already available in `manifest.json` + `run_output.txt`)
+#       - did the operator find the dispatched video worth watching?
+#         (would need a thumbs-up/down surface on the dashboard tile)
+#       - did any *rejected* video later turn out to be high-value?
+#     Wire `cody-work-evaluator` outcomes into this store.  Trigger: after
+#     1-2 weeks of Tier A data shows whether scoring is still saturating.
+#
+#   Tier D — RUBRIC-TUNER AGENT (deferred, depends on B + C)
+#     A weekly Claude Code session that reads the labeled outcomes store,
+#     identifies miscalls (high score → useless demo, low score → great
+#     video), and proposes rubric edits as a PR for operator review.  THIS
+#     is where a CC skill genuinely fits: a meta-skill that tunes the
+#     rubric.  NOT a "ranking skill that learns" — the ranking stays a
+#     deterministic SDK call; the learning loop is the offline tuner that
+#     edits this prompt.
+#
+# Don't promote a tier without measurement: rubric churn without a baseline
+# makes regressions hard to diagnose.  Doc 99 mirrors this roadmap for
+# operator visibility.
+# ===========================================================================
 # ---------------------------------------------------------------------------
 RETELL_PROMPT = """You are a technical knowledge synthesizer. You will be given the transcript and metadata for ONE YouTube video. Produce a "Compressed Retelling" that lets the reader skip watching the video while preserving its substance.
 
@@ -210,7 +258,7 @@ REQUIRED OUTPUT FORMAT (markdown — do not deviate):
 **Video ID:** <video_id>
 
 ### Retelling
-<the 30-40% length retelling>
+<the 50% length retelling>
 
 ### Actionable Insights
 - <concrete thing a reader could do>
@@ -230,6 +278,72 @@ REQUIRED OUTPUT FORMAT (markdown — do not deviate):
   "reason": "<short reason grounded in the transcript>"
 }
 ```
+
+SCORING RUBRIC — READ THIS CAREFULLY BEFORE ASSIGNING value_score.
+
+`value_score` is a 0-100 integer that ranks this video against an idealized
+"buildable technical tutorial." USE THE FULL RANGE. A typical day's batch
+should have scores spread from ~20 to ~95, NOT cluster at 90+. Defaulting
+to 95 because the transcript exists is WRONG — most videos do not earn 95.
+
+Anchored buckets (assign by best fit, not by ceiling):
+
+  - 90-100: CONCRETE BUILD TUTORIAL. Contains named files, specific commands,
+    visible code or config, and a reproducible setup the reader could follow
+    end-to-end.  Examples that earn 90+: "Master 80% of Claude Code with 15
+    Things" listing each tool with worked examples; a video that types
+    `pip install X` then walks through a specific .py file line-by-line.
+    If you can't point to specific code/config artifacts in the transcript,
+    it does NOT earn 90+.
+
+  - 75-89: STRONG TECHNICAL EXPLAINER. Named tools, named systems, mechanism
+    explanations ("this works because..."), but missing reproducible
+    code/config.  A rigorous architecture talk; a hands-on demo that shows
+    output without showing the code paths to reproduce it.
+
+  - 60-74: EDUCATIONAL EXPLAINER. Speaker teaches a real technical concept
+    with named systems, but no code is shown and no specific implementation
+    details are given.  A "how X works" explainer at the conceptual level.
+
+  - 40-59: SURVEY / OVERVIEW / OPINION. Talks ABOUT a technical topic without
+    teaching how to do it.  Industry commentary, panel discussions, news
+    roundups, "the future of AI" pieces.  Worth watching for context, not
+    for implementation.
+
+  - 20-39: SALES / MARKETING / PROMOTIONAL even if AI-themed.  "Make $X with
+    AI," "Anyone can start a $1k business," affiliate-link pitches, "this
+    one tool changed everything" framing.
+
+  - 0-19: OFF-TOPIC, CLICKBAIT, OR LOW-SIGNAL.  Unrelated to the operator's
+    technical domain; pure entertainment; deceptive framing.
+
+DISQUALIFIER CAPS (apply BEFORE the bucket choice; the cap wins):
+
+  - Sales-pitch framing in title OR opening minutes ("Make $X with...",
+    "Anyone can start...", "$1M Solo Business," etc.): CAP at 50.  This
+    catches the failure mode where a high-energy promotional video about
+    AI tooling gets mistaken for a tutorial.
+
+  - View-count or "going viral" focus / influencer-meta content: CAP at 50.
+
+  - Affiliate links or promotional URLs are the dominant call-to-action:
+    CAP at 50.
+
+  - Transcript text is "[Metadata-only — transcript unavailable]": CAP at 30
+    AND set evidence_quality="metadata_only".  Without a transcript you
+    cannot verify any of the above signals, so we score conservatively.
+
+TIER MUST AGREE WITH SCORE:
+  - value_tier="high"   requires value_score >= 75
+  - value_tier="medium" requires 50 <= value_score < 75
+  - value_tier="low"    requires value_score < 50
+
+CODE IMPLEMENTATION PROSPECT:
+  - `code_implementation_prospect` is TRUE only if the video would be
+    valuable as input to an automated build agent — i.e. contains enough
+    concrete instructions (specific tools, commands, config, file paths)
+    that an agent could attempt to reproduce the result.  Concept explainers,
+    sales pitches, and news roundups are FALSE even if they're high-quality.
 
 INPUT FOLLOWS:
 """
