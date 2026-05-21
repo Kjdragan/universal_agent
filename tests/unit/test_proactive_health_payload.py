@@ -416,13 +416,29 @@ def test_proactive_artifact_digest_invariant_fires_when_emails_stale(
 ) -> None:
     """The bug-reproduction case: aggregator should DETECT that no digest
     email has been sent in 26h+. Before P0b, the invariant queried the empty
-    runtime_state.db and silently passed — it could never fire on real data."""
+    runtime_state.db and silently passed — it could never fire on real data.
+
+    P7 (2026-05-21): test was time-bombed. It (a) hard-coded fixed_now to
+    2026-05-20 18:00 UTC which is now in the past, (b) reloaded the invariants
+    module AFTER the monkeypatch, undoing it. CI runs after that date hit the
+    invariant's `now.hour < 9` hour-gate and got [] back. Fix: reload FIRST,
+    then patch, and use a clock-relative fixed_now so the test is durable."""
     from datetime import datetime, timezone, timedelta
-    # Pin the clock to a moment WELL past the 9 AM probe window so the
-    # invariant's hour-gate doesn't filter the test out.
+
+    # Reload BEFORE the monkeypatch — reload would otherwise re-create
+    # _now_houston and undo the patch.
+    import importlib
     from universal_agent.services.invariants import proactive_pipeline_invariants as ppi
-    fixed_now = datetime(2026, 5, 20, 18, 0, tzinfo=timezone.utc)  # 1 PM Houston
-    monkeypatch.setattr(ppi, "_now_houston", lambda: fixed_now.astimezone(ppi.HOUSTON_TZ) if hasattr(ppi, "HOUSTON_TZ") else fixed_now)
+    importlib.reload(ppi)
+
+    # Force _now_houston to a fixed hour past the invariant's 9 AM probe
+    # gate. Use 18:00 UTC ("hour" alone is what the gate checks).
+    real_now = datetime.now(timezone.utc)
+    fixed_now = real_now.replace(hour=18, minute=0, second=0, microsecond=0)
+    monkeypatch.setattr(ppi, "_now_houston", lambda: fixed_now)
+    # The invariant also computes age_hours via real `datetime.now(timezone.utc)`
+    # internally — we can't patch that easily, so seed `stale` relative to
+    # REAL now (35h ago) so age_hours always exceeds the 30h threshold.
 
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
@@ -442,19 +458,15 @@ def test_proactive_artifact_digest_invariant_fires_when_emails_stale(
         );
         """
     )
-    stale = (datetime.now(timezone.utc) - timedelta(hours=30)).isoformat()
+    # Seed a row 35h before REAL now so it exceeds the invariant's internal
+    # 30h threshold (which uses datetime.now(timezone.utc), not _now_houston).
+    stale = (real_now - timedelta(hours=35)).isoformat()
     conn.execute(
         "INSERT INTO proactive_artifact_emails (artifact_id, subject, recipient, sent_at) "
         "VALUES ('a1', 'Old Digest', 'kevinjdragan@gmail.com', ?)",
         (stale,),
     )
     conn.commit()
-
-    # Need the invariant registered. The conftest pattern from the existing
-    # YouTube test resets the registry — re-import to pick up proactive_*.
-    import importlib
-    from universal_agent.services.invariants import proactive_pipeline_invariants
-    importlib.reload(proactive_pipeline_invariants)
 
     payload = build_proactive_health_payload(
         activity_conn=conn,
