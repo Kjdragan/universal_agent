@@ -31,6 +31,14 @@ logger = logging.getLogger(__name__)
 
 _SAFETY_MAX_INPUT_CHARS = 480_000  # ~120K tokens at ~4 chars/token
 
+# Serialise dossier LLM calls across every caller in this process.
+# Two paths race on session close — the hooks_service completion path
+# (hourly at :40) and the gateway session reaper (half-hourly at :10/:40).
+# Their overlap produced 100% of observed ZAI 429s in the P7 window
+# (2026-05-21 → 22); a single-slot semaphore forces them to queue at
+# the LLM boundary the way every other prolific caller already does.
+_DOSSIER_SEMAPHORE = asyncio.Semaphore(1)
+
 
 def _get_async_client():
     """Create an async Anthropic client using the ZAI emulation layer."""
@@ -256,12 +264,13 @@ async def generate_session_dossier(
         len(user_content),
     )
 
-    raw_response = await _async_call_llm(
-        system=_DOSSIER_SYSTEM_PROMPT,
-        user=user_content,
-        model=resolve_haiku(),
-        max_tokens=2048,
-    )
+    async with _DOSSIER_SEMAPHORE:
+        raw_response = await _async_call_llm(
+            system=_DOSSIER_SYSTEM_PROMPT,
+            user=user_content,
+            model=resolve_haiku(),
+            max_tokens=2048,
+        )
 
     # Parse the response
     if _DESCRIPTION_SEPARATOR in raw_response:
