@@ -147,6 +147,116 @@ def _get_watchdog_block_or_empty() -> str:
         return ""
 
 
+def _build_atlas_briefs_block(briefs: list[dict[str, str]]) -> str:
+    """Render the markdown block for the morning briefing.
+
+    Pulled out for unit-testing; called only when `briefs` is non-empty.
+    """
+    lines = [
+        "## ATLAS Insight Briefs — Awaiting Operator Triage",
+        "",
+        f"- New since last briefing: **{len(briefs)}**",
+        "",
+    ]
+    for brief in briefs:
+        title = (brief.get("title") or "").replace("ATLAS insight brief: ", "").strip() or "(untitled)"
+        summary = (brief.get("summary") or "").strip()
+        if summary:
+            lines.append(f"- **{title}** — {summary}")
+        else:
+            lines.append(f"- **{title}**")
+    return "\n".join(lines)
+
+
+def _get_atlas_briefs_block_or_empty(
+    *,
+    max_age_hours: int = 36,
+    limit: int = 5,
+) -> str:
+    """Return the Atlas insight-briefs block, or "" on kill switch / nothing surfaceable.
+
+    Surfaces ATLAS insight briefs that are:
+      - artifact_type='insight_brief_task'
+      - status='candidate' (not yet acted on by Simone/operator)
+      - delivery_state='not_surfaced' (not already mentioned in a prior briefing)
+      - created within the last `max_age_hours` so stale briefs don't show up forever
+
+    Side effect: after rendering, each surfaced brief is transitioned to
+    `delivery_state='digest_queued'` + `surfaced_at=now()` so the next
+    morning won't re-list it. This is per-brief, NOT per-briefing-run, so
+    a briefing that crashes mid-render won't silently consume briefs that
+    never reached the operator.
+
+    Kill switch: `UA_ATLAS_BRIEFING_BLOCK_ENABLED=0` disables the block
+    entirely. Best-effort: any DB or import error returns "" so the
+    briefing can never break because Atlas isn't ready.
+    """
+    if os.getenv("UA_ATLAS_BRIEFING_BLOCK_ENABLED", "1") == "0":
+        logger.info("Atlas briefing block disabled via UA_ATLAS_BRIEFING_BLOCK_ENABLED=0")
+        return ""
+    try:
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+        from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+        from universal_agent.services import proactive_artifacts as _pa
+
+        cutoff = (_dt.now(_tz.utc) - _td(hours=max_age_hours)).isoformat()
+        with connect_runtime_db(get_activity_db_path()) as conn:
+            import sqlite3 as _sqlite3
+            conn.row_factory = _sqlite3.Row
+            _pa.ensure_schema(conn)
+            rows = conn.execute(
+                """
+                SELECT artifact_id, title, summary, created_at
+                FROM proactive_artifacts
+                WHERE artifact_type = ?
+                  AND status = ?
+                  AND delivery_state = ?
+                  AND created_at > ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (
+                    "insight_brief_task",
+                    _pa.ARTIFACT_STATUS_CANDIDATE,
+                    _pa.DELIVERY_NOT_SURFACED,
+                    cutoff,
+                    int(limit),
+                ),
+            ).fetchall()
+            if not rows:
+                return ""
+
+            briefs = [
+                {
+                    "artifact_id": r["artifact_id"],
+                    "title": r["title"] or "",
+                    "summary": r["summary"] or "",
+                }
+                for r in rows
+            ]
+            block = _build_atlas_briefs_block(briefs)
+
+            # Mark each surfaced brief so it doesn't appear in tomorrow's
+            # briefing. Per-brief, so a render crash doesn't burn briefs.
+            for brief in briefs:
+                try:
+                    _pa.update_artifact_state(
+                        conn,
+                        artifact_id=brief["artifact_id"],
+                        delivery_state=_pa.DELIVERY_DIGEST_QUEUED,
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "Atlas briefing: failed to flag artifact %s as digest_queued",
+                        brief["artifact_id"],
+                    )
+            return block
+    except Exception as exc:  # noqa: BLE001 — never let Atlas break the briefing
+        logger.warning("Atlas briefs block helper crashed: %s", exc)
+        return ""
+
+
 def _build_objective(
     *,
     telemetry_json: str,
@@ -156,6 +266,7 @@ def _build_objective(
     today: str,
     triage_block: str = "",
     watchdog_block: str = "",
+    atlas_block: str = "",
 ) -> str:
     """Assemble the briefing prompt from the context sources.
 
@@ -192,6 +303,21 @@ def _build_objective(
             "watchdog reports `overall: ok` and the backlog is empty, say so in one line and move on."
         )
 
+    atlas_section = ""
+    atlas_instructions = ""
+    if atlas_block:
+        atlas_section = f"\n\n{atlas_block}\n"
+        atlas_instructions = (
+            "\n- **Include an 'ATLAS Insight Briefs' section.** These are non-obvious patterns "
+            "ATLAS detected from CSI/YouTube signals and queued as proactive insight tasks. "
+            "List each brief by title with its one-line summary. After the list, in 2-3 sentences, "
+            "name any cross-cutting theme that emerges across the briefs (if any) and recommend "
+            "whether the operator should (a) promote one or two to active work, (b) deepen the "
+            "synthesis with another ATLAS pass, or (c) close out the queue if the briefs are "
+            "drifting from current strategic priorities. Keep the recommendation concrete — the "
+            "operator wants to decide what to do, not read more abstract trend prose."
+        )
+
     hn_section = ""
     hn_instructions = ""
     if hn_block:
@@ -223,13 +349,13 @@ Here is the external Nightly Wiki Proactive Generation output (if any):
 ```markdown
 {wiki_content}
 ```
-{watchdog_section}{triage_section}{hn_section}
+{watchdog_section}{triage_section}{atlas_section}{hn_section}
 Instructions:
 - Summarize tasks completed, attempted, and failed.
 - Include links/paths to any artifacts produced.
 - MUST explicitly include a "Latest Proactive Knowledge Base Additions" section referencing the Nightly Wiki external paths and files if any are provided.
 - Highlight any items requiring user decisions.
-- If there are data quality warnings, mention them.{watchdog_instructions}{triage_instructions}{hn_instructions}
+- If there are data quality warnings, mention them.{watchdog_instructions}{triage_instructions}{atlas_instructions}{hn_instructions}
 
 Write a concise markdown report to '{artifacts_dir}/autonomous-briefings/{today}/DAILY_BRIEFING.md'.
 Make sure to provide a short completion message suitable for a dashboard notification.
@@ -301,6 +427,16 @@ async def main():
     else:
         logger.info("Watchdog briefing block omitted (kill switch / healthy state / no findings)")
 
+    # ATLAS insight briefs (2026-05-22): surface the parked insight_brief_task
+    # artifacts so the operator can decide whether to promote, deepen, or close
+    # them. Marks each brief delivery_state='digest_queued' so it isn't re-listed
+    # tomorrow morning.
+    atlas_block = _get_atlas_briefs_block_or_empty()
+    if atlas_block:
+        logger.info("Atlas briefs block included (~%d chars)", len(atlas_block))
+    else:
+        logger.info("Atlas briefs block omitted (kill switch / no new briefs)")
+
     objective = _build_objective(
         telemetry_json=telemetry_json,
         wiki_content=wiki_content,
@@ -309,6 +445,7 @@ async def main():
         today=today,
         triage_block=triage_block,
         watchdog_block=watchdog_block,
+        atlas_block=atlas_block,
     )
 
     logger.info("Dispatching mission to vp.general.primary...")
