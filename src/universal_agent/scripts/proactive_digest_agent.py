@@ -24,17 +24,29 @@ logger = logging.getLogger(__name__)
 
 async def _run_digest() -> dict:
     """Compose and send the daily proactive artifact digest email."""
+    from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
     from universal_agent.services.intelligence_reporter import IntelligenceReporter
 
-    # Resolve the DB path (same pattern as other cron agents)
+    # Resolve the DB path. `proactive_artifacts` (insight_brief_task, codie PRs,
+    # convergence briefs, etc.) lives in the **activity_state.db**, not the
+    # runtime_state.db that the script previously defaulted to. The original
+    # ``workspaces/runtime_state.db`` fallback meant the digest was reading
+    # an empty/wrong DB for ~weeks — see audit 2026-05-22 (638 briefs piled
+    # up in activity_state.db with zero email deliveries).
+    #
+    # Resolution order (highest precedence first):
+    #   1. UA_DB_PATH env override (operator escape hatch)
+    #   2. canonical get_activity_db_path() — same path the convergence cron
+    #      writes to via connect_runtime_db(get_activity_db_path()).
     db_path = os.getenv("UA_DB_PATH", "")
     if not db_path:
-        workspace_root = os.getenv("UA_WORKSPACE_ROOT", "/opt/universal_agent")
-        db_path = str(Path(workspace_root) / "workspaces" / "runtime_state.db")
+        db_path = get_activity_db_path()
 
     recipient = os.getenv("UA_BRIEFING_RECIPIENT", "kevinjdragan@gmail.com")
 
-    conn = sqlite3.connect(db_path)
+    # Use the same connection helper the producers use so WAL +
+    # busy-timeout pragmas match across writer + reader.
+    conn = connect_runtime_db(db_path)
     conn.row_factory = sqlite3.Row
 
     # Initialize mail service

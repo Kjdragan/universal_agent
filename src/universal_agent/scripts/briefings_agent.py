@@ -170,16 +170,24 @@ def _build_atlas_briefs_block(briefs: list[dict[str, str]]) -> str:
 
 def _get_atlas_briefs_block_or_empty(
     *,
-    max_age_hours: int = 36,
+    max_age_hours: int = 168,
     limit: int = 5,
 ) -> str:
     """Return the Atlas insight-briefs block, or "" on kill switch / nothing surfaceable.
 
-    Surfaces ATLAS insight briefs that are:
+    Surfaces the top N=`limit` ATLAS insight briefs that are:
       - artifact_type='insight_brief_task'
       - status='candidate' (not yet acted on by Simone/operator)
       - delivery_state='not_surfaced' (not already mentioned in a prior briefing)
-      - created within the last `max_age_hours` so stale briefs don't show up forever
+      - created within the last `max_age_hours` so a long outage doesn't dump
+        ancient briefs into the briefing once the helper comes back online
+
+    Window defaults to 7 days (168h). The convergence cron generates 100-200
+    briefs/day at steady state and we only surface the freshest `limit=5`,
+    so the daily briefing always carries the top 5 *newest* briefs regardless
+    of when the previous briefing actually ran. A shorter window (e.g. 36h)
+    would leave the briefing empty whenever the convergence cron stalled
+    overnight or the briefing crashed — undesirable for a daily morning surface.
 
     Side effect: after rendering, each surfaced brief is transitioned to
     `delivery_state='digest_queued'` + `surfaced_at=now()` so the next
