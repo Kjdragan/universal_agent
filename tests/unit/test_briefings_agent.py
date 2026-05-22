@@ -245,6 +245,8 @@ def test_build_objective_includes_triage_block_when_present() -> None:
     "_get_triage_block_or_empty",
     "_build_triage_block",
     "_build_objective",
+    "_get_atlas_briefs_block_or_empty",
+    "_build_atlas_briefs_block",
     "build_briefing_block",
 ])
 def test_briefings_agent_exposes_helpers(public_name: str) -> None:
@@ -255,3 +257,85 @@ def test_briefings_agent_exposes_helpers(public_name: str) -> None:
 class _FakeConn:
     def close(self) -> None:
         pass
+
+
+# ─── _build_atlas_briefs_block (pure renderer) ─────────────────────────
+
+
+def test_build_atlas_briefs_block_renders_title_and_summary() -> None:
+    briefs = [
+        {"title": "ATLAS insight brief: Tech Labor Bifurcation", "summary": "Two-class market emerging."},
+        {"title": "ATLAS insight brief: Open-Source AI Fragility", "summary": "Corporate forks dominate."},
+    ]
+    out = briefings_agent._build_atlas_briefs_block(briefs)
+    assert "ATLAS Insight Briefs" in out
+    assert "New since last briefing: **2**" in out
+    # Title prefix is stripped.
+    assert "**Tech Labor Bifurcation**" in out
+    assert "Two-class market emerging." in out
+    # No bare "ATLAS insight brief:" prefix in the user-facing list.
+    assert "**ATLAS insight brief: Tech" not in out
+
+
+def test_build_atlas_briefs_block_handles_missing_summary() -> None:
+    briefs = [{"title": "ATLAS insight brief: lonely", "summary": ""}]
+    out = briefings_agent._build_atlas_briefs_block(briefs)
+    assert "**lonely**" in out
+    # Should not leave a trailing em-dash for an empty summary.
+    assert "**lonely** —" not in out
+
+
+# ─── _get_atlas_briefs_block_or_empty (kill switch + DB integration) ──
+
+
+def test_get_atlas_briefs_block_returns_empty_when_kill_switch_enabled(monkeypatch) -> None:
+    monkeypatch.setenv("UA_ATLAS_BRIEFING_BLOCK_ENABLED", "0")
+    # If kill switch fires, the helper must short-circuit before any import.
+    assert briefings_agent._get_atlas_briefs_block_or_empty() == ""
+
+
+def test_get_atlas_briefs_block_swallows_import_errors(monkeypatch) -> None:
+    """Any failure in the helper must NEVER break the briefing."""
+    monkeypatch.delenv("UA_ATLAS_BRIEFING_BLOCK_ENABLED", raising=False)
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("simulated DB failure")
+
+    # Patching the imported helper directly inside the function would
+    # require sys.modules surgery; simpler: monkeypatch the DB connector
+    # so the helper raises during open.
+    import universal_agent.durable.db as _db
+
+    monkeypatch.setattr(_db, "connect_runtime_db", boom)
+    assert briefings_agent._get_atlas_briefs_block_or_empty() == ""
+
+
+def test_build_objective_includes_atlas_section_when_block_present() -> None:
+    atlas = "## ATLAS Insight Briefs — Awaiting Operator Triage\n\n- New since last briefing: **3**"
+    out = briefings_agent._build_objective(
+        telemetry_json="{}",
+        wiki_content="",
+        hn_block="",
+        artifacts_dir="/x",
+        today="2026-05-22",
+        atlas_block=atlas,
+    )
+    assert atlas in out
+    # Instruction line for Atlas synthesis appears when the block is non-empty.
+    assert "ATLAS Insight Briefs" in out
+    assert "cross-cutting theme" in out or "ATLAS pass" in out
+
+
+def test_build_objective_omits_atlas_section_when_block_empty() -> None:
+    out = briefings_agent._build_objective(
+        telemetry_json="{}",
+        wiki_content="",
+        hn_block="",
+        artifacts_dir="/x",
+        today="2026-05-22",
+        atlas_block="",
+    )
+    assert "ATLAS Insight Briefs" not in out
+    # Atlas-specific instruction prose must NOT leak into prompts that
+    # have no Atlas block (avoids the LLM hallucinating an empty section).
+    assert "cross-cutting theme" not in out
