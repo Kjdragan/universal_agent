@@ -1,5 +1,6 @@
 """Unit tests for pure helper functions in services.session_dossier."""
 
+import asyncio
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -286,3 +287,71 @@ class TestGenerateSessionDossierParsing:
             dossier, description = await generate_session_dossier(tmp_path)
 
         assert description == "Session completed"
+
+
+# ---------------------------------------------------------------------------
+# generate_session_dossier — concurrency serialization
+# ---------------------------------------------------------------------------
+
+
+class TestGenerateSessionDossierSerialization:
+    """The module-scope semaphore must serialise LLM calls across concurrent
+    invocations regardless of workspace.
+
+    Regression guard: prior to the fix, the hooks_service (:40 hourly) and
+    gateway reaper (:10/:40 half-hourly) paths could race and fire 3-6
+    parallel calls to the same upstream, producing 100% of observed ZAI 429s
+    in the P7 observability window (2026-05-21 to 2026-05-22). The semaphore
+    forces them to queue at the LLM-call boundary.
+    """
+
+    @pytest.mark.asyncio
+    async def test_concurrent_invocations_serialise_at_llm_boundary(
+        self, tmp_path: Path
+    ):
+        # Six separate workspaces, each with the minimum content required to
+        # reach the LLM call.
+        workspaces = []
+        for idx in range(6):
+            ws = tmp_path / f"ws_{idx}"
+            ws.mkdir()
+            (ws / "run.log").write_text(f"work {idx}", encoding="utf-8")
+            workspaces.append(ws)
+
+        in_flight = 0
+        max_in_flight = 0
+        lock = asyncio.Lock()
+
+        async def fake_llm(*args, **kwargs):
+            nonlocal in_flight, max_in_flight
+            async with lock:
+                in_flight += 1
+                if in_flight > max_in_flight:
+                    max_in_flight = in_flight
+            # Hold the "call" open long enough that any concurrent waiter
+            # would be observable as in-flight > 1 if the semaphore is absent.
+            await asyncio.sleep(0.05)
+            async with lock:
+                in_flight -= 1
+            return f"dossier\n\n{_DESCRIPTION_SEPARATOR}\ndesc"
+
+        with patch(
+            "universal_agent.services.session_dossier._async_call_llm",
+            side_effect=fake_llm,
+        ), patch(
+            "universal_agent.services.session_dossier.resolve_haiku",
+            return_value="m",
+        ):
+            await asyncio.gather(
+                *(generate_session_dossier(ws) for ws in workspaces)
+            )
+
+        assert max_in_flight == 1, (
+            f"Expected serial execution (max 1 in-flight) but observed "
+            f"{max_in_flight} concurrent LLM calls — the module-scope "
+            f"semaphore is missing or not awaited."
+        )
+        # And every workspace still got its artifacts.
+        for ws in workspaces:
+            assert (ws / "context_brief.md").exists()
+            assert (ws / "description.txt").exists()
