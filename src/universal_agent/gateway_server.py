@@ -7767,6 +7767,14 @@ def _classify_upstream_outage_signature(error_text: str) -> Optional[str]:
         return "upstream_502"
     if "connection refused" in et or "econnrefused" in et:
         return "upstream_connection_refused"
+    # Cloudflare JS-challenge interstitial — observed 2026-05-21 on
+    # api.github.com from the VPS. Reconciler now skips silently, but
+    # any future leak should still be deduped if it reaches the alert
+    # layer.
+    if "just a moment" in et and "cloudflare" in et:
+        return "upstream_cloudflare_challenge"
+    if "challenges.cloudflare.com" in et:
+        return "upstream_cloudflare_challenge"
     return None
 
 

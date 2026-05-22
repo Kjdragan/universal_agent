@@ -55,13 +55,14 @@ def main() -> int:
 
     logger.info(
         "reconcile_vp_mission_prs: scanned=%d closed=%d still_open=%d "
-        "pr_deleted=%d errors=%d skipped_no_token=%d dry_run=%s",
+        "pr_deleted=%d errors=%d skipped_no_token=%d cloudflare_skipped=%d dry_run=%s",
         result["scanned"],
         result["closed"],
         result["still_open"],
         result["pr_deleted"],
         result["errors"],
         result["skipped_no_token"],
+        result.get("cloudflare_skipped", 0),
         args.dry_run,
     )
     return 0

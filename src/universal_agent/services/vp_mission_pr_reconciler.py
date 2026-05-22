@@ -237,12 +237,30 @@ def _list_candidates(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return candidates
 
 
+def _looks_like_cloudflare_challenge(body: bytes | str) -> bool:
+    """Detect a Cloudflare interstitial in an HTTP response body.
+
+    Cloudflare's JS challenge ships as `text/html` containing the
+    "Just a moment..." title and a reference to `challenges.cloudflare.com`.
+    We treat this as a transient upstream-edge condition (not a real
+    PR-query failure) so the caller skips silently instead of paging us.
+    """
+    if isinstance(body, bytes):
+        sample = body[:2048].decode("latin-1", errors="replace").lower()
+    else:
+        sample = body[:2048].lower()
+    return "just a moment" in sample and "cloudflare" in sample
+
+
 def _query_github_pr(pr_number: int) -> Optional[dict[str, Any]]:
     """Fetch the current state of a PR from GitHub.
 
     Returns the parsed JSON body on success, or None on any error
     (rate-limit, 5xx, network). 404 returns `{"_status": 404}` so the
-    caller can distinguish "PR deleted" from "transient failure."
+    caller can distinguish "PR deleted" from "transient failure." A
+    Cloudflare JS challenge (200/403 with HTML body) returns
+    `{"_status": "cloudflare_challenge"}` so the caller can count it
+    separately and avoid emitting a failure alert with the HTML body.
     """
     token = _gh_token()
     if not token:
@@ -255,20 +273,48 @@ def _query_github_pr(pr_number: int) -> Optional[dict[str, Any]]:
         headers={
             "Authorization": f"token {token}",
             "Accept": "application/vnd.github+json",
-            "User-Agent": "universal-agent-vp-mission-reconciler/1",
+            # gh CLI's UA is allowlisted at the Cloudflare edge for
+            # api.github.com; our previous bespoke UA was getting
+            # JS-challenged from datacenter IPs (incident 2026-05-21).
+            "User-Agent": "gh-cli/2.x (universal-agent-reconciler)",
         },
         method="GET",
     )
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read())
+            raw = resp.read()
+            if _looks_like_cloudflare_challenge(raw):
+                logger.info(
+                    "_query_github_pr: cloudflare challenge on 200 response for PR #%d",
+                    pr_number,
+                )
+                return {"_status": "cloudflare_challenge"}
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                logger.warning(
+                    "_query_github_pr: PR #%d returned 200 but non-JSON body (%d bytes)",
+                    pr_number, len(raw),
+                )
+                return None
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             return {"_status": 404}
+        body = b""
+        try:
+            body = exc.read() or b""
+        except Exception:
+            pass
+        if _looks_like_cloudflare_challenge(body):
+            logger.info(
+                "_query_github_pr: cloudflare challenge HTTP %d for PR #%d",
+                exc.code, pr_number,
+            )
+            return {"_status": "cloudflare_challenge"}
         # 403 typically = rate-limit; 5xx = transient. Log + skip.
         logger.warning("_query_github_pr: HTTP %d for PR #%d", exc.code, pr_number)
         return None
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+    except (urllib.error.URLError, TimeoutError) as exc:
         logger.warning("_query_github_pr: PR #%d query failed: %s", pr_number, exc)
         return None
 
@@ -372,6 +418,7 @@ def reconcile_vp_missions_with_prs(
         "pr_deleted": 0,
         "errors": 0,
         "skipped_no_token": 0,
+        "cloudflare_skipped": 0,
     }
     if not candidates:
         logger.info("vp_mission_pr_reconciler: no candidates in last %d days", _SCAN_WINDOW_DAYS)
@@ -390,6 +437,13 @@ def reconcile_vp_missions_with_prs(
         if pr_response is None:
             # Transient (rate-limit / 5xx / no token). Skip; try again next tick.
             counters["skipped_no_token" if not _gh_token() else "errors"] += 1
+            continue
+
+        if pr_response.get("_status") == "cloudflare_challenge":
+            # Transient edge-level block; next 15-min tick will retry.
+            # Don't count toward errors — keeps the cron's exit code 0
+            # and avoids paging on a known recoverable condition.
+            counters["cloudflare_skipped"] += 1
             continue
 
         if pr_response.get("_status") == 404:
