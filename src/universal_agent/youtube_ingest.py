@@ -647,12 +647,26 @@ def _run_youtube_transcript_api_extract(
         # so a no-proxy attempt is a guaranteed waste. If you ever run
         # this from a residential machine, set
         # `UA_YOUTUBE_TRANSCRIPT_NOPROXY_FALLBACK=1` to re-enable it.
-        max_attempts = max(1, int(os.getenv("UA_YOUTUBE_TRANSCRIPT_PROXY_RETRIES", "3") or 3))
+        # Default 6 (was 3): the 2026-05-21 WEDNESDAY cron had 15/29 metadata-only
+        # fallbacks because flagged-IP misses landed on the same video repeatedly
+        # before exhausting the retry budget. A direct probe showed mixed
+        # `TranscriptsDisabled` + `RequestBlocked` errors on the same video across
+        # attempts (proves it's IP rotation, not creator state). Probability that
+        # ALL 6 fresh-IP attempts land on flagged IPs (at ~25% pool flag rate) is
+        # 0.25**6 ≈ 0.02% — well within budget for a daily cron.
+        max_attempts = max(1, int(os.getenv("UA_YOUTUBE_TRANSCRIPT_PROXY_RETRIES", "6") or 6))
         noproxy_fallback = os.getenv("UA_YOUTUBE_TRANSCRIPT_NOPROXY_FALLBACK", "0").strip().lower() in {"1", "true", "yes", "on"}
 
         fetched = None
         actual_proxy_mode = proxy_mode
         last_proxy_exc: Optional[Exception] = None
+        # Track exception class names across attempts. A mix of TranscriptsDisabled
+        # and RequestBlocked for the same video means the underlying state is "IP
+        # blocked" — YouTube serves a sanitized response that the library parses
+        # as "subtitles disabled" depending on which flagged IP fronted the call.
+        # Use this to reclassify the final failure as `request_blocked` instead of
+        # `transcript_unavailable` so logs surface the real cause.
+        attempt_exc_classes: list[str] = []
         for attempt in range(1, max_attempts + 1):
             try:
                 api = YouTubeTranscriptApi(**api_kwargs)
@@ -661,14 +675,16 @@ def _run_youtube_transcript_api_extract(
                 break
             except Exception as proxy_exc:
                 last_proxy_exc = proxy_exc
+                attempt_exc_classes.append(type(proxy_exc).__name__)
                 if proxy_config is None:
                     # No proxy in use → no point retrying with a "fresh"
                     # connection that will reuse the same direct route.
                     raise
                 if attempt < max_attempts:
                     log.info(
-                        "Transcript fetch attempt %d/%d failed for %s via proxy (%s); retrying with fresh proxy IP",
-                        attempt, max_attempts, video_id, str(proxy_exc)[:200],
+                        "Transcript fetch attempt %d/%d failed for %s via proxy (%s: %s); retrying with fresh proxy IP",
+                        attempt, max_attempts, video_id,
+                        type(proxy_exc).__name__, str(proxy_exc)[:200],
                     )
         if fetched is None:
             if proxy_config is not None and noproxy_fallback:
@@ -710,11 +726,26 @@ def _run_youtube_transcript_api_extract(
         }
     except Exception as exc:
         detail = str(exc)
+        # If we collected exception-class data across multiple proxy attempts and
+        # saw at least one `RequestBlocked` alongside `TranscriptsDisabled`, the
+        # real root cause is IP-block masquerading — not creator-disabled subs.
+        # Surface that as `request_blocked` so the operator can act on it.
+        exc_classes = locals().get("attempt_exc_classes") or []
+        derived_class: Optional[str] = None
+        if exc_classes:
+            if "RequestBlocked" in exc_classes and "TranscriptsDisabled" in exc_classes:
+                derived_class = "request_blocked"
+            elif exc_classes.count("RequestBlocked") >= max(1, len(exc_classes) // 2):
+                derived_class = "request_blocked"
+        failure_class = derived_class or _classify_api_error(
+            "youtube_transcript_api_failed", detail
+        )
         return {
             "ok": False,
             "error": "youtube_transcript_api_failed",
             "detail": detail,
-            "failure_class": _classify_api_error("youtube_transcript_api_failed", detail),
+            "failure_class": failure_class,
+            "attempt_exc_classes": exc_classes or None,
         }
 
 

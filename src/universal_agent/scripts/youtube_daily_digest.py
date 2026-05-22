@@ -22,8 +22,10 @@ Playlist IDs are stored in Infisical as <DAY>_YT_PLAYLIST:
 from __future__ import annotations
 
 import asyncio
+import base64
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+import html as html_module
 import json
 import logging
 import os
@@ -97,12 +99,18 @@ class VideoTranscriptPayload:
     """Per-video data passed into both pipelines.
 
     `transcript_text` is empty when only metadata was available — the map step
-    will handle that case by emitting a metadata-only classification."""
+    will handle that case by emitting a metadata-only classification.
+
+    `metadata` carries the fields ingest_youtube_transcript already fetches from
+    the YouTube Data API (channel, duration, upload_date, …). It's threaded
+    through so the per-video email section can show "Channel · 12:34 · 2026-05-19"
+    instead of just the bare video ID."""
     video_id: str
     title: str
     transcript_text: str
     is_metadata_only: bool = False
     original_item: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -563,6 +571,84 @@ def _parse_map_output(raw_text: str, *, video_id: str, fallback_title: str) -> d
     }
 
 
+def _format_duration_seconds(seconds: int | None) -> str:
+    """Format a duration in seconds as h:mm:ss (or m:ss when under an hour)."""
+    if not seconds or seconds <= 0:
+        return ""
+    s = int(seconds)
+    hours, remainder = divmod(s, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
+def _format_upload_date(raw: str | None) -> str:
+    """Convert YYYYMMDD or ISO 8601 date strings to a friendly 'Mon DD, YYYY'."""
+    if not raw:
+        return ""
+    s = str(raw).strip()
+    if not s:
+        return ""
+    # YouTube Data API path produces YYYYMMDD; tolerate ISO dates too.
+    digits = "".join(ch for ch in s if ch.isdigit())
+    if len(digits) >= 8:
+        try:
+            from datetime import datetime as _dt
+            return _dt.strptime(digits[:8], "%Y%m%d").strftime("%b %-d, %Y")
+        except (ValueError, OSError):
+            pass
+    return s
+
+
+def _build_per_video_header(video: VideoTranscriptPayload) -> str:
+    """Build a deterministic per-video header block.
+
+    Output:
+        ## <title>
+        <small> Channel · 12:34 · May 19, 2026 · [watch ↗](https://youtu.be/<id>) </small>
+
+    We render the metadata strip as a single line of small text rather than a
+    table so it stays compact in both rendered HTML and plaintext.
+    """
+    md = video.metadata or {}
+    parts: list[str] = []
+    channel = str(md.get("channel") or "").strip()
+    if channel:
+        parts.append(channel)
+    duration = _format_duration_seconds(md.get("duration"))
+    if duration:
+        parts.append(duration)
+    pub = _format_upload_date(md.get("upload_date"))
+    if pub:
+        parts.append(pub)
+    parts.append(f"[watch ↗](https://www.youtube.com/watch?v={video.video_id})")
+    meta_line = " · ".join(parts)
+
+    return f"## {video.title}\n\n<small>{meta_line}</small>\n"
+
+
+_FIRST_H2_PATTERN = re.compile(r"^\s*##\s+[^\n]*\n*", flags=re.MULTILINE)
+
+
+_VIDEO_ID_LINE_PATTERN = re.compile(r"^\s*\*\*Video ID:\*\*[^\n]*\n?", flags=re.MULTILINE)
+
+
+def _inject_video_header(retell_markdown: str, video: VideoTranscriptPayload) -> str:
+    """Replace the LLM's `## <title>` line with our deterministic header (title +
+    metadata strip). Also drop the LLM's `**Video ID:**` line — the watch link in
+    the metadata strip already exposes the ID, and keeping both creates dead
+    duplication in every per-video card.
+
+    If the LLM didn't emit an H2 (rare), prepend our header so the section is
+    still well-formed."""
+    header = _build_per_video_header(video)
+    new_md, n = _FIRST_H2_PATTERN.subn(header + "\n", retell_markdown, count=1)
+    if n == 0:
+        new_md = header + "\n" + retell_markdown
+    return _VIDEO_ID_LINE_PATTERN.sub("", new_md, count=1)
+
+
 async def _retell_one_video(
     *,
     client: AsyncAnthropic,
@@ -602,10 +688,11 @@ async def _retell_one_video(
         )
         elapsed = (datetime.now(timezone.utc) - started).total_seconds()
         parsed = _parse_map_output(raw_text, video_id=video.video_id, fallback_title=video.title)
+        retell_markdown = _inject_video_header(parsed["retell_markdown"], video)
         return MapResult(
             video_id=video.video_id,
             title=video.title,
-            retell_markdown=parsed["retell_markdown"],
+            retell_markdown=retell_markdown,
             thesis_line=parsed["thesis_line"],
             classification=parsed["classification"],
             elapsed_seconds=elapsed,
@@ -617,9 +704,9 @@ async def _retell_one_video(
     except Exception as exc:
         elapsed = (datetime.now(timezone.utc) - started).total_seconds()
         logger.error("Map step failed for %s after %.1fs: %s", video.video_id, elapsed, exc)
+        header = _build_per_video_header(video)
         fallback_md = (
-            f"## {video.title}\n\n"
-            f"**Video ID:** {video.video_id}\n\n"
+            f"{header}\n"
             f"### Retelling\n\n"
             f"_Map-step retelling failed: {exc}. Tutorial pipeline dispatch will skip this video._\n"
         )
@@ -1102,6 +1189,289 @@ def _strip_digest_decision_blocks(digest_content: str) -> str:
         flags=re.DOTALL | re.IGNORECASE,
     )
     return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
+def _split_email_body_and_attachment(full_content: str) -> tuple[str, str]:
+    """Split the full markdown digest into:
+      - body_md: everything up to but not including the `## Per-Video Retellings` header.
+                 This is the meta-synthesis section (Cross-Video Themes / Learning Insights /
+                 Neglected Opportunities) — short enough to scan inline in an email client.
+      - attachment_md: the unchanged full markdown — meta-synthesis + per-video retellings
+                       + tutorial dispatch summary — rendered as a standalone HTML file.
+
+    The split point is `^## Per-Video Retellings` (case-insensitive). If the marker
+    isn't found (e.g. an unusual reducer output), the body keeps everything and the
+    attachment is identical.
+    """
+    pattern = re.compile(r"(?im)^\#{1,3}\s*Per[- ]Video Retellings\s*$")
+    match = pattern.search(full_content)
+    if not match:
+        return full_content.strip(), full_content
+    body_md = full_content[: match.start()].rstrip()
+    # Drop a trailing `---` divider that was meant to separate body from per-video
+    # retellings — looks like a stray rule when the per-video section is gone.
+    body_md = re.sub(r"\n+---\s*$", "", body_md).rstrip()
+    return body_md, full_content
+
+
+# ---------------------------------------------------------------------------
+# HTML rendering template
+#
+# Inline CSS is required for email clients (Gmail in particular strips
+# `<style>` tags from the body and ignores anything that isn't inline). The
+# attachment renders as a standalone HTML file so we can use `<style>` there.
+# Notable choices:
+#   * No `nl2br` markdown extension — `nl2br` inserts <br> on every newline,
+#     including INSIDE a single paragraph the user wrote across two lines.
+#     The result is the "way too much spacing" we saw on 2026-05-21.
+#   * `border-bottom` on h1/h2 only (not h3) — h3 is too small to deserve a
+#     full-width rule, and the per-video section has many of them.
+#   * `<small>` metadata strip styled as dim, italic-free, single line.
+#   * Code blocks: GitHub-style light grey, monospace, generous padding.
+# ---------------------------------------------------------------------------
+
+_DIGEST_HTML_HEAD_CSS = """
+  :root { color-scheme: light; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+                 Helvetica, Arial, sans-serif;
+    font-size: 15px;
+    line-height: 1.55;
+    color: #1f2328;
+    background: #ffffff;
+    max-width: 780px;
+    margin: 0 auto;
+    padding: 24px 28px 80px;
+  }
+  h1 {
+    font-size: 24px;
+    border-bottom: 2px solid #d0d7de;
+    padding-bottom: 8px;
+    margin-top: 8px;
+  }
+  h2 {
+    font-size: 20px;
+    border-bottom: 1px solid #d8dee4;
+    padding-bottom: 6px;
+    margin-top: 32px;
+  }
+  h3 {
+    font-size: 16px;
+    margin-top: 22px;
+    margin-bottom: 4px;
+    color: #24292f;
+  }
+  p, ul, ol { margin: 8px 0; }
+  ul, ol { padding-left: 22px; }
+  li { margin: 2px 0; }
+  small {
+    display: inline-block;
+    font-size: 13px;
+    color: #57606a;
+    margin-bottom: 8px;
+  }
+  small a { color: #57606a; text-decoration: underline; }
+  small a:hover { color: #0969da; }
+  blockquote {
+    border-left: 4px solid #d0d7de;
+    margin: 8px 0;
+    padding: 4px 14px;
+    color: #57606a;
+    background: #f6f8fa;
+  }
+  code {
+    background: #eff1f3;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-family: SFMono-Regular, Consolas, 'Liberation Mono', monospace;
+    font-size: 13px;
+  }
+  pre {
+    background: #f6f8fa;
+    padding: 14px 16px;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  pre code { background: transparent; padding: 0; }
+  hr { border: none; border-top: 1px solid #d8dee4; margin: 28px 0; }
+  a { color: #0969da; }
+  table { border-collapse: collapse; margin: 12px 0; }
+  th, td { border: 1px solid #d0d7de; padding: 6px 10px; }
+  th { background: #f6f8fa; }
+  .digest-toc {
+    background: #f6f8fa;
+    border: 1px solid #d8dee4;
+    border-radius: 6px;
+    padding: 12px 18px;
+    margin: 18px 0 28px;
+  }
+  .digest-toc h2 {
+    font-size: 14px;
+    border: none;
+    margin: 0 0 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #57606a;
+    padding: 0;
+  }
+  .digest-toc ol { margin: 4px 0 0; padding-left: 22px; }
+  .digest-toc li { margin: 2px 0; font-size: 14px; }
+"""
+
+
+def _markdown_to_html_fragment(md_text: str) -> str:
+    """Render markdown to an HTML fragment with no inline-line-break (nl2br)
+    expansion. Dropping nl2br is the single biggest fix for the 2026-05-21
+    "excessive spacing" complaint — soft newlines no longer become <br>."""
+    return markdown.markdown(md_text, extensions=["extra"])
+
+
+_VIDEO_HEADING_PATTERN = re.compile(r"(?m)^##\s+(?!Per-Video Retellings)(.+?)\s*$")
+# Headings that mark the END of the per-video range (anything below this is
+# tutorial-dispatch summary / footer, NOT a video).
+_PER_VIDEO_END_PATTERN = re.compile(
+    r"(?im)^##\s+(?:Tutorial Pipeline Dispatch|Dispatch Summary|Footer)\b"
+)
+
+
+def _per_video_range(full_content: str) -> tuple[int, int] | None:
+    """Return (start, end) indices of the per-video range within full_content,
+    or None if no per-video marker is present. The range starts right after
+    `## Per-Video Retellings` and ends at the first dispatch/footer heading."""
+    start_match = re.search(
+        r"(?im)^\#{1,3}\s*Per[- ]Video Retellings\s*$", full_content,
+    )
+    if not start_match:
+        return None
+    start = start_match.end()
+    end_match = _PER_VIDEO_END_PATTERN.search(full_content, pos=start)
+    end = end_match.start() if end_match else len(full_content)
+    return start, end
+
+
+def _build_toc_html(full_content: str) -> str:
+    """Build a small per-video table of contents from the markdown source.
+
+    Returns "" if there are fewer than two video sections.
+    """
+    bounds = _per_video_range(full_content)
+    if not bounds:
+        return ""
+    per_video_section = full_content[bounds[0]:bounds[1]]
+    titles = _VIDEO_HEADING_PATTERN.findall(per_video_section)
+    if len(titles) < 2:
+        return ""
+    items: list[str] = []
+    for idx, raw_title in enumerate(titles, start=1):
+        title = html_module.escape(raw_title.strip())
+        anchor = _slugify_anchor(raw_title, idx)
+        items.append(f'<li><a href="#{anchor}">{title}</a></li>')
+    return (
+        '<div class="digest-toc">'
+        '<h2>Today\'s videos</h2>'
+        f'<ol>{"".join(items)}</ol>'
+        '</div>'
+    )
+
+
+def _slugify_anchor(text: str, idx: int) -> str:
+    base = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return f"v{idx}-{base[:48]}" if base else f"v{idx}"
+
+
+def _inject_video_anchors(html_fragment: str) -> str:
+    """Add `id="vN-slug"` attributes to per-video <h2> elements so the TOC
+    links resolve. Anchors are applied to h2s in the range between the
+    "Per-Video Retellings" marker and the first dispatch/footer h2 — so
+    meta-synthesis (before) and tutorial-dispatch (after) h2s are left
+    untouched and the TOC indices line up with the per-video order."""
+    marker = re.search(
+        r"<h2[^>]*>\s*Per[- ]Video Retellings\s*</h2>",
+        html_fragment,
+        flags=re.IGNORECASE,
+    )
+    if not marker:
+        return html_fragment
+    end_marker = re.search(
+        r"<h2[^>]*>\s*(?:Tutorial Pipeline Dispatch|Dispatch Summary|Footer)\b[^<]*</h2>",
+        html_fragment[marker.end():],
+        flags=re.IGNORECASE,
+    )
+    body_end = marker.end() + (end_marker.start() if end_marker else len(html_fragment) - marker.end())
+    head = html_fragment[: marker.end()]
+    body = html_fragment[marker.end(): body_end]
+    foot = html_fragment[body_end:]
+    counter = {"i": 0}
+
+    def repl(m: re.Match) -> str:
+        inner = m.group(1)
+        counter["i"] += 1
+        stripped = re.sub(r"<[^>]+>", "", inner).strip()
+        anchor = _slugify_anchor(stripped, counter["i"])
+        return f'<h2 id="{anchor}">{inner}</h2>'
+
+    body = re.sub(r"<h2>(.*?)</h2>", repl, body, flags=re.DOTALL)
+    return head + body + foot
+
+
+def _render_full_digest_html(
+    full_content: str,
+    *,
+    day_name: str,
+    date_str: str,
+) -> str:
+    """Render the full digest markdown into a polished standalone HTML doc
+    intended for the email attachment."""
+    fragment = _markdown_to_html_fragment(full_content)
+    fragment = _inject_video_anchors(fragment)
+    toc_html = _build_toc_html(full_content)
+    title = f"Daily YouTube Digest — {day_name.title()}, {date_str}"
+    # Insert the TOC right after the first <h1> so it sits between the title
+    # and the meta-synthesis section.
+    if toc_html:
+        fragment = re.sub(
+            r"(</h1>)",
+            lambda m: m.group(1) + "\n" + toc_html,
+            fragment,
+            count=1,
+        )
+    return (
+        "<!DOCTYPE html>\n"
+        '<html lang="en">\n'
+        "<head>\n"
+        '  <meta charset="utf-8">\n'
+        f"  <title>{html_module.escape(title)}</title>\n"
+        f"  <style>{_DIGEST_HTML_HEAD_CSS}</style>\n"
+        "</head>\n"
+        f"<body>{fragment}</body>\n"
+        "</html>\n"
+    )
+
+
+def _render_email_body_html(
+    body_md: str,
+    *,
+    intro_html: str,
+) -> str:
+    """Render the email body (intro + meta-synthesis only) as inline-styled HTML.
+
+    Gmail strips <style> tags, so every visual rule is inlined here. We keep the
+    formatting deliberately minimal because the body is now short — the full
+    template lives in the attachment.
+    """
+    body_fragment = _markdown_to_html_fragment(body_md)
+    # Strip the leading H1 (the email subject already names the day).
+    body_fragment = re.sub(r"<h1>.*?</h1>\s*", "", body_fragment, count=1, flags=re.DOTALL)
+    return (
+        '<div style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\','
+        'Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.55;'
+        'color:#1f2328;max-width:760px;margin:0 auto;padding:8px 4px 0;">'
+        f'{intro_html}'
+        f'{body_fragment}'
+        '</div>'
+    )
 
 
 def _rank_digest_decisions(decisions: dict[str, Any], processed_items: list[dict]) -> dict[str, Any]:
@@ -1720,6 +2090,7 @@ def process_daily_digest(
             if len(text) > 50000:
                 text = text[:50000] + "... [TRUNCATED]"
 
+            result_metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
             transcripts.append(f"Title: {title}\nVideo ID: {video_id}\nTranscript:\n{text}\n")
             transcript_payloads.append(
                 VideoTranscriptPayload(
@@ -1728,6 +2099,7 @@ def process_daily_digest(
                     transcript_text=text,
                     is_metadata_only=False,
                     original_item=item,
+                    metadata=result_metadata or {},
                 )
             )
             processed_items.append(item)
@@ -1746,6 +2118,13 @@ def process_daily_digest(
             )
 
             # Metadata-only fallback: use title for synthesis (playlist API doesn't return description)
+            # We still capture the metadata dict from the failed-fetch result if present —
+            # the YouTube Data API call inside ingest_youtube_transcript runs even when the
+            # transcript fetch fails, so channel/duration/upload_date are usually populated.
+            result_metadata = (
+                result.get("metadata") if isinstance(result, dict) and isinstance(result.get("metadata"), dict)
+                else {}
+            )
             fallback_text = f"[Metadata-only — transcript unavailable]\n\nTitle: {title}"
             transcripts.append(f"Title: {title}\nVideo ID: {video_id}\n{fallback_text}\n")
             transcript_payloads.append(
@@ -1755,6 +2134,7 @@ def process_daily_digest(
                     transcript_text="",
                     is_metadata_only=True,
                     original_item=item,
+                    metadata=result_metadata or {},
                 )
             )
             processed_items.append(item)
@@ -1890,16 +2270,44 @@ def process_daily_digest(
     email_succeeded = email_to is None
     if email_to:
         logger.info("Sending email digest to %s...", email_to)
+        # Build body (meta-synthesis only) + standalone HTML attachment (full digest).
+        # The attachment is what the user reads when they want the full retellings;
+        # the body is a scannable "today's themes" summary they can read inline.
+        body_md, attachment_md = _split_email_body_and_attachment(full_content)
+        attachment_count = len(processed_items)
+        intro_html = (
+            '<p style="margin:0 0 14px;">'
+            f"Here's today's daily synthesis across <strong>{attachment_count}</strong> "
+            f"video{'s' if attachment_count != 1 else ''} from your <em>{day_name.title()}</em> "
+            "playlist. The cross-video themes are below; the full per-video retellings, "
+            "tutorial dispatch summary, and decision metadata are attached as a styled "
+            "HTML report."
+            "</p>"
+        )
+        email_html = _render_email_body_html(body_md, intro_html=intro_html)
+        attachment_html = _render_full_digest_html(
+            attachment_md, day_name=day_name, date_str=date_str,
+        )
+        attachment_filename = f"YouTube_Daily_Digest_{date_str}_{day_name.title()}.html"
+        attachment_payload = {
+            "content": base64.b64encode(attachment_html.encode("utf-8")).decode("ascii"),
+            "filename": attachment_filename,
+            "content_type": "text/html",
+        }
+
         async def _send():
             mail = AgentMailService()
             await mail.startup()
             try:
-                html_content = markdown.markdown(full_content, extensions=["extra", "nl2br"])
                 await mail.send_email(
                     to=email_to,
                     subject=f"Daily YouTube Digest: {day_name.title()}",
-                    html=f"<html><head><style>body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; max-width: 800px; margin: 0 auto; padding: 20px; }} h1, h2, h3 {{ border-bottom: 1px solid #eee; padding-bottom: 8px; }} img {{ max-width: 100%; }} blockquote {{ border-left: 4px solid #ddd; margin: 0; padding-left: 16px; color: #666; }} pre {{ background-color: #f6f8fa; padding: 16px; border-radius: 6px; overflow: auto; }}</style></head><body>{html_content}</body></html>",
-                    text=full_content,
+                    html=email_html,
+                    text=body_md + (
+                        f"\n\n(Full per-video retellings + dispatch summary are in the "
+                        f"attached file: {attachment_filename})\n"
+                    ),
+                    attachments=[attachment_payload],
                     force_send=True,
                     require_approval=False,
                     action=ActionTag.FYI,
