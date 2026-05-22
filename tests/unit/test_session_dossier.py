@@ -11,6 +11,7 @@ from universal_agent.services.session_dossier import (
     _DESCRIPTION_SEPARATOR,
     _SAFETY_MAX_INPUT_CHARS,
     _collect_workspace_data,
+    _has_meaningful_content,
     _write_files,
     generate_session_dossier,
 )
@@ -176,8 +177,11 @@ class TestGenerateSessionDossierEmpty:
     @pytest.mark.asyncio
     async def test_empty_workspace_returns_minimal_dossier(self, tmp_path: Path):
         dossier, description = await generate_session_dossier(tmp_path)
-        assert "No execution artifacts found" in dossier
-        assert description == "Empty session — no execution data"
+        # Content-filter (2026-05-22): empty workspace now produces the
+        # "No meaningful execution data" message instead of "artifacts found".
+        assert ("No meaningful execution data" in dossier
+                or "No execution artifacts" in dossier)
+        assert "no" in description.lower()
         assert (tmp_path / "context_brief.md").exists()
         assert (tmp_path / "description.txt").exists()
 
@@ -189,7 +193,183 @@ class TestGenerateSessionDossierEmpty:
     @pytest.mark.asyncio
     async def test_metadata_defaults_to_empty_dict(self, tmp_path: Path):
         dossier, description = await generate_session_dossier(tmp_path, metadata=None)
-        assert "No execution artifacts found" in dossier
+        # Empty workspace now produces "No meaningful execution data" (P-filter)
+        assert ("No meaningful execution data" in dossier
+                or "No execution artifacts" in dossier)
+
+    # ── Content-filter behavior (2026-05-22) ──────────────────────────────
+    # Pure-Python content check skips the LLM call when the workspace has
+    # no meaningful execution data. CONTENT-based, NOT workspace-name-based.
+
+    @pytest.mark.asyncio
+    async def test_zero_byte_run_log_skips_llm(self, tmp_path: Path):
+        (tmp_path / "run.log").write_text("", encoding="utf-8")
+        with patch(
+            "universal_agent.services.session_dossier._async_call_llm",
+            new_callable=AsyncMock,
+        ) as mock_llm:
+            await generate_session_dossier(tmp_path)
+        mock_llm.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_tiny_run_log_below_threshold_skips_llm(self, tmp_path: Path):
+        (tmp_path / "run.log").write_text("started\nfinished\n", encoding="utf-8")
+        with patch(
+            "universal_agent.services.session_dossier._async_call_llm",
+            new_callable=AsyncMock,
+        ) as mock_llm:
+            await generate_session_dossier(tmp_path)
+        mock_llm.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_substantial_run_log_triggers_llm(self, tmp_path: Path):
+        (tmp_path / "run.log").write_text("x" * 600, encoding="utf-8")
+        with patch(
+            "universal_agent.services.session_dossier._async_call_llm",
+            new_callable=AsyncMock,
+            return_value="# Dossier\n\nSomething happened.\n\n"
+            f"{_DESCRIPTION_SEPARATOR}\nReal session.",
+        ), patch(
+            "universal_agent.services.session_dossier.resolve_haiku",
+            return_value="test-model",
+        ):
+            await generate_session_dossier(tmp_path)
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_with_original_request_triggers_llm(self, tmp_path: Path):
+        (tmp_path / "run.log").write_text("", encoding="utf-8")
+        (tmp_path / "run_checkpoint.json").write_text(
+            json.dumps({"original_request": "implement feature X"}), encoding="utf-8"
+        )
+        with patch(
+            "universal_agent.services.session_dossier._async_call_llm",
+            new_callable=AsyncMock,
+            return_value=f"# Dossier{_DESCRIPTION_SEPARATOR}\nimpl X",
+        ), patch(
+            "universal_agent.services.session_dossier.resolve_haiku",
+            return_value="test-model",
+        ):
+            await generate_session_dossier(tmp_path)
+
+    @pytest.mark.asyncio
+    async def test_sync_ready_zero_tool_calls_skips_llm(self, tmp_path: Path):
+        (tmp_path / "sync_ready.json").write_text(
+            json.dumps({"status": "ok", "tool_calls": 0, "iterations": 0}),
+            encoding="utf-8",
+        )
+        with patch(
+            "universal_agent.services.session_dossier._async_call_llm",
+            new_callable=AsyncMock,
+        ) as mock_llm:
+            await generate_session_dossier(tmp_path)
+        mock_llm.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_sync_ready_nonzero_tool_calls_triggers_llm(self, tmp_path: Path):
+        (tmp_path / "sync_ready.json").write_text(
+            json.dumps({"status": "ok", "tool_calls": 5, "iterations": 3}),
+            encoding="utf-8",
+        )
+        with patch(
+            "universal_agent.services.session_dossier._async_call_llm",
+            new_callable=AsyncMock,
+            return_value=f"# Dossier{_DESCRIPTION_SEPARATOR}\nbrief",
+        ), patch(
+            "universal_agent.services.session_dossier.resolve_haiku",
+            return_value="test-model",
+        ):
+            await generate_session_dossier(tmp_path)
+
+    @pytest.mark.asyncio
+    async def test_transcript_content_triggers_llm(self, tmp_path: Path):
+        (tmp_path / "transcript.md").write_text("y" * 600, encoding="utf-8")
+        with patch(
+            "universal_agent.services.session_dossier._async_call_llm",
+            new_callable=AsyncMock,
+            return_value=f"# Dossier{_DESCRIPTION_SEPARATOR}\nfrom transcript",
+        ), patch(
+            "universal_agent.services.session_dossier.resolve_haiku",
+            return_value="test-model",
+        ):
+            await generate_session_dossier(tmp_path)
+
+    @pytest.mark.asyncio
+    async def test_skip_writes_placeholder_files(self, tmp_path: Path):
+        """When skipped, still write placeholder so the reaper's
+        if-exists guard prevents re-triggering the same workspace."""
+        (tmp_path / "run.log").write_text("", encoding="utf-8")
+        with patch(
+            "universal_agent.services.session_dossier._async_call_llm",
+            new_callable=AsyncMock,
+        ):
+            await generate_session_dossier(tmp_path)
+        assert (tmp_path / "context_brief.md").exists()
+        assert (tmp_path / "description.txt").exists()
+
+    @pytest.mark.asyncio
+    async def test_threshold_overridable_via_env(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("UA_DOSSIER_MIN_RUN_LOG_BYTES", "10")
+        (tmp_path / "run.log").write_text("short but >10 bytes here",
+                                          encoding="utf-8")
+        with patch(
+            "universal_agent.services.session_dossier._async_call_llm",
+            new_callable=AsyncMock,
+            return_value=f"# Dossier{_DESCRIPTION_SEPARATOR}\ntunable",
+        ), patch(
+            "universal_agent.services.session_dossier.resolve_haiku",
+            return_value="test-model",
+        ):
+            await generate_session_dossier(tmp_path)
+
+
+class TestHasMeaningfulContent:
+    """Direct unit tests for the content-filter predicate (pure Python, no LLM)."""
+
+    def test_empty_workspace_no_content(self, tmp_path: Path):
+        has, _ = _has_meaningful_content(tmp_path)
+        assert has is False
+
+    def test_zero_byte_run_log_no_content(self, tmp_path: Path):
+        (tmp_path / "run.log").write_text("", encoding="utf-8")
+        has, _ = _has_meaningful_content(tmp_path)
+        assert has is False
+
+    def test_large_run_log_has_content(self, tmp_path: Path):
+        (tmp_path / "run.log").write_text("x" * 600, encoding="utf-8")
+        has, reasons = _has_meaningful_content(tmp_path)
+        assert has is True
+        assert reasons.get("matched") == "run.log"
+
+    def test_checkpoint_with_query_has_content(self, tmp_path: Path):
+        (tmp_path / "run_checkpoint.json").write_text(
+            json.dumps({"query": "find X"}), encoding="utf-8"
+        )
+        has, _ = _has_meaningful_content(tmp_path)
+        assert has is True
+
+    def test_checkpoint_empty_dict_no_content(self, tmp_path: Path):
+        (tmp_path / "run_checkpoint.json").write_text("{}", encoding="utf-8")
+        has, _ = _has_meaningful_content(tmp_path)
+        assert has is False
+
+    def test_invalid_json_checkpoint_no_content(self, tmp_path: Path):
+        (tmp_path / "run_checkpoint.json").write_text("not json", encoding="utf-8")
+        has, _ = _has_meaningful_content(tmp_path)
+        assert has is False
+
+    def test_sync_ready_with_tool_calls_has_content(self, tmp_path: Path):
+        (tmp_path / "sync_ready.json").write_text(
+            json.dumps({"tool_calls": 3}), encoding="utf-8"
+        )
+        has, _ = _has_meaningful_content(tmp_path)
+        assert has is True
+
+    def test_sync_ready_zero_tool_calls_no_content(self, tmp_path: Path):
+        (tmp_path / "sync_ready.json").write_text(
+            json.dumps({"tool_calls": 0}), encoding="utf-8"
+        )
+        has, _ = _has_meaningful_content(tmp_path)
+        assert has is False
 
     @pytest.mark.asyncio
     async def test_checkpoint_only_triggers_llm_path(self, tmp_path: Path):
@@ -216,7 +396,9 @@ class TestGenerateSessionDossierParsing:
 
     @pytest.mark.asyncio
     async def test_response_with_separator_splits_correctly(self, tmp_path: Path):
-        (tmp_path / "run.log").write_text("did some work", encoding="utf-8")
+        (tmp_path / "run_checkpoint.json").write_text(
+            json.dumps({"original_request": "test"}), encoding="utf-8"
+        )
         response = f"# Analysis\n\nDetailed report.\n\n{_DESCRIPTION_SEPARATOR}\nBrief card text."
 
         with patch(
@@ -231,7 +413,9 @@ class TestGenerateSessionDossierParsing:
 
     @pytest.mark.asyncio
     async def test_response_without_separator_uses_first_line_as_description(self, tmp_path: Path):
-        (tmp_path / "run.log").write_text("content", encoding="utf-8")
+        (tmp_path / "run_checkpoint.json").write_text(
+            json.dumps({"original_request": "test"}), encoding="utf-8"
+        )
         response = "# Some Title Here\n\nBody of the dossier."
 
         with patch(
@@ -246,7 +430,9 @@ class TestGenerateSessionDossierParsing:
 
     @pytest.mark.asyncio
     async def test_description_normalizes_whitespace(self, tmp_path: Path):
-        (tmp_path / "run.log").write_text("x", encoding="utf-8")
+        (tmp_path / "run_checkpoint.json").write_text(
+            json.dumps({"original_request": "test"}), encoding="utf-8"
+        )
         response = f"Dossier text\n\n{_DESCRIPTION_SEPARATOR}\nLine 1\n  Line 2  \n  Line 3"
 
         with patch(
@@ -261,7 +447,9 @@ class TestGenerateSessionDossierParsing:
 
     @pytest.mark.asyncio
     async def test_description_truncated_at_300_chars(self, tmp_path: Path):
-        (tmp_path / "run.log").write_text("x", encoding="utf-8")
+        (tmp_path / "run_checkpoint.json").write_text(
+            json.dumps({"original_request": "test"}), encoding="utf-8"
+        )
         long_desc = "A" * 500
         response = f"Dossier\n\n{_DESCRIPTION_SEPARATOR}\n{long_desc}"
 
@@ -277,7 +465,9 @@ class TestGenerateSessionDossierParsing:
 
     @pytest.mark.asyncio
     async def test_empty_response_fallback(self, tmp_path: Path):
-        (tmp_path / "run.log").write_text("x", encoding="utf-8")
+        (tmp_path / "run_checkpoint.json").write_text(
+            json.dumps({"original_request": "test"}), encoding="utf-8"
+        )
 
         with patch(
             "universal_agent.services.session_dossier._async_call_llm",
@@ -315,7 +505,10 @@ class TestGenerateSessionDossierSerialization:
         for idx in range(6):
             ws = tmp_path / f"ws_{idx}"
             ws.mkdir()
-            (ws / "run.log").write_text(f"work {idx}", encoding="utf-8")
+            (ws / "run_checkpoint.json").write_text(
+                json.dumps({"original_request": f"work {idx}"}),
+                encoding="utf-8",
+            )
             workspaces.append(ws)
 
         in_flight = 0
