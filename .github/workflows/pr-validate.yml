@@ -176,6 +176,16 @@ jobs:
             --no-cache \
             ${{ steps.changed.outputs.files }} 2>&1 | tail -50
 
+      - name: Guard against hardcoded date literals in tests/
+        run: |
+          # Catches the class of failure from 2026-05-21/22 where a hardcoded
+          # packet date in test_claude_code_intel_rollup.py aged past the
+          # 28-day rolling window and broke CI on every open PR until the
+          # fixture was switched to a relative date (commit e717c273).
+          # New unmarked YYYY-MM-DD literals fail this step; existing ones
+          # are grandfathered via scripts/test_date_literal_baseline.txt.
+          uv run python scripts/check_test_date_literals.py
+
       - name: Run unit tests
         run: |
           # tests/unit is the fast subset. Full suite runs nightly.
