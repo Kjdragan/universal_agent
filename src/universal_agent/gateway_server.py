@@ -455,6 +455,13 @@ YOUTUBE_DAILY_DIGEST_DEFAULT_TIMEZONE = (
     or (os.getenv("UA_DEFAULT_TIMEZONE") or "").strip()
     or "America/Chicago"
 )
+# Gold-channel poller runs 30 min before the digest cron so any newly-published
+# videos from `tier:"gold"` channels in channels_watchlist.json land in the
+# day-of-week playlist before the digest consumes it. Idempotent — second run
+# in the same window is a no-op.
+YOUTUBE_GOLD_POLLER_JOB_KEY = "youtube_gold_channel_poller"
+YOUTUBE_GOLD_POLLER_DEFAULT_CRON = "30 5 * * *"  # 5:30 AM Central daily
+YOUTUBE_GOLD_POLLER_DEFAULT_TIMEZONE = YOUTUBE_DAILY_DIGEST_DEFAULT_TIMEZONE
 CODIE_PROACTIVE_CLEANUP_JOB_KEY = "codie_proactive_cleanup"
 CODIE_PROACTIVE_CLEANUP_DEFAULT_CRON = "30 1 * * *"
 CODIE_PROACTIVE_CLEANUP_DEFAULT_TIMEZONE = (
@@ -14729,6 +14736,7 @@ async def lifespan(app: FastAPI):
                 _ensure_intel_auto_promoter_cron_job()
                 _ensure_paper_to_podcast_cron_job()
                 _ensure_youtube_daily_digest_cron_job()
+                _ensure_youtube_gold_poller_cron_job()
                 _ensure_nightly_wiki_cron_job()
                 _ensure_morning_briefing_cron_job()
                 _ensure_proactive_report_morning_cron_job()
@@ -18891,6 +18899,85 @@ def _ensure_youtube_daily_digest_cron_job() -> Optional[dict[str, Any]]:
         workspace_dir=workspace_dir,
         command="!script universal_agent.scripts.youtube_daily_digest",
         description="Daily YouTube Digest: ingest day-specific playlist, synthesize via LLM, email summary, mark videos processed.",
+        cron_expr=cron_expr,
+        timezone=timezone_name,
+        enabled=True,
+        catch_up_on_restart=True,
+        metadata=metadata,
+    )
+    return job.to_dict() if hasattr(job, "to_dict") else {"job_id": str(getattr(job, "job_id", ""))}
+
+
+def _youtube_gold_poller_enabled() -> bool:
+    """Master kill switch for the gold-channel RSS poller. Default ON.
+
+    The poller is a tightly-scoped read-add operation (RSS metadata + playlist
+    inserts capped at 10/day), so it's safe to leave enabled. The env var
+    exists for the operator to disable it cleanly if the gold-tier
+    behavior ever needs to be paused.
+    """
+    return os.getenv("UA_YOUTUBE_GOLD_POLLER_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _ensure_youtube_gold_poller_cron_job() -> Optional[dict[str, Any]]:
+    """Idempotently register the gold-channel RSS poller cron.
+
+    Schedule: 30 min before the digest cron (default 5:30 AM Central). The
+    poller adds new videos from `tier:"gold"` channels to the appropriate
+    day-of-week playlist so the existing digest cron consumes them at 6 AM.
+    """
+    if not _cron_service or not _youtube_gold_poller_enabled():
+        return None
+    cron_expr = (
+        os.getenv("UA_YOUTUBE_GOLD_POLLER_CRON", YOUTUBE_GOLD_POLLER_DEFAULT_CRON).strip()
+        or YOUTUBE_GOLD_POLLER_DEFAULT_CRON
+    )
+    timezone_name = (
+        os.getenv("UA_YOUTUBE_GOLD_POLLER_TIMEZONE", YOUTUBE_GOLD_POLLER_DEFAULT_TIMEZONE).strip()
+        or YOUTUBE_GOLD_POLLER_DEFAULT_TIMEZONE
+    )
+    workspace_dir = str(WORKSPACES_DIR / "cron_youtube_gold_channel_poller")
+    metadata = {
+        "system_job": YOUTUBE_GOLD_POLLER_JOB_KEY,
+        "autonomous": True,
+        "source": "system",
+        "session_id": "cron_youtube_gold_channel_poller",
+        "script": "universal_agent.services.youtube_gold_channel_poller",
+        "required_secrets": [
+            "YOUTUBE_OAUTH_CLIENT_ID",
+            "YOUTUBE_OAUTH_CLIENT_SECRET",
+            "YOUTUBE_OAUTH_REFRESH_TOKEN",
+            "YOUTUBE_API_KEY",
+            # The day-of-week playlists — same set as the digest cron needs.
+            "MONDAY_YT_PLAYLIST",
+            "TUESDAY_YT_PLAYLIST",
+            "WEDNESDAY_YT_PLAYLIST",
+            "THURSDAY_YT_PLAYLIST",
+            "FRIDAY_YT_PLAYLIST",
+            "SATURDAY_YT_PLAYLIST",
+            "SUNDAY_YT_PLAYLIST",
+        ],
+    }
+    updates = {
+        "user_id": "cron_system",
+        "workspace_dir": workspace_dir,
+        "command": "!script universal_agent.services.youtube_gold_channel_poller",
+        "description": "Gold-channel RSS poller: auto-add new videos from tier=gold channels to the day-of-week playlist 30 min before digest cron.",
+        "cron_expr": cron_expr,
+        "timezone": timezone_name,
+        "enabled": True,
+        "catch_up_on_restart": True,
+        "metadata": metadata,
+    }
+    existing = _find_cron_job_by_system_job(YOUTUBE_GOLD_POLLER_JOB_KEY)
+    if existing is not None:
+        updated = _cron_service.update_job(str(getattr(existing, "job_id", "")), updates)
+        return updated.to_dict() if hasattr(updated, "to_dict") else {"job_id": str(getattr(updated, "job_id", ""))}
+    job = _cron_service.add_job(
+        user_id="cron_system",
+        workspace_dir=workspace_dir,
+        command="!script universal_agent.services.youtube_gold_channel_poller",
+        description="Gold-channel RSS poller: auto-add new videos from tier=gold channels to the day-of-week playlist 30 min before digest cron.",
         cron_expr=cron_expr,
         timezone=timezone_name,
         enabled=True,

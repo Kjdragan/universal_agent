@@ -1087,6 +1087,40 @@ def _pockets_dir() -> Path:
     return _digest_artifacts_dir() / "repopulate_pockets"
 
 
+def _load_gold_duration_overrides() -> dict[str, int]:
+    """Return {channel_id: max_duration_seconds_override} for every gold channel
+    that has an explicit override. Used to plumb per-channel cap-bypass into the
+    digest's pre-ingest triage so e.g. Lex Fridman 3-hour interviews don't get
+    auto-skipped by the global 90-minute cap.
+
+    Returns an empty dict if the watchlist is missing or malformed — the
+    default behavior (global cap applied everywhere) is preserved.
+    """
+    path = Path(
+        os.getenv(
+            "UA_YOUTUBE_CHANNELS_WATCHLIST_PATH",
+            "/opt/universal_agent/channels_watchlist.json",
+        )
+    )
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Could not load gold duration overrides from %s: %s", path, exc)
+        return {}
+    overrides: dict[str, int] = {}
+    for c in data.get("channels", []):
+        if c.get("tier") != "gold":
+            continue
+        override = c.get("duration_max_seconds_override")
+        if isinstance(override, int) and override > 0:
+            cid = c.get("channel_id")
+            if cid:
+                overrides[cid] = override
+    return overrides
+
+
 def _pocket_path(*, day_name: str, date_str: str) -> Path:
     day_upper = day_name.upper()
     return _pockets_dir() / day_upper / f"{date_str}_{day_upper}_playlist_pocket.json"
@@ -2056,11 +2090,19 @@ def process_daily_digest(
     processed_items: list[dict] = []
     video_titles: list[str] = []
 
+    # Load gold-channel duration overrides once. Maps video_owner_channel_id ->
+    # max_duration_seconds_override. Used so e.g. Lex Fridman 3-hour interviews
+    # don't get auto-triaged out of the digest by the global 90-minute cap.
+    gold_duration_overrides = _load_gold_duration_overrides()
+
     for item in items:
         video_id = item["video_id"]
         title = item["title"]
         logger.info("Ingesting: %s (%s)", title, video_id)
         video_titles.append(title)
+
+        owner_channel_id = item.get("video_owner_channel_id") or ""
+        duration_override = gold_duration_overrides.get(owner_channel_id)
 
         # Strategy: try proxy first (VPS path), then no-proxy, then metadata-only
         result = None
@@ -2070,6 +2112,7 @@ def process_daily_digest(
                     video_url=None,
                     video_id=video_id,
                     require_proxy=attempt_proxy,
+                    max_duration_seconds_override=duration_override,
                 )
                 if result.get("ok"):
                     break
