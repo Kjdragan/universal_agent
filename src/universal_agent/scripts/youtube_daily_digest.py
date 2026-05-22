@@ -1351,7 +1351,12 @@ _DIGEST_HTML_HEAD_CSS = """
     padding: 0;
   }
   .digest-toc ol { margin: 4px 0 0; padding-left: 22px; }
-  .digest-toc li { margin: 2px 0; font-size: 14px; }
+  .digest-toc li { margin: 4px 0; font-size: 14px; line-height: 1.45; }
+  .digest-toc a { text-decoration: none; color: inherit; }
+  .digest-toc a:hover .toc-title { text-decoration: underline; color: #0969da; }
+  .toc-channel { color: #1f2328; font-weight: 600; }
+  .toc-sep { color: #8c959f; }
+  .toc-title { color: #0969da; }
 """
 
 
@@ -1385,26 +1390,86 @@ def _per_video_range(full_content: str) -> tuple[int, int] | None:
     return start, end
 
 
-def _build_toc_html(full_content: str) -> str:
-    """Build a small per-video table of contents from the markdown source.
+_DURATION_PATTERN = re.compile(r"^\d+:\d+(:\d+)?$")
+_DATE_PATTERN = re.compile(r"^[A-Za-z]+\s+\d+,\s+\d{4}$")
 
-    Returns "" if there are fewer than two video sections.
+
+def _extract_channel_from_meta(meta_line: str) -> str:
+    """Pull the channel name out of a per-video `<small>` metadata strip.
+
+    The strip is built by `_build_per_video_header` as
+    "Channel · 12:34 · May 19, 2026 · [watch ↗](...)" — channel is always
+    first when present. If channel was missing the first segment will be
+    duration / date / watch-link instead, so we shape-check before returning.
+    """
+    if not meta_line:
+        return ""
+    first = meta_line.split(" · ", 1)[0].strip()
+    if not first:
+        return ""
+    if _DURATION_PATTERN.match(first):
+        return ""
+    if _DATE_PATTERN.match(first):
+        return ""
+    if first.startswith("[") or "watch" in first.lower():
+        return ""
+    return first
+
+
+def _extract_video_entries(per_video_section: str) -> list[tuple[str, str]]:
+    """Walk the per-video markdown section, return ``[(title, channel), ...]``
+    in document order. Channel is empty string when the metadata strip was
+    missing or malformed for that video."""
+    entries: list[tuple[str, str]] = []
+    # Split on H2 boundaries — blocks[0] is preamble; everything after each
+    # boundary starts with the H2's text on its own line.
+    blocks = re.split(r"(?m)^##\s+", per_video_section)
+    for block in blocks[1:]:
+        lines = block.split("\n", 1)
+        title = lines[0].strip()
+        if not title or title.lower().startswith("per-video retellings"):
+            continue
+        rest = lines[1] if len(lines) > 1 else ""
+        channel = ""
+        small_match = re.search(r"<small>(.+?)</small>", rest, flags=re.DOTALL)
+        if small_match:
+            channel = _extract_channel_from_meta(small_match.group(1))
+        entries.append((title, channel))
+    return entries
+
+
+def _build_toc_html(full_content: str) -> str:
+    """Build a per-video table of contents from the markdown source.
+
+    Each entry is "Channel — Title" linked to that video's anchor. The TOC is
+    placed at the END of the executive summary (right before "Per-Video
+    Retellings") so the operator reads themes first, then drills into specific
+    videos via click. Returns "" when fewer than two video sections exist.
     """
     bounds = _per_video_range(full_content)
     if not bounds:
         return ""
     per_video_section = full_content[bounds[0]:bounds[1]]
-    titles = _VIDEO_HEADING_PATTERN.findall(per_video_section)
-    if len(titles) < 2:
+    entries = _extract_video_entries(per_video_section)
+    if len(entries) < 2:
         return ""
     items: list[str] = []
-    for idx, raw_title in enumerate(titles, start=1):
-        title = html_module.escape(raw_title.strip())
+    for idx, (raw_title, channel) in enumerate(entries, start=1):
+        title_esc = html_module.escape(raw_title.strip())
         anchor = _slugify_anchor(raw_title, idx)
-        items.append(f'<li><a href="#{anchor}">{title}</a></li>')
+        if channel:
+            channel_esc = html_module.escape(channel.strip())
+            label = (
+                f'<span class="toc-channel">{channel_esc}</span>'
+                f'<span class="toc-sep"> — </span>'
+                f'<span class="toc-title">{title_esc}</span>'
+            )
+        else:
+            label = f'<span class="toc-title">{title_esc}</span>'
+        items.append(f'<li><a href="#{anchor}">{label}</a></li>')
     return (
         '<div class="digest-toc">'
-        '<h2>Today\'s videos</h2>'
+        '<h2>Jump to a video</h2>'
         f'<ol>{"".join(items)}</ol>'
         '</div>'
     )
@@ -1462,15 +1527,31 @@ def _render_full_digest_html(
     fragment = _inject_video_anchors(fragment)
     toc_html = _build_toc_html(full_content)
     title = f"Daily YouTube Digest — {day_name.title()}, {date_str}"
-    # Insert the TOC right after the first <h1> so it sits between the title
-    # and the meta-synthesis section.
+    # Insert the TOC immediately BEFORE the per-video section heading — i.e.
+    # at the end of the executive summary. Operator reads themes first, then
+    # uses the TOC to jump into specific videos. Falls back to "after </h1>"
+    # if the per-video marker is missing (defensive — shouldn't happen with
+    # the digest's deterministic assembly).
     if toc_html:
-        fragment = re.sub(
-            r"(</h1>)",
-            lambda m: m.group(1) + "\n" + toc_html,
+        per_video_h2 = re.search(
+            r"<h2[^>]*>\s*Per[- ]Video Retellings\s*</h2>",
             fragment,
-            count=1,
+            flags=re.IGNORECASE,
         )
+        if per_video_h2:
+            fragment = (
+                fragment[: per_video_h2.start()]
+                + toc_html
+                + "\n"
+                + fragment[per_video_h2.start():]
+            )
+        else:
+            fragment = re.sub(
+                r"(</h1>)",
+                lambda m: m.group(1) + "\n" + toc_html,
+                fragment,
+                count=1,
+            )
     return (
         "<!DOCTYPE html>\n"
         '<html lang="en">\n'
