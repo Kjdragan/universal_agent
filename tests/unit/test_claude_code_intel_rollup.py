@@ -2,14 +2,23 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from universal_agent.services.claude_code_intel_rollup import build_rolling_assets
 
+# Dynamically derive a date inside the 28-day rolling window so the fixture
+# doesn't rot. Was hardcoded to "2026-04-23" which fell outside the window
+# on 2026-05-22 (29 days old) — a classic time-bomb. Use 7 days ago so we
+# stay comfortably inside the window even if it ever shrinks.
+_PACKET_DEFAULT_DATE = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
 
-def _make_packet_dir(artifacts_root: Path, *, date: str = "2026-04-23", stamp: str = "161449") -> Path:
+
+def _make_packet_dir(artifacts_root: Path, *, date: str | None = None, stamp: str = "161449") -> Path:
+    if date is None:
+        date = _PACKET_DEFAULT_DATE
     packet_dir = artifacts_root / "proactive" / "claude_code_intel" / "packets" / date / f"{stamp}__ClaudeDevs"
     packet_dir.mkdir(parents=True, exist_ok=True)
     (packet_dir / "manifest.json").write_text(
@@ -196,11 +205,13 @@ def _make_packet_with_actions(
     artifacts_root: Path,
     *,
     handle: str = "ClaudeDevs",
-    date: str = "2026-04-23",
+    date: str | None = None,
     stamp: str = "161449",
     actions: list[dict],
 ) -> Path:
     """Create a packet with arbitrary action tiers and handles."""
+    if date is None:
+        date = _PACKET_DEFAULT_DATE
     packet_dir = artifacts_root / "proactive" / "claude_code_intel" / "packets" / date / f"{stamp}__{handle}"
     packet_dir.mkdir(parents=True, exist_ok=True)
     (packet_dir / "manifest.json").write_text(
@@ -229,7 +240,7 @@ def test_rollup_excludes_tier1_from_synthesis(monkeypatch, tmp_path: Path) -> No
     _make_packet_with_actions(
         artifacts_root,
         handle="bcherny",
-        date="2026-04-23",
+        date=_PACKET_DEFAULT_DATE,
         stamp="100000",
         actions=[
             {
@@ -246,7 +257,7 @@ def test_rollup_excludes_tier1_from_synthesis(monkeypatch, tmp_path: Path) -> No
     _make_packet_with_actions(
         artifacts_root,
         handle="ClaudeDevs",
-        date="2026-04-23",
+        date=_PACKET_DEFAULT_DATE,
         stamp="100001",
         actions=[
             {
@@ -286,7 +297,7 @@ def test_rollup_includes_tier2_from_any_handle(monkeypatch, tmp_path: Path) -> N
     _make_packet_with_actions(
         artifacts_root,
         handle="bcherny",
-        date="2026-04-23",
+        date=_PACKET_DEFAULT_DATE,
         stamp="100010",
         actions=[
             {
