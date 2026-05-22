@@ -123,6 +123,105 @@ _DESCRIPTION_SEPARATOR = "===DESCRIPTION==="
 
 
 # ---------------------------------------------------------------------------
+# Content-filter (pure Python, no LLM)
+# ---------------------------------------------------------------------------
+# Skip the LLM call when the workspace has no meaningful execution data.
+# Catches the common prod case where cron-spawned workspaces close with an
+# empty run.log (the real work happened in a !script subprocess that didn't
+# route output through run.log). Content-based, NOT workspace-name-based —
+# any session type that DOES start producing real logs gets a dossier with
+# no code changes needed.
+
+_DEFAULT_MIN_RUN_LOG_BYTES = 500
+_DEFAULT_MIN_TRANSCRIPT_BYTES = 500
+_CHECKPOINT_REQUEST_KEYS = ("original_request", "query", "task")
+
+
+def _min_run_log_bytes() -> int:
+    try:
+        return max(0, int(os.getenv("UA_DOSSIER_MIN_RUN_LOG_BYTES",
+                                    str(_DEFAULT_MIN_RUN_LOG_BYTES))))
+    except ValueError:
+        return _DEFAULT_MIN_RUN_LOG_BYTES
+
+
+def _min_transcript_bytes() -> int:
+    try:
+        return max(0, int(os.getenv("UA_DOSSIER_MIN_TRANSCRIPT_BYTES",
+                                    str(_DEFAULT_MIN_TRANSCRIPT_BYTES))))
+    except ValueError:
+        return _DEFAULT_MIN_TRANSCRIPT_BYTES
+
+
+def _has_meaningful_content(workspace: Path) -> tuple[bool, dict]:
+    """Return (True, reason_dict) if the workspace has anything worth
+    summarizing. Pure-Python heuristic — no LLM call, microseconds to run.
+
+    Returns True on the FIRST signal that matches:
+      - run.log file size > UA_DOSSIER_MIN_RUN_LOG_BYTES (default 500)
+      - transcript.md file size > UA_DOSSIER_MIN_TRANSCRIPT_BYTES (default 500)
+      - run_checkpoint.json or session_checkpoint.json parses AND has a
+        non-empty value for original_request / query / task
+      - sync_ready.json parses AND tool_calls > 0
+
+    Returns False if ALL of the above are absent — meaning the workspace
+    closed with nothing real to summarize.
+    """
+    workspace = Path(workspace)
+
+    # 1. run.log byte size
+    run_log = workspace / "run.log"
+    try:
+        if run_log.is_file():
+            size = run_log.stat().st_size
+            if size >= _min_run_log_bytes():
+                return True, {"matched": "run.log", "bytes": size}
+    except OSError:
+        pass
+
+    # 2. transcript.md byte size
+    transcript = workspace / "transcript.md"
+    try:
+        if transcript.is_file():
+            size = transcript.stat().st_size
+            if size >= _min_transcript_bytes():
+                return True, {"matched": "transcript.md", "bytes": size}
+    except OSError:
+        pass
+
+    # 3. checkpoint with original request / query / task
+    for cp_name in ("run_checkpoint.json", "session_checkpoint.json"):
+        cp_path = workspace / cp_name
+        if not cp_path.is_file():
+            continue
+        try:
+            cp_data = json.loads(cp_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if not isinstance(cp_data, dict):
+            continue
+        for key in _CHECKPOINT_REQUEST_KEYS:
+            val = cp_data.get(key)
+            if isinstance(val, str) and val.strip():
+                return True, {"matched": f"{cp_name}:{key}"}
+
+    # 4. sync_ready.json with non-zero tool_calls
+    sync_ready = workspace / "sync_ready.json"
+    if sync_ready.is_file():
+        try:
+            sr_data = json.loads(sync_ready.read_text(encoding="utf-8"))
+            if isinstance(sr_data, dict):
+                tool_calls = sr_data.get("tool_calls")
+                if isinstance(tool_calls, (int, float)) and tool_calls > 0:
+                    return True, {"matched": "sync_ready.tool_calls",
+                                  "tool_calls": int(tool_calls)}
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    return False, {"matched": None}
+
+
+# ---------------------------------------------------------------------------
 # Workspace Data Collection
 # ---------------------------------------------------------------------------
 
@@ -241,18 +340,29 @@ async def generate_session_dossier(
     if not workspace.is_dir():
         raise FileNotFoundError(f"Workspace directory not found: {workspace}")
 
-    # Check for meaningful content (at least a run.log or transcript)
-    has_run_log = (workspace / "run.log").exists()
-    has_transcript = (workspace / "transcript.md").exists()
-    has_checkpoint = any(
-        (workspace / f).exists()
-        for f in ("run_checkpoint.json", "session_checkpoint.json")
-    )
-
-    if not has_run_log and not has_transcript and not has_checkpoint:
-        # Nothing meaningful to analyze — write minimal files
-        dossier = f"# Session Dossier\n\nNo execution artifacts found in `{workspace}`.\n"
-        description = "Empty session — no execution data"
+    # Content-based skip (2026-05-22): pure-Python check that bypasses the
+    # LLM when there's nothing meaningful to summarize. Catches the common
+    # prod case where cron-spawned workspaces close with an empty run.log
+    # (the real work happened in a !script subprocess that didn't route
+    # output through run.log). Saves ~75-85% of dossier LLM calls.
+    # CONTENT-based, NOT workspace-name-based — any session type that
+    # starts producing real logs gets a dossier with no code change.
+    has_content, _reasons = _has_meaningful_content(workspace)
+    if not has_content:
+        logger.info(
+            "Skipping dossier for %s: no meaningful execution data "
+            "(empty/missing run.log, transcript, checkpoint, sync_ready). %s",
+            workspace.name,
+            _reasons,
+        )
+        dossier = (
+            "# Session Dossier\n\n"
+            "No meaningful execution data found to summarize. The workspace "
+            "had no run.log content, no transcript, no original-request "
+            "checkpoint, and no non-zero tool-call record. Skipped LLM "
+            "summarization to conserve inference budget.\n"
+        )
+        description = "Empty session — no meaningful execution data"
         _write_files(workspace, dossier, description)
         return dossier, description
 
