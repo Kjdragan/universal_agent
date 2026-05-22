@@ -201,12 +201,20 @@ def _evaluate_transcript_quality(transcript_text: str, min_chars: int) -> tuple[
 
 def _should_skip_video_by_metadata(
     metadata: dict[str, Any],
+    *,
+    max_duration_seconds_override: int | None = None,
 ) -> tuple[bool, str]:
     """Pre-ingest triage gate: decide whether to skip transcript fetch.
 
     Uses FREE metadata (YouTube Data API v3 or yt-dlp, already fetched
     before this point) to avoid consuming expensive residential proxy
     bandwidth on videos unlikely to produce valuable transcripts.
+
+    ``max_duration_seconds_override`` lets a caller (e.g. the digest's
+    gold-channel path) raise the duration cap for specific channels —
+    Lex Fridman interviews are routinely 2-4 hours and shouldn't be
+    auto-triaged out. ``None`` means "use the global default
+    _MAX_DURATION_SECONDS"; a positive int N means "use N as the cap."
 
     Returns (should_skip, reason).  If should_skip is True, the caller
     should return early WITHOUT calling the transcript API through the
@@ -218,6 +226,11 @@ def _should_skip_video_by_metadata(
 
     # ── Duration gate ──────────────────────────────────────────────────
     duration = metadata.get("duration")
+    effective_max = (
+        max_duration_seconds_override
+        if isinstance(max_duration_seconds_override, int) and max_duration_seconds_override > 0
+        else _MAX_DURATION_SECONDS
+    )
     if duration is not None:
         try:
             dur_int = int(duration)
@@ -229,10 +242,10 @@ def _should_skip_video_by_metadata(
                     f"video too short ({dur_int}s < {_MIN_DURATION_SECONDS}s) "
                     f"— unlikely to yield valuable transcript"
                 )
-            if dur_int > _MAX_DURATION_SECONDS:
+            if dur_int > effective_max:
                 return True, (
-                    f"video too long ({dur_int}s > {_MAX_DURATION_SECONDS}s / "
-                    f"{_MAX_DURATION_SECONDS // 3600}h{(_MAX_DURATION_SECONDS % 3600) // 60}m) "
+                    f"video too long ({dur_int}s > {effective_max}s / "
+                    f"{effective_max // 3600}h{(effective_max % 3600) // 60}m) "
                     f"— likely a livestream replay; excessive proxy bandwidth"
                 )
 
@@ -758,7 +771,16 @@ def ingest_youtube_transcript(
     max_chars: int = 180_000,
     min_chars: int = 160,
     require_proxy: bool = False,
+    max_duration_seconds_override: int | None = None,
 ) -> dict[str, Any]:
+    """Fetch a YouTube transcript + metadata.
+
+    ``max_duration_seconds_override``: when the caller knows the video came
+    from a gold-tier channel with a per-channel duration cap (e.g. Lex
+    Fridman's 86400s "effectively unlimited" cap), pass the cap here so the
+    pre-ingest triage gate honors it instead of the global default. ``None``
+    keeps the default behavior unchanged.
+    """
     resolved_url, resolved_video_id = normalize_video_target(video_url, video_id)
     if not resolved_url:
         return {
@@ -845,7 +867,10 @@ def ingest_youtube_transcript(
     # transcripts (too short, too long, music, live broadcasts).
     # The metadata was fetched for free above — this adds zero cost.
     meta_for_triage = metadata_result.get("metadata") if isinstance(metadata_result.get("metadata"), dict) else {}
-    skip_video, skip_reason = _should_skip_video_by_metadata(meta_for_triage)
+    skip_video, skip_reason = _should_skip_video_by_metadata(
+        meta_for_triage,
+        max_duration_seconds_override=max_duration_seconds_override,
+    )
     if skip_video:
         log.info(
             "PRE-INGEST TRIAGE: skipping transcript fetch for %s — %s",

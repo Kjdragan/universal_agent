@@ -88,10 +88,15 @@ def get_playlist_items(playlist_id: str) -> list[dict[str, Any]]:
                 snippet = item.get("snippet", {})
                 video_id = snippet.get("resourceId", {}).get("videoId")
                 if video_id:
+                    # `videoOwnerChannelId` identifies the channel that uploaded
+                    # the video (distinct from the playlist owner). The gold-tier
+                    # poller threads this so the digest's ingest loop can look
+                    # up per-channel duration overrides without an extra API call.
                     items.append({
                         "playlist_item_id": item.get("id"),
                         "video_id": video_id,
                         "title": snippet.get("title"),
+                        "video_owner_channel_id": snippet.get("videoOwnerChannelId"),
                     })
                     
             page_token = data.get("nextPageToken")
