@@ -14718,6 +14718,7 @@ async def lifespan(app: FastAPI):
                 _ensure_csi_convergence_cron_job()
                 _ensure_claude_code_intel_cron_job()
                 _ensure_csi_demo_triage_rank_cron_job()
+                _ensure_intel_auto_promoter_cron_job()
                 _ensure_paper_to_podcast_cron_job()
                 _ensure_youtube_daily_digest_cron_job()
                 _ensure_nightly_wiki_cron_job()
@@ -19368,6 +19369,44 @@ def _ensure_csi_demo_triage_rank_cron_job() -> Optional[dict[str, Any]]:
         # observability separately from the candidate rows it touches.
     )
 
+
+def _intel_auto_promoter_cron_enabled() -> bool:
+    """Whether the CSI intel auto-promoter cron should be registered.
+
+    Default ON. Disable with UA_INTEL_AUTO_PROMOTE_CRON_ENABLED=0.
+    Note: the runtime promotion itself is *separately* gated by
+    UA_INTEL_AUTO_PROMOTE_ENABLED so the cron can stay registered
+    while promotions are paused.
+    """
+    raw = os.getenv("UA_INTEL_AUTO_PROMOTE_CRON_ENABLED", "1").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _ensure_intel_auto_promoter_cron_job() -> Optional[dict[str, Any]]:
+    """Register the CSI intel auto-promoter cron.
+
+    Fires 30 minutes after the ranker on each tick so freshly-scored
+    candidates promote in the same active-hours window. Houston-time
+    schedule keeps the run inside the 6 AM-10 PM content-generation
+    window per CLAUDE.md operating-hours policy.
+    """
+    if not _intel_auto_promoter_cron_enabled():
+        return None
+    return _register_system_cron_job(
+        system_job="intel_auto_promoter",
+        default_cron="35 10,15 * * *",
+        default_timezone="America/Chicago",
+        command="!script universal_agent.scripts.intel_auto_promoter_cron",
+        description=(
+            "Auto-approve top-scored CSI demo-triage candidates so they flow "
+            "into Cody's queue without operator clicks. Capped per day; uses "
+            "the same approve_candidate path as the dashboard button."
+        ),
+        timeout_seconds=180,
+        enabled=True,
+        cron_env_var="UA_INTEL_AUTO_PROMOTE_CRON_EXPR",
+        timezone_env_var="UA_INTEL_AUTO_PROMOTE_CRON_TIMEZONE",
+    )
 
 
 def _ensure_claude_code_intel_cron_job() -> None:
