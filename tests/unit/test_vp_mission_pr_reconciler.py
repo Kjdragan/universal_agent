@@ -289,6 +289,43 @@ def test_reconcile_handles_missing_token_gracefully(th_conn, monkeypatch):
     assert item["status"] == task_hub.TASK_STATUS_BLOCKED  # unchanged
 
 
+def test_reconcile_treats_cloudflare_challenge_as_skip(th_conn, monkeypatch):
+    """A Cloudflare JS-challenge on the GitHub call (incident 2026-05-21)
+    must not be counted as an error or emit a failure alert with the
+    HTML body. The next 15-min tick will retry."""
+    monkeypatch.setenv("GITHUB_TOKEN", "fake_token_for_test")
+    _seed_vp_mission_task(
+        th_conn,
+        task_id="vp-mission-cf-blocked",
+        metadata={"dispatch": {"pr": {"number": 42}}},
+    )
+    with patch(
+        "universal_agent.services.vp_mission_pr_reconciler._query_github_pr",
+        return_value={"_status": "cloudflare_challenge"},
+    ):
+        result = reconcile_vp_missions_with_prs(th_conn)
+
+    assert result["cloudflare_skipped"] == 1
+    assert result["errors"] == 0
+    assert result["closed"] == 0
+    item = task_hub.get_item(th_conn, "vp-mission-cf-blocked")
+    assert item["status"] == task_hub.TASK_STATUS_BLOCKED  # unchanged
+
+
+def test_looks_like_cloudflare_challenge_detects_known_signature():
+    from universal_agent.services.vp_mission_pr_reconciler import (
+        _looks_like_cloudflare_challenge,
+    )
+    challenge_html = (
+        b'<!DOCTYPE html><html lang="en-US"><head><title>Just a moment...'
+        b'</title><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">'
+        b'<script src="https://challenges.cloudflare.com/turnstile/v0/api.js"></script>'
+    )
+    assert _looks_like_cloudflare_challenge(challenge_html) is True
+    assert _looks_like_cloudflare_challenge(b'{"number": 42, "merged_at": null}') is False
+    assert _looks_like_cloudflare_challenge("") is False
+
+
 def test_reconcile_ignores_terminal_status_tasks(th_conn, monkeypatch):
     """A task already in `completed` status must not be re-scanned, even
     if it still has dispatch.pr metadata."""
