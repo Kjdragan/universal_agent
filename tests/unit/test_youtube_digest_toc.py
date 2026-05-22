@@ -123,7 +123,7 @@ def test_toc_lives_at_end_of_executive_summary():
         _video_block("Vid Two", "AICodeKing", 1500, "20260520", "def"),
     ]
     md = _digest_md(blocks)
-    html = _render_full_digest_html(md, day_name="Friday", date_str="2026-05-22")
+    html = _render_full_digest_html(md, day_name="Friday", date_str="2026-05-22")  # date-pinned-ok: display-only fixture
 
     meta_idx = html.index("Meta-Synthesis")
     toc_idx = html.index('<div class="digest-toc"')
@@ -138,7 +138,7 @@ def test_toc_contains_channel_and_title():
         _video_block("9 Layers Pro Playbook", "AICodeKing", 1500, "20260520", "def"),
     ]
     md = _digest_md(blocks)
-    html = _render_full_digest_html(md, day_name="Friday", date_str="2026-05-22")
+    html = _render_full_digest_html(md, day_name="Friday", date_str="2026-05-22")  # date-pinned-ok: display-only fixture
 
     # Extract the TOC slice
     toc_start = html.index('<div class="digest-toc"')
@@ -161,7 +161,7 @@ def test_toc_gracefully_omits_channel_when_missing():
         _video_block("Channel Missing", None, 600, "20260520", "def"),
     ]
     md = _digest_md(blocks)
-    html = _render_full_digest_html(md, day_name="Friday", date_str="2026-05-22")
+    html = _render_full_digest_html(md, day_name="Friday", date_str="2026-05-22")  # date-pinned-ok: display-only fixture
 
     toc_start = html.index('<div class="digest-toc"')
     toc_end = html.index("Per-Video Retellings</h2>")
@@ -180,7 +180,7 @@ def test_toc_anchor_ids_align_with_h2_ids():
         _video_block("Second Vid", "Cole Medin", 1500, "20260520", "def"),
     ]
     md = _digest_md(blocks)
-    html = _render_full_digest_html(md, day_name="Friday", date_str="2026-05-22")
+    html = _render_full_digest_html(md, day_name="Friday", date_str="2026-05-22")  # date-pinned-ok: display-only fixture
 
     # Pull the TOC and per-video sections
     toc_start = html.index('<div class="digest-toc"')
@@ -199,7 +199,7 @@ def test_toc_renders_with_single_video_returns_empty_string():
     """Under 2 videos we don't bother with the TOC."""
     blocks = [_video_block("Only One", "Cole Medin", 754, "20260519", "abc")]
     md = _digest_md(blocks)
-    html = _render_full_digest_html(md, day_name="Friday", date_str="2026-05-22")
+    html = _render_full_digest_html(md, day_name="Friday", date_str="2026-05-22")  # date-pinned-ok: display-only fixture
     # The CSS block always contains `.digest-toc` selectors; check for the
     # body-side div instead.
     assert '<div class="digest-toc"' not in html
