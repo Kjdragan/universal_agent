@@ -94,6 +94,84 @@ def test_classify_returns_none_for_empty_string() -> None:
     assert gs._classify_upstream_outage_signature(None) is None  # type: ignore[arg-type]
 
 
+def test_classify_recognizes_composio_429_vercel_rate_limit() -> None:
+    """Observed 2026-05-23: Composio's Vercel-fronted edge returned a 429
+    with a Vercel "Security Checkpoint" HTML body carrying an iad1::
+    edge fingerprint. The Composio-specific signature must win over the
+    generic Vercel branch — it gives Mission Control vendor grouping
+    AND keys the cron retry policy on a known rate-limit shape."""
+    from universal_agent import gateway_server as gs
+
+    body = (
+        '<!DOCTYPE html><html lang="en" data-astro-cid-nbv56vs3><head>'
+        '<title>Vercel Security Checkpoint</title></head><body>'
+        '<a href="https://vercel.link/security-checkpoint">fix</a>'
+        'iad1::1779519002-U6zRHDmphyrJ4xP4Be4SzCBgM1J9LNPZ</body></html>'
+    )
+    assert gs._classify_upstream_outage_signature(body) == "composio_tool_router_429_vercel_rl"
+
+
+def test_classify_recognizes_vercel_security_checkpoint_title() -> None:
+    """A Vercel checkpoint body without the iad1:: Composio fingerprint
+    falls through to the generic Vercel signature. Defense in depth for
+    any future caller that talks to a different Vercel-fronted upstream."""
+    from universal_agent import gateway_server as gs
+
+    body = (
+        '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
+        '<title>Vercel Security Checkpoint</title></head><body>...</body></html>'
+    )
+    assert gs._classify_upstream_outage_signature(body) == "upstream_vercel_challenge"
+
+
+def test_classify_recognizes_vercel_link_even_without_title() -> None:
+    """Match the canonical fix-text link too, in case Vercel changes
+    the page title down the road."""
+    from universal_agent import gateway_server as gs
+
+    body = (
+        "<html><body>Something different "
+        '<a href="https://vercel.link/security-checkpoint">fix</a></body></html>'
+    )
+    assert gs._classify_upstream_outage_signature(body) == "upstream_vercel_challenge"
+
+
+def test_classify_does_not_match_random_html_page() -> None:
+    """A random HTML page (no Vercel signatures) must NOT classify —
+    we deliberately avoid a generic HTML catch-all so legitimate HTML
+    errors from a real Vercel-hosted dependency don't get muted."""
+    from universal_agent import gateway_server as gs
+
+    body = "<!doctype html><html><body>Some random page content</body></html>"
+    assert gs._classify_upstream_outage_signature(body) is None
+
+
+def test_classify_does_not_match_html_word_inside_normal_error() -> None:
+    """Don't classify a plain-text error that merely mentions 'html'."""
+    from universal_agent import gateway_server as gs
+
+    assert gs._classify_upstream_outage_signature(
+        "ValueError: expected HTML but got JSON"
+    ) is None
+
+
+# ── Vercel dedup end-to-end ──────────────────────────────────────────────
+
+
+def test_vercel_alert_storm_dedups_after_first() -> None:
+    """48 Vercel-tagged retries in 22 minutes (2026-05-23 incident shape)
+    must collapse to one alert via the dedup window."""
+    from universal_agent import gateway_server as gs
+
+    _reset_module_state(gs)
+    body = (
+        '<!DOCTYPE html><html><head><title>Vercel Security Checkpoint</title>'
+        "</head><body>iad1::checkpoint</body></html>"
+    )
+    results = [gs._should_suppress_upstream_outage_alert(body) for _ in range(5)]
+    assert results == [False, True, True, True, True]
+
+
 # ── suppression ──────────────────────────────────────────────────────────
 
 
