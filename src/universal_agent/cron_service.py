@@ -192,6 +192,51 @@ def _persist_cron_run_output(
         )
 
 
+# ── Non-retryable cron-failure classifier ──────────────────────────────
+#
+# Some exceptions during cron tick execution should NOT trigger the
+# default 3-attempt retry policy:
+#   - HTTP 429 from any upstream we depend on: hammering the rate-limit
+#     three times in quick succession is the opposite of what the
+#     server is asking for. The natural cron schedule (next tick in
+#     <= 60s) is the right backoff.
+#
+# Background — observed 2026-05-23 06:50-07:12 UTC: the
+# atlas_direct_dispatch cron's heavyweight bootstrap hit Composio's
+# Vercel-fronted edge with a per-minute POST and got HTTP 429. Each
+# failing tick spawned 2 retries (= 3 attempts total), tripling the
+# call rate during the rate-limit window. The fix is to recognise
+# rate-limit signatures and let the cron's own schedule reissue at
+# the next tick instead of immediately re-firing.
+#
+# Detection keys off the error text. The httpx 429 status doesn't
+# survive into the captured exception body (the Composio SDK wraps
+# the response body — Vercel's HTML interstitial — into the
+# exception message and discards the status code). So we pattern-match
+# on the body signatures that the gateway_server classifier already
+# knows about; keeping the source of truth there makes it easy to
+# update both alert-dedup and retry policy in lockstep.
+_RATE_LIMIT_BODY_TOKENS: tuple[str, ...] = (
+    "vercel security checkpoint",       # Composio edge 429 (2026-05-23)
+    "vercel.link/security-checkpoint",  # canonical Vercel link
+    "429 too many requests",            # raw httpx error string
+    "rate limit exceeded",
+    "too many requests",
+)
+
+
+def _is_rate_limit_exception(error_text: str) -> bool:
+    """Returns True when the captured cron-failure error_text looks like
+    an upstream rate-limit response. Such failures should not trigger
+    the default 3-attempt retry — the cron's natural schedule provides
+    a better-shaped backoff than an immediate re-fire.
+    """
+    if not error_text:
+        return False
+    haystack = error_text.lower()
+    return any(token in haystack for token in _RATE_LIMIT_BODY_TOKENS)
+
+
 def _normalize_timeout_seconds(value: Any) -> Optional[int]:
     if value is None:
         return None
@@ -2436,6 +2481,20 @@ class CronService:
                 record.finished_at = time.time()
                 record.error = str(exc)
                 logger.error("Chron job %s failed: %s", job.job_id, exc)
+                # Defer rate-limit failures to the next scheduled tick
+                # instead of retrying immediately — see
+                # `_is_rate_limit_exception` docblock for the 2026-05-23
+                # incident shape that motivated this.
+                _retryable = not _is_rate_limit_exception(record.error)
+                _failure_class = (
+                    "rate_limited" if not _retryable else "cron_dispatch_failed"
+                )
+                if not _retryable:
+                    logger.warning(
+                        "Chron job %s hit upstream rate-limit signature; "
+                        "deferring to next scheduled tick (no retry).",
+                        job.job_id,
+                    )
                 self._finalize_workflow_attempt(
                     job=job,
                     record=record,
@@ -2445,8 +2504,8 @@ class CronService:
                     workflow_run_id=workflow_run_id,
                     workflow_attempt_id=workflow_attempt_id,
                     failure_reason=record.error,
-                    failure_class="cron_dispatch_failed",
-                    retryable=True,
+                    failure_class=_failure_class,
+                    retryable=_retryable,
                 )
             finally:
                 retry_scheduled = record.status == "retry_queued"

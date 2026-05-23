@@ -7767,6 +7767,19 @@ def _classify_upstream_outage_signature(error_text: str) -> Optional[str]:
         return "composio_tool_router_500"
     if "tool_router/session" in et and ("500" in et or "503" in et):
         return "composio_tool_router_5xx"
+    # Composio tool-router 429: rate-limited by Composio's Vercel-fronted
+    # edge. The response body is the bare Vercel "Security Checkpoint"
+    # HTML interstitial — neither the URL nor the status code appears in
+    # the body, so we can't pattern-match on either. Observed 2026-05-23
+    # at 06:50-07:12 UTC (16 ticks × 3 attempts = 48 atlas-direct-dispatch
+    # error rows). The body shape is what we have to key on. The
+    # `iad1::` fingerprint ties the match specifically to Vercel's
+    # US-East edge (where Composio's backend lives) — if Composio moves
+    # regions, add more region tokens (`sfo1::`, `fra1::`, etc.) so a
+    # legitimate Vercel-hosted site we ever start talking to
+    # intentionally doesn't get muted by accident.
+    if "vercel security checkpoint" in et and "iad1::" in et:
+        return "composio_tool_router_429_vercel_rl"
     # Generic upstream 5xx patterns
     if "503 service unavailable" in et:
         return "upstream_503"
@@ -7782,6 +7795,15 @@ def _classify_upstream_outage_signature(error_text: str) -> Optional[str]:
         return "upstream_cloudflare_challenge"
     if "challenges.cloudflare.com" in et:
         return "upstream_cloudflare_challenge"
+    # Vercel anti-bot interstitial from any upstream we didn't match
+    # explicitly above (the Composio-specific branch with `iad1::` runs
+    # first). Match on the stable page title or the canonical fix-text
+    # link; deliberately avoid a bare "vercel" substring so a legitimate
+    # Vercel-hosted dependency's real errors don't get muted.
+    if "vercel security checkpoint" in et:
+        return "upstream_vercel_challenge"
+    if "vercel.link/security-checkpoint" in et:
+        return "upstream_vercel_challenge"
     return None
 
 
@@ -19203,6 +19225,14 @@ def _ensure_atlas_direct_dispatch_cron_job() -> Optional[dict[str, Any]]:
         # Ship 4 (Task Hub Observability Protocol): opted IN. The tasks
         # this cron dispatches still carry their own task_hub linkage —
         # this row tracks the dispatcher's own liveness, separately.
+        # Lightweight: the script is pure-SQL + asyncio.run on
+        # `dispatch_atlas_candidates_once`. It never calls Composio tools
+        # or instantiates an agent session, so the heavyweight bootstrap
+        # is wasted work. Worse, the bootstrap creates a fresh Composio
+        # tool-router session each minute — on 2026-05-23 that triggered
+        # a Vercel-edge 429 rate-limit (48 retry rows, 5 alert emails).
+        # Same shape as simone_chat_auto_complete (already lightweight).
+        lightweight=True,
     )
 
 
@@ -19387,6 +19417,13 @@ def _ensure_csi_convergence_cron_job() -> None:
         "autonomous": True,
         "proactive_producer": "csi_convergence",
         "session_id": "cron_csi_convergence_sync",
+        # Pure-SQL housekeeping: `scripts/csi_convergence_sync.py` only
+        # calls `sync_topic_signatures_from_csi` (SQL + sqlite3). No
+        # Composio tools, no agent session — same shape as atlas's
+        # direct dispatcher above. Skipping the heavyweight bootstrap
+        # avoids the per-tick Composio tool-router session creation
+        # that triggered the 2026-05-23 Vercel-edge 429 storm.
+        "lightweight": True,
     }
     existing = _cron_service.get_job(job_id)
     if existing is not None:
