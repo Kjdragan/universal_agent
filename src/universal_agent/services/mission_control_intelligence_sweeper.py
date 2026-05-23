@@ -477,7 +477,7 @@ class MissionControlSweeper:
                 try:
                     data_conn.close()
                 except Exception:
-                    pass
+                    logger.debug("tier-1 data_conn.close() failed (already closed or broken)", exc_info=True)
 
             sig = evidence_signature(evidence)
             last_signature = sig
@@ -547,7 +547,7 @@ class MissionControlSweeper:
             try:
                 mc_conn.close()
             except Exception:
-                pass
+                logger.debug("tier-1 mc_conn.close() failed (already closed or broken)", exc_info=True)
 
     @staticmethod
     def _write_tier1_meta(
@@ -741,7 +741,7 @@ class MissionControlSweeper:
             try:
                 mc_conn.close()
             except Exception:
-                pass
+                logger.debug("tier-2 mc_conn.close() failed (already closed or broken)", exc_info=True)
 
     @staticmethod
     def _tier2_cascade_reason(result: SweepResult) -> str:
