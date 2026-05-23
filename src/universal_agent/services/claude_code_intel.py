@@ -210,6 +210,7 @@ def _first_handle_from_lane(lane_slug: str) -> str:
 
         lane = get_lane(lane_slug)
     except Exception:
+        logger.debug("intel_lanes lookup failed for lane %r", lane_slug, exc_info=True)
         return ""
     handles = list(lane.handles or [])
     return str(handles[0]).strip() if handles else ""
@@ -222,6 +223,7 @@ def _all_handles_from_lane(lane_slug: str) -> list[str]:
 
         lane = get_lane(lane_slug)
     except Exception:
+        logger.debug("intel_lanes lookup failed for lane %r", lane_slug, exc_info=True)
         return []
     return [str(h).strip() for h in (lane.handles or []) if str(h).strip()]
 
@@ -460,7 +462,7 @@ def run_sync(
                 if packet_dir.exists() and not any(packet_dir.iterdir()):
                     shutil.rmtree(packet_dir, ignore_errors=True)
             except Exception:
-                pass
+                logger.debug("packet dir cleanup failed for %s", packet_dir, exc_info=True)
             run.ok = True
             run.user_id = str((user_payload.get("data") or {}).get("id") or "")
             run.auth_mode = auth_mode
@@ -960,6 +962,7 @@ def _vault_slug_for_lane(lane_slug: str) -> str:
 
         lane = get_lane(lane_slug)
     except Exception:
+        logger.debug("intel_lanes lookup failed for lane %r, falling back to %s", lane_slug, KB_SLUG, exc_info=True)
         return KB_SLUG
     return str(getattr(lane, "vault_slug", "") or KB_SLUG)
 
@@ -1613,6 +1616,7 @@ def _get_json_with_auth_fallbacks(
         try:
             payload = resp.json()
         except Exception:
+            logger.debug("X API response JSON parse failed (HTTP %d)", resp.status_code, exc_info=True)
             payload = {}
         if resp.status_code < 400:
             out = payload if isinstance(payload, dict) else {}
@@ -1690,6 +1694,7 @@ def _json_response(resp: httpx.Response) -> dict[str, Any]:
     try:
         payload = resp.json()
     except Exception:
+        logger.debug("X API response JSON parse failed (HTTP %d, url=%s)", resp.status_code, resp.url, exc_info=True)
         payload = {}
     if resp.status_code >= 400:
         detail = _x_error_detail(payload if isinstance(payload, dict) else {})
@@ -1721,6 +1726,7 @@ def resolve_state_path(lane_root: Path, handle: str) -> Path:
         try:
             legacy_state = json.loads(legacy.read_text(encoding="utf-8"))
         except Exception:
+            logger.debug("legacy state migration parse failed for %s", legacy, exc_info=True)
             legacy_state = {}
         legacy_handle = str(legacy_state.get("handle") or "").strip().lstrip("@").lower()
         if legacy_handle == safe_handle or not legacy_handle:
@@ -1736,6 +1742,7 @@ def _load_state(path: Path) -> dict[str, Any]:
     try:
         parsed = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
+        logger.debug("state file parse failed for %s, returning empty state", path, exc_info=True)
         return {"seen_post_ids": []}
     return parsed if isinstance(parsed, dict) else {"seen_post_ids": []}
 
@@ -1775,5 +1782,6 @@ def _bounded_int(raw: Any, default: int, *, low: int, high: int) -> int:
     try:
         value = int(raw)
     except Exception:
+        logger.debug("int conversion failed for %r, using default %d", raw, default, exc_info=True)
         value = default
     return max(low, min(value, high))
