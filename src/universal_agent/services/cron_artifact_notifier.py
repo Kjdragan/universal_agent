@@ -122,6 +122,14 @@ async def notify_cron_artifact(
             title=title,
         )
 
+        # Task Hub cross-reference. The F.1 close-out path creates a
+        # ``cron:<job_id>`` row in ``task_hub_items``. We link the
+        # artifact to that task_id so the Proactive Task History tab's
+        # cross-join (gateway_server._proactive_artifacts_by_task) finds
+        # it. Without this link, the artifact lives in proactive_artifacts
+        # but never surfaces alongside the cron task in the dashboard.
+        linked_task_id = f"cron:{job_id}"
+
         proactive_artifacts.ensure_schema(conn)
         artifact = proactive_artifacts.upsert_artifact(
             conn,
@@ -136,6 +144,7 @@ async def notify_cron_artifact(
             artifact_path=str(workspace_dir),
             metadata={
                 "job_id": job_id,
+                "task_id": linked_task_id,
                 "started_at_epoch": started_at,
                 "finished_at_epoch": finished_at,
                 "workspace_dir": str(workspace_dir),
@@ -143,6 +152,26 @@ async def notify_cron_artifact(
                 "reminder": _seed_reminder_state(finished_at),
             },
         )
+
+        # Promote the cron's Task Hub row from ``project_key='immediate'``
+        # to ``project_key='proactive'`` so the Proactive Task History
+        # tab's WHERE clause picks it up. Bounded scope: only opted-in
+        # crons (this code path requires notify_on_artifact=true) get
+        # promoted, so non-disclosure crons stay out of the proactive
+        # surface. Best-effort UPDATE; missing row is a no-op.
+        try:
+            conn.execute(
+                "UPDATE task_hub_items SET project_key = 'proactive', "
+                "updated_at = ? WHERE task_id = ? AND project_key != 'proactive'",
+                (datetime.now(timezone.utc).isoformat(), linked_task_id),
+            )
+            conn.commit()
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            logger.debug(
+                "cron_artifact_notifier: project_key promotion skipped for %s: %s",
+                linked_task_id,
+                exc,
+            )
 
         ack_url = _build_ack_url(artifact_id, dashboard_base_url)
         subject, text_body, html_body = _compose_initial_email(

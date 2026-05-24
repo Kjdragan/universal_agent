@@ -241,6 +241,121 @@ async def test_email_delivery_recorded(conn, mail_service, workspace) -> None:
     assert rows[0][2] == "kevinjdragan@gmail.com"
 
 
+# ── Task Hub linkage for Proactive Task History tab ───────────────────
+
+
+def _create_cron_task_hub_row(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    project_key: str = "immediate",
+) -> None:
+    """Seed a task_hub_items row that mirrors what the F.1 close-out
+    creates for a cron — so the notifier's promotion path has something
+    to update."""
+    # Schema is defined in task_hub.ensure_schema; create a minimal one
+    # for the test rather than importing the full module side effects.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS task_hub_items (
+            task_id TEXT PRIMARY KEY,
+            source_kind TEXT NOT NULL,
+            source_ref TEXT,
+            title TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            project_key TEXT NOT NULL DEFAULT 'immediate',
+            priority INTEGER NOT NULL DEFAULT 1,
+            status TEXT NOT NULL DEFAULT 'open',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO task_hub_items "
+        "(task_id, source_kind, title, project_key, created_at, updated_at) "
+        "VALUES (?, 'cron_run', ?, ?, '2026-05-24T00:00:00Z', '2026-05-24T00:00:00Z')",
+        (task_id, "Cron: paper_to_podcast_daily", project_key),
+    )
+    conn.commit()
+
+
+@pytest.mark.asyncio
+async def test_notifier_links_artifact_to_cron_task(
+    conn, mail_service, workspace
+) -> None:
+    _create_cron_task_hub_row(conn, task_id="cron:paper_to_podcast")
+    _write_manifest(workspace, [{"title": "x", "path": "work_products/x"}])
+    artifact = await notify_cron_artifact(
+        conn=conn,
+        mail_service=mail_service,
+        job_id="paper_to_podcast",
+        job_metadata={"notify_on_artifact": True},
+        job_command="run",
+        workspace_dir=workspace,
+        started_at=1779600000.0,
+        finished_at=1779600300.0,
+        recipient="kevinjdragan@gmail.com",
+    )
+    assert artifact is not None
+    meta = artifact.get("metadata") or {}
+    assert meta["task_id"] == "cron:paper_to_podcast"
+
+
+@pytest.mark.asyncio
+async def test_notifier_promotes_cron_task_to_proactive(
+    conn, mail_service, workspace
+) -> None:
+    _create_cron_task_hub_row(
+        conn,
+        task_id="cron:paper_to_podcast",
+        project_key="immediate",
+    )
+    _write_manifest(workspace, [{"title": "x", "path": "work_products/x"}])
+    await notify_cron_artifact(
+        conn=conn,
+        mail_service=mail_service,
+        job_id="paper_to_podcast",
+        job_metadata={"notify_on_artifact": True},
+        job_command="run",
+        workspace_dir=workspace,
+        started_at=1779600000.0,
+        finished_at=1779600300.0,
+        recipient="kevinjdragan@gmail.com",
+    )
+    row = conn.execute(
+        "SELECT project_key FROM task_hub_items WHERE task_id=?",
+        ("cron:paper_to_podcast",),
+    ).fetchone()
+    assert row is not None
+    assert row[0] == "proactive"
+
+
+@pytest.mark.asyncio
+async def test_notifier_missing_task_hub_row_no_crash(
+    conn, mail_service, workspace
+) -> None:
+    """If the cron's task_hub_items row doesn't exist yet (race or
+    skip_task_hub_link cron), the promotion UPDATE is a no-op and the
+    artifact still gets emailed."""
+    # NOTE: no _create_cron_task_hub_row call here
+    _write_manifest(workspace, [{"title": "x", "path": "work_products/x"}])
+    artifact = await notify_cron_artifact(
+        conn=conn,
+        mail_service=mail_service,
+        job_id="orphan_cron",
+        job_metadata={"notify_on_artifact": True},
+        job_command="run",
+        workspace_dir=workspace,
+        started_at=1779600000.0,
+        finished_at=1779600300.0,
+        recipient="kevinjdragan@gmail.com",
+    )
+    assert artifact is not None
+    mail_service.send_email.assert_called_once()
+
+
 # ── HMAC ack token sign/verify ─────────────────────────────────────────
 
 
