@@ -18658,6 +18658,15 @@ def _ensure_vp_mission_pr_reconciler_cron_job() -> Optional[dict[str, Any]]:
         cron_env_var="UA_VP_MISSION_PR_RECONCILER_CRON",
         timezone_env_var="UA_VP_MISSION_PR_RECONCILER_TIMEZONE",
         skip_task_hub_link=True,
+        # Lightweight: pure SQL + GitHub HTTP — never touches Composio
+        # tools or instantiates an agent session. The heavyweight bootstrap
+        # would still try to open a Composio tool-router session on every
+        # tick, and that's exactly what caused the 2026-05-23 16:00-18:00 UTC
+        # alert flood when COMPOSIO_API_KEY was rotated upstream and the
+        # in-flight cached value started returning 401. Skipping the
+        # bootstrap makes this cron resilient to Composio outages it doesn't
+        # depend on.
+        lightweight=True,
     )
 
 
@@ -19195,6 +19204,11 @@ def _ensure_hackernews_snapshot_cron_job() -> Optional[dict[str, Any]]:
         enabled=_proactive_cron_enabled("UA_HACKERNEWS_SNAPSHOT_ENABLED"),
         cron_env_var="UA_HACKERNEWS_SNAPSHOT_CRON",
         timezone_env_var="UA_HACKERNEWS_SNAPSHOT_TIMEZONE",
+        # Lightweight: pure HN-API HTTP + bs4 parse — no Composio tools,
+        # no agent session needed. Was caught up in the 2026-05-23
+        # Composio key rotation storm because the heavyweight bootstrap
+        # initializes Composio before yielding to the script.
+        lightweight=True,
     )
 
 
@@ -19316,6 +19330,10 @@ def _ensure_proactive_artifact_digest_cron_job() -> Optional[dict[str, Any]]:
         enabled=_proactive_cron_enabled("UA_PROACTIVE_ARTIFACT_DIGEST_ENABLED"),
         cron_env_var="UA_PROACTIVE_ARTIFACT_DIGEST_CRON",
         timezone_env_var="UA_PROACTIVE_ARTIFACT_DIGEST_TIMEZONE",
+        # Lightweight: SQL read against activity_state.db + AgentMail
+        # send. No Composio tools needed. Mail service uses its own
+        # AGENTMAIL_API_KEY which is independent of Composio.
+        lightweight=True,
     )
 
 
@@ -19499,6 +19517,13 @@ def _ensure_csi_demo_triage_rank_cron_job() -> Optional[dict[str, Any]]:
         # Ship 4 (Task Hub Observability Protocol): opted IN. Re-ranking
         # sweeps benefit from "did this LLM tick run and finish cleanly?"
         # observability separately from the candidate rows it touches.
+        #
+        # Lightweight: pure SQL + one direct ANTHROPIC_BASE_URL/AUTH_TOKEN
+        # LLM call (via run_ranking). No Composio tools, no agent session.
+        # Bypassing the heavyweight bootstrap also avoids the per-tick
+        # Composio tool-router init that becomes a noise generator any
+        # time COMPOSIO_API_KEY is in flux (see 2026-05-23 storm).
+        lightweight=True,
     )
 
 
@@ -19538,6 +19563,10 @@ def _ensure_intel_auto_promoter_cron_job() -> Optional[dict[str, Any]]:
         enabled=True,
         cron_env_var="UA_INTEL_AUTO_PROMOTE_CRON_EXPR",
         timezone_env_var="UA_INTEL_AUTO_PROMOTE_CRON_TIMEZONE",
+        # Lightweight: pure SQL — calls csi_demo_triage.approve_candidate
+        # which is a synchronous DB write. No Composio tools, no agent
+        # session needed.
+        lightweight=True,
     )
 
 
