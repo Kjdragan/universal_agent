@@ -25,7 +25,7 @@ import sys
 import tempfile
 import time
 import traceback
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, List, Optional
 import uuid
 
 from universal_agent.agent_core import AgentEvent, EventType
