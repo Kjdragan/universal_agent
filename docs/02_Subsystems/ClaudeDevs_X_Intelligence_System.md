@@ -539,12 +539,25 @@ Replay/post-processing adds:
 
 The system uses four outcome types:
 
-| Tier | Action type | Meaning |
-| --- | --- | --- |
-| 1 | `digest` | Informational update, low direct implementation value |
-| 2 | `kb_update` | Reference/docs/usage/release note update |
-| 3 | `demo_task` | Code-worthy or implementation opportunity |
-| 4 | `strategic_follow_up` | Migration risk, bug, breakage, or strategic operational issue |
+| Tier | Action type | Meaning | Surfaces to Kevin via |
+| --- | --- | --- | --- |
+| 1 | `digest` | Informational update, low direct implementation value | Daily operator report only |
+| 2 | `kb_update` | Reference/docs/usage/release note update | Vault entity + `[Intel]` email (see below) |
+| 3 | `demo_task` | Code-worthy or implementation opportunity | Vault entity + demo workspace + Codie PR email (when accepted); demo workspaces that Simone parks as not-demo-worthy still emit an `[Intel]` email if a fresh vault write occurred upstream |
+| 4 | `strategic_follow_up` | Migration risk, bug, breakage, or strategic operational issue | Vault entity + `[Intel]` email (see below) |
+
+### Intel-Brief Surfacing (Tier 2 & Tier 4)
+
+Whenever the `claude_code_kb_update` lane causes Simone to CREATE or materially EXTEND a vault entity in `artifacts/knowledge-vaults/<vault_slug>/entities/`, the task contract REQUIRES her to:
+
+1. Email Kevin from the shared VP mailbox (`vp.agents@agentmail.to`, CC `oddcity216@agentmail.to`) with subject prefix `[Intel]` and a one-paragraph summary lifted from the entity's frontmatter `summary` field, a "Why this matters for UA" paragraph, a vault URL, source post(s), and the tier/action_type. The send path is the same `mcp__agentmail__send_message` tool Codie uses for `[VP Status]` PR notifications.
+2. Write a row to `proactive_artifacts` with `artifact_type='intel_brief'` (canonical constant: `services.proactive_artifacts.ARTIFACT_TYPE_INTEL_BRIEF`), `delivery_state='emailed'` (or `'email_failed'`), `status='surfaced'`, `artifact_path=<absolute vault entity path>`, and metadata `{post_id, tier, action_type, vault_slug, entity_slug, packet_dir}`. This makes the brief visible at `/dashboard/proactive-task-history` and feeds the operator preference model.
+
+The trigger condition is **vault write**, not task type — a `cody_scaffold_request` that ends up writing or extending an entity also fires the brief. Parked-as-not-demo-worthy decisions where the vault entity was already current emit NO email (this is judgment-noise, not new intelligence).
+
+Failure mode: if step 1 raises, still write the `proactive_artifacts` row with `delivery_state='email_failed'` so Mission Control still surfaces the new knowledge. Do not silently swallow.
+
+This surfacing was added 2026-05-24 after a parked `cody_scaffold_request` (`/fewer-permission-prompts`) and a Tier 4 `claude_code_kb_update` (Workload Identity Federation) both wrote durable vault knowledge but never reached the operator. Simone owns the contract; the HEARTBEAT directive lives under "Intel-brief surfacing on vault writes" in `memory/HEARTBEAT.md`.
 
 ### LLM-Assisted Classification
 

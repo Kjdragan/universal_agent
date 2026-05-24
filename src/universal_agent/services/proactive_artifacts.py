@@ -44,6 +44,8 @@ VALID_DELIVERY_STATES = {
     DELIVERY_REVIEWED,
 }
 
+ARTIFACT_TYPE_INTEL_BRIEF = "intel_brief"
+
 _ARTIFACT_ID_RE = re.compile(r"\bpa_[a-f0-9]{16}\b", re.IGNORECASE)
 
 
