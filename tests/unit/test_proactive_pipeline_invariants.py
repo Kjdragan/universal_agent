@@ -704,5 +704,99 @@ def test_all_ten_invariants_register_on_import() -> None:
         "csi_demo_triage_rank_artifact",
         "paper_to_podcast_email_delivery",
         "vault_lint_contradictions_monthly",
+        "proactive_brief_task_funnel",
     }
     assert expected.issubset(ids)
+
+
+# --- 11. proactive_brief_task_funnel ---
+
+
+def _seeded_funnel_conn() -> sqlite3.Connection:
+    """In-memory activity DB with proactive_artifacts + task_hub_items columns
+    used by the funnel invariant. Schema is the minimal subset we read."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE proactive_artifacts (
+            artifact_id TEXT PRIMARY KEY,
+            source_kind TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE task_hub_items (
+            task_id TEXT PRIMARY KEY,
+            source_kind TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.commit()
+    return conn
+
+
+def _seed_artifacts(conn: sqlite3.Connection, *, source_kind: str, n: int, hours_old: float = 1.0) -> None:
+    ts = (datetime.now(UTC) - timedelta(hours=hours_old)).isoformat()
+    for i in range(n):
+        conn.execute(
+            "INSERT INTO proactive_artifacts (artifact_id, source_kind, created_at) VALUES (?, ?, ?)",
+            (f"art-{source_kind}-{i}", source_kind, ts),
+        )
+    conn.commit()
+
+
+def _seed_tasks(conn: sqlite3.Connection, *, source_kind: str, n: int, hours_old: float = 1.0) -> None:
+    ts = (datetime.now(UTC) - timedelta(hours=hours_old)).isoformat()
+    for i in range(n):
+        conn.execute(
+            "INSERT INTO task_hub_items (task_id, source_kind, created_at) VALUES (?, ?, ?)",
+            (f"task-{source_kind}-{i}", source_kind, ts),
+        )
+    conn.commit()
+
+
+def test_funnel_quiet_when_artifacts_and_tasks_keep_pace() -> None:
+    conn = _seeded_funnel_conn()
+    _seed_artifacts(conn, source_kind="convergence_detection", n=12)
+    _seed_tasks(conn, source_kind="convergence_detection", n=10)
+    findings = run_invariants({"activity_conn": conn})
+    assert _only(findings, "proactive_brief_task_funnel") == []
+
+
+def test_funnel_warns_when_artifacts_produce_zero_tasks() -> None:
+    """Replays the May-2026 incident shape: many artifacts, zero queued tasks."""
+    conn = _seeded_funnel_conn()
+    _seed_artifacts(conn, source_kind="insight_detection", n=40)
+    _seed_artifacts(conn, source_kind="convergence_detection", n=30)
+    # tutorial_build is healthy in this scenario — only insight/convergence
+    # pipelines should fire.
+    _seed_artifacts(conn, source_kind="tutorial_build", n=6)
+    _seed_tasks(conn, source_kind="tutorial_build", n=6)
+
+    findings = run_invariants({"activity_conn": conn})
+    matches = _only(findings, "proactive_brief_task_funnel")
+    assert len(matches) == 1
+    obs = matches[0].observed_value
+    starved_kinds = {row["source_kind"] for row in obs["starved_pipelines"]}
+    assert starved_kinds == {"insight_detection", "convergence_detection"}
+
+
+def test_funnel_quiet_when_artifact_volume_below_floor() -> None:
+    """Genuinely slow CSI input — don't false-fire."""
+    conn = _seeded_funnel_conn()
+    _seed_artifacts(conn, source_kind="convergence_detection", n=2)  # below MIN=5
+    findings = run_invariants({"activity_conn": conn})
+    assert _only(findings, "proactive_brief_task_funnel") == []
+
+
+def test_funnel_ignores_artifacts_outside_window() -> None:
+    """Old artifacts past the 48h window shouldn't count."""
+    conn = _seeded_funnel_conn()
+    _seed_artifacts(conn, source_kind="convergence_detection", n=20, hours_old=72.0)
+    findings = run_invariants({"activity_conn": conn})
+    assert _only(findings, "proactive_brief_task_funnel") == []
+
+
+def test_funnel_quiet_when_no_activity_conn() -> None:
+    findings = run_invariants({})
+    assert _only(findings, "proactive_brief_task_funnel") == []
