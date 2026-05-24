@@ -426,14 +426,23 @@ def main() -> int:
         transcript_endpoints_raw,
         fallback=args.transcript_endpoint.strip(),
     )
+    # NOTE: order matters. The gateway's `_require_youtube_ingest_auth` only
+    # accepts UA_YOUTUBE_INGEST_TOKEN or UA_INTERNAL_API_TOKEN — it does NOT
+    # accept CSI_RSS_ANALYSIS_TRANSCRIPT_TOKEN (which exists in Infisical prod
+    # but for a different purpose). Try the gateway-accepted tokens FIRST;
+    # CSI_RSS_ANALYSIS_TRANSCRIPT_TOKEN is kept as a last-resort env override
+    # only because it was historically the documented override key.
+    # Diagnosed 2026-05-24 when the csi_run.sh Infisical wrap exposed all
+    # three keys to the script and the wrong one (mismatched token) was
+    # being picked first → HTTP 401 from /api/v1/youtube/ingest.
     transcript_token = _resolve_setting(
-        ["CSI_RSS_ANALYSIS_TRANSCRIPT_TOKEN", "UA_YOUTUBE_INGEST_TOKEN", "UA_INTERNAL_API_TOKEN"],
+        ["UA_YOUTUBE_INGEST_TOKEN", "UA_INTERNAL_API_TOKEN", "CSI_RSS_ANALYSIS_TRANSCRIPT_TOKEN"],
         merged_env_values,
     )
     if not transcript_token:
-        # systemd does not wrap this unit in `infisical run`, and the env files
-        # only carry Infisical *bootstrap* creds, not the resolved secrets. Pull
-        # UA_INTERNAL_API_TOKEN directly so /api/v1/youtube/ingest auth succeeds.
+        # Fallback: systemd may not always wrap this unit in `infisical run`.
+        # If the env-file resolution returned empty, pull directly from
+        # Infisical so /api/v1/youtube/ingest auth still succeeds.
         transcript_token = resolve_token_from_infisical(
             ["UA_YOUTUBE_INGEST_TOKEN", "UA_INTERNAL_API_TOKEN"],
             log_prefix="RSS_ENRICH",
