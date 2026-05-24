@@ -52,6 +52,19 @@ CSI_DEMO_TRIAGE_MAX_AGE_HOURS = 6.0  # twice-daily cron
 PAPER_TO_PODCAST_MAX_AGE_HOURS = 30.0  # daily 9 PM Houston + 6h grace
 VAULT_LINT_DAY_OF_MONTH_GATE = 2  # only probe after the 2nd to give the 1st's cron full day
 
+# Brief→task funnel (added 2026-05-24). Each proactive source_kind should
+# produce roughly one task_hub_items row per artifact. A wide gap (lots of
+# artifacts, zero tasks) means the preference gate / queue insert path is
+# silently dropping work — which is exactly the failure mode that the
+# 2026-04-18 implicit-park-poison incident exposed.
+BRIEF_TASK_FUNNEL_WINDOW_HOURS = 48
+BRIEF_TASK_FUNNEL_MIN_ARTIFACTS = 5  # below this it's plausibly just slow CSI inputs
+BRIEF_TASK_FUNNEL_SOURCE_KINDS = (
+    "convergence_detection",
+    "insight_detection",
+    "tutorial_build",
+)
+
 
 def _today_houston() -> str:
     return datetime.now(HOUSTON_TZ).strftime("%Y-%m-%d")
@@ -804,4 +817,85 @@ def vault_lint_contradictions_monthly(ctx: Dict[str, Any]) -> Optional[Dict[str,
             "for another month."
         ),
         "threshold_text": "≥1 contradiction-report-*.md file dated current month",
+    }
+
+
+# ---------------------------------------------------------------------------
+# 11. proactive brief → task_hub funnel coverage
+# ---------------------------------------------------------------------------
+
+
+@invariant(
+    id="proactive_brief_task_funnel",
+    title="Proactive artifacts produce matching task_hub_items",
+    description=(
+        "Each proactive source_kind (convergence_detection, insight_detection, "
+        "tutorial_build) should produce roughly one task_hub_items row per "
+        "artifact. A wide gap (≥N artifacts, 0 tasks in 48h) means the "
+        "preference gate, dedup logic, or queue insert path is silently "
+        "dropping work. This is the failure mode that hid the 2026-04-18 "
+        "implicit-park preference poison incident for ~5 weeks."
+    ),
+    severity="warn",
+    runbook_command=(
+        "sqlite3 \"$UA_ACTIVITY_DB_PATH\" \""
+        "SELECT source_kind, COUNT(*) AS arts FROM proactive_artifacts "
+        "WHERE source_kind IN ('convergence_detection','insight_detection','tutorial_build') "
+        "AND created_at >= datetime('now','-48 hours') GROUP BY source_kind;\""
+    ),
+    metadata={
+        "pipeline": "proactive_brief_funnel",
+        "tables": ["proactive_artifacts", "task_hub_items"],
+    },
+)
+def proactive_brief_task_funnel(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    conn = ctx.get("activity_conn")
+    if conn is None:
+        return None
+    starved: list[dict[str, Any]] = []
+    for source_kind in BRIEF_TASK_FUNNEL_SOURCE_KINDS:
+        try:
+            arts = conn.execute(
+                """
+                SELECT COUNT(*) FROM proactive_artifacts
+                WHERE source_kind = ?
+                  AND created_at >= datetime('now', ?)
+                """,
+                (source_kind, f"-{BRIEF_TASK_FUNNEL_WINDOW_HOURS} hours"),
+            ).fetchone()[0]
+            tasks = conn.execute(
+                """
+                SELECT COUNT(*) FROM task_hub_items
+                WHERE source_kind = ?
+                  AND created_at >= datetime('now', ?)
+                """,
+                (source_kind, f"-{BRIEF_TASK_FUNNEL_WINDOW_HOURS} hours"),
+            ).fetchone()[0]
+        except sqlite3.Error as exc:
+            logger.debug("proactive_brief_task_funnel: query failed for %s (%s)", source_kind, exc)
+            continue
+        if arts >= BRIEF_TASK_FUNNEL_MIN_ARTIFACTS and tasks == 0:
+            starved.append({
+                "source_kind": source_kind,
+                "artifacts_48h": int(arts),
+                "task_hub_items_48h": 0,
+            })
+    if not starved:
+        return None
+    return {
+        "observed_value": {
+            "starved_pipelines": starved,
+            "window_hours": BRIEF_TASK_FUNNEL_WINDOW_HOURS,
+        },
+        "message": (
+            f"{len(starved)} proactive pipeline(s) produced ≥"
+            f"{BRIEF_TASK_FUNNEL_MIN_ARTIFACTS} artifacts in "
+            f"{BRIEF_TASK_FUNNEL_WINDOW_HOURS}h but zero task_hub_items. "
+            "The preference gate or queue insert path is silently dropping "
+            "work. Check proactive_preference_signals for poison and "
+            "should_block_proactive_task call sites."
+        ),
+        "threshold_text": (
+            f"if artifacts_48h ≥ {BRIEF_TASK_FUNNEL_MIN_ARTIFACTS} then task_hub_items_48h > 0"
+        ),
     }

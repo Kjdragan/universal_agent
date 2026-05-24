@@ -246,39 +246,66 @@ def should_block_proactive_task(
     task_type: str = "",
     topic_tags: list[str] | None = None,
     block_threshold: float = -0.5,
+    half_life_days: float = 14.0,
 ) -> tuple[bool, str]:
     """Hard gate: return (True, reason) if preferences strongly oppose this task.
 
-    A task is blocked when *every* matching preference key carries a weight
-    at or below ``block_threshold`` (default -0.5).  If there are no matching
-    signals at all the task is allowed through (benefit of the doubt).
+    Counts ONLY ``signal_type='explicit_feedback'`` rows. Implicit outcome
+    signals (auto-fired by the outcome tracker when tasks reach a terminal
+    state like park/block) are deliberately excluded — they conflate
+    "Kevin disliked this" with "no consumer claimed it / stale cleanup",
+    and a single burst of system parks can otherwise saturate a key's
+    weight at -1.0 and silently suppress an entire pipeline. Implicit
+    signals still contribute to ranking via ``score_artifact_for_review``,
+    just never to the hard gate.
 
-    Returns:
-        (should_block, reason) — ``should_block`` is True when the task
-        should be silently dropped, and ``reason`` explains why.
-
+    A task is blocked when *every* matching preference key carries an
+    explicit weight at or below ``block_threshold`` (default -0.5). If there
+    are no matching explicit signals at all the task is allowed through
+    (benefit of the doubt).
     """
     ensure_schema(conn)
-    model = get_preference_snapshot(conn)
-    preferences = model.get("topic_preferences") if isinstance(model.get("topic_preferences"), dict) else {}
     keys = _context_keys(task_type=task_type, topic_tags=topic_tags or [])
     if not keys:
         return False, ""
 
-    matched = [(k, preferences[k]) for k in keys if k in preferences]
-    if not matched:
-        return False, ""  # No signal → allow
+    placeholders = ",".join("?" for _ in keys)
+    rows = conn.execute(
+        f"""
+        SELECT signal_key, weight, created_at
+        FROM proactive_preference_signals
+        WHERE signal_type = 'explicit_feedback'
+          AND signal_key IN ({placeholders})
+        """,
+        tuple(keys),
+    ).fetchall()
+    if not rows:
+        return False, ""
+
+    now = datetime.now(timezone.utc)
+    weights: dict[str, float] = {}
+    for row in rows:
+        key = str(row["signal_key"] or "").strip()
+        if not key:
+            continue
+        decayed = float(row["weight"] or 0.0) * _decay_multiplier(
+            _age_days(str(row["created_at"] or ""), now=now), half_life_days
+        )
+        weights[key] = weights.get(key, 0.0) + decayed
+
+    if not weights:
+        return False, ""
 
     negative_keys: list[str] = []
-    for key, value in matched:
-        weight = float((value or {}).get("weight") or 0.0)
-        if weight > block_threshold:
+    for key, weight_sum in weights.items():
+        clipped = max(-1.0, min(1.0, weight_sum))
+        if clipped > block_threshold:
             return False, ""  # At least one dimension is neutral/positive → allow
-        negative_keys.append(f"{key}={weight:.2f}")
+        negative_keys.append(f"{key}={clipped:.2f}")
 
     reason = (
-        f"All {len(negative_keys)} preference dimension(s) are strongly negative "
-        f"(threshold {block_threshold}): {', '.join(negative_keys)}. "
+        f"All {len(negative_keys)} explicit-feedback dimension(s) are strongly "
+        f"negative (threshold {block_threshold}): {', '.join(negative_keys)}. "
         f"Proactive task suppressed."
     )
     return True, reason
