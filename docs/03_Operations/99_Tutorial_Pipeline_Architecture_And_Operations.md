@@ -3,7 +3,7 @@
 > **Canonical source-of-truth** for the YouTube Tutorial Pipeline. All other
 > tutorial-related documentation should reference this file.
 >
-> **Last updated:** 2026-05-23 — **Gold-channel RSS auto-add + per-channel duration override**. New `tier` field on `channels_watchlist.json` records (`gold` / `sidecar` / `blocked`). New `services/youtube_gold_channel_poller.py` cron runs at 5:30 AM Houston (30 min before the digest cron), fetches RSS feeds for every `tier:"gold"` channel, dedups against existing playlist contents + processed-videos SQLite + the local 30h lookback window, and adds new videos to the right day-of-week playlist (routed by `published_at.astimezone(America/Chicago).strftime('%A')`). Daily cap default 10, configurable via `UA_YOUTUBE_GOLD_DAILY_CAP`. Per-channel `duration_max_seconds_override` field lets the pre-ingest triage gate honor a per-channel cap — Lex Fridman's seed value is 86400 (24h, effectively unlimited) so his 2-4 hour interviews aren't auto-triaged out by the global 90min cap. Plumbed through `_should_skip_video_by_metadata` and `ingest_youtube_transcript`. 22 channels seeded as gold (AICodeKing, Cole Medin, IndyDevDan, Discover AI, Sam Witteveen, Prompt Engineering, Matthew Berman, Adam Lucek, Ray Fernando, AI Engineer, AI Jason, Chris Hay, All About AI, Wes Roth, TheAIGRID, Pyotr Kurzin, Anthropic, Latent Space, Dwarkesh Patel, Brian Lagerstrom, Simon Willison, Lex Fridman); 4 seeded as `blocked` (LangChain, Fahd Mirza, MCP Developers Summit, Cloudflare Developers); ~417 remain default `sidecar` for later review. Gateway boot helper registers `_ensure_youtube_gold_poller_cron_job` alongside the existing digest helper. Kill switch: `UA_YOUTUBE_GOLD_POLLER_ENABLED=0`. Test coverage: 26 new unit tests (`tests/unit/test_youtube_gold_channel_poller.py` + `tests/unit/test_youtube_ingest_duration_override.py`). Earlier 2026-05-22 — **Daily Digest email/template overhaul + transcript reliability**. Email body now contains intro + meta-synthesis only; full per-video retellings + tutorial dispatch summary ship as a styled `text/html` attachment (`YouTube_Daily_Digest_<date>_<Day>.html`) with a per-video TOC, anchor links, and a compact "Channel · Duration · Published · watch ↗" metadata strip on every video card. `nl2br` markdown extension dropped (the cause of "way too much spacing" between paragraphs in pre-2026-05-22 deliveries). Per-video metadata (channel name, ISO-formatted duration, "Mon DD, YYYY" upload date, YouTube watch URL) is now threaded from `ingest_youtube_transcript` → `VideoTranscriptPayload.metadata` → a deterministic Python-built header (no LLM trust). Transcript reliability: `UA_YOUTUBE_TRANSCRIPT_PROXY_RETRIES` default bumped 3 → 6 (each retry pulls a fresh DataImpulse residential IP; flagged-IP miss budget drops from 25%³≈1.6% to 25%⁶≈0.02%), and mixed `TranscriptsDisabled`+`RequestBlocked` patterns across attempts now classify as `request_blocked` instead of `transcript_unavailable` so logs surface the real cause. Diagnosed 2026-05-21 WEDNESDAY 52% metadata-only fallback rate (15/29) as proxy-IP block masquerading as creator-disabled subs. 2026-05-20: **Tier A scoring rubric** added inline to `RETELL_PROMPT` with anchored buckets (90-100 / 75-89 / 60-74 / 40-59 / 20-39 / 0-19) + disqualifier caps (sales-pitch / view-count / metadata-only) + explicit "do not default to 95" guidance.  Addresses score saturation surfaced by the 2026-05-20 WEDNESDAY dry-run (12 of 29 videos got 95).  See § 1.1B for the full multi-tier roadmap (Tier A current, Tier B/C/D deferred). Earlier 2026-05-20: deterministic `youtube_digest_decisions` JSON block built from `MapResult` classifications in Python (PR #407) so reducer LLM failures can no longer drop tutorial dispatch to zero; orphan `---` removed + Houston-friendly banner time (PR #408).  2026-05-19: delivery-reminder signals (Telegram + dashboard tile) with `UA_DIGEST_REMINDER_TTL_MINUTES` (default 90).  2026-05-18: Daily Digest ships on a **map-reduce pipeline** (per-video retell on `glm-4.5-air` @ conc=3, meta-synthesis on `glm-5.1`), 50%-length retelling, deterministic **demo-worthiness gate** (score ≥ 70, value_tier ≠ low/unknown, evidence_quality ≠ metadata_only). `required_secrets` preflight includes `YOUTUBE_OAUTH_*`. PRs #356, #357, #360, #361, #363, #391, #393, #394, #407, #408, #411.
+> **Last updated:** 2026-05-23 (PM) — **Retired the UA-native playlist watcher.** The standalone `services/youtube_playlist_watcher.py` (Pipeline A in this doc) was removed; its `YT_TUTORIALS_PLAYLIST_ID` env var, `UA_YT_PLAYLIST_WATCHER_ENABLED` toggle, ops endpoints (`/api/v1/ops/youtube-playlist-watcher{,/poll}`), state file (`AGENT_RUN_WORKSPACES/youtube_playlist_watcher_state.json`), and db-health check are gone. The hook route `/api/v1/hooks/youtube/manual` and the `manual_youtube_transform.py` webhook transform are **kept** because the Daily YouTube Digest cron still dispatches via that route (the watcher and the digest were two triggers feeding the same downstream agent). Pipeline B (CSI RSS) is unchanged. **Earlier same-day 2026-05-23 (AM)** — **Gold-channel RSS auto-add + per-channel duration override**. New `tier` field on `channels_watchlist.json` records (`gold` / `sidecar` / `blocked`). New `services/youtube_gold_channel_poller.py` cron runs at 5:30 AM Houston (30 min before the digest cron), fetches RSS feeds for every `tier:"gold"` channel, dedups against existing playlist contents + processed-videos SQLite + the local 30h lookback window, and adds new videos to the right day-of-week playlist (routed by `published_at.astimezone(America/Chicago).strftime('%A')`). Daily cap default 10, configurable via `UA_YOUTUBE_GOLD_DAILY_CAP`. Per-channel `duration_max_seconds_override` field lets the pre-ingest triage gate honor a per-channel cap — Lex Fridman's seed value is 86400 (24h, effectively unlimited) so his 2-4 hour interviews aren't auto-triaged out by the global 90min cap. Plumbed through `_should_skip_video_by_metadata` and `ingest_youtube_transcript`. 22 channels seeded as gold (AICodeKing, Cole Medin, IndyDevDan, Discover AI, Sam Witteveen, Prompt Engineering, Matthew Berman, Adam Lucek, Ray Fernando, AI Engineer, AI Jason, Chris Hay, All About AI, Wes Roth, TheAIGRID, Pyotr Kurzin, Anthropic, Latent Space, Dwarkesh Patel, Brian Lagerstrom, Simon Willison, Lex Fridman); 4 seeded as `blocked` (LangChain, Fahd Mirza, MCP Developers Summit, Cloudflare Developers); ~417 remain default `sidecar` for later review. Gateway boot helper registers `_ensure_youtube_gold_poller_cron_job` alongside the existing digest helper. Kill switch: `UA_YOUTUBE_GOLD_POLLER_ENABLED=0`. Test coverage: 26 new unit tests (`tests/unit/test_youtube_gold_channel_poller.py` + `tests/unit/test_youtube_ingest_duration_override.py`). Earlier 2026-05-22 — **Daily Digest email/template overhaul + transcript reliability**. Email body now contains intro + meta-synthesis only; full per-video retellings + tutorial dispatch summary ship as a styled `text/html` attachment (`YouTube_Daily_Digest_<date>_<Day>.html`) with a per-video TOC, anchor links, and a compact "Channel · Duration · Published · watch ↗" metadata strip on every video card. `nl2br` markdown extension dropped (the cause of "way too much spacing" between paragraphs in pre-2026-05-22 deliveries). Per-video metadata (channel name, ISO-formatted duration, "Mon DD, YYYY" upload date, YouTube watch URL) is now threaded from `ingest_youtube_transcript` → `VideoTranscriptPayload.metadata` → a deterministic Python-built header (no LLM trust). Transcript reliability: `UA_YOUTUBE_TRANSCRIPT_PROXY_RETRIES` default bumped 3 → 6 (each retry pulls a fresh DataImpulse residential IP; flagged-IP miss budget drops from 25%³≈1.6% to 25%⁶≈0.02%), and mixed `TranscriptsDisabled`+`RequestBlocked` patterns across attempts now classify as `request_blocked` instead of `transcript_unavailable` so logs surface the real cause. Diagnosed 2026-05-21 WEDNESDAY 52% metadata-only fallback rate (15/29) as proxy-IP block masquerading as creator-disabled subs. 2026-05-20: **Tier A scoring rubric** added inline to `RETELL_PROMPT` with anchored buckets (90-100 / 75-89 / 60-74 / 40-59 / 20-39 / 0-19) + disqualifier caps (sales-pitch / view-count / metadata-only) + explicit "do not default to 95" guidance.  Addresses score saturation surfaced by the 2026-05-20 WEDNESDAY dry-run (12 of 29 videos got 95).  See § 1.1B for the full multi-tier roadmap (Tier A current, Tier B/C/D deferred). Earlier 2026-05-20: deterministic `youtube_digest_decisions` JSON block built from `MapResult` classifications in Python (PR #407) so reducer LLM failures can no longer drop tutorial dispatch to zero; orphan `---` removed + Houston-friendly banner time (PR #408).  2026-05-19: delivery-reminder signals (Telegram + dashboard tile) with `UA_DIGEST_REMINDER_TTL_MINUTES` (default 90).  2026-05-18: Daily Digest ships on a **map-reduce pipeline** (per-video retell on `glm-4.5-air` @ conc=3, meta-synthesis on `glm-5.1`), 50%-length retelling, deterministic **demo-worthiness gate** (score ≥ 70, value_tier ≠ low/unknown, evidence_quality ≠ metadata_only). `required_secrets` preflight includes `YOUTUBE_OAUTH_*`. PRs #356, #357, #360, #361, #363, #391, #393, #394, #407, #408, #411.
 
 ## 1. Pipeline Overview
 
@@ -20,8 +20,9 @@ Playlist Watch → New Video Detection → Webhook Dispatch → Agent Session
 
 | Layer | File | Responsibility |
 |-------|------|---------------|
-| Playlist Watcher | `services/youtube_playlist_watcher.py` | Periodically polls configured YouTube playlists for new video IDs |
-| Hooks Service | `hooks_service.py` | Receives webhook events, manages dispatch queue, throttling, retry policies |
+| Daily Digest Cron | `scripts/youtube_daily_digest.py` | Runs at 6 AM Houston, ranks the day's playlist videos via LLM, POSTs top demo-worthy candidates to `/api/v1/hooks/youtube/manual` |
+| Gold-Channel RSS Cron | `services/youtube_gold_channel_poller.py` | Runs 30 min before the digest, RSS-pulls every `tier:"gold"` channel and adds new videos to the right day-of-week playlist |
+| Hooks Service | `hooks_service.py` | Receives webhook events (digest + manual webhooks), manages dispatch queue, throttling, retry policies |
 | Gateway Server | `gateway_server.py` | Notification system, tutorial dashboard API, persistence |
 | YouTube Ingestion | `youtube_ingest.py` | Fetches transcripts via rotating residential proxy (Webshare or DataImpulse, selected by `PROXY_PROVIDER`) |
 | Telegram Notifier | `services/notification_dispatcher.py` + `services/telegram_send.py` | Generic out-of-band Telegram delivery; per-video dedup is upstream via `_add_notification()` video-level upsert in `gateway_server.py` |
@@ -246,31 +247,40 @@ encounter the plan before editing scoring guidance.
 
 ```mermaid
 flowchart LR
-    subgraph "Pipeline A: Playlist Watcher (UA-native)"
-        PW[youtube_playlist_watcher.py] -->|new video ID| HS[hooks_service.py]
-        HS --> AS[Agent Session]
+    subgraph "Pipeline A: Daily Digest (UA-native)"
+        GOLD[youtube_gold_channel_poller.py<br/>5:30 AM CT] -->|new videos| PL[Day-of-Week Playlist]
+        MAN[Operator manually adds<br/>videos to playlist] --> PL
+        PL -->|6 AM CT pickup| DIG[youtube_daily_digest.py]
+        DIG -->|top demo-worthy| HS[hooks_service.py<br/>/api/v1/hooks/youtube/manual]
+        HS --> AS[youtube-expert Agent]
         AS --> TG[Tutorial Generation]
     end
 
     subgraph "Pipeline B: CSI RSS Channel Feed"
         RSS[youtube_channel_rss.py] -->|new video event| CSI_DB[(csi.db)]
-        CSI_DB --> ENRICH[LLM Enrichment]
-        ENRICH --> DIGEST[Digest/Reports]
+        CSI_DB --> ENRICH[LLM Enrichment + transcript]
+        ENRICH --> JUDGE[is_video_buildable_with_judge]
+        JUDGE -->|buildable| THUB[task_hub_items<br/>source_kind=tutorial_build]
+        THUB --> CODY[Cody builds private repo]
     end
 
-    PW -.->|state file| SF[youtube_playlist_watcher_state.json]
+    DIG -.->|seen-id state| YDS[(youtube_ingestion_state.db)]
     RSS -.->|source_state table| SS[(csi.db → source_state)]
 ```
 
-| Aspect | Pipeline A: Playlist Watcher | Pipeline B: CSI RSS Channel Feed |
+| Aspect | Pipeline A: Daily Digest | Pipeline B: CSI RSS Channel Feed |
 |--------|------------------------------|-----------------------------------|
-| **Purpose** | Watch specific playlists for new tutorial videos | Watch 444+ channel RSS feeds for any new uploads |
-| **Owner** | UA Gateway (`services/youtube_playlist_watcher.py`) | CSI Ingester (`csi_ingester/adapters/youtube_channel_rss.py`) |
-| **State Storage** | `youtube_playlist_watcher_state.json` (flat file) | `source_state` table rows keyed `youtube_channel_rss:<channel_id>` |
-| **Database** | None (file-based state) | `csi.db` (default: `/var/lib/universal-agent/csi/csi.db`) |
-| **State Contents** | `seen_ids`, `pending_dispatch_items`, `run_retry_counts`, `permanently_failed_video_ids` | Per-channel: `seen_ids`, `seeded`, `etag`, `last_modified` |
-| **Reset Script** | `scripts/purge_youtube_backlog.py` Steps 1-3 | `scripts/purge_youtube_backlog.py` Steps 4-5 |
-| **Proxy Usage** | Transcript ingestion via residential proxy | RSS feed polling (no proxy needed for RSS, proxy used for transcript fetch if triggered) |
+| **Purpose** | Curated daily review of operator-added + gold-channel videos | Watch 444+ channel RSS feeds for any new uploads |
+| **Owner** | UA Gateway (`scripts/youtube_daily_digest.py` + `services/youtube_gold_channel_poller.py`) | CSI Ingester (`csi_ingester/adapters/youtube_channel_rss.py`) |
+| **Trigger** | Cron 6 AM CT (digest) + cron 5:30 AM CT (gold poller) + operator manual playlist adds | Continuous CSI loop (every 2h during 6 AM–8 PM CT + 2 AM catch-up) |
+| **State Storage** | `youtube_ingestion_state.db` (per-day dedupe) | `source_state` table rows keyed `youtube_channel_rss:<channel_id>` |
+| **Database** | `youtube_ingestion_state.db` | `csi.db` (default: `/var/lib/universal-agent/csi/csi.db`) |
+| **Output** | Digest email + dispatch to `youtube-expert` agent for top demo-worthy candidates | `tutorial_build` Task Hub items routed to Cody |
+| **Reset Script** | `scripts/purge_youtube_backlog.py` Steps 2-3 | `scripts/purge_youtube_backlog.py` Steps 4-5 |
+| **Proxy Usage** | Transcript ingestion via residential proxy | RSS feed polling (no proxy needed for RSS, proxy used for transcript fetch via gateway endpoint) |
+
+> [!NOTE]
+> **Pipeline A used to have a third trigger** — `services/youtube_playlist_watcher.py`, a continuously-polling UA-native watcher of `YT_TUTORIALS_PLAYLIST_ID`. It was retired 2026-05-23 because the daily digest produces equivalent (curated) demo dispatches at lower API quota cost. The hook route and agent are unchanged. Operator manually-added URLs now go into the day-of-week playlist instead of the tutorial playlist.
 
 > [!CAUTION]
 > When switching proxy providers or resetting YouTube state, you **MUST** run
@@ -494,7 +504,7 @@ Optional video/vision analysis in `youtube-tutorial-creation` is gated to `conce
 | `src/universal_agent/hooks_service.py` | Core pipeline orchestration, dispatch queue, retry |
 | `src/universal_agent/gateway_server.py` | Notification CRUD, tutorial dashboard API, dedup constants |
 | `src/universal_agent/youtube_ingest.py` | Transcript fetching via rotating residential proxy (Webshare or DataImpulse) |
-| `src/universal_agent/youtube_mode_utils.py` | Shared concept-only vs code-worthy mode inference used by CSI signal ingest, hooks, gateway tutorial indexing, and playlist watching |
+| `src/universal_agent/youtube_mode_utils.py` | Shared concept-only vs code-worthy mode inference used by CSI signal ingest, hooks, and gateway tutorial indexing |
 | `src/universal_agent/scripts/youtube_daily_digest.py` | Daily playlist digest. Hosts the map-reduce dispatcher (`_generate_digest_content`), map step (`_map_retell_videos` / `_retell_one_video`), reduce step (`_reduce_meta_synthesize`), demo-worthiness gate (`_select_tutorial_dispatch_candidates`), ranked tutorial-candidate persistence, and bounded code-prospect dispatch. Legacy single-call path retained as `_generate_digest_content_single_call`. |
 | `src/universal_agent/scripts/youtube_digest_compare.py` | A/B comparison harness. Loads a repopulate pocket, re-ingests transcripts, runs an arbitrary list of `(pipeline, map_model, map_concurrency)` configs against identical input, dumps per-run `digest.md` + `run_metadata.json` plus a cross-run `classifications_diff.json` and `index.json`. Used to evaluate model+concurrency choices without touching the live cron. |
 | `src/universal_agent/scripts/youtube_provision_digest_playlists.py` | One-shot utility: discovers "\<Day\> Digest" playlists via YouTube Data API and upserts IDs to Infisical |
@@ -504,7 +514,6 @@ Optional video/vision analysis in `youtube-tutorial-creation` is gated to `conce
 | `tests/unit/test_youtube_daily_digest_pockets.py` | Repopulate pocket persistence + restore, candidates artifact shape, dispatch dry-run, decision JSON stripping. |
 | `tests/unit/test_youtube_daily_digest_email_failures.py` | Email delivery → processed-videos DB write gating (success path, failure path, no-email mode). |
 | `src/universal_agent/scripts/vp_coder_workspace_pruner.py` | Weekly archive of stale VP-coder workspace subdirectories (7-day default retention) |
-| `src/universal_agent/services/youtube_playlist_watcher.py` | Playlist polling |
 | `src/universal_agent/services/notification_dispatcher.py` | Generic out-of-band notification dispatcher (Telegram + email) for undelivered high-severity rows; polls every `UA_NOTIFICATION_DISPATCHER_INTERVAL_SECONDS` (default 30s) |
 | `src/universal_agent/services/telegram_send.py` | Low-level Telegram send utility with retry policy, rate-limit awareness, structured logging |
 | `web-ui/app/dashboard/page.tsx` | Main dashboard with notification dedup |

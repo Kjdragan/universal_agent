@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Purge YouTube backlog across BOTH watching systems before proxy switch.
+"""Purge YouTube backlog before proxy switch.
 
-This script is meant to run on the VPS BEFORE restarting the gateway with
-PROXY_PROVIDER=dataimpulse. It resets BOTH YouTube watching pipelines:
+This script was originally written to run on the VPS BEFORE restarting the
+gateway with PROXY_PROVIDER=dataimpulse. Pipeline A (the UA-native playlist
+watcher) was retired 2026-05-23 — its `WATCHER_STATE_FILE` action below is now
+a no-op (the file no longer exists in normal operation) but is preserved for
+operators who still have stale state from before the retirement.
 
-  Pipeline A — Playlist Watcher (UA-native, file-based state)
+  Pipeline A — Playlist Watcher (RETIRED 2026-05-23, no-op if no state file)
   Pipeline B — CSI RSS Channel Feed (CSI Ingester, csi.db state)
 
 Cleanup actions:

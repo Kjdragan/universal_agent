@@ -99,9 +99,6 @@ class HeartbeatConfig:
                 os.getenv("UA_VP_EXTERNAL_DISPATCH_ENABLED") or ""
             ).strip(),
             "ua_agentmail_enabled": str(os.getenv("UA_AGENTMAIL_ENABLED") or "").strip(),
-            "ua_yt_playlist_watcher_enabled": str(
-                os.getenv("UA_YT_PLAYLIST_WATCHER_ENABLED") or ""
-            ).strip(),
             "ua_enable_heartbeat": str(os.getenv("UA_ENABLE_HEARTBEAT") or "").strip(),
             "ua_enable_cron": str(os.getenv("UA_ENABLE_CRON") or "").strip(),
             "ua_runtime_stage": runtime_stage,

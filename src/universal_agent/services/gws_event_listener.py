@@ -116,8 +116,8 @@ class GwsEventListener:
     label filter, detects newly-arrived message IDs, fetches their metadata,
     and dispatches them into the UA hooks pipeline.
 
-    Lifecycle follows the same start/stop pattern as YouTubePlaylistWatcher
-    so it integrates cleanly with gateway_server.py.
+    Lifecycle follows the gateway's standard start/stop pattern so it
+    integrates cleanly with gateway_server.py.
     """
 
     def __init__(

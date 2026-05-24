@@ -56,7 +56,6 @@ def _gateway_subprocess_env(port: int) -> dict[str, str]:
             "UA_CRON_MOCK_RESPONSE": "1",
             "UA_DISABLE_HEARTBEAT": "1",
             "UA_AGENTMAIL_ENABLED": "0",
-            "UA_YT_PLAYLIST_WATCHER_ENABLED": "0",
             "UA_ENABLE_GOOGLE_WORKSPACE_EVENTS": "0",
         }
     )

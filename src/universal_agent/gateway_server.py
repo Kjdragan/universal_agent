@@ -186,7 +186,6 @@ from universal_agent.services.refinement_agent import (
     RefinementError,
     refine_with_llm,
 )
-from universal_agent.services.youtube_playlist_watcher import YouTubePlaylistWatcher
 from universal_agent.session_hub import (
     clear_active_sidebar,
     get_active_sidebar,
@@ -2403,7 +2402,6 @@ _todo_dispatch_service: Optional[Any] = None
 _cron_service: Optional[CronService] = None
 _ops_service: Optional[OpsService] = None
 _hooks_service: Optional[HooksService] = None
-_yt_playlist_watcher: Optional[YouTubePlaylistWatcher] = None
 _gws_event_listener: Optional[GwsEventListener] = None
 _agentmail_service: Optional[AgentMailService] = None
 _daemon_session_manager: Optional[Any] = None  # DaemonSessionManager (lazy import)
@@ -8291,15 +8289,6 @@ async def _startup_recover_interrupted_youtube_sessions(workspaces_dir: Path) ->
             logger.warning("🔁 Recovered %d interrupted youtube hook session(s) on startup", recovered)
         else:
             logger.info("🔁 No interrupted youtube hook sessions required recovery")
-
-
-async def _startup_start_youtube_playlist_watcher() -> None:
-    if _yt_playlist_watcher is None:
-        return
-    try:
-        await _yt_playlist_watcher.start()
-    except Exception:
-        logger.exception("Failed starting YouTube playlist watcher")
 
 
 async def _startup_start_gws_event_listener() -> None:
@@ -14547,7 +14536,7 @@ async def lifespan(app: FastAPI):
     main_module.budget_config = main_module.load_budget_config()
     
     # Initialize Heartbeat Service
-    global _heartbeat_service, _todo_dispatch_service, _cron_service, _ops_service, _hooks_service, _yt_playlist_watcher, _gws_event_listener
+    global _heartbeat_service, _todo_dispatch_service, _cron_service, _ops_service, _hooks_service, _gws_event_listener
     global _vp_event_bridge_task, _vp_event_bridge_stop_event
     if HEARTBEAT_ENABLED:
         logger.info("💓 Heartbeat System ENABLED")
@@ -14824,42 +14813,6 @@ async def lifespan(app: FastAPI):
         notification_sink=_hook_notification_sink,
     )
     logger.info("🪝 Hooks Service Initialized")
-
-    # YouTube tutorial playlist watcher (native UA poller — replaces CSI ingester source)
-    async def _yt_watcher_dispatch_fn(subpath: str, payload: dict) -> tuple[bool, str]:
-        if _hooks_service is None:
-            return {"decision": "failed", "reason": "hooks_service_not_ready", "error": "hooks_service_not_ready"}
-        if subpath == "youtube/manual":
-            action_payload = build_manual_youtube_action(
-                payload,
-                name="PlaylistWatcherYouTubeWebhook",
-            )
-            if action_payload is None:
-                return {"decision": "failed", "reason": "invalid_manual_youtube_payload", "error": "invalid_manual_youtube_payload"}
-            return await _hooks_service.dispatch_internal_action_background_with_admission(action_payload)
-        return await _hooks_service.dispatch_internal_payload(
-            subpath=subpath, payload=payload, headers={"x-ua-source": "yt_playlist_watcher"}
-        )
-
-    if should_run_loop("youtube_playlist_watcher", prod_default=True):
-        _yt_playlist_watcher = YouTubePlaylistWatcher(
-            dispatch_fn=_yt_watcher_dispatch_fn,
-            notification_sink=_hook_notification_sink,
-        )
-        _spawn_background_task(
-            _run_after_deployment_window(
-                "youtube_playlist_watcher",
-                _startup_start_youtube_playlist_watcher,
-            ),
-            task_name="youtube_playlist_watcher_startup",
-        )
-    else:
-        logger.info(
-            "⏸️ YouTube playlist watcher disabled "
-            "(UA_YOUTUBE_PLAYLIST_WATCHER_ENABLED=0 or "
-            "UA_RUNTIME_STAGE=development). No 60s polling, no Google API "
-            "quota burn."
-        )
 
     # --- gws Workspace Event Listener (Phase 5 — Gmail polling) ---
     async def _gws_event_dispatch_fn(subpath: str, payload: dict) -> tuple[bool, str]:
@@ -15341,8 +15294,6 @@ async def lifespan(app: FastAPI):
             await _mission_control_sweeper_task
         except Exception:
             pass
-    if _yt_playlist_watcher:
-        await _yt_playlist_watcher.stop()
     if _gws_event_listener:
         await _gws_event_listener.stop()
     if _agentmail_service:
@@ -28106,25 +28057,6 @@ async def ops_system_health():
     }
 
     result["timestamp"] = now_ts
-    return result
-
-
-@app.get("/api/v1/ops/youtube-playlist-watcher")
-async def ops_yt_playlist_watcher_status(request: Request):
-    _require_ops_auth(request)
-    if _yt_playlist_watcher is None:
-        return {"enabled": False, "reason": "not_initialized"}
-    status = _yt_playlist_watcher.status()
-    status["telegram"] = {"enabled": False, "reason": "removed_for_rebuild"}
-    return status
-
-
-@app.post("/api/v1/ops/youtube-playlist-watcher/poll")
-async def ops_yt_playlist_watcher_poll_now(request: Request):
-    _require_ops_auth(request)
-    if _yt_playlist_watcher is None:
-        raise HTTPException(status_code=503, detail="YouTube playlist watcher not initialized")
-    result = await _yt_playlist_watcher.poll_now()
     return result
 
 
