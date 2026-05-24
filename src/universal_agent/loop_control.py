@@ -187,7 +187,6 @@ _KNOWN_LOOPS: Final[tuple[str, ...]] = (
     "vp_stale_reconcile",
     "agentmail_service",
     "notification_dispatcher",
-    "youtube_playlist_watcher",
     "hq_self_heartbeat",
 )
 

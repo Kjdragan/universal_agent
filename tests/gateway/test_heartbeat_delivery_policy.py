@@ -58,7 +58,6 @@ def _gateway_subprocess_env(port: int, workspace_root: Path, env_overrides: dict
             "UA_HEARTBEAT_MOCK_RESPONSE": "1",
             "UA_DISABLE_CRON": "1",
             "UA_AGENTMAIL_ENABLED": "0",
-            "UA_YT_PLAYLIST_WATCHER_ENABLED": "0",
             "UA_ENABLE_GOOGLE_WORKSPACE_EVENTS": "0",
             "UA_INTERNAL_API_TOKEN": "",
             "UA_OPS_TOKEN": "",

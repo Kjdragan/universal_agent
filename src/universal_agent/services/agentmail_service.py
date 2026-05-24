@@ -178,7 +178,7 @@ def _extract_reply_text(text_body: str, html_body: str = "") -> str:
         logger.debug("Email reply extraction failed, using full body", exc_info=True)
         return text_body
 
-# Type aliases matching the patterns in youtube_playlist_watcher.py
+# Type aliases for the standard hook-dispatch lifecycle used across UA services.
 DispatchFn = Callable[[dict[str, Any]], Coroutine[Any, Any, tuple[bool, str]]]
 DispatchAdmissionFn = Callable[[dict[str, Any]], Coroutine[Any, Any, dict[str, Any]]]
 NotifyFn = Callable[[dict[str, Any]], None]
