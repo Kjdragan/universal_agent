@@ -2478,7 +2478,8 @@ class CronService:
                                                         if _f_mail_svc_llm is not None:
                                                             _f_recipient_llm = _f_gw_llm._proactive_review_recipient("")
                                                             _f_dashboard_base_llm = (
-                                                                os.getenv("UA_PUBLIC_BASE_URL", "")
+                                                                os.getenv("FRONTEND_URL", "")
+                                                                or os.getenv("UA_PUBLIC_BASE_URL", "")
                                                                 or "https://app.clearspringcg.com"
                                                             )
                                                             _f_notify_llm(

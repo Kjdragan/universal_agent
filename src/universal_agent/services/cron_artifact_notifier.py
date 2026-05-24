@@ -620,7 +620,16 @@ def verify_ack_token(artifact_id: str, token: str) -> bool:
 
 
 def _build_ack_url(artifact_id: str, dashboard_base_url: str) -> str:
-    base = (dashboard_base_url or os.getenv("UA_PUBLIC_BASE_URL", "")).strip().rstrip("/")
+    # Prefer FRONTEND_URL — that's the canonical operator-facing base in
+    # ``intelligence_reporter.py`` and ``link_notifier.py``. Fall back to
+    # UA_PUBLIC_BASE_URL for parity with other proactive surfaces. Final
+    # fallback is the ClearSpring app domain.
+    base = (
+        dashboard_base_url
+        or os.getenv("FRONTEND_URL", "")
+        or os.getenv("UA_PUBLIC_BASE_URL", "")
+        or "https://app.clearspringcg.com"
+    ).strip().rstrip("/")
     if not base:
         return ""
     token = sign_ack_token(artifact_id)

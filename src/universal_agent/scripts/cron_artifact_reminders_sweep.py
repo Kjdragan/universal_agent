@@ -32,8 +32,10 @@ async def _async_main() -> int:
         return 1
 
     recipient = gateway_server._proactive_review_recipient("")
+    import os as _os
     dashboard_base_url = (
-        __import__("os").getenv("UA_PUBLIC_BASE_URL", "")
+        _os.getenv("FRONTEND_URL", "")
+        or _os.getenv("UA_PUBLIC_BASE_URL", "")
         or "https://app.clearspringcg.com"
     )
 
