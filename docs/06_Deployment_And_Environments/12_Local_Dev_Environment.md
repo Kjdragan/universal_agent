@@ -402,8 +402,8 @@ Items the doc claims that **may not yet be true** in the codebase. Each one is a
 - [x] **Cron service master gate.** `feature_flags.cron_enabled()` now defaults OFF in dev — the `CronService` itself doesn't instantiate (independent of `UA_CRON_REGISTRATION_ENABLED` which only controls registration once the service is up).
 - [x] **AgentMail service master gate.** `should_run_loop("agentmail_service")` — when OFF, no inbox polling, no WebSocket, no outbound email. Prevents dev from racing with prod on the same `oddcity216@agentmail.to` inbox or sending real emails to operator's gmail.
 - [x] **Notification dispatcher master gate.** `_notification_dispatcher_enabled()` now uses `should_run_loop` — defaults OFF in dev. Prevents accidental email blast from queued notification backlog when dev boots.
-- [x] **YouTube playlist watcher master gate.** `should_run_loop("youtube_playlist_watcher")` — no Google API quota burn from dev.
 - [x] **`bootstrap_local_hq_dev.sh` prints a "loops silenced" banner** at the end of bootstrap so operators see what's off and how to opt back in.
+- [x] ~~**YouTube playlist watcher master gate.**~~ The watcher itself was retired 2026-05-23; this gate is now moot.
 
 **Closed in Phase D (2026-05-11, after second end-to-end dev verification revealed Infisical pollution):**
 

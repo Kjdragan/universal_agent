@@ -74,7 +74,6 @@ The following keys are overridden from the `dev` baseline when provisioning a ne
 | `UA_HOOKS_ENABLED` | `1` | `0` | No inbound webhook hooks |
 | `UA_SIGNALS_INGEST_ENABLED` | `1` | `0` | No CSI signal ingest |
 | `UA_AGENTMAIL_ENABLED` | `1` | `0` | No AgentMail on local worker |
-| `UA_YT_PLAYLIST_WATCHER_ENABLED` | `1` | `0` | No YouTube playlist watcher |
 | `UA_ENABLE_GOOGLE_WORKSPACE_EVENTS` | `0` | `0` | No Gmail polling |
 
 ### STANDALONE_NODE Overrides

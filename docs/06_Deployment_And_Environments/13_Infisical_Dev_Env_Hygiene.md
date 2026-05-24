@@ -78,7 +78,6 @@ INFO: 🔧 loop_control: UA_RUNTIME_STAGE=development; reporting per-loop decisi
 INFO:    loop_control[heartbeat]: dev default (UA_RUNTIME_STAGE=development) → OFF
 INFO:    loop_control[cron]: dev default (UA_RUNTIME_STAGE=development) → OFF
 INFO:    loop_control[agentmail_service]: dev default (UA_RUNTIME_STAGE=development) → OFF
-INFO:    loop_control[youtube_playlist_watcher]: dev default (UA_RUNTIME_STAGE=development) → OFF
 ...
 INFO: 🔧 loop_control: no dev opt-ins; all loops dev-default-OFF.
 ```

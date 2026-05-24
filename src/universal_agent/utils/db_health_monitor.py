@@ -12,7 +12,6 @@ Databases checked:
 - activity_state.db: pending signal cards, proactive backlog
 - vp_state.db: stuck VP missions
 - csi.db: adapter health, source freshness, unemitted events, dedupe bloat
-- youtube_playlist_watcher_state.json: stale watcher state
 """
 
 from __future__ import annotations
@@ -38,7 +37,6 @@ CSI_CONSECUTIVE_FAIL_WARN = 3  # adapter consecutive failures
 CSI_SOURCE_STALE_HOURS = 12.0  # channels not polled in > N hours
 CSI_UNEMITTED_WARN = 100       # events not yet batched/emitted
 CSI_DEDUPE_BLOAT_WARN = 50_000 # dedupe table entries
-WATCHER_PENDING_WARN = 10      # pending dispatch items in watcher state
 
 
 def _db_path(name: str) -> str:
@@ -505,50 +503,6 @@ def check_csi_dedupe_bloat() -> list[HeartbeatFinding]:
     return findings
 
 
-def check_playlist_watcher() -> list[HeartbeatFinding]:
-    """Check YouTube playlist watcher state for pending dispatch items."""
-    findings: list[HeartbeatFinding] = []
-    repo_root = Path(__file__).resolve().parent.parent.parent.parent
-    state_file = repo_root / "AGENT_RUN_WORKSPACES" / "youtube_playlist_watcher_state.json"
-    if not state_file.exists():
-        return findings
-    try:
-        state = json.loads(state_file.read_text(encoding="utf-8"))
-        pending = len(state.get("pending_dispatch_items", {}))
-        failed = len(state.get("permanently_failed_video_ids", []))
-
-        if pending >= WATCHER_PENDING_WARN:
-            findings.append(HeartbeatFinding(
-                finding_id="playlist_watcher_pending_backlog",
-                category="gateway",
-                severity="warn",
-                metric_key="playlist_watcher.pending_dispatch",
-                observed_value=pending,
-                threshold_text=f">={WATCHER_PENDING_WARN}",
-                known_rule_match=True,
-                confidence="high",
-                title=f"{pending} pending dispatches in playlist watcher — may indicate hook failures",
-                recommendation="Check webhook dispatch queue and proxy connectivity.",
-            ))
-
-        if failed > 0:
-            findings.append(HeartbeatFinding(
-                finding_id="playlist_watcher_permanently_failed",
-                category="gateway",
-                severity="warn" if failed < 5 else "critical",
-                metric_key="playlist_watcher.permanently_failed",
-                observed_value=failed,
-                threshold_text=">0",
-                known_rule_match=True,
-                confidence="high",
-                title=f"{failed} permanently failed video(s) in playlist watcher",
-                recommendation="Review failed videos. May need manual purge and retry.",
-            ))
-    except Exception as exc:
-        logger.debug("check_playlist_watcher failed: %s", exc)
-    return findings
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # Main entry point
 # ═══════════════════════════════════════════════════════════════════════
@@ -573,7 +527,6 @@ def check_all_databases() -> list[HeartbeatFinding]:
         check_csi_source_freshness,
         check_csi_unemitted_events,
         check_csi_dedupe_bloat,
-        check_playlist_watcher,
     ]
 
     for check_fn in checks:
