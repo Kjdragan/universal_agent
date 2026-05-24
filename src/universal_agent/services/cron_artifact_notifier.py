@@ -123,12 +123,20 @@ async def notify_cron_artifact(
         )
 
         # Task Hub cross-reference. The F.1 close-out path creates a
-        # ``cron:<job_id>`` row in ``task_hub_items``. We link the
-        # artifact to that task_id so the Proactive Task History tab's
-        # cross-join (gateway_server._proactive_artifacts_by_task) finds
-        # it. Without this link, the artifact lives in proactive_artifacts
-        # but never surfaces alongside the cron task in the dashboard.
-        linked_task_id = f"cron:{job_id}"
+        # ``cron:<system_job>`` row in ``task_hub_items`` via
+        # ``derive_cron_task_id`` (cron_task_hub_link.py:82). Use that
+        # same helper so our linkage matches — using ``cron:<job_id>``
+        # (the hash) would point at a row that doesn't exist and the
+        # Proactive Task History tab's cross-join would silently miss
+        # the artifact.
+        from universal_agent.services.cron_task_hub_link import (
+            derive_cron_task_id,
+        )
+        _system_job = str((job_metadata or {}).get("system_job") or "").strip()
+        linked_task_id = derive_cron_task_id(
+            system_job=_system_job or None,
+            job_id=job_id,
+        ) or f"cron:{job_id}"
 
         proactive_artifacts.ensure_schema(conn)
         artifact = proactive_artifacts.upsert_artifact(
