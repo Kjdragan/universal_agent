@@ -333,6 +333,45 @@ async def test_notifier_promotes_cron_task_to_proactive(
 
 
 @pytest.mark.asyncio
+async def test_notifier_uses_system_job_for_task_id_when_present(
+    conn, mail_service, workspace
+) -> None:
+    """Regression for 2026-05-24: the prod cron has job_id='2afe05ab96'
+    (a hash) but metadata.system_job='paper_to_podcast_daily'. The
+    canonical Task Hub row is cron:paper_to_podcast_daily, NOT
+    cron:2afe05ab96. The notifier must use the system_job-derived
+    task_id (matching derive_cron_task_id in cron_task_hub_link.py)
+    or the project_key promotion silently matches zero rows."""
+    _create_cron_task_hub_row(conn, task_id="cron:paper_to_podcast_daily")
+    _write_manifest(workspace, [{"title": "x", "path": "work_products/x"}])
+    artifact = await notify_cron_artifact(
+        conn=conn,
+        mail_service=mail_service,
+        job_id="2afe05ab96",  # hash, NOT the canonical name
+        job_metadata={
+            "notify_on_artifact": True,
+            "system_job": "paper_to_podcast_daily",
+        },
+        job_command="run",
+        workspace_dir=workspace,
+        started_at=1779600000.0,
+        finished_at=1779600300.0,
+        recipient="kevinjdragan@gmail.com",
+    )
+    assert artifact is not None
+    meta = artifact.get("metadata") or {}
+    # CRITICAL: task_id derived from system_job, not job_id
+    assert meta["task_id"] == "cron:paper_to_podcast_daily"
+    # And the promotion landed on the right row:
+    row = conn.execute(
+        "SELECT project_key FROM task_hub_items WHERE task_id=?",
+        ("cron:paper_to_podcast_daily",),
+    ).fetchone()
+    assert row is not None
+    assert row[0] == "proactive"
+
+
+@pytest.mark.asyncio
 async def test_notifier_missing_task_hub_row_no_crash(
     conn, mail_service, workspace
 ) -> None:
