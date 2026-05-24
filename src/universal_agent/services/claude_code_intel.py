@@ -1442,6 +1442,20 @@ def _task_description(*, handle: str, packet_dir: Path, action: dict[str, Any]) 
             "- For Tier 3 items, build a small private demo or implementation plan if the capability is code-worthy.",
             "  - IMPORTANT: When building code or demos on the VPS, ALWAYS save them to `/home/ua/vpsrepos/<project_name>` instead of the ephemeral run workspace.",
             "- Do not post to X. This lane is read-only unless explicitly re-authorized.",
+            "",
+            "Intel-brief surfacing (REQUIRED whenever you CREATE or materially EXTEND a vault entity):",
+            "  1. After the vault write completes (entity file written, index.md and log.md updated), send a single email from the shared VP mailbox (vp.agents@agentmail.to) to kevinjdragan@gmail.com.",
+            "  2. CC Simone's inbox (oddcity216@agentmail.to) for situational awareness.",
+            "  3. Prefix the subject with '[Intel]' and name the entity, e.g. '[Intel] Workload Identity Federation — Tier 4 strategic_follow_up'.",
+            "  4. Body must include:",
+            "     - One-paragraph plain-English summary (lift from the entity frontmatter `summary`).",
+            "     - 'Why this matters for UA' — the relevance assessment you just wrote.",
+            "     - Vault link: https://app.clearspringcg.com/api/artifacts/files/knowledge-vaults/<vault_slug>/entities/<entity_slug>.md",
+            "     - Source post(s) and any official-doc links you consulted.",
+            "     - Tier and action_type from the packet.",
+            "  5. Record a row in `proactive_artifacts` with `artifact_type='intel_brief'`, `delivery_state='emailed'`, `status='surfaced'`, `artifact_path=<absolute path to vault entity file>`, and a `metadata_json` block containing `{post_id, tier, action_type, vault_slug, entity_slug, packet_dir}`. Use `services.proactive_artifacts.upsert_artifact` then `services.proactive_artifacts.record_email_delivery`. This is what makes the brief visible in Mission Control.",
+            "  6. Skip steps 1–5 ONLY if the vault entity was already current and you made no material change (no CREATE, no EXTEND with new key facts). 'Material extend' = the log.md entry's `reason:` line describes a real fact addition, not a cosmetic re-sync.",
+            "  7. If email fails, still write the proactive_artifacts row with `delivery_state='email_failed'` so the brief is at least visible in the dashboard — do not silently swallow the failure.",
         ]
     )
 

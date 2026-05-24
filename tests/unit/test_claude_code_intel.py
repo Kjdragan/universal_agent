@@ -395,3 +395,43 @@ def test_two_handles_maintain_separate_state(tmp_path: Path) -> None:
     assert "601" not in boris_state["seen_post_ids"]
     assert "602" in boris_state["seen_post_ids"]
     assert "602" not in devs_state["seen_post_ids"]
+
+
+def test_kb_update_task_description_includes_intel_brief_contract() -> None:
+    """The Tier 4 / strategic_follow_up kb_update lane must instruct Simone to
+    surface durable intelligence via email + a proactive_artifacts row whenever
+    she creates or extends a vault entity. Prior to this contract, vault writes
+    were invisible to the operator and the synthesis effort was wasted.
+    """
+    from universal_agent.services.claude_code_intel import _task_description
+
+    description = _task_description(
+        handle="ClaudeDevs",
+        packet_dir=Path("/tmp/fake-packet"),
+        action={
+            "tier": 4,
+            "url": "https://x.com/ClaudeDevs/status/2051393709619732758",
+            "text": "Announcing keyless auth for Claude Platform.",
+            "links": ["https://platform.claude.com/docs/en/build-with-claude/workload-identity-federation"],
+        },
+    )
+
+    assert "[Intel]" in description
+    assert "vp.agents@agentmail.to" in description
+    assert "kevinjdragan@gmail.com" in description
+    assert "oddcity216@agentmail.to" in description
+    assert "intel_brief" in description
+    assert "proactive_artifacts" in description
+    assert "upsert_artifact" in description
+    assert "record_email_delivery" in description
+    assert "Material extend" in description or "material EXTEND" in description
+    assert "email_failed" in description
+
+
+def test_proactive_artifacts_exposes_intel_brief_type() -> None:
+    """A canonical constant must exist so callers can reference the artifact
+    type symbolically instead of stringly-typed across modules.
+    """
+    from universal_agent.services import proactive_artifacts
+
+    assert proactive_artifacts.ARTIFACT_TYPE_INTEL_BRIEF == "intel_brief"
