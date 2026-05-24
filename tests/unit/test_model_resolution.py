@@ -180,9 +180,14 @@ class TestModelCallTimeoutSeconds:
         monkeypatch.delenv("UA_MODEL_TIMEOUT_SONNET_SECONDS", raising=False)
         assert model_call_timeout_seconds("sonnet") == 180.0
 
-    def test_opus_default_is_300s(self, monkeypatch):
+    def test_opus_default_is_generous(self, monkeypatch):
+        # 2026-05-24: bumped from 300s to 1800s after paper_to_podcast_daily
+        # was killed 6 nights running at the old knife-edge cap. Operating
+        # principle: opus default should be generous because real opus work
+        # (research, multi-doc synthesis, long crons) legitimately takes
+        # 10+ minutes. Haiku/sonnet stay tight on purpose.
         monkeypatch.delenv("UA_MODEL_TIMEOUT_OPUS_SECONDS", raising=False)
-        assert model_call_timeout_seconds("opus") == 300.0
+        assert model_call_timeout_seconds("opus") == 1800.0
 
     def test_env_override_haiku(self, monkeypatch):
         monkeypatch.setenv("UA_MODEL_TIMEOUT_HAIKU_SECONDS", "45")
