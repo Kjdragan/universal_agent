@@ -20347,6 +20347,71 @@ async def dashboard_proactive_artifact_feedback(
     return {"status": "ok", "artifact": artifact}
 
 
+def _ack_artifact(conn: sqlite3.Connection, artifact_id: str) -> Optional[dict[str, Any]]:
+    """Idempotent acknowledgement transition. Returns the artifact or None
+    if the row doesn't exist.
+
+    Sets status=ACCEPTED + delivery_state=REVIEWED. Repeat calls are a
+    no-op (already in the target state).
+    """
+    from universal_agent.services import proactive_artifacts
+
+    current = proactive_artifacts.get_artifact(conn, artifact_id)
+    if current is None:
+        return None
+    if current.get("status") == proactive_artifacts.ARTIFACT_STATUS_ACCEPTED:
+        return current
+    return proactive_artifacts.update_artifact_state(
+        conn,
+        artifact_id=artifact_id,
+        status=proactive_artifacts.ARTIFACT_STATUS_ACCEPTED,
+        delivery_state=proactive_artifacts.DELIVERY_REVIEWED,
+    )
+
+
+@app.get("/api/v1/artifacts/{artifact_id}/ack")
+async def artifacts_ack_get(artifact_id: str, t: str = ""):
+    """Signed-URL acknowledge endpoint for email "Acknowledge" links.
+
+    Validates the HMAC token against the artifact_id (signing key shared
+    with ``cron_artifact_notifier.sign_ack_token``). Idempotent — repeat
+    clicks return the same OK response.
+    """
+    from universal_agent.services.cron_artifact_notifier import verify_ack_token
+
+    if not verify_ack_token(artifact_id, t):
+        raise HTTPException(status_code=401, detail="invalid acknowledgement token")
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            artifact = _ack_artifact(conn, artifact_id)
+        finally:
+            conn.close()
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="artifact not found")
+    return {
+        "status": "ok",
+        "artifact_id": artifact_id,
+        "title": artifact.get("title"),
+        "message": "Acknowledged. You won't get further reminders for this artifact.",
+    }
+
+
+@app.post("/api/v1/dashboard/proactive-artifacts/{artifact_id}/ack")
+async def dashboard_proactive_artifact_ack(request: Request, artifact_id: str):
+    """Ops-authed acknowledge endpoint for the dashboard button."""
+    _require_ops_auth(request)
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            artifact = _ack_artifact(conn, artifact_id)
+        finally:
+            conn.close()
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="Proactive artifact not found")
+    return {"status": "ok", "artifact": artifact}
+
+
 @app.post("/api/v1/dashboard/proactive-artifacts/{artifact_id}/send-review")
 async def dashboard_proactive_artifact_send_review(
     request: Request,
