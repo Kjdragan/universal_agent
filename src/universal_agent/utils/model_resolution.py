@@ -140,12 +140,26 @@ def mission_control_call_timeout_seconds() -> float:
 
 
 # ── Per-tier wall-clock timeouts ──────────────────────────────────────
-# A single SDK turn can legitimately take a long time on opus (deep
-# reports, multi-step research). On the cheap tiers a turn that takes
-# 5+ minutes almost always means the upstream lane has wedged and is
-# heading to a 400 error. Cap each tier separately so cheap-tier
-# wedges fail fast and free up retry/escalation, while heavy opus
-# work is allowed to breathe.
+# Operating principle: don't run timeouts on the knife's edge. A cron
+# that takes 8 minutes instead of 5 isn't a bug — it's a multi-step
+# workflow that picked up an extra paper, ran an extra tool call, or
+# hit a slow upstream API. Minutes of headroom are cheap; broken
+# nightly pipelines that silently park in NOT_ASSIGNED are expensive.
+#
+# Tier philosophy:
+#   - Haiku/Sonnet caps stay tight (cheap-tier wedges are almost always
+#     a 5xx loop that should fail fast so the dispatcher's retry sweep
+#     can reopen the task).
+#   - Opus default is generous: real opus work is research, synthesis,
+#     and multi-tool reasoning. The old 300s cap was killing legitimate
+#     work (e.g. paper_to_podcast_daily — 6 consecutive nightly runs
+#     died at ~5min wall-clock for at least a week before this bump).
+#   - Per-cron / per-request override via
+#     ``GatewayRequest.metadata["turn_timeout_seconds"]`` (consumed in
+#     ``execution_engine.py``) is the right knob for "this specific
+#     workflow needs even more time" — set it generously per-job
+#     instead of dragging the global default upward to fit the
+#     slowest cron.
 #
 # All defaults overridable via UA_MODEL_TIMEOUT_<TIER>_SECONDS env vars
 # (haiku, sonnet, opus). Setting any to 0 disables the cap for that
@@ -154,7 +168,7 @@ def mission_control_call_timeout_seconds() -> float:
 _TIER_DEFAULT_TIMEOUTS = {
     "haiku": 120.0,    # SDK preflight + tiny tasks; failed glm-4.5-air calls used to wedge for ~365s.
     "sonnet": 180.0,   # Daily-driver tasks; comfortably long enough for multi-tool turns.
-    "opus": 300.0,     # Heavy work (research, multi-doc synthesis); was effectively 6+ min before.
+    "opus": 1800.0,    # Heavy work (research, multi-doc synthesis, long crons). Generous on purpose.
 }
 
 
