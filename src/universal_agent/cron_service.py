@@ -2462,27 +2462,47 @@ class CronService:
                                                 # Artifact-disclosure rail. Fires only on
                                                 # clean_exit_zero AND when the cron has
                                                 # ``metadata.notify_on_artifact`` opted in.
-                                                # Best-effort; the notifier swallows every
-                                                # error path so the cron close-out is
-                                                # never disrupted by a mail or LLM hiccup.
+                                                #
+                                                # AWAIT inline (not fire-and-forget). The
+                                                # 2026-05-24 verification showed that
+                                                # ``asyncio.get_running_loop().create_task(...)``
+                                                # without retaining the task reference got
+                                                # garbage-collected when the cron coroutine
+                                                # broke out of its loop. The notifier itself
+                                                # swallows every exception path internally,
+                                                # so awaiting it never raises — at worst we
+                                                # add a few seconds to the close-out, which
+                                                # is fine because this is the cron's last
+                                                # step before the heartbeat-wake. Logs at
+                                                # INFO/WARNING so verification is
+                                                # observable in journalctl.
                                                 if (
                                                     _f_rc_equiv_llm == 0
                                                     and bool((job.metadata or {}).get("notify_on_artifact"))
                                                 ):
+                                                    logger.info(
+                                                        "Phase F.1 cron_artifact_notifier triggered for job %s (opted in)",
+                                                        job.job_id,
+                                                    )
                                                     try:
                                                         from universal_agent import gateway_server as _f_gw_llm
                                                         from universal_agent.services.cron_artifact_notifier import (
-                                                            notify_cron_artifact_fire_and_forget as _f_notify_llm,
+                                                            notify_cron_artifact as _f_notify_llm,
                                                         )
                                                         _f_mail_svc_llm = getattr(_f_gw_llm, "_agentmail_service", None)
-                                                        if _f_mail_svc_llm is not None:
+                                                        if _f_mail_svc_llm is None:
+                                                            logger.warning(
+                                                                "Phase F.1 cron_artifact_notifier SKIPPED for %s: AgentMail service not initialized",
+                                                                job.job_id,
+                                                            )
+                                                        else:
                                                             _f_recipient_llm = _f_gw_llm._proactive_review_recipient("")
                                                             _f_dashboard_base_llm = (
                                                                 os.getenv("FRONTEND_URL", "")
                                                                 or os.getenv("UA_PUBLIC_BASE_URL", "")
                                                                 or "https://app.clearspringcg.com"
                                                             )
-                                                            _f_notify_llm(
+                                                            _f_notify_result_llm = await _f_notify_llm(
                                                                 conn=_f_conn_llm,
                                                                 mail_service=_f_mail_svc_llm,
                                                                 job_id=job.job_id,
@@ -2496,10 +2516,22 @@ class CronService:
                                                                 recipient=_f_recipient_llm,
                                                                 dashboard_base_url=_f_dashboard_base_llm,
                                                             )
+                                                            if _f_notify_result_llm:
+                                                                logger.info(
+                                                                    "Phase F.1 cron_artifact_notifier delivered artifact %s for job %s",
+                                                                    _f_notify_result_llm.get("artifact_id"),
+                                                                    job.job_id,
+                                                                )
+                                                            else:
+                                                                logger.warning(
+                                                                    "Phase F.1 cron_artifact_notifier returned None for job %s (no artifacts or opt-out)",
+                                                                    job.job_id,
+                                                                )
                                                     except Exception as _f_notify_exc_llm:
-                                                        logger.debug(
-                                                            "Phase F.1 cron_artifact_notifier wiring skipped for job %s: %s",
+                                                        logger.warning(
+                                                            "Phase F.1 cron_artifact_notifier RAISED for job %s: %s",
                                                             job.job_id, _f_notify_exc_llm,
+                                                            exc_info=True,
                                                         )
                                             finally:
                                                 _f_conn_llm.close()
