@@ -14754,6 +14754,7 @@ async def lifespan(app: FastAPI):
                 _ensure_proactive_report_midday_cron_job()
                 _ensure_proactive_report_afternoon_cron_job()
                 _ensure_proactive_artifact_digest_cron_job()
+                _ensure_cron_artifact_reminders_sweep_cron_job()
                 _ensure_vp_coder_workspace_pruning_cron_job()
                 _ensure_vp_mission_pr_reconciler_cron_job()
                 _ensure_architecture_canvas_drift_cron_job()
@@ -19284,6 +19285,33 @@ def _ensure_proactive_artifact_digest_cron_job() -> Optional[dict[str, Any]]:
         # Lightweight: SQL read against activity_state.db + AgentMail
         # send. No Composio tools needed. Mail service uses its own
         # AGENTMAIL_API_KEY which is independent of Composio.
+        lightweight=True,
+    )
+
+
+def _ensure_cron_artifact_reminders_sweep_cron_job() -> Optional[dict[str, Any]]:
+    """Half-hourly during active hours: walk pending cron-disclosure
+    artifacts and send the same-day-nudge / Day-3 / Day-7 reminder
+    emails per ``cron_artifact_reminders.sweep_pending_artifact_reminders``.
+
+    The sweep itself enforces 6 AM – 10 PM Houston gating per email
+    (so a misconfigured wide cron schedule still won't send overnight),
+    but we constrain the cron to the active window anyway to save the
+    process spawn cost when there's nothing to do.
+    """
+    return _register_system_cron_job(
+        system_job="cron_artifact_reminders_sweep",
+        default_cron="*/30 6-21 * * *",
+        default_timezone="America/Chicago",
+        command="!script universal_agent.scripts.cron_artifact_reminders_sweep",
+        description=(
+            "Half-hourly sweep: send same-day-nudge / Day-3 / Day-7 reminder "
+            "emails for unacknowledged cron-produced artifacts."
+        ),
+        timeout_seconds=300,
+        enabled=_proactive_cron_enabled("UA_CRON_ARTIFACT_REMINDERS_ENABLED"),
+        cron_env_var="UA_CRON_ARTIFACT_REMINDERS_CRON",
+        timezone_env_var="UA_CRON_ARTIFACT_REMINDERS_TIMEZONE",
         lightweight=True,
     )
 
