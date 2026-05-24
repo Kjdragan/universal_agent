@@ -265,6 +265,101 @@ def _get_atlas_briefs_block_or_empty(
         return ""
 
 
+def _build_pending_artifacts_block(artifacts: list[dict]) -> str:
+    """Render the 'Pending your review' block for cron-disclosure artifacts.
+
+    Pulled out for unit-testing; called only when ``artifacts`` is
+    non-empty. Each artifact shows its title, age (days since creation),
+    and an acknowledge / dashboard URL hint so the operator knows where
+    to act.
+    """
+    lines = [
+        "## Pending Your Review — Cron-Produced Artifacts",
+        "",
+        f"- Unacknowledged artifacts: **{len(artifacts)}**",
+        "",
+    ]
+    for art in artifacts:
+        title = str(art.get("title") or "").strip() or "(untitled)"
+        artifact_id = str(art.get("artifact_id") or "").strip()
+        summary = str(art.get("summary") or "").strip()
+        age_part = ""
+        created = str(art.get("created_at") or "").strip()
+        if created:
+            try:
+                parsed = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                delta = datetime.now(timezone.utc) - parsed
+                age_days = max(0, delta.days)
+                age_part = f" — {age_days}d old" if age_days else " — today"
+            except Exception:  # noqa: BLE001
+                age_part = ""
+        if summary:
+            summary = summary[:200] + ("…" if len(summary) > 200 else "")
+            lines.append(f"- **{title}**{age_part} — {summary}")
+        else:
+            lines.append(f"- **{title}**{age_part}")
+        if artifact_id:
+            lines.append(f"  - Dashboard: `?artifact={artifact_id}`")
+    return "\n".join(lines)
+
+
+def _get_pending_artifacts_block_or_empty(*, limit: int = 10) -> str:
+    """Return the pending-artifact-review block, or "" on kill switch / nothing pending.
+
+    Surfaces cron-produced artifacts (``artifact_type='cron_run_output'``)
+    that have been emailed but not yet acknowledged. Stays visible in the
+    morning briefing until the operator clicks the ack link or hits the
+    dashboard button, even after the Day-7 reminder loop has stopped
+    sending emails.
+
+    Kill switch: ``UA_PENDING_ARTIFACTS_BRIEFING_BLOCK_ENABLED=0``.
+    """
+    if os.getenv("UA_PENDING_ARTIFACTS_BRIEFING_BLOCK_ENABLED", "1") == "0":
+        logger.info(
+            "Pending-artifacts briefing block disabled via "
+            "UA_PENDING_ARTIFACTS_BRIEFING_BLOCK_ENABLED=0"
+        )
+        return ""
+    try:
+        from universal_agent.durable.db import (
+            connect_runtime_db,
+            get_activity_db_path,
+        )
+        from universal_agent.services import proactive_artifacts as _pa
+
+        conn = connect_runtime_db(get_activity_db_path())
+        try:
+            _pa.ensure_schema(conn)
+            # Surface artifacts that have been emailed (so the operator
+            # has at least one initial touch) and are not yet acked.
+            rows = conn.execute(
+                """
+                SELECT artifact_id, title, summary, created_at, updated_at, metadata_json
+                FROM proactive_artifacts
+                WHERE artifact_type = 'cron_run_output'
+                  AND status IN ('produced', 'surfaced', 'candidate')
+                  AND delivery_state = 'emailed'
+                  AND accepted_at = ''
+                  AND rejected_at = ''
+                  AND archived_at = ''
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (max(1, min(int(limit), 50)),),
+            ).fetchall()
+        finally:
+            conn.close()
+        artifacts = [dict(r) for r in rows]
+        if not artifacts:
+            return ""
+        return _build_pending_artifacts_block(artifacts)
+    except Exception as exc:  # noqa: BLE001 — never let pending-artifacts break the briefing
+        logger.warning("Pending-artifacts briefing block helper crashed: %s", exc)
+        return ""
+
+
 def _build_objective(
     *,
     telemetry_json: str,
@@ -275,6 +370,7 @@ def _build_objective(
     triage_block: str = "",
     watchdog_block: str = "",
     atlas_block: str = "",
+    pending_artifacts_block: str = "",
 ) -> str:
     """Assemble the briefing prompt from the context sources.
 
@@ -326,6 +422,20 @@ def _build_objective(
             "operator wants to decide what to do, not read more abstract trend prose."
         )
 
+    pending_artifacts_section = ""
+    pending_artifacts_instructions = ""
+    if pending_artifacts_block:
+        pending_artifacts_section = f"\n\n{pending_artifacts_block}\n"
+        pending_artifacts_instructions = (
+            "\n- **Include a 'Pending Your Review' section.** List every "
+            "cron-produced artifact that has been emailed but not yet "
+            "acknowledged. For each artifact say one sentence on what it "
+            "is and why it might still be worth opening. These items stay "
+            "visible until the operator clicks the email Acknowledge link "
+            "or the dashboard ack button — surface them every morning so "
+            "they don't quietly age out of attention."
+        )
+
     hn_section = ""
     hn_instructions = ""
     if hn_block:
@@ -357,13 +467,13 @@ Here is the external Nightly Wiki Proactive Generation output (if any):
 ```markdown
 {wiki_content}
 ```
-{watchdog_section}{triage_section}{atlas_section}{hn_section}
+{watchdog_section}{triage_section}{atlas_section}{pending_artifacts_section}{hn_section}
 Instructions:
 - Summarize tasks completed, attempted, and failed.
 - Include links/paths to any artifacts produced.
 - MUST explicitly include a "Latest Proactive Knowledge Base Additions" section referencing the Nightly Wiki external paths and files if any are provided.
 - Highlight any items requiring user decisions.
-- If there are data quality warnings, mention them.{watchdog_instructions}{triage_instructions}{atlas_instructions}{hn_instructions}
+- If there are data quality warnings, mention them.{watchdog_instructions}{triage_instructions}{atlas_instructions}{pending_artifacts_instructions}{hn_instructions}
 
 Write a concise markdown report to '{artifacts_dir}/autonomous-briefings/{today}/DAILY_BRIEFING.md'.
 Make sure to provide a short completion message suitable for a dashboard notification.
@@ -445,6 +555,20 @@ async def main():
     else:
         logger.info("Atlas briefs block omitted (kill switch / no new briefs)")
 
+    # Cron-disclosure pending artifacts (2026-05-24): surfaces unacknowledged
+    # cron-produced artifacts so the operator can decide whether to act.
+    # Stays visible until acked even after the reminder cadence has stopped.
+    pending_artifacts_block = _get_pending_artifacts_block_or_empty()
+    if pending_artifacts_block:
+        logger.info(
+            "Pending-artifacts block included (~%d chars)",
+            len(pending_artifacts_block),
+        )
+    else:
+        logger.info(
+            "Pending-artifacts block omitted (kill switch / nothing pending)"
+        )
+
     objective = _build_objective(
         telemetry_json=telemetry_json,
         wiki_content=wiki_content,
@@ -454,6 +578,7 @@ async def main():
         triage_block=triage_block,
         watchdog_block=watchdog_block,
         atlas_block=atlas_block,
+        pending_artifacts_block=pending_artifacts_block,
     )
 
     logger.info("Dispatching mission to vp.general.primary...")

@@ -2459,6 +2459,48 @@ class CronService:
                                                         task_id=_f_task_id,
                                                         success=(_f_rc_equiv_llm == 0),
                                                     )
+                                                # Artifact-disclosure rail. Fires only on
+                                                # clean_exit_zero AND when the cron has
+                                                # ``metadata.notify_on_artifact`` opted in.
+                                                # Best-effort; the notifier swallows every
+                                                # error path so the cron close-out is
+                                                # never disrupted by a mail or LLM hiccup.
+                                                if (
+                                                    _f_rc_equiv_llm == 0
+                                                    and bool((job.metadata or {}).get("notify_on_artifact"))
+                                                ):
+                                                    try:
+                                                        from universal_agent import gateway_server as _f_gw_llm
+                                                        from universal_agent.services.cron_artifact_notifier import (
+                                                            notify_cron_artifact_fire_and_forget as _f_notify_llm,
+                                                        )
+                                                        _f_mail_svc_llm = getattr(_f_gw_llm, "_agentmail_service", None)
+                                                        if _f_mail_svc_llm is not None:
+                                                            _f_recipient_llm = _f_gw_llm._proactive_review_recipient("")
+                                                            _f_dashboard_base_llm = (
+                                                                os.getenv("FRONTEND_URL", "")
+                                                                or os.getenv("UA_PUBLIC_BASE_URL", "")
+                                                                or "https://app.clearspringcg.com"
+                                                            )
+                                                            _f_notify_llm(
+                                                                conn=_f_conn_llm,
+                                                                mail_service=_f_mail_svc_llm,
+                                                                job_id=job.job_id,
+                                                                job_metadata=job.metadata or {},
+                                                                job_command=job.command or "",
+                                                                workspace_dir=Path(job.workspace_dir)
+                                                                if job.workspace_dir
+                                                                else Path("/tmp"),
+                                                                started_at=float(record.started_at or time.time()),
+                                                                finished_at=float(record.finished_at or time.time()),
+                                                                recipient=_f_recipient_llm,
+                                                                dashboard_base_url=_f_dashboard_base_llm,
+                                                            )
+                                                    except Exception as _f_notify_exc_llm:
+                                                        logger.debug(
+                                                            "Phase F.1 cron_artifact_notifier wiring skipped for job %s: %s",
+                                                            job.job_id, _f_notify_exc_llm,
+                                                        )
                                             finally:
                                                 _f_conn_llm.close()
                                         except Exception as _f_exc_llm:
