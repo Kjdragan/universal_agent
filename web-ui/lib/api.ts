@@ -24,6 +24,29 @@ export const GATEWAY_VERSION_PATH = "/api/dashboard/gateway/api/v1/version";
 /** Recent-restart window — banner stays visible while the gateway is this fresh. */
 export const RECENT_RESTART_WINDOW_MS = 60_000;
 
+/**
+ * Tracks in-flight mutations (bulk deletes, dispatches, etc.) so the gateway
+ * status poll can skip itself while the browser is busy. Without this, a burst
+ * of parallel mutations saturates the HTTP/1.1 connection pool (6/origin) and
+ * starves the version poll past its 4s AbortController deadline, producing a
+ * "Gateway unreachable" banner even though the backend is healthy.
+ */
+let activeMutationCount = 0;
+
+export function beginMutation(): () => void {
+  activeMutationCount += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    activeMutationCount = Math.max(0, activeMutationCount - 1);
+  };
+}
+
+export function getActiveMutationCount(): number {
+  return activeMutationCount;
+}
+
 export class ApiTimeoutError extends Error {
   constructor(public url: string, public timeoutMs: number) {
     super(`Request to ${url} timed out after ${timeoutMs}ms`);
