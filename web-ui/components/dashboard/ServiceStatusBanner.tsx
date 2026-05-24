@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { getGatewayStatus, type GatewayStatus } from "@/lib/api";
+import { getActiveMutationCount, getGatewayStatus, type GatewayStatus } from "@/lib/api";
 
 /**
  * Sticky top-of-dashboard banner that surfaces gateway availability.
@@ -25,6 +25,9 @@ import { getGatewayStatus, type GatewayStatus } from "@/lib/api";
 
 const HEALTHY_POLL_MS = 30_000;
 const DEGRADED_POLL_MS = 5_000;
+/** While a mutation is in flight we defer the poll instead of skipping it
+ *  outright — short enough to resume promptly after the burst clears. */
+const MUTATION_DEFER_MS = 1_000;
 
 export function ServiceStatusBanner() {
   const [status, setStatus] = useState<GatewayStatus | null>(null);
@@ -41,8 +44,23 @@ export function ServiceStatusBanner() {
     };
 
     const poll = async () => {
+      // Skip the version probe while mutations are in flight. A burst of
+      // parallel deletes saturates the connection pool and starves the probe
+      // past its 4s timeout, surfacing a false-positive "unreachable" banner.
+      if (getActiveMutationCount() > 0) {
+        if (cancelled) return;
+        timerRef.current = setTimeout(poll, MUTATION_DEFER_MS);
+        return;
+      }
       const next = await getGatewayStatus();
       if (cancelled) return;
+      // Belt-and-suspenders: if a mutation began while our request was in
+      // flight and the response came back as an abort/timeout, treat it as a
+      // deferred poll rather than a real outage.
+      if (!next.reachable && getActiveMutationCount() > 0) {
+        timerRef.current = setTimeout(poll, MUTATION_DEFER_MS);
+        return;
+      }
       setStatus(next);
       scheduleNext(next);
     };

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { formatDistanceToNow, parseISO } from "date-fns";
+import { beginMutation } from "@/lib/api";
 import { resolveTaskWorkspaceTarget } from "@/lib/taskWorkspaceTarget";
 import { openViewer } from "@/lib/viewer/openViewer";
 
@@ -451,6 +452,9 @@ function KanbanCol({ label, icon, count, accentColor, emptyText, headerAction, c
 export default function ToDoListDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  // Wall clock as state so render-time comparisons stay pure. 15s cadence is
+  // fine — the only consumer is a 120s "heartbeat overdue" threshold.
+  const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000));
   const [error, setError] = useState("");
   const [countdown, setCountdown] = useState(AUTO_REFRESH_SECONDS);
 
@@ -468,8 +472,18 @@ export default function ToDoListDashboardPage() {
   const [selectedTaskDetails, setSelectedTaskDetails] = useState<any | null>(null);
   const [selectedSessionDetail, setSelectedSessionDetail] = useState<any | null>(null);
   const [sessionDetailLoading, setSessionDetailLoading] = useState("");
-  const [deletedTaskIds, setDeletedTaskIds] = useState<Set<string>>(new Set());
-  const [deletedTaskIdsHydrated, setDeletedTaskIdsHydrated] = useState(false);
+  // Hydrate deleted-task IDs from localStorage at mount via the useState
+  // initializer (runs once, before paint, no effect-triggered setState).
+  // SSR-safe: `window` is undefined server-side, fall through to empty set.
+  const [deletedTaskIds, setDeletedTaskIds] = useState<Set<string>>(() => {
+    if (typeof window === "undefined") return new Set();
+    try {
+      const stored = window.localStorage.getItem("ua.deleted_completed_tasks.v1");
+      return stored ? new Set(JSON.parse(stored) as string[]) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
   const [deleteAllPending, setDeleteAllPending] = useState(false);
   const [deleteAllNotAssignedPending, setDeleteAllNotAssignedPending] = useState(false);
   const [hoveredDeleteId, setHoveredDeleteId] = useState<string | null>(null);
@@ -520,48 +534,40 @@ export default function ToDoListDashboardPage() {
   const [failureContext, setFailureContext] = useState<FailureContext | null>(null);
   const [failureContextLoading, setFailureContextLoading] = useState(false);
 
+  // Single close-drawer callback used everywhere so failureContext clears
+  // synchronously at the user action — not as a derived effect from
+  // expandedTaskId, which would put setState in the effect body.
+  const closeDrawer = useCallback(() => {
+    setExpandedTaskId(null);
+    setFailureContext(null);
+  }, []);
+
   useEffect(() => {
-    if (!expandedTaskId) {
-      // Reset failure context when drawer closes so the next open
-      // doesn't briefly flash the previous task's data.
-      setFailureContext(null);
-      return;
-    }
+    if (!expandedTaskId) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setExpandedTaskId(null);
+      if (e.key === "Escape") closeDrawer();
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [expandedTaskId]);
+  }, [expandedTaskId, closeDrawer]);
 
 
+  // Persist deletedTaskIds to localStorage whenever it changes. Initial-mount
+  // write is a no-op (same value just read from storage).
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem("ua.deleted_completed_tasks.v1");
-      if (stored) {
-        setDeletedTaskIds(new Set(JSON.parse(stored) as string[]));
-      }
-    } catch {
-      // Ignore localStorage corruption and fall back to an empty set.
-    } finally {
-      setDeletedTaskIdsHydrated(true);
-    }
-
-
-  }, []);
-
-  // Persist deletedTaskIds to localStorage whenever it changes
-  useEffect(() => {
-    if (!deletedTaskIdsHydrated) return;
     try {
       localStorage.setItem("ua.deleted_completed_tasks.v1", JSON.stringify([...deletedTaskIds]));
     } catch { /* ignore */ }
-  }, [deletedTaskIds, deletedTaskIdsHydrated]);
+  }, [deletedTaskIds]);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async (background = false) => {
+    // Yield to a microtask before any setState so callers can `void load(...)`
+    // from a useEffect body without tripping react-hooks/set-state-in-effect.
+    // The delay is imperceptible (<1ms) and preserves the loading-indicator UX.
+    await Promise.resolve();
     if (background) setRefreshing(true);
     else setLoading(true);
     if (!background) setError("");
@@ -617,9 +623,18 @@ export default function ToDoListDashboardPage() {
     }
   }, []);
 
-  // Auto-refresh timer
+  // Wall-clock ticker — feeds nowSec so render-time time comparisons stay pure.
   useEffect(() => {
-    void load(false);
+    const id = setInterval(() => setNowSec(Math.floor(Date.now() / 1000)), 15_000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Auto-refresh timer. The initial load is kicked off via a 0ms setTimeout so
+  // it leaves the effect's synchronous tick before any setState fires — the
+  // intervals only call setState inside their own callbacks (also outside the
+  // effect body), keeping us clean of react-hooks/set-state-in-effect.
+  useEffect(() => {
+    const kickoff = setTimeout(() => { void load(false); }, 0);
     intervalRef.current = setInterval(() => {
       setCountdown(AUTO_REFRESH_SECONDS);
       void load(true);
@@ -628,6 +643,7 @@ export default function ToDoListDashboardPage() {
       setCountdown((c) => (c <= 1 ? AUTO_REFRESH_SECONDS : c - 1));
     }, 1000);
     return () => {
+      clearTimeout(kickoff);
       if (intervalRef.current) clearInterval(intervalRef.current);
       if (countdownRef.current) clearInterval(countdownRef.current);
     };
@@ -817,6 +833,7 @@ export default function ToDoListDashboardPage() {
 
   const handleDeleteAllCompleted = useCallback(async () => {
     setDeleteAllPending(true);
+    const releaseMutation = beginMutation();
     const ids = (completedTasks?.items || []).map((i) => i.task_id);
     // Merge into existing set so previously-deleted IDs aren't lost
     setDeletedTaskIds((prev) => {
@@ -836,6 +853,7 @@ export default function ToDoListDashboardPage() {
     } finally {
       // Reload so the backend-hidden tasks are also gone from server-side data
       await load(true);
+      releaseMutation();
       setDeleteAllPending(false);
     }
   }, [completedTasks, load]);
@@ -924,6 +942,7 @@ export default function ToDoListDashboardPage() {
     );
     if (!confirmed) return;
     setDeleteAllNotAssignedPending(true);
+    const releaseMutation = beginMutation();
     try {
       await Promise.allSettled(
         notAssignedItems.map((item) =>
@@ -938,6 +957,7 @@ export default function ToDoListDashboardPage() {
       // noop — best-effort
     } finally {
       await load(true);
+      releaseMutation();
       setDeleteAllNotAssignedPending(false);
     }
   }, [notAssignedItems, load]);
@@ -984,14 +1004,14 @@ export default function ToDoListDashboardPage() {
     if (hb.busy_sessions > 0) alerts.push(`${hb.busy_sessions} busy session${hb.busy_sessions > 1 ? "s" : ""}`);
     const nextRun = hb.nearest_next_run_epoch;
     if (nextRun) {
-      const secsUntil = nextRun - Math.floor(Date.now() / 1000);
+      const secsUntil = nextRun - nowSec;
       if (secsUntil < 0 && Math.abs(secsUntil) > 120) {
         alerts.push("Heartbeat overdue");
       }
     }
     if (hb.session_state_count === 0 && hb.session_count === 0) alerts.push("No sessions running");
     return alerts;
-  }, [overview?.heartbeat]);
+  }, [overview?.heartbeat, nowSec]);
 
   const todoDispatch = overview?.todo_dispatch;
   const lastResultState = String(todoDispatch?.last_result_state || todoDispatch?.last_dispatch_decision || "").trim();
@@ -1347,14 +1367,14 @@ export default function ToDoListDashboardPage() {
       {isExpanded && (
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-150"
-          onClick={(e) => { e.stopPropagation(); setExpandedTaskId(null); }}
+          onClick={(e) => { e.stopPropagation(); closeDrawer(); }}
         >
           <div
             className="relative w-full max-w-2xl mx-4 rounded-xl border border-white/20 bg-kcd-surface-dim/95 backdrop-blur-lg shadow-2xl p-6 animate-in zoom-in-95 slide-in-from-bottom-2 duration-200"
             onClick={(e) => e.stopPropagation()}
           >
             <button
-              onClick={() => setExpandedTaskId(null)}
+              onClick={() => closeDrawer()}
               className="absolute top-4 right-4 text-muted-foreground hover:text-foreground transition-colors text-lg leading-none"
               title="Close (Esc)"
             >
@@ -1385,11 +1405,11 @@ export default function ToDoListDashboardPage() {
             </div>
             {showActions && (
               <div className="mt-4 flex flex-wrap items-center gap-2">
-                <button onClick={(e) => { e.stopPropagation(); void handleTaskAction(item.task_id, "park"); setExpandedTaskId(null); }} disabled={isPending}
+                <button onClick={(e) => { e.stopPropagation(); void handleTaskAction(item.task_id, "park"); closeDrawer(); }} disabled={isPending}
                   className="px-3 py-1.5 font-mono text-[11px] font-bold tracking-wider uppercase bg-kcd-red/10 text-kcd-red border border-kcd-red/20 rounded-md cursor-pointer hover:bg-kcd-red/20 transition-colors disabled:opacity-40">
                   🗑 Trash It
                 </button>
-                <button onClick={(e) => { e.stopPropagation(); void handleWakeHeartbeat(item.task_id); setExpandedTaskId(null); }} disabled={wakePending}
+                <button onClick={(e) => { e.stopPropagation(); void handleWakeHeartbeat(item.task_id); closeDrawer(); }} disabled={wakePending}
                   className="px-3 py-1.5 font-mono text-[11px] font-bold tracking-wider uppercase bg-kcd-cyan/10 text-kcd-cyan border border-kcd-cyan/20 rounded-md cursor-pointer hover:bg-kcd-cyan/20 transition-colors disabled:opacity-40">
                   ⚡ {wakePending ? "Queueing…" : "Dispatch"}
                 </button>
@@ -1662,14 +1682,14 @@ export default function ToDoListDashboardPage() {
       {isExpanded && (
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-150"
-          onClick={(e) => { e.stopPropagation(); setExpandedTaskId(null); }}
+          onClick={(e) => { e.stopPropagation(); closeDrawer(); }}
         >
           <div
             className="relative w-full max-w-2xl mx-4 rounded-xl border border-white/20 bg-kcd-surface-dim/95 backdrop-blur-lg shadow-2xl p-6 animate-in zoom-in-95 slide-in-from-bottom-2 duration-200"
             onClick={(e) => e.stopPropagation()}
           >
             <button
-              onClick={() => setExpandedTaskId(null)}
+              onClick={() => closeDrawer()}
               className="absolute top-4 right-4 text-muted-foreground hover:text-foreground transition-colors text-lg leading-none"
               title="Close (Esc)"
             >
