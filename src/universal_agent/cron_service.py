@@ -2485,18 +2485,40 @@ class CronService:
                                                         job.job_id,
                                                     )
                                                     try:
+                                                        import sys as _f_sys_llm
                                                         from universal_agent import gateway_server as _f_gw_llm
                                                         from universal_agent.services.cron_artifact_notifier import (
                                                             notify_cron_artifact as _f_notify_llm,
                                                         )
-                                                        _f_mail_svc_llm = getattr(_f_gw_llm, "_agentmail_service", None)
+                                                        # Python ``__main__`` vs imported-module gotcha:
+                                                        # the gateway runs as ``python -m universal_agent.gateway_server``,
+                                                        # so ``sys.modules['__main__']`` is the live module where
+                                                        # ``lifespan`` startup mutated ``_agentmail_service`` to the
+                                                        # AgentMailService instance. A plain ``from universal_agent
+                                                        # import gateway_server`` returns a SEPARATE copy under the
+                                                        # qualified name whose ``_agentmail_service`` is the pristine
+                                                        # None from the file-level declaration. Look up __main__
+                                                        # first; fall back to the imported module for safety in
+                                                        # non-main-script contexts (uvicorn programmatic boot,
+                                                        # tests, etc.).
+                                                        _f_main_mod_llm = _f_sys_llm.modules.get("__main__")
+                                                        _f_mail_svc_llm = getattr(_f_main_mod_llm, "_agentmail_service", None)
+                                                        if _f_mail_svc_llm is None:
+                                                            _f_mail_svc_llm = getattr(_f_gw_llm, "_agentmail_service", None)
                                                         if _f_mail_svc_llm is None:
                                                             logger.warning(
-                                                                "Phase F.1 cron_artifact_notifier SKIPPED for %s: AgentMail service not initialized",
+                                                                "Phase F.1 cron_artifact_notifier SKIPPED for %s: AgentMail service not initialized in __main__ or imported module",
                                                                 job.job_id,
                                                             )
                                                         else:
-                                                            _f_recipient_llm = _f_gw_llm._proactive_review_recipient("")
+                                                            # Same recipient resolver also lives in both module copies;
+                                                            # prefer __main__ so we read live env state instead of an
+                                                            # import-time snapshot.
+                                                            _f_recipient_fn_llm = (
+                                                                getattr(_f_main_mod_llm, "_proactive_review_recipient", None)
+                                                                or _f_gw_llm._proactive_review_recipient
+                                                            )
+                                                            _f_recipient_llm = _f_recipient_fn_llm("")
                                                             _f_dashboard_base_llm = (
                                                                 os.getenv("FRONTEND_URL", "")
                                                                 or os.getenv("UA_PUBLIC_BASE_URL", "")
