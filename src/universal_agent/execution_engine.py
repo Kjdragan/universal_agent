@@ -519,12 +519,21 @@ class ProcessTurnAdapter:
             await self._client.__aenter__()
         return self._client
     
-    async def execute(self, user_input: str) -> AsyncIterator[AgentEvent]:
+    async def execute(
+        self,
+        user_input: str,
+        request_metadata: Optional[dict[str, Any]] = None,
+    ) -> AsyncIterator[AgentEvent]:
         """
         Execute a query and yield AgentEvents.
-        
+
         This wraps process_turn() and emits events based on the execution.
         For real-time streaming, we use a callback mechanism.
+
+        ``request_metadata`` carries per-request hints from the gateway —
+        notably ``turn_timeout_seconds`` so cron jobs / long-running flows
+        can opt out of the tier default wall-clock cap without setting a
+        global env override.
         """
         if not self._initialized:
             await self.initialize()
@@ -839,10 +848,15 @@ class ProcessTurnAdapter:
         engine_task = asyncio.create_task(run_engine())
 
         # Resolve the wall-clock cap for this turn. Priority order:
-        #   1. Explicit UA_PROCESS_TURN_TIMEOUT_SECONDS env (legacy override).
-        #   2. Tier-aware default keyed off the configured agent model
-        #      (haiku=120s, sonnet=180s, opus=300s).
-        #   3. No cap (0).
+        #   1. Per-request ``turn_timeout_seconds`` from caller metadata
+        #      (e.g. cron jobs with a configured ``timeout_seconds``).
+        #      This is the right knob for "this workflow is legitimately
+        #      multi-step and slow" — set it generously per-job rather
+        #      than fighting global tier defaults.
+        #   2. Explicit UA_PROCESS_TURN_TIMEOUT_SECONDS env (legacy override).
+        #   3. Tier-aware default keyed off the configured agent model
+        #      (haiku=120s, sonnet=180s, opus=1800s).
+        #   4. No cap (0).
         #
         # The atom-poem stuck task showed why an unbounded turn is a UX
         # disaster: a single failing inference call sat on the wire for
@@ -851,8 +865,22 @@ class ProcessTurnAdapter:
         # cap the turn aborts cleanly, the dispatcher's stuck-assignment
         # sweep (todo_dispatch_service.py) catches it, the task reopens,
         # and the next dispatch tick re-runs in ~10s.
+        per_request_cap_s = 0.0
+        if isinstance(request_metadata, dict):
+            raw = request_metadata.get("turn_timeout_seconds")
+            if raw is not None:
+                try:
+                    per_request_cap_s = max(0.0, float(raw))
+                except (TypeError, ValueError):
+                    per_request_cap_s = 0.0
         legacy_override_s = process_turn_timeout_seconds()
-        if legacy_override_s > 0:
+        if per_request_cap_s > 0:
+            max_runtime_s = per_request_cap_s
+            logger.info(
+                "ProcessTurnAdapter wall-clock cap: %.0fs (per-request override)",
+                max_runtime_s,
+            )
+        elif legacy_override_s > 0:
             max_runtime_s = legacy_override_s
         else:
             configured_model = ""
@@ -860,10 +888,21 @@ class ProcessTurnAdapter:
             if opt_obj is not None:
                 configured_model = str(getattr(opt_obj, "model", "") or "").strip()
             tier_for_cap = "sonnet"  # safe default
+            configured_lower = configured_model.lower()
+            # Match either a ZAI-mapped model string (glm-5.1 etc.) OR an
+            # Anthropic-style model id containing the tier name
+            # (e.g. ``claude-opus-4-7``, ``claude-sonnet-4-6``,
+            # ``claude-haiku-4-5-20251001``). Without the Anthropic
+            # branch, post-2026-05-11 Cody runs on Anthropic Max silently
+            # fall through to the sonnet default (180 s), which kills
+            # legitimate long opus work like the paper_to_podcast cron.
             for tier_name, mapped in ZAI_MODEL_MAP.items():
                 if configured_model and (
                     configured_model == mapped or configured_model.startswith(mapped)
                 ):
+                    tier_for_cap = tier_name
+                    break
+                if tier_name in configured_lower:
                     tier_for_cap = tier_name
                     break
             max_runtime_s = model_call_timeout_seconds(tier_for_cap)

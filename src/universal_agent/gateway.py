@@ -1218,7 +1218,10 @@ class InProcessGateway(Gateway):
 
             # Execute through unified engine (possibly delegated to CODER VP lane)
             try:
-                async for event in active_adapter.execute(request.user_input):
+                async for event in active_adapter.execute(
+                    request.user_input,
+                    request_metadata=request.metadata,
+                ):
                     if (
                         vp_mission_id
                         and self._coder_vp_runtime is not None
@@ -1321,7 +1324,10 @@ class InProcessGateway(Gateway):
                         },
                     )
                     try:
-                        async for event in adapter.execute(request.user_input):
+                        async for event in adapter.execute(
+                            request.user_input,
+                            request_metadata=request.metadata,
+                        ):
                             if event.type == EventType.STATUS and isinstance(event.data, dict):
                                 if "token_usage" in event.data:
                                     session.metadata["usage"] = event.data["token_usage"]

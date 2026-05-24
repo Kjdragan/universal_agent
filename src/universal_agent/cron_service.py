@@ -1662,6 +1662,20 @@ class CronService:
                             if job.model:
                                 request_metadata["model"] = job.model
 
+                            # Plumb per-job wall-clock budget down to the
+                            # execution engine so the in-process LLM turn
+                            # respects the cron's configured timeout instead
+                            # of the tier default. Without this, a cron with
+                            # ``timeout_seconds=3600`` still gets killed at
+                            # the opus tier default because the outer
+                            # ``asyncio.wait_for`` and the engine's deadline
+                            # are independent. See ProcessTurnAdapter's
+                            # ``turn_timeout_seconds`` lookup in
+                            # ``execution_engine.py``.
+                            _job_timeout = self._resolve_job_timeout_seconds(job)
+                            if _job_timeout is not None and _job_timeout > 0:
+                                request_metadata["turn_timeout_seconds"] = int(_job_timeout)
+
                             raw_command = job.command.strip()
                             if raw_command.startswith("!script "):
                                 script_path = raw_command.replace("!script ", "", 1).strip()
@@ -2396,6 +2410,49 @@ class CronService:
                                                         summary=f"cron LLM {job.job_id} clean exit no disposition",
                                                         agent_id="cron_scheduler",
                                                     )
+                                                # Operator-escalation hook: when the wall-clock
+                                                # cap fires (timeout_killed) or the coroutine is
+                                                # cancelled mid-run, leave a durable comment on
+                                                # the cron's task row so the operator sees the
+                                                # event in dashboard history instead of just an
+                                                # innocent-looking refreshed timestamp in
+                                                # NOT_ASSIGNED. Pairs with the
+                                                # cron_consecutive_failures invariant — that
+                                                # handles "this has been failing for N nights",
+                                                # this handles "what happened on the most
+                                                # recent run". TODO(operator-in-the-loop):
+                                                # follow-up to push a needs_review prompt and
+                                                # accept "keep working" / "abandon" replies.
+                                                if _f_classification_llm.outcome in {
+                                                    "timeout_killed",
+                                                    "cancelled_mid_run",
+                                                }:
+                                                    try:
+                                                        _cap_s = request_metadata.get(
+                                                            "turn_timeout_seconds"
+                                                        )
+                                                        _cap_label = (
+                                                            f"{int(_cap_s)}s" if _cap_s else "configured cap"
+                                                        )
+                                                        _f_th_llm.add_comment(
+                                                            _f_conn_llm,
+                                                            task_id=_f_task_id,
+                                                            author="cron_scheduler",
+                                                            content=(
+                                                                f"Cron LLM exceeded {_cap_label} "
+                                                                f"(outcome={_f_classification_llm.outcome}). "
+                                                                "Workflow paused mid-run. If this is a "
+                                                                "slow-but-healthy pipeline, raise "
+                                                                "`timeout_seconds` on the cron config; "
+                                                                "if it looks wedged, investigate the run "
+                                                                "workspace before the next scheduled fire."
+                                                            ),
+                                                        )
+                                                    except Exception as _f_comment_exc_llm:
+                                                        logger.debug(
+                                                            "Phase F.1 LLM operator-escalation comment skipped for cron job %s: %s",
+                                                            job.job_id, _f_comment_exc_llm,
+                                                        )
                                                 if _f_auto_linked:
                                                     _f_close_link_llm(
                                                         _f_conn_llm,
