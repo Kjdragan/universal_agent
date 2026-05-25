@@ -368,25 +368,19 @@ def test_remember_mc_refresh_job_caps_retention(monkeypatch):
 # ── Endpoint deprecation contract ──────────────────────────────────────
 
 
-def test_old_chief_of_staff_refresh_returns_410(monkeypatch, tmp_path):
-    """The synchronous endpoint is deprecated. POSTs must return 410
-    with a Link header pointing at the new async endpoint, so any stale
-    caller (or curl-using operator) gets a clear migration signal."""
+def test_old_chief_of_staff_refresh_removed(tmp_path):
+    """The deprecated synchronous COS refresh endpoint has been removed.
+    POSTs to the old path should return 405 (method not allowed on the
+    GET-only /chief-of-staff endpoint) or 404 — either way, NOT 200 or 410."""
     from fastapi.testclient import TestClient
 
     from universal_agent import gateway_server
 
-    # The endpoint itself is pure (no DB writes) so we can hit the app
-    # directly without the heavy ops_api fixture.
     client = TestClient(gateway_server.app)
     resp = client.post("/api/v1/dashboard/chief-of-staff/refresh")
-    assert resp.status_code == 410
-    body = resp.json()
-    assert body["error"] == "deprecated"
-    assert body["new_endpoint"] == "/api/v1/dashboard/mission-control/refresh"
-    link = resp.headers.get("link", "")
-    assert "/api/v1/dashboard/mission-control/refresh" in link
-    assert 'rel="successor-version"' in link
+    assert resp.status_code in (404, 405), (
+        f"Expected 404/405 for removed endpoint, got {resp.status_code}"
+    )
 
 
 def test_post_mission_control_refresh_returns_202(monkeypatch, tmp_path):
@@ -892,3 +886,16 @@ def test_proactive_tile_excludes_non_proactive_sources(tmp_path, monkeypatch):
     assert state.color == "yellow"
     assert "no proactive completions" in state.one_line_status.lower()
 
+def test_dashboard_situations_endpoint_removed(tmp_path):
+    """The deprecated /dashboard/situations endpoint has been removed.
+    GETs should return 404. Consumers should use
+    /api/v1/dashboard/mission-control/{tiles,cards} + /chief-of-staff."""
+    from fastapi.testclient import TestClient
+
+    from universal_agent import gateway_server
+
+    client = TestClient(gateway_server.app)
+    resp = client.get("/api/v1/dashboard/situations")
+    assert resp.status_code == 404, (
+        f"Expected 404 for removed endpoint, got {resp.status_code}"
+    )
