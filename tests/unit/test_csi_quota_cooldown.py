@@ -9,8 +9,8 @@ are silent until the cooldown expires.
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 
 import pytest

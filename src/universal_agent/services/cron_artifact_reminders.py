@@ -26,12 +26,12 @@ This module exposes a single async entrypoint
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import logging
 import os
 import sqlite3
 import time
-from datetime import datetime, timezone
 from typing import Any, Optional
 
 from universal_agent.services import proactive_artifacts

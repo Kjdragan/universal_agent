@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import importlib
-import sqlite3
 from pathlib import Path
+import sqlite3
 
 import pytest
 

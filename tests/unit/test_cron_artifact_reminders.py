@@ -10,22 +10,21 @@ Covers:
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import sqlite3
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 
 import pytest
 
 from universal_agent.services import proactive_artifacts
 from universal_agent.services.cron_artifact_reminders import (
-    SAME_DAY_NUDGE_DELAY_S,
     DAY3_DELAY_S,
     DAY7_DELAY_S,
-    sweep_pending_artifact_reminders,
+    SAME_DAY_NUDGE_DELAY_S,
     _within_active_window,
+    sweep_pending_artifact_reminders,
 )
-
 
 # Chosen so finished_at + 4h is ALSO inside Houston active hours (6 AM – 10 PM).
 # Finishing at 09:00 Houston (= UTC 14:00 CDT) means the same-day nudge at +4h
