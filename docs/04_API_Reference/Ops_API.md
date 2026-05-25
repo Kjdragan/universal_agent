@@ -226,8 +226,10 @@ These endpoints expose the durable run catalog. They are the canonical browsing 
 | `/api/v1/dashboard/proactive-artifacts/digest/send` | POST | Send the proactive review digest through the initialized AgentMail service |
 | `/api/v1/dashboard/proactive-artifacts/preferences/weekly/preview` | GET | Preview the weekly preference model report |
 | `/api/v1/dashboard/proactive-artifacts/preferences/weekly/send` | POST | Send the weekly preference report through AgentMail |
+| `/api/v1/dashboard/proactive-artifacts/{artifact_id}/ack` | POST | Acknowledge a proactive artifact from the dashboard (ops-authed); sets status=ACCEPTED, stops further reminders |
 | `/api/v1/dashboard/proactive-artifacts/{artifact_id}/feedback` | POST | Record explicit review feedback for an artifact |
 | `/api/v1/dashboard/proactive-artifacts/{artifact_id}/send-review` | POST | Send one artifact as a review email |
+| `/api/v1/artifacts/{artifact_id}/ack` | GET | Signed-URL acknowledge endpoint for email "Acknowledge" links (validates HMAC token via `t` query param); idempotent |
 | `/api/v1/dashboard/proactive-artifacts/codie/cleanup-task` | POST | Queue a review-gated CODIE cleanup Task Hub item |
 | `/api/v1/dashboard/proactive-artifacts/codie/pr` | POST | Register a CODIE draft PR as a review artifact |
 | `/api/v1/dashboard/proactive-artifacts/tutorial/build-task` | POST | Queue a private tutorial-build Task Hub item for CODIE |
@@ -749,6 +751,9 @@ Key environment variables controlling gateway behavior:
 | `UA_OPS_AUTH_PASSWORD` | - | Password for ops token issuance |
 | `UA_DAEMON_IDLE_TIMEOUT` | `1800` | Seconds before daemon session execution is killed as stuck |
 | `UA_ACTIVITY_NOTIFICATION_AUTO_READ_HOURS` | `24` | Hours after which non-actionable info/success notifications are auto-marked as read |
+| `UA_CRON_ARTIFACT_REMINDERS_ENABLED` | `true` | Enable the half-hourly artifact reminder sweep cron |
+| `UA_CRON_ARTIFACT_REMINDERS_CRON` | `*/30 6-21 * * *` | Cron schedule for artifact reminder sweep |
+| `UA_CRON_ARTIFACT_REMINDERS_TIMEZONE` | `America/Chicago` | Timezone for artifact reminder sweep |
 | `UA_CODIE_PROACTIVE_CLEANUP_TIMEZONE` | `America/Chicago` | Timezone for CODIE proactive cleanup cron job |
 
 ## 35. Error Responses
