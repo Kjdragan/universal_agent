@@ -173,9 +173,9 @@ def _vp_active_counts(active_assignments: list[dict[str, Any]] | None) -> tuple[
     general = 0
     for assignment in active_assignments or []:
         agent_id = str(assignment.get("agent_id") or "").strip().lower()
-        if agent_id in coder_patterns or any(pat in agent_id for pat in coder_patterns):
+        if agent_id in coder_patterns:
             coder += 1
-        elif agent_id in general_patterns or any(pat in agent_id for pat in general_patterns):
+        elif agent_id in general_patterns:
             general += 1
     return coder, general
 
