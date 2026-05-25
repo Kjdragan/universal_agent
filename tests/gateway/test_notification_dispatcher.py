@@ -163,9 +163,11 @@ async def test_dispatcher_skips_already_delivered_rows():
 
 @pytest.mark.asyncio
 async def test_dispatcher_cooldown_prevents_flapping_kind_spam():
-    """Two rows of the same kind delivered within the cooldown window
-    should only produce one set of sends — protects email/Telegram
-    from a flapping cron job."""
+    """Two rows of the same (kind, scope) delivered within the cooldown
+    window should only produce one set of sends — protects email/Telegram
+    from a flapping cron job. Scope defaults to "" when no metadata
+    provides task_id/job_id/session_id, so the dedup matches the legacy
+    per-kind behaviour for non-scoped events."""
     rows = [
         _row(event_id="ntf_a", kind="cron_run_failed"),
         _row(event_id="ntf_b", kind="cron_run_failed"),
@@ -188,6 +190,121 @@ async def test_dispatcher_cooldown_prevents_flapping_kind_spam():
 
     assert len(email.calls) == 1, f"cooldown should suppress 2nd kind=cron_run_failed; got {len(email.calls)} sends"
     assert len(telegram.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_cooldown_scopes_independently_by_task_id():
+    """2026-05-25: per-task dedup. Two rows of the same kind but for
+    DIFFERENT task_ids should both alert within the cooldown window —
+    they represent independent failures, not a flapping single source.
+    Before this change, the cooldown was per-kind and would have
+    suppressed the second."""
+    rows = [
+        _row(
+            event_id="ntf_task_a",
+            kind="execution_missing_lifecycle_mutation",
+            metadata={"task_id": "proactive_signal_discord:abc_2026-05-25"},
+        ),
+        _row(
+            event_id="ntf_task_b",
+            kind="execution_missing_lifecycle_mutation",
+            metadata={"task_id": "proactive_signal_discord:xyz_2026-05-25"},
+        ),
+    ]
+    email = _Recorder()
+    telegram = _Recorder()
+
+    dispatcher = NotificationDispatcher(
+        get_pending_rows=lambda: list(rows),
+        mark_delivered=lambda *args: None,
+        send_email=email,
+        send_telegram=telegram,
+        email_targets=["test@example.com"],
+        telegram_chat_id="1234",
+        cooldown_seconds=600,
+        now_fn=lambda: time.time(),
+    )
+
+    await dispatcher.dispatch_pending_once()
+
+    assert len(email.calls) == 2, (
+        f"different task_ids should alert independently; got {len(email.calls)} sends"
+    )
+    assert len(telegram.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_cooldown_collapses_same_task_repeats():
+    """The flip side: two rows of the same kind AND same task_id
+    (e.g., a single task crashing twice in a row) get collapsed to one
+    email — that's the legacy spam-suppression behaviour preserved
+    under the new keying."""
+    rows = [
+        _row(
+            event_id="ntf_dup_a",
+            kind="execution_missing_lifecycle_mutation",
+            metadata={"task_id": "proactive_signal_discord:abc_2026-05-25"},
+        ),
+        _row(
+            event_id="ntf_dup_b",
+            kind="execution_missing_lifecycle_mutation",
+            metadata={"task_id": "proactive_signal_discord:abc_2026-05-25"},
+        ),
+    ]
+    email = _Recorder()
+    telegram = _Recorder()
+
+    dispatcher = NotificationDispatcher(
+        get_pending_rows=lambda: list(rows),
+        mark_delivered=lambda *args: None,
+        send_email=email,
+        send_telegram=telegram,
+        email_targets=["test@example.com"],
+        telegram_chat_id="1234",
+        cooldown_seconds=600,
+        now_fn=lambda: time.time(),
+    )
+
+    await dispatcher.dispatch_pending_once()
+
+    assert len(email.calls) == 1
+    assert len(telegram.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_cooldown_falls_back_to_job_id_then_session():
+    """Cooldown scope resolution order is task_id → entity_ref → job_id
+    → run_id → session_id. Confirm fallback path works for cron-style
+    events that have no task_id."""
+    rows = [
+        _row(
+            event_id="ntf_cron_x",
+            kind="cron_run_failed",
+            metadata={"job_id": "cron_paper_to_podcast"},
+        ),
+        _row(
+            event_id="ntf_cron_y",
+            kind="cron_run_failed",
+            metadata={"job_id": "cron_youtube_digest"},
+        ),
+    ]
+    email = _Recorder()
+    telegram = _Recorder()
+
+    dispatcher = NotificationDispatcher(
+        get_pending_rows=lambda: list(rows),
+        mark_delivered=lambda *args: None,
+        send_email=email,
+        send_telegram=telegram,
+        email_targets=["test@example.com"],
+        telegram_chat_id="1234",
+        cooldown_seconds=600,
+        now_fn=lambda: time.time(),
+    )
+
+    await dispatcher.dispatch_pending_once()
+
+    assert len(email.calls) == 2, "different job_ids should alert independently"
 
 
 @pytest.mark.asyncio
