@@ -23,10 +23,13 @@ HEARTBEAT_PATH = REPO_ROOT / "memory" / "HEARTBEAT.md"
 
 
 def test_heartbeat_directive_contains_verb_decision_tree() -> None:
-    """The Cody-mission review decision tree must be present in HEARTBEAT.md.
+    """The VP-mission review decision tree must be present in HEARTBEAT.md.
 
     Markers asserted:
-      * Section heading exists.
+      * Section heading exists (renamed 2026-05-25 from "Reviewing Cody's
+        completed missions" to "Reviewing your team's completed missions
+        (Atlas + Cody)" when the prompt was reframed to apply the same
+        decision tree to Atlas-delegated missions too).
       * All three verb names are referenced.
       * The operator-baked budget invariant is present (re_evaluate
         does not bump retry budget; request_revision does).
@@ -34,7 +37,7 @@ def test_heartbeat_directive_contains_verb_decision_tree() -> None:
     assert HEARTBEAT_PATH.exists(), f"missing: {HEARTBEAT_PATH}"
     text = HEARTBEAT_PATH.read_text(encoding="utf-8")
     required_markers = [
-        "Reviewing Cody's completed missions",
+        "Reviewing your team's completed missions",
         "task_request_revision",
         "task_re_evaluate",
         "task_redirect_to",
