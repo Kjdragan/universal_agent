@@ -319,6 +319,46 @@ Acceptance criteria:
 - Weekly report summarizes learned interests and invites correction.
 - Silence does not materially punish a topic.
 
+### Implementation correction 2026-05-24 (PR #449)
+
+The above rule was violated from 2026-04-18 through 2026-05-24. The hard
+gate `services/proactive_preferences.py:should_block_proactive_task`
+counted both `signal_type='explicit_feedback'` and
+`signal_type='implicit_outcome'` rows against the same per-key weight.
+Implicit outcomes are auto-fired by
+`services/proactive_outcome_tracker.py:_fire_implicit_preference_signal`
+on every terminal task state (`park`/`block`/`complete`/`approve`/
+`review`) — they encode "task finished in state X", not "Kevin signalled
+preference X". A 224-event one-day implicit park burst on 2026-04-18→19
+against the convergence pipeline saturated `source:convergence_detection`,
+`topic:convergence`, `topic:atlas`, `topic:research` at -1.0 and silently
+suppressed every brief produced after that. The funnel hid the failure
+because `proactive_artifacts` rows still got written (gate runs *before*
+the `task_hub.upsert_item` call but *after* the artifact insert).
+Activity DB accumulated 1119 insight + 571 convergence `candidate`
+artifacts with zero matching `task_hub_items` rows; the last brief that
+escaped was 2026-05-18 22:38 UTC.
+
+PR #449 corrections:
+
+1. `should_block_proactive_task` now reads only `signal_type=
+   'explicit_feedback'` rows (filtered + decayed inline against the
+   signals table — no longer trusts the cached snapshot for the gate
+   decision). Implicit outcomes still feed `score_artifact_for_review`
+   for ranking and `get_delegation_context` for prompt context, but
+   never the hard gate.
+2. New one-shot migration `universal_agent.scripts.preference_signal_detox`
+   deletes existing implicit-outcome rows and rebuilds the snapshot.
+   Run in prod 2026-05-24 21:36 UTC: deleted 2656 rows. Idempotent.
+3. New `proactive_brief_task_funnel` watchdog invariant fires when any
+   proactive `source_kind` produces ≥5 artifacts in 48h with 0 matching
+   `task_hub_items` — catches this exact failure class within one
+   heartbeat instead of weeks. See [Doc 132](../03_Operations/132_Proactive_Health_Watchdog.md).
+
+Cross-reference: the design framing of CSI as the preferred producer
+direction is in [Doc 116](../03_Operations/116_CSI_Convergence_Proactivity_Repair_Handoff_2026-04-19.md),
+which was written the same day the poison burst landed.
+
 ## Phase 7 - GWS Enhancements
 
 Goal: use GWS as an enhancement layer without making it a prerequisite for proactive intelligence.
