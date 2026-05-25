@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 import json
@@ -19,7 +19,7 @@ from pathlib import Path
 import re
 import sqlite3
 import time
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import quote, urlsplit
 
 import httpx
@@ -245,6 +245,13 @@ class ClaudeCodeIntelRun:
     artifact_id: str = ""
     error: str = ""
     actions: list[dict[str, Any]] = field(default_factory=list)
+    # 2026-05-25: quota cooldown. When the X API returns HTTP 402
+    # (CreditsDepleted), subsequent runs within the cooldown window
+    # short-circuit and set ``quota_cooldown_until_iso``. The cron
+    # script reads this and suppresses the failure-event email so the
+    # operator gets ONE alarm per cooldown window, not one per
+    # scheduled fire.
+    quota_cooldown_until_iso: str = ""
 
 
 def resolve_lane_root(artifacts_root: Path | None = None) -> Path:
@@ -266,6 +273,106 @@ def get_x_bearer_token() -> str:
     return ""
 
 
+# ── X API quota cooldown (HTTP 402 backoff) ─────────────────────────────
+#
+# Background: the X API can return HTTP 402 "CreditsDepleted" when the
+# account's monthly credits are exhausted. Without a cooldown, every
+# scheduled CSI sync (8am/4pm/10pm Houston × 2 handles × N restart
+# catch-ups) keeps hammering the API and fires an error email each time —
+# tonight's run produced 12 csi_sync_failed events for what is really a
+# single operational state: "credits empty, top up needed."
+#
+# The cooldown writes a small JSON state file per handle. Subsequent
+# runs within the window short-circuit before hitting the API. The
+# first 402 of a new window still fires its alarm (one email per
+# cooldown window). Default 24h; configurable via
+# UA_CSI_QUOTA_COOLDOWN_HOURS.
+
+
+_DEFAULT_QUOTA_COOLDOWN_HOURS = 24.0
+
+
+def _quota_cooldown_path(lane_root: Path, handle: str) -> Path:
+    safe_handle = re.sub(r"[^A-Za-z0-9_.-]+", "-", handle.strip().lstrip("@")) or DEFAULT_HANDLE
+    return lane_root / f"quota_cooldown__{safe_handle}.json"
+
+
+def _quota_cooldown_hours() -> float:
+    raw = (os.getenv("UA_CSI_QUOTA_COOLDOWN_HOURS") or "").strip()
+    if raw:
+        try:
+            return max(0.5, float(raw))
+        except ValueError:
+            pass
+    return _DEFAULT_QUOTA_COOLDOWN_HOURS
+
+
+def _read_quota_cooldown(path: Path) -> Optional[dict[str, Any]]:
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return None
+        return data
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _cooldown_active(record: Optional[dict[str, Any]]) -> Optional[str]:
+    """Return the ``until_iso`` string if the cooldown is still in effect,
+    else None. ``record`` is the parsed cooldown JSON."""
+    if not record:
+        return None
+    until_iso = str(record.get("until_iso") or "").strip()
+    if not until_iso:
+        return None
+    try:
+        until_dt = datetime.fromisoformat(until_iso.replace("Z", "+00:00"))
+        if until_dt.tzinfo is None:
+            until_dt = until_dt.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) < until_dt:
+            return until_iso
+    except (ValueError, TypeError):
+        return None
+    return None
+
+
+def _write_quota_cooldown(path: Path, *, reason: str, hours: float) -> str:
+    """Write a cooldown file blocking subsequent runs for ``hours``.
+
+    Returns the ``until_iso`` timestamp written. Best-effort — if the
+    write fails (read-only FS, race), returns "" and the caller falls
+    through to the normal error path.
+    """
+    now = datetime.now(timezone.utc)
+    until = now + timedelta(hours=hours)
+    until_iso = until.isoformat()
+    payload = {
+        "set_at_iso": now.isoformat(),
+        "until_iso": until_iso,
+        "reason": reason,
+        "cooldown_hours": hours,
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return until_iso
+    except OSError as exc:
+        logger.warning(
+            "CSI quota cooldown write failed for %s: %s", path, exc
+        )
+        return ""
+
+
+def _is_quota_exhausted_error(error_text: str) -> bool:
+    """Heuristic match for X API HTTP 402 / credits-depleted responses."""
+    lowered = (error_text or "").lower()
+    return ("http 402" in lowered) or ("creditsdepleted" in lowered) or (
+        "credits depleted" in lowered
+    )
+
+
 def run_sync(
     *,
     config: ClaudeCodeIntelConfig | None = None,
@@ -281,6 +388,29 @@ def run_sync(
     cfg = config or ClaudeCodeIntelConfig.from_env()
     generated_at = _now_iso()
     lane_root = resolve_lane_root(cfg.artifacts_root)
+
+    # Quota-cooldown short-circuit. If a previous run hit HTTP 402 and
+    # the cooldown window hasn't expired, return early without touching
+    # the X API. ``ok=True`` so the cron script doesn't emit a
+    # csi_sync_failed event (which would mail the operator). The
+    # quota_cooldown_until_iso field tells the cron script this was a
+    # silent skip, not a real success.
+    cooldown_path = _quota_cooldown_path(lane_root, cfg.handle)
+    cooldown_record = _read_quota_cooldown(cooldown_path)
+    cooldown_until = _cooldown_active(cooldown_record)
+    if cooldown_until:
+        logger.info(
+            "📡 CSI poll @%s: skipped — X API quota cooldown active until %s",
+            cfg.handle,
+            cooldown_until,
+        )
+        return ClaudeCodeIntelRun(
+            ok=True,
+            generated_at=generated_at,
+            handle=cfg.handle,
+            quota_cooldown_until_iso=cooldown_until,
+        )
+
     packet_dir = _new_packet_dir(lane_root, handle=cfg.handle, generated_at=generated_at)
     packet_dir.mkdir(parents=True, exist_ok=True)
     if conn is not None and conn.row_factory is None:
@@ -486,6 +616,24 @@ def run_sync(
         return run
     except Exception as exc:
         error = str(exc)
+        # X API HTTP 402 detection. Write a cooldown file so subsequent
+        # scheduled fires short-circuit instead of hammering the API and
+        # producing one error email per fire. The FIRST 402 of a fresh
+        # cycle still emits its csi_sync_failed event (the operator's
+        # alarm to top up credits); subsequent fires in the cooldown
+        # window are silenced upstream by the cooldown check in run_sync.
+        if _is_quota_exhausted_error(error):
+            hours = _quota_cooldown_hours()
+            until_iso = _write_quota_cooldown(
+                cooldown_path, reason=error, hours=hours,
+            )
+            if until_iso:
+                logger.warning(
+                    "CSI @%s: X API quota exhausted (%s). Cooldown set "
+                    "for %.1fh — next attempt after %s.",
+                    cfg.handle, error[:200], hours, until_iso,
+                )
+                run.quota_cooldown_until_iso = until_iso
         write_reference_kb_update(
             packet_dir=packet_dir,
             handle=cfg.handle,
