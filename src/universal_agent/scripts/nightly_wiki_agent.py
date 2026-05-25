@@ -6,7 +6,7 @@ import os
 import sqlite3
 import sys
 
-from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
+from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
 from universal_agent.infisical_loader import initialize_runtime_secrets
 from universal_agent.proactive_signals import CARD_STATUS_PENDING, list_cards
 
@@ -26,8 +26,14 @@ async def main():
     
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    # Connect to DB to load pending cards
-    db_path = get_runtime_db_path()
+    # Connect to DB to load pending cards.
+    # IMPORTANT: proactive_signal_cards lives in activity_state.db, NOT
+    # runtime_state.db. The dashboard endpoint /api/v1/dashboard/proactive-signals
+    # and the "Create Wiki" button both write to activity_state.db via
+    # gateway_server._activity_connect. Reading runtime_state.db here will
+    # silently return zero pending cards even when the dashboard shows dozens.
+    # Same DB-path pattern as the May-20 watchdog incident (PRs #389/#390/#392/#396).
+    db_path = get_activity_db_path()
     conn = connect_runtime_db(db_path)
     
     # Read the pending signals
