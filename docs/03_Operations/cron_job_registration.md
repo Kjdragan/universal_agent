@@ -1,29 +1,39 @@
 # Cron Job Registration — Source of Truth & First-Boot Fallback
 
-> **Last updated:** 2026-05-19 — established after the proactive-robustness
+> **Last updated:** 2026-05-25 — established after the proactive-robustness
 > work (commits `825e608e` through `15ccbc4e`) made all proactive cron jobs
-> idempotently re-registerable at gateway boot.
+> idempotently re-registerable at gateway boot. Updated to reflect the
+> full 22-helper startup block (was 13 in the previous revision).
 
 ## Source of truth
 
 The canonical source of truth for proactive cron jobs is the set of
 `_ensure_*_cron_job()` helpers in `src/universal_agent/gateway_server.py`,
-called from the lifespan startup block at `gateway_server.py:14215-14227`:
+called from the lifespan startup block at `gateway_server.py:14743-14764`:
 
 ```
-_ensure_autonomous_daily_briefing_job()
 _ensure_codie_proactive_cleanup_cron_job()
 _ensure_csi_convergence_cron_job()
 _ensure_claude_code_intel_cron_job()
+_ensure_csi_demo_triage_rank_cron_job()
+_ensure_intel_auto_promoter_cron_job()
 _ensure_paper_to_podcast_cron_job()
 _ensure_youtube_daily_digest_cron_job()
+_ensure_youtube_gold_poller_cron_job()
 _ensure_nightly_wiki_cron_job()
 _ensure_morning_briefing_cron_job()
 _ensure_proactive_report_morning_cron_job()
 _ensure_proactive_report_midday_cron_job()
 _ensure_proactive_report_afternoon_cron_job()
 _ensure_proactive_artifact_digest_cron_job()
+_ensure_cron_artifact_reminders_sweep_cron_job()
+_ensure_vp_coder_workspace_pruning_cron_job()
+_ensure_vp_mission_pr_reconciler_cron_job()
+_ensure_architecture_canvas_drift_cron_job()
+_ensure_hackernews_snapshot_cron_job()
+_ensure_atlas_direct_dispatch_cron_job()
 _ensure_simone_chat_autocomplete_cron_job()
+_ensure_vault_lint_contradictions_cron_job()
 ```
 
 Each helper is **idempotent**: it looks up the existing job by
@@ -37,7 +47,7 @@ state file will re-register every job in its canonical shape.
 `workspaces/cron_jobs.json` is a **first-boot fallback**, not the source of
 truth. The cron service loads it during `CronService.__init__`
 (`cron_service.py:515`) which runs **before** the lifespan boot block
-calls the `_ensure_*` helpers (`gateway_server.py:14227`). This means:
+calls the `_ensure_*` helpers (`gateway_server.py:14764`). This means:
 
 - On a fresh checkout where the runtime DB has no jobs yet, the seed file
   populates the initial set so the scheduler has something to schedule
@@ -46,7 +56,7 @@ calls the `_ensure_*` helpers (`gateway_server.py:14227`). This means:
   the seed and the canonical config (cron expression, command, timeout,
   metadata, `catch_up_on_restart` flag).
 
-Because all 7 entries in the seed file now have matching `_ensure_*`
+Because entries in the seed file now have matching `_ensure_*`
 helpers with identical cron expressions, the seed is essentially redundant
 in steady state. We keep it as a deliberate fallback rather than delete
 it, because deletion would create a small window during fresh-state
@@ -88,7 +98,7 @@ whenever else makes sense.
 
 ## Adding a new proactive cron job
 
-Mirror `_ensure_paper_to_podcast_cron_job` (`gateway_server.py:17883`).
+Mirror `_ensure_paper_to_podcast_cron_job` (`gateway_server.py:18762`).
 Steps:
 
 1. Add a `<NAME>_JOB_KEY` constant, default cron expression, default
@@ -96,11 +106,11 @@ Steps:
 2. Add an `<env>_enabled()` helper that returns False unless the env flag
    is on.
 3. Add `_ensure_<name>_cron_job()` that calls
-   `_register_system_cron_job(...)` (`gateway_server.py:~17750`) — pass
+   `_register_system_cron_job(...)` (`gateway_server.py:~18650`) — pass
    `system_job`, `default_cron`, `default_timezone`, `command`,
    `description`, `timeout_seconds`, `enabled`, optionally
    `cron_env_var` / `timezone_env_var` / `required_secrets`.
-4. Add the helper call to the lifespan block at `gateway_server.py:14215`.
+4. Add the helper call to the lifespan block at `gateway_server.py:14743`.
 5. (Optional but recommended) declare any truly job-specific env vars in
    `metadata.required_secrets`. The cron service pre-flight check
    (`cron_service._find_missing_required_secrets`) will fail the run with
@@ -161,19 +171,26 @@ job can be disabled at deploy time by adding the env var to `.env`
 
 | Job | Disable env |
 |---|---|
-| `autonomous_daily_briefing` | `UA_AUTONOMOUS_DAILY_BRIEFING_ENABLED=0` (default off as of G2) |
 | `codie_proactive_cleanup` | `UA_CODIE_PROACTIVE_CLEANUP_ENABLED=0` |
 | `csi_convergence_sync` | `UA_CSI_CONVERGENCE_CRON_ENABLED=0` |
 | `claude_code_intel` | `UA_CLAUDE_CODE_INTEL_CRON_ENABLED=0` |
+| `csi_demo_triage_rank` | `UA_CSI_DEMO_TRIAGE_RANK_CRON_ENABLED=0` |
+| `intel_auto_promoter` | `UA_INTEL_AUTO_PROMOTE_CRON_ENABLED=0` |
 | `paper_to_podcast_daily` | `UA_PAPER_TO_PODCAST_ENABLED=0` |
 | `youtube_daily_digest` | `UA_YOUTUBE_DAILY_DIGEST_ENABLED=0` |
+| `youtube_gold_poller` | `UA_YOUTUBE_GOLD_POLLER_ENABLED=0` |
 | `nightly_wiki` | `UA_NIGHTLY_WIKI_ENABLED=0` |
 | `morning_briefing` | `UA_MORNING_BRIEFING_ENABLED=0` |
 | `proactive_report_*` | `UA_PROACTIVE_REPORTS_ENABLED=0` (covers all three time slots) |
 | `proactive_artifact_digest` | `UA_PROACTIVE_ARTIFACT_DIGEST_ENABLED=0` |
+| `cron_artifact_reminders_sweep` | `UA_CRON_ARTIFACT_REMINDERS_ENABLED=0` |
+| `vp_coder_workspace_pruning` | `UA_VP_CODER_WORKSPACE_PRUNING_ENABLED=0` |
+| `vp_mission_pr_reconciler` | `UA_VP_MISSION_PR_RECONCILER_ENABLED=0` |
+| `architecture_canvas_drift` | `UA_ARCH_CANVAS_DRIFT_ENABLED=0` |
 | `hackernews_snapshot` | `UA_HACKERNEWS_SNAPSHOT_ENABLED=0` |
 | `atlas_direct_dispatch` (Hermes Phase C, default OFF) | `UA_ATLAS_DIRECT_DISPATCH_ENABLED=0` |
 | `simone_chat_auto_complete` (lightweight, always on) | `UA_SIMONE_CHAT_AUTOCOMPLETE_ENABLED=0` |
+| `vault_lint_contradictions` | `UA_VAULT_LINT_CONTRADICTIONS_ENABLED=0` |
 
 > **`atlas_direct_dispatch` (Hermes Phase C, PR #221):** independent
 > dispatcher that bypasses Simone's heartbeat throttle for tasks tagged
