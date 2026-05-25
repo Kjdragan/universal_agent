@@ -258,19 +258,35 @@ async def main() -> int:
             all_results.append(handle_payload)
             if result.ok:
                 any_ok = True
-                # Emit CSI activity event for dashboard visibility
-                try:
-                    emit_csi_activity_event(
-                        conn,
-                        handle=handle,
-                        new_post_count=result.new_post_count,
-                        action_count=result.action_count,
-                        queued_task_count=int(post_process.get("queued_task_count") or result.queued_task_count),
-                        packet_dir=result.packet_dir or "",
-                        actions=result.actions,
+                # X API quota cooldown short-circuit. When run_sync
+                # detected a prior HTTP 402 (CreditsDepleted) and
+                # short-circuited this fire, ``quota_cooldown_until_iso``
+                # is set. Skip the activity-event emission entirely so
+                # the operator does not receive one "sync completed"
+                # email per scheduled fire while credits are depleted.
+                # The first 402 that triggered the cooldown already
+                # fired its csi_sync_failed alarm — that one email is
+                # the operator's signal to act.
+                if getattr(result, "quota_cooldown_until_iso", ""):
+                    logger.info(
+                        "Handle @%s: silent skip — X API quota cooldown "
+                        "active until %s. No activity event emitted.",
+                        handle, result.quota_cooldown_until_iso,
                     )
-                except Exception:
-                    logger.warning("Failed to emit CSI activity event for @%s", handle, exc_info=True)
+                else:
+                    # Emit CSI activity event for dashboard visibility
+                    try:
+                        emit_csi_activity_event(
+                            conn,
+                            handle=handle,
+                            new_post_count=result.new_post_count,
+                            action_count=result.action_count,
+                            queued_task_count=int(post_process.get("queued_task_count") or result.queued_task_count),
+                            packet_dir=result.packet_dir or "",
+                            actions=result.actions,
+                        )
+                    except Exception:
+                        logger.warning("Failed to emit CSI activity event for @%s", handle, exc_info=True)
                 # Write a per-handle operator report only when there are actual
                 # new posts — empty polls don't need operator reports.
                 if result.packet_dir and result.new_post_count > 0:
