@@ -37,7 +37,41 @@ logger = logging.getLogger(__name__)
 
 
 _DELIVERABLE_SEVERITIES = frozenset({"error", "warning"})
-_DEFAULT_COOLDOWN_SECONDS = 300.0  # 5 min per-kind cooldown
+_DEFAULT_COOLDOWN_SECONDS = 300.0  # 5 min per-(kind, scope) cooldown
+
+
+def _scope_key_for_record(record: dict) -> str:
+    """Extract the per-notification dedup scope from a record.
+
+    The cooldown key is ``(kind, scope, channel)`` rather than just
+    ``(kind, channel)`` — that way two genuinely-different
+    ``execution_missing_lifecycle_mutation`` events for different
+    task_ids (or different sessions) can alert independently within
+    the cooldown window, while a single misbehaving task that keeps
+    firing the same kind gets coalesced.
+
+    Resolution order:
+      1. ``metadata.task_id`` (Task Hub item id)
+      2. ``entity_ref.task_id`` or ``entity_ref.id``
+      3. ``metadata.job_id`` (cron job id)
+      4. ``metadata.run_id``
+      5. ``session_id``
+      6. ``""`` — falls back to legacy per-kind behaviour
+    """
+    metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+    entity_ref = record.get("entity_ref") if isinstance(record.get("entity_ref"), dict) else {}
+    for key, source in (
+        ("task_id", metadata),
+        ("task_id", entity_ref),
+        ("id", entity_ref),
+        ("job_id", metadata),
+        ("run_id", metadata),
+    ):
+        value = str(source.get(key) or "").strip()
+        if value:
+            return value
+    session_id = str(record.get("session_id") or "").strip()
+    return session_id
 
 
 def _delivery_state_for_channel(record: dict, channel: str) -> Optional[dict]:
@@ -137,17 +171,20 @@ class NotificationDispatcher:
         self._telegram_chat_id = telegram_chat_id
         self._cooldown_seconds = max(1.0, float(cooldown_seconds))
         self._now = now_fn
-        # Per-kind+channel last-send timestamps for cooldown enforcement.
-        self._last_send_at: dict[tuple[str, str], float] = {}
+        # Per-(kind, scope, channel) last-send timestamps for cooldown
+        # enforcement. ``scope`` is a task_id / job_id / session_id
+        # extracted by ``_scope_key_for_record`` so different tasks of the
+        # same kind alert independently within the cooldown window.
+        self._last_send_at: dict[tuple[str, str, str], float] = {}
 
-    def _within_cooldown(self, kind: str, channel: str) -> bool:
-        last = self._last_send_at.get((kind, channel))
+    def _within_cooldown(self, kind: str, scope: str, channel: str) -> bool:
+        last = self._last_send_at.get((kind, scope, channel))
         if last is None:
             return False
         return (self._now() - last) < self._cooldown_seconds
 
-    def _record_send(self, kind: str, channel: str) -> None:
-        self._last_send_at[(kind, channel)] = self._now()
+    def _record_send(self, kind: str, scope: str, channel: str) -> None:
+        self._last_send_at[(kind, scope, channel)] = self._now()
 
     async def _deliver_email_for_row(self, record: dict, summary: dict) -> None:
         if "email" not in _channels_list(record):
@@ -155,7 +192,8 @@ class NotificationDispatcher:
         if _row_already_delivered(record, "email"):
             return
         kind = str(record.get("kind") or "")
-        if self._within_cooldown(kind, "email"):
+        scope = _scope_key_for_record(record)
+        if self._within_cooldown(kind, scope, "email"):
             summary["email_cooldown_skipped"] += 1
             return
         if not self._email_targets:
@@ -182,12 +220,12 @@ class NotificationDispatcher:
                 delivered_any = True
             except Exception:
                 logger.exception(
-                    "notification_dispatcher: email send failed for kind=%s target=%s",
-                    kind, target,
+                    "notification_dispatcher: email send failed for kind=%s scope=%s target=%s",
+                    kind, scope, target,
                 )
 
         if delivered_any:
-            self._record_send(kind, "email")
+            self._record_send(kind, scope, "email")
             try:
                 self._mark_delivered(str(record.get("id") or ""), "email")
             except Exception:
@@ -202,7 +240,8 @@ class NotificationDispatcher:
         if _row_already_delivered(record, "telegram"):
             return
         kind = str(record.get("kind") or "")
-        if self._within_cooldown(kind, "telegram"):
+        scope = _scope_key_for_record(record)
+        if self._within_cooldown(kind, scope, "telegram"):
             summary["telegram_cooldown_skipped"] += 1
             return
         if self._telegram_chat_id is None or str(self._telegram_chat_id).strip() == "":
@@ -217,13 +256,13 @@ class NotificationDispatcher:
             )
         except Exception:
             logger.exception(
-                "notification_dispatcher: telegram send failed for kind=%s",
-                kind,
+                "notification_dispatcher: telegram send failed for kind=%s scope=%s",
+                kind, scope,
             )
             summary["telegram_failed"] += 1
             return
 
-        self._record_send(kind, "telegram")
+        self._record_send(kind, scope, "telegram")
         try:
             self._mark_delivered(str(record.get("id") or ""), "telegram")
         except Exception:
