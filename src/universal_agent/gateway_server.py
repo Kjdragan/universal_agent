@@ -34207,6 +34207,23 @@ if __name__ == "__main__":
 
     import uvicorn
 
+    # Bootstrap runtime secrets from Infisical so UA_OPS_TOKEN /
+    # UA_INTERNAL_API_TOKEN populate os.environ before any auth gate
+    # evaluates. Without this, the module-level SESSION_API_TOKEN
+    # resolves to "" while UA_DEPLOYMENT_PROFILE=vps requires auth,
+    # so every session WebSocket handshake gets closed with 403 and
+    # the dashboard renders a "Gateway unreachable" banner. The
+    # ``.env`` bootstrap dict in deploy.yml never contained these
+    # tokens — they only ever lived in Infisical.
+    try:
+        from universal_agent.infisical_loader import initialize_runtime_secrets
+
+        initialize_runtime_secrets()
+        _refresh_ops_auth_config_from_env()
+        logger.info("Infisical runtime secrets loaded for gateway server")
+    except Exception as exc:
+        logger.warning("Infisical secret bootstrap skipped: %s", exc)
+
     port = int(os.getenv("UA_GATEWAY_PORT", "8002"))
     host = os.getenv("UA_GATEWAY_HOST", "0.0.0.0")
 

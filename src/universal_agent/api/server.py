@@ -2377,6 +2377,21 @@ async def websocket_agent(websocket: WebSocket, session_id: Optional[str] = None
 if __name__ == "__main__":
     import uvicorn
 
+    # Bootstrap runtime secrets from Infisical so UA_OPS_TOKEN /
+    # UA_INTERNAL_API_TOKEN are present in os.environ before any
+    # outbound calls to the gateway. Without this, GatewayBridge sends
+    # no auth header and the gateway's session-WS endpoint replies 403
+    # (logged as "Gateway broadcast forwarder error" every 21s). The
+    # ``.env`` bootstrap dict in deploy.yml never contained these
+    # tokens — they only ever lived in Infisical.
+    try:
+        from universal_agent.infisical_loader import initialize_runtime_secrets
+
+        initialize_runtime_secrets()
+        logger.info("Infisical runtime secrets loaded for api server")
+    except Exception as exc:
+        logger.warning("Infisical secret bootstrap skipped: %s", exc)
+
     port = int(os.getenv("UA_API_PORT", "8001"))
     host = os.getenv("UA_API_HOST", "0.0.0.0")
 
