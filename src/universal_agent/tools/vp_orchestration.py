@@ -331,19 +331,44 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
         if isinstance(linked_meta, dict) and bool(linked_meta.get("use_goal_loop")):
             mission_metadata["use_goal_loop"] = True
 
-    # Hermes Phase E.2 routing rule: when the resolved mode is
-    # "anthropic", auto-route through execution_mode="cli" so the
-    # spawned `claude` subprocess uses workspace-local OAuth (Anthropic
-    # Max) instead of the gateway's ZAI-routed env. SDK in-process mode
-    # cannot easily flip ANTHROPIC_* per-call without races; CLI mode
-    # gives Cody true environmental autonomy (own PID/env/workspace).
-    # Explicit args["execution_mode"] still wins so an operator can
-    # override (e.g. force "dag" for deterministic flows).
+    # Hermes Phase E.2 routing rule (refined 2026-05-26): when the
+    # resolved cody_mode is "anthropic", FORCE execution_mode="cli" so
+    # the spawned `claude` subprocess uses workspace-local OAuth
+    # (Anthropic Max) instead of the gateway's ZAI-routed env. SDK
+    # in-process mode cannot easily flip ANTHROPIC_* per-call without
+    # races; CLI mode gives Cody true environmental autonomy
+    # (own PID/env/workspace) — and is the ONLY mode where Anthropic
+    # features like `/goal` actually function.
+    #
+    # Previously, an explicit ``args["execution_mode"]`` could override
+    # this — the intent was operator-driven exceptions (e.g. "dag" for
+    # deterministic flows). In practice it became a footgun: Simone
+    # (running on ZAI) defaulted to ``execution_mode="autonomous"`` on
+    # the 2026-05-26 /goal smoke test, which overrode the Anthropic
+    # auto-route, dropped the mission onto the SDK in-process adapter
+    # (ZAI-routed), and ran the mission on glm-5 instead of Claude. The
+    # `/goal` loop was never possible because /goal is an Anthropic
+    # Claude Code feature, and the COMPLETION-attestation guard
+    # spuriously demoted the (successful) mission to failed.
+    #
+    # Fix: cody_mode is the source of truth for "use Anthropic." If the
+    # operator wants the SDK in-process path, they should pass
+    # ``cody_mode="zai"`` (which conveys the intent properly); explicit
+    # ``execution_mode`` only overrides in non-anthropic mode.
     explicit_exec_mode = str(args.get("execution_mode") or "").strip().lower()
-    if explicit_exec_mode:
-        resolved_execution_mode = explicit_exec_mode
-    elif resolved_cody_mode == "anthropic":
+    if resolved_cody_mode == "anthropic":
         resolved_execution_mode = "cli"
+        if explicit_exec_mode and explicit_exec_mode != "cli":
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "vp_dispatch_mission: ignoring explicit execution_mode=%r because "
+                "cody_mode='anthropic' requires execution_mode='cli' (Anthropic "
+                "endpoint + workspace OAuth). To use the SDK in-process path, set "
+                "cody_mode='zai' instead.",
+                explicit_exec_mode,
+            )
+    elif explicit_exec_mode:
+        resolved_execution_mode = explicit_exec_mode
     else:
         resolved_execution_mode = "sdk"
 
