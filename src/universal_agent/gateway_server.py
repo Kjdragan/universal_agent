@@ -24245,11 +24245,26 @@ async def dashboard_todolist_quick_add(payload: QuickAddTaskRequest):
         "labels": ["quick-add"],
     }
     if payload.target_agent:
-        item["metadata"] = {
+        target = payload.target_agent.strip()
+        metadata: dict[str, Any] = {
             "workflow_manifest": {
-                "target_agent": payload.target_agent.strip()
+                "target_agent": target,
             }
         }
+        # Operator-dispatched Cody missions default to the /goal loop —
+        # the operator typed a specific objective in the dashboard's
+        # Dispatch Mission box, so the Haiku evaluator can drive Cody
+        # to a verifiable end state without per-step operator nudging.
+        # This flag is read downstream by
+        # ``services.self_briefing.is_goal_eligible_mission`` and
+        # propagated into ``vp_missions.payload_json.metadata.use_goal_loop``
+        # by ``vp_dispatch_mission`` (which inherits from the linked task).
+        # Per PRD § 3 decision 1: cody_demo_task / cody_scaffold_request /
+        # tutorial_build are auto-eligible by source_kind; operator-dispatched
+        # is the per-task opt-in path activated here.
+        if target == "vp.coder.primary":
+            metadata["use_goal_loop"] = True
+        item["metadata"] = metadata
     with _activity_store_lock:
         conn = _task_hub_open_conn()
         try:
