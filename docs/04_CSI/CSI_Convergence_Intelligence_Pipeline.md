@@ -1,7 +1,7 @@
 # CSI Convergence Intelligence Pipeline
 
-> **Status**: Implemented foundation; runtime producer registered; production-volume tuning pending
-> **Last updated**: 2026-04-19
+> **Status**: Implemented foundation; runtime producer registered; hourly insight delivery (PR `claude/hourly-insight-redesign`, 2026-05-25); production-volume tuning pending
+> **Last updated**: 2026-05-25
 
 ## 1. Overview
 
@@ -89,6 +89,80 @@ Earlier gateway failures fixed in this pass:
 - The missing `detect_and_queue_convergence_llm` import is restored by an async service function.
 - The endpoint now returns `convergence` for existing clients/tests and `convergences` for callers that want all Track A/Track B results.
 - The ToDo source pill map now includes `convergence_detection` and `insight_detection`.
+
+## 5b. Hourly insight delivery (PR `claude/hourly-insight-redesign`, 2026-05-25)
+
+Adds a structural lever that replaces Simone's per-brief email loop with a
+single hourly digest. The convergence cron still generates briefs as before,
+but delivery now flows through a deterministic scoring + selection pipeline:
+
+```
+csi_convergence_sync (cron, hourly)
+  └── creates insight_brief_task / convergence_brief_task artifacts in
+      activity_state.db with metadata.confidence (Track B) or
+      metadata.signal_strength (Track A) and supporting_channel_count
+hourly_insight_email (cron, top of every hour 6 AM-9 PM Houston)
+  └── services/hourly_insight_email.compose_hourly_email scores every
+      undelivered brief from the last hour via the composite:
+        0.4*confidence
+      + 0.3*min(supporting_channel_count/5, 1)
+      + 0.2*(1 - max_jaccard_overlap_against_last_7d_briefs)
+      + 0.1*normalized_preference_score
+      Floor (≥3 channels AND confidence ≥0.7) is informational — sub-threshold
+      briefs still fill the slot when no candidate clears.
+  └── picks insight #1 (highest composite) and insight #2 (highest composite
+      among candidates with Jaccard topic-overlap < 0.30 with #1).
+  └── sends ONE `[Hourly Intel]` email from Simone's AgentMail inbox.
+  └── stamps proactive_artifacts.delivered_at so the brief is excluded next
+      hour, and writes a row per considered brief to
+      proactive_brief_scoring_log for weekly tuning.
+morning_briefing / evening_briefing
+  └── recap section lists every insight that went out via hourly email since
+      the prior briefing, then flips delivered_briefing=1 on those scoring-log
+      rows so they aren't recapped twice.
+  └── evening briefing only: picks ONE unsurfaced brief from the window as an
+      "Honorable Mention" via LLM selection of the unsurfaced backlog.
+insight_scoring_health (cron, Sunday 8 AM Houston)
+  └── 7-day rollup: # generated, # delivered hourly, # delivered in briefing,
+      sub-threshold rate, operator-rating distribution. LLM-generated verdict
+      ("scoring is calibrated" / "raise confidence floor to 0.8" / …).
+```
+
+### New modules
+
+| File | Purpose |
+|---|---|
+| [`src/universal_agent/services/hourly_insight_email.py`](../../src/universal_agent/services/hourly_insight_email.py) | Composer — scoring, diversity selection, render |
+| [`src/universal_agent/services/proactive_scoring_log.py`](../../src/universal_agent/services/proactive_scoring_log.py) | Audit table for every scored brief |
+| [`src/universal_agent/scripts/hourly_insight_email.py`](../../src/universal_agent/scripts/hourly_insight_email.py) | Cron entrypoint — composes + sends + stamps delivered_at |
+| [`src/universal_agent/scripts/insight_scoring_health.py`](../../src/universal_agent/scripts/insight_scoring_health.py) | Weekly tuning report |
+
+### Schema additions (activity_state.db)
+
+- `proactive_artifacts.delivered_at TEXT` — stamped by the hourly cron once a brief is emailed so it isn't re-considered. Added via idempotent `ALTER TABLE ADD COLUMN` in `proactive_artifacts.ensure_schema`.
+- `proactive_brief_scoring_log` — full table (see `proactive_scoring_log.ensure_schema`). Unique on `(artifact_id, delivery_slot, logged_at)` for safe re-runs.
+
+### Prompt change (Track B ideation)
+
+The Track-B `_IDEATION_SYSTEM` prompt now requires a `confidence` field on
+each emitted insight (0.0-1.0 self-rating). This flows into
+`metadata.confidence` on the resulting `insight_brief_task` artifact and is
+the primary input to the composite score's 0.4× weighted term. Track A
+already returned `signal_strength` (1-10) which we now persist as
+`metadata.signal_strength` and normalize to [0, 1] for the same composite.
+
+### New env flags
+
+| Flag | Default | Effect |
+|---|---|---|
+| `UA_INSIGHT_HOURLY_EMAIL_ENABLED` | `1` | Hourly cron sends the digest. `0` = compose but skip send (structural pause lever — replaces "email Simone to pause"). |
+| `UA_INSIGHT_HOURLY_EMAIL_CRON` | `0 6-21 * * *` | Cron expr; default = top of every active-window hour. |
+| `UA_INSIGHT_HOURLY_EMAIL_RECIPIENT` | `kevinjdragan@gmail.com` | Override the outbound recipient. |
+| `UA_EVENING_BRIEFING_ENABLED` | `1` | Register the 6 PM evening briefing cron. |
+| `UA_EVENING_BRIEFING_CRON` | `0 18 * * *` | 6 PM Houston. |
+| `UA_INSIGHT_SCORING_HEALTH_ENABLED` | `1` | Register the weekly health-check cron. |
+| `UA_HOURLY_RECAP_BRIEFING_BLOCK_ENABLED` | `1` | Briefings include the "Hourly Insights Recap" block. |
+| `UA_HONORABLE_MENTION_BRIEFING_BLOCK_ENABLED` | `1` | Evening briefing includes the LLM-picked "Honorable Mention". |
 
 ## 6. Future Optimizations
 
