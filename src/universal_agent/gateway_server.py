@@ -17284,14 +17284,11 @@ def _dashboard_summary_sync_compute():
     # does not block the asyncio loop. Confirmed via py-spy dumps.
     _apply_notification_snooze_expiry()
     _apply_activity_snooze_expiry()
-    sessions_total = 0
-    if _ops_service:
-        try:
-            sessions_total = len(_ops_service.list_sessions())
-        except Exception:
-            sessions_total = len(_sessions)
-    else:
-        sessions_total = len(_sessions)
+    # HOT-PATCH 2026-05-26: skip heavy ops_service.list_sessions() — it does
+    # find_run_for_workspace per session (LIKE scans + index lookups) that take
+    # 5-15s in aggregate on the prod DB. Dashboard summary is a tile; in-memory
+    # _sessions count is good enough and is what the fallback already used.
+    sessions_total = len(_sessions)
     if _session_runtime:
         active_sessions = sum(
             1
@@ -17304,19 +17301,15 @@ def _dashboard_summary_sync_compute():
     pending_approvals = len(list_approvals(status="pending"))
     unread_notifications = 0
     total_notifications = 0
-    try:
-        counters = _query_activity_event_counters(
-            event_class="notification",
-            status_value=None,
-            apply_default_window=False,
-        )
-        unread_notifications = int(((counters.get("totals") or {}).get("unread") or 0))
-        total_notifications = int(((counters.get("totals") or {}).get("total") or 0))
-    except Exception:
-        unread_notifications = sum(
-            1 for item in _notifications if str(item.get("status", "new")).lower() in {"new", "pending"}
-        )
-        total_notifications = len(_notifications)
+    # HOT-PATCH 2026-05-26: _query_activity_event_counters does sync json.loads
+    # over the 1.23GB activity_state.db and was taking 8-10s per dashboard hit.
+    # Use the cheap in-memory _notifications count (same as the existing except
+    # branch) — the activity_event_counters value is only used in the summary
+    # tile, not for any decision logic.
+    unread_notifications = sum(
+        1 for item in _notifications if str(item.get("status", "new")).lower() in {"new", "pending"}
+    )
+    total_notifications = len(_notifications)
     cron_total = 0
     cron_enabled = 0
     if _cron_service:
