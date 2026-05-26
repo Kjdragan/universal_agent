@@ -11,14 +11,14 @@ def _iso_now() -> str:
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
         return int(value)
-    except Exception:
+    except (ValueError, TypeError):
         return default
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
         return float(value)
-    except Exception:
+    except (ValueError, TypeError):
         return default
 
 
