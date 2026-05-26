@@ -112,11 +112,16 @@ export interface GatewayStatus {
  * how recently it (re)started. Never throws — failures are encoded into the
  * return value so the banner component can render a degraded state cleanly.
  *
- * Uses a tight 4s timeout so the banner's poll cycle doesn't itself stall the
- * UI if the gateway is wedged.
+ * Uses a 10s timeout. The gateway runs heartbeat sessions + cron jobs +
+ * in-process Claude SDK tool calls on the same asyncio loop, and routinely
+ * spikes 5-8s under autonomous load even when fundamentally healthy. The
+ * old 4s budget tripped the "Gateway unreachable" banner during normal
+ * spikes — false-positive UX. The Next-proxy's per-attempt deadline is
+ * already 15s (web-ui/app/api/dashboard/gateway/[...path]/route.ts), so 10s
+ * stays well inside the proxy budget while masking transient spikes.
  */
 export async function getGatewayStatus(
-  timeoutMs: number = 4000,
+  timeoutMs: number = 10000,
 ): Promise<GatewayStatus> {
   try {
     const resp = await fetchWithTimeout(
