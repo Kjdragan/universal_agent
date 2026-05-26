@@ -63,7 +63,7 @@ def _json_loads_obj(raw: Any) -> dict[str, Any]:
     if isinstance(raw, str) and raw.strip():
         try:
             parsed = json.loads(raw)
-        except Exception:
+        except (json.JSONDecodeError, ValueError):
             return {}
         if isinstance(parsed, dict):
             return parsed
@@ -79,7 +79,7 @@ def _normalize_list(value: Any) -> list[str]:
             return []
         try:
             parsed = json.loads(text)
-        except Exception:
+        except (json.JSONDecodeError, ValueError):
             parsed = None
         if isinstance(parsed, list):
             return [str(item).strip() for item in parsed if str(item).strip()]
@@ -308,7 +308,7 @@ def sync_from_proactive_signal_cards(conn: sqlite3.Connection, *, limit: int = 2
         from universal_agent import proactive_signals
 
         cards = proactive_signals.list_cards(conn, limit=max(1, min(int(limit), 500)))
-    except Exception:
+    except (ImportError, AttributeError):
         return {"seen": 0, "upserted": 0}
 
     upserted = 0

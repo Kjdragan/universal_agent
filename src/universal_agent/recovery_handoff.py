@@ -92,7 +92,7 @@ def _redact_obj(obj: Any, *, max_str_len: int = 2000, _depth: int = 0) -> Any:
     # Fallback for unknown objects.
     try:
         return _redact_obj(str(obj), max_str_len=max_str_len, _depth=_depth + 1)
-    except Exception:
+    except (ValueError, TypeError):
         return "<unserializable>"
 
 
@@ -101,7 +101,7 @@ def _safe_tail(items: Iterable[Any] | None, n: int) -> list[Any]:
         return []
     try:
         seq = list(items)
-    except Exception:
+    except TypeError:
         return []
     return seq[-n:]
 

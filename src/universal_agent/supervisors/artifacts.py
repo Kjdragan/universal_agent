@@ -125,7 +125,7 @@ def list_snapshot_runs(
             parsed = json.loads(json_path.read_text(encoding="utf-8"))
             if isinstance(parsed, dict):
                 payload = parsed
-        except Exception:
+        except (json.JSONDecodeError, OSError):
             payload = {}
         md_path = json_path.with_suffix(".md")
         runs.append(
