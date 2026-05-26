@@ -800,9 +800,18 @@ def _build_cli_prompt(
     workspace_dir: Path,
     skill_name: str,
 ) -> str:
-    """Craft a well-structured prompt for the Claude Code CLI session."""
+    """Craft a well-structured prompt for the Claude Code CLI session.
+
+    When ``UA_VP_GOAL_ENABLED`` is set (and self-briefing artifacts already
+    exist in the workspace from a prior briefing turn), this function still
+    builds the work-phase prompt — but the briefing turn produced via
+    ``services/self_briefing.build_self_briefing_prompt`` is what runs first.
+    See ``worker_loop.py:_execute_mission_logic`` for the two-phase wiring.
+    """
 
     parts = []
+
+    goal_enabled = os.environ.get("UA_VP_GOAL_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
 
     if skill_name:
         parts.append(
@@ -813,6 +822,34 @@ def _build_cli_prompt(
     parts.append(f"## Objective\n\n{objective}\n")
 
     parts.append(f"## Workspace\n\nAll output files go under: {workspace_dir}\n")
+
+    # Self-briefing directive: when UA_VP_GOAL_ENABLED is on, prepend an
+    # instruction telling the VP to invoke the self-brief-and-attest skill
+    # FIRST. The skill drives the VP to write BRIEF.md (and ACCEPTANCE.md +
+    # goal_condition.txt when /goal-eligible) before starting the work.
+    # See .claude/skills/self-brief-and-attest/SKILL.md for the contract.
+    if goal_enabled:
+        brief_path = workspace_dir / "BRIEF.md"
+        if not brief_path.exists():
+            # No prior briefing turn — this run does briefing + work in one pass.
+            parts.append(
+                "## Self-briefing (REQUIRED FIRST STEP)\n\n"
+                "Before any other work, invoke the `self-brief-and-attest` skill.\n"
+                "Complete its Phase 1 (read + interrogate context), Phase 2 (write\n"
+                "`BRIEF.md` at the workspace root). Then continue to the work below.\n"
+                "If this mission is /goal-eligible (Cody + eligible source_kind),\n"
+                "also complete Phase 3 (write `ACCEPTANCE.md` + `goal_condition.txt`).\n"
+            )
+        else:
+            # Briefing artifacts already exist from a prior briefing turn — just
+            # point the VP at them.
+            acceptance_path = workspace_dir / "ACCEPTANCE.md"
+            parts.append(
+                f"## Self-briefing artifacts (from prior turn)\n\n"
+                f"You have already self-briefed. Read these before starting work:\n"
+                f"- `{brief_path}` — your interpretation of the task\n"
+                + (f"- `{acceptance_path}` — verifiable success criteria\n" if acceptance_path.exists() else "")
+            )
 
     constraints = payload.get("constraints")
     if isinstance(constraints, dict) and constraints:
@@ -828,6 +865,21 @@ def _build_cli_prompt(
     output_dir = str(payload.get("output_dir") or "").strip()
     if output_dir:
         parts.append(f"## Output Directory\n\nWrite final deliverables to: {output_dir}\n")
+
+    # Completion-attestation reminder when UA_VP_GOAL_ENABLED is on.
+    # The worker-level guard at worker_loop.py enforces this; the prompt
+    # text here makes it explicit in the VP's context so the VP knows to
+    # write the file before declaring done.
+    if goal_enabled:
+        parts.append(
+            "## Completion attestation (REQUIRED)\n\n"
+            "Before declaring this mission complete, write a `COMPLETION.md` file\n"
+            "at the workspace root. See the `self-brief-and-attest` skill for the\n"
+            "required structure. The parent worker enforces this — missing\n"
+            "`COMPLETION.md` will route the mission into the failure-rescue lane\n"
+            "as `failure_mode=\"missing_completion_attestation\"` and Simone\n"
+            "will be notified.\n"
+        )
 
     parts.append(
         "## Instructions\n\n"
