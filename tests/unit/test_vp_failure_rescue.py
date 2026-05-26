@@ -19,6 +19,12 @@ from typing import Any
 import pytest
 
 from universal_agent import task_hub
+# Import the module itself (not just the symbols) so monkeypatch can
+# resolve the dotted attribute path "universal_agent.services.vp_failure_rescue.X"
+# in the tests below — without this explicit import the
+# `universal_agent.services` subpackage isn't loaded at monkeypatch time
+# on a fresh interpreter, and pytest raises AttributeError on CI.
+from universal_agent.services import vp_failure_rescue  # noqa: F401
 from universal_agent.services.vp_failure_rescue import (
     SOURCE_KIND_VP_FAILURE,
     surface_failure_to_simone,
