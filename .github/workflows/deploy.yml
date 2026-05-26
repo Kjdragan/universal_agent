@@ -276,6 +276,29 @@ jobs:
               echo "--> Discord baseline (pre-deploy): cc-bot=$discord_cc_pre intelligence=$discord_intel_pre"
             fi
 
+            # Sync project skills to the ua user's ~/.claude/skills/ so they're
+            # discoverable from any CWD — including VP worker subprocess
+            # workspaces that run from /opt/universal_agent/AGENT_RUN_WORKSPACES/
+            # (where the project-relative .claude/skills/ isn't visible).
+            # Without this, skills like self-brief-and-attest deployed in the
+            # repo wouldn't be reachable by Cody's CLI subprocess. Discovery
+            # is hard-tested by the smoke-test on 2026-05-26 — Cody never
+            # invoked self-brief-and-attest because it wasn't in its session's
+            # skills[] list.
+            #
+            # Idempotent: rsync mirrors the project skills dir into the user
+            # location; --delete keeps the target in sync if a skill is
+            # removed upstream.
+            echo "--> Syncing project skills to ua user-level for VP worker discovery..."
+            sudo -u ua mkdir -p /home/ua/.claude/skills
+            if [ -d "$PROD_DIR/.claude/skills" ]; then
+              sudo rsync -a --delete "$PROD_DIR/.claude/skills/" /home/ua/.claude/skills/
+              sudo chown -R ua:ua /home/ua/.claude/skills
+              ls -1 /home/ua/.claude/skills 2>&1 | sed 's/^/  /' | head -20 || true
+            else
+              echo "  (no .claude/skills/ dir in repo — skipping skill sync)"
+            fi
+
             echo "--> Restarting production services..."
             if command -v systemctl >/dev/null 2>&1; then
               if command -v sudo >/dev/null 2>&1; then
