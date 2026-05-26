@@ -17201,7 +17201,7 @@ async def list_sessions(request: Request):
     """List live execution sessions and compatibility-visible session records."""
     _require_session_api_auth(request)
     if _ops_service:
-        summaries = _ops_service.list_sessions(status_filter="all")
+        summaries = await asyncio.to_thread(_ops_service.list_sessions, status_filter="all")
         return {
             "sessions": [
                 SessionSummaryResponse(
@@ -17277,8 +17277,11 @@ async def list_runs_public(
     }
 
 
-@app.get("/api/v1/dashboard/summary")
-async def dashboard_summary():
+def _dashboard_summary_sync_compute():
+    # HOT-PATCH 2026-05-26: extracted to run in to_thread so the whole sync
+    # chain (list_sessions, _query_activity_event_counters with json.loads
+    # over 1.23GB activity_state.db, list_approvals, list_jobs, snooze sweeps)
+    # does not block the asyncio loop. Confirmed via py-spy dumps.
     _apply_notification_snooze_expiry()
     _apply_activity_snooze_expiry()
     sessions_total = 0
@@ -17289,7 +17292,6 @@ async def dashboard_summary():
             sessions_total = len(_sessions)
     else:
         sessions_total = len(_sessions)
-
     if _session_runtime:
         active_sessions = sum(
             1
@@ -17321,26 +17323,18 @@ async def dashboard_summary():
         jobs = _cron_service.list_jobs()
         cron_total = len(jobs)
         cron_enabled = sum(1 for job in jobs if bool(getattr(job, "enabled", False)))
-
     return {
-        "sessions": {
-            "active": active_sessions,
-            "total": sessions_total,
-        },
-        "approvals": {
-            "pending": pending_approvals,
-            "total": len(list_approvals()),
-        },
-        "cron": {
-            "total": cron_total,
-            "enabled": cron_enabled,
-        },
-        "notifications": {
-            "unread": unread_notifications,
-            "total": total_notifications,
-        },
+        "sessions": {"active": active_sessions, "total": sessions_total},
+        "approvals": {"pending": pending_approvals, "total": len(list_approvals())},
+        "cron": {"total": cron_total, "enabled": cron_enabled},
+        "notifications": {"unread": unread_notifications, "total": total_notifications},
         "deployment_profile": _deployment_profile_defaults(),
     }
+
+
+@app.get("/api/v1/dashboard/summary")
+async def dashboard_summary():
+    return await asyncio.to_thread(_dashboard_summary_sync_compute)
 
 
 def _discord_intelligence_db_path() -> Path:
@@ -31485,7 +31479,7 @@ async def ops_list_sessions(
     try:
         if not _ops_service:
             raise HTTPException(status_code=503, detail="Ops service not initialized")
-        summaries = _ops_service.list_sessions(
+        summaries = await asyncio.to_thread(_ops_service.list_sessions,
             status_filter=status,
             source_filter=source,
             owner_filter=owner,
@@ -31652,7 +31646,7 @@ async def ops_cancel_outstanding_sessions(request: Request, payload: OpsSessionC
     if not reason:
         reason = "Cancelled from ops bulk session controls"
 
-    sessions = _ops_service.list_sessions(status_filter="all")
+    sessions = await asyncio.to_thread(_ops_service.list_sessions, status_filter="all")
     candidates: list[dict[str, Any]] = []
     for item in sessions:
         status = str(item.get("status", "")).lower()
@@ -31687,7 +31681,7 @@ async def ops_purge_csi_sessions(request: Request, payload: OpsCsiSessionPurgeRe
     older_than_seconds = older_than_minutes * 60
     include_active = bool(payload.include_active)
 
-    sessions = _ops_service.list_sessions(status_filter="all")
+    sessions = await asyncio.to_thread(_ops_service.list_sessions, status_filter="all")
     csi_sessions = [
         item
         for item in sessions
@@ -31857,7 +31851,7 @@ async def ops_purge_stale_sessions(request: Request, payload: OpsStaleSessionPur
     dry_run = payload.dry_run
     include_active = payload.include_active
 
-    all_sessions = _ops_service.list_sessions()
+    all_sessions = await asyncio.to_thread(_ops_service.list_sessions)
     now = datetime.now(timezone.utc)
     stale_threshold = timedelta(hours=older_than_hours)
 

@@ -1597,7 +1597,11 @@ class CronService:
                         if record.status == "cancelled"
                         else "script_exit_error"
                     )
-                    self._finalize_workflow_attempt(
+                    # HOT-PATCH 2026-05-26: wrap in to_thread so the sync shutil.copytree
+                    # inside mark_completed -> _sync_attempt_evidence (run_workspace.py:55)
+                    # does not block the asyncio loop. Confirmed via py-spy stack dump.
+                    await asyncio.to_thread(
+                        self._finalize_workflow_attempt,
                         job=job,
                         record=record,
                         scheduled_at=scheduled_at,
