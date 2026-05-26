@@ -57,6 +57,7 @@ Mistaking one for the other is the #1 source of confusion in this system. Before
 - **[Database Architecture](01_Architecture/Database_Architecture.md)**: Absolute source of truth for database paradigms, schema structure, segregation boundaries, activity notification lifecycle, and pruning logic.
 - **[Model Choice and Resolution](01_Architecture/10_Model_Choice_And_Resolution.md)**: Anthropic Z.AI proxy emulation, model resolution mapping, and inference health governance.
 - **[Archon Comparison & Integration Strategy](01_Architecture/11_Archon_Comparison_And_Integration_Strategy_2026-04-25.md)**: Critical architectural review comparing Archon to UA, evaluating Git Worktree isolation emulation and asynchronous YAML-driven coding service integration.
+- **[VP `/goal` Integration & Failure-Rescue PRD (Draft)](01_Architecture/12_VP_Goal_Integration_And_Failure_Rescue_PRD.md)**: Adopt Anthropic's `/goal` self-driving loop for tightly-scoped Cody work; mandatory universal self-briefing (`BRIEF.md`); mandatory completion attestation (`COMPLETION.md`); Simone-mediated failure rescue with three new tools (`vp_dispatch_mission_retry`, `vp_dispatch_mission_redispatch_fresh`, `escalate_vp_failure_to_operator`); centralized CC-Simone-on-success directive; HEARTBEAT/PROMPT close-discipline reconciliation. Status: draft, awaiting operator approval.
 
 ### 2. [Subsystems](02_Subsystems)
 
