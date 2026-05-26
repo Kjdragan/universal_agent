@@ -13,7 +13,7 @@ source:
   - src/universal_agent/hooks_service.py
   - src/universal_agent/gateway_server.py
   - src/universal_agent/services/proactive_advisor.py
-  - src/universal_agent/services/youtube_playlist_watcher.py
+  - src/universal_agent/services/youtube_playlist_manager.py
   - src/universal_agent/youtube_ingest.py
   - src/universal_agent/scripts/youtube_daily_digest.py
   - src/universal_agent/scripts/youtube_provision_digest_playlists.py
@@ -54,7 +54,7 @@ inputs:
     kind: "internal · cron + webhook"
     color: "#c47d6e"
     trigger: "Daily digest cron 06:00 CT (yesterday-shift) + playlist watcher + manual /api/v1/hooks/youtube/dispatch"
-    handler: "scripts/youtube_daily_digest.py · services/youtube_playlist_watcher.py · hooks_service.py"
+    handler: "scripts/youtube_daily_digest.py · services/youtube_playlist_manager.py · hooks_service.py"
     transform: "Zero-quota DB dedup → ranked candidates → top-N auto-dispatch → tutorial run (concept doc + optional repo bootstrap). See docs/03_Operations/99_Tutorial_Pipeline_Architecture_And_Operations.md."
 
   - label: "Dashboard"

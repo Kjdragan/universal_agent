@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import importlib
 import json
-import time
 from pathlib import Path
+import time
 from unittest.mock import patch
 
 import pytest

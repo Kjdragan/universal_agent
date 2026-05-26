@@ -10,8 +10,8 @@ need to run it again.
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
+import sys
 
 # Hand-curated lists from the 2026-05-22 conversation.
 # Gold = auto-add to that day's playlist when a new video is published.

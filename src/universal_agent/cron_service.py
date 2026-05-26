@@ -2490,7 +2490,10 @@ class CronService:
                                                     )
                                                     try:
                                                         import sys as _f_sys_llm
-                                                        from universal_agent import gateway_server as _f_gw_llm
+
+                                                        from universal_agent import (
+                                                            gateway_server as _f_gw_llm,
+                                                        )
                                                         from universal_agent.services.cron_artifact_notifier import (
                                                             notify_cron_artifact as _f_notify_llm,
                                                         )

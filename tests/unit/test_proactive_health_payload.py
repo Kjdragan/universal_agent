@@ -366,7 +366,7 @@ def test_proactive_artifact_digest_invariant_reads_from_activity_conn(
     The post-fix behavior: invariant queries activity_conn and finds the
     fresh row, so it stays quiet. A *missing* row (separate test below) is
     what should fire it. Either way, we prove it's reading the right DB."""
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta, timezone
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     # task_hub_items so the activity_conn path doesn't blow up
@@ -423,11 +423,12 @@ def test_proactive_artifact_digest_invariant_fires_when_emails_stale(
     module AFTER the monkeypatch, undoing it. CI runs after that date hit the
     invariant's `now.hour < 9` hour-gate and got [] back. Fix: reload FIRST,
     then patch, and use a clock-relative fixed_now so the test is durable."""
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta, timezone
 
     # Reload BEFORE the monkeypatch — reload would otherwise re-create
     # _now_houston and undo the patch.
     import importlib
+
     from universal_agent.services.invariants import proactive_pipeline_invariants as ppi
     importlib.reload(ppi)
 
