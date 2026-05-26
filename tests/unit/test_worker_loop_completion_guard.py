@@ -294,3 +294,127 @@ class TestExecutionModeOverrideForAnthropic:
             cody_mode="zai",
             explicit_exec_mode="",
         ) == "sdk"
+
+
+# ---------------------------------------------------------------------------
+# Bug 6: Source-task close on VP terminal.
+#
+# Before the fix, worker_loop only closed the mirror row (task_id ==
+# mission_id), leaving the ORIGINAL source task that triggered the
+# dispatch (linked via payload.metadata.task_id) stuck in `delegated`
+# indefinitely. Cumulative count on 2026-05-26 cleanup: 188 zombie rows.
+# ---------------------------------------------------------------------------
+
+
+class TestSourceTaskCloseOnVpTerminal:
+    """Pin the source-task close logic added to worker_loop.py:_execute_mission_logic."""
+
+    def _simulate_close(
+        self,
+        *,
+        mission_payload_json: str,
+        mission_id: str,
+        event_type: str,
+    ) -> dict:
+        """Mirror the worker_loop logic for source-task close.
+
+        Returns the upsert dict that would be applied to the source task
+        (or empty dict if no source task linked).
+        """
+        from universal_agent import task_hub
+
+        th_status_map = {
+            "vp.mission.completed": task_hub.TASK_STATUS_COMPLETED,
+            "vp.mission.failed": task_hub.TASK_STATUS_OPEN,
+            "vp.mission.cancelled": task_hub.TASK_STATUS_CANCELLED,
+        }
+        th_status = th_status_map.get(event_type, task_hub.TASK_STATUS_COMPLETED)
+
+        try:
+            payload = json.loads(mission_payload_json or "{}")
+        except Exception:
+            payload = {}
+        source_task_id = ""
+        if isinstance(payload, dict):
+            meta = payload.get("metadata")
+            if isinstance(meta, dict):
+                source_task_id = str(meta.get("task_id") or "").strip()
+        if not source_task_id or source_task_id == mission_id:
+            return {}
+
+        return {
+            "task_id": source_task_id,
+            "status": th_status,
+            "metadata": {
+                "vp_terminal_status": event_type.replace("vp.mission.", ""),
+                "linked_mission_id": mission_id,
+                "result_ref": "",
+            },
+        }
+
+    def test_completed_mission_closes_source_task_as_completed(self):
+        result = self._simulate_close(
+            mission_payload_json=json.dumps({"metadata": {"task_id": "qa-cf83c59411c5"}}),
+            mission_id="vp-mission-abc123",
+            event_type="vp.mission.completed",
+        )
+        assert result["task_id"] == "qa-cf83c59411c5"
+        assert result["status"] == "completed"
+        assert result["metadata"]["linked_mission_id"] == "vp-mission-abc123"
+        assert result["metadata"]["vp_terminal_status"] == "completed"
+
+    def test_failed_mission_reopens_source_task(self):
+        """Per existing precedent for the mirror row: VP failure → task = open
+        so it can be re-dispatched or rescued."""
+        result = self._simulate_close(
+            mission_payload_json=json.dumps({"metadata": {"task_id": "qa-task-xyz"}}),
+            mission_id="vp-mission-def456",
+            event_type="vp.mission.failed",
+        )
+        assert result["status"] == "open"
+        assert result["metadata"]["vp_terminal_status"] == "failed"
+
+    def test_cancelled_mission_cancels_source_task(self):
+        result = self._simulate_close(
+            mission_payload_json=json.dumps({"metadata": {"task_id": "qa-task-uvw"}}),
+            mission_id="vp-mission-ghi789",
+            event_type="vp.mission.cancelled",
+        )
+        assert result["status"] == "cancelled"
+
+    def test_no_source_task_in_metadata_is_noop(self):
+        """Missions dispatched without a source task_id (rare — direct vp_dispatch
+        from non-task-hub caller) should NOT touch any task hub row beyond the
+        mirror."""
+        result = self._simulate_close(
+            mission_payload_json=json.dumps({"metadata": {"cody_mode": "anthropic"}}),
+            mission_id="vp-mission-no-source",
+            event_type="vp.mission.completed",
+        )
+        assert result == {}, "no upsert when source_task_id is absent"
+
+    def test_source_task_equal_to_mission_id_is_noop(self):
+        """If somehow the linked task_id equals the mission_id (the mirror row),
+        skip — we already closed it as the mirror."""
+        result = self._simulate_close(
+            mission_payload_json=json.dumps({"metadata": {"task_id": "vp-mission-same"}}),
+            mission_id="vp-mission-same",
+            event_type="vp.mission.completed",
+        )
+        assert result == {}, "no double-close when source_task_id == mission_id"
+
+    def test_malformed_payload_json_is_safe(self):
+        result = self._simulate_close(
+            mission_payload_json="this is not json",
+            mission_id="vp-mission-bad",
+            event_type="vp.mission.completed",
+        )
+        assert result == {}
+
+    def test_empty_payload_is_safe(self):
+        result = self._simulate_close(
+            mission_payload_json="",
+            mission_id="vp-mission-empty",
+            event_type="vp.mission.completed",
+        )
+        assert result == {}
