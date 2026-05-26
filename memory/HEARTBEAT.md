@@ -74,10 +74,26 @@ vp_dispatch_mission(
     vp_id="vp.coder.primary",
     objective="<crisp objective with verifiable success criteria>",
     mission_type="task",
+    task_id="<source_task_id>",          ← REQUIRED for /goal flow inheritance
     idempotency_key="task-<task_id>",
     metadata={"use_goal_loop": True},
 )
 ```
+
+> **`task_id` is REQUIRED, not optional**, whenever you're dispatching an
+> operator-dispatched task (i.e., a task hub item where Kevin typed the
+> objective into the dashboard's Dispatch Mission box). The `vp_dispatch_mission`
+> tool uses `task_id` to look up the linked task hub row and propagate
+> `metadata.use_goal_loop=True` onto the spawned VP mission. Without `task_id`,
+> the inheritance never fires and the mission runs WITHOUT the /goal loop —
+> even if you also set `metadata={"use_goal_loop": True}` (which works too,
+> but `task_id` is the single source of truth that all downstream surfaces
+> rely on, including the dashboard's `goal-artifacts` panel that needs to
+> trace the original prompt back from the mission).
+>
+> **Passing `idempotency_key="task-<task_id>"` does NOT substitute for `task_id`.**
+> idempotency_key is purely for dispatch dedup; the inheritance code reads
+> `args.get("task_id")` (or `metadata.task_id`), not the idempotency key.
 
 **When NOT to set it:**
 

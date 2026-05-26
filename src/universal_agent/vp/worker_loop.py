@@ -81,6 +81,16 @@ def _classify_outcome_failure_mode(outcome) -> Optional[str]:
 
     if not haystack:
         return None
+    # Check protocol-violation markers FIRST so they take precedence over
+    # the generic vp_self_reported fallback. 2026-05-26 fix: previously
+    # the smoke-test failure (where worker_loop demoted a completed
+    # mission to failed for missing COMPLETION.md) was mislabeled as
+    # vp_self_reported because the classifier returned the generic
+    # `status == failed` fallback before checking for protocol markers.
+    # That was confusing because the failure card said the VP self-
+    # reported when in fact our own attestation guard fired.
+    if "missing_completion_attestation" in haystack:
+        return "missing_completion_attestation"
     if any(marker in haystack for marker in _AUTH_FAILURE_MARKERS_LOWER):
         return "auth_failure"
     if any(marker in haystack for marker in _WORKSPACE_GUARD_MARKERS_LOWER):
@@ -514,21 +524,33 @@ class VpWorkerLoop:
                 await heartbeat_task
             except asyncio.CancelledError:
                 pass
-        # Completion attestation guard (PRD § 5.5) — when UA_VP_GOAL_ENABLED
-        # is on, the VP must have written COMPLETION.md per the
-        # self-brief-and-attest skill before we accept "completed". Missing
-        # the file demotes to failed with a stable failure_mode that Simone
-        # can recognize as a protocol violation (not a work failure).
-        # The demoted outcome then flows through the failure_mode /
-        # transcript_tail derivation below, surfacing to Simone via the
+        # Completion attestation guard (PRD § 5.5) — when THIS MISSION is
+        # /goal-eligible (use_goal_loop=True in payload metadata OR an
+        # eligible source_kind), the VP must have written COMPLETION.md
+        # per the self-brief-and-attest skill before we accept "completed".
+        # Missing the file demotes to failed with a stable failure_mode
+        # that Simone can recognize as a protocol violation (not a work
+        # failure). The demoted outcome then flows through the failure_mode
+        # / transcript_tail derivation below, surfacing to Simone via the
         # vp_mission_failure lane just like any other failure.
+        #
+        # 2026-05-26 fix: previously this gated on the GLOBAL flag
+        # `vp_goal_enabled()` instead of the per-mission eligibility,
+        # which caused successful Cody missions WITHOUT use_goal_loop to
+        # be spuriously demoted for missing a file they were never told
+        # to write. The smoke test (vp-mission-24b75861...) hit exactly
+        # this — Cody completed the task correctly, but the global flag
+        # was on, COMPLETION.md was absent (skill wasn't even invokable
+        # — see issue #4 in PR description), and the guard demoted it.
+        # Now we check `is_goal_eligible_mission(mission)` so the guard
+        # only fires for missions that actually opted into /goal flow.
         if outcome.status == "completed":
             try:
                 from universal_agent.services.self_briefing import (
                     check_completion_attestation,
-                    vp_goal_enabled,
+                    is_goal_eligible_mission,
                 )
-                if vp_goal_enabled():
+                if is_goal_eligible_mission(mission):
                     ok, reason = check_completion_attestation(workspace_path)
                     if not ok:
                         logger.warning(
