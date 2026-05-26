@@ -19476,7 +19476,7 @@ def _ensure_csi_convergence_cron_job() -> None:
         return
     job_id = "csi_convergence_sync"
     command = "!script universal_agent.scripts.csi_convergence_sync"
-    cron_expr = os.getenv("UA_CSI_CONVERGENCE_CRON_EXPR", "*/30 * * * *").strip() or "*/30 * * * *"
+    cron_expr = os.getenv("UA_CSI_CONVERGENCE_CRON_EXPR", "0 * * * *").strip() or "0 * * * *"
     timezone_name = os.getenv("UA_CSI_CONVERGENCE_CRON_TIMEZONE", "America/Chicago").strip() or "America/Chicago"
     workspace_dir = str(WORKSPACES_DIR / "cron_csi_convergence_sync")
     metadata = {
