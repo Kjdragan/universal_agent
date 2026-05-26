@@ -1205,7 +1205,25 @@ def finalize_vp_mission(
     *,
     result_ref: Optional[str] = None,
     clear_claim: bool = True,
+    failure_mode: Optional[str] = None,
+    transcript_tail: Optional[str] = None,
 ) -> bool:
+    """Finalize a VP mission.
+
+    For ``status in {failed, cancelled}`` with ``failure_mode != "operator_cancel"``,
+    surfaces an informational ``vp_mission_failure`` task hub item routed to
+    Simone (see ``services/vp_failure_rescue.surface_failure_to_simone``).
+    The surfacing is best-effort and never blocks the UPDATE.
+
+    ``failure_mode`` is a stable string used by Simone's HEARTBEAT directive
+    to pick the right rescue verb. Recommended values: ``"vp_self_reported"``,
+    ``"goal_cap_hit"``, ``"subprocess_crash"``, ``"auth_failure"``,
+    ``"workspace_guard"``, ``"timeout"``, ``"operator_cancel"``,
+    ``"missing_completion_attestation"``, ``"unspecified"``.
+
+    ``transcript_tail`` is the last N bytes of subprocess output. Surfacing
+    truncates to 2 KB before persistence.
+    """
     status = str(final_status or "").strip().lower()
     if status not in {"completed", "failed", "cancelled"}:
         raise ValueError(f"Unsupported final_status: {final_status}")
@@ -1223,6 +1241,26 @@ def finalize_vp_mission(
         (status, result_ref, now, 1 if clear_claim else 0, now, mission_id),
     )
     conn.commit()
+
+    # Failure-rescue hook (best-effort — never propagate exceptions).
+    if status in {"failed", "cancelled"} and result.rowcount == 1:
+        try:
+            from universal_agent.services.vp_failure_rescue import (
+                surface_failure_to_simone,
+            )
+            surface_failure_to_simone(
+                mission_id=mission_id,
+                failure_mode=failure_mode or "unspecified",
+                transcript_tail=transcript_tail,
+                result_ref=result_ref,
+            )
+        except Exception:  # pragma: no cover — defensive
+            import logging
+            logging.getLogger(__name__).exception(
+                "finalize_vp_mission: failure-rescue surfacing failed for %s",
+                mission_id,
+            )
+
     return result.rowcount == 1
 
 

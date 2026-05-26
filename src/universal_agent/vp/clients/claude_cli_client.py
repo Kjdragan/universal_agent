@@ -777,6 +777,18 @@ def _build_cli_env(
         env = {k: v for k, v in os.environ.items() if not k.startswith("ANTHROPIC_")}
         # Agent Teams is the whole point of Anthropic mode — force on.
         env["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
+        # If a long-lived Anthropic Max headless token is available (from
+        # ``claude setup-token``, stored in Infisical as
+        # ``ANTHROPIC_MAX_OAUTH_TOKEN``), inject it as ``ANTHROPIC_API_KEY`` in
+        # the subprocess env. Claude Code reads ``ANTHROPIC_API_KEY`` natively;
+        # the setup-token credential bills against the Max subscription rather
+        # than per-token API. Without this, the subprocess falls through to
+        # the file-based OAuth at ``~/.claude/.credentials.json``, which has a
+        # refresh-chain failure mode for headless invocations (see
+        # ``_AUTH_FAILURE_OPERATOR_HINT`` at the top of this file).
+        max_token = os.environ.get("ANTHROPIC_MAX_OAUTH_TOKEN", "").strip()
+        if max_token:
+            env["ANTHROPIC_API_KEY"] = max_token
     else:
         env = dict(os.environ)
         if enable_agent_teams:
