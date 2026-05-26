@@ -1124,7 +1124,18 @@ async def run_sweeper_loop(stop_event: "Any") -> None:
         if stop_event.is_set():
             break
         try:
-            result = sweeper.tick()
+            # CRITICAL: sweeper.tick() is sync and queries activity_state.db
+            # (currently 1.23 GB) across many tiles in _run_tier0. Running
+            # that sync work directly on the asyncio loop blocks the gateway
+            # for 15-30 seconds at a time once the DB grows past ~500 MB —
+            # the dashboard's `/api/v1/version` probe (and every other HTTP
+            # handler) times out, producing the "Gateway unreachable" red
+            # banner. Same pattern as the startup-recovery sweep — see
+            # gateway_server.py:14649-14656 where asyncio.to_thread was used
+            # to fix the identical bug for a different sync SQLite block
+            # (PR #289). 2026-05-26: dashboard banner regression caused by
+            # this exact loop-blocking pattern.
+            result = await asyncio.to_thread(sweeper.tick)
             if result.skipped_reason is None:
                 # Now run the LLM-driven async tiers (tier-1, tier-2).
                 # tick() handled tier-0 synchronously; the async pass
