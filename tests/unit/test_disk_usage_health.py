@@ -13,10 +13,10 @@ Thresholds (operator-strict per pattern set in P4):
 
 from __future__ import annotations
 
+from collections import namedtuple
 import importlib
 from pathlib import Path
 from unittest.mock import patch
-from collections import namedtuple
 
 import pytest
 

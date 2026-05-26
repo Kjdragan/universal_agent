@@ -22,17 +22,17 @@ See: docs/02_Subsystems/Architecture_Canvas_View.md
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass, field
 import datetime as dt
 import html
 import json
 import os
+from pathlib import Path
 import shutil
 import subprocess
 import sys
-import urllib.request
-from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
+import urllib.request
 
 import yaml
 

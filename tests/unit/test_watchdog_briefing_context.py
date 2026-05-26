@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
