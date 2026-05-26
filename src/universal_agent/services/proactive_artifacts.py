@@ -126,7 +126,8 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             surfaced_at TEXT NOT NULL DEFAULT '',
             accepted_at TEXT NOT NULL DEFAULT '',
             rejected_at TEXT NOT NULL DEFAULT '',
-            archived_at TEXT NOT NULL DEFAULT ''
+            archived_at TEXT NOT NULL DEFAULT '',
+            delivered_at TEXT NOT NULL DEFAULT ''
         );
 
         CREATE INDEX IF NOT EXISTS idx_proactive_artifacts_status
@@ -170,6 +171,17 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             ON proactive_artifact_feedback(artifact_id, created_at DESC);
         """
     )
+    # Idempotent column add for pre-existing DBs created before
+    # `delivered_at` was introduced (PR claude/hourly-insight-redesign).
+    # SQLite's `IF NOT EXISTS` on ALTER TABLE ADD COLUMN landed in 3.35.0;
+    # use a defensive try/except to stay compatible with older bundles.
+    try:
+        conn.execute(
+            "ALTER TABLE proactive_artifacts ADD COLUMN delivered_at TEXT NOT NULL DEFAULT ''"
+        )
+    except sqlite3.OperationalError:
+        # Column already exists — that's the expected steady-state path.
+        pass
     conn.commit()
 
 
@@ -419,6 +431,30 @@ def record_email_delivery(
         status=ARTIFACT_STATUS_SURFACED,
         delivery_state=DELIVERY_EMAILED,
     )
+    return get_artifact(conn, artifact_id) or {}
+
+
+def mark_artifact_delivered(
+    conn: sqlite3.Connection,
+    *,
+    artifact_id: str,
+    delivered_at: str = "",
+) -> dict[str, Any]:
+    """Stamp ``delivered_at`` on an artifact so it isn't re-delivered.
+
+    Used by the hourly insight email composer to mark briefs that have
+    actually gone out. Idempotent — re-stamping with the same value is a
+    no-op write but still safe.
+    """
+    ensure_schema(conn)
+    if get_artifact(conn, artifact_id) is None:
+        raise KeyError(artifact_id)
+    stamp = delivered_at or _now_iso()
+    conn.execute(
+        "UPDATE proactive_artifacts SET delivered_at = ?, updated_at = ? WHERE artifact_id = ?",
+        (stamp, _now_iso(), artifact_id),
+    )
+    conn.commit()
     return get_artifact(conn, artifact_id) or {}
 
 
