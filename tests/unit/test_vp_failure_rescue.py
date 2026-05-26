@@ -258,10 +258,11 @@ def test_finalize_vp_mission_invokes_surface_on_failed(tmp_path, monkeypatch):
         })
         return "vp_failure:mocked"
 
-    monkeypatch.setattr(
-        "universal_agent.services.vp_failure_rescue.surface_failure_to_simone",
-        _capture,
-    )
+    # Use module-object form (not string form) — pytest's string-based
+    # resolve() walks attributes from universal_agent down, and on CI's
+    # interpreter init path `services` isn't yet bound as an attribute
+    # of universal_agent even after the explicit import above.
+    monkeypatch.setattr(vp_failure_rescue, "surface_failure_to_simone", _capture)
 
     db = sqlite3.connect(":memory:")
     db.row_factory = sqlite3.Row
@@ -297,7 +298,8 @@ def test_finalize_vp_mission_silent_on_completed(tmp_path, monkeypatch):
 
     captured: list[Any] = []
     monkeypatch.setattr(
-        "universal_agent.services.vp_failure_rescue.surface_failure_to_simone",
+        vp_failure_rescue,
+        "surface_failure_to_simone",
         lambda **kw: captured.append(kw),
     )
 
@@ -323,10 +325,7 @@ def test_finalize_vp_mission_surface_failure_does_not_propagate(tmp_path, monkey
     def _boom(**_):
         raise RuntimeError("rescue surfacing failed for test")
 
-    monkeypatch.setattr(
-        "universal_agent.services.vp_failure_rescue.surface_failure_to_simone",
-        _boom,
-    )
+    monkeypatch.setattr(vp_failure_rescue, "surface_failure_to_simone", _boom)
 
     db = sqlite3.connect(":memory:")
     db.row_factory = sqlite3.Row
