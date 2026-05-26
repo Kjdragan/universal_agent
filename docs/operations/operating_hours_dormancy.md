@@ -82,6 +82,9 @@ All times Houston (America/Chicago) unless noted. Schedules spread on 2026-05-11
 | `proactive_report_afternoon` | 4:05 PM daily | [`gateway_server.py`](../../src/universal_agent/gateway_server.py) |
 | `vp_coder_workspace_pruning` | Sun 5:05 PM (weekly) | [`gateway_server.py`](../../src/universal_agent/gateway_server.py) |
 | `hackernews_snapshot` | every 30m, 6 AM–10 PM (at :00 and :30) | [`gateway_server.py`](../../src/universal_agent/gateway_server.py) |
+| `hourly_insight_email` | top of every hour, 6 AM–9 PM | [`gateway_server.py`](../../src/universal_agent/gateway_server.py) |
+| `evening_briefing` | 6:00 PM daily | [`gateway_server.py`](../../src/universal_agent/gateway_server.py) |
+| `insight_scoring_health` | Sun 8:00 AM (weekly) | [`gateway_server.py`](../../src/universal_agent/gateway_server.py) |
 
 GitHub Actions schedules (UTC, no DST handling):
 

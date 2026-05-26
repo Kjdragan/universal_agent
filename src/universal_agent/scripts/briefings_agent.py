@@ -13,7 +13,7 @@ swallowed — the briefing must never break because the HN block didn't.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 import os
@@ -371,6 +371,9 @@ def _build_objective(
     watchdog_block: str = "",
     atlas_block: str = "",
     pending_artifacts_block: str = "",
+    hourly_recap_block: str = "",
+    honorable_mention_block: str = "",
+    mode: str = "morning",
 ) -> str:
     """Assemble the briefing prompt from the context sources.
 
@@ -436,6 +439,14 @@ def _build_objective(
             "they don't quietly age out of attention."
         )
 
+    hourly_recap_section = ""
+    if hourly_recap_block:
+        hourly_recap_section = f"\n\n{hourly_recap_block}\n"
+
+    honorable_mention_section = ""
+    if honorable_mention_block:
+        honorable_mention_section = f"\n\n{honorable_mention_block}\n"
+
     hn_section = ""
     hn_instructions = ""
     if hn_block:
@@ -467,7 +478,7 @@ Here is the external Nightly Wiki Proactive Generation output (if any):
 ```markdown
 {wiki_content}
 ```
-{watchdog_section}{triage_section}{atlas_section}{pending_artifacts_section}{hn_section}
+{watchdog_section}{triage_section}{atlas_section}{hourly_recap_section}{honorable_mention_section}{pending_artifacts_section}{hn_section}
 Instructions:
 - Summarize tasks completed, attempted, and failed.
 - Include links/paths to any artifacts produced.
@@ -480,10 +491,255 @@ Make sure to provide a short completion message suitable for a dashboard notific
 """
 
 
+def _detect_mode() -> str:
+    """Return the briefing mode — ``"morning"`` (default) or ``"evening"``.
+
+    Resolution order (first non-empty wins):
+      1. ``--mode=evening`` / ``--mode=morning`` CLI flag (cron registration
+         passes ``--mode=evening`` for the 6 PM job).
+      2. ``UA_BRIEFING_MODE`` env var.
+      3. Fallback ``"morning"``.
+    """
+    for arg in sys.argv[1:]:
+        if arg.startswith("--mode="):
+            value = arg.split("=", 1)[1].strip().lower()
+            if value in {"morning", "evening"}:
+                return value
+    env_value = (os.getenv("UA_BRIEFING_MODE") or "").strip().lower()
+    if env_value in {"morning", "evening"}:
+        return env_value
+    return "morning"
+
+
+def _hourly_recap_window(mode: str) -> tuple[str, str]:
+    """Compute the recap window ISO bounds for the current briefing mode.
+
+    Morning briefing recaps from the prior evening's briefing (18:00 yesterday)
+    through now. Evening briefing recaps from this morning's briefing
+    (06:30 today) through now. These are best-effort approximations — they
+    miss the actual prior-briefing-completed timestamps but are within a few
+    minutes which is more than precise enough for the recap window.
+    """
+    now = datetime.now(timezone.utc)
+    if mode == "evening":
+        # Today 06:30 UTC-equivalent. We use UTC anchors to avoid TZ math —
+        # the recap loses ±1h in DST shoulders but that just means a couple of
+        # extra/fewer rows; not a correctness issue.
+        anchor = now.replace(hour=11, minute=30, second=0, microsecond=0)
+        if anchor > now:
+            anchor = anchor - timedelta(days=1)
+    else:
+        # 18:00 yesterday Houston ≈ 23:00 UTC yesterday (CST) / 24:00 UTC
+        # yesterday (CDT). Use 23:00 UTC yesterday as the conservative
+        # anchor — captures all hourly emails actually sent.
+        anchor = (now - timedelta(days=1)).replace(hour=23, minute=0, second=0, microsecond=0)
+    return anchor.isoformat(), now.isoformat()
+
+
+def _build_hourly_recap_block(rows: list[dict]) -> str:
+    """Render the "Hourly Insights Recap" block from scoring-log rows."""
+    if not rows:
+        return ""
+    lines = [
+        "## Hourly Insights Recap",
+        "",
+        f"- Insights delivered since last briefing: **{len(rows)}**",
+        "",
+    ]
+    for row in rows:
+        artifact_id = str(row.get("artifact_id") or "").strip()
+        title = str(row.get("title") or "").strip() or "(untitled)"
+        summary = str(row.get("summary") or "").strip()
+        snippet = summary[:200] + ("…" if len(summary) > 200 else "") if summary else ""
+        slot = str(row.get("delivery_slot") or "").strip()
+        slot_tag = ""
+        if slot == "sub_threshold_filler":
+            slot_tag = "  *(sub-threshold filler)*"
+        elif slot == "insight_2":
+            slot_tag = "  *(diversified second pick)*"
+        lines.append(f"- **{title}**{slot_tag}")
+        if snippet:
+            lines.append(f"  - {snippet}")
+        if artifact_id:
+            lines.append(f"  - Dashboard: `?artifact={artifact_id}`")
+    return "\n".join(lines)
+
+
+def _get_hourly_recap_block_or_empty(mode: str) -> str:
+    """Pull every delivered_hourly=1 brief in the recap window, render the block.
+
+    Side effect: rows that have NOT yet been surfaced in a briefing get
+    flipped to ``delivered_briefing=1`` so the next briefing doesn't re-list
+    them. Kill switch: ``UA_HOURLY_RECAP_BRIEFING_BLOCK_ENABLED=0``.
+    """
+    if os.getenv("UA_HOURLY_RECAP_BRIEFING_BLOCK_ENABLED", "1") == "0":
+        logger.info("Hourly recap block disabled via UA_HOURLY_RECAP_BRIEFING_BLOCK_ENABLED=0")
+        return ""
+    try:
+        from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+        from universal_agent.services import proactive_scoring_log as _scoring
+
+        since_iso, _to_iso = _hourly_recap_window(mode)
+        conn = connect_runtime_db(get_activity_db_path())
+        try:
+            _scoring.ensure_schema(conn)
+            rows = conn.execute(
+                """
+                SELECT s.artifact_id, s.delivery_slot, s.logged_at,
+                       a.title, a.summary
+                FROM proactive_brief_scoring_log s
+                LEFT JOIN proactive_artifacts a ON a.artifact_id = s.artifact_id
+                WHERE s.delivered_hourly = 1
+                  AND s.delivered_briefing = 0
+                  AND s.logged_at >= ?
+                ORDER BY s.logged_at ASC
+                """,
+                (since_iso,),
+            ).fetchall()
+            if not rows:
+                return ""
+            payload = [dict(r) for r in rows]
+            block = _build_hourly_recap_block(payload)
+            # Flip delivered_briefing so we don't recap the same brief twice.
+            artifact_ids = {p["artifact_id"] for p in payload if p.get("artifact_id")}
+            _scoring.mark_delivered_briefing(conn, artifact_ids=artifact_ids)
+            return block
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001 — never let the recap break the briefing
+        logger.warning("Hourly recap block helper crashed: %s", exc)
+        return ""
+
+
+def _build_honorable_mention_block(*, title: str, snippet: str, artifact_id: str, reason: str) -> str:
+    """Render the "Honorable Mention" block from an LLM-chosen unsurfaced brief."""
+    lines = [
+        "## Honorable Mention",
+        "",
+        f"- **{title}**",
+    ]
+    if snippet:
+        lines.append(f"  - {snippet}")
+    if artifact_id:
+        lines.append(f"  - Dashboard: `?artifact={artifact_id}`")
+    if reason:
+        lines.append(f"  - Why it stood out: {reason}")
+    return "\n".join(lines)
+
+
+async def _select_honorable_mention(rows: list[dict]) -> tuple[int, str]:
+    """Ask the LLM which unsurfaced brief has the most merit.
+
+    Returns ``(index, reason)`` where ``index`` is into ``rows``. Defaults to
+    ``(0, "")`` when the LLM call fails — the caller still surfaces *something*
+    rather than dropping the block silently.
+    """
+    if not rows:
+        return -1, ""
+    if len(rows) == 1:
+        return 0, ""
+
+    import json
+
+    from universal_agent.services.llm_classifier import _call_llm, _parse_json_response
+
+    compact = [
+        {
+            "index": idx,
+            "title": str(r.get("title") or "").strip(),
+            "summary": (str(r.get("summary") or "").strip())[:300],
+            "composite": float(r.get("composite_score") or 0.0),
+            "confidence": float(r.get("confidence") or 0.0),
+            "channel_breadth": int(r.get("channel_breadth") or 0),
+        }
+        for idx, r in enumerate(rows)
+    ]
+    system = (
+        "You select the ONE most operator-worthy proactive brief from a list "
+        "of briefs the autoscorer chose not to surface. Be ruthless — only "
+        "pick a brief if it looks materially interesting or non-obvious. "
+        "Return ONLY JSON: {\"index\": <int>, \"reason\": \"<one-sentence why>\"}."
+    )
+    try:
+        raw = await _call_llm(
+            system=system,
+            user=json.dumps({"unsurfaced": compact}, ensure_ascii=True),
+            max_tokens=400,
+        )
+        parsed = _parse_json_response(raw)
+        if isinstance(parsed, dict):
+            idx = int(parsed.get("index") or 0)
+            reason = str(parsed.get("reason") or "").strip()
+            if 0 <= idx < len(rows):
+                return idx, reason
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Honorable-mention LLM selection failed: %s", exc)
+    return 0, ""
+
+
+async def _get_honorable_mention_block_or_empty(mode: str) -> str:
+    """Surface ONE unsurfaced brief from the recap window via LLM selection.
+
+    Kill switch: ``UA_HONORABLE_MENTION_BRIEFING_BLOCK_ENABLED=0``. Only fires
+    in evening mode (the morning briefing already surfaces ATLAS briefs via
+    the legacy ``_get_atlas_briefs_block_or_empty`` path).
+    """
+    if mode != "evening":
+        return ""
+    if os.getenv("UA_HONORABLE_MENTION_BRIEFING_BLOCK_ENABLED", "1") == "0":
+        return ""
+    try:
+        from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+        from universal_agent.services import proactive_scoring_log as _scoring
+
+        since_iso, _to_iso = _hourly_recap_window(mode)
+        conn = connect_runtime_db(get_activity_db_path())
+        try:
+            _scoring.ensure_schema(conn)
+            rows = conn.execute(
+                """
+                SELECT s.artifact_id, s.composite_score, s.confidence,
+                       s.channel_breadth, a.title, a.summary
+                FROM proactive_brief_scoring_log s
+                LEFT JOIN proactive_artifacts a ON a.artifact_id = s.artifact_id
+                WHERE s.delivered_hourly = 0
+                  AND s.logged_at >= ?
+                ORDER BY s.composite_score DESC
+                LIMIT 20
+                """,
+                (since_iso,),
+            ).fetchall()
+            if not rows:
+                return ""
+            payload = [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+        idx, reason = await _select_honorable_mention(payload)
+        if idx < 0:
+            return ""
+        chosen = payload[idx]
+        title = str(chosen.get("title") or "").strip() or "(untitled)"
+        summary = str(chosen.get("summary") or "").strip()
+        snippet = summary[:200] + ("…" if len(summary) > 200 else "")
+        return _build_honorable_mention_block(
+            title=title,
+            snippet=snippet,
+            artifact_id=str(chosen.get("artifact_id") or "").strip(),
+            reason=reason,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Honorable-mention block helper crashed: %s", exc)
+        return ""
+
+
 async def main():
     # 1. Initialize runtime secrets via Infisical (allowing dotenv fallback)
     initialize_runtime_secrets(profile="local_workstation")
     logging.basicConfig(level=logging.INFO)
+
+    mode = _detect_mode()
+    logger.info("Briefings agent invoked in mode=%s", mode)
 
     port = os.getenv("UA_GATEWAY_PORT", "8008")
     gateway_url = f"http://127.0.0.1:{port}/api/v1/ops/telemetry/briefing"
@@ -569,6 +825,31 @@ async def main():
             "Pending-artifacts block omitted (kill switch / nothing pending)"
         )
 
+    # Mode-aware blocks (hourly recap + honorable mention) — both modes get
+    # the recap, but honorable mention only fires in evening mode (the
+    # morning briefing already surfaces ATLAS briefs via the legacy path).
+    hourly_recap_block = _get_hourly_recap_block_or_empty(mode)
+    if hourly_recap_block:
+        logger.info(
+            "Hourly recap block included (~%d chars, mode=%s)",
+            len(hourly_recap_block),
+            mode,
+        )
+    else:
+        logger.info(
+            "Hourly recap block omitted (mode=%s, kill switch / no delivered briefs since last recap window)",
+            mode,
+        )
+
+    honorable_mention_block = await _get_honorable_mention_block_or_empty(mode)
+    if honorable_mention_block:
+        logger.info(
+            "Honorable-mention block included (~%d chars)",
+            len(honorable_mention_block),
+        )
+    else:
+        logger.info("Honorable-mention block omitted (morning mode / kill switch / no unsurfaced briefs)")
+
     objective = _build_objective(
         telemetry_json=telemetry_json,
         wiki_content=wiki_content,
@@ -579,9 +860,12 @@ async def main():
         watchdog_block=watchdog_block,
         atlas_block=atlas_block,
         pending_artifacts_block=pending_artifacts_block,
+        hourly_recap_block=hourly_recap_block,
+        honorable_mention_block=honorable_mention_block,
+        mode=mode,
     )
 
-    logger.info("Dispatching mission to vp.general.primary...")
+    logger.info("Dispatching mission to vp.general.primary (mode=%s)...", mode)
 
     from universal_agent.tools.vp_orchestration import dispatch_vp_mission
 
@@ -589,7 +873,7 @@ async def main():
         await dispatch_vp_mission(
             objective=objective,
             mission_type="briefing",
-            idempotency_key=f"briefing-{today}",
+            idempotency_key=f"briefing-{today}-{mode}",
         )
     except RuntimeError as exc:
         logger.error(f"Dispatch failed: {exc}")

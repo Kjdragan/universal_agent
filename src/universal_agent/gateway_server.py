@@ -14750,6 +14750,9 @@ async def lifespan(app: FastAPI):
                 _ensure_youtube_gold_poller_cron_job()
                 _ensure_nightly_wiki_cron_job()
                 _ensure_morning_briefing_cron_job()
+                _ensure_evening_briefing_cron_job()
+                _ensure_hourly_insight_email_cron_job()
+                _ensure_insight_scoring_health_cron_job()
                 _ensure_proactive_report_morning_cron_job()
                 _ensure_proactive_report_midday_cron_job()
                 _ensure_proactive_report_afternoon_cron_job()
@@ -19113,6 +19116,74 @@ def _ensure_morning_briefing_cron_job() -> Optional[dict[str, Any]]:
         # cron_run_failed notification instead of a generic exit code.
         required_secrets=["UA_OPS_TOKEN"],
     )
+
+
+def _ensure_evening_briefing_cron_job() -> Optional[dict[str, Any]]:
+    """Register the 6 PM Houston evening briefing cron.
+
+    Reuses ``briefings_agent.py`` but with ``UA_BRIEFING_MODE=evening`` so the
+    script picks the morning→now recap window (vs the default
+    evening-yesterday→now used by the morning cron). The evening recap also
+    enumerates every hourly insight email the operator received since the
+    morning briefing and adds an "Honorable Mention" pick from the
+    not-delivered backlog (see ``briefings_agent.py`` for the LLM selection).
+    """
+    return _register_system_cron_job(
+        system_job="evening_briefing",
+        default_cron="0 18 * * *",
+        default_timezone="America/Chicago",
+        command="!script universal_agent.scripts.briefings_agent --mode=evening",
+        description="Evening briefing recap + hourly-insight digest + honorable mention.",
+        timeout_seconds=900,
+        enabled=_proactive_cron_enabled("UA_EVENING_BRIEFING_ENABLED"),
+        cron_env_var="UA_EVENING_BRIEFING_CRON",
+        timezone_env_var="UA_EVENING_BRIEFING_TIMEZONE",
+        required_secrets=["UA_OPS_TOKEN"],
+    )
+
+
+def _ensure_hourly_insight_email_cron_job() -> Optional[dict[str, Any]]:
+    """Register the top-of-hour insight-delivery email cron.
+
+    Schedule: ``0 6-21 * * *`` America/Chicago — top of every active-window
+    hour (6 AM – 9 PM Houston, last fire 21:00). Content-generation work, so
+    it respects the dormancy default (no 22:00–05:00 fires). The hourly cron
+    is the structural replacement for Simone's per-brief email loop —
+    flipping ``UA_INSIGHT_HOURLY_EMAIL_ENABLED=0`` is the canonical pause
+    lever for hourly intel without affecting upstream convergence detection.
+    """
+    return _register_system_cron_job(
+        system_job="hourly_insight_email",
+        default_cron="0 6-21 * * *",
+        default_timezone="America/Chicago",
+        command="!script universal_agent.scripts.hourly_insight_email",
+        description="Hourly diversified insight-delivery email (replaces Simone per-brief loop).",
+        timeout_seconds=300,
+        enabled=_proactive_cron_enabled("UA_INSIGHT_HOURLY_EMAIL_ENABLED"),
+        cron_env_var="UA_INSIGHT_HOURLY_EMAIL_CRON",
+        timezone_env_var="UA_INSIGHT_HOURLY_EMAIL_TIMEZONE",
+    )
+
+
+def _ensure_insight_scoring_health_cron_job() -> Optional[dict[str, Any]]:
+    """Register the weekly insight-scoring health-check cron.
+
+    Schedule: ``0 8 * * 0`` (Sunday 8 AM Houston). Pulls the last 7 days of
+    proactive_brief_scoring_log rows, computes delivery/sub-threshold/honorable
+    mention stats, and emails Kevin a one-paragraph LLM verdict.
+    """
+    return _register_system_cron_job(
+        system_job="insight_scoring_health",
+        default_cron="0 8 * * 0",
+        default_timezone="America/Chicago",
+        command="!script universal_agent.scripts.insight_scoring_health",
+        description="Weekly health check on hourly insight scoring (calibration audit).",
+        timeout_seconds=600,
+        enabled=_proactive_cron_enabled("UA_INSIGHT_SCORING_HEALTH_ENABLED"),
+        cron_env_var="UA_INSIGHT_SCORING_HEALTH_CRON",
+        timezone_env_var="UA_INSIGHT_SCORING_HEALTH_TIMEZONE",
+    )
+
 
 
 def _ensure_vault_lint_contradictions_cron_job() -> Optional[dict[str, Any]]:

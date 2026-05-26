@@ -52,10 +52,16 @@ Return ONLY JSON:
     {
       "narrative": "A compelling narrative or trend",
       "value": "Why this insight is actionable or non-obvious",
-      "supporting_video_ids": ["id1", "id2"]
+      "supporting_video_ids": ["id1", "id2"],
+      "confidence": 0.0
     }
   ]
 }
+The `confidence` field is REQUIRED and is a self-rating from 0.0 to 1.0 indicating how confident
+you are that this pattern is real (sourced from the supporting videos) rather than fabricated or
+over-generalized from too few signals. Use 0.9+ only when the supporting videos explicitly converge
+on the claim. Use 0.5-0.7 when the pattern is suggestive but speculative. Use <0.5 when you're
+stretching to find a connection — downstream filters drop these.
 If there are no non-obvious relationships, return an empty "insights" list. Do not generate generic summaries.
 """
 
@@ -314,9 +320,23 @@ async def _detect_and_queue_convergence_async(
     channels_a.discard("")
     if len(channels_a) >= max(2, int(min_channels or 2)):
         participants = [signature, *matched_a]
-        result_a = create_convergence_brief_task(conn, signatures=participants)
+        # Pull the stashed signal_strength off any matched item (set by
+        # track_a_concrete_convergence). Default 0.0 when not present so callers
+        # of create_convergence_brief_task can still invoke it with raw sigs.
+        signal_strength = 0.0
+        for item in matched_a:
+            val = item.get("_signal_strength")
+            if val is not None:
+                try:
+                    signal_strength = float(val)
+                except (TypeError, ValueError):
+                    signal_strength = 0.0
+                break
+        result_a = create_convergence_brief_task(
+            conn, signatures=participants, signal_strength=signal_strength
+        )
         created_events.append(result_a)
-        
+
     # Process Track B
     for insight in insights_b:
         sigs = insight["signatures"]
@@ -324,10 +344,11 @@ async def _detect_and_queue_convergence_async(
         channels_b.discard("")
         if len(channels_b) >= max(2, int(min_channels or 2)):
             result_b = create_insight_brief_task(
-                conn, 
-                narrative=insight["narrative"], 
-                value=insight["value"], 
-                signatures=sigs
+                conn,
+                narrative=insight["narrative"],
+                value=insight["value"],
+                signatures=sigs,
+                confidence=float(insight.get("confidence") or 0.0),
             )
             created_events.append(result_b)
 
@@ -459,6 +480,15 @@ async def track_a_concrete_convergence(
         }
         matched = [item for item in candidates if str(item.get("video_id") or "").strip() in matched_ids]
         if matched:
+            # Stash the LLM-rated signal_strength on a sentinel key so the caller
+            # can persist it into the brief artifact metadata downstream. Using a
+            # leading underscore avoids colliding with topic signature fields.
+            try:
+                strength_val = float(signal_strength)
+            except (TypeError, ValueError):
+                strength_val = 0.0
+            for item in matched:
+                item["_signal_strength"] = strength_val
             return matched
     except Exception:
         pass
@@ -512,13 +542,22 @@ async def track_b_ideation_synthesis(
             value = str(insight.get("value") or "").strip()
             supporting_ids = set(insight.get("supporting_video_ids") or [])
             
+            try:
+                raw_conf = insight.get("confidence")
+                confidence = float(raw_conf) if raw_conf is not None else 0.0
+            except (TypeError, ValueError):
+                confidence = 0.0
+            # Clamp to [0, 1]
+            confidence = max(0.0, min(1.0, confidence))
+
             if narrative and value and len(supporting_ids) >= 2:
                 supporting_sigs = [item for item in batch if item.get("video_id") in supporting_ids]
                 if len(supporting_sigs) >= 2:
                     results.append({
                         "narrative": narrative,
                         "value": value,
-                        "signatures": supporting_sigs
+                        "confidence": confidence,
+                        "signatures": supporting_sigs,
                     })
         return results
     except Exception:
@@ -530,11 +569,29 @@ def create_convergence_brief_task(
     conn: sqlite3.Connection,
     *,
     signatures: list[dict[str, Any]],
+    signal_strength: float = 0.0,
 ) -> dict[str, Any]:
-    """Queue a convergence brief task and artifact from matched signatures."""
+    """Queue a convergence brief task and artifact from matched signatures.
+
+    ``signal_strength`` is the LLM-rated 1-10 convergence score from
+    :func:`track_a_concrete_convergence`. It is persisted into the artifact
+    metadata under ``signal_strength`` (normalized to a float) for downstream
+    scoring (e.g. ``hourly_insight_email``)."""
     ensure_schema(conn)
     if len(signatures) < 2:
         raise ValueError("at least two signatures are required")
+    try:
+        strength = float(signal_strength)
+    except (TypeError, ValueError):
+        strength = 0.0
+    # Count of distinct channels backing this convergence — used by the
+    # hourly-email composite-score channel_breadth term.
+    supporting_channels = {
+        str(item.get("channel_name") or item.get("channel_id") or "").strip()
+        for item in signatures
+    }
+    supporting_channels.discard("")
+    supporting_channel_count = len(supporting_channels)
     primary_topic = _primary_topic(signatures)
     video_ids = [str(item.get("video_id") or "").strip() for item in signatures if str(item.get("video_id") or "").strip()]
     event_id = _convergence_event_id(primary_topic=primary_topic, video_ids=video_ids)
@@ -578,7 +635,13 @@ def create_convergence_brief_task(
         status=ARTIFACT_STATUS_CANDIDATE,
         priority=3,
         topic_tags=["convergence", primary_topic],
-        metadata={"task_id": task_id, "event_id": event_id, "video_ids": video_ids},
+        metadata={
+            "task_id": task_id,
+            "event_id": event_id,
+            "video_ids": video_ids,
+            "signal_strength": strength,
+            "supporting_channel_count": supporting_channel_count,
+        },
     )
     _record_convergence_event(conn, event_id=event_id, primary_topic=primary_topic, signatures=signatures, task_id=task_id, artifact_id=artifact["artifact_id"])
     return {"event": get_convergence_event(conn, event_id), "task": task, "artifact": artifact}
@@ -590,12 +653,28 @@ def create_insight_brief_task(
     narrative: str,
     value: str,
     signatures: list[dict[str, Any]],
+    confidence: float = 0.0,
 ) -> dict[str, Any]:
-    """Queue an insight brief task from an abstract ideation narrative."""
+    """Queue an insight brief task from an abstract ideation narrative.
+
+    ``confidence`` is the LLM self-rating (0.0-1.0) from the Track-B ideation
+    prompt and is persisted into the artifact metadata under ``confidence``
+    for downstream scoring (e.g. ``hourly_insight_email``)."""
     ensure_schema(conn)
     primary_topic = (narrative[:47] + "...") if len(narrative) > 50 else narrative
     video_ids = [str(item.get("video_id") or "").strip() for item in signatures if str(item.get("video_id") or "").strip()]
     event_id = _convergence_event_id(primary_topic=primary_topic, video_ids=video_ids)
+    try:
+        conf = float(confidence)
+    except (TypeError, ValueError):
+        conf = 0.0
+    conf = max(0.0, min(1.0, conf))
+    supporting_channels = {
+        str(item.get("channel_name") or item.get("channel_id") or "").strip()
+        for item in signatures
+    }
+    supporting_channels.discard("")
+    supporting_channel_count = len(supporting_channels)
     
     task_id = f"insight-brief:{event_id.removeprefix('conv_')}"
     preference_context = _preference_context(conn, task_type="insight_brief", topic_tags=["insight", primary_topic])
@@ -671,7 +750,13 @@ def create_insight_brief_task(
         status=ARTIFACT_STATUS_CANDIDATE,
         priority=3,
         topic_tags=["insight", primary_topic],
-        metadata={"task_id": task_id, "event_id": event_id, "video_ids": video_ids},
+        metadata={
+            "task_id": task_id,
+            "event_id": event_id,
+            "video_ids": video_ids,
+            "confidence": conf,
+            "supporting_channel_count": supporting_channel_count,
+        },
     )
     _record_convergence_event(conn, event_id=event_id, primary_topic=primary_topic, signatures=signatures, task_id=task_id, artifact_id=artifact["artifact_id"])
     return {"event": get_convergence_event(conn, event_id), "task": task, "artifact": artifact}
