@@ -777,18 +777,32 @@ def _build_cli_env(
         env = {k: v for k, v in os.environ.items() if not k.startswith("ANTHROPIC_")}
         # Agent Teams is the whole point of Anthropic mode — force on.
         env["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
-        # If a long-lived Anthropic Max headless token is available (from
+        # Forward the long-lived Anthropic Max OAuth token (from
         # ``claude setup-token``, stored in Infisical as
-        # ``ANTHROPIC_MAX_OAUTH_TOKEN``), inject it as ``ANTHROPIC_API_KEY`` in
-        # the subprocess env. Claude Code reads ``ANTHROPIC_API_KEY`` natively;
-        # the setup-token credential bills against the Max subscription rather
-        # than per-token API. Without this, the subprocess falls through to
-        # the file-based OAuth at ``~/.claude/.credentials.json``, which has a
-        # refresh-chain failure mode for headless invocations (see
-        # ``_AUTH_FAILURE_OPERATOR_HINT`` at the top of this file).
-        max_token = os.environ.get("ANTHROPIC_MAX_OAUTH_TOKEN", "").strip()
-        if max_token:
-            env["ANTHROPIC_API_KEY"] = max_token
+        # ``CLAUDE_CODE_OAUTH_TOKEN``) into the subprocess env.
+        #
+        # Empirically verified 2026-05-26: ``claude setup-token`` produces a
+        # token of the form ``sk-ant-oat01-...`` and explicitly tells the
+        # operator: "Use this token by setting: export
+        # CLAUDE_CODE_OAUTH_TOKEN=<token>". An earlier version of this code
+        # translated the token into ``ANTHROPIC_API_KEY`` instead, which made
+        # Claude Code reject it as "Invalid API key · Fix external API key"
+        # because the OAuth token isn't valid in the API-key auth slot.
+        #
+        # CLAUDE_CODE_OAUTH_TOKEN does NOT start with ``ANTHROPIC_``, so it
+        # would naturally pass through the dict comprehension above —
+        # we read it explicitly here to make the contract obvious and
+        # to support the legacy ``ANTHROPIC_MAX_OAUTH_TOKEN`` name as a
+        # fallback during the rollout transition.
+        oauth_token = (
+            os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+            or os.environ.get("ANTHROPIC_MAX_OAUTH_TOKEN", "").strip()
+        )
+        if oauth_token:
+            env["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
+            # Make absolutely sure no stale ANTHROPIC_API_KEY survives —
+            # Claude Code prefers it over OAuth when both are present.
+            env.pop("ANTHROPIC_API_KEY", None)
     else:
         env = dict(os.environ)
         if enable_agent_teams:

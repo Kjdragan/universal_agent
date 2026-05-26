@@ -339,32 +339,62 @@ def test_finalize_vp_mission_surface_failure_does_not_propagate(tmp_path, monkey
     assert ok is True
 
 
-def test_cli_env_injects_max_oauth_token_in_anthropic_mode(tmp_path, monkeypatch):
-    """_build_cli_env(anthropic) injects ANTHROPIC_MAX_OAUTH_TOKEN as ANTHROPIC_API_KEY."""
+def test_cli_env_injects_oauth_token_in_anthropic_mode(tmp_path, monkeypatch):
+    """_build_cli_env(anthropic) forwards CLAUDE_CODE_OAUTH_TOKEN into subprocess env.
+
+    Empirically verified 2026-05-26: ``claude setup-token`` produces a
+    long-lived OAuth token (``sk-ant-oat01-...``) and tells the operator
+    "Use this token by setting: export CLAUDE_CODE_OAUTH_TOKEN=<token>".
+    Forwarding it as ANTHROPIC_API_KEY (earlier behavior) was rejected by
+    Claude Code as "Invalid API key · Fix external API key".
+    """
     from universal_agent.vp.clients.claude_cli_client import _build_cli_env
 
-    monkeypatch.setenv("ANTHROPIC_MAX_OAUTH_TOKEN", "test-token-12345")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test-token-12345")
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://zai.example/v1")
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "zai-aux-token")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "stale-api-key-should-not-survive")
 
     env = _build_cli_env(
         enable_agent_teams=False,
         workspace_dir=tmp_path,
         cody_mode="anthropic",
     )
-    # ZAI routing vars stripped (per cody_mode=anthropic contract)
+    # ZAI routing vars stripped (per cody_mode=anthropic contract).
     assert "ANTHROPIC_BASE_URL" not in env
     assert "ANTHROPIC_AUTH_TOKEN" not in env
-    # MAX_OAUTH_TOKEN scrubbed (starts with ANTHROPIC_) but then re-injected as API_KEY
-    assert env.get("ANTHROPIC_API_KEY") == "test-token-12345"
+    # OAuth token forwarded under its canonical env var name.
+    assert env.get("CLAUDE_CODE_OAUTH_TOKEN") == "sk-ant-oat01-test-token-12345"
+    # Stale ANTHROPIC_API_KEY MUST NOT survive (Claude Code would prefer
+    # it over OAuth and fail with "Invalid API key").
+    assert "ANTHROPIC_API_KEY" not in env
     assert env["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] == "1"
 
 
-def test_cli_env_zai_mode_unchanged_by_max_token(tmp_path, monkeypatch):
-    """ZAI mode preserves ANTHROPIC_* vars; max token presence doesn't disturb routing."""
+def test_cli_env_legacy_max_oauth_token_name_still_works(tmp_path, monkeypatch):
+    """Legacy ANTHROPIC_MAX_OAUTH_TOKEN env var still routes correctly during transition.
+
+    During rollout we may have both names in Infisical. CLAUDE_CODE_OAUTH_TOKEN
+    is preferred; ANTHROPIC_MAX_OAUTH_TOKEN is the fallback.
+    """
     from universal_agent.vp.clients.claude_cli_client import _build_cli_env
 
-    monkeypatch.setenv("ANTHROPIC_MAX_OAUTH_TOKEN", "test-token-12345")
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.setenv("ANTHROPIC_MAX_OAUTH_TOKEN", "sk-ant-oat01-legacy-name-token")
+
+    env = _build_cli_env(
+        enable_agent_teams=False,
+        workspace_dir=tmp_path,
+        cody_mode="anthropic",
+    )
+    assert env.get("CLAUDE_CODE_OAUTH_TOKEN") == "sk-ant-oat01-legacy-name-token"
+
+
+def test_cli_env_zai_mode_unchanged_by_oauth_token(tmp_path, monkeypatch):
+    """ZAI mode preserves ANTHROPIC_* vars; OAuth token presence doesn't disturb routing."""
+    from universal_agent.vp.clients.claude_cli_client import _build_cli_env
+
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test-token")
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://zai.example/v1")
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "zai-aux-token")
 
@@ -373,11 +403,8 @@ def test_cli_env_zai_mode_unchanged_by_max_token(tmp_path, monkeypatch):
         workspace_dir=tmp_path,
         cody_mode="zai",
     )
-    # ZAI routing vars preserved
+    # ZAI routing vars preserved (no anthropic-mode scrubbing).
     assert env.get("ANTHROPIC_BASE_URL") == "https://zai.example/v1"
     assert env.get("ANTHROPIC_AUTH_TOKEN") == "zai-aux-token"
-    # MAX_OAUTH_TOKEN remains visible (not stripped in zai mode) — no special routing applied
-    assert env.get("ANTHROPIC_MAX_OAUTH_TOKEN") == "test-token-12345"
-    # API_KEY is NOT overwritten by the max token in zai mode
-    # (ANTHROPIC_API_KEY only gets set in anthropic mode)
-    assert env.get("ANTHROPIC_API_KEY") != "test-token-12345" or "ANTHROPIC_API_KEY" not in env
+    # OAuth token flows through naturally (doesn't start with ANTHROPIC_).
+    assert env.get("CLAUDE_CODE_OAUTH_TOKEN") == "sk-ant-oat01-test-token"
