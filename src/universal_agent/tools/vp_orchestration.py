@@ -258,16 +258,34 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
     raw_metadata = (
         args.get("metadata") if isinstance(args.get("metadata"), dict) else {}
     )
+    # ``linked_task`` is hoisted out of the cody_mode resolution branch so the
+    # use_goal_loop inheritance block below can read it regardless of which
+    # branch ran. ``linked_task_id`` is also hoisted so we can attempt to
+    # load the linked task when an explicit cody_mode was passed (otherwise
+    # we'd skip inheritance for any caller that supplies cody_mode directly).
+    linked_task_id = str(args.get("task_id") or raw_metadata.get("task_id") or "").strip()
+    linked_task: dict[str, Any] | None = None
+
     explicit_cody_mode = str(args.get("cody_mode") or raw_metadata.get("cody_mode") or "").strip().lower()
     if explicit_cody_mode in {"zai", "anthropic"}:
         resolved_cody_mode: str = explicit_cody_mode
+        # Still try to load the linked task for use_goal_loop inheritance.
+        if linked_task_id:
+            try:
+                from universal_agent import task_hub as _th
+                from universal_agent.durable.db import (
+                    connect_runtime_db,
+                    get_activity_db_path,
+                )
+                with connect_runtime_db(get_activity_db_path()) as _th_conn:
+                    linked_task = _th.get_item(_th_conn, linked_task_id)
+            except Exception:
+                linked_task = None
     else:
         from universal_agent.services.cody_mode import resolve_cody_mode
 
         # Load the linked task row (if any) and pass the same conn into
         # the resolver so it can read the operator DB setting.
-        linked_task_id = str(args.get("task_id") or raw_metadata.get("task_id") or "").strip()
-        linked_task: dict[str, Any] | None = None
         th_conn = None
         try:
             from universal_agent import (
@@ -298,6 +316,20 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
 
     mission_metadata = dict(raw_metadata)
     mission_metadata["cody_mode"] = resolved_cody_mode
+
+    # Inherit use_goal_loop from the linked task hub item's metadata if not
+    # already set on the mission. This is the wiring that makes the dashboard
+    # "Dispatch Mission" UI automatically activate /goal for operator-dispatched
+    # Cody work: the dashboard endpoint sets ``metadata.use_goal_loop=True`` on
+    # the task hub item when target_agent=vp.coder.primary, and this block
+    # propagates it onto the vp_missions row where
+    # ``is_goal_eligible_mission`` reads it.
+    # An explicit ``args["metadata"]["use_goal_loop"]`` value (True or False)
+    # always wins over the linked-task default.
+    if "use_goal_loop" not in raw_metadata and linked_task:
+        linked_meta = linked_task.get("metadata") if isinstance(linked_task, dict) else None
+        if isinstance(linked_meta, dict) and bool(linked_meta.get("use_goal_loop")):
+            mission_metadata["use_goal_loop"] = True
 
     # Hermes Phase E.2 routing rule: when the resolved mode is
     # "anthropic", auto-route through execution_mode="cli" so the
