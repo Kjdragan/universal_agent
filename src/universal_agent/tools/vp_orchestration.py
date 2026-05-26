@@ -732,3 +732,342 @@ async def _vp_read_result_artifacts_impl(args: dict[str, Any]) -> dict[str, Any]
         return _result(_error_payload("artifact_read_failed", str(exc)))
     finally:
         conn.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# VP failure-rescue tools (Step 2 of VP /goal + Failure-Rescue PRD)
+#
+# These three verbs are Simone's rescue toolset for handling
+# vp_mission_failure task hub items surfaced by services/vp_failure_rescue.
+# See docs/01_Architecture/12_VP_Goal_Integration_And_Failure_Rescue_PRD.md
+# § 5.3 and HEARTBEAT.md "Handling vp_mission_failure items".
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _load_failed_mission(mission_id: str) -> Optional[dict[str, Any]]:
+    """Load mission row from vp_state.db; returns dict or None."""
+    if not mission_id:
+        return None
+    conn = _connect_vp_db()
+    try:
+        row = get_vp_mission(conn, mission_id)
+        return _mission_to_dict(row) if row is not None else None
+    finally:
+        conn.close()
+
+
+def _close_failure_task(activity_conn: sqlite3.Connection, mission_id: str, *, note: str, action: str) -> None:
+    """Best-effort: mark the vp_failure:<mission_id> task hub item as completed.
+
+    Simone may pull rescue actions back-to-back; we want each rescue to
+    close out its corresponding informational notification so the queue
+    doesn't carry stale failure rows.
+    """
+    if not mission_id:
+        return
+    try:
+        from universal_agent import task_hub
+        failure_task_id = f"vp_failure:{mission_id}"
+        # Append a note to metadata for audit.
+        item = task_hub.get_item(activity_conn, failure_task_id)
+        if not item:
+            return
+        meta = dict(item.get("metadata") or {})
+        rescue_log = list(meta.get("rescue_log") or [])
+        rescue_log.append({
+            "action": action,
+            "note": note,
+            "at": datetime.now(timezone.utc).isoformat(),
+        })
+        meta["rescue_log"] = rescue_log
+        task_hub.upsert_item(activity_conn, {
+            "task_id": failure_task_id,
+            "status": task_hub.TASK_STATUS_COMPLETED,
+            "metadata": meta,
+        })
+    except Exception:
+        pass  # never block the rescue action
+
+
+def _next_chain_id(failed_mission: dict[str, Any]) -> str:
+    """Derive the rescue_chain_id for a retry mission.
+
+    If the failed mission already has metadata.rescue_chain_id, reuse it
+    (extending an existing chain). Otherwise, the failed mission_id becomes
+    the chain anchor.
+    """
+    try:
+        payload = json.loads(failed_mission.get("payload_json") or "{}")
+        meta = payload.get("metadata") or {}
+        existing = str(meta.get("rescue_chain_id") or "").strip()
+        if existing:
+            return existing
+    except Exception:
+        pass
+    return str(failed_mission.get("mission_id") or "")
+
+
+def _build_retry_objective(failed_mission: dict[str, Any], additional_guidance: str) -> str:
+    """Compose the new objective: original + Simone's rescue guidance."""
+    original = str(failed_mission.get("objective") or "").rstrip()
+    guidance = (additional_guidance or "").strip()
+    if not guidance:
+        return original
+    return (
+        f"{original}\n\n"
+        f"--- SIMONE RESCUE GUIDANCE ({datetime.now(timezone.utc).isoformat()}) ---\n"
+        f"This is a re-dispatch of a failed mission. Use the guidance below\n"
+        f"to address the failure. The previous workspace (if any) is referenced\n"
+        f"in your mission metadata.\n\n"
+        f"{guidance}\n"
+        f"--- END RESCUE GUIDANCE ---\n"
+    )
+
+
+@tool(
+    name="vp_dispatch_mission_retry",
+    description=(
+        "Re-dispatch a failed VP mission with Simone's additional guidance, "
+        "extending the same rescue chain. Use when the failure was self-reported "
+        "or hit a /goal cap AND your guidance addresses the gap. Same VP, same "
+        "rescue chain (so failure_count keeps growing). Closes the corresponding "
+        "vp_failure:<mission_id> task hub item."
+    ),
+    input_schema={
+        "mission_id": str,
+        "additional_guidance": str,
+        "max_additional_turns": int,
+    },
+)
+async def vp_dispatch_mission_retry_wrapper(args: dict[str, Any]) -> dict[str, Any]:
+    return await _vp_dispatch_mission_retry_impl(args)
+
+
+async def _vp_dispatch_mission_retry_impl(args: dict[str, Any]) -> dict[str, Any]:
+    mission_id = str(args.get("mission_id") or "").strip()
+    additional_guidance = str(args.get("additional_guidance") or "").strip()
+    if not mission_id:
+        return _result(_error_payload("validation_error", "mission_id is required"))
+    if not additional_guidance:
+        return _result(_error_payload(
+            "validation_error",
+            "additional_guidance is required — Simone must explain what to do differently",
+        ))
+
+    failed = _load_failed_mission(mission_id)
+    if failed is None:
+        return _result(_error_payload("not_found", f"Mission not found: {mission_id}"))
+
+    chain_id = _next_chain_id(failed)
+    new_objective = _build_retry_objective(failed, additional_guidance)
+
+    # Preserve constraints, mission_type, vp_id from the failed mission.
+    payload_meta: dict[str, Any] = {}
+    try:
+        payload = json.loads(failed.get("payload_json") or "{}")
+        payload_meta = payload.get("metadata") or {}
+    except Exception:
+        pass
+
+    dispatch_args: dict[str, Any] = {
+        "vp_id": str(failed.get("vp_id") or ""),
+        "objective": new_objective,
+        "mission_type": str(failed.get("mission_type") or "task"),
+        "idempotency_key": f"rescue-retry-{chain_id}-{uuid.uuid4().hex[:8]}",
+        "metadata": {
+            **payload_meta,
+            "rescue_chain_id": chain_id,
+            "rescue_prior_mission_id": mission_id,
+            "rescue_action": "retry",
+        },
+    }
+    max_additional_turns = args.get("max_additional_turns")
+    if isinstance(max_additional_turns, int) and max_additional_turns > 0:
+        dispatch_args["metadata"]["max_additional_turns"] = max_additional_turns
+
+    try:
+        result = await _vp_dispatch_mission_impl(dispatch_args)
+        # Best-effort close the failure task.
+        try:
+            with connect_runtime_db(get_activity_db_path()) as activity_conn:
+                _close_failure_task(
+                    activity_conn, mission_id,
+                    note=f"retried with guidance (chain={chain_id})",
+                    action="retry",
+                )
+        except Exception:
+            pass
+        return result
+    except Exception as exc:
+        return _result(_error_payload("rescue_dispatch_failed", str(exc)))
+
+
+@tool(
+    name="vp_dispatch_mission_redispatch_fresh",
+    description=(
+        "Re-dispatch a failed VP mission in a FRESH workspace (no inheritance "
+        "of partial outputs), copying only the original BRIEF and adding "
+        "Simone's context. Use when the failure was a subprocess crash, env "
+        "corruption, or workspace contamination — situations where the prior "
+        "state may itself be the problem. Same VP, extends the rescue chain. "
+        "Closes the corresponding vp_failure:<mission_id> task hub item."
+    ),
+    input_schema={
+        "mission_id": str,
+        "additional_context": str,
+    },
+)
+async def vp_dispatch_mission_redispatch_fresh_wrapper(args: dict[str, Any]) -> dict[str, Any]:
+    return await _vp_dispatch_mission_redispatch_fresh_impl(args)
+
+
+async def _vp_dispatch_mission_redispatch_fresh_impl(args: dict[str, Any]) -> dict[str, Any]:
+    mission_id = str(args.get("mission_id") or "").strip()
+    additional_context = str(args.get("additional_context") or "").strip()
+    if not mission_id:
+        return _result(_error_payload("validation_error", "mission_id is required"))
+
+    failed = _load_failed_mission(mission_id)
+    if failed is None:
+        return _result(_error_payload("not_found", f"Mission not found: {mission_id}"))
+
+    chain_id = _next_chain_id(failed)
+    fresh_objective = str(failed.get("objective") or "").rstrip()
+    if additional_context:
+        fresh_objective = (
+            f"{fresh_objective}\n\n"
+            f"--- SIMONE FRESH-RESTART CONTEXT ---\n"
+            f"The prior attempt failed (likely environmental). Starting fresh.\n\n"
+            f"{additional_context}\n"
+            f"--- END CONTEXT ---\n"
+        )
+
+    payload_meta: dict[str, Any] = {}
+    try:
+        payload = json.loads(failed.get("payload_json") or "{}")
+        payload_meta = payload.get("metadata") or {}
+    except Exception:
+        pass
+
+    dispatch_args: dict[str, Any] = {
+        "vp_id": str(failed.get("vp_id") or ""),
+        "objective": fresh_objective,
+        "mission_type": str(failed.get("mission_type") or "task"),
+        "idempotency_key": f"rescue-fresh-{chain_id}-{uuid.uuid4().hex[:8]}",
+        "metadata": {
+            **payload_meta,
+            "rescue_chain_id": chain_id,
+            "rescue_prior_mission_id": mission_id,
+            "rescue_action": "redispatch_fresh",
+        },
+    }
+
+    try:
+        result = await _vp_dispatch_mission_impl(dispatch_args)
+        try:
+            with connect_runtime_db(get_activity_db_path()) as activity_conn:
+                _close_failure_task(
+                    activity_conn, mission_id,
+                    note=f"redispatched fresh (chain={chain_id})",
+                    action="redispatch_fresh",
+                )
+        except Exception:
+            pass
+        return result
+    except Exception as exc:
+        return _result(_error_payload("rescue_dispatch_failed", str(exc)))
+
+
+@tool(
+    name="escalate_vp_failure_to_operator",
+    description=(
+        "Escalate a VP mission failure to Kevin via a chat_panel task hub item. "
+        "Use when the failure is auth/workspace-guard/config (Simone can't fix), "
+        "when failure_count is high (rescue attempts already failed), or when "
+        "you choose not to retry. Closes the corresponding vp_failure:<mission_id>."
+    ),
+    input_schema={
+        "mission_id": str,
+        "summary": str,
+        "why_escalating": str,
+        "recommended_action": str,
+    },
+)
+async def escalate_vp_failure_to_operator_wrapper(args: dict[str, Any]) -> dict[str, Any]:
+    return await _escalate_vp_failure_to_operator_impl(args)
+
+
+async def _escalate_vp_failure_to_operator_impl(args: dict[str, Any]) -> dict[str, Any]:
+    mission_id = str(args.get("mission_id") or "").strip()
+    summary = str(args.get("summary") or "").strip()
+    why_escalating = str(args.get("why_escalating") or "").strip()
+    recommended_action = str(args.get("recommended_action") or "").strip()
+
+    if not mission_id:
+        return _result(_error_payload("validation_error", "mission_id is required"))
+    if not summary:
+        return _result(_error_payload("validation_error", "summary is required"))
+    if not why_escalating:
+        return _result(_error_payload(
+            "validation_error",
+            "why_escalating is required — Simone must explain why she's escalating instead of retrying",
+        ))
+
+    failed = _load_failed_mission(mission_id)
+    vp_id = str((failed or {}).get("vp_id") or "")
+    original_objective = str((failed or {}).get("objective") or "")[:600]
+
+    body_parts = [
+        f"## VP Failure Escalation — {vp_id or 'unknown VP'}",
+        "",
+        f"**Mission:** `{mission_id}`",
+        f"**Summary:** {summary}",
+        f"**Why Simone escalated:** {why_escalating}",
+    ]
+    if recommended_action:
+        body_parts.extend(["", f"**Simone's recommended action:** {recommended_action}"])
+    body_parts.extend([
+        "",
+        "**Original objective (preview):**",
+        f"> {original_objective[:400]}",
+    ])
+    body = "\n".join(body_parts)
+
+    escalation_task_id = f"chat_panel:vp_escalation:{mission_id}"
+    try:
+        with connect_runtime_db(get_activity_db_path()) as activity_conn:
+            from universal_agent import task_hub
+            task_hub.ensure_schema(activity_conn)
+            task_hub.upsert_item(
+                activity_conn,
+                {
+                    "task_id": escalation_task_id,
+                    "source_kind": "chat_panel",
+                    "status": task_hub.TASK_STATUS_OPEN,
+                    "agent_ready": True,
+                    "trigger_type": "immediate",
+                    "title": f"[VP Escalation] {vp_id}: {summary[:80]}",
+                    "metadata": {
+                        "intake_channel": "chat_panel",
+                        "escalation_source": "vp_failure",
+                        "vp_id": vp_id,
+                        "mission_id": mission_id,
+                        "summary": summary,
+                        "why_escalating": why_escalating,
+                        "recommended_action": recommended_action or None,
+                        "body": body,
+                    },
+                },
+            )
+            _close_failure_task(
+                activity_conn, mission_id,
+                note=f"escalated to operator: {summary[:80]}",
+                action="escalate",
+            )
+        return _result({
+            "ok": True,
+            "escalation_task_id": escalation_task_id,
+            "mission_id": mission_id,
+        })
+    except Exception as exc:
+        return _result(_error_payload("escalation_failed", str(exc)))

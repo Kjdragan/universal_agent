@@ -45,6 +45,59 @@ _PATH_CONSTRAINT_KEYS = (
 )
 
 
+_AUTH_FAILURE_MARKERS_LOWER = (
+    "invalid authentication credentials",
+    "failed to authenticate",
+    "invalid x-api-key",
+    "authentication_error",
+)
+_GOAL_CAP_MARKERS_LOWER = (
+    "stop after",
+    "goal evaluator",
+    "max turns",
+    "turn limit",
+)
+_WORKSPACE_GUARD_MARKERS_LOWER = (
+    "workspaceguarderror",
+    "workspace guard",
+    "outside approved",
+)
+
+
+def _classify_outcome_failure_mode(outcome) -> Optional[str]:
+    """Best-effort failure-mode classifier for the rescue hook.
+
+    Returns a stable string from the set documented in
+    ``durable/state.finalize_vp_mission`` or None when classification
+    can't pick a confident category (caller substitutes a default).
+    """
+    if outcome is None:
+        return None
+    status = str(getattr(outcome, "status", "") or "").lower()
+    msg = str(getattr(outcome, "message", "") or "")
+    payload = getattr(outcome, "payload", {}) or {}
+    final_text = str(payload.get("final_text") or "")
+    haystack = (msg + " " + final_text).lower()
+
+    if not haystack:
+        return None
+    if any(marker in haystack for marker in _AUTH_FAILURE_MARKERS_LOWER):
+        return "auth_failure"
+    if any(marker in haystack for marker in _WORKSPACE_GUARD_MARKERS_LOWER):
+        return "workspace_guard"
+    if "sigterm" in haystack or "sigill" in haystack or "killed by signal" in haystack:
+        return "subprocess_crash"
+    if "timeout" in haystack or "timed out" in haystack:
+        return "timeout"
+    if any(marker in haystack for marker in _GOAL_CAP_MARKERS_LOWER):
+        return "goal_cap_hit"
+    if status == "cancelled":
+        return "operator_cancel"
+    if status == "failed":
+        return "vp_self_reported"
+    return None
+
+
 def _extract_first_target_path(constraints: dict[str, Any]) -> str:
     """Extract the first non-empty path from recognized constraint keys."""
     for key in _PATH_CONSTRAINT_KEYS:
@@ -466,6 +519,9 @@ class VpWorkerLoop:
         # self-brief-and-attest skill before we accept "completed". Missing
         # the file demotes to failed with a stable failure_mode that Simone
         # can recognize as a protocol violation (not a work failure).
+        # The demoted outcome then flows through the failure_mode /
+        # transcript_tail derivation below, surfacing to Simone via the
+        # vp_mission_failure lane just like any other failure.
         if outcome.status == "completed":
             try:
                 from universal_agent.services.self_briefing import (
@@ -496,11 +552,38 @@ class VpWorkerLoop:
                     mission_id, exc,
                 )
 
+        # Derive failure_mode + transcript_tail for the rescue hook in
+        # finalize_vp_mission. transcript_tail comes from outcome.payload
+        # (Claude CLI stream-json client populates this on failure paths).
+        # If COMPLETION-attestation demotion happened above, the classifier
+        # will see "missing_completion_attestation" in the message and
+        # return that string — preserving the protocol-violation signal
+        # all the way to Simone's rescue surface.
+        _payload = outcome.payload or {}
+        _transcript_tail = (
+            str(_payload.get("final_text") or "")
+            or str(outcome.message or "")
+            or None
+        )
+        _failure_mode = _classify_outcome_failure_mode(outcome)
+        if not _failure_mode and "missing_completion_attestation" in str(outcome.message or ""):
+            _failure_mode = "missing_completion_attestation"
+
         if outcome.status == "cancelled":
-            finalize_vp_mission(self.conn, mission_id, "cancelled", result_ref=outcome.result_ref)
+            finalize_vp_mission(
+                self.conn, mission_id, "cancelled",
+                result_ref=outcome.result_ref,
+                failure_mode=_failure_mode or "operator_cancel",
+                transcript_tail=_transcript_tail,
+            )
             event_type = "vp.mission.cancelled"
         elif outcome.status == "failed":
-            finalize_vp_mission(self.conn, mission_id, "failed", result_ref=outcome.result_ref)
+            finalize_vp_mission(
+                self.conn, mission_id, "failed",
+                result_ref=outcome.result_ref,
+                failure_mode=_failure_mode or "vp_self_reported",
+                transcript_tail=_transcript_tail,
+            )
             event_type = "vp.mission.failed"
         else:
             finalize_vp_mission(self.conn, mission_id, "completed", result_ref=outcome.result_ref)
