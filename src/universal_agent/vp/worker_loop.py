@@ -627,7 +627,22 @@ class VpWorkerLoop:
                 workspace_path,
             )
 
-        # Sync terminal status to Task Hub for Kanban board visibility
+        # Sync terminal status to Task Hub for Kanban board visibility.
+        #
+        # Two task hub rows may need closing on VP terminal:
+        #
+        #   (1) The mirror row keyed by ``task_id == mission_id`` (created
+        #       by upsert_item at mission start). Always closed.
+        #
+        #   (2) The ORIGINAL source task that triggered this dispatch
+        #       (the row Simone called ``task_redirect_to`` on, now in
+        #       ``status=delegated`` waiting to be closed). Identified
+        #       via ``payload_json.metadata.task_id``. Closing this is
+        #       what prevents the "delegated zombie" pattern documented
+        #       in the 2026-05-26 cleanup (188 rows accumulated this
+        #       way over ~3 weeks). Skips silently when the mission
+        #       carries no source task_id (e.g., direct vp_dispatch
+        #       from a non-task-hub caller).
         try:
             from universal_agent import task_hub
             from universal_agent.durable.db import (
@@ -642,6 +657,8 @@ class VpWorkerLoop:
             th_status = _th_status_map.get(event_type, task_hub.TASK_STATUS_COMPLETED)
             th_conn = connect_runtime_db(get_activity_db_path())
             task_hub.ensure_schema(th_conn)
+
+            # (1) Close the mirror row.
             task_hub.upsert_item(th_conn, {
                 "task_id": mission_id,
                 "status": th_status,
@@ -650,6 +667,38 @@ class VpWorkerLoop:
                     "result_ref": outcome.result_ref or "",
                 },
             })
+
+            # (2) Close the original source task, if linked.
+            try:
+                _mission_payload = json.loads(mission.get("payload_json") or "{}")
+            except Exception:
+                _mission_payload = {}
+            _source_task_id = ""
+            if isinstance(_mission_payload, dict):
+                _meta = _mission_payload.get("metadata")
+                if isinstance(_meta, dict):
+                    _source_task_id = str(_meta.get("task_id") or "").strip()
+            if _source_task_id and _source_task_id != mission_id:
+                try:
+                    task_hub.upsert_item(th_conn, {
+                        "task_id": _source_task_id,
+                        "status": th_status,
+                        "metadata": {
+                            "vp_terminal_status": event_type.replace("vp.mission.", ""),
+                            "linked_mission_id": mission_id,
+                            "result_ref": outcome.result_ref or "",
+                        },
+                    })
+                    logger.info(
+                        "Source task closed after VP terminal: source_task_id=%s mission_id=%s status=%s",
+                        _source_task_id, mission_id, th_status,
+                    )
+                except Exception as src_exc:
+                    logger.warning(
+                        "Source-task close failed for %s ← mission %s: %s",
+                        _source_task_id, mission_id, src_exc,
+                    )
+
             th_conn.close()
         except Exception as th_exc:
             logger.warning("Task Hub finalize sync failed for %s: %s", mission_id, th_exc)
