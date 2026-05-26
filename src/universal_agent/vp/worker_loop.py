@@ -30,7 +30,7 @@ from universal_agent.feature_flags import (
     vp_poll_interval_seconds,
 )
 from universal_agent.services.dag_governor import DagConcurrencyGovernor
-from universal_agent.vp.clients.base import VpClient
+from universal_agent.vp.clients.base import MissionOutcome, VpClient
 from universal_agent.vp.clients.claude_code_client import ClaudeCodeClient
 from universal_agent.vp.clients.claude_generalist_client import ClaudeGeneralistClient
 from universal_agent.vp.profiles import get_vp_profile
@@ -461,6 +461,41 @@ class VpWorkerLoop:
                 await heartbeat_task
             except asyncio.CancelledError:
                 pass
+        # Completion attestation guard (PRD § 5.5) — when UA_VP_GOAL_ENABLED
+        # is on, the VP must have written COMPLETION.md per the
+        # self-brief-and-attest skill before we accept "completed". Missing
+        # the file demotes to failed with a stable failure_mode that Simone
+        # can recognize as a protocol violation (not a work failure).
+        if outcome.status == "completed":
+            try:
+                from universal_agent.services.self_briefing import (
+                    check_completion_attestation,
+                    vp_goal_enabled,
+                )
+                if vp_goal_enabled():
+                    ok, reason = check_completion_attestation(workspace_path)
+                    if not ok:
+                        logger.warning(
+                            "VP mission %s missing COMPLETION.md: %s — demoting to failed",
+                            mission_id, reason,
+                        )
+                        outcome = MissionOutcome(
+                            status="failed",
+                            result_ref=outcome.result_ref,
+                            message=f"missing_completion_attestation: {reason}",
+                            payload={
+                                **(outcome.payload or {}),
+                                "demoted_from_completed": True,
+                                "completion_attestation_reason": reason,
+                            },
+                        )
+            except Exception as exc:
+                logger.warning(
+                    "VP mission %s: completion-attestation check failed (%s); "
+                    "treating original outcome as authoritative",
+                    mission_id, exc,
+                )
+
         if outcome.status == "cancelled":
             finalize_vp_mission(self.conn, mission_id, "cancelled", result_ref=outcome.result_ref)
             event_type = "vp.mission.cancelled"
