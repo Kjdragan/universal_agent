@@ -207,8 +207,21 @@ def register_pr_artifact_from_text(
 
 
 def _cleanup_task_description(*, chosen_theme: str, note: str = "", preference_context: str = "") -> str:
+    # The CC-Simone email directive is centralized in services/vp_email_directive
+    # so all autonomous VP work uses the same template. Update the template
+    # there to propagate changes here + every other VP producer.
+    from universal_agent.services.vp_email_directive import (
+        build_vp_outbound_email_directive,
+    )
+
+    email_directive = build_vp_outbound_email_directive(
+        vp_id="vp.coder.primary",
+        subject_prefix="[VP Status]",
+        audience_hint="kevin",
+    )
+
     lines = [
-        "CODIE should proactively improve code quality in the Universal Agent repository.",
+        "Cody should proactively improve code quality in the Universal Agent repository.",
         "",
         f"Code quality theme: {chosen_theme}",
         "",
@@ -217,22 +230,18 @@ def _cleanup_task_description(*, chosen_theme: str, note: str = "", preference_c
         "2. Keep the task non-breaking and reviewable. Do NOT redesign subsystems, change product behavior, alter deployment/config/secrets, or take on high-complexity migrations.",
         "3. Prefer simplification over expansion: delete dead code, reuse existing helpers, reduce brittle branching, and tighten tests before adding new abstractions.",
         "4. If a Claude Code simplify/cleanup skill is available in the runtime, use it as a focused helper for the chosen improvement area; do not let skill usage expand the scope.",
-        "5. Implement the change on a feature branch targeting develop.",
+        "5. Implement the change on a feature branch targeting main (per-task branch: codie/<task>).",
         "6. Use red-green TDD for behavior-touching changes: add or update a focused regression test, confirm it fails before the fix when practical, implement the smallest fix, then confirm the test passes.",
         "7. For mechanical-only cleanup where a failing regression is not meaningful, explain why red-green was not applicable and still run the focused test/lint/typecheck command that proves the cleanup is safe.",
-        "8. Open a pull request targeting develop for Kevin review. A PR is the required final work product unless no worthwhile improvement is found.",
+        "8. Open a pull request targeting main for Kevin review. A PR is the required final work product unless no worthwhile improvement is found.",
         "9. Do not merge, push to main, deploy, delete production data, or make public releases.",
         "10. In the PR body, include rationale, changed files, tests run, red-green evidence or why it was not applicable, risks, rollback notes, and why the scope remained low/medium complexity.",
-        "11. After creating the PR, use the AgentMail tools from the shared VP mailbox (vp.agents@agentmail.to) to send an email to kevinjdragan@gmail.com.",
-        "12. CC Simone's inbox (oddcity216@agentmail.to) on the email for situational awareness.",
-        "13. Prefix the subject with '[VP Status]' and include this header at the top of the email body before your content:",
-        "   '── VP Status Update (FYI — no action required) ──",
-        "   This reply was sent by Codie (vp.coder.primary) directly to Kevin.",
-        "   Simone is CC'd for situational awareness only. No action is needed from her.",
-        "   ────────────────────────────────────────────────'",
-        "14. The email must contain a natural language summary explaining exactly what was proposed in the PR and why.",
-        "15. If no worthwhile improvement is found, produce a short artifact explaining what was inspected and why no PR was warranted.",
-        "16. Scope each PR to a single coherent improvement area. Do not bundle unrelated changes.",
+        "11. Before declaring done, write a COMPLETION.md file in your workspace summarizing what you produced relative to this brief, then send the outbound email as described in the directive below.",
+        "12. The email body must contain a natural language summary explaining exactly what was proposed in the PR and why.",
+        "13. If no worthwhile improvement is found, produce a short artifact explaining what was inspected and why no PR was warranted (still send the email so Kevin sees the no-op).",
+        "14. Scope each PR to a single coherent improvement area. Do not bundle unrelated changes.",
+        "",
+        email_directive,
     ]
     extra = str(note or "").strip()
     if extra:

@@ -70,7 +70,8 @@ def test_queue_cleanup_task_creates_agent_ready_review_gated_task(tmp_path):
     assert task["source_kind"] == "proactive_codie"
     assert task["agent_ready"] is True
     assert task["trigger_type"] == "heartbeat_poll"
-    assert "pull request targeting develop" in task["description"].lower()
+    # `develop` was retired 2026-05-10; PRs now target `main`.
+    assert "pull request targeting main" in task["description"].lower()
     assert "do not merge" in task["description"].lower()
     assert "Preference context:" in task["description"]
     assert task["metadata"]["workflow_manifest"]["workflow_kind"] == "code_change"
