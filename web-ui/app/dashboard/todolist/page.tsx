@@ -7,6 +7,7 @@ import { formatDistanceToNow, parseISO } from "date-fns";
 import { beginMutation } from "@/lib/api";
 import { resolveTaskWorkspaceTarget } from "@/lib/taskWorkspaceTarget";
 import { openViewer } from "@/lib/viewer/openViewer";
+import { GoalArtifactsToggle, GoalBadge } from "@/components/GoalArtifactsPanel";
 
 const API_BASE = "/api/dashboard/gateway";
 const AUTO_REFRESH_SECONDS = 30;
@@ -69,6 +70,14 @@ type AgentQueueItem = {
       last_provider_session_id?: string | null;
       last_disposition_reason?: string | null;
       todo_retry_count?: number | string | null;
+    };
+    // Set by the dashboard's Dispatch Mission UI when target_agent=vp.coder.primary
+    // (see gateway_server.dashboard_todolist_quick_add) or by source_kind eligibility
+    // (cody_demo_task etc., see services/self_briefing.GOAL_ELIGIBLE_SOURCE_KINDS).
+    // Surfaced in the card via the /goal badge + GoalArtifactsPanel.
+    use_goal_loop?: boolean;
+    workflow_manifest?: {
+      target_agent?: string;
     };
   };
 };
@@ -1237,6 +1246,10 @@ export default function ToDoListDashboardPage() {
               <span className="font-mono text-[9px] font-bold text-kcd-text-muted">#{idx + 1}</span>
               {sourceKindPill(item.source_kind)}
               {item.must_complete && <span className="font-mono text-[9px] font-bold px-1.5 py-0.5 bg-kcd-red/10 text-kcd-red tracking-wider uppercase">MUST</span>}
+              {/* /goal badge — visible when the operator-dispatched task is /goal-eligible
+                  (dashboard auto-sets use_goal_loop for vp.coder.primary targets, or the
+                  source_kind is in GOAL_ELIGIBLE_SOURCE_KINDS like cody_demo_task). */}
+              <GoalBadge active={Boolean(item.metadata?.use_goal_loop)} />
             </div>
             <h3 className="text-[13px] font-semibold text-kcd-text leading-snug m-0">
               {(() => {
@@ -1252,6 +1265,12 @@ export default function ToDoListDashboardPage() {
             </h3>
             {item.description && (
               <p className="mt-1 text-[11px] text-kcd-text-muted leading-snug line-clamp-2">{item.description}</p>
+            )}
+            {/* /goal-flow artifacts: lets the operator inspect the progression
+                user prompt → BRIEF → ACCEPTANCE → goal_condition → COMPLETION
+                without leaving the dashboard. Lazy-fetched on click. */}
+            {item.metadata?.use_goal_loop && (
+              <GoalArtifactsToggle taskId={item.task_id} />
             )}
           </div>
           <div className="text-right shrink-0">
