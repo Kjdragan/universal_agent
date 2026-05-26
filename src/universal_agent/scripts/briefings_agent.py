@@ -447,7 +447,7 @@ def _build_objective(
     if honorable_mention_block:
         honorable_mention_section = f"\n\n{honorable_mention_block}\n"
 
-        hn_section = ""
+    hn_section = ""
     hn_instructions = ""
     if hn_block:
         hn_section = f"\n\n{hn_block}\n"
