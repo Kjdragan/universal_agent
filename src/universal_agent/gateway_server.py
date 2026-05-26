@@ -23880,6 +23880,131 @@ async def dashboard_todolist_get_task(task_id: str):
     return row
 
 
+@app.get("/api/v1/dashboard/todolist/tasks/{task_id}/goal-artifacts")
+async def dashboard_todolist_get_goal_artifacts(task_id: str):
+    """Return the /goal-flow artifact contents for a task.
+
+    The Task Hub dashboard card surfaces a `/goal active` badge and an
+    expandable artifacts panel for any task whose `metadata.use_goal_loop`
+    is true (set automatically by the dashboard's Dispatch Mission UI for
+    Cody targets, and by source_kind eligibility for cody_demo_task etc.).
+    This endpoint backs that panel — it locates the linked VP mission's
+    workspace and reads the four standard self-briefing artifacts that
+    the `self-brief-and-attest` skill produces:
+
+      * BRIEF.md           — VP's interpretation of the task
+      * ACCEPTANCE.md      — structured success criteria (/goal-eligible only)
+      * goal_condition.txt — the prose condition fed to `/goal -p`
+      * COMPLETION.md      — self-attestation written before finalize
+
+    Plus the operator's original objective for the progression view
+    (user prompt → BRIEF → ACCEPTANCE → goal condition → COMPLETION).
+
+    Returns 404 if the task doesn't exist, 200 with `linked_mission_id=null`
+    if the task exists but no mission has been dispatched yet, and 200
+    with file contents (or `null` for missing files) once a mission has
+    spawned a workspace.
+    """
+    tid = str(task_id or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="task_id is required")
+
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            task_row = task_hub.get_item(conn, tid)
+        finally:
+            conn.close()
+    if not task_row:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    metadata = task_row.get("metadata") or {}
+    use_goal_loop = bool(metadata.get("use_goal_loop"))
+    workflow_target = ""
+    workflow_manifest = metadata.get("workflow_manifest") if isinstance(metadata.get("workflow_manifest"), dict) else {}
+    if isinstance(workflow_manifest, dict):
+        workflow_target = str(workflow_manifest.get("target_agent") or "")
+
+    # Find the linked VP mission. Two lookup paths:
+    #   1. vp_missions row whose mission_id == task_id (worker_loop pattern
+    #      where the task hub mirror row uses mission_id as task_id)
+    #   2. vp_missions row whose payload_json.metadata.task_id == task_id
+    #      (vp_dispatch_mission propagates the linked task_id into mission
+    #      metadata when called with task_id=...)
+    # Prefer the most recent match.
+    from universal_agent.durable.db import connect_runtime_db, get_vp_db_path
+
+    mission_id: Optional[str] = None
+    workspace_path: Optional[str] = None
+    mission_status: Optional[str] = None
+
+    try:
+        with connect_runtime_db(get_vp_db_path()) as vp_conn:
+            vp_conn.row_factory = sqlite3.Row
+            row = vp_conn.execute(
+                """
+                SELECT mission_id, status, result_ref, completed_at, payload_json
+                FROM vp_missions
+                WHERE mission_id = ?
+                   OR json_extract(payload_json, '$.metadata.task_id') = ?
+                ORDER BY completed_at DESC NULLS LAST, created_at DESC
+                LIMIT 1
+                """,
+                (tid, tid),
+            ).fetchone()
+        if row is not None:
+            mission_id = str(row["mission_id"] or "")
+            mission_status = str(row["status"] or "")
+            result_ref = str(row["result_ref"] or "").strip()
+            if result_ref.startswith("workspace://"):
+                workspace_path = result_ref[len("workspace://"):].strip()
+            elif result_ref:
+                workspace_path = result_ref
+    except Exception as exc:
+        # If vp_state.db is unreachable, return what we have without artifacts.
+        logger.warning("goal-artifacts: vp_missions lookup failed for %s: %s", tid, exc)
+
+    # Read the four artifacts from the workspace if it exists on disk.
+    artifact_names = ("BRIEF.md", "ACCEPTANCE.md", "goal_condition.txt", "COMPLETION.md")
+    artifacts: dict[str, Optional[dict[str, Any]]] = {name: None for name in artifact_names}
+    if workspace_path:
+        ws_dir = Path(workspace_path).expanduser()
+        if ws_dir.is_dir():
+            for name in artifact_names:
+                fpath = ws_dir / name
+                if fpath.exists() and fpath.is_file():
+                    try:
+                        # Cap reads at 64 KB so a runaway file doesn't bloat the response
+                        raw = fpath.read_bytes()[:64 * 1024]
+                        text = raw.decode("utf-8", errors="replace")
+                        artifacts[name] = {
+                            "path": str(fpath),
+                            "size_bytes": fpath.stat().st_size,
+                            "truncated": fpath.stat().st_size > 64 * 1024,
+                            "content": text,
+                        }
+                    except Exception as exc:
+                        artifacts[name] = {
+                            "path": str(fpath),
+                            "error": str(exc)[:200],
+                            "content": None,
+                        }
+
+    return {
+        "task_id": tid,
+        "use_goal_loop": use_goal_loop,
+        "target_agent": workflow_target,
+        "original_prompt": {
+            "title": str(task_row.get("title") or ""),
+            "description": str(task_row.get("description") or ""),
+        },
+        "linked_mission_id": mission_id,
+        "linked_mission_status": mission_status,
+        "workspace_path": workspace_path,
+        "artifacts": artifacts,
+    }
+
+
 @app.get("/api/v1/dashboard/todolist/tasks/{task_id}/subtasks")
 async def dashboard_todolist_get_subtasks(task_id: str):
     """Return decomposition tree for a task."""
