@@ -401,8 +401,8 @@ If the `LLM Routing Judgment` line on a work item shows `should_delegate=true`, 
 
 How to delegate cleanly:
   1. Call `vp_dispatch_mission(objective=..., target_vp="vp.general.primary"|"vp.coder.primary", task_id=..., idempotency_key="task-<task_id>")`. The objective should capture what done looks like; include the source task_id.
-  2. **Immediately** call `task_hub_task_action(task_id=<source_task_id>, action="complete", note="delegated to <vp_id> via vp_dispatch_mission")`. The dispatch alone does NOT close the source work item — the close discipline applies regardless of whether you executed or delegated.
-  3. Move on. The VP will produce its output in a separate assignment; you'll see it in `needs_review` on a future heartbeat for sign-off.
+  2. **Release your claim on the source task with `task_hub_task_action(task_id=<source_task_id>, action="redirect_to", note="vp.coder.primary"|"vp.general.primary")`.** This clears your retry counters and stamps `metadata.preferred_vp` so the lifecycle-audit guardrail doesn't fire a "missing lifecycle mutation." **Do NOT use `action="complete"`** — the work isn't done yet (the VP is about to start); marking complete creates an audit-trail lie and breaks the failure-rescue flow if the VP fails. (Earlier versions of this prompt instructed `complete` at dispatch time; that contradicted HEARTBEAT.md's "VP will close it" instruction. Aligned on `redirect_to` per PRD § 5.6.)
+  3. Move on. When the VP succeeds, the source task closes automatically and the VP emails Kevin directly (you're CC'd for visibility). When the VP fails, a `vp_mission_failure` informational task hub item appears in your queue — handle it per the rescue-evaluator directive in HEARTBEAT.md. **There is no per-task `needs_review` pause for routine successes** — that was removed from the architecture (see `docs/01_Architecture/12_VP_Goal_Integration_And_Failure_Rescue_PRD.md` § 2).
 
 When you execute yourself, follow the standard close-discipline: do the work, deliver the result, then call `task_hub_task_action(action=...)` to disposition.
 
@@ -446,12 +446,12 @@ After finishing work, ALWAYS disposition every claimed work item via `task_hub_t
 ### FINAL DISPOSITION VERIFICATION (CRITICAL):
 Before you stop responding, run this self-check for EVERY claimed work item in the To Do List above:
 
-1. Did you call `task_hub_task_action(task_id=<id>, action=<one of: complete, review, block, park, approve, delegate>)` for that item during this run?
+1. Did you call `task_hub_task_action(task_id=<id>, action=<one of: complete, review, block, park, approve, redirect_to>)` for that item during this run?
 2. If NO: STOP. Do not declare the mission done. Decide which action applies, call `task_hub_task_action` now, then end your turn.
-3. If the item was delegated via `vp_dispatch_mission`, you still MUST call `task_hub_task_action(action="complete")` on the original work item with a note that it was delegated to <vp_id>. The dispatch alone does NOT close the work item — it only kicks off the VP. Without the explicit `complete` action, the original item remains "in progress" and your run will be flagged as incomplete.
+3. **If the item was delegated via `vp_dispatch_mission`, you MUST call `task_hub_task_action(action="redirect_to", note="<vp_id>")` on the original work item** — NOT `action="complete"`. The work isn't done yet (the VP is starting); `redirect_to` releases your claim and stamps `metadata.preferred_vp`, satisfying the lifecycle guardrail. The VP itself closes the source task on its own completion. (Prior versions of this prompt said `complete` here — that contradicted HEARTBEAT.md and was fixed per PRD § 5.6.)
 4. If the contract for an item required an outbound email and no email was sent yet, send it now (or, if blocked, call `task_hub_task_action(action="block"|"review")` with the concrete reason in the note).
 
-Failing this check triggers the "Execution Missing Lifecycle Mutation" guardrail (mission_guardrails.py) and your completion will be blocked. The guardrail accepts exactly these actions as a durable lifecycle mutation: `review`, `complete`, `block`, `park`, `approve`. Always close the loop with one of them.
+Failing this check triggers the "Execution Missing Lifecycle Mutation" guardrail (mission_guardrails.py) and your completion will be blocked. The guardrail accepts these actions as a durable lifecycle mutation: `review`, `complete`, `block`, `park`, `approve`, `redirect_to`. Always close the loop with one of them.
 """
 
 
