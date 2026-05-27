@@ -24,6 +24,7 @@ from claude_agent_sdk.client import ClaudeSDKClient
 from claude_agent_sdk.types import (
     AgentDefinition,
     AssistantMessage,
+    HookContext,
     ResultMessage,
     TextBlock,
     ThinkingBlock,
@@ -318,7 +319,7 @@ class QueueLogHandler(logging.Handler):
         self.queue = queue
         self.loop = asyncio.get_running_loop()
 
-    def emit(self, record: logging.LogRecord):
+    def emit(self, record: logging.LogRecord) -> None:
         try:
             msg = self.format(record)
             event = AgentEvent(
@@ -354,7 +355,7 @@ class StreamCapture:
         self.log_handler = log_handler
         self.loop = asyncio.get_running_loop()
 
-    def write(self, text: str):
+    def write(self, text: str) -> None:
         # Mirror to original stream
         self.stream.write(text)
 
@@ -491,7 +492,7 @@ def _warn_if_subagent_hooks_configured(agents: dict[str, Any] | None) -> None:
 
 
 async def malformed_tool_guardrail_hook(
-    input_data: dict, tool_use_id: str, context
+    input_data: dict, tool_use_id: str, context: HookContext
 ) -> dict:
     """
     Pre-tool-use hook that blocks malformed tool calls and injects schema guidance.
@@ -694,7 +695,7 @@ _MAX_EMPTY_WRITE_RETRIES = 3
 
 
 async def tool_output_validator_hook(
-    tool_output: dict, tool_use_id: str, context
+    tool_output: dict, tool_use_id: str, context: HookContext
 ) -> dict:
     """
     Post-Tool hook to catch empty or failed tool executions (especially Write calls).
@@ -878,7 +879,7 @@ def configure_logfire():
     if not LOGFIRE_TOKEN:
         return False
 
-    def scrubbing_callback(m: logfire.ScrubMatch):
+    def scrubbing_callback(m: logfire.ScrubMatch) -> Any | None:
         if not m.path:
             return None
         last_key = m.path[-1]
@@ -1021,7 +1022,7 @@ def parse_relative_date(relative_str: str) -> str:
 
 
 async def observe_and_save_search_results(
-    tool_name: str, content, workspace_dir: str
+    tool_name: str, content: Any, workspace_dir: str
 ) -> None:
     """Observer: Parse SERP tool results and save cleaned artifacts."""
     is_serp_tool = any(
@@ -1093,7 +1094,7 @@ async def observe_and_save_search_results(
             if "results" in payload and isinstance(payload["results"], dict):
                 search_data = payload["results"]
 
-            def safe_get_list(data, key):
+            def safe_get_list(data: dict, key: str) -> list:
                 val = data.get(key, [])
                 if isinstance(val, dict):
                     return list(val.values())
@@ -1270,7 +1271,7 @@ async def observe_and_save_workbench_activity(
 
 
 async def observe_and_enrich_corpus(
-    tool_name: str, tool_input: dict, tool_result, workspace_dir: str
+    tool_name: str, tool_input: dict, tool_result: Any, workspace_dir: str
 ) -> None:
     """Observer: Placeholder for corpus enrichment (future feature)."""
     # This observer can be expanded to automatically add crawl results to corpus
@@ -1950,7 +1951,7 @@ class UniversalAgent:
         try:
             from mcp_server import set_mcp_log_callback
 
-            def mcp_bridge_sync(msg, level, prefix=""):
+            def mcp_bridge_sync(msg: str, level: str, prefix: str = "") -> None:
                 if self._event_queue:
                     try:
                         loop = asyncio.get_running_loop()
@@ -1986,7 +1987,7 @@ class UniversalAgent:
         run_log_file = open(run_log_path, "a")
         journal_file = open(journal_path, "a", encoding="utf-8")
 
-        def log_to_journal(event: AgentEvent):
+        def log_to_journal(event: AgentEvent) -> None:
             """Helper to log high-level activity to the journal."""
             try:
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -2340,7 +2341,7 @@ class UniversalAgent:
                     usage_source = getattr(msg, "usage", None)
                     if usage_source:
 
-                        def get_val(obj, key):
+                        def get_val(obj: Any, key: str) -> Any:
                             if isinstance(obj, dict):
                                 return obj.get(key, 0)
                             return getattr(obj, key, 0)
@@ -2476,7 +2477,7 @@ class UniversalAgent:
                     usage_source = getattr(msg, "usage", None)
                     if usage_source:
 
-                        def get_val(obj, key):
+                        def get_val(obj: Any, key: str) -> Any:
                             if isinstance(obj, dict):
                                 return obj.get(key, 0)
                             return getattr(obj, key, 0)
