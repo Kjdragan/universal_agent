@@ -30,6 +30,7 @@ Mistaking one for the other is the #1 source of confusion in this system. Before
 
 - **[Demo Execution Environments](06_Deployment_And_Environments/09_Demo_Execution_Environments.md)** — canonical reference. Includes the [decision tree](06_Deployment_And_Environments/09_Demo_Execution_Environments.md#decision-tree-which-environment-do-i-need), the [CLI-vs-SDK auth wrinkle](06_Deployment_And_Environments/09_Demo_Execution_Environments.md#the-cli-vs-sdk-auth-wrinkle-read-this-it-bit-us), and the troubleshooting matrix.
 - **[Demo Workspace Provisioning Runbook](operations/demo_workspace_provisioning.md)** — one-time VPS setup steps.
+- **[Claude Max OAuth Credentials](06_Deployment_And_Environments/13_Claude_Max_OAuth_Credentials.md)** — canonical reference for production Cody-on-Anthropic-Max auth: `CLAUDE_CODE_OAUTH_TOKEN` in Infisical (NOT `~/.claude/.credentials.json`). Refresh procedure, diagnostic recipe, dead-weight cleanup.
 
 ## Development
 
