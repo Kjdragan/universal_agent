@@ -1,16 +1,18 @@
 name: Deploy
 
 on:
+  # Trigger on EVERY push (no branch filter at the trigger level) and
+  # gate inside the job via `if: github.ref == 'refs/heads/main'`.
+  #
+  # Why this shape: GitHub Actions has a UX quirk where a workflow
+  # filtered out by `on.push.branches` emits a `conclusion=failure`
+  # workflow_run with `jobs: []` — and the email notifier sends a
+  # "Run failed" email even though the workflow correctly didn't
+  # deploy. Triggering on every push and gating in-job converts those
+  # false-positive failure emails into clean `skipped` (neutral) runs.
+  #
+  # paths-ignore still applies as a fast skip for docs-only commits.
   push:
-    branches:
-      - main
-    # Skip production deploy when a push to `main` only contains docs,
-    # markdown, or scheduled-job state files. These are produced by
-    # `nightly-doc-drift-audit.yml` and `openclaw-release-sync.yml` (which
-    # auto-merge their PRs to main directly post-2026-05-10) and shouldn't
-    # restart the gateway. GitHub semantics: deploy is skipped only when
-    # **every** changed file matches a `paths-ignore` glob — a mixed
-    # code+docs commit still deploys, which is the safe default.
     paths-ignore:
       - 'docs/**'
       - '**.md'
@@ -46,6 +48,15 @@ concurrency:
 
 jobs:
   deploy-production:
+    # Gate on branch INSIDE the job rather than via on.push.branches.
+    # The 2026-05-27 17:46 deploy of #507 failed with "No jobs were
+    # run" (workflow listed as filename, not "Deploy") — a GHA quirk
+    # where filter-skipped runs report conclusion=failure and email
+    # the operator. Triggering on every push and gating in-job
+    # converts those false-positive failure emails into clean
+    # `skipped` (neutral) runs. Manual workflow_dispatch still works
+    # (github.ref will be refs/heads/main when triggered from main).
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -516,68 +527,51 @@ jobs:
       #   - AGENTMAIL_API_KEY: repo or org secret. If unset, this step
       #     becomes a no-op (don't double-fault the deploy with a missing
       #     credential — surface that diagnostically and continue).
-      #   - DEPLOY_FAILURE_EMAIL: repo or org variable (defaults to
-      #     kevinjdragan@gmail.com if unset).
-      #   - DEPLOY_FAILURE_INBOX: AgentMail inbox to send from (defaults
-      #     to oddcity216@agentmail.to — Simone's inbox, matches the
-      #     existing system-alert delivery convention).
+      #   - Recipient (kevinjdragan@gmail.com) and sender inbox
+      #     (oddcity216@agentmail.to) are hard-coded. Originally factored
+      #     through `${{ vars.X || 'default' }}` but that triggered a
+      #     GHA workflow-parser failure on the 2026-05-27 17:46 deploy
+      #     (no jobs ran, workflow shown as filename not name). Hard
+      #     defaults are safer — change here if you ever need to.
       - name: Notify operator on deploy failure via AgentMail
         if: failure()
         env:
           AGENTMAIL_API_KEY: ${{ secrets.AGENTMAIL_API_KEY }}
-          DEPLOY_FAILURE_EMAIL: ${{ vars.DEPLOY_FAILURE_EMAIL || 'kevinjdragan@gmail.com' }}
-          DEPLOY_FAILURE_INBOX: ${{ vars.DEPLOY_FAILURE_INBOX || 'oddcity216@agentmail.to' }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           COMMIT_SHA: ${{ github.sha }}
           COMMIT_REF: ${{ github.ref_name }}
         shell: bash
         run: |
+          set +e
+          DEPLOY_FAILURE_EMAIL="kevinjdragan@gmail.com"
+          DEPLOY_FAILURE_INBOX="oddcity216@agentmail.to"
           if [ -z "${AGENTMAIL_API_KEY:-}" ]; then
             echo "::warning::AGENTMAIL_API_KEY not configured; skipping failure-email notification."
-            echo "::warning::Set the AGENTMAIL_API_KEY repo/org secret to enable deploy-failure emails."
             exit 0
           fi
           SHORT_SHA="${COMMIT_SHA:0:8}"
-          export SUBJECT="[deploy-failed] universal_agent main @${SHORT_SHA}"
-          # Build the JSON payload via python so we don't have to hand-escape
-          # newlines/quotes for curl. python3 is always available on GHA
-          # Ubuntu runners.
-          PAYLOAD="$(python3 -c "
-          import json, os
-          body = (
-              'Production deploy FAILED.\\n\\n'
-              f\"Commit:    {os.environ['COMMIT_SHA']}\\n\"
-              f\"Branch:    {os.environ['COMMIT_REF']}\\n\"
-              f\"Workflow:  {os.environ['RUN_URL']}\\n\\n\"
-              'Next steps:\\n'
-              '  1. Open the workflow run URL above to see which step failed.\\n'
-              '  2. If the failure was in the gateway health-check loop, check journalctl on the VPS:\\n'
-              '       ssh ua@uaonvps \"journalctl -u universal-agent-gateway -n 200 --no-pager\"\\n'
-              '  3. The deploy.yml concurrency guard queues subsequent deploys until this one\\n'
-              '     reaches a terminal state — so further merges to main will wait.\\n'
-          )
-          print(json.dumps({
-              'to': [os.environ['DEPLOY_FAILURE_EMAIL']],
-              'subject': os.environ['SUBJECT'],
-              'text': body,
-              'labels': ['deploy-failed', 'ops'],
-          }))")"
-          # Best-effort POST. Don't fail the job if AgentMail is down (we're
-          # already in failure() — double-fault buys nothing).
-          set +e
-          curl -sS -o /tmp/agentmail_resp.json -w "%{http_code}" \
+          SUBJECT="[deploy-failed] universal_agent main @${SHORT_SHA}"
+          # Hand-built JSON via printf — no python heredoc, no embedded
+          # escaping. \n inside printf %b produces real newlines; the
+          # entire body becomes a single JSON string.
+          BODY=$(printf 'Production deploy FAILED.\n\nCommit:    %s\nBranch:    %s\nWorkflow:  %s\n\nNext steps:\n  1. Open the workflow URL above to see which step failed.\n  2. If gateway health-wait timed out, check the VPS:\n       ssh ua@uaonvps "journalctl -u universal-agent-gateway -n 200 --no-pager"\n  3. The deploy concurrency guard queues subsequent deploys until this one resolves, so further merges to main will wait.' \
+            "$COMMIT_SHA" "$COMMIT_REF" "$RUN_URL")
+          # jq builds the JSON payload safely.
+          PAYLOAD=$(jq -n \
+            --arg to "$DEPLOY_FAILURE_EMAIL" \
+            --arg subject "$SUBJECT" \
+            --arg text "$BODY" \
+            '{to: [$to], subject: $subject, text: $text, labels: ["deploy-failed", "ops"]}')
+          curl -sS -o /tmp/agentmail_resp.json -w "AgentMail HTTP %{http_code}\n" \
             -X POST \
             -H "Authorization: Bearer ${AGENTMAIL_API_KEY}" \
             -H "Content-Type: application/json" \
             --max-time 15 \
             --data "$PAYLOAD" \
             "https://api.agentmail.to/v0/inboxes/${DEPLOY_FAILURE_INBOX}/messages/send" \
-            > /tmp/agentmail_status.txt
-          status="$(cat /tmp/agentmail_status.txt 2>/dev/null || echo '???')"
-          echo "AgentMail send status: $status"
+            || true
           head -c 500 /tmp/agentmail_resp.json 2>/dev/null || true
           echo ""
-          set -e
-          # Soft-success — the deploy already failed; we don't want a missing
-          # notification to mask that with a fresh red workflow.
+          # Don't fail the workflow — deploy already failed; missing email
+          # delivery shouldn't double-fault.
           exit 0
