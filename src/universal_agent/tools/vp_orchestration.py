@@ -317,6 +317,14 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
     mission_metadata = dict(raw_metadata)
     mission_metadata["cody_mode"] = resolved_cody_mode
 
+    # Propagate the originating Task Hub task_id into mission metadata so
+    # the spawned worker (CLI or SDK) can attach its identifiers (CLI
+    # session_id, workspace_dir, etc.) back to the parent task row. Without
+    # this, the worker sees task_id="" and the entire Phase F.1 bookkeeping
+    # plus the Workspace-button deep-link fix from PR #488 silently no-op.
+    if linked_task_id:
+        mission_metadata["linked_task_id"] = linked_task_id
+
     # Inherit use_goal_loop from the linked task hub item's metadata if not
     # already set on the mission. This is the wiring that makes the dashboard
     # "Dispatch Mission" UI automatically activate /goal for operator-dispatched

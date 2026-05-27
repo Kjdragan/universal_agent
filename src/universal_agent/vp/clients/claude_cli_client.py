@@ -296,6 +296,22 @@ async def _execute_cli_session(
         "--verbose",
     ]
 
+    # Model selection — the Claude Code CLI defaults to Sonnet
+    # (claude-sonnet-4-6). For Cody's autonomous coding work we default
+    # to Opus 4.7 (Anthropic positions it as the most capable model for
+    # complex agentic coding — a step-change over Sonnet 4.6 on the
+    # 93-task coding benchmark). The operator can override per-process
+    # by setting ``UA_CODY_CLI_MODEL``:
+    #   - explicit value (e.g. ``claude-sonnet-4-6``) → pinned to that
+    #   - ``default`` or empty → use the CLI's default (no ``--model``
+    #     flag, currently Sonnet)
+    # Only applied when ``cody_mode == "anthropic"`` — ZAI/SDK paths
+    # have their own model routing and would ignore ``--model`` anyway.
+    if cody_mode == "anthropic":
+        model_override = os.getenv("UA_CODY_CLI_MODEL", "claude-opus-4-7").strip()
+        if model_override and model_override.lower() != "default":
+            cmd.extend(["--model", model_override])
+
     logger.info("Launching CLI: %s (cwd=%s, timeout=%ds)", " ".join(cmd), workspace_dir, timeout_seconds)
 
     try:
@@ -392,12 +408,23 @@ async def _execute_cli_session(
     ):
         enriched_payload.setdefault("was_timeout_killed", True)
 
-    # Write the captured CLI session_id back onto the assignment row so
-    # the Task Hub card's Workspace button deep-links into the CLI
-    # subprocess's session instead of the orchestrator's session.
+    # Accumulate Cody identifiers (CLI session_id, mission_id, workspace
+    # path, worker PID) on the parent Task Hub row's
+    # ``metadata.dispatch.cody_*`` so the dashboard card can render a
+    # progressive Delegation Trace and the Workspace button can deep-link
+    # into the Cody CLI session.
+    #
+    # We write to the PARENT task row (e.g. ``qa-af037bdaa324``) — NOT to
+    # the orchestrator's (Simone's) assignment row. PR #488 mistakenly
+    # wrote to the assignment's ``provider_session_id``, but that field
+    # belongs to whoever claimed the task (Simone, in the operator →
+    # Simone → Cody handoff). Overwriting it would lose Simone's session
+    # identity, and in practice the write silently no-op'd because the
+    # ``task_id`` propagation gap meant ``cli_assignment_id`` was None.
+    #
     # Best-effort — never blocks the happy path.
     _captured_sid = str(enriched_payload.get("cli_session_id") or "").strip()
-    if _captured_sid and cli_assignment_id:
+    if task_id and (_captured_sid or proc.pid or mission_id or workspace_dir):
         try:
             from universal_agent import task_hub as _f_th
             from universal_agent.gateway_server import (
@@ -405,17 +432,20 @@ async def _execute_cli_session(
             )
             _f_conn = _f_open_conn()
             try:
-                _f_th.record_provider_session_id(
+                _f_th.record_cody_dispatch_metadata(
                     _f_conn,
-                    assignment_id=cli_assignment_id,
-                    provider_session_id=_captured_sid,
+                    task_id=task_id,
+                    cody_session_id=_captured_sid,
+                    cody_mission_id=mission_id,
+                    cody_workspace_dir=str(workspace_dir),
+                    cody_worker_pid=int(proc.pid) if proc.pid else 0,
                 )
                 _f_conn.commit()
             finally:
                 _f_conn.close()
         except Exception as _f_exc:
             logger.debug(
-                "record_provider_session_id skipped for CLI mission %s: %s",
+                "record_cody_dispatch_metadata skipped for CLI mission %s: %s",
                 mission_id, _f_exc,
             )
 

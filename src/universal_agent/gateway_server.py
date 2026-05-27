@@ -24651,6 +24651,23 @@ def _task_hub_board_projection(
     # in docs/107_Task_Hub_Master_Reference.md).
     has_active_assignment = False
 
+    # Pull Cody/VP-CLI delegation identifiers off the row's metadata.
+    # These accumulate as the mission progresses (dispatch → spawn →
+    # completion) via ``task_hub.record_cody_dispatch_metadata`` and let
+    # the dashboard card surface a progressive Delegation Trace.
+    cody_session_id = str(dispatch_meta.get("cody_session_id") or "").strip()
+    cody_mission_id = str(dispatch_meta.get("cody_mission_id") or "").strip()
+    cody_workspace_dir = str(dispatch_meta.get("cody_workspace_dir") or "").strip()
+    cody_worker_pid_raw = dispatch_meta.get("cody_worker_pid")
+    cody_worker_pid: Optional[int] = None
+    try:
+        if cody_worker_pid_raw is not None and int(cody_worker_pid_raw) > 0:
+            cody_worker_pid = int(cody_worker_pid_raw)
+    except (TypeError, ValueError):
+        cody_worker_pid = None
+    cody_dispatched_at = str(dispatch_meta.get("cody_dispatched_at") or "").strip()
+    delegation_target = str(delegation.get("delegate_target") or "").strip()
+
     if active_assignment:
         assigned_agent_id = str(active_assignment.get("agent_id") or "")
         assigned_session_id = str(active_assignment.get("provider_session_id") or "") or task_hub._session_id_from_agent_id(assigned_agent_id)
@@ -24667,6 +24684,15 @@ def _task_hub_board_projection(
         assigned_session_id = str(dispatch_meta.get("active_provider_session_id") or "")
         assignment_state = "seized"
         has_active_assignment = True
+
+    # When Cody's CLI session_id has been captured on the parent row,
+    # prefer it for the Workspace button's deep-link target. The active
+    # assignment row belongs to the orchestrator (e.g. Simone) who
+    # claimed the task in order to delegate it — its session_id is
+    # Simone's, not Cody's. The card's operator-facing action is to
+    # inspect Cody's work, so we route the navigation there.
+    if cody_session_id:
+        assigned_session_id = cody_session_id
 
     if status in {task_hub.TASK_STATUS_REVIEW, task_hub.TASK_STATUS_PENDING_REVIEW}:
         board_lane = "needs_review"
@@ -24692,6 +24718,15 @@ def _task_hub_board_projection(
         "assigned_session_id": assigned_session_id or None,
         "assignment_state": assignment_state or None,
         "requires_simone_review": board_lane == "needs_review",
+        # Delegation Trace fields — accumulated as the mission moves
+        # through the lifecycle. Frontend reads these to render an
+        # incremental "where is this task now" panel on the card.
+        "delegation_target": delegation_target or None,
+        "cody_session_id": cody_session_id or None,
+        "cody_mission_id": cody_mission_id or None,
+        "cody_workspace_dir": cody_workspace_dir or None,
+        "cody_worker_pid": cody_worker_pid,
+        "cody_dispatched_at": cody_dispatched_at or None,
     }
 
 

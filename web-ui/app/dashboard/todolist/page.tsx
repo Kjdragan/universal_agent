@@ -8,6 +8,7 @@ import { beginMutation } from "@/lib/api";
 import { resolveTaskWorkspaceTarget } from "@/lib/taskWorkspaceTarget";
 import { openViewer } from "@/lib/viewer/openViewer";
 import { GoalArtifactsToggle, GoalBadge } from "@/components/GoalArtifactsPanel";
+import { DelegationTracePanel } from "@/components/DelegationTracePanel";
 
 const API_BASE = "/api/dashboard/gateway";
 const AUTO_REFRESH_SECONDS = 30;
@@ -48,6 +49,16 @@ type AgentQueueItem = {
   assigned_session_id?: string | null;
   assignment_state?: string | null;
   requires_simone_review?: boolean;
+  // Delegation Trace fields (PR #488b). Populated by
+  // _task_hub_board_projection from metadata.dispatch.cody_* on tasks
+  // that Simone routed to a VP (typically vp.coder.primary). Frontend
+  // renders these in the inline DelegationTracePanel on the card.
+  delegation_target?: string | null;
+  cody_session_id?: string | null;
+  cody_mission_id?: string | null;
+  cody_workspace_dir?: string | null;
+  cody_worker_pid?: number | null;
+  cody_dispatched_at?: string | null;
   delivery_mode?: string | null;
   session_role?: string | null;
   run_kind?: string | null;
@@ -1397,6 +1408,18 @@ export default function ToDoListDashboardPage() {
             )}
           </div>
         )}
+        <DelegationTracePanel
+          taskId={item.task_id}
+          delegationTarget={item.delegation_target}
+          codyMissionId={item.cody_mission_id}
+          codySessionId={item.cody_session_id}
+          codyWorkspaceDir={item.cody_workspace_dir}
+          codyWorkerPid={item.cody_worker_pid}
+          codyDispatchedAt={item.cody_dispatched_at}
+          assignedAgentId={item.assigned_agent_id}
+          assignedSessionId={item.assigned_session_id}
+          assignmentState={item.assignment_state}
+        />
         {showActions && (
           <div className="mt-2 flex flex-wrap items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200" onClick={(e) => e.stopPropagation()}>
             <button onClick={() => void handleTaskAction(item.task_id, "park")} disabled={isPending}
