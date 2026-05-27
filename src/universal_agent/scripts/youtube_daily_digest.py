@@ -45,7 +45,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from anthropic import AsyncAnthropic
 
-from universal_agent.infisical_loader import initialize_runtime_secrets
+from universal_agent.infisical_loader import (
+    initialize_runtime_secrets,
+    upsert_infisical_secret,
+)
 from universal_agent.rate_limiter import ZAIRateLimiter
 from universal_agent.services.agentmail_service import AgentMailService
 from universal_agent.services.digest_delivery_reminder import (
@@ -56,7 +59,10 @@ from universal_agent.services.youtube_playlist_manager import (
     YouTubeAPIError,
     YouTubeOAuthError,
     add_playlist_item,
+    create_playlist,
+    delete_playlist,
     get_playlist_items,
+    get_playlist_metadata,
     remove_playlist_item,
 )
 from universal_agent.utils.model_resolution import resolve_model
@@ -2100,6 +2106,99 @@ def _emit_proactive_delivery_failure(
         pass
 
 
+def _recreate_playlist_after_digest(
+    *,
+    day_name: str,
+    old_playlist_id: str,
+    processed_count: int,
+) -> None:
+    """Recreate the day-of-week playlist with the same name + description.
+
+    Triggered after a successful digest run that processed at least one video.
+    The point is to give Kevin a clean playlist for the next day's manual
+    additions without paying per-video delete quota cost.
+
+    Quota cost: ~101 YouTube Data API units per recreate (1 list + 50 create
+    + 50 delete) regardless of how many videos were in the playlist. Compare
+    against per-video delete which costs N*50 units — on a 65-video SATURDAY
+    that's 3250 units (32% of daily quota).
+
+    Safe ordering, so we never end up with zero playlists:
+        1. Read the old playlist's metadata (title, description, privacy).
+        2. Create a NEW playlist carrying that same metadata.
+        3. Write the new playlist ID to Infisical.
+        4. Only after Infisical persistence succeeds, delete the OLD playlist.
+
+    Failure semantics:
+      * Step 1 fail -> log, skip recreate. Playlist accumulates noise this
+        cycle but the digest itself already succeeded.
+      * Step 2 fail -> log, skip. No state changed.
+      * Step 3 fail -> log loudly. Two playlists with the same name now exist;
+        the old one is still referenced from Infisical, so the next cron tick
+        still works. Operator can manually clean the orphan.
+      * Step 4 fail -> log. Same outcome as step 3 — two playlists exist
+        temporarily; the live env-var points at the new one. The old playlist
+        is now orphaned but Kevin can delete it manually.
+    """
+    if processed_count <= 0:
+        return
+    if not old_playlist_id:
+        return
+
+    logger.info(
+        "Recreating %s playlist (cleanup after %d processed videos)...",
+        day_name, processed_count,
+    )
+
+    try:
+        metadata = get_playlist_metadata(old_playlist_id)
+    except YouTubeAPIError as exc:
+        logger.warning(
+            "Could not fetch metadata for %s playlist %s (skipping recreate; digest already succeeded): %s",
+            day_name, old_playlist_id, exc,
+        )
+        return
+
+    title = metadata.get("title") or f"{day_name.title()} Digest"
+    try:
+        new_id = create_playlist(
+            title=title,
+            description=metadata.get("description", ""),
+            privacy_status=metadata.get("privacy_status", "private"),
+        )
+    except YouTubeAPIError as exc:
+        logger.warning(
+            "Could not create replacement %s playlist (skipping recreate): %s",
+            day_name, exc,
+        )
+        return
+
+    env_var = f"{day_name}_YT_PLAYLIST"
+    upsert_ok = upsert_infisical_secret(env_var, new_id)
+    if not upsert_ok:
+        logger.error(
+            "Failed to persist new %s playlist ID to Infisical. "
+            "Two playlists with title %r now exist; Infisical still points at "
+            "the old one (%s). The next cron will still work — manual cleanup "
+            "of the new orphan (id=%s) is recommended.",
+            day_name, title, old_playlist_id, new_id,
+        )
+        return
+
+    try:
+        delete_playlist(old_playlist_id)
+    except YouTubeAPIError as exc:
+        logger.warning(
+            "Old %s playlist %s not deleted (orphan; new playlist %s is now live; "
+            "safe to delete the orphan manually): %s",
+            day_name, old_playlist_id, new_id, exc,
+        )
+    logger.info(
+        "Recreated %s playlist: old=%s -> new=%s (title=%r preserved)",
+        day_name, old_playlist_id, new_id, title,
+    )
+
+
 def _save_processed_videos(items: list[dict], day_name: str) -> None:
     db_path = _ingestion_db_path()
     conn = sqlite3.connect(str(db_path))
@@ -2488,6 +2587,25 @@ def process_daily_digest(
     logger.info("Saving state to processed_videos database...")
     _save_processed_videos(processed_items, day_name)
     logger.info("Successfully recorded %d videos as processed for %s.", len(processed_items), day_name)
+
+    # Recreate the day-of-week playlist with the same name so the next day's
+    # additions land in an empty playlist. Quota-cheap: 101 units flat instead
+    # of N*50 per-item-delete. Failure here is non-fatal — the digest already
+    # succeeded; an unrenamed playlist is a cleanup nuisance, not a delivery
+    # issue. See `_recreate_playlist_after_digest` for the safe ordering.
+    if os.getenv("UA_YOUTUBE_PLAYLIST_RECREATE_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}:
+        try:
+            _recreate_playlist_after_digest(
+                day_name=day_name,
+                old_playlist_id=playlist_id,
+                processed_count=len(processed_items),
+            )
+        except Exception as recreate_exc:  # broad on purpose — never block on cleanup
+            logger.warning(
+                "Playlist recreate raised an unexpected exception for %s "
+                "(digest succeeded; manual cleanup may be needed): %s",
+                day_name, recreate_exc,
+            )
 
 
 if __name__ == "__main__":
