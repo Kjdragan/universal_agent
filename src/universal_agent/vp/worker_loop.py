@@ -64,6 +64,49 @@ _WORKSPACE_GUARD_MARKERS_LOWER = (
 )
 
 
+def _resolve_source_task_id_from_payload(mission_payload: Any) -> str:
+    """Return the originating Task Hub task_id from a VP mission payload.
+
+    The linkage between an operator-dispatched ``qa-*`` task and the
+    spawned VP mission can live in three places on the mission_payload,
+    depending on which dispatch path created it:
+
+      1. ``payload.task_id`` (top-level) — PR #490's ``_build_payload``
+         lifts ``request.metadata.linked_task_id`` here. Highest
+         priority because it's the explicit contract field.
+      2. ``payload.metadata.linked_task_id`` — PR #491's
+         ``_vp_dispatch_mission_impl`` auto-discovery writes here when
+         the caller's args didn't include ``task_id`` but a current
+         seized assignment exists.
+      3. ``payload.metadata.task_id`` — legacy callers that stuffed
+         it directly under metadata.
+
+    Pre-PR-#493 the worker_loop only checked the third path — and
+    nobody writes that key — so the source-task closure
+    silently no-op'd for every operator-dispatched Cody mission, leaving
+    `qa-*` rows stuck in ``status=delegated`` indefinitely (the long-
+    standing "delegated zombie" pattern).
+
+    Returns ``""`` when no linkage is found — callers skip the closure
+    silently in that case (it's expected for ad-hoc tool-call dispatches
+    without a Task Hub parent).
+    """
+    if not isinstance(mission_payload, dict):
+        return ""
+    top_level = str(mission_payload.get("task_id") or "").strip()
+    if top_level:
+        return top_level
+    metadata = mission_payload.get("metadata")
+    if isinstance(metadata, dict):
+        linked = str(metadata.get("linked_task_id") or "").strip()
+        if linked:
+            return linked
+        legacy = str(metadata.get("task_id") or "").strip()
+        if legacy:
+            return legacy
+    return ""
+
+
 def _classify_outcome_failure_mode(outcome) -> Optional[str]:
     """Best-effort failure-mode classifier for the rescue hook.
 
@@ -686,11 +729,7 @@ class VpWorkerLoop:
                 _mission_payload = json.loads(mission.get("payload_json") or "{}")
             except Exception:
                 _mission_payload = {}
-            _source_task_id = ""
-            if isinstance(_mission_payload, dict):
-                _meta = _mission_payload.get("metadata")
-                if isinstance(_meta, dict):
-                    _source_task_id = str(_meta.get("task_id") or "").strip()
+            _source_task_id = _resolve_source_task_id_from_payload(_mission_payload)
             if _source_task_id and _source_task_id != mission_id:
                 try:
                     task_hub.upsert_item(th_conn, {
