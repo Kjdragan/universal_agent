@@ -352,12 +352,28 @@ This pattern matters because the dashboard embeds the mini Agent Flow widget and
 
 | Column | Derived From | Available Actions |
 |--------|--------------|-------------------|
-| **Not Assigned** | `open` with no active assignment/delegation | Dispatch, Seize, Block, Park |
-| **In Progress** | `in_progress`, `delegated`, or active seized/running assignment | Complete, Block, Review, Park |
+| **Not Assigned** | `open` (untriaged) OR `delegated` without an active assignment row (Simone has chosen a delegate but the VP heartbeat hasn't picked it up yet) | Dispatch, Seize, Block, Park; bulk "Delete All" parks every row in the lane |
+| **In Progress** | `in_progress` OR an active assignment row in state `seized`/`running` OR legacy `metadata.dispatch.active_agent_id` set | Complete, Block, Review, Park; bulk "Delete All" parks every row in the lane |
 | **Needs Review** | `needs_review`, `pending_review`, or unverified completion flagged by reconciliation | Complete, Park |
 | **Completed** | `completed` | Inspect, review history, hide |
 
 Blocked and parked items remain available through queue data and filters, but they are no longer primary board columns.
+
+> **Lane semantics changed 2026-05-27 (PR claude/taskhub-in-progress-truth):** previously `status='delegated'` alone promoted a card to the In Progress lane. That conflated "Simone has triaged and chosen a delegate" with "an agent has hands on this right now," which made the lane appear stuck during Atlas/VP backlogs (every delegated insight brief showed in_progress regardless of whether Atlas had actually claimed it yet). The projection now requires either explicit `status='in_progress'`, an active assignment row in `seized`/`running`, or the legacy `dispatch.active_agent_id` metadata path. Delegated-but-not-yet-claimed rows live in **Not Assigned** with a subtle teal left border and a timeline strip showing `created → delegated → queued behind N`. See `gateway_server.py:_task_hub_board_projection`.
+
+### 6.1.1 Card Timeline Strip
+
+Every card carries a compact `timeline` array (latest 2–3 events rendered inline, full history in the drawer). Events are derived directly from existing metadata — the gateway does not write anything new:
+
+| Event kind | Source |
+|---|---|
+| `created` | `task_hub_items.created_at` |
+| `delegated` | `metadata.delegation.delegated_at` + `delegate_target` |
+| `picked_up` | `active_assignment.started_at` ∪ `latest_assignment.started_at` ∪ `metadata.dispatch.last_assignment_started_at` |
+| `assignment_<state>` | terminal `latest_assignment.state` + `ended_at` (e.g. `assignment_completed`, `assignment_failed`) |
+| `parked` / `blocked` | `task_hub_items.updated_at` when status flipped to that terminal lane |
+
+A queued-delegated row also carries `queued_behind: int` — the count of other tasks delegated earlier to the same target that have not been picked up yet. Computed by `_task_hub_queued_behind` (single SQL, falls back to `0` on any miss).
 
 > [!TIP]
 > The lifecycle of a task and how it visually propagates through the dashboard columns is outlined below.

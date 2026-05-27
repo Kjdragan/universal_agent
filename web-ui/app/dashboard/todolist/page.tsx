@@ -79,7 +79,24 @@ type AgentQueueItem = {
     workflow_manifest?: {
       target_agent?: string;
     };
+    delegation?: {
+      delegate_target?: string | null;
+      delegated_at?: string | null;
+    };
   };
+  // Lifecycle timeline events appended by the gateway projection.  Each entry
+  // is a small dict {kind, at, label, ...} sorted chronologically.  The UI
+  // shows the latest 2-3 inline and the full history in the drawer.
+  timeline?: Array<{
+    kind: string;
+    at: string;
+    label: string;
+    delegate_target?: string | null;
+  }>;
+  // Count of OTHER tasks delegated to the same target that landed earlier
+  // and have not been picked up yet.  Populated only for delegated rows
+  // without an active assignment; 0 otherwise.
+  queued_behind?: number;
 };
 
 
@@ -495,6 +512,7 @@ export default function ToDoListDashboardPage() {
   });
   const [deleteAllPending, setDeleteAllPending] = useState(false);
   const [deleteAllNotAssignedPending, setDeleteAllNotAssignedPending] = useState(false);
+  const [deleteAllInProgressPending, setDeleteAllInProgressPending] = useState(false);
   const [hoveredDeleteId, setHoveredDeleteId] = useState<string | null>(null);
   const [quickAddTitle, setQuickAddTitle] = useState("");
   const [quickAddPending, setQuickAddPending] = useState(false);
@@ -947,7 +965,7 @@ export default function ToDoListDashboardPage() {
   const handleDeleteAllNotAssigned = useCallback(async () => {
     if (!notAssignedItems.length) return;
     const confirmed = window.confirm(
-      `Park all ${notAssignedItems.length} unassigned task${notAssignedItems.length === 1 ? "" : "s"}? They will be moved out of the active board.`,
+      `Park all ${notAssignedItems.length} queued task${notAssignedItems.length === 1 ? "" : "s"}? Includes untriaged and delegated-but-not-yet-picked-up tasks. They will be moved out of the active board.`,
     );
     if (!confirmed) return;
     setDeleteAllNotAssignedPending(true);
@@ -958,7 +976,7 @@ export default function ToDoListDashboardPage() {
           fetch(`${API_BASE}/api/v1/dashboard/todolist/tasks/${encodeURIComponent(item.task_id)}/action`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "park", reason: "bulk_delete_unassigned" }),
+            body: JSON.stringify({ action: "park", reason: "bulk_delete_queued" }),
           }),
         ),
       );
@@ -970,6 +988,33 @@ export default function ToDoListDashboardPage() {
       setDeleteAllNotAssignedPending(false);
     }
   }, [notAssignedItems, load]);
+
+  const handleDeleteAllInProgress = useCallback(async () => {
+    if (!inProgressItems.length) return;
+    const confirmed = window.confirm(
+      `Park all ${inProgressItems.length} in-progress task${inProgressItems.length === 1 ? "" : "s"}? Any active agent assignment will be marked completed. They will be moved out of the active board.`,
+    );
+    if (!confirmed) return;
+    setDeleteAllInProgressPending(true);
+    const releaseMutation = beginMutation();
+    try {
+      await Promise.allSettled(
+        inProgressItems.map((item) =>
+          fetch(`${API_BASE}/api/v1/dashboard/todolist/tasks/${encodeURIComponent(item.task_id)}/action`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "park", reason: "bulk_delete_in_progress" }),
+          }),
+        ),
+      );
+    } catch {
+      // noop — best-effort
+    } finally {
+      await load(true);
+      releaseMutation();
+      setDeleteAllInProgressPending(false);
+    }
+  }, [inProgressItems, load]);
 
   // Allocation breakdown: source_kind counts
   const allocationBySource = useMemo(() => {
@@ -1091,6 +1136,14 @@ export default function ToDoListDashboardPage() {
     const isAwaitingReview = boardLane === "needs_review" && !isAgentStaging && !isHumanReview; // Fallback
     const isOrphaned = Boolean(item.reconciliation?.orphaned_in_progress);
     const lastDispatch = item.metadata?.dispatch;
+    // Delegated-but-not-yet-picked-up: Simone has triaged and chosen a VP, but
+    // the VP heartbeat hasn't claimed the task yet (no active_assignment).
+    // These rows live in the not_assigned lane after the projection change in
+    // PR taskhub-in-progress-truth, but operators benefit from a subtle visual
+    // distinction from genuinely-untriaged (status='open') cards.
+    const isQueuedDelegated = boardLane === "not_assigned" && item.status === "delegated";
+    const queuedBehind = Number(item.queued_behind || 0);
+    const timelineEvents = Array.isArray(item.timeline) ? item.timeline : [];
 
     // Security-specific flags
     const itemLabels = item.labels || [];
@@ -1131,6 +1184,10 @@ export default function ToDoListDashboardPage() {
           (isSecurityAlert || isQuarantined) ? "border-l-2 border-l-red-500 border-red-500/30 bg-red-950/20" : "",
           (!isSecurityAlert && !isQuarantined && (isHumanReview || isAwaitingReview)) ? "border-l-2 border-l-kcd-amber" : "",
           isAgentStaging ? "border-l-2 border-l-indigo-400" : "",
+          // Subtle teal border so the operator can scan the Not-Assigned lane
+          // and tell "Simone has decided who to give this to" cards from
+          // "untriaged, still waiting on Simone" cards at a glance.
+          (isQueuedDelegated && !item.must_complete && !isProcessing && !isSecurityAlert && !isQuarantined && !isHumanReview && !isAwaitingReview && !isAgentStaging) ? "border-l-2 border-l-kcd-cyan/60" : "",
         ].filter(Boolean).join(" ")}
       >
         {/* ── Security Alert Badge (external/quarantined) ── */}
@@ -1321,6 +1378,25 @@ export default function ToDoListDashboardPage() {
             <><span className="opacity-40">│</span><span className="text-kcd-amber">below threshold {dispatchThreshold}</span></>
           )}
         </div>
+        {(timelineEvents.length > 0 || queuedBehind > 0) && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5 font-mono text-[10px] text-kcd-text-dim">
+            {timelineEvents.slice(-3).map((evt, i) => (
+              <span key={`${evt.kind}-${evt.at}-${i}`} className="flex items-center gap-1.5">
+                {i > 0 && <span className="opacity-40">·</span>}
+                <span>
+                  {evt.label}
+                  {evt.at && <span className="opacity-60"> {formatTs(evt.at)}</span>}
+                </span>
+              </span>
+            ))}
+            {queuedBehind > 0 && (
+              <>
+                <span className="opacity-40">·</span>
+                <span className="text-kcd-amber">queued behind {queuedBehind}</span>
+              </>
+            )}
+          </div>
+        )}
         {showActions && (
           <div className="mt-2 flex flex-wrap items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200" onClick={(e) => e.stopPropagation()}>
             <button onClick={() => void handleTaskAction(item.task_id, "park")} disabled={isPending}
@@ -2199,7 +2275,24 @@ export default function ToDoListDashboardPage() {
         >
           {notAssignedItems.map((item, idx) => renderTaskCard(item, idx, true))}
         </KanbanCol>
-        <KanbanCol label="In Progress" icon="bolt" count={inProgressItems.length} accentColor="#4ADE80" emptyText="Nothing actively in progress.">
+        <KanbanCol
+          label="In Progress"
+          icon="bolt"
+          count={inProgressItems.length}
+          accentColor="#4ADE80"
+          emptyText="Nothing actively in progress."
+          headerAction={
+            inProgressItems.length > 0 ? (
+              <button
+                onClick={() => void handleDeleteAllInProgress()}
+                disabled={deleteAllInProgressPending}
+                className="px-2 py-0.5 font-mono text-[9px] font-bold tracking-wider uppercase bg-kcd-red/10 text-kcd-red border-none rounded-sm cursor-pointer hover:bg-kcd-red/20 transition-colors disabled:opacity-40"
+              >
+                {deleteAllInProgressPending ? "Deleting…" : "Delete All"}
+              </button>
+            ) : undefined
+          }
+        >
           {inProgressItems.map((item, idx) => renderTaskCard(item, idx, true, (id) => void handleTaskAction(id, "park")))}
         </KanbanCol>
         <KanbanCol label="Needs Review" icon="rate_review" count={needsReviewItems.length} accentColor="#F59E0B" emptyText="Nothing awaiting Simone review.">
