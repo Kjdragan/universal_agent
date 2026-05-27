@@ -135,7 +135,7 @@ def remove_playlist_item(playlist_item_id: str) -> bool:
     """Physically delete an item from the user's YouTube playlist."""
     access_token = _get_access_token()
     headers = {"Authorization": f"Bearer {access_token}"}
-    
+
     with httpx.Client(headers=headers, timeout=15.0) as client:
         response = client.delete(
             f"{YOUTUBE_API_BASE}/playlistItems",
@@ -148,3 +148,101 @@ def remove_playlist_item(playlist_item_id: str) -> bool:
             return True
         else:
             raise YouTubeAPIError(f"Failed to delete playlist item {playlist_item_id}: {response.text}")
+
+
+def get_playlist_metadata(playlist_id: str) -> dict[str, Any]:
+    """Fetch a playlist's title, description, and privacy status.
+
+    Used by the digest cron's daily playlist-recreate flow to preserve the
+    user-visible title (e.g. "Monday Digest") + any custom description across
+    the recreate. Quota cost: 1 unit.
+
+    Raises YouTubeAPIError on non-200 or empty result.
+    """
+    access_token = _get_access_token()
+    headers = {"Authorization": f"Bearer {access_token}"}
+
+    with httpx.Client(headers=headers, timeout=15.0) as client:
+        response = client.get(
+            f"{YOUTUBE_API_BASE}/playlists",
+            params={"part": "snippet,status", "id": playlist_id},
+        )
+    if response.status_code != 200:
+        raise YouTubeAPIError(
+            f"Failed to fetch playlist metadata for {playlist_id}: {response.text}"
+        )
+    items = response.json().get("items", [])
+    if not items:
+        raise YouTubeAPIError(
+            f"Playlist {playlist_id} not found (Data API returned empty items array)"
+        )
+    snippet = items[0].get("snippet") or {}
+    status = items[0].get("status") or {}
+    return {
+        "title": str(snippet.get("title") or "").strip(),
+        "description": str(snippet.get("description") or ""),
+        "privacy_status": str(status.get("privacyStatus") or "private").strip(),
+    }
+
+
+def create_playlist(
+    *,
+    title: str,
+    description: str = "",
+    privacy_status: str = "private",
+) -> str:
+    """Create a new playlist with the given metadata. Returns the new playlist ID.
+
+    Quota cost: 50 units. ``privacy_status`` must be one of ``private``,
+    ``unlisted``, ``public`` per YouTube Data API v3 spec; we default to
+    ``private`` so a freshly-created day-of-week playlist is never
+    accidentally exposed.
+    """
+    if not title:
+        raise ValueError("title must be non-empty")
+    access_token = _get_access_token()
+    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+    payload = {
+        "snippet": {"title": title, "description": description},
+        "status": {"privacyStatus": privacy_status},
+    }
+    with httpx.Client(headers=headers, timeout=15.0) as client:
+        response = client.post(
+            f"{YOUTUBE_API_BASE}/playlists",
+            params={"part": "snippet,status"},
+            json=payload,
+        )
+    if response.status_code not in {200, 201}:
+        raise YouTubeAPIError(
+            f"Failed to create playlist {title!r}: {response.text}"
+        )
+    new_id = response.json().get("id")
+    if not new_id:
+        raise YouTubeAPIError(
+            f"create_playlist for {title!r} returned no id: {response.text}"
+        )
+    return str(new_id)
+
+
+def delete_playlist(playlist_id: str) -> bool:
+    """Delete a YouTube playlist by ID. Quota cost: 50 units.
+
+    Returns True on 204 (success) or 404 (already gone — treated as success
+    for idempotency, same convention as remove_playlist_item).
+    Raises YouTubeAPIError on any other non-success status.
+    """
+    access_token = _get_access_token()
+    headers = {"Authorization": f"Bearer {access_token}"}
+    with httpx.Client(headers=headers, timeout=15.0) as client:
+        response = client.delete(
+            f"{YOUTUBE_API_BASE}/playlists",
+            params={"id": playlist_id},
+        )
+    if response.status_code == 204:
+        return True
+    if response.status_code == 404:
+        logger.warning("Playlist %s already deleted or not found.", playlist_id)
+        return True
+    raise YouTubeAPIError(
+        f"Failed to delete playlist {playlist_id}: {response.text}"
+    )
