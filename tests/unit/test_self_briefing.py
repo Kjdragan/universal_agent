@@ -187,6 +187,57 @@ class TestCheckCompletionAttestation:
         assert ok is False
         assert "empty" in reason
 
+    # PR #492 — fallback_dirs (Cody's actual cwd when BRIEF redirects
+    # work to /tmp). Worker_loop populates this from
+    # outcome.payload.cli_workspace_dir.
+
+    def test_fallback_dir_has_completion_returns_true(self, tmp_path):
+        """Canonical workspace empty but fallback (cli cwd) has it."""
+        canonical = tmp_path / "canonical"
+        fallback = tmp_path / "tmp_cwd"
+        canonical.mkdir()
+        fallback.mkdir()
+        (fallback / "COMPLETION.md").write_text("# done")
+        ok, reason = check_completion_attestation(canonical, fallback_dirs=[fallback])
+        assert ok is True
+        assert reason is None
+
+    def test_canonical_preferred_over_fallback(self, tmp_path):
+        """If canonical has COMPLETION.md, fallback isn't even checked."""
+        canonical = tmp_path / "canonical"
+        fallback = tmp_path / "tmp_cwd"
+        canonical.mkdir()
+        fallback.mkdir()
+        (canonical / "COMPLETION.md").write_text("# real")
+        # Fallback intentionally has bad content — should never be read.
+        (fallback / "COMPLETION.md").write_text("")
+        ok, reason = check_completion_attestation(canonical, fallback_dirs=[fallback])
+        assert ok is True
+        assert reason is None
+
+    def test_neither_has_completion_returns_false(self, tmp_path):
+        canonical = tmp_path / "canonical"
+        fallback = tmp_path / "tmp_cwd"
+        canonical.mkdir()
+        fallback.mkdir()
+        ok, reason = check_completion_attestation(canonical, fallback_dirs=[fallback])
+        assert ok is False
+        assert "not written" in reason
+
+    def test_empty_fallback_dirs_behaves_like_no_fallback(self, tmp_path):
+        """``fallback_dirs=None`` and ``fallback_dirs=[]`` are both no-ops."""
+        ok, _ = check_completion_attestation(tmp_path, fallback_dirs=[])
+        assert ok is False
+        ok, _ = check_completion_attestation(tmp_path, fallback_dirs=None)
+        assert ok is False
+
+    def test_fallback_dedup_does_not_double_check(self, tmp_path):
+        """If a fallback path equals workspace_dir, it's deduplicated."""
+        ok, reason = check_completion_attestation(tmp_path, fallback_dirs=[tmp_path])
+        assert ok is False
+        # Reason still mentions canonical, not a duplicate path message.
+        assert "not written" in reason
+
 
 class TestBuildCliPromptInjectsBriefingAndCompletion:
     """Smoke-test that _build_cli_prompt inserts the right sections when flag is on."""

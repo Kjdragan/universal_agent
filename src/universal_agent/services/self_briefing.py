@@ -142,7 +142,21 @@ self-briefing protocol — DO NOT skip this step.
 
 ## Workspace
 
-All artifacts you write must live under: {workspace_dir}
+CANONICAL MISSION WORKSPACE: {workspace_dir}
+
+ALL of the mission's protocol artifacts (BRIEF.md, ACCEPTANCE.md,
+goal_condition.txt, COMPLETION.md) MUST be written to this exact path.
+This is the path the parent worker reads to verify the self-attestation
+protocol. If you write COMPLETION.md anywhere else — your own cwd, a
+/tmp scratch dir, or a path you derived from the operator's BRIEF
+scope — the parent worker will not find it and will demote your
+successful mission to failed with
+``failure_mode="missing_completion_attestation"``.
+
+If the operator's objective tells you to scope your WORK (file edits,
+test files, build outputs) to a different directory like ``/tmp/foo``,
+honor that for the work — but the four protocol artifacts above
+ALWAYS go to the canonical workspace above. The two are independent.
 
 ## Self-briefing contract — invoke the skill
 
@@ -205,25 +219,50 @@ def read_goal_condition(workspace_dir: Path) -> Optional[str]:
     return text
 
 
-def check_completion_attestation(workspace_dir: Path) -> tuple[bool, Optional[str]]:
+def check_completion_attestation(
+    workspace_dir: Path,
+    *,
+    fallback_dirs: Optional[list[Path]] = None,
+) -> tuple[bool, Optional[str]]:
     """Verify COMPLETION.md exists in the workspace before finalize(completed).
 
+    Checks ``workspace_dir`` first (canonical mission workspace). If
+    missing, walks ``fallback_dirs`` in order — used by the worker_loop
+    to also check Cody's actual cwd (captured via
+    ``metadata.dispatch.cody_workspace_dir``) when the BRIEF redirected
+    Cody to a non-canonical path (e.g. ``/tmp/cody-X``). Without the
+    fallback, a successful mission that wrote COMPLETION.md to its cwd
+    instead of the canonical workspace gets spuriously demoted to
+    failed.
+
     Returns:
-        (True, None) if COMPLETION.md is present and non-empty.
-        (False, reason) if missing, empty, or unreadable — caller should
-        route the mission into failure-rescue via finalize(failed,
-        failure_mode="missing_completion_attestation").
+        (True, None) if COMPLETION.md is present and non-empty in any
+          checked directory.
+        (False, reason) if missing/empty/unreadable in every checked
+          directory — caller routes the mission into failure-rescue via
+          finalize(failed, failure_mode="missing_completion_attestation").
     """
-    path = workspace_dir / "COMPLETION.md"
-    if not path.exists():
-        return False, "COMPLETION.md was not written; VP did not complete the self-attestation protocol"
-    try:
-        text = path.read_text(encoding="utf-8").strip()
-    except Exception as exc:
-        return False, f"COMPLETION.md unreadable: {exc}"
-    if not text:
-        return False, "COMPLETION.md is empty"
-    return True, None
+    candidates = [workspace_dir]
+    if fallback_dirs:
+        for extra in fallback_dirs:
+            if extra and extra not in candidates:
+                candidates.append(extra)
+
+    last_reason = "COMPLETION.md was not written; VP did not complete the self-attestation protocol"
+    for candidate in candidates:
+        path = candidate / "COMPLETION.md"
+        if not path.exists():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8").strip()
+        except Exception as exc:
+            last_reason = f"COMPLETION.md unreadable at {path}: {exc}"
+            continue
+        if not text:
+            last_reason = f"COMPLETION.md at {path} is empty"
+            continue
+        return True, None
+    return False, last_reason
 
 
 __all__ = [
