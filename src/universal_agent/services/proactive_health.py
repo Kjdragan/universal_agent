@@ -268,6 +268,32 @@ def build_proactive_health_payload(
         parked_count=int(parked.get("count") or 0),
     )
 
+    # VP mission backlog snapshot — informational telemetry surfaced
+    # alongside invariant findings. Read-only; doesn't affect overall
+    # status (the SLA invariant `operator_daily_mission_freshness`
+    # handles the alerting side). Falls back to None if vp_state.db is
+    # unreachable so a missing DB never breaks proactive_health.
+    backlog_payload = None
+    try:
+        from universal_agent.durable.db import connect_runtime_db, get_vp_db_path
+        from universal_agent.services.vp_mission_backlog import (
+            compute_backlog_snapshot,
+            snapshot_to_payload,
+        )
+        _vp_conn = connect_runtime_db(get_vp_db_path())
+        try:
+            _vp_conn.row_factory = sqlite3.Row  # type: ignore[attr-defined]
+            backlog_payload = snapshot_to_payload(
+                compute_backlog_snapshot(_vp_conn)
+            )
+        finally:
+            try:
+                _vp_conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+    except Exception:  # noqa: BLE001
+        backlog_payload = None
+
     return {
         "overall_status": overall,
         "generated_at_utc": _utc_now_iso(),
@@ -275,4 +301,5 @@ def build_proactive_health_payload(
         "stale_tasks": stale,
         "parked_tasks": parked,
         "invariants": [f.model_dump() for f in invariant_findings],
+        "vp_mission_backlog": backlog_payload,
     }
