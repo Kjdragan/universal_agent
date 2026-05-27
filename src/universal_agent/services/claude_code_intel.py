@@ -143,7 +143,7 @@ class ClaudeCodeIntelConfig:
     lane_slug: str = "claude-code-intelligence"
 
     @classmethod
-    def from_env(cls) -> "ClaudeCodeIntelConfig":
+    def from_env(cls: type[ClaudeCodeIntelConfig]) -> "ClaudeCodeIntelConfig":
         """Build config from environment variables, falling back to lane YAML and defaults."""
         # Resolution order for handle:
         #   1. Explicit env UA_CLAUDE_CODE_INTEL_X_HANDLE
@@ -164,7 +164,7 @@ class ClaudeCodeIntelConfig:
         )
 
     @classmethod
-    def from_lane(cls, lane_slug: str = "claude-code-intelligence") -> "ClaudeCodeIntelConfig":
+    def from_lane(cls: type[ClaudeCodeIntelConfig], lane_slug: str = "claude-code-intelligence") -> "ClaudeCodeIntelConfig":
         """Build config from a lane slug only — bypasses env for tests/explicit lane runs."""
         handle = _first_handle_from_lane(lane_slug) or DEFAULT_HANDLE
         return cls(
@@ -176,7 +176,7 @@ class ClaudeCodeIntelConfig:
         )
 
     @classmethod
-    def all_handles_from_env(cls) -> list[str]:
+    def all_handles_from_env(cls: type[ClaudeCodeIntelConfig]) -> list[str]:
         """Return all configured handles.
 
         Resolution order:
