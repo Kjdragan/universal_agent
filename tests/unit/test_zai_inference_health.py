@@ -29,6 +29,7 @@ from universal_agent.services.pipeline_invariants import (
 def _fresh_registry():
     clear_registry_for_tests()
     from universal_agent.services.invariants import zai_inference_health
+
     importlib.reload(zai_inference_health)
     yield
     clear_registry_for_tests()
@@ -37,8 +38,43 @@ def _fresh_registry():
 @pytest.fixture
 def isolated_state(tmp_path, monkeypatch):
     state_file = tmp_path / "zai_inference_state.json"
+    events_file = tmp_path / "zai_inference_events.jsonl"
     monkeypatch.setenv("UA_ZAI_INFERENCE_STATE_PATH", str(state_file))
+    monkeypatch.setenv("UA_ZAI_EVENTS_PATH", str(events_file))
+    # Tighten the events windows so tests don't need to fake huge timespans.
+    monkeypatch.setenv("UA_ZAI_EVENTS_429_WINDOW_SECONDS", "600")
+    monkeypatch.setenv("UA_ZAI_EVENTS_429_CRITICAL_COUNT", "3")
+    monkeypatch.setenv("UA_ZAI_EVENTS_FUP_WINDOW_SECONDS", "1800")
     yield state_file
+
+
+def _write_events(events_path: Path, events: list[dict]) -> None:
+    """Write a list of event dicts to the JSONL events file (one per line)."""
+    events_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(events_path, "w") as f:
+        for e in events:
+            f.write(json.dumps(e) + "\n")
+
+
+def _event(
+    category: str,
+    ts_offset: float,
+    caller: str = "universal_agent/foo.py",
+    status: int = 429,
+    body: str = "",
+) -> dict:
+    """Build a single event dict; ts_offset is seconds RELATIVE to now (negative = past)."""
+    return {
+        "ts": time.time() + ts_offset,
+        "method": "POST",
+        "url_path": "/api/anthropic/v1/messages",
+        "host": "api.z.ai",
+        "status": status,
+        "response_time_ms": 200.0,
+        "category": category,
+        "caller": caller,
+        "body_snippet": body,
+    }
 
 
 def _write_snapshot(path: Path, **fields) -> None:
@@ -231,3 +267,181 @@ def test_runbook_command_mentions_zai_state(isolated_state):
     assert len(matches) == 1
     runbook = matches[0].runbook_command or ""
     assert "zai_inference_state.json" in runbook or "pgrep" in runbook
+
+
+# --- JSONL events-file augmentation (P7 gap closer) ------------------------
+
+
+def test_events_429_burst_fires_critical(isolated_state):
+    """Direct-httpx caller bypasses with_rate_limit_retry → snapshot stays
+    clean BUT the universal P7 hook captures the 429s in the JSONL events
+    file. Invariant should fire critical from the events alone."""
+    _write_snapshot(isolated_state)  # snapshot reports all-zero
+    events_path = isolated_state.parent / "zai_inference_events.jsonl"
+    _write_events(
+        events_path,
+        [
+            _event(
+                "rate_limited_429",
+                -60,
+                caller="universal_agent/services/session_dossier.py",
+            ),
+            _event(
+                "rate_limited_429",
+                -55,
+                caller="universal_agent/services/session_dossier.py",
+            ),
+            _event(
+                "rate_limited_429",
+                -50,
+                caller="universal_agent/services/session_dossier.py",
+            ),
+        ],
+    )
+    with _mock_process_count(10):
+        findings = run_invariants({})
+    matches = [f for f in findings if f.metric_key == "zai_inference_health"]
+    assert len(matches) == 1
+    assert matches[0].severity == "critical"
+    obs = matches[0].observed_value or {}
+    assert "events_429_burst" in (obs.get("triggered_conditions") or [])
+    assert obs.get("events_429_count") == 3
+    callers = obs.get("events_429_top_callers") or []
+    assert callers and callers[0]["caller"].endswith("session_dossier.py")
+    assert callers[0]["count"] == 3
+    # Headline should name the caller so the operator gets attribution.
+    assert "session_dossier" in (matches[0].recommendation or "")
+
+
+def test_events_429_under_threshold_does_not_fire(isolated_state):
+    """2 × 429s in window is below the 3-event critical threshold — quiet."""
+    _write_snapshot(isolated_state)
+    events_path = isolated_state.parent / "zai_inference_events.jsonl"
+    _write_events(
+        events_path,
+        [
+            _event("rate_limited_429", -60),
+            _event("rate_limited_429", -55),
+        ],
+    )
+    with _mock_process_count(10):
+        findings = run_invariants({})
+    matches = [f for f in findings if f.metric_key == "zai_inference_health"]
+    assert matches == []
+
+
+def test_events_429_outside_window_is_ignored(isolated_state):
+    """429s from 30 min ago are outside the 10 min rolling window — quiet."""
+    _write_snapshot(isolated_state)
+    events_path = isolated_state.parent / "zai_inference_events.jsonl"
+    _write_events(
+        events_path,
+        [
+            _event("rate_limited_429", -1800),
+            _event("rate_limited_429", -1700),
+            _event("rate_limited_429", -1600),
+        ],
+    )
+    with _mock_process_count(10):
+        findings = run_invariants({})
+    matches = [f for f in findings if f.metric_key == "zai_inference_health"]
+    assert matches == []
+
+
+def test_events_fup_signal_fires_critical(isolated_state):
+    """A single fup_signal in the rolling window fires critical even when
+    the snapshot has no FUP recorded (direct-httpx caller)."""
+    _write_snapshot(isolated_state)
+    events_path = isolated_state.parent / "zai_inference_events.jsonl"
+    _write_events(
+        events_path,
+        [
+            _event(
+                "fup_signal",
+                -300,
+                caller="universal_agent/services/some_caller.py",
+                status=403,
+                body='{"error":"fair use policy violation, code 1313"}',
+            ),
+        ],
+    )
+    with _mock_process_count(10):
+        findings = run_invariants({})
+    matches = [f for f in findings if f.metric_key == "zai_inference_health"]
+    assert len(matches) == 1
+    assert matches[0].severity == "critical"
+    obs = matches[0].observed_value or {}
+    assert obs.get("fup_active") is True
+    assert obs.get("events_fup_count") == 1
+    assert "some_caller.py" in (obs.get("events_last_fup_caller") or "")
+    # Headline should be the FUP one, not 429 burst.
+    msg = matches[0].recommendation or ""
+    assert "FUP signal active" in msg
+
+
+def test_events_ok_only_stays_silent(isolated_state):
+    """A healthy event stream with only ok events doesn't fire."""
+    _write_snapshot(isolated_state)
+    events_path = isolated_state.parent / "zai_inference_events.jsonl"
+    _write_events(
+        events_path,
+        [
+            _event("ok", -120, status=200),
+            _event("ok", -60, status=200),
+        ],
+    )
+    with _mock_process_count(10):
+        findings = run_invariants({})
+    matches = [f for f in findings if f.metric_key == "zai_inference_health"]
+    assert matches == []
+
+
+def test_events_missing_file_is_silent(isolated_state):
+    """No events file at all → invariant treats events-side as zeros and
+    falls through to snapshot/process-count logic."""
+    _write_snapshot(isolated_state)  # healthy snapshot
+    # Don't write events_path.
+    with _mock_process_count(10):
+        findings = run_invariants({})
+    matches = [f for f in findings if f.metric_key == "zai_inference_health"]
+    assert matches == []
+
+
+def test_events_malformed_lines_are_skipped(isolated_state):
+    """Garbage lines mixed with valid events: valid ones still counted."""
+    _write_snapshot(isolated_state)
+    events_path = isolated_state.parent / "zai_inference_events.jsonl"
+    events_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(events_path, "w") as f:
+        f.write("this is not json\n")
+        f.write(json.dumps(_event("rate_limited_429", -60)) + "\n")
+        f.write("{broken json\n")
+        f.write(json.dumps(_event("rate_limited_429", -50)) + "\n")
+        f.write(json.dumps(_event("rate_limited_429", -40)) + "\n")
+    with _mock_process_count(10):
+        findings = run_invariants({})
+    matches = [f for f in findings if f.metric_key == "zai_inference_health"]
+    assert len(matches) == 1
+    assert matches[0].severity == "critical"
+    obs = matches[0].observed_value or {}
+    assert obs.get("events_429_count") == 3
+
+
+def test_runbook_command_mentions_events_jsonl(isolated_state):
+    """The runbook should point operators at the new events file too."""
+    _write_snapshot(isolated_state)
+    events_path = isolated_state.parent / "zai_inference_events.jsonl"
+    _write_events(
+        events_path,
+        [
+            _event("rate_limited_429", -60),
+            _event("rate_limited_429", -55),
+            _event("rate_limited_429", -50),
+        ],
+    )
+    with _mock_process_count(10):
+        findings = run_invariants({})
+    matches = [f for f in findings if f.metric_key == "zai_inference_health"]
+    assert len(matches) == 1
+    runbook = matches[0].runbook_command or ""
+    assert "zai_inference_events.jsonl" in runbook
