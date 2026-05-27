@@ -229,8 +229,11 @@ CREATE INDEX IF NOT EXISTS idx_vp_events_mission ON vp_events(mission_id, create
 CREATE INDEX IF NOT EXISTS idx_vp_events_vp ON vp_events(vp_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_vp_session_events_vp ON vp_session_events(vp_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_vp_session_events_type ON vp_session_events(event_type, created_at);
-CREATE INDEX IF NOT EXISTS idx_vp_missions_tier_priority ON vp_missions(vp_id, status, priority_tier, priority, created_at);
-CREATE INDEX IF NOT EXISTS idx_vp_backlog_history_recent ON vp_mission_backlog_history(measured_at DESC, vp_id, priority_tier);
+-- idx_vp_missions_tier_priority + idx_vp_backlog_history_recent are created in
+-- ensure_schema() AFTER the priority_tier ALTER TABLE backfill runs. They can't
+-- live here because executescript() runs this block before the ALTER, and on
+-- pre-PR-499 databases vp_missions.priority_tier doesn't yet exist, so SQLite
+-- aborts the entire script at the index. See 2026-05-27 incident postmortem.
 
 CREATE TABLE IF NOT EXISTS user_preferences (
   user_id TEXT PRIMARY KEY,
@@ -345,6 +348,16 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         conn, "vp_missions", "priority_tier", "TEXT NOT NULL DEFAULT 'background'"
     )
     _backfill_vp_mission_priority_tier(conn)
+    # Tier-aware indexes — must run AFTER priority_tier exists on the (possibly
+    # pre-existing) vp_missions table. See SCHEMA_SQL comment above for context.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_vp_missions_tier_priority "
+        "ON vp_missions(vp_id, status, priority_tier, priority, created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_vp_backlog_history_recent "
+        "ON vp_mission_backlog_history(measured_at DESC, vp_id, priority_tier)"
+    )
     _add_column_if_missing(conn, "vp_missions", "worker_id", "TEXT")
     _add_column_if_missing(conn, "vp_missions", "claim_expires_at", "TEXT")
     _add_column_if_missing(conn, "vp_missions", "cancel_requested", "INTEGER DEFAULT 0")
