@@ -1,11 +1,8 @@
-"""agent_router.py — Simone-First Orchestration Router.
+"""Simone-First Orchestration Router.
 
 All tasks route to Simone. She decides delegation via batch triage
 during her heartbeat cycle, using her full capabilities, skills, MCPs,
 and sub-agents to evaluate work.
-
-Previously: deterministic keyword/label-based routing to CODIE/ATLAS VPs.
-Decommissioned: qualify_agent(), qualify_agent_llm(), keyword/label heuristics.
 
 Design principles:
   - Simone is the primary executor — she takes the next task and works it directly
@@ -24,7 +21,6 @@ from typing import Any
 AGENT_SIMONE = "simone"
 AGENT_CODER = "vp.coder.primary"
 AGENT_GENERAL = "vp.general.primary"
-
 
 
 # ---------------------------------------------------------------------------
