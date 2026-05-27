@@ -551,7 +551,20 @@ class VpWorkerLoop:
                     is_goal_eligible_mission,
                 )
                 if is_goal_eligible_mission(mission):
-                    ok, reason = check_completion_attestation(workspace_path)
+                    # PR #492 dual-path — also check Cody's actual cwd
+                    # (captured by PR #490 in MissionOutcome.payload
+                    # when CLI capture fires) before declaring missing.
+                    # Cody may have written COMPLETION.md to his cwd
+                    # rather than the canonical mission_workspace when
+                    # the BRIEF scoped his work to a /tmp dir.
+                    _fallback_dirs: list[Path] = []
+                    _payload_cwd = str((outcome.payload or {}).get("cli_workspace_dir") or "").strip()
+                    if _payload_cwd:
+                        _fallback_dirs.append(Path(_payload_cwd))
+                    ok, reason = check_completion_attestation(
+                        workspace_path,
+                        fallback_dirs=_fallback_dirs or None,
+                    )
                     if not ok:
                         logger.warning(
                             "VP mission %s missing COMPLETION.md: %s — demoting to failed",
