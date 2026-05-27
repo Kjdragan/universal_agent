@@ -1821,6 +1821,86 @@ def record_provider_session_id(
     return cursor.rowcount
 
 
+def record_cody_dispatch_metadata(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    cody_session_id: str = "",
+    cody_mission_id: str = "",
+    cody_workspace_dir: str = "",
+    cody_worker_pid: int = 0,
+) -> int:
+    """Accumulate Cody/VP-CLI execution identifiers onto the parent task row.
+
+    Writes to ``task_hub_items.metadata.dispatch.cody_*`` on the
+    originating Task Hub row (the operator-typed quick-add task, not the
+    Simone-owned assignment row and not the vp-mission mirror row). The
+    fields accumulate incrementally as a mission moves through dispatch
+    → spawn → completion so the dashboard's Task Hub card can render a
+    progressive Delegation Trace and the Workspace button can deep-link
+    into the Cody CLI session instead of the orchestrator session.
+
+    Only non-empty fields are written, so the same row can be updated in
+    multiple passes without clobbering values captured by earlier passes.
+    Empty ``task_id`` is a no-op (mirrors the rest of the Phase F.1
+    helpers' "silently skip if no linked task" contract).
+
+    Returns the number of rows updated (0 or 1).
+    """
+    tid = str(task_id or "").strip()
+    if not tid:
+        return 0
+
+    fields: dict[str, Any] = {}
+    if cody_session_id and str(cody_session_id).strip():
+        fields["cody_session_id"] = str(cody_session_id).strip()
+    if cody_mission_id and str(cody_mission_id).strip():
+        fields["cody_mission_id"] = str(cody_mission_id).strip()
+    if cody_workspace_dir and str(cody_workspace_dir).strip():
+        fields["cody_workspace_dir"] = str(cody_workspace_dir).strip()
+    if cody_worker_pid:
+        try:
+            pid_int = int(cody_worker_pid)
+            if pid_int > 0:
+                fields["cody_worker_pid"] = pid_int
+        except (TypeError, ValueError):
+            pass
+    if not fields:
+        return 0
+
+    row = conn.execute(
+        "SELECT metadata_json FROM task_hub_items WHERE task_id = ?",
+        (tid,),
+    ).fetchone()
+    if not row:
+        return 0
+
+    raw_meta = row[0] if not hasattr(row, "keys") else row["metadata_json"]
+    try:
+        metadata = json.loads(raw_meta) if raw_meta else {}
+    except Exception:
+        metadata = {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    dispatch = metadata.get("dispatch")
+    if not isinstance(dispatch, dict):
+        dispatch = {}
+    # Stamp first-seen timestamp the first time we accumulate Cody fields
+    # on this row so the UI can show "dispatched at" without scanning
+    # other tables.
+    if "cody_dispatched_at" not in dispatch:
+        dispatch["cody_dispatched_at"] = _now_iso()
+    dispatch.update(fields)
+    metadata["dispatch"] = dispatch
+
+    cursor = conn.execute(
+        "UPDATE task_hub_items SET metadata_json = ?, updated_at = ? WHERE task_id = ?",
+        (_json_dumps(metadata), _now_iso(), tid),
+    )
+    return cursor.rowcount
+
+
 def resolve_max_runtime_seconds(task: dict[str, Any] | None) -> int:
     """Phase F.2 — resolve effective wall-clock timeout for a task.
 

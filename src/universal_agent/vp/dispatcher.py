@@ -213,6 +213,13 @@ def _build_payload(
     profile: VpProfile,
     mission_id: str,
 ) -> dict[str, Any]:
+    # Lift the originating Task Hub task_id (passed via
+    # ``metadata.linked_task_id`` by ``vp_dispatch_mission``) into a
+    # top-level ``task_id`` payload field. ``claude_cli_client.run_mission``
+    # reads ``payload.task_id`` to thread the linkage into Phase F.1
+    # bookkeeping and the cody_* metadata write-back on the parent task row.
+    metadata_dict = request.metadata if isinstance(request.metadata, dict) else {}
+    linked_task_id = str(metadata_dict.get("linked_task_id") or "").strip()
     return {
         "mission_id": mission_id,
         "vp_id": request.vp_id,
@@ -228,6 +235,9 @@ def _build_payload(
         "priority": int(request.priority),
         "execution_mode": request.execution_mode,
         "metadata": request.metadata,
+        # Empty string when no linked Task Hub row (e.g. ad-hoc agent tool
+        # calls); the downstream code already handles "" as "no linkage".
+        "task_id": linked_task_id,
         # Pass through DAG workflow definition for dag execution mode
         **(
             {

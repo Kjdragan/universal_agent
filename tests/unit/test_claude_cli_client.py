@@ -636,3 +636,291 @@ def test_record_provider_session_id_noop_on_empty_inputs():
         ("asg_1",),
     ).fetchone()
     assert row["provider_session_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# record_cody_dispatch_metadata — writes Cody/VP-CLI identifiers to the
+# PARENT Task Hub row's metadata.dispatch.cody_*  (the actual write target
+# that PR #488b uses; PR #488's record_provider_session_id targeted the
+# wrong row — Simone's assignment — which silently no-op'd).
+# ---------------------------------------------------------------------------
+def _make_items_conn() -> sqlite3.Connection:
+    """In-memory conn with just enough schema for record_cody_dispatch_metadata."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE task_hub_items (
+            task_id TEXT PRIMARY KEY,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            updated_at TEXT NOT NULL DEFAULT ''
+        )
+        """
+    )
+    return conn
+
+
+def test_record_cody_dispatch_metadata_writes_all_fields():
+    from universal_agent.task_hub import record_cody_dispatch_metadata
+
+    conn = _make_items_conn()
+    conn.execute(
+        "INSERT INTO task_hub_items (task_id, metadata_json) VALUES (?, ?)",
+        ("qa-af037bdaa324", "{}"),
+    )
+
+    rows = record_cody_dispatch_metadata(
+        conn,
+        task_id="qa-af037bdaa324",
+        cody_session_id="c18d4626-8ede-4d1b-a498-f243b05d5996",
+        cody_mission_id="vp-mission-c3bf4977968054951dfb1b88",
+        cody_workspace_dir="/opt/ua/AGENT_RUN_WORKSPACES/vp_coder_primary_external/vp-mission-X/vp-mission-X",
+        cody_worker_pid=12345,
+    )
+    assert rows == 1
+
+    row = conn.execute(
+        "SELECT metadata_json FROM task_hub_items WHERE task_id = ?",
+        ("qa-af037bdaa324",),
+    ).fetchone()
+    meta = json.loads(row["metadata_json"])
+    dispatch = meta["dispatch"]
+    assert dispatch["cody_session_id"] == "c18d4626-8ede-4d1b-a498-f243b05d5996"
+    assert dispatch["cody_mission_id"] == "vp-mission-c3bf4977968054951dfb1b88"
+    assert dispatch["cody_workspace_dir"].endswith("vp-mission-X")
+    assert dispatch["cody_worker_pid"] == 12345
+    assert "cody_dispatched_at" in dispatch  # auto-stamped
+
+
+def test_record_cody_dispatch_metadata_accumulates_across_calls():
+    """Subsequent calls add fields without clobbering earlier values."""
+    from universal_agent.task_hub import record_cody_dispatch_metadata
+
+    conn = _make_items_conn()
+    conn.execute(
+        "INSERT INTO task_hub_items (task_id, metadata_json) VALUES (?, ?)",
+        ("qa-xyz", "{}"),
+    )
+
+    # First pass: just mission_id + workspace (e.g. at dispatch time before
+    # the CLI subprocess has emitted session_id).
+    record_cody_dispatch_metadata(
+        conn,
+        task_id="qa-xyz",
+        cody_mission_id="vp-mission-abc",
+        cody_workspace_dir="/ws",
+        cody_worker_pid=99,
+    )
+    # Second pass: session_id arrives after subprocess starts.
+    record_cody_dispatch_metadata(
+        conn,
+        task_id="qa-xyz",
+        cody_session_id="sess-xyz",
+    )
+
+    row = conn.execute(
+        "SELECT metadata_json FROM task_hub_items WHERE task_id = ?",
+        ("qa-xyz",),
+    ).fetchone()
+    dispatch = json.loads(row["metadata_json"])["dispatch"]
+    assert dispatch["cody_mission_id"] == "vp-mission-abc"
+    assert dispatch["cody_workspace_dir"] == "/ws"
+    assert dispatch["cody_worker_pid"] == 99
+    assert dispatch["cody_session_id"] == "sess-xyz"
+
+
+def test_record_cody_dispatch_metadata_noop_on_empty_task_id():
+    from universal_agent.task_hub import record_cody_dispatch_metadata
+
+    conn = _make_items_conn()
+    conn.execute("INSERT INTO task_hub_items (task_id) VALUES (?)", ("real",))
+
+    assert record_cody_dispatch_metadata(conn, task_id="", cody_session_id="x") == 0
+    assert record_cody_dispatch_metadata(conn, task_id="  ", cody_session_id="x") == 0
+
+
+def test_record_cody_dispatch_metadata_noop_when_all_fields_empty():
+    from universal_agent.task_hub import record_cody_dispatch_metadata
+
+    conn = _make_items_conn()
+    conn.execute("INSERT INTO task_hub_items (task_id) VALUES (?)", ("real",))
+
+    # All fields blank — nothing to write, return 0 without touching row.
+    assert record_cody_dispatch_metadata(conn, task_id="real") == 0
+
+
+def test_record_cody_dispatch_metadata_returns_zero_for_unknown_task():
+    from universal_agent.task_hub import record_cody_dispatch_metadata
+
+    conn = _make_items_conn()
+    # No row inserted — record should return 0 not raise.
+    assert (
+        record_cody_dispatch_metadata(
+            conn,
+            task_id="missing",
+            cody_session_id="x",
+        )
+        == 0
+    )
+
+
+# ---------------------------------------------------------------------------
+# Dispatcher task_id propagation — _build_payload must lift
+# metadata.linked_task_id to a top-level "task_id" key so the CLI client's
+# Phase F.1 bookkeeping and cody_* write-back can find it.
+# ---------------------------------------------------------------------------
+def test_build_payload_lifts_linked_task_id_to_top_level():
+    from universal_agent.vp.dispatcher import MissionDispatchRequest, _build_payload
+    from universal_agent.vp.profiles import VpProfile
+
+    profile = VpProfile(
+        vp_id="vp.coder.primary",
+        display_name="CODY",
+        runtime_id="runtime.coder.external",
+        client_kind="claude_cli",
+        workspace_root=Path("/tmp/test_ws"),
+    )
+
+    request = MissionDispatchRequest(
+        vp_id="vp.coder.primary",
+        mission_type="code_change",
+        objective="do thing",
+        constraints={},
+        budget={},
+        idempotency_key="key-1",
+        source_session_id="internal.vp_tool",
+        source_turn_id="turn-1",
+        reply_mode="async",
+        priority=5,
+        execution_mode="cli",
+        metadata={"cody_mode": "anthropic", "linked_task_id": "qa-af037bdaa324"},
+    )
+    payload = _build_payload(request=request, profile=profile, mission_id="vp-mission-X")
+    assert payload["task_id"] == "qa-af037bdaa324"
+
+
+def test_build_payload_task_id_is_empty_when_no_linked_task():
+    from universal_agent.vp.dispatcher import MissionDispatchRequest, _build_payload
+    from universal_agent.vp.profiles import VpProfile
+
+    profile = VpProfile(
+        vp_id="vp.coder.primary",
+        display_name="CODY",
+        runtime_id="runtime.coder.external",
+        client_kind="claude_cli",
+        workspace_root=Path("/tmp/test_ws"),
+    )
+
+    request = MissionDispatchRequest(
+        vp_id="vp.coder.primary",
+        mission_type="code_change",
+        objective="ad-hoc",
+        constraints={},
+        budget={},
+        idempotency_key="key-2",
+        source_session_id="x",
+        source_turn_id="y",
+        reply_mode="async",
+        priority=5,
+        execution_mode="cli",
+        metadata={"cody_mode": "anthropic"},  # no linked_task_id
+    )
+    payload = _build_payload(request=request, profile=profile, mission_id="vp-mission-Y")
+    assert payload["task_id"] == ""
+
+
+# ---------------------------------------------------------------------------
+# UA_CODY_CLI_MODEL — Opus 4.7 default + override hooks.
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_cli_uses_opus_47_by_default_for_anthropic_mode(tmp_path: Path, monkeypatch):
+    """Anthropic-mode missions default to claude-opus-4-7 via --model flag."""
+    monkeypatch.delenv("UA_CODY_CLI_MODEL", raising=False)
+    client = ClaudeCodeCLIClient()
+    mission: dict[str, Any] = {
+        "mission_id": "test-mission-model-1",
+        "objective": "anything",
+        "payload_json": json.dumps({
+            "timeout_seconds": 30,
+            "max_retries": 0,
+            "metadata": {"cody_mode": "anthropic"},
+        }),
+    }
+
+    captured_cmd: list[str] = []
+
+    async def mock_create_subprocess(*args, **kwargs):
+        captured_cmd.extend(args)
+        # Fail fast — we only care about the cmd args here.
+        raise FileNotFoundError("claude")
+
+    with patch(
+        "universal_agent.vp.clients.claude_cli_client.asyncio.create_subprocess_exec",
+        side_effect=mock_create_subprocess,
+    ):
+        await client.run_mission(mission=mission, workspace_root=tmp_path)
+
+    assert "--model" in captured_cmd
+    assert "claude-opus-4-7" in captured_cmd
+
+
+@pytest.mark.asyncio
+async def test_cli_respects_ua_cody_cli_model_override(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("UA_CODY_CLI_MODEL", "claude-sonnet-4-6")
+    client = ClaudeCodeCLIClient()
+    mission: dict[str, Any] = {
+        "mission_id": "test-mission-model-2",
+        "objective": "anything",
+        "payload_json": json.dumps({
+            "timeout_seconds": 30,
+            "max_retries": 0,
+            "metadata": {"cody_mode": "anthropic"},
+        }),
+    }
+
+    captured_cmd: list[str] = []
+
+    async def mock_create_subprocess(*args, **kwargs):
+        captured_cmd.extend(args)
+        raise FileNotFoundError("claude")
+
+    with patch(
+        "universal_agent.vp.clients.claude_cli_client.asyncio.create_subprocess_exec",
+        side_effect=mock_create_subprocess,
+    ):
+        await client.run_mission(mission=mission, workspace_root=tmp_path)
+
+    # The override is honored.
+    assert "claude-sonnet-4-6" in captured_cmd
+    # And the default Opus is NOT in the args.
+    assert "claude-opus-4-7" not in captured_cmd
+
+
+@pytest.mark.asyncio
+async def test_cli_ua_cody_cli_model_default_means_no_model_flag(tmp_path: Path, monkeypatch):
+    """UA_CODY_CLI_MODEL=default uses the CLI's built-in default (no --model)."""
+    monkeypatch.setenv("UA_CODY_CLI_MODEL", "default")
+    client = ClaudeCodeCLIClient()
+    mission: dict[str, Any] = {
+        "mission_id": "test-mission-model-3",
+        "objective": "anything",
+        "payload_json": json.dumps({
+            "timeout_seconds": 30,
+            "max_retries": 0,
+            "metadata": {"cody_mode": "anthropic"},
+        }),
+    }
+
+    captured_cmd: list[str] = []
+
+    async def mock_create_subprocess(*args, **kwargs):
+        captured_cmd.extend(args)
+        raise FileNotFoundError("claude")
+
+    with patch(
+        "universal_agent.vp.clients.claude_cli_client.asyncio.create_subprocess_exec",
+        side_effect=mock_create_subprocess,
+    ):
+        await client.run_mission(mission=mission, workspace_root=tmp_path)
+
+    assert "--model" not in captured_cmd
