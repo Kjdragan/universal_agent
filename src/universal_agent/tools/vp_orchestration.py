@@ -266,6 +266,60 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
     linked_task_id = str(args.get("task_id") or raw_metadata.get("task_id") or "").strip()
     linked_task: dict[str, Any] | None = None
 
+    # PR #490c fallback — when the caller (Simone's LLM via the
+    # vp_dispatch_mission tool) didn't include task_id, auto-discover it
+    # from the orchestrator's currently-seized assignment. Without this
+    # fallback every operator-dispatched Cody mission loses the
+    # parent-task linkage: PR #490's record_cody_dispatch_metadata
+    # silently no-ops, mission_receipt.task_id stays null, and the Task
+    # Hub card never accumulates a Delegation Trace. Empirically
+    # observed in the post-PR-#490 smoke test on production
+    # (vp-mission-5cedd30dd387a10374b88359, 2026-05-27 04:30).
+    #
+    # The inner ``vp_dispatch_mission`` tool call gets
+    # ``source_session_id="internal.vp_tool"`` because the SDK adapter
+    # doesn't propagate session context through tool calls — so we use
+    # the unfiltered query (latest seized assignment overall). At the
+    # moment of a vp_dispatch_mission call there's typically exactly
+    # one orchestrator-claimed task in flight, so this matches the right
+    # parent.
+    if not linked_task_id:
+        try:
+            from universal_agent import task_hub as _th
+            from universal_agent.durable.db import (
+                connect_runtime_db,
+                get_activity_db_path,
+            )
+
+            with connect_runtime_db(get_activity_db_path()) as _th_conn:
+                # If we have a non-trivial source_session_id, narrow the
+                # search to that agent. Otherwise (internal.vp_tool /
+                # empty) fall back to the latest seized assignment
+                # overall — see helper docstring for the rationale.
+                agent_slug = (
+                    source_session_id
+                    if source_session_id and source_session_id != "internal.vp_tool"
+                    else ""
+                )
+                discovered = _th.find_recent_active_task_for_agent(
+                    _th_conn, agent_slug=agent_slug
+                )
+                if discovered:
+                    linked_task_id = discovered
+                    import logging as _logging
+
+                    _logging.getLogger(__name__).info(
+                        "vp_dispatch_mission: auto-discovered linked_task_id=%s "
+                        "(source_session_id=%s, caller did not include task_id in args)",
+                        linked_task_id,
+                        source_session_id or "<empty>",
+                    )
+        except Exception:
+            # Best-effort — if the lookup fails for any reason, fall
+            # through to the no-linkage path the rest of this function
+            # already handles silently.
+            pass
+
     explicit_cody_mode = str(args.get("cody_mode") or raw_metadata.get("cody_mode") or "").strip().lower()
     if explicit_cody_mode in {"zai", "anthropic"}:
         resolved_cody_mode: str = explicit_cody_mode
