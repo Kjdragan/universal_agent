@@ -22,7 +22,7 @@ import os
 from pathlib import Path
 import random
 import time
-from typing import Optional
+from typing import Any, AsyncIterator, Callable, Optional, Self
 
 try:
     import logfire
@@ -89,7 +89,7 @@ class ZAIRateLimiter:
     _instance: Optional["ZAIRateLimiter"] = None
     _lock: asyncio.Lock = None
     
-    def __init__(self, max_concurrent: int = None):
+    def __init__(self, max_concurrent: int | None = None):
         # Config from environment
         # Default to 2 concurrent - ZAI rate limits are strict
         self._max_concurrent = max_concurrent or int(os.getenv("ZAI_MAX_CONCURRENT", "2"))
@@ -126,18 +126,18 @@ class ZAIRateLimiter:
             )
     
     @classmethod
-    def get_instance(cls, max_concurrent: int = None) -> "ZAIRateLimiter":
+    def get_instance(cls: type["ZAIRateLimiter"], max_concurrent: int | None = None) -> "ZAIRateLimiter":
         """Get or create the singleton instance."""
         if cls._instance is None:
             cls._instance = cls(max_concurrent)
         return cls._instance
     
     @classmethod
-    def reset_instance(cls):
+    def reset_instance(cls: type["ZAIRateLimiter"]) -> None:
         """Reset the singleton (useful for testing)."""
         cls._instance = None
     
-    async def record_429(self, context: str = ""):
+    async def record_429(self, context: str = "") -> None:
         """
         Called when a 429 is received. Adjusts adaptive backoff.
 
@@ -169,7 +169,7 @@ class ZAIRateLimiter:
                 )
             self._persist_snapshot()
 
-    async def record_success(self):
+    async def record_success(self) -> None:
         """Called on successful request. Gradually lowers backoff floor."""
         async with self._state_lock:
             self._total_requests += 1
@@ -179,7 +179,7 @@ class ZAIRateLimiter:
             self._consecutive_429s = max(0, self._consecutive_429s - 1)
             self._persist_snapshot()
 
-    async def record_fup_signal(self, context: str = "", error_snippet: str = ""):
+    async def record_fup_signal(self, context: str = "", error_snippet: str = "") -> None:
         """Called when a Fair-Use-Policy / concurrency-violation signal is
         detected from ZAI. Distinct from 429 because the response is to
         STOP, not retry. The watchdog escalates this as CRITICAL with
@@ -252,7 +252,7 @@ class ZAIRateLimiter:
         return min(base + jitter, self._max_backoff)
     
     @asynccontextmanager
-    async def acquire(self, context: str = ""):
+    async def acquire(self, context: str = "") -> AsyncIterator[None]:
         """
         Acquire a slot for an API call.
         Enforces both concurrent limit AND minimum inter-request spacing.
@@ -289,12 +289,12 @@ class ZAIRateLimiter:
 
 
 async def with_rate_limit_retry(
-    func,
+    func: Callable[..., Any],
     *args,
     max_retries: int = 5,
     context: str = "",
     **kwargs
-):
+) -> Any:
     """
     Execute an async function with rate limit handling.
     
