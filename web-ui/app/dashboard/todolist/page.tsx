@@ -851,12 +851,11 @@ export default function ToDoListDashboardPage() {
       return merged;
     });
     try {
-      // Await all DELETEs before reloading to avoid race condition
-      await Promise.allSettled(
-        ids.map((id) =>
-          fetch(`${API_BASE}/api/v1/dashboard/todolist/completed/${encodeURIComponent(id)}`, { method: "DELETE" }),
-        ),
-      );
+      // Bulk endpoint parks EVERY status=completed row in one UPDATE. The
+      // per-task loop only cleared the ~80 currently-loaded items, leaving
+      // older completions to bubble up on reload — looking like the cleared
+      // cards were coming back.
+      await fetch(`${API_BASE}/api/v1/dashboard/todolist/completed`, { method: "DELETE" });
     } catch {
       // noop
     } finally {
