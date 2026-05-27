@@ -1,6 +1,6 @@
 # Heartbeat Service
 
-**Last updated:** 2026-04-29
+**Last updated:** 2026-05-27
 
 The **Heartbeat Service** is the "autonomic nervous system" of the Universal Agent. It allows the agent to function without direct user interaction.
 
@@ -281,6 +281,7 @@ Proactive curation tasks (such as those triggered by cron) are explicitly isolat
 | `src/universal_agent/hooks_service.py` | Hook completion handling for Simone heartbeat investigations |
 | `src/universal_agent/heartbeat_scope_filter.py` | `filter_heartbeat_by_scope()`: filters HEARTBEAT.md sections by factory role (HQ vs local worker) |
 | `src/universal_agent/delegation/heartbeat.py` | Factory heartbeat sender: periodic registration refresh with HQ for Corporation View stale detection |
+| `src/universal_agent/services/vp_mission_backlog.py` | `compute_backlog_snapshot()`, `record_backlog_sample()`, `classify_trend()`: per-tier backlog snapshot and trend detection for VP mission queues |
 | `src/universal_agent/bot/heartbeat_adapter.py` | `BotConnectionAdapter`: adapts Telegram Bot for HeartbeatService broadcast interface |
 | `memory/HEARTBEAT.md` | Agent-facing operating instructions and active monitors |
 | `src/universal_agent/main.py` | Bootstraps the service during agent initialization |
@@ -323,3 +324,24 @@ Watchdog findings use the same `HeartbeatFinding` schema as other heartbeat find
 | Document | Scope |
 |---|---|
 | [Proactive Activity Watchdog](../03_Operations/132_Proactive_Health_Watchdog.md) | Canonical architecture, invariant authoring runbook, endpoint contract |
+
+## 12. VP Mission Backlog Sampling
+
+Each heartbeat tick, the service samples the VP mission backlog into `vp_mission_backlog_history` for trend detection. This is informational telemetry only — it does not alert on its own. Simone reads the snapshot in her context block and decides whether to surface to the operator.
+
+### How it works
+
+1. `compute_backlog_snapshot()` queries queued VP missions grouped by `priority_tier`
+2. `record_backlog_sample()` writes a per-tier row with `queued_count` and timestamp
+3. History is pruned probabilistically (~0.1% of ticks) via `prune_backlog_history()`
+
+### Integration with Proactive Health
+
+The backlog snapshot surfaces in the `GET /api/v1/ops/proactive_health` payload (informational). The `operator_daily_mission_freshness` pipeline invariant fires a critical finding when any `priority_tier='operator_daily'` mission has been queued beyond `UA_OPERATOR_DAILY_MISSION_SLA_HOURS` (default 2 hours). This closes the monitoring gap where briefings and other operator-dispatched work sat queued for hours due to the old priority-100 default.
+
+### Related documentation
+
+| Document | Scope |
+|---|---|
+| [VP Mission Priority Tiers](../01_Architecture/vp_mission_priority_tiers.md) | Tier semantics, mission_type mapping, claim ordering |
+| [VP Backlog Flush Runbook](../operations/vp_backlog_flush_runbook.md) | Operator runbook for cancelling all queued VP missions |
