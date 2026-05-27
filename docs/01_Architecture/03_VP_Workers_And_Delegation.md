@@ -1,6 +1,6 @@
 # 03. VP Workers and Delegation Architecture
 
-**Last verified against source code:** 2026-04-30
+**Last verified against source code:** 2026-05-27
 
 ## Overview
 
@@ -254,7 +254,7 @@ Pause/resume: bridge stops consuming work missions but stays running (heartbeat 
 
 ## VP Orchestration Tools
 
-Simone dispatches and monitors VP missions through six internal tools defined in `src/universal_agent/tools/vp_orchestration.py`:
+Simone dispatches and monitors VP missions through nine internal tools defined in `src/universal_agent/tools/vp_orchestration.py`:
 
 | Tool | Purpose | Key Parameters |
 |------|---------|----------------|
@@ -264,6 +264,9 @@ Simone dispatches and monitors VP missions through six internal tools defined in
 | `vp_wait_mission` | Block until mission reaches terminal state | `mission_id`, `timeout_seconds` (default 1200, max 3600), `poll_seconds` (default 3, max 30) |
 | `vp_cancel_mission` | Request cancellation of a queued/running mission | `mission_id`, `reason` |
 | `vp_read_result_artifacts` | Summarize output artifacts from mission workspace | `mission_id`, `max_files`, `max_bytes` |
+| `vp_dispatch_mission_retry` | Re-dispatch a failed mission with guidance | `mission_id`, `guidance`, `fresh_workspace` |
+| `vp_dispatch_mission_redispatch_fresh` | Re-dispatch a failed mission into a fresh workspace | `mission_id`, `guidance` |
+| `escalate_vp_failure_to_operator` | Escalate a failed mission to Kevin via Task Hub | `mission_id`, `reason`, `context` |
 
 ### Preference Context Injection
 
@@ -282,6 +285,28 @@ The `vp_wait_mission` default timeout is 1200 seconds (20 minutes). For `code_ge
 ### Convenience Wrapper
 
 `dispatch_vp_mission()` is an async convenience function that dispatches a VP mission and unwraps the result payload, raising `RuntimeError` on failure. It is used by internal callers (heartbeat dispatch, ops dispatch) that prefer exception-based error handling over the tool-call result format.
+
+### Failure Rescue
+
+When a VP mission reaches `failed` status, Simone has three rescue tools available:
+
+1. **`vp_dispatch_mission_retry`** — Re-dispatch the failed mission with attached guidance. The new mission links back to the original for traceability.
+2. **`vp_dispatch_mission_redispatch_fresh`** — Same as retry but creates a completely fresh workspace. Used when the original workspace may be corrupted.
+3. **`escalate_vp_failure_to_operator`** — Escalate to Kevin via a `chat_panel` Task Hub item. Used after retries also fail, or for systemic issues.
+
+Design doc: [VP Goal Integration and Failure Rescue PRD](12_VP_Goal_Integration_And_Failure_Rescue_PRD.md).
+
+### Behavioral Parameters on Dispatch
+
+`vp_dispatch_mission` accepts several parameters that control VP worker behavior:
+
+| Parameter | Purpose |
+|-----------|---------|
+| `execution_mode` | `"sdk"` or `"cli"`; overrides worker default. When `cody_mode="anthropic"`, forced to `"cli"` |
+| `cody_mode` | `"anthropic"` or `"zai"`; resolved per Hermes Phase E priority chain (per-task override > DB setting > env var > hardcoded default) |
+| `priority_tier` | Validated priority tier: `"critical"`, `"high"`, `"normal"`, `"low"`, `"background"` |
+| `metadata` | Arbitrary key-value metadata; includes `use_goal_loop` (inherited from linked Task Hub item) |
+| `task_id` | Auto-linked Task Hub item for traceability; enables `linked_task_id` auto-discovery |
 
 ## Cross-Health Surface
 
