@@ -23919,6 +23919,14 @@ async def dashboard_todolist_get_goal_artifacts(task_id: str):
     if isinstance(workflow_manifest, dict):
         workflow_target = str(workflow_manifest.get("target_agent") or "")
 
+    # Cody often writes BRIEF/COMPLETION to its own cwd (captured via
+    # metadata.dispatch.cody_workspace_dir) when the operator's objective
+    # scopes work to /tmp or another non-canonical path. Mirrors PR #492's
+    # dual-path pattern in check_completion_attestation: try the canonical
+    # mission workspace first, then fall back to Cody's actual cwd.
+    dispatch_meta = metadata.get("dispatch") if isinstance(metadata.get("dispatch"), dict) else {}
+    cody_workspace_dir = str(dispatch_meta.get("cody_workspace_dir") or "").strip() if isinstance(dispatch_meta, dict) else ""
+
     # Find the linked VP mission. Two lookup paths:
     #   1. vp_missions row whose mission_id == task_id (worker_loop pattern
     #      where the task hub mirror row uses mission_id as task_id)
@@ -23959,30 +23967,45 @@ async def dashboard_todolist_get_goal_artifacts(task_id: str):
         logger.warning("goal-artifacts: vp_missions lookup failed for %s: %s", tid, exc)
 
     # Read the four artifacts from the workspace if it exists on disk.
+    # Per-artifact: try the canonical mission workspace first, then fall
+    # back to Cody's cli cwd. Done per-artifact (not whole-directory) so
+    # we correctly handle the split case where Cody wrote BRIEF/COMPLETION
+    # to its cwd but the canonical workspace has goal_condition.txt
+    # written by the briefing turn.
     artifact_names = ("BRIEF.md", "ACCEPTANCE.md", "goal_condition.txt", "COMPLETION.md")
     artifacts: dict[str, Optional[dict[str, Any]]] = {name: None for name in artifact_names}
+
+    candidate_dirs: list[Path] = []
     if workspace_path:
-        ws_dir = Path(workspace_path).expanduser()
-        if ws_dir.is_dir():
-            for name in artifact_names:
-                fpath = ws_dir / name
-                if fpath.exists() and fpath.is_file():
-                    try:
-                        # Cap reads at 64 KB so a runaway file doesn't bloat the response
-                        raw = fpath.read_bytes()[:64 * 1024]
-                        text = raw.decode("utf-8", errors="replace")
-                        artifacts[name] = {
-                            "path": str(fpath),
-                            "size_bytes": fpath.stat().st_size,
-                            "truncated": fpath.stat().st_size > 64 * 1024,
-                            "content": text,
-                        }
-                    except Exception as exc:
-                        artifacts[name] = {
-                            "path": str(fpath),
-                            "error": str(exc)[:200],
-                            "content": None,
-                        }
+        candidate_dirs.append(Path(workspace_path).expanduser())
+    if cody_workspace_dir:
+        cody_dir = Path(cody_workspace_dir).expanduser()
+        if cody_dir not in candidate_dirs:
+            candidate_dirs.append(cody_dir)
+
+    for name in artifact_names:
+        for ws_dir in candidate_dirs:
+            if not ws_dir.is_dir():
+                continue
+            fpath = ws_dir / name
+            if not (fpath.exists() and fpath.is_file()):
+                continue
+            try:
+                raw = fpath.read_bytes()[:64 * 1024]
+                text = raw.decode("utf-8", errors="replace")
+                artifacts[name] = {
+                    "path": str(fpath),
+                    "size_bytes": fpath.stat().st_size,
+                    "truncated": fpath.stat().st_size > 64 * 1024,
+                    "content": text,
+                }
+            except Exception as exc:
+                artifacts[name] = {
+                    "path": str(fpath),
+                    "error": str(exc)[:200],
+                    "content": None,
+                }
+            break  # first hit wins; canonical workspace takes precedence
 
     return {
         "task_id": tid,
@@ -23995,6 +24018,7 @@ async def dashboard_todolist_get_goal_artifacts(task_id: str):
         "linked_mission_id": mission_id,
         "linked_mission_status": mission_status,
         "workspace_path": workspace_path,
+        "cody_workspace_dir": cody_workspace_dir or None,
         "artifacts": artifacts,
     }
 
