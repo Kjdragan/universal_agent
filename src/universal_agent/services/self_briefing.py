@@ -53,26 +53,24 @@ def vp_goal_enabled() -> bool:
 def is_goal_eligible_mission(mission: dict[str, Any]) -> bool:
     """Return True when the mission should get the full /goal artifact set.
 
-    Eligibility:
-    1. Feature flag ``UA_VP_GOAL_ENABLED`` is ON, AND
-    2. Mission's source_kind (or mission_type) is in
-       ``GOAL_ELIGIBLE_SOURCE_KINDS``, OR mission carries
-       ``metadata.use_goal_loop=True`` (operator-dispatched override).
-
-    Atlas missions are never eligible (only Cody work goes through /goal).
+    Eligibility (Cody-only; Atlas missions never get /goal):
+    1. Explicit per-task override: ``metadata.use_goal_loop=True`` activates
+       /goal regardless of the global ``UA_VP_GOAL_ENABLED`` flag. The
+       dashboard's Dispatch Mission UI sets this for Cody targets, so an
+       operator's explicit opt-in must always win even when the global
+       feature flag is OFF (the prod default).
+    2. Global default-on path: ``UA_VP_GOAL_ENABLED`` ON AND source_kind
+       (or mission_type) is in ``GOAL_ELIGIBLE_SOURCE_KINDS``.
     """
-    if not vp_goal_enabled():
-        return False
     vp_id = str((mission or {}).get("vp_id") or "").strip()
     if vp_id != "vp.coder.primary":
         return False  # Atlas never gets /goal
 
-    source_kind = str((mission or {}).get("source_kind") or "").strip()
-    mission_type = str((mission or {}).get("mission_type") or "").strip()
-    if source_kind in GOAL_ELIGIBLE_SOURCE_KINDS or mission_type in GOAL_ELIGIBLE_SOURCE_KINDS:
-        return True
-
-    # Explicit per-task override via metadata.use_goal_loop=True.
+    # 1. Explicit per-task override via metadata.use_goal_loop=True.
+    # Checked BEFORE the global feature flag because the dispatch UI uses
+    # this flag as the operator's per-task opt-in switch — gating it
+    # behind UA_VP_GOAL_ENABLED would make the UI's toggle dead code in
+    # prod (where the global flag defaults OFF).
     payload_meta: dict[str, Any] = {}
     payload_json = (mission or {}).get("payload_json")
     if payload_json:
@@ -84,6 +82,14 @@ def is_goal_eligible_mission(mission: dict[str, Any]) -> bool:
         except Exception:
             payload_meta = {}
     if bool(payload_meta.get("use_goal_loop")):
+        return True
+
+    # 2. Global default-on path: feature flag + eligible source_kind.
+    if not vp_goal_enabled():
+        return False
+    source_kind = str((mission or {}).get("source_kind") or "").strip()
+    mission_type = str((mission or {}).get("mission_type") or "").strip()
+    if source_kind in GOAL_ELIGIBLE_SOURCE_KINDS or mission_type in GOAL_ELIGIBLE_SOURCE_KINDS:
         return True
 
     return False

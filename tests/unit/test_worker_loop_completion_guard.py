@@ -156,8 +156,28 @@ class TestGoalEligibilityForGuard:
         }
         assert is_goal_eligible_mission(mission) is True
 
-    def test_global_flag_off_disables_eligibility(self, monkeypatch):
-        """Flag off → never eligible, even for use_goal_loop missions."""
+    def test_global_flag_off_disables_source_kind_path(self, monkeypatch):
+        """Flag off → source_kind-based eligibility is gated."""
+        monkeypatch.setenv("UA_VP_GOAL_ENABLED", "0")
+        from universal_agent.services.self_briefing import is_goal_eligible_mission
+
+        mission = {
+            "vp_id": "vp.coder.primary",
+            "source_kind": "cody_demo_task",
+            "payload_json": json.dumps({"metadata": {}}),  # no override
+        }
+        assert is_goal_eligible_mission(mission) is False
+
+    def test_global_flag_off_does_not_disable_use_goal_loop_override(self, monkeypatch):
+        """Explicit per-task use_goal_loop=True bypasses the global flag.
+
+        The dashboard Dispatch Mission UI sets this as the operator's
+        per-task /goal opt-in. Gating it behind UA_VP_GOAL_ENABLED would
+        make the UI's toggle dead code in prod (flag defaults OFF), so
+        the override wins regardless of the global flag. The COMPLETION
+        guard still applies here — these missions DO get the full
+        /goal artifact set.
+        """
         monkeypatch.setenv("UA_VP_GOAL_ENABLED", "0")
         from universal_agent.services.self_briefing import is_goal_eligible_mission
 
@@ -166,7 +186,7 @@ class TestGoalEligibilityForGuard:
             "source_kind": "cody_demo_task",
             "payload_json": json.dumps({"metadata": {"use_goal_loop": True}}),
         }
-        assert is_goal_eligible_mission(mission) is False
+        assert is_goal_eligible_mission(mission) is True
 
 
 # ---------------------------------------------------------------------------
