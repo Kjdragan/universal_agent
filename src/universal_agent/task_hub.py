@@ -1792,6 +1792,35 @@ def record_worker_pid(
     return cursor.rowcount
 
 
+def record_provider_session_id(
+    conn: sqlite3.Connection,
+    *,
+    assignment_id: str,
+    provider_session_id: str,
+) -> int:
+    """Stamp the CLI subprocess's emitted session_id onto an assignment.
+
+    Mirrors :func:`record_worker_pid` but for the Claude Code CLI's
+    ``session_id`` field (emitted on every stream-json event). Called
+    from the VP CLI client after it captures the session_id from the
+    spawned subprocess's first event. Lets the Task Hub card's
+    "Workspace" button deep-link into the actual CLI session workspace
+    instead of the parent orchestrator's session.
+
+    Empty ``provider_session_id`` is a no-op so callers can pipe through
+    optional captures without guarding at every site.
+    """
+    aid = str(assignment_id or "").strip()
+    sid = str(provider_session_id or "").strip()
+    if not aid or not sid:
+        return 0
+    cursor = conn.execute(
+        "UPDATE task_hub_assignments SET provider_session_id = ? WHERE assignment_id = ?",
+        (sid, aid),
+    )
+    return cursor.rowcount
+
+
 def resolve_max_runtime_seconds(task: dict[str, Any] | None) -> int:
     """Phase F.2 — resolve effective wall-clock timeout for a task.
 
