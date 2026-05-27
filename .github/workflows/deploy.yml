@@ -1,11 +1,9 @@
 name: Deploy
 
-# BISECT PROBE 2 (DO NOT MERGE): hypothesis 1 (comment-scanning for
-# ${{ }} expressions) was FALSIFIED — push 054eec7a parsed cleanly.
-# Now testing whether the NEW STEP itself trips the parser. Adds a
-# minimal `if: failure()` step at the end of the job with no env, no
-# shell, no expressions in the body. Same gating as before (branches
-# filter + job-level if:) so no real deploy.
+# BISECT PROBE 3 (DO NOT MERGE): probes 1+2 falsified comment-scanning
+# and minimal `if: failure()` step. Now adding the full `env:` block
+# from e7842f0a (no vars||, just secrets + github.* refs). If this
+# trips the parser, the issue is in the env block expressions.
 
 on:
   push:
@@ -485,11 +483,13 @@ jobs:
             echo "Deployment to Production complete!"
           EOF
 
-      # BISECT PROBE 2: minimal `if: failure()` step. No env, no shell,
-      # no expressions in run body. If this trips the parser we know the
-      # culprit is the step *structure* (extremely unlikely). If it
-      # parses (name=Deploy / skipped), the culprit is in env+shell or
-      # the run body content — narrow further.
+      # BISECT PROBE 3: add full env: block from e7842f0a (no vars||).
+      # If this trips the parser, the issue is in one of these expressions.
       - name: Probe failure step (bisect)
         if: failure()
+        env:
+          AGENTMAIL_API_KEY: ${{ secrets.AGENTMAIL_API_KEY }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT_SHA: ${{ github.sha }}
+          COMMIT_REF: ${{ github.ref_name }}
         run: echo "would-notify-on-failure"
