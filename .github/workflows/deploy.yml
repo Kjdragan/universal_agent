@@ -483,8 +483,9 @@ jobs:
             echo "Deployment to Production complete!"
           EOF
 
-      # BISECT PROBE 3: add full env: block from e7842f0a (no vars||).
-      # If this trips the parser, the issue is in one of these expressions.
+      # BISECT PROBE 4: add `shell: bash` to the step. env block already
+      # cleared in probe 3. If this trips the parser, the issue is shell:bash
+      # interacting with the step structure (very unlikely).
       - name: Probe failure step (bisect)
         if: failure()
         env:
@@ -492,4 +493,5 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           COMMIT_SHA: ${{ github.sha }}
           COMMIT_REF: ${{ github.ref_name }}
+        shell: bash
         run: echo "would-notify-on-failure"
