@@ -80,9 +80,37 @@ class TestIsGoalEligibleMission:
     def test_empty_mission_is_not_eligible(self):
         assert is_goal_eligible_mission({}) is False
 
-    def test_feature_flag_off_overrides_everything(self, monkeypatch):
+    def test_feature_flag_off_blocks_source_kind_path(self, monkeypatch):
+        """Flag-off still gates the global default-on (eligible source_kind) path."""
         monkeypatch.setenv("UA_VP_GOAL_ENABLED", "0")
         m = {"vp_id": "vp.coder.primary", "source_kind": "cody_demo_task"}
+        assert is_goal_eligible_mission(m) is False
+
+    def test_use_goal_loop_override_bypasses_feature_flag(self, monkeypatch):
+        """Explicit per-task opt-in via metadata.use_goal_loop=True must
+        activate /goal even when UA_VP_GOAL_ENABLED is OFF (prod default).
+        The dashboard's Dispatch Mission UI uses this flag as the per-task
+        opt-in switch — gating it behind the global flag makes the UI dead
+        code in prod.
+        """
+        import json
+        monkeypatch.setenv("UA_VP_GOAL_ENABLED", "0")
+        m = {
+            "vp_id": "vp.coder.primary",
+            "source_kind": "operator_dispatched",
+            "payload_json": json.dumps({"metadata": {"use_goal_loop": True}}),
+        }
+        assert is_goal_eligible_mission(m) is True
+
+    def test_use_goal_loop_override_still_blocks_atlas(self, monkeypatch):
+        """Override does NOT escape the Cody-only rule."""
+        import json
+        monkeypatch.setenv("UA_VP_GOAL_ENABLED", "0")
+        m = {
+            "vp_id": "vp.general.primary",
+            "source_kind": "operator_dispatched",
+            "payload_json": json.dumps({"metadata": {"use_goal_loop": True}}),
+        }
         assert is_goal_eligible_mission(m) is False
 
     def test_all_eligible_source_kinds_documented_in_constant(self):
