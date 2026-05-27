@@ -391,6 +391,34 @@ async def _execute_cli_session(
         and "timed out" in result.message.lower()
     ):
         enriched_payload.setdefault("was_timeout_killed", True)
+
+    # Write the captured CLI session_id back onto the assignment row so
+    # the Task Hub card's Workspace button deep-links into the CLI
+    # subprocess's session instead of the orchestrator's session.
+    # Best-effort — never blocks the happy path.
+    _captured_sid = str(enriched_payload.get("cli_session_id") or "").strip()
+    if _captured_sid and cli_assignment_id:
+        try:
+            from universal_agent import task_hub as _f_th
+            from universal_agent.gateway_server import (
+                _task_hub_open_conn as _f_open_conn,
+            )
+            _f_conn = _f_open_conn()
+            try:
+                _f_th.record_provider_session_id(
+                    _f_conn,
+                    assignment_id=cli_assignment_id,
+                    provider_session_id=_captured_sid,
+                )
+                _f_conn.commit()
+            finally:
+                _f_conn.close()
+        except Exception as _f_exc:
+            logger.debug(
+                "record_provider_session_id skipped for CLI mission %s: %s",
+                mission_id, _f_exc,
+            )
+
     return MissionOutcome(
         status=result.status,
         result_ref=result.result_ref,
@@ -414,6 +442,7 @@ async def _monitor_cli_output(
     errors: list[str] = []
     last_output_time = time.monotonic()
     stream_lines: list[str] = []
+    cli_session_id: str = ""
 
     try:
         deadline = time.monotonic() + timeout_seconds
@@ -466,6 +495,17 @@ async def _monitor_cli_output(
                 continue
 
             event_type = str(event.get("type") or "")
+
+            # Capture the CLI subprocess's session_id on the first event
+            # that emits it. Every stream-json event from `claude --print`
+            # carries a `session_id` field; we keep the first non-empty
+            # value seen so the Task Hub card's Workspace button can
+            # deep-link to this CLI session instead of the orchestrator
+            # (e.g. Simone) session that dispatched the mission.
+            if not cli_session_id:
+                _sid = str(event.get("session_id") or "").strip()
+                if _sid:
+                    cli_session_id = _sid
 
             if event_type == "result":
                 # Final result from the CLI
@@ -528,28 +568,34 @@ async def _monitor_cli_output(
 
     if exit_code != 0 or errors:
         error_summary = "; ".join(errors) if errors else stderr_text or f"CLI exited with code {exit_code}"
+        failed_payload: dict[str, Any] = {
+            "exit_code": exit_code,
+            "tool_calls": tool_calls,
+            "cost": cost_info,
+            "final_text": final_text[:1000] if final_text else "",
+        }
+        if cli_session_id:
+            failed_payload["cli_session_id"] = cli_session_id
         return MissionOutcome(
             status="failed",
             result_ref=f"workspace://{workspace_dir}",
             message=error_summary[:2000],
-            payload={
-                "exit_code": exit_code,
-                "tool_calls": tool_calls,
-                "cost": cost_info,
-                "final_text": final_text[:1000] if final_text else "",
-            },
+            payload=failed_payload,
         )
 
+    completed_payload: dict[str, Any] = {
+        "exit_code": exit_code,
+        "tool_calls": tool_calls,
+        "cost": cost_info,
+        "final_text": final_text[:4000] if final_text else "",
+        "stream_lines": len(stream_lines),
+    }
+    if cli_session_id:
+        completed_payload["cli_session_id"] = cli_session_id
     return MissionOutcome(
         status="completed",
         result_ref=f"workspace://{workspace_dir}",
-        payload={
-            "exit_code": exit_code,
-            "tool_calls": tool_calls,
-            "cost": cost_info,
-            "final_text": final_text[:4000] if final_text else "",
-            "stream_lines": len(stream_lines),
-        },
+        payload=completed_payload,
     )
 
 

@@ -463,3 +463,176 @@ def test_dispatch_guardrails_allow_general_cli_for_approved_codebase_when_author
         },
         execution_mode="cli",
     )
+
+
+# ---------------------------------------------------------------------------
+# CLI session_id capture — Workspace-button deep-link fix
+#
+# The Claude Code CLI stamps `session_id` on every stream-json event.
+# `_monitor_cli_output` captures the first non-empty value so the Task Hub
+# card's Workspace button can deep-link to the CLI subprocess's session
+# instead of the orchestrator's (Simone's) session.
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_cli_session_id_captured_from_stream(tmp_path: Path):
+    """Verify a stream-json `session_id` field is propagated into outcome.payload."""
+    client = ClaudeCodeCLIClient()
+    mission: dict[str, Any] = {
+        "mission_id": "test-mission-sid-1",
+        "objective": "Create hello.py",
+        "payload_json": json.dumps({"timeout_seconds": 30, "max_retries": 0}),
+    }
+
+    captured_sid = "0db5fd6b-16e1-4357-a1bc-cfc559ad8ec1"
+
+    mock_proc = AsyncMock()
+    mock_proc.pid = 12345
+    mock_proc.returncode = 0
+
+    # First event carries session_id (typical CLI behavior); result event closes.
+    events = [
+        json.dumps({
+            "type": "rate_limit_event",
+            "session_id": captured_sid,
+            "rate_limit_info": {"status": "allowed"},
+        }),
+        json.dumps({
+            "type": "result",
+            "session_id": captured_sid,
+            "result": "done",
+            "cost_usd": 0.01,
+        }),
+    ]
+    event_iter = iter(events)
+
+    async def mock_readline():
+        try:
+            return (next(event_iter) + "\n").encode()
+        except StopIteration:
+            return b""
+
+    mock_proc.stdout.readline = mock_readline
+    mock_proc.stderr.read = AsyncMock(return_value=b"")
+    mock_proc.stdin.write = MagicMock()
+    mock_proc.stdin.drain = AsyncMock()
+    mock_proc.wait = AsyncMock(return_value=0)
+
+    with patch(
+        "universal_agent.vp.clients.claude_cli_client.asyncio.create_subprocess_exec",
+        return_value=mock_proc,
+    ):
+        outcome = await client.run_mission(mission=mission, workspace_root=tmp_path)
+
+    assert outcome.status == "completed"
+    assert outcome.payload.get("cli_session_id") == captured_sid
+
+
+@pytest.mark.asyncio
+async def test_cli_session_id_absent_when_stream_never_emits_it(tmp_path: Path):
+    """Streams without a session_id field leave the payload key absent."""
+    client = ClaudeCodeCLIClient()
+    mission: dict[str, Any] = {
+        "mission_id": "test-mission-sid-2",
+        "objective": "Do something",
+        "payload_json": json.dumps({"timeout_seconds": 30, "max_retries": 0}),
+    }
+
+    mock_proc = AsyncMock()
+    mock_proc.pid = 12345
+    mock_proc.returncode = 0
+
+    result_event = json.dumps({"type": "result", "result": "ok"})
+
+    async def mock_readline():
+        if not hasattr(mock_readline, "_called"):
+            mock_readline._called = True
+            return (result_event + "\n").encode()
+        return b""
+
+    mock_proc.stdout.readline = mock_readline
+    mock_proc.stderr.read = AsyncMock(return_value=b"")
+    mock_proc.stdin.write = MagicMock()
+    mock_proc.stdin.drain = AsyncMock()
+    mock_proc.wait = AsyncMock(return_value=0)
+
+    with patch(
+        "universal_agent.vp.clients.claude_cli_client.asyncio.create_subprocess_exec",
+        return_value=mock_proc,
+    ):
+        outcome = await client.run_mission(mission=mission, workspace_root=tmp_path)
+
+    assert outcome.status == "completed"
+    assert "cli_session_id" not in outcome.payload
+
+
+# ---------------------------------------------------------------------------
+# task_hub.record_provider_session_id helper — covers the assignment
+# write-back used by _execute_cli_session after capturing the CLI's
+# session_id from the stream.
+# ---------------------------------------------------------------------------
+def _make_assignment_conn() -> sqlite3.Connection:
+    """In-memory conn with just enough schema for record_provider_session_id."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE task_hub_assignments (
+            assignment_id TEXT PRIMARY KEY,
+            task_id TEXT,
+            agent_id TEXT,
+            provider_session_id TEXT,
+            worker_pid INTEGER,
+            state TEXT
+        )
+        """
+    )
+    return conn
+
+
+def test_record_provider_session_id_writes_back():
+    from universal_agent.task_hub import record_provider_session_id
+
+    conn = _make_assignment_conn()
+    conn.execute(
+        "INSERT INTO task_hub_assignments (assignment_id, task_id, agent_id, state) "
+        "VALUES (?, ?, ?, ?)",
+        ("asg_1", "task_1", "vp.coder.primary", "seized"),
+    )
+
+    rows = record_provider_session_id(
+        conn,
+        assignment_id="asg_1",
+        provider_session_id="cli-session-abc",
+    )
+    assert rows == 1
+
+    row = conn.execute(
+        "SELECT provider_session_id FROM task_hub_assignments WHERE assignment_id = ?",
+        ("asg_1",),
+    ).fetchone()
+    assert row["provider_session_id"] == "cli-session-abc"
+
+
+def test_record_provider_session_id_noop_on_empty_inputs():
+    from universal_agent.task_hub import record_provider_session_id
+
+    conn = _make_assignment_conn()
+    conn.execute(
+        "INSERT INTO task_hub_assignments (assignment_id, task_id, agent_id, state) "
+        "VALUES (?, ?, ?, ?)",
+        ("asg_1", "task_1", "vp.coder.primary", "seized"),
+    )
+
+    # Empty assignment_id → no-op
+    assert record_provider_session_id(conn, assignment_id="", provider_session_id="x") == 0
+    # Empty session_id → no-op
+    assert record_provider_session_id(conn, assignment_id="asg_1", provider_session_id="") == 0
+    # Whitespace-only inputs → no-op
+    assert record_provider_session_id(conn, assignment_id="  ", provider_session_id="x") == 0
+    assert record_provider_session_id(conn, assignment_id="asg_1", provider_session_id="  ") == 0
+
+    row = conn.execute(
+        "SELECT provider_session_id FROM task_hub_assignments WHERE assignment_id = ?",
+        ("asg_1",),
+    ).fetchone()
+    assert row["provider_session_id"] is None
