@@ -1,12 +1,11 @@
 name: Deploy
 
-# BISECT PROBE (DO NOT MERGE): testing whether GHA's workflow validator
-# regex-scans the raw file for ${{ vars.X || 'default' }} expressions
-# rather than the YAML-parsed tree. This comment is the only delta from
-# the post-revert good file. If a push to this branch produces a run
-# with name=path / jobs=[], the comment-scanning hypothesis is confirmed.
-# Revert: drop this comment block + the branches entry below + the
-# job-level `if:` guard.
+# BISECT PROBE 2 (DO NOT MERGE): hypothesis 1 (comment-scanning for
+# ${{ }} expressions) was FALSIFIED — push 054eec7a parsed cleanly.
+# Now testing whether the NEW STEP itself trips the parser. Adds a
+# minimal `if: failure()` step at the end of the job with no env, no
+# shell, no expressions in the body. Same gating as before (branches
+# filter + job-level if:) so no real deploy.
 
 on:
   push:
@@ -485,3 +484,12 @@ jobs:
             
             echo "Deployment to Production complete!"
           EOF
+
+      # BISECT PROBE 2: minimal `if: failure()` step. No env, no shell,
+      # no expressions in run body. If this trips the parser we know the
+      # culprit is the step *structure* (extremely unlikely). If it
+      # parses (name=Deploy / skipped), the culprit is in env+shell or
+      # the run body content — narrow further.
+      - name: Probe failure step (bisect)
+        if: failure()
+        run: echo "would-notify-on-failure"
