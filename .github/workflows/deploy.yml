@@ -1,9 +1,18 @@
 name: Deploy
 
+# BISECT PROBE (DO NOT MERGE): testing whether GHA's workflow validator
+# regex-scans the raw file for ${{ vars.X || 'default' }} expressions
+# rather than the YAML-parsed tree. This comment is the only delta from
+# the post-revert good file. If a push to this branch produces a run
+# with name=path / jobs=[], the comment-scanning hypothesis is confirmed.
+# Revert: drop this comment block + the branches entry below + the
+# job-level `if:` guard.
+
 on:
   push:
     branches:
       - main
+      - worktree-claude+bisect-deployyml
     # Skip production deploy when a push to `main` only contains docs,
     # markdown, or scheduled-job state files. These are produced by
     # `nightly-doc-drift-audit.yml` and `openclaw-release-sync.yml` (which
@@ -46,6 +55,9 @@ concurrency:
 
 jobs:
   deploy-production:
+    # BISECT PROBE: gate on main so a parse-success on the bisect branch
+    # does not actually attempt to deploy. Remove with the probe block above.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
