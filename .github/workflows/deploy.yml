@@ -12,7 +12,9 @@ on:
   push:
     branches:
       - main
-      - worktree-claude+bisect-deployyml
+      # GHA branch filters treat `+` as a glob quantifier (one-or-more of
+      # preceding char). The literal `+` in this branch name needs escaping.
+      - 'worktree-claude\+bisect-deployyml'
     # Skip production deploy when a push to `main` only contains docs,
     # markdown, or scheduled-job state files. These are produced by
     # `nightly-doc-drift-audit.yml` and `openclaw-release-sync.yml` (which
