@@ -171,6 +171,7 @@ CREATE TABLE IF NOT EXISTS vp_missions (
   payload_json TEXT,
   result_ref TEXT,
   priority INTEGER DEFAULT 100,
+  priority_tier TEXT NOT NULL DEFAULT 'background',
   worker_id TEXT,
   claim_expires_at TEXT,
   cancel_requested INTEGER DEFAULT 0,
@@ -179,6 +180,15 @@ CREATE TABLE IF NOT EXISTS vp_missions (
   completed_at TEXT,
   updated_at TEXT NOT NULL,
   FOREIGN KEY(vp_id) REFERENCES vp_sessions(vp_id)
+);
+
+CREATE TABLE IF NOT EXISTS vp_mission_backlog_history (
+  sample_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  measured_at TEXT NOT NULL,
+  vp_id TEXT NOT NULL,
+  priority_tier TEXT NOT NULL,
+  queued_count INTEGER NOT NULL,
+  running_count INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS vp_session_events (
@@ -219,6 +229,8 @@ CREATE INDEX IF NOT EXISTS idx_vp_events_mission ON vp_events(mission_id, create
 CREATE INDEX IF NOT EXISTS idx_vp_events_vp ON vp_events(vp_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_vp_session_events_vp ON vp_session_events(vp_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_vp_session_events_type ON vp_session_events(event_type, created_at);
+CREATE INDEX IF NOT EXISTS idx_vp_missions_tier_priority ON vp_missions(vp_id, status, priority_tier, priority, created_at);
+CREATE INDEX IF NOT EXISTS idx_vp_backlog_history_recent ON vp_mission_backlog_history(measured_at DESC, vp_id, priority_tier);
 
 CREATE TABLE IF NOT EXISTS user_preferences (
   user_id TEXT PRIMARY KEY,
@@ -239,6 +251,45 @@ def _add_column_if_missing(
     if _column_exists(conn, table, column):
         return
     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
+
+
+def _backfill_vp_mission_priority_tier(conn: sqlite3.Connection) -> None:
+    """One-time backfill of vp_missions.priority_tier from mission_type.
+
+    Idempotent: the WHERE clause only touches rows still at the default
+    'background' tier, so once a row is moved into 'operator_daily' /
+    'operator_signal' / 'maintenance' it stays there (manual operator
+    overrides survive subsequent calls).
+
+    Re-imports the mapping from ``vp.mission_priority`` so the source of
+    truth stays in one place.
+    """
+    try:
+        from universal_agent.vp.mission_priority import MISSION_TYPE_TIER
+    except Exception:
+        # If the constants module ever moves or breaks import, leave
+        # rows at the safe default rather than crashing schema setup.
+        return
+    if not MISSION_TYPE_TIER:
+        return
+    # Build a single UPDATE per tier so we issue at most 4 statements
+    # regardless of how many mission_types map to each tier.
+    by_tier: dict[str, list[str]] = {}
+    for mission_type, tier in MISSION_TYPE_TIER.items():
+        by_tier.setdefault(tier, []).append(mission_type)
+    for tier, mission_types in by_tier.items():
+        if tier == "background":
+            continue  # column default already covers this case
+        placeholders = ",".join("?" * len(mission_types))
+        conn.execute(
+            f"""
+            UPDATE vp_missions
+            SET priority_tier = ?
+            WHERE priority_tier = 'background'
+              AND mission_type IN ({placeholders})
+            """,
+            (tier, *mission_types),
+        )
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
@@ -290,6 +341,10 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "vp_missions", "mission_type", "TEXT")
     _add_column_if_missing(conn, "vp_missions", "payload_json", "TEXT")
     _add_column_if_missing(conn, "vp_missions", "priority", "INTEGER DEFAULT 100")
+    _add_column_if_missing(
+        conn, "vp_missions", "priority_tier", "TEXT NOT NULL DEFAULT 'background'"
+    )
+    _backfill_vp_mission_priority_tier(conn)
     _add_column_if_missing(conn, "vp_missions", "worker_id", "TEXT")
     _add_column_if_missing(conn, "vp_missions", "claim_expires_at", "TEXT")
     _add_column_if_missing(conn, "vp_missions", "cancel_requested", "INTEGER DEFAULT 0")

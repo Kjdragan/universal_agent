@@ -2478,6 +2478,47 @@ class HeartbeatService:
                 },
             )
 
+            # VP mission backlog sampling — informational telemetry only,
+            # writes a per-tier sample to vp_mission_backlog_history every
+            # tick so the trend probe in proactive_health can detect a
+            # backlog that's growing unboundedly. NOT alerting on its own:
+            # Simone reads the snapshot in her context block and decides
+            # whether to surface to the operator. Best-effort: failures
+            # never block the heartbeat.
+            try:
+                from universal_agent.durable.db import (
+                    connect_runtime_db as _bk_connect,
+                    get_vp_db_path as _bk_get_vp_db_path,
+                )
+                from universal_agent.services.vp_mission_backlog import (
+                    compute_backlog_snapshot,
+                    prune_backlog_history,
+                    record_backlog_sample,
+                )
+
+                _bk_conn = _bk_connect(_bk_get_vp_db_path())
+                _bk_conn.row_factory = sqlite3.Row  # type: ignore[attr-defined]
+                try:
+                    _bk_snapshot = compute_backlog_snapshot(_bk_conn)
+                    record_backlog_sample(_bk_conn, _bk_snapshot)
+                    # Prune very old history once per ~1k heartbeats. Cheap
+                    # DELETE with index on measured_at; running every tick
+                    # would be wasted work. Random sampling keeps each
+                    # heartbeat's expected cost low.
+                    import random as _bk_random
+                    if _bk_random.random() < 0.001:
+                        prune_backlog_history(_bk_conn)
+                finally:
+                    try:
+                        _bk_conn.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+            except Exception as _bk_exc:  # noqa: BLE001
+                logger.debug(
+                    "vp_mission_backlog sampling skipped (non-fatal): %s",
+                    _bk_exc,
+                )
+
             # Proactive health pre-flight — runs every tick regardless of
             # skip-mode so the watchdog can't be silenced by an empty Task Hub.
             # Best-effort: errors are logged but never block the heartbeat.

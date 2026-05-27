@@ -895,6 +895,7 @@ def upsert_vp_mission(
     budget: Optional[dict[str, Any]] = None,
     payload: Optional[dict[str, Any]] = None,
     priority: Optional[int] = None,
+    priority_tier: Optional[str] = None,
     worker_id: Optional[str] = None,
     claim_expires_at: Optional[str] = None,
     cancel_requested: Optional[bool] = None,
@@ -907,6 +908,17 @@ def upsert_vp_mission(
     budget_json = _json_or_none(budget)
     payload_json = _json_or_none(payload)
     cancel_requested_value = 1 if cancel_requested else 0 if cancel_requested is not None else 0
+    # Resolve priority_tier from mission_type if caller didn't supply one.
+    # Imported lazily to avoid a cycle: vp.mission_priority is leaf-y but
+    # durable.state is imported very early in boot.
+    if priority_tier is None and mission_type:
+        try:
+            from universal_agent.vp.mission_priority import resolve_tier
+            priority_tier = resolve_tier(mission_type)
+        except Exception:
+            priority_tier = "background"
+    # Final fallback so the NOT NULL constraint never trips on INSERT.
+    insert_priority_tier = priority_tier or "background"
     conn.execute(
         """
         INSERT OR IGNORE INTO vp_missions (
@@ -920,6 +932,7 @@ def upsert_vp_mission(
             payload_json,
             result_ref,
             priority,
+            priority_tier,
             worker_id,
             claim_expires_at,
             cancel_requested,
@@ -927,7 +940,7 @@ def upsert_vp_mission(
             started_at,
             completed_at,
             updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             mission_id,
@@ -940,6 +953,7 @@ def upsert_vp_mission(
             payload_json,
             result_ref,
             priority,
+            insert_priority_tier,
             worker_id,
             claim_expires_at,
             cancel_requested_value,
@@ -960,6 +974,7 @@ def upsert_vp_mission(
             budget_json = COALESCE(?, budget_json),
             payload_json = COALESCE(?, payload_json),
             priority = COALESCE(?, priority),
+            priority_tier = COALESCE(?, priority_tier),
             worker_id = COALESCE(?, worker_id),
             claim_expires_at = COALESCE(?, claim_expires_at),
             cancel_requested = COALESCE(?, cancel_requested),
@@ -978,6 +993,7 @@ def upsert_vp_mission(
             budget_json,
             payload_json,
             priority,
+            priority_tier,
             worker_id,
             claim_expires_at,
             1 if cancel_requested else 0 if cancel_requested is not None else None,
@@ -1045,6 +1061,7 @@ def queue_vp_mission(
     budget: Optional[dict[str, Any]] = None,
     run_id: Optional[str] = None,
     priority: int = 100,
+    priority_tier: Optional[str] = None,
     source: str = "gateway",
 ) -> None:
     # Ensure referenced VP session row exists for FK integrity.
@@ -1067,6 +1084,7 @@ def queue_vp_mission(
         budget=budget,
         run_id=run_id,
         priority=priority,
+        priority_tier=priority_tier,
         cancel_requested=False,
     )
     # Set source column for bridge tracking (additive — safe on older schemas)
@@ -1091,6 +1109,16 @@ def claim_next_vp_mission(
     lease_expires_iso = (now + timedelta(seconds=max(1, lease_ttl_seconds))).isoformat()
     try:
         conn.execute("BEGIN IMMEDIATE")
+        # Sort order, in priority of operator impact:
+        #   1. priority_tier rank (operator_daily=0 → background=3) —
+        #      missions Kevin reads with morning coffee always win against
+        #      proactive pipeline output. See vp/mission_priority.py for
+        #      the semantic tier definitions.
+        #   2. Within the same tier, numeric `priority` ASC as a
+        #      fine-grained tiebreaker (lower = sooner).
+        #   3. created_at ASC so the oldest queued item in the tier wins
+        #      on a complete tie — prevents starvation of older work
+        #      when many same-tier+same-priority missions land at once.
         row = conn.execute(
             """
             SELECT mission_id
@@ -1105,7 +1133,15 @@ def claim_next_vp_mission(
                     AND claim_expires_at < ?
                 )
               )
-            ORDER BY priority ASC, created_at ASC
+            ORDER BY
+              CASE priority_tier
+                WHEN 'operator_daily'  THEN 0
+                WHEN 'operator_signal' THEN 1
+                WHEN 'maintenance'     THEN 2
+                ELSE                        3
+              END ASC,
+              priority ASC,
+              created_at ASC
             LIMIT 1
             """,
             (vp_id, now_iso),
@@ -1145,6 +1181,21 @@ def claim_next_vp_mission(
         if updated.rowcount != 1:
             conn.commit()
             return None
+
+        # A successful claim means the worker is functional NOW. Clear any
+        # stale last_error stamp on this vp_session — leaving 4-day-old
+        # transient errors in place misleads operators triaging from the
+        # vp_sessions table (the 2026-05-27 morning-briefing incident
+        # wasted an hour because an ancient Composio 401 looked live).
+        conn.execute(
+            """
+            UPDATE vp_sessions
+            SET last_error = NULL,
+                updated_at = ?
+            WHERE vp_id = ? AND last_error IS NOT NULL
+            """,
+            (now_iso, vp_id),
+        )
 
         claimed = conn.execute(
             "SELECT * FROM vp_missions WHERE mission_id = ?",
