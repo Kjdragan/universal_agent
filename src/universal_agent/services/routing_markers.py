@@ -74,9 +74,6 @@ _RESEARCH_WORKFLOW_TERMS: Sequence[str] = (
 CODE_WORKFLOW_RE: re.Pattern[str] = _compile_markers(_CODE_WORKFLOW_TERMS)
 RESEARCH_WORKFLOW_RE: re.Pattern[str] = _compile_markers(_RESEARCH_WORKFLOW_TERMS)
 
-# Keep tuple forms for backward-compat callers that do ``any(m in text for m in ...)``
-CODE_WORKFLOW_MARKERS: tuple[str, ...] = tuple(_CODE_WORKFLOW_TERMS)
-RESEARCH_WORKFLOW_MARKERS: tuple[str, ...] = tuple(_RESEARCH_WORKFLOW_TERMS)
 
 
 # ---------------------------------------------------------------------------
@@ -99,9 +96,6 @@ CSI_CODE_RE: re.Pattern[str] = _compile_markers(_CSI_CODE_TERMS)
 CSI_RESEARCH_RE: re.Pattern[str] = _compile_markers(_CSI_RESEARCH_TERMS)
 CSI_WRITER_RE: re.Pattern[str] = _compile_markers(_CSI_WRITER_TERMS)
 
-CSI_CODE_SUBTASK_KEYWORDS: tuple[str, ...] = tuple(_CSI_CODE_TERMS)
-CSI_RESEARCH_SUBTASK_KEYWORDS: tuple[str, ...] = tuple(_CSI_RESEARCH_TERMS)
-CSI_WRITER_SUBTASK_KEYWORDS: tuple[str, ...] = tuple(_CSI_WRITER_TERMS)
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +117,3 @@ _CSI_HUMAN_HINTS: Sequence[str] = (
 
 CSI_AGENT_HINTS_RE: re.Pattern[str] = _compile_markers(_CSI_AGENT_HINTS)
 CSI_HUMAN_HINTS_RE: re.Pattern[str] = _compile_markers(_CSI_HUMAN_HINTS)
-
-CSI_AGENT_RECOMMENDATION_HINTS: frozenset[str] = frozenset(_CSI_AGENT_HINTS)
-CSI_HUMAN_RECOMMENDATION_HINTS: frozenset[str] = frozenset(_CSI_HUMAN_HINTS)

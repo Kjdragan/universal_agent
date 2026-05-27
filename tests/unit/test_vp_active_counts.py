@@ -48,7 +48,7 @@ class TestVpActiveCountsCanonical:
 
 
 # ---------------------------------------------------------------------------
-# Alias matching (substring of agent_id only)
+# Alias matching (exact set only)
 # ---------------------------------------------------------------------------
 
 
@@ -61,10 +61,10 @@ class TestVpActiveCountsAliases:
         assignments = [{"agent_id": "atlas"}]
         assert _vp_active_counts(assignments) == (0, 1)
 
-    def test_coder_substring_in_agent_id(self):
-        """agent_id containing 'coder' as a substring should match."""
+    def test_coder_substring_in_agent_id_no_false_positive(self):
+        """agent_id containing 'coder' as substring should NOT match (exact-only)."""
         assignments = [{"agent_id": "some-coder-session"}]
-        assert _vp_active_counts(assignments) == (1, 0)
+        assert _vp_active_counts(assignments) == (0, 0)
 
 
 # ---------------------------------------------------------------------------
