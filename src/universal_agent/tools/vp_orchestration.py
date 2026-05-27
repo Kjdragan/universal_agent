@@ -230,6 +230,27 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
     raw_idempotency = str(args.get("idempotency_key") or "").strip()
     idempotency_key = raw_idempotency or f"vp-tool-{uuid.uuid4().hex}"
 
+    # Priority tier resolution. Callers normally omit this — the queue
+    # layer auto-resolves from mission_type via vp.mission_priority. We
+    # only need to validate an explicit override here so a typo doesn't
+    # land an unknown tier value in the DB.
+    raw_priority_tier = str(args.get("priority_tier") or "").strip() or None
+    if raw_priority_tier is not None:
+        try:
+            from universal_agent.vp.mission_priority import is_valid_tier, TIERS
+            if not is_valid_tier(raw_priority_tier):
+                return _result(
+                    _error_payload(
+                        "validation_error",
+                        f"priority_tier must be one of {list(TIERS)}; got {raw_priority_tier!r}",
+                    )
+                )
+        except Exception:
+            # If the constants module ever fails to import, accept whatever
+            # the caller gave us and let the DB default catch malformed
+            # values via the NOT NULL constraint.
+            pass
+
     source_session_id = str(args.get("source_session_id") or "").strip()
     run_id = str(args.get("run_id") or "").strip()
     
@@ -449,6 +470,7 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
                 source_turn_id=str(args.get("source_turn_id") or uuid.uuid4().hex),
                 reply_mode=reply_mode,
                 priority=priority,
+                priority_tier=raw_priority_tier,
                 run_id=run_id or None,
                 execution_mode=resolved_execution_mode,
                 metadata=mission_metadata,

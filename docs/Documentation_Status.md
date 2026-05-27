@@ -56,6 +56,7 @@ Written from source code review — these describe the system as it actually exi
 | 07 | Database Architecture — absolute source of truth for database paradigms, schema structure, segregation boundaries, and lifecycle pruning logic |
 | 10 | Model Choice and Resolution — Anthropic proxy emulation map, inference fallbacks, and the Capacity Governor loud-failure hook |
 | 11 | Archon Comparison & Integration Strategy — critical architectural review comparing Archon to UA, including emulation recommendations for Git Worktree Isolation and integration paths for YAML-driven coding DAGs |
+| vp_mission_priority_tiers | VP Mission Priority Tiers (2026-05-27) — semantic `operator_daily` / `operator_signal` / `maintenance` / `background` ranking column above numeric priority. Default tier is `background` (safe — forgotten work runs last). Closes the priority-100-default starvation trap that hid the 2026-05-27 morning briefing miss. Includes the freshness SLA invariant + informational backlog tracking surfaced via Simone's heartbeat context. |
 
 ## Root Architecture Docs
 

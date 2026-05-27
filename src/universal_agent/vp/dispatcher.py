@@ -53,6 +53,12 @@ class MissionDispatchRequest:
     run_id: Optional[str] = None
     execution_mode: str = "sdk"  # "sdk" (default), "cli" (Claude Code CLI), or "dag" (deterministic DAG runner)
     metadata: dict[str, Any] = field(default_factory=dict)
+    # When None, the queue layer auto-resolves from mission_type via
+    # vp.mission_priority.resolve_tier — keeps callers from having to
+    # remember tier names. Pass an explicit value only to override the
+    # default mapping (rare; usually a sign that mission_type should
+    # move tiers in the constants module instead).
+    priority_tier: Optional[str] = None
 
 
 def dispatch_mission(
@@ -112,6 +118,7 @@ def dispatch_mission(
         budget=request.budget,
         run_id=request.run_id,
         priority=request.priority,
+        priority_tier=request.priority_tier,
     )
     append_vp_event(
         conn=conn,

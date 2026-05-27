@@ -19,6 +19,7 @@ from universal_agent.services.invariants import (  # noqa: F401
     cron_staleness,
     csi_source_liveness,
     disk_usage_health,
+    operator_daily_mission_freshness,
     proactive_pipeline_invariants,
     youtube_invariants,
     zai_inference_health,
