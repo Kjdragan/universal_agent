@@ -470,6 +470,14 @@ Daemon sessions (always-on heartbeat agents) are guarded by an execution timeout
 | `/api/v1/dashboard/todolist/dispatch-queue` | GET | Dispatch queue state |
 | `/api/v1/dashboard/todolist/dispatch-queue/rebuild` | POST | Rebuild dispatch queue |
 
+| `/api/v1/dashboard/todolist/tasks/{id}/goal-artifacts` | GET | Return `/goal`-flow artifact contents (BRIEF.md, ACCEPTANCE.md, goal_condition.txt, COMPLETION.md) for a task whose `metadata.use_goal_loop` is true |
+
+### Goal Artifacts Details
+
+The `goal-artifacts` endpoint backs the Task Hub dashboard's `/goal active` badge and expandable artifacts panel. It locates the linked VP mission's workspace and reads the four standard self-briefing artifacts produced by the `self-brief-and-attest` skill.
+
+**Dual-path resolution:** The endpoint first tries the canonical mission workspace, then falls back per-artifact to `metadata.dispatch.cody_workspace_dir` when Cody writes artifacts to its own cwd (common when the operator scopes work to a non-canonical path). Canonical workspace takes precedence; fallback is per-artifact so split cases are handled correctly. Artifact reads are capped at 64 KB. Returns `404` if the task does not exist or has no linked VP mission.
+
 ### Task Hub Missions
 
 When the `task_hub_missions` feature flag is enabled, several Task Hub endpoints include additional mission/workstream fields:
