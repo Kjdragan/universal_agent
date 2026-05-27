@@ -212,10 +212,21 @@ verify_service_imports() {
   run_as_service_user "export PATH=\"$PATH_PREFIX:\$PATH\"; cd \"$APP_ROOT\" && export PYTHONPATH=src && ./.venv/bin/python scripts/verify_service_imports.py"
 }
 
+verify_migrations_preflight() {
+  # Run ensure_schema against snapshot copies of production DBs before
+  # any service restart. Catches the migration class of failure that
+  # crashlooped production on 2026-05-27 (vp_missions.priority_tier
+  # ALTER ordering). Failure here aborts the deploy with a structured
+  # error — no 8-minute gateway crashloop while we figure out it's down.
+  echo "--> Validating ensure_schema against DB snapshots before restart..."
+  run_as_service_user "export PATH=\"$PATH_PREFIX:\$PATH\"; cd \"$APP_ROOT\" && export PYTHONPATH=src && ./.venv/bin/python scripts/preflight_migrations.py"
+}
+
 run_validation_cycle() {
   validate_runtime_bootstrap &&
   verify_observability_runtime &&
-  verify_service_imports
+  verify_service_imports &&
+  verify_migrations_preflight
 }
 
 ensure_runtime_is_ready() {
