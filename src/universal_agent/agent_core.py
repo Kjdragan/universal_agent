@@ -40,6 +40,8 @@ from universal_agent.sdk.task_events import extract_typed_task_payload
 
 if TYPE_CHECKING:
     from composio import Composio
+
+    from universal_agent.agent_setup import AgentSetup
 from universal_agent.durable.tool_gateway import (
     is_malformed_tool_name,
     parse_malformed_tool_name,
