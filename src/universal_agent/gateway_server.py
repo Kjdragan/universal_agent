@@ -24644,18 +24644,29 @@ def _task_hub_board_projection(
     assigned_agent_id = ""
     assigned_session_id = ""
     assignment_state = ""
+    # An "active" hand-on signal: either a real assignment row in seized/running,
+    # or the legacy dispatch.active_agent_id metadata path used before assignments
+    # were written.  Bare status='delegated' is NOT active — the delegate may be
+    # backlogged and hasn't picked the task up yet (see Task Hub lane semantics
+    # in docs/107_Task_Hub_Master_Reference.md).
+    has_active_assignment = False
 
     if active_assignment:
         assigned_agent_id = str(active_assignment.get("agent_id") or "")
         assigned_session_id = str(active_assignment.get("provider_session_id") or "") or task_hub._session_id_from_agent_id(assigned_agent_id)
         assignment_state = str(active_assignment.get("state") or "")
+        has_active_assignment = True
     elif status in {task_hub.TASK_STATUS_DELEGATED, task_hub.TASK_STATUS_PENDING_REVIEW}:
+        # Delegate target is decided but pickup has not happened yet.  We surface
+        # the target on the card so the operator sees who it's queued for, but we
+        # do NOT promote to in_progress — that requires an active_assignment row.
         assigned_agent_id = str(delegation.get("delegate_target") or "")
         assignment_state = "delegated"
     elif str(dispatch_meta.get("active_agent_id") or "").strip():
         assigned_agent_id = str(dispatch_meta.get("active_agent_id") or "")
         assigned_session_id = str(dispatch_meta.get("active_provider_session_id") or "")
         assignment_state = "seized"
+        has_active_assignment = True
 
     if status in {task_hub.TASK_STATUS_REVIEW, task_hub.TASK_STATUS_PENDING_REVIEW}:
         board_lane = "needs_review"
@@ -24665,13 +24676,14 @@ def _task_hub_board_projection(
         board_lane = "parked"
     elif status == task_hub.TASK_STATUS_BLOCKED:
         board_lane = "blocked"
-    elif status == task_hub.TASK_STATUS_DELEGATED:
-        board_lane = "in_progress"
     elif status == task_hub.TASK_STATUS_IN_PROGRESS:
         board_lane = "in_progress"
-    elif assigned_agent_id or assigned_session_id:
+    elif has_active_assignment:
+        # Truly hands-on right now.
         board_lane = "in_progress"
     else:
+        # Includes status='open' (untriaged) AND status='delegated' without an
+        # active assignment (Simone has triaged but the VP is still backlogged).
         board_lane = "not_assigned"
 
     return {
@@ -24681,6 +24693,121 @@ def _task_hub_board_projection(
         "assignment_state": assignment_state or None,
         "requires_simone_review": board_lane == "needs_review",
     }
+
+
+def _task_hub_queued_behind(
+    conn: sqlite3.Connection,
+    *,
+    delegate_target: str,
+    delegated_at: str,
+    self_task_id: str,
+) -> int:
+    """Count other tasks delegated to the same target that landed earlier
+    and have not been picked up yet (still status='delegated', no active
+    assignment).  Returns 0 on any miss so a small SQL hiccup never breaks
+    the queue payload.
+    """
+    target = (delegate_target or "").strip()
+    pivot = (delegated_at or "").strip()
+    if not target or not pivot:
+        return 0
+    try:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS n
+            FROM task_hub_items i
+            WHERE i.status = ?
+              AND i.task_id != ?
+              AND json_extract(i.metadata_json, '$.delegation.delegate_target') = ?
+              AND COALESCE(json_extract(i.metadata_json, '$.delegation.delegated_at'), '') < ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM task_hub_assignments a
+                  WHERE a.task_id = i.task_id AND a.state IN ('seized','running')
+              )
+            """,
+            (task_hub.TASK_STATUS_DELEGATED, self_task_id, target, pivot),
+        ).fetchone()
+        return int(row["n"] if row else 0)
+    except Exception:
+        return 0
+
+
+def _task_hub_timeline_events(
+    item: dict[str, Any],
+    *,
+    active_assignment: Optional[dict[str, Any]],
+    latest_assignment: Optional[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Compact lifecycle timeline used by the dashboard card.
+
+    Events are emitted in chronological order; the UI shows the last few
+    inline and the full list in the drawer.  Sources are metadata fields the
+    task hub already maintains — we don't compute anything new here, just
+    surface what's already on disk.
+    """
+    events: list[dict[str, Any]] = []
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    delegation = metadata.get("delegation") if isinstance(metadata.get("delegation"), dict) else {}
+    dispatch_meta = metadata.get("dispatch") if isinstance(metadata.get("dispatch"), dict) else {}
+    status = str(item.get("status") or "").strip().lower()
+
+    created_at = str(item.get("created_at") or "").strip()
+    if created_at:
+        events.append({"kind": "created", "at": created_at, "label": "created"})
+
+    delegated_at = str(delegation.get("delegated_at") or "").strip()
+    delegate_target = str(delegation.get("delegate_target") or "").strip()
+    if delegated_at:
+        events.append({
+            "kind": "delegated",
+            "at": delegated_at,
+            "label": f"delegated → {delegate_target}" if delegate_target else "delegated",
+            "delegate_target": delegate_target or None,
+        })
+
+    assignment_started = str(
+        (active_assignment or {}).get("started_at")
+        or (latest_assignment or {}).get("started_at")
+        or dispatch_meta.get("last_assignment_started_at")
+        or ""
+    ).strip()
+    assignment_agent = str(
+        (active_assignment or {}).get("agent_id")
+        or (latest_assignment or {}).get("agent_id")
+        or ""
+    ).strip()
+    if assignment_started:
+        events.append({
+            "kind": "picked_up",
+            "at": assignment_started,
+            "label": f"picked up by {assignment_agent}" if assignment_agent else "picked up",
+        })
+
+    if not active_assignment and latest_assignment:
+        ended_at = str(latest_assignment.get("ended_at") or "").strip()
+        end_state = str(latest_assignment.get("state") or "").strip()
+        if ended_at and end_state and end_state not in ("seized", "running"):
+            events.append({
+                "kind": f"assignment_{end_state}",
+                "at": ended_at,
+                "label": f"{end_state}",
+            })
+
+    if status == task_hub.TASK_STATUS_PARKED:
+        events.append({
+            "kind": "parked",
+            "at": str(item.get("updated_at") or ""),
+            "label": "parked",
+        })
+    elif status == task_hub.TASK_STATUS_BLOCKED:
+        events.append({
+            "kind": "blocked",
+            "at": str(item.get("updated_at") or ""),
+            "label": "blocked",
+        })
+
+    events.sort(key=lambda e: str(e.get("at") or ""))
+    return events
 
 
 def _serialize_task_hub_queue_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any]:
@@ -24720,6 +24847,25 @@ def _serialize_task_hub_queue_item(conn: sqlite3.Connection, item: dict[str, Any
         if task_hub_missions_enabled()
         else None
     )
+    serialized["timeline"] = _task_hub_timeline_events(
+        item,
+        active_assignment=active_assignment,
+        latest_assignment=latest_assignment,
+    )
+    delegation_meta = metadata.get("delegation") if isinstance(metadata.get("delegation"), dict) else {}
+    if (
+        not active_assignment
+        and str(item.get("status") or "").strip().lower() == task_hub.TASK_STATUS_DELEGATED
+        and delegation_meta
+    ):
+        serialized["queued_behind"] = _task_hub_queued_behind(
+            conn,
+            delegate_target=str(delegation_meta.get("delegate_target") or ""),
+            delegated_at=str(delegation_meta.get("delegated_at") or ""),
+            self_task_id=task_id,
+        )
+    else:
+        serialized["queued_behind"] = 0
     return serialized
 
 
