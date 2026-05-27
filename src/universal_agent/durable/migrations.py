@@ -229,8 +229,13 @@ CREATE INDEX IF NOT EXISTS idx_vp_events_mission ON vp_events(mission_id, create
 CREATE INDEX IF NOT EXISTS idx_vp_events_vp ON vp_events(vp_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_vp_session_events_vp ON vp_session_events(vp_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_vp_session_events_type ON vp_session_events(event_type, created_at);
-CREATE INDEX IF NOT EXISTS idx_vp_missions_tier_priority ON vp_missions(vp_id, status, priority_tier, priority, created_at);
 CREATE INDEX IF NOT EXISTS idx_vp_backlog_history_recent ON vp_mission_backlog_history(measured_at DESC, vp_id, priority_tier);
+-- NOTE: idx_vp_missions_tier_priority intentionally NOT declared
+-- here. executescript(SCHEMA_SQL) runs BEFORE _add_column_if_missing
+-- has ALTER-TABLE'd priority_tier onto pre-existing vp_missions
+-- tables. Putting the index here crashes with "no such column:
+-- priority_tier" on upgrade from any pre-tier schema. It's created
+-- later in ensure_schema(), AFTER the ALTER.
 
 CREATE TABLE IF NOT EXISTS user_preferences (
   user_id TEXT PRIMARY KEY,
@@ -343,6 +348,12 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "vp_missions", "priority", "INTEGER DEFAULT 100")
     _add_column_if_missing(
         conn, "vp_missions", "priority_tier", "TEXT NOT NULL DEFAULT 'background'"
+    )
+    # Index references priority_tier — must come AFTER _add_column_if_missing
+    # so upgrades from pre-tier schemas don't crash with "no such column".
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_vp_missions_tier_priority "
+        "ON vp_missions(vp_id, status, priority_tier, priority, created_at)"
     )
     _backfill_vp_mission_priority_tier(conn)
     _add_column_if_missing(conn, "vp_missions", "worker_id", "TEXT")
