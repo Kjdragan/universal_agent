@@ -7,6 +7,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import time
 from typing import Any, Callable, Dict, Iterable, Optional
@@ -82,6 +83,29 @@ def _process_start_time() -> float:
             # always grows; we only widen the deploy window, not narrow it).
             _PROCESS_START_TIME = time.time()
     return _PROCESS_START_TIME
+
+
+def _parse_script_command_argv(raw_command: str) -> list[str]:
+    """Split a ``!script <module> [args...]`` cron command into argv.
+
+    Returns the list ready to pass after ``python -m``: the first element
+    is the dotted module path (with ``path/to/file.py`` shorthand
+    normalised to dots), followed by any positional/CLI arguments.
+
+    Raises ``ValueError`` if the command does not start with ``!script `` or
+    contains no module token.
+    """
+    body = raw_command.strip()
+    if not body.startswith("!script "):
+        raise ValueError(f"not a !script command: {raw_command!r}")
+    body = body[len("!script "):].strip()
+    tokens = shlex.split(body)
+    if not tokens:
+        raise ValueError(f"empty !script command: {raw_command!r}")
+    module = tokens[0].replace("/", ".")
+    if module.endswith(".py"):
+        module = module[:-3]
+    return [module, *tokens[1:]]
 
 
 def _is_deploy_window_active() -> bool:
@@ -1462,6 +1486,7 @@ class CronService:
                             f"got: {raw_command!r}"
                         )
                     script_path = raw_command.replace("!script ", "", 1).strip()
+                    script_argv = _parse_script_command_argv(raw_command)
                     logger.info(
                         "Chron job %s executing lightweight script: %s",
                         job.job_id, script_path,
@@ -1497,7 +1522,7 @@ class CronService:
                     _lw_proc = await asyncio.create_subprocess_exec(
                         _lw_sys.executable,
                         "-m",
-                        script_path.replace("/", ".").replace(".py", ""),
+                        *script_argv,
                         stdout=_lw_subprocess.PIPE,
                         stderr=_lw_subprocess.PIPE,
                         cwd=_lw_cwd,
@@ -1683,6 +1708,7 @@ class CronService:
                             raw_command = job.command.strip()
                             if raw_command.startswith("!script "):
                                 script_path = raw_command.replace("!script ", "", 1).strip()
+                                script_argv = _parse_script_command_argv(raw_command)
                                 logger.info(f"Chron job {job.job_id} executing native script: {script_path}")
 
                                 # Use asyncio.create_subprocess_exec
@@ -1761,7 +1787,7 @@ class CronService:
                                     )
 
                                 proc = await asyncio.create_subprocess_exec(
-                                    sys.executable, "-m", script_path.replace("/", ".").replace(".py", ""),
+                                    sys.executable, "-m", *script_argv,
                                     stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE,
                                     cwd=cwd_str,
