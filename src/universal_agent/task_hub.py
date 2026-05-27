@@ -1901,6 +1901,65 @@ def record_cody_dispatch_metadata(
     return cursor.rowcount
 
 
+def find_recent_active_task_for_agent(
+    conn: sqlite3.Connection,
+    *,
+    agent_slug: str = "",
+) -> str:
+    """Return the task_id of the most-recently-seized active assignment.
+
+    Used by ``_vp_dispatch_mission_impl`` to auto-discover the originating
+    ``linked_task_id`` when the caller (typically Simone's LLM via the
+    ``vp_dispatch_mission`` tool) didn't include it explicitly. Without
+    this fallback, every operator-dispatched Cody mission loses the
+    parent-task linkage: ``record_cody_dispatch_metadata`` silently
+    no-ops, ``mission_receipt.task_id`` stays ``null``, and the Task
+    Hub card never accumulates a Delegation Trace.
+
+    Matching rule:
+      - Always restricts to ``state='seized'`` (currently active claim).
+      - Optionally filters by ``agent_id LIKE %agent_slug%`` when
+        ``agent_slug`` is provided (e.g.
+        ``agent_slug="daemon_simone_todo"`` matches
+        ``agent_id="todo:daemon_simone_todo"``).
+      - Empty ``agent_slug`` returns the most-recent seized assignment
+        overall — used when the inner ``vp_dispatch_mission`` tool call
+        has no session context (``source_session_id="internal.vp_tool"``)
+        and we need any orchestrator's current claim.
+
+    Returns the most recent by ``started_at`` so concurrent claims
+    resolve to whichever task was picked up last. Returns ``""`` if no
+    match — callers handle that as "no linkage, skip propagation"
+    silently.
+    """
+    slug = str(agent_slug or "").strip()
+    if slug:
+        row = conn.execute(
+            """
+            SELECT task_id
+            FROM task_hub_assignments
+            WHERE state = 'seized'
+              AND agent_id LIKE ?
+            ORDER BY started_at DESC
+            LIMIT 1
+            """,
+            (f"%{slug}%",),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """
+            SELECT task_id
+            FROM task_hub_assignments
+            WHERE state = 'seized'
+            ORDER BY started_at DESC
+            LIMIT 1
+            """,
+        ).fetchone()
+    if not row:
+        return ""
+    return str(row[0] if not hasattr(row, "keys") else row["task_id"]).strip()
+
+
 def resolve_max_runtime_seconds(task: dict[str, Any] | None) -> int:
     """Phase F.2 — resolve effective wall-clock timeout for a task.
 
