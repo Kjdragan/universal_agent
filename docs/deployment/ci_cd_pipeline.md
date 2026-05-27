@@ -26,7 +26,7 @@ Release verification rule:
 | `PR Auto-Merge` | `pr-auto-merge.yml` | Pull request to `main` (any non-draft PR not from `codie/*`, `kevin/*`, or `feature/*`) | Enables GitHub auto-merge (squash + delete branch) so PR merges automatically once `Validate PR` passes. Uses `secrets.AUTO_MERGE_PAT` (fine-grained PAT) so the downstream squash-merge `push` event actually fires `deploy.yml` — see "Why a PAT" below. Tier-1 PRs through `/ship` already self-enable auto-merge. |
 | `PR Rebase Watchdog` | `pr-rebase-watchdog.yml` | Push to `main`, every 15 min cron, `workflow_dispatch` | Heals stuck auto-merge PRs that went `mergeStateStatus=DIRTY` after main moved. **GitHub does not run `Validate PR` on conflicting PRs**, so auto-merge has nothing to wait on and sits silently. The watchdog detects this state, auto-rebases `claude/*` and `worktree-*` branches (force-push with lease), and posts a comment with rebase instructions on `kevin/*`/`feature/*`/`codie/*` branches. A `rebase-needed-comment` label suppresses comment spam; it auto-clears once the branch is mergeable again. |
 | ~~`Post-Merge Deploy Dispatcher`~~ | ~~`post-merge-deploy.yml`~~ | **Deleted 2026-05-11 PM** | Was the workaround for the GITHUB_TOKEN suppression bug. With PR #232's PAT swap making `pr-auto-merge.yml` fire deploys via the natural `push` trigger, this bridge was redundant — every merge produced two Deploy runs (one from `push`, one from the bridge's `workflow_dispatch`). Removed to avoid double-deploys + Actions-tab clutter. |
-| `Deploy` | `deploy.yml` | Push to `main` (paths-ignore: docs/, **.md, reports/, state/, artifacts/), or `workflow_dispatch` | Production Service. **No concurrency guard as of 2026-05-11** — see "Concurrency caveat" below. |
+| `Deploy` | `deploy.yml` | Push to `main` (paths-ignore: docs/, **.md, reports/, state/, artifacts/, memory/**), or `workflow_dispatch` | Production Service. Concurrency guard (`deploy-production` group, `cancel-in-progress: false`) added 2026-05-11 PM — see "Concurrency guard" below. |
 
 ### End-to-End PR-to-Production Flow (2026-05-11)
 
@@ -58,17 +58,15 @@ Fix: `pr-auto-merge.yml` now uses `secrets.AUTO_MERGE_PAT` (a fine-grained PAT s
 
 **PAT maintenance:** default fine-grained PATs expire after 1 year. When the token expires, `gh pr merge --auto` calls will 401/403 — regenerate the token, paste the new value into the existing `AUTO_MERGE_PAT` secret (overwrite), no workflow file change needed.
 
-#### Concurrency caveat (2026-05-11 PM incident)
+#### Concurrency guard (added 2026-05-11 PM)
 
-`deploy.yml` does NOT currently have a `concurrency:` guard. When three Dependabot/operator PRs (#231, #226, plus the chain catch-up commit) merged within seconds of each other, three deploy runs raced on `/opt/universal_agent/.git/index.lock` and all three failed with:
+During the 2026-05-11 PM incident, three Dependabot/operator PRs (#231, #226, plus the chain catch-up commit) merged within seconds of each other, three deploy runs raced on `/opt/universal_agent/.git/index.lock` and all three failed with:
 
 ```
 fatal: Unable to create '/opt/universal_agent/.git/index.lock': File exists.
 ```
 
-Manual recovery: one fresh `gh workflow run deploy.yml --ref main` once the stale lock self-clears.
-
-**Recommended hardening** (not yet implemented; open follow-up):
+The concurrency guard was added to `deploy.yml` after that incident:
 
 ```yaml
 concurrency:
@@ -76,7 +74,7 @@ concurrency:
   cancel-in-progress: false  # preserve every deploy's intent
 ```
 
-This serializes deploys so simultaneous merges queue instead of colliding. `cancel-in-progress: false` is the right setting — main is the source of truth and every deploy should run to completion.
+This serializes deploys so simultaneous merges queue instead of colliding. `cancel-in-progress: false` is the right setting — main is the source of truth and every deploy should run to completion (last-write-wins semantics on production).
 
 ### Utility Workflows
 
@@ -226,6 +224,8 @@ deploy rather than editing keys in place.
 - This provides the `nlm` CLI and `notebooklm-mcp` server binaries expected by the NotebookLM runtime.
 - Deploy installs the `goplaces` CLI tool (v0.3.0) for the `ua` service user by downloading the release binary from GitHub to `/home/ua/.local/bin/goplaces`.
 - Installation is idempotent.
+- Deploy installs the `hackernews-pp-cli` binary for the `ua` service user via `scripts/install_hackernews_cli.sh`. The script downloads, SHA-pin-verifies, and smoke-tests the binary before reporting success. Targets `~/.local/bin/` (not the repo) so it survives `git clean` / repo resets. Installation is idempotent — only downloads if the binary is missing.
+- Deploy syncs project skills (`.claude/skills/`) to the `ua` user-level directory (`/home/ua/.claude/skills/`) via `rsync -a --delete`. This makes skills discoverable by VP worker subprocesses that run from `/opt/universal_agent/AGENT_RUN_WORKSPACES/` where the project-relative `.claude/skills/` isn't visible. Without this sync, skills like `self-brief-and-attest` deployed in the repo wouldn't be reachable by Cody's CLI subprocess. The sync is idempotent and runs before the service restart phase.
 
 ## Expected Deploy Times
 
