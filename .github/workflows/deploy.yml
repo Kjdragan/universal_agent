@@ -1,18 +1,16 @@
 name: Deploy
 
 on:
-  # Trigger on EVERY push (no branch filter at the trigger level) and
-  # gate inside the job via `if: github.ref == 'refs/heads/main'`.
-  #
-  # Why this shape: GitHub Actions has a UX quirk where a workflow
-  # filtered out by `on.push.branches` emits a `conclusion=failure`
-  # workflow_run with `jobs: []` — and the email notifier sends a
-  # "Run failed" email even though the workflow correctly didn't
-  # deploy. Triggering on every push and gating in-job converts those
-  # false-positive failure emails into clean `skipped` (neutral) runs.
-  #
-  # paths-ignore still applies as a fast skip for docs-only commits.
   push:
+    branches:
+      - main
+    # Skip production deploy when a push to `main` only contains docs,
+    # markdown, or scheduled-job state files. These are produced by
+    # `nightly-doc-drift-audit.yml` and `openclaw-release-sync.yml` (which
+    # auto-merge their PRs to main directly post-2026-05-10) and shouldn't
+    # restart the gateway. GitHub semantics: deploy is skipped only when
+    # **every** changed file matches a `paths-ignore` glob — a mixed
+    # code+docs commit still deploys, which is the safe default.
     paths-ignore:
       - 'docs/**'
       - '**.md'
@@ -48,15 +46,6 @@ concurrency:
 
 jobs:
   deploy-production:
-    # Gate on branch INSIDE the job rather than via on.push.branches.
-    # The 2026-05-27 17:46 deploy of #507 failed with "No jobs were
-    # run" (workflow listed as filename, not "Deploy") — a GHA quirk
-    # where filter-skipped runs report conclusion=failure and email
-    # the operator. Triggering on every push and gating in-job
-    # converts those false-positive failure emails into clean
-    # `skipped` (neutral) runs. Manual workflow_dispatch still works
-    # (github.ref will be refs/heads/main when triggered from main).
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -374,20 +363,6 @@ jobs:
               url="$2"
               max_attempts="${3:-36}"
               sleep_seconds="${4:-5}"
-              service_unit="${5:-}"
-              # Fail-fast threshold: if the watched systemd unit
-              # restarts more than this during the retry window, the
-              # service is crashlooping (not just slow to boot). Bail
-              # out early instead of burning the full ~8 minutes. The
-              # 2026-05-27 incident wasted ~24 min of crashloop because
-              # the loop assumed every "no response" was "still
-              # starting." Tuned to 5: catches a real crashloop quickly
-              # while tolerating one or two restarts from a slow boot.
-              crashloop_threshold=5
-              start_restarts=""
-              if [ -n "$service_unit" ] && command -v systemctl >/dev/null 2>&1; then
-                start_restarts="$(systemctl show -p NRestarts --value "$service_unit" 2>/dev/null || echo 0)"
-              fi
               attempt=1
               while [ "$attempt" -le "$max_attempts" ]; do
                 if curl -fsS -m 4 "$url" >/tmp/ua-health-${name}.json 2>/tmp/ua-health-${name}.err; then
@@ -396,21 +371,6 @@ jobs:
                   echo ""
                   rm -f /tmp/ua-health-${name}.json /tmp/ua-health-${name}.err
                   return 0
-                fi
-                # Crashloop detection: only fires when caller passed a
-                # service_unit AND we're past attempt 3 (lets a slow
-                # boot finish its first cycle in peace).
-                if [ -n "$service_unit" ] && [ "$attempt" -ge 3 ] && command -v systemctl >/dev/null 2>&1; then
-                  now_restarts="$(systemctl show -p NRestarts --value "$service_unit" 2>/dev/null || echo 0)"
-                  if [ -n "$start_restarts" ] && [ "$now_restarts" -ge 0 ] 2>/dev/null; then
-                    delta=$((now_restarts - start_restarts))
-                    if [ "$delta" -ge "$crashloop_threshold" ]; then
-                      echo "::error::$name crashloop detected: $service_unit restarted $delta times during health-wait (threshold=$crashloop_threshold). Failing fast instead of waiting for the full retry budget."
-                      echo "--> Last journal entries from $service_unit:"
-                      journalctl -u "$service_unit" --no-pager -n 80 2>/dev/null | tail -80 || true
-                      return 1
-                    fi
-                  fi
                 fi
                 if [ "$attempt" -eq 1 ] || [ $((attempt % 6)) -eq 0 ]; then
                   echo "    Waiting for $name health at $url (attempt $attempt/$max_attempts)..."
@@ -430,9 +390,8 @@ jobs:
               url="$2"
               max_attempts="$3"
               sleep_seconds="$4"
-              service_unit="${5:-}"
               (
-                if check_local_health "$name" "$url" "$max_attempts" "$sleep_seconds" "$service_unit"; then
+                if check_local_health "$name" "$url" "$max_attempts" "$sleep_seconds"; then
                   echo 0 >"$health_status_dir/$name.status"
                 else
                   echo 1 >"$health_status_dir/$name.status"
@@ -455,11 +414,7 @@ jobs:
             # though the gateway came up healthy seconds later). The
             # right architectural fix is to slim the pre-yield work
             # (tracked separately); 8 minutes is the operational backstop.
-            # Pass the systemd unit name so check_local_health can
-            # short-circuit on crashloop. Gateway is the high-risk one
-            # (lifespan does heavy migration + reconcile work); api and
-            # webui have lighter startup paths so omit the watcher.
-            run_health_check gateway "http://127.0.0.1:8002/api/v1/health" 96 5 universal-agent-gateway.service
+            run_health_check gateway "http://127.0.0.1:8002/api/v1/health" 96 5
             run_health_check api "http://127.0.0.1:8001/api/health" 24 5
             run_health_check webui "http://127.0.0.1:3000/dashboard" 24 5
             for health_pid in $health_pids; do
@@ -516,62 +471,3 @@ jobs:
             
             echo "Deployment to Production complete!"
           EOF
-
-      # On deploy failure, push a structured email straight to the operator's
-      # AgentMail inbox so they don't have to babysit the Actions UI. Before
-      # this step, a red deploy looked identical to a slow deploy from the
-      # operator's side — see the 2026-05-27 incident where three deploys
-      # cascaded the same crashloop for ~30 min before anyone noticed.
-      #
-      # Configuration:
-      #   - AGENTMAIL_API_KEY: repo or org secret. If unset, this step
-      #     becomes a no-op (don't double-fault the deploy with a missing
-      #     credential — surface that diagnostically and continue).
-      #   - Recipient (kevinjdragan@gmail.com) and sender inbox
-      #     (oddcity216@agentmail.to) are hard-coded. Originally factored
-      #     through `${{ vars.X || 'default' }}` but that triggered a
-      #     GHA workflow-parser failure on the 2026-05-27 17:46 deploy
-      #     (no jobs ran, workflow shown as filename not name). Hard
-      #     defaults are safer — change here if you ever need to.
-      - name: Notify operator on deploy failure via AgentMail
-        if: failure()
-        env:
-          AGENTMAIL_API_KEY: ${{ secrets.AGENTMAIL_API_KEY }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          COMMIT_SHA: ${{ github.sha }}
-          COMMIT_REF: ${{ github.ref_name }}
-        shell: bash
-        run: |
-          set +e
-          DEPLOY_FAILURE_EMAIL="kevinjdragan@gmail.com"
-          DEPLOY_FAILURE_INBOX="oddcity216@agentmail.to"
-          if [ -z "${AGENTMAIL_API_KEY:-}" ]; then
-            echo "::warning::AGENTMAIL_API_KEY not configured; skipping failure-email notification."
-            exit 0
-          fi
-          SHORT_SHA="${COMMIT_SHA:0:8}"
-          SUBJECT="[deploy-failed] universal_agent main @${SHORT_SHA}"
-          # Hand-built JSON via printf — no python heredoc, no embedded
-          # escaping. \n inside printf %b produces real newlines; the
-          # entire body becomes a single JSON string.
-          BODY=$(printf 'Production deploy FAILED.\n\nCommit:    %s\nBranch:    %s\nWorkflow:  %s\n\nNext steps:\n  1. Open the workflow URL above to see which step failed.\n  2. If gateway health-wait timed out, check the VPS:\n       ssh ua@uaonvps "journalctl -u universal-agent-gateway -n 200 --no-pager"\n  3. The deploy concurrency guard queues subsequent deploys until this one resolves, so further merges to main will wait.' \
-            "$COMMIT_SHA" "$COMMIT_REF" "$RUN_URL")
-          # jq builds the JSON payload safely.
-          PAYLOAD=$(jq -n \
-            --arg to "$DEPLOY_FAILURE_EMAIL" \
-            --arg subject "$SUBJECT" \
-            --arg text "$BODY" \
-            '{to: [$to], subject: $subject, text: $text, labels: ["deploy-failed", "ops"]}')
-          curl -sS -o /tmp/agentmail_resp.json -w "AgentMail HTTP %{http_code}\n" \
-            -X POST \
-            -H "Authorization: Bearer ${AGENTMAIL_API_KEY}" \
-            -H "Content-Type: application/json" \
-            --max-time 15 \
-            --data "$PAYLOAD" \
-            "https://api.agentmail.to/v0/inboxes/${DEPLOY_FAILURE_INBOX}/messages/send" \
-            || true
-          head -c 500 /tmp/agentmail_resp.json 2>/dev/null || true
-          echo ""
-          # Don't fail the workflow — deploy already failed; missing email
-          # delivery shouldn't double-fault.
-          exit 0
