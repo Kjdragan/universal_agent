@@ -70,6 +70,13 @@ Dispatch an external VP mission through the internal VP ledger.
 | `idempotency_key` | string | | Stable key for replay-safe dispatch; auto-generated if omitted |
 | `priority` | int | | Default: `100` (lower = higher priority) |
 | `reply_mode` | string | | Default: `"async"` |
+| `execution_mode` | string | | `"sdk"` or `"cli"`; overrides worker default. When `cody_mode="anthropic"`, forced to `"cli"` |
+| `cody_mode` | string | | `"anthropic"` or `"zai"`; resolved per Hermes Phase E priority chain |
+| `priority_tier` | string | | Validated tier: `"critical"`, `"high"`, `"normal"`, `"low"`, `"background"` |
+| `metadata` | object | | Arbitrary key-value metadata attached to the mission |
+| `task_id` | string | | Auto-linked Task Hub item ID for traceability |
+| `source_session_id` | string | | Originating session for provenance |
+| `run_id` | string | | Originating run ID for provenance |
 
 Returns: `{ ok, mission_id, status, vp_id, queued_at, mission }`
 
@@ -130,6 +137,41 @@ Read artifact files from a mission's `workspace://` result location.
 
 Returns: `{ ok, result_ref, workspace_root, files_indexed, files_total, artifacts }` where each artifact has `{ path, bytes, excerpt, excerpt_truncated }`
 
+### `vp_dispatch_mission_retry`
+
+Re-dispatch a failed VP mission with Simone's guidance attached. Creates a new mission linked to the original.
+
+| Parameter | Type | Notes |
+|-----------|------|-------|
+| `mission_id` | string | Required — the failed mission to retry |
+| `guidance` | string | Simone's analysis and instructions for the retry |
+| `fresh_workspace` | bool | Default: `false` — reuse original workspace if false |
+
+Returns: `{ ok, mission_id, original_mission_id, status }`
+
+### `vp_dispatch_mission_redispatch_fresh`
+
+Re-dispatch a failed mission into a completely fresh workspace. Use when the original workspace is corrupted or has conflicting artifacts.
+
+| Parameter | Type | Notes |
+|-----------|------|-------|
+| `mission_id` | string | Required — the failed mission to re-dispatch |
+| `guidance` | string | Optional instructions for the new attempt |
+
+Returns: `{ ok, mission_id, original_mission_id, workspace_root, status }`
+
+### `escalate_vp_failure_to_operator`
+
+Escalate a failed VP mission to Kevin via a `chat_panel` Task Hub item. Use after retry attempts have also failed, or when the failure indicates a systemic issue requiring human judgment.
+
+| Parameter | Type | Notes |
+|-----------|------|-------|
+| `mission_id` | string | Required — the failed mission to escalate |
+| `reason` | string | Required — why this needs human attention |
+| `context` | string | Optional — additional context for the operator |
+
+Returns: `{ ok, task_id, mission_id, escalated }`
+
 ---
 
 ## Error Codes
@@ -160,8 +202,22 @@ Returns: `{ ok, result_ref, workspace_root, files_indexed, files_total, artifact
 
 1. If dispatch returns `vp_db_locked` (`retryable=true`): wait ~1s and retry once.
 2. If mission reaches `failed` status: call `vp_get_mission` and surface `failure_detail` before proposing a retry.
-3. If mission is no longer needed: call `vp_cancel_mission` with a descriptive reason.
-4. Never silently swallow `ok=false` — always surface the `error.code` and `error.message`.
+3. **Guided retry**: call `vp_dispatch_mission_retry` with Simone's analysis as `guidance` to re-dispatch with corrective context.
+4. **Fresh workspace retry**: if the original workspace may be corrupted, call `vp_dispatch_mission_redispatch_fresh` to start clean.
+5. **Escalation**: if retries also fail or the issue is systemic, call `escalate_vp_failure_to_operator` to route to Kevin.
+6. If mission is no longer needed: call `vp_cancel_mission` with a descriptive reason.
+7. Never silently swallow `ok=false` — always surface the `error.code` and `error.message`.
+
+### Rescue Decision Flow
+
+```
+mission failed -> vp_get_mission (read failure_detail)
+  |-- transient / retryable -> vp_dispatch_mission_retry (with guidance)
+  |     +-- retry also fails -> escalate_vp_failure_to_operator
+  |-- workspace corruption -> vp_dispatch_mission_redispatch_fresh
+  |     +-- fresh retry also fails -> escalate_vp_failure_to_operator
+  +-- systemic / requires judgment -> escalate_vp_failure_to_operator
+```
 
 ---
 
