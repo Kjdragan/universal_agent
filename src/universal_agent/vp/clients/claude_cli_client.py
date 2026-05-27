@@ -398,6 +398,11 @@ async def _execute_cli_session(
         enriched_payload.setdefault("worker_pid", int(proc.pid))
     if cli_assignment_id:
         enriched_payload.setdefault("assignment_id", cli_assignment_id)
+    # PR #492 — expose the spawn cwd so worker_loop's COMPLETION
+    # attestation check can also look here when the canonical
+    # mission_workspace doesn't have COMPLETION.md (BRIEF redirected
+    # the agent to a non-canonical path like /tmp/foo).
+    enriched_payload.setdefault("cli_workspace_dir", str(workspace_dir))
     # Heuristic: a "timed out" message indicates _monitor_cli_output\u2019s
     # timeout path fired (it calls ``_kill_process`` and returns
     # status="failed" with a "timed out" message).
