@@ -35,6 +35,11 @@ type GoalArtifactsPayload = {
   linked_mission_id: string | null;
   linked_mission_status: string | null;
   workspace_path: string | null;
+  // Cody's actual cwd when BRIEF redirected work to /tmp. Populated from
+  // metadata.dispatch.cody_workspace_dir. Surfaced as a workspace pointer
+  // fallback when workspace_path is null (e.g. operator-dispatched task with
+  // no vp_missions row match).
+  cody_workspace_dir?: string | null;
   artifacts: {
     "BRIEF.md": ArtifactFile;
     "ACCEPTANCE.md": ArtifactFile;
@@ -221,10 +226,21 @@ export function GoalArtifactsPanel({ taskId, expanded }: Props) {
         })}
       </div>
 
-      {/* Workspace pointer for operator deep-dive */}
-      {data.workspace_path && (
-        <div className="mt-2 pt-2 border-t border-kcd-border/50 font-mono text-[9px] text-kcd-text-muted">
-          workspace: <span className="text-kcd-text">{data.workspace_path}</span>
+      {/* Workspace pointer for operator deep-dive. Prefer canonical
+          workspace_path; fall back to Cody's cwd when the operator's BRIEF
+          scoped work to /tmp (the path Cody actually wrote BRIEF/COMPLETION to). */}
+      {(data.workspace_path || data.cody_workspace_dir) && (
+        <div className="mt-2 pt-2 border-t border-kcd-border/50 font-mono text-[9px] text-kcd-text-muted space-y-0.5">
+          {data.workspace_path && (
+            <div>
+              workspace: <span className="text-kcd-text">{data.workspace_path}</span>
+            </div>
+          )}
+          {data.cody_workspace_dir && data.cody_workspace_dir !== data.workspace_path && (
+            <div>
+              cody cwd: <span className="text-kcd-text">{data.cody_workspace_dir}</span>
+            </div>
+          )}
         </div>
       )}
     </div>
