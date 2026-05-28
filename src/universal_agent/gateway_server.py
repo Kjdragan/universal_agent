@@ -9470,6 +9470,21 @@ def _ensure_activity_schema(conn: sqlite3.Connection) -> None:
         )
     except Exception as exc:
         logger.debug("activity_events expires_at migration skipped: %s", exc)
+    # PR B: digest pause state — single-row UPSERT table consumed by
+    # Simone's hourly digest skill and the gateway pause endpoint.
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS digest_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                paused_until TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT ''
+            );
+            INSERT OR IGNORE INTO digest_state (id) VALUES (1);
+            """
+        )
+    except Exception as exc:
+        logger.debug("digest_state schema bootstrap skipped: %s", exc)
     # Task hub tables share the activity DB operational plane.
     task_hub.ensure_schema(conn)
     conn.commit()
@@ -20515,6 +20530,302 @@ async def artifacts_ack_get(artifact_id: str, t: str = ""):
         "title": artifact.get("title"),
         "message": "Acknowledged. You won't get further reminders for this artifact.",
     }
+
+
+# ── PR B: Insight pipeline feedback / viewer / pause endpoints ─────────
+#
+# These three routes are pure-addition infrastructure consumed by PR D's
+# Simone digest skill (which embeds the signed feedback URLs in outbound
+# emails) and PR C's Atlas skill (which writes the artifact rows the
+# viewer reads).  No existing UA caller invokes them yet.
+
+
+def _brief_feedback_base_url() -> str:
+    """Return the operator-facing base URL for embedded brief links."""
+    return (
+        os.getenv("FRONTEND_URL", "")
+        or os.getenv("UA_PUBLIC_BASE_URL", "")
+        or os.getenv("UA_GATEWAY_BASE_URL", "")
+        or "https://app.clearspringcg.com"
+    ).strip().rstrip("/")
+
+
+def _brief_chrome(title: str, body_html: str, *, status_color: str = "#0969da") -> str:
+    """Wrap a small HTML body in lightweight dashboard chrome."""
+    safe_title = (
+        (title or "Universal Agent")
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+    return (
+        "<!doctype html>\n"
+        "<html lang=\"en\"><head><meta charset=\"utf-8\">"
+        f"<title>{safe_title}</title>"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        "</head><body style=\"margin:0;background:#ffffff;font-family:-apple-system,"
+        "BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1f2328;\">"
+        "<div style=\"max-width:680px;margin:0 auto;padding:24px;\">"
+        f"<div style=\"font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:{status_color};\">"
+        "UA Intel</div>"
+        f"<h1 style=\"font-size:22px;margin:6px 0 18px 0;\">{safe_title}</h1>"
+        f"<div style=\"font-size:14px;line-height:1.6;\">{body_html}</div>"
+        "</div></body></html>"
+    )
+
+
+@app.get("/api/v1/briefs/{artifact_id}/feedback")
+async def briefs_feedback_get(artifact_id: str, v: str = "", t: str = ""):
+    """Operator thumbs-up/down endpoint for digest brief links.
+
+    Accepts ``v`` in {"up", "down"} and ``t`` an HMAC-SHA256(secret,
+    ``f"{artifact_id}:{v}"``) signature.  Idempotent — re-clicking
+    overwrites the rating.  Returns small HTML pages for 200/401/404
+    suitable for an email-client landing page.
+    """
+    from fastapi.responses import HTMLResponse
+
+    from universal_agent.services import proactive_artifacts as pa_module
+    from universal_agent.services.cron_artifact_notifier import (
+        verify_feedback_token,
+    )
+    from universal_agent.services.recent_briefs_index import (
+        update_operator_rating_in_index,
+    )
+
+    vote = (v or "").strip().lower()
+    if vote not in {"up", "down"}:
+        body = _brief_chrome(
+            "Link expired or invalid",
+            "<p>This feedback link is missing a vote. You can rate the brief "
+            "from the dashboard instead.</p>",
+            status_color="#cf222e",
+        )
+        return HTMLResponse(content=body, status_code=401)
+
+    if not verify_feedback_token(artifact_id, vote, t or ""):
+        body = _brief_chrome(
+            "Link expired or invalid",
+            "<p>We couldn't verify this feedback link. You can rate the brief "
+            "from the dashboard instead.</p>",
+            status_color="#cf222e",
+        )
+        return HTMLResponse(content=body, status_code=401)
+
+    score = 5 if vote == "up" else 1
+
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            _ensure_activity_schema(conn)
+            artifact = pa_module.get_artifact(conn, artifact_id)
+            if artifact is None:
+                body = _brief_chrome(
+                    "Brief not found",
+                    "<p>This brief has been removed or never existed. "
+                    "Try the dashboard.</p>",
+                    status_color="#cf222e",
+                )
+                return HTMLResponse(content=body, status_code=404)
+
+            pa_module.record_feedback(
+                conn,
+                artifact_id=artifact_id,
+                score=score,
+                actor="kevin",
+                metadata={"source": "brief_feedback_get", "vote": vote},
+            )
+
+            # Update most-recent scoring log row's operator_rating.
+            try:
+                conn.execute(
+                    """
+                    UPDATE proactive_brief_scoring_log
+                    SET operator_rating = ?
+                    WHERE id = (
+                        SELECT id FROM proactive_brief_scoring_log
+                        WHERE artifact_id = ?
+                        ORDER BY logged_at DESC
+                        LIMIT 1
+                    )
+                    """,
+                    (score, artifact_id),
+                )
+                conn.commit()
+            except sqlite3.OperationalError as exc:
+                logger.debug(
+                    "briefs_feedback_get: scoring log update skipped: %s", exc
+                )
+        finally:
+            conn.close()
+
+    # Update the index file — best-effort, never block the response.
+    try:
+        update_operator_rating_in_index(
+            artifact_id=artifact_id, rating=score
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort
+        logger.debug("briefs_feedback_get: index update skipped: %s", exc)
+
+    base = _brief_feedback_base_url()
+    back_link = (
+        f'<p><a href="{base}/briefs/{artifact_id}" '
+        f'style="color:#0969da;">View the full brief →</a></p>'
+        if base
+        else ""
+    )
+    note = "More like this" if vote == "up" else "Less like this"
+    body = _brief_chrome(
+        f"Thanks — recorded ({note})",
+        f"<p>Your rating ({score}/5) on this brief has been saved and will "
+        f"influence future intel selection.</p>{back_link}",
+        status_color="#1a7f37" if vote == "up" else "#cf222e",
+    )
+    return HTMLResponse(content=body, status_code=200)
+
+
+@app.get("/briefs/{artifact_id}")
+async def briefs_viewer_get(artifact_id: str):
+    """Dashboard viewer for the durable HTML brief.
+
+    Serves the file at ``proactive_artifacts.artifact_path`` if present;
+    falls back to a header+summary card rendered from the DB row when the
+    file is missing.  Always wraps the inner content in the dashboard
+    chrome with thumbs-up/down links (fresh HMAC tokens minted per
+    request).
+    """
+    from fastapi.responses import HTMLResponse
+
+    from universal_agent.services import proactive_artifacts as pa_module
+    from universal_agent.services.cron_artifact_notifier import (
+        sign_feedback_token,
+    )
+
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            artifact = pa_module.get_artifact(conn, artifact_id)
+        finally:
+            conn.close()
+
+    if artifact is None:
+        body = _brief_chrome(
+            "Brief not found",
+            "<p>No brief with that ID. Check the link in your email or "
+            "browse the dashboard.</p>",
+            status_color="#cf222e",
+        )
+        return HTMLResponse(content=body, status_code=404)
+
+    inner_html: str = ""
+    artifact_path = str(artifact.get("artifact_path") or "").strip()
+    if artifact_path:
+        try:
+            path = Path(artifact_path)
+            if path.exists() and path.is_file():
+                inner_html = path.read_text(encoding="utf-8", errors="replace")
+        except (OSError, UnicodeDecodeError) as exc:
+            logger.debug(
+                "briefs_viewer_get: failed to read %s: %s", artifact_path, exc
+            )
+
+    base = _brief_feedback_base_url()
+    up_token = sign_feedback_token(artifact_id, "up")
+    down_token = sign_feedback_token(artifact_id, "down")
+    feedback_widget = ""
+    if base and up_token and down_token:
+        up_url = (
+            f"{base}/api/v1/briefs/{artifact_id}/feedback?v=up&t={up_token}"
+        )
+        down_url = (
+            f"{base}/api/v1/briefs/{artifact_id}/feedback?v=down&t={down_token}"
+        )
+        feedback_widget = (
+            "<div style=\"margin:24px 0;padding-top:18px;border-top:1px solid #e6e8eb;\">"
+            "<div style=\"font-size:12px;color:#6b7280;margin-bottom:8px;\">Rate this brief</div>"
+            f'<a href="{up_url}" style="display:inline-block;padding:8px 14px;'
+            'background:#dafbe1;color:#1a7f37;text-decoration:none;font-weight:600;'
+            'border-radius:6px;margin-right:8px;">👍 More like this</a>'
+            f'<a href="{down_url}" style="display:inline-block;padding:8px 14px;'
+            'background:#ffebe9;color:#cf222e;text-decoration:none;font-weight:600;'
+            'border-radius:6px;">👎 Less like this</a>'
+            "</div>"
+        )
+
+    title = str(artifact.get("title") or "Intel brief")
+    if inner_html:
+        body_html = inner_html + feedback_widget
+        body = _brief_chrome(title, body_html)
+    else:
+        summary = str(artifact.get("summary") or "").strip() or "(no summary)"
+        safe_summary = (
+            summary.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        )
+        body_html = (
+            f'<p style="color:#6b7280;">The full HTML for this brief is not '
+            f"available on disk. Showing summary from the database.</p>"
+            f"<p>{safe_summary}</p>{feedback_widget}"
+        )
+        body = _brief_chrome(title, body_html)
+    return HTMLResponse(content=body, status_code=200)
+
+
+@app.get("/api/v1/digest/pause")
+async def digest_pause_get(hours: int = 24, t: str = ""):
+    """Operator pause endpoint for the hourly intel digest.
+
+    Validates an HMAC token over ``f"digest_pause:{hours}"`` and upserts
+    ``digest_state.paused_until``.  Caps ``hours`` at 168 (1 week).
+    """
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+    from fastapi.responses import HTMLResponse
+
+    from universal_agent.services.cron_artifact_notifier import (
+        set_digest_pause,
+        verify_digest_pause_token,
+    )
+
+    try:
+        clean_hours = int(hours)
+    except (TypeError, ValueError):
+        clean_hours = 24
+    if clean_hours <= 0:
+        clean_hours = 24
+    clean_hours = min(clean_hours, 168)
+
+    if not verify_digest_pause_token(clean_hours, t or ""):
+        # If the supplied hours were clamped but the token was signed for
+        # the original value, the verify call already fails — re-check the
+        # original to give a clearer 401 page either way.
+        body = _brief_chrome(
+            "Link expired or invalid",
+            "<p>We couldn't verify this pause link. You can adjust digest "
+            "preferences from the dashboard instead.</p>",
+            status_color="#cf222e",
+        )
+        return HTMLResponse(content=body, status_code=401)
+
+    paused_until = _dt.now(_tz.utc) + _td(hours=clean_hours)
+    paused_until_iso = paused_until.isoformat()
+
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            _ensure_activity_schema(conn)
+            set_digest_pause(conn, paused_until_iso)
+        finally:
+            conn.close()
+
+    body = _brief_chrome(
+        f"Digest paused {clean_hours}h",
+        f"<p>Hourly intel digest paused until "
+        f"<strong>{paused_until_iso}</strong> (UTC).</p>"
+        f"<p>Brief artifacts continue to accumulate and will deliver in one "
+        f"digest after the pause expires.</p>",
+        status_color="#9a6700",
+    )
+    return HTMLResponse(content=body, status_code=200)
 
 
 @app.post("/api/v1/dashboard/proactive-artifacts/{artifact_id}/ack")
