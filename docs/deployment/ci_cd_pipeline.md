@@ -137,6 +137,8 @@ This is intentional: deploys must not rely on manually created host-only base un
 - `INFISICAL_CLIENT_ID`
 - `INFISICAL_CLIENT_SECRET`
 - `INFISICAL_PROJECT_ID`
+- `AGENTMAIL_API_KEY` (deploy-failure email notification — best-effort; deploy does not double-fault if missing)
+- `AUTO_MERGE_PAT` (fine-grained PAT for auto-merge squash pushes that trigger deploy.yml)
 
 ## Required Tailscale Policy Model
 
@@ -273,15 +275,23 @@ After restart, Python services are checked against the current virtualenv interp
 
 After restart, the deploy workflow verifies local service health for:
 
-- `http://127.0.0.1:8002/api/v1/health` (`universal-agent-gateway`)
+- `http://127.0.0.1:8002/api/v1/health` (`universal-agent-gateway`, 96 attempts × 5s = 8 min timeout)
 - `http://127.0.0.1:8001/api/health` (`universal-agent-api`)
 - `http://127.0.0.1:3000/dashboard` (`universal-agent-webui`)
 
-If any of these checks fail, the workflow prints `systemctl status` and recent journal excerpts for the managed services, then fails the deploy. A green deploy therefore means the repo sync/restart completed and the local service health gates passed.
+If any health check fails (timeout or crashloop abort), the workflow prints `systemctl status` and recent journal excerpts for the managed services, then fails the deploy. A green deploy therefore means the repo sync/restart completed and the local service health gates passed.
+
+### Crashloop Fail-Fast (2026-05-28)
+
+Each health-check attempt also runs `scripts/check_crashloop.sh`, which tracks systemd unit restart counts via a `/tmp/ua-crashloop-*` cache. If a service restarts ≥5 times while health checks are still polling, the watcher aborts the wait loop immediately instead of letting it time out. This prevents a 30-minute deploy timeout on a service that is crash-looping and will never recover (e.g. a bad config or import error introduced by the deploy). The script is a no-op when `systemctl` is unavailable.
 
 ### Deployment-Window Flag
 
 The workflow sets `/tmp/ua-deployment-window` before restarting services and clears it after. This flag exists so the CSI canary can suppress SLO alerts during the brief service restart window.
+
+### Deploy Failure Notification (2026-05-28)
+
+When the deploy job fails (any step), a final best-effort step sends an email to the operator via AgentMail (`oddcity216@agentmail.to` → `kevinjdragan@gmail.com`). The email includes the commit SHA, branch, and a direct link to the failed workflow run with suggested next steps. The notification is gated on `secrets.AGENTMAIL_API_KEY` — if the secret is missing or the API call fails, the step exits cleanly without double-faulting the deploy.
 
 > [!IMPORTANT]
 > **Code changes only take effect after the service restarts.** If the deploy workflow completes but services are not restarted (e.g., `systemctl` is not available), the gateway will continue running the old code. The workflow logs a warning in this case.
