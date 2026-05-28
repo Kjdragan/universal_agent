@@ -15,6 +15,8 @@ fields where possible):
     3. workspace_name      → resolve to absolute path, recurse via workspace_dir
     4. session_id (via provider_session_id mapping in run_catalog)
     5. session_id (daemon fallback) → ops_service._session_workspace, then run lookup
+    6. session_id (literal dir under AGENT_RUN_WORKSPACES)
+    7. session_id (Cody CLI lookup) → task_hub_items.metadata.dispatch.cody_session_id
 
 The `source` field on the returned target records which branch resolved
 it, so production logs can reveal which path is hit most.
@@ -134,6 +136,63 @@ def _resolve_workspaces_root() -> Path:
     if override:
         return Path(override).expanduser().resolve()
     return Path(__file__).resolve().parents[3] / "AGENT_RUN_WORKSPACES"
+
+
+def _cody_workspace_from_task_hub(session_id: str) -> Optional[Path]:
+    """Look up a Cody CLI session_id → cody_workspace_dir via task_hub_items.
+
+    Cody runs as a ``claude --print`` subprocess (see
+    ``vp/clients/claude_cli_client.py``). The CLI emits its own
+    ``session_id`` UUID that has no entry in run_catalog, no
+    ``daemon_`` prefix, and no literal dir under
+    ``AGENT_RUN_WORKSPACES`` — so paths 4–6 in
+    :func:`resolve_session_view_target` all miss for Cody sessions.
+
+    The dispatch flow records ``cody_session_id`` and
+    ``cody_workspace_dir`` together on
+    ``task_hub_items.metadata_json.dispatch`` (see
+    ``task_hub.record_cody_dispatch_metadata``). We query that index
+    to recover the workspace path, which contains the ``run.log``
+    written by ``_monitor_cli_output``. Without this branch the
+    three-panel viewer can't rehydrate Cody's session even though the
+    artifacts exist on disk.
+    """
+    if not session_id:
+        return None
+    try:
+        import sqlite3 as _sqlite3
+        from universal_agent.durable.db import (
+            connect_runtime_db,
+            get_activity_db_path,
+        )
+    except Exception:
+        return None
+
+    db_path = get_activity_db_path()
+    try:
+        with connect_runtime_db(db_path) as conn:
+            conn.row_factory = _sqlite3.Row
+            row = conn.execute(
+                """
+                SELECT json_extract(metadata_json, '$.dispatch.cody_workspace_dir') AS cwd
+                FROM task_hub_items
+                WHERE json_extract(metadata_json, '$.dispatch.cody_session_id') = ?
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
+    except Exception:
+        return None
+    if row is None:
+        return None
+    cwd = str(row["cwd"] or "").strip()
+    if not cwd:
+        return None
+    path = Path(cwd).expanduser()
+    if not path.is_dir():
+        return None
+    return path.resolve()
 
 
 def _daemon_glob_workspace(session_id: str) -> Optional[Path]:
@@ -322,5 +381,32 @@ def resolve_session_view_target(
             f"session_id={session_id!r}: literal dir fallback also missed at "
             f"{root}/{session_id}"
         )
+
+        # 7. Cody CLI session lookup via task_hub_items.metadata.dispatch.
+        # Cody runs as a subprocess and emits its own CLI session_id; we
+        # recover the matching cody_workspace_dir from the Task Hub row.
+        cody_ws = _cody_workspace_from_task_hub(session_id)
+        if cody_ws is not None:
+            run = catalog.find_run_for_workspace(str(cody_ws))
+            if run:
+                built = _build_target_from_run(
+                    run,
+                    source="cody_session_id+run_catalog",
+                    fallback_session_id=session_id,
+                )
+                if built:
+                    return built
+            built = _build_target_from_path(
+                cody_ws,
+                source="cody_session_id_via_task_hub",
+                session_id=session_id,
+            )
+            if built:
+                return built
+        else:
+            _trace(
+                f"session_id={session_id!r}: no task_hub_items row with "
+                f"matching dispatch.cody_session_id (or workspace dir missing)"
+            )
 
     return None
