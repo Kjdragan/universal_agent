@@ -471,3 +471,43 @@ jobs:
             
             echo "Deployment to Production complete!"
           EOF
+
+      # Operator notification when the deploy job fails. Posts an email
+      # to AgentMail. Best-effort: a missing API key or send failure
+      # never double-faults the deploy.
+      - name: Notify operator on deploy failure via AgentMail
+        if: failure()
+        env:
+          AGENTMAIL_API_KEY: ${{ secrets.AGENTMAIL_API_KEY }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT_SHA: ${{ github.sha }}
+          COMMIT_REF: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set +e
+          DEPLOY_FAILURE_EMAIL="kevinjdragan@gmail.com"
+          DEPLOY_FAILURE_INBOX="oddcity216@agentmail.to"
+          if [ -z "${AGENTMAIL_API_KEY:-}" ]; then
+            echo "::warning::AGENTMAIL_API_KEY not configured; skipping failure-email notification."
+            exit 0
+          fi
+          SHORT_SHA="${COMMIT_SHA:0:8}"
+          SUBJECT="[deploy-failed] universal_agent main @${SHORT_SHA}"
+          BODY=$(printf 'Production deploy FAILED.\n\nCommit:    %s\nBranch:    %s\nWorkflow:  %s\n\nNext steps:\n  1. Open the workflow URL above to see which step failed.\n  2. If gateway health-wait timed out, check the VPS:\n       ssh ua@uaonvps "journalctl -u universal-agent-gateway -n 200 --no-pager"\n  3. The deploy concurrency guard queues subsequent deploys until this one resolves, so further merges to main will wait.' \
+            "$COMMIT_SHA" "$COMMIT_REF" "$RUN_URL")
+          PAYLOAD=$(jq -n \
+            --arg to "$DEPLOY_FAILURE_EMAIL" \
+            --arg subject "$SUBJECT" \
+            --arg text "$BODY" \
+            '{to: [$to], subject: $subject, text: $text, labels: ["deploy-failed", "ops"]}')
+          curl -sS -o /tmp/agentmail_resp.json -w "AgentMail HTTP %{http_code}\n" \
+            -X POST \
+            -H "Authorization: Bearer ${AGENTMAIL_API_KEY}" \
+            -H "Content-Type: application/json" \
+            --max-time 15 \
+            --data "$PAYLOAD" \
+            "https://api.agentmail.to/v0/inboxes/${DEPLOY_FAILURE_INBOX}/messages/send" \
+            || true
+          head -c 500 /tmp/agentmail_resp.json 2>/dev/null || true
+          echo ""
+          exit 0
