@@ -377,10 +377,11 @@ jobs:
               max_attempts="${3:-36}"
               sleep_seconds="${4:-5}"
               service_unit="${5:-}"
-              # PROBE 16: keep only first 3 of the added comment lines.
+              # PROBE 17: add ONLY line A ("out early instead of burning")
               # Fail-fast threshold: if the watched systemd unit
               # restarts more than this during the retry window, the
               # service is crashlooping (not just slow to boot). Bail
+              # out early instead of burning the full ~8 minutes. The
               # the loop assumed every "no response" was "still
               # starting." Tuned to 5: catches a real crashloop quickly
               crashloop_threshold=5
