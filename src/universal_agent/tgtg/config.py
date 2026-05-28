@@ -54,8 +54,8 @@ POLL_WINDOW_MINUTES: int = int(os.getenv("TGTG_POLL_WINDOW_MINUTES", "90"))
 #   constructed automatically.  PROXY_PROVIDER selects the provider:
 #   "dataimpulse" (default) or "webshare".
 #
-# Webshare residential endpoint:    proxy.webshare.io:80  (HTTP)
-# DataImpulse residential endpoint: gw.dataimpulse.com:823 (HTTP/HTTPS)
+# DataImpulse residential endpoint: gw.dataimpulse.com:823 (HTTP/HTTPS)  ← default
+# Webshare residential endpoint:    p.webshare.io:80     (HTTP)         ← failover
 _WEBSHARE_HOST = os.getenv("WEBSHARE_PROXY_HOST", "proxy.webshare.io")
 _WEBSHARE_PORT = os.getenv("WEBSHARE_PROXY_PORT", "80")
 _DATAIMPULSE_HOST = os.getenv("DATAIMPULSE_PROXY_HOST", "gw.dataimpulse.com")

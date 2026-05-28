@@ -2,8 +2,8 @@
 """
 Provider-agnostic residential proxy transport probe.
 
-Supports both Webshare and DataImpulse proxy services.  Selects the
-active provider via PROXY_PROVIDER env var (default: webshare) or
+Supports both DataImpulse and Webshare proxy services.  Selects the
+active provider via PROXY_PROVIDER env var (default: dataimpulse) or
 --provider CLI flag.
 
 Usage:
@@ -248,7 +248,7 @@ def main() -> int:
         "--provider",
         choices=["webshare", "dataimpulse"],
         default=None,
-        help="Proxy provider to check (default: reads PROXY_PROVIDER env var, fallback webshare)",
+        help="Proxy provider to check (default: reads PROXY_PROVIDER env var, fallback dataimpulse)",
     )
     parser.add_argument("--http-url", default=DEFAULT_HTTP_URL, help="HTTP URL to fetch through proxy")
     parser.add_argument("--https-url", default=DEFAULT_HTTPS_URL, help="HTTPS URL to fetch through proxy (tests CONNECT)")
@@ -275,7 +275,7 @@ def main() -> int:
         force_reload=True,
     )
 
-    provider = args.provider or (os.getenv("PROXY_PROVIDER") or "webshare").strip().lower()
+    provider = args.provider or (os.getenv("PROXY_PROVIDER") or "dataimpulse").strip().lower()
     settings = _resolve_proxy_settings(provider)
 
     report: dict[str, Any] = {

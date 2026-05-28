@@ -182,6 +182,40 @@ def build_webshare_proxy_config() -> tuple[Optional[Any], str, str]:
     return cfg, "webshare", proxy_url
 
 
+def build_dataimpulse_proxy_config() -> tuple[Optional[Any], str, str]:
+    username = (os.getenv("DATAIMPULSE_PROXY_USER") or "").strip()
+    password = (os.getenv("DATAIMPULSE_PROXY_PASS") or "").strip()
+    if not username or not password:
+        return None, "disabled", ""
+
+    try:
+        from youtube_transcript_api.proxies import GenericProxyConfig
+    except Exception:
+        return None, "module_unavailable", ""
+
+    host = (os.getenv("DATAIMPULSE_PROXY_HOST") or "gw.dataimpulse.com").strip() or "gw.dataimpulse.com"
+    port = (os.getenv("DATAIMPULSE_PROXY_PORT") or "823").strip() or "823"
+
+    from urllib.parse import quote
+    user_q = quote(username, safe="")
+    pass_q = quote(password, safe="")
+    proxy_url = f"http://{user_q}:{pass_q}@{host}:{port}"
+    cfg = GenericProxyConfig(http_url=proxy_url, https_url=proxy_url)
+    return cfg, "dataimpulse", proxy_url
+
+
+def build_proxy_config() -> tuple[Optional[Any], str, str]:
+    """Route to the correct proxy builder based on PROXY_PROVIDER env var.
+
+    Mirrors src/universal_agent/youtube_ingest.py:_build_proxy_config().
+    Default provider is "dataimpulse"; "webshare" remains supported for failover.
+    """
+    provider = (os.getenv("PROXY_PROVIDER") or "dataimpulse").strip().lower()
+    if provider == "webshare":
+        return build_webshare_proxy_config()
+    return build_dataimpulse_proxy_config()
+
+
 def run_youtube_transcript_api_extract(
     video_id: str,
     *,
@@ -339,7 +373,7 @@ def fetch_transcript_and_metadata(
             "attempts": [],
         }
 
-    proxy_config, proxy_mode, proxy_url = build_webshare_proxy_config()
+    proxy_config, proxy_mode, proxy_url = build_proxy_config()
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         transcript_future = executor.submit(

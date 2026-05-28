@@ -4819,12 +4819,12 @@ class HooksService:
                         elif failure_class == "proxy_connect_failed":
                             _proxy_alert_msg = (
                                 "YouTube ingest failed because the residential proxy CONNECT path is broken. "
-                                f"Check {(os.getenv('PROXY_PROVIDER') or 'Webshare').capitalize()} host/port overrides, proxy credentials in Infisical, "
+                                f"Check {(os.getenv('PROXY_PROVIDER') or 'DataImpulse').capitalize()} host/port overrides, proxy credentials in Infisical, "
                                 "and upstream proxy availability."
                             )
                         elif failure_class == "proxy_pool_unallocated":
                             _proxy_alert_msg = (
-                                f"YouTube ingest failed because {(os.getenv('PROXY_PROVIDER') or 'Webshare').capitalize()} reported no proxies allocated for the "
+                                f"YouTube ingest failed because {(os.getenv('PROXY_PROVIDER') or 'DataImpulse').capitalize()} reported no proxies allocated for the "
                                 "configured endpoint/username. Refresh the proxy list/rotation username "
                                 "and update Infisical proxy secrets."
                             )
@@ -4833,12 +4833,12 @@ class HooksService:
                                 "YouTube transcript fetch BLOCKED — YouTube is rate-limiting or IP-blocking "
                                 "the proxy. RSS feed analysis may be degraded while transcripts cannot be fetched. "
                                 "This usually resolves within a few hours as proxy IPs rotate. "
-                                f"If persistent, check {(os.getenv('PROXY_PROVIDER') or 'Webshare').capitalize()} proxy pool health and quota."
+                                f"If persistent, check {(os.getenv('PROXY_PROVIDER') or 'DataImpulse').capitalize()} proxy pool health and quota."
                             )
                         else:
                             _proxy_alert_msg = (
                                 "YouTube ingest failed due to proxy billing/quota or proxy credentials. "
-                                f"Check {(os.getenv('PROXY_PROVIDER') or 'Webshare').capitalize()} account status and proxy secrets."
+                                f"Check {(os.getenv('PROXY_PROVIDER') or 'DataImpulse').capitalize()} account status and proxy secrets."
                             )
                         self._emit_notification(
                             kind="youtube_ingest_proxy_alert",
