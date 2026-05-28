@@ -24436,9 +24436,19 @@ def _task_history_links_for_session(session_id: str, *, workspace_dir: str = "")
 
     # For daemon sessions, the workspace_dir is the actual timestamped directory
     # (e.g. run_daemon_simone_todo_20260327_224414_076ac652).
-    # After recycling, it moves to _daemon_archives/.  Resolve the best path.
+    # After recycling, it moves to _daemon_archives/.
+    # For VP missions (Cody/Atlas), the workspace lives at
+    # ``WORKSPACES_DIR/vp_<vp>_external/vp-mission-<id>/vp-mission-<id>``,
+    # so we need the relative path under WORKSPACES_DIR — not just the leaf
+    # name — for the storage-explorer href to resolve to the right tree.
     resolved_workspace_name = ""
     resolved_workspace_path = ""
+
+    def _rel_under_workspaces(p: Path) -> Optional[str]:
+        try:
+            return str(p.resolve().relative_to(WORKSPACES_DIR))
+        except (ValueError, OSError):
+            return None
 
     if wdir:
         wdir_path = Path(wdir)
@@ -24446,7 +24456,9 @@ def _task_history_links_for_session(session_id: str, *, workspace_dir: str = "")
 
         # Check if workspace still exists at original location
         if wdir_path.exists() and wdir_path.is_dir():
-            resolved_workspace_name = workspace_name
+            # Prefer the full sub-path under WORKSPACES_DIR so deeply-nested
+            # VP-mission workspaces resolve correctly in the file explorer.
+            resolved_workspace_name = _rel_under_workspaces(wdir_path) or workspace_name
             resolved_workspace_path = str(wdir_path)
         else:
             # Check _daemon_archives
@@ -24455,8 +24467,10 @@ def _task_history_links_for_session(session_id: str, *, workspace_dir: str = "")
                 resolved_workspace_name = f"_daemon_archives/{workspace_name}"
                 resolved_workspace_path = str(archive_candidate)
             else:
-                # Workspace not found — use the name anyway for link generation
-                resolved_workspace_name = workspace_name
+                # Workspace not found — still try to surface the full sub-path
+                # if the source dir is under WORKSPACES_DIR (e.g. archived VP
+                # missions). Otherwise fall back to the leaf name.
+                resolved_workspace_name = _rel_under_workspaces(wdir_path) or workspace_name
                 resolved_workspace_path = str(wdir_path)
 
     # Build effective session_href: use the stored session_id (daemon_simone_todo etc.)
@@ -24941,21 +24955,53 @@ async def dashboard_todolist_completed(limit: int = 60):
     for row in rows:
         item = dict(row) if isinstance(row, dict) else {}
         assignment = item.get("last_assignment") if isinstance(item.get("last_assignment"), dict) else {}
-        item["canonical_execution_session_id"] = str(
-            assignment.get("session_id") or assignment.get("provider_session_id") or ""
-        ) or None
-        item["canonical_execution_run_id"] = str(assignment.get("workflow_run_id") or "") or None
-        
+
         metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        dispatch_meta = metadata.get("dispatch") if isinstance(metadata.get("dispatch"), dict) else {}
         result_ref = str(metadata.get("result_ref") or "")
-        workspace = str(assignment.get("workspace_dir") or "")
-        if not workspace and result_ref.startswith("workspace://"):
-            workspace = result_ref.replace("workspace://", "")
-            
-        item["canonical_execution_workspace"] = workspace or None
+
+        # When the task was delegated to a VP (Cody/Atlas), the orchestrator's
+        # assignment row points at Simone's daemon workspace — where she
+        # logged the redirect_to, not where the VP produced artifacts. The
+        # operator-facing "Workspace" button needs to deep-link to the VP
+        # mission workspace instead. Mirrors the agent-queue resolver pattern
+        # at the cody_session_id override above (≈L24712).
+        cody_session_id = str(dispatch_meta.get("cody_session_id") or "").strip()
+        cody_mission_id = str(dispatch_meta.get("cody_mission_id") or "").strip()
+        cody_workspace_dir = str(dispatch_meta.get("cody_workspace_dir") or "").strip()
+
+        assignment_session_id = str(assignment.get("session_id") or "")
+        assignment_workspace = str(assignment.get("workspace_dir") or "")
+
+        if cody_workspace_dir or cody_mission_id or cody_session_id:
+            # vp-mission-<id> as the session_id triggers the frontend's
+            # VP-mission special-case (web-ui/app/page.tsx) which knows how
+            # to render the three-panel view from the workspace dir. The
+            # cody CLI session UUID is recorded separately for the trace
+            # panel but is NOT a UA session_id, so it doesn't belong in
+            # the link builder.
+            link_session_id = cody_mission_id or assignment_session_id
+            link_workspace = cody_workspace_dir
+            if not link_workspace and result_ref.startswith("workspace://"):
+                link_workspace = result_ref.replace("workspace://", "", 1)
+            item["canonical_execution_session_id"] = link_session_id or None
+            item["canonical_execution_run_id"] = cody_mission_id or None
+            item["canonical_execution_workspace"] = link_workspace or None
+        else:
+            workspace = assignment_workspace
+            if not workspace and result_ref.startswith("workspace://"):
+                workspace = result_ref.replace("workspace://", "", 1)
+            item["canonical_execution_session_id"] = str(
+                assignment.get("session_id") or assignment.get("provider_session_id") or ""
+            ) or None
+            item["canonical_execution_run_id"] = str(assignment.get("workflow_run_id") or "") or None
+            item["canonical_execution_workspace"] = workspace or None
+            link_session_id = assignment_session_id
+            link_workspace = workspace
+
         links = _task_history_links_for_session(
-            str(assignment.get("session_id") or ""),
-            workspace_dir=workspace,
+            link_session_id,
+            workspace_dir=link_workspace,
         )
         item["links"] = links
         enriched.append(item)
