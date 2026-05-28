@@ -859,7 +859,21 @@ function FileExplorer() {
       return;
     }
 
+    // VP-mission sessions have no row in the durable session catalog —
+    // ``/api/files?session_id=vp-mission-*`` returns
+    // ``{files: [], error: "Workspace not found"}`` with HTTP 200. That
+    // races the workspaces-mode fetch (which DOES find the mission
+    // directory) and, when the session-mode call lands last, overwrites
+    // the file list with []. Skip the session-mode fetch entirely for
+    // vp-mission ids — the auto-switch effect at L842 immediately flips
+    // mode to ``vps_workspaces`` at the correct path.
+    const sid = String(currentSession?.session_id || "").trim();
+    if (mode === "session" && /^vp-mission-/i.test(sid)) {
+      return;
+    }
+
     setLoading(true);
+    const ac = new AbortController();
     const url = mode === "artifacts"
       ? `${API_BASE}/api/artifacts?path=${encodeURIComponent(path)}`
       : mode === "vps_workspaces"
@@ -867,7 +881,7 @@ function FileExplorer() {
         : mode === "vps_artifacts"
           ? `${API_BASE}/api/vps/files?scope=artifacts&path=${encodeURIComponent(path)}`
           : buildDurableFileListUrl(currentSession, path);
-    fetch(url, { cache: "no-store" })
+    fetch(url, { cache: "no-store", signal: ac.signal })
       .then(res => res.json())
       .then(data => {
         const sortedFiles = (data.files || []).sort((a: any, b: any) => {
@@ -878,8 +892,12 @@ function FileExplorer() {
         });
         setFiles(sortedFiles);
       })
-      .catch(err => console.error("Failed to fetch files:", err))
+      .catch(err => {
+        if (err?.name === "AbortError") return;
+        console.error("Failed to fetch files:", err);
+      })
       .finally(() => setLoading(false));
+    return () => ac.abort();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentSession?.session_id, currentSession?.run_id, currentSession?.is_live_session, path, mode]);
 
