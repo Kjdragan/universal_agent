@@ -475,7 +475,7 @@ function KanbanCol({ label, icon, count, accentColor, emptyText, headerAction, c
           <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded-sm" style={{ background: `${accentColor}18`, color: accentColor }}>{count}</span>
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto p-2.5 max-h-[60vh] scrollbar-thin">
+      <div className="flex-1 overflow-y-auto p-2.5 max-h-[85vh] scrollbar-thin">
         {count === 0 ? (
           <p className="text-xs text-kcd-text-muted italic p-2">{emptyText}</p>
         ) : (
