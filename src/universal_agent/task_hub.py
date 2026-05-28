@@ -88,6 +88,15 @@ MISSION_PHASE_SOURCE_KIND = "mission_phase"
 
 @dataclass
 class TaskHubPolicy:
+    """Configurable thresholds controlling dispatch eligibility and stale-task reaping.
+
+    Attributes:
+        agent_threshold: Minimum score a task needs to be eligible for dispatch.
+        stale_enabled: Whether to park tasks that exceed stale thresholds.
+        stale_min_cycles: Minimum dispatch cycles before staleness is considered.
+        stale_min_age_minutes: Minimum wall-clock age (minutes) before staleness is considered.
+    """
+
     agent_threshold: int
     stale_enabled: bool
     stale_min_cycles: int
@@ -233,6 +242,7 @@ def _parse_iso(raw: Any) -> Optional[datetime]:
 
 
 def current_policy() -> TaskHubPolicy:
+    """Build a TaskHubPolicy from environment variables with validated defaults."""
     return TaskHubPolicy(
         agent_threshold=max(1, min(10, _safe_int(os.getenv("UA_TASK_AGENT_THRESHOLD"), 3))),
         stale_enabled=str(os.getenv("UA_TASK_STALE_ENABLED", "0")).strip().lower() in {"1", "true", "yes", "on"},
@@ -242,6 +252,7 @@ def current_policy() -> TaskHubPolicy:
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
+    """Create all Task Hub SQLite tables if they do not exist. Idempotent."""
     conn.row_factory = sqlite3.Row
     conn.executescript(
         """
@@ -513,6 +524,7 @@ def _set_setting(conn: sqlite3.Connection, key: str, value: dict[str, Any]) -> N
 
 
 def hydrate_item(row: dict[str, Any]) -> dict[str, Any]:
+    """Convert a raw DB row dict into a richly-typed item dict with parsed JSON columns."""
     item = dict(row)
     item["labels"] = [str(v) for v in _json_loads_list(item.get("labels_json")) if str(v)]
     item["metadata"] = _json_loads_obj(item.get("metadata_json"), default={})
@@ -562,6 +574,7 @@ def _decorate_csi_routing(item: dict[str, Any], *, threshold: Optional[float] = 
 
 
 def get_item(conn: sqlite3.Connection, task_id: str) -> Optional[dict[str, Any]]:
+    """Retrieve a single task item by ID, or None if not found."""
     ensure_schema(conn)
     row = conn.execute("SELECT * FROM task_hub_items WHERE task_id = ? LIMIT 1", (task_id,)).fetchone()
     if row is None:
@@ -577,6 +590,7 @@ def upsert_workstream(
     state: str = "active",
     metadata: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
+    """Create or update a workstream row. Returns the full workstream dict."""
     ensure_schema(conn)
     safe_id = str(workstream_id or "").strip()
     if not safe_id:
@@ -1077,6 +1091,11 @@ def _refresh_workstream_state(conn: sqlite3.Connection, workstream_id: str) -> O
 
 
 def upsert_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any]:
+    """Create or update a task item, merging labels/metadata with existing data.
+
+    Handles scoring, project_key assignment, status preservation across
+    re-upserts, and dispatch-queue insertion for new items.
+    """
     ensure_schema(conn)
     task_id = str(item.get("task_id") or "").strip()
     if not task_id:
@@ -1368,6 +1387,14 @@ def _memory_relevance_bonus(task: dict[str, Any]) -> float:
 
 
 def score_task(conn: sqlite3.Connection, task: dict[str, Any]) -> tuple[float, float, dict[str, Any]]:
+    """Compute a priority score (1.0-10.0) and confidence for a task.
+
+    Considers labels, must_complete flag, priority, due urgency, project key,
+    historical completion patterns, staleness, and memory relevance.
+
+    Returns:
+        Tuple of (score, confidence, details_dict).
+    """
     labels = {str(v).strip().lower() for v in (task.get("labels") or [])}
     must_complete = bool(task.get("must_complete"))
     priority = _safe_int(task.get("priority"), 1)
@@ -1529,6 +1556,11 @@ def _apply_stale_policy(conn: sqlite3.Connection, task: dict[str, Any], policy: 
 
 
 def rebuild_dispatch_queue(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Full rebuild of the dispatch queue from all non-terminal tasks.
+
+    Scores each item, applies stale-task parking, and bulk-inserts eligible
+    items into the dispatch_queue table. Returns summary statistics.
+    """
     ensure_schema(conn)
     policy = current_policy()
 
@@ -2590,6 +2622,10 @@ def record_task_feedback(
     status: Optional[str] = None,
     actor: Optional[str] = None,
 ) -> dict[str, Any]:
+    """Append structured feedback to a task and optionally transition its status.
+
+    Returns the updated task item dict.
+    """
     ensure_schema(conn)
     row = conn.execute("SELECT * FROM task_hub_items WHERE task_id = ?", (task_id,)).fetchone()
     if not row:
@@ -2764,6 +2800,10 @@ def _latest_proactive_recap(conn: sqlite3.Connection, task_id: str) -> dict[str,
 
 
 def list_completed_tasks(conn: sqlite3.Connection, *, limit: int = 80) -> list[dict[str, Any]]:
+    """Return recently completed tasks ordered by updated_at descending.
+
+    Each item includes its last assignment lineage and delivery evidence.
+    """
     ensure_schema(conn)
     rows = conn.execute(
         """
@@ -2998,6 +3038,11 @@ def list_proactive_work_tasks(conn: sqlite3.Connection, *, limit: int = 120) -> 
 
 
 def get_task_history(conn: sqlite3.Connection, *, task_id: str, limit: int = 80) -> dict[str, Any]:
+    """Return a task with its full assignment and evaluation history.
+
+    Used by Simone's task-context prompts to reconstruct who worked on
+    a task, when, and with what outcome.
+    """
     ensure_schema(conn)
     item = get_item(conn, task_id)
     if not item:
@@ -3501,6 +3546,12 @@ def finalize_assignments(
     policy: str = "legacy",
     heartbeat_max_retries: Optional[int] = None,
 ) -> dict[str, int]:
+    """Bulk-transition assignment rows to a terminal state.
+
+    Implements retry-exhaustion detection and optional task reopening when
+    an assignment fails but retries remain. Returns counts of finalized,
+    reopened, reviewed, completed, and retry-exhausted assignments.
+    """
     ensure_schema(conn)
     cleaned_ids = [str(v).strip() for v in assignment_ids if str(v).strip()]
     if not cleaned_ids:
@@ -5312,6 +5363,12 @@ def reopen_stale_delegations(
 
 
 def get_agent_activity(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Compute per-agent activity windows, queue depth, and recent metrics.
+
+    Returns active assignments, 1h/24h metrics (new, seized, rejected,
+    completed tasks by source), and backlog count. Powers Simone's
+    agent-activity prompt and the dashboard summary.
+    """
     ensure_schema(conn)
     now = datetime.now(timezone.utc)
     window_1h = (now.timestamp() - 3600)
@@ -5487,6 +5544,10 @@ def upsert_csi_item(
     follow_up_budget_remaining: Optional[int] = None,
     human_intervention_reason: Optional[str] = None,
 ) -> dict[str, Any]:
+    """Ingest a CSI (ClaudeDevs Intel) event as a Task Hub item with routing metadata.
+
+    Handles dedup by event_id and sets agent_ready based on routing_state.
+    """
     ensure_schema(conn)
     key = str(incident_key or "").strip() or str(event_id).strip() or uuid.uuid4().hex
     task_id = f"csi:{key}"
@@ -5573,6 +5634,11 @@ def park_csi_items_not_matching_event_types(
 
 
 def approvals_as_tasks(approvals: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert a list of approval dicts into Task Hub item dicts for unified display.
+
+    Maps approval fields (title, deadline, description) to task fields
+    so approvals appear alongside regular tasks in the Kanban view.
+    """
     rows: list[dict[str, Any]] = []
     now = _now_iso()
     for approval in approvals:
@@ -5607,6 +5673,9 @@ def approvals_as_tasks(approvals: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def overview(conn: sqlite3.Connection, *, approvals_pending: int = 0) -> dict[str, Any]:
+    """Build a full dashboard summary: status counts, source breakdown,
+    CSI stats, dispatch queue, agent activity, and workstream counts.
+    """
     ensure_schema(conn)
     queue = get_dispatch_queue(conn, limit=500)
     visible_agent_queue = list_agent_queue(conn, include_csi=True, collapse_csi=False, limit=500)
