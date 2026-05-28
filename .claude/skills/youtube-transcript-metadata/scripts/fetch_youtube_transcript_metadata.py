@@ -183,23 +183,38 @@ def build_webshare_proxy_config() -> tuple[Optional[Any], str, str]:
 
 
 def build_dataimpulse_proxy_config() -> tuple[Optional[Any], str, str]:
+    """Mirror of src/universal_agent/youtube_ingest.py:_build_dataimpulse_proxy_config().
+
+    Behavior must match byte-for-byte: same __cr.us zone suffix auto-append,
+    same port int-coercion + 1..65535 validation, same URL format.
+    """
     username = (os.getenv("DATAIMPULSE_PROXY_USER") or "").strip()
     password = (os.getenv("DATAIMPULSE_PROXY_PASS") or "").strip()
     if not username or not password:
         return None, "disabled", ""
+
+    # DataImpulse uses username__zone suffixes for targeting (e.g. __cr.us).
+    # If the operator only provided the base ID in Infisical, default to US targeting.
+    if "__" not in username:
+        username = f"{username}__cr.us"
 
     try:
         from youtube_transcript_api.proxies import GenericProxyConfig
     except Exception:
         return None, "module_unavailable", ""
 
-    host = (os.getenv("DATAIMPULSE_PROXY_HOST") or "gw.dataimpulse.com").strip() or "gw.dataimpulse.com"
-    port = (os.getenv("DATAIMPULSE_PROXY_PORT") or "823").strip() or "823"
+    host = (
+        os.getenv("DATAIMPULSE_PROXY_HOST") or "gw.dataimpulse.com"
+    ).strip() or "gw.dataimpulse.com"
+    port_raw = (os.getenv("DATAIMPULSE_PROXY_PORT") or "823").strip()
+    try:
+        port = int(port_raw)
+    except Exception:
+        port = 823
+    if port <= 0 or port > 65535:
+        port = 823
 
-    from urllib.parse import quote
-    user_q = quote(username, safe="")
-    pass_q = quote(password, safe="")
-    proxy_url = f"http://{user_q}:{pass_q}@{host}:{port}"
+    proxy_url = f"http://{username}:{password}@{host}:{port}"
     cfg = GenericProxyConfig(http_url=proxy_url, https_url=proxy_url)
     return cfg, "dataimpulse", proxy_url
 

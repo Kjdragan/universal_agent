@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import sys
-from urllib.parse import quote
+from urllib.parse import quote  # only used for the webshare branch
 
 REPO_ROOT = Path(__file__).resolve().parents[4]  # .agents/skills/residential-proxy/scripts -> repo root
 SRC_ROOT = REPO_ROOT / "src"
@@ -54,16 +54,27 @@ def _build_webshare_url() -> str | None:
 
 
 def _build_dataimpulse_url() -> str | None:
+    """Mirror youtube_ingest.py:_build_dataimpulse_proxy_config() URL shape."""
     username = (os.getenv("DATAIMPULSE_PROXY_USER") or "").strip()
     password = (os.getenv("DATAIMPULSE_PROXY_PASS") or "").strip()
+    if not username or not password:
+        return None
+
+    if "__" not in username:
+        username = f"{username}__cr.us"
+
     host = (
         os.getenv("DATAIMPULSE_PROXY_HOST") or "gw.dataimpulse.com"
     ).strip() or "gw.dataimpulse.com"
-    port = (os.getenv("DATAIMPULSE_PROXY_PORT") or "823").strip() or "823"
+    port_raw = (os.getenv("DATAIMPULSE_PROXY_PORT") or "823").strip()
+    try:
+        port = int(port_raw)
+    except Exception:
+        port = 823
+    if port <= 0 or port > 65535:
+        port = 823
 
-    if not username or not password:
-        return None
-    return f"http://{quote(username, safe='')}:{quote(password, safe='')}@{host}:{port}"
+    return f"http://{username}:{password}@{host}:{port}"
 
 
 def get_proxy_url() -> str | None:

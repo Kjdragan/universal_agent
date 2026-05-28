@@ -158,7 +158,7 @@ Implementation:
 - `.agents/skills/residential-proxy/scripts/get_proxy_url.py`
 - `.agents/skills/residential-proxy/scripts/proxy_fetch.py`
 
-The `residential-proxy` agent skill provides **one-off** access to the Webshare rotating residential proxy for situations where the VPS datacenter IP is blocked by a target site before any content or CAPTCHA is reachable.
+The `residential-proxy` agent skill provides **one-off** access to the active rotating residential proxy (DataImpulse by default; selected by `PROXY_PROVIDER`) for situations where the VPS datacenter IP is blocked by a target site before any content or CAPTCHA is reachable.
 
 This skill:
 - Loads credentials from Infisical via `initialize_runtime_secrets()` (same pattern as `check_webshare_proxy.py`)
