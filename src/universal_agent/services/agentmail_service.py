@@ -886,6 +886,16 @@ class AgentMailService:
                     argv += ["-a", path]
 
             timeout = _gmail_cli_timeout_seconds()
+            # Strip GOOGLE_WORKSPACE_CLI_* env vars from the subprocess. A
+            # known footgun: deploy.yml's .env bootstrap leaves
+            # GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE set to "" in the gateway
+            # process. The gws CLI interprets that as "use this empty path"
+            # and bombs with "points to , but file does not exist" instead of
+            # falling back to its default ~/.config/gws/credentials.enc.
+            child_env = {
+                k: v for k, v in os.environ.items()
+                if not k.startswith("GOOGLE_WORKSPACE_CLI_") or v.strip()
+            }
             try:
                 proc = await asyncio.to_thread(
                     subprocess.run,
@@ -894,6 +904,7 @@ class AgentMailService:
                     text=True,
                     timeout=timeout,
                     check=False,
+                    env=child_env,
                 )
             except FileNotFoundError as exc:
                 raise RuntimeError(
