@@ -561,9 +561,23 @@ The daily YouTube digest email body is fully self-contained — operator does NO
 
 **Env-scrub for empty GOOGLE_WORKSPACE_CLI_* vars (PR #536):** `/opt/universal_agent/.env` carries three GWS-CLI env vars set to empty strings (`GOOGLE_WORKSPACE_CLI_TOKEN`, `GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE`, `GOOGLE_WORKSPACE_CLI_IMPERSONATED_USER`). The gws CLI treats those empty paths as authoritative and refuses to fall back to its default `~/.config/gws/credentials.enc`, dying with `Gmail auth failed: GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE points to , but file does not exist`. `_send_via_gmail_cli` builds a child env that drops any `GOOGLE_WORKSPACE_CLI_*` var whose value is blank/whitespace; non-empty values pass through.
 
-**Test coverage:** `tests/unit/test_agentmail_gmail_fallback.py` (8 tests) covers the success path, flag-gated 429 → fallback transition, non-429 errors still raising, CLI failure propagation, attachment plumbing, missing-CLI handling, and the empty-env scrub.
+**Test coverage:** `tests/unit/test_agentmail_gmail_fallback.py` (11 tests) covers the success path, flag-gated 429 → fallback transition, non-429 errors still raising, CLI failure propagation, attachment plumbing, missing-CLI handling, the empty-env scrub, and the Gmail Sent-copy labeling path (create-then-apply, reuse-existing-label, label-failure-is-non-fatal).
 
 **Field verification (2026-05-28):** Two end-to-end resends of the WEDNESDAY YouTube digest through this path succeeded — AgentMail returned 429, `_send_direct` caught it, `_send_via_gmail_cli` ran the gws CLI, Gmail accepted the message. Gmail message IDs `19e6fda6878cae69` (text-only smoke test) and `19e6fe6e7eb7252a` (full 129KB rendered HTML with clickable TOC, see § "Digest and Report Policy" below).
+
+#### Gmail Sent-copy labeling (Phase 1, 2026-05-28)
+
+> **Status:** Lives in `agentmail_service.py:_apply_gmail_label` / `_resolve_or_create_gmail_label`. Gated by `UA_AGENTMAIL_GMAIL_LABEL=1` (default **on**).
+
+**Motivation.** A fallback send lands in Kevin's Gmail Sent folder, not AgentMail's Sent box — and AgentMail has no API to import a sent message (its only message-creation path is `messages.send`, which is exactly what 429'd; `messages.update` only toggles labels on existing messages). Rather than fake an AgentMail record, we make the *real* Gmail copy self-identifying so it's queryable for debugging ("what did Simone send via fallback today" → `label:UA/AgentSent/Simone in:sent`).
+
+**Behavior.** After a successful `+send`, `_apply_gmail_label` stamps the Gmail message with a nested label `UA/AgentSent/<principal>` (principal defaults to `Simone`, since this service is Simone's send path). It resolves the label id via `gws gmail users labels list`, creating it with `… labels create` if absent (label id cached on the instance), then applies it with `… messages modify --params '{"userId":"me","id":<msgId>}' --json '{"addLabelIds":[<id>]}'`. The success return dict gains a `"label"` key (the label name, or `null` when labeling is disabled).
+
+**Best-effort, never fatal.** The email is already sent by the time labeling runs, so every label failure (missing/renamed label, CLI error, timeout, unparseable output) is logged at WARNING and swallowed — it can never turn a successful send into a raised exception. Reuses the same scrubbed `child_env` as the send (so it inherits the empty-`GOOGLE_WORKSPACE_CLI_*` fix).
+
+**Per-principal forward-compat.** The `principal` argument and `UA/AgentSent/<principal>` scheme are ready for a future VP-path fallback (`Atlas`/`Cody` via `vp_email_directive.vp_display_name`). Note: this service is Simone-only today — Atlas/Cody send via the in-session AgentMail **MCP** tool (`vp.agents@agentmail.to`), which does **not** route through this Python fallback. Extending the fallback to the VP send path is tracked as Phase 2 (justified by 316 documented VP-mailbox 429s; see investigation notes).
+
+**Verification status (2026-05-28):** Unit-tested (3 dedicated tests). **Not yet live-verified** — desktop and VPS `gws auth status` currently report `token_valid: false` (`invalid_grant`), so an interactive `npx -y @googleworkspace/cli auth login` is required before the label calls can run end-to-end. Smoke test deferred to that re-auth.
 
 ### Large Attachments & Payload Context Limits
 

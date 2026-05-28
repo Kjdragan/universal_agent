@@ -89,6 +89,9 @@ async def test_429_with_flag_falls_back_to_gws_cli(monkeypatch):
     monkeypatch.setenv("UA_AGENTMAIL_GMAIL_FALLBACK", "1")
     # Override the CLI so the test doesn't shell out to npx.
     monkeypatch.setenv("UA_GMAIL_CLI_CMD", "/usr/bin/false")
+    # Labeling makes extra subprocess.run calls; disable it here so this test
+    # stays focused on the +send argv/return shape (labeling has its own tests).
+    monkeypatch.setenv("UA_AGENTMAIL_GMAIL_LABEL", "0")
     service = _make_service(send_raises=_Stub429())
 
     captured: dict = {}
@@ -117,6 +120,7 @@ async def test_429_with_flag_falls_back_to_gws_cli(monkeypatch):
         "message_id": "gmail-cli-msg-77",
         "inbox": "oddcity216@agentmail.to",
         "via": "gmail_cli",
+        "label": None,  # labeling disabled in this test
     }
     # Argv shape: CLI override + gmail +send --format json --to ... --subject ... --body ... --html
     argv = captured["argv"]
@@ -134,6 +138,7 @@ async def test_429_fallback_writes_attachments_and_passes_them(monkeypatch):
     import base64
     monkeypatch.setenv("UA_AGENTMAIL_GMAIL_FALLBACK", "1")
     monkeypatch.setenv("UA_GMAIL_CLI_CMD", "/usr/bin/false")
+    monkeypatch.setenv("UA_AGENTMAIL_GMAIL_LABEL", "0")  # focus on attachment plumbing
     service = _make_service(send_raises=_Stub429())
 
     payload = b"hello-pdf-bytes"
@@ -198,6 +203,7 @@ async def test_429_fallback_strips_empty_gws_env_vars(monkeypatch):
     """
     monkeypatch.setenv("UA_AGENTMAIL_GMAIL_FALLBACK", "1")
     monkeypatch.setenv("UA_GMAIL_CLI_CMD", "/usr/bin/false")
+    monkeypatch.setenv("UA_AGENTMAIL_GMAIL_LABEL", "0")  # focus on env scrubbing
     monkeypatch.setenv("GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE", "")
     monkeypatch.setenv("GOOGLE_WORKSPACE_CLI_KEEP_ME", "real-value")
     service = _make_service(send_raises=_Stub429())
@@ -236,3 +242,129 @@ async def test_429_fallback_handles_missing_cli(monkeypatch):
                 to="kevin@example.com", subject="x", text="x",
                 html=None, attachments=None, labels=None,
             )
+
+
+# ── Gmail Sent-copy labeling (Phase 1) ────────────────────────────────────
+
+
+def _route_gws(handlers):
+    """Build a subprocess.run fake that dispatches on the gws subcommand.
+
+    ``handlers`` maps a predicate name → SimpleNamespace result. The fake
+    inspects argv and routes to: 'send' (`+send`), 'list' (labels list),
+    'create' (labels create), 'modify' (messages modify). Each call is also
+    recorded in the returned ``calls`` list for assertions.
+    """
+    calls: list[list[str]] = []
+
+    def _run(argv, *, capture_output=True, text=True, timeout=None, check=False, env=None, **_):
+        argv = list(argv)
+        calls.append(argv)
+        if "+send" in argv:
+            kind = "send"
+        elif "labels" in argv and "list" in argv:
+            kind = "list"
+        elif "labels" in argv and "create" in argv:
+            kind = "create"
+        elif "messages" in argv and "modify" in argv:
+            kind = "modify"
+        else:
+            kind = "unknown"
+        return handlers[kind]
+
+    return _run, calls
+
+
+@pytest.mark.asyncio
+async def test_429_fallback_labels_sent_copy_by_default(monkeypatch):
+    """With labeling on (default), a fresh label is created and applied."""
+    monkeypatch.setenv("UA_AGENTMAIL_GMAIL_FALLBACK", "1")
+    monkeypatch.setenv("UA_GMAIL_CLI_CMD", "/usr/bin/false")
+    monkeypatch.delenv("UA_AGENTMAIL_GMAIL_LABEL", raising=False)  # default ON
+    service = _make_service(send_raises=_Stub429())
+
+    run, calls = _route_gws({
+        "send": SimpleNamespace(returncode=0, stdout=json.dumps({"id": "msg-abc"}), stderr=""),
+        "list": SimpleNamespace(returncode=0, stdout=json.dumps({"labels": []}), stderr=""),
+        "create": SimpleNamespace(returncode=0, stdout=json.dumps({"id": "Label_42", "name": "UA/AgentSent/Simone"}), stderr=""),
+        "modify": SimpleNamespace(returncode=0, stdout=json.dumps({"id": "msg-abc", "labelIds": ["Label_42"]}), stderr=""),
+    })
+
+    with patch.object(subprocess, "run", run):
+        result = await service._send_direct(
+            to="kevin@example.com", subject="Digest", text="x",
+            html=None, attachments=None, labels=None,
+        )
+
+    assert result["status"] == "sent_via_gmail_fallback"
+    assert result["message_id"] == "msg-abc"
+    assert result["label"] == "UA/AgentSent/Simone"
+
+    # The create call carried the nested label name in the request body.
+    create_argv = next(a for a in calls if "create" in a)
+    body = json.loads(create_argv[create_argv.index("--json") + 1])
+    assert body["name"] == "UA/AgentSent/Simone"
+
+    # The modify call targeted the sent message id and added the created label.
+    modify_argv = next(a for a in calls if "modify" in a)
+    params = json.loads(modify_argv[modify_argv.index("--params") + 1])
+    mbody = json.loads(modify_argv[modify_argv.index("--json") + 1])
+    assert params == {"userId": "me", "id": "msg-abc"}
+    assert mbody == {"addLabelIds": ["Label_42"]}
+
+
+@pytest.mark.asyncio
+async def test_429_fallback_reuses_existing_label_id(monkeypatch):
+    """When the label already exists, no create call is made."""
+    monkeypatch.setenv("UA_AGENTMAIL_GMAIL_FALLBACK", "1")
+    monkeypatch.setenv("UA_GMAIL_CLI_CMD", "/usr/bin/false")
+    monkeypatch.delenv("UA_AGENTMAIL_GMAIL_LABEL", raising=False)
+    service = _make_service(send_raises=_Stub429())
+
+    run, calls = _route_gws({
+        "send": SimpleNamespace(returncode=0, stdout=json.dumps({"id": "msg-xyz"}), stderr=""),
+        "list": SimpleNamespace(returncode=0, stdout=json.dumps({"labels": [
+            {"id": "Label_7", "name": "UA/AgentSent/Simone"},
+            {"id": "Label_1", "name": "INBOX"},
+        ]}), stderr=""),
+        "create": SimpleNamespace(returncode=0, stdout="{}", stderr=""),  # should not be hit
+        "modify": SimpleNamespace(returncode=0, stdout="{}", stderr=""),
+    })
+
+    with patch.object(subprocess, "run", run):
+        result = await service._send_direct(
+            to="kevin@example.com", subject="Digest", text="x",
+            html=None, attachments=None, labels=None,
+        )
+
+    assert result["label"] == "UA/AgentSent/Simone"
+    assert not any("create" in a for a in calls), "must reuse existing label, not create"
+    modify_argv = next(a for a in calls if "modify" in a)
+    mbody = json.loads(modify_argv[modify_argv.index("--json") + 1])
+    assert mbody == {"addLabelIds": ["Label_7"]}
+
+
+@pytest.mark.asyncio
+async def test_429_fallback_label_failure_is_non_fatal(monkeypatch):
+    """A failed label step must NOT break an already-successful send."""
+    monkeypatch.setenv("UA_AGENTMAIL_GMAIL_FALLBACK", "1")
+    monkeypatch.setenv("UA_GMAIL_CLI_CMD", "/usr/bin/false")
+    monkeypatch.delenv("UA_AGENTMAIL_GMAIL_LABEL", raising=False)
+    service = _make_service(send_raises=_Stub429())
+
+    run, _calls = _route_gws({
+        "send": SimpleNamespace(returncode=0, stdout=json.dumps({"id": "msg-1"}), stderr=""),
+        "list": SimpleNamespace(returncode=1, stdout="", stderr="auth expired"),
+        "create": SimpleNamespace(returncode=1, stdout="", stderr="auth expired"),
+        "modify": SimpleNamespace(returncode=1, stdout="", stderr="auth expired"),
+    })
+
+    with patch.object(subprocess, "run", run):
+        result = await service._send_direct(
+            to="kevin@example.com", subject="Digest", text="x",
+            html=None, attachments=None, labels=None,
+        )
+
+    # Send still reported success; label couldn't be resolved so it's absent.
+    assert result["status"] == "sent_via_gmail_fallback"
+    assert result["message_id"] == "msg-1"
