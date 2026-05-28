@@ -363,6 +363,7 @@ jobs:
               url="$2"
               max_attempts="${3:-36}"
               sleep_seconds="${4:-5}"
+              service_unit="${5:-}"
               attempt=1
               while [ "$attempt" -le "$max_attempts" ]; do
                 if curl -fsS -m 4 "$url" >/tmp/ua-health-${name}.json 2>/tmp/ua-health-${name}.err; then
@@ -372,6 +373,7 @@ jobs:
                   rm -f /tmp/ua-health-${name}.json /tmp/ua-health-${name}.err
                   return 0
                 fi
+                bash "$PROD_DIR/scripts/check_crashloop.sh" "$name" "$service_unit" "$attempt" 5 || return 1
                 if [ "$attempt" -eq 1 ] || [ $((attempt % 6)) -eq 0 ]; then
                   echo "    Waiting for $name health at $url (attempt $attempt/$max_attempts)..."
                   cat /tmp/ua-health-${name}.err || true
@@ -390,8 +392,9 @@ jobs:
               url="$2"
               max_attempts="$3"
               sleep_seconds="$4"
+              service_unit="${5:-}"
               (
-                if check_local_health "$name" "$url" "$max_attempts" "$sleep_seconds"; then
+                if check_local_health "$name" "$url" "$max_attempts" "$sleep_seconds" "$service_unit"; then
                   echo 0 >"$health_status_dir/$name.status"
                 else
                   echo 1 >"$health_status_dir/$name.status"
@@ -414,7 +417,7 @@ jobs:
             # though the gateway came up healthy seconds later). The
             # right architectural fix is to slim the pre-yield work
             # (tracked separately); 8 minutes is the operational backstop.
-            run_health_check gateway "http://127.0.0.1:8002/api/v1/health" 96 5
+            run_health_check gateway "http://127.0.0.1:8002/api/v1/health" 96 5 universal-agent-gateway.service
             run_health_check api "http://127.0.0.1:8001/api/health" 24 5
             run_health_check webui "http://127.0.0.1:3000/dashboard" 24 5
             for health_pid in $health_pids; do
