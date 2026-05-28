@@ -4,12 +4,6 @@ on:
   push:
     branches:
       - main
-      # PRE-MERGE VALIDATION PROBE (REMOVE BEFORE MERGE): allow this
-      # branch to trigger the workflow so we can observe whether GHA
-      # parses the file successfully before the merge-to-main deploy.
-      # Branch literal includes `+`; `+` is a glob quantifier in GHA
-      # filter patterns and must be escaped with `\+`.
-      - 'worktree-claude\+redo-deploy-improvements-v2'
     # Skip production deploy when a push to `main` only contains docs,
     # markdown, or scheduled-job state files. These are produced by
     # `nightly-doc-drift-audit.yml` and `openclaw-release-sync.yml` (which
@@ -52,10 +46,6 @@ concurrency:
 
 jobs:
   deploy-production:
-    # PRE-MERGE VALIDATION PROBE (REMOVE BEFORE MERGE): gate the actual
-    # deploy on main so a parse-success on the feature branch does NOT
-    # attempt to deploy. Removed in the cleanup commit before opening PR.
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
