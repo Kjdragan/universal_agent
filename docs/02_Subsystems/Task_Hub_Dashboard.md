@@ -2,7 +2,7 @@
 
 > **Canonical source of truth** for the Task Hub Dashboard frontend — design system, component architecture, API integration, and Kanban UX patterns.
 >
-> **Last updated:** 2026-05-06 — ToDo happy-path repair documented; three-panel rehydration now prefers `trace.json`, live ToDo sessions stamp active run lineage, and mission-envelope / mission-summary UX for meaningful multi-phase work is documented.
+> **Last updated:** 2026-05-27 — Completed-column "Clear All" now calls the bulk `DELETE /api/v1/dashboard/todolist/completed` endpoint in a single request, replacing the per-task loop that only drained the ~80 currently-loaded items and left older completions to bubble up on reload (PR #498). Previous: 2026-05-06 — ToDo happy-path repair documented; three-panel rehydration now prefers `trace.json`, live ToDo sessions stamp active run lineage, and mission-envelope / mission-summary UX for meaningful multi-phase work is documented.
 
 ---
 
@@ -301,6 +301,8 @@ The current first pass implements the durable Chief-of-Staff layer while keeping
 | `/api/v1/dashboard/todolist/tasks/{task_id}/action` | POST | Lifecycle action: `complete`, `block`, `park`, `review`, `reopen` |
 | `/api/v1/dashboard/todolist/tasks/{task_id}/dispatch` | POST | "Start Now" — immediate dispatch to agent |
 | `/api/v1/dashboard/todolist/tasks/{task_id}/approve` | POST | Approve a task for agent execution |
+| `/api/v1/dashboard/todolist/completed/{task_id}` | DELETE | Hide a single completed task by parking it (`status=completed → parked`, `stale_state=dashboard_hidden`) |
+| `/api/v1/dashboard/todolist/completed` | DELETE | **Bulk park** — flip every `status=completed` row to `parked` in one UPDATE. Used by the Completed column "Clear All" verb. **Do NOT loop the per-task DELETE as a substitute** — the `GET /completed` endpoint caps at `limit=80`, so a per-task loop only drains the visible page and older completions bubble up on reload, producing the illusion of regeneration (PR #498). Backed by `task_hub.py` UPDATE at `gateway_server.py:24784`. |
 | `/api/v1/heartbeat/wake` | POST | Manually nudge heartbeat/system supervision |
 
 ### 5.3 Data Flow
