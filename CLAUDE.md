@@ -92,6 +92,21 @@ INFISICAL_TOKEN="$TOK" infisical run \
 
 Also note: bare `claude` on Kevin's desktop lazy-loads `HOSTINGER_API_TOKEN` (and only that) via `_ua_load_mcp_secrets` in `~/.bashrc`, cached at `~/.cache/ua/hostinger_token`. Replaced the eager `infisical secrets get` block on 2026-05-17 because it was hanging Antigravity terminals on an interactive arrow-key prompt that `--silent` didn't suppress. If MCP Hostinger stops resolving, the user can `rm ~/.cache/ua/hostinger_token` to force refresh on next `claude` launch.
 
+## gws (Google Workspace CLI) Auth on the VPS — RUNBOOK (read before touching gws/Gmail)
+
+The `gws` CLI (`npx -y @googleworkspace/cli`) backs Gmail send/label, Calendar sync, and the AgentMail **429 → Gmail fallback** (`agentmail_service._send_via_gmail_cli`). Auth is the #1 time-sink here; this is the verified mechanism (don't re-derive it):
+
+- **How creds reach the VPS:** NOT a manual file copy. Four Infisical `production` secrets hold the base64 of the desktop's gws config — `GWS_CREDENTIALS_ENC_B64`, `GWS_TOKEN_CACHE_B64`, `GWS_ENCRYPTION_KEY_B64`, `GWS_CLIENT_SECRET_JSON_B64`. At runtime `discord_intelligence/calendar_sync.py` materializes them into `/home/ua/.config/gws/` and sets `GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file`. The gateway and discord daemon **both run as `ua` (HOME=/home/ua)** so they share that dir. The AgentMail fallback also self-defaults `KEYRING_BACKEND=file` in its subprocess env.
+- **Why it keeps breaking (`invalid_grant: Bad Request`):** the OAuth app is in Google "Testing" mode → refresh tokens **expire after ~7 days**. When the VPS (or desktop) `auth status` shows `token_valid: false`, the token died. **Durable fix (Kevin-only, one-time): publish the OAuth app "Testing" → "In production" in Google Cloud Console** — removes the 7-day expiry. Until then, creds must be refreshed ~weekly.
+- **To refresh creds (desktop is the source of truth):**
+  1. `unset GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE GOOGLE_WORKSPACE_CLI_TOKEN GOOGLE_WORKSPACE_CLI_IMPERSONATED_USER` (empty values are a footgun — gws treats `""` as a real path and dies with "points to , but file does not exist").
+  2. `npx -y @googleworkspace/cli auth login --scopes https://www.googleapis.com/auth/gmail.modify` (covers read+modify-labels+send). Approve in browser; click through "Google hasn't verified this app".
+  3. Push the 4 files into Infisical (values via shell vars so they never hit the transcript; **`KEY=@file` is NOT supported** — it stores the literal path):
+     `A=$(base64 -w0 ~/.config/gws/credentials.enc); infisical secrets set "GWS_CREDENTIALS_ENC_B64=$A" --token "$TOK" --projectId="$INFISICAL_PROJECT_ID" --env=production --silent` (repeat for token_cache.json→`GWS_TOKEN_CACHE_B64`, .encryption_key→`GWS_ENCRYPTION_KEY_B64`, client_secret.json→`GWS_CLIENT_SECRET_JSON_B64`). Verify with a SHA-256 round-trip before restarting prod.
+  4. **Restart needs sudo (you don't have passwordless sudo as `ua`):** either ship any service-code change (deploy.yml restarts `universal-agent-gateway` + `ua-discord-intelligence`) or ask Kevin to `sudo systemctl restart` them. New Infisical secrets load only at process start.
+- **Headless verification from a non-interactive shell** (your background-job shell can't unlock the OS keyring): set `GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file` so gws reads `.encryption_key` from disk, then `npx -y @googleworkspace/cli gmail users labels list --params '{"userId":"me"}'`. `--dry-run` still auth-checks first, so it can't validate args while the token is dead.
+- Full detail + the AgentMail-fallback labeling design: `docs/03_Operations/82_Email_Architecture_And_AgentMail_Source_Of_Truth_2026-03-06.md` § "Gmail (gws) CLI Fallback".
+
 ## Key Commands
 - Install deps: `uv sync`
 - Run app: `uv run python -m src.universal_agent.main`
