@@ -72,3 +72,44 @@ def test_daemon_idle_timeout_filter_logic_matches_production_call_site():
     assert _should_suppress("") is False
     # Defensive: non-prefix mention shouldn't suppress
     assert _should_suppress("triggered by daemon_idle_timeout policy") is False
+
+
+def test_daemon_execution_timeout_is_dashboard_only_not_email():
+    """A daemon *execution* timeout (a wedged turn killed by the watchdog)
+    is a real health signal — it must still surface on the dashboard — but
+    it is self-healing (the dispatcher re-runs the task), so it must NOT
+    email the operator. The gateway emits it with channels=["dashboard"].
+
+    Mirrors the exact discriminators in
+    gateway_server.py:_cancel_session_execution:
+      - idle reaps  -> fully suppressed (no notification)
+      - execution timeouts -> dashboard-only notification
+      - everything else -> default channels (email included)
+    """
+    def _is_idle_reap(reason: str | None) -> bool:
+        return str(reason or "").startswith("daemon_idle_timeout")
+
+    def _is_execution_timeout(reason: str | None) -> bool:
+        return str(reason or "").startswith("daemon_execution_timeout")
+
+    def _channels_for(reason: str | None):
+        # Returns None to signal "notification suppressed entirely".
+        if _is_idle_reap(reason):
+            return None
+        return ["dashboard"] if _is_execution_timeout(reason) else "default"
+
+    # Production format: "daemon_execution_timeout:1800s"
+    assert _is_execution_timeout("daemon_execution_timeout:1800s") is True
+    assert _channels_for("daemon_execution_timeout:1800s") == ["dashboard"]
+    assert _channels_for("daemon_execution_timeout") == ["dashboard"]
+
+    # Idle reaps stay fully suppressed (not merely dashboard-only).
+    assert _channels_for("daemon_idle_timeout:1800s") is None
+
+    # Real cancellations keep default channels (email surfaced).
+    assert _channels_for("Internal error: provider unavailable") == "default"
+    assert _channels_for("Cancelled from ops bulk session controls") == "default"
+    assert _channels_for(None) == "default"
+
+    # An execution timeout must NOT be misclassified as an idle reap.
+    assert _is_idle_reap("daemon_execution_timeout:1800s") is False
