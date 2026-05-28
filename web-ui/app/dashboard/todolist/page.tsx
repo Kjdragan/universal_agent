@@ -1470,9 +1470,17 @@ export default function ToDoListDashboardPage() {
                   // app/page.tsx pull durable run.log + trace.json,
                   // populating tool calls, assistant turns, thinking
                   // blocks via extractHistoryFromTraceJson.
+                  //
+                  // Pass every available hint. For VP-delegated tasks
+                  // (Cody/Atlas) sessionId/runId are the vp-mission-<id>
+                  // mirror which the resolver does NOT recognize — the
+                  // workspace_dir branch finds Cody's mission directory
+                  // and returns a usable target.
                   void openViewer({
                     session_id: target.sessionId,
                     run_id: target.runId,
+                    workspace_dir: target.workspaceDir,
+                    workspace_name: target.workspaceName,
                     role: "viewer",
                   });
                 }}
@@ -1797,6 +1805,8 @@ export default function ToDoListDashboardPage() {
                 void openViewer({
                   session_id: target.sessionId,
                   run_id: target.runId,
+                  workspace_dir: target.workspaceDir,
+                  workspace_name: target.workspaceName,
                   role: "viewer",
                 });
               }}
@@ -2115,6 +2125,8 @@ export default function ToDoListDashboardPage() {
                             void openViewer({
                               session_id: target.sessionId,
                               run_id: target.runId,
+                              workspace_dir: target.workspaceDir,
+                              workspace_name: target.workspaceName,
                               role: "viewer",
                             });
                           }}
@@ -2393,6 +2405,8 @@ export default function ToDoListDashboardPage() {
                             void openViewer({
                               session_id: target.sessionId,
                               run_id: target.runId,
+                              workspace_dir: target.workspaceDir,
+                              workspace_name: target.workspaceName,
                               role: "viewer",
                             });
                           }
