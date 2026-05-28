@@ -1501,6 +1501,12 @@ function ChatInterface() {
   const [hydrationError, setHydrationError] = useState<string | null>(null);
   const [requestedSessionIdFromUrl, setRequestedSessionIdFromUrl] = useState("");
   const [requestedRunIdFromUrl, setRequestedRunIdFromUrl] = useState("");
+  // VP missions don't live in the session/run catalog — the only way to
+  // know their workspace is via the resolver. ``openViewer`` calls the
+  // resolver then forwards ``target.workspace_dir`` as a URL param so the
+  // three-panel view's auto-switch effect at L842 can fire without an
+  // extra round-trip. Empty for non-VP navigations.
+  const [requestedWorkspaceFromUrl, setRequestedWorkspaceFromUrl] = useState("");
   const connectionStatus = useAgentStore((s) => s.connectionStatus);
   const ws = getWebSocket();
   const inputRef = React.useRef<HTMLInputElement>(null);
@@ -1674,6 +1680,7 @@ function ChatInterface() {
     const params = new URLSearchParams(window.location.search);
     setRequestedSessionIdFromUrl((params.get("session_id") || "").trim());
     setRequestedRunIdFromUrl((params.get("run_id") || "").trim());
+    setRequestedWorkspaceFromUrl((params.get("workspace") || "").trim());
     const role = (params.get("role") || "").trim().toLowerCase();
     const nextRole = role === "viewer" ? "viewer" : "writer";
     setChatRole(nextRole);
@@ -1809,6 +1816,30 @@ function ChatInterface() {
       cancelled = true;
     };
   }, [currentSession?.run_id, currentSession?.workspace, setCurrentSession]);
+
+  // VP-mission rehydration: when the Workspace button on a Task Hub card
+  // navigates here with ``?session_id=vp-mission-<id>&workspace=<dir>``,
+  // the session/run catalog has no entry for ``vp-mission-<id>`` so the
+  // standard hydration effects above leave ``currentSession.workspace``
+  // empty — and the auto-switch effect at L842 (which keys on
+  // ``currentSession.workspace`` being non-empty) never fires. Stamp the
+  // URL workspace directly so the three-panel file browser pane swaps
+  // to ``vps_workspaces`` mode at the mission directory.
+  useEffect(() => {
+    if (!requestedWorkspaceFromUrl) return;
+    if (!effectiveSessionId || !/^vp-mission-/i.test(effectiveSessionId)) return;
+    if (currentSession?.session_id !== effectiveSessionId) return;
+    if (currentSession?.workspace) return;
+    setCurrentSession({
+      ...currentSession,
+      workspace: requestedWorkspaceFromUrl,
+    });
+  }, [
+    requestedWorkspaceFromUrl,
+    effectiveSessionId,
+    currentSession,
+    setCurrentSession,
+  ]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
