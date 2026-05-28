@@ -2,16 +2,19 @@ export type TaskWorkspaceTargetInput = {
   assigned_session_id?: string | null;
   canonical_execution_session_id?: string | null;
   canonical_execution_run_id?: string | null;
+  canonical_execution_workspace?: string | null;
   workflow_run_id?: string | null;
   links?: {
     session_id?: string | null;
     workspace_name?: string | null;
+    workspace_dir?: string | null;
   } | null;
 };
 
 export type TaskWorkspaceTarget = {
   sessionId?: string;
   runId?: string;
+  workspaceDir?: string;
   workspaceName?: string;
 };
 
@@ -29,13 +32,18 @@ export function resolveTaskWorkspaceTarget(
   );
   const runId = cleanId(item.canonical_execution_run_id || item.workflow_run_id);
   const workspaceName = cleanId(item.links?.workspace_name);
+  const workspaceDir = cleanId(
+    item.links?.workspace_dir || item.canonical_execution_workspace,
+  );
 
-  // Note: workspace_name alone (a path-like string with `/` in it) is NOT a
-  // valid navigation identity. The backend resolver has a `workspace_dir`
-  // branch but treats workspace_name as a basename only. Producers should
-  // pass workspaceName as a HINT alongside sessionId/runId — the resolver
-  // uses it as a fallback when the catalog lookup misses.
-  const hasNavigableId = Boolean(sessionId || runId);
+  // For VP-delegated tasks (Cody/Atlas), the upstream completed-card
+  // enrichment sets sessionId/runId to the ``vp-mission-<id>`` mirror —
+  // those are NOT valid keys in the resolver's session/run catalog, so
+  // sending them alone yields a 404. The same payload always carries
+  // ``workspace_dir`` (Cody's mission directory). The resolver's
+  // workspace-path branch keys on that dir to return a usable
+  // SessionViewTarget. Pass every hint we have and let the backend pick.
+  const hasNavigableId = Boolean(sessionId || runId || workspaceDir || workspaceName);
   if (!hasNavigableId) {
     return null;
   }
@@ -58,12 +66,11 @@ export function resolveTaskWorkspaceTarget(
   } else if (runId) {
     target.runId = runId;
   }
-  // workspaceName is NOT propagated as a navigation identity. The backend
-  // resolver treats it as a basename hint at best, and the URL contract
-  // (`/?session_id=...&run_id=...`) doesn't carry it. Adding it here just
-  // pollutes the resolve payload and pushes the resolver toward the wrong
-  // workspace branch when sessionId/runId are already present. Tests pin
-  // this contract explicitly.
-  void workspaceName;
+  if (workspaceDir) {
+    target.workspaceDir = workspaceDir;
+  }
+  if (workspaceName) {
+    target.workspaceName = workspaceName;
+  }
   return target;
 }
