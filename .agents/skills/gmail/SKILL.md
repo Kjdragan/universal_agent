@@ -6,39 +6,45 @@ description: Guide for using Google Workspace CLI (gws) natively to access Kevin
 # Gmail (gws CLI)
 
 This skill provides instructions for interacting with Kevin's Gmail using the Google Workspace CLI natively.
-**NOTE:** Do not use this for Simone's own outbound emails (e.g., sending agent reports). For Simone's emails, use the `agentmail` skill.
+
+**Primary use:** sending email on behalf of Kevin, checking his inbox, managing his labels.
+
+**Secondary use (NEW):** Simone's AgentMailService transparently uses this CLI as a fallback when AgentMail returns HTTP 429 ("Daily send limit exceeded"). The fallback is gated by `UA_AGENTMAIL_GMAIL_FALLBACK=1` and lives in `src/universal_agent/services/agentmail_service.py:_send_via_gmail_cli` — agents do **not** invoke the CLI directly for Simone's outbound mail; AgentMailService routes there automatically when configured.
 
 ## Gmail Skill (via gws CLI)
 
 You can interact with Google Workspace using the `gws` command via the Bash tool. The command is executed via `npx -y @googleworkspace/cli` to assure it works even if not globally linked.
 
+The helper subcommands begin with a `+` prefix (`+send`, `+reply`, etc.). The underlying resource-style commands (`gws gmail users messages list`, etc.) also work but are more verbose.
+
 ## Tools (CLI commands)
 
-- `npx -y @googleworkspace/cli gmail send --to "email@example.com" --subject "Hello" --body "This is a test"`
-- `npx -y @googleworkspace/cli gmail list --max 5`
-- `npx -y @googleworkspace/cli gmail get --id "MESSAGE_ID"`
-- `npx -y @googleworkspace/cli gmail thread get --id "THREAD_ID"`
-- `npx -y @googleworkspace/cli gmail create-draft --to "email@example.com" --subject "Draft" --body "This is a draft"`
-- `npx -y @googleworkspace/cli gmail list-drafts`
-- `npx -y @googleworkspace/cli gmail delete-draft --id "DRAFT_ID"`
+- `npx -y @googleworkspace/cli gmail +send --to "email@example.com" --subject "Hello" --body "This is a test"`
+- `npx -y @googleworkspace/cli gmail +triage` — show unread inbox summary
+- `npx -y @googleworkspace/cli gmail +read --id "MESSAGE_ID"` — read a message body/headers
+- `npx -y @googleworkspace/cli gmail +reply --id "MESSAGE_ID" --body "Got it."`
+- `npx -y @googleworkspace/cli gmail +forward --id "MESSAGE_ID" --to "team@example.com"`
+- `npx -y @googleworkspace/cli gmail +send --to "..." --subject "..." --body "..." --draft` — save as draft instead of sending
+- `npx -y @googleworkspace/cli gmail users messages list --params '{"userId": "me", "maxResults": 5}'` — list messages (resource-style)
 
-*Note: For attachments, use `--attach "/path/to/file"`*
+*Attachments use `-a/--attach`, repeat the flag for multiple files (25 MB total cap).*
 ```bash
-npx -y @googleworkspace/cli gmail send \
+npx -y @googleworkspace/cli gmail +send \
   --to "john@example.com" \
   --subject "Weekly Report" \
   --body "Here is the report." \
-  --attach "/path/to/report.pdf"
+  -a "/path/to/report.pdf"
 ```
 
-To create an HTML drafted response with CC and attachment:
+HTML body with CC and attachment (use `--html` to tell `+send` the body is HTML):
 ```bash
-npx -y @googleworkspace/cli gmail create-draft \
+npx -y @googleworkspace/cli gmail +send \
   --to "team@example.com" \
   --cc "manager@example.com" \
   --subject "Project Alpha Update" \
-  --html "<h1>Status Update</h1><p>We are on track.</p>" \
-  --attach "/path/to/presentation.pdf"
+  --html \
+  --body "<h1>Status Update</h1><p>We are on track.</p>" \
+  -a "/path/to/presentation.pdf"
 ```
 
 ## Usage Guidelines
