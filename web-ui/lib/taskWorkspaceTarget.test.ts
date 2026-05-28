@@ -12,7 +12,10 @@ describe("resolveTaskWorkspaceTarget", () => {
           session_id: "daemon_simone_todo",
         },
       }),
-    ).toEqual({ sessionId: "daemon_simone_todo" });
+    ).toEqual({
+      sessionId: "daemon_simone_todo",
+      workspaceName: "run_workspace_basename",
+    });
   });
 
   it("falls back through canonical and assigned session ids", () => {
@@ -30,7 +33,7 @@ describe("resolveTaskWorkspaceTarget", () => {
     ).toEqual({ sessionId: "daemon_simone_todo" });
   });
 
-  it("uses run-only mode only when no session id exists", () => {
+  it("uses run-only mode when no session id exists", () => {
     expect(
       resolveTaskWorkspaceTarget({
         canonical_execution_run_id: "run_history_only",
@@ -38,17 +41,68 @@ describe("resolveTaskWorkspaceTarget", () => {
           workspace_name: "run_history_workspace",
         },
       }),
-    ).toEqual({ runId: "run_history_only" });
+    ).toEqual({
+      runId: "run_history_only",
+      workspaceName: "run_history_workspace",
+    });
   });
 
-  it("does not treat workspace paths as navigation identities", () => {
+  // ── VP-mission workspace fallback (2026-05-28 regression fix) ─────────────
+  // When a Task Hub card was delegated to Cody / Atlas, the completed-card
+  // enrichment sets sessionId/runId to ``vp-mission-<id>``. That mirror id
+  // is NOT a key the backend resolver's session/run catalog recognizes — it
+  // returns 404. The same payload always carries the VP mission workspace
+  // dir + name; the resolver's workspace-path branch finds Cody's mission
+  // directory and returns a usable target. Propagate every hint we have so
+  // openViewer() can fall through cleanly.
+  it("propagates workspace_dir and workspace_name when present", () => {
     expect(
       resolveTaskWorkspaceTarget({
         links: {
-          workspace_name: "/tmp/AGENT_RUN_WORKSPACES/run_not_a_target",
+          session_id: "vp-mission-79ffc956d5fe046e07182583",
+          workspace_dir:
+            "/opt/universal_agent/AGENT_RUN_WORKSPACES/vp_coder_primary_external/vp-mission-79ffc956d5fe046e07182583/vp-mission-79ffc956d5fe046e07182583",
+          workspace_name:
+            "vp_coder_primary_external/vp-mission-79ffc956d5fe046e07182583/vp-mission-79ffc956d5fe046e07182583",
+        },
+        canonical_execution_session_id: "vp-mission-79ffc956d5fe046e07182583",
+        canonical_execution_run_id: "vp-mission-79ffc956d5fe046e07182583",
+        canonical_execution_workspace:
+          "/opt/universal_agent/AGENT_RUN_WORKSPACES/vp_coder_primary_external/vp-mission-79ffc956d5fe046e07182583/vp-mission-79ffc956d5fe046e07182583",
+      }),
+    ).toEqual({
+      sessionId: "vp-mission-79ffc956d5fe046e07182583",
+      workspaceDir:
+        "/opt/universal_agent/AGENT_RUN_WORKSPACES/vp_coder_primary_external/vp-mission-79ffc956d5fe046e07182583/vp-mission-79ffc956d5fe046e07182583",
+      workspaceName:
+        "vp_coder_primary_external/vp-mission-79ffc956d5fe046e07182583/vp-mission-79ffc956d5fe046e07182583",
+    });
+  });
+
+  it("returns a valid target when only workspace info is present", () => {
+    // Pure workspace-only resolution path: e.g. a vp_mission mirror row
+    // that has no assignment session/run but carries a result_ref-derived
+    // workspace_dir. Pre-fix this returned null and the Workspace button
+    // was hidden (or rendered and 404'd).
+    expect(
+      resolveTaskWorkspaceTarget({
+        canonical_execution_workspace:
+          "/opt/universal_agent/AGENT_RUN_WORKSPACES/vp_coder_primary_external/vp-mission-abc/vp-mission-abc",
+        links: {
+          workspace_dir:
+            "/opt/universal_agent/AGENT_RUN_WORKSPACES/vp_coder_primary_external/vp-mission-abc/vp-mission-abc",
+          workspace_name: "vp_coder_primary_external/vp-mission-abc/vp-mission-abc",
         },
       }),
-    ).toBeNull();
+    ).toEqual({
+      workspaceDir:
+        "/opt/universal_agent/AGENT_RUN_WORKSPACES/vp_coder_primary_external/vp-mission-abc/vp-mission-abc",
+      workspaceName: "vp_coder_primary_external/vp-mission-abc/vp-mission-abc",
+    });
+  });
+
+  it("returns null only when no identity hint at all is present", () => {
+    expect(resolveTaskWorkspaceTarget({})).toBeNull();
   });
 
   // ── Track A regression guard ──────────────────────────────────────────────
