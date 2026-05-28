@@ -19078,8 +19078,22 @@ def _register_system_cron_job(
     dashboard /version timeouts. Only valid with ``!script`` commands.
     See ``plans/fix-2-lightweight-cron-path.md``.
 
-    Returns the job dict on success, or `None` when disabled or the
-    cron service is unavailable.
+    When called with ``enabled=False``:
+
+    * If an existing DB row is found for ``system_job`` AND it is
+      currently enabled, the helper calls ``update_job(id, {"enabled": False})``
+      to actually disable the row (returning the updated job dict). This
+      ensures that flipping a cron's env var from on → off via a code
+      change propagates to the persisted cron row on next gateway start
+      instead of silently leaving the row enabled (which would keep
+      firing on every restart). See PR #534 / hourly_insight_email
+      regression for the bug this prevents.
+    * If no existing row is found, or the existing row is already
+      disabled, the helper returns ``None`` (no-op — don't insert a
+      disabled row, don't churn the existing one).
+
+    Returns the job dict on success, or `None` when disabled with no
+    enabled-row to flip, or the cron service is unavailable.
     """
     # Validate misconfigurations BEFORE the service-availability short-circuit
     # so a bad registration raises at startup instead of silently returning None.
@@ -19087,8 +19101,26 @@ def _register_system_cron_job(
         raise ValueError(
             f"lightweight=True requires a `!script` command, got: {command!r}"
         )
-    if not _cron_service or not enabled:
+    if not _cron_service:
         return None
+
+    # When called with enabled=False, propagate the disable to any
+    # existing DB row instead of silently returning. This fixes the
+    # bug where flipping a cron's enable env var from on → off (e.g.
+    # PR #534 setting UA_INSIGHT_HOURLY_EMAIL_ENABLED default to "0")
+    # left the previously-enabled row in the DB enabled, so it kept
+    # firing on every gateway restart. See PR fix-cron-registration-
+    # disable-bug.
+    if not enabled:
+        existing = _find_cron_job_by_system_job(system_job)
+        if existing is not None and bool(getattr(existing, "enabled", False)):
+            existing_id = str(getattr(existing, "job_id", ""))
+            updated = _cron_service.update_job(existing_id, {"enabled": False})
+            if hasattr(updated, "to_dict"):
+                return updated.to_dict()
+            return {"job_id": existing_id, "enabled": False}
+        return None
+
     cron_expr = (
         os.getenv(cron_env_var, default_cron).strip()
         if cron_env_var
