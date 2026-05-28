@@ -51,6 +51,15 @@ MAX_CLI_TIMEOUT_SECONDS = 14400
 STALL_TIMEOUT_SECONDS = 300
 # Maximum retries for failed CLI sessions
 MAX_RETRIES = 2
+# StreamReader line buffer for the spawned claude CLI's stdout/stderr.
+# Default asyncio limit is 64 KiB, but the Claude CLI's stream-json output
+# legitimately emits single lines well above that (large tool_result blocks
+# from file reads, web fetches, large assistant messages). Hitting the
+# default raises asyncio.LimitOverrunError inside _monitor_cli_output and
+# fails the entire mission with "Error monitoring CLI: ...". 10 MiB matches
+# the headroom the Anthropic SDK uses for similar streams; a single line
+# above that is itself a defect worth surfacing.
+CLI_STREAM_BUFFER_LIMIT = 10 * 1024 * 1024
 
 # Substrings that indicate the CLI rejected our credentials. Retrying with
 # the same env is pointless — the OAuth access token has expired or the
@@ -323,6 +332,7 @@ async def _execute_cli_session(
             cwd=str(workspace_dir),
             env=env,
             start_new_session=True,
+            limit=CLI_STREAM_BUFFER_LIMIT,
         )
     except FileNotFoundError:
         return MissionOutcome(
