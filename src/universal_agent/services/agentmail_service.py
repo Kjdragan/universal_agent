@@ -953,6 +953,15 @@ class AgentMailService:
                 k: v for k, v in os.environ.items()
                 if not k.startswith("GOOGLE_WORKSPACE_CLI_") or v.strip()
             }
+            # Headless decryption: the gateway runs as a system service with no
+            # unlocked OS keyring, so gws cannot read the AES key from the
+            # keyring. Force the file backend (reads ~/.config/gws/.encryption_key
+            # from disk) unless the operator pinned a different backend. This is
+            # the same default the Infisical gws-bundle materializer applies
+            # (discord_intelligence/calendar_sync.py); setting it here makes the
+            # AgentMail fallback self-sufficient instead of depending on another
+            # service having exported it process-wide.
+            child_env.setdefault("GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND", "file")
             try:
                 proc = await asyncio.to_thread(
                     subprocess.run,
