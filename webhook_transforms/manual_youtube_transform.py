@@ -249,7 +249,7 @@ def transform(ctx: dict[str, Any]) -> dict[str, Any] | None:
         "For GitHub repos: fetch README and file tree. For Kaggle: fetch competition/dataset page. For docs: extract clean content.",
         "Save fetched resources under work_products/description_resources/ and use them to enrich CONCEPT.md and IMPLEMENTATION.md.",
         "Record all extracted links and their fetch status in manifest.json under description_links array.",
-        "Do NOT route external link fetches through the Webshare residential proxy — only YouTube API calls use the proxy.",
+        "Do NOT route external link fetches through the rotating residential proxy — only YouTube API calls use the proxy.",
     ]
 
     return {

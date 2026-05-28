@@ -182,6 +182,55 @@ def build_webshare_proxy_config() -> tuple[Optional[Any], str, str]:
     return cfg, "webshare", proxy_url
 
 
+def build_dataimpulse_proxy_config() -> tuple[Optional[Any], str, str]:
+    """Mirror of src/universal_agent/youtube_ingest.py:_build_dataimpulse_proxy_config().
+
+    Behavior must match byte-for-byte: same __cr.us zone suffix auto-append,
+    same port int-coercion + 1..65535 validation, same URL format.
+    """
+    username = (os.getenv("DATAIMPULSE_PROXY_USER") or "").strip()
+    password = (os.getenv("DATAIMPULSE_PROXY_PASS") or "").strip()
+    if not username or not password:
+        return None, "disabled", ""
+
+    # DataImpulse uses username__zone suffixes for targeting (e.g. __cr.us).
+    # If the operator only provided the base ID in Infisical, default to US targeting.
+    if "__" not in username:
+        username = f"{username}__cr.us"
+
+    try:
+        from youtube_transcript_api.proxies import GenericProxyConfig
+    except Exception:
+        return None, "module_unavailable", ""
+
+    host = (
+        os.getenv("DATAIMPULSE_PROXY_HOST") or "gw.dataimpulse.com"
+    ).strip() or "gw.dataimpulse.com"
+    port_raw = (os.getenv("DATAIMPULSE_PROXY_PORT") or "823").strip()
+    try:
+        port = int(port_raw)
+    except Exception:
+        port = 823
+    if port <= 0 or port > 65535:
+        port = 823
+
+    proxy_url = f"http://{username}:{password}@{host}:{port}"
+    cfg = GenericProxyConfig(http_url=proxy_url, https_url=proxy_url)
+    return cfg, "dataimpulse", proxy_url
+
+
+def build_proxy_config() -> tuple[Optional[Any], str, str]:
+    """Route to the correct proxy builder based on PROXY_PROVIDER env var.
+
+    Mirrors src/universal_agent/youtube_ingest.py:_build_proxy_config().
+    Default provider is "dataimpulse"; "webshare" remains supported for failover.
+    """
+    provider = (os.getenv("PROXY_PROVIDER") or "dataimpulse").strip().lower()
+    if provider == "webshare":
+        return build_webshare_proxy_config()
+    return build_dataimpulse_proxy_config()
+
+
 def run_youtube_transcript_api_extract(
     video_id: str,
     *,
@@ -339,7 +388,7 @@ def fetch_transcript_and_metadata(
             "attempts": [],
         }
 
-    proxy_config, proxy_mode, proxy_url = build_webshare_proxy_config()
+    proxy_config, proxy_mode, proxy_url = build_proxy_config()
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         transcript_future = executor.submit(

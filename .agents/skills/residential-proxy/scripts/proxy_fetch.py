@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Fetch a URL through the Webshare rotating residential proxy.
+Fetch a URL through the active rotating residential proxy (selected by
+PROXY_PROVIDER; default "dataimpulse").
 
 One-shot utility: loads Infisical credentials, builds the proxy URL,
 fetches the target URL via HTTPS CONNECT through the proxy, and
@@ -37,7 +38,7 @@ from get_proxy_url import get_proxy_url  # noqa: E402
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Fetch a URL through the Webshare residential proxy."
+        description="Fetch a URL through the active rotating residential proxy."
     )
     parser.add_argument("url", help="Target URL to fetch.")
     parser.add_argument("--out", help="File path to save the response body.")
@@ -54,8 +55,9 @@ def main() -> int:
     proxy_url = get_proxy_url()
     if proxy_url is None:
         print(
-            "ERROR: Proxy credentials not found. "
-            "Ensure PROXY_USERNAME and PROXY_PASSWORD are set in Infisical.",
+            "ERROR: Proxy credentials not found for the active provider. "
+            "Check PROXY_PROVIDER and the matching DATAIMPULSE_PROXY_* / "
+            "PROXY_USERNAME-PROXY_PASSWORD secrets in Infisical.",
             file=sys.stderr,
         )
         return 1

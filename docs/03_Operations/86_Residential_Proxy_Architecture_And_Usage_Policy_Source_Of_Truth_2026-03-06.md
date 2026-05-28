@@ -12,10 +12,10 @@ Universal Agent supports **two rotating residential proxy providers** for YouTub
 
 | Provider | Endpoint | Port | Config Class | Default |
 |---|---|---|---|---|
-| **Webshare** | `p.webshare.io` | `80` | `WebshareProxyConfig` | ✅ (default) |
-| **DataImpulse** | `gw.dataimpulse.com` | `823` | `GenericProxyConfig` | — |
+| **DataImpulse** | `gw.dataimpulse.com` | `823` | `GenericProxyConfig` | ✅ (default) |
+| **Webshare** | `p.webshare.io` | `80` | `WebshareProxyConfig` | — (failover) |
 
-The active provider is selected by the `PROXY_PROVIDER` env var (default: `webshare`).
+The active provider is selected by the `PROXY_PROVIDER` env var (default: `dataimpulse`). The code-level default in `src/universal_agent/youtube_ingest.py:_build_proxy_config()` is `"dataimpulse"`; Infisical `production` sets `PROXY_PROVIDER=dataimpulse` explicitly.
 
 > [!NOTE]
 > The desktop transcript worker was decommissioned in April 2026. All transcript
@@ -60,12 +60,12 @@ Implementation:
 
 The VPS transcript fetch path uses rotating residential proxies to bypass YouTube's datacenter IP blocking. It is exposed via the gateway endpoint `/api/v1/youtube/ingest` and called by the CSI enrichment pipeline.
 
-The proxy provider is selected by `PROXY_PROVIDER` (default: `webshare`):
+The proxy provider is selected by `PROXY_PROVIDER` (default: `dataimpulse`):
 
 | Provider | Builder function | Config Class |
 |---|---|---|
-| `webshare` | `_build_webshare_proxy_config()` | `WebshareProxyConfig` |
 | `dataimpulse` | `_build_dataimpulse_proxy_config()` | `GenericProxyConfig` |
+| `webshare` | `_build_webshare_proxy_config()` | `WebshareProxyConfig` |
 
 The router function `_build_proxy_config()` reads `PROXY_PROVIDER` and dispatches to the appropriate builder.
 
@@ -158,7 +158,7 @@ Implementation:
 - `.agents/skills/residential-proxy/scripts/get_proxy_url.py`
 - `.agents/skills/residential-proxy/scripts/proxy_fetch.py`
 
-The `residential-proxy` agent skill provides **one-off** access to the Webshare rotating residential proxy for situations where the VPS datacenter IP is blocked by a target site before any content or CAPTCHA is reachable.
+The `residential-proxy` agent skill provides **one-off** access to the active rotating residential proxy (DataImpulse by default; selected by `PROXY_PROVIDER`) for situations where the VPS datacenter IP is blocked by a target site before any content or CAPTCHA is reachable.
 
 This skill:
 - Loads credentials from Infisical via `initialize_runtime_secrets()` (same pattern as `check_webshare_proxy.py`)
@@ -227,7 +227,7 @@ The reason is both operational and financial:
 ### Approved Uses
 
 Approved now:
-- YouTube transcript fetching via VPS Webshare rotating residential proxy
+- YouTube transcript fetching via VPS rotating residential proxy (DataImpulse by default; Webshare available as failover via `PROXY_PROVIDER=webshare`)
 - YouTube metadata-only extraction paired with transcript workflows
 - approved TGTG use
 - **one-off agent scraping** via the `residential-proxy` skill when a target site blocks the VPS datacenter IP
@@ -287,7 +287,7 @@ This is important because missing proxy configuration can block the entire YouTu
 
 ### Provider Selection
 
-- `PROXY_PROVIDER` — selects active provider: `webshare` (default) or `dataimpulse`
+- `PROXY_PROVIDER` — selects active provider: `dataimpulse` (default) or `webshare`
 
 ### Webshare Credential Env Vars
 
@@ -441,7 +441,7 @@ This can be integrated into the health heartbeat, cron jobs, or manual diagnosti
 ## Bottom Line
 
 The canonical residential proxy policy in Universal Agent is:
-- **use rotating residential proxy (Webshare or DataImpulse, selected by `PROXY_PROVIDER`) as the primary YouTube transcript path on the VPS**
+- **use rotating residential proxy (DataImpulse by default, Webshare as failover, selected by `PROXY_PROVIDER`) as the primary YouTube transcript path on the VPS**
 - **require proxy for VPS YouTube transcript ingestion unless explicitly in local dev mode**
 - **screen videos with the pre-ingest triage gate BEFORE consuming proxy bandwidth — filter by duration, category, and live status**
 - **never send video binary through the proxy**
