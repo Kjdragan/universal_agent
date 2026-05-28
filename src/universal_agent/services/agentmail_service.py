@@ -17,6 +17,13 @@ Env vars:
     UA_AGENTMAIL_WS_RECONNECT_MAX_DELAY  — max backoff seconds (default 120)
     UA_AGENTMAIL_WS_FAIL_OPEN_STATUS_CODES — comma-delimited HTTP statuses that disable WS and rely on polling
     UA_AGENTMAIL_WS_FAIL_OPEN_AFTER_ATTEMPTS — reconnect attempts before fail-open (default 3)
+    UA_AGENTMAIL_GMAIL_FALLBACK    — 1 = on AgentMail HTTP 429 ("Daily send limit
+                                     exceeded"), retry the send via the local
+                                     Google Workspace CLI (gws gmail +send).
+                                     Default 0 (off). Requires `npx` + an
+                                     authenticated gws profile (see
+                                     `.agents/skills/gmail/SKILL.md`).
+    UA_GMAIL_CLI_TIMEOUT_SECONDS   — subprocess timeout for the gws CLI fallback (default 60).
 """
 
 from __future__ import annotations
@@ -220,6 +227,32 @@ def _ws_enabled() -> bool:
 def _auto_send() -> bool:
     val = os.getenv("UA_AGENTMAIL_AUTO_SEND", "0").strip().lower()
     return val in {"1", "true", "yes", "on"}
+
+
+def _gmail_fallback_enabled() -> bool:
+    val = os.getenv("UA_AGENTMAIL_GMAIL_FALLBACK", "0").strip().lower()
+    return val in _TRUTHY
+
+
+def _gmail_cli_timeout_seconds() -> float:
+    try:
+        return max(5.0, float(os.getenv("UA_GMAIL_CLI_TIMEOUT_SECONDS", "60") or 60))
+    except Exception:
+        return 60.0
+
+
+def _gmail_cli_argv() -> list[str]:
+    """Argv prefix for the gws CLI invocation.
+
+    Overridable via UA_GMAIL_CLI_CMD (whitespace-separated) for tests and
+    bespoke installs. Default uses `npx -y @googleworkspace/cli`, which is
+    what `.agents/skills/gmail/SKILL.md` documents and what's installed on the
+    VPS.
+    """
+    override = os.getenv("UA_GMAIL_CLI_CMD", "").strip()
+    if override:
+        return override.split()
+    return ["npx", "-y", "@googleworkspace/cli"]
 
 
 def _ws_reconnect_base() -> float:
@@ -741,7 +774,22 @@ class AgentMailService:
         if labels:
             kwargs["labels"] = labels
 
-        msg = await self._client.inboxes.messages.send(**kwargs)
+        try:
+            msg = await self._client.inboxes.messages.send(**kwargs)
+        except Exception as exc:
+            # On HTTP 429 ("Daily send limit exceeded" or other rate-limit)
+            # optionally fall back to the local Google Workspace CLI. Gated by
+            # UA_AGENTMAIL_GMAIL_FALLBACK so the behavior change is conscious.
+            if getattr(exc, "status_code", None) == 429 and _gmail_fallback_enabled():
+                logger.warning(
+                    "📧 AgentMail 429 (%s) — falling back to gws gmail +send to=%s subject=%r",
+                    getattr(exc, "body", None), to, subject,
+                )
+                return await self._send_via_gmail_cli(
+                    to=to, subject=subject, text=text, html=html,
+                    attachments=attachments,
+                )
+            raise
         self._messages_sent += 1
         logger.info("📧 Sent email to=%s subject=%r message_id=%s", to, subject, msg.message_id)
         # Email notifications suppressed — dedicated Mail page provides visibility.
@@ -783,6 +831,108 @@ class AgentMailService:
             },
         )
         return {"status": "draft", "draft_id": draft.draft_id, "inbox": self._inbox_address}
+
+    async def _send_via_gmail_cli(
+        self, *, to: str, subject: str, text: str,
+        html: Optional[str], attachments: Optional[list[dict]],
+    ) -> dict[str, Any]:
+        """Send via `gws gmail +send` when AgentMail has exhausted its daily limit.
+
+        Returns a dict shaped like ``_send_direct``'s success path but with
+        ``status="sent_via_gmail_fallback"`` and ``via="gmail_cli"`` so callers
+        can tell the two paths apart in logs/metrics. The From: header will be
+        the gws-authenticated account (e.g. kevinjdragan@gmail.com), NOT the
+        AgentMail inbox.
+        """
+        import base64
+        import shutil
+        import subprocess
+        import tempfile
+
+        argv = list(_gmail_cli_argv()) + [
+            "gmail", "+send",
+            "--format", "json",
+            "--to", to,
+            "--subject", subject or "(no subject)",
+        ]
+        # Prefer HTML body when caller provided one — Gmail renders better.
+        if html:
+            argv += ["--body", html, "--html"]
+        else:
+            argv += ["--body", text or ""]
+
+        tmpdir: Optional[str] = None
+        try:
+            if attachments:
+                tmpdir = tempfile.mkdtemp(prefix="ua_gmail_fallback_")
+                for idx, att in enumerate(attachments):
+                    filename = str(att.get("filename") or f"attachment_{idx}")
+                    safe_name = os.path.basename(filename) or f"attachment_{idx}"
+                    path = os.path.join(tmpdir, safe_name)
+                    raw = att.get("content")
+                    if isinstance(raw, str):
+                        # AgentMail attachment content is base64-encoded text.
+                        data = base64.b64decode(raw)
+                    elif isinstance(raw, (bytes, bytearray)):
+                        data = bytes(raw)
+                    else:
+                        logger.warning(
+                            "📧 Gmail fallback: skipping attachment %r — unsupported content type %s",
+                            filename, type(raw).__name__,
+                        )
+                        continue
+                    with open(path, "wb") as fh:
+                        fh.write(data)
+                    argv += ["-a", path]
+
+            timeout = _gmail_cli_timeout_seconds()
+            try:
+                proc = await asyncio.to_thread(
+                    subprocess.run,
+                    argv,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    check=False,
+                )
+            except FileNotFoundError as exc:
+                raise RuntimeError(
+                    f"agentmail_gmail_fallback_missing_cli: {argv[0]} not found on PATH"
+                ) from exc
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError(
+                    f"agentmail_gmail_fallback_timeout: gws CLI exceeded {timeout}s"
+                ) from exc
+
+            if proc.returncode != 0:
+                stderr = (proc.stderr or "").strip()[:500]
+                stdout = (proc.stdout or "").strip()[:500]
+                raise RuntimeError(
+                    f"agentmail_gmail_fallback_failed: rc={proc.returncode} "
+                    f"stderr={stderr!r} stdout={stdout!r}"
+                )
+
+            message_id: str = "gmail-cli-unknown"
+            try:
+                payload = json.loads(proc.stdout or "{}")
+                message_id = str(payload.get("id") or payload.get("messageId") or message_id)
+            except Exception:
+                logger.debug("📧 Gmail fallback: stdout was not JSON; using sentinel message_id")
+
+            self._messages_sent += 1
+            logger.info(
+                "📧 Sent via gmail-cli fallback to=%s subject=%r message_id=%s",
+                to, subject, message_id,
+            )
+            return {
+                "status": "sent_via_gmail_fallback",
+                "message_id": message_id,
+                "inbox": self._inbox_address,
+                "via": "gmail_cli",
+            }
+        finally:
+            if tmpdir:
+                shutil.rmtree(tmpdir, ignore_errors=True)
 
     async def send_draft(
         self,

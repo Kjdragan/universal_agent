@@ -519,6 +519,28 @@ Digest/report mail to Kevin uses AgentMail, not Gmail:
 - Kevin sees the message as coming from Simone
 - Avoids Kevin appearing to email himself
 
+### Gmail (gws) CLI Fallback on AgentMail 429
+
+> **Status:** Added 2026-05-28. Lives in `src/universal_agent/services/agentmail_service.py:_send_via_gmail_cli`. Gated by `UA_AGENTMAIL_GMAIL_FALLBACK=1` (default off).
+
+**Motivation.** AgentMail enforces a per-inbox daily send quota. When the quota is exhausted, every outbound `send_email` call raises `ApiError(status_code=429, body="Daily send limit exceeded")` with a `retry-after` header that can be ~13 hours, silently dropping that day's digests, notifications, and proactive alerts (incident: 2026-05-28 WEDNESDAY YouTube digest, fully produced, never delivered).
+
+**Behavior.** When the env flag is set, `_send_direct` catches `status_code==429` and shells out to `npx -y @googleworkspace/cli gmail +send …` via `_send_via_gmail_cli`. Other status codes still propagate — the fallback does NOT mask auth or config failures. Success returns `{"status": "sent_via_gmail_fallback", "message_id": <Gmail ID>, "via": "gmail_cli", "inbox": <agentmail inbox>}` so callers can distinguish the two paths.
+
+**From-address change.** The gws CLI sends from the authenticated Google account (default: Kevin's personal Gmail), NOT from `oddcity216@agentmail.to`. Inbound replies to fallback-sent messages will NOT reach Simone's WebSocket listener — they go to Kevin's normal Gmail inbox. This is acceptable for self-addressed digests; it's a tradeoff for outbound mail to other recipients.
+
+**HTML preferred.** If `send_email(..., html=...)` is set, the CLI runs with `--html` and passes the HTML body. Otherwise the plaintext `text` body is passed.
+
+**Attachments.** AgentMail base64 attachment dicts are decoded into a tmpdir and passed as repeated `-a /path/file` flags; the tmpdir is cleaned up in a `finally`.
+
+**Operator preconditions:**
+- `npx` available on PATH (VPS already has Node 20).
+- `@googleworkspace/cli` installs lazily via `npx -y` on first use.
+- An authenticated gws profile under `~/.config/gws/` (`auth status` should report `token_valid: true`). If `token_valid: false`, re-run `npx -y @googleworkspace/cli auth login` on the VPS once.
+- Set `UA_AGENTMAIL_GMAIL_FALLBACK=1` in `/opt/universal_agent/.env`. Optional: `UA_GMAIL_CLI_TIMEOUT_SECONDS=60`, `UA_GMAIL_CLI_CMD="…"` to override the argv prefix.
+
+**Test coverage:** `tests/unit/test_agentmail_gmail_fallback.py` covers the success path, flag-gated 429 → fallback transition, non-429 errors still raising, CLI failure propagation, attachment plumbing, and missing-CLI handling.
+
 ### Large Attachments & Payload Context Limits
 
 When dealing with large binary attachments (PDFs, large PNGs, etc.), LLM context limits prevent generating massive Base64 payloads directly in the JSON response logic. 
