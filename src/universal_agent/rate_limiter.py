@@ -15,6 +15,7 @@ Configuration (environment variables):
 """
 
 import asyncio
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 import json
 import logging
@@ -22,12 +23,14 @@ import os
 from pathlib import Path
 import random
 import time
-from typing import Any, AsyncIterator, Callable, Optional, Self
+from typing import Any, TypeVar
 
 try:
     import logfire
 except ImportError:
     logfire = None
+
+T = TypeVar("T")
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +80,7 @@ def _get_state_path() -> Path:
 class ZAIRateLimiter:
     """
     Centralized rate limiter for ZAI API calls.
-    
+
     Features:
     - Global concurrency limit (default 3)
     - Adaptive backoff that increases floor after repeated 429s
@@ -85,17 +88,17 @@ class ZAIRateLimiter:
     - Shared state across all callers
     - Logfire instrumentation for monitoring
     """
-    
-    _instance: Optional["ZAIRateLimiter"] = None
-    _lock: asyncio.Lock = None
-    
-    def __init__(self, max_concurrent: int | None = None):
+
+    _instance: "ZAIRateLimiter | None" = None
+    _lock: "asyncio.Lock | None" = None
+
+    def __init__(self, max_concurrent: int | None = None) -> None:
         # Config from environment
         # Default to 2 concurrent - ZAI rate limits are strict
         self._max_concurrent = max_concurrent or int(os.getenv("ZAI_MAX_CONCURRENT", "2"))
         self._initial_backoff = float(os.getenv("ZAI_INITIAL_BACKOFF", "1.0"))
         self._max_backoff = float(os.getenv("ZAI_MAX_BACKOFF", "30.0"))
-        
+
         # State
         self._semaphore = asyncio.Semaphore(self._max_concurrent)
         self._backoff_floor = self._initial_backoff
@@ -110,13 +113,13 @@ class ZAIRateLimiter:
         self._last_fup_time = 0.0
         self._last_fup_snippet = ""
         self._last_fup_context = ""
-        
+
         # Minimum inter-request spacing to avoid burst rate limits
         self._min_request_interval = float(os.getenv("ZAI_MIN_INTERVAL", "0.5"))
         self._last_request_time = 0.0
         self._request_lock = asyncio.Lock()
         self._state_lock = asyncio.Lock()
-        
+
         if logfire:
             logfire.info(
                 "zai_rate_limiter_initialized",
@@ -124,19 +127,19 @@ class ZAIRateLimiter:
                 initial_backoff=self._initial_backoff,
                 max_backoff=self._max_backoff,
             )
-    
+
     @classmethod
     def get_instance(cls: type["ZAIRateLimiter"], max_concurrent: int | None = None) -> "ZAIRateLimiter":
         """Get or create the singleton instance."""
         if cls._instance is None:
             cls._instance = cls(max_concurrent)
         return cls._instance
-    
+
     @classmethod
     def reset_instance(cls: type["ZAIRateLimiter"]) -> None:
         """Reset the singleton (useful for testing)."""
         cls._instance = None
-    
+
     async def record_429(self, context: str = "") -> None:
         """
         Called when a 429 is received. Adjusts adaptive backoff.
@@ -236,27 +239,27 @@ class ZAIRateLimiter:
             os.replace(tmp, path)
         except Exception:  # noqa: BLE001 — never crash the rate limiter over a snapshot write
             logger.warning("rate_limiter snapshot persist failed", exc_info=True)
-    
+
     def get_backoff(self, attempt: int) -> float:
         """
         Calculate backoff with jitter. Uses adaptive floor.
-        
+
         Args:
             attempt: Zero-indexed attempt number
-            
+
         Returns:
             Backoff duration in seconds
         """
         base = self._backoff_floor * (2 ** attempt)
         jitter = random.uniform(0.1, 0.5) * base
         return min(base + jitter, self._max_backoff)
-    
+
     @asynccontextmanager
     async def acquire(self, context: str = "") -> AsyncIterator[None]:
         """
         Acquire a slot for an API call.
         Enforces both concurrent limit AND minimum inter-request spacing.
-        
+
         Args:
             context: Optional context string for logging
         """
@@ -276,8 +279,8 @@ class ZAIRateLimiter:
             yield
         finally:
             self._semaphore.release()
-    
-    def get_stats(self) -> dict:
+
+    def get_stats(self) -> dict[str, float]:
         """Return current rate limiter statistics."""
         return {
             "max_concurrent": self._max_concurrent,
@@ -289,37 +292,37 @@ class ZAIRateLimiter:
 
 
 async def with_rate_limit_retry(
-    func: Callable[..., Any],
-    *args,
+    func: Callable[..., Awaitable[T]],
+    *args: Any,
     max_retries: int = 5,
     context: str = "",
-    **kwargs
-) -> Any:
+    **kwargs: Any,
+) -> T:
     """
     Execute an async function with rate limit handling.
-    
+
     This is a convenience wrapper that:
     1. Acquires a slot from the rate limiter
     2. Executes the function
     3. Handles 429 errors with adaptive backoff
     4. Records success/failure for adaptive tuning
-    
+
     Args:
         func: Async function to execute
         *args: Positional arguments for func
         max_retries: Maximum retry attempts (default: 5)
         context: Context string for logging
         **kwargs: Keyword arguments for func
-        
+
     Returns:
         Result of func
-        
+
     Raises:
         Last exception if all retries exhausted
     """
     limiter = ZAIRateLimiter.get_instance()
     last_error = None
-    
+
     for attempt in range(max_retries):
         async with limiter.acquire(context):
             try:
@@ -351,7 +354,7 @@ async def with_rate_limit_retry(
                 else:
                     # Non-rate-limit error, don't retry
                     raise
-    
+
     # All retries exhausted
     if last_error:
         raise last_error
