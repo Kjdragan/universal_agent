@@ -110,7 +110,7 @@ async def run_triage_batch(db: DiscordIntelligenceDB, channel_id: str, limit: in
     try:
         async with limiter.acquire():
             response = await client.messages.create(
-                model=CONFIG.get("models", {}).get("triage", "claude-haiku-4-5-20251001"),
+                model=CONFIG.get("models", {}).get("triage", "claude-haiku-4-5"),
                 max_tokens=2048,
                 system=TRIAGE_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": prompt}]

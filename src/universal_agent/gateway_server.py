@@ -205,7 +205,7 @@ from universal_agent.signals_ingest import (
 )
 from universal_agent.utils.heartbeat_findings_schema import HeartbeatFindings
 from universal_agent.utils.json_utils import extract_json_payload
-from universal_agent.utils.model_resolution import resolve_sonnet
+from universal_agent.utils.model_resolution import resolve_opus, resolve_sonnet
 from universal_agent.vp import (
     MissionDispatchRequest,
     cancel_mission,
@@ -29322,15 +29322,24 @@ async def vision_describe(request: VisionDescribeRequest):
     if httpx is None:
         raise HTTPException(status_code=500, detail="httpx is not available in this runtime")
 
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+    api_key = (
+        os.getenv("ANTHROPIC_API_KEY")
+        or os.getenv("ANTHROPIC_AUTH_TOKEN")
+        or os.getenv("ZAI_API_KEY")
+    )
     if not api_key:
-        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured for vision tasks")
+        raise HTTPException(
+            status_code=500,
+            detail="No Anthropic-compatible API key configured for vision tasks",
+        )
 
-    # FIXME(claude/pr-validate-workflow-fix): `resolve_opus` is defined at
-    # universal_agent/utils/model_resolution.py:82 but is NOT imported in this
-    # file. Calling vision_describe would raise NameError. Filed as a follow-up
-    # issue; the noqa here is a documented gap, not a silent fix.
-    model = resolve_opus()  # noqa: F821
+    # Vision routes through the same proxy as the rest of the daemon:
+    # resolve_opus() returns the configured opus-tier model (glm-5.1 on the
+    # ZAI Anthropic-compatible endpoint) and the request goes to
+    # ANTHROPIC_BASE_URL below. To use real Anthropic high-res vision instead,
+    # point ANTHROPIC_BASE_URL at api.anthropic.com with a real console key
+    # and set an explicit claude-* model here.
+    model = resolve_opus()
 
     try:
         base64_data = request.image_base64
@@ -29341,9 +29350,12 @@ async def vision_describe(request: VisionDescribeRequest):
             media_type = header.split(";")[0].replace("data:", "")
             base64_data = content
 
+        base_url = (
+            os.getenv("ANTHROPIC_BASE_URL") or "https://api.z.ai/api/anthropic"
+        ).rstrip("/")
         async with httpx.AsyncClient(timeout=request.timeout_seconds) as client:
             response = await client.post(
-                "https://api.anthropic.com/v1/messages",
+                f"{base_url}/v1/messages",
                 headers={
                     "x-api-key": api_key,
                     "anthropic-version": "2023-06-01",
