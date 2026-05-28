@@ -709,6 +709,13 @@ def create_insight_brief_task(
             "2. THE EVIDENCE: how the sources support this.",
             "3. SO WHAT: why Kevin should care and what is actionable.",
             "",
+            "DELIVERABLE FILENAME CONTRACT (mandatory):",
+            "- HTML rendering MUST be saved as `insight_artifact.html` at the workspace root.",
+            "- PDF rendering MUST be saved as `insight_artifact.pdf` at the workspace root.",
+            "- Do NOT use `brief.html` / `brief.pdf` — those collide visually with `BRIEF.md`",
+            "  (the pre-work self-briefing artifact) and have caused operator confusion.",
+            "- If you delegate this work to another VP/agent, propagate this contract verbatim.",
+            "",
             "Store the final brief as a durable artifact. If you email Kevin about it,",
             "honor the FRAMING note above — open with proactive-discovery phrasing.",
         ]

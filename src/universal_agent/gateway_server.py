@@ -23975,6 +23975,23 @@ async def dashboard_todolist_get_goal_artifacts(task_id: str):
     artifact_names = ("BRIEF.md", "ACCEPTANCE.md", "goal_condition.txt", "COMPLETION.md")
     artifacts: dict[str, Optional[dict[str, Any]]] = {name: None for name in artifact_names}
 
+    # Final deliverable artifacts (rendered outputs). These are NOT part of
+    # the /goal self-briefing protocol — they're the actual artifact the
+    # mission was dispatched to produce. We surface metadata (path + size)
+    # so the dashboard can link / download / preview, but we do not inline
+    # PDF content. HTML content is small enough to inline as a preview.
+    # Filenames mirror the contract in create_insight_brief_task plus the
+    # legacy `brief.*` names produced before that contract existed.
+    deliverable_names = (
+        "insight_artifact.html",
+        "insight_artifact.pdf",
+        "brief.html",
+        "brief.pdf",
+        "insight_brief.html",
+        "insight_brief.pdf",
+    )
+    deliverables: dict[str, Optional[dict[str, Any]]] = {}
+
     candidate_dirs: list[Path] = []
     if workspace_path:
         candidate_dirs.append(Path(workspace_path).expanduser())
@@ -24007,6 +24024,28 @@ async def dashboard_todolist_get_goal_artifacts(task_id: str):
                 }
             break  # first hit wins; canonical workspace takes precedence
 
+    for name in deliverable_names:
+        for ws_dir in candidate_dirs:
+            if not ws_dir.is_dir():
+                continue
+            fpath = ws_dir / name
+            if not (fpath.exists() and fpath.is_file()):
+                continue
+            entry: dict[str, Any] = {
+                "path": str(fpath),
+                "size_bytes": fpath.stat().st_size,
+            }
+            # Only inline HTML content (text); PDFs surface as path+size only.
+            if name.endswith(".html"):
+                try:
+                    raw = fpath.read_bytes()[:128 * 1024]
+                    entry["content"] = raw.decode("utf-8", errors="replace")
+                    entry["truncated"] = fpath.stat().st_size > 128 * 1024
+                except Exception as exc:
+                    entry["error"] = str(exc)[:200]
+            deliverables[name] = entry
+            break
+
     return {
         "task_id": tid,
         "use_goal_loop": use_goal_loop,
@@ -24020,6 +24059,7 @@ async def dashboard_todolist_get_goal_artifacts(task_id: str):
         "workspace_path": workspace_path,
         "cody_workspace_dir": cody_workspace_dir or None,
         "artifacts": artifacts,
+        "deliverables": deliverables,
     }
 
 
