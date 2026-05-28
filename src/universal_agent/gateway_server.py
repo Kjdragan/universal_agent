@@ -2400,6 +2400,7 @@ class YouTubeIngestRequest(BaseModel):
 class VisionDescribeRequest(BaseModel):
     image_base64: str = Field(..., description="Base64 encoded image string (e.g. data:image/png;base64,...)")
     prompt: str = Field("Describe this image in detail.", description="Instructions for the vision model")
+    timeout_seconds: float = Field(60.0, description="Wall-clock cap for the upstream vision call (seconds)")
 
 
 # =============================================================================
