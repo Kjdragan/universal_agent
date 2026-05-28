@@ -3,7 +3,7 @@
 Covers:
 - Floor filtering / scoring composite math
 - Diversity selection (Jaccard <0.30 for insight #2)
-- Sub-threshold filler path when no candidates clear the floor
+- No-send path when no candidates clear the floor (PR A consolidation)
 - None return when no candidates exist in the window
 - Idempotency of scoring-log writes within the same delivery slot
 """
@@ -153,8 +153,10 @@ def test_diversity_picks_low_overlap_second(tmp_path) -> None:
         conn.close()
 
 
-def test_sub_threshold_filler_when_no_one_clears(tmp_path) -> None:
-    """When zero candidates meet floor, still surface the top-scored brief."""
+def test_returns_none_when_no_candidate_clears_floor(tmp_path) -> None:
+    """PR A of the insight pipeline consolidation: when zero candidates meet
+    the floor, the composer returns None so the cron skips the send. Empty
+    hours stay empty — no sub-threshold filler padding."""
     conn = _connect(tmp_path)
     try:
         _insert_brief(
@@ -166,14 +168,12 @@ def test_sub_threshold_filler_when_no_one_clears(tmp_path) -> None:
             supporting_channel_count=2,  # below floor
         )
         result = compose_hourly_email(conn, hour_window_hours=1)
-        assert result is not None
-        assert result["met_floor"][0] is False
-        # Scoring-log row should be tagged as sub_threshold_filler.
+        assert result is None
+        # No scoring-log rows should be written when the composer short-circuits.
         row = conn.execute(
             "SELECT delivery_slot FROM proactive_brief_scoring_log WHERE artifact_id='weak'"
         ).fetchone()
-        assert row is not None
-        assert row["delivery_slot"] == _scoring.SLOT_SUB_THRESHOLD_FILLER
+        assert row is None
     finally:
         conn.close()
 
@@ -186,7 +186,7 @@ def test_floor_clears_when_thresholds_met(tmp_path) -> None:
             artifact_id="ok",
             title="ATLAS insight brief: clear signal",
             topic_tags=["clear signal"],
-            confidence=0.75,
+            confidence=0.85,  # PR A: floor raised 0.7 → 0.8
             supporting_channel_count=3,
         )
         result = compose_hourly_email(conn, hour_window_hours=1)
