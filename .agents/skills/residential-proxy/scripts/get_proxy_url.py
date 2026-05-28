@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-Resolve and print the Webshare rotating residential proxy URL.
+Resolve and print the active residential proxy URL.
 
-Loads credentials from Infisical (via the project's infisical_loader),
-then constructs and prints the proxy URL to stdout.
+Provider is selected by PROXY_PROVIDER (default: "dataimpulse"). Credentials
+are loaded from Infisical via the project's infisical_loader.
 
 Usage:
     uv run .agents/skills/residential-proxy/scripts/get_proxy_url.py
-    # prints: http://rotatingproxyua-rotate:<password>@p.webshare.io:80
+    # dataimpulse: http://<user>:<pass>@gw.dataimpulse.com:823
+    # webshare:    http://<user>:<pass>@p.webshare.io:80
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import sys
-from urllib.parse import quote
+from urllib.parse import quote  # only used for the webshare branch
 
 REPO_ROOT = Path(__file__).resolve().parents[4]  # .agents/skills/residential-proxy/scripts -> repo root
 SRC_ROOT = REPO_ROOT / "src"
@@ -25,10 +26,7 @@ if str(SRC_ROOT) not in sys.path:
 from universal_agent.infisical_loader import initialize_runtime_secrets  # noqa: E402
 
 
-def get_proxy_url() -> str | None:
-    """Load Infisical secrets and return the Webshare residential proxy URL."""
-    initialize_runtime_secrets()
-
+def _build_webshare_url() -> str | None:
     username = (
         os.getenv("PROXY_USERNAME")
         or os.getenv("WEBSHARE_PROXY_USER")
@@ -43,27 +41,66 @@ def get_proxy_url() -> str | None:
         os.getenv("WEBSHARE_PROXY_HOST")
         or os.getenv("PROXY_HOST")
         or "p.webshare.io"
-    ).strip()
+    ).strip() or "p.webshare.io"
     port = (
         os.getenv("WEBSHARE_PROXY_PORT")
         or os.getenv("PROXY_PORT")
         or "80"
-    ).strip()
+    ).strip() or "80"
 
     if not username or not password:
         return None
+    return f"http://{quote(username, safe='')}:{quote(password, safe='')}@{host}:{port}"
 
-    user_encoded = quote(username, safe="")
-    pass_encoded = quote(password, safe="")
-    return f"http://{user_encoded}:{pass_encoded}@{host}:{port}"
+
+def _build_dataimpulse_url() -> str | None:
+    """Mirror youtube_ingest.py:_build_dataimpulse_proxy_config() URL shape."""
+    username = (os.getenv("DATAIMPULSE_PROXY_USER") or "").strip()
+    password = (os.getenv("DATAIMPULSE_PROXY_PASS") or "").strip()
+    if not username or not password:
+        return None
+
+    if "__" not in username:
+        username = f"{username}__cr.us"
+
+    host = (
+        os.getenv("DATAIMPULSE_PROXY_HOST") or "gw.dataimpulse.com"
+    ).strip() or "gw.dataimpulse.com"
+    port_raw = (os.getenv("DATAIMPULSE_PROXY_PORT") or "823").strip()
+    try:
+        port = int(port_raw)
+    except Exception:
+        port = 823
+    if port <= 0 or port > 65535:
+        port = 823
+
+    return f"http://{username}:{password}@{host}:{port}"
+
+
+def get_proxy_url() -> str | None:
+    """Return the residential proxy URL for the active provider.
+
+    Provider selection follows PROXY_PROVIDER (default: "dataimpulse"), matching
+    src/universal_agent/youtube_ingest.py:_build_proxy_config().
+    """
+    initialize_runtime_secrets()
+    provider = (os.getenv("PROXY_PROVIDER") or "dataimpulse").strip().lower()
+    if provider == "webshare":
+        return _build_webshare_url()
+    return _build_dataimpulse_url()
 
 
 def main() -> int:
     url = get_proxy_url()
     if url is None:
+        provider = (os.getenv("PROXY_PROVIDER") or "dataimpulse").strip().lower()
+        if provider == "webshare":
+            missing = "PROXY_USERNAME/PROXY_PASSWORD (or WEBSHARE_PROXY_USER/PASS)"
+        else:
+            missing = "DATAIMPULSE_PROXY_USER/DATAIMPULSE_PROXY_PASS"
         print(
-            "ERROR: Proxy credentials not found. "
-            "Ensure PROXY_USERNAME and PROXY_PASSWORD are set in Infisical.",
+            f"ERROR: Proxy credentials not found for provider={provider!r}. "
+            f"Ensure {missing} are set in Infisical.",
             file=sys.stderr,
         )
         return 1

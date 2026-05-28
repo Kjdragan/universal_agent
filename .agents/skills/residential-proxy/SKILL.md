@@ -1,11 +1,11 @@
 ---
 name: residential-proxy
-description: Route web requests through the project's Webshare rotating residential proxy to bypass datacenter IP blocks. Use when scraping gets blocked because the VPS datacenter IP is detected, when agent-browser or playwright-cli encounters a Cloudflare "access denied" or bot-detection wall before even reaching a CAPTCHA, when you need to fetch content from a site that rate-limits or blocks server IPs, or when a previous scraping attempt failed with a 403/503 status. This skill provides the proxy URL that can be passed to Playwright, curl, httpx, or the captcha-solver skill. It does NOT solve CAPTCHAs itself — for that, chain with the captcha-solver skill. IMPORTANT: residential proxy bandwidth costs real money (3 GB/month cap). Only use when standard fetching fails due to IP-based blocking.
+description: Route web requests through the project's rotating residential proxy (provider selected by PROXY_PROVIDER — default DataImpulse, Webshare available for failover) to bypass datacenter IP blocks. Use when scraping gets blocked because the VPS datacenter IP is detected, when agent-browser or playwright-cli encounters a Cloudflare "access denied" or bot-detection wall before even reaching a CAPTCHA, when you need to fetch content from a site that rate-limits or blocks server IPs, or when a previous scraping attempt failed with a 403/503 status. This skill provides the proxy URL that can be passed to Playwright, curl, httpx, or the captcha-solver skill. It does NOT solve CAPTCHAs itself — for that, chain with the captcha-solver skill. IMPORTANT: residential proxy bandwidth costs real money. Only use when standard fetching fails due to IP-based blocking.
 ---
 
 # Residential Proxy Skill
 
-This skill provides one-off access to the project's **Webshare rotating residential proxy** for situations where the VPS's datacenter IP gets blocked before you can even attempt to scrape content.
+This skill provides one-off access to the project's **rotating residential proxy** for situations where the VPS's datacenter IP gets blocked before you can even attempt to scrape content. The active provider is selected by `PROXY_PROVIDER` (default `dataimpulse`; `webshare` available as failover).
 
 ## When to use this
 
@@ -28,9 +28,10 @@ We have a **3 GB/month** cap on residential proxy bandwidth. Typical web pages a
 
 ### Option 1: Get the proxy URL (for use with any tool)
 
-The proxy URL format is:
+The proxy URL format depends on `PROXY_PROVIDER`:
 ```
-http://<username>:<password>@p.webshare.io:80
+dataimpulse: http://<user>:<pass>@gw.dataimpulse.com:823   (default)
+webshare:    http://<user>:<pass>@p.webshare.io:80
 ```
 
 To resolve it from Infisical secrets at runtime:
@@ -74,19 +75,20 @@ uv run .agents/skills/captcha-solver/scripts/solve_with_nopecha.py \
 ### Option 5: Verify proxy health
 
 ```bash
-uv run scripts/check_webshare_proxy.py --skip-http
+uv run scripts/check_proxy.py          # honors PROXY_PROVIDER (default: dataimpulse)
+uv run scripts/check_proxy.py --provider webshare    # explicit override
 ```
 
-This runs the project's standard proxy health check (TCP + HTTPS CONNECT + YouTube probe).
+This runs the project's standard proxy health check (TCP + HTTPS CONNECT + YouTube probe) against the selected provider.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `proxy_not_configured` | Missing credentials | Run `uv run scripts/check_webshare_proxy_credentials.py` |
-| `404 Not Found` on CONNECT | Wrong host or username | Verify `WEBSHARE_PROXY_HOST=p.webshare.io` and username has `-rotate` suffix |
-| `407 Proxy Auth Required` | Wrong password | Regenerate in Webshare dashboard, update Infisical |
-| Timeouts | Bandwidth exhausted | Check Webshare dashboard for remaining quota |
+| `proxy_not_configured` | Missing credentials for active provider | Check `PROXY_PROVIDER` then verify `DATAIMPULSE_PROXY_USER`/`DATAIMPULSE_PROXY_PASS` (or `PROXY_USERNAME`/`PROXY_PASSWORD` for webshare) in Infisical |
+| `404 Not Found` on CONNECT | Wrong host or username | Confirm `gw.dataimpulse.com:823` (dataimpulse) or `p.webshare.io:80` (webshare) |
+| `407 Proxy Auth Required` | Wrong password | Regenerate in provider dashboard, update Infisical |
+| Timeouts | Bandwidth exhausted | Check provider dashboard for remaining quota (see also `get_dataimpulse_usage_stats()` in `youtube_ingest.py`) |
 
 ## Important rules
 
