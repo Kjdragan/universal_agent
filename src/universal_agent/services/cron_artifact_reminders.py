@@ -8,9 +8,15 @@ follow-ups:
 
   - ``sent_initial``      → sent_same_day_nudge at T+4h
   - ``sent_same_day_nudge`` → sent_day3 at T+72h after finished_at
-  - ``sent_day3``         → sent_day7 at T+168h after finished_at
-  - ``sent_day7``         → ``stopped`` (no more emails; row still
+  - ``sent_day3``         → ``stopped`` (final reminder; row still
                             visible in morning briefing until acked)
+
+The cadence is intentionally capped at 3 emails total (initial +
+same-day nudge + day-3). An artifact ignored for 3 days is unlikely to
+be acted on by a 4th (day-7) reminder, so the day-7 step was removed
+and day-3 is now the final reminder. Legacy in-flight rows sitting at
+``sent_day3`` or ``sent_day7`` transition cleanly to ``stopped`` on the
+next sweep — no day-7 email is sent.
 
 Once an artifact transitions to status=ACCEPTED (via the ack endpoint),
 the reminder loop short-circuits.
@@ -45,14 +51,13 @@ logger = logging.getLogger(__name__)
 
 SAME_DAY_NUDGE_DELAY_S = 4 * 3600
 DAY3_DELAY_S = 72 * 3600
-DAY7_DELAY_S = 168 * 3600
 
 # State transitions; each value is the next state name + offset (from
-# ``finished_at_epoch``) to schedule.
+# ``finished_at_epoch``) to schedule. ``sent_day3`` has no entry here —
+# it is terminal, so the day-3 reminder is the last email sent.
 _STATE_TRANSITIONS: dict[str, tuple[str, float]] = {
     "sent_initial": ("sent_same_day_nudge", SAME_DAY_NUDGE_DELAY_S),
     "sent_same_day_nudge": ("sent_day3", DAY3_DELAY_S),
-    "sent_day3": ("sent_day7", DAY7_DELAY_S),
 }
 _TERMINAL_STATE = "stopped"
 
@@ -344,8 +349,7 @@ async def _send_reminder(
 
 _REMINDER_HEADLINES = {
     "sent_same_day_nudge": "Still pending: ",
-    "sent_day3": "Day-3 reminder: ",
-    "sent_day7": "Day-7 reminder (final): ",
+    "sent_day3": "Day-3 reminder (final): ",
 }
 
 
@@ -377,7 +381,7 @@ def _compose_reminder_email(
         text_lines.append(
             f"Dashboard: {dashboard_base_url.rstrip('/')}/dashboard/todolist?artifact={artifact_id}"
         )
-    if next_state == "sent_day7":
+    if next_state == "sent_day3":
         text_lines.append("")
         text_lines.append(
             "This is the final reminder. The artifact stays in the dashboard "
@@ -402,7 +406,7 @@ def _compose_reminder_email(
     final_block = (
         "<p><em>This is the final reminder. The artifact stays in the dashboard "
         "until acknowledged or archived.</em></p>"
-        if next_state == "sent_day7"
+        if next_state == "sent_day3"
         else ""
     )
     html_body = (
