@@ -24,6 +24,14 @@ type ArtifactFile = {
   error?: string;
 } | null;
 
+type DeliverableFile = {
+  path: string;
+  size_bytes?: number;
+  truncated?: boolean;
+  content?: string | null;
+  error?: string;
+};
+
 type GoalArtifactsPayload = {
   task_id: string;
   use_goal_loop: boolean;
@@ -46,6 +54,12 @@ type GoalArtifactsPayload = {
     "goal_condition.txt": ArtifactFile;
     "COMPLETION.md": ArtifactFile;
   };
+  // Final mission deliverables (rendered outputs). Present when the mission
+  // produced HTML/PDF artifacts. Keys are filenames; values include path +
+  // size (and inline content for HTML). Absent or empty when no deliverables
+  // were produced (e.g. mid-flight task, or a task whose mission writes
+  // markdown-only outputs).
+  deliverables?: Record<string, DeliverableFile>;
 };
 
 type Props = {
@@ -225,6 +239,60 @@ export function GoalArtifactsPanel({ taskId, expanded }: Props) {
           );
         })}
       </div>
+
+      {/* Deliverables (rendered outputs from the mission). Surfaces final
+          HTML/PDF artifacts produced in the mission workspace — e.g.
+          `insight_artifact.html` / `insight_artifact.pdf` for insight-brief
+          missions. PDFs surface as path + size only (no inline preview);
+          HTML may inline a preview when small. */}
+      {data.deliverables && Object.keys(data.deliverables).length > 0 && (
+        <div className="mt-3 pt-2 border-t border-kcd-border/50">
+          <div className="font-mono text-[10px] uppercase tracking-wider text-kcd-cyan mb-1">
+            Deliverables
+          </div>
+          <div className="space-y-1">
+            {Object.entries(data.deliverables).map(([name, file]) => {
+              const isHtml = name.endsWith(".html");
+              const hasPreview = isHtml && file?.content;
+              return (
+                <div key={name}>
+                  <button
+                    type="button"
+                    onClick={() => hasPreview && setOpenFile(openFile === `D:${name}` ? null : `D:${name}`)}
+                    disabled={!hasPreview}
+                    className={`w-full text-left flex items-center justify-between px-1.5 py-1 rounded transition-colors ${
+                      hasPreview ? "hover:bg-kcd-border/30 cursor-pointer" : "cursor-default"
+                    }`}
+                  >
+                    <span className="font-mono text-[10px] text-kcd-text">
+                      <span className="text-kcd-text-muted mr-2">📎</span>
+                      <span className="text-kcd-text">{name}</span>
+                    </span>
+                    <span className="font-mono text-[9px] text-kcd-text-muted">
+                      {file?.size_bytes != null && `${file.size_bytes} B`}
+                      {file?.truncated && " · truncated"}
+                      {hasPreview && (openFile === `D:${name}` ? " ▼" : " ▶")}
+                    </span>
+                  </button>
+                  {openFile === `D:${name}` && hasPreview && (
+                    <iframe
+                      title={name}
+                      srcDoc={file?.content || ""}
+                      sandbox=""
+                      className="mt-1 w-full h-96 bg-white border border-kcd-border rounded"
+                    />
+                  )}
+                  {file?.path && (
+                    <div className="font-mono text-[9px] text-kcd-text-muted px-1.5">
+                      {file.path}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Workspace pointer for operator deep-dive. Prefer canonical
           workspace_path; fall back to Cody's cwd when the operator's BRIEF
