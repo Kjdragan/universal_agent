@@ -399,21 +399,7 @@ jobs:
                   rm -f /tmp/ua-health-${name}.json /tmp/ua-health-${name}.err
                   return 0
                 fi
-                # Crashloop detection: only fires when caller passed a
-                # service_unit AND we're past attempt 3 (lets a slow
-                # boot finish its first cycle in peace).
-                if [ -n "$service_unit" ] && [ "$attempt" -ge 3 ] && command -v systemctl >/dev/null 2>&1; then
-                  now_restarts="$(systemctl show -p NRestarts --value "$service_unit" 2>/dev/null || echo 0)"
-                  if [ -n "$start_restarts" ] && [ "$now_restarts" -ge 0 ] 2>/dev/null; then
-                    delta=$((now_restarts - start_restarts))
-                    if [ "$delta" -ge "$crashloop_threshold" ]; then
-                      echo "::error::$name crashloop detected: $service_unit restarted $delta times during health-wait (threshold=$crashloop_threshold). Failing fast instead of waiting for the full retry budget."
-                      echo "--> Last journal entries from $service_unit:"
-                      journalctl -u "$service_unit" --no-pager -n 80 2>/dev/null | tail -80 || true
-                      return 1
-                    fi
-                  fi
-                fi
+                # PROBE 8: inner crashloop detection block REMOVED.
                 if [ "$attempt" -eq 1 ] || [ $((attempt % 6)) -eq 0 ]; then
                   echo "    Waiting for $name health at $url (attempt $attempt/$max_attempts)..."
                   cat /tmp/ua-health-${name}.err || true
