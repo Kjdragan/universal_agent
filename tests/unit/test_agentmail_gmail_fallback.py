@@ -228,6 +228,56 @@ async def test_429_fallback_strips_empty_gws_env_vars(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_429_fallback_defaults_keyring_backend_file(monkeypatch):
+    """Headless gateway has no unlocked OS keyring, so the subprocess must
+    default GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file to decrypt creds from
+    ~/.config/gws/.encryption_key on disk."""
+    monkeypatch.setenv("UA_AGENTMAIL_GMAIL_FALLBACK", "1")
+    monkeypatch.setenv("UA_GMAIL_CLI_CMD", "/usr/bin/false")
+    monkeypatch.setenv("UA_AGENTMAIL_GMAIL_LABEL", "0")
+    monkeypatch.delenv("GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND", raising=False)
+    service = _make_service(send_raises=_Stub429())
+
+    captured_env: dict = {}
+
+    def _fake_run(argv, *, capture_output, text, timeout, check, env=None, **_):
+        captured_env["env"] = env or {}
+        return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+
+    with patch.object(subprocess, "run", _fake_run):
+        await service._send_direct(
+            to="kevin@example.com", subject="x", text="x",
+            html=None, attachments=None, labels=None,
+        )
+
+    assert captured_env["env"].get("GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND") == "file"
+
+
+@pytest.mark.asyncio
+async def test_429_fallback_preserves_explicit_keyring_backend(monkeypatch):
+    """An operator-pinned backend must not be overridden by the file default."""
+    monkeypatch.setenv("UA_AGENTMAIL_GMAIL_FALLBACK", "1")
+    monkeypatch.setenv("UA_GMAIL_CLI_CMD", "/usr/bin/false")
+    monkeypatch.setenv("UA_AGENTMAIL_GMAIL_LABEL", "0")
+    monkeypatch.setenv("GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND", "keyring")
+    service = _make_service(send_raises=_Stub429())
+
+    captured_env: dict = {}
+
+    def _fake_run(argv, *, capture_output, text, timeout, check, env=None, **_):
+        captured_env["env"] = env or {}
+        return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+
+    with patch.object(subprocess, "run", _fake_run):
+        await service._send_direct(
+            to="kevin@example.com", subject="x", text="x",
+            html=None, attachments=None, labels=None,
+        )
+
+    assert captured_env["env"].get("GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND") == "keyring"
+
+
+@pytest.mark.asyncio
 async def test_429_fallback_handles_missing_cli(monkeypatch):
     monkeypatch.setenv("UA_AGENTMAIL_GMAIL_FALLBACK", "1")
     monkeypatch.setenv("UA_GMAIL_CLI_CMD", "/usr/bin/false")

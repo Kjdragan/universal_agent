@@ -577,7 +577,17 @@ The daily YouTube digest email body is fully self-contained — operator does NO
 
 **Per-principal forward-compat.** The `principal` argument and `UA/AgentSent/<principal>` scheme are ready for a future VP-path fallback (`Atlas`/`Cody` via `vp_email_directive.vp_display_name`). Note: this service is Simone-only today — Atlas/Cody send via the in-session AgentMail **MCP** tool (`vp.agents@agentmail.to`), which does **not** route through this Python fallback. Extending the fallback to the VP send path is tracked as Phase 2 (justified by 316 documented VP-mailbox 429s; see investigation notes).
 
-**Verification status (2026-05-28):** Unit-tested (3 dedicated tests). **Not yet live-verified** — desktop and VPS `gws auth status` currently report `token_valid: false` (`invalid_grant`), so an interactive `npx -y @googleworkspace/cli auth login` is required before the label calls can run end-to-end. Smoke test deferred to that re-auth.
+**Verification status (2026-05-28): LIVE-VERIFIED on both desktop and VPS.**
+- Desktop: drove the real `_send_via_gmail_cli` path → Gmail msg `19e70d088c666cb4` landed in SENT carrying `UA/AgentSent/Simone` (read-back confirmed `labelIds=[UNREAD, Label_27, SENT, INBOX]`).
+- VPS (`ua`, production Infisical creds): msg `19e70e486fe5b117` sent + labeled identically — proving the production credential path works.
+
+#### gws auth provisioning on the VPS (headless) — the mechanism
+
+The VPS has no browser and the gateway runs headless (no unlocked OS keyring), so gws creds are supplied via **Infisical**, not interactive login on the box. Four `production` secrets carry the base64 of the desktop's gws config dir — `GWS_CREDENTIALS_ENC_B64`, `GWS_TOKEN_CACHE_B64`, `GWS_ENCRYPTION_KEY_B64`, `GWS_CLIENT_SECRET_JSON_B64`. At runtime `discord_intelligence/calendar_sync.py` (`_prepare_gws_env`) materializes them into `/home/ua/.config/gws/` and sets `GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file`. The gateway and discord daemon both run as `ua` (HOME=`/home/ua`), so they share that config dir. As of 2026-05-28 the AgentMail fallback **also self-defaults `KEYRING_BACKEND=file`** in its own subprocess env (`_send_via_gmail_cli`), so it no longer depends on another service having exported that var process-wide.
+
+**Refresh procedure (when `auth status` shows `token_valid: false`):** re-auth on the desktop (`npx -y @googleworkspace/cli auth login --scopes https://www.googleapis.com/auth/gmail.modify`, after `unset`-ing empty `GOOGLE_WORKSPACE_CLI_*` vars), then overwrite the four `GWS_*_B64` Infisical secrets with `base64 -w0` of the four desktop files (use `KEY=$VAR` inline — **`KEY=@file` is NOT supported**, it stores the literal path), then restart `universal-agent-gateway` + `ua-discord-intelligence` (needs sudo / a deploy). Full operator runbook in `CLAUDE.md` § "gws (Google Workspace CLI) Auth on the VPS".
+
+**Root cause of recurring auth death — UNRESOLVED:** the OAuth app is in Google "Testing" mode, where refresh tokens expire after ~7 days. This is why the VPS reverts to `invalid_grant` roughly weekly. **Durable fix (Kevin-only, one-time): publish the OAuth app "Testing" → "In production" in Google Cloud Console.** Until then, the four `GWS_*_B64` secrets must be refreshed ~weekly.
 
 ### Large Attachments & Payload Context Limits
 
