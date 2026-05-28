@@ -83,6 +83,30 @@ _CSI_INCIDENT_NORMALIZED_EVENT_TYPES = {
 logger = logging.getLogger(__name__)
 
 MISSION_ENVELOPE_SOURCE_KIND = "mission_envelope"
+
+# A ``vp_mission`` row is a visibility-only mirror inserted by
+# ``tools/vp_orchestration.vp_dispatch_mission`` so the operator can see the
+# VP's work in the Kanban. Post PR #522/#525 the parent task row already
+# carries ``dispatch.cody_mission_id`` + ``cody_workspace_dir`` and its
+# Workspace button deep-links to the VP mission workspace — the mirror adds
+# no actionable information. Suppress mirror rows from board projections
+# whenever a parent row references them via either:
+#   * ``metadata.dispatch.cody_mission_id``    (Cody / vp.coder.primary path)
+#   * ``metadata.linked_mission_id``            (generic VP delegation)
+# Orphan mirrors (no parent row) still render — they're not redundant.
+_VP_MISSION_MIRROR_HAS_PARENT_CLAUSE = """
+(
+  task_hub_items.source_kind != 'vp_mission'
+  OR NOT EXISTS (
+    SELECT 1 FROM task_hub_items AS parent_row
+    WHERE parent_row.task_id != task_hub_items.task_id
+      AND (
+        json_extract(parent_row.metadata_json, '$.dispatch.cody_mission_id') = task_hub_items.task_id
+        OR json_extract(parent_row.metadata_json, '$.linked_mission_id') = task_hub_items.task_id
+      )
+  )
+)
+"""
 MISSION_PHASE_SOURCE_KIND = "mission_phase"
 
 
@@ -2806,10 +2830,11 @@ def list_completed_tasks(conn: sqlite3.Connection, *, limit: int = 80) -> list[d
     """
     ensure_schema(conn)
     rows = conn.execute(
-        """
+        f"""
         SELECT *
         FROM task_hub_items
         WHERE status = ?
+          AND {_VP_MISSION_MIRROR_HAS_PARENT_CLAUSE}
         ORDER BY updated_at DESC
         LIMIT ?
         """,
@@ -4094,10 +4119,11 @@ def list_agent_queue(
     policy = current_policy()
 
     rows = conn.execute(
-        """
+        f"""
         SELECT *
         FROM task_hub_items
         WHERE status IN ('open', 'in_progress', 'blocked', 'needs_review', 'delegated', 'pending_review')
+          AND {_VP_MISSION_MIRROR_HAS_PARENT_CLAUSE}
         ORDER BY
           CASE
             WHEN source_kind = 'system_command'
