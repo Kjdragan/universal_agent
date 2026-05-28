@@ -110,6 +110,13 @@ export async function openViewer(options: OpenViewerOptions): Promise<OpenViewer
   const url = new URL("/", window.location.origin);
   if (sid) url.searchParams.set("session_id", sid);
   if (rid) url.searchParams.set("run_id", rid);
+  // VP missions aren't in the session/run catalog, so page.tsx can't
+  // resolve their workspace from session_id alone. Forward the resolver's
+  // ``workspace_dir`` so the three-panel auto-switch (page.tsx L842) has
+  // the path it needs to swap the file browser pane into vps_workspaces
+  // mode at the mission directory.
+  const workspaceDir = (target.workspace_dir || "").trim();
+  if (workspaceDir) url.searchParams.set("workspace", workspaceDir);
   if (options.attachMode === "tail") {
     url.searchParams.set("attach", "tail");
   }
