@@ -389,6 +389,7 @@ async def _execute_cli_session(
         timeout_seconds=timeout_seconds,
         workspace_dir=workspace_dir,
         mission_id=mission_id,
+        prompt=prompt,
     )
 
     # Phase F.1 — enrich the outcome payload with PID + assignment +
@@ -468,8 +469,19 @@ async def _monitor_cli_output(
     timeout_seconds: int,
     workspace_dir: Path,
     mission_id: str,
+    prompt: str = "",
 ) -> MissionOutcome:
-    """Read the CLI's JSON stream output and extract the result."""
+    """Read the CLI's JSON stream output and extract the result.
+
+    Emits a ``run.log`` in ``workspace_dir`` alongside the raw
+    ``cli_stream.log``. ``run.log`` matches the format the gateway's
+    chat handler writes (`[HH:MM:SS] 👤 USER: …`, `🤖 ASSISTANT: …`,
+    `🔧 TOOL CALL: …`, `📦 TOOL RESULT (N bytes)`, `ERROR: …`, and a
+    closing ``=== Turn completed (N tool calls) ===`` line). This is
+    the canonical durable rehydration source for the three-panel
+    viewer — without it, the viewer can't render Cody's session even
+    after the resolver maps the cody_session_id to this workspace.
+    """
 
     final_text = ""
     cost_info: dict[str, Any] = {}
@@ -479,6 +491,49 @@ async def _monitor_cli_output(
     stream_lines: list[str] = []
     cli_session_id: str = ""
 
+    # Open run.log handle for live rehydration source. The viewer's
+    # rehydration path reads this file (see app/page.tsx). We write
+    # incrementally so an operator opening the workspace while Cody
+    # is mid-run sees in-flight progress.
+    run_log_handle = None
+    try:
+        from datetime import datetime, timezone
+        workspace_dir.mkdir(parents=True, exist_ok=True)
+        run_log_path = workspace_dir / "run.log"
+        run_log_handle = open(run_log_path, "a", encoding="utf-8")
+        if prompt:
+            ts0 = datetime.now(timezone.utc).strftime("%H:%M:%S")
+            run_log_handle.write(f"[{ts0}] 👤 USER: {prompt}\n")
+            run_log_handle.flush()
+    except Exception:
+        run_log_handle = None
+
+    def _rl_write(line: str) -> None:
+        if run_log_handle is None:
+            return
+        try:
+            run_log_handle.write(line + "\n")
+            run_log_handle.flush()
+        except Exception:
+            pass
+
+    def _rl_ts() -> str:
+        from datetime import datetime, timezone
+        return datetime.now(timezone.utc).strftime("%H:%M:%S")
+
+    def _rl_close(reason: str) -> None:
+        nonlocal run_log_handle
+        if run_log_handle is None:
+            return
+        try:
+            run_log_handle.write(
+                f"[{_rl_ts()}] === {reason} ({tool_calls} tool calls) ===\n"
+            )
+            run_log_handle.close()
+        except Exception:
+            pass
+        run_log_handle = None
+
     try:
         deadline = time.monotonic() + timeout_seconds
 
@@ -487,6 +542,7 @@ async def _monitor_cli_output(
             if remaining <= 0:
                 logger.warning("CLI mission %s timed out after %ds", mission_id, timeout_seconds)
                 _kill_process(proc)
+                _rl_close("Turn timed out")
                 return MissionOutcome(
                     status="failed",
                     result_ref=f"workspace://{workspace_dir}",
@@ -562,20 +618,43 @@ async def _monitor_cli_output(
                 content = msg.get("content") if isinstance(msg, dict) else None
                 if isinstance(content, list):
                     for block in content:
-                        if isinstance(block, dict) and block.get("type") == "text":
-                            final_text = str(block.get("text") or "")
+                        if not isinstance(block, dict):
+                            continue
+                        block_type = block.get("type")
+                        if block_type == "text":
+                            text = str(block.get("text") or "")
+                            final_text = text
+                            stripped = text.rstrip()
+                            if stripped:
+                                _rl_write(f"[{_rl_ts()}] 🤖 ASSISTANT: {stripped}")
+                        elif block_type == "tool_use":
+                            tool_name = str(block.get("name") or "unknown")
+                            _rl_write(f"[{_rl_ts()}] 🔧 TOOL CALL: {tool_name}")
+                        elif block_type == "tool_result":
+                            tc = block.get("content")
+                            tc_size = len(str(tc)) if tc is not None else 0
+                            _rl_write(f"[{_rl_ts()}] 📦 TOOL RESULT ({tc_size} bytes)")
 
             elif event_type == "tool_use":
                 tool_calls += 1
+                tool_name = str(event.get("name") or "unknown")
+                _rl_write(f"[{_rl_ts()}] 🔧 TOOL CALL: {tool_name}")
+
+            elif event_type == "tool_result":
+                tc = event.get("content")
+                tc_size = len(str(tc)) if tc is not None else 0
+                _rl_write(f"[{_rl_ts()}] 📦 TOOL RESULT ({tc_size} bytes)")
 
             elif event_type == "error":
                 error_msg = str(event.get("error") or event.get("message") or "unknown error")
                 errors.append(error_msg)
                 logger.warning("CLI mission %s error event: %s", mission_id, error_msg)
+                _rl_write(f"[{_rl_ts()}] ERROR: {error_msg}")
 
     except Exception as exc:
         logger.exception("Error monitoring CLI output for mission %s", mission_id)
         _kill_process(proc)
+        _rl_close(f"Monitor crashed: {exc}")
         return MissionOutcome(
             status="failed",
             result_ref=f"workspace://{workspace_dir}",
@@ -611,6 +690,7 @@ async def _monitor_cli_output(
         }
         if cli_session_id:
             failed_payload["cli_session_id"] = cli_session_id
+        _rl_close(f"Turn failed (exit={exit_code})")
         return MissionOutcome(
             status="failed",
             result_ref=f"workspace://{workspace_dir}",
@@ -627,6 +707,7 @@ async def _monitor_cli_output(
     }
     if cli_session_id:
         completed_payload["cli_session_id"] = cli_session_id
+    _rl_close("Turn completed")
     return MissionOutcome(
         status="completed",
         result_ref=f"workspace://{workspace_dir}",

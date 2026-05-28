@@ -29,6 +29,10 @@ def workspaces_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "AGENT_RUN_WORKSPACES"
     root.mkdir()
     monkeypatch.setenv("AGENT_RUN_WORKSPACES_DIR", str(root))
+    # Isolate the cody-session-lookup branch from any real activity DB on
+    # the dev box. Pointing it at a tmp path makes the lookup return None
+    # by default; tests that exercise the branch seed schema + row first.
+    monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str(tmp_path / "activity_state.db"))
     return root
 
 
@@ -281,3 +285,88 @@ def test_viewer_href_url_safe_for_session_with_underscores(
     assert target is not None
     # underscores survive URL encoding (they're unreserved)
     assert target.viewer_href == "/dashboard/viewer/session/daemon_simone_todo"
+
+
+# ── Cody CLI session_id branch (path 7) ──────────────────────────────────────
+
+
+def _seed_task_hub_row(
+    db_path: Path,
+    *,
+    cody_session_id: str,
+    cody_workspace_dir: str,
+) -> None:
+    """Create a minimal task_hub_items row with the dispatch metadata.
+
+    Mirrors only the columns the resolver branch actually reads via
+    ``json_extract``; the wider task_hub schema isn't required for the
+    lookup to succeed.
+    """
+    import json as _json
+    import sqlite3 as _sqlite3
+
+    conn = _sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_hub_items (
+                task_id TEXT PRIMARY KEY,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                updated_at TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO task_hub_items(task_id, metadata_json, updated_at) VALUES (?, ?, ?)",
+            (
+                "qa-test-cody-resolver",
+                _json.dumps({
+                    "dispatch": {
+                        "cody_session_id": cody_session_id,
+                        "cody_workspace_dir": cody_workspace_dir,
+                    }
+                }),
+                "2026-05-28T01:00:00Z",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_resolve_cody_session_id_via_task_hub(
+    fake_catalog, workspaces_root, tmp_path
+):
+    """A Claude-CLI session_id (UUID, no daemon_ prefix) resolves via
+    task_hub_items.metadata.dispatch.cody_session_id → cody_workspace_dir."""
+    cody_cwd = tmp_path / "vp-mission-deadbeef"
+    cody_cwd.mkdir()
+    (cody_cwd / "run.log").write_text("[00:00:00] 👤 USER: hi\n")
+
+    cody_uuid = "f61bc91d-a98b-450d-9594-90c394a903f2"
+    _seed_task_hub_row(
+        tmp_path / "activity_state.db",
+        cody_session_id=cody_uuid,
+        cody_workspace_dir=str(cody_cwd),
+    )
+
+    target = resolver.resolve_session_view_target(session_id=cody_uuid)
+    assert target is not None
+    assert target.workspace_dir == str(cody_cwd.resolve())
+    assert target.session_id == cody_uuid
+    assert target.source == "cody_session_id_via_task_hub"
+
+
+def test_resolve_cody_session_id_missing_workspace_returns_none(
+    fake_catalog, workspaces_root, tmp_path
+):
+    """Row exists but the cwd path is gone (e.g. /tmp cleaned) → no target."""
+    cody_uuid = "abcd1234-0000-0000-0000-000000000000"
+    _seed_task_hub_row(
+        tmp_path / "activity_state.db",
+        cody_session_id=cody_uuid,
+        cody_workspace_dir=str(tmp_path / "does-not-exist"),
+    )
+
+    target = resolver.resolve_session_view_target(session_id=cody_uuid)
+    assert target is None
