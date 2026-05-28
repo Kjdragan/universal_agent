@@ -377,9 +377,9 @@ jobs:
               max_attempts="${3:-36}"
               sleep_seconds="${4:-5}"
               service_unit="${5:-}"
-              # PROBE 13: drop the two comment lines with unbalanced "..."
-              # quoting that spans two lines. Keep crashloop_threshold=5.
-              # Fail-fast threshold for crashloop detection. Tuned to 5.
+              # PROBE 14: add back ONLY the cross-line " quote span.
+              # the loop assumed every "no response" was "still
+              # starting." Tuned to 5: catches a real crashloop quickly
               crashloop_threshold=5
               attempt=1
               while [ "$attempt" -le "$max_attempts" ]; do
