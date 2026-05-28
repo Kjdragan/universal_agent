@@ -830,11 +830,11 @@ def test_build_payload_task_id_is_empty_when_no_linked_task():
 
 
 # ---------------------------------------------------------------------------
-# UA_CODY_CLI_MODEL — Opus 4.7 default + override hooks.
+# UA_CODY_CLI_MODEL — Opus 4.8 default + override hooks.
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_cli_uses_opus_47_by_default_for_anthropic_mode(tmp_path: Path, monkeypatch):
-    """Anthropic-mode missions default to claude-opus-4-7 via --model flag."""
+async def test_cli_uses_opus_48_by_default_for_anthropic_mode(tmp_path: Path, monkeypatch):
+    """Anthropic-mode missions default to claude-opus-4-8 via --model flag."""
     monkeypatch.delenv("UA_CODY_CLI_MODEL", raising=False)
     client = ClaudeCodeCLIClient()
     mission: dict[str, Any] = {
@@ -861,7 +861,7 @@ async def test_cli_uses_opus_47_by_default_for_anthropic_mode(tmp_path: Path, mo
         await client.run_mission(mission=mission, workspace_root=tmp_path)
 
     assert "--model" in captured_cmd
-    assert "claude-opus-4-7" in captured_cmd
+    assert "claude-opus-4-8" in captured_cmd
 
 
 @pytest.mark.asyncio
@@ -893,7 +893,7 @@ async def test_cli_respects_ua_cody_cli_model_override(tmp_path: Path, monkeypat
     # The override is honored.
     assert "claude-sonnet-4-6" in captured_cmd
     # And the default Opus is NOT in the args.
-    assert "claude-opus-4-7" not in captured_cmd
+    assert "claude-opus-4-8" not in captured_cmd
 
 
 @pytest.mark.asyncio

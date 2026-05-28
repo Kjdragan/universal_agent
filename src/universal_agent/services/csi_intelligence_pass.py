@@ -72,8 +72,8 @@ class VaultAction(BaseModel):
         default_factory=list,
         description=(
             "Other forms this entity is referenced by in the corpus. Used "
-            "for future canonicalization. Example for 'Claude Opus 4.7': "
-            "['Opus 4.7', 'opus-4.7', 'claude-opus-4-7']."
+            "for future canonicalization. Example for 'Claude Opus 4.8': "
+            "['Opus 4.8', 'opus-4.8', 'claude-opus-4-8']."
         ),
     )
     summary: str = Field(
@@ -185,7 +185,7 @@ real, durable entities deserve a page in the vault.
 - **Products:** Claude Code, Claude Code Web, Claude Code Mobile, Claude API, \
   Claude Managed Agents, Claude Agent SDK, MCP (Model Context Protocol), \
   Claude.ai, Anthropic Console, claude.com platform.
-- **Models:** Opus 4.7 / Opus 4.6, Sonnet 4.6 / Sonnet 4.5, Haiku 4.5. The \
+- **Models:** Opus 4.8 / Opus 4.7, Sonnet 4.6 / Sonnet 4.5, Haiku 4.5. The \
   family is "Claude" with versioned tiers.
 - **SDK / tooling:** Agent SDK (Python + TypeScript), MCP Servers, the \
   `claude` CLI, Claude Code IDE extensions.
