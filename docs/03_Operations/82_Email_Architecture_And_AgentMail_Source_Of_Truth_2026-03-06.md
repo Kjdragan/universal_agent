@@ -519,6 +519,26 @@ Digest/report mail to Kevin uses AgentMail, not Gmail:
 - Kevin sees the message as coming from Simone
 - Avoids Kevin appearing to email himself
 
+### Daily YouTube Digest — Email Layout (PR #536, 2026-05-28)
+
+The daily YouTube digest email body is fully self-contained — operator does NOT need to open an attachment to read the per-video retellings. Layout (top → bottom):
+
+1. **Intro paragraph** — synthesis count + playlist day name.
+2. **"Jump to a video" TOC** — a styled grey box listing every per-video entry as "Channel — Title". Each entry is `<a href="#vN-slug">` where the slug matches an `<h2 id="vN-slug">` on the corresponding per-video section, so clicks jump within the same email body. Anchor ID generation lives in `_slugify_anchor`; injection on h2s lives in `_inject_video_anchors`.
+3. **Meta-synthesis** — Cross-Video Themes / Learning Insights / Neglected Opportunities.
+4. **Per-video retellings** — each `<h2>` carries its `id="vN-..."` anchor; per-video body is markdown rendered to inline-styled HTML.
+5. **Tutorial Pipeline Dispatch** — short summary table of tutorial candidates dispatched.
+
+**Why inline, not attachment.** Gmail mobile + many third-party readers either suppress attachments or make them awkward to open. The old design (body = meta-synthesis only, full content in an attached HTML file) created an extra click per digest read. Operator preference, captured 2026-05-28: everything in one scrollable email.
+
+**Gmail clip threshold.** The full-content body is ~120-150KB. Gmail clips email bodies over ~102KB and shows "View entire message" at the bottom. The TOC sits above the clip line, so all entries remain clickable without expanding first. The attachment is still produced and attached as a standalone HTML report for archive / print, but is no longer the primary read surface.
+
+**Inline styling.** Gmail strips `<style>` blocks from email bodies. `_inline_email_styles` walks the rendered HTML and injects per-tag `style="..."` for every supported element type (h1/h2/h3/p/ul/ol/li/small/blockquote/code/pre/hr/a/table/th/td). `_build_inline_toc_html` is the email-body twin of `_build_toc_html` (which targets the standalone attachment) with the same content shape but self-styled spans/divs.
+
+**Backward-compat.** `_render_email_body_html(body_md, intro_html=...)` without the new `full_content=` kwarg keeps the legacy behavior (rendered meta-synthesis only, no TOC) — protects any callers that haven't migrated.
+
+**Test coverage:** `tests/unit/test_youtube_daily_digest_email_html.py` (6 tests) — TOC heading present, TOC href↔h2 id parity, h2/h3/p carry inline styles, TOC box self-styled with inline background, legacy callsite still works without TOC.
+
 ### Gmail (gws) CLI Fallback on AgentMail 429
 
 > **Status:** Added 2026-05-28. Lives in `src/universal_agent/services/agentmail_service.py:_send_via_gmail_cli`. Gated by `UA_AGENTMAIL_GMAIL_FALLBACK=1` (default off).
@@ -536,10 +556,14 @@ Digest/report mail to Kevin uses AgentMail, not Gmail:
 **Operator preconditions:**
 - `npx` available on PATH (VPS already has Node 20).
 - `@googleworkspace/cli` installs lazily via `npx -y` on first use.
-- An authenticated gws profile under `~/.config/gws/` (`auth status` should report `token_valid: true`). If `token_valid: false`, re-run `npx -y @googleworkspace/cli auth login` on the VPS once.
-- Set `UA_AGENTMAIL_GMAIL_FALLBACK=1` in `/opt/universal_agent/.env`. Optional: `UA_GMAIL_CLI_TIMEOUT_SECONDS=60`, `UA_GMAIL_CLI_CMD="…"` to override the argv prefix.
+- An authenticated gws profile under `~/.config/gws/` (`auth status` should report `token_valid: true`). If `token_valid: false`, re-run `npx -y @googleworkspace/cli auth login` on the VPS once. **Production state as of 2026-05-28: auth re-established, `token_valid: true`, refresh token saved.**
+- Set `UA_AGENTMAIL_GMAIL_FALLBACK=1` in Infisical `production` env (already set 2026-05-28). Optional: `UA_GMAIL_CLI_TIMEOUT_SECONDS=60`, `UA_GMAIL_CLI_CMD="…"` to override the argv prefix.
 
-**Test coverage:** `tests/unit/test_agentmail_gmail_fallback.py` covers the success path, flag-gated 429 → fallback transition, non-429 errors still raising, CLI failure propagation, attachment plumbing, and missing-CLI handling.
+**Env-scrub for empty GOOGLE_WORKSPACE_CLI_* vars (PR #536):** `/opt/universal_agent/.env` carries three GWS-CLI env vars set to empty strings (`GOOGLE_WORKSPACE_CLI_TOKEN`, `GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE`, `GOOGLE_WORKSPACE_CLI_IMPERSONATED_USER`). The gws CLI treats those empty paths as authoritative and refuses to fall back to its default `~/.config/gws/credentials.enc`, dying with `Gmail auth failed: GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE points to , but file does not exist`. `_send_via_gmail_cli` builds a child env that drops any `GOOGLE_WORKSPACE_CLI_*` var whose value is blank/whitespace; non-empty values pass through.
+
+**Test coverage:** `tests/unit/test_agentmail_gmail_fallback.py` (8 tests) covers the success path, flag-gated 429 → fallback transition, non-429 errors still raising, CLI failure propagation, attachment plumbing, missing-CLI handling, and the empty-env scrub.
+
+**Field verification (2026-05-28):** Two end-to-end resends of the WEDNESDAY YouTube digest through this path succeeded — AgentMail returned 429, `_send_direct` caught it, `_send_via_gmail_cli` ran the gws CLI, Gmail accepted the message. Gmail message IDs `19e6fda6878cae69` (text-only smoke test) and `19e6fe6e7eb7252a` (full 129KB rendered HTML with clickable TOC, see § "Digest and Report Policy" below).
 
 ### Large Attachments & Payload Context Limits
 
