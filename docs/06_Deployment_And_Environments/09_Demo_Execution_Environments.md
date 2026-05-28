@@ -24,7 +24,7 @@ UA is **always** running two Claude environments side by side on the VPS:
 |---|---|---|
 | **Where** | Anywhere except `/opt/ua_demos/` | Inside `/opt/ua_demos/<demo-id>/` |
 | **Who's there** | UA itself, Simone, Atlas, normal Cody work, ClaudeDevs intel cron, dependency drift sweep, dashboards | Cody when she's building a Phase 3 demo. Phase 0 smoke tests. |
-| **Models** | GLM via ZAI proxy (cheap, GLM-5.x emulating Claude) | Real Anthropic Claude (Opus 4.7, Sonnet, Haiku) |
+| **Models** | GLM via ZAI proxy (cheap, GLM-5.x emulating Claude) | Real Anthropic Claude (Opus 4.8, Sonnet, Haiku) |
 | **Auth** | API key (`ANTHROPIC_AUTH_TOKEN` env) | Max plan **OAuth session** from `claude /login` |
 | **Why** | Cost — 95% of UA work doesn't need bleeding-edge Claude | Demo correctness — new Anthropic features may not exist in the proxy |
 | **Settings file** | `~/.claude/settings.json` (polluted, with env block + hooks + plugins) | Project-local `.claude/settings.json` inside each demo dir (vanilla) |
@@ -258,7 +258,7 @@ Same Cody, different working directory. A worked example:
 - It overrides the user-global polluted settings.
 - The dispatcher unsets any `ANTHROPIC_*` env vars before launching.
 - Claude Code routes to `api.anthropic.com` using the Max plan OAuth.
-- Real Claude Opus 4.7 / Sonnet 4.6 / Haiku 4.5. Real Skills feature. Real demo.
+- Real Claude Opus 4.8 / Sonnet 4.6 / Haiku 4.5. Real Skills feature. Real demo.
 
 **The Cody process is the same binary in both cases. Only the working directory changes.**
 
