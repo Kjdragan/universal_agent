@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import sqlite3
@@ -56,12 +57,12 @@ def test_detect_and_queue_convergence_for_independent_channels(tmp_path):
                 json.dumps({"insights": [{"narrative": "MCP is rising", "value": "Actionable", "supporting_video_ids": ["video-a", "video-b"]}]})
             ]
             results = detect_and_queue_convergence(conn, signature=second)
-            
+
         task_a = None
         task_b = None
         event_a = None
         event_b = None
-        
+
         for result in results:
             if result["task"]["source_kind"] == "convergence_detection":
                 task_a = task_hub.get_item(conn, result["task"]["task_id"])
@@ -78,7 +79,7 @@ def test_detect_and_queue_convergence_for_independent_channels(tmp_path):
     assert task_a["source_kind"] == "convergence_detection"
     assert task_a["agent_ready"] is True
     assert "CONVERGENCE SIGNAL" in task_a["description"]
-    
+
     assert event_b["primary_topic"] == "MCP is rising"
     assert task_b is not None
     assert task_b["source_kind"] == "insight_detection"
@@ -116,7 +117,15 @@ def test_convergence_requires_multiple_channels(tmp_path):
     assert len(results) == 0
 
 
-def test_sync_topic_signatures_from_csi_creates_convergence(tmp_path):
+def test_sync_topic_signatures_from_csi_writes_convergence_candidate(tmp_path):
+    """After PR C, sync_topic_signatures_from_csi uses SQL clustering and
+    writes a ``convergence_candidate`` row + Task Hub item — NOT a Track A/B
+    LLM call. This test pins that behavior.
+
+    Tests for the legacy ``detect_and_queue_convergence`` LLM path stay
+    intact above; the gateway hand-trigger endpoints still call that
+    function until PR E cleans it up.
+    """
     csi_db = tmp_path / "csi.db"
     csi = sqlite3.connect(csi_db)
     csi.execute(
@@ -143,11 +152,14 @@ def test_sync_topic_signatures_from_csi_creates_convergence(tmp_path):
         )
         """
     )
+    # Use a recent timestamp so SQL clustering's 72h rolling window includes us.
+    recent_iso = datetime.now(timezone.utc).isoformat()
     for event_id, channel in (("evt-a", "Channel A"), ("evt-b", "Channel B")):
         csi.execute(
-            "INSERT INTO events (event_id, source, event_type, occurred_at, subject_json) VALUES (?, 'youtube_channel_rss', 'channel_new_upload', '2026-04-15T10:00:00+00:00', ?)",
+            "INSERT INTO events (event_id, source, event_type, occurred_at, subject_json) VALUES (?, 'youtube_channel_rss', 'channel_new_upload', ?, ?)",
             (
                 event_id,
+                recent_iso,
                 json.dumps(
                     {
                         "video_id": event_id,
@@ -160,22 +172,39 @@ def test_sync_topic_signatures_from_csi_creates_convergence(tmp_path):
             ),
         )
         csi.execute(
-            "INSERT INTO rss_event_analysis (event_id, transcript_status, category, summary_text, analysis_json, analyzed_at) VALUES (?, 'ok', 'ai', 'MCP server pattern for agents', ?, '2026-04-15T11:00:00+00:00')",
-            (event_id, json.dumps({"themes": ["MCP servers"], "key_claims": ["MCP is useful for agent tools."]})),
+            "INSERT INTO rss_event_analysis (event_id, transcript_status, category, summary_text, analysis_json, analyzed_at) VALUES (?, 'ok', 'ai', 'MCP server pattern for agents', ?, ?)",
+            (
+                event_id,
+                json.dumps({"themes": ["MCP servers"], "key_claims": ["MCP is useful for agent tools."]}),
+                recent_iso,
+            ),
         )
     csi.commit()
     csi.close()
 
     with _connect(tmp_path / "activity.db") as conn:
-        with patch("universal_agent.services.llm_classifier._call_llm", new_callable=AsyncMock) as mock_llm:
-            mock_llm.side_effect = [
-                json.dumps({"matches": [{"video_id": "evt-a"}], "signal_strength": 9}),
-                json.dumps({"insights": [{"narrative": "MCP trend", "value": "val", "supporting_video_ids": ["evt-a", "evt-b"]}]})
-            ]
+        # Hard requirement: the new sync path must not call the LLM.
+        with patch("universal_agent.services.llm_classifier._call_llm") as mock_llm:
+            mock_llm.side_effect = AssertionError(
+                "sync_topic_signatures_from_csi must not invoke the LLM after PR C"
+            )
             counts = sync_topic_signatures_from_csi(conn, csi_db_path=csi_db)
 
+        # SQL clustering should write exactly one convergence_candidate row.
+        rows = conn.execute(
+            "SELECT candidate_id, channel_count, verdict FROM convergence_candidates"
+        ).fetchall()
+        # Verify the Task Hub item too.
+        task_rows = conn.execute(
+            "SELECT task_id, source_kind FROM task_hub_items WHERE source_kind='convergence_candidate'"
+        ).fetchall()
+
     assert counts["upserted"] == 2
-    assert counts["convergence_events"] >= 1
+    assert counts["candidates_written"] >= 1
+    assert len(rows) == 1
+    assert rows[0]["channel_count"] == 2
+    assert rows[0]["verdict"] == ""
+    assert len(task_rows) == 1
 
 
 @pytest.mark.asyncio
@@ -318,4 +347,3 @@ def test_insight_brief_description_has_proactive_framing_clause(tmp_path):
         assert banned not in desc, (
             f"insight brief description still contains banned operator-requested phrasing: {banned!r}"
         )
-
