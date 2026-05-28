@@ -51,9 +51,12 @@ WEIGHT_CHANNEL_BREADTH = 0.3
 WEIGHT_NOVELTY = 0.2
 WEIGHT_PREFERENCE = 0.1
 
-# Floor thresholds (≥3 supporting channels AND confidence ≥0.7).
+# Floor thresholds (≥3 supporting channels AND confidence ≥0.8).
+# Raised from 0.7 → 0.8 in PR A of the insight pipeline consolidation
+# (docs/proactive_signals/insight_pipeline_consolidation_spec.md) to cut
+# low-confidence noise from the hourly digest.
 FLOOR_MIN_CHANNELS = 3
-FLOOR_MIN_CONFIDENCE = 0.7
+FLOOR_MIN_CONFIDENCE = 0.8
 
 # Diversity: insight #2 must have Jaccard topic overlap < this with insight #1.
 DIVERSITY_MAX_OVERLAP = 0.30
@@ -391,8 +394,13 @@ def compose_hourly_email(
     ]
     scored.sort(key=lambda s: s["composite"], reverse=True)
 
-    # Insight #1 = highest composite, even if below floor.
+    # Insight #1 = highest composite. PR A of the insight pipeline
+    # consolidation: if nothing clears the floor, return None so the
+    # cron skips the send entirely (empty hours stay empty rather than
+    # padding with sub-threshold filler material).
     pick_1 = scored[0]
+    if not pick_1["met_floor"]:
+        return None
     pick_2: Optional[dict[str, Any]] = None
     for cand in scored[1:]:
         overlap = _jaccard(pick_1["tags"], cand["tags"])
@@ -424,9 +432,9 @@ def compose_hourly_email(
             else:
                 slot = _scoring.SLOT_NOT_DELIVERED
             delivered_hourly = True
-            # Track whether the surfaced brief was a sub-threshold filler.
-            if not sc["met_floor"]:
-                slot = _scoring.SLOT_SUB_THRESHOLD_FILLER
+            # PR A of the insight pipeline consolidation removed the
+            # SLOT_SUB_THRESHOLD_FILLER fallback — when no candidate
+            # clears the floor we return None above instead of padding.
         else:
             slot = _scoring.SLOT_NOT_DELIVERED
             delivered_hourly = False
