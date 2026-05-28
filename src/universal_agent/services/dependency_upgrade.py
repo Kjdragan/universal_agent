@@ -310,7 +310,7 @@ def run_zai_smoke(*, repo_root: Path | None = None) -> SmokeResult:
         "    from anthropic import Anthropic\n"
         "    client = Anthropic()\n"
         "    resp = client.messages.create(\n"
-        "        model='claude-haiku-4-5-20251001',\n"
+        "        model='claude-haiku-4-5',\n"
         "        max_tokens=32,\n"
         "        messages=[{'role':'user','content':'Reply with exactly: OK'}],\n"
         "    )\n"

@@ -891,8 +891,8 @@ class ProcessTurnAdapter:
             configured_lower = configured_model.lower()
             # Match either a ZAI-mapped model string (glm-5.1 etc.) OR an
             # Anthropic-style model id containing the tier name
-            # (e.g. ``claude-opus-4-7``, ``claude-sonnet-4-6``,
-            # ``claude-haiku-4-5-20251001``). Without the Anthropic
+            # (e.g. ``claude-opus-4-8``, ``claude-sonnet-4-6``,
+            # ``claude-haiku-4-5``). Without the Anthropic
             # branch, post-2026-05-11 Cody runs on Anthropic Max silently
             # fall through to the sonnet default (180 s), which kills
             # legitimate long opus work like the paper_to_podcast cron.

@@ -73,7 +73,7 @@ def record_token_usage(
         mission_id: provenance for audit / per-mission drill-in.
         task_id: provenance for audit / per-mission drill-in.
         model: model identifier from the CLI's result event (e.g.
-            ``"claude-opus-4-7"``, ``"glm-5.1"``).
+            ``"claude-opus-4-8"``, ``"glm-5.1"``).
         cost_info: the dict captured from the CLI's ``result`` event.
             Expected keys (any subset; missing => 0):
                 * ``input_tokens``

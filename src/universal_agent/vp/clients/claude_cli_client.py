@@ -307,7 +307,7 @@ async def _execute_cli_session(
 
     # Model selection — the Claude Code CLI defaults to Sonnet
     # (claude-sonnet-4-6). For Cody's autonomous coding work we default
-    # to Opus 4.7 (Anthropic positions it as the most capable model for
+    # to Opus 4.8 (Anthropic positions it as the most capable model for
     # complex agentic coding — a step-change over Sonnet 4.6 on the
     # 93-task coding benchmark). The operator can override per-process
     # by setting ``UA_CODY_CLI_MODEL``:
@@ -317,7 +317,7 @@ async def _execute_cli_session(
     # Only applied when ``cody_mode == "anthropic"`` — ZAI/SDK paths
     # have their own model routing and would ignore ``--model`` anyway.
     if cody_mode == "anthropic":
-        model_override = os.getenv("UA_CODY_CLI_MODEL", "claude-opus-4-7").strip()
+        model_override = os.getenv("UA_CODY_CLI_MODEL", "claude-opus-4-8").strip()
         if model_override and model_override.lower() != "default":
             cmd.extend(["--model", model_override])
 

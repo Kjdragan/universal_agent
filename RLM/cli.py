@@ -44,7 +44,7 @@ def _build_base_parser() -> argparse.ArgumentParser:
         )
         target.add_argument(
             "--model",
-            default="claude-sonnet-4-20250514",
+            default="claude-sonnet-4-6",
             help="Model name used by ua_rom_baseline lane",
         )
 
