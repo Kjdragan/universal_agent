@@ -33,7 +33,7 @@ class DistillRequest:
     output_dir: str = "RLM/work_products"
     threshold_tokens: int = 180_000
     enforce_threshold: bool = False
-    model: str = "claude-sonnet-4-20250514"
+    model: str = "claude-sonnet-4-6"
 
 
 @dataclass

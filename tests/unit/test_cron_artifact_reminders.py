@@ -1,10 +1,10 @@
 """Tests for cron_artifact_reminders sweep.
 
 Covers:
-  - Cadence transitions (sent_initial → same_day → day3 → day7 → stopped)
+  - Cadence transitions (sent_initial → same_day → day3 → stopped)
   - Active-window gating (reminders due overnight defer to 6 AM)
   - Ack short-circuits reminders (status=ACCEPTED is skipped)
-  - Stop at Day 7 (no more emails after the final reminder)
+  - Stop at Day 3 (day-3 is the final reminder; no day-7 email)
   - Non-cron artifacts ignored
 """
 
@@ -20,7 +20,6 @@ import pytest
 from universal_agent.services import proactive_artifacts
 from universal_agent.services.cron_artifact_reminders import (
     DAY3_DELAY_S,
-    DAY7_DELAY_S,
     SAME_DAY_NUDGE_DELAY_S,
     _within_active_window,
     sweep_pending_artifact_reminders,
@@ -116,7 +115,9 @@ async def test_same_day_nudge_transition(conn, mail_service) -> None:
 
 
 @pytest.mark.asyncio
-async def test_day3_to_day7_transition(conn, mail_service) -> None:
+async def test_day3_is_terminal(conn, mail_service) -> None:
+    """The day-3 reminder is the final email: it sends, then the artifact
+    transitions straight to stopped (no day-7 reminder is ever scheduled)."""
     _insert_pending(
         conn,
         artifact_id="pa_b",
@@ -129,35 +130,40 @@ async def test_day3_to_day7_transition(conn, mail_service) -> None:
         recipient="kevinjdragan@gmail.com", now_epoch=now,
     )
     assert report["sent"] == 1
+    # The day-3 email carries the "final reminder" note.
+    sent_text = mail_service.send_email.call_args.kwargs["text"]
+    assert "final reminder" in sent_text.lower()
     row = conn.execute(
         "SELECT metadata_json FROM proactive_artifacts WHERE artifact_id='pa_b'"
     ).fetchone()
     meta = json.loads(row[0])
     assert meta["reminder"]["schedule_state"] == "sent_day3"
-    assert meta["reminder"]["next_reminder_at_epoch"] == FINISHED_AT + DAY7_DELAY_S
+    assert meta["reminder"]["stopped"] is True
+    assert meta["reminder"]["next_reminder_at_epoch"] == 0
 
 
 @pytest.mark.asyncio
-async def test_day7_terminal_stops(conn, mail_service) -> None:
+async def test_legacy_sent_day3_row_stops_without_day7(conn, mail_service) -> None:
+    """A row already at sent_day3 from before the day-7 removal must NOT
+    send a day-7 email; it transitions to stopped on the next sweep."""
     _insert_pending(
         conn,
         artifact_id="pa_c",
         schedule_state="sent_day3",
-        next_due_epoch=FINISHED_AT + DAY7_DELAY_S,
+        next_due_epoch=FINISHED_AT + DAY3_DELAY_S,
     )
-    now = FINISHED_AT + DAY7_DELAY_S + 1
+    now = FINISHED_AT + DAY3_DELAY_S * 3  # well past any old day-7 due time
     report = await sweep_pending_artifact_reminders(
         conn=conn, mail_service=mail_service,
         recipient="kevinjdragan@gmail.com", now_epoch=now,
     )
-    assert report["sent"] == 1
+    assert report["sent"] == 0
+    mail_service.send_email.assert_not_called()
     row = conn.execute(
         "SELECT metadata_json FROM proactive_artifacts WHERE artifact_id='pa_c'"
     ).fetchone()
     meta = json.loads(row[0])
-    assert meta["reminder"]["schedule_state"] == "sent_day7"
     assert meta["reminder"]["stopped"] is True
-    assert meta["reminder"]["next_reminder_at_epoch"] == 0
 
 
 # ── Not-due gating ─────────────────────────────────────────────────────
@@ -193,7 +199,7 @@ async def test_accepted_artifact_skipped(conn, mail_service) -> None:
         next_due_epoch=FINISHED_AT + SAME_DAY_NUDGE_DELAY_S,
         status=proactive_artifacts.ARTIFACT_STATUS_ACCEPTED,
     )
-    now = FINISHED_AT + DAY7_DELAY_S * 2  # well past every reminder
+    now = FINISHED_AT + DAY3_DELAY_S * 3  # well past every reminder
     report = await sweep_pending_artifact_reminders(
         conn=conn, mail_service=mail_service,
         recipient="kevinjdragan@gmail.com", now_epoch=now,
@@ -204,8 +210,8 @@ async def test_accepted_artifact_skipped(conn, mail_service) -> None:
 
 @pytest.mark.asyncio
 async def test_stopped_flag_skipped(conn, mail_service) -> None:
-    """A row whose reminder state is already past day7 (or manually stopped)
-    must not be re-touched even when due."""
+    """A row whose reminder state is already terminal (manually stopped or
+    a legacy final reminder) must not be re-touched even when due."""
     proactive_artifacts.upsert_artifact(
         conn,
         artifact_id="pa_f",
@@ -218,15 +224,15 @@ async def test_stopped_flag_skipped(conn, mail_service) -> None:
         metadata={
             "finished_at_epoch": FINISHED_AT,
             "reminder": {
-                "count": 4,
-                "schedule_state": "sent_day7",
+                "count": 3,
+                "schedule_state": "sent_day3",
                 "next_reminder_at_epoch": 0,
-                "last_sent_at_epoch": FINISHED_AT + DAY7_DELAY_S,
+                "last_sent_at_epoch": FINISHED_AT + DAY3_DELAY_S,
                 "stopped": True,
             },
         },
     )
-    now = FINISHED_AT + DAY7_DELAY_S * 3
+    now = FINISHED_AT + DAY3_DELAY_S * 4
     report = await sweep_pending_artifact_reminders(
         conn=conn, mail_service=mail_service,
         recipient="kevinjdragan@gmail.com", now_epoch=now,
@@ -265,9 +271,8 @@ async def test_artifact_without_reminder_metadata_skipped(
 
 
 def test_active_window_at_noon_houston() -> None:
-    # 2026-05-23 17:00 UTC = 12:00 Houston (active)
-    epoch = datetime(2026, 5, 23, 17, 0, 0).timestamp() - 0  # naive→local; ok for assert
-    # Just use the raw helper with an explicit UTC epoch.
+    # Use the raw helper with an explicit UTC epoch (2026-05-23 17:00 UTC
+    # = 12:00 Houston, inside the active window).
     assert _within_active_window(1779600000.0) is True or True  # noqa: SIM222
 
 

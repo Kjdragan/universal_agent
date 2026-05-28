@@ -205,7 +205,7 @@ from universal_agent.signals_ingest import (
 )
 from universal_agent.utils.heartbeat_findings_schema import HeartbeatFindings
 from universal_agent.utils.json_utils import extract_json_payload
-from universal_agent.utils.model_resolution import resolve_sonnet
+from universal_agent.utils.model_resolution import resolve_opus, resolve_sonnet
 from universal_agent.vp import (
     MissionDispatchRequest,
     cancel_mission,
@@ -3571,6 +3571,11 @@ def _sync_continuity_notifications() -> None:
         actual = alert.get("actual")
         threshold = alert.get("threshold")
         details = f" actual={actual}, threshold={threshold}" if actual is not None and threshold is not None else ""
+        # Continuity alerts are a transport-health metric (resume-failure
+        # rate over a rolling window), commonly tripped by benign
+        # session-not-found 404s and reset on every gateway restart. They
+        # are rarely operator-actionable in isolation, so surface them
+        # dashboard-only rather than emailing/Telegram-ing each one.
         _add_notification(
             kind="continuity_alert",
             title="Session Continuity Alert",
@@ -3578,6 +3583,7 @@ def _sync_continuity_notifications() -> None:
             severity="warning",
             requires_action=False,
             metadata={"code": code, "alert": alert, "source": "session_continuity_metrics"},
+            channels=["dashboard"],
         )
 
     for code in sorted(recovered):
@@ -11781,7 +11787,12 @@ def _add_notification(
     requires_action: bool = False,
     metadata: Optional[dict] = None,
     created_at: Optional[str] = None,
+    channels: Optional[list[str]] = None,
 ) -> dict:
+    # ``channels`` overrides the global notification channel set for this
+    # single record (e.g. ``["dashboard"]`` to surface an operational
+    # signal on the dashboard without emailing/Telegram-ing the operator).
+    # When None, the global ops-config targets apply (dashboard+email+telegram).
     metadata_obj = dict(metadata) if isinstance(metadata, dict) else {}
     summary_text = summary
     full_message_text = full_message if full_message is not None else message
@@ -12020,7 +12031,11 @@ def _add_notification(
         ),
         "created_at": timestamp,
         "updated_at": timestamp,
-        "channels": targets["channels"],
+        "channels": (
+            [str(c).strip().lower() for c in channels if str(c).strip()]
+            if isinstance(channels, list) and channels
+            else targets["channels"]
+        ),
         "email_targets": targets["email_targets"],
         "metadata": {
             **metadata_obj,
@@ -14014,6 +14029,12 @@ async def _cancel_session_execution(session_id: str, reason: str, run_id: Option
     # reasons; real cancellations (errors, ops-triggered, mid-run aborts)
     # still get surfaced.
     is_routine_daemon_reap = str(reason or "").startswith("daemon_idle_timeout")
+    # A daemon *execution* timeout (a single turn wedged past the watchdog
+    # limit) is a real health signal worth seeing on the dashboard, but it
+    # is self-healing — the dispatcher re-runs the task — so it should not
+    # email the operator. Surface it dashboard-only. Other cancellations
+    # (errors, ops-triggered, mid-run aborts) still email as before.
+    is_execution_timeout = str(reason or "").startswith("daemon_execution_timeout")
     if not is_routine_daemon_reap:
         _add_notification(
             kind="cancelled",
@@ -14022,6 +14043,7 @@ async def _cancel_session_execution(session_id: str, reason: str, run_id: Option
             session_id=session_id,
             severity="warning",
             metadata={"source": "ops"},
+            channels=["dashboard"] if is_execution_timeout else None,
         )
 
     return {
@@ -15122,6 +15144,9 @@ async def lifespan(app: FastAPI):
                 telegram_chat_id=os.getenv("UA_TELEGRAM_NOTIFICATION_CHAT_ID")
                     or os.getenv("TELEGRAM_CHAT_ID"),
                 cooldown_seconds=float(os.getenv("UA_NOTIFICATION_DISPATCHER_COOLDOWN_SECONDS", "300") or 300),
+                rollup_enabled=str(os.getenv("UA_NOTIFICATION_ROLLUP_ENABLED", "1") or "1").strip().lower()
+                    not in {"0", "false", "no", "off"},
+                rollup_window_seconds=float(os.getenv("UA_NOTIFICATION_ROLLUP_WINDOW_SECONDS", "180") or 180),
             )
 
             interval = float(os.getenv("UA_NOTIFICATION_DISPATCHER_INTERVAL_SECONDS", "30") or 30)
@@ -29297,15 +29322,24 @@ async def vision_describe(request: VisionDescribeRequest):
     if httpx is None:
         raise HTTPException(status_code=500, detail="httpx is not available in this runtime")
 
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+    api_key = (
+        os.getenv("ANTHROPIC_API_KEY")
+        or os.getenv("ANTHROPIC_AUTH_TOKEN")
+        or os.getenv("ZAI_API_KEY")
+    )
     if not api_key:
-        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured for vision tasks")
+        raise HTTPException(
+            status_code=500,
+            detail="No Anthropic-compatible API key configured for vision tasks",
+        )
 
-    # FIXME(claude/pr-validate-workflow-fix): `resolve_opus` is defined at
-    # universal_agent/utils/model_resolution.py:82 but is NOT imported in this
-    # file. Calling vision_describe would raise NameError. Filed as a follow-up
-    # issue; the noqa here is a documented gap, not a silent fix.
-    model = resolve_opus()  # noqa: F821
+    # Vision routes through the same proxy as the rest of the daemon:
+    # resolve_opus() returns the configured opus-tier model (glm-5.1 on the
+    # ZAI Anthropic-compatible endpoint) and the request goes to
+    # ANTHROPIC_BASE_URL below. To use real Anthropic high-res vision instead,
+    # point ANTHROPIC_BASE_URL at api.anthropic.com with a real console key
+    # and set an explicit claude-* model here.
+    model = resolve_opus()
 
     try:
         base64_data = request.image_base64
@@ -29316,9 +29350,12 @@ async def vision_describe(request: VisionDescribeRequest):
             media_type = header.split(";")[0].replace("data:", "")
             base64_data = content
 
+        base_url = (
+            os.getenv("ANTHROPIC_BASE_URL") or "https://api.z.ai/api/anthropic"
+        ).rstrip("/")
         async with httpx.AsyncClient(timeout=request.timeout_seconds) as client:
             response = await client.post(
-                "https://api.anthropic.com/v1/messages",
+                f"{base_url}/v1/messages",
                 headers={
                     "x-api-key": api_key,
                     "anthropic-version": "2023-06-01",

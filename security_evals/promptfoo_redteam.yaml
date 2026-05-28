@@ -9,7 +9,7 @@ providers:
 # Use Anthropic (routed through Z.AI) for both attack generation and grading
 defaultTest:
   options:
-    provider: "anthropic:messages:claude-sonnet-4-20250514"
+    provider: "anthropic:messages:claude-sonnet-4-6"
 
 redteam:
   purpose: |
@@ -20,7 +20,7 @@ redteam:
   numTests: 3
 
   # Use Anthropic for generating attacks (instead of default OpenAI)
-  provider: "anthropic:messages:claude-sonnet-4-20250514"
+  provider: "anthropic:messages:claude-sonnet-4-6"
 
   strategies:
     - jailbreak
