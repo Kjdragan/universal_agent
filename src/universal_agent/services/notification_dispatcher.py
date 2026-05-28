@@ -29,6 +29,7 @@ delivered (so the row stays eligible for retry on the next tick).
 from __future__ import annotations
 
 import asyncio
+from html import escape as _html_escape
 import logging
 import time
 from typing import Any, Awaitable, Callable, Iterable, Optional
@@ -38,6 +39,8 @@ logger = logging.getLogger(__name__)
 
 _DELIVERABLE_SEVERITIES = frozenset({"error", "warning"})
 _DEFAULT_COOLDOWN_SECONDS = 300.0  # 5 min per-(kind, scope) cooldown
+_DEFAULT_ROLLUP_WINDOW_SECONDS = 180.0  # per-kind email rollup window
+_ROLLUP_SAMPLE_CAP = 20  # max collapsed events listed in a rollup email
 
 
 def _scope_key_for_record(record: dict) -> str:
@@ -147,6 +150,43 @@ def _format_telegram_text(record: dict) -> str:
     return f"[{severity}] {title}\n\n{message}"
 
 
+def _format_rollup_email(kind: str, count: int, samples: list[str]) -> tuple[str, str, str]:
+    """Compose the single rollup email for ``count`` collapsed same-kind alerts.
+
+    The first alert of the kind was already emailed individually; this rollup
+    covers the additional ones that fired within the window. It lists up to
+    ``_ROLLUP_SAMPLE_CAP`` samples and notes any overflow so no event is
+    silently dropped.
+    """
+    subject = f"[ALERT ROLLUP] {kind} × {count} additional alert(s)"
+    lines = [
+        f"{count} additional '{kind}' alert(s) fired within the rollup window "
+        "(the first one was emailed separately).",
+        "",
+        "Collapsed events:",
+    ]
+    lines.extend(f"  - {s}" for s in samples)
+    if count > len(samples):
+        lines.append(f"  - ... and {count - len(samples)} more")
+    lines.append("")
+    lines.append("See the dashboard for full details on each.")
+    text = "\n".join(lines)
+
+    items_html = "".join(f"<li>{_html_escape(s)}</li>" for s in samples)
+    if count > len(samples):
+        items_html += f"<li>... and {count - len(samples)} more</li>"
+    html = (
+        "<html><body style=\"font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height:1.5;\">"
+        f"<h2 style=\"color:#b00020;\">[ALERT ROLLUP] {_html_escape(kind)} &times; {count}</h2>"
+        f"<p>{count} additional '<code>{_html_escape(kind)}</code>' alert(s) fired within the rollup "
+        "window (the first one was emailed separately).</p>"
+        f"<ul>{items_html}</ul>"
+        "<p style=\"color:#666;font-size:11px;\">See the dashboard for full details on each.</p>"
+        "</body></html>"
+    )
+    return subject, text, html
+
+
 class NotificationDispatcher:
     """Dispatches pending notifications to email and Telegram channels."""
 
@@ -160,6 +200,8 @@ class NotificationDispatcher:
         email_targets: list[str],
         telegram_chat_id: Optional[str | int],
         cooldown_seconds: float = _DEFAULT_COOLDOWN_SECONDS,
+        rollup_enabled: bool = True,
+        rollup_window_seconds: float = _DEFAULT_ROLLUP_WINDOW_SECONDS,
         now_fn: Callable[[], float] = time.time,
     ) -> None:
         """Initialize the dispatcher with delivery callables and targeting config."""
@@ -170,12 +212,21 @@ class NotificationDispatcher:
         self._email_targets = list(email_targets or [])
         self._telegram_chat_id = telegram_chat_id
         self._cooldown_seconds = max(1.0, float(cooldown_seconds))
+        self._rollup_enabled = bool(rollup_enabled)
+        self._rollup_window_seconds = max(1.0, float(rollup_window_seconds))
         self._now = now_fn
         # Per-(kind, scope, channel) last-send timestamps for cooldown
         # enforcement. ``scope`` is a task_id / job_id / session_id
         # extracted by ``_scope_key_for_record`` so different tasks of the
         # same kind alert independently within the cooldown window.
         self._last_send_at: dict[tuple[str, str, str], float] = {}
+        # Per-kind email rollup windows. The first alert of a kind sends
+        # immediately and opens a window here; same-kind alerts arriving
+        # while the window is open are buffered into ``count``/``samples``
+        # and emitted as one rollup email when the window expires. This
+        # caps incident fan-out (many distinct scopes of one kind failing
+        # at once) that the per-(kind, scope) cooldown cannot coalesce.
+        self._rollup_open: dict[str, dict[str, Any]] = {}
 
     def _within_cooldown(self, kind: str, scope: str, channel: str) -> bool:
         last = self._last_send_at.get((kind, scope, channel))
@@ -186,6 +237,61 @@ class NotificationDispatcher:
     def _record_send(self, kind: str, scope: str, channel: str) -> None:
         self._last_send_at[(kind, scope, channel)] = self._now()
 
+    def _rollup_window_open(self, kind: str) -> bool:
+        window = self._rollup_open.get(kind)
+        if window is None:
+            return False
+        return (self._now() - float(window["opened_at"])) < self._rollup_window_seconds
+
+    def _rollup_start(self, kind: str) -> None:
+        self._rollup_open[kind] = {"opened_at": self._now(), "count": 0, "samples": []}
+
+    def _rollup_buffer(self, kind: str, record: dict) -> None:
+        window = self._rollup_open.get(kind)
+        if window is None:
+            return
+        window["count"] = int(window["count"]) + 1
+        samples = window["samples"]
+        if len(samples) < _ROLLUP_SAMPLE_CAP:
+            title = str(record.get("title") or "Alert")
+            scope = _scope_key_for_record(record) or "-"
+            samples.append(f"{title} (scope: {scope})")
+
+    async def _flush_expired_rollups(self, summary: dict) -> None:
+        """Emit one rollup email per kind whose window has expired with buffered events."""
+        if not self._rollup_enabled or not self._rollup_open:
+            return
+        now = self._now()
+        expired = [
+            kind
+            for kind, window in self._rollup_open.items()
+            if (now - float(window["opened_at"])) >= self._rollup_window_seconds
+        ]
+        for kind in expired:
+            window = self._rollup_open.pop(kind, None)
+            if not window or int(window.get("count") or 0) <= 0:
+                continue  # isolated alert — first send already covered it
+            targets = list(self._email_targets)
+            if not targets:
+                summary["email_skipped_no_target"] += 1
+                continue
+            subject, text, html = _format_rollup_email(
+                kind, int(window["count"]), list(window["samples"])
+            )
+            delivered_any = False
+            for target in targets:
+                try:
+                    await self._send_email(to=str(target), subject=subject, text=text, html=html)
+                    delivered_any = True
+                except Exception:
+                    logger.exception(
+                        "notification_dispatcher: rollup email send failed for kind=%s", kind
+                    )
+            if delivered_any:
+                summary["rollup_emails_sent"] += 1
+            else:
+                summary["email_failed"] += 1
+
     async def _deliver_email_for_row(self, record: dict, summary: dict) -> None:
         if "email" not in _channels_list(record):
             return
@@ -193,6 +299,17 @@ class NotificationDispatcher:
             return
         kind = str(record.get("kind") or "")
         scope = _scope_key_for_record(record)
+        # Per-kind rollup: while a kind's window is open, buffer same-kind
+        # alerts (any scope) into a single rollup instead of emailing each.
+        # The row is marked delivered so it cannot re-surface and double-send.
+        if self._rollup_enabled and self._rollup_window_open(kind):
+            self._rollup_buffer(kind, record)
+            summary["email_rolled_up"] += 1
+            try:
+                self._mark_delivered(str(record.get("id") or ""), "email")
+            except Exception:
+                logger.exception("notification_dispatcher: mark_delivered(email rollup) failed")
+            return
         if self._within_cooldown(kind, scope, "email"):
             summary["email_cooldown_skipped"] += 1
             return
@@ -231,6 +348,10 @@ class NotificationDispatcher:
             except Exception:
                 logger.exception("notification_dispatcher: mark_delivered(email) failed")
             summary["email_sent"] += 1
+            # Open a rollup window so further same-kind alerts within it
+            # collapse into one rollup instead of emailing individually.
+            if self._rollup_enabled:
+                self._rollup_start(kind)
         else:
             summary["email_failed"] += 1
 
@@ -282,12 +403,16 @@ class NotificationDispatcher:
             "telegram_failed": 0,
             "telegram_cooldown_skipped": 0,
             "telegram_skipped_no_chat_id": 0,
+            "email_rolled_up": 0,
+            "rollup_emails_sent": 0,
         }
 
         try:
             rows = list(self._get_pending_rows() or [])
         except Exception:
             logger.exception("notification_dispatcher: get_pending_rows failed")
+            # Still flush any rollup windows that have come due.
+            await self._flush_expired_rollups(summary)
             return summary
 
         for record in rows:
@@ -299,6 +424,9 @@ class NotificationDispatcher:
             await self._deliver_email_for_row(record, summary)
             await self._deliver_telegram_for_row(record, summary)
 
+        # Emit any rollup emails whose window expired during/before this tick.
+        await self._flush_expired_rollups(summary)
+
         return summary
 
     async def run_loop(self, interval_seconds: float, *, stop_event: Optional[asyncio.Event] = None) -> None:
@@ -309,11 +437,13 @@ class NotificationDispatcher:
                 return
             try:
                 summary = await self.dispatch_pending_once()
-                if summary["email_sent"] or summary["telegram_sent"]:
+                if summary["email_sent"] or summary["telegram_sent"] or summary["rollup_emails_sent"]:
                     logger.info(
-                        "notification_dispatcher tick: email=%d telegram=%d (eligible=%d)",
+                        "notification_dispatcher tick: email=%d telegram=%d rollup=%d (rolled_up=%d eligible=%d)",
                         summary["email_sent"],
                         summary["telegram_sent"],
+                        summary["rollup_emails_sent"],
+                        summary["email_rolled_up"],
                         summary["rows_eligible"],
                     )
             except Exception:
