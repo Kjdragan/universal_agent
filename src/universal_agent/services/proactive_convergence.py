@@ -716,8 +716,9 @@ def create_insight_brief_task(
             "  (the pre-work self-briefing artifact) and have caused operator confusion.",
             "- If you delegate this work to another VP/agent, propagate this contract verbatim.",
             "",
-            "Store the final brief as a durable artifact. If you email Kevin about it,",
-            "honor the FRAMING note above — open with proactive-discovery phrasing.",
+            "Store the final brief as a durable artifact via "
+            "services.proactive_artifacts.upsert_artifact. Do NOT email Kevin",
+            "directly. Delivery is handled by the consolidated digest pipeline.",
         ]
     )
     if preference_context:
@@ -903,8 +904,9 @@ def _brief_task_description(*, primary_topic: str, signatures: list[dict[str, An
             "3. DIVERGENCE: where sources differ.",
             "4. SO WHAT: why Kevin should care and what is actionable.",
             "",
-            "Store the final brief as a durable artifact. If you email Kevin about it,",
-            "honor the FRAMING note above — open with proactive-discovery phrasing.",
+            "Store the final brief as a durable artifact via "
+            "services.proactive_artifacts.upsert_artifact. Do NOT email Kevin",
+            "directly. Delivery is handled by the consolidated digest pipeline.",
         ]
     )
     if preference_context:
