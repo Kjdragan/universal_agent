@@ -1571,24 +1571,154 @@ def _render_full_digest_html(
     )
 
 
+# Per-element inline styles. Gmail strips <style> blocks placed in the email
+# body, so every visual rule the operator should see must be inlined directly
+# on each tag. This map is applied by `_inline_email_styles` AFTER markdown is
+# rendered to HTML. Keeping the inline values short — Gmail truncates emails
+# over ~102KB and inline `style="..."` repetition eats into that budget.
+_EMAIL_INLINE_STYLES: dict[str, str] = {
+    "h1": "font-size:24px;border-bottom:2px solid #d0d7de;padding-bottom:8px;margin-top:8px;",
+    "h2": "font-size:20px;border-bottom:1px solid #d8dee4;padding-bottom:6px;margin-top:32px;",
+    "h3": "font-size:16px;margin-top:22px;margin-bottom:4px;color:#24292f;",
+    "p": "margin:8px 0;",
+    "ul": "margin:8px 0;padding-left:22px;",
+    "ol": "margin:8px 0;padding-left:22px;",
+    "li": "margin:2px 0;",
+    "small": "display:inline-block;font-size:13px;color:#57606a;margin-bottom:8px;",
+    "blockquote": "border-left:4px solid #d0d7de;margin:8px 0;padding:4px 14px;color:#57606a;background:#f6f8fa;",
+    "code": "background:#eff1f3;padding:1px 6px;border-radius:4px;font-family:SFMono-Regular,Consolas,'Liberation Mono',monospace;font-size:13px;",
+    "pre": "background:#f6f8fa;padding:14px 16px;border-radius:6px;overflow-x:auto;font-size:13px;line-height:1.45;",
+    "hr": "border:none;border-top:1px solid #d8dee4;margin:28px 0;",
+    "a": "color:#0969da;",
+    "table": "border-collapse:collapse;margin:12px 0;",
+    "th": "border:1px solid #d0d7de;padding:6px 10px;background:#f6f8fa;",
+    "td": "border:1px solid #d0d7de;padding:6px 10px;",
+}
+
+
+def _inline_email_styles(html_fragment: str) -> str:
+    """Walk the rendered HTML and inject ``style="..."`` on every supported
+    element. Preserves existing attributes (notably ``id="vN-..."`` from the
+    per-video anchor injection) so TOC links keep working.
+
+    Uses a regex-based rewrite — the digest's HTML is well-formed (python-markdown
+    is deterministic) and we control the input markdown, so we don't need a
+    full parser.
+    """
+    for tag, inline_css in _EMAIL_INLINE_STYLES.items():
+        pattern = re.compile(rf"<{tag}(\s[^>]*)?>", re.IGNORECASE)
+
+        def repl(m: re.Match, _css: str = inline_css, _tag: str = tag) -> str:
+            attrs = m.group(1) or ""
+            if re.search(r'\bstyle\s*=', attrs, flags=re.IGNORECASE):
+                return m.group(0)
+            return f'<{_tag}{attrs} style="{_css}">'
+
+        html_fragment = pattern.sub(repl, html_fragment)
+    return html_fragment
+
+
+def _build_inline_toc_html(full_content: str) -> str:
+    """Variant of ``_build_toc_html`` with inline styles (Gmail strips
+    ``<style>`` so the TOC box needs to be self-styled for the email body)."""
+    bounds = _per_video_range(full_content)
+    if not bounds:
+        return ""
+    per_video_section = full_content[bounds[0]:bounds[1]]
+    entries = _extract_video_entries(per_video_section)
+    if len(entries) < 2:
+        return ""
+    box_style = (
+        "background:#f6f8fa;border:1px solid #d8dee4;border-radius:6px;"
+        "padding:12px 18px;margin:18px 0 28px;"
+    )
+    heading_style = (
+        "font-size:14px;border:none;margin:0 0 6px;text-transform:uppercase;"
+        "letter-spacing:0.04em;color:#57606a;padding:0;"
+    )
+    ol_style = "margin:4px 0 0;padding-left:22px;"
+    li_style = "margin:4px 0;font-size:14px;line-height:1.45;"
+    link_style = "text-decoration:none;color:inherit;"
+    channel_style = "color:#1f2328;font-weight:600;"
+    sep_style = "color:#8c959f;"
+    title_style = "color:#0969da;"
+    items: list[str] = []
+    for idx, (raw_title, channel) in enumerate(entries, start=1):
+        title_esc = html_module.escape(raw_title.strip())
+        anchor = _slugify_anchor(raw_title, idx)
+        if channel:
+            channel_esc = html_module.escape(channel.strip())
+            label = (
+                f'<span style="{channel_style}">{channel_esc}</span>'
+                f'<span style="{sep_style}"> — </span>'
+                f'<span style="{title_style}">{title_esc}</span>'
+            )
+        else:
+            label = f'<span style="{title_style}">{title_esc}</span>'
+        items.append(
+            f'<li style="{li_style}">'
+            f'<a href="#{anchor}" style="{link_style}">{label}</a>'
+            f'</li>'
+        )
+    return (
+        f'<div style="{box_style}">'
+        f'<h2 style="{heading_style}">Jump to a video</h2>'
+        f'<ol style="{ol_style}">{"".join(items)}</ol>'
+        f'</div>'
+    )
+
+
 def _render_email_body_html(
     body_md: str,
     *,
     intro_html: str,
+    full_content: str | None = None,
 ) -> str:
-    """Render the email body (intro + meta-synthesis only) as inline-styled HTML.
+    """Render the email body as inline-styled HTML.
 
-    Gmail strips <style> tags, so every visual rule is inlined here. We keep the
-    formatting deliberately minimal because the body is now short — the full
-    template lives in the attachment.
+    When ``full_content`` is provided, the body renders the WHOLE digest —
+    intro + clickable per-video TOC + meta-synthesis + per-video retellings —
+    with anchors that the TOC can jump to. This is the layout Kevin wants:
+    everything in one scrollable email, no attachment hunting.
+
+    When ``full_content`` is ``None`` (legacy callsite), only ``body_md`` is
+    rendered without TOC (used historically when the per-video body lived
+    only in the attachment).
+
+    Gmail strips ``<style>`` so every visual rule is inlined per-element via
+    ``_inline_email_styles``.
     """
-    body_fragment = _markdown_to_html_fragment(body_md)
+    source_md = full_content if full_content is not None else body_md
+    body_fragment = _markdown_to_html_fragment(source_md)
+    body_fragment = _inject_video_anchors(body_fragment)
     # Strip the leading H1 (the email subject already names the day).
     body_fragment = re.sub(r"<h1>.*?</h1>\s*", "", body_fragment, count=1, flags=re.DOTALL)
+    # Inject the TOC right BEFORE the per-video section so the reader sees
+    # themes (meta-synthesis) first, then the clickable index, then dives in.
+    if full_content is not None:
+        toc_html = _build_inline_toc_html(full_content)
+        if toc_html:
+            per_video_h2 = re.search(
+                r"<h2[^>]*>\s*Per[- ]Video Retellings\s*</h2>",
+                body_fragment,
+                flags=re.IGNORECASE,
+            )
+            if per_video_h2:
+                body_fragment = (
+                    body_fragment[: per_video_h2.start()]
+                    + toc_html
+                    + "\n"
+                    + body_fragment[per_video_h2.start():]
+                )
+            else:
+                # No per-video marker — fall back to placing TOC at the very
+                # top so it's at least visible.
+                body_fragment = toc_html + body_fragment
+    body_fragment = _inline_email_styles(body_fragment)
     return (
         '<div style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\','
         'Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.55;'
-        'color:#1f2328;max-width:760px;margin:0 auto;padding:8px 4px 0;">'
+        'color:#1f2328;max-width:780px;margin:0 auto;padding:8px 4px 0;">'
         f'{intro_html}'
         f'{body_fragment}'
         '</div>'
@@ -2502,12 +2632,16 @@ def process_daily_digest(
             '<p style="margin:0 0 14px;">'
             f"Here's today's daily synthesis across <strong>{attachment_count}</strong> "
             f"video{'s' if attachment_count != 1 else ''} from your <em>{day_name.title()}</em> "
-            "playlist. The cross-video themes are below; the full per-video retellings, "
-            "tutorial dispatch summary, and decision metadata are attached as a styled "
-            "HTML report."
+            "playlist. The clickable index below jumps straight to any video; "
+            "the same content is also attached as a standalone HTML report."
             "</p>"
         )
-        email_html = _render_email_body_html(body_md, intro_html=intro_html)
+        # `full_content` here gives the email body the per-video sections + TOC
+        # inline (so anchors resolve). `attachment_md` mirrors that content as
+        # a standalone HTML file for archive / print.
+        email_html = _render_email_body_html(
+            body_md, intro_html=intro_html, full_content=full_content,
+        )
         attachment_html = _render_full_digest_html(
             attachment_md, day_name=day_name, date_str=date_str,
         )

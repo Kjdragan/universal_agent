@@ -93,7 +93,7 @@ async def test_429_with_flag_falls_back_to_gws_cli(monkeypatch):
 
     captured: dict = {}
 
-    def _fake_run(argv, *, capture_output, text, timeout, check):
+    def _fake_run(argv, *, capture_output, text, timeout, check, **_):
         captured["argv"] = list(argv)
         captured["timeout"] = timeout
         return SimpleNamespace(
@@ -147,7 +147,7 @@ async def test_429_fallback_writes_attachments_and_passes_them(monkeypatch):
 
     captured_paths: list[str] = []
 
-    def _fake_run(argv, *, capture_output, text, timeout, check):
+    def _fake_run(argv, *, capture_output, text, timeout, check, **_):
         # Capture each -a path and confirm the file is there with the right bytes.
         i = 0
         while i < len(argv):
@@ -185,6 +185,40 @@ async def test_429_fallback_propagates_cli_failure(monkeypatch):
                 to="kevin@example.com", subject="x", text="x",
                 html=None, attachments=None, labels=None,
             )
+
+
+@pytest.mark.asyncio
+async def test_429_fallback_strips_empty_gws_env_vars(monkeypatch):
+    """Empty GOOGLE_WORKSPACE_CLI_* env vars must not leak into the subprocess.
+
+    Real-world failure: deploy.yml's .env bootstrap on the VPS leaves
+    GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE set to "" in the gateway process.
+    Without scrubbing, the gws CLI interprets that empty path as
+    "no fallback to default ~/.config/gws/credentials.enc" and bombs.
+    """
+    monkeypatch.setenv("UA_AGENTMAIL_GMAIL_FALLBACK", "1")
+    monkeypatch.setenv("UA_GMAIL_CLI_CMD", "/usr/bin/false")
+    monkeypatch.setenv("GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE", "")
+    monkeypatch.setenv("GOOGLE_WORKSPACE_CLI_KEEP_ME", "real-value")
+    service = _make_service(send_raises=_Stub429())
+
+    captured_env: dict = {}
+
+    def _fake_run(argv, *, capture_output, text, timeout, check, env=None, **_):
+        captured_env["env"] = env or {}
+        return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+
+    with patch.object(subprocess, "run", _fake_run):
+        await service._send_direct(
+            to="kevin@example.com", subject="x", text="x",
+            html=None, attachments=None, labels=None,
+        )
+
+    env = captured_env["env"]
+    assert "GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE" not in env, \
+        "Empty GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE must be stripped"
+    assert env.get("GOOGLE_WORKSPACE_CLI_KEEP_ME") == "real-value", \
+        "Non-empty GOOGLE_WORKSPACE_CLI_* vars must pass through"
 
 
 @pytest.mark.asyncio
