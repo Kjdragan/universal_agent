@@ -15122,6 +15122,9 @@ async def lifespan(app: FastAPI):
                 telegram_chat_id=os.getenv("UA_TELEGRAM_NOTIFICATION_CHAT_ID")
                     or os.getenv("TELEGRAM_CHAT_ID"),
                 cooldown_seconds=float(os.getenv("UA_NOTIFICATION_DISPATCHER_COOLDOWN_SECONDS", "300") or 300),
+                rollup_enabled=str(os.getenv("UA_NOTIFICATION_ROLLUP_ENABLED", "1") or "1").strip().lower()
+                    not in {"0", "false", "no", "off"},
+                rollup_window_seconds=float(os.getenv("UA_NOTIFICATION_ROLLUP_WINDOW_SECONDS", "180") or 180),
             )
 
             interval = float(os.getenv("UA_NOTIFICATION_DISPATCHER_INTERVAL_SECONDS", "30") or 30)
