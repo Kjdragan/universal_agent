@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - main
-      # PRE-MERGE PROBE (REMOVE BEFORE MERGE): smoke-test parsing on this branch.
-      - 'claude/crashloop-failfast-via-script'
     # Skip production deploy when a push to `main` only contains docs,
     # markdown, or scheduled-job state files. These are produced by
     # `nightly-doc-drift-audit.yml` and `openclaw-release-sync.yml` (which
@@ -48,8 +46,6 @@ concurrency:
 
 jobs:
   deploy-production:
-    # PRE-MERGE PROBE (REMOVE BEFORE MERGE): suppress deploy on probe branch.
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
