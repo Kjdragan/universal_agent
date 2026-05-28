@@ -17277,6 +17277,49 @@ async def list_runs_public(
     }
 
 
+_DASHBOARD_SUMMARY_CACHE_TTL_SECONDS = float(
+    os.getenv("UA_DASHBOARD_SUMMARY_CACHE_TTL_SECONDS", "5") or "5"
+)
+_dashboard_summary_lock = threading.Lock()
+_dashboard_summary_cache: dict[str, Any] = {"data": None, "computed_at": 0.0}
+
+
+def _dashboard_summary_cached() -> dict[str, Any]:
+    """Single-flight TTL cache around the summary compute.
+
+    The dashboard polls /api/v1/dashboard/summary every ~8s per open tab. Each
+    compute touches a 1.4GB activity_state.db and a Python iteration over
+    ~67k notification rows (~0.6–1s standalone). Without coalescing, parallel
+    polls saturate the asyncio to_thread pool and the endpoint stalls at the
+    15s timeout — observed 2026-05-28 with the dashboard rendering a
+    "Gateway unreachable" banner.
+
+    Strategy: serve any compute result newer than ``TTL`` seconds (default 5s)
+    from in-process memory. Concurrent cache misses coalesce on
+    ``_dashboard_summary_lock`` — at most one compute runs at a time, and
+    every other caller picks up the freshly-populated value on lock re-entry.
+
+    Knob: ``UA_DASHBOARD_SUMMARY_CACHE_TTL_SECONDS``. Setting it to 0 disables
+    the cache entirely (always recompute) for diagnostics.
+    """
+    ttl = _DASHBOARD_SUMMARY_CACHE_TTL_SECONDS
+    if ttl > 0:
+        cached = _dashboard_summary_cache.get("data")
+        cached_at = float(_dashboard_summary_cache.get("computed_at") or 0.0)
+        if cached is not None and (time.monotonic() - cached_at) < ttl:
+            return cached
+    with _dashboard_summary_lock:
+        if ttl > 0:
+            cached = _dashboard_summary_cache.get("data")
+            cached_at = float(_dashboard_summary_cache.get("computed_at") or 0.0)
+            if cached is not None and (time.monotonic() - cached_at) < ttl:
+                return cached
+        data = _dashboard_summary_sync_compute()
+        _dashboard_summary_cache["data"] = data
+        _dashboard_summary_cache["computed_at"] = time.monotonic()
+        return data
+
+
 def _dashboard_summary_sync_compute():
     # HOT-PATCH 2026-05-26: extracted to run in to_thread so the whole sync
     # chain (list_sessions, _query_activity_event_counters with json.loads
@@ -17334,7 +17377,7 @@ def _dashboard_summary_sync_compute():
 
 @app.get("/api/v1/dashboard/summary")
 async def dashboard_summary():
-    return await asyncio.to_thread(_dashboard_summary_sync_compute)
+    return await asyncio.to_thread(_dashboard_summary_cached)
 
 
 def _discord_intelligence_db_path() -> Path:
