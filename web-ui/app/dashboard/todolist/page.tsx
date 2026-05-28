@@ -973,58 +973,56 @@ export default function ToDoListDashboardPage() {
   );
 
   const handleDeleteAllNotAssigned = useCallback(async () => {
-    if (!notAssignedItems.length) return;
+    // The visible list is capped at limit=120 by the agent-queue fetch
+    // (≈L614). The operator's mental model is "park EVERYTHING in this
+    // lane" — backend resolves candidates by lane, not by the rendered
+    // window, so we don't miss the rest of the queue behind pagination.
+    const visibleCount = notAssignedItems.length;
+    if (!visibleCount) return;
     const confirmed = window.confirm(
-      `Park all ${notAssignedItems.length} queued task${notAssignedItems.length === 1 ? "" : "s"}? Includes untriaged and delegated-but-not-yet-picked-up tasks. They will be moved out of the active board.`,
+      `Park ALL queued tasks (${visibleCount} currently visible — there may be more behind pagination)? Includes untriaged and delegated-but-not-yet-picked-up tasks. They will be moved out of the active board.`,
     );
     if (!confirmed) return;
     setDeleteAllNotAssignedPending(true);
     const releaseMutation = beginMutation();
     try {
-      await Promise.allSettled(
-        notAssignedItems.map((item) =>
-          fetch(`${API_BASE}/api/v1/dashboard/todolist/tasks/${encodeURIComponent(item.task_id)}/action`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "park", reason: "bulk_delete_queued" }),
-          }),
-        ),
-      );
+      await fetch(`${API_BASE}/api/v1/dashboard/todolist/bulk-park`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lane: "not_assigned", reason: "bulk_park_not_assigned" }),
+      });
     } catch {
-      // noop — best-effort
+      // noop — best-effort; load() below re-syncs the board
     } finally {
       await load(true);
       releaseMutation();
       setDeleteAllNotAssignedPending(false);
     }
-  }, [notAssignedItems, load]);
+  }, [notAssignedItems.length, load]);
 
   const handleDeleteAllInProgress = useCallback(async () => {
-    if (!inProgressItems.length) return;
+    const visibleCount = inProgressItems.length;
+    if (!visibleCount) return;
     const confirmed = window.confirm(
-      `Park all ${inProgressItems.length} in-progress task${inProgressItems.length === 1 ? "" : "s"}? Any active agent assignment will be marked completed. They will be moved out of the active board.`,
+      `Park ALL in-progress tasks (${visibleCount} currently visible)? Any active agent assignment will be marked completed. They will be moved out of the active board.`,
     );
     if (!confirmed) return;
     setDeleteAllInProgressPending(true);
     const releaseMutation = beginMutation();
     try {
-      await Promise.allSettled(
-        inProgressItems.map((item) =>
-          fetch(`${API_BASE}/api/v1/dashboard/todolist/tasks/${encodeURIComponent(item.task_id)}/action`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "park", reason: "bulk_delete_in_progress" }),
-          }),
-        ),
-      );
+      await fetch(`${API_BASE}/api/v1/dashboard/todolist/bulk-park`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lane: "in_progress", reason: "bulk_park_in_progress" }),
+      });
     } catch {
-      // noop — best-effort
+      // noop — best-effort; load() below re-syncs the board
     } finally {
       await load(true);
       releaseMutation();
       setDeleteAllInProgressPending(false);
     }
-  }, [inProgressItems, load]);
+  }, [inProgressItems.length, load]);
 
   // Allocation breakdown: source_kind counts
   const allocationBySource = useMemo(() => {

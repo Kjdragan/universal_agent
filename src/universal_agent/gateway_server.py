@@ -2182,6 +2182,18 @@ class QuickAddTaskRequest(BaseModel):
     target_agent: Optional[str] = None
 
 
+class BulkParkRequest(BaseModel):
+    """Park every task in a board lane in one round-trip.
+
+    Replaces the dashboard's pre-PR pattern of issuing one HTTP POST per
+    visible row, which capped at the rendered window (limit=120) and could
+    take minutes when N×120 items were queued.
+    """
+
+    lane: str  # "not_assigned" | "in_progress" | "blocked" | "needs_review"
+    reason: Optional[str] = None
+
+
 
 
 class MemoryTaskCompactRequest(BaseModel):
@@ -23791,6 +23803,82 @@ async def dashboard_todolist_task_action(task_id: str, payload: ToDoTaskActionRe
             return {"status": "ok", "item": updated}
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+        finally:
+            conn.close()
+
+
+# Board-lane → candidate-row SELECT mirrors the per-item categorization at
+# ``_serialize_task_hub_queue_item`` (≈L24819). Keep these in sync if the
+# lane rules ever change.
+_BULK_PARK_LANE_QUERIES: dict[str, str] = {
+    "not_assigned": """
+        SELECT task_id FROM task_hub_items
+        WHERE status IN ('open', 'delegated')
+          AND NOT EXISTS (
+            SELECT 1 FROM task_hub_assignments a
+            WHERE a.task_id = task_hub_items.task_id
+              AND a.state IN ('seized', 'running')
+          )
+    """,
+    "in_progress": """
+        SELECT task_id FROM task_hub_items
+        WHERE status = 'in_progress'
+           OR EXISTS (
+            SELECT 1 FROM task_hub_assignments a
+            WHERE a.task_id = task_hub_items.task_id
+              AND a.state IN ('seized', 'running')
+          )
+    """,
+    "blocked": "SELECT task_id FROM task_hub_items WHERE status = 'blocked'",
+    "needs_review": "SELECT task_id FROM task_hub_items WHERE status IN ('needs_review', 'pending_review')",
+}
+
+
+@app.post("/api/v1/dashboard/todolist/bulk-park")
+async def dashboard_todolist_bulk_park(payload: BulkParkRequest):
+    """Park every task in the given board lane in one request.
+
+    Resolves all candidate ``task_id``s via a single SELECT and parks them
+    through the canonical ``task_hub.perform_task_action`` path. With the
+    DB in autocommit mode, each park UPDATE flushes immediately — typical
+    cost is ~1ms per row, so even 500-row sweeps complete sub-second
+    instead of the minutes-long N×HTTP-POST loop the dashboard issued
+    pre-fix.
+    """
+    lane = (payload.lane or "").strip().lower()
+    if lane not in _BULK_PARK_LANE_QUERIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"lane must be one of: {sorted(_BULK_PARK_LANE_QUERIES.keys())}",
+        )
+    reason = (payload.reason or "").strip() or f"bulk_park_{lane}"
+
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            rows = conn.execute(_BULK_PARK_LANE_QUERIES[lane]).fetchall()
+            task_ids = [str(row["task_id"]) for row in rows if row and row["task_id"]]
+            parked = 0
+            failed = 0
+            for tid in task_ids:
+                try:
+                    task_hub.perform_task_action(
+                        conn,
+                        task_id=tid,
+                        action="park",
+                        reason=reason,
+                        agent_id="dashboard_operator",
+                    )
+                    parked += 1
+                except Exception:
+                    failed += 1
+            return {
+                "status": "ok",
+                "lane": lane,
+                "candidate_count": len(task_ids),
+                "parked_count": parked,
+                "failed_count": failed,
+            }
         finally:
             conn.close()
 
