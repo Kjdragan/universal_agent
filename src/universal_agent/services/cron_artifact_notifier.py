@@ -675,9 +675,141 @@ def _build_ack_url(artifact_id: str, dashboard_base_url: str) -> str:
     return f"{base}/api/v1/artifacts/{artifact_id}/ack?t={token}"
 
 
+# ── Feedback / digest-pause HMAC helpers (PR B insight pipeline) ───────
+#
+# These reuse the same secret material as sign_ack_token /
+# verify_ack_token so we never introduce a new env var or rotation
+# surface.  They sign different payloads (artifact_id:vote vs hours)
+# so an ack token cannot be replayed as a feedback token, and vice
+# versa.
+
+
+def _feedback_payload(artifact_id: str, vote: str) -> bytes:
+    return f"{artifact_id}:{vote}".encode("utf-8")
+
+
+def sign_feedback_token(artifact_id: str, vote: str) -> str:
+    """HMAC-SHA256 over f"{artifact_id}:{vote}", truncated to 16 hex.
+
+    vote must be "up" or "down" — anything else returns the empty
+    string so the token cannot accidentally validate against a foreign
+    vote shape.
+    """
+    secret = _ack_secret()
+    if not secret:
+        return ""
+    clean_vote = (vote or "").strip().lower()
+    if clean_vote not in {"up", "down"}:
+        return ""
+    clean_id = (artifact_id or "").strip()
+    if not clean_id:
+        return ""
+    mac = hmac.new(secret, _feedback_payload(clean_id, clean_vote), hashlib.sha256)
+    return mac.hexdigest()[:16]
+
+
+def verify_feedback_token(artifact_id: str, vote: str, token: str) -> bool:
+    """Constant-time HMAC verification.  False on any error."""
+    expected = sign_feedback_token(artifact_id, vote)
+    if not expected:
+        return False
+    supplied = (token or "").strip()
+    if not supplied:
+        return False
+    return hmac.compare_digest(expected, supplied)
+
+
+def _digest_pause_payload(hours: int) -> bytes:
+    return f"digest_pause:{int(hours)}".encode("utf-8")
+
+
+def sign_digest_pause_token(hours: int) -> str:
+    """HMAC-SHA256 over f"digest_pause:{hours}" truncated to 16 hex."""
+    secret = _ack_secret()
+    if not secret:
+        return ""
+    try:
+        clean_hours = int(hours)
+    except (TypeError, ValueError):
+        return ""
+    if clean_hours <= 0:
+        return ""
+    mac = hmac.new(secret, _digest_pause_payload(clean_hours), hashlib.sha256)
+    return mac.hexdigest()[:16]
+
+
+def verify_digest_pause_token(hours: int, token: str) -> bool:
+    """Constant-time HMAC verification.  False on any error."""
+    expected = sign_digest_pause_token(hours)
+    if not expected:
+        return False
+    supplied = (token or "").strip()
+    if not supplied:
+        return False
+    return hmac.compare_digest(expected, supplied)
+
+
+# ── Digest pause state helpers (small runtime-state table) ─────────────
+
+
+def is_digest_paused(conn: sqlite3.Connection) -> bool:
+    """True iff digest_state.paused_until is a future timestamp."""
+    try:
+        row = conn.execute(
+            "SELECT paused_until FROM digest_state WHERE id = 1"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return False
+    if not row:
+        return False
+    try:
+        paused_until = row["paused_until"] if hasattr(row, "keys") else row[0]
+    except (KeyError, IndexError):
+        return False
+    text = (paused_until or "").strip()
+    if not text:
+        return False
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        cleaned = text[:-1] + "+00:00" if text.endswith("Z") else text
+        dt = _dt.fromisoformat(cleaned)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_tz.utc)
+        return dt > _dt.now(_tz.utc)
+    except (ValueError, TypeError):
+        return False
+
+
+def set_digest_pause(conn: sqlite3.Connection, paused_until_iso: str) -> None:
+    """UPSERT digest_state.paused_until with the supplied ISO timestamp.
+
+    Caller is responsible for ensuring the schema exists (the gateway runs
+    _ensure_digest_state_schema at startup).  This helper is a thin
+    write — no validation of the timestamp shape.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """
+        INSERT INTO digest_state (id, paused_until, updated_at)
+        VALUES (1, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            paused_until = excluded.paused_until,
+            updated_at = excluded.updated_at
+        """,
+        (str(paused_until_iso or "").strip(), now),
+    )
+    conn.commit()
+
+
 __all__ = [
+    "is_digest_paused",
     "notify_cron_artifact",
     "notify_cron_artifact_fire_and_forget",
+    "set_digest_pause",
     "sign_ack_token",
+    "sign_digest_pause_token",
+    "sign_feedback_token",
     "verify_ack_token",
+    "verify_digest_pause_token",
+    "verify_feedback_token",
 ]
