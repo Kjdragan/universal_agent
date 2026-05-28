@@ -386,9 +386,8 @@ jobs:
               # the loop assumed every "no response" was "still
               # starting." Tuned to 5: catches a real crashloop quickly
               # while tolerating one or two restarts from a slow boot.
-              # PROBE 11: add back simple var assignments only (no `if`).
+              # PROBE 12: keep ONLY crashloop_threshold=5 (drop start_restarts="").
               crashloop_threshold=5
-              start_restarts=""
               attempt=1
               while [ "$attempt" -le "$max_attempts" ]; do
                 if curl -fsS -m 4 "$url" >/tmp/ua-health-${name}.json 2>/tmp/ua-health-${name}.err; then
