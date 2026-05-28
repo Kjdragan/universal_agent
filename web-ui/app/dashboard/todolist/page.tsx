@@ -1333,11 +1333,26 @@ export default function ToDoListDashboardPage() {
             {item.description && (
               <p className="mt-1 text-[11px] text-kcd-text-muted leading-snug line-clamp-2">{item.description}</p>
             )}
-            {/* /goal-flow artifacts: lets the operator inspect the progression
-                user prompt → BRIEF → ACCEPTANCE → goal_condition → COMPLETION
-                without leaving the dashboard. Lazy-fetched on click. */}
-            {item.metadata?.use_goal_loop && (
-              <GoalArtifactsToggle taskId={item.task_id} />
+            {/* Mission artifacts: lets the operator inspect the /goal-flow
+                progression (BRIEF → ACCEPTANCE → goal_condition → COMPLETION)
+                AND the final deliverables (insight_artifact.html / .pdf) without
+                leaving the dashboard. Rendered for:
+                  - /goal-eligible Cody tasks (use_goal_loop = true)
+                  - vp_mission cards (Atlas etc. produce BRIEF + COMPLETION +
+                    deliverables in the mission workspace, even without /goal)
+                  - insight_detection cards (they carry a linked_mission_id)
+                Lazy-fetched on click; API returns empty when nothing exists. */}
+            {(item.metadata?.use_goal_loop ||
+              item.source_kind === "vp_mission" ||
+              item.source_kind === "insight_detection") && (
+              <GoalArtifactsToggle
+                taskId={item.task_id}
+                label={
+                  item.metadata?.use_goal_loop
+                    ? "View /goal flow artifacts"
+                    : "View mission artifacts"
+                }
+              />
             )}
           </div>
           <div className="text-right shrink-0">
