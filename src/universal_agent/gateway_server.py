@@ -19223,7 +19223,7 @@ def _ensure_hourly_insight_email_cron_job() -> Optional[dict[str, Any]]:
         command="!script universal_agent.scripts.hourly_insight_email",
         description="Hourly diversified insight-delivery email (replaces Simone per-brief loop).",
         timeout_seconds=300,
-        enabled=_proactive_cron_enabled("UA_INSIGHT_HOURLY_EMAIL_ENABLED"),
+        enabled=_proactive_cron_enabled("UA_INSIGHT_HOURLY_EMAIL_ENABLED", default="0"),  # PR D: disabled by default — Simone /hourly-intel-digest skill replaces this. Flip env to "1" to re-enable the legacy cron.
         cron_env_var="UA_INSIGHT_HOURLY_EMAIL_CRON",
         timezone_env_var="UA_INSIGHT_HOURLY_EMAIL_TIMEZONE",
     )
