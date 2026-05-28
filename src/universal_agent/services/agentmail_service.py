@@ -24,6 +24,12 @@ Env vars:
                                      authenticated gws profile (see
                                      `.agents/skills/gmail/SKILL.md`).
     UA_GMAIL_CLI_TIMEOUT_SECONDS   — subprocess timeout for the gws CLI fallback (default 60).
+    UA_AGENTMAIL_GMAIL_LABEL       — 1 = after a successful gws gmail +send
+                                     fallback, stamp the Gmail Sent copy with a
+                                     `UA/AgentSent/<principal>` label so the
+                                     agent-originated send is identifiable in
+                                     Gmail (default 1; best-effort, never blocks
+                                     the send).
 """
 
 from __future__ import annotations
@@ -239,6 +245,47 @@ def _gmail_cli_timeout_seconds() -> float:
         return max(5.0, float(os.getenv("UA_GMAIL_CLI_TIMEOUT_SECONDS", "60") or 60))
     except Exception:
         return 60.0
+
+
+def _gmail_label_enabled() -> bool:
+    """Whether to stamp Gmail-CLI fallback sends with a UA/AgentSent/<principal> label.
+
+    Defaults ON (the labeling is best-effort and never blocks a send), but
+    can be disabled independently of the fallback itself via
+    ``UA_AGENTMAIL_GMAIL_LABEL=0``.
+    """
+    val = os.getenv("UA_AGENTMAIL_GMAIL_LABEL", "1").strip().lower()
+    return val in _TRUTHY
+
+
+# Parent label under which every agent-originated Gmail fallback send is
+# filed, plus a per-principal child so "what did Simone send via fallback"
+# is a single Gmail filter (`label:UA/AgentSent/Simone in:sent`). Gmail uses
+# "/" for nested labels. This service is Simone-only today (see module
+# docstring); the principal is threaded through so a future VP-path fallback
+# can reuse the same scheme with "Atlas"/"Cody".
+_GMAIL_AGENT_SENT_PARENT = "UA/AgentSent"
+
+
+def _agent_sent_label(principal: str) -> str:
+    clean = (principal or "Simone").strip() or "Simone"
+    return f"{_GMAIL_AGENT_SENT_PARENT}/{clean}"
+
+
+def _extract_first_json_object(stdout: str) -> dict[str, Any]:
+    """Parse the first JSON object from gws stdout, tolerating preamble noise.
+
+    The gws CLI sometimes prefixes a line like ``Using keyring backend: …``
+    before the JSON payload, which would break a naive ``json.loads``.
+    """
+    text = stdout or ""
+    start = text.find("{")
+    if start < 0:
+        return {}
+    try:
+        return json.loads(text[start:])
+    except Exception:
+        return {}
 
 
 def _gmail_cli_argv() -> list[str]:
@@ -482,6 +529,10 @@ class AgentMailService:
         self._messages_sent: int = 0
         self._messages_received: int = 0
         self._drafts_created: int = 0
+        # Cache of resolved Gmail label name -> id, populated lazily by the
+        # gws fallback labeling path so repeated fallbacks skip the list/create
+        # round-trip.
+        self._gmail_label_ids: dict[str, str] = {}
         self._api_timeout_seconds = _api_timeout_seconds()
         ws_fail_open_statuses_raw = (
             os.getenv("UA_AGENTMAIL_WS_FAIL_OPEN_STATUS_CODES", "401,403,429")
@@ -835,6 +886,7 @@ class AgentMailService:
     async def _send_via_gmail_cli(
         self, *, to: str, subject: str, text: str,
         html: Optional[str], attachments: Optional[list[dict]],
+        principal: str = "Simone",
     ) -> dict[str, Any]:
         """Send via `gws gmail +send` when AgentMail has exhausted its daily limit.
 
@@ -843,6 +895,11 @@ class AgentMailService:
         can tell the two paths apart in logs/metrics. The From: header will be
         the gws-authenticated account (e.g. kevinjdragan@gmail.com), NOT the
         AgentMail inbox.
+
+        On success, the Gmail Sent copy is stamped (best-effort) with a
+        ``UA/AgentSent/<principal>`` label so the agent-originated send is
+        identifiable later via Gmail search. ``principal`` defaults to
+        ``"Simone"`` since this service is Simone's send path.
         """
         import base64
         import shutil
@@ -923,27 +980,170 @@ class AgentMailService:
                     f"stderr={stderr!r} stdout={stdout!r}"
                 )
 
-            message_id: str = "gmail-cli-unknown"
-            try:
-                payload = json.loads(proc.stdout or "{}")
-                message_id = str(payload.get("id") or payload.get("messageId") or message_id)
-            except Exception:
-                logger.debug("📧 Gmail fallback: stdout was not JSON; using sentinel message_id")
+            payload = _extract_first_json_object(proc.stdout)
+            message_id = str(
+                payload.get("id") or payload.get("messageId") or "gmail-cli-unknown"
+            )
+            if message_id == "gmail-cli-unknown":
+                logger.debug("📧 Gmail fallback: no message id in stdout; using sentinel")
 
             self._messages_sent += 1
             logger.info(
                 "📧 Sent via gmail-cli fallback to=%s subject=%r message_id=%s",
                 to, subject, message_id,
             )
+            # Best-effort: stamp the Gmail Sent copy so it's attributable later.
+            # Reuses the same scrubbed child_env as the send so it doesn't trip
+            # the empty-GOOGLE_WORKSPACE_CLI_* footgun.
+            await self._apply_gmail_label(
+                message_id, principal=principal, child_env=child_env,
+            )
             return {
                 "status": "sent_via_gmail_fallback",
                 "message_id": message_id,
                 "inbox": self._inbox_address,
                 "via": "gmail_cli",
+                "label": _agent_sent_label(principal) if _gmail_label_enabled() else None,
             }
         finally:
             if tmpdir:
                 shutil.rmtree(tmpdir, ignore_errors=True)
+
+    async def _apply_gmail_label(
+        self, message_id: str, *, principal: str, child_env: dict[str, str],
+    ) -> None:
+        """Stamp a Gmail message with ``UA/AgentSent/<principal>`` — best-effort.
+
+        The email has already been sent by the time we get here, so EVERY
+        failure mode is swallowed (logged at WARNING): a missing/renamed label,
+        a CLI error, a timeout, or unparseable output must never turn a
+        successful fallback send into a raised exception.
+        """
+        if not _gmail_label_enabled():
+            return
+        if not message_id or message_id == "gmail-cli-unknown":
+            logger.debug("📧 Gmail label skipped — no usable message_id")
+            return
+
+        import subprocess
+
+        label_name = _agent_sent_label(principal)
+        try:
+            label_id = await self._resolve_or_create_gmail_label(
+                label_name, child_env=child_env,
+            )
+            if not label_id:
+                logger.warning(
+                    "📧 Gmail label %r could not be resolved/created — Sent copy left unlabeled",
+                    label_name,
+                )
+                return
+
+            argv = list(_gmail_cli_argv()) + [
+                "gmail", "users", "messages", "modify",
+                "--format", "json",
+                "--params", json.dumps({"userId": "me", "id": message_id}),
+                "--json", json.dumps({"addLabelIds": [label_id]}),
+            ]
+            proc = await asyncio.to_thread(
+                subprocess.run,
+                argv,
+                capture_output=True,
+                text=True,
+                timeout=_gmail_cli_timeout_seconds(),
+                check=False,
+                env=child_env,
+            )
+            if proc.returncode != 0:
+                logger.warning(
+                    "📧 Gmail label modify failed (rc=%s) message_id=%s: %s",
+                    proc.returncode, message_id, (proc.stderr or "").strip()[:300],
+                )
+                return
+            logger.info(
+                "📧 Gmail Sent copy labeled %r message_id=%s", label_name, message_id,
+            )
+        except Exception as exc:  # noqa: BLE001 — best-effort, never fatal
+            logger.warning(
+                "📧 Gmail label step errored (non-fatal) message_id=%s: %s",
+                message_id, exc,
+            )
+
+    async def _resolve_or_create_gmail_label(
+        self, label_name: str, *, child_env: dict[str, str],
+    ) -> Optional[str]:
+        """Return the Gmail label id for ``label_name``, creating it if absent.
+
+        Caches resolved ids on the instance so repeated fallbacks skip the
+        list/create round-trip. Returns ``None`` on any failure (caller treats
+        that as "leave the message unlabeled").
+        """
+        import subprocess
+
+        cached = self._gmail_label_ids.get(label_name)
+        if cached:
+            return cached
+
+        timeout = _gmail_cli_timeout_seconds()
+
+        # 1. Try to find an existing label by name.
+        list_argv = list(_gmail_cli_argv()) + [
+            "gmail", "users", "labels", "list",
+            "--format", "json",
+            "--params", json.dumps({"userId": "me"}),
+        ]
+        proc = await asyncio.to_thread(
+            subprocess.run, list_argv, capture_output=True, text=True,
+            timeout=timeout, check=False, env=child_env,
+        )
+        if proc.returncode == 0:
+            data = _extract_first_json_object(proc.stdout)
+            for lbl in data.get("labels", []) or []:
+                if lbl.get("name") == label_name and lbl.get("id"):
+                    self._gmail_label_ids[label_name] = str(lbl["id"])
+                    return self._gmail_label_ids[label_name]
+
+        # 2. Not found (or list failed) — create it. Gmail nests on "/" so
+        #    creating the child label is sufficient; the parent appears
+        #    automatically in the UI.
+        create_argv = list(_gmail_cli_argv()) + [
+            "gmail", "users", "labels", "create",
+            "--format", "json",
+            "--params", json.dumps({"userId": "me"}),
+            "--json", json.dumps({
+                "name": label_name,
+                "labelListVisibility": "labelShow",
+                "messageListVisibility": "show",
+            }),
+        ]
+        proc = await asyncio.to_thread(
+            subprocess.run, create_argv, capture_output=True, text=True,
+            timeout=timeout, check=False, env=child_env,
+        )
+        if proc.returncode == 0:
+            data = _extract_first_json_object(proc.stdout)
+            label_id = data.get("id")
+            if label_id:
+                self._gmail_label_ids[label_name] = str(label_id)
+                return self._gmail_label_ids[label_name]
+            # A 409 "Label name exists" can land here if a concurrent send
+            # created it between our list and create — re-list once to recover.
+            relist = await asyncio.to_thread(
+                subprocess.run, list_argv, capture_output=True, text=True,
+                timeout=timeout, check=False, env=child_env,
+            )
+            if relist.returncode == 0:
+                data = _extract_first_json_object(relist.stdout)
+                for lbl in data.get("labels", []) or []:
+                    if lbl.get("name") == label_name and lbl.get("id"):
+                        self._gmail_label_ids[label_name] = str(lbl["id"])
+                        return self._gmail_label_ids[label_name]
+        else:
+            logger.warning(
+                "📧 Gmail label create failed (rc=%s) name=%r: %s",
+                proc.returncode, label_name, (proc.stderr or "").strip()[:300],
+            )
+        return None
 
     async def send_draft(
         self,
