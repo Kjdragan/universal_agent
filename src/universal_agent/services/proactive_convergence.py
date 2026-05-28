@@ -103,6 +103,34 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_proactive_convergence_events_detected
             ON proactive_convergence_events(detected_at DESC);
+
+        -- PR B: convergence candidate ledger.  Detected by SQL clustering in
+        -- the rewritten CSI sync (PR C), evaluated by Atlas via the
+        -- /evaluate-and-author-intel-brief skill (PR C).  PR B only ships
+        -- the table — no code reads or writes it yet.
+        CREATE TABLE IF NOT EXISTS convergence_candidates (
+            candidate_id TEXT PRIMARY KEY,
+            video_ids_json TEXT NOT NULL DEFAULT '[]',
+            channel_names_json TEXT NOT NULL DEFAULT '[]',
+            channel_count INTEGER NOT NULL DEFAULT 0,
+            primary_topics_json TEXT NOT NULL DEFAULT '[]',
+            signatures_json TEXT NOT NULL DEFAULT '[]',
+            task_id TEXT NOT NULL DEFAULT '',
+            verdict TEXT NOT NULL DEFAULT '',
+            verdict_reasoning TEXT NOT NULL DEFAULT '',
+            artifact_id TEXT NOT NULL DEFAULT '',
+            detected_at TEXT NOT NULL,
+            evaluated_at TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_convergence_candidates_verdict
+            ON convergence_candidates(verdict, detected_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_convergence_candidates_detected
+            ON convergence_candidates(detected_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_convergence_candidates_task
+            ON convergence_candidates(task_id);
         """
     )
     conn.commit()

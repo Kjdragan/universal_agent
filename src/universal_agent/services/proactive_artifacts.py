@@ -182,6 +182,20 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     except sqlite3.OperationalError:
         # Column already exists — that's the expected steady-state path.
         pass
+    # PR B: Atlas verdict columns (ship/skip/defer/error or empty=unevaluated).
+    # Same idempotent-ALTER pattern as delivered_at above.
+    try:
+        conn.execute(
+            "ALTER TABLE proactive_artifacts ADD COLUMN verdict TEXT NOT NULL DEFAULT ''"
+        )
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute(
+            "ALTER TABLE proactive_artifacts ADD COLUMN verdict_reasoning TEXT NOT NULL DEFAULT ''"
+        )
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
 
 
