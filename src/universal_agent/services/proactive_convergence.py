@@ -288,32 +288,53 @@ def sync_topic_signatures_from_csi(
         )
         upserted += 1
 
-    # Deterministic SQL cluster detection.  Operates over the full signature
-    # table; idempotency comes from candidate_id stability + write-once verdict
-    # semantics in write_convergence_candidate.
+    # Convergence detection. Runs every call (the cron is the cadence governor)
+    # so genuine convergence in the existing window is still found when no new
+    # signatures landed this run; candidate_id stability + write-once verdict
+    # semantics keep it idempotent.
+    #
+    # LLM precision layer (default): SQL recall buckets → per-bucket LLM judge
+    # that confirms a genuine shared thesis and emits only high-strength
+    # clusters. Falls back to raw SQL buckets when UA_CONVERGENCE_LLM_CLUSTERING=0.
     candidates_written = 0
-    if upserted > 0:
-        clusters = _detect_clusters_sql(
+    if _llm_clustering_enabled():
+        confirmed = _detect_clusters_llm(
             conn,
             source_window_hours=source_window_hours,
             min_channels=min_channels,
         )
-        for cluster_signatures in clusters:
-            try:
-                result = write_convergence_candidate(
-                    conn,
-                    signatures=cluster_signatures,
-                    source_window_hours=source_window_hours,
-                )
-                # Only count rows that newly queued a task (verdict='' and a fresh task_id).
-                if result and result.get("_newly_queued"):
-                    candidates_written += 1
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "write_convergence_candidate failed for cluster (size=%d): %s",
-                    len(cluster_signatures),
-                    exc,
-                )
+        clusters = [
+            (c["signatures"], c.get("thesis", ""), float(c.get("signal_strength") or 0))
+            for c in confirmed
+        ]
+    else:
+        clusters = [
+            (sigs, "", 0.0)
+            for sigs in _detect_clusters_sql(
+                conn,
+                source_window_hours=source_window_hours,
+                min_channels=min_channels,
+            )
+        ]
+
+    for cluster_signatures, thesis, strength in clusters:
+        try:
+            result = write_convergence_candidate(
+                conn,
+                signatures=cluster_signatures,
+                source_window_hours=source_window_hours,
+                thesis=thesis,
+                signal_strength=strength,
+            )
+            # Only count rows that newly queued a task (verdict='' and a fresh task_id).
+            if result and result.get("_newly_queued"):
+                candidates_written += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "write_convergence_candidate failed for cluster (size=%d): %s",
+                len(cluster_signatures),
+                exc,
+            )
 
     return {
         "seen": len(rows),
@@ -387,11 +408,184 @@ def _detect_clusters_sql(
     return clusters
 
 
+# ── LLM convergence-precision layer ────────────────────────────────────
+#
+# `_detect_clusters_sql` is a cheap RECALL net: it buckets by a coarse
+# primary_topic tag, which lumps unrelated content (a single "ai_coding"
+# bucket spanned cooking, true-crime, crypto, bodycam in production). Those
+# false buckets caused Atlas to skip 100% of candidates → the digest never
+# got fuel. This layer adds LLM PRECISION: for each coarse bucket, a single
+# bounded LLM call (routed to ZAI via llm_classifier._call_llm) judges whether
+# the videos genuinely converge on the same concrete story/thesis, returns the
+# converging subset + a one-line thesis + a 1-10 signal_strength, and gates on
+# strength. Aligns with the LLM-native design philosophy (code collects/pre-
+# filters; the LLM synthesizes meaning). See
+# docs/proactive_signals/llm_convergence_clustering_2026-05-29.md.
+
+_CLUSTER_REFINE_SYSTEM = """\
+You judge whether a group of recent videos from different channels GENUINELY
+converge on the SAME concrete story, event, or specific thesis — not merely
+sharing a broad topic label.
+
+The videos were coarsely bucketed by a shared topic tag. Many such buckets are
+false: a broad tag (e.g. "ai_coding", "general_interest") lumps together
+unrelated content. Your job is PRECISION — identify only the subset (if any)
+that truly converges on one specific subject.
+
+Return ONLY JSON:
+{
+  "is_convergence": true,
+  "thesis": "One sentence naming the SPECIFIC shared story/event/claim.",
+  "converging_video_ids": ["id1", "id2"],
+  "signal_strength": 8
+}
+
+Rules:
+- Real convergence = >=2 INDEPENDENT channels covering the same SPECIFIC subject
+  (same event / same claim / same narrow thesis), NOT just the same broad category.
+- Drop videos that only share the broad tag but cover different subjects.
+- signal_strength 1-10: 10 = tight, specific, actionable multi-channel convergence;
+  <=6 = loose / topical-only / coincidental.
+- If there is no genuine specific convergence, return
+  {"is_convergence": false, "thesis": "", "converging_video_ids": [], "signal_strength": 0}.
+"""
+
+
+def _llm_clustering_enabled() -> bool:
+    """LLM precision layer on by default; flip UA_CONVERGENCE_LLM_CLUSTERING=0 to
+    fall back to raw SQL string-match clustering (legacy behaviour)."""
+    return str(os.getenv("UA_CONVERGENCE_LLM_CLUSTERING", "1")).strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _min_signal_strength() -> int:
+    raw = str(os.getenv("UA_CONVERGENCE_MIN_STRENGTH", "7")).strip()
+    try:
+        return max(1, min(10, int(raw)))
+    except ValueError:
+        return 7
+
+
+def _independent_channels(signatures: list[dict[str, Any]]) -> set[str]:
+    out = {
+        str(s.get("channel_name") or s.get("channel_id") or "").strip()
+        for s in signatures
+    }
+    out.discard("")
+    return out
+
+
+async def _refine_cluster_with_llm(
+    bucket: list[dict[str, Any]],
+    *,
+    min_channels: int,
+) -> Optional[dict[str, Any]]:
+    """Refine one coarse topic bucket into a genuine convergence cluster.
+
+    Returns ``{"signatures": [...], "thesis": str, "signal_strength": float}``
+    for a confirmed cluster, or ``None`` when the bucket is not a real
+    convergence (or the LLM call/parse fails — fail closed, no candidate).
+    """
+    if len(bucket) < 2:
+        return None
+    compact = [
+        {
+            "video_id": s.get("video_id"),
+            "channel": s.get("channel_name") or s.get("channel_id"),
+            "title": s.get("video_title"),
+            "primary_topics": s.get("primary_topics"),
+            "key_claims": (s.get("key_claims") or [])[:4],
+        }
+        for s in bucket
+    ]
+    user = json.dumps({"videos": compact}, ensure_ascii=True)
+    try:
+        from universal_agent.services.llm_classifier import (
+            _call_llm,
+            _parse_json_response,
+        )
+
+        raw = await _call_llm(system=_CLUSTER_REFINE_SYSTEM, user=user, max_tokens=1200)
+        parsed = _parse_json_response(raw)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("convergence LLM refine failed (bucket size=%d): %s", len(bucket), exc)
+        return None
+
+    if not isinstance(parsed, dict) or not parsed.get("is_convergence"):
+        return None
+    try:
+        strength = float(parsed.get("signal_strength") or 0)
+    except (TypeError, ValueError):
+        strength = 0.0
+    if strength < _min_signal_strength():
+        return None
+
+    confirmed_ids = {
+        str(v).strip()
+        for v in (parsed.get("converging_video_ids") or [])
+        if str(v).strip()
+    }
+    confirmed = [s for s in bucket if str(s.get("video_id") or "").strip() in confirmed_ids]
+    # The LLM must have kept a real multi-channel subset.
+    if len(_independent_channels(confirmed)) < max(2, int(min_channels or 2)):
+        return None
+    return {
+        "signatures": confirmed,
+        "thesis": str(parsed.get("thesis") or "").strip(),
+        "signal_strength": strength,
+    }
+
+
+async def _detect_clusters_llm_async(
+    conn: sqlite3.Connection,
+    *,
+    source_window_hours: int,
+    min_channels: int,
+) -> list[dict[str, Any]]:
+    """Recall (SQL buckets) → precision (LLM refine each). Returns confirmed
+    clusters as dicts with ``signatures`` / ``thesis`` / ``signal_strength``."""
+    buckets = _detect_clusters_sql(
+        conn,
+        source_window_hours=source_window_hours,
+        min_channels=min_channels,
+    )
+    confirmed: list[dict[str, Any]] = []
+    for bucket in buckets:
+        refined = await _refine_cluster_with_llm(bucket, min_channels=min_channels)
+        if refined:
+            confirmed.append(refined)
+    return confirmed
+
+
+def _detect_clusters_llm(
+    conn: sqlite3.Connection,
+    *,
+    source_window_hours: int,
+    min_channels: int,
+) -> list[dict[str, Any]]:
+    """Sync wrapper around the async LLM clustering (mirrors the loop-handling
+    pattern used by ``detect_and_queue_convergence``)."""
+    coro = _detect_clusters_llm_async(
+        conn, source_window_hours=source_window_hours, min_channels=min_channels
+    )
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    import nest_asyncio
+
+    nest_asyncio.apply()
+    return loop.run_until_complete(coro)
+
+
 def write_convergence_candidate(
     conn: sqlite3.Connection,
     *,
     signatures: list[dict[str, Any]],
     source_window_hours: int = 72,
+    thesis: str = "",
+    signal_strength: float = 0.0,
 ) -> dict[str, Any]:
     """Upsert a ``convergence_candidates`` row and (idempotently) queue Atlas.
 
@@ -484,12 +678,16 @@ def write_convergence_candidate(
         candidate_count=len(signatures),
         channel_count=len(channel_names),
         index_path=index_path_env,
+        thesis=thesis,
+        signal_strength=signal_strength,
     )
     metadata_payload = {
         "source": "convergence_candidate",
         "candidate_id": candidate_id,
         "preferred_vp": "vp.general.primary",
         "primary_topic": headline,
+        "thesis": thesis,
+        "signal_strength": float(signal_strength or 0.0),
         "video_ids": video_ids,
         "channel_count": len(channel_names),
         "source_window_hours": int(source_window_hours),
@@ -584,6 +782,8 @@ def _candidate_task_description(
     candidate_count: int,
     channel_count: int,
     index_path: str,
+    thesis: str = "",
+    signal_strength: float = 0.0,
 ) -> str:
     """Render the Task Hub task description for a convergence_candidate item.
 
@@ -592,6 +792,15 @@ def _candidate_task_description(
     handled by the consolidated digest pipeline in PR D).
     """
     index_hint = index_path or "(default: workspaces dir)"
+    thesis_lines: list[str] = []
+    if thesis:
+        thesis_lines = [
+            f"LLM-detected convergence thesis (signal_strength {signal_strength:.0f}/10):",
+            f"  {thesis}",
+            "This thesis is the LLM clustering pass's reason for surfacing the cluster;",
+            "verify it against the sources, then ship/skip/defer accordingly.",
+            "",
+        ]
     lines = [
         "FRAMING: This task was generated by the csi_convergence_sync cron, NOT by Kevin.",
         "Kevin did not ask for this. When composing any operator-facing artifact,",
@@ -603,6 +812,7 @@ def _candidate_task_description(
         f"Candidate ID: {candidate_id}",
         f"Headline topic: {headline}",
         "",
+        *thesis_lines,
         "Invoke the skill `/evaluate-and-author-intel-brief` with this candidate_id.",
         "The skill handles ship/skip/defer judgment and authoring.",
         "",

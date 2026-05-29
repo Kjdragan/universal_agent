@@ -19,7 +19,7 @@ import hashlib
 import json
 from pathlib import Path
 import sqlite3
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -277,12 +277,75 @@ def test_mid_processing_candidate_with_empty_verdict_re_upserts_and_requeues(tmp
 # ── sync_topic_signatures_from_csi: SQL clustering replaces LLM ───────
 
 
-def test_sync_topic_signatures_uses_sql_clustering_no_llm(tmp_path):
-    """sync_topic_signatures_from_csi must NOT call the LLM Track A/B path
-    after PR C. SQL clustering + write_convergence_candidate replaces it.
+def _build_two_channel_csi(tmp_path) -> Path:
+    """Build a CSI db with two channels covering the same topic (a coarse
+    two-channel bucket). Returns the db path."""
+    csi_db = tmp_path / "csi.db"
+    csi = sqlite3.connect(csi_db)
+    csi.execute(
+        """
+        CREATE TABLE events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id TEXT UNIQUE NOT NULL,
+            source TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            occurred_at TEXT NOT NULL,
+            subject_json TEXT NOT NULL
+        )
+        """
+    )
+    csi.execute(
+        """
+        CREATE TABLE rss_event_analysis (
+            event_id TEXT UNIQUE NOT NULL,
+            transcript_status TEXT,
+            category TEXT,
+            summary_text TEXT,
+            analysis_json TEXT,
+            analyzed_at TEXT
+        )
+        """
+    )
+    from datetime import datetime, timedelta, timezone
 
-    The legacy detect_and_queue_convergence remains callable from the
-    gateway hand-trigger endpoints — that's covered by other tests.
+    recent = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    for event_id, channel in (("evt-a", "Channel A"), ("evt-b", "Channel B")):
+        csi.execute(
+            "INSERT INTO events (event_id, source, event_type, occurred_at, subject_json) VALUES (?, 'youtube_channel_rss', 'channel_new_upload', ?, ?)",
+            (
+                event_id,
+                recent,
+                json.dumps(
+                    {
+                        "video_id": event_id,
+                        "title": "MCP server pattern",
+                        "channel_name": channel,
+                        "channel_id": channel.lower().replace(" ", "-"),
+                        "url": f"https://youtube.test/{event_id}",
+                    }
+                ),
+            ),
+        )
+        csi.execute(
+            "INSERT INTO rss_event_analysis (event_id, transcript_status, category, summary_text, analysis_json, analyzed_at) VALUES (?, 'ok', 'ai', 'MCP server pattern for agents', ?, ?)",
+            (
+                event_id,
+                json.dumps({"themes": ["MCP servers"], "key_claims": ["MCP is useful."]}),
+                recent,
+            ),
+        )
+    csi.commit()
+    csi.close()
+    return csi_db
+
+
+def test_sync_topic_signatures_llm_clustering_default(tmp_path):
+    """sync_topic_signatures_from_csi now runs the LLM precision layer by
+    default (operator decision 2026-05-29 — ZAI quota is abundant). The coarse
+    SQL bucket is refined by an LLM judge; a candidate is written only when the
+    LLM confirms a genuine shared thesis. The legacy "no LLM after PR C" guard
+    is intentionally superseded — see
+    docs/proactive_signals/llm_convergence_clustering_2026-05-29.md.
     """
     csi_db = tmp_path / "csi.db"
     csi = sqlite3.connect(csi_db)
@@ -338,23 +401,24 @@ def test_sync_topic_signatures_uses_sql_clustering_no_llm(tmp_path):
     csi.commit()
     csi.close()
 
-    # Hard requirement: the LLM helper used by Track A/B must NOT be called
-    # from sync_topic_signatures_from_csi after PR C.
-    with patch("universal_agent.services.llm_classifier._call_llm") as mock_llm, \
+    # The LLM judge confirms the two-channel bucket genuinely converges.
+    llm_confirm = AsyncMock(return_value=json.dumps({
+        "is_convergence": True,
+        "thesis": "Two independent channels cover the same MCP server pattern.",
+        "converging_video_ids": ["evt-a", "evt-b"],
+        "signal_strength": 9,
+    }))
+    with patch("universal_agent.services.llm_classifier._call_llm", llm_confirm), \
          _connect(tmp_path / "activity.db") as conn:
-        # Patch _call_llm to throw if invoked — sync should not touch it.
-        mock_llm.side_effect = AssertionError(
-            "sync_topic_signatures_from_csi must not invoke the LLM after PR C"
-        )
         counts = sync_topic_signatures_from_csi(conn, csi_db_path=csi_db)
 
-        # Both signatures should be upserted.
+        # Both signatures upserted; the LLM judge WAS consulted.
         assert counts["upserted"] == 2
+        assert llm_confirm.await_count >= 1
 
-        # And exactly one convergence_candidate row should be written
-        # (two channels covering the same primary topic, SQL groups them).
+        # Exactly one confirmed convergence_candidate row, carrying the thesis.
         rows = conn.execute(
-            "SELECT candidate_id, channel_count, video_ids_json, verdict FROM convergence_candidates"
+            "SELECT candidate_id, channel_count, video_ids_json, verdict, metadata_json FROM convergence_candidates"
         ).fetchall()
         assert len(rows) == 1
         assert rows[0]["channel_count"] == 2
@@ -366,6 +430,36 @@ def test_sync_topic_signatures_uses_sql_clustering_no_llm(tmp_path):
             "SELECT task_id, source_kind FROM task_hub_items WHERE source_kind = 'convergence_candidate'"
         ).fetchall()
         assert len(task_rows) == 1
+
+
+def test_sync_topic_signatures_llm_skip_writes_no_candidate(tmp_path):
+    """When the LLM judge rejects the coarse bucket (no genuine convergence),
+    NO candidate is written — this is the cluster-quality fix that stops
+    over-broad topic buckets from reaching Atlas."""
+    csi_db = _build_two_channel_csi(tmp_path)
+    llm_reject = AsyncMock(return_value=json.dumps({
+        "is_convergence": False, "thesis": "", "converging_video_ids": [], "signal_strength": 0,
+    }))
+    with patch("universal_agent.services.llm_classifier._call_llm", llm_reject), \
+         _connect(tmp_path / "activity.db") as conn:
+        counts = sync_topic_signatures_from_csi(conn, csi_db_path=csi_db)
+        assert counts["upserted"] == 2
+        assert llm_reject.await_count >= 1
+        assert conn.execute("SELECT COUNT(*) FROM convergence_candidates").fetchone()[0] == 0
+
+
+def test_sync_topic_signatures_sql_fallback_when_llm_disabled(tmp_path, monkeypatch):
+    """UA_CONVERGENCE_LLM_CLUSTERING=0 falls back to legacy SQL string-match
+    clustering and must NOT touch the LLM."""
+    monkeypatch.setenv("UA_CONVERGENCE_LLM_CLUSTERING", "0")
+    csi_db = _build_two_channel_csi(tmp_path)
+    no_llm = AsyncMock(side_effect=AssertionError("LLM must not run when clustering disabled"))
+    with patch("universal_agent.services.llm_classifier._call_llm", no_llm), \
+         _connect(tmp_path / "activity.db") as conn:
+        counts = sync_topic_signatures_from_csi(conn, csi_db_path=csi_db)
+        assert counts["upserted"] == 2
+        assert no_llm.await_count == 0
+        assert conn.execute("SELECT COUNT(*) FROM convergence_candidates").fetchone()[0] == 1
 
 
 def test_sync_topic_signatures_skips_clusters_without_multi_channel_coverage(tmp_path):
