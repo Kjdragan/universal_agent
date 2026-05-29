@@ -461,6 +461,14 @@ YOUTUBE_DAILY_DIGEST_DEFAULT_TIMEZONE = (
 YOUTUBE_GOLD_POLLER_JOB_KEY = "youtube_gold_channel_poller"
 YOUTUBE_GOLD_POLLER_DEFAULT_CRON = "30 5 * * *"  # 5:30 AM Central daily
 YOUTUBE_GOLD_POLLER_DEFAULT_TIMEZONE = YOUTUBE_DAILY_DIGEST_DEFAULT_TIMEZONE
+YOUTUBE_OAUTH_WATCHDOG_JOB_KEY = "youtube_oauth_watchdog"
+# 7 AM Central: inside the active window (6 AM–10 PM) so it passes the
+# dormancy guard, and late enough that the operator is likely awake to tap
+# the re-auth button when the token is already dead. The proactive (age)
+# warning fires ~2 days before expiry, so same-morning timing isn't
+# load-bearing for the common case.
+YOUTUBE_OAUTH_WATCHDOG_DEFAULT_CRON = "0 7 * * *"
+YOUTUBE_OAUTH_WATCHDOG_DEFAULT_TIMEZONE = YOUTUBE_DAILY_DIGEST_DEFAULT_TIMEZONE
 CODIE_PROACTIVE_CLEANUP_JOB_KEY = "codie_proactive_cleanup"
 CODIE_PROACTIVE_CLEANUP_DEFAULT_CRON = "30 1 * * *"
 CODIE_PROACTIVE_CLEANUP_DEFAULT_TIMEZONE = (
@@ -14798,6 +14806,7 @@ async def lifespan(app: FastAPI):
                 _ensure_paper_to_podcast_cron_job()
                 _ensure_youtube_daily_digest_cron_job()
                 _ensure_youtube_gold_poller_cron_job()
+                _ensure_youtube_oauth_watchdog_cron_job()
                 _ensure_nightly_wiki_cron_job()
                 _ensure_morning_briefing_cron_job()
                 _ensure_evening_briefing_cron_job()
@@ -19063,6 +19072,42 @@ def _ensure_youtube_gold_poller_cron_job() -> Optional[dict[str, Any]]:
     return job.to_dict() if hasattr(job, "to_dict") else {"job_id": str(getattr(job, "job_id", ""))}
 
 
+def _youtube_oauth_watchdog_enabled() -> bool:
+    return os.getenv("UA_YOUTUBE_OAUTH_WATCHDOG_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _ensure_youtube_oauth_watchdog_cron_job() -> Optional[dict[str, Any]]:
+    """Idempotently register the YouTube OAuth watchdog cron.
+
+    Runs daily at 7 AM Central: tests the refresh token's liveness and age,
+    and emails a one-tap re-auth button before the ~7-day token expiry breaks
+    the morning digest. Pure stdlib + httpx + AgentMail — no agent session
+    needed, so ``lightweight=True``. ``skip_task_hub_link=True`` because it's
+    a credential-health check that produces no tracked work-product (it only
+    conditionally emits a warning email).
+    """
+    if not _cron_service or not _youtube_oauth_watchdog_enabled():
+        return None
+    return _register_system_cron_job(
+        system_job=YOUTUBE_OAUTH_WATCHDOG_JOB_KEY,
+        default_cron=YOUTUBE_OAUTH_WATCHDOG_DEFAULT_CRON,
+        default_timezone=YOUTUBE_OAUTH_WATCHDOG_DEFAULT_TIMEZONE,
+        command="!script universal_agent.scripts.youtube_oauth_watchdog",
+        description="YouTube OAuth watchdog: daily liveness + expiry check; emails a one-tap re-auth button before the 7-day token expires.",
+        timeout_seconds=120,
+        enabled=True,
+        cron_env_var="UA_YOUTUBE_OAUTH_WATCHDOG_CRON",
+        timezone_env_var="UA_YOUTUBE_OAUTH_WATCHDOG_TIMEZONE",
+        required_secrets=[
+            "YOUTUBE_OAUTH_CLIENT_ID",
+            "YOUTUBE_OAUTH_CLIENT_SECRET",
+            "YOUTUBE_OAUTH_REFRESH_TOKEN",
+        ],
+        skip_task_hub_link=True,
+        lightweight=True,
+    )
+
+
 def _proactive_cron_enabled(env_var: str, default: str = "1") -> bool:
     return os.getenv(env_var, default).strip().lower() in {"1", "true", "yes", "on"}
 
@@ -20833,6 +20878,174 @@ async def briefs_viewer_get(artifact_id: str):
         )
         body = _brief_chrome(title, body_html)
     return HTMLResponse(content=body, status_code=200)
+
+
+# ── YouTube OAuth email-button re-auth flow ──────────────────────────────
+#
+# The youtube_oauth_watchdog cron emails a signed link to `/start` when the
+# refresh token is dead or near its 7-day expiry. `/start` bounces the
+# operator to Google's consent screen; Google redirects back to `/callback`,
+# which exchanges the code and writes the fresh token (+ minted-at stamp) to
+# production Infisical. The next digest/poller subprocess bootstraps secrets
+# fresh, so no gateway restart is needed.
+#
+# PREREQUISITE (one-time, GCP console): the redirect URI
+# `https://<public-base>/api/v1/youtube-oauth/callback` must be registered as
+# an Authorized redirect URI on the OAuth client behind YOUTUBE_OAUTH_CLIENT_ID
+# (a "Web application" client — desktop clients only allow localhost redirects).
+
+
+@app.get("/api/v1/youtube-oauth/start")
+async def youtube_oauth_start(t: str = ""):
+    """Redirect the operator to Google's consent screen for a YouTube re-auth.
+
+    Requires a valid signed ``t`` (minted by the watchdog email) so this
+    endpoint can't be used as an open "trigger a consent screen" nuisance.
+    """
+    from fastapi.responses import HTMLResponse, RedirectResponse
+
+    from universal_agent.services import youtube_oauth_health as yoh
+
+    if not yoh.check_signed_param("start", t or ""):
+        return HTMLResponse(
+            _brief_chrome(
+                "Link expired or invalid",
+                "<p>This re-auth link is invalid or has expired. The next daily "
+                "watchdog run will email a fresh one, or re-mint from a terminal "
+                "with <code>uv run python -m universal_agent.scripts.youtube_oauth2_setup</code>.</p>",
+                status_color="#cf222e",
+            ),
+            status_code=401,
+        )
+    client_id = (os.getenv("YOUTUBE_OAUTH_CLIENT_ID") or "").strip()
+    if not client_id:
+        return HTMLResponse(
+            _brief_chrome(
+                "OAuth not configured",
+                "<p>YOUTUBE_OAUTH_CLIENT_ID is not set in this environment.</p>",
+                status_color="#cf222e",
+            ),
+            status_code=500,
+        )
+    base = yoh.public_base_url()
+    redirect_uri = f"{base}{yoh.CALLBACK_PATH}"
+    state = yoh.mint_signed_param("state", 1800)  # 30 min to complete consent
+    consent_url = yoh.build_consent_url(client_id, redirect_uri, state)
+    return RedirectResponse(consent_url, status_code=302)
+
+
+@app.get("/api/v1/youtube-oauth/callback")
+async def youtube_oauth_callback(code: str = "", state: str = "", error: str = ""):
+    """Exchange the Google auth code for a refresh token and persist it.
+
+    Writes ``YOUTUBE_OAUTH_REFRESH_TOKEN`` + ``YOUTUBE_OAUTH_REFRESH_TOKEN_MINTED_AT``
+    to Infisical (the gateway process env is ``production`` on the VPS).
+    """
+    import asyncio as _asyncio
+
+    from fastapi.responses import HTMLResponse
+
+    from universal_agent.infisical_loader import upsert_infisical_secret
+    from universal_agent.services import youtube_oauth_health as yoh
+
+    if error:
+        return HTMLResponse(
+            _brief_chrome(
+                "Authorization failed",
+                f"<p>Google returned an error: <code>{str(error)[:200]}</code></p>",
+                status_color="#cf222e",
+            ),
+            status_code=400,
+        )
+    if not yoh.check_signed_param("state", state or ""):
+        return HTMLResponse(
+            _brief_chrome(
+                "Link expired or invalid",
+                "<p>The authorization state could not be verified (it may have "
+                "expired — you have 30 minutes to complete consent). Start again "
+                "from the link in your email.</p>",
+                status_color="#cf222e",
+            ),
+            status_code=401,
+        )
+    if not code:
+        return HTMLResponse(
+            _brief_chrome(
+                "Missing authorization code",
+                "<p>No authorization code was returned by Google.</p>",
+                status_color="#cf222e",
+            ),
+            status_code=400,
+        )
+
+    client_id = (os.getenv("YOUTUBE_OAUTH_CLIENT_ID") or "").strip()
+    client_secret = (os.getenv("YOUTUBE_OAUTH_CLIENT_SECRET") or "").strip()
+    base = yoh.public_base_url()
+    redirect_uri = f"{base}{yoh.CALLBACK_PATH}"
+
+    try:
+        # httpx.post is sync — keep it off the event loop.
+        token_data = await _asyncio.to_thread(
+            yoh.exchange_code, client_id, client_secret, code, redirect_uri,
+        )
+    except Exception as exc:  # noqa: BLE001 — surface a friendly page
+        logger.error("youtube_oauth_callback: token exchange failed: %s", exc)
+        return HTMLResponse(
+            _brief_chrome(
+                "Token exchange failed",
+                f"<p>Google rejected the code exchange: <code>{str(exc)[:300]}</code></p>"
+                "<p>If this says the redirect URI is not registered, add "
+                f"<code>{redirect_uri}</code> to the OAuth client's authorized "
+                "redirect URIs in Google Cloud Console.</p>",
+                status_color="#cf222e",
+            ),
+            status_code=502,
+        )
+
+    refresh_token = (token_data.get("refresh_token") or "").strip()
+    if not refresh_token:
+        return HTMLResponse(
+            _brief_chrome(
+                "No refresh token returned",
+                "<p>Google did not return a refresh token. Revoke 'Universal Agent' "
+                "at <a href='https://myaccount.google.com/permissions'>myaccount.google.com/permissions</a> "
+                "and try the re-auth link again.</p>",
+                status_color="#cf222e",
+            ),
+            status_code=400,
+        )
+
+    minted_at = yoh.current_iso()
+    ok_token = upsert_infisical_secret(yoh.REFRESH_TOKEN_KEY, refresh_token)
+    ok_stamp = upsert_infisical_secret(yoh.MINTED_AT_KEY, minted_at)
+    logger.info(
+        "youtube_oauth_callback: re-auth complete token_saved=%s stamp_saved=%s minted_at=%s",
+        ok_token, ok_stamp, minted_at,
+    )
+
+    if ok_token:
+        return HTMLResponse(
+            _brief_chrome(
+                "YouTube access re-authorized ✓",
+                "<p>The fresh token has been saved to production. Tomorrow's "
+                "digest will use it automatically — nothing else to do.</p>"
+                "<p style='font-size:12px;color:#6b7280;'>To stop these weekly "
+                "re-auths for good, publish the OAuth app to “In production” in "
+                "Google Cloud Console.</p>",
+                status_color="#1a7f37",
+            ),
+            status_code=200,
+        )
+    return HTMLResponse(
+        _brief_chrome(
+            "Re-auth partially complete",
+            "<p>A new token was obtained but could not be written to Infisical "
+            "(missing machine credentials in this process). Re-mint from a "
+            "terminal with <code>uv run python -m universal_agent.scripts.youtube_oauth2_setup</code>.</p>",
+            status_color="#bf8700",
+        ),
+        status_code=500,
+    )
 
 
 @app.get("/api/v1/digest/pause")
