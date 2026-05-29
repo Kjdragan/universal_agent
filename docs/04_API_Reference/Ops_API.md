@@ -229,13 +229,12 @@ These endpoints expose the durable run catalog. They are the canonical browsing 
 | `/api/v1/dashboard/proactive-artifacts/{artifact_id}/ack` | POST | Acknowledge a proactive artifact from the dashboard (ops-authed); sets status=ACCEPTED, stops further reminders |
 | `/api/v1/dashboard/proactive-artifacts/{artifact_id}/feedback` | POST | Record explicit review feedback for an artifact |
 | `/api/v1/dashboard/proactive-artifacts/{artifact_id}/send-review` | POST | Send one artifact as a review email |
-| `/api/v1/artifacts/{artifact_id}/ack` | GET | Signed-URL acknowledge endpoint for email "Acknowledge" links (validates HMAC token via `t` query param); idempotent |
+| `/api/v1/artifacts/{artifact_id}/ack` | GET | Silent acknowledge endpoint for email links. Returns `204 No Content` for all outcomes; ack only performed when HMAC validates. Idempotent. |
 | `/api/v1/dashboard/proactive-artifacts/codie/cleanup-task` | POST | Queue a review-gated CODIE cleanup Task Hub item |
 | `/api/v1/dashboard/proactive-artifacts/codie/pr` | POST | Register a CODIE draft PR as a review artifact |
 | `/api/v1/dashboard/proactive-artifacts/tutorial/build-task` | POST | Queue a private tutorial-build Task Hub item for CODIE |
 | `/api/v1/dashboard/proactive-artifacts/tutorial/build-artifact` | POST | Register a completed private tutorial repo or local fallback artifact |
-| `/api/v1/dashboard/proactive-artifacts/convergence/signature` | POST | Upsert a topic signature and optionally queue deterministic convergence detection |
-| `/api/v1/dashboard/proactive-artifacts/convergence/extract` | POST | Extract a topic signature with LLM/fallback logic and optionally queue convergence detection |
+> **Note:** Convergence signature/extract endpoints (`/convergence/signature`, `/convergence/extract`) were removed in PR #568 when the legacy per-signature pipeline was retired. Topic signatures and convergence detection are now managed internally by the `csi_convergence_sync` cron (hourly, active-window hours) and the LLM precision layer. There is no public API for ad-hoc signature upsert or extraction.
 
 Proactive artifact endpoints are review-oriented. They create inventory, Task Hub work candidates, review emails, and feedback records; they do not merge PRs, publish public repos, deploy production, or treat silence as rejection.
 
@@ -282,6 +281,15 @@ Proactive artifact endpoints are review-oriented. They create inventory, Task Hu
 | `/api/v1/dashboard/notifications/purge` | POST | Purge notifications |
 
 Non-actionable notifications with `info` or `success` severity are automatically marked as `read` after the TTL configured by `UA_ACTIVITY_NOTIFICATION_AUTO_READ_HOURS` (default 24 hours). Actionable notifications retain their initial status until explicitly resolved.
+
+### Notification Channel Routing
+
+The `_add_notification` function supports an optional `channels` parameter that overrides the global notification target set for a single record. When `None`, notifications go to all configured channels (dashboard + email + Telegram). When set to `["dashboard"]`, the notification surfaces only on the dashboard without paging the operator.
+
+Dashboard-only routing cases:
+- **Continuity alerts**: resume-failure rate, commonly tripped by benign 404s
+- **Deploy-restart lifecycle misses**: transient non-events (work item auto-reopened)
+- **Daemon execution timeouts**: self-healing (dispatcher re-runs)
 
 ### Events
 | Endpoint | Method | Description |
@@ -358,6 +366,17 @@ POST /api/v1/signals/ingest
 ```
 
 Ingests external signals (CSI events, webhooks).
+
+### YouTube OAuth Re-Auth
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/youtube-oauth/start` | GET | Redirect operator to Google consent screen for YouTube re-auth (requires signed `t` param) |
+| `/api/v1/youtube-oauth/callback` | GET | Google OAuth callback: exchange auth code for refresh token and persist to Infisical |
+
+The YouTube OAuth watchdog cron emails a signed link to `/start` when the refresh token is dead or near its 7-day expiry. `/start` redirects to Google consent screen; Google redirects back to `/callback`, which exchanges the code and writes the fresh token to production Infisical. No gateway restart needed.
+
+Both endpoints return HTML responses (not JSON). `/start` returns 401 HTML on invalid tokens, 500 if unconfigured, or 302 redirect. `/callback` returns 200 HTML with success/failure page.
 
 ### Telegram Ops
 
@@ -454,7 +473,10 @@ Daemon sessions (always-on heartbeat agents) are guarded by an execution timeout
 | `/api/v1/dashboard/todolist/morning-report` | GET | Morning report summary |
 | `/api/v1/dashboard/todolist/email-tasks` | GET | Email-sourced tasks |
 | `/api/v1/dashboard/todolist/completed` | GET | Completed tasks |
-| `/api/v1/dashboard/todolist/completed/{id}` | DELETE | Delete completed task |
+| `/api/v1/dashboard/todolist/completed/{id}` | DELETE | Hide a completed task from the dashboard (sets `stale_state=dashboard_hidden`, keeps `status=completed`) |
+| `/api/v1/dashboard/todolist/completed` | DELETE | Hide all completed tasks from the dashboard (bulk `stale_state=dashboard_hidden`) |
+
+Completed tasks stay `status=completed` (terminal success) with `stale_state=dashboard_hidden`. Previously demoted to `parked` which corrupted status-count consumers.
 | `/api/v1/dashboard/todolist/tasks` | POST | Create new task |
 | `/api/v1/dashboard/todolist/tasks/{id}/action` | POST | Execute task action |
 | `/api/v1/dashboard/todolist/tasks/{id}/dispatch` | POST | Dispatch task to agent |
@@ -469,6 +491,11 @@ Daemon sessions (always-on heartbeat agents) are guarded by an execution timeout
 | `/api/v1/dashboard/todolist/tasks/{id}/history` | GET | Task execution history |
 | `/api/v1/dashboard/todolist/dispatch-queue` | GET | Dispatch queue state |
 | `/api/v1/dashboard/todolist/dispatch-queue/rebuild` | POST | Rebuild dispatch queue |
+| `/api/v1/dashboard/todolist/bulk-park` | POST | Park every task in a given board lane in one server-side request |
+
+### Bulk Park Details
+
+Parks all tasks in a lane via single SELECT + canonical `task_hub.perform_task_action`. Each park UPDATE flushes immediately. Supports lanes matching dashboard columns (`needs_review`, `inbox`, `escalated`, etc.).
 
 | `/api/v1/dashboard/todolist/tasks/{id}/goal-artifacts` | GET | Return `/goal`-flow artifact contents (BRIEF.md, ACCEPTANCE.md, goal_condition.txt, COMPLETION.md) for a task whose `metadata.use_goal_loop` is true |
 
@@ -743,7 +770,7 @@ Related implementation:
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/v1/vision/describe` | POST | Describe an image using vision model |
+| `/api/v1/vision/describe` | POST | Describe an image using vision model (routes through `ANTHROPIC_BASE_URL`, default ZAI proxy; supports `timeout_seconds` field) |
 
 ## 34. Environment Variables
 
@@ -763,6 +790,11 @@ Key environment variables controlling gateway behavior:
 | `UA_CRON_ARTIFACT_REMINDERS_CRON` | `*/30 6-21 * * *` | Cron schedule for artifact reminder sweep |
 | `UA_CRON_ARTIFACT_REMINDERS_TIMEZONE` | `America/Chicago` | Timezone for artifact reminder sweep |
 | `UA_CODIE_PROACTIVE_CLEANUP_TIMEZONE` | `America/Chicago` | Timezone for CODIE proactive cleanup cron job |
+| `UA_YOUTUBE_OAUTH_WATCHDOG_ENABLED` | `1` | Enable the daily YouTube OAuth watchdog cron |
+| `UA_YOUTUBE_OAUTH_WATCHDOG_CRON` | `0 7 * * *` | Cron schedule for YouTube OAuth watchdog (7 AM Central) |
+| `UA_YOUTUBE_OAUTH_WATCHDOG_TIMEZONE` | `America/Chicago` | Timezone for YouTube OAuth watchdog |
+| `UA_NOTIFICATION_ROLLUP_ENABLED` | `1` | Enable per-kind notification email rollup window |
+| `UA_NOTIFICATION_ROLLUP_WINDOW_SECONDS` | `180` | Seconds to batch same-kind notifications before sending |
 
 ## 35. Error Responses
 
