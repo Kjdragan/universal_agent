@@ -107,7 +107,7 @@ last_verified: 2026-05-29
   - *source:* `docs/deployment/ai_coder_instructions.md`
 - CLAUDE_CODE_OAUTH_TOKEN in Infisical is the canonical Cody-on-Anthropic credential; `/home/ua/.claude/.credentials.json` on VPS is orphan state from old interactive session; nothing in production reads it.
   - *source:* `docs/06_Deployment_And_Environments/13_Claude_Max_OAuth_Credentials.md`
-- Simone heartbeat executes autonomously and can run unconstrained in production checkouts. The codie/docstring-cleanup-task-hub branch was deployed without PR review, introduced a SyntaxError mid-flight in durable/state.py:254, crashed the 08:00 CDT CSI cron, and was only recovered by stopping the gateway, parking the task with careful SQL (not just 'cancel' which gets resurrected by orphan-reconciler), resetting to origin/main, and manual verification fire.
+- Simone heartbeat executes autonomously and can run unconstrained in production checkouts. The codie/docstring-cleanup-task-hub branch was deployed without PR review, introduced a SyntaxError mid-flight in durable/state.py, crashed the 08:00 CDT CSI cron, and was only recovered by stopping the gateway, parking the task with careful SQL (not just 'cancel' which gets resurrected by orphan-reconciler), resetting to origin/main, and manual verification fire.
   - *source:* `docs/operations/2026-05-07_codie_rogue_branch_recovery.md`
 - The canonical Task Hub DB is NOT /opt/universal_agent/AGENT_RUN_WORKSPACES/task_hub.db (stale, most recent mtime 2026-05-01) but /opt/universal_agent/AGENT_RUN_WORKSPACES/activity_state.db, resolved at runtime via durable/db.py:get_activity_db_path(). Prior handoff docs named the wrong path.
   - *source:* `docs/operations/2026-05-07_codie_rogue_branch_recovery.md § Dead end 2`
