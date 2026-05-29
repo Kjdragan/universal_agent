@@ -1,0 +1,500 @@
+# OpenClaw Release Report — 2026-05-29
+
+**Generated:** 2026-05-29 22:12 UTC
+**Repository:** [openclaw/openclaw](https://github.com/openclaw/openclaw)
+**New releases found:** 5
+
+## 🆕 Release: openclaw 2026.5.28-beta.3 🧪 (pre-release)
+
+- **Tag:** `v2026.5.28-beta.3`
+- **Published:** 2026-05-29T17:19:33Z
+- **URL:** [v2026.5.28-beta.3](https://github.com/openclaw/openclaw/releases/tag/v2026.5.28-beta.3)
+
+### 📊 Change Statistics
+
+| Metric | Value |
+|--------|-------|
+| Files changed | 163 |
+| Lines added | +330 |
+| Lines removed | -312 |
+
+**Changes by component area:**
+
+| Component | Files |
+|-----------|-------|
+| Other | 161 |
+| CI/CD | 2 |
+
+### 📝 Changes by Category
+
+#### Agent Runtime
+
+- [Highlights] Agent and Codex runtime recovery is steadier: subagents keep cwd/workspace separation, hook context stays prompt-local, session locks release on timeout abort, stale restart continuations are avoided, and Codex app-server/helper failures no longer tear down shared runtime state. (#87218, #86875, #87409, #87399, #87375)
+- [Fixes] Agents: fall back to local config pruning when the optional `agents delete` Gateway probe cannot authenticate, so offline installs can still delete agents without removing shared workspaces.
+- [Fixes] Agents/Codex: keep spawned agent cwd/workspace state separated, keep hook context prompt-local, release session locks on timeout abort and runtime teardown, avoid session event queue self-wait, clean up exec abort listeners, stream assistant deltas incrementally, recover raw missing-thread compaction failures, preserve shared app-server state across startup or helper failures, keep native hook relay alive across restarts and prune stale bridge files, keep Claude live tool progress visible for watchdog recovery, suppress abandoned requester completion handoff, route workspace memory through tools, resolve Codex runtime models first, report quarantined dynamic tools, format `skills` command output, and bound compaction/steering retries. (#87218, #86875, #86123, #87399, #87375, #72574, #87383, #87400, #83022, #87671, #87738, #87747, #87706, #87546, #87541) Thanks @mbelinky, @Alix-007, @luoyanglang, @yetval, @sjf, and @joshavant.
+- [Fixes] Agents/tool args: harden smart-quoted argument repair for edit arrays and exact escaped arguments so model-produced tool calls recover without corrupting valid input. (#86611)
+- [Fixes] Providers/agents: preserve seeded Anthropic signatures, preserve signed thinking payloads, concatenate signature-delta chunks, preserve DeepSeek `reasoning_content` replay across tier suffixes, apply OpenRouter strict9 ids to Mistral routes, promote Ollama plain-text tool calls, load NVIDIA featured model catalogs, stream MiniMax music generation responses, and recover empty preflight compaction. (#87593, #87493, #80775, #84764) Thanks @eleqtrizit.
+
+#### Browser Integration
+
+- [Highlights] Browser, channel, and automation inputs are stricter: Browser tool timeouts, viewport/tab indices, Gateway ports, cron retry handling, Discord component ids, schema array refs, Telegram callback pages, and channel progress callbacks now reject malformed values earlier and preserve the intended delivery context. (#82887)
+- [Fixes] Browser/input hardening: reject invalid tab indexes, excessive viewport resizes, explicit zero CDP ports, malformed geolocation options, unsafe screenshot or permission-grant timeouts, loose response-body limits, invalid cookie expiries, and non-finite Browser tool delays/timeouts.
+
+#### Build & CI
+
+- [Fixes] Docker/release/QA: package runtime workspace templates, stream cross-OS served artifacts, preserve sparse Crabbox run artifacts, isolate npm plugin installs per package, reject incompatible package plugin API installs, bound OpenClaw instance logs, plugin gauntlet relay logs, MCP channel buffers, kitchen-sink scans, agent-turn assertions, and release scenario logs, and keep release/google live guards current. (#87647, #87477) Thanks @rohitjavvadi.
+
+#### Cron & Scheduling
+
+- [Fixes] Cron/automation: retry recurring jobs after transient model rate limits before waiting for the next scheduled slot, and preflight model fallbacks before skipping scheduled work. (#82887)
+
+#### Gateway
+
+- [Fixes] Gateway/session state: clear completed session active runs, avoid cold-loading providers for MCP inventory, cache single-session child indexes, cap handshake timers, and bound preauth, auth-guard, media, transcript, readiness, and port options.
+
+#### General
+
+- [Highlights] Mobile and chat surfaces got a broader refresh: the iOS Pro UI, Gateway chat transport, onboarding, Talk permissions, WebChat reconnect delivery, and session picker behavior now preserve more state across reconnects and empty searches. (#87367, #87531, #87682)
+- [Highlights] Provider, media, and document coverage expands with Claude Opus 4.8, Fal Krea image schemas, NVIDIA featured models, MiniMax streaming music responses, encrypted PDF extraction, voice model catalogs, GitHub Copilot agent runtime support, and a Codex Supervisor plugin path for delegated Codex workflows. (#87845, #87890, #80775, #84764, #87751, #87794)
+- [Highlights] CLI, auth, doctor, and provider paths fail faster and recover more clearly: malformed numeric/version options are rejected, workspace dotenv provider credentials are ignored, OAuth and local service startup requests are bounded, legacy `api_key` auth profiles migrate to canonical form, and restart guidance is actionable. (#87398, #86281, #87361, #83655, #87559)
+- [Highlights] Release, QA, and E2E validation now bound more log, artifact, harness, and cross-OS waits so failing lanes produce proof instead of hanging or false-greening.
+- [Changes] Status: show active subagent details in status output.
+- [Changes] Diffs: split the default language pack and expand default Diffs language coverage while keeping the host floor aligned. (#87370, #87372) Thanks @RomneyDa.
+- [Changes] ClawHub: add plugin display names plus skill verification and trust surfaces. (#87354, #86699) Thanks @thewilloftheshadow and @Patrick-Erichsen.
+- [Changes] Docs: clarify Codex computer-use setup, paste-token stdin auth setup, macOS gateway sleep troubleshooting, native Codex hook relay recovery, container model auth, install deployment cards, device-token admin gating, CLI setup flow compatibility, and backport targets. (#87313, #63050, #87685) Thanks @bdjben, @liaoandi, and @thewilloftheshadow.
+- [Changes] Providers: add Claude Opus 4.8 support, Fal Krea image model schemas, NVIDIA featured model catalogs, MiniMax streaming music responses, and provider-backed voice model catalogs. (#87845, #87890, #80775, #84764, #87794) Thanks @eleqtrizit and @vincentkoc.
+- [Changes] Codex/GitHub: add the GitHub Copilot agent runtime and the Codex Supervisor plugin package.
+- [Changes] Policy: add policy comparison, ingress-channel conformance, and sandbox-posture conformance checks. (#85572, #85744, #86768)
+- [Fixes] Tighten phone-control mutation authorization [AI]. (#87150) Thanks @pgondhi987.
+- [Fixes] Clarify directive persistence authorization policy [AI]. (#86369) Thanks @pgondhi987.
+- [Fixes] CLI/auth/doctor/providers: reject malformed numeric/timeout/subcommand-version inputs, ignore workspace dotenv provider credentials, wait for respawn child shutdown, bound Codex and GitHub Copilot OAuth/token requests, harden Codex auth probes, warm provider auth off the main thread, honor Codex response timeouts, stop migrating current Claude Haiku 4.5 profiles to Sonnet, bound local service startup, resolve GPT-5.5 without cached catalog, migrate legacy memory auto-provider config, rewrite non-canonical `api_key` auth profiles, and make doctor restart follow-ups actionable. (#87398, #86281, #87361, #83655, #87559, #87719) Thanks @Patrick-Erichsen, @samzong, @giodl73-repo, @alkor2000, @mmaps, and @nxmxbbd.
+- [Fixes] Auto-reply/directives: respect provider and relayed channel metadata during directive persistence so channel-originated decisions keep their intended context. (#87683)
+- [Fixes] WhatsApp: resolve the auth directory from the active profile so profile-scoped WhatsApp installs do not drift to the wrong credential root. (#82492)
+- [Fixes] Media/images: skip CLI image cache refs when resolving generated images and bound generated video downloads so stale refs and slow providers fail cleanly. (#87523)
+- [Fixes] File transfer: handle late tar stdin pipe errors after archive validation or unpacking has already settled.
+- [Fixes] Performance: trust install-record caches between reloads, prefer native JSON parsing, reuse unchanged tool-search catalogs, skip unchanged store serialization, add precomputed session patch writers, reduce store clone allocations, cache manifest model catalog rows and auto-enabled plugin config, avoid full session snapshots for entry reads, defer configured Slack full startup, prefer bundled plugin dist entries, and slim current metadata identity caches. (#87760)
+- [Release verification] npm package: https://www.npmjs.com/package/openclaw/v/2026.5.28-beta.3
+- [Release verification] registry tarball: https://registry.npmjs.org/openclaw/-/openclaw-2026.5.28-beta.3.tgz
+- [Release verification] integrity: `sha512-S495OQbu67tIExI1cn+rs8wfNI7SY1ksePrt7xnQUGHCWpubvGpqoWKCF/Jf5k/5yfjz3JC+qVD7823IKc42TQ==`
+- [Release verification] release publish attempt: https://github.com/openclaw/openclaw/actions/runs/26650757547
+- [Release verification] npm preflight: https://github.com/openclaw/openclaw/actions/runs/26648478809
+- [Release verification] full release validation: https://github.com/openclaw/openclaw/actions/runs/26648480369
+- [Release verification] performance evidence: https://github.com/openclaw/openclaw/actions/runs/26648477398
+- [Release verification] OpenClaw npm publish: https://github.com/openclaw/openclaw/actions/runs/26651492551
+
+#### Memory & Search
+
+- [Fixes] Release/CI: bound manual git fetches, ClawHub verifier responses, ClawHub owner metadata, Parallels limits, startup/test/memory budget parsing, and diffs viewer build warnings so release lanes fail with useful proof instead of hanging. (#87839)
+
+#### Messaging Channels
+
+- [Highlights] Channel delivery and session identity got safer across outbound plugin hooks, Matrix room ids, iMessage reactions/approvals, Slack final replies, Discord recovered tool warnings, WhatsApp profile auth roots, Telegram polling, and Microsoft Teams service URL trust checks. (#73706, #75670, #87366, #87451, #87334, #82492, #83304, #87160)
+- [Changes] Discord: show commentary in progress drafts so live Discord runs expose useful in-progress context. (#85200)
+- [Fixes] Channels: thread canonical session keys into outbound hooks, preserve Matrix room-id case, keep fallback tool warnings mention-inert, retain delivered Slack final replies during late cleanup, continue iMessage polling after denied reactions, suppress duplicate native exec approvals, preserve Telegram SecretRef prompt config and polling keepalives, preserve WhatsApp profile auth roots, QR display, document filenames, and plugin hook config, suppress Discord recovered tool warnings, preserve the Discord voice outbound helper, and block untrusted Teams service URLs while keeping TeamsSDK patterns aligned. (#73706, #75670, #87366, #87451, #87465, #87334, #76262, #83304, #82492, #87581, #77114, #86426, #85529, #87160) Thanks @zeroaltitude, @lukeboyett, @xiaotian, @eleqtrizit, @heyitsaamir, @amittell, @liorb-mountapps, @masatohoshino, @bladin, and @giodl73-repo.
+- [Fixes] Config/parsing/network: reject partial numeric parsing, parse provider/Discord retry headers and dates strictly, honor IPv6 and bare IPv6 `no_proxy` entries, canonicalize secret target array indexes, and reject malformed media content lengths, inspected TCP ports, marketplace content lengths, cron epochs, sandbox stat fields, unsafe duration values, empty config path segments, noncanonical schema array refs, unsafe Telegram callback pages, and invalid Teams attachment-fetch DNS targets.
+- [Fixes] Channels/replies: preserve channel-owned progress callbacks when verbose output is off, keep group-room progress suppression intact, prefer external session delivery context, escape Discord component id delimiters, force final TUI chat repaints, show Slack reasoning previews, and normalize Discord/Matrix/Mattermost channel numeric options. (#87476, #87423)
+
+#### Plugin SDK
+
+- [Highlights] Plugin and Gateway hot paths do less repeated work while preserving cache correctness for install records, config JSON parsing, tool search catalogs, session stores, manifest model rows, auto-enabled plugin config, browser tokens, and viewer assets. (#86699)
+- [Changes] Plugin SDK: add a reply payload sending hook for plugins that need to deliver channel-owned replies and flatten package types for SDK declarations. (#82823, #87165) Thanks @RomneyDa.
+- [Release verification] plugin npm publish: https://github.com/openclaw/openclaw/actions/runs/26650915625
+
+#### Security
+
+- [Fixes] Gateway/security/session state: expire browser tokens after auth rotation, scope assistant idempotency dedupe, drain probe client closes, avoid stale restart continuation reuse, preserve retry-after fallbacks and stale rate-limit cooldown probes, bound webchat image and artifact transcript scans, include seconds in inbound metadata timestamps, clear completed session active runs, and evict current plugin-state namespaces at row caps. (#87810, #87833) Thanks @joshavant.
+
+#### Tools System
+
+- [Changes] PDF/tools: use ClawPDF for PDF extraction, support encrypted PDF extraction, and surface MCP structured content in agent tool results. (#87670, #87751)
+
+#### iOS Client
+
+- [Changes] iOS: refresh the dev app with Pro Command, Chat, Agents, and Settings tabs wired to gateway sessions, diagnostics, chat, and realtime Talk. (#87367) Thanks @Solvely-Colin.
+
+---
+
+## 📦 Release: openclaw 2026.5.28-beta.2 🧪 (pre-release)
+
+- **Tag:** `v2026.5.28-beta.2`
+- **Published:** 2026-05-29T12:19:13Z
+- **URL:** [v2026.5.28-beta.2](https://github.com/openclaw/openclaw/releases/tag/v2026.5.28-beta.2)
+
+### 📊 Change Statistics
+
+| Metric | Value |
+|--------|-------|
+| Files changed | 300 |
+| Lines added | +14725 |
+| Lines removed | -1297 |
+
+**Changes by component area:**
+
+| Component | Files |
+|-----------|-------|
+| Other | 238 |
+| Documentation | 48 |
+| CI/CD | 14 |
+
+### 📝 Changes by Category
+
+#### Agent Runtime
+
+- [Highlights] Agent and Codex runtime recovery is steadier: subagents keep cwd/workspace separation, hook context stays prompt-local, session locks release on timeout abort, stale restart continuations are avoided, and Codex app-server/helper failures no longer tear down shared runtime state. (#87218, #86875, #87409, #87399, #87375)
+- [Fixes] Agents: fall back to local config pruning when the optional `agents delete` Gateway probe cannot authenticate, so offline installs can still delete agents without removing shared workspaces.
+- [Fixes] Agents/Codex: keep spawned agent cwd/workspace state separated, keep hook context prompt-local, release session locks on timeout abort and runtime teardown, avoid session event queue self-wait, clean up exec abort listeners, stream assistant deltas incrementally, recover raw missing-thread compaction failures, preserve shared app-server state across startup or helper failures, keep native hook relay alive across restarts and prune stale bridge files, keep Claude live tool progress visible for watchdog recovery, suppress abandoned requester completion handoff, route workspace memory through tools, resolve Codex runtime models first, report quarantined dynamic tools, format `skills` command output, and bound compaction/steering retries. (#87218, #86875, #86123, #87399, #87375, #72574, #87383, #87400, #83022, #87671, #87738, #87747, #87706, #87546, #87541) Thanks @mbelinky, @Alix-007, @luoyanglang, @yetval, @sjf, and @joshavant.
+- [Fixes] Agents/tool args: harden smart-quoted argument repair for edit arrays and exact escaped arguments so model-produced tool calls recover without corrupting valid input. (#86611)
+- [Fixes] Providers/agents: preserve seeded Anthropic signatures, preserve signed thinking payloads, concatenate signature-delta chunks, preserve DeepSeek `reasoning_content` replay across tier suffixes, apply OpenRouter strict9 ids to Mistral routes, promote Ollama plain-text tool calls, load NVIDIA featured model catalogs, stream MiniMax music generation responses, and recover empty preflight compaction. (#87593, #87493, #80775, #84764) Thanks @eleqtrizit.
+
+#### Browser Integration
+
+- [Highlights] Browser, channel, and automation inputs are stricter: Browser tool timeouts, viewport/tab indices, Gateway ports, cron retry handling, Discord component ids, schema array refs, Telegram callback pages, and channel progress callbacks now reject malformed values earlier and preserve the intended delivery context. (#82887)
+- [Fixes] Browser/input hardening: reject invalid tab indexes, excessive viewport resizes, explicit zero CDP ports, malformed geolocation options, unsafe screenshot or permission-grant timeouts, loose response-body limits, invalid cookie expiries, and non-finite Browser tool delays/timeouts.
+
+#### Build & CI
+
+- [Fixes] Docker/release/QA: package runtime workspace templates, stream cross-OS served artifacts, preserve sparse Crabbox run artifacts, isolate npm plugin installs per package, reject incompatible package plugin API installs, bound OpenClaw instance logs, plugin gauntlet relay logs, MCP channel buffers, kitchen-sink scans, agent-turn assertions, and release scenario logs, and keep release/google live guards current. (#87647, #87477) Thanks @rohitjavvadi.
+
+#### Cron & Scheduling
+
+- [Fixes] Cron/automation: retry recurring jobs after transient model rate limits before waiting for the next scheduled slot, and preflight model fallbacks before skipping scheduled work. (#82887)
+
+#### Gateway
+
+- [Fixes] Gateway/session state: clear completed session active runs, avoid cold-loading providers for MCP inventory, cache single-session child indexes, cap handshake timers, and bound preauth, auth-guard, media, transcript, readiness, and port options.
+
+#### General
+
+- [Highlights] Mobile and chat surfaces got a broader refresh: the iOS Pro UI, Gateway chat transport, onboarding, Talk permissions, WebChat reconnect delivery, and session picker behavior now preserve more state across reconnects and empty searches. (#87367, #87531, #87682)
+- [Highlights] Provider, media, and document coverage expands with Claude Opus 4.8, Fal Krea image schemas, NVIDIA featured models, MiniMax streaming music responses, encrypted PDF extraction, voice model catalogs, GitHub Copilot agent runtime support, and a Codex Supervisor plugin path for delegated Codex workflows. (#87845, #87890, #80775, #84764, #87751, #87794)
+- [Highlights] CLI, auth, doctor, and provider paths fail faster and recover more clearly: malformed numeric/version options are rejected, workspace dotenv provider credentials are ignored, OAuth and local service startup requests are bounded, legacy `api_key` auth profiles migrate to canonical form, and restart guidance is actionable. (#87398, #86281, #87361, #83655, #87559)
+- [Highlights] Release, QA, and E2E validation now bound more log, artifact, harness, and cross-OS waits so failing lanes produce proof instead of hanging or false-greening.
+- [Changes] Status: show active subagent details in status output.
+- [Changes] Diffs: split the default language pack and expand default Diffs language coverage while keeping the host floor aligned. (#87370, #87372) Thanks @RomneyDa.
+- [Changes] ClawHub: add plugin display names plus skill verification and trust surfaces. (#87354, #86699) Thanks @thewilloftheshadow and @Patrick-Erichsen.
+- [Changes] Docs: clarify Codex computer-use setup, paste-token stdin auth setup, macOS gateway sleep troubleshooting, native Codex hook relay recovery, container model auth, install deployment cards, device-token admin gating, CLI setup flow compatibility, and backport targets. (#87313, #63050, #87685) Thanks @bdjben, @liaoandi, and @thewilloftheshadow.
+- [Changes] Providers: add Claude Opus 4.8 support, Fal Krea image model schemas, NVIDIA featured model catalogs, MiniMax streaming music responses, and provider-backed voice model catalogs. (#87845, #87890, #80775, #84764, #87794) Thanks @eleqtrizit and @vincentkoc.
+- [Changes] Codex/GitHub: add the GitHub Copilot agent runtime and the Codex Supervisor plugin package.
+- [Changes] Policy: add policy comparison, ingress-channel conformance, and sandbox-posture conformance checks. (#85572, #85744, #86768)
+- [Fixes] Tighten phone-control mutation authorization [AI]. (#87150) Thanks @pgondhi987.
+- [Fixes] Clarify directive persistence authorization policy [AI]. (#86369) Thanks @pgondhi987.
+- [Fixes] CLI/auth/doctor/providers: reject malformed numeric/timeout/subcommand-version inputs, ignore workspace dotenv provider credentials, wait for respawn child shutdown, bound Codex and GitHub Copilot OAuth/token requests, harden Codex auth probes, warm provider auth off the main thread, honor Codex response timeouts, stop migrating current Claude Haiku 4.5 profiles to Sonnet, bound local service startup, resolve GPT-5.5 without cached catalog, migrate legacy memory auto-provider config, rewrite non-canonical `api_key` auth profiles, and make doctor restart follow-ups actionable. (#87398, #86281, #87361, #83655, #87559, #87719) Thanks @Patrick-Erichsen, @samzong, @giodl73-repo, @alkor2000, @mmaps, and @nxmxbbd.
+- [Fixes] Auto-reply/directives: respect provider and relayed channel metadata during directive persistence so channel-originated decisions keep their intended context. (#87683)
+- [Fixes] WhatsApp: resolve the auth directory from the active profile so profile-scoped WhatsApp installs do not drift to the wrong credential root. (#82492)
+- [Fixes] Media/images: skip CLI image cache refs when resolving generated images and bound generated video downloads so stale refs and slow providers fail cleanly. (#87523)
+- [Fixes] File transfer: handle late tar stdin pipe errors after archive validation or unpacking has already settled.
+- [Fixes] Performance: trust install-record caches between reloads, prefer native JSON parsing, reuse unchanged tool-search catalogs, skip unchanged store serialization, add precomputed session patch writers, reduce store clone allocations, cache manifest model catalog rows and auto-enabled plugin config, avoid full session snapshots for entry reads, defer configured Slack full startup, prefer bundled plugin dist entries, and slim current metadata identity caches. (#87760)
+
+#### Memory & Search
+
+- [Fixes] Release/CI: bound manual git fetches, ClawHub verifier responses, ClawHub owner metadata, Parallels limits, startup/test/memory budget parsing, and diffs viewer build warnings so release lanes fail with useful proof instead of hanging. (#87839)
+
+#### Messaging Channels
+
+- [Highlights] Channel delivery and session identity got safer across outbound plugin hooks, Matrix room ids, iMessage reactions/approvals, Slack final replies, Discord recovered tool warnings, WhatsApp profile auth roots, Telegram polling, and Microsoft Teams service URL trust checks. (#73706, #75670, #87366, #87451, #87334, #82492, #83304, #87160)
+- [Changes] Discord: show commentary in progress drafts so live Discord runs expose useful in-progress context. (#85200)
+- [Fixes] Channels: thread canonical session keys into outbound hooks, preserve Matrix room-id case, keep fallback tool warnings mention-inert, retain delivered Slack final replies during late cleanup, continue iMessage polling after denied reactions, suppress duplicate native exec approvals, preserve Telegram SecretRef prompt config and polling keepalives, preserve WhatsApp profile auth roots, QR display, document filenames, and plugin hook config, suppress Discord recovered tool warnings, preserve the Discord voice outbound helper, and block untrusted Teams service URLs while keeping TeamsSDK patterns aligned. (#73706, #75670, #87366, #87451, #87465, #87334, #76262, #83304, #82492, #87581, #77114, #86426, #85529, #87160) Thanks @zeroaltitude, @lukeboyett, @xiaotian, @eleqtrizit, @heyitsaamir, @amittell, @liorb-mountapps, @masatohoshino, @bladin, and @giodl73-repo.
+- [Fixes] Config/parsing/network: reject partial numeric parsing, parse provider/Discord retry headers and dates strictly, honor IPv6 and bare IPv6 `no_proxy` entries, canonicalize secret target array indexes, and reject malformed media content lengths, inspected TCP ports, marketplace content lengths, cron epochs, sandbox stat fields, unsafe duration values, empty config path segments, noncanonical schema array refs, unsafe Telegram callback pages, and invalid Teams attachment-fetch DNS targets.
+- [Fixes] Channels/replies: preserve channel-owned progress callbacks when verbose output is off, keep group-room progress suppression intact, prefer external session delivery context, escape Discord component id delimiters, force final TUI chat repaints, show Slack reasoning previews, and normalize Discord/Matrix/Mattermost channel numeric options. (#87476, #87423)
+
+#### Plugin SDK
+
+- [Highlights] Plugin and Gateway hot paths do less repeated work while preserving cache correctness for install records, config JSON parsing, tool search catalogs, session stores, manifest model rows, auto-enabled plugin config, browser tokens, and viewer assets. (#86699)
+- [Changes] Plugin SDK: add a reply payload sending hook for plugins that need to deliver channel-owned replies and flatten package types for SDK declarations. (#82823, #87165) Thanks @RomneyDa.
+
+#### Security
+
+- [Fixes] Gateway/security/session state: expire browser tokens after auth rotation, scope assistant idempotency dedupe, drain probe client closes, avoid stale restart continuation reuse, preserve retry-after fallbacks and stale rate-limit cooldown probes, bound webchat image and artifact transcript scans, include seconds in inbound metadata timestamps, clear completed session active runs, and evict current plugin-state namespaces at row caps. (#87810, #87833) Thanks @joshavant.
+
+#### Tools System
+
+- [Changes] PDF/tools: use ClawPDF for PDF extraction, support encrypted PDF extraction, and surface MCP structured content in agent tool results. (#87670, #87751)
+
+#### iOS Client
+
+- [Changes] iOS: refresh the dev app with Pro Command, Chat, Agents, and Settings tabs wired to gateway sessions, diagnostics, chat, and realtime Talk. (#87367) Thanks @Solvely-Colin.
+
+---
+
+## 📦 Release: openclaw 2026.5.28-beta.1 🧪 (pre-release)
+
+- **Tag:** `v2026.5.28-beta.1`
+- **Published:** 2026-05-29T04:46:20Z
+- **URL:** [v2026.5.28-beta.1](https://github.com/openclaw/openclaw/releases/tag/v2026.5.28-beta.1)
+
+### 📊 Change Statistics
+
+| Metric | Value |
+|--------|-------|
+| Files changed | 300 |
+| Lines added | +11370 |
+| Lines removed | -5290 |
+
+**Changes by component area:**
+
+| Component | Files |
+|-----------|-------|
+| Documentation | 133 |
+| Other | 130 |
+| CI/CD | 37 |
+
+### 📝 Changes by Category
+
+#### Agent Runtime
+
+- [Highlights] Agent and Codex runtime recovery is steadier: subagents keep cwd/workspace separation, hook context stays prompt-local, session locks release on timeout abort, stale restart continuations are avoided, and Codex app-server/helper failures no longer tear down shared runtime state. (#87218, #86875, #87409, #87399, #87375)
+- [Fixes] Agents: fall back to local config pruning when the optional `agents delete` Gateway probe cannot authenticate, so offline installs can still delete agents without removing shared workspaces.
+- [Fixes] Agents/Codex: keep spawned agent cwd/workspace state separated, keep hook context prompt-local, release session locks on timeout abort, avoid session event queue self-wait, preserve shared app-server state across startup or helper failures, keep native hook relay alive across restarts, route workspace memory through tools, resolve Codex runtime models first, report quarantined dynamic tools, format `skills` command output, and bound compaction/steering retries. (#87218, #86875, #86123, #87399, #87375, #87383, #87400) Thanks @mbelinky, @Alix-007, @luoyanglang, @yetval, and @sjf.
+- [Fixes] Providers/agents: preserve seeded Anthropic signatures, concatenate signature-delta chunks, preserve DeepSeek `reasoning_content` replay across tier suffixes, apply OpenRouter strict9 ids to Mistral routes, promote Ollama plain-text tool calls, and recover empty preflight compaction. (#87593)
+
+#### Build & CI
+
+- [Fixes] Docker/release/QA: package runtime workspace templates, stream cross-OS served artifacts, preserve sparse Crabbox run artifacts, bound OpenClaw instance logs, plugin gauntlet relay logs, MCP channel buffers, kitchen-sink scans, agent-turn assertions, and release scenario logs, and keep release/google live guards current.
+
+#### General
+
+- [Highlights] Mobile and chat surfaces got a broader refresh: the iOS Pro UI, Gateway chat transport, onboarding, Talk permissions, WebChat reconnect delivery, and session picker behavior now preserve more state across reconnects and empty searches. (#87367, #87531, #87682)
+- [Highlights] CLI, auth, doctor, and provider paths fail faster and recover more clearly: malformed numeric/version options are rejected, OAuth and local service startup requests are bounded, legacy `api_key` auth profiles migrate to canonical form, and restart guidance is actionable. (#87398, #86281, #87361)
+- [Highlights] Release, QA, and E2E validation now bound more log, artifact, harness, and cross-OS waits so failing lanes produce proof instead of hanging or false-greening.
+- [Changes] Status: show active subagent details in status output.
+- [Changes] Diffs: split the default language pack and expand default Diffs language coverage while keeping the host floor aligned. (#87370, #87372) Thanks @RomneyDa.
+- [Changes] ClawHub: add plugin display names plus skill verification and trust surfaces. (#87354, #86699) Thanks @thewilloftheshadow and @Patrick-Erichsen.
+- [Changes] Docs: clarify Codex computer-use setup, paste-token stdin auth setup, macOS gateway sleep troubleshooting, native Codex hook relay recovery, container model auth, install deployment cards, device-token admin gating, and backport targets. (#87313, #63050) Thanks @bdjben, @liaoandi, and @thewilloftheshadow.
+- [Fixes] Tighten phone-control mutation authorization [AI]. (#87150) Thanks @pgondhi987.
+- [Fixes] Clarify directive persistence authorization policy [AI]. (#86369) Thanks @pgondhi987.
+- [Fixes] CLI/auth/doctor/providers: reject malformed numeric/timeout/subcommand-version inputs, wait for respawn child shutdown, bound Codex and GitHub Copilot OAuth/token requests, warm provider auth off the main thread, honor Codex response timeouts, bound local service startup, resolve GPT-5.5 without cached catalog, migrate legacy memory auto-provider config, rewrite non-canonical `api_key` auth profiles, and make doctor restart follow-ups actionable. (#87398, #86281, #87361) Thanks @Patrick-Erichsen, @samzong, @giodl73-repo, and @alkor2000.
+- [Fixes] File transfer: handle late tar stdin pipe errors after archive validation or unpacking has already settled.
+- [Fixes] Performance: trust install-record caches between reloads, prefer native JSON parsing, reuse unchanged tool-search catalogs, skip unchanged store serialization, add precomputed session patch writers, reduce store clone allocations, cache manifest model catalog rows and auto-enabled plugin config, and slim current metadata identity caches.
+- [Release verification] npm package: https://www.npmjs.com/package/openclaw/v/2026.5.28-beta.1
+- [Release verification] registry tarball: https://registry.npmjs.org/openclaw/-/openclaw-2026.5.28-beta.1.tgz
+- [Release verification] integrity: sha512-xMvO9tcAzIlzJsJhR3E8iAWk21bIC9E/94Dy3PQgul7fpowTM2VXp3zpAQUoY/hxJ9oJRK6PyeNfwVtIvYK2bw==
+- [Release verification] OpenClaw npm publish: https://github.com/openclaw/openclaw/actions/runs/26619000832
+- [Release verification] npm preflight: https://github.com/openclaw/openclaw/actions/runs/26617230525
+- [Release verification] full release validation: https://github.com/openclaw/openclaw/actions/runs/26617230543
+- [Release verification] performance evidence: https://github.com/openclaw/openclaw/actions/runs/26617230578
+- [Release verification] release publish umbrella: https://github.com/openclaw/openclaw/actions/runs/26618553779
+
+#### Messaging Channels
+
+- [Highlights] Channel delivery and session identity got safer across outbound plugin hooks, Matrix room ids, iMessage reactions/approvals, Slack final replies, Discord recovered tool warnings, and Microsoft Teams service URL trust checks. (#73706, #75670, #87366, #87451, #87334)
+- [Fixes] Channels: thread canonical session keys into outbound hooks, preserve Matrix room-id case, keep fallback tool warnings mention-inert, retain delivered Slack final replies during late cleanup, continue iMessage polling after denied reactions, suppress duplicate native exec approvals, preserve Telegram SecretRef prompt config, suppress Discord recovered tool warnings, and block untrusted Teams service URLs. (#73706, #75670, #87366, #87451, #87334) Thanks @zeroaltitude, @lukeboyett, @xiaotian, and @eleqtrizit.
+- [Fixes] Config/parsing/network: reject partial numeric parsing, parse provider/Discord retry headers and dates strictly, honor IPv6 and bare IPv6 `no_proxy` entries, canonicalize secret target array indexes, and reject malformed media content lengths, inspected TCP ports, marketplace content lengths, cron epochs, and sandbox stat fields.
+
+#### Plugin SDK
+
+- [Highlights] Plugin and Gateway hot paths do less repeated work while preserving cache correctness for install records, config JSON parsing, tool search catalogs, session stores, manifest model rows, auto-enabled plugin config, browser tokens, and viewer assets. (#86699)
+- [Release verification] plugin npm publish: https://github.com/openclaw/openclaw/actions/runs/26618634658 (blocked on first publish of @openclaw/diffs-language-pack; existing publishable plugins completed before that failure)
+- [Release verification] plugin ClawHub publish: https://github.com/openclaw/openclaw/actions/runs/26618636481 (blocked on missing ClawHub row for @openclaw/diffs-language-pack)
+
+#### Security
+
+- [Fixes] Gateway/security/session state: expire browser tokens after auth rotation, scope assistant idempotency dedupe, drain probe client closes, avoid stale restart continuation reuse, preserve retry-after fallbacks, bound webchat image and artifact transcript scans, include seconds in inbound metadata timestamps, and evict current plugin-state namespaces at row caps.
+
+#### Tools System
+
+- [Changes] PDF/tools: use ClawPDF for PDF extraction and surface MCP structured content in agent tool results. (#87670)
+
+#### iOS Client
+
+- [Changes] iOS: refresh the dev app with Pro Command, Chat, Agents, and Settings tabs wired to gateway sessions, diagnostics, chat, and realtime Talk. (#87367) Thanks @Solvely-Colin.
+
+---
+
+## 📦 Release: openclaw 2026.5.27
+
+- **Tag:** `v2026.5.27`
+- **Published:** 2026-05-28T11:41:42Z
+- **URL:** [v2026.5.27](https://github.com/openclaw/openclaw/releases/tag/v2026.5.27)
+
+### 📊 Change Statistics
+
+| Metric | Value |
+|--------|-------|
+| Files changed | 186 |
+| Lines added | +889 |
+| Lines removed | -363 |
+
+**Changes by component area:**
+
+| Component | Files |
+|-----------|-------|
+| Other | 186 |
+
+### 📝 Changes by Category
+
+#### Agent Runtime
+
+- [Changes] Agents: split the heartbeat runtime template out of docs assets and add compatibility repair for legacy heartbeat template content. (#85416) Thanks @hxy91819.
+- [Fixes] Agents/runtime: avoid session event queue self-waits, bound compaction wake and steering retries, preserve grace for pending error diagnostics, avoid false Codex runtime live switches, avoid stale restart continuation reuse, preserve session fallback errors, suppress duplicate Claude CLI skill prompts, keep runtime context before active user turns, strip stale Anthropic thinking, quarantine unsupported tool schemas, recover completed write timeouts safely, release retained session write locks on timeout abort, and validate forced plugin harness support before pinning. (#86123, #55424, #86855, #74341, #87278) Thanks @luoyanglang, @cathrynlavery, and @openperf.
+
+#### Gateway
+
+- [Fixes] Gateway/performance: borrow read-only session metadata and active session working stores, cache current/stable plugin metadata fingerprints, cache auto-enabled plugin config, slim metadata identity caches, trust current metadata lifecycle caches, stabilize isolated cron prompt-cache affinity, persist model auth profile suffixes, drain probe client closes, expire browser tokens after auth rotation, and keep default status fast paths bounded. Thanks @ferminquant.
+
+#### General
+
+- [Highlights] Stronger security and content boundaries: group prompt text is kept out of the system prompt, repeated-dot hostnames are normalized, side-effecting command wrappers and unsafe Node runtime env overrides are blocked, no-auth Tailscale exposure is rejected, and node/device-role approvals now require admin authority. (#87144, #87305, #87292, #87308, #87146) Thanks @eleqtrizit and @pgondhi987.
+- [Highlights] More reliable Codex app-server runs: Codex runtime models resolve first, workspace memory is routed through tools, shared app-server clients survive startup and spawned-helper failures, native hook relay generations survive restarts and rotate on fresh fallbacks, and false runtime live switches are avoided. (#87383, #87403, #87375, #72574, #87428) Thanks @yetval.
+- [Highlights] Faster Gateway and reply paths: session reads, plugin metadata fingerprints, auth env snapshots, auto-enabled plugin config, tool-search catalogs, and stable metadata caches do less hot-path rediscovery while visible replies no longer inherit hidden cleanup timeouts. (#86439, #87044) Thanks @keshavbotagent.
+- [Highlights] Better provider and model coverage: OpenAI-compatible embedding providers are core, DeepInfra catalog browsing loads the full credential-aware model set, Pixverse adds video generation and API region selection, VLLM thinking params are wired, Claude CLI OAuth overlays load for PI auth profiles, and bare direct Anthropic model ids work. (#85269, #84549, #87167) Thanks @dutifulbob, @ats3v, and @joshavant.
+- [Highlights] Release, package, and CI proof paths are harder to wedge: npm/package inventory honors dist exclusions, shrinkwrap override pins merge correctly, Docker runtime workspace templates are packaged and smoked, release postpublish checks are stricter, beta smoke rejects empty runs, and E2E log/probe waits are bounded.
+- [Changes] Providers: add the Pixverse video generation provider, API region selection, docs, and external plugin packaging support.
+- [Changes] DeepInfra: load the full model catalog when users browse models during onboarding, preserve configured API-key catalogs, refresh media/video defaults, and keep pricing/default model metadata aligned. (#84549) Thanks @ats3v.
+- [Changes] ClawHub: add plugin display metadata so catalog/package listings use cleaner names. (#87354) Thanks @thewilloftheshadow.
+- [Fixes] Codex: resolve Codex runtime models before generic routing, route workspace memory through tools, preserve shared app-server clients after startup and spawned-helper failures, preserve native hook relay generations across restarts and fresh fallbacks, keep raw reasoning/source-reply guards intact, report quarantined dynamic tools, keep the attempt watchdog armed for queued terminal turns, and route Codex OAuth compaction through OpenAI-Codex. (#87383, #87403, #87375, #72574, #87428) Thanks @yetval.
+- [Fixes] Reply/session delivery: keep visible turn admission unbounded, keep visible fallback delivery on latest targets, preserve bridge hook context, classify direct fallback targets by channel grammar, report approval resolutions in bridge mode, and avoid stale source-reply artifacts. (#87044) Thanks @keshavbotagent.
+- [Fixes] Providers/models: forward cached token usage in OpenAI-compatible chat completions, load Claude CLI OAuth overlays for PI auth profiles, send bare direct Anthropic model ids, wire configured VLLM thinking params, honor OpenAI-compatible cache retention, normalize OpenAI Responses replay tool ids, resolve OpenAI `gpt-5.5` without a cached catalog, preserve `retry-after` fallback handling, bound GitHub Copilot auth requests, and load DeepInfra custom/live catalogs consistently. (#82062, #87167, #84549) Thanks @caz0075, @joshavant, and @ats3v.
+- [Fixes] Install/package/release: match npm globstar exclusions, honor dist package exclusions in inventory, omit unpacked test helpers, skip Homebrew until macOS packages need it, package Docker runtime workspace templates, smoke Docker runtime templates during full validation, merge nested shrinkwrap override pins, preserve forked shrinkwrap pins, pin aged `lru-cache`, harden postpublish verification, accept main full-validation proof, and reject empty beta smoke runs.
+- [Fixes] E2E/QA/Crabbox: bound Telegram, Open WebUI, ClawHub, Matrix, Tool Search, MCP, gateway network, bundled runtime, kitchen-sink, codex media, config reload, and agent-turn assertion waits; prefer Azure for Windows targets; reinitialize invalid changed-gate git dirs; full-sync sparse container runs; and fail empty explicit test requests. (#87186)
+- [Release verification] npm package: https://www.npmjs.com/package/openclaw/v/2026.5.27
+- [Release verification] registry tarball: https://registry.npmjs.org/openclaw/-/openclaw-2026.5.27.tgz
+- [Release verification] integrity: `sha512-2N93zhdAo88KAbHt6T7KvYXf4s7XIkYXBgv1npYpn7e1Y9FvrtgtpsA38my9rtFW+70uXEojRPX5/OqnuDqJPw==`
+- [Release verification] full release CI report: https://github.com/openclaw/releases/blob/main/evidence/2026.5.27/release-evidence.md
+- [Release verification] release publish: https://github.com/openclaw/openclaw/actions/runs/26571393853
+- [Release verification] npm preflight: https://github.com/openclaw/openclaw/actions/runs/26569630056
+- [Release verification] full release validation: https://github.com/openclaw/openclaw/actions/runs/26569544553
+- [Release verification] release checks: https://github.com/openclaw/openclaw/actions/runs/26569853272
+- [Release verification] product performance: https://github.com/openclaw/openclaw/actions/runs/26569541556
+- [Release verification] OpenClaw npm publish: https://github.com/openclaw/openclaw/actions/runs/26572175549
+- [Release verification] appcast: https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml
+
+#### Memory & Search
+
+- [Changes] Memory: add a core OpenAI-compatible embedding provider for local and hosted OpenAI-style endpoints, with config, doctor, and docs support. (#85269) Thanks @dutifulbob.
+- [Fixes] Memory: salvage QMD search JSON after nonzero exits and keep workspace memory routing through the Codex tool path where possible. (#87225, #87383, #87403) Thanks @osolmaz.
+
+#### Messaging Channels
+
+- [Highlights] Channel delivery is steadier: Telegram `sendMessage` actions use durable outbound delivery, iMessage suppresses duplicate native exec approval prompts and sends, Slack keeps delivered final replies during late cleanup, Matrix mention previews/finals are stricter, QQBot fallback approval buttons honor slash-command auth, Discord guild requester checks are tighter, recovered Discord tool-warning artifacts stay out of successful replies, and Google Chat stops thread sends in DMs. (#87261, #87154) Thanks @mbelinky and @eleqtrizit.
+- [Changes] Channel SDK: move channel message compatibility into core, remove old channel turn runtime aliases, and preserve runtime catalog markdown metadata for plugins.
+- [Fixes] Channels: make Telegram `sendMessage` action replies durable and preserve SecretRef prompt config, suppress duplicate iMessage native exec approval prompts and sends, keep iMessage approval polling alive after denied reactions, keep Slack delivered final replies during late cleanup, keep Matrix mention previews/finals mention-inert and normally delivered, ignore filename-embedded Matrix IDs, suppress recovered Discord tool-warning artifacts from successful replies, suppress Google Chat thread sends in DMs, and harden Discord guild requester checks. (#87261, #87452) Thanks @mbelinky.
+
+#### Plugin SDK
+
+- [Changes] Plugin SDK: mark memory-specific embedding provider registration as deprecated compatibility and surface non-bundled usage in plugin compatibility diagnostics. (#85072) Thanks @mbelinky.
+- [Changes] Plugin SDK: expose plugin approval action metadata and stop exporting Vitest test helpers from the public SDK surface. (#87120) Thanks @RomneyDa.
+- [Fixes] CLI/help/config: reject loose or malformed numeric options for gateway timeouts, model limits, directory limits, message options, webhooks, and partial values; respect subcommand version options; route generated/root/plugin help targets correctly; keep skills JSON output flushing naturally; and keep plugin descriptor loading quiet in root help. (#87398) Thanks @Patrick-Erichsen.
+- [Fixes] Plugin state/tool search: evict the current namespace when plugin rows hit caps, reuse unchanged tool-search catalogs, align the release catalog reuse wrapper, and keep fallback tool warnings mention-inert.
+- [Release verification] plugin npm publish: https://github.com/openclaw/openclaw/actions/runs/26571646739
+- [Release verification] plugin ClawHub publish: https://github.com/openclaw/openclaw/actions/runs/26571650967
+
+#### Security
+
+- [Fixes] Security/content boundaries: route untrusted group prompt metadata outside system prompts, normalize repeated trailing hostname dots, block side-effecting command wrappers, reject unsafe Node runtime env overrides, reject no-auth Tailscale exposure, block untrusted Microsoft Teams service URLs, enforce `/allowlist configWrites` origin policy, gate QQBot fallback approval buttons, and require admin for node/device-role approvals. (#87144, #87305, #87292, #87308, #87146, #87154, #87334) Thanks @eleqtrizit and @pgondhi987.
+
+#### macOS Client
+
+- [Release verification] macOS preflight/sign/notarize: https://github.com/openclaw/releases/actions/runs/26572630696
+- [Release verification] macOS validation: https://github.com/openclaw/releases/actions/runs/26573954998
+- [Release verification] macOS publish/appcast: https://github.com/openclaw/releases/actions/runs/26574441406
+- [Release verification] macOS zip: https://github.com/openclaw/openclaw/releases/download/v2026.5.27/OpenClaw-2026.5.27.zip
+- [Release verification] macOS dmg: https://github.com/openclaw/openclaw/releases/download/v2026.5.27/OpenClaw-2026.5.27.dmg
+- [Release verification] macOS dSYM: https://github.com/openclaw/openclaw/releases/download/v2026.5.27/OpenClaw-2026.5.27.dSYM.zip
+
+---
+
+## 📦 Release: openclaw 2026.5.27-beta.1 🧪 (pre-release)
+
+- **Tag:** `v2026.5.27-beta.1`
+- **Published:** 2026-05-28T05:54:37Z
+- **URL:** [v2026.5.27-beta.1](https://github.com/openclaw/openclaw/releases/tag/v2026.5.27-beta.1)
+
+### 📝 Changes by Category
+
+#### Agent Runtime
+
+- [Changes] Agents: split the heartbeat runtime template out of docs assets and add compatibility repair for legacy heartbeat template content. (#85416) Thanks @hxy91819.
+- [Fixes] Agents/runtime: avoid session event queue self-waits, bound compaction wake and steering retries, preserve grace for pending error diagnostics, avoid false Codex runtime live switches, avoid stale restart continuation reuse, preserve session fallback errors, suppress duplicate Claude CLI skill prompts, keep runtime context before active user turns, strip stale Anthropic thinking, quarantine unsupported tool schemas, recover completed write timeouts safely, release retained session write locks on timeout abort, and validate forced plugin harness support before pinning. (#86123, #55424, #86855, #74341, #87278) Thanks @luoyanglang, @cathrynlavery, and @openperf.
+
+#### Gateway
+
+- [Fixes] Gateway/performance: borrow read-only session metadata and active session working stores, cache current/stable plugin metadata fingerprints, cache auto-enabled plugin config, slim metadata identity caches, trust current metadata lifecycle caches, stabilize isolated cron prompt-cache affinity, persist model auth profile suffixes, drain probe client closes, expire browser tokens after auth rotation, and keep default status fast paths bounded. Thanks @ferminquant.
+
+#### General
+
+- [Highlights] Stronger security and content boundaries: group prompt text is kept out of the system prompt, repeated-dot hostnames are normalized, side-effecting command wrappers and unsafe Node runtime env overrides are blocked, no-auth Tailscale exposure is rejected, and node/device-role approvals now require admin authority. (#87144, #87305, #87292, #87308, #87146) Thanks @eleqtrizit and @pgondhi987.
+- [Highlights] More reliable Codex app-server runs: Codex runtime models resolve first, workspace memory is routed through tools, shared app-server clients survive startup and spawned-helper failures, native hook relay generations survive restarts and rotate on fresh fallbacks, and false runtime live switches are avoided. (#87383, #87403, #87375, #72574, #87428) Thanks @yetval.
+- [Highlights] Faster Gateway and reply paths: session reads, plugin metadata fingerprints, auth env snapshots, auto-enabled plugin config, tool-search catalogs, and stable metadata caches do less hot-path rediscovery while visible replies no longer inherit hidden cleanup timeouts. (#86439, #87044) Thanks @keshavbotagent.
+- [Highlights] Better provider and model coverage: OpenAI-compatible embedding providers are core, DeepInfra catalog browsing loads the full credential-aware model set, Pixverse adds video generation and API region selection, VLLM thinking params are wired, Claude CLI OAuth overlays load for PI auth profiles, and bare direct Anthropic model ids work. (#85269, #84549, #87167) Thanks @dutifulbob, @ats3v, and @joshavant.
+- [Highlights] Release, package, and CI proof paths are harder to wedge: npm/package inventory honors dist exclusions, shrinkwrap override pins merge correctly, Docker runtime workspace templates are packaged and smoked, release postpublish checks are stricter, beta smoke rejects empty runs, and E2E log/probe waits are bounded.
+- [Changes] Providers: add the Pixverse video generation provider, API region selection, docs, and external plugin packaging support.
+- [Changes] DeepInfra: load the full model catalog when users browse models during onboarding, preserve configured API-key catalogs, refresh media/video defaults, and keep pricing/default model metadata aligned. (#84549) Thanks @ats3v.
+- [Changes] ClawHub: add plugin display metadata so catalog/package listings use cleaner names. (#87354) Thanks @thewilloftheshadow.
+- [Fixes] Codex: resolve Codex runtime models before generic routing, route workspace memory through tools, preserve shared app-server clients after startup and spawned-helper failures, preserve native hook relay generations across restarts and fresh fallbacks, keep raw reasoning/source-reply guards intact, report quarantined dynamic tools, keep the attempt watchdog armed for queued terminal turns, and route Codex OAuth compaction through OpenAI-Codex. (#87383, #87403, #87375, #72574, #87428) Thanks @yetval.
+- [Fixes] Reply/session delivery: keep visible turn admission unbounded, keep visible fallback delivery on latest targets, preserve bridge hook context, classify direct fallback targets by channel grammar, report approval resolutions in bridge mode, and avoid stale source-reply artifacts. (#87044) Thanks @keshavbotagent.
+- [Fixes] Providers/models: forward cached token usage in OpenAI-compatible chat completions, load Claude CLI OAuth overlays for PI auth profiles, send bare direct Anthropic model ids, wire configured VLLM thinking params, honor OpenAI-compatible cache retention, normalize OpenAI Responses replay tool ids, resolve OpenAI `gpt-5.5` without a cached catalog, preserve `retry-after` fallback handling, bound GitHub Copilot auth requests, and load DeepInfra custom/live catalogs consistently. (#82062, #87167, #84549) Thanks @caz0075, @joshavant, and @ats3v.
+- [Fixes] Install/package/release: match npm globstar exclusions, honor dist package exclusions in inventory, omit unpacked test helpers, skip Homebrew until macOS packages need it, package Docker runtime workspace templates, smoke Docker runtime templates during full validation, merge nested shrinkwrap override pins, preserve forked shrinkwrap pins, pin aged `lru-cache`, harden postpublish verification, accept main full-validation proof, and reject empty beta smoke runs.
+- [Fixes] E2E/QA/Crabbox: bound Telegram, Open WebUI, ClawHub, Matrix, Tool Search, MCP, gateway network, bundled runtime, kitchen-sink, codex media, config reload, and agent-turn assertion waits; prefer Azure for Windows targets; reinitialize invalid changed-gate git dirs; full-sync sparse container runs; and fail empty explicit test requests. (#87186)
+- [Release verification] npm package: https://www.npmjs.com/package/openclaw/v/2026.5.27-beta.1
+- [Release verification] registry tarball: https://registry.npmjs.org/openclaw/-/openclaw-2026.5.27-beta.1.tgz
+- [Release verification] integrity: `sha512-Bwc1x2bsmmjgc/zfKrZZTUCVKSwc29WJ96RxKb6xvR/3/ISvBjmMGa1goJuJi2Po+oqrD3IJ8zdbxcGSY7Woww==`
+- [Release verification] full release validation: https://github.com/openclaw/openclaw/actions/runs/26555534701
+- [Release verification] npm preflight: https://github.com/openclaw/openclaw/actions/runs/26555537448
+- [Release verification] release publish parent: https://github.com/openclaw/openclaw/actions/runs/26556941655
+- [Release verification] OpenClaw npm publish: https://github.com/openclaw/openclaw/actions/runs/26557350528
+- [Release verification] postpublish verifier: `fnm exec --using 24.15.0 -- node --import tsx scripts/openclaw-npm-postpublish-verify.ts 2026.5.27-beta.1` passed.
+- [Release verification] beta release verifier: `fnm exec --using 24.15.0 -- pnpm release:verify-beta -- 2026.5.27-beta.1 ... --skip-clawhub --plugins <all publishable except @openclaw/pixverse-provider>` passed for core npm, GitHub release, 30 plugin npm packages, full validation, and OpenClaw npm publish.
+- [Release verification] @openclaw/pixverse-provider recovery verifier: `node --import tsx scripts/release-verify-beta.ts 2026.5.27-beta.1 --plugins @openclaw/pixverse-provider --skip-postpublish` passed for GitHub release, core npm, plugin npm, and ClawHub.
+- [Release verification] beta smoke: blocked locally because Parallels VM `Ubuntu 26.04` is missing on this host.
+- [Release verification] @openclaw/pixverse-provider: https://www.npmjs.com/package/@openclaw/pixverse-provider/v/2026.5.27-beta.1
+- [Release verification] @openclaw/pixverse-provider tarball: https://registry.npmjs.org/@openclaw/pixverse-provider/-/pixverse-provider-2026.5.27-beta.1.tgz
+- [Release verification] @openclaw/pixverse-provider integrity: `sha512-9rfWZ4GcKSd9sFrdfI9jncRKWvdtGLjNVWZdbJ+6ztd3WRyxSJTFfj/i9Py8Qj0gr3mDCiQqQXceFA0l7DW2Rg==`
+- [Release verification] @openclaw/pixverse-provider ClawHub API: https://clawhub.ai/api/v1/packages/%40openclaw%2Fpixverse-provider/versions/2026.5.27-beta.1
+
+#### Memory & Search
+
+- [Changes] Memory: add a core OpenAI-compatible embedding provider for local and hosted OpenAI-style endpoints, with config, doctor, and docs support. (#85269) Thanks @dutifulbob.
+- [Fixes] Memory: salvage QMD search JSON after nonzero exits and keep workspace memory routing through the Codex tool path where possible. (#87225, #87383, #87403) Thanks @osolmaz.
+
+#### Messaging Channels
+
+- [Highlights] Channel delivery is steadier: Telegram `sendMessage` actions use durable outbound delivery, iMessage suppresses duplicate native exec approval prompts and sends, Slack keeps delivered final replies during late cleanup, Matrix mention previews/finals are stricter, QQBot fallback approval buttons honor slash-command auth, Discord guild requester checks are tighter, recovered Discord tool-warning artifacts stay out of successful replies, and Google Chat stops thread sends in DMs. (#87261, #87154) Thanks @mbelinky and @eleqtrizit.
+- [Changes] Channel SDK: move channel message compatibility into core, remove old channel turn runtime aliases, and preserve runtime catalog markdown metadata for plugins.
+- [Fixes] Channels: make Telegram `sendMessage` action replies durable and preserve SecretRef prompt config, suppress duplicate iMessage native exec approval prompts and sends, keep iMessage approval polling alive after denied reactions, keep Slack delivered final replies during late cleanup, keep Matrix mention previews/finals mention-inert and normally delivered, ignore filename-embedded Matrix IDs, suppress recovered Discord tool-warning artifacts from successful replies, suppress Google Chat thread sends in DMs, and harden Discord guild requester checks. (#87261, #87452) Thanks @mbelinky.
+
+#### Plugin SDK
+
+- [Changes] Plugin SDK: mark memory-specific embedding provider registration as deprecated compatibility and surface non-bundled usage in plugin compatibility diagnostics. (#85072) Thanks @mbelinky.
+- [Changes] Plugin SDK: expose plugin approval action metadata and stop exporting Vitest test helpers from the public SDK surface. (#87120) Thanks @RomneyDa.
+- [Fixes] CLI/help/config: reject loose or malformed numeric options for gateway timeouts, model limits, directory limits, message options, webhooks, and partial values; respect subcommand version options; route generated/root/plugin help targets correctly; keep skills JSON output flushing naturally; and keep plugin descriptor loading quiet in root help. (#87398) Thanks @Patrick-Erichsen.
+- [Fixes] Plugin state/tool search: evict the current namespace when plugin rows hit caps, reuse unchanged tool-search catalogs, align the release catalog reuse wrapper, and keep fallback tool warnings mention-inert.
+- [Release verification] plugin npm publish: https://github.com/openclaw/openclaw/actions/runs/26557065983 published all plugins except @openclaw/pixverse-provider in Actions; @openclaw/pixverse-provider was recovered manually via npm maintainer auth.
+- [Release verification] plugin ClawHub publish: https://github.com/openclaw/openclaw/actions/runs/26557068673 published all workflow candidates except @openclaw/pixverse-provider in Actions; @openclaw/pixverse-provider was recovered manually on ClawHub after package-row bootstrap.
+- [Release verification] @openclaw/pixverse-provider ClawHub: https://clawhub.ai/plugins/%40openclaw%2Fpixverse-provider
+
+#### Security
+
+- [Fixes] Security/content boundaries: route untrusted group prompt metadata outside system prompts, normalize repeated trailing hostname dots, block side-effecting command wrappers, reject unsafe Node runtime env overrides, reject no-auth Tailscale exposure, block untrusted Microsoft Teams service URLs, enforce `/allowlist configWrites` origin policy, gate QQBot fallback approval buttons, and require admin for node/device-role approvals. (#87144, #87305, #87292, #87308, #87146, #87154, #87334) Thanks @eleqtrizit and @pgondhi987.
+
+---
+
+## 📈 Impact Summary (All Releases Combined)
+
+### Component Areas Most Affected
+
+| Component | Total Files Changed |
+|-----------|-------------------|
+| Other | 715 |
+| Documentation | 181 |
+| CI/CD | 53 |
+
+### Feature Categories
+
+| Category | Change Entries |
+|----------|--------------|
+| General | 118 |
+| Plugin SDK | 21 |
+| Messaging Channels | 19 |
+| Agent Runtime | 18 |
+| Memory & Search | 6 |
+| macOS Client | 6 |
+| Security | 5 |
+| Browser Integration | 4 |
+| Gateway | 4 |
+| iOS Client | 3 |
+| Tools System | 3 |
+| Build & CI | 3 |
+| Cron & Scheduling | 2 |
+
+---
+*Generated by openclaw_release_scanner.py — Stage 1 of the OpenClaw sync pipeline*
