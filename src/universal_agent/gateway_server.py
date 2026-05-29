@@ -2324,19 +2324,6 @@ class ProactiveTopicSignatureExtractRequest(BaseModel):
     min_channels: Optional[int] = 2
 
 
-def _primary_convergence_result(results: Any) -> Optional[dict[str, Any]]:
-    """Return the preferred single-object convergence result for API compatibility."""
-    if not isinstance(results, list) or not results:
-        return None
-    for result in results:
-        if not isinstance(result, dict):
-            continue
-        task = result.get("task") if isinstance(result.get("task"), dict) else {}
-        if str(task.get("source_kind") or "").strip() == "convergence_detection":
-            return result
-    return next((result for result in results if isinstance(result, dict)), None)
-
-
 class DashboardEventPresetCreateRequest(BaseModel):
     name: str
     filters: dict[str, Any] = Field(default_factory=dict)
@@ -21358,110 +21345,6 @@ async def dashboard_proactive_tutorial_build_artifact(
     return {"status": "ok", "artifact": artifact}
 
 
-@app.post("/api/v1/dashboard/proactive-artifacts/convergence/signature")
-async def dashboard_proactive_convergence_signature(
-    request: Request,
-    payload: ProactiveTopicSignatureRequest,
-):
-    _require_ops_auth(request)
-    from universal_agent.services.proactive_convergence import (
-        detect_and_queue_convergence,
-        upsert_topic_signature,
-    )
-
-    with _activity_store_lock:
-        conn = _activity_connect()
-        try:
-            try:
-                signature = upsert_topic_signature(
-                    conn,
-                    video_id=payload.video_id,
-                    channel_id=str(payload.channel_id or ""),
-                    channel_name=str(payload.channel_name or ""),
-                    video_title=str(payload.video_title or ""),
-                    video_url=str(payload.video_url or ""),
-                    ingested_at=str(payload.ingested_at or ""),
-                    primary_topics=payload.primary_topics,
-                    secondary_topics=payload.secondary_topics,
-                    key_claims=payload.key_claims,
-                    content_type=str(payload.content_type or ""),
-                    metadata=dict(payload.metadata or {}),
-                )
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc))
-            convergence_results = (
-                detect_and_queue_convergence(
-                    conn,
-                    signature=signature,
-                    window_hours=max(1, int(payload.window_hours or 72)),
-                    min_channels=max(2, int(payload.min_channels or 2)),
-                )
-                if payload.detect
-                else []
-            )
-        finally:
-            conn.close()
-    return {
-        "status": "ok",
-        "signature": signature,
-        "convergence": _primary_convergence_result(convergence_results),
-        "convergences": convergence_results,
-    }
-
-
-@app.post("/api/v1/dashboard/proactive-artifacts/convergence/extract")
-async def dashboard_proactive_convergence_extract(
-    request: Request,
-    payload: ProactiveTopicSignatureExtractRequest,
-):
-    _require_ops_auth(request)
-    from universal_agent.services.proactive_convergence import (
-        detect_and_queue_convergence,
-        detect_and_queue_convergence_llm,
-        extract_topic_signature_from_text,
-        upsert_topic_signature,
-    )
-
-    extracted = await extract_topic_signature_from_text(
-        video_id=payload.video_id,
-        title=str(payload.title or ""),
-        transcript_text=str(payload.transcript_text or ""),
-        summary_text=str(payload.summary_text or ""),
-        channel_id=str(payload.channel_id or ""),
-        channel_name=str(payload.channel_name or ""),
-        video_url=str(payload.video_url or ""),
-        ingested_at=str(payload.ingested_at or ""),
-        metadata=dict(payload.metadata or {}),
-    )
-    conn = _activity_connect()
-    try:
-        signature = upsert_topic_signature(conn, **extracted)
-        if not payload.detect:
-            convergence_results = []
-        elif payload.use_llm_match:
-            convergence_results = await detect_and_queue_convergence_llm(
-                conn,
-                signature=signature,
-                window_hours=max(1, int(payload.window_hours or 72)),
-                min_channels=max(2, int(payload.min_channels or 2)),
-            )
-        else:
-            convergence_results = detect_and_queue_convergence(
-                conn,
-                signature=signature,
-                window_hours=max(1, int(payload.window_hours or 72)),
-                min_channels=max(2, int(payload.min_channels or 2)),
-            )
-    finally:
-        conn.close()
-    return {
-        "status": "ok",
-        "signature": signature,
-        "convergence": _primary_convergence_result(convergence_results),
-        "convergences": convergence_results,
-    }
-
-
 @app.get("/api/v1/dashboard/csi/reports")
 async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = False):
     def _reports_from_notifications(max_items: int) -> list[dict[str, Any]]:
@@ -24796,8 +24679,8 @@ async def dashboard_todolist_get_goal_artifacts(task_id: str):
     # mission was dispatched to produce. We surface metadata (path + size)
     # so the dashboard can link / download / preview, but we do not inline
     # PDF content. HTML content is small enough to inline as a preview.
-    # Filenames mirror the contract in create_insight_brief_task plus the
-    # legacy `brief.*` names produced before that contract existed.
+    # Filenames cover the historical insight/brief artifact contracts
+    # (insight_artifact, brief, insight_brief .html/.pdf) produced by past runs.
     deliverable_names = (
         "insight_artifact.html",
         "insight_artifact.pdf",
