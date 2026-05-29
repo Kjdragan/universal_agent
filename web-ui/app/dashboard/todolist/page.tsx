@@ -524,6 +524,7 @@ export default function ToDoListDashboardPage() {
   const [deleteAllPending, setDeleteAllPending] = useState(false);
   const [deleteAllNotAssignedPending, setDeleteAllNotAssignedPending] = useState(false);
   const [deleteAllInProgressPending, setDeleteAllInProgressPending] = useState(false);
+  const [deleteAllNeedsReviewPending, setDeleteAllNeedsReviewPending] = useState(false);
   const [hoveredDeleteId, setHoveredDeleteId] = useState<string | null>(null);
   const [quickAddTitle, setQuickAddTitle] = useState("");
   const [quickAddPending, setQuickAddPending] = useState(false);
@@ -1023,6 +1024,30 @@ export default function ToDoListDashboardPage() {
       setDeleteAllInProgressPending(false);
     }
   }, [inProgressItems.length, load]);
+
+  const handleDeleteAllNeedsReview = useCallback(async () => {
+    const visibleCount = needsReviewItems.length;
+    if (!visibleCount) return;
+    const confirmed = window.confirm(
+      `Park ALL tasks awaiting review (${visibleCount} currently visible)? They will be moved out of the active board and will no longer be queued for Simone review.`,
+    );
+    if (!confirmed) return;
+    setDeleteAllNeedsReviewPending(true);
+    const releaseMutation = beginMutation();
+    try {
+      await fetch(`${API_BASE}/api/v1/dashboard/todolist/bulk-park`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lane: "needs_review", reason: "bulk_park_needs_review" }),
+      });
+    } catch {
+      // noop — best-effort; load() below re-syncs the board
+    } finally {
+      await load(true);
+      releaseMutation();
+      setDeleteAllNeedsReviewPending(false);
+    }
+  }, [needsReviewItems.length, load]);
 
   // Allocation breakdown: source_kind counts
   const allocationBySource = useMemo(() => {
@@ -2342,7 +2367,24 @@ export default function ToDoListDashboardPage() {
         >
           {inProgressItems.map((item, idx) => renderTaskCard(item, idx, true, (id) => void handleTaskAction(id, "park")))}
         </KanbanCol>
-        <KanbanCol label="Needs Review" icon="rate_review" count={needsReviewItems.length} accentColor="#F59E0B" emptyText="Nothing awaiting Simone review.">
+        <KanbanCol
+          label="Needs Review"
+          icon="rate_review"
+          count={needsReviewItems.length}
+          accentColor="#F59E0B"
+          emptyText="Nothing awaiting Simone review."
+          headerAction={
+            needsReviewItems.length > 0 ? (
+              <button
+                onClick={() => void handleDeleteAllNeedsReview()}
+                disabled={deleteAllNeedsReviewPending}
+                className="px-2 py-0.5 font-mono text-[9px] font-bold tracking-wider uppercase bg-kcd-red/10 text-kcd-red border-none rounded-sm cursor-pointer hover:bg-kcd-red/20 transition-colors disabled:opacity-40"
+              >
+                {deleteAllNeedsReviewPending ? "Deleting…" : "Delete All"}
+              </button>
+            ) : undefined
+          }
+        >
           {needsReviewItems.map((item, idx) => renderTaskCard(item, idx, true))}
         </KanbanCol>
         <KanbanCol
