@@ -336,12 +336,41 @@ def sync_topic_signatures_from_csi(
                 exc,
             )
 
+    # Ideation sweep (Track B restored): non-obvious abstract patterns over the
+    # recent corpus — the higher-value insight engine that convergence detection
+    # (same-story = news saturation) cannot surface. Routes through the same
+    # de-poisoned convergence_candidate → Atlas → digest path with
+    # candidate_kind='ideation'. Disable via UA_IDEATION_SWEEP_ENABLED=0.
+    ideation_written = 0
+    if _ideation_sweep_enabled():
+        try:
+            ideations = _run_ideation_sweep(conn, source_window_hours=source_window_hours)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("ideation sweep failed: %s", exc)
+            ideations = []
+        for ins in ideations:
+            try:
+                result = write_convergence_candidate(
+                    conn,
+                    signatures=ins.get("signatures") or [],
+                    source_window_hours=source_window_hours,
+                    thesis=str(ins.get("narrative") or ""),
+                    value=str(ins.get("value") or ""),
+                    signal_strength=float(ins.get("confidence") or 0.0) * 10.0,
+                    candidate_kind="ideation",
+                )
+                if result and result.get("_newly_queued"):
+                    ideation_written += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("write ideation candidate failed: %s", exc)
+
     return {
         "seen": len(rows),
         "upserted": upserted,
         # Legacy key kept for any caller still reading it.
         "convergence_events": candidates_written,
         "candidates_written": candidates_written,
+        "ideation_candidates_written": ideation_written,
     }
 
 
@@ -579,6 +608,101 @@ def _detect_clusters_llm(
     return loop.run_until_complete(coro)
 
 
+# ── Ideation sweep (Track B restored) ──────────────────────────────────
+#
+# Track A / convergence detection finds the SAME story across channels — which
+# is, by construction, news saturation (low marginal value). Track B is the
+# higher-value engine: it synthesizes NON-OBVIOUS abstract patterns, trends, and
+# cross-cutting relationships from the recent corpus (e.g. "the manufactured-
+# reality FORMAT has converged across enemies" — the kind of insight the operator
+# actually values). It was removed in PR C for cost; restored here because ZAI/GLM
+# quota is abundant (operator decision 2026-05-29). Output routes through the SAME
+# de-poisoned convergence_candidate → Atlas → digest path with candidate_kind=
+# 'ideation'. See docs/proactive_signals/ideation_sweep_2026-05-29.md.
+
+
+def _ideation_sweep_enabled() -> bool:
+    return str(os.getenv("UA_IDEATION_SWEEP_ENABLED", "1")).strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _ideation_min_confidence() -> float:
+    raw = str(os.getenv("UA_IDEATION_MIN_CONFIDENCE", "0.7")).strip()
+    try:
+        return max(0.0, min(1.0, float(raw)))
+    except ValueError:
+        return 0.7
+
+
+def _load_recent_signatures(
+    conn: sqlite3.Connection, *, source_window_hours: int, limit: int = 60
+) -> list[dict[str, Any]]:
+    """Most-recent topic signatures within the rolling window (corpus for ideation)."""
+    ensure_schema(conn)
+    horizon = datetime.now(timezone.utc) - timedelta(hours=max(1, int(source_window_hours)))
+    rows = conn.execute(
+        """
+        SELECT * FROM proactive_topic_signatures
+        WHERE ingested_at >= ?
+        ORDER BY ingested_at DESC
+        LIMIT ?
+        """,
+        (horizon.isoformat(), max(2, int(limit))),
+    ).fetchall()
+    return [_hydrate_signature(dict(row)) for row in rows]
+
+
+async def _run_ideation_sweep_async(
+    conn: sqlite3.Connection,
+    *,
+    source_window_hours: int,
+    max_signatures: int = 60,
+) -> list[dict[str, Any]]:
+    """Run Track B ideation synthesis over the recent corpus.
+
+    Chunks the corpus into batches of 20 (track_b's analysis cap) so more than
+    20 recent videos are covered, gates each insight on the confidence floor,
+    and returns ``[{narrative, value, confidence, signatures}]``. Fails closed
+    per batch (a failed LLM call drops that batch, never a false insight).
+    """
+    sigs = _load_recent_signatures(
+        conn, source_window_hours=source_window_hours, limit=max_signatures
+    )
+    if len(sigs) < 2:
+        return []
+    floor = _ideation_min_confidence()
+    insights: list[dict[str, Any]] = []
+    for start in range(0, len(sigs), 20):
+        batch = sigs[start:start + 20]
+        if len(batch) < 2:
+            continue
+        try:
+            batch_insights = await track_b_ideation_synthesis(batch)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("ideation sweep batch failed (size=%d): %s", len(batch), exc)
+            continue
+        for ins in batch_insights:
+            if float(ins.get("confidence") or 0.0) >= floor and len(ins.get("signatures") or []) >= 2:
+                insights.append(ins)
+    return insights
+
+
+def _run_ideation_sweep(
+    conn: sqlite3.Connection, *, source_window_hours: int
+) -> list[dict[str, Any]]:
+    """Sync wrapper around the async ideation sweep (loop-handling like clustering)."""
+    coro = _run_ideation_sweep_async(conn, source_window_hours=source_window_hours)
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    import nest_asyncio
+
+    nest_asyncio.apply()
+    return loop.run_until_complete(coro)
+
+
 def write_convergence_candidate(
     conn: sqlite3.Connection,
     *,
@@ -586,6 +710,8 @@ def write_convergence_candidate(
     source_window_hours: int = 72,
     thesis: str = "",
     signal_strength: float = 0.0,
+    candidate_kind: str = "convergence",
+    value: str = "",
 ) -> dict[str, Any]:
     """Upsert a ``convergence_candidates`` row and (idempotently) queue Atlas.
 
@@ -671,6 +797,7 @@ def write_convergence_candidate(
     # Don't resolve relative-to-cwd here; pass through whatever the env says,
     # let the skill / helper default to the canonical workspaces dir when empty.
 
+    is_ideation = str(candidate_kind or "convergence").strip().lower() == "ideation"
     task_id = f"convergence-candidate:{candidate_id.removeprefix('cand_')}"
     description = _candidate_task_description(
         candidate_id=candidate_id,
@@ -680,13 +807,17 @@ def write_convergence_candidate(
         index_path=index_path_env,
         thesis=thesis,
         signal_strength=signal_strength,
+        candidate_kind=candidate_kind,
+        value=value,
     )
     metadata_payload = {
         "source": "convergence_candidate",
         "candidate_id": candidate_id,
+        "candidate_kind": "ideation" if is_ideation else "convergence",
         "preferred_vp": "vp.general.primary",
         "primary_topic": headline,
         "thesis": thesis,
+        "value": value,
         "signal_strength": float(signal_strength or 0.0),
         "video_ids": video_ids,
         "channel_count": len(channel_names),
@@ -695,15 +826,22 @@ def write_convergence_candidate(
         "invoke_skill": "evaluate-and-author-intel-brief",
     }
 
+    if is_ideation:
+        title = f"ATLAS evaluate ideation insight: {headline}"
+        labels = ["agent-ready", "ideation", "atlas", "candidate", "insight"]
+    else:
+        title = f"ATLAS evaluate convergence candidate: {headline}"
+        labels = ["agent-ready", "convergence", "atlas", "candidate"]
+
     task = queue_proactive_task(
         conn,
         task_id=task_id,
         source_kind="convergence_candidate",
         source_ref=candidate_id,
-        title=f"ATLAS evaluate convergence candidate: {headline}",
+        title=title,
         description=description,
         priority=3,
-        labels=["agent-ready", "convergence", "atlas", "candidate"],
+        labels=labels,
         metadata=metadata_payload,
     )
 
@@ -742,6 +880,10 @@ def write_convergence_candidate(
             _json_dumps({
                 "preferred_vp": "vp.general.primary",
                 "headline": headline,
+                "candidate_kind": "ideation" if is_ideation else "convergence",
+                "thesis": thesis,
+                "value": value,
+                "signal_strength": float(signal_strength or 0.0),
                 "source_window_hours": int(source_window_hours),
                 "task_status": str(task.get("status") or ""),
             }),
@@ -784,37 +926,27 @@ def _candidate_task_description(
     index_path: str,
     thesis: str = "",
     signal_strength: float = 0.0,
+    candidate_kind: str = "convergence",
+    value: str = "",
 ) -> str:
     """Render the Task Hub task description for a convergence_candidate item.
 
     Directs Atlas to invoke the ``/evaluate-and-author-intel-brief`` skill,
     explains batch-serial semantics, and forbids direct emailing (delivery is
-    handled by the consolidated digest pipeline in PR D).
+    handled by the consolidated digest pipeline). For ``candidate_kind=='ideation'``
+    the framing flips from same-story convergence to non-obvious-pattern judgment.
     """
     index_hint = index_path or "(default: workspaces dir)"
-    thesis_lines: list[str] = []
-    if thesis:
-        thesis_lines = [
-            f"LLM-detected convergence thesis (signal_strength {signal_strength:.0f}/10):",
-            f"  {thesis}",
-            "This thesis is the LLM clustering pass's reason for surfacing the cluster;",
-            "verify it against the sources, then ship/skip/defer accordingly.",
-            "",
-        ]
-    lines = [
+    is_ideation = str(candidate_kind or "convergence").strip().lower() == "ideation"
+
+    framing = [
         "FRAMING: This task was generated by the csi_convergence_sync cron, NOT by Kevin.",
         "Kevin did not ask for this. When composing any operator-facing artifact,",
-        "open with proactive-discovery phrasing — e.g. 'I noticed multiple independent",
-        "sources covering X' or 'Heads up: convergence signal on X'. Do NOT frame this",
-        "as 'as you requested' or 'here's the X you wanted'.",
+        "open with proactive-discovery phrasing — e.g. 'I noticed a non-obvious pattern'",
+        "or 'Heads up: a trend worth two minutes'. Do NOT frame this as 'as you requested'.",
         "",
-        f"Convergence candidate cluster: {candidate_count} sources across {channel_count} channels.",
-        f"Candidate ID: {candidate_id}",
-        f"Headline topic: {headline}",
-        "",
-        *thesis_lines,
-        "Invoke the skill `/evaluate-and-author-intel-brief` with this candidate_id.",
-        "The skill handles ship/skip/defer judgment and authoring.",
+    ]
+    common_tail = [
         "",
         "If multiple candidate tasks are claimed in the same batch, process them",
         "serially — each evaluation's verdict appears in the recent briefs index",
@@ -823,9 +955,51 @@ def _candidate_task_description(
         f"Recent briefs index path: {index_hint}",
         "",
         "Do NOT email Kevin directly. Delivery is handled by the consolidated digest",
-        "pipeline (Simone's /hourly-intel-digest skill, ships in PR D).",
+        "pipeline (Simone's /hourly-intel-digest skill).",
     ]
-    return "\n".join(lines)
+
+    if is_ideation:
+        body = [
+            f"IDEATION INSIGHT (candidate_kind=ideation, confidence {signal_strength:.0f}/10).",
+            f"Candidate ID: {candidate_id}",
+            f"Spans {candidate_count} videos across {channel_count} channels.",
+            "",
+            "This is NOT a same-story convergence — it is a NON-OBVIOUS abstract pattern,",
+            "trend, or cross-cutting relationship the LLM ideation sweep synthesized from",
+            "the recent corpus. Judge it on NOVELTY, INSIGHT, and ACTIONABILITY for an",
+            "operator who builds/runs an AI agent platform — NOT on multi-channel overlap.",
+            "Do NOT skip it merely because the videos cover different topics; that is the point.",
+            "",
+            "LLM-synthesized narrative (the insight):",
+            f"  {thesis}",
+            "Why it matters (the 'so what'):",
+            f"  {value}",
+            "",
+            "Invoke the skill `/evaluate-and-author-intel-brief` with this candidate_id.",
+            "Verify the narrative against the sources; ship if it is genuinely non-obvious",
+            "and useful, skip if it is generic/obvious/unsupported, else defer.",
+        ]
+    else:
+        thesis_lines: list[str] = []
+        if thesis:
+            thesis_lines = [
+                f"LLM-detected convergence thesis (signal_strength {signal_strength:.0f}/10):",
+                f"  {thesis}",
+                "This thesis is the LLM clustering pass's reason for surfacing the cluster;",
+                "verify it against the sources, then ship/skip/defer accordingly.",
+                "",
+            ]
+        body = [
+            f"Convergence candidate cluster: {candidate_count} sources across {channel_count} channels.",
+            f"Candidate ID: {candidate_id}",
+            f"Headline topic: {headline}",
+            "",
+            *thesis_lines,
+            "Invoke the skill `/evaluate-and-author-intel-brief` with this candidate_id.",
+            "The skill handles ship/skip/defer judgment and authoring.",
+        ]
+
+    return "\n".join(framing + body + common_tail)
 
 
 def get_topic_signature(conn: sqlite3.Connection, video_id: str) -> Optional[dict[str, Any]]:
