@@ -79,7 +79,16 @@ def _conn(tmp_path):
 
 
 def test_judge_skips_when_summary_is_empty(tmp_path):
-    """No transcript signal → skip without LLM call, cache the verdict."""
+    """No transcript signal yet → skip without LLM call AND without caching.
+
+    An empty summary almost always means the ingestion->analysis race (the sweep
+    saw the CSI event before its summary was written), not a permanent verdict.
+    Caching ``no_summary`` here used to lock the video out forever because the
+    cache-read short-circuited the LLM judge on every later sweep — that is how
+    production ended up 534/534 ``no_summary`` with zero buildable candidates.
+    The skip must therefore NOT cache, so the video re-judges once its summary
+    lands. (Mirrors ``test_judge_disabled_flag_skips_without_caching``.)
+    """
     with _conn(tmp_path) as conn:
         result = is_video_buildable_with_judge(
             conn,
@@ -89,10 +98,8 @@ def test_judge_skips_when_summary_is_empty(tmp_path):
             summary_text="",
         )
         assert result is False
-        cached = _get_cached_judge_verdict(conn, "vid_empty")
-        assert cached is not None
-        assert cached["buildable"] is False
-        assert cached["method"] == "no_summary"
+        # No terminal verdict persisted → re-judged on a later sweep.
+        assert _get_cached_judge_verdict(conn, "vid_empty") is None
 
 
 def test_judge_returns_false_when_llm_says_news(tmp_path, monkeypatch):
