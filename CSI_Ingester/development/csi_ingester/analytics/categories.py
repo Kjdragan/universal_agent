@@ -693,13 +693,24 @@ def _merge_or_retire_narrowest_dynamic(state: dict[str, Any]) -> bool:
     return True
 
 
+_KEYWORD_PATTERN_CACHE: dict[str, "re.Pattern[str]"] = {}
+
+
 def _score_category(blob: str, keywords: list[str]) -> int:
     score = 0
     for kw in keywords:
         phrase = str(kw).strip().lower()
         if not phrase:
             continue
-        if phrase in blob:
+        pattern = _KEYWORD_PATTERN_CACHE.get(phrase)
+        if pattern is None:
+            # Word-boundary match so a short keyword like "ide" or "rag" cannot
+            # substring-match inside an unrelated word ("video", "fragrant").
+            # Substring matching here was false-positiving lifestyle videos into
+            # AI buckets and manufacturing phantom convergence clusters.
+            pattern = re.compile(r"\b" + re.escape(phrase) + r"\b")
+            _KEYWORD_PATTERN_CACHE[phrase] = pattern
+        if pattern.search(blob):
             score += 1 if " " not in phrase else 2
     return score
 
