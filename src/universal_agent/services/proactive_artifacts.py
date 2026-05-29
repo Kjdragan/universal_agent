@@ -196,6 +196,18 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         )
     except sqlite3.OperationalError:
         pass
+    # PR B (completion): delivery_channel records WHICH channel delivered an
+    # artifact (e.g. 'hourly_digest'). The hourly-intel-digest throttle
+    # (`is_throttled`) queries this column; it was missing from the canonical
+    # schema (only added by the digest skill's own ensure_schema_addons, which
+    # never ran), so the digest would error on its first real candidate.
+    # See docs/proactive_signals/insight_pipeline_remediation_plan_2026-05-28.md.
+    try:
+        conn.execute(
+            "ALTER TABLE proactive_artifacts ADD COLUMN delivery_channel TEXT NOT NULL DEFAULT ''"
+        )
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
 
 
