@@ -1,6 +1,6 @@
 # Branching and Release Workflow
 
-Last updated: 2026-05-13 (retired `feature/latest2`; documented the `claudereal` session-baseline cleanup that lands new sessions on `main` automatically)
+Last updated: 2026-05-29 (deploy-cancellation classification extended to positive-rc deploy-collateral — see § Cron deploy-cancellation classification); earlier 2026-05-13 (retired `feature/latest2`; documented the `claudereal` session-baseline cleanup that lands new sessions on `main` automatically)
 
 ## Purpose
 
@@ -192,7 +192,9 @@ A deploy that overlaps a long-running subprocess cron (e.g. `claude_code_intel_s
 
 Fix (`cron_service.py:_is_deploy_window_active` + new branch around line 1466): when a subprocess exits with a negative return code AND either (a) `/tmp/ua-deployment-window` exists (the deploy.yml-managed flag, already used by CSI canary), or (b) the gateway has been up for less than 60 seconds (fallback), classify the run as `cancelled` and advance the job's `next_run_at` by 5 seconds. The existing scheduler startup pass at `cron_service.py:604-624` then picks up the rescheduled job on next boot — backfill via the existing `catch_up_on_restart` mechanism, no new table or replay system required.
 
-Net effect: a deploy that lands during a long cron's run is now a non-event (single `[INFO] Chron Run Cancelled` email instead of `[ERROR]` + `[WARNING]` pair, and the cron re-fires on the next gateway boot). Real subprocess failures (positive exit codes, signals outside the deploy window) keep their existing loud behavior so genuine bugs still surface.
+Net effect: a deploy that lands during a long cron's run is now a non-event (single `[INFO] Chron Run Cancelled` email instead of `[ERROR]` + `[WARNING]` pair, and the cron re-fires on the next gateway boot). Real subprocess failures (signals outside the deploy window) keep their existing loud behavior so genuine bugs still surface.
+
+**Extended 2026-05-29 — positive-rc deploy-collateral.** The original branch only downgraded *negative* return codes (SIGTERM). But a cron can also fail with a *positive* rc inside a deploy window when the platform restarts under it: the 2026-05-29 `evening_briefing` incident, where `briefings_agent --mode=evening` exited `rc=1` after `connect ECONNREFUSED ::1:8002` because the gateway it calls was mid-restart (PR #572's merge triggered the deploy; the cron fired at 23:03:14 UTC during the gateway restart). The subprocess ran to completion and returned a positive code (so the kernel didn't signal-kill it), yet the failure was pure deploy collateral — and it still paged a scary `[ERROR] Autonomous Task Failed` email. Fix: the deploy-window branch now matches `exit_code != 0` (both signs) instead of `exit_code < 0`, with distinct messaging for signal-kill vs `rc=N during deploy restart (platform unreachable mid-restart)`. **Guardrail unchanged:** `_is_deploy_window_active()` (the `/tmp/ua-deployment-window` flag, set by `deploy.yml` *before* the service restart, or the gateway-uptime<60s fallback) is the ONLY thing that downgrades a nonzero exit — outside a deploy window a positive-rc failure still marks the run `error` and pages `[ERROR]` exactly as before. Regression-guarded in `tests/unit/test_cron_deploy_cancellation.py`.
 
 ## Session Baseline Cleanup
 

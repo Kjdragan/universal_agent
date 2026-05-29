@@ -1873,10 +1873,25 @@ class CronService:
                                 if exit_code == 0:
                                     record.status = "success"
                                     record.output_preview = output_text[:400]
-                                elif exit_code is not None and exit_code < 0 and _is_deploy_window_active():
-                                    # Subprocess was signal-killed during an active
-                                    # deploy window. This is a deploy-restart side
-                                    # effect, not a real failure — mirror the
+                                elif exit_code is not None and exit_code != 0 and _is_deploy_window_active():
+                                    # Subprocess died while a deploy was in
+                                    # flight. Two flavours, both deploy-restart
+                                    # collateral rather than a real failure:
+                                    #
+                                    #   * NEGATIVE rc (e.g. -15): the kernel
+                                    #     SIGTERM'd the subprocess as the gateway
+                                    #     was torn down.
+                                    #   * POSITIVE rc (e.g. 1): the subprocess
+                                    #     ran to completion but failed because the
+                                    #     platform was restarting under it — the
+                                    #     classic case is the 2026-05-29
+                                    #     `evening_briefing` incident, where the
+                                    #     briefings_agent script exited rc=1 after
+                                    #     `connect ECONNREFUSED ::1:8002` because
+                                    #     the gateway it calls was mid-restart.
+                                    #
+                                    # In BOTH cases the cron itself is fine; the
+                                    # platform yanked the rug. Mirror the
                                     # asyncio.CancelledError handling below: mark
                                     # cancelled, advance next_run_at so the next
                                     # scheduler tick re-fires this job, and skip
@@ -1884,11 +1899,31 @@ class CronService:
                                     # existing `cancelled` branch already routes
                                     # this to a benign [INFO] alert instead of
                                     # the scary [ERROR] + [WARNING] pair.
-                                    signal_num = -exit_code
+                                    #
+                                    # GUARDRAIL: the deploy-window predicate is
+                                    # the ONLY thing that downgrades a nonzero
+                                    # exit here. Outside a deploy window the
+                                    # `else` branch still marks the run `error`
+                                    # and the [ERROR] email fires exactly as
+                                    # before — real failures are never suppressed
+                                    # on the basis of rc alone.
+                                    if exit_code < 0:
+                                        signal_num = -exit_code
+                                        _cancel_detail = (
+                                            f"subprocess killed by signal {signal_num} "
+                                            "during deploy restart"
+                                        )
+                                        _log_detail = f"killed by signal {signal_num}"
+                                    else:
+                                        _cancel_detail = (
+                                            f"subprocess exited rc={exit_code} "
+                                            "during deploy restart (platform unreachable mid-restart)"
+                                        )
+                                        _log_detail = f"exited rc={exit_code}"
                                     record.status = "cancelled"
                                     record.error = (
-                                        f"subprocess killed by signal {signal_num} "
-                                        "during deploy restart (will re-fire on next gateway boot)"
+                                        f"{_cancel_detail} "
+                                        "(will re-fire on next gateway boot)"
                                     )
                                     record.output_preview = output_text[:400]
                                     # Reschedule to fire shortly after gateway
@@ -1905,11 +1940,11 @@ class CronService:
                                         job.next_run_at = time.time() + _DEPLOY_CANCEL_BACKFILL_OFFSET_SEC
                                         self.store.save_jobs(self.jobs.values())
                                         logger.info(
-                                            "Chron job %s: subprocess killed by signal %d "
+                                            "Chron job %s: subprocess %s "
                                             "during deploy window — marked cancelled, "
                                             "next_run_at advanced to +%ds for backfill on next boot",
                                             job.job_id,
-                                            signal_num,
+                                            _log_detail,
                                             _DEPLOY_CANCEL_BACKFILL_OFFSET_SEC,
                                         )
                                     except Exception as backfill_exc:  # noqa: BLE001
