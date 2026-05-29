@@ -19598,10 +19598,14 @@ def _ensure_csi_convergence_cron_job() -> None:
         return
     job_id = "csi_convergence_sync"
     command = "!script universal_agent.scripts.csi_convergence_sync"
-    # PR A of the insight pipeline consolidation: shifted from hourly
-    # ("0 * * * *") to 3x/day at 7am / 1pm / 7pm Houston time to cut
-    # convergence-sync volume and align with the new digest cadence.
-    cron_expr = os.getenv("UA_CSI_CONVERGENCE_CRON_EXPR", "0 7,13,19 * * *").strip() or "0 7,13,19 * * *"
+    # Cadence: top of every active-window hour (06:00-21:00 Houston). The
+    # detection pass now runs an LLM precision layer (ZAI/GLM, abundant quota),
+    # so per-run cost is negligible and hourly cadence gives the hourly digest
+    # fresh, high-precision candidates to draw from. Respects the content-
+    # generation dormancy window (no overnight runs). PR A had cut this to
+    # 3x/day ("0 7,13,19 * * *") purely to limit the cost of an LLM detection
+    # pass that was then removed entirely; that constraint no longer applies.
+    cron_expr = os.getenv("UA_CSI_CONVERGENCE_CRON_EXPR", "0 6-21 * * *").strip() or "0 6-21 * * *"
     timezone_name = os.getenv("UA_CSI_CONVERGENCE_CRON_TIMEZONE", "America/Chicago").strip() or "America/Chicago"
     workspace_dir = str(WORKSPACES_DIR / "cron_csi_convergence_sync")
     metadata = {

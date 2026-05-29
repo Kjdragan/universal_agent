@@ -118,9 +118,9 @@ def test_convergence_requires_multiple_channels(tmp_path):
 
 
 def test_sync_topic_signatures_from_csi_writes_convergence_candidate(tmp_path):
-    """After PR C, sync_topic_signatures_from_csi uses SQL clustering and
-    writes a ``convergence_candidate`` row + Task Hub item — NOT a Track A/B
-    LLM call. This test pins that behavior.
+    """sync_topic_signatures_from_csi runs SQL recall → LLM precision (the
+    2026-05-29 cluster-quality fix). When the LLM judge confirms a genuine
+    convergence, a ``convergence_candidate`` row + Task Hub item is written.
 
     Tests for the legacy ``detect_and_queue_convergence`` LLM path stay
     intact above; the gateway hand-trigger endpoints still call that
@@ -183,14 +183,18 @@ def test_sync_topic_signatures_from_csi_writes_convergence_candidate(tmp_path):
     csi.close()
 
     with _connect(tmp_path / "activity.db") as conn:
-        # Hard requirement: the new sync path must not call the LLM.
-        with patch("universal_agent.services.llm_classifier._call_llm") as mock_llm:
-            mock_llm.side_effect = AssertionError(
-                "sync_topic_signatures_from_csi must not invoke the LLM after PR C"
-            )
+        # The LLM precision layer confirms the two-channel bucket converges.
+        llm_confirm = AsyncMock(return_value=json.dumps({
+            "is_convergence": True,
+            "thesis": "Two independent channels cover the same MCP server pattern.",
+            "converging_video_ids": ["evt-a", "evt-b"],
+            "signal_strength": 9,
+        }))
+        with patch("universal_agent.services.llm_classifier._call_llm", llm_confirm):
             counts = sync_topic_signatures_from_csi(conn, csi_db_path=csi_db)
+        assert llm_confirm.await_count >= 1
 
-        # SQL clustering should write exactly one convergence_candidate row.
+        # The confirmed cluster should write exactly one convergence_candidate row.
         rows = conn.execute(
             "SELECT candidate_id, channel_count, verdict FROM convergence_candidates"
         ).fetchall()
