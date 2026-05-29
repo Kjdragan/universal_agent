@@ -454,6 +454,19 @@ def _fire_implicit_preference_signal(
     action: str,
 ) -> None:
     """Record an implicit preference signal based on task outcome."""
+    # DISABLED by default (operator decision 2026-05-29). Implicit outcome
+    # signals (park/skip/block) conflate "Kevin disliked this" with "no
+    # consumer claimed it / stale cleanup". A burst of system parks saturated
+    # project:proactive at -1.0, which fed Atlas's preference context and made
+    # it skip every convergence — a self-reinforcing doom loop (skip → park
+    # signal → more negative → more skips). Only EXPLICIT thumbs feedback moves
+    # preference now. Set UA_PROACTIVE_IMPLICIT_SIGNALS_ENABLED=1 to restore the
+    # old behaviour. See
+    # docs/proactive_signals/insight_pipeline_completion_spec_2026-05-29.md.
+    if str(os.getenv("UA_PROACTIVE_IMPLICIT_SIGNALS_ENABLED", "0")).strip().lower() not in {
+        "1", "true", "yes", "on",
+    }:
+        return
     weight = _SIGNAL_WEIGHTS.get(action, 0.0)
     if weight == 0.0:
         return
