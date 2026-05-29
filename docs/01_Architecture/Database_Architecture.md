@@ -1,6 +1,6 @@
 # Universal Agent Database Architecture
 
-**Last updated:** 2026-04-29
+**Last updated:** 2026-05-29
 
 This document serves as the absolute source of truth for the database paradigms, table schemas, and pruning logic across the Universal Agent architecture.
 
@@ -9,6 +9,50 @@ This document serves as the absolute source of truth for the database paradigms,
 Universal Agent handles thousands of execution steps, high-throughput telemetry streams, and vector graph operations. Instead of a naive monolith, the database strategy relies on **domain-segregated SQLite files** combined with `WAL` journaling and `autocommit` to eradicate lock contention entirely.
 
 If you are modifying, adding, or debugging any data state in Universal Agent, consult this architecture first to ensure you are respecting isolation paradigms.
+
+---
+
+## 0. Canonical DB Paths & Resolvers — READ FIRST ⚠️
+
+> [!CAUTION]
+> **Never hard-code a database path in a diagnostic, script, or query. Always resolve it through the canonical resolver function below.** Multiple copies of similarly-named DBs (`csi.db`, dev vs prod) exist on disk; querying the wrong one yields false conclusions (e.g. "the pipeline is dead" when it is healthy). This section is the authoritative map of *which file is real* and *who writes it*.
+
+### 0.1 Resolver registry
+
+Every UA database is addressed through a resolver that honors an env override and falls back to a default. On the VPS, `repo_root` resolves to `/opt/universal_agent`, so `AGENT_RUN_WORKSPACES/` = `/opt/universal_agent/AGENT_RUN_WORKSPACES/`.
+
+| Logical DB | Canonical resolver (file:line) | Env override | Default path |
+|---|---|---|---|
+| **CSI events** (`csi.db`) | `gateway_server._csi_default_db_path()` (`gateway_server.py:17450`) | `CSI_DB_PATH` | `/var/lib/universal-agent/csi/csi.db` |
+| **Runtime / execution queue** (`runtime_state.db`) | `durable.db.get_runtime_db_path()` (`durable/db.py:22`) | `UA_RUNTIME_DB_PATH` | `<repo_root>/AGENT_RUN_WORKSPACES/runtime_state.db` |
+| **Activity / CSI telemetry / convergence tasks** (`activity_state.db`) | `durable.db.get_activity_db_path()` (`durable/db.py:69`) | `UA_ACTIVITY_DB_PATH` | `<repo_root>/AGENT_RUN_WORKSPACES/activity_state.db` |
+| **Coder VP state** (`coder_vp_state.db`) | `durable.db.get_coder_vp_db_path()` (`durable/db.py:43`) | `UA_CODER_VP_DB_PATH` | `<repo_root>/AGENT_RUN_WORKSPACES/coder_vp_state.db` |
+| **General VP state** (`vp_state.db`) | `durable.db.get_vp_db_path()` (`durable/db.py:56`) | `UA_VP_DB_PATH` | `<repo_root>/AGENT_RUN_WORKSPACES/vp_state.db` |
+| **CSI watchlist config** (`channels_watchlist.json`) | `api/routers/csi_watchlist.py:16` (`_DEFAULT_WATCHLIST_FILE`) | — | `/var/lib/universal-agent/csi/channels_watchlist.json` |
+
+**Who writes `csi.db`:** the `csi-ingester.service` (uvicorn on `127.0.0.1:8091`, `WorkingDirectory=/opt/universal_agent/CSI_Ingester/development`). Its `config.yaml` ships `db_path: "var/csi.db"` (a relative dev default), but the systemd `EnvironmentFile` (`CSI_Ingester/development/deployment/systemd/csi-ingester.env`) sets **`CSI_DB_PATH=/var/lib/universal-agent/csi/csi.db`**, which overrides the config so the ingester and the UA gateway share one DB.
+
+### 0.2 Runtime_state vs activity_state — which holds task rows?
+
+This trips people up repeatedly. Two different task populations live in two different files:
+
+- **`runtime_state.db`** — execution-engine state: the durable run queue, leases, checkpoints, replay metadata. Hot path. Resolver: `get_runtime_db_path()`.
+- **`activity_state.db`** — the **CSI / proactive-intelligence Task Hub** population (`task_hub_items` for `source_kind` in `convergence_candidate`, `insight_detection`, `proactive_signal`, `csi_digests`, etc.) plus dashboard telemetry. The heartbeat/watchdog and convergence pipeline read **this** file. Resolver: `get_activity_db_path()`.
+
+When a count "doesn't match," confirm **which resolver produced the path** before drawing conclusions. (Historical incident: a 2026-05-22 audit read `runtime_state.db` and concluded assignments were empty; the canonical `activity_state.db` had 1,149.)
+
+### 0.3 Stale / relic copies — DO NOT QUERY ❌
+
+These are NOT canonical. Querying them produces wrong answers:
+
+| Stale path | Why it exists | Status |
+|---|---|---|
+| `CSI_Ingester/development/var/csi.db` | Pre-2026-05-20 split-brain: before `CSI_DB_PATH` was set, the ingester wrote here (relative to `WorkingDirectory`). Froze at **2026-05-20 21:01** — the moment the override landed. | **Deleted 2026-05-29.** Do not recreate by running the ingester without `CSI_DB_PATH`. |
+| `CSI_Ingester/development/var/csi_events.db`, `csi_ingester.db` | 0-byte abandoned scaffolding. | **Deleted 2026-05-29.** |
+| Any `*.db` under a repo working tree | local dev runs create them; never the production source of truth. | ignore for prod diagnostics |
+
+> [!WARNING]
+> **The split-brain footgun is latent, not gone.** `CSI_Ingester/development/config/config.yaml` still defaults `db_path: "var/csi.db"`. Production is safe *only* because `csi-ingester.env` sets `CSI_DB_PATH`. If that env override is ever dropped, the ingester silently resumes writing the dev relic and the live `/var/lib` DB goes stale — reproducing exactly the failure this section exists to prevent. Treat `CSI_DB_PATH` in `csi-ingester.env` as load-bearing.
 
 ## 1. Concurrency Paradigms
 
