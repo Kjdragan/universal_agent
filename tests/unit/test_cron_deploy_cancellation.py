@@ -260,18 +260,71 @@ def test_subprocess_exit_branch_marks_error_when_signaled_outside_deploy_window(
     assert job.next_run_at is None  # NOT advanced — real failure path
 
 
-def test_subprocess_exit_branch_marks_error_for_normal_nonzero_exit(monkeypatch):
-    """A non-signal failure (positive return code) is always a real error,
-    regardless of deploy window — the script exited cleanly with a code,
-    so the kernel didn't kill it. Don't suppress."""
+def test_subprocess_exit_branch_marks_cancelled_for_positive_rc_in_deploy_window(
+    monkeypatch,
+):
+    """A positive-rc failure INSIDE a deploy window is deploy collateral.
+
+    The 2026-05-29 ``evening_briefing`` incident: the briefings_agent
+    script exited rc=1 after ``connect ECONNREFUSED ::1:8002`` because the
+    gateway it calls was mid-restart. The subprocess ran to completion and
+    returned a positive code (so the kernel didn't signal-kill it), but the
+    failure was caused by the platform restarting under it — not a bug in
+    the script. Inside an active deploy window this must be downgraded to
+    ``cancelled`` (benign [INFO], reschedule for next-boot catch-up), NOT
+    surfaced as an [ERROR] Autonomous Task Failed email.
+    """
     monkeypatch.setattr(cron_service, "_is_deploy_window_active", lambda: True)
 
     record = _FakeRecord()
-    exit_code = 1  # Normal non-zero — bug in the script, not a signal
+    job = _FakeJob()
+    exit_code = 1  # Positive non-zero — gateway unreachable mid-restart
+
+    # Mirror the production branch's structure.
+    if exit_code == 0:
+        record.status = "success"
+    elif exit_code is not None and exit_code != 0 and cron_service._is_deploy_window_active():
+        if exit_code < 0:
+            detail = f"subprocess killed by signal {-exit_code} during deploy restart"
+        else:
+            detail = (
+                f"subprocess exited rc={exit_code} "
+                "during deploy restart (platform unreachable mid-restart)"
+            )
+        record.status = "cancelled"
+        record.error = f"{detail} (will re-fire on next gateway boot)"
+        job.next_run_at = time.time() + _DEPLOY_CANCEL_BACKFILL_OFFSET_SEC
+    else:
+        record.status = "error"
+        record.error = f"Script exited with {exit_code}"
+
+    assert record.status == "cancelled"
+    assert "rc=1" in record.error
+    assert "deploy restart" in record.error
+    # Rescheduled for next-boot catch-up via the PR #274 mechanism.
+    assert job.next_run_at is not None
+    assert 0 < (job.next_run_at - time.time()) <= _DEPLOY_CANCEL_BACKFILL_OFFSET_SEC + 1
+
+
+def test_subprocess_exit_branch_marks_error_for_positive_rc_outside_deploy_window(
+    monkeypatch,
+):
+    """REGRESSION GUARD: a positive-rc failure OUTSIDE a deploy window is a
+    real error and MUST still surface loudly as [ERROR], exactly as before.
+
+    This is the hard guardrail: the deploy-window predicate is the ONLY
+    thing that may downgrade a nonzero exit. With no deploy in flight, a
+    genuine script bug (rc=1) keeps paging the operator.
+    """
+    monkeypatch.setattr(cron_service, "_is_deploy_window_active", lambda: False)
+
+    record = _FakeRecord()
+    job = _FakeJob()
+    exit_code = 1  # Normal non-zero — a real bug in the script
 
     if exit_code == 0:
         record.status = "success"
-    elif exit_code is not None and exit_code < 0 and cron_service._is_deploy_window_active():
+    elif exit_code is not None and exit_code != 0 and cron_service._is_deploy_window_active():
         record.status = "cancelled"
     else:
         record.status = "error"
@@ -279,6 +332,7 @@ def test_subprocess_exit_branch_marks_error_for_normal_nonzero_exit(monkeypatch)
 
     assert record.status == "error"
     assert record.error == "Script exited with 1"
+    assert job.next_run_at is None  # NOT advanced — real failure path
 
 
 def test_subprocess_exit_branch_marks_success_for_zero_exit(monkeypatch):
