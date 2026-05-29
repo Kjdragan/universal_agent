@@ -78,6 +78,12 @@ MISSION_TYPE_TIER: dict[str, PriorityTier] = {
     #   not on a tight schedule —
     "insight_brief": "operator_signal",
     "convergence_brief": "operator_signal",
+    # convergence_evaluation is Atlas's ship/skip/defer + author pass that
+    # FEEDS Simone's hourly intel digest. It must outrank maintenance
+    # (curation) and background, or the digest never gets a brief to batch.
+    # (Omitting it here resolved to 'background' and starved the digest —
+    # see docs/proactive_signals/insight_pipeline_remediation_plan_2026-05-28.md.)
+    "convergence_evaluation": "operator_signal",
     "research": "operator_signal",
     "research_and_report": "operator_signal",
     "research_report_email": "operator_signal",
