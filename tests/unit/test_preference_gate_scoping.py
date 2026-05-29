@@ -17,6 +17,7 @@ import pytest
 from universal_agent.scripts.preference_signal_detox import detox
 from universal_agent.services.proactive_preferences import (
     ensure_schema,
+    get_delegation_context,
     rebuild_preference_snapshot,
     should_block_proactive_task,
 )
@@ -227,3 +228,73 @@ def test_detox_is_idempotent(tmp_path):
     assert first["deleted"] == 3
     assert second["deleted"] == 0
     assert second["target_rows"] == 0
+
+
+# ── Snapshot / delegation-context scoping (Phase 0.5, 2026-05-29) ───────────
+# The 2026-05-24 fix scoped the GATE to explicit feedback. These pin the same
+# scoping for the preference CONTEXT injected into Atlas's mission reasoning —
+# the path that was still poisoned and made Atlas skip every convergence.
+
+
+def test_snapshot_excludes_implicit_signals(tmp_path):
+    """rebuild_preference_snapshot must reflect ONLY explicit feedback."""
+    db = tmp_path / "activity_state.db"
+    with _connect(db) as conn:
+        for i in range(50):
+            _insert_signal(
+                conn, signal_key="project:proactive", weight=-0.1,
+                signal_type="implicit_outcome", artifact_id=f"p-{i}", text="Outcome: park",
+            )
+        model = rebuild_preference_snapshot(conn)
+    prefs = model.get("topic_preferences", {})
+    # The implicit park burst must NOT appear in the snapshot at all.
+    assert "project:proactive" not in prefs or abs(prefs["project:proactive"]["weight"]) < 0.05
+
+
+def test_delegation_context_neutral_when_only_implicit(tmp_path):
+    """With only implicit park signals, Atlas's context must carry no
+    negative-preference line (the doom-loop poison)."""
+    db = tmp_path / "activity_state.db"
+    with _connect(db) as conn:
+        for i in range(298):
+            _insert_signal(
+                conn, signal_key="project:proactive", weight=-0.1,
+                signal_type="implicit_outcome", artifact_id=f"p-{i}", text="Outcome: park",
+            )
+        rebuild_preference_snapshot(conn)
+        context = get_delegation_context(conn, task_type="convergence_evaluation", topic_tags=["proactive"])
+    assert context == "" or "negative" not in context.lower()
+
+
+def test_delegation_context_reflects_explicit_feedback(tmp_path):
+    """Genuine explicit thumbs feedback DOES surface in the context."""
+    db = tmp_path / "activity_state.db"
+    with _connect(db) as conn:
+        for i in range(4):
+            _insert_signal(
+                conn, signal_key="topic:foo", weight=-0.8,
+                signal_type="explicit_feedback", artifact_id=f"e-{i}", text="thumbs down",
+            )
+        rebuild_preference_snapshot(conn)
+        context = get_delegation_context(conn, task_type="x", topic_tags=["foo"])
+    assert "foo" in context and "negative" in context.lower()
+
+
+def test_implicit_signal_emission_disabled_by_default(tmp_path, monkeypatch):
+    """_fire_implicit_preference_signal is a no-op unless explicitly enabled."""
+    from universal_agent.services.proactive_outcome_tracker import _fire_implicit_preference_signal
+
+    db = tmp_path / "activity_state.db"
+    task = {"task_id": "t1", "source_kind": "insight_detection", "project_key": "proactive", "labels": ["insight"]}
+
+    monkeypatch.delenv("UA_PROACTIVE_IMPLICIT_SIGNALS_ENABLED", raising=False)
+    with _connect(db) as conn:
+        _fire_implicit_preference_signal(conn, task=task, action="park")
+        n_default = conn.execute("SELECT COUNT(*) FROM proactive_preference_signals").fetchone()[0]
+    assert n_default == 0, "implicit signals must NOT be emitted by default"
+
+    monkeypatch.setenv("UA_PROACTIVE_IMPLICIT_SIGNALS_ENABLED", "1")
+    with _connect(db) as conn:
+        _fire_implicit_preference_signal(conn, task=task, action="park")
+        n_enabled = conn.execute("SELECT COUNT(*) FROM proactive_preference_signals").fetchone()[0]
+    assert n_enabled > 0, "implicit signals should emit when explicitly re-enabled"

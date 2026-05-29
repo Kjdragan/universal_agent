@@ -267,12 +267,17 @@ def test_outcome_stats_aggregation(fresh_conn):
 # 4. test_implicit_preference_signal
 # ---------------------------------------------------------------------------
 
-def test_implicit_preference_signal(fresh_conn):
-    """Verify success/failure generates correct preference weight."""
+def test_implicit_preference_signal(fresh_conn, monkeypatch):
+    """Verify the (now opt-in) emission mechanism produces correct weights.
+
+    Implicit emission is OFF by default since 2026-05-29 (self-poison fix);
+    enable it explicitly to exercise the weight mechanism.
+    """
     from universal_agent.services.proactive_outcome_tracker import (
         _fire_implicit_preference_signal,
     )
 
+    monkeypatch.setenv("UA_PROACTIVE_IMPLICIT_SIGNALS_ENABLED", "1")
     task = _make_proactive_task(source_kind="reflection")
 
     with patch("universal_agent.services.proactive_preferences.rebuild_preference_snapshot"):
@@ -287,12 +292,13 @@ def test_implicit_preference_signal(fresh_conn):
         assert float(row["weight"]) == 0.3  # complete => +0.3
 
 
-def test_implicit_preference_signal_failure(fresh_conn):
-    """Verify failure generates negative weight."""
+def test_implicit_preference_signal_failure(fresh_conn, monkeypatch):
+    """Verify failure generates negative weight (opt-in emission path)."""
     from universal_agent.services.proactive_outcome_tracker import (
         _fire_implicit_preference_signal,
     )
 
+    monkeypatch.setenv("UA_PROACTIVE_IMPLICIT_SIGNALS_ENABLED", "1")
     task = _make_proactive_task(source_kind="proactive_signal")
 
     with patch("universal_agent.services.proactive_preferences.rebuild_preference_snapshot"):
