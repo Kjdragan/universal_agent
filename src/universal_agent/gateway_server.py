@@ -25796,7 +25796,13 @@ async def dashboard_todolist_completed(limit: int = 60):
 
 @app.delete("/api/v1/dashboard/todolist/completed/{task_id}")
 async def dashboard_todolist_delete_completed(task_id: str):
-    """Hide a completed task from the dashboard by parking it."""
+    """Hide a completed task from the dashboard.
+
+    The task stays ``status=completed`` (terminal SUCCESS) and is flagged
+    ``stale_state=dashboard_hidden`` so it drops off the completed tab without
+    being demoted to ``parked``. Demoting completed work to ``parked`` used to
+    make Simone's digest miscount archived-done tasks as a deferred backlog.
+    """
     tid = str(task_id or "").strip()
     if not tid:
         raise HTTPException(status_code=400, detail="task_id is required")
@@ -25816,31 +25822,42 @@ async def dashboard_todolist_delete_completed(task_id: str):
                     detail=f"Task is not completed (status={current_status})",
                 )
             conn.execute(
-                "UPDATE task_hub_items SET status=?, stale_state=?, updated_at=? WHERE task_id=?",
-                (task_hub.TASK_STATUS_PARKED, "dashboard_hidden", _utc_now_iso(), tid),
+                "UPDATE task_hub_items SET stale_state=?, updated_at=? WHERE task_id=?",
+                (task_hub.STALE_STATE_DASHBOARD_HIDDEN, _utc_now_iso(), tid),
             )
             conn.commit()
         finally:
             conn.close()
-    return {"status": "ok", "task_id": tid, "new_status": task_hub.TASK_STATUS_PARKED}
+    return {"status": "ok", "task_id": tid, "new_status": task_hub.TASK_STATUS_COMPLETED}
 
 
 @app.delete("/api/v1/dashboard/todolist/completed")
 async def dashboard_todolist_delete_all_completed():
-    """Hide all completed tasks from the dashboard by parking them."""
+    """Hide all completed tasks from the dashboard.
+
+    Tasks stay ``status=completed`` (terminal SUCCESS) and are flagged
+    ``stale_state=dashboard_hidden`` so they drop off the completed tab without
+    being demoted to ``parked`` (which corrupts status-count consumers).
+    """
     with _activity_store_lock:
         conn = _task_hub_open_conn()
         try:
             conn.execute(
-                "UPDATE task_hub_items SET status=?, stale_state=?, updated_at=? WHERE status=?",
-                (task_hub.TASK_STATUS_PARKED, "dashboard_hidden", _utc_now_iso(), task_hub.TASK_STATUS_COMPLETED),
+                "UPDATE task_hub_items SET stale_state=?, updated_at=? "
+                "WHERE status=? AND COALESCE(stale_state,'') != ?",
+                (
+                    task_hub.STALE_STATE_DASHBOARD_HIDDEN,
+                    _utc_now_iso(),
+                    task_hub.TASK_STATUS_COMPLETED,
+                    task_hub.STALE_STATE_DASHBOARD_HIDDEN,
+                ),
             )
             row = conn.execute("SELECT changes() AS c").fetchone()
             count = row["c"] if row else 0
             conn.commit()
         finally:
             conn.close()
-    return {"status": "ok", "hidden_count": count, "new_status": task_hub.TASK_STATUS_PARKED}
+    return {"status": "ok", "hidden_count": count, "new_status": task_hub.TASK_STATUS_COMPLETED}
 
 
 def _clear_email_quarantine_local(conn, task_id: str) -> Optional[str]:

@@ -560,6 +560,26 @@ sequenceDiagram
 
 **Phase D.2 (not yet shipped):** the `re_evaluate` prompt addendum will pull `list_runs_for_task` to surface the last 3 runs' summaries + errors to Simone. The B.2 drawer will render an attempt-history table. Both bounded UI/prompt work; tracked separately.
 
+### 13.0.4 Terminal Status Semantics — `completed` vs `parked` (shipped 2026-05-29)
+
+`TERMINAL_STATUSES = {completed, parked, cancelled}` ([task_hub.py:27](../../src/universal_agent/task_hub.py#L27)). There is **no** `done` status — terminal *success* is `completed`. Each terminal status carries a distinct meaning that status-count consumers (notably Simone's morning digest, which groups on `status`) must be able to trust:
+
+| Status | Meaning | Re-dispatched? |
+|---|---|---|
+| `completed` | Terminal **success** — the work finished (a PR shipped, a deliverable was sent, or the agent reached a legitimate no-op conclusion). | No |
+| `parked` | Terminal **deferred** — genuinely held / not actioned (`park` verb, `stale_parked` after retry exhaustion, or policy filter). | No |
+| `cancelled` | Terminal **abandoned**. | No |
+
+**The trap (fixed 2026-05-29):** the dashboard "clear completed" action (`DELETE /api/v1/dashboard/todolist/completed[/{id}]`) used to flip `completed → parked` while stamping `stale_state=dashboard_hidden`. That demotion **erased the success signal** — Simone's digest then read decluttered-done work as a "parked backlog needing triage." The May 29 2026 digest reported 6 parked `proactive_codie` tasks as an actionable backlog when in fact every one had completed (one had shipped merged PR #527; the rest were legitimate no-ops).
+
+**Fix:** hidden-completed tasks now keep `status=completed` and rely solely on `stale_state=dashboard_hidden` (constant `STALE_STATE_DASHBOARD_HIDDEN`, [task_hub.py](../../src/universal_agent/task_hub.py)) to drop off the completed tab — `list_completed_tasks` excludes that marker. `parked` is reserved for genuinely deferred work. The completed→parked demotion no longer exists anywhere in the codebase.
+
+**`terminal_disposition` metadata (no-op vs shipped):** on VP mission completion, `VpWorkerLoop` ([vp/worker_loop.py](../../src/universal_agent/vp/worker_loop.py)) now stamps `metadata.terminal_disposition`:
+- `completed_with_pr` (+ `metadata.pr_url`) when the mission output contains a GitHub PR URL (detected via the canonical `proactive_codie._GITHUB_PR_RE`), or
+- `completed_without_pr` for a legitimate no-op ("inspected, nothing worth a PR" — an explicitly valid `proactive_codie` outcome).
+
+This lets any reader distinguish a shipped-PR completion from a no-op **from the row alone**, without inferring a stalled backlog from the bare status. See `tests/unit/test_completed_hidden_not_parked.py`.
+
 ### 13.1 Enforcement and Auto-Completion
 
 If a `todo_execution` run ends without an explicit lifecycle mutation, `_todo_execution_auto_complete_after_final_delivery(...)` in [gateway_server.py](../../src/universal_agent/gateway_server.py) is only allowed to repair the task when final delivery already happened and is durably recorded. It does **not** auto-complete unresolved tasks unconditionally.

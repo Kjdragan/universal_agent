@@ -24,6 +24,14 @@ TASK_STATUS_DELEGATED = "delegated"           # VP is actively working this
 TASK_STATUS_PENDING_REVIEW = "pending_review"  # VP done, Simone sign-off needed
 TASK_STATUS_SCHEDULED = "scheduled"            # Time-bound: cron trigger will execute at due_at
 
+# stale_state marker for terminal-SUCCESS tasks the operator cleared off the
+# dashboard. Such rows keep ``status = completed`` — they are deliberately NOT
+# demoted to ``parked``. Demoting them used to corrupt status-count consumers
+# (Simone's morning digest read archived-done work as a "parked backlog needing
+# triage" — a recurring false positive). ``parked`` is reserved for genuinely
+# deferred / abandoned work. See docs/03_Operations/107_Task_Hub_Master_Reference.
+STALE_STATE_DASHBOARD_HIDDEN = "dashboard_hidden"
+
 TERMINAL_STATUSES = {TASK_STATUS_COMPLETED, TASK_STATUS_PARKED, TASK_STATUS_CANCELLED}
 ACTIVE_STATUSES = {
     TASK_STATUS_OPEN, TASK_STATUS_IN_PROGRESS, TASK_STATUS_BLOCKED,
@@ -2834,11 +2842,12 @@ def list_completed_tasks(conn: sqlite3.Connection, *, limit: int = 80) -> list[d
         SELECT *
         FROM task_hub_items
         WHERE status = ?
+          AND COALESCE(stale_state, '') != ?
           AND {_VP_MISSION_MIRROR_HAS_PARENT_CLAUSE}
         ORDER BY updated_at DESC
         LIMIT ?
         """,
-        (TASK_STATUS_COMPLETED, max(1, min(int(limit), 500))),
+        (TASK_STATUS_COMPLETED, STALE_STATE_DASHBOARD_HIDDEN, max(1, min(int(limit), 500))),
     ).fetchall()
 
     out: list[dict[str, Any]] = []
