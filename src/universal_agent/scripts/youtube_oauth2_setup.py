@@ -222,6 +222,12 @@ def main():
     ok1 = upsert_infisical_secret("YOUTUBE_OAUTH_CLIENT_ID", client_id)
     ok2 = upsert_infisical_secret("YOUTUBE_OAUTH_CLIENT_SECRET", client_secret)
     ok3 = upsert_infisical_secret("YOUTUBE_OAUTH_REFRESH_TOKEN", refresh_token)
+    # Record the mint time so the youtube_oauth_watchdog cron can compute the
+    # token's age and warn ~2 days before the 7-day "Testing"-mode expiry.
+    from datetime import datetime as _dt, timezone as _tz
+    upsert_infisical_secret(
+        "YOUTUBE_OAUTH_REFRESH_TOKEN_MINTED_AT", _dt.now(_tz.utc).isoformat()
+    )
 
     if ok1 and ok2 and ok3:
         print(f"\n🎉 All credentials saved to Infisical env={args.env} successfully!")

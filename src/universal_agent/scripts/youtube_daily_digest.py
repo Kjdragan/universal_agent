@@ -2658,7 +2658,7 @@ def process_daily_digest(
             try:
                 await mail.send_email(
                     to=email_to,
-                    subject=f"Daily YouTube Digest: {day_name.title()}",
+                    subject=f"Daily YouTube Summaries — {date_str}",
                     html=email_html,
                     text=body_md + (
                         f"\n\n(Full per-video retellings + dispatch summary are in the "
@@ -2681,7 +2681,7 @@ def process_daily_digest(
             try:
                 from datetime import datetime as _dt, timezone as _tz
                 reminder = send_digest_delivery_reminder(
-                    subject=f"Daily YouTube Digest: {day_name.title()}",
+                    subject=f"Daily YouTube Summaries — {date_str}",
                     recipient=email_to,
                     sent_at_utc=_dt.now(_tz.utc),
                 )
