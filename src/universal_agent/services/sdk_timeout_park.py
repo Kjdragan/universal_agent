@@ -180,7 +180,7 @@ def record_sdk_timeout_and_maybe_park(
                 _th.perform_task_action(
                     conn,
                     task_id=tid,
-                    action="review",
+                    action=_th.ACTION_REVIEW,
                     reason=f"{_PARK_REASON_PREFIX}: {summary}",
                     agent_id="sdk_timeout_park",
                 )
