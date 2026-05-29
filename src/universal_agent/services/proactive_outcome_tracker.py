@@ -19,6 +19,15 @@ import sqlite3
 from typing import Any, Optional
 import uuid
 
+from universal_agent.task_hub import (
+    ACTION_APPROVE,
+    ACTION_BLOCK,
+    ACTION_COMPLETE,
+    ACTION_DELEGATE,
+    ACTION_PARK,
+    ACTION_REVIEW,
+)
+
 logger = logging.getLogger(__name__)
 
 # ── Proactive source kinds that trigger outcome recording ─────────────────
@@ -42,20 +51,20 @@ PROACTIVE_SOURCES = frozenset({
 # ── Terminal actions that constitute an outcome ───────────────────────────
 
 TERMINAL_ACTIONS = frozenset({
-    "complete", "block", "review", "park", "approve",
+    ACTION_COMPLETE, ACTION_BLOCK, ACTION_REVIEW, ACTION_PARK, ACTION_APPROVE,
 })
 
 # Actions that indicate failure/issues (trigger auto-investigation)
-FAILURE_ACTIONS = frozenset({"block", "review"})
+FAILURE_ACTIONS = frozenset({ACTION_BLOCK, ACTION_REVIEW})
 
 # Implicit preference signal weights by terminal action
 _SIGNAL_WEIGHTS: dict[str, float] = {
-    "complete": 0.3,
-    "approve": 0.5,
-    "block": -0.4,
-    "review": -0.2,
-    "park": -0.1,
-    "delegate": 0.0,
+    ACTION_COMPLETE: 0.3,
+    ACTION_APPROVE: 0.5,
+    ACTION_BLOCK: -0.4,
+    ACTION_REVIEW: -0.2,
+    ACTION_PARK: -0.1,
+    ACTION_DELEGATE: 0.0,
 }
 
 
@@ -248,7 +257,7 @@ def _emit_outcome_intelligence(
     source_kind = str(task.get("source_kind") or "proactive").strip()
     duration_s = outcome.get("duration_seconds")
 
-    if action in ("complete", "approve"):
+    if action in (ACTION_COMPLETE, ACTION_APPROVE):
         severity = SEVERITY_SUCCESS
         kind = "proactive_task_completed"
         headline = f"Proactive work landed: {title}"
@@ -357,8 +366,8 @@ def get_outcome_stats(
     by_source = {str(r["source_kind"]): int(r["count"]) for r in source_rows}
 
     # Success rate
-    success_count = sum(by_action.get(a, 0) for a in ("complete", "approve"))
-    failure_count = sum(by_action.get(a, 0) for a in ("block", "review"))
+    success_count = sum(by_action.get(a, 0) for a in (ACTION_COMPLETE, ACTION_APPROVE))
+    failure_count = sum(by_action.get(a, 0) for a in (ACTION_BLOCK, ACTION_REVIEW))
     success_rate = round(success_count / total, 3) if total > 0 else 0.0
 
     # Average duration
@@ -586,7 +595,7 @@ def _write_outcome_to_memory(
         duration = outcome.get("duration_seconds")
         duration_str = f"{duration:.0f}s" if duration is not None else "unknown"
 
-        if action in ("complete", "approve"):
+        if action in (ACTION_COMPLETE, ACTION_APPROVE):
             content = (
                 f"Proactive task completed successfully: {task_title}\n"
                 f"Source: {source_kind} | Duration: {duration_str}\n"
@@ -654,11 +663,11 @@ def _compute_duration(conn: sqlite3.Connection, task_id: str) -> Optional[float]
 
 
 _STATUS_MAP = {
-    "complete": "completed",
-    "approve": "completed",
-    "block": "blocked",
-    "review": "pending_review",
-    "park": "parked",
+    ACTION_COMPLETE: "completed",
+    ACTION_APPROVE: "completed",
+    ACTION_BLOCK: "blocked",
+    ACTION_REVIEW: "pending_review",
+    ACTION_PARK: "parked",
 }
 
 
