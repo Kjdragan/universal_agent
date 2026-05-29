@@ -103,6 +103,39 @@ def test_resolve_tier_defaults_to_background_for_unknown_mission_type():
     assert DEFAULT_TIER == "background"
 
 
+def test_ideation_mission_types_are_operator_signal():
+    # Track B ideation evaluation feeds the same digest; must outrank maintenance.
+    for mt in ("evaluate_ideation_insight", "ideation_evaluation", "ideation_insight"):
+        assert MISSION_TYPE_TIER.get(mt) == "operator_signal"
+
+
+def test_resolve_tier_substring_guard_catches_llm_named_variants():
+    # Simone names ideation/convergence missions with LLM-chosen strings we can't
+    # enumerate — the substring guard keeps them out of 'background'.
+    assert resolve_tier("atlas_ideation_pass_v2") == "operator_signal"
+    assert resolve_tier("convergence_eval_batch") == "operator_signal"
+    assert resolve_tier("author_intel_brief_now") == "operator_signal"
+    # ...but genuinely unrelated types still default to background.
+    assert resolve_tier("codie_cleanup") == "background"
+    assert resolve_tier("scaffold_demo") == "background"
+
+
+def test_ideation_mission_outranks_curation(conn):
+    # Regression: organic ideation missions (e.g. evaluate_ideation_insight)
+    # resolved to 'background' and were drained dead-last behind curation.
+    _queue(conn, "vp.general.primary", "m-curation-i", "curation")  # maintenance
+    _queue(conn, "vp.general.primary", "m-ideation-i", "evaluate_ideation_insight")
+
+    claimed = claim_next_vp_mission(
+        conn=conn,
+        vp_id="vp.general.primary",
+        worker_id="worker.test",
+        lease_ttl_seconds=60,
+    )
+    assert claimed is not None
+    assert dict(claimed)["mission_id"] == "m-ideation-i"
+
+
 def test_tier_rank_orders_operator_daily_first_background_last():
     assert tier_rank("operator_daily") < tier_rank("operator_signal")
     assert tier_rank("operator_signal") < tier_rank("maintenance")

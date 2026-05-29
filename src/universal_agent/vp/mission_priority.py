@@ -84,6 +84,14 @@ MISSION_TYPE_TIER: dict[str, PriorityTier] = {
     # (Omitting it here resolved to 'background' and starved the digest —
     # see docs/proactive_signals/insight_pipeline_remediation_plan_2026-05-28.md.)
     "convergence_evaluation": "operator_signal",
+    # Ideation insight evaluation (Track B sweep) feeds the same digest. Simone
+    # dispatches these under LLM-chosen names (observed: "evaluate_ideation_insight",
+    # also "ideation_evaluation"); without an operator_signal tier they resolve to
+    # 'background' and get drained dead-last behind every convergence mission.
+    # The substring guard in resolve_tier() catches any other ideation_* variant.
+    "evaluate_ideation_insight": "operator_signal",
+    "ideation_evaluation": "operator_signal",
+    "ideation_insight": "operator_signal",
     "research": "operator_signal",
     "research_and_report": "operator_signal",
     "research_report_email": "operator_signal",
@@ -106,7 +114,16 @@ def resolve_tier(mission_type: str | None) -> PriorityTier:
     if not mission_type:
         return DEFAULT_TIER
     key = str(mission_type).strip()
-    return MISSION_TYPE_TIER.get(key, DEFAULT_TIER)
+    if key in MISSION_TYPE_TIER:
+        return MISSION_TYPE_TIER[key]
+    # Defensive guard: the proactive-insight mission families (convergence /
+    # ideation / intel-brief authoring) are dispatched under LLM-chosen names
+    # that we can't fully enumerate. They are always operator-facing signal,
+    # never background — so a burst of them can never sink below maintenance.
+    low = key.lower()
+    if any(token in low for token in ("ideation", "convergence", "intel_brief", "insight_brief")):
+        return "operator_signal"
+    return DEFAULT_TIER
 
 
 def is_valid_tier(value: object) -> bool:
