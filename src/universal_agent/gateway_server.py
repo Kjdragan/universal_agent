@@ -6854,6 +6854,59 @@ def _enforce_todo_execution_lifecycle(
     return goal_satisfaction
 
 
+def _lifecycle_miss_notification_routing(
+    *,
+    notification_kind: str,
+    goal_message: str,
+) -> tuple[str, bool, Optional[list[str]], bool, str]:
+    """Decide notification routing for a todo-execution lifecycle miss.
+
+    Returns ``(severity, requires_action, channels, deploy_restart_casualty,
+    message)``.
+
+    When a deploy (or operator ``systemctl restart``) SIGTERMs the Claude
+    subprocess mid-run, the turn comes back with no durable Task Hub lifecycle
+    mutation and the ``execution_missing_lifecycle_mutation`` guardrail
+    correctly fires — but this is a transient non-event, not a stuck task. The
+    caller's ``finalize_assignments(reopen_in_progress=True)`` already reopened
+    the work item, so the todo dispatcher will re-claim and retry it on the next
+    sweep (typically within minutes). Emailing/Telegraming the operator an
+    ``[ERROR]`` for a self-healing deploy casualty is pure noise.
+
+    Mirror the cron path (``cron_service.py`` deploy-window reclassification):
+    when ``_is_deploy_window_active()`` is true, downgrade to a dashboard-only
+    ``warning`` so the signal stays observable on the dashboard without paging
+    the operator. The deploy window is conservative (deploy-marker flag OR
+    process uptime < 60s), so genuine lifecycle misses outside a deploy/restart
+    still surface loudly as ``error`` on every channel, exactly as before.
+
+    Only ``execution_missing_lifecycle_mutation`` is eligible for this
+    downgrade; every other guardrail kind keeps its original error routing.
+    """
+    severity = "error"
+    requires_action = True
+    channels: Optional[list[str]] = None
+    deploy_restart_casualty = False
+    if notification_kind == "execution_missing_lifecycle_mutation":
+        try:
+            from universal_agent.cron_service import _is_deploy_window_active
+
+            deploy_restart_casualty = bool(_is_deploy_window_active())
+        except Exception:  # noqa: BLE001 — never block the failure path
+            deploy_restart_casualty = False
+        if deploy_restart_casualty:
+            severity = "warning"
+            requires_action = False
+            channels = ["dashboard"]
+            goal_message = (
+                f"{goal_message} (Deploy/restart in flight — the run's "
+                "subprocess was terminated before it could close the Task Hub "
+                "lifecycle; the work item was reopened and will be retried "
+                "automatically. Dashboard-only; no operator action required.)"
+            )
+    return severity, requires_action, channels, deploy_restart_casualty, goal_message
+
+
 def _record_todo_execution_result(
     *,
     session_id: str,
@@ -7324,18 +7377,35 @@ async def _run_gateway_session_request(
                     result_state="failed",
                     detail=goal_message,
                 )
+            # Deploy-restart casualty suppression: when a deploy/restart
+            # SIGTERMs the run mid-flight, the lifecycle miss is a transient
+            # non-event (the work item was already reopened above and will be
+            # retried) — downgrade to a dashboard-only warning instead of
+            # paging the operator. See helper docstring for full rationale.
+            (
+                notification_severity,
+                notification_requires_action,
+                notification_channels,
+                deploy_restart_casualty,
+                goal_message,
+            ) = _lifecycle_miss_notification_routing(
+                notification_kind=notification_kind,
+                goal_message=goal_message,
+            )
             _add_notification(
                 kind=notification_kind,
                 title=notification_title,
                 message=goal_message,
                 session_id=session_id,
-                severity="error",
-                requires_action=True,
+                severity=notification_severity,
+                requires_action=notification_requires_action,
+                channels=notification_channels,
                 metadata={
                     "goal_satisfaction": goal_satisfaction,
                     "run_id": _session_run_id(session),
                     "workspace_dir": active_execution_workspace or session.workspace_dir or "",
                     "active_run_workspace": _session_active_run_workspace(session) or active_execution_workspace or "",
+                    "deploy_restart_casualty": deploy_restart_casualty,
                 },
             )
             await manager.broadcast(

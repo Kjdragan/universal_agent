@@ -274,7 +274,7 @@ These are the authoritative references for each subsystem. When any other docume
 | 80 | Google Workspace Integration Retrospective Memo |
 | 99 | **Documentation Drift Maintenance Pipeline** — canonical source-of-truth |
 | 103 | Debugging Lessons Living Document — reusable debugging lessons from complex production incidents, including the April 5 dashboard browser-state incident and SHA-first deploy verification |
-| 106 | TaskStop Guardrails and Task Hub Execution Hardening — explainer for the March 31 hardening work: SDK task control versus Task Hub lifecycle, run-aware `TaskStop` blocking, corrective guidance, and the resulting pipeline reliability improvements |
+| 106 | TaskStop Guardrails and Task Hub Execution Hardening — explainer for the March 31 hardening work: SDK task control versus Task Hub lifecycle, run-aware `TaskStop` blocking, corrective guidance, and the resulting pipeline reliability improvements. _Updated 2026-05-29: added § 8.1 deploy-restart casualty suppression — `execution_missing_lifecycle_mutation` is downgraded to a dashboard-only warning during a deploy window so self-healing restart kills don't email the operator._ |
 
 ## Cleanup Summary
 
