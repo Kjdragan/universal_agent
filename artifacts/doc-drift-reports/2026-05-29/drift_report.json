@@ -1,0 +1,32 @@
+{
+  "report_date": "2026-05-29",
+  "generated_at": "2026-05-29T20:59:50.470704+00:00",
+  "total_issues": 2,
+  "issues_by_severity": {
+    "P0": 0,
+    "P1": 1,
+    "P2": 1
+  },
+  "git_summary": {
+    "files_changed": 84,
+    "areas_affected": [
+      "src/universal_agent/gateway_server"
+    ]
+  },
+  "issues": [
+    {
+      "category": "agentic_drift",
+      "severity": "P1",
+      "file": "AGENTS.md / .agents/",
+      "description": "Agent code changed (src/universal_agent/scripts/youtube_daily_digest.py, src/universal_agent/scripts/youtube_oauth2_setup.py, src/universal_agent/scripts/youtube_oauth_watchdog.py) but no agentic config files (AGENTS.md, workflows, skills) were updated",
+      "suggested_action": "Review whether AGENTS.md, workflow files, or SKILL.md files need updates to reflect the code changes"
+    },
+    {
+      "category": "code_doc_drift",
+      "severity": "P2",
+      "file": "src/universal_agent/gateway_server",
+      "description": "Code in `src/universal_agent/gateway_server` changed (6 files) but related doc areas (02_Flows/, 04_API_Reference/) were not updated",
+      "suggested_action": "Review docs in 02_Flows/, 04_API_Reference/ to verify they still accurately describe the code in src/universal_agent/gateway_server"
+    }
+  ]
+}
