@@ -131,12 +131,22 @@ def score_artifact_for_review(conn: sqlite3.Connection, artifact: dict[str, Any]
 
 
 def rebuild_preference_snapshot(conn: sqlite3.Connection, *, half_life_days: float = 14.0) -> dict[str, Any]:
-    """Recompute the preference model with time-decay weighting from all signals."""
+    """Recompute the preference model with time-decay weighting.
+
+    EXPLICIT FEEDBACK ONLY. Implicit outcome signals (auto-fired on task
+    park/skip/block) are excluded — they conflate "Kevin disliked this" with
+    "no consumer claimed it / stale cleanup", and a burst of system parks can
+    saturate a key's weight at -1.0 and silently suppress the whole pipeline
+    (this snapshot feeds get_delegation_context → Atlas's mission reasoning).
+    Mirrors the explicit-only scoping in should_block_proactive_task. See
+    docs/proactive_signals/insight_pipeline_completion_spec_2026-05-29.md.
+    """
     ensure_schema(conn)
     rows = conn.execute(
         """
         SELECT signal_key, signal_type, weight, score, created_at
         FROM proactive_preference_signals
+        WHERE signal_type = 'explicit_feedback'
         ORDER BY created_at DESC
         """
     ).fetchall()
