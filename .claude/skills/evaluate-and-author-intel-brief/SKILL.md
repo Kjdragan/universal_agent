@@ -112,7 +112,29 @@ For the current candidate, compile:
 
 ### 1.2 Apply the decision rubric
 
-Walk these in order:
+**FIRST check `metadata.candidate_kind`** (from the candidate row / task metadata):
+
+- **`ideation`** — this is NOT a same-story convergence. It is a non-obvious
+  abstract pattern, trend, or cross-cutting relationship synthesized by the
+  Track B ideation sweep (the narrative + "so what" are in `metadata.thesis` /
+  `metadata.value` and the task description). Judge it on **novelty, insight,
+  and actionability for an operator who builds/runs an AI agent platform** —
+  NOT on multi-channel same-topic overlap. Do **not** skip merely because the
+  supporting videos cover different topics; cross-topic synthesis is the entire
+  point. Ideation rubric, in order:
+  1. **Generic / obvious?** If the narrative is a truism, a restatement of the
+     headlines, or something the operator obviously already knows → **skip**.
+  2. **Unsupported?** If the narrative is not actually borne out by the
+     supporting videos' claims (the LLM over-reached) → **skip**.
+  3. **Duplicate of a recent ship?** Same insight as a `[SHIP]` in the last 48h
+     → **skip**, cite the prior `artifact_id`.
+  4. **Genuinely non-obvious + useful?** → **ship**, authoring from the
+     synthesized narrative + value (Phase 2), with the supporting videos as
+     evidence. Then SKIP the convergence rubric below.
+
+- **`convergence`** (default / absent) — apply the convergence rubric below.
+
+Walk these in order (convergence candidates):
 
 1. **Same thesis as a ship within last 48h?** Compare against prior `[SHIP]`
    blocks in the index. If a recent brief covers essentially the same
