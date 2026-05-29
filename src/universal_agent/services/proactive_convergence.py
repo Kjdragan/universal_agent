@@ -379,6 +379,7 @@ def _detect_clusters_sql(
     *,
     source_window_hours: int,
     min_channels: int,
+    include_secondary: bool = False,
 ) -> list[list[dict[str, Any]]]:
     """Group recent signatures by shared primary topic across ≥ ``min_channels`` channels.
 
@@ -401,13 +402,24 @@ def _detect_clusters_sql(
     ).fetchall()
     signatures = [_hydrate_signature(dict(row)) for row in rows]
 
-    # Bucket by primary topic (case-insensitive, trimmed).
+    # Bucket by topic (case-insensitive, trimmed). Recall stage: when
+    # ``include_secondary`` is set (the LLM-gated path), a video also joins
+    # buckets for its SECONDARY topics so convergences that share only a
+    # secondary topic are surfaced for the downstream LLM precision refine to
+    # judge. The raw-SQL fallback keeps primary-only bucketing because it has
+    # no precision gate to drop the looser matches. (Ported from the retired
+    # track_a fast-filter, which scored overlap on primary + secondary topics.)
     buckets: dict[str, list[dict[str, Any]]] = {}
     for sig in signatures:
-        for topic in sig.get("primary_topics") or []:
+        topics = list(sig.get("primary_topics") or [])
+        if include_secondary:
+            topics += list(sig.get("secondary_topics") or [])
+        seen_keys: set[str] = set()
+        for topic in topics:
             key = str(topic or "").strip().lower()
-            if not key:
+            if not key or key in seen_keys:
                 continue
+            seen_keys.add(key)
             buckets.setdefault(key, []).append(sig)
 
     threshold = max(2, int(min_channels or 2))
@@ -578,6 +590,7 @@ async def _detect_clusters_llm_async(
         conn,
         source_window_hours=source_window_hours,
         min_channels=min_channels,
+        include_secondary=True,
     )
     confirmed: list[dict[str, Any]] = []
     for bucket in buckets:
