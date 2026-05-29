@@ -450,8 +450,10 @@ def test_sync_topic_signatures_llm_skip_writes_no_candidate(tmp_path):
 
 def test_sync_topic_signatures_sql_fallback_when_llm_disabled(tmp_path, monkeypatch):
     """UA_CONVERGENCE_LLM_CLUSTERING=0 falls back to legacy SQL string-match
-    clustering and must NOT touch the LLM."""
+    clustering and must NOT touch the LLM. The Track B ideation sweep is a
+    separate LLM path (own flag) — disable it too to isolate this assertion."""
     monkeypatch.setenv("UA_CONVERGENCE_LLM_CLUSTERING", "0")
+    monkeypatch.setenv("UA_IDEATION_SWEEP_ENABLED", "0")
     csi_db = _build_two_channel_csi(tmp_path)
     no_llm = AsyncMock(side_effect=AssertionError("LLM must not run when clustering disabled"))
     with patch("universal_agent.services.llm_classifier._call_llm", no_llm), \
