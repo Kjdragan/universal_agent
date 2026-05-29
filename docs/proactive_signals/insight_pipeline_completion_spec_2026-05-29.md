@@ -182,11 +182,30 @@ flowchart TD
   - Verify: Gmail MCP search for the digest; prod DB delivery columns.
 - [ ] **0.3** Record results; if a *new* blocker appears, fold it into this spec before continuing.
 
-### Phase 1 — VP worker concurrency
-- [ ] **1.1** Reconcile `worker_loop.py:358` default (1) with `UA_MAX_CONCURRENT_VP_GENERAL` (2); make the general worker honor the configured concurrency.
-  - Acceptance: ≥2 `operator_signal` missions run concurrently; idle-queue claim latency < 3 min.
-  - Verify: unit test on the concurrency resolver; live: queue 3 missions, observe 2 running.
-  - Files: `vp/worker_loop.py`, `heartbeat_service.py`, 1 test.
+### Phase 1 — VP worker throughput
+
+- [x] **1.0 (shipped 2026-05-29)** Ideation mission-tier gap. Simone dispatches
+  ideation candidates under LLM-chosen mission types (`evaluate_ideation_insight`)
+  that were absent from `MISSION_TYPE_TIER` → resolved to `background` → drained
+  dead-last behind every convergence mission. Fixed: explicit operator_signal
+  entries for the ideation mission types + a substring guard in `resolve_tier`
+  (any `ideation`/`convergence`/`intel_brief`/`insight_brief`-family mission_type
+  → operator_signal). `vp/mission_priority.py`, tests in
+  `test_vp_mission_priority_tiers.py`.
+
+- [ ] **1.1 (RECLASSIFIED — deliberate change, deferred)** True worker concurrency.
+  Investigation showed `UA_VP_MAX_CONCURRENT_MISSIONS` / `max_concurrent_missions`
+  is **stored but unused**: `VpWorkerLoop._tick()` claims ONE mission and runs it
+  to completion before the next claim — the loop is **structurally serial**. So
+  "concurrency=2" is NOT a knob flip; it requires rewriting `_run`/`_tick` to claim
+  up to N and run them as concurrent asyncio tasks with in-flight tracking. That
+  directly risks the documented **event-loop-starvation incident** (in-process
+  Claude SDK turns starving the loop). Defer to a properly-spec'd + load-tested
+  change; consider a second worker *process* (`worker_main.py`) over in-loop
+  concurrency to avoid sharing one event loop. With the tier gaps now closed and
+  candidate volume low (a few insights/cycle), the serial worker may be adequate —
+  re-measure before taking the risk.
+  - Files (if pursued): `vp/worker_loop.py` (loop rewrite) OR a new worker process unit.
 
 ### Phase 2 — ZAI 1301 content-safety resilience
 - [ ] **2.1** In `_refine_cluster_with_llm`, on a 1301 (or any 400 content-safety) error, retry once with a trimmed payload (fewer videos / shorter claims); if still rejected, log + increment a dropped-bucket counter with the topic.
