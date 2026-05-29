@@ -714,14 +714,28 @@ class VpWorkerLoop:
             th_conn = connect_runtime_db(get_activity_db_path())
             task_hub.ensure_schema(th_conn)
 
+            # Machine-legible terminal disposition so downstream readers
+            # (Simone's digest) can distinguish a shipped-PR completion from a
+            # legitimate no-op ("inspected, nothing worth a PR") instead of
+            # inferring a stalled backlog from the bare status. Only meaningful
+            # for completed missions; failed/cancelled keep their own status.
+            _terminal_meta: dict[str, Any] = {
+                "vp_terminal_status": event_type.replace("vp.mission.", ""),
+                "result_ref": outcome.result_ref or "",
+            }
+            if event_type == "vp.mission.completed":
+                _pr_url = self._detect_pr_url(outcome)
+                _terminal_meta["terminal_disposition"] = (
+                    "completed_with_pr" if _pr_url else "completed_without_pr"
+                )
+                if _pr_url:
+                    _terminal_meta["pr_url"] = _pr_url
+
             # (1) Close the mirror row.
             task_hub.upsert_item(th_conn, {
                 "task_id": mission_id,
                 "status": th_status,
-                "metadata": {
-                    "vp_terminal_status": event_type.replace("vp.mission.", ""),
-                    "result_ref": outcome.result_ref or "",
-                },
+                "metadata": dict(_terminal_meta),
             })
 
             # (2) Close the original source task, if linked.
@@ -736,9 +750,8 @@ class VpWorkerLoop:
                         "task_id": _source_task_id,
                         "status": th_status,
                         "metadata": {
-                            "vp_terminal_status": event_type.replace("vp.mission.", ""),
+                            **_terminal_meta,
                             "linked_mission_id": mission_id,
-                            "result_ref": outcome.result_ref or "",
                         },
                     })
                     logger.info(
@@ -799,6 +812,28 @@ class VpWorkerLoop:
             payload={**source_context, **payload},
         )
         self._upsert_session(status="idle")
+
+    @staticmethod
+    def _detect_pr_url(outcome: Any) -> str:
+        """Return the first GitHub PR URL found in a mission outcome, else "".
+
+        Reuses the single canonical PR-URL pattern from ``proactive_codie`` so
+        detection here can't drift from the artifact-registration path.
+        """
+        try:
+            from universal_agent.services.proactive_codie import _GITHUB_PR_RE
+
+            text = "\n".join(
+                [
+                    str(getattr(outcome, "message", "") or ""),
+                    str(getattr(outcome, "result_ref", "") or ""),
+                    json.dumps(dict(getattr(outcome, "payload", {}) or {}), ensure_ascii=True, sort_keys=True),
+                ]
+            )
+            match = _GITHUB_PR_RE.search(text)
+            return match.group(0) if match else ""
+        except Exception:
+            return ""
 
     def _register_proactive_pr_artifact(self, *, mission: sqlite3.Row, payload: dict[str, Any]) -> None:
         try:
