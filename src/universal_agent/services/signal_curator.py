@@ -34,6 +34,14 @@ DEFAULT_MIN_CARDS = 10
 DEFAULT_MIN_HOURS = 12
 DEFAULT_MAX_OPEN_SIGNALS = 10
 DEFAULT_MAX_DISPATCH_QUEUE = 20
+# Minimum wall-clock gap between curation dispatches. Without this, the
+# ≥10-pending-cards "immediate" trigger fires on EVERY heartbeat whenever
+# cards sit unprocessed (which happens precisely when curation missions are
+# queued but not yet run) — a feedback loop that dispatched 20-30 curation
+# missions/hour and buried the VP queue, starving operator-facing work.
+# Floor the dispatch rate regardless of card count. See
+# docs/proactive_signals/insight_pipeline_remediation_plan_2026-05-28.md.
+DEFAULT_MIN_INTERVAL_MINUTES = 60
 _LAST_RUN_KEY = "signal_curator_last_run"
 
 
@@ -131,33 +139,53 @@ def should_run_curation(conn: sqlite3.Connection) -> bool:
         )
         return False
 
-    # Check card count threshold
+    # Read the last-run timestamp once; it gates BOTH the minimum-interval
+    # floor (below) and the 12h time-based trigger (further down).
+    min_hours = _parse_int_env("UA_CURATOR_MIN_HOURS", DEFAULT_MIN_HOURS)
+    task_hub.ensure_schema(conn)
+    setting = task_hub._get_setting(conn, _LAST_RUN_KEY)
+    last_timestamp = str(setting.get("timestamp") or "") if setting else ""
+    elapsed: timedelta | None = None
+    if last_timestamp:
+        try:
+            last_dt = datetime.fromisoformat(last_timestamp)
+            if last_dt.tzinfo is None:
+                last_dt = last_dt.replace(tzinfo=timezone.utc)
+            elapsed = datetime.now(timezone.utc) - last_dt
+        except (ValueError, TypeError):
+            elapsed = None  # Unparseable — treat as "long ago".
+
+    # Minimum-interval floor: never dispatch again within this window of the
+    # last dispatch, regardless of how many cards are pending. This breaks the
+    # every-heartbeat flood while still letting cards accumulate for the next
+    # legitimate run.
+    min_interval = _parse_int_env(
+        "UA_CURATOR_MIN_INTERVAL_MINUTES", DEFAULT_MIN_INTERVAL_MINUTES
+    )
+    if elapsed is not None and elapsed < timedelta(minutes=max(0, min_interval)):
+        logger.info(
+            "Signal curator skipping run: only %.1f min since last dispatch "
+            "(floor=%d min, pending_cards=%d)",
+            elapsed.total_seconds() / 60.0,
+            min_interval,
+            pending_count,
+        )
+        return False
+
+    # Card-count trigger (now rate-limited by the interval floor above).
     min_cards = _parse_int_env("UA_CURATOR_MIN_CARDS", DEFAULT_MIN_CARDS)
     if pending_count >= min_cards:
         return True
 
-    # Check time since last run
-    min_hours = _parse_int_env("UA_CURATOR_MIN_HOURS", DEFAULT_MIN_HOURS)
-    task_hub.ensure_schema(conn)
-    setting = task_hub._get_setting(conn, _LAST_RUN_KEY)
-    if not setting:
+    # Time-based trigger: ≥min_hours since last run with ≥1 pending card.
+    if not last_timestamp:
         # Never run before — only the card-count threshold applies.
         # We need a time baseline before the time-based trigger can fire.
         return False
-
-    last_timestamp = str(setting.get("timestamp") or "")
-    if not last_timestamp:
-        return False
-
-    try:
-        last_dt = datetime.fromisoformat(last_timestamp)
-        if last_dt.tzinfo is None:
-            last_dt = last_dt.replace(tzinfo=timezone.utc)
-        elapsed = datetime.now(timezone.utc) - last_dt
-        if elapsed >= timedelta(hours=min_hours):
-            return True
-    except (ValueError, TypeError):
-        return True  # Can't parse — assume it's been long enough
+    if elapsed is None:
+        return True  # Couldn't parse the baseline — assume it's been long enough.
+    if elapsed >= timedelta(hours=min_hours):
+        return True
 
     return False
 

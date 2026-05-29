@@ -66,8 +66,32 @@ def test_known_operator_facing_mission_types_in_operator_daily_tier():
 
 
 def test_known_proactive_pipeline_mission_types_in_operator_signal_tier():
-    for mt in ("insight_brief", "convergence_brief", "research", "research_report_email"):
+    for mt in (
+        "insight_brief",
+        "convergence_brief",
+        "convergence_evaluation",
+        "research",
+        "research_report_email",
+    ):
         assert MISSION_TYPE_TIER.get(mt) == "operator_signal"
+
+
+def test_convergence_evaluation_outranks_curation(conn):
+    # Regression: convergence_evaluation (Atlas's ship/skip/defer + author
+    # pass that feeds Simone's hourly digest) was missing from the tier map,
+    # resolved to 'background', and got starved behind every curation mission
+    # — so the digest never received a brief. It must outrank maintenance.
+    _queue(conn, "vp.general.primary", "m-curation-x", "curation")  # maintenance
+    _queue(conn, "vp.general.primary", "m-conv-eval-x", "convergence_evaluation")
+
+    claimed = claim_next_vp_mission(
+        conn=conn,
+        vp_id="vp.general.primary",
+        worker_id="worker.test",
+        lease_ttl_seconds=60,
+    )
+    assert claimed is not None
+    assert dict(claimed)["mission_id"] == "m-conv-eval-x"
 
 
 def test_resolve_tier_defaults_to_background_for_unknown_mission_type():
