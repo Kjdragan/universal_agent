@@ -126,12 +126,17 @@ inbox.
 3. **Two detectors run over that corpus, same stage:**
    - **Convergence Detection** *(proposed; was "Track A")* —
      `track_a_concrete_convergence` (`:1173`, "Fast Filter -> Deep Semantic Comparison ->
-     Quality Gate"). Finds the **SAME story across >=2 channels**. The code itself flags
-     this as **low value**: *"convergence detection finds the SAME story across channels —
-     which is, by construction, news saturation (low marginal value)"* (`:613`).
+     Quality Gate"). Finds the **SAME story across >=2 channels**. An in-code comment
+     (`:613`) historically framed this as "news saturation (low marginal value)" —
+     **but that framing is being corrected (Kevin, 2026-05-29): this is a
+     signal-reinforcement mechanism, not low-quality output.** Grouping convergent
+     observations across multiple *independent* channels is itself a signal — it confirms
+     the **salience and significance** of a topic ("this is broadly important right now").
+     It is *less revelatory* than the Ideation Sweep, but it answers a different and
+     legitimate question. Do not conflate "less revelatory than ideation" with "low value."
    - **Ideation Sweep** *(proposed; was "Track B")* — `track_b_ideation_synthesis`
      (`:1264`, "LLM Ideation / Synthesis on a batch of schemas"). Finds **non-obvious
-     cross-cutting patterns** — the **high-value** engine. Chunks corpus into batches of
+     cross-cutting patterns** — the **more revelatory** engine. Chunks corpus into batches of
      20. Restored 2026-05-29 (ZAI quota abundant); see
      `docs/proactive_signals/ideation_sweep_2026-05-29.md`.
      Flags: `UA_IDEATION_SWEEP_ENABLED` (default 1), `UA_IDEATION_MIN_CONFIDENCE`
@@ -180,8 +185,8 @@ inbox.
 | Daily Digest engine | **Daily YouTube Digest** | 6:00 AM transcript+synthesis of the day playlist (Feed 1) |
 | (Feed 2 source) | **Watchlist RSS Ingestion** | CSI hourly poll of all 444 channels -> `youtube_channel_rss` |
 | `sync_topic_signatures_from_csi` | **Signature Sync** | RSS analysis -> `proactive_topic_signatures` corpus |
-| Track A / `track_a_concrete_convergence` | **Convergence Detection** | same-story-across-channels (news saturation, LOW value) |
-| Track B / `track_b_ideation_synthesis` | **Ideation Sweep** | non-obvious cross-cutting synthesis (HIGH value) |
+| Track A / `track_a_concrete_convergence` | **Convergence Detection** | same-story-across-channels → signal reinforcement / salience confirmation (valuable; less revelatory than ideation) |
+| Track B / `track_b_ideation_synthesis` | **Ideation Sweep** | non-obvious cross-cutting synthesis (more revelatory) |
 | Atlas evaluate skill | **Candidate Evaluation** | Atlas scores a `convergence_candidate`, authors brief |
 | `hourly_insight_email` | **Insight Digest** | consolidated email delivery of authored briefs |
 | `detect_and_queue_convergence` -> `insight_detection` | **Legacy Insight-Brief Emitter** *(deprecated, PR E)* | the per-insight firehose |
@@ -258,7 +263,7 @@ print(collections.Counter(c.get('tier') for c in d['channels']))"
 | `api/routers/csi_watchlist.py` | `:16,135,272,331,578` | watchlist file resolution + RSS URL |
 | `services/invariants/csi_source_liveness.py` | `:42` | "444-channel watchlist, hourly-ish per channel" |
 | `services/proactive_convergence.py` | `:204 sync_topic_signatures_from_csi` | Feed 2 — Signature Sync (active entrypoint) |
-| `services/proactive_convergence.py` | `:613` | comment: convergence = news saturation, low value |
+| `services/proactive_convergence.py` | `:613` | in-code comment frames convergence as "news saturation" — superseded by the signal-reinforcement reframing (see §3); code comment not yet updated |
 | `services/proactive_convergence.py` | `:1173 track_a_concrete_convergence` | Convergence Detection |
 | `services/proactive_convergence.py` | `:1264 track_b_ideation_synthesis` | Ideation Sweep |
 | `services/proactive_convergence.py` | `:1015/1047 detect_and_queue_convergence[_llm]` | LEGACY firehose path |
