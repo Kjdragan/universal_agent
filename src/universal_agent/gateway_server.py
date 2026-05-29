@@ -19378,7 +19378,16 @@ def _ensure_atlas_direct_dispatch_cron_job() -> Optional[dict[str, Any]]:
             "bypasses Simone-heartbeat throttle (Hermes Phase C)."
         ),
         timeout_seconds=60,
-        enabled=_proactive_cron_enabled("UA_ATLAS_DIRECT_DISPATCH_ENABLED"),
+        # default="0" so an UNSET flag disables the cron, matching the
+        # script's own `_is_enabled()` gate (which also defaults OFF).
+        # Previously this defaulted to "1": with the flag unset in prod the
+        # cron fired every 60s (1,440 spawns/day) while the script no-opped
+        # every tick — wasted `create_subprocess_exec` calls that also fed
+        # the 6 AM event-loop spawn-pressure (EAGAIN) failures. Re-registering
+        # disabled trips the #539 disable-on-flip path and stops the row.
+        enabled=_proactive_cron_enabled(
+            "UA_ATLAS_DIRECT_DISPATCH_ENABLED", default="0"
+        ),
         cron_env_var="UA_ATLAS_DIRECT_DISPATCH_CRON",
         timezone_env_var="UA_ATLAS_DIRECT_DISPATCH_TIMEZONE",
         # Ship 4 (Task Hub Observability Protocol): opted IN. The tasks
@@ -20573,14 +20582,28 @@ def _ack_artifact(conn: sqlite3.Connection, artifact_id: str) -> Optional[dict[s
 async def artifacts_ack_get(artifact_id: str, t: str = ""):
     """Signed-URL acknowledge endpoint for email "Acknowledge" links.
 
-    Validates the HMAC token against the artifact_id (signing key shared
-    with ``cron_artifact_notifier.sign_ack_token``). Idempotent — repeat
-    clicks return the same OK response.
+    Silent by design: the operator clicks the link in their mail client,
+    we mark the artifact accepted server-side (which drops it out of the
+    ``cron_artifact_reminders`` sweep), and we return ``204 No Content`` so
+    the browser shows a blank tab — no JSON blob, no confirmation screen.
+    Every benign outcome (valid click, already-acked, missing artifact,
+    even an invalid/expired token) returns 204 so the operator never sees
+    an error page; the ack itself is only performed when the HMAC token
+    validates. Idempotent — repeat clicks are a no-op.
     """
+    from fastapi import Response
+
     from universal_agent.services.cron_artifact_notifier import verify_ack_token
 
     if not verify_ack_token(artifact_id, t):
-        raise HTTPException(status_code=401, detail="invalid acknowledgement token")
+        # Tampered / expired link. Do nothing, but stay silent for the
+        # operator (blank tab); log for server-side diagnosability.
+        logger.info(
+            "artifacts_ack_get: invalid/expired ack token for artifact %s (no-op)",
+            artifact_id,
+        )
+        return Response(status_code=204)
+
     with _activity_store_lock:
         conn = _activity_connect()
         try:
@@ -20588,13 +20611,16 @@ async def artifacts_ack_get(artifact_id: str, t: str = ""):
         finally:
             conn.close()
     if artifact is None:
-        raise HTTPException(status_code=404, detail="artifact not found")
-    return {
-        "status": "ok",
-        "artifact_id": artifact_id,
-        "title": artifact.get("title"),
-        "message": "Acknowledged. You won't get further reminders for this artifact.",
-    }
+        logger.info(
+            "artifacts_ack_get: artifact %s not found (no-op)", artifact_id
+        )
+    else:
+        logger.info(
+            "artifacts_ack_get: acknowledged artifact %s (%s) — reminders halted",
+            artifact_id,
+            (artifact.get("title") or "")[:80],
+        )
+    return Response(status_code=204)
 
 
 # ── PR B: Insight pipeline feedback / viewer / pause endpoints ─────────
