@@ -81,7 +81,7 @@ The CI-vs-local difference is the env-dependence: CI has no creds and a dedicate
 
 | PR | Concern | Status |
 |---|---|---|
-| **PR1** | Fail-fast: `pytest-timeout` (global `timeout=60`, `timeout_method=thread`) in `pyproject.toml`; explicit `--timeout=60` in CI; `just test-fast` recipe; this runbook | **Shipped 2026-05-30** |
+| **PR1** | Fail-fast: `pytest-timeout` (global `timeout=60`, `timeout_method=thread`) in `pyproject.toml` — CI (`pr-validate.yml` runs `uv run pytest tests/unit`) inherits this from the ini, so a CI hang now fails fast at 60s too; `just test-fast` recipe; this runbook | **Shipped 2026-05-30** |
 | **PR2** | Isolate unit I/O at the source: `tests/unit/conftest.py` autouse fixture redirecting `UA_ACTIVITY_DB_PATH`/`UA_RUNTIME_DB_PATH`/peers to `tmp_path` + low `UA_SQLITE_BUSY_TIMEOUT_MS`; `pytest-socket` `--disable-socket` with explicit opt-in; apply `integration`/`slow` markers to genuinely-heavy tests (test-only, no prod code change) | Pending |
 | **PR3** | Fix the specific offender: give the `service` fixture the same tmp-DB redirect as `service_with_queue` | Pending |
 
@@ -128,5 +128,5 @@ just preship
 - `tests/unit/test_agentmail_service.py:90` — `service` fixture (no DB redirect — PR3 target)
 - `tests/unit/test_agentmail_service.py:110` — `service_with_queue` fixture (correct pattern)
 - `pyproject.toml [tool.pytest.ini_options]` — `timeout`, `timeout_method`
-- `.github/workflows/pr-validate.yml` — "Run unit tests" step (`--timeout=60`)
+- `.github/workflows/pr-validate.yml` — "Run unit tests" step (`uv run pytest tests/unit`; inherits `timeout=60` from the pyproject ini — no explicit flag needed)
 - `justfile` — `test-fast`, `test-one`, `test-ci-env`, `preship`
