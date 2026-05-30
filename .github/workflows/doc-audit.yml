@@ -1,0 +1,63 @@
+name: Documentation Audit
+
+# Deterministic documentation gate (the "teeth" from the doc refactor plan §3).
+# Runs scripts/doc_audit.py on PRs that touch project_docs/ or the engine itself:
+#   - frontmatter schema present + code_paths globs resolve
+#   - every `file::symbol` citation resolves in code
+#   - zero line-number citations (they rot)
+#   - internal links resolve; canonical docs are indexed in README
+# Plus a tripwire: an automated doc-fix PR (head branch docfix/*) must touch ONLY
+# documentation paths — a hard mechanical replacement for the prompt-only firewall
+# that was bypassed on 2026-04-24.
+
+on:
+  pull_request:
+    paths:
+      - 'project_docs/**'
+      - 'scripts/doc_audit.py'
+      - '.github/workflows/doc-audit.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic-audit:
+    name: Deterministic doc audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run doc_audit.py (stdlib-only; errors fail the PR)
+        run: python scripts/doc_audit.py
+
+  docfix-tripwire:
+    name: Doc-fix PR touches docs only
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    # Only enforced for automated documentation-fix PRs.
+    if: startsWith(github.head_ref, 'docfix/')
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Fail if any non-documentation path changed
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          echo "Changed files in this doc-fix PR:"
+          changed="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
+          echo "$changed"
+          # Allowed: project_docs/**, docs/** (legacy/archive), root *.md, AGENTS.md
+          violations="$(echo "$changed" | grep -vE '^(project_docs/|docs/|[^/]+\.md$|AGENTS\.md$)' || true)"
+          if [ -n "$violations" ]; then
+            echo "::error::Doc-fix PR modified non-documentation paths:"
+            echo "$violations"
+            exit 1
+          fi
+          echo "OK — doc-fix PR touches documentation only."

@@ -1,0 +1,6 @@
+# Legacy documentation — superseded by project_docs/ (2026-05-29 code-first rebuild).
+# Kept on disk as historical / emergency reference, but excluded from default project
+# searches so stale docs don't surface during code work. Search it explicitly with
+# `rg -u --no-ignore <pattern> docs/` if you truly need the archive.
+/docs/
+/artifacts/doc-drift-reports/
