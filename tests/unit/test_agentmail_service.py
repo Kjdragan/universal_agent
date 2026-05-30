@@ -87,9 +87,20 @@ def mock_agentmail_client():
 
 
 @pytest.fixture
-async def service(mock_agentmail_client):
+async def service(mock_agentmail_client, monkeypatch, tmp_path):
     """Create and start an AgentMailService with mocked client."""
     from universal_agent.services.agentmail_service import AgentMailService
+
+    # Redirect the trusted-inbox queue DB to a per-test tmp file. Without this,
+    # any test reaching the queue/status code path (e.g. status() ->
+    # _trusted_queue_overview() -> _ensure_queue_schema()) runs write-DDL
+    # against the REAL AGENT_RUN_WORKSPACES/activity_state.db via
+    # connect_runtime_db(get_activity_db_path()). On a loaded host that fsync
+    # contends with the live stack / concurrent sessions and stalls for
+    # seconds-to-minutes — the root cause of the 2026-05-30 38-min hang. The
+    # sibling `service_with_queue` fixture already does this; `service` was the
+    # gap. See docs/03_Operations/135_Test_Suite_Hardening_And_Local_Run_Runbook.md.
+    monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str(tmp_path / "activity_state.db"))
 
     svc = AgentMailService(
         dispatch_fn=AsyncMock(return_value=(True, "agent")),
