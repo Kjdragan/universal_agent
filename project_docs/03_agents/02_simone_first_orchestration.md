@@ -272,9 +272,9 @@ flowchart TD
   remediation decision and may fix bounded coding issues autonomously, escalating only
   destructive / security / approval-bound fixes to the operator.
 
-> **Note — `/btw` sidebar sessions are real.** A `/btw` handler exists in
-> `gateway_server.py` (matches `user_input.startswith("/btw ")`) and creates/enters a
-> sidebar session via `session_hub.py::set_active_sidebar` / `get_active_sidebar`. It is
-> only mentioned here because it is tangential to Simone-first routing; full coverage of
-> sidebar sessions belongs with the web-UI/session docs (tracked in `_meta/FOLLOWUPS.md`).
-> (An earlier audit incorrectly flagged `/btw` as unimplemented — corrected here.)
+> **Note — `/btw` is UA's own minor sidebar-session command, not Claude Code's native `/btw`.**
+> A `/btw` handler in `gateway_server.py` (matches `user_input.startswith("/btw ")`) routes the
+> message into an ephemeral side gateway session via `session_hub.py::set_active_sidebar` /
+> `get_active_sidebar` (in-memory only); `/return` exits. It is unrelated to the `/btw` slash
+> command Claude Code ships. Tangential to Simone-first routing — documented where it lives, in
+> `05_channels/05_web_ui_communication.md`.
