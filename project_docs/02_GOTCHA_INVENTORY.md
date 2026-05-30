@@ -4,7 +4,7 @@ status: active
 canonical: true
 subsystem: meta-documentation
 code_paths: []
-last_verified: 2026-05-29
+last_verified: 2026-05-30
 ---
 
 # Gotcha & Operational-Fact Inventory
@@ -17,11 +17,11 @@ last_verified: 2026-05-29
 > - **rationale** facts → carried as asserted context (the *why*), marked not-code-verified.
 > - `appears_still_valid: no/uncertain` items get extra scrutiny; genuinely-uncertain → flag to operator.
 
-**Counts:** 59 operational, 11 rationale. (68 code-behavior gotchas omitted here — those are re-derived directly from code.)
+**Counts:** 61 operational, 11 rationale. (68 code-behavior gotchas omitted here — those are re-derived directly from code.) *Harvest was 59 operational; +2 added 2026-05-30 (CSI category vocabulary, OMC worktree-cancel).*
 
 ## Operational / environmental facts
 
-### Still valid (preserve) — 53
+### Still valid (preserve) — 55
 
 - Dual Claude environments on VPS: ZAI-mapped (default, cheap GLM models) vs Anthropic-native (/opt/ua_demos/, real Claude Max plan OAuth). Mistaking one for the other is the #1 source of confusion.
   - *source:* `docs/README.md § Dual Claude Environments on VPS`
@@ -129,6 +129,10 @@ last_verified: 2026-05-29
   - *source:* `docs/proactive_signals/insight_pipeline_completion_spec_2026-05-29.md § 2, § 12 (Decisions C)`
 - Hermes Phase A.1/A.2/B.1 were initially PR'd to feature/latest2 (PRs #193-197) under the old branch model assumption. They never reached main. Recovery required opening a single PR (#198) targeting main directly, cherry-picking the 3 code commits, dropping the wrong-direction auto-promote workflow, and merging. feature/latest2 is now stale. All new feature work branches off origin/main directly.
   - *source:* `docs/reports/hermes_continued.md § 7`
+- CSI `rss_event_analysis.category` is a **single-token** enum the live classifier emits (`ai_coding`, `ai_models`, `ai_news_and_business`, `ai_business`, `ai_applications`, `software_engineering`, `technology`, `geopolitics`, `conflict`, `economics`, `cooking`, `personal_health`, `noise`, `other_signal`, `longform_interviews`, `from`), NOT the compound taxonomy (`geopolitics_and_conflict`, `ai_coding_and_agents`) a handoff/prompt may assert. The ideation relevance gate's first version (PR #592) used the compound tokens, matched almost nothing, and silently leaked ~290 geopolitics/conflict/economics rows into the ideation corpus; PR #594 corrected it. The values are classifier-defined (CSI Ingester, a separate deploy unit), not enforced by a UA-code enum, so they can drift. **Lesson:** verify any category-based gate with `SELECT category, COUNT(*) FROM rss_event_analysis GROUP BY category` against the live `csi.db` before trusting a doc/prompt/handoff's claimed vocabulary. `technology` is intentionally kept despite being mixed (real dev content + occasional politics) — coarse category gating can't split it.
+  - *source:* PR #594; `proactive_convergence.py::_DEFAULT_RELEVANCE_DENYLIST`; live `csi.db` 2026-05-30; `04_intelligence/01_csi_architecture.md § 3.1`
+- OMC (oh-my-claudecode) ralph / persistent-mode state started **inside a git worktree** lives in the *worktree's* `.omc/state/sessions/<id>/`, but the `state_clear` MCP tool and `/oh-my-claudecode:cancel` always resolve the *main repo's* `.omc` (their `resolveOmcStateRoot`/`workingDirectory` does not follow into the worktree). A ralph loop started in a worktree therefore **cannot be cancelled by the normal command** and spins to the 2-hour staleness timeout. Recovery: remove the worktree's `ralph-state.json` + linked `ultrawork-state.json` directly (and write a `cancel-signal-state.json`). Do NOT `cancel --force` when other sessions are active — it wipes their state too.
+  - *source:* this session 2026-05-30 (debugged `persistent-mode.mjs` Stop hook + `scripts/lib/state-root.mjs::resolveOmcStateRoot`)
 
 ### Uncertain (verify before preserving) — 5
 
