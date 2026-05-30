@@ -1,7 +1,7 @@
 # 135 — Test Suite Hardening & "Run Tests Locally Without Stalling" Runbook
 
 **Last updated:** 2026-05-30
-**Status:** Living. PR1 (fail-fast) shipped; PR2 (unit I/O isolation) and PR3 (fix the `service` fixture) tracked below.
+**Status:** Living. PR1 (fail-fast), PR2 (unit DB-I/O isolation) and PR3 (fix the `service` fixture) all shipped 2026-05-30. Socket-block split to a measured follow-up; `-n auto` deferred (see §4).
 **Owner area:** test infrastructure (`pyproject.toml [tool.pytest.ini_options]`, `tests/`, `.github/workflows/pr-validate.yml`, `justfile`)
 
 > TL;DR for a hurry: **never background a bare `pytest -q` on the full suite.** Run `just test-fast` (scoped to your change), which adds a 60s per-test fail-fast timeout. If a run ever stalls, the timeout now dumps a thread traceback naming the exact blocking call instead of hanging silently.
@@ -82,10 +82,12 @@ The CI-vs-local difference is the env-dependence: CI has no creds and a dedicate
 | PR | Concern | Status |
 |---|---|---|
 | **PR1** | Fail-fast: `pytest-timeout` (global `timeout=60`, `timeout_method=thread`) in `pyproject.toml` — CI (`pr-validate.yml` runs `uv run pytest tests/unit`) inherits this from the ini, so a CI hang now fails fast at 60s too; `just test-fast` recipe; this runbook | **Shipped 2026-05-30** |
-| **PR2** | Isolate unit I/O at the source: `tests/unit/conftest.py` autouse fixture redirecting `UA_ACTIVITY_DB_PATH`/`UA_RUNTIME_DB_PATH`/peers to `tmp_path` + low `UA_SQLITE_BUSY_TIMEOUT_MS`; `pytest-socket` `--disable-socket` with explicit opt-in; apply `integration`/`slow` markers to genuinely-heavy tests (test-only, no prod code change) | Pending |
-| **PR3** | Fix the specific offender: give the `service` fixture the same tmp-DB redirect as `service_with_queue` | Pending |
+| **PR2** | Isolate unit I/O at the source: `tests/unit/conftest.py` autouse fixture redirecting **all 10** UA SQLite DB-path env vars (`UA_ACTIVITY_DB_PATH`, `UA_RUNTIME_DB_PATH`, `UA_VP_DB_PATH`, `UA_CODER_VP_DB_PATH`, `UA_DB_PATH`, `CSI_DB_PATH`, `UA_MISSION_CONTROL_INTEL_DB_PATH`, `UA_MISSION_CONTROL_COS_DB_PATH`, `UA_LOSSLESS_DB_PATH`, `UA_FACTORY_REGISTRY_DB_PATH`) to a per-test `tmp_path/AGENT_RUN_WORKSPACES/` dir + `UA_SQLITE_BUSY_TIMEOUT_MS=250`; `@pytest.mark.no_db_redirect` opt-out. Test-only, no prod code change. | **Shipped 2026-05-30** |
+| **PR3** | Fix the specific offender: give the `service` fixture the same tmp-DB redirect as `service_with_queue` | **Shipped 2026-05-30** (PR #617) |
 
-**Deliberately deferred — `pytest-xdist -n auto`.** The host is already oversubscribed by concurrent sessions; adding intra-suite parallelism worsens load. Per-test `tmp_path` DB isolation looks viable (39 files already redirect DB paths to `tmp_path`), but `-n auto` is only worth revisiting **after** PR2/PR3 land and cross-session concurrency is controlled.
+**Socket-block split to a measured follow-up (not in PR2).** `pytest-socket` `--disable-socket` is valuable but surfaces previously-hidden real-network "unit" tests as *failures* — it needs a full-suite breakage census before landing, and each offender must be fixed or quarantined-with-reason (not mass-disabled). That census is impractical to run cleanly while the host sits at load ~100, and the *proven* root cause of the hang is DB I/O, not network — which PR2's DB isolation already addresses. Tracked as a follow-up; do it on an unloaded host so the breakage count is trustworthy.
+
+**Deliberately deferred — `pytest-xdist -n auto`.** The host is already oversubscribed by concurrent sessions; adding intra-suite parallelism worsens load. Per-test `tmp_path` DB isolation is now in place (PR2), but `-n auto` is only worth revisiting **after** cross-session concurrency is controlled.
 
 ### Why `timeout_method = "thread"` (not the default `signal`)
 
