@@ -76,7 +76,7 @@ It is now extracted to a committed, executable `scripts/deploy/remote_deploy.sh`
 Key properties:
 - **Byte-for-byte identical deploy logic.** The script body is the exact bash that was in the heredoc, only dedented; the extraction was verified with a `diff` that returned no changes.
 - **Secrets via stdin, not argv.** The three `INFISICAL_*` bootstrap secrets are the only values `deploy.yml` injects (they were `${{ secrets.* }}` in the heredoc). They're now prepended as `export` lines through the same SSH stdin stream, so they never appear in the VPS process table — preserving the prior security property while keeping `remote_deploy.sh` free of `${{ }}` placeholders. The script fails fast (`${VAR:?}`) if any is missing.
-- **A new `actions/checkout` step** was added to `deploy.yml` so the runner has the repo to `cat` the script; it checks out the pushed commit, so the deploy-script version always matches the code being deployed.
+- **No `actions/checkout`** — the script is fetched for the exact `$GITHUB_SHA` via the GitHub API (`gh api … contents/scripts/deploy/remote_deploy.sh`). A full checkout would pin a deprecated Node-20 action and its post-job submodule cleanup chokes (benign exit-128 warning) on the repo's orphaned `.claude/agents/agent-browser` / `test-remotion-project` gitlinks (committed with no `.gitmodules`). Fetching one file sidesteps both.
 - **Removes the heredoc-parser fragility class entirely** — the workflow YAML no longer contains a large embedded bash block, and `remote_deploy.sh` can be `shellcheck`ed (planned PR-Validate gate) and reasoned about locally.
 
 #### Concurrency guard (added 2026-05-11 PM)

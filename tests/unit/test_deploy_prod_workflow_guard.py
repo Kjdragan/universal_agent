@@ -33,18 +33,25 @@ def test_runtime_helper_repairs_unreadable_stale_venv_before_uv_sync() -> None:
 def test_deploy_pipes_remote_deploy_script() -> None:
     """The workflow must feed the committed remote deploy script to the VPS.
 
-    Pins the Phase 1 (2026-05-30) decomposition structure: deploy.yml checks out
-    the repo, then pipes scripts/deploy/remote_deploy.sh over SSH stdin to
-    `bash -s`, prepending the three Infisical bootstrap secrets as export lines
-    (through stdin, not argv). A future refactor can't silently drop the script
-    or revert to an inline heredoc without tripping this guard.
+    Pins the Phase 1 (2026-05-30) decomposition structure: deploy.yml fetches
+    scripts/deploy/remote_deploy.sh via the GitHub API (no actions/checkout) and
+    pipes it over SSH stdin to `bash -s`, prepending the three Infisical
+    bootstrap secrets as export lines (through stdin, not argv). A future
+    refactor can't silently drop the script or revert to an inline heredoc
+    without tripping this guard.
     """
     content = _DEPLOY_WORKFLOW.read_text(encoding="utf-8")
 
     assert _REMOTE_DEPLOY.exists(), "scripts/deploy/remote_deploy.sh must exist"
-    assert "uses: actions/checkout@v4" in content
-    assert "cat scripts/deploy/remote_deploy.sh" in content
+    # The script is fetched via the GitHub API (no actions/checkout — that pins a
+    # deprecated Node-20 action AND its post-job submodule cleanup chokes on the
+    # orphaned .claude/agents/agent-browser gitlink). Then piped over SSH stdin.
+    assert "contents/scripts/deploy/remote_deploy.sh?ref=${GITHUB_SHA}" in content
+    assert "cat /tmp/remote_deploy.sh" in content
     assert "'bash -s'" in content
+    # No full checkout step (a prose mention in a comment is fine — pin the
+    # actual `uses:` form so the explanatory comment doesn't trip this).
+    assert "uses: actions/checkout" not in content
     assert "printf 'export INFISICAL_CLIENT_ID=%q\\n' \"$INFISICAL_CLIENT_ID\"" in content
     # The secrets must NOT be baked into the committed script. Check the
     # dotted GHA substitution form (`${{ secrets.NAME }}`) so the script's own
