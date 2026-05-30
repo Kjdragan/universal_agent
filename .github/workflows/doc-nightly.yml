@@ -1,9 +1,12 @@
 name: Nightly Documentation Health
 
 # Replaces the legacy nightly-doc-drift-audit.yml (24h git-co-change heuristic +
-# fragile Tailscale->VPS->gateway dispatch). This nightly runs the deterministic
-# audit over the WHOLE corpus (not just a 24h window) and emits the rotating
-# accuracy-sweep batch (oldest last_verified first) for the LLM accuracy auditor.
+# fragile Tailscale->VPS->gateway dispatch). Two jobs:
+#   1. deterministic-health — full-corpus link/symbol/frontmatter audit (stdlib, no LLM).
+#   2. accuracy-sweep — LLM doc-vs-code judge over the oldest-verified batch, routed
+#      through the ZAI proxy / GLM models (resolve_sonnet -> glm-5-turbo) via the same
+#      Infisical-injected ANTHROPIC_*->ZAI mapping the UA services use. No Anthropic spend,
+#      no new secret. Opens a GH issue when drift is found; never fails the run.
 #
 # Schedule: 18:35 UTC ~= 1:35 PM CT — inside the operating-hours active window
 # (content/quota work respects dormancy; this is cheap + read-only so timing is lax).
@@ -44,4 +47,33 @@ jobs:
           python scripts/doc_audit.py --accuracy-batch "$BATCH" | tee -a "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "_LLM accuracy auditor consumes this batch — see project_docs/_meta/FOLLOWUPS.md (transport decision pending)._" >> "$GITHUB_STEP_SUMMARY"
+          echo "_The accuracy-sweep job (below) judges this batch via ZAI/GLM._" >> "$GITHUB_STEP_SUMMARY"
+
+  accuracy-sweep:
+    name: LLM accuracy sweep (ZAI / GLM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    needs: deterministic-health
+    # Skipped automatically on forks / where Infisical creds are absent (the script
+    # exits 0 with a warning). Never fails the nightly — drift is reported, not enforced.
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: '3.12'
+      - name: Install project deps
+        run: uv sync --frozen --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango
+      - name: ZAI-backed doc-accuracy sweep (opens a GH issue on drift)
+        env:
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_PROJECT_ID }}
+          INFISICAL_ENVIRONMENT: development
+          UA_RUNTIME_STAGE: development
+          UA_INFISICAL_ENABLED: '1'
+          GH_TOKEN: ${{ github.token }}
+          BATCH: ${{ github.event.inputs.batch_size || '10' }}
+        run: uv run --no-sync python scripts/doc_accuracy_sweep.py --batch "$BATCH" --open-issue
