@@ -14,7 +14,7 @@ code_paths:
   - "scripts/deploy_validate_runtime.sh"
   - "scripts/check_crashloop.sh"
   - "scripts/check_heartbeat_liveness.py"
-last_verified: 2026-05-29
+last_verified: 2026-05-30
 ---
 
 # Incident Response Patterns
@@ -243,7 +243,7 @@ flowchart LR
 
 ### Post-restart interpreter guard
 
-After restart, `deploy.yml::ensure_current_venv_interpreter` compares each service's
+After restart, `remote_deploy.sh::ensure_current_venv_interpreter` compares each service's
 `/proc/<pid>/exe` against `readlink -f .venv/bin/python`; if a service is still running the old
 interpreter (e.g. it restarted before the rebuild), it gets restarted again. Applied to
 `universal-agent-gateway`, `universal-agent-api`, `ua-discord-intelligence`.
@@ -299,7 +299,7 @@ work; the thread-offload is the operational backstop.
 
 Because cold-start lifespan work grows with accumulated production state, the deploy gateway
 health check allows **96 attempts × 5s = 8 minutes**
-(`deploy.yml::run_health_check gateway ... 96 5`). Deploys #436/#437 timed out at the old
+(`remote_deploy.sh::run_health_check gateway ... 96 5`). Deploys #436/#437 timed out at the old
 4-minute window even though the gateway came up healthy seconds later.
 
 ### Gotchas
