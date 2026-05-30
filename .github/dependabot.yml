@@ -1,24 +1,20 @@
-# Dependabot configuration — routes dependency-update PRs through develop
-# instead of merging directly to main.
+# Dependabot configuration.
 #
-# Why target-branch: develop?
+# Dependabot opens dependency-update PRs against the default branch (main),
+# where they flow through the same gate as every other change:
+# PR → pr-validate (+ GitGuardian) → auto-merge → deploy.
 #
-# Without this config, Dependabot defaults to opening PRs against the repo's
-# default branch (main). When those PRs merge to main directly, they bypass
-# the canonical feature/latest2 → develop → main fast-forward chain that
-# /ship relies on. Subsequent /ship runs then fail with "Diverging branches
-# can't be fast-forwarded" because main has commits develop doesn't.
+# HISTORY / why no `target-branch`: this file used to set
+# `target-branch: develop` to protect the old `feature/latest2 → develop → main`
+# fast-forward chain that `/ship` relied on. That branch model was retired
+# 2026-05-10 (develop deleted); the chain no longer exists. The dangling
+# `target-branch: develop` then pointed Dependabot at a non-existent branch,
+# which silently stopped it from opening PRs (last Dependabot PR: 2026-05-19).
+# Removing it (2026-05-30) restores Dependabot against `main`.
 #
-# That's exactly what happened on 2026-05-07: PR #152 (a python-multipart
-# bump) merged directly to main via the GitHub UI, breaking /ship for the
-# next session and requiring a manual merge-commit recovery on main.
-#
-# By routing Dependabot PRs to develop, dep updates flow through the same
-# review path as feature work: develop → main fast-forward stays clean.
-#
-# References:
-#   - docs/operations/2026-05-07_open_followups.md (Followup #2 background)
-#   - .claude/commands/ship.md (the workflow whose --ff-only this protects)
+# Note: Dependabot's `pip` ecosystem reads pyproject.toml, not uv.lock — after
+# merging a bump, regenerate the lock with `uv lock` / `uv sync` so deploy.yml's
+# `uv sync --frozen` on the VPS resolves cleanly.
 
 version: 2
 updates:
@@ -36,7 +32,6 @@ updates:
       day: "monday"
       time: "12:00"
       timezone: "America/Chicago"
-    target-branch: "develop"
     labels:
       - "dependencies"
       - "python"
@@ -59,7 +54,6 @@ updates:
       day: "monday"
       time: "12:00"
       timezone: "America/Chicago"
-    target-branch: "develop"
     labels:
       - "dependencies"
       - "ci-cd"
