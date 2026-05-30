@@ -11,7 +11,7 @@ def load(path):
     with open(path) as f:
         return json.load(f)
 
-def channels_of(d):
+def channels_of(d, path):
     if isinstance(d, dict) and "channels" in d:
         return d["channels"], "dict"
     if isinstance(d, list):
@@ -21,7 +21,7 @@ def channels_of(d):
 def main(path, dormant_ids_file):
     dormant_ids = {l.strip() for l in open(dormant_ids_file) if l.strip()}
     d = load(path)
-    chans, shape = channels_of(d)
+    chans, shape = channels_of(d, path)
     keep = [c for c in chans if c.get("channel_id") not in dormant_ids]
     drop = [c for c in chans if c.get("channel_id") in dormant_ids]
     if not drop:
