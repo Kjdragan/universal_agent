@@ -137,7 +137,9 @@ def test_claude_md_links_to_dormancy_doc() -> None:
     rule MUST be visible there or it'll get violated routinely.
     """
     body = Path("CLAUDE.md").read_text(encoding="utf-8")
-    assert "operating_hours_dormancy.md" in body
+    # Canonical dormancy doc moved to project_docs/ in the 2026-05-29 doc rebuild;
+    # CLAUDE.md links the rebuilt doc now (this guards the link, not the old path).
+    assert "03_dormancy_and_operating_hours.md" in body
     assert "6:00 AM" in body and "10:00 PM" in body
     assert "Houston" in body
 
