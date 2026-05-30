@@ -41,6 +41,20 @@ corpus; each is a decision or a scoped addition for after this PR merges.
    Deliberately not shipping a fragile transport. `scripts/doc_audit.py::build_accuracy_batch` already
    produces the work-list. **This is the single follow-up required to make the accuracy layer fully autonomous.**
 
+## Cutover items deliberately deferred (to keep this PR low-risk)
+
+6. **Physical rename `docs/` → `docs_archive/` deferred.** ~5 production Python scripts reference
+   `docs/` paths at runtime (`openclaw_release_scanner.py`, `scheduling_v2_soak.py`,
+   `csi_vault_cleanup_grounding_hallucinations.py`, the legacy drift scripts). A rename would break them.
+   This PR instead **search-excludes** `docs/` via `.rgignore` + an ARCHIVED banner (achieves "out of
+   flow / not in searches"). Do the physical rename after remapping those code refs.
+
+7. **Legacy drift pipeline not yet deleted.** `doc_drift_auditor.py`, `doc_maintenance_agent.py`,
+   `nightly-doc-drift-audit.yml` are superseded by `scripts/doc_audit.py` + `.github/workflows/doc-audit.yml`
+   + `doc-nightly.yml`, but they have tendrils (`update_cron.py`, `doc_drift_health_check.py`, a dormancy
+   guard test, `test_todo_dispatch_executing_sessions.py`). Removing them cleanly (without a red CI) is a
+   focused follow-up. They are left in place (dormant) for now.
+
 ## Stale gotcha-inventory entries corrected during reconstruction (already handled, logged for traceability)
 
 - Legacy claim `logfire.instrument_anthropic()` — not in code (only mcp/httpx/sqlite3). Corrected in `arch-events-tracing`.
