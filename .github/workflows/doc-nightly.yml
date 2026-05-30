@@ -61,12 +61,16 @@ jobs:
       issues: write
     steps:
       - uses: actions/checkout@v6
+        with:
+          # We push a docfix/* rotation branch with a PAT below; don't let checkout
+          # persist the GITHUB_TOKEN extraheader (it would override the PAT on push).
+          persist-credentials: false
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: '3.12'
       - name: Install project deps
         run: uv sync --frozen --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango
-      - name: ZAI-backed doc-accuracy sweep (opens a GH issue on drift)
+      - name: ZAI-backed doc-accuracy sweep (opens a GH issue on drift; stamps accurate docs)
         env:
           INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
           INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
@@ -76,4 +80,31 @@ jobs:
           UA_INFISICAL_ENABLED: '1'
           GH_TOKEN: ${{ github.token }}
           BATCH: ${{ github.event.inputs.batch_size || '10' }}
-        run: uv run --no-sync python scripts/doc_accuracy_sweep.py --batch "$BATCH" --open-issue
+        run: uv run --no-sync python scripts/doc_accuracy_sweep.py --batch "$BATCH" --open-issue --stamp
+      - name: Open rotation PR if any docs were re-verified
+        if: ${{ always() }}
+        env:
+          AUTO_MERGE_PAT: ${{ secrets.AUTO_MERGE_PAT }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "$(git status --porcelain project_docs/)" ]; then
+            echo "No last_verified bumps this run — queue unchanged, nothing to commit."
+            exit 0
+          fi
+          if [ -z "${AUTO_MERGE_PAT:-}" ]; then
+            echo "::warning::AUTO_MERGE_PAT not set — leaving stamps uncommitted (rotation will not advance)."
+            git checkout -- project_docs/ || true
+            exit 0
+          fi
+          BR="docfix/nightly-rotation-${RUN_ID}"
+          git config user.name  "ua-doc-bot"
+          git config user.email "ua-doc-bot@users.noreply.github.com"
+          git checkout -b "$BR"
+          git add project_docs/
+          git commit -m "docs(rotation): stamp last_verified on docs that passed the nightly accuracy sweep" -m "Automated by doc-nightly.yml so build_accuracy_batch advances through the corpus instead of re-judging the oldest batch nightly. Docs-only; auto-merges."
+          git push "https://x-access-token:${AUTO_MERGE_PAT}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/${BR}"
+          GH_TOKEN="$AUTO_MERGE_PAT" gh pr create --base main --head "$BR" \
+            --title "docs(rotation): nightly last_verified stamps" \
+            --body "Automated rotation: docs that passed tonight's ZAI/GLM accuracy sweep get \`last_verified\` bumped so the sweep advances through the corpus (~10/night) instead of re-judging the oldest batch forever. Docs-only — auto-merges via pr-auto-merge; the docfix/* tripwire enforces docs-only."
