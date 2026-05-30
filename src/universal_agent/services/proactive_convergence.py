@@ -501,16 +501,31 @@ Rules:
 
 
 # Non-domain CSI categories excluded from the ideation/convergence corpus by
-# the relevance gate. Mirrors the taxonomy emitted by the first CSI inference
-# (csi_rss_semantic_enrich.py). Domain categories kept: ai_coding_and_agents,
-# ai_models_and_research, ai_news_and_business, software_engineering.
+# the relevance gate. These are the EMPIRICAL category values the live CSI
+# classifier actually emits (verified against rss_event_analysis.category in
+# /var/lib/universal-agent/csi/csi.db, 2026-05-30), NOT the compound taxonomy
+# (`geopolitics_and_conflict`, `ai_coding_and_agents`) an earlier handoff
+# assumed — that mismatch let `geopolitics`/`conflict`/`economics` leak through.
+#
+# Kept (domain): ai_coding, ai_models, ai_news_and_business, ai_business,
+# ai_applications, software_engineering, and `technology`. `technology` is a
+# mixed bucket (genuine vibe-coding/dev content alongside occasional politics);
+# coarse category gating intentionally keeps it rather than discard real dev
+# content — disambiguating within a category is Stage 2's per-video job.
+#
+# Compound aliases (`geopolitics_and_conflict`) are retained as harmless
+# belt-and-suspenders in case the classifier taxonomy reverts.
 _DEFAULT_RELEVANCE_DENYLIST: frozenset[str] = frozenset({
-    "geopolitics_and_conflict",
+    "geopolitics",
+    "conflict",
+    "economics",
     "cooking",
     "personal_health",
     "noise",
     "other_signal",
     "longform_interviews",
+    "from",  # malformed/junk classifier label (e.g. "From the I/O main stage…")
+    "geopolitics_and_conflict",  # compound-taxonomy alias (defensive)
 })
 
 

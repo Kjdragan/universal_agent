@@ -12,7 +12,7 @@ code_paths:
   - src/universal_agent/services/intel_lanes.py
   - src/universal_agent/services/invariants/proactive_pipeline_invariants.py
   - src/universal_agent/proactive_signals.py
-last_verified: 2026-05-29
+last_verified: 2026-05-30
 ---
 
 # Proactive Pipeline
@@ -147,6 +147,45 @@ pure-SQL/sqlite (no Claude SDK in the cron itself).
    cross-cutting relationships"). Insights below `UA_IDEATION_MIN_CONFIDENCE`
    (default 0.7) are dropped downstream.
 5. Each cluster/insight is written via `write_convergence_candidate` (below).
+
+**Relevance gate (step 1, default ON).** Before a row becomes a signature,
+`sync_topic_signatures_from_csi` excludes non-domain categories so politics /
+geopolitics / war / economics / cooking / health / noise videos never become
+topic signatures — and therefore never become ideation/convergence candidates
+or Atlas `evaluate-and-author-intel-brief` missions. The gate is a deterministic
+filter over an *already-LLM-produced* judgment (the per-video
+`rss_event_analysis.category` from the first CSI inference) — the "code gates,
+LLM synthesizes" rule, not new pseudo-reasoning. It is applied **in SQL** (an
+`AND (a.category IS NULL OR LOWER(TRIM(a.category)) NOT IN (...))` clause built
+from `_relevance_denylist`) so denied rows don't consume the query `LIMIT`
+budget. Helpers: `proactive_convergence.py::_relevance_gate_enabled`,
+`proactive_convergence.py::_relevance_denylist`, constant
+`proactive_convergence.py::_DEFAULT_RELEVANCE_DENYLIST`.
+
+- **Denied** (the *empirical* single-token vocabulary the live classifier emits,
+  verified against `rss_event_analysis.category` in `/var/lib/universal-agent/csi/csi.db`):
+  `geopolitics`, `conflict`, `economics`, `cooking`, `personal_health`, `noise`,
+  `other_signal`, `longform_interviews`, `from` (a junk label), plus
+  `geopolitics_and_conflict` as a defensive compound-taxonomy alias.
+- **Kept** (domain): `ai_coding`, `ai_models`, `ai_news_and_business`,
+  `ai_business`, `ai_applications`, `software_engineering`, and `technology`.
+  `technology` is a *mixed* bucket (genuine vibe-coding/dev content alongside the
+  occasional politics clip); coarse category gating keeps it rather than discard
+  real dev content — per-video disambiguation is deferred future work.
+- **Unknown / NULL / empty category** is **kept** (only *known* non-domain
+  categories are excluded), so a brand-new domain category isn't silently
+  dropped. Trade-off: a brand-new *non-domain* category leaks until added to the
+  denylist — observable, and fixable via the env override below with no deploy.
+- Env: `UA_RELEVANCE_GATE_ENABLED` (default `1`; `0` = legacy ingest-everything),
+  `UA_IDEATION_RELEVANCE_DENYLIST` (comma-separated, case-insensitive override).
+- **History:** the gate shipped 2026-05-30 (#592) with the *compound* taxonomy
+  (`geopolitics_and_conflict`, …) an earlier handoff assumed; that matched almost
+  nothing the live classifier emits, so `geopolitics` (~210 rows), `conflict`
+  (~63), and `economics` leaked. The denylist was corrected the same day to the
+  empirical vocabulary above. Because the gate filters ingest only, pre-existing
+  non-domain signatures already in `proactive_topic_signatures` keep feeding
+  convergence until they age out of the 72h `source_window_hours` (self-healing;
+  no backfill/purge).
 
 > The legacy per-signature LLM pipeline (`detect_and_queue_convergence` →
 > `insight_detection`, `track_a_concrete_convergence`, `create_insight_brief_task`)

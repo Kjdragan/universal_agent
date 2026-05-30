@@ -138,6 +138,47 @@ def test_sync_topic_signatures_relevance_gate_disabled_keeps_all(tmp_path, monke
         assert get_topic_signature(conn, "vid-ai")
 
 
+def test_relevance_gate_matches_live_csi_category_vocabulary(tmp_path, monkeypatch):
+    """Regression for the 2026-05-30 vocabulary-mismatch defect: the live CSI
+    classifier emits single-token categories (`geopolitics`, `conflict`,
+    `economics`, `from`), NOT the compound taxonomy (`geopolitics_and_conflict`)
+    the original handoff assumed. The default denylist MUST exclude the actual
+    non-domain values, while keeping every AI/dev category (incl. the mixed
+    `technology` bucket, which coarse gating intentionally keeps — intra-category
+    mixing is Stage 2's job)."""
+    monkeypatch.delenv("UA_RELEVANCE_GATE_ENABLED", raising=False)
+    monkeypatch.delenv("UA_IDEATION_RELEVANCE_DENYLIST", raising=False)
+    csi_db = tmp_path / "csi.db"
+    _build_csi_db(
+        csi_db,
+        [
+            # Non-domain — MUST be excluded (the live values that leaked in v1).
+            ("vid-geo", "Geo Channel", "geopolitics", "Ukrainian drones strike Russian refinery"),
+            ("vid-conflict", "War Channel", "conflict", "Snipers trade rifles for drone control"),
+            ("vid-econ", "Macro Channel", "economics", "Saylor's $300T Bitcoin credit bet"),
+            ("vid-from", "Junk Channel", "from", "CENTCOM hits 90 targets on Iran"),
+            ("vid-cook", "Food Channel", "cooking", "Perfect sourdough"),
+            # Domain — MUST be kept.
+            ("vid-coding", "Dev Channel", "ai_coding", "Vibe coding with Claude"),
+            ("vid-models", "Research Channel", "ai_models", "Gemini 3 benchmarks"),
+            ("vid-tech", "Tech Channel", "technology", "The perfect setup for vibe coding"),
+            ("vid-bus", "Biz Channel", "ai_business", "Will AI replace programmers"),
+        ],
+    )
+
+    with _connect(tmp_path / "activity.db") as conn:
+        no_llm = AsyncMock(return_value="not json")
+        with patch("universal_agent.services.llm_classifier._call_llm", no_llm):
+            counts = sync_topic_signatures_from_csi(conn, csi_db_path=csi_db)
+
+        # 4 domain videos kept; 5 non-domain dropped.
+        assert counts["upserted"] == 4
+        for kept in ("vid-coding", "vid-models", "vid-tech", "vid-bus"):
+            assert get_topic_signature(conn, kept), f"{kept} should be kept"
+        for dropped in ("vid-geo", "vid-conflict", "vid-econ", "vid-from", "vid-cook"):
+            assert get_topic_signature(conn, dropped) is None, f"{dropped} should be excluded"
+
+
 def test_sync_topic_signatures_from_csi_writes_convergence_candidate(tmp_path):
     """sync_topic_signatures_from_csi runs SQL recall → LLM precision (the
     2026-05-29 cluster-quality fix). When the LLM judge confirms a genuine
