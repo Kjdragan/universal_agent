@@ -113,6 +113,54 @@ jobs:
             --body-file /tmp/issue-body.md \
             --label ci-failure
 
+      - name: Notify UA CI-failure auto-fix hook
+        # Fire-and-forget POST to the UA gateway's dedicated, ops-authed
+        # ci-failure hook. The gateway schedules a DURABLE one-shot ~15-min
+        # grace timer; UA (NOT this runner, NOT Simone's heartbeat) re-verifies
+        # after the grace window and either dispatches a Cody fix mission or
+        # escalates to the operator. Event-driven; no polling, no sleeping
+        # runner. Public URL + ops-token => no Tailscale, no actions/checkout
+        # (keeps this job free of the orphaned-gitlink `git exit 128` class).
+        # Non-fatal: a hook/gateway outage must never fail the issue filer.
+        env:
+          OPS_TOKEN: ${{ secrets.UA_OPS_TOKEN }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          EVENT: ${{ github.event.workflow_run.event }}
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OPS_TOKEN}" ]; then
+            echo "UA_OPS_TOKEN secret not set; skipping ci-failure hook POST."
+            exit 0
+          fi
+          BODY=$(jq -n \
+            --arg workflow "${WORKFLOW_NAME}" \
+            --arg conclusion "${CONCLUSION}" \
+            --arg head_branch "${HEAD_BRANCH}" \
+            --arg head_sha "${HEAD_SHA}" \
+            --arg run_id "${RUN_ID}" \
+            --arg run_url "${RUN_URL}" \
+            --arg event "${EVENT}" \
+            --arg pr "${PR_NUMBER}" \
+            '{workflow:$workflow, conclusion:$conclusion, head_branch:$head_branch,
+              head_sha:$head_sha, run_id:$run_id, run_url:$run_url, event:$event,
+              pr_number: (if $pr == "" then null else ($pr|tonumber) end)}')
+          HTTP=$(curl -sS -o /tmp/hook_resp.json -w '%{http_code}' --max-time 20 \
+            -X POST "https://app.clearspringcg.com/api/v1/hooks/ci-failure" \
+            -H "content-type: application/json" \
+            -H "x-ua-ops-token: ${OPS_TOKEN}" \
+            --data "${BODY}" || echo "000")
+          echo "ci-failure hook responded HTTP ${HTTP}"
+          cat /tmp/hook_resp.json 2>/dev/null || true
+          if [ "${HTTP}" != "200" ]; then
+            echo "::warning::ci-failure hook POST non-200 (${HTTP}); grace-recheck not scheduled. Non-fatal."
+          fi
+
   close-issue:
     # Mirror of file-issue but for the "CI flipped green on this branch+workflow"
     # signal. Closes any open ci-failure issues whose title matches the same

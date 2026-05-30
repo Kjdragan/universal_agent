@@ -54,3 +54,9 @@ src/universal_agent/vp/worker_loop.py
 src/universal_agent/vp/worker_main.py
 src/universal_agent/vp/worktree_utils.py
 src/universal_agent/worker.py
+
+# ci_failure_grace_recheck.py: the only subprocess use is ephemeral read-only
+# `gh` CLI calls (GitHub issue/PR/run state re-verification + issue label edits)
+# at grace-fire time. It is NOT a Task-Hub worker spawning a tracked unit of work,
+# so the worker-exit/PID observability protocol does not apply. (ci-autofix hook, 2026-05-30)
+src/universal_agent/scripts/ci_failure_grace_recheck.py

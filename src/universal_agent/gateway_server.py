@@ -15593,6 +15593,126 @@ async def issue_ops_token_endpoint(request: Request, payload: OpsTokenIssueReque
     )
 
 
+@app.post("/api/v1/hooks/ci-failure")
+async def ci_failure_hook_endpoint(request: Request):
+    """Event-driven entry point for the autonomous CI-failure auto-fix loop.
+
+    Called by ``.github/workflows/ci-failure-issue.yml`` on a
+    ``workflow_run: completed`` (``conclusion == failure``) event. We do NOT act
+    immediately: a session almost always fix-forwards its own CI failure within
+    minutes, so we schedule a **durable one-shot grace timer** (~15 min) and let
+    ``universal_agent.scripts.ci_failure_grace_recheck`` re-verify and act only on
+    a genuinely orphaned, still-red failure. The timer is a persisted cron
+    ``run_at`` job, so it survives the gateway restart that a deploy triggers.
+
+    Deterministic and decoupled from agent cognition — this is a dedicated route,
+    not the agent-dispatch hooks engine, so CI triage never enters Simone's loop.
+    Defined before the ``/api/v1/hooks/{subpath}`` catch-all so it wins routing.
+    """
+    _require_ops_auth(request)
+
+    if (os.getenv("UA_CI_AUTOFIX_ENABLED", "1").strip() not in {"1", "true", "True", "yes"}):
+        return JSONResponse({"ok": True, "disabled": True})
+
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "invalid_json"})
+    if not isinstance(payload, dict):
+        return JSONResponse(status_code=400, content={"ok": False, "error": "payload_not_object"})
+
+    workflow = str(payload.get("workflow") or payload.get("workflow_name") or "").strip()
+    head_sha = str(payload.get("head_sha") or "").strip()
+    run_id = str(payload.get("run_id") or "").strip()
+    if not workflow or not run_id:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "error": "missing_required_fields", "need": ["workflow", "run_id"]},
+        )
+
+    if _cron_service is None:
+        return JSONResponse(status_code=503, content={"ok": False, "error": "cron_service_unavailable"})
+
+    pr_number = payload.get("pr_number")
+    branch = str(payload.get("head_branch") or "").strip()
+    idempotency_key = f"{pr_number or branch}:{workflow}:{head_sha}"
+
+    # Dedup at the schedule stage: one pending grace timer per failure identity.
+    try:
+        for job in _cron_service.list_jobs():
+            meta = job.metadata or {}
+            if (
+                meta.get("system_job") == "ci_failure_grace_recheck"
+                and meta.get("idempotency_key") == idempotency_key
+                and job.next_run_at is not None
+            ):
+                return JSONResponse(
+                    {"ok": True, "deduped": True, "job_id": job.job_id, "idempotency_key": idempotency_key}
+                )
+    except Exception:
+        pass  # Dedup is best-effort; the grace-fire re-verify is the real guard.
+
+    try:
+        grace_seconds = int(os.getenv("UA_CI_AUTOFIX_GRACE_SECONDS", "900"))
+    except ValueError:
+        grace_seconds = 900
+    grace_seconds = max(60, grace_seconds)
+
+    # Pass the full context to the grace script as urlsafe-base64 JSON (no spaces,
+    # survives shlex tokenization of the `!script` command).
+    payload_b64 = base64.urlsafe_b64encode(
+        json.dumps(payload, ensure_ascii=True, default=str).encode("utf-8")
+    ).decode("ascii")
+    command = (
+        "!script universal_agent.scripts.ci_failure_grace_recheck "
+        f"--payload-b64 {payload_b64}"
+    )
+
+    try:
+        job = _cron_service.add_job(
+            user_id="ci_autofix_hook",
+            workspace_dir=None,
+            command=command,
+            description=f"CI auto-fix grace re-check: {workflow} run {run_id}",
+            run_at=time.time() + grace_seconds,
+            delete_after_run=True,
+            timeout_seconds=600,
+            enabled=True,
+            metadata={
+                "system_job": "ci_failure_grace_recheck",
+                "source": "ci_failure_hook",
+                "idempotency_key": idempotency_key,
+                "workflow": workflow,
+                "run_id": run_id,
+                "pr_number": pr_number,
+                "head_sha": head_sha,
+            },
+        )
+    except Exception as exc:
+        logger.exception("ci-failure hook: failed to schedule grace timer")
+        return JSONResponse(
+            status_code=500, content={"ok": False, "error": f"schedule_failed:{type(exc).__name__}"}
+        )
+
+    logger.info(
+        "ci-failure hook: scheduled grace re-check job=%s workflow=%s run=%s pr=%s grace=%ss",
+        job.job_id,
+        workflow,
+        run_id,
+        pr_number,
+        grace_seconds,
+    )
+    return JSONResponse(
+        {
+            "ok": True,
+            "scheduled": True,
+            "job_id": job.job_id,
+            "grace_seconds": grace_seconds,
+            "idempotency_key": idempotency_key,
+        }
+    )
+
+
 @app.post("/api/v1/hooks/{subpath:path}")
 async def hooks_endpoint(request: Request, subpath: str):
     if not _hooks_service:
