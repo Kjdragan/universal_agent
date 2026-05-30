@@ -10,6 +10,9 @@ name: PR Auto-Merge
 # Everything else (claude/*, worktree-*, fix/*, docs/*, etc.) auto-merges
 # once pr-validate.yml passes. Safety is in CI, not in branch naming.
 #
+# AUTHORITATIVE branch policy (keep this + pr-rebase-watchdog.yml in sync):
+#   project_docs/06_platform/04_deployment_and_cicd.md § "Branch policy — single source of truth"
+#
 # EXCEPTION — the `ci-autofix` label (2026-05-30): a PR carrying that label
 # auto-merges regardless of branch prefix (including codie/*). The label is
 # applied ONLY by the autonomous CI-failure auto-fix loop (Simone's heartbeat
