@@ -178,6 +178,31 @@ When using the `infisical` CLI directly (not the REST loader above), several sha
 - **Expired CLI session silently triggers an interactive login** instead of erroring — empty output is the tell that this happened. Always pass `--token` (a universal-auth token from the machine-id creds) so headless invocations fail loudly instead of hanging on a login prompt.
 - **Bare `infisical secrets` with no subcommand hangs / returns empty** when piped. Use an explicit subcommand (`secrets get`, `run -- <cmd>`).
 
+## Self-service secret access for agents (machine-identity)
+
+Agents (Claude Code, Cody, etc.) have machine-identity Infisical creds pre-loaded in their shell — fetch secrets directly instead of asking the operator. Sources: Kevin's desktop `~/.config/ua/infisical-machine-id`, VPS `/opt/universal_agent/.env`. Both export `INFISICAL_CLIENT_ID` / `INFISICAL_CLIENT_SECRET` / `INFISICAL_PROJECT_ID`. The interactive user-CLI session at `~/.infisical/infisical-config.json` is flaky for headless calls — **DO NOT rely on it; always use universal-auth (machine-identity)**.
+
+**Inject every secret into a child process (preferred pattern):**
+```bash
+TOK=$(infisical login --method=universal-auth \
+        --client-id="$INFISICAL_CLIENT_ID" \
+        --client-secret="$INFISICAL_CLIENT_SECRET" --plain --silent)
+INFISICAL_TOKEN="$TOK" infisical run \
+    --projectId="$INFISICAL_PROJECT_ID" --env=development --silent -- \
+    <your command>
+```
+
+**Single-key read:** swap `run … -- <cmd>` for `secrets get KEY_NAME --plain --silent` (token + projectId/env flags stay the same).
+
+**Guardrails — NON-NEGOTIABLE:**
+- **NEVER print secret VALUES to chat.** `infisical secrets` with `--plain` dumps `KEY=VALUE` pairs (not just keys). Filter with `awk -F= '{print $1}'` when you only want to enumerate names.
+- Prefer `infisical run -- CMD` over fetching to shell variables — the secret stays inside the child process and never lands in your env or command history.
+- Ask the operator before reading production secrets if the task could be done in dev.
+- Never `infisical secrets set` / delete / rotate without explicit operator approval.
+- For UA's own Python services, the canonical bootstrap is still `initialize_runtime_secrets()` — use the CLI only for ad-hoc diagnostics, script invocations, and one-off lookups.
+
+**Desktop `claude` Hostinger lazy-load:** bare `claude` on Kevin's desktop lazy-loads `HOSTINGER_API_TOKEN` (and only that) via `_ua_load_mcp_secrets` in `~/.bashrc`, cached at `~/.cache/ua/hostinger_token`. This replaced an eager `infisical secrets get` block on 2026-05-17 because it was hanging Antigravity terminals on an interactive arrow-key prompt that `--silent` didn't suppress. If MCP Hostinger stops resolving, `rm ~/.cache/ua/hostinger_token` forces a refresh on next `claude` launch.
+
 ## Interactive `claude` launcher (the MCP placeholder path)
 
 Interactive `claude` sessions do **not** run the UA service bootstrap, so `${VAR}` placeholders in `.mcp.json` (e.g. `AGENTMAIL_API_KEY`, `DISCORD_BOT_TOKEN`, `HOSTINGER_API_TOKEN`) would substitute to empty and MCP children would fail. `scripts/claude_with_mcp_env.sh` → `scripts/_claude_launcher.py` solves this:

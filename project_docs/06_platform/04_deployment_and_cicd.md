@@ -9,8 +9,8 @@ code_paths:
   - .github/workflows/pr-auto-merge.yml
   - .github/workflows/pr-rebase-watchdog.yml
   - .github/workflows/ci-failure-issue.yml
-  - .github/workflows/nightly-doc-drift-audit.yml
-  - .github/workflows/openclaw-release-sync.yml
+  - .github/workflows/doc-audit.yml
+  - .github/workflows/doc-nightly.yml
   - scripts/deploy_validate_runtime.sh
   - scripts/check_crashloop.sh
 last_verified: 2026-05-29
