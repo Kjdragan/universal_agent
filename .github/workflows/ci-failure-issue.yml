@@ -30,8 +30,6 @@ on:
       - PR Validate
       - PR Auto-Merge
       - Auto-Promote to Production
-      - Nightly Documentation Drift Audit
-      - OpenClaw Release Sync
     types: [completed]
 
 permissions:
