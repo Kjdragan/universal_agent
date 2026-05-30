@@ -10,6 +10,16 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 
+
+def _input_snippet(text: str, limit: int = 200) -> str:
+    """Collapse whitespace and truncate `text` for safe inclusion in error
+    messages / debug logs, so a multi-KB LLM blob can't bloat a log line."""
+    collapsed = " ".join(text.split())
+    if len(collapsed) > limit:
+        return collapsed[:limit] + "...[truncated]"
+    return collapsed
+
+
 def extract_json_payload(
     text: str, 
     model: Optional[Type[T]] = None, 
@@ -42,25 +52,26 @@ def extract_json_payload(
         normalized_text = re.sub(r"\bTrue\b", "true", normalized_text)
         normalized_text = re.sub(r"\bFalse\b", "false", normalized_text)
         normalized_text = re.sub(r"\bNone\b", "null", normalized_text)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Layer 0 (Python-literal normalization) failed, using raw text: %s", e)
 
     # Layer 1: Standard Parse
     try:
         data = json.loads(normalized_text)
         return _validate(data, model, require_model)
-    except json.JSONDecodeError:
-        pass
+    except json.JSONDecodeError as e:
+        logger.debug("Layer 1 (json.loads) failed: %s", e)
 
     # Layer 2: json_repair.loads
     try:
         data = json_repair.loads(normalized_text)
-        # STRICTOR: Only accept if it's a dict or list. 
+        # STRICTOR: Only accept if it's a dict or list.
         # If json_repair returns a string, it likely failed to find a real structure.
         if isinstance(data, (dict, list)):
             return _validate(data, model, require_model)
-    except Exception:
-        pass
+        logger.debug("Layer 2 (json_repair) returned non-structural %s, continuing", type(data).__name__)
+    except Exception as e:
+        logger.debug("Layer 2 (json_repair) failed: %s", e)
 
     # Layer 3: Regex extraction
     # Find the largest {...} or [...] block
@@ -71,10 +82,16 @@ def extract_json_payload(
             data = json_repair.loads(potential_json)
             if isinstance(data, (dict, list)):
                 return _validate(data, model, require_model)
-        except Exception:
-            pass
+            logger.debug("Layer 3 (regex+json_repair) returned non-structural %s", type(data).__name__)
+        except Exception as e:
+            logger.debug("Layer 3 (regex+json_repair) failed: %s", e)
+    else:
+        logger.debug("Layer 3 (regex extraction) found no {...}/[...] block in input")
 
-    raise ValueError("Failed to extract or repair JSON payload from the provided text.")
+    raise ValueError(
+        "Failed to extract or repair JSON payload from the provided text. "
+        f"Input snippet: {_input_snippet(text)!r}"
+    )
 
 def _validate(data: Any, model: Optional[Type[T]], require_model: bool) -> Union[Dict[str, Any], T, None]:
     """Internal helper to handle Pydantic validation if a model is provided."""
