@@ -26,7 +26,7 @@ def _get_lessons_learned_content() -> str:
             return doc_path.read_text(encoding="utf-8")
         return "No lessons learned document found."
     except Exception as exc:
-        logger.error(f"Failed to read lessons learned document: {exc}")
+        logger.error("Failed to read lessons learned document: %s", exc)
         return "Error reading lessons learned."
 
 def _build_evaluation_prompt(raw_report_text: str, lessons_learned: str) -> str:
@@ -135,8 +135,7 @@ async def evaluate_health_snapshot(raw_report_dict: dict[str, Any]) -> Dict[str,
             "human_escalations": parsed.get("human_escalations", [])
         }
     except Exception as exc:
-        logger.error(f"Health Evaluator LLM call failed: {exc}", exc_info=True)
-        # Fallback to a safe empty structure
+        logger.error("Health Evaluator LLM call failed: %s", exc,  exc_info=True)        # Fallback to a safe empty structure
         return {
             "ignore": [],
             "simone_directives": ["Error running health evaluator. Please manually review the raw report."],

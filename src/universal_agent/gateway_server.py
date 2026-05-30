@@ -285,7 +285,7 @@ _default_ws_dir = BASE_DIR / "AGENT_RUN_WORKSPACES"
 env_ws_dir = os.getenv("UA_WORKSPACES_DIR")
 if env_ws_dir:
     WORKSPACES_DIR = Path(env_ws_dir).resolve()
-    logger.info(f"📁 Workspaces Directory Overridden: {WORKSPACES_DIR}")
+    logger.info("Workspaces Directory Overridden: %s", WORKSPACES_DIR)
 else:
     WORKSPACES_DIR = _default_ws_dir
 
@@ -1833,7 +1833,7 @@ if _allowed_users_str:
             "➕ Added runtime identities to allowlist: %s",
             ", ".join(_added_runtime_identities),
         )
-    logger.info(f"🔒 Authenticated Access Only. Allowed Users: {len(ALLOWED_USERS)}")
+    logger.info("Authenticated Access Only. Allowed Users: %s", len(ALLOWED_USERS))
 else:
     logger.info("🔓 Public Access Mode (No Allowlist configured)")
 
@@ -14299,12 +14299,12 @@ class ConnectionManager:
         self.session_connections[session_id].add(connection_id)
         _set_session_connections(session_id, len(self.session_connections.get(session_id, set())))
         
-        logger.info(f"Gateway WebSocket connected: {connection_id} (session: {session_id})")
+        logger.info("Gateway WebSocket connected: %s (session: %s)", connection_id, session_id)
 
     def disconnect(self, connection_id: str, session_id: str):
         if connection_id in self.active_connections:
             del self.active_connections[connection_id]
-            logger.info(f"Gateway WebSocket disconnected: {connection_id}")
+            logger.info("Gateway WebSocket disconnected: %s", connection_id)
             
         if session_id in self.session_connections:
             self.session_connections[session_id].discard(connection_id)
@@ -14347,7 +14347,7 @@ class ConnectionManager:
                 if stale_session:
                     self.disconnect(connection_id, stale_session)
                 _increment_metric("ws_stale_evictions")
-                logger.error(f"Failed to send to {connection_id}: {e}")
+                logger.error("Failed to send to %s: %s", connection_id, e)
 
     async def broadcast(self, session_id: str, data: dict, exclude_connection_id: Optional[str] = None):
         """Send a message to all connections associated with a session_id."""
@@ -14392,7 +14392,7 @@ class ConnectionManager:
                 except Exception as e:
                     _increment_metric("ws_send_failures")
                     stale_connections.append(connection_id)
-                    logger.error(f"Failed to broadcast to {connection_id}: {e}")
+                    logger.error("Failed to broadcast to %s: %s", connection_id, e)
 
         for connection_id in global_targets:
             if connection_id == exclude_connection_id:
@@ -14416,7 +14416,7 @@ class ConnectionManager:
                 except Exception as e:
                     _increment_metric("ws_send_failures")
                     stale_connections.append(connection_id)
-                    logger.error(f"Failed to broadcast annotated payload to {connection_id}: {e}")
+                    logger.error("Failed to broadcast annotated payload to %s: %s", connection_id, e)
 
         for stale_connection in stale_connections:
             stale_session = self._session_id_for_connection(stale_connection) or session_id
@@ -14611,7 +14611,7 @@ async def lifespan(app: FastAPI):
     # Initialize runtime database (required by ProcessTurnAdapter -> setup_session)
     import universal_agent.main as main_module
     db_path = get_runtime_db_path()
-    logger.info(f"📊 Connecting to runtime DB: {db_path}")
+    logger.info("Connecting to runtime DB: %s", db_path)
     main_module.runtime_db_conn = connect_runtime_db(db_path)
     # Enable WAL mode for concurrent access (CLI + gateway can coexist)
     main_module.runtime_db_conn.execute("PRAGMA journal_mode=WAL")
@@ -15980,7 +15980,7 @@ def _scan_freelance_opportunities() -> list[dict]:
                         "created_at": created_at,
                     })
             except Exception as e:
-                logger.warning(f"Failed to parse opportunity file {filepath}: {e}")
+                logger.warning("Failed to parse opportunity file %s: %s", filepath, e)
     return opportunities
 
 
@@ -16024,7 +16024,7 @@ def _scan_freelance_applications() -> list[dict]:
                         "artifact_path": str(filepath),
                     })
             except Exception as e:
-                logger.warning(f"Failed to parse application file {filepath}: {e}")
+                logger.warning("Failed to parse application file %s: %s", filepath, e)
     return applications
 
 
@@ -16111,7 +16111,7 @@ async def health(response: Response):
         db_status = "error"
         db_error = str(e)
         is_healthy = False
-        logger.error(f"Health check failed: {e}")
+        logger.error("Health check failed: %s", e)
 
     if not is_healthy:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
@@ -17227,7 +17227,7 @@ async def upload_session_file(
             text_content = content_bytes.decode("utf-8", errors="replace")
         result["content"] = text_content
 
-    logger.info(f"📎 File uploaded: {relative_path} ({len(content_bytes)} bytes) for session {safe_id}")
+    logger.info("File uploaded: %s (%s bytes) for session %s", relative_path, len(content_bytes), safe_id)
     return result
 
 
@@ -17265,7 +17265,7 @@ async def create_session(request: CreateSessionRequest, http_request: Request):
     # 1. Enforce Allowlist
     final_user_id = resolve_user_id(request.user_id)
     if not is_user_allowed(final_user_id):
-        logger.warning(f"⛔ Access Denied: User '{final_user_id}' not in allowlist.")
+        logger.warning("Access Denied: User '%s' not in allowlist.", final_user_id)
         raise HTTPException(status_code=403, detail="Access denied: User not allowed.")
 
     workspace_dir = _sanitize_workspace_dir_or_400(request.workspace_dir)
@@ -17311,7 +17311,7 @@ async def create_session(request: CreateSessionRequest, http_request: Request):
             is_live_session=True,
         )
     except Exception as e:
-        logger.error(f"Failed to create session: {e}")
+        logger.error("Failed to create session: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -17944,7 +17944,7 @@ async def dashboard_discord_recent_messages(
                     data = json.load(f)
                 target_server_ids = {srv["server_id"] for srv in data.get("servers", []) if srv.get("domain") == category}
             except Exception as e:
-                logger.error(f"Error reading discord watchlist for category filter: {e}")
+                logger.error("Error reading discord watchlist for category filter: %s", e)
                 target_server_ids = set()
 
     conn = _discord_connect()
@@ -28375,9 +28375,9 @@ async def dashboard_tutorial_run_delete(run_path: str):
 
     try:
         shutil.rmtree(run_dir)
-        logger.info(f"Deleted tutorial run directory: {run_dir}")
+        logger.info("Deleted tutorial run directory: %s", run_dir)
     except Exception as exc:
-        logger.error(f"Failed to delete tutorial run directory {run_dir}: {exc}")
+        logger.error("Failed to delete tutorial run directory %s: %s", run_dir, exc)
         raise HTTPException(status_code=500, detail=f"Failed to delete run: {exc}")
 
     return {"deleted": True, "run_path": rel}
@@ -29608,7 +29608,7 @@ async def vision_describe(request: VisionDescribeRequest):
                 "description": description
             }
     except httpx.HTTPStatusError as e:
-        logger.error(f"Vision API HTTP error: {e.response.text}")
+        logger.error("Vision API HTTP error: %s", e.response.text)
         raise HTTPException(status_code=502, detail=f"Vision API returned an error: {e.response.status_code}")
     except Exception as e:
         logger.exception("Vision API error")
@@ -31648,7 +31648,7 @@ async def run_cron_job(job_id: str):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Failed to run chron job: {e}")
+        logger.error("Failed to run chron job: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -33582,22 +33582,22 @@ async def ops_skill_doc(request: Request, skill_key: str):
     _require_ops_auth(request)
     catalog = _load_skill_catalog()
     normalized = skill_key.strip().lower()
-    logger.info(f"Docs requested for skill: '{skill_key}' (normalized: '{normalized}')")
+    logger.info("Docs requested for skill: '%s' (normalized: '%s')", skill_key, normalized)
     
     for s in catalog:
         name_norm = str(s.get("name", "")).strip().lower()
         if name_norm == normalized:
             path = s.get("path")
-            logger.info(f"Found match: {s.get('name')} at path: {path}")
+            logger.info("Found match: %s at path: %s", s.get('name'), path)
             if path and os.path.exists(path):
                 return {"skill": s.get("name"), "content": Path(path).read_text(encoding="utf-8")}
             else:
-                logger.warning(f"Skill path does not exist: {path}")
+                logger.warning("Skill path does not exist: %s", path)
                 # Fallback: check if path is relative to repo root?
                 # The path should be absolute from _load_skill_catalog but let's be sure
                 return {"skill": s.get("name"), "content": f"Use locally at: {path}\n\n(File not found at server runtime)"}
                 
-    logger.warning(f"Skill not found in catalog: {normalized}. Available: {[s.get('name') for s in catalog]}")
+    logger.warning("Skill not found in catalog: %s. Available: %s", normalized, [s.get('name') for s in catalog])
     raise HTTPException(status_code=404, detail="Skill documentation not found")
 
 
@@ -34250,7 +34250,7 @@ async def websocket_stream(
             _increment_metric("resume_failures")
             _increment_metric("ws_attach_attempts")
             _increment_metric("ws_attach_failures")
-            logger.exception(f"Failed to resume session {session_id}")
+            logger.exception("Failed to resume session %s", session_id)
             await websocket.close(code=1011, reason="Internal Error")
             manager.disconnect(connection_id, session_id)
             return
@@ -34262,7 +34262,7 @@ async def websocket_stream(
 
     # 1. Enforce Allowlist for WebSocket
     if session_id != "global_agent_flow" and not is_user_allowed(session.user_id):
-        logger.warning(f"⛔ Access Denied (WS): User '{session.user_id}' not in allowlist.")
+        logger.warning("Access Denied (WS): User '%s' not in allowlist.", session.user_id)
         _increment_metric("ws_attach_failures")
         await websocket.close(code=4003, reason="Access denied")
         manager.disconnect(connection_id, session_id)
@@ -34840,9 +34840,9 @@ async def websocket_stream(
                                  success = True
                     
                     if not success:
-                         logger.warning(f"Failed to resolve input {input_id} for session {session_id}")
+                         logger.warning("Failed to resolve input %s for session %s", input_id, session_id)
                     else:
-                         logger.info(f"Resolved input {input_id} for session {session_id}")
+                         logger.info("Resolved input %s for session %s", input_id, session_id)
                 
                 elif msg_type == "broadcast_test":
                      # Test event to verify broadcast capability (Phase 1 verification)
@@ -34881,7 +34881,7 @@ async def websocket_stream(
                     )
 
             except Exception as e:
-                logger.error(f"Error handling message: {e}")
+                logger.error("Error handling message: %s", e)
                 await manager.send_json(
                     connection_id,
                     {
@@ -34899,11 +34899,11 @@ async def websocket_stream(
             endpoint="gateway_session_stream",
         )
         manager.disconnect(connection_id, session_id)
-        logger.info(f"Gateway WebSocket disconnected: {connection_id}")
+        logger.info("Gateway WebSocket disconnected: %s", connection_id)
     except Exception as e:
         _record_ws_close(None, str(e), endpoint="gateway_session_stream")
         manager.disconnect(connection_id, session_id)
-        logger.error(f"Gateway WebSocket error: {e}")
+        logger.error("Gateway WebSocket error: %s", e)
 
 
 # =============================================================================
