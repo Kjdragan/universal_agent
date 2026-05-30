@@ -22,9 +22,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -117,13 +119,48 @@ def _judge(client, model: str, doc_rel: str, doc_text: str, code_text: str) -> d
         return {"verdict": "parse_error", "findings": [], "_raw": raw[:400]}
 
 
+_LAST_VERIFIED_RE = re.compile(r"^(last_verified:[ \t]*).*$", re.MULTILINE)
+
+
+def _stamp_last_verified(doc_rel: str, today: str) -> bool:
+    """Bump a doc's frontmatter ``last_verified`` to ``today``.
+
+    Only rewrites the date value inside the leading ``---`` frontmatter block.
+    Returns True if the file changed. This is what makes the nightly sweep
+    *rotate*: a doc judged accurate moves to the back of the oldest-verified
+    queue (``build_accuracy_batch`` orders by ``last_verified`` ascending), so
+    the next night audits the next-oldest batch instead of re-judging this one.
+    """
+    path = DOCS_DIR / doc_rel
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    if not text.startswith("---"):
+        return False
+    end = text.find("\n---", 3)  # close of the frontmatter block
+    if end == -1:
+        return False
+    head, body = text[:end], text[end:]
+    new_head, n = _LAST_VERIFIED_RE.subn(rf"\g<1>{today}", head, count=1)
+    if n == 0 or new_head == head:
+        return False
+    path.write_text(new_head + body, encoding="utf-8")
+    return True
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Nightly ZAI-backed doc-accuracy sweep")
     ap.add_argument("--batch", type=int, default=8, help="oldest-verified docs to audit")
     ap.add_argument("--model", default="", help="override model (default resolve_sonnet → glm-5-turbo)")
     ap.add_argument("--open-issue", action="store_true", help="open a GH issue if drift is found")
     ap.add_argument("--dry-run", action="store_true", help="build prompts only; no LLM call")
+    ap.add_argument("--stamp", action="store_true",
+                    help="bump last_verified=today on docs judged accurate (enables corpus rotation)")
+    ap.add_argument("--today", default="",
+                    help="date to stamp (YYYY-MM-DD); defaults to today (UTC)")
     args = ap.parse_args()
+    today = args.today or datetime.date.today().isoformat()
 
     batch = build_accuracy_batch(args.batch)
     if not batch:
@@ -151,6 +188,7 @@ def main() -> int:
 
     print(f"Auditing {len(batch)} docs via model={model}\n")
     drifted = []
+    accurate: list[str] = []
     for d in batch:
         doc_rel = d["doc"]
         doc_text = (DOCS_DIR / doc_rel).read_text(encoding="utf-8", errors="ignore")
@@ -165,6 +203,10 @@ def main() -> int:
         print(f"  {v:12} {doc_rel}  ({n} finding(s))")
         if v in ("minor_drift", "major_drift") and verdict.get("findings"):
             drifted.append((doc_rel, verdict))
+        elif v == "accurate":
+            # Only drift-free docs rotate; drifted/parse_error docs keep their old
+            # last_verified so they stay at the front of the oldest-first queue.
+            accurate.append(doc_rel)
 
     # ---- report ----
     lines = [f"# Nightly doc-accuracy sweep — {len(batch)} docs audited (model={model})", ""]
@@ -194,6 +236,16 @@ def main() -> int:
             print(f"\nOpened GH issue: {title}")
         except Exception as exc:  # noqa: BLE001
             print(f"::warning::Could not open GH issue: {exc}")
+
+    # ---- rotation: stamp accurate docs so the queue advances ----
+    if args.stamp:
+        stamped = [d for d in accurate if _stamp_last_verified(d, today)]
+        if stamped:
+            print(f"\nStamped last_verified={today} on {len(stamped)} accurate doc(s):")
+            for d in stamped:
+                print(f"  • {d}")
+        else:
+            print("\nNo accurate docs to stamp this batch (queue unchanged).")
 
     return 0  # informational — drift is reported, not a build failure
 
