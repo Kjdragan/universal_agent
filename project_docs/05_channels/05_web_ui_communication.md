@@ -190,7 +190,9 @@ Send failures/timeouts (`WS_SEND_TIMEOUT_SECONDS`) evict stale connections and b
 
 Inside the message loop (`execute`/`query`):
 
-- `/btw <prompt>` enters an ephemeral sidebar session; `/return` exits it.
+- `/btw <prompt>` enters an ephemeral sidebar session; `/return` exits it. This is UA's own
+  minor command (in-memory state via `session_hub.py::set_active_sidebar`), **not** Claude Code's
+  native `/btw` slash command — they are unrelated.
 - Each turn is admitted under a per-session lock via `_admit_turn`, which returns `accepted` / `busy` / `duplicate_in_progress` / `duplicate_completed`. Only one turn runs per session at a time; rejected turns get a `status` + `query_complete(completed=false)`.
 - Before admission, the request is run through session **policy** (`evaluate_request_against_policy`): a `deny` decision emits an error + notification; `require_approval` parks the request in `_pending_gated_requests`, raises an approval, and the user must approve then send `resume`/`continue`.
 - The accepted turn runs in a background task (`_run_gateway_session_request`), and `gateway.execute(...)` events are broadcast to all session connections via `manager.broadcast`.
