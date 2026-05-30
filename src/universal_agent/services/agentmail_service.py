@@ -506,6 +506,12 @@ class AgentMailService:
 
         # SDK client (lazy init)
         self._client: Any = None
+        # We own the httpx.AsyncClient injected into AsyncAgentMail so we can
+        # close it deterministically in shutdown(). Without ownership the SDK
+        # creates its own client whose finalizer fires aclose() AFTER
+        # asyncio.run() tears down the loop in one-shot CLI contexts (cron
+        # digests), logging a noisy "Event loop is closed" RuntimeError.
+        self._httpx_client: Any = None
         self._inbox_id: str = ""
         self._inbox_ids: list[str] = []
         self._inbox_address: str = ""
@@ -600,7 +606,16 @@ class AgentMailService:
 
         try:
             from agentmail import AsyncAgentMail
-            self._client = AsyncAgentMail(api_key=api_key, timeout=self._api_timeout_seconds)
+            import httpx
+            # Own the httpx client (SDK-supported extension point) so shutdown()
+            # can close it inside the running loop. See _httpx_client comment in
+            # __init__ for the "Event loop is closed" failure this prevents.
+            self._httpx_client = httpx.AsyncClient(timeout=self._api_timeout_seconds)
+            self._client = AsyncAgentMail(
+                api_key=api_key,
+                timeout=self._api_timeout_seconds,
+                httpx_client=self._httpx_client,
+            )
         except Exception as exc:
             logger.error("📧 Failed to initialize AgentMail client: %s", exc)
             self._enabled = False
@@ -662,6 +677,18 @@ class AgentMailService:
             except Exception:
                 poll_task.cancel()
             self._poll_task = None
+        # Close the httpx client we injected into AsyncAgentMail WHILE the event
+        # loop is still running. Skipping this leaves the client for the GC
+        # finalizer, which schedules aclose() on a loop asyncio.run() has already
+        # closed (one-shot CLI contexts) and raises "Event loop is closed".
+        httpx_client = self._httpx_client
+        if httpx_client is not None:
+            try:
+                await httpx_client.aclose()
+            except Exception as exc:
+                logger.debug("📧 Error closing AgentMail httpx client: %s", exc)
+            self._httpx_client = None
+        self._client = None
         self._started = False
         logger.info("📧 AgentMail service stopped")
 
