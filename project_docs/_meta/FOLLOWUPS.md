@@ -3,23 +3,22 @@
 Open items surfaced during the code-first reconstruction (Phases 1–2). None block the rebuilt
 corpus; each is a decision or a scoped addition for after this PR merges.
 
-## Coverage gaps (candidate new docs)
+## Coverage gaps — RESOLVED (PR-C)
 
-1. **SDK lifecycle hooks subsystem is undocumented.** `arch-hooks` (`01_architecture/05_hook_system.md`)
-   documents `hooks_service.py` (HTTP **webhook ingress**). But `hooks.py::AgentHookSet` is a *separate*
-   subsystem — Claude SDK lifecycle hooks (PreToolUse/PostToolUse guardrails, `DISALLOWED_TOOLS`, workspace
-   guard) + permissions + subagent architecture — which the legacy `Hook_System_Architecture.md` /
-   `002_SDK_PERMISSIONS_HOOKS_SUBAGENTS.md` actually described. The new doc adds a redirect but does not
-   fully cover it. **Recommend:** add `01_architecture/07_sdk_lifecycle_hooks_and_permissions.md`.
+1. ✅ **SDK lifecycle hooks — DONE.** Added `02_execution_core/06_sdk_lifecycle_hooks_and_guardrails.md`
+   (code-first from `hooks.py` + `guardrails/workspace_guard.py` + `constants.py`): PreToolUse/PostToolUse
+   gating, `DISALLOWED_TOOLS`, workspace guard, heartbeat write allowlist, subagent detection, TaskStop
+   rejection, event emission. Distinct from `05_hook_system` (webhook ingress).
 
-1b. **`/btw` sidebar sessions need a proper home.** The Phase 0 audit wrongly flagged `/btw` as vaporware;
-   it is **real** (`gateway_server.py` handler + `session_hub.py::set_active_sidebar`/`get_active_sidebar`).
-   It is currently only a note in `agents-simone`. **Recommend:** document sidebar sessions properly in the
-   web-UI/session doc (`05_channels/05_web_ui_communication.md` or a new session doc).
+1b. ✅ **`/btw` — DONE (clarified, no dedicated doc needed).** It is UA's own minor in-memory sidebar-session
+   command (`session_hub.py`), **unrelated to Claude Code's native `/btw`**. Documented where it lives
+   (`05_channels/05_web_ui_communication.md`); the `agents-simone` note now states the distinction. No
+   separate doc — it's a one-line feature.
 
-2. **Mission Control scope mismatch.** `intel-mission-control` is scoped to `supervisors/` (on-demand
-   snapshot briefs), but a separate, larger, live three-tier "Mission Control" intelligence surface exists.
-   **Recommend:** confirm whether that surface warrants its own doc or a scope expansion.
+2. ✅ **Mission Control — DONE (scope expanded).** `04_intelligence/11_mission_control_intelligence.md` now
+   covers the full tiered stack (sweeper, dedicated DB, tier-0 tiles, tier-1 cards, tier-2 Chief-of-Staff,
+   event titles, dashboard endpoints) — not just the `supervisors/` snapshots. Flagged inline: tiered-stack
+   endpoints lack the ops-auth/HQ gate the supervisor endpoints enforce (`> [VERIFY]`).
 
 ## Dispose / revive decisions (operator)
 

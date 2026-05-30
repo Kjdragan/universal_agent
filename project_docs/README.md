@@ -36,6 +36,7 @@ _Gateway, sessions, execution engine, task hub, dispatch, durable, URW, workspac
 - **[Durable Execution](02_execution_core/03_durable_execution.md)** — Durable state, tool-call ledger, worker pool, tool classification, checkpointing. _(verified 2026-05-29)_
 - **[URW Orchestration](02_execution_core/04_urw_orchestration.md)** — Multi-phase task orchestration: decomposer, phase planner, evaluator, evaluation policy, state/artifacts. _(verified 2026-05-29)_
 - **[Workspaces & Artifacts](02_execution_core/05_workspaces_and_artifacts.md)** — Workspace resolution (4-tier fallback), artifacts dir resolution, run workspaces, guardrails, remote sync. _(verified 2026-05-29)_
+- **[SDK Lifecycle Hooks & Guardrails](02_execution_core/06_sdk_lifecycle_hooks_and_guardrails.md)** — PreToolUse/PostToolUse guardrail engine: tool gating (DISALLOWED_TOOLS), workspace write guard, heartbeat write allowlist, code-mutation actor resolution, subagent detection, TaskStop rejection, tool-call event emission. _(verified 2026-05-29)_
 
 ## 03_agents
 
@@ -106,4 +107,4 @@ _Operating playbook, verification rules, dormancy, VPS recovery, incident patter
 
 ---
 
-_48/48 canonical docs present. Legacy point-in-time reports are archived (search-excluded) — see `00_DOCUMENTATION_REFACTOR_PLAN.md` §5._
+_49/49 canonical docs present. Legacy point-in-time reports are archived (search-excluded) — see `00_DOCUMENTATION_REFACTOR_PLAN.md` §5._
