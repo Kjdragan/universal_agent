@@ -15,7 +15,7 @@ last_verified: 2026-05-29
 
 ## TL;DR / Status
 
-**Agent College is an experimental, mostly-dormant self-improvement loop. It is NOT wired into the live VPS production runtime** (the gateway / systemd / heartbeat stack described in the rest of these docs). It belongs to an older / alternate **Railway + Telegram-bot deployment** of `universal_agent` that boots from `start.sh` and persists state in a local SQLite `Memory_System`. Treat it as **legacy / vestigial** unless you are specifically reviving the Railway deployment.
+**Agent College is an experimental, mostly-dormant self-improvement loop. It is NOT wired into the live VPS production runtime** (the gateway / systemd / heartbeat stack described in the rest of these docs). It belongs to an older / alternate **Railway + Telegram-bot deployment** of `universal_agent` that boots from `start.sh` and persists state in the local `Memory_System` package (a hybrid SQLite + ChromaDB store; the College-relevant tables are SQLite). Treat it as **legacy / vestigial** unless you are specifically reviving the Railway deployment.
 
 Evidence it is not in the production path:
 - The VPS production deploy workflow (`.github/workflows/`) contains **zero** references to `agent_college`, `AgentCollege`, `start.sh`, `railway`, `Memory_System`, or `logfire_fetch`.
@@ -52,7 +52,7 @@ flowchart TD
     PROF[ProfessorAgent.check_sandbox] -->|read| BLOCK
     PROF -->|human-approved create_skill| INIT[.claude/skills/skill-creator/scripts/init_skill.py]
     BLOCK --> MM[Memory_System.manager.MemoryManager]
-    MM --> STORE[(Memory_System SQLite:<br/>memory_blocks + processed_traces)]
+    MM --> STORE[(Memory_System hybrid store:<br/>SQLite agent_core.db<br/>core_blocks + processed_traces<br/>+ ChromaDB chroma_db archival)]
 ```
 
 There are **two parallel ingest paths**, and they are not the same code, despite near-identical logic:
@@ -86,9 +86,9 @@ Standalone worker (see "Designed but unwired" above). Configures Logfire with `s
 
 ## Persistence — `Memory_System`
 
-College state lives in the top-level `Memory_System/` SQLite package, **not** in any UA production DB (`runtime_state.db` / `activity_state.db`).
+College state lives in the top-level `Memory_System/` package, **not** in any UA production DB (`runtime_state.db` / `activity_state.db`). It is a **hybrid store** (`storage.py::StorageManager` docstring: "SQLite for Core Memory ... ChromaDB for Archival Memory"): the SQLite file is `agent_core.db`, and a `chromadb.PersistentClient` is opened against a sibling `chroma_db/` dir for archival/semantic search. Only the SQLite side (`core_blocks`, `processed_traces`) is College-relevant.
 
-- `Memory_System/storage.py` creates a `processed_traces(trace_id PRIMARY KEY, timestamp)` table explicitly labeled "(Agent College)", plus `memory_blocks` and an `archival_fts` FTS5 table.
+- `Memory_System/storage.py::StorageManager._init_sqlite` creates a `processed_traces(trace_id PRIMARY KEY, timestamp)` table explicitly labeled "(Agent College)", plus a `core_blocks` table (label/value/description/is_editable/last_updated — this is the block store, **not** named `memory_blocks`) and an `archival_fts` FTS5 virtual table.
 - `Memory_System/manager.py::MemoryManager`:
   - `get_memory_block(label)` / `update_memory_block(label, value)` — the block accessors Critic/Scribe/Professor use. `update_memory_block` **auto-creates** a block if the label is missing (comment explicitly cites the `AGENT_COLLEGE_NOTES` "initialized late" case).
   - `mark_trace_processed(trace_id)` / `has_trace_been_processed(trace_id)` — the dedup pair `runner.py` relies on.

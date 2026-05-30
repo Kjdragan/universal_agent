@@ -21,7 +21,7 @@ last_verified: 2026-05-29
 
 Infisical is the single source of truth (SSOT) for all Universal Agent application configuration and secrets. At process start, every UA Python service calls `initialize_runtime_secrets()` (`src/universal_agent/infisical_loader.py`), which authenticates to Infisical with machine-identity (universal-auth) credentials, fetches every secret in the project at the configured path, and injects them onto `os.environ`. The vault is **authoritative**: fetched values overwrite anything already in the environment, with a small carve-out for "bootstrap identity" keys (machine role/stage/slug and the Infisical creds themselves).
 
-There is exactly one bootstrap dependency that does **not** come from Infisical: the four machine-identity credentials needed to talk to Infisical in the first place. These live in a tiny `.env` file on disk (`INFISICAL_CLIENT_ID`, `INFISICAL_CLIENT_SECRET`, `INFISICAL_PROJECT_ID`, `INFISICAL_ENVIRONMENT`). Everything else is pulled from the vault.
+There is exactly one bootstrap dependency that does **not** come from Infisical: the machine-identity credentials needed to talk to Infisical in the first place. These live in a tiny `.env` file on disk. Three are the actual *credentials* and are validated as required in `infisical_loader.py::_fetch_infisical_secrets` (`INFISICAL_CLIENT_ID`, `INFISICAL_CLIENT_SECRET`, `INFISICAL_PROJECT_ID`); a fourth, `INFISICAL_ENVIRONMENT`, sits alongside them but is *configuration*, not a credential — it defaults to `development` via `_normalize_infisical_environment` when unset. Everything else is pulled from the vault.
 
 > Operator rule (from CLAUDE.md): never read secrets from `.env`/`os.getenv` except for the Infisical bootstrap creds. Call `initialize_runtime_secrets()` at startup. Never commit secrets.
 
@@ -159,7 +159,7 @@ Some consumers (notably the Next.js `web-ui`) can't run the Python bootstrap, so
 - `--allow-missing` writes empty values instead of failing; otherwise a missing required key raises.
 - Output is written `0o640`.
 
-Invoked from `deploy.yml`, `scripts/install_vps_webui_env.sh`, `scripts/install_local_webui_env.sh`, and `scripts/dev_up.sh`. The VPS installer renders to a temp file, installs it as `root:ua` mode `640` at `$APP_ROOT/.env.webui`, and wires it via a systemd drop-in `EnvironmentFile=-...`.
+Invoked from `deploy.yml`, `scripts/install_vps_webui_env.sh`, `scripts/install_local_webui_env.sh`, and `scripts/dev_up.sh`. The VPS installer renders to a temp file, then installs it mode `640` at `$APP_ROOT/.env.webui` and wires it via a systemd drop-in `EnvironmentFile=-...`. Ownership is `root:$APP_USER` (i.e. `root:ua`, the intended path) when `APP_USER` resolves as a real user (`install -o root -g "$APP_USER"`); it falls back to `root:root -m 640` if that user lookup fails.
 
 ## Writing secrets back to Infisical
 
@@ -169,6 +169,14 @@ Two write paths:
 2. **`scripts/infisical_upsert_secret.py`** — batch CLI for ad-hoc/provisioning. Supports `--secret KEY=VALUE` (literal) and `--secret-env NAME` (read `NAME` from current env and upsert its value). Can `--ensure-environment` (create the env via `POST /api/v1/projects/{id}/environments`). Computes a create/update/unchanged plan, supports `--dry-run`, and uses the v4 batch endpoint (`/api/v4/secrets/batch`, POST for creates, PATCH for updates).
 
 > Operator note: Kevin standing-authorized self-service Infisical mutations via the machine-id creds in shell. Never `set`/delete/rotate production secrets without explicit approval; never print secret VALUES to chat.
+
+### Infisical CLI gotchas (ad-hoc shell use)
+
+When using the `infisical` CLI directly (not the REST loader above), several sharp edges recur:
+
+- **Environment slugs are strict full names** — `development` / `production` / `staging`. Passing `--env=prod` or `--env=dev` does **not** alias; it returns a cryptic `Folder with path '/' in environment 'prod' was not found`. Always use the full slug (matching `_LEGACY_INFISICAL_ENV_ALIASES`, which only normalizes the aliases on the *Python* path, not the CLI).
+- **Expired CLI session silently triggers an interactive login** instead of erroring — empty output is the tell that this happened. Always pass `--token` (a universal-auth token from the machine-id creds) so headless invocations fail loudly instead of hanging on a login prompt.
+- **Bare `infisical secrets` with no subcommand hangs / returns empty** when piped. Use an explicit subcommand (`secrets get`, `run -- <cmd>`).
 
 ## Interactive `claude` launcher (the MCP placeholder path)
 
@@ -184,6 +192,10 @@ The `exclude_prefixes` parameter on `initialize_runtime_secrets` exists specific
 ## `.mcp.json` rule
 
 Every value in `.mcp.json` MUST be a `${VAR}` placeholder, never a literal token. Resolution happens via the launcher above. `infisical run` (the CLI) is the wrong primitive — no headless auth context on the VPS.
+
+When upserting the corresponding secret with the CLI, note that `KEY=@file` syntax is **not** supported by `infisical secrets set` — it stores the literal string `@file` as the value, not the file's contents. Pass the value through a shell variable instead (so it also never lands in shell history).
+
+> **Secret-leak class lesson (operator-critical):** if a token ever lands in a literal in `.mcp.json` (or any committed file), history-rewriting cannot fully neutralize it — GitHub caches dangling commits (~90 days) and any fork/clone retains the value. **Revocation/rotation at the vendor is the only true remediation.** This is the whole reason the placeholder rule exists. (Learned from the Hostinger token incident.)
 
 ## What lives in the vault (categories)
 

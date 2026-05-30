@@ -75,7 +75,7 @@ Known `nudge_dispatch` callers (verified):
 | `gateway_server` (inbound trigger path) | varies |
 | `services/email_task_bridge.py` | `email_inbound:<thread>` |
 | `services/agentmail_service.py` | `email_promoted:<thread>` |
-| `scripts/codie_cleanup_enqueue.py` | `codie_cleanup_enqueued:<task_id>` |
+| `src/universal_agent/scripts/codie_cleanup_enqueue.py` | `codie_cleanup_enqueued:<task_id>` |
 
 ### Loop body, step by step
 
@@ -358,6 +358,22 @@ actually claims and runs VP missions. Relevant flags:
 | `vp_poll_interval_seconds` | `UA_VP_POLL_INTERVAL_SECONDS` | `5` |
 | `vp_lease_ttl_seconds` | `UA_VP_LEASE_TTL_SECONDS` | `120` |
 | `vp_max_concurrent_missions` | `UA_VP_MAX_CONCURRENT_MISSIONS` | `1` |
+
+> **Gotcha — the worker loop is structurally serial.**
+> `VpWorkerLoop._tick` claims exactly ONE mission
+> (`durable/state.claim_next_vp_mission`) and `await`s
+> `_execute_mission_logic` to completion before the next tick. The
+> `max_concurrent_missions` value is read from `UA_VP_MAX_CONCURRENT_MISSIONS`
+> into `self.max_concurrent_missions` but is **never consulted** in `_tick` or
+> the claim path — it is stored-but-unused. So "concurrency = 2" is **not a knob
+> flip**: real intra-process parallelism requires a loop rewrite (or a second
+> worker process). And it directly risks the documented event-loop-starvation
+> incident, because a single in-process gateway serializes all
+> `gateway.execute()` calls — see the concurrency discussion in
+> `02_execution_core/01_gateway_sessions_execution.md`.
+>
+> The `asyncio.create_task` inside `_execute_mission_logic` is the lease-renewal
+> `_heartbeat_mission_claim` background task, not concurrent mission execution.
 
 Each tick heartbeats the session lease, recovers `degraded → idle` after a
 successful heartbeat, then `claim_next_vp_mission`. A background

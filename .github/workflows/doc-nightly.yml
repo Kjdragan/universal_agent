@@ -1,0 +1,47 @@
+name: Nightly Documentation Health
+
+# Replaces the legacy nightly-doc-drift-audit.yml (24h git-co-change heuristic +
+# fragile Tailscale->VPS->gateway dispatch). This nightly runs the deterministic
+# audit over the WHOLE corpus (not just a 24h window) and emits the rotating
+# accuracy-sweep batch (oldest last_verified first) for the LLM accuracy auditor.
+#
+# Schedule: 18:35 UTC ~= 1:35 PM CT — inside the operating-hours active window
+# (content/quota work respects dormancy; this is cheap + read-only so timing is lax).
+
+on:
+  schedule:
+    - cron: '35 18 * * *'
+  workflow_dispatch:
+    inputs:
+      batch_size:
+        description: 'How many oldest-verified docs to list for accuracy review'
+        required: false
+        default: '10'
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic-health:
+    name: Full-corpus deterministic audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Deterministic audit (links, symbol refs, frontmatter, no line numbers)
+        run: python scripts/doc_audit.py --warn-only | tee "$GITHUB_STEP_SUMMARY"
+      - name: README index staleness
+        run: python scripts/gen_doc_index.py --check || echo "::warning::README index is stale — run scripts/gen_doc_index.py"
+      - name: Emit rotating accuracy-sweep batch (oldest last_verified first)
+        env:
+          BATCH: ${{ github.event.inputs.batch_size || '10' }}
+        run: |
+          echo "### Accuracy-sweep candidates (oldest verified)" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          python scripts/doc_audit.py --accuracy-batch "$BATCH" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "_LLM accuracy auditor consumes this batch — see project_docs/_meta/FOLLOWUPS.md (transport decision pending)._" >> "$GITHUB_STEP_SUMMARY"

@@ -273,6 +273,19 @@ token). Representative endpoints (all gated by `_require_ops_auth`):
 These are ordinary JSON REST endpoints; the only communication-layer subtlety is the
 auth path (cookie at the Next proxy, ops token injected to the gateway).
 
+> **Dashboard read-path invariant.** GET dashboard endpoints (and their helpers) must
+> return the latest *stored* snapshot — they must never recompute it inline. Concretely:
+> never call `task_hub.rebuild_dispatch_queue` from a GET handler. The dispatch-queue GET
+> (`dashboard_todolist_dispatch_queue`) only reads via `task_hub.get_dispatch_queue`;
+> `rebuild_dispatch_queue` is reserved for the explicit POST
+> `.../dispatch-queue/rebuild` and the heartbeat eligibility probe
+> (`_task_hub_has_dispatch_eligible_items`). Likewise, Proactive-Signals GETs must not
+> run CSI/Discord sync inline (use `sync=background` + a cooldown). When a dashboard
+> panel is slow, the fix is *never* to raise the Next.js proxy timeout
+> (`UA_DASHBOARD_GATEWAY_PROXY_TOTAL_TIMEOUT_MS`) — that masks an inline recompute that
+> belongs on a writer path. Full rationale:
+> `03_Operations/113_Task_Hub_Dashboard_Read_Path_Performance_2026-04-16.md`.
+
 ## Auth surface
 
 There are **two** token-signing implementations that must agree, plus the gateway's
@@ -377,5 +390,5 @@ sequenceDiagram
 ### Architectural / operational notes (carried context, partly outside this code path)
 
 - **Three independent trust surfaces** (dashboard cookie+HMAC, ops token, CSI ingest HMAC) do not share a common abstraction. The dashboard proxy injecting ops tokens on behalf of an authenticated cookie user is the seam that joins the first two.
-- **`web-ua` `.env.local` is regenerated on every deploy** from Infisical (via `render_service_env_from_infisical.py`); the Next.js process has no Infisical SDK, so deploy-time rendering is the required pattern for `UA_DASHBOARD_*` / `UA_OPS_TOKEN` to reach it. VPS-side hand edits to `.env.local` do not survive a deploy. [VERIFY: exact renderer script name/path not re-confirmed in this code review.]
+- **`web-ua` `.env.local` is regenerated on every deploy** from Infisical (via `scripts/render_service_env_from_infisical.py`); the Next.js process has no Infisical SDK, so deploy-time rendering is the required pattern for `UA_DASHBOARD_*` / `UA_OPS_TOKEN` to reach it. VPS-side hand edits to `.env.local` do not survive a deploy.
 - **Telegram bypasses this gateway session model** entirely (its own `tg_<user_id>` session scheme); it is not part of the Web UI communication path described here.

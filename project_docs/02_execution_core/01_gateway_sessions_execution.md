@@ -190,6 +190,16 @@ missing it briefly grabs the global lock (`"resume_in_execute"`) only long
 enough to resume/create the adapter, then releases it — so a slow resume of one
 session doesn't block turns on other sessions.
 
+A subtler constraint on true in-process parallelism: the underlying CLI engine
+(`main.py`) still reads/writes **module-level globals** (`run_id`, `tool_ledger`,
+`trace`, `budget_state`) — `gateway.py` does not serialize all `execute()` calls,
+so per-session locks *do* let distinct sessions run concurrently, but those
+shared CLI globals mean concurrent in-process turns can still cross-contaminate
+run-scoped state. The durable answer is a per-session `SessionContext` refactor
+(still a future milestone). Until then, real isolation comes from running heavy
+work in separate VP worker *processes*, and pushing in-process concurrency too
+high (e.g. raising VP worker concurrency) risks asyncio event-loop starvation.
+
 ## Execute / run_query flow
 
 `run_query` is the high-level "run one turn and return a `GatewayResult`"
@@ -311,8 +321,26 @@ service restarts.
 The SDK transport builds the child process env from the **process-global**
 `os.environ`. Spawning the CLI subprocess with a huge env risks `E2BIG`
 (Linux ARG_MAX ~2 MB). `_temporary_sanitized_process_env()` wraps only the
-`transport.connect()` call: it `sanitize_env_for_subprocess()`s, spawns, then
-restores the parent env (so the gateway keeps its runtime secrets).
+`transport.connect()` call: it snapshots `os.environ`, calls
+`sanitize_env_for_subprocess()`, spawns, then **restores the parent env in a
+`finally`** (so the gateway keeps its runtime secrets).
+
+The snapshot/restore scoping is load-bearing, not incidental: sanitization must
+touch only the child-spawn window and never mutate the long-running parent
+gateway env. Leaking the sanitization into the parent process caused a
+`proxy_not_configured` production incident (the gateway lost a runtime var it
+needed *after* spawning the child). This is also why ARG_MAX is the limit on
+*total* env+argv — see the per-string `MAX_ARG_STRLEN` note below.
+
+There are actually **two** distinct kernel limits at play. ARG_MAX (~2 MB, the
+combined argv+envp budget) is what the env sanitization above defends. Separately,
+`MAX_ARG_STRLEN` caps any **single** argument string at 128 KB — a hardcoded
+kernel `#define` that no `ulimit`/systemd setting can raise (raising
+`LimitSTACK` only moves the total `ARG_MAX` ceiling, not the per-string cap). A
+system prompt larger than 128 KB therefore triggers `E2BIG` on subprocess spawn
+regardless of how much total headroom exists; this is the kernel-level reason
+behind prompt-density rules + progressive disclosure. Full treatment lives in the
+model-resolution / prompt-architecture doc.
 
 `sanitize_env_for_subprocess()` is a **blocklist**, not an allowlist: it strips
 known-huge/irrelevant vars (`LS_COLORS`, `UA_SYSTEM_EVENTS_*`,
@@ -422,9 +450,9 @@ so it doesn't email).
   Tokens are read from `Authorization: Bearer`, `x-ua-internal-token`, or
   `x-ua-ops-token`. WS auth closes with code **4401** on unauthorized, **1011**
   if the token isn't configured at all.
-- **Ops auth** (`_require_ops_auth`): JWT (`OPS_JWT_SECRET`) or legacy
-  `UA_OPS_TOKEN`; gates `/api/v1/ops/*`. Legacy token usage logs a deprecation
-  warning once.
+- **Ops auth** (`_require_ops_auth`): JWT (module symbol `OPS_JWT_SECRET`, read
+  from env var `UA_OPS_JWT_SECRET`) or legacy `UA_OPS_TOKEN`; gates
+  `/api/v1/ops/*`. Legacy token usage logs a deprecation warning once.
 - **Allowlist** (`is_user_allowed` / `UA_ALLOWED_USERS`): empty = allow all.
   Always allows local system/service accounts (`webhook`, `user_ui`, `user_cli`,
   `cron_system`, `vp.*`, `worker_*`, `cron:*`, …). Supports numeric Telegram IDs.

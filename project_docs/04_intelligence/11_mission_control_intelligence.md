@@ -138,7 +138,7 @@ The builders are pure — they take facts as kwargs and do no I/O. All collectio
 (`_recent_delegation_history(limit=50)` — last 50 `vp_missions` rows from the runtime DB),
 Task Hub overview + agent/dispatch queues (`_task_hub_supervisor_snapshot`), activity events,
 and systemd timers (`_system_timers_snapshot` — shells out to `systemctl list-timers
---output=json`, 10s timeout, returns `[]` on any failure).
+--all --output=json`, 10s timeout, returns `[]` on any failure).
 
 **CSI** gathers (by `await`-ing other dashboard endpoint handlers directly):
 `dashboard_csi_health()`, `dashboard_csi_delivery_health()`, `dashboard_csi_reliability_slo()`,

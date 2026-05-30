@@ -31,6 +31,17 @@ code, and conflating them is the single most common mistake here:
    wrappers and executed in-process. The `@mcp.tool()` decorations on those
    functions are effectively dormant in the production wiring.
 
+**Design rationale (Vocal vs Silent).** The in-process-vs-subprocess split is
+not arbitrary. The guiding ADR distinguishes "Vocal" tools (run in-process so the
+agent's event stream — and therefore the Web UI — sees real-time progress; the
+`StdoutToEventStream` bridge described below is what makes this work) from
+"Silent" tools (run as isolated subprocesses for environment isolation). Rule of
+thumb: anything that runs more than a few seconds should be Vocal so the operator
+gets terminal-style disclosure of progress; third-party or unstable tools that
+risk polluting the agent's environment go Silent. This is why the heavy local
+toolkit was migrated in-process while the external servers (telegram, zai_vision,
+gws, etc.) stay as stdio subprocesses.
+
 The legacy name for the stdio path was `local_toolkit`. Those tool slugs
 (`mcp__local_toolkit__*`) are now hard-banned in `constants.py::DISALLOWED_TOOLS`
 precisely because they were replaced by the in-process `internal` server. If you
@@ -90,6 +101,17 @@ agent as `mcp__internal__<tool_name>` (the SDK's `mcp__<server>__<tool>`
 convention). The `<tool_name>` is the `name=` passed to the SDK `@tool(...)`
 decorator on each wrapper — **not** the Python function name (which usually ends
 in `_wrapper`).
+
+> [VERIFY: tool-name layering across the SDK boundary]. The naming has three
+> decoupled layers: the Python function (`*_wrapper`), the SDK `@tool(name=...)`
+> decorator value, and the prompt text agents are told to call. Prompt text that
+> says "use `mcp__internal__task_hub_task_action`" can drift from what the SDK
+> actually exposes (the SDK has been observed to strip/normalize the
+> `mcp__internal__` prefix at native exposure in some surfaces). The practical
+> rule: inspect the *live* tool list via SDK reflection before concluding a tool
+> is missing, and when renaming a tool, change the Python fn, the `@tool`
+> decorator `name=`, AND every markdown prompt that references it together — they
+> do not update each other.
 
 ### The registry is the single source of truth
 
@@ -279,14 +301,18 @@ Key behaviors observed in code:
   tool, tagged `blocked_by: session_policy`.
 - Counters increment pre-execution, so the *over-limit* call is the one rejected.
 
-> [VERIFY: the circuit breaker lives on `trace_tool_output` in `mcp_server.py`.
-> The in-process `internal` wrappers in `tools/*_bridge.py` are decorated with
-> the SDK `@tool(...)`, not `@trace_tool_output`, so they do not route through
-> this precheck. The breaker therefore protects the standalone/core call surface
-> (and any path that calls those decorated core functions directly), not
-> necessarily every `mcp__internal__*` call. Confirm whether any production lane
-> still exercises the `@trace_tool_output` path before relying on it as a global
-> guardrail.]
+**Where the breaker actually fires.** The in-process `internal` wrappers in
+`tools/*_bridge.py` are decorated with the SDK `@tool(...)`, *not*
+`@trace_tool_output`. However, the heavy core functions they import from
+`mcp_server.py` (`write_text_file`, `list_directory`, `generate_image`,
+`run_research_pipeline`, etc.) *are* stacked `@mcp.tool()` + `@trace_tool_output`.
+Because the bridge wrappers call those decorated core functions, the precheck
+*does* run on the bridge → core path for every tool whose implementation lives in
+`mcp_server.py`. The breaker does **not** cover wrappers whose logic is entirely
+self-contained in the bridge file (no decorated core fn behind them) — those
+bypass the precheck. So the guardrail's reach is "any call that ultimately
+executes a `@trace_tool_output`-decorated core function," which is most of the
+file/research/image surface but not 100% of `mcp__internal__*`.
 
 A second, independent guardrail lives in `batch_tool_execute`: a hard
 `MAX_BATCH_SIZE = 20` cap (returns an error blob if exceeded), and batch calls
@@ -352,3 +378,20 @@ redirect `mcp_log()` output to the UI.
 - **Composio Twitter/X is intentionally suppressed** in
   `discover_connected_toolkits` regardless of connection state, and all Composio
   crawl/fetch + remote-workbench tools are globally banned in `DISALLOWED_TOOLS`.
+- **Gemini image-gen prefers an AI Studio key, not a Cloud project key.**
+  `mcp_server.py::generate_image` reads `GEMINI_IMAGE_API_KEY` first and only
+  falls back to `GEMINI_API_KEY`. The org-level GCP policy on the image project
+  silently blocks plain Cloud-Console project keys from the Generative Language
+  API (`API_KEY_SERVICE_BLOCKED`) even when the API is enabled; AI Studio keys
+  (from aistudio.google.com) bypass org restrictions. A 403-despite-enabled on
+  Imagen → suspect org policy before chasing IAM. Store the AI Studio key as
+  `GEMINI_IMAGE_API_KEY` separately.
+- **NLM-first routing for specialized artifacts.** When both a generic in-process
+  tool (`generate_image`) and a specialized NotebookLM tool (`studio_create`,
+  `research_import` — exposed via the external `notebooklm-mcp` server) exist,
+  agents tend to default to the generic tool unless the prompt *explicitly*
+  mandates the specialist. For KB-pipeline work the intended order is
+  research → `research_import`, reports → `studio_create(report)`, infographics →
+  `studio_create(infographic)`, audio → `studio_create(audio)`. If artifacts are
+  landing as generic images instead of KB studio outputs, the prompt — not the
+  tool wiring — is usually the cause.

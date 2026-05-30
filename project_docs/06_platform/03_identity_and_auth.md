@@ -7,6 +7,8 @@ code_paths:
   - src/universal_agent/identity/*.py
   - src/universal_agent/auth/ops_auth.py
   - src/universal_agent/api/server.py
+  - src/universal_agent/gateway_server.py
+  - src/universal_agent/main.py
   - src/universal_agent/signals_ingest.py
   - web-ui/lib/dashboardAuth.ts
 last_verified: 2026-05-29
@@ -118,7 +120,7 @@ flowchart TD
 ## 2. Ops auth — `/api/v1/ops/*` (`auth/ops_auth.py`)
 
 Guards the operational API surface (durable runs, Task Hub, channels, calendar,
-factory, etc. — ~250 `_require_ops_auth(request)` call sites in `gateway_server.py`,
+factory, etc. — ~150 `_require_ops_auth(request)` call sites in `gateway_server.py`,
 plus a blanket middleware `enforce_ops_auth_http_surface` that gates every path
 under `/api/v1/ops/`).
 
@@ -249,9 +251,13 @@ dashboard→gateway proxy uses it to forward authenticated user requests upstrea
 `_enforce_session_owner` is the *real* per-resource boundary: it compares the
 authenticated owner against the session's owner (fetched from the gateway) and
 403s on mismatch. Notable allow-bypasses (each with an in-code rationale comment):
-- **system-owned sessions** (`_SYSTEM_SESSION_OWNERS`: `webhook`, `user_ui`,
-  `user_cli`, `cron_system`, `daemon`, `ops:system-configuration-agent`, …, plus
-  prefixes `cron:`, `worker_`, `vp.`) are visible from the dashboard owner lane.
+- **system-owned sessions** are visible from the dashboard owner lane. The
+  membership test is `_is_system_session_owner(owner_id)`, which (a) checks the
+  `_SYSTEM_SESSION_OWNERS` set literal — `webhook`, `user_ui`, `user_cli`,
+  `ops_tutorial_review`, `cron_system`, `ops:system-configuration-agent`,
+  `daemon` — and (b) separately matches the prefixes `cron:`, `worker_`, `vp.`.
+  The prefix logic lives in `_is_system_session_owner`, **not** in the set
+  literal itself.
 - **daemon sessions** (`daemon_*` / `run_daemon_*`): ownership is meaningless
   because the shared daemon runtime's stored owner is just "last dispatcher", so
   the primary dashboard owner is allowed through. (The `daemon` owner entry was

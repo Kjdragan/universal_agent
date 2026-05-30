@@ -328,6 +328,19 @@ Opus).
   Atlas's mission reasoning (`convergence` candidate task descriptions call
   `_preference_context`).
 
+### Generation rules — a live, system-maintained constraints file
+
+`docs/proactive_signals/generation_rules.md` is **not a dated report — it is a
+runtime input.** When an operator gives feedback on a proactive signal card
+(icon tags or free text), `proactive_signals.py` runs an LLM feedback-distiller
+that **reads the current rules file and rewrites it** to fold the new preference
+in without destroying existing rules (`rules_path = docs_dir / "generation_rules.md"`;
+"Successfully distilled feedback into generation_rules.md"). The file is both
+system-maintained and hand-editable, accumulating per-source / per-topic
+generation constraints distilled from operator feedback. It may be empty at any
+given moment; its *role* (a live constraints input read at generation time), not
+its current contents, is what matters.
+
 ### The implicit-park poison incident (load-bearing context)
 
 `_fire_implicit_preference_signal` is **disabled by default** as of 2026-05-29
@@ -356,6 +369,22 @@ implicit signals without understanding this loop.
   free, **never-raises** hook for background workers to write `activity_events`
   rows that Mission Control's tier-1 LLM card discovery reads. `emit_intelligence_event`
   is best-effort by contract — instrumentation must never break the caller.
+- **Notification dispatcher** (`notification_dispatcher.py`): turns recent
+  activity rows into operator alerts across configured channels. Today only the
+  **dashboard** channel has a live consumer; email/telegram are configured but
+  largely unconsumed for most kinds. Two de-dup layers protect the operator:
+  - A per-`(kind, scope, channel)` cooldown (`_DEFAULT_COOLDOWN_SECONDS`, 5 min)
+    so a single flapping task can't spam, while two genuinely-different scopes of
+    the same kind still each surface (`_scope_key_for_record`).
+  - A per-`kind` **email rollup window** (`_DEFAULT_ROLLUP_WINDOW_SECONDS`, 3 min,
+    up to `_ROLLUP_SAMPLE_CAP=20` collapsed samples via `_format_rollup_email`).
+    This sits *above* the cooldown specifically to handle an incident that fails
+    many *different* scopes of one kind at once — the cooldown alone (being
+    scope-specific) doesn't coalesce those, so one bad window could otherwise fan
+    out a dozen-plus separate emails.
+  - `proactive_task_failed` (emitted by `proactive_outcome_tracker` on terminal
+    failure actions) is surfaced as an activity event the dashboard reads; it is
+    **not** wired to ride the email channel.
 
 ---
 

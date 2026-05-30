@@ -94,7 +94,7 @@ Text-message commands (all case-insensitive on the prefix):
 | `/new` | Disable continuation mode (next run starts fresh). |
 | `/cancel [task_id]` | Cancel a *pending* task (running tasks cannot be force-cancelled). |
 | `/menu` | Render an inline-button quick-action keyboard. |
-| `/briefing` | Read today's `artifacts/autonomous-briefings/<date>/DAILY_BRIEFING.md`; send as text or as a file if >4000 chars. |
+| `/briefing` | Read today's `<artifacts>/autonomous-briefings/<date>/DAILY_BRIEFING.md`; send as text or as a file if >4000 chars. Path base is `UA_ARTIFACTS_DIR` (hardcoded fallback `/home/kjdragan/lrepos/universal_agent/artifacts`); `<date>` is computed with `datetime.now(timezone.utc)` — **UTC, not Houston time**, so the briefing can roll over before/after the operator's local midnight. |
 | `/delegate <objective>` | Queue a task prefixed with `[DELEGATION REQUIRED]:`. |
 
 Inline-button callbacks handled: `menu_status`, `menu_cancel`, `menu_briefing`, `menu_delegate`, and `vp_accept_<id>` / `vp_reject_<id>` (the VP-mission accept/reject buttons are currently **placeholders** — they edit the message but the comment notes `TODO: Integrate with VP Orchestration approval API`).
@@ -150,7 +150,9 @@ All sends (task replies, proactive heartbeats, status updates) go through the sh
 
 ## Heartbeat / proactive messages
 
-When the **in-process** gateway path is used *and* `heartbeat_enabled()` is true, `AgentAdapter` spins up a `HeartbeatService` bridged by `BotConnectionAdapter` (`bot/heartbeat_adapter.py`). The adapter fakes the connection-manager interface the heartbeat service expects (`session_connections`, `broadcast`). On a `heartbeat_summary` broadcast it extracts `user_id` from the `tg_<user_id>` session id and pushes the text via the send callback. (In the production ExternalGateway path, the heartbeat is managed externally and this in-process service does not start.)
+When the **in-process** gateway path is used *and* `heartbeat_enabled()` is true, `AgentAdapter` spins up a `HeartbeatService` bridged by `BotConnectionAdapter` (`bot/heartbeat_adapter.py`). The adapter fakes the connection-manager interface the heartbeat service expects (`session_connections`, `broadcast`). On a `heartbeat_summary` broadcast it extracts the recipient id from the session id via `session_id[3:]` and pushes the text via the send callback. (In the production ExternalGateway path, the heartbeat is managed externally and this in-process service does not start.)
+
+> [VERIFY] **Latent id mismatch.** `heartbeat_adapter.py::broadcast` slices `session_id[3:]` and its inline comment assumes `session_id = f"tg_{user_id}"`. But the real session ids minted by `agent_adapter._get_or_create_session` are `tg_<user_id>_<8hex>` (`session_id = f"tg_{user_id}_{uuid.uuid4().hex[:8]}"`). So `session_id[3:]` actually yields `<user_id>_<8hex>`, not a clean numeric user id, and the value is then passed straight to `send_message_callback` as the Telegram chat target. This is a code-level inconsistency (the adapter expects the no-suffix form), not a doc fabrication; the in-process heartbeat path is the only consumer.
 
 ## Runtime policy gating
 

@@ -75,14 +75,14 @@ if root_override:
 return Path(resolve_shared_memory_workspace()) / "memory" / "wiki"
 ```
 
-> [VERIFY: this is a known/flagged behavior, confirmed in current code.] **The
-> returned path ignores both `vault_kind` and `vault_slug` unless `root_override` is
-> supplied.** Every `ensure_vault`/`query_vault`/`lint_vault`/`sync_internal_memory_vault`
-> call without an explicit `root_override` resolves to the **single shared path**
-> `<shared-memory-workspace>/memory/wiki`. An "internal" and an "external" vault, and
-> any two different slugs, all collide onto the same directory. The slug/kind are still
-> used to *select which subdirectories get created* and to validate input, but they do
-> NOT partition storage. Callers that need isolation MUST pass `root_override`.
+Confirmed in current code (`wiki/core.py::resolve_vault_path`): **the
+returned path ignores both `vault_kind` and `vault_slug` unless `root_override` is
+supplied.** Every `ensure_vault`/`query_vault`/`lint_vault`/`sync_internal_memory_vault`
+call without an explicit `root_override` resolves to the **single shared path**
+`<shared-memory-workspace>/memory/wiki`. An "internal" and an "external" vault, and
+any two different slugs, all collide onto the same directory. The slug/kind are still
+used to *select which subdirectories get created* and to validate input, but they do
+NOT partition storage. Callers that need isolation MUST pass `root_override`.
 
 The shared memory workspace root is `resolve_shared_memory_workspace()`
 (`memory/paths.py`): default `<repo-root>/Memory_System/ua_shared_workspace`,
@@ -132,7 +132,7 @@ root_override=None)` (`wiki/core.py`):
 of the title.
 
 Production callers: `services/claude_code_intel_replay.py` (CSI report ingest) and the
-`nightly_wiki_agent.py` script. The proactive-signals "Create Wiki" action also
+`src/universal_agent/scripts/nightly_wiki_agent.py` script. The proactive-signals "Create Wiki" action also
 instructs the `notebooklm-operator` sub-agent to finish by calling
 `wiki_ingest_external_source`.
 
@@ -249,7 +249,7 @@ break the calling memory-write path. Known callers:
 > `llm_wiki_internal_projection_enabled`, `llm_wiki_external_vault_enabled`) that ALSO
 > honor `UA_DISABLE_*` kill switches. The projection auto-sync path does NOT consult the
 > `feature_flags` helpers, so the `UA_DISABLE_LLM_WIKI_AUTO_SYNC_INTERNAL` /
-> `UA_DISABLE_LLM_WIKI_ENABLE_INTERNAL_PROJECTION` kill switches do not affect the
+> `UA_DISABLE_LLM_WIKI_INTERNAL_PROJECTION` kill switches do not affect the
 > auto-sync trigger — they only affect callers that go through `feature_flags`.
 
 ## Query
@@ -326,11 +326,13 @@ in-process rather than as durable/remote operations.
   is the operator/agent entry point: triggers on "wiki", "knowledge base/vault",
   "build a wiki about", "what does our wiki say about", etc. It orchestrates the
   NotebookLM-backed flow (notebook → research → register KB → ingest into vault).
-- **Nightly Wiki cron** — `scripts/schedule_nightly_wiki.py` registers job
-  `nightly_wiki` with cron expr `15 3 * * *` (3:15 AM Houston) running
-  `nightly_wiki_agent.py`, which selects proactive-signal cards, builds NLM-backed KBs,
-  and writes `nightly_wiki_<date>.md` under `<artifacts>/nightly_wikis/` for the morning
-  briefing. (The same script also registers the briefing job at `30 6 * * *`.)
+- **Nightly Wiki cron** — `src/universal_agent/scripts/schedule_nightly_wiki.py`
+  registers job `nightly_wiki` (`WIKI_JOB_ID`) with cron expr `15 3 * * *` (3:15 AM
+  Houston) whose command is `!script universal_agent.scripts.nightly_wiki_agent`
+  (`src/universal_agent/scripts/nightly_wiki_agent.py`), which selects proactive-signal
+  cards, builds NLM-backed KBs, and writes `nightly_wiki_<date>.md` under
+  `<artifacts>/nightly_wikis/` for the morning briefing. (The same script also registers
+  the morning-briefing job at `30 6 * * *`.)
 - The legacy-referenced `wiki-maintainer` sub-agent **no longer exists** in
   `.claude/agents/` — do not expect it.
 

@@ -178,7 +178,7 @@ Real-time gateway handlers:
 
 ### Signal detection (`signals.py`)
 
-`detect_signals(content, channel_tier)` is **deterministic regex**, not an LLM. Rules:
+`detect_signals(message_content, channel_tier, author_id=None)` is **deterministic regex**, not an LLM. Rules:
 
 1. `tier_a_activity` (severity high) — any message in a Tier-A channel.
 2. `release_detected` (high) — a version pattern (`v?\d+\.\d+\.\d+...`) **plus** a

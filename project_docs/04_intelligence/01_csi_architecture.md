@@ -61,7 +61,7 @@ flowchart TB
     subgraph Conv["Convergence / ideation (cron, hourly)"]
         B0["csi.db: events + rss_event_analysis<br/>(YouTube RSS transcripts)"] --> B1["sync_topic_signatures_from_csi"]
         B1 --> B2["topic_signatures (activity_state.db)"]
-        B2 --> B3["_detect_clusters_sql<br/>(recall: GROUP BY topic × channels)"]
+        B2 --> B3["_detect_clusters_sql<br/>(recall: SQL window scan +<br/>Python bucket by topic × channels)"]
         B3 --> B4["_refine_cluster_with_llm<br/>(precision: ZAI/GLM judge)"]
         B2 --> B5["_run_ideation_sweep<br/>track_b_ideation_synthesis"]
         B4 --> B6["write_convergence_candidate"]
@@ -215,8 +215,16 @@ If `csi_db_path` is None or missing, it returns zero-counts and does nothing.
 After syncing, convergence detection runs **every call** (the cron is the
 cadence governor; candidate-id stability keeps it idempotent):
 
-- **Recall (`_detect_clusters_sql`):** SQL `GROUP BY` topic across *distinct
-  channels* within `source_window_hours` (default 72). Coarse buckets.
+- **Recall (`_detect_clusters_sql`):** a plain SQL window scan
+  (`SELECT * FROM proactive_topic_signatures WHERE ingested_at >= ? ORDER BY
+  ingested_at DESC LIMIT 500`) followed by **Python-side grouping** — it loops
+  the rows into a `buckets` dict keyed by trimmed/lowercased primary topic, then
+  keeps only buckets spanning *distinct channels* ≥ `min_channels` (floored at
+  2) within `source_window_hours` (default 72). There is no SQL `GROUP BY`; the
+  grouping and channel-count thresholding happen in code. Net effect is coarse
+  topic × channel buckets. A signature can land in multiple buckets via its
+  multiple `primary_topics`, and buckets with the exact same video set are
+  de-duplicated.
 - **Precision (`_refine_cluster_with_llm`, default ON):** each bucket goes to a
   bounded ZAI/GLM judge (`llm_classifier._call_llm`). It must confirm a genuine
   shared thesis, emit `signal_strength` ≥ `_min_signal_strength()` (default 7),
@@ -323,9 +331,11 @@ def _csi_default_db_path() -> Path:
 Default is `/var/lib/universal-agent/csi/csi.db`, overridable via `CSI_DB_PATH`.
 **Never assume a dev relic `csi.db` location.** A stale `csi.db` elsewhere on
 disk will silently produce zero signatures / zero convergence. Heartbeats reach
-this via `getattr(_gs, "_csi_default_db_path")` (defensively, because the
-freshly-imported gateway module in a daemon subprocess may lack a
-`_cron_service`). Related split-brain hazards from the gotcha inventory:
+this defensively: `heartbeat_service.py` guards with
+`if hasattr(_gs, "_csi_default_db_path"):` and only then calls
+`_gs._csi_default_db_path()` (wrapped in its own try/except), because the
+freshly-imported gateway module in a daemon subprocess may not expose it.
+Related split-brain hazards from the gotcha inventory:
 
 - The canonical Task Hub / activity DB is `activity_state.db` (resolved via
   `durable/db.py:get_activity_db_path()`), **not** the stale
@@ -335,21 +345,34 @@ freshly-imported gateway module in a daemon subprocess may lack a
   playlist watcher (`youtube_playlist_watcher_state.json`) and the CSI RSS
   channel feed (`csi.db`). Resetting one does **not** reset the other.
 
-### 5.2 ZAI content-safety (error 1301) is fail-closed and silent-ish
+### 5.2 ZAI content-safety is fail-closed
 
-When ZAI/GLM returns content-safety error **1301**, the LLM call raises.
-`_refine_cluster_with_llm` catches the exception and **returns `None` (fail
-closed → no candidate)**; the docstring says so explicitly. The same fail-closed
-shape applies anywhere `_call_llm` is wrapped in a try/except that returns
-None/empty on failure.
+**Code-verified shape:** `_refine_cluster_with_llm` is fully fail-closed. Its
+docstring states it returns `None` when the LLM call or parse fails ("fail
+closed, no candidate"), and the body has several `return None` paths under
+`except Exception` / `except (TypeError, ValueError)`. So *any* refine failure —
+content-safety rejection, transport error, or unparseable output — silently
+drops that bucket's candidate. The same fail-closed shape applies anywhere
+`llm_classifier._call_llm` is wrapped in a try/except that returns None/empty on
+failure.
 
-Consequence (observed 2026-05-29 Phase 0 verification): a 29-video bucket was
-dropped on a YouTube convergence run because the content tripped the guardrail.
-The **accepted design decision** (Phase 2 resilience) is: keep fail-closed, do
-not retry or reroute, but ensure the drop is **logged, not silent**. Political /
-conflict convergences that trip the guardrail will not surface — this is an
-accepted tradeoff, not a bug. If convergence candidates mysteriously vanish for
-a sensitive topic, check logs for a 1301 drop before assuming a pipeline fault.
+> [VERIFY: the specific ZAI/GLM content-safety **error code 1301** is an
+> operational observation, NOT a code constant — the string "1301" does not
+> appear anywhere under `src/universal_agent/`. It is the error code ZAI is
+> reported to return when GLM trips its content guardrail; treat it as an
+> external-service detail to grep for in logs, not something the codebase
+> branches on.]
+
+> [VERIFY: the 2026-05-29 Phase 0 observation that a 29-video bucket was dropped
+> because its content tripped the guardrail, and the "Phase 2 resilience"
+> design decision (keep fail-closed, do not retry/reroute, but ensure the drop
+> is *logged, not silent*) are operational/roadmap claims, not verifiable from
+> the cited code paths.]
+
+Practical consequence: political / conflict convergences that trip the
+guardrail will not surface — an accepted tradeoff, not a bug. If convergence
+candidates mysteriously vanish for a sensitive topic, check logs for a
+content-safety drop (the reported `1301` code) before assuming a pipeline fault.
 
 ### 5.3 Empty `vault_actions` is correct, not a failure
 
@@ -396,7 +419,7 @@ to it.
   refresh in `apply_memex_pass`.
 - No convergence candidates → check `csi.db` path (`_csi_default_db_path`),
   whether signatures synced, the `min_channels`/`signal_strength` thresholds,
-  and logs for a **1301 content-safety drop**.
+  and logs for a **content-safety drop** (the reported ZAI `1301` code; see §5.2).
 - Adding a new topic lane → edit `config/intel_lanes.yaml` (remember the loader
   is `extra="forbid"`); but note lanes are not yet consumed by the live replay
   path.

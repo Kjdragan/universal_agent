@@ -95,7 +95,7 @@ A skill with `overrides.get(key) is False` is dropped from discovery entirely (n
 
 ## How skills reach the model's context
 
-`AgentSetup` (`agent_setup.py`) is the in-process entrypoint (used by Simone and other Agent-SDK principals). With `enable_skills=True` (the default), `_load_assets()` calls `discover_skills()`, stores the result on `self._discovered_skills`, and builds `self._skills_xml` via `generate_skills_xml`. There are **two** places skills surface in the prompt:
+`AgentSetup` (`agent_setup.py`) is the in-process entrypoint (used by Simone and other Agent-SDK principals). With `enable_skills=True` (the default), `AgentSetup.initialize()` calls `discover_skills()`, stores the result on `self._discovered_skills`, and builds `self._skills_xml` via `generate_skills_xml`. The hand-assembled prompt is built later in `AgentSetup._build_system_prompt`, which passes `skills_xml=self._skills_xml` into `prompt_builder.build_system_prompt`. There are **two** places skills surface in the prompt:
 
 1. **`skills_xml`** — a Markdown checklist (despite the `_xml` name it's Markdown) passed through to `prompt_builder.build_system_prompt(..., skills_xml=...)`. Header: `## 📚 AVAILABLE SKILLS (Standard Operating Procedures)` / "You MUST read the relevant SOP before executing these tasks", one line per skill: `- **<name>**: <description> (Path: <path>)`.
 

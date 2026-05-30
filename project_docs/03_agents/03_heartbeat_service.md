@@ -9,6 +9,7 @@ code_paths:
   - src/universal_agent/gateway_server.py
   - src/universal_agent/services/dispatch_service.py
   - src/universal_agent/services/agent_router.py
+  - scripts/check_heartbeat_liveness.py
   - memory/HEARTBEAT.md
 last_verified: 2026-05-29
 ---
@@ -29,7 +30,7 @@ The heartbeat is a **health / proactive supervisor**. It does:
 - Synthetic / deterministic findings when the agent does not write one.
 - Idle-session cleanup and stuck-daemon termination.
 
-It does **NOT** own trusted-email mission execution. Trusted inbound email is triaged by the hook layer and executed by the dedicated ToDo runtime (`services/todo_dispatch_service.py`). The heartbeat code that used to inline-claim Task Hub dispatch work has been **decoupled**: in `_run_heartbeat`, `task_hub_claimed` is now hardcoded to `[]` (the comment reads `# Dispatch logic moved to todo_dispatch_service`). Task claiming and `route_all_to_simone` live in `services/dispatch_service.py::dispatch_sweep`, which the ToDo dispatcher drives — not the heartbeat loop. As a result the "task-focused mode" branches inside `_run_heartbeat` (and the `finally`-block finalization of `task_hub_claimed`) are effectively dormant in the current call path; they remain in the file but are not reached because `task_hub_claimed` is always empty. `[VERIFY: confirm no other caller sets task_hub_claimed before _run_heartbeat — grep shows it is only assigned [] inside the method.]`
+It does **NOT** own trusted-email mission execution. Trusted inbound email is triaged by the hook layer and executed by the dedicated ToDo runtime (`services/todo_dispatch_service.py`). The heartbeat code that used to inline-claim Task Hub dispatch work has been **decoupled**: in `_run_heartbeat`, `task_hub_claimed` is now hardcoded to `[]` (the comment reads `# Dispatch logic moved to todo_dispatch_service`). Task claiming and routing are orchestrated by `services/dispatch_service.py::dispatch_sweep` (which the ToDo dispatcher drives — not the heartbeat loop), but the functions themselves live elsewhere: `route_all_to_simone` is defined in `services/agent_router.py::route_all_to_simone` and the claim primitive is `task_hub.py::claim_next_dispatch_tasks`. `dispatch_sweep` only calls them. As a result the "task-focused mode" branches inside `_run_heartbeat` (and the `finally`-block finalization of `task_hub_claimed`) are effectively dormant in the current call path; they remain in the file but are not reached because `task_hub_claimed` is always empty: it is initialized to `[]` and the only later assignment also sets it to `[]` (the dispatch path now records `task_hub_claimed_count` only, never repopulating the list).
 
 ## Process Heartbeat vs UA Heartbeat Service (do not confuse)
 
@@ -134,7 +135,7 @@ When `_run_heartbeat` finishes it emits a `heartbeat_completed` event (via the `
    - classification-level cooldown (default 120 min) — catches the same root cause across sessions.
    - exact-signature cooldown (default 60 min) — catches identical finding sets.
 5. If status is not `ok`/`info`, an `autonomous_heartbeat_completed` notification is recorded (`requires_action=True`).
-6. If dispatch is allowed, `_dispatch_heartbeat_to_simone` runs in the background: it builds a `simone_heartbeat_<suffix>` session and a structured handoff message (truncated findings JSON ≤ 24 KB) and calls `_hooks_service.dispatch_internal_action_background_with_admission` with `name="AutoHeartbeatInvestigation"`.
+6. If dispatch is allowed, `_dispatch_heartbeat_to_simone` runs in the background: it builds a `simone_heartbeat_<suffix>` session and a structured handoff message (findings JSON sliced to the first 24000 characters — `json.dumps(...)[:24000]`, so ~24 KB for ASCII but more for multibyte content) and calls `_hooks_service.dispatch_internal_action_background_with_admission` with `name="AutoHeartbeatInvestigation"`.
 
 The handoff message encodes the **remediation policy**: Simone searches memory for the finding signature/classification/error text, then makes an active decision — autonomous remediation (preferred when the fix is bounded, reversible, testable, locally verifiable) or refer to Kevin (extreme safety net: destructive changes, data-boundary exposure, secrets/security policy, unusually complex design, weak-evidence unique failures, production deploy approval). Simone does **not** edit code in the investigation session; she writes `work_products/heartbeat_investigation_summary.md` (+ optional `.json` with `autonomous_remediation_approved`, confidence, rationale, memory evidence, proposed changes) so Task Hub/Cody can apply and verify.
 
@@ -153,6 +154,17 @@ sequenceDiagram
     SIM->>SIM: build handoff + AutoHeartbeatInvestigation session
     SIM-->>GW: investigation summary artifacts
 ```
+
+## Heartbeat-silence detection (the heartbeat that never wakes)
+
+The mediation pipeline above only fires when a heartbeat *completes*. The harder failure is a heartbeat that goes **silent** — the service never starts, or its background loop dies — so no `heartbeat_completed` event ever arrives and nothing is there to alert on. Two gateway-side mechanisms close that hole:
+
+- `gateway_server.py::_spawn_background_task` installs an `add_done_callback` (`_on_done`) that, if the task dies with an unexpected exception, emits a `background_task_failed` notification.
+- `gateway_server.py::_run_after_deployment_window` wraps service init (it is what launches `_start_heartbeat_service`) and emits a `service_startup_failed` notification if startup raises — and is deliberately structured so the generic `background_task_failed` callback does not double-fire for the same condition.
+
+Both `background_task_failed` and `service_startup_failed` are members of `gateway_server.py::_HEALTH_ALERT_NOTIFICATION_KINDS`, so a flapping condition collapses to a single alert row rather than spamming.
+
+The active diagnostic is `scripts/check_heartbeat_liveness.py` (`run_check`), which reads the gateway liveness API and exits **2** when the heartbeat has never ticked (`latest_last_run_epoch=None` — the "silent" shape) and **3** when the last tick is stale (older than `staleness_multiplier`× the effective interval, default 2.0×). This machinery closed the ~26h-silent-heartbeat hole from the 2026-05-01/05-03 incidents.
 
 ## Key env vars and defaults (code-verified)
 
@@ -203,11 +215,12 @@ Explicit wakes: `request_heartbeat_now` (run ASAP, can bypass a foreground lock)
 - **Sections are factory-scoped** via HTML comments (`<!-- scope:hq -->`, `<!-- scope:local -->`, `<!-- scope:all -->`) and filtered by `heartbeat_scope_filter.filter_heartbeat_by_scope` against the service's `heartbeat_scope`.
 - It mandates writing both `work_products/system_health_latest.md` (human) and `work_products/heartbeat_findings_latest.json` (machine), and to triage `proactive_health:*` Task Hub rows that the pre-flight parks — without mass-clearing them.
 - Checkbox semantics: `- [ ]` = active/pending, `- [x]` = completed/disabled.
+- **Health-check false-positive discipline** (keep terse — this file is injected into Simone's context every cycle, so verbosity costs tokens): brainstorms awaiting a human reply are a DEFER, not an alert; a `[System/Sync]` task in `in_progress` is normal; `vp_db_locked` is transient SQLite contention — retry, don't abandon; a VP mission that finished >4h ago but whose task is still `in_progress` means Simone should read the `workspace://` artifacts via `vp_read_result_artifacts` and synthesize the completion herself. Escalate only on a hard cloud outage (3+ retries) or runaway deletions.
 
 ## Gotchas
 
 - **The legacy `UA_HEARTBEAT_MAX_PROACTIVE_PER_CYCLE` default of 1 is stale.** The code default is 5 (`heartbeat_service.py` constant + `_heartbeat_guard_policy`).
-- **Task claiming is no longer in the heartbeat.** `task_hub_claimed` is hardcoded `[]`; dispatch + `route_all_to_simone` live in `dispatch_service.dispatch_sweep`, driven by `todo_dispatch_service`. Do not reason about heartbeat "claiming" tasks from this file's task-focused branches — they are not reached.
+- **Task claiming is no longer in the heartbeat.** `task_hub_claimed` is hardcoded `[]`; dispatch is orchestrated by `dispatch_service.dispatch_sweep` (driven by `todo_dispatch_service`), which calls `agent_router.py::route_all_to_simone` and `task_hub.py::claim_next_dispatch_tasks` — those functions are defined in those modules, not in `dispatch_service`. Do not reason about heartbeat "claiming" tasks from this file's task-focused branches — they are not reached.
 - **Heartbeat does not own trusted-email execution.** That routes through the hook layer + ToDo runtime. (Confirmed in `02_GOTCHA_INVENTORY.md` and code path.)
 - **Simone's heartbeat runs in a real checkout and can act autonomously.** A bad branch deployed without review once introduced a mid-flight SyntaxError that crashed the CSI cron; recovery required stopping the gateway, parking the task with careful SQL (plain `cancel` gets resurrected by the orphan-reconciler), and resetting to `origin/main`. Autonomous remediation is bounded by the referral policy in the handoff message.
 - **Findings parse failures only alert when the artifact exists but is corrupt.** A *missing* artifact is normal for many run types and is intentionally silent (avoids notification noise).

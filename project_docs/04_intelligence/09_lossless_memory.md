@@ -65,7 +65,7 @@ Five tables model the conversation and its (designed) summary DAG:
 | Table | Purpose |
 | --- | --- |
 | `lcm_conversations` | One row per `session_id` (unique). Maps `session_id` → internal `conv_*` id. |
-| `lcm_messages` | Raw messages: `role`, short `content` (≤1000 chars for indexing), full `raw_blocks` JSON, `token_count`, `seq`, `created_at`. |
+| `lcm_messages` | Raw messages: `role`, `content` (a plain-`str` message is stored in full; only a list-of-blocks message is truncated to its first 1000 chars of JSON for indexing — see write path), full `raw_blocks` JSON, `token_count`, `seq`, `created_at`. |
 | `lcm_summaries` | Summary nodes: `depth`, `descendant_count`, `earliest_at`/`latest_at`, `content`, `token_count`. |
 | `lcm_summary_messages` | Join: which raw messages a summary covers. |
 | `lcm_summary_parents` | Join: summary→parent-summary edges (the DAG hierarchy). Defined but unused — no Depth-1+ rollup runs today. |

@@ -242,9 +242,10 @@ recovery sweep, autonomous cron registration, session reaper, workspace
 archiver, stale-VP-mission reconcile) **before** FastAPI begins serving.
 Accumulated production state pushed cold start past the old 4-minute window.
 
-`SELECT 1` against the runtime DB and returns `503` if the DB is disconnected or
-erroring. So "gateway healthy" means "process up *and* DB reachable," not just
-"port open."
+The gateway's `/api/v1/health` handler (`gateway_server.py::health`) runs a
+`SELECT 1` against the runtime DB connection (`main.runtime_db_conn`) and sets
+`503 Service Unavailable` if the DB is disconnected or erroring. So "gateway
+healthy" means "process up *and* DB reachable," not just "port open."
 
 **Crashloop fail-fast.** Inside the wait loop, `scripts/check_crashloop.sh`
 tracks the unit's `NRestarts` delta. It records a baseline on the first call,

@@ -13,6 +13,7 @@ code_paths:
   - ".github/workflows/deploy.yml"
   - "scripts/deploy_validate_runtime.sh"
   - "scripts/check_crashloop.sh"
+  - "scripts/check_heartbeat_liveness.py"
 last_verified: 2026-05-29
 ---
 
@@ -350,6 +351,23 @@ The proper fix is to move SDK iteration out-of-process (or off the loop), not to
 kill switch flipped. Disabling daemon sessions stops Simone's autonomous heartbeat work, so
 it's an incident-mitigation lever, not a steady state.
 
+### Detecting a silent heartbeat
+
+Starvation (or an outright crashed loop) can leave the heartbeat *silent* without the process
+dying — the hole that once let the heartbeat go 26h unnoticed. Two complementary detectors now
+close it:
+
+- **Self-reporting at the source.** `gateway_server.py::_spawn_background_task` installs an
+  `add_done_callback` that emits a `background_task_failed` notification if a background task
+  dies with an unexpected exception; `gateway_server.py::_run_after_deployment_window` wraps
+  init and emits `service_startup_failed` on init failure. Both kinds are in
+  `gateway_server.py::_HEALTH_ALERT_NOTIFICATION_KINDS`, so repeated firings collapse to a
+  single alert row (see the notification-dedup machinery below).
+- **External liveness probe.** `scripts/check_heartbeat_liveness.py` checks the last tick
+  against a staleness window (default 2× the heartbeat interval). Exit codes: `0` healthy (or
+  explicitly disabled), `2` no heartbeat record at all (silent), `3` stale (last tick beyond
+  the threshold).
+
 ---
 
 ## Cross-cutting machinery: worker exit classification & recovery
@@ -455,6 +473,14 @@ that keeps firing the same kind gets coalesced. Default cooldown 300s, rollup wi
   cancel-in-progress: false }` so simultaneous merges queue serially instead of racing on
   `/opt/universal_agent/.git/index.lock`. The deploy also removes a stale `index.lock` if no
   git process is running.
+- **SSH idle-eviction false-failure**: a long *silent* remote deploy step (systemd
+  `daemon-reload` + `enable --now` on a busy VPS can run minutes with no output) lets an
+  intermediate idle-timeout-killer drop the TCP connection, so the workflow exits **255 even
+  though the VPS restarted at the merged SHA**. The fix in `deploy.yml` is keepalive on the
+  deploy `ssh` invocation — `-o ServerAliveInterval=30 -o ServerAliveCountMax=120` (up to ~60
+  min of idle tolerance inside the outer `timeout 30m`) plus heartbeat output lines from the
+  otherwise-silent install scripts. A red deploy is therefore *not* proof of failure: always
+  run the Rule-A `/api/v1/version` SHA check before treating it as one.
 - **Branch-versus-deploy honesty**: a commit on a branch — or merged to `main` but with the
   deploy not yet green — is **not deployed**. Confirm with the `/api/v1/version` SHA check
   before claiming "shipped."

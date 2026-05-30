@@ -202,9 +202,16 @@ flowchart TB
 > incident where uvicorn 0.46.0's lifespan-then-bind ordering wedged the gateway. Do not
 > "simplify" this back to a plain `uvicorn.run(host, port)`.
 
-> **Gotcha — resource limits:** the gateway systemd unit sets `MemoryMax 8G`,
-> `MemoryHigh 6G`, `TasksMax 500`, `OOMPolicy=continue` (a child OOM-kill is OK; the gateway
-> survives). This guards against runaway memory and fork-bombs from spawned subprocesses.
+> **Gotcha — resource limits:** the gateway systemd template
+> (`deployment/systemd/templates/universal-agent-gateway.service.template`) sets
+> `MemoryMax=8G`, `MemoryHigh=6G`, `TasksMax=500` to guard against runaway memory and
+> fork-bombs from spawned subprocesses. The template itself does **not** set `OOMPolicy`.
+> `OOMPolicy=continue` (a child OOM-kill is OK; the gateway survives) is supplied separately
+> by the optional drop-in installer `scripts/install_vps_memory_guardrails.sh`, which writes
+> `/etc/systemd/system/<svc>.d/override.conf` for the gateway and csi-ingester. Note that
+> drop-in **also overrides** the template numbers with percent-based limits
+> (`MemoryHigh=85%`, `MemoryMax=95%`, `TasksMax=4096` by default), so the effective limits on
+> a VPS where the guardrails are installed differ from the template defaults.
 
 ### Two different "heartbeats" — don't conflate them
 

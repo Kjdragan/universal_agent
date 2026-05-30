@@ -107,8 +107,10 @@ Survivors become `candidates`. Matching is host-exact or suffix
 **LLM judge.** Calls `_call_llm_structured()` which uses the Anthropic SDK with
 `tool_use` (forced `tool_choice`) for structured output, validated by the
 `UrlJudgmentResult` / `UrlVerdict` Pydantic models. The model is
-**`resolve_opus()`** — i.e. the flagship tier (`glm-5.1` on the ZAI proxy, or
-`ANTHROPIC_DEFAULT_OPUS_MODEL` if set).
+**`resolve_opus()`** — i.e. the flagship tier. `model_resolution.resolve_model`
+checks `ANTHROPIC_DEFAULT_OPUS_MODEL` first and only falls back to
+`ZAI_MODEL_MAP["opus"]` (`glm-5.1` on the ZAI proxy) when that env var is empty,
+so the env var takes precedence.
 
 > **Correction vs. legacy docs:** older documentation claimed this judge uses
 > `resolve_sonnet`. The code uses **`resolve_opus()`**
@@ -305,8 +307,9 @@ ingest can never pick it up), recording `skip_reason="spa_404_shell"`:
    source lands as a 200KB raw-HTML dump regardless of the URL.
 
 The function name `_is_spa_404_shell` is kept stable for the cleanup script
-(`scripts/csi_vault_cleanup_grounding_hallucinations.py`) even though it now
-catches both modes.
+(`src/universal_agent/scripts/csi_vault_cleanup_grounding_hallucinations.py`,
+which imports `research_grounding._is_spa_404_shell`) even though it now catches
+both modes.
 
 `ResearchSource.to_enrichment_record()` adapts each source into the same
 `EnrichmentRecord` shape the classifier consumes (category `documentation` for
@@ -328,8 +331,8 @@ allowlisted rank ≥ 0, else `other`).
 - **`claude_code_intel_replay.py`** drives research grounding:
   `build_research_request()` → `execute_research()`, persisting under
   `<packet>/research_grounding/<post_id>/` and `research_grounding.json`.
-- **`scripts/csi_vault_cleanup_grounding_hallucinations.py`** uses
-  `_is_spa_404_shell` to quarantine already-ingested poison.
+- **`src/universal_agent/scripts/csi_vault_cleanup_grounding_hallucinations.py`**
+  uses `_is_spa_404_shell` to quarantine already-ingested poison.
 
 ## Tier vocabulary (for the research gate)
 

@@ -28,13 +28,25 @@ documents explicitly (`execution_run_service.py` module docstring):
 |---|---|---|
 | **Task** | Durable business identity — "the thing that must get done" | `task_hub_items` row |
 | **Assignment** | One claim of a task by one agent/session | `task_hub_assignments` row |
-| **Run** | Artifact isolation + execution lineage (one workspace dir) | `task_hub_runs` row + `runs` catalog |
-| **Attempt** | A retry within a run | `run_attempts` row |
+| **Run** | Durable logical execution unit + artifact isolation lineage | `task_hub_runs` row + `runs` catalog |
+| **Attempt** | One execution try within a run (the retry boundary) | `run_attempts` row |
 | **Session** | Transport container only — **not** an artifact root | gateway session |
 
 A single task may accrue many assignments (retries), and each dispatched
 execution allocates its own run workspace. Sessions carry traffic but never
 own artifacts.
+
+**Nomenclature discipline.** The codebase deliberately splits four ideas that
+casual usage tends to conflate. A **Run** is the durable logical unit; an
+**Attempt** is one execution try (the retry boundary); an **Execution Session**
+is the live provider/runtime process actually executing — this is the *only*
+legitimate use of the bare word "session"; and a **Run Workspace** is the
+durable evidence bundle (the per-run directory of artifacts). Reserve "session"
+for live, in-flight concepts only — never for the durable run or its workspace.
+The durable run/attempt state machine itself is driven by
+`workflow_admission.py::WorkflowAdmissionService` (`mark_running`,
+`mark_blocked`, `mark_needs_review`, `queue_retry`), which writes the run-level
+status separately from the `task_hub_items` status tracked in the next section.
 
 ## State Model
 
@@ -385,7 +397,7 @@ sessions from blocking short Task Hub writes.
 | `UA_TASK_HUB_TODO_MAX_RETRIES` | 3 | ToDo-policy retry budget |
 | `UA_MAX_CONCURRENT_VP_CODER` | 1 | Cody concurrency cap |
 | `UA_MAX_CONCURRENT_VP_GENERAL` | 2 | Atlas concurrency cap |
-| `UA_TASK_DEFAULT_MAX_RUNTIME_SECONDS` | — | Per-run wall-clock fallback (`resolve_max_runtime_seconds`) |
+| `UA_TASK_DEFAULT_MAX_RUNTIME_SECONDS` | 7200 (2h) | Per-run wall-clock fallback when no per-task override (`resolve_max_runtime_seconds`) |
 | `UA_ACTIVITY_DB_PATH` / `UA_RUNTIME_DB_PATH` | under `AGENT_RUN_WORKSPACES/` | DB overrides |
 
 ## Gotchas Observed in Code

@@ -32,6 +32,12 @@ if absent.
 > via `transcript_path`, `AgentDefinition`, `.claude/agents/*.md` frontmatter) lives in
 > the agent-setup/hooks/guardrails code paths and is documented separately — not here.
 > The legacy `docs/002_SDK_PERMISSIONS_HOOKS_SUBAGENTS.md` is that other subsystem.
+>
+> Likewise the **tool-name layer** — how the SDK strips the `mcp__internal__` prefix
+> when exposing internal tools natively, so a tool registered as
+> `mcp__internal__task_hub_task_action` surfaces simply as `task_hub_task_action` —
+> is owned by the MCP tools doc, not here. When chasing a "missing tool," inspect the
+> live SDK tool list rather than trusting prompt text, which can name a stale prefix.
 
 ---
 
@@ -216,12 +222,16 @@ the `output_artifacts` declared in a `mission.json` task.
 > against `search_results/processed_json/`. This is a narrow research-pipeline
 > accommodation baked into the generic verifier.
 >
-> [VERIFY] `verify_semantic` calls `self.client.generate_content(model="gemini-2.0-flash-exp", …)`
-> — i.e. it expects a **Gemini** client interface, not the Anthropic SDK. The
-> `main.py` call site constructs `TaskVerifier(client=client)`; confirm `client`
-> there is actually a Gemini-compatible client, otherwise Tier 3 would raise and be
-> swallowed by the fail-safe (silently always-pass). The other `main.py` verifier
-> usage explicitly passes `client=None` ("Tier 2 only").
+> Gotcha — **Tier 3 is effectively dead code at the live call site.** `verify_semantic`
+> calls `self.client.generate_content(model="gemini-2.0-flash-exp", …)` — i.e. it
+> expects a **Gemini** client interface. But the `main.py` massive-task call site
+> (`main.py::TaskVerifier(client=client)`) passes the run's `ClaudeSDKClient`
+> (constructed via `main.py` `ClaudeSDKClient(options)`), which has **no
+> `generate_content` method**. So when Tier 3 fires it raises `AttributeError`, the
+> `except Exception` block in `verify_semantic` catches it, and the fail-safe returns
+> `(True, "semantic check skipped (error: …)")` — Tier 3 is silently always-pass here.
+> The other `main.py` verifier usage explicitly passes `client=None` ("Tier 2 only"),
+> which short-circuits Tier 3 to a clean skip before any LLM call.
 
 ---
 

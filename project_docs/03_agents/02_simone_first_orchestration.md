@@ -144,8 +144,10 @@ When Simone delegates, she:
    The `idempotency_key` is **mandatory** to prevent duplicate dispatches on interruption.
 2. **Releases her claim with `task_hub_task_action(action="redirect_to", note="<vp_id>")`** —
    NOT `action="complete"`. The work is not done; the VP is just starting. `redirect_to`
-   clears retry counters and stamps `metadata.preferred_vp`, satisfying the lifecycle
-   guardrail. The VP closes the source task itself on completion.
+   clears retry counters and stamps `metadata.preferred_vp`. The guardrail is satisfied not
+   by `redirect_to` itself but by the preceding `vp_dispatch_mission` call (the
+   `auto_delegate` branch — see [Lifecycle guardrail](#lifecycle-guardrail)). The VP closes
+   the source task itself on completion.
 3. Moves on. On VP success the source task auto-closes and the VP emails the requester
    directly (Simone CC'd). On VP failure, a `vp_mission_failure` informational task
    appears in Simone's queue for rescue handling.
@@ -163,11 +165,27 @@ if the LLM route picks `AGENT_CODER`, the workflow manifest is rewritten to
 
 ## Lifecycle guardrail
 
-Every claimed work item must end with a `task_hub_task_action` lifecycle mutation. The
-guardrail (`mission_guardrails.py`, "Execution Missing Lifecycle Mutation") accepts:
-`review`, `complete`, `block`, `park`, `approve`, `redirect_to`. Failing to call one of
-these blocks Simone's completion. `TaskStop` is **not** a lifecycle primitive in this lane
-and must not be used.
+Every claimed work item must end with a durable Task Hub lifecycle mutation, or the
+todo-execution guardrail (`mission_guardrails.py::MissionGuardrailTracker`, the `todo_execution`
+branch) flags `lifecycle_mutation` as missing and blocks Simone's completion.
+
+The guardrail passes a turn when **any** of these hold:
+
+- a lifecycle action in the enumerated set is observed:
+  `{"review", "complete", "block", "park", "approve"}` (this exact tuple is what the
+  code tests — see the `not any(action in lifecycle_actions for action in (...))` check);
+- a `"delegate"` action is in `lifecycle_actions` → `stage_status="delegated"`;
+- a VP dispatch was attempted/succeeded (`self.successful_vp_dispatches or
+  self._vp_dispatch_attempted`) → `stage_status="auto_delegate"`.
+
+Note: `redirect_to` is **not** in the enumerated lifecycle-action tuple. A delegation that
+ends with `redirect_to` clears the guardrail via the `auto_delegate` branch — because
+Simone called `vp_dispatch_mission` first, `_vp_dispatch_attempted` is set, which is what
+actually satisfies the check. (The `TODO_DISPATCH_PROMPT` text lists `redirect_to` among
+accepted actions; that prompt copy and the literal guardrail enumeration diverge — the
+behavior is consistent only because the dispatch attempt accompanies the `redirect_to`.)
+
+`TaskStop` is **not** a lifecycle primitive in this lane and must not be used.
 
 ## Gateway VP routing (external-VP fast path)
 
@@ -254,10 +272,9 @@ flowchart TD
   remediation decision and may fix bounded coding issues autonomously, escalating only
   destructive / security / approval-bound fixes to the operator.
 
-> [VERIFY: doc-spec contradiction] The doc spec for this file says the `/btw` sidebar-
-> sessions feature is "vaporware (no /btw handler exists in code)" and instructs removing
-> it. As of 2026-05-29 a `/btw` handler **does** exist in
-> `gateway_server.py` (creates/enters a sidebar session via `session_hub.py`'s
-> `set_active_sidebar` / `get_active_sidebar`). Per the spec it is omitted from this
-> document anyway (it is tangential to Simone-first routing), but the "no handler exists"
-> premise is outdated — flagging so the spec can be corrected.
+> **Note — `/btw` sidebar sessions are real.** A `/btw` handler exists in
+> `gateway_server.py` (matches `user_input.startswith("/btw ")`) and creates/enters a
+> sidebar session via `session_hub.py::set_active_sidebar` / `get_active_sidebar`. It is
+> only mentioned here because it is tangential to Simone-first routing; full coverage of
+> sidebar sessions belongs with the web-UI/session docs (tracked in `_meta/FOLLOWUPS.md`).
+> (An earlier audit incorrectly flagged `/btw` as unimplemented — corrected here.)

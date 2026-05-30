@@ -1,0 +1,159 @@
+{
+ "id2file": {
+  "arch-overview": "01_architecture/01_system_overview.md",
+  "arch-task-lifecycle": "01_architecture/02_task_lifecycle_end_to_end.md",
+  "arch-database": "01_architecture/03_database_architecture.md",
+  "arch-model-resolution": "01_architecture/04_model_choice_and_resolution.md",
+  "arch-hooks": "01_architecture/05_hook_system.md",
+  "arch-events-tracing": "01_architecture/06_event_streaming_and_tracing.md",
+  "exec-gateway": "02_execution_core/01_gateway_sessions_execution.md",
+  "exec-task-hub": "02_execution_core/02_task_hub.md",
+  "exec-durable": "02_execution_core/03_durable_execution.md",
+  "exec-urw": "02_execution_core/04_urw_orchestration.md",
+  "exec-workspaces": "02_execution_core/05_workspaces_and_artifacts.md",
+  "agents-vp": "03_agents/01_vp_workers_and_delegation.md",
+  "agents-simone": "03_agents/02_simone_first_orchestration.md",
+  "agents-heartbeat": "03_agents/03_heartbeat_service.md",
+  "agents-cron": "03_agents/04_cron_and_scheduling.md",
+  "agents-idle-goal": "03_agents/05_idle_dispatch_and_goal_loop.md",
+  "agents-college": "03_agents/06_agent_college.md",
+  "intel-csi": "04_intelligence/01_csi_architecture.md",
+  "intel-url-judge": "04_intelligence/02_url_judging_and_research_grounding.md",
+  "intel-lanes": "04_intelligence/03_intel_lanes_config.md",
+  "intel-claudedevs": "04_intelligence/04_claudedevs_x_intel.md",
+  "intel-youtube": "04_intelligence/05_youtube_csi_flow.md",
+  "intel-demo-triage": "04_intelligence/06_demo_triage.md",
+  "intel-wiki": "04_intelligence/07_llm_wiki.md",
+  "intel-memory": "04_intelligence/08_memory_system.md",
+  "intel-lossless": "04_intelligence/09_lossless_memory.md",
+  "intel-proactive": "04_intelligence/10_proactive_pipeline.md",
+  "intel-mission-control": "04_intelligence/11_mission_control_intelligence.md",
+  "intel-discord": "04_intelligence/12_discord_intelligence.md",
+  "chan-email": "05_channels/01_email_agentmail.md",
+  "chan-webhooks": "05_channels/02_webhooks.md",
+  "chan-telegram": "05_channels/03_telegram.md",
+  "chan-discord-ops": "05_channels/04_discord_ops.md",
+  "chan-webui": "05_channels/05_web_ui_communication.md",
+  "plat-secrets": "06_platform/01_secrets_and_infisical.md",
+  "plat-runtime": "06_platform/02_runtime_bootstrap_and_profiles.md",
+  "plat-identity-auth": "06_platform/03_identity_and_auth.md",
+  "plat-deploy": "06_platform/04_deployment_and_cicd.md",
+  "plat-environments": "06_platform/05_environments.md",
+  "plat-networking": "06_platform/06_networking_tailscale_proxy_sshfs.md",
+  "tools-mcp": "07_tools/01_mcp_server_and_tools.md",
+  "tools-sdk": "07_tools/02_sdk_integration.md",
+  "tools-skills": "07_tools/03_skills_system.md",
+  "ops-playbook": "08_operations/01_agent_operating_playbook.md",
+  "ops-verification": "08_operations/02_production_verification_rules.md",
+  "ops-dormancy": "08_operations/03_dormancy_and_operating_hours.md",
+  "ops-vps-recovery": "08_operations/04_vps_recovery_and_security.md",
+  "ops-incidents": "08_operations/05_incident_response_patterns.md"
+ },
+ "p2_by_doc": {
+  "arch-overview": [
+   "Gotcha box: the gateway systemd unit sets MemoryMax 8G, MemoryHigh 6G, TasksMax 500, OOMPolicy=continue (a child OOM-kill is OK; the gateway survives). -> REALITY: deployment/systemd/templates/universal-agent-gateway.service.template sets MemoryMax=8G, MemoryHigh=6G, TasksMax=500 but does NOT contain an OOMPolicy line. OOMPolicy=continue is present only in scripts/install_vps_memory_guardrails.sh (a runtime override drop-in) and on the csi-ingester / vp-worker units. So the three memory/task limits are correct, but OOMPolicy=continue is not set by the gateway template itself."
+  ],
+  "arch-task-lifecycle": [
+   "Env-flag table lists UA_TASK_DEFAULT_MAX_RUNTIME_SECONDS default as '\u2014' (unspecified) -> REALITY: task_hub.py::resolve_max_runtime_seconds documents and applies a default of 7200 seconds when the env var is unset",
+   "seizure_state field tracks values 'unseized'/'seized'/'delegated'/'completed'/'rejected'/'parked_manual' -> REALITY: Directly confirmed as literal write-sites: 'unseized' (default), 'seized' (claim), 'completed' (self-verify auto-complete), 'parked_manual' (park action). 'delegated' and 'rejected' are used as states elsewhere but were not pinned to a literal seizure_state assignment in this pass; claim is plausible and not contradicted."
+  ],
+  "exec-gateway": [
+   "Ops auth: JWT (`OPS_JWT_SECRET`) or legacy `UA_OPS_TOKEN` -> REALITY: The module-level variable is named OPS_JWT_SECRET but it is read from the environment variable UA_OPS_JWT_SECRET (gateway_server.py: `OPS_JWT_SECRET = os.getenv(\"UA_OPS_JWT_SECRET\", \"\").strip()`). In a list that otherwise names env vars (UA_OPS_TOKEN, OPS_JWT_SECRET), readers may mistake OPS_JWT_SECRET for the env var name. The symbol itself resolves, so this is purely a clarity nit.",
+   "Inbound message-type table lists `(/btw \u2026) | open/route a sidebar session` as a real receive-loop branch. -> REALITY: CONFIRMED PRESENT (not a problem) \u2014 a `/btw` handler exists in websocket_stream (gateway_server.py around the `user_input_strip.startswith(\"/btw \")` branch, using get_active_sidebar/set_active_sidebar/clear_active_sidebar and creating a `<session>_sidebar_<ts>` session). Flagged only to note the manifest's 'btw is vaporware, remove it' directive was scoped to the Simone doc (agents-simone), NOT this gateway doc; here the entry is accurate."
+  ],
+  "exec-task-hub": [
+   "Doc frontmatter code_paths lists src/universal_agent/services/cron_task_hub_link.py, which is NOT in the manifest entry's code_paths for exec-task-hub. -> REALITY: The file exists and is correctly documented (its symbols ensure_cron_task_link/close_cron_task_link resolve and the lifecycle claims are accurate). This is an additive, accurate inclusion rather than an error, but it diverges from the manifest's declared code_paths list.",
+   "Staleness bonus described as 'by age (+0.5/+1.0/+2.0 at 2h/6h/24h)'. -> REALITY: Confirmed correct, but the age basis is specifically created_at (task_hub.py::score_task uses task.get('created_at')), not last-touched/updated_at. The doc's generic 'by age' wording is accurate but slightly underspecified; no factual error."
+  ],
+  "agents-simone": [
+   "The guardrail (mission_guardrails.py, 'Execution Missing Lifecycle Mutation') accepts: review, complete, block, park, approve, redirect_to. -> REALITY: mission_guardrails.py's lifecycle check tests only ('review','complete','block','park','approve') \u2014 'redirect_to' is NOT in that tuple. A redirect_to-only delegation passes the guardrail via a separate branch ('delegate' in lifecycle_actions OR self.successful_vp_dispatches/self._vp_dispatch_attempted), which co-occurs because Simone called vp_dispatch_mission first. The doc's claim mirrors the in-code prompt contract text (todo_dispatch_service.py prompt line: 'The guardrail accepts these actions ... redirect_to'), so doc and in-code prompt agree, but the literal guardrail code does not enumerate redirect_to. Practically consistent; technically imprecise.",
+   "[VERIFY note] doc spec says /btw is vaporware (no /btw handler exists). Doc flags that a /btw handler DOES exist in gateway_server.py via session_hub set_active_sidebar/get_active_sidebar. -> REALITY: Confirmed: gateway_server.py has a /btw handler (user_input_strip.startswith('/btw')) that creates/enters a sidebar session and calls set_active_sidebar/get_active_sidebar from session_hub.py. The doc's VERIFY callout is correct; the manifest spec premise ('no /btw handler exists in code') is outdated. Not a doc error \u2014 doc handled it correctly."
+  ],
+  "agents-heartbeat": [
+   "\"Task claiming and route_all_to_simone live in services/dispatch_service.py::dispatch_sweep\" (and gotcha: \"dispatch + route_all_to_simone live in dispatch_service.dispatch_sweep\"). -> REALITY: route_all_to_simone is DEFINED in services/agent_router.py::route_all_to_simone (line 30). claim_next_dispatch_tasks is DEFINED in task_hub.py::claim_next_dispatch_tasks (line 2176). dispatch_service.py only IMPORTS/CALLS them (route_all_to_simone called at dispatch_service.py:137; claim_next_dispatch_tasks called at :171/:220/:259/:319). So the routing+claiming logic is orchestrated via dispatch_service but the functions themselves do not 'live' there. The doc's substantive point (these are NOT in the heartbeat loop) is correct, and agent_router.py is listed in code_paths, so this is a wording imprecision only.",
+   "Auto-triage handoff truncates findings JSON to '\u2264 24 KB'. -> REALITY: gateway_server._dispatch_heartbeat_to_simone slices the JSON string to 24000 characters (findings_json = json.dumps(...)[:24000]), not 24 KB by byte count. For ASCII this is ~24 KB but for multibyte content it can exceed 24 KB of bytes. Cosmetic \u2014 the intent is correct."
+  ],
+  "intel-csi": [
+   "Section 3.2 + the mermaid diagram describe recall as `_detect_clusters_sql`: SQL `GROUP BY` topic across distinct channels (diagram: \"GROUP BY topic x channels\"). -> REALITY: proactive_convergence.py::_detect_clusters_sql runs a plain `SELECT * FROM proactive_topic_signatures WHERE ingested_at >= ? ORDER BY ingested_at DESC LIMIT 500` and then buckets/groups in Python (a `for sig in signatures` loop building a `buckets` dict, then channel-count thresholding). There is no SQL GROUP BY. Net behavior (group by topic across distinct channels) is accurate, but the mechanism is mischaracterized as SQL-side grouping.",
+   "Gotcha 5.2 asserts a specific ZAI/GLM content-safety error code 1301 is fail-closed and that the accepted Phase 2 design is to log-not-silent the drop, with a 29-video bucket dropped on 2026-05-29. -> REALITY: The string \"1301\" does not appear anywhere under src/universal_agent/. The only code-verifiable part is that _refine_cluster_with_llm catches exceptions and returns None (fail-closed, no candidate) per its docstring/try-except. The specific 1301 code, the 29-video observation, and the 'logged not silent' design are environmental/operational claims not verifiable from the cited code_paths. The doc frames them as observed, but a reader may take 1301 as a code constant.",
+   "Section 5.1: 'Heartbeats reach this via getattr(_gs, \"_csi_default_db_path\") (defensively...)' -> REALITY: heartbeat_service.py uses `if hasattr(_gs, \"_csi_default_db_path\"):` then calls `_gs._csi_default_db_path()` directly (attribute access), not getattr with a default. Functionally equivalent defensive pattern; the getattr phrasing is slightly inaccurate."
+  ],
+  "intel-url-judge": [
+   "Cites the cleanup script as scripts/csi_vault_cleanup_grounding_hallucinations.py (referenced twice: in the _is_spa_404_shell section and in Callers & integration). -> REALITY: The script actually lives at src/universal_agent/scripts/csi_vault_cleanup_grounding_hallucinations.py. There is no top-level scripts/csi_vault_cleanup_grounding_hallucinations.py (ls returned No such file). _is_spa_404_shell is correctly imported there.",
+   "Pass 2 section states resolve_opus() returns 'glm-5.1 on the ZAI proxy, or ANTHROPIC_DEFAULT_OPUS_MODEL if set' \u2014 phrasing implies glm-5.1 is primary with env as alternative. -> REALITY: resolve_model('opus') checks ANTHROPIC_DEFAULT_OPUS_MODEL FIRST and only falls back to ZAI_MODEL_MAP['opus']='glm-5.1' when the env var is empty. Env var has precedence, not the other way around. Note the doc later (env-vars section) states the precedence correctly ('returns glm-5.1 unless ANTHROPIC_DEFAULT_OPUS_MODEL overrides it'), so this is an internal phrasing inconsistency, not a factual error in values."
+  ],
+  "intel-wiki": [
+   "Doc states the feature_flags kill switches are 'UA_DISABLE_LLM_WIKI_AUTO_SYNC_INTERNAL / UA_DISABLE_LLM_WIKI_ENABLE_INTERNAL_PROJECTION'. -> REALITY: feature_flags.py::llm_wiki_internal_projection_enabled checks os.getenv('UA_DISABLE_LLM_WIKI_INTERNAL_PROJECTION') \u2014 there is no 'ENABLE' in the disable var name. The auto-sync disable var (UA_DISABLE_LLM_WIKI_AUTO_SYNC_INTERNAL) is correct; the projection one is mis-named in the doc.",
+   "Doc cites 'scripts/schedule_nightly_wiki.py' and 'nightly_wiki_agent.py' (implying top-level scripts/ dir) as registering the nightly_wiki cron (15 3 * * *) and briefing (30 6 * * *). -> REALITY: The files exist but under src/universal_agent/scripts/, not top-level scripts/. schedule_nightly_wiki.py registers WIKI_JOB_ID='nightly_wiki' with cron_expr='15 3 * * *' and a briefing job at '30 6 * * *' \u2014 cron details are correct; only the path prefix is imprecise."
+  ],
+  "intel-memory": [
+   "Flag table lists UA_MEMORY_FLUSH_MAX_CHARS (default 4000) as the 'Flush transcript-tail cap.' -> REALITY: feature_flags.memory_flush_max_chars exists and returns default 4000, but the live flush path MemoryOrchestrator.flush_pre_compact / memory_flush.flush_pre_compact_memory hardcodes max_chars=4000 as a function default and does NOT call memory_flush_max_chars(). The env var therefore does not actually influence the flush cap on the orchestrator path. Minor over-implication that the flag is wired; the flag and default value themselves are correctly stated."
+  ],
+  "intel-proactive": [
+   "Mermaid edge labels and prose reference the cron as `*/30`; gotcha says detection 'runs every call even when no new signatures landed... the cron is the cadence governor'. -> REALITY: Cadence governor framing is correct (sync_topic_signatures_from_csi runs detection each invocation; candidate_id stability + write-once verdicts keep it idempotent \u2014 confirmed in proactive_convergence.py::write_convergence_candidate, final_verdicts no-op). Only the */30 cadence value is wrong (actual minute-0 hourly). Minor because the idempotency reasoning holds."
+  ],
+  "chan-webui": [
+   "VERIFY note in the carried-context section: 'exact renderer script name/path not re-confirmed in this code review' for render_service_env_from_infisical.py -> REALITY: The script DOES exist at exactly scripts/render_service_env_from_infisical.py \u2014 the hedge is over-cautious and could be promoted to a confirmed statement. Not a divergence; it is an honest VERIFY marker per governance rules, so acceptable as-is."
+  ],
+  "plat-secrets": [
+   "Doc line 24 calls 'four machine-identity credentials needed to talk to Infisical: INFISICAL_CLIENT_ID, INFISICAL_CLIENT_SECRET, INFISICAL_PROJECT_ID, INFISICAL_ENVIRONMENT.' -> REALITY: infisical_loader.py::_fetch_infisical_secrets validates only three as required (CLIENT_ID, CLIENT_SECRET, PROJECT_ID); INFISICAL_ENVIRONMENT is config (defaulting to 'development' via _normalize_infisical_environment), not a credential. The doc itself states this correctly elsewhere (the 'three required ones' phrasing). Minor terminological imprecision only.",
+   "VPS installer 'installs it as root:ua mode 640'. -> REALITY: scripts/install_vps_webui_env.sh installs as root:ua m640 only when APP_USER resolves (line with `install -o root -g \"$APP_USER\"`); it falls back to root:root m640 otherwise. The doc's root:ua characterization is the primary/intended path and is accurate, just omits the fallback branch."
+  ],
+  "ops-verification": [
+   "Frontmatter code_paths uses symbol-qualified entries: 'src/universal_agent/gateway_server.py::version_info', '::_capture_version_info', '::health', 'src/universal_agent/cron_service.py::_is_deploy_window_active'. -> REALITY: All four symbols DO resolve in their files (_capture_version_info/version_info/_VERSION_INFO at gateway_server.py; health at gateway_server.py; _is_deploy_window_active at cron_service.py). But per project_docs/CLAUDE.md, code_paths are meant to be 'globs this doc documents' for PR-time drift mapping; a '::symbol' suffix is not a valid file glob and won't drift-map. Every other reconstructed doc (02_task_hub.md, 06_platform/04_deployment_and_cicd.md) uses plain file paths in code_paths. Convention deviation, not a factual error. (doc_audit.py enforcer is absent from this worktree so CI behavior unconfirmed.)"
+  ],
+  "arch-events-tracing": [
+   "Citation 'server.py:21 configure_logfire()' on line 139 uses a line number. -> REALITY: project_docs governance forbids line-number citations (CI rejects ':NNN'). Should cite server.py::configure_logfire by symbol instead. This is the only line-number citation in the doc (the [:1000]/[:8000] tokens elsewhere are code-slice syntax, not citations)."
+  ],
+  "agents-idle-goal": [
+   "Known nudge_dispatch callers table lists `scripts/codie_cleanup_enqueue.py` -> REALITY: The actual module path is `src/universal_agent/scripts/codie_cleanup_enqueue.py` (under the package), not a top-level `scripts/` dir. The filename is right; the dir prefix is slightly imprecise. Cosmetic only.",
+   "Doc says check_completion_attestation fallback is fed `outcome.payload[\"cli_workspace_dir\"]` (captured by the CLI client). -> REALITY: Verified accurate against worker_loop (_payload_cwd = outcome.payload['cli_workspace_dir']) and claude_cli_client (enriched_payload.setdefault('cli_workspace_dir', ...)). However the self_briefing.check_completion_attestation docstring itself references a stale key `metadata.dispatch.cody_workspace_dir`. The DOC is correct; flagging only because a reader cross-checking the function's own docstring may be confused. No doc change required."
+  ],
+  "agents-college": [
+   "Persistence section: 'Memory_System/storage.py creates a processed_traces(...) table ... plus memory_blocks and an archival_fts FTS5 table.' The mermaid node also labels the SQLite store 'memory_blocks + processed_traces'. -> REALITY: storage.py::StorageManager._init_sqlite creates tables named core_blocks (not memory_blocks), processed_traces, and archival_fts. There is no table named memory_blocks anywhere. The accessor methods (get_core_memory/save_block/get_block) all operate on core_blocks.",
+   "TL;DR/persistence framing describes Memory_System as 'a local SQLite Memory_System' and the mermaid shows a single SQLite store. -> REALITY: Memory_System is a HYBRID store: storage.py::StorageManager opens a chromadb.PersistentClient (chroma_db dir) for archival memory in addition to the agent_core.db SQLite file. The College-relevant tables (core_blocks, processed_traces) are SQLite, so the College claim is substantially correct, but describing the whole subsystem as SQLite-only is inaccurate."
+  ],
+  "intel-youtube": [
+   "ZAI content-safety error 1301 silently drops buckets (gotcha section). -> REALITY: The string '1301' does not appear anywhere in the codebase. The doc itself frames this as an upstream ZAI-proxy behavior 'not handled in youtube_daily_digest.py itself', which makes the absence consistent, but the specific numeric code (1301) is unverifiable against code and rests on the 2026-05-29 operational handoff only. (Error 1313 FUP IS verified in code.)"
+  ],
+  "intel-demo-triage": [
+   "Mermaid node (doc line 44) labels the auto-promoter cron '(35 min after ranker)'. -> REALITY: Ranker fires at :05 (`5 10,15 * * *`), promoter at :35 (`35 10,15 * * *`) = 30 minutes after. The module/cron docstring explicitly says 'Fires 30 minutes after the ranker', and the doc's own table (line 142) correctly says 'fires 30 min after ranker'. The mermaid '35 min' is internally inconsistent and wrong."
+  ],
+  "intel-lossless": [
+   "Schema table row for lcm_messages: 'short content (\u22641000 chars for indexing)' -> REALITY: The \u22641000-char truncation in add_message only applies when content is a list of blocks (text_content = json.dumps(raw_blocks)[:1000]). For a plain str, the full string is stored in content with no truncation. The write-path section correctly scopes the \u22641000 to list serialization, so this is only a minor imprecision in the schema table summary."
+  ],
+  "intel-mission-control": [
+   "`_system_timers_snapshot` shells out to `systemctl list-timers --output=json` -> REALITY: gateway_server.py::_system_timers_snapshot actually invokes `systemctl list-timers --all --output=json` (the `--all` flag is omitted in the doc). Behaviorally immaterial; 10s timeout and `[]`-on-error are correctly described.",
+   "The older 'Operator Brief' panel and its `/api/v1/dashboard/situations` endpoint were removed in Phase 8 (2026-05-04). -> REALITY: The absence of `/situations` is verifiable and confirmed (grep returns nothing in src/universal_agent/). The specific 'Phase 8' label and '2026-05-04' date are unverifiable historical/environmental claims, but the doc frames the removal as inferred from grep and it is low-risk."
+  ],
+  "intel-discord": [
+   "Relevance/dashboard sections: 'the gateway dashboard_discord_* message endpoints filter WHERE m.is_meaningful = 1' and 'gate messages on is_meaningful = 1' \u2014 implying unclassified (NULL) messages are hidden. -> REALITY: Two endpoints differ. The per-server messages endpoint (the one whose show_all/total/total_all behaviour the doc describes) uses relevance_clause = 'AND (m.is_meaningful IS NULL OR m.is_meaningful = 1)', i.e. NULL/unclassified messages are INCLUDED. Only the recent-messages endpoint uses strict 'WHERE m.is_meaningful = 1'. The doc overstates filtering for the per-server path.",
+   "Section headers attribute the periodic loops to relevance_filter.py ('A periodic sweep (run_relevance_sweep_loop...)') and triage.py ('run_triage_jobs (default every 60 min)'). -> REALITY: run_relevance_sweep_loop and run_triage_jobs are tasks.loop methods defined on the daemon in daemon.py; they call into relevance_filter.run_relevance_sweep and triage.run_triage_batch respectively. TRIAGE_TIERS/TRIAGE_BATCH_LIMIT env constants also live in daemon.py, not triage.py. Function names cited are correct but the file attribution is imprecise."
+  ],
+  "chan-telegram": [
+   "Heartbeat section: 'extracts user_id from the tg_<user_id> session id' (heartbeat_adapter.py does session_id[3:]) -> REALITY: Actual created session ids are tg_<user_id>_<8hex> (agent_adapter._get_or_create_session), so session_id[3:] yields '<user_id>_<8hex>', not a clean user_id. The adapter's own comment assumes session_id = f'tg_{user_id}'. This is a latent code inconsistency, not a doc fabrication \u2014 the doc describes code intent faithfully \u2014 but the doc could note the id actually carries the 8-hex suffix.",
+   "/briefing reads today's artifacts/autonomous-briefings/<date>/DAILY_BRIEFING.md -> REALITY: Path base is os.getenv('UA_ARTIFACTS_DIR') with a hardcoded fallback of /home/kjdragan/lrepos/universal_agent/artifacts, and the date is computed with datetime.now(timezone.utc) (UTC, not Houston time). Doc's relative-path phrasing is a reasonable simplification; the UTC date basis is unmentioned."
+  ],
+  "chan-discord-ops": [
+   "detect_signals(content, channel_tier) is deterministic regex. -> REALITY: Actual signature is signals.py::detect_signals(message_content, channel_tier, author_id=None). Deterministic-regex characterization and all four rules (tier_a_activity high, release_detected high with version+release-word and noise/>60%-code suppression, keywords_matched medium, text_event_detected medium >=30 chars + event word + time indicator) are accurate; only the cited parameter names are paraphrased/incomplete."
+  ],
+  "plat-identity-auth": [
+   "Doc states there are '~250 _require_ops_auth(request) call sites in gateway_server.py'. -> REALITY: Actual count of `_require_ops_auth(request)` in src/universal_agent/gateway_server.py is 156 (grep -c). The ~250 figure is overstated by ~60%.",
+   "Frontmatter code_paths lists identity/*.py, auth/ops_auth.py, api/server.py, signals_ingest.py, web-ui/lib/dashboardAuth.ts. -> REALITY: The doc documents ops enforcement in gateway_server.py (_require_ops_auth, _require_ops_token_issuance_auth, /auth/ops-token route, _refresh_ops_auth_config_from_env) and the PreToolUse email-recipient block in main.py in depth, but neither file is in code_paths. PR-time drift mapping will not flag changes to gateway_server.py or main.py against this doc.",
+   "Doc describes _SYSTEM_SESSION_OWNERS as containing webhook,user_ui,user_cli,cron_system,daemon,ops:system-configuration-agent '\u2026, plus prefixes cron:, worker_, vp.' -> REALITY: The set literal _SYSTEM_SESSION_OWNERS contains {webhook,user_ui,user_cli,ops_tutorial_review,cron_system,ops:system-configuration-agent,daemon} \u2014 it does NOT contain prefix logic and omits ops_tutorial_review from the doc's list. The cron:/worker_/vp. prefix matching lives in the separate function _is_system_session_owner, not in the set. Substantively correct (prefixes do grant system-owner treatment) but attributed to the wrong construct."
+  ],
+  "plat-networking": [
+   "Both apply scripts 'back onto src/universal_agent/tailscale_admin.py, which talks to https://api.tailscale.com/api/v2'. -> REALITY: TailscaleAdminClient base_url default is 'https://api.tailscale.com' (tailscale_admin.py::TailscaleAdminClient, line ~97). The '/api/v2' segment is part of each request path (e.g. get_acl GETs '/api/v2/tailnet/{seg}/acl', set_device_tags POSTs '/api/v2/device/{id}/tags'). So '/api/v2' is genuinely used on every endpoint but is not the base URL \u2014 cosmetic imprecision only.",
+   "UA_YOUTUBE_TRANSCRIPT_PROXY_RETRIES default 6, 'raised from 3 on 2026-05-21'. -> REALITY: Default 6 confirmed in youtube_ingest.py (os.getenv(..., \"6\")). The 'raised from 3 on 2026-05-21' historical detail is not verifiable from current code, but it is a dated rationale note which governance rules permit."
+  ],
+  "tools-sdk": [
+   "The [VERIFY] block in \u00a74b asks to confirm whether the main.py TaskVerifier(client=client) call site passes a Gemini-compatible client; it is left unresolved in the doc. -> REALITY: Resolvable: at main.py the `client` passed to TaskVerifier(client=client) is a ClaudeSDKClient (constructed at main.py::ClaudeSDKClient(options)), which has no generate_content method. verify_semantic calls self.client.generate_content(model='gemini-2.0-flash-exp', ...), so Tier 3 raises and is swallowed by the fail-safe (always-pass). The doc's hypothesis is correct; the [VERIFY] could be promoted to a confirmed gotcha. The other call site (TaskVerifier(client=None), 'Tier 2 only') is confirmed accurate."
+  ],
+  "tools-skills": [
+   "Doc states: 'With enable_skills=True (the default), _load_assets() calls discover_skills(), stores the result on self._discovered_skills, and builds self._skills_xml via generate_skills_xml.' -> REALITY: There is no _load_assets method on AgentSetup. discover_skills() + self._discovered_skills + self._skills_xml = generate_skills_xml(...) all happen inside AgentSetup.initialize() (agent_setup.py::initialize). The hand-assembled prompt is built later in AgentSetup._build_system_prompt, which passes skills_xml=self._skills_xml to prompt_builder.build_system_prompt. The described data flow is correct; only the method name '_load_assets' is fabricated."
+  ],
+  "ops-dormancy": [
+   "Doc frontmatter code_paths lists gateway_server.py / heartbeat_service.py / cron_artifact_reminders.py / cron_artifact_notifier.py / proactive_pipeline_invariants.py / the guard test, but the manifest entry for id=ops-dormancy lists code_paths=[src/universal_agent/cron_service.py]. -> REALITY: The dormancy mechanisms actually live in the files the frontmatter lists (active-window constants in cron_artifact_reminders.py, the heartbeat active-hours gate in heartbeat_service.py, cron literals in gateway_server.py, invariants in proactive_pipeline_invariants.py). cron_service.py is barely involved in dormancy. The frontmatter is MORE accurate than the manifest hint; flagging only as a cross-reference mismatch, not a doc defect."
+  ]
+ }
+}

@@ -80,7 +80,7 @@ The tailnet's device tags and SSH ACL are version-controlled under `infrastructu
 ]
 ```
 
-**Apply tooling** (both back onto `src/universal_agent/tailscale_admin.py`, which talks to `https://api.tailscale.com/api/v2`):
+**Apply tooling** (both back onto `src/universal_agent/tailscale_admin.py`, whose `TailscaleAdminClient` base URL is `https://api.tailscale.com` — the `/api/v2/...` segment is part of each request path, e.g. `get_acl` GETs `/api/v2/tailnet/{seg}/acl` and `set_device_tags` POSTs `/api/v2/device/{id}/tags`):
 
 | Script | Purpose | Key flags |
 |---|---|---|

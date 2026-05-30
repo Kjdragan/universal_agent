@@ -152,9 +152,23 @@ default to `AGENT_RUN_WORKSPACES/vp_coder_primary_external` /
 At mission start the worker seeds the VP's **soul** into the per-mission
 workspace (`worker_loop.py::_seed_vp_soul`, reading from
 `prompt_assets/<soul_file>`) so the agent loads its own identity (CODIE/ATLAS)
-rather than Simone's. If the payload carries `system_prompt_injection`, it is
-written to `MISSION_BRIEFING.md` in the workspace
-(`_write_mission_briefing`).
+rather than Simone's. The soul file is always copied to a fixed
+`<workspace_dir>/SOUL.md` (the `VpProfile.soul_file` default is literally
+`"SOUL.md"`; the per-VP sources are `CODIE_SOUL.md` / `ATLAS_SOUL.md`). If the
+payload carries `system_prompt_injection`, it is written to
+`MISSION_BRIEFING.md` in the workspace (`_write_mission_briefing`).
+
+**How identity flips the system prompt.** The seeded soul drives prompt
+selection downstream: `agent_setup.py::_build_system_prompt` scans the loaded
+soul context for VP identity markers (`CODIE`, `ATLAS`, `VP Coder Agent`,
+`VP General Agent`) and, on a match, routes to
+`prompt_builder.py::build_vp_system_prompt` — a streamlined VP prompt — instead
+of the full Simone `build_system_prompt`. So the soul file is both the agent's
+identity text *and* the switch that selects the lean VP prompt path.
+> [VERIFY: legacy notes cite the VP prompt at ~20KB vs Simone's ~90KB; the
+> routing is code-verified but the exact sizes are not.]
+The `GENERALIST_VP_SOUL.md` asset was removed (replaced by ATLAS) — only
+`CODIE_SOUL.md` and `ATLAS_SOUL.md` exist in `prompt_assets/`.
 
 ## Execution clients
 
@@ -274,6 +288,17 @@ Concurrency/lease env flags (defaults): `UA_VP_POLL_INTERVAL_SECONDS=5`,
 `UA_VP_LEASE_TTL_SECONDS=120`, `UA_VP_MAX_CONCURRENT_MISSIONS=1`. On a
 rate-limit error (`429`/overloaded), the loop reports to `CapacityGovernor`.
 
+**The worker loop is structurally serial.** `_tick` claims exactly ONE mission
+(`claim_next_vp_mission`) and runs it to completion via `_execute_mission_logic`
+before the next tick. `max_concurrent_missions` is **stored on the loop
+(`self.max_concurrent_missions`) but never read** by the claim/execute path —
+`UA_VP_MAX_CONCURRENT_MISSIONS` is therefore an inert knob, not a live
+concurrency dial. Real concurrency comes from running a *second worker process*
+(or a per-VP unit). "Concurrency = 2" is a loop rewrite, not a flag flip — and
+because `gateway.execute()` is serialized in-process (see exec-gateway), raising
+in-process VP concurrency directly risks the documented event-loop-starvation
+incident.
+
 ### Workspace provisioning (CODIE git worktrees)
 
 For `vp.coder.primary` whose target path is a git repo, `_provision_workspace`
@@ -376,6 +401,28 @@ Each verb closes the corresponding `vp_failure:<mission_id>` task hub item with 
 `subprocess_crash`, `timeout`, `goal_cap_hit`, `operator_cancel`,
 `vp_self_reported`.
 
+## Operator runbook: flushing the mission backlog
+
+`scripts/flush_vp_mission_backlog.py`
+(`python -m universal_agent.scripts.flush_vp_mission_backlog`) is the one-shot
+operator tool for clearing a runaway queue (e.g. the post-priority-tiers-PR
+backlog). It is deliberately narrow:
+
+- It cancels **only** `vp_missions` rows with `status='queued' AND
+  cancel_requested=0` (`_list_queued`), then `UPDATE ... SET status='cancelled'`
+  guarded again on `WHERE status='queued'` (`_cancel`). It never touches
+  `running` missions (a worker is actively executing them) or terminal states
+  (`completed`/`failed`/`cancelled`), and it does not touch `task_hub_items`.
+- It writes an audit JSON snapshot (mission_id, mission_type, priority_tier,
+  created_at) under `AGENT_RUN_WORKSPACES/flush_audit/` **before** mutating, and
+  appends a `vp.mission.cancelled` event row per mission for the lifecycle trail.
+- Idempotent — a second run finds nothing to cancel. Run with `--dry-run` first;
+  scope to one VP with `--vp`.
+
+**Don't flush if producers are still generating legitimate unprocessed work** —
+re-queueing is mostly pointless because proactive pipelines regenerate the work,
+so fix the upstream producer instead of repeatedly clearing the queue.
+
 ## Workspace guardrails
 
 CODIE and any CLI mission cannot write into the UA repo/runtime tree. Enforced by
@@ -464,7 +511,7 @@ capability).
 | `UA_VP_ENABLED_IDS` | both VPs | CSV of enabled VP ids |
 | `UA_VP_POLL_INTERVAL_SECONDS` | 5 | worker poll interval |
 | `UA_VP_LEASE_TTL_SECONDS` | 120 | mission claim lease TTL |
-| `UA_VP_MAX_CONCURRENT_MISSIONS` | 1 | per-worker concurrency |
+| `UA_VP_MAX_CONCURRENT_MISSIONS` | 1 | stored on the loop but **unused** — the loop is structurally serial; not a live concurrency dial |
 | `UA_VP_HARD_BLOCK_UA_REPO` | on | block writes into repo/runtime roots |
 | `UA_VP_HANDOFF_ROOT` | `/opt/universal_agent/vp_handoff` | allowlisted external write root |
 | `UA_VP_CODER_WORKSPACE_ROOT` / `UA_VP_GENERAL_WORKSPACE_ROOT` | unset | workspace root overrides |

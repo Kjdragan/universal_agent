@@ -121,7 +121,10 @@ adjusted by:
 - `+1.0` if it is a "system schedule" task (`_is_system_schedule_task`)
 - historical-completion bonus, memory-relevance bonus
 - staleness bonus by age (`+0.5`/`+1.0`/`+2.0` at 2h/6h/24h) — this is the
-  anti-languish mechanism so old tasks naturally float up
+  anti-languish mechanism so old tasks naturally float up. The age basis is
+  `created_at` (`score_task` reads `task.get("created_at")`), **not** last-touched
+  `updated_at`, so a task that keeps getting re-evaluated still ages from its
+  original creation.
 - penalties: `-3.0` blocked, `-0.8` needs-review, `-2.0` if **not** agent_ready
 
 Confidence starts at `0.58` and is nudged up by history/must_complete/blocked/
@@ -167,6 +170,13 @@ memory signals, clamped to `0.35–0.95`.
 Re-scoring on a rebuild deliberately does **not** bump `updated_at` (only true
 lifecycle transitions do), so a task doesn't look "freshly touched" just because
 the queue rebuilt.
+
+`rebuild_dispatch_queue` is a **write path** (it `DELETE`s and bulk-inserts the
+queue table). Dashboard/read endpoints must never call it: GET handlers and their
+helpers (`overview`, `list_agent_queue`, `get_agent_activity`) should return the
+latest stored snapshot rather than rebuilding inline. Driving a queue rebuild
+from a read path was a documented dashboard read-path performance regression —
+the fix is to read the snapshot, not to raise the proxy timeout.
 
 ## Atomic claiming
 
@@ -421,8 +431,21 @@ into Task Hub rather than running invisibly. The canonical helpers:
   *assignments* by wall-clock.
 - **Orphaned in_progress recovery** is the rehydrate/re_evaluate verbs' job — do
   not write a per-task reaper or "manual SQL" cancel. Note: a plain `cancel`
-  can be resurrected by the orphan reconciler; careful parking is the documented
-  recovery for wedged tasks.
+  can be resurrected; careful parking is the documented recovery for wedged
+  tasks.
+- **Park survives the orphan-reconciler; cancel does not.** The lifecycle guards
+  are asymmetric. `reconcile_task_lifecycle` only scans `WHERE status =
+  in_progress`, so a `parked`/`completed`/`cancelled` row is never reaped by it.
+  Separately, `upsert_item` has a re-upsert guard that preserves an
+  `existing_status` of only `{in_progress, blocked, needs_review}` when a source
+  refresh blindly re-upserts the row as `open` — terminal statuses
+  (`completed`/`cancelled`/`parked`) are **not** in that protected set, so a
+  producer that blindly re-upserts can still clobber a terminal row back to
+  `open`. To **durably** halt a live mission, use the `park` action verb (it sets
+  `status="parked", stale_state="parked_manual"` via `perform_task_action`); a
+  bare `cancel` is the weaker choice because nothing re-protects it from a
+  subsequent producer re-upsert. For the strongest halt, park with the gateway
+  down so no producer races the write.
 - **`completion_token`** is a one-way idempotency lock. Once set, a task cannot
   be re-claimed without an explicit reset. Auto-completion and manual `complete`
   both set it.

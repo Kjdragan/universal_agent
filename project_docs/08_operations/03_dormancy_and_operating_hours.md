@@ -254,8 +254,13 @@ discipline requirement, not an enforced one.
   the operator (emails, digests). Distinguish "work frozen" from "delivery delayed"
   — they're different. (Operational note carried from the gotcha inventory.)
 - **ZAI peak-hours collision (counterintuitive).** The ZAI proxy used by UA's
-  autonomous loops is capacity-limited during Greater-China business hours
-  (~16:00–22:00 Beijing), which maps to **US Central night** (~00:00–10:00 CDT).
-  So the naive "run heavy batch overnight" instinct is exactly backwards here:
-  overnight US runs hit ZAI capacity limits. This reinforces — for a separate
-  reason — keeping content-generation crons inside the Houston daytime window.
+  autonomous loops is capacity-limited during Greater-China business hours, which
+  map to **US Central night** (the China peak is roughly US night). Empirically the
+  proxy bursts to ~20 calls/min then stalls 1.5–3 min during that window; the
+  observed off-peak target band is **~12:00–17:00 CDT**. So the naive "run heavy
+  batch overnight" instinct is exactly backwards here: overnight US runs land in the
+  worst window. This reinforces — for a separate reason — keeping content-generation
+  crons inside the Houston daytime window. The in-process pacing module is a backstop,
+  not the fix; schedule heavy content-gen for the off-peak band.
+  (Operational note carried from the gotcha inventory; the daytime active window
+  already keeps most content-gen crons clear of the ZAI peak.)

@@ -300,6 +300,13 @@ path, not a named detector.) That convergence/ideation machinery is documented i
 proactive-pipeline and ClaudeDevs-intel docs; it is a downstream consumer of
 this YouTube feed, not part of the YouTube ingestion code itself.
 
+`insight_detection` is one of the proactive `source_kind`s tracked by the
+downstream pipeline (`services/invariants/proactive_pipeline_invariants.py`,
+`services/proactive_outcome_tracker.py`) alongside `convergence_detection` and
+`tutorial_build`. It is a cross-pipeline concern, not YouTube-ingestion code;
+its lifecycle/backlog status is owned by the proactive-pipeline doc (cross-ref
+intel-proactive).
+
 ### B.1 Health invariants
 
 The original incident: 100% of YouTube cards showed `transcript_status='missing'`
@@ -455,13 +462,20 @@ native playlist learning dispatch. Keyword sets: `YOUTUBE_CODE_HINT_KEYWORDS`
   decommissioned (April 2026 per the gotcha inventory); all transcript fetching
   runs on the VPS via `youtube_ingest.py` with a residential proxy (DataImpulse
   default, Webshare failover).
-- **ZAI content-safety (error 1301) silently drops buckets, fail-closed.** A
+- **ZAI content-safety silently drops buckets, fail-closed.** A
   large/sensitive bucket sent to the ZAI proxy can be dropped wholesale
   (observed 2026-05-29: a 29-video YouTube convergence bucket dropped).
   Accepted tradeoff — fail-closed, no retry/reroute; political/conflict
   convergences that trip the guardrail will not surface. This is a ZAI-proxy
   behavior upstream of the digest/convergence code, not handled in
-  `youtube_daily_digest.py` itself.
+  `youtube_daily_digest.py` itself (consistent with the absence of any
+  content-safety handling in that file — only the 429/FUP **error 1313** loop is
+  in code, see `youtube_daily_digest.py` and `rate_limiter.py`).
+  > [VERIFY: the specific content-safety code "1301" is from the 2026-05-29
+  > operational handoff only — the string "1301" appears nowhere in
+  > `src/universal_agent/`, so the numeric code is unverifiable against code
+  > (the fail-closed *behavior* is real and observed; only the exact code is
+  > unconfirmed).]
 - **Map-step model is hardcoded `glm-4.5-air`, not `resolve_model("haiku")`** —
   `resolve_model` points haiku at `glm-5-turbo` to dodge a historical preflight
   wedge; the digest deliberately bypasses that for the faster air model.

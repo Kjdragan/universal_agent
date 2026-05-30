@@ -41,7 +41,7 @@ flowchart TD
     C["cron: csi_demo_triage_rank<br/>(twice daily, 10:05 &amp; 15:05 CDT)"] -->|"run_ranking() — 1 GLM call"| D["UPDATE ranking_score,<br/>ranking_rationale, ..."]
     B --> C
     D --> B
-    E["cron: intel_auto_promoter<br/>(35 min after ranker)"] -->|"score &gt;= min_score,<br/>daily cap"| F["approve_candidate()"]
+    E["cron: intel_auto_promoter<br/>(30 min after ranker)"] -->|"score &gt;= min_score,<br/>daily cap"| F["approve_candidate()"]
     G["Dashboard flyout<br/>GET /triage"] -->|"operator click"| F
     G -->|operator click| H["dismiss_candidate()"]
     B --> E

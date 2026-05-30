@@ -140,12 +140,21 @@ embed via its feed loops. This is intentional spam control.
 
 ## Relevance filter — store-but-hide (`relevance_filter.py`)
 
-A periodic sweep (`run_relevance_sweep_loop`, default every 5 min) pulls messages
+A periodic sweep (`daemon.py::run_relevance_sweep_loop`, a `tasks.loop` method that
+calls `relevance_filter.py::run_relevance_sweep`, default every 5 min) pulls messages
 where `messages.is_meaningful IS NULL` and asks a cheap LLM to label each one
 **meaningful** vs **noise** in cross-channel batches (server/channel context inlined).
 Results are written back to `messages.is_meaningful` (1/0). Noise is **never deleted** —
-it stays in the DB but is hidden from the dashboard's "meaningful" view (the gateway
-`dashboard_discord_*` message endpoints filter `WHERE m.is_meaningful = 1`).
+it stays in the DB but is de-emphasized in the dashboard's "meaningful" view. Note that
+the two gateway message endpoints filter **differently**:
+
+- The **per-server** endpoint (`dashboard_discord_server_messages`, the one with the
+  `?show_all` toggle and `total`/`total_all` badge) uses
+  `relevance_clause = "AND (m.is_meaningful IS NULL OR m.is_meaningful = 1)"` —
+  unclassified (NULL) messages are **included**, only `is_meaningful = 0` noise is hidden.
+- The **recent-messages** endpoint (`dashboard_discord_recent_messages`) uses strict
+  `WHERE m.is_meaningful = 1` — NULL/unclassified messages are excluded until the sweep
+  labels them.
 
 Design notes that matter operationally:
 - **Fail-open everywhere.** Parse failure, LLM exception, or messages the model
@@ -158,8 +167,10 @@ Design notes that matter operationally:
 
 ## Triage — LLM insight extraction (`triage.py`)
 
-`run_triage_jobs` (default every 60 min) iterates channels in `TRIAGE_TIERS`
-(default `A`), and for each calls `run_triage_batch`. That pulls up to
+`daemon.py::run_triage_jobs` (a `tasks.loop` method, default every 60 min) iterates
+channels in `TRIAGE_TIERS` (default `A`; the `TRIAGE_TIERS`/`TRIAGE_BATCH_LIMIT`
+constants also live in `daemon.py`, not `triage.py`), and for each calls
+`triage.py::run_triage_batch`. That pulls up to
 `TRIAGE_BATCH_LIMIT` (default 50) unprocessed messages
 (`processed_by_triage = 0`), formats them into a prompt, and asks the LLM
 (`models.triage`, default `claude-haiku-4-5` per code, `glm-4.5-air` per config.yaml)
@@ -250,6 +261,14 @@ crashes — a real footgun documented in CLAUDE.md).
 > tokens die ~weekly with `invalid_grant`. When calendar sync starts failing, that's
 > almost always the cause — refresh creds per the CLAUDE.md gws runbook.
 
+> Design rationale (do not resurrect): calendar sync deliberately shells out to the
+> vendor's `gws` CLI rather than a custom Google direct-API integration. An earlier
+> "Strategy-C" `src/universal_agent/services/google_workspace/` scaffold was
+> prototype-only and **never wired** (it no longer exists in the tree). The rationale
+> was "don't build what the vendor ships"; Composio is retained only for cross-SaaS
+> reach, not for Google Calendar. Treat the gws CLI path as the intended design — do
+> not reintroduce a custom Google direct-API scaffold.
+
 ## C&C bot surfaces (`cc_bot.py`)
 
 The bot polls the SQLite DB and posts embeds into named channels of the owner's C&C
@@ -296,11 +315,15 @@ Slash commands (`setup_commands`) include `/status`, `/queue`, `/task_add`,
 
 - **Read endpoints** (`gateway_server.py`, `dashboard_discord_*`): overview, events,
   channels (+ PATCH tier/active), per-channel/server messages, delete events. These
-  read `discord_intelligence/discord_intelligence.db` directly and gate messages on
-  `is_meaningful = 1`. Auth: `_require_ops_auth`. The per-server messages endpoint
-  accepts `?show_all=true` to bypass the relevance filter and returns both `total`
-  (filtered) and `total_all` (unfiltered) counts so the dashboard can render its
-  "N signals of M total" effectiveness badge.
+  read `discord_intelligence/discord_intelligence.db` directly. Relevance filtering
+  differs by endpoint (see the relevance-filter section): the **per-server** endpoint
+  hides only `is_meaningful = 0` noise while **including** NULL/unclassified messages
+  (`AND (m.is_meaningful IS NULL OR m.is_meaningful = 1)`), whereas the
+  **recent-messages** endpoint uses strict `WHERE m.is_meaningful = 1`. Auth:
+  `_require_ops_auth`. The per-server messages endpoint accepts `?show_all=true` to
+  bypass the relevance filter and returns both `total` (filtered) and `total_all`
+  (unfiltered) counts so the dashboard can render its "N signals of M total"
+  effectiveness badge.
 - **Watchlist CRUD** (`api/routers/csi_discord_watchlist.py`, prefix
   `/api/v1/csi/discord`): manage a JSON watchlist of categories + servers + watched
   sub-channels. On `add_server` it resolves the guild name/icon/text-channels live

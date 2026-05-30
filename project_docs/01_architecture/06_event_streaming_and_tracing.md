@@ -205,6 +205,10 @@ flowchart TD
 
 `gateway_server.py` adds FastAPI auto-instrumentation via `logfire.instrument_fastapi(app)`.
 
+### Coverage gap (what Logfire does NOT trace)
+
+Logfire instrumentation is scoped to the **agent turn**: gateway/CLI/heartbeat root spans (`execution_engine.py`, `main.py`, `heartbeat_service.py`), the per-iteration agent subtree, hook-driven `tool_use`, and auto-instrumented HTTP/MCP/SQLite. It does **not** cover everything that runs in the daemon. Verified absences: the **VP worker loop and VP clients** (`vp/` has no `logfire.span` calls), **cron lifecycle** (`cron_service.py` has no spans), **heartbeat *scheduling*** (only the `heartbeat_run` span around an actual gateway turn exists — the scheduler/wake logic itself is untraced), and **doc-maintenance / notification dispatch**. For those paths, do not reach for Logfire — query the gateway API, `heartbeat_findings_latest.json`, or the VPS journal instead.
+
 ### Trace catalog
 
 After a run, `trace_catalog.py` emits a **Trace Catalog** to three places: the run.log/stdout (a structured block of trace IDs + query hints), the `trace_catalog` key inside `trace.json`, and a standalone `trace_catalog.md` in the workspace (plus `work_products/logfire-eval/trace_catalog.{md,json}` as the preferred input for the `logfire-eval` skill). It carries the main agent trace ID + Logfire URL, any local-toolkit (MCP server) trace IDs, run id/source, and an analysis guide. `trace_catalog.py::_logfire_url` honors `LOGFIRE_PROJECT_SLUG`.
