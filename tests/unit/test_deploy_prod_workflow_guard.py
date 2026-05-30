@@ -3,6 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 _DEPLOY_WORKFLOW = Path(".github/workflows/deploy.yml")
+# 2026-05-30 (Phase 1 decomposition): the remote deploy logic that used to live
+# in deploy.yml's inline heredoc now lives in this committed, shellcheck-able
+# script, piped to the VPS over SSH stdin. Guards that pin "the deploy still
+# does X" now read the script where X moved; guards for the workflow's own
+# structure (paths-ignore, the pipe invocation) still read deploy.yml.
+_REMOTE_DEPLOY = Path("scripts/deploy/remote_deploy.sh")
 _RUNTIME_HELPER = Path("scripts/deploy_validate_runtime.sh")
 _SYSTEMD_INSTALLER = Path("scripts/install_vps_systemd_units.sh")
 
@@ -24,8 +30,31 @@ def test_runtime_helper_repairs_unreadable_stale_venv_before_uv_sync() -> None:
     assert 'scripts/verify_service_imports.py' in content
 
 
-def test_deploy_workflow_uses_centralized_runtime_helper() -> None:
+def test_deploy_pipes_remote_deploy_script() -> None:
+    """The workflow must feed the committed remote deploy script to the VPS.
+
+    Pins the Phase 1 (2026-05-30) decomposition structure: deploy.yml checks out
+    the repo, then pipes scripts/deploy/remote_deploy.sh over SSH stdin to
+    `bash -s`, prepending the three Infisical bootstrap secrets as export lines
+    (through stdin, not argv). A future refactor can't silently drop the script
+    or revert to an inline heredoc without tripping this guard.
+    """
     content = _DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+
+    assert _REMOTE_DEPLOY.exists(), "scripts/deploy/remote_deploy.sh must exist"
+    assert "uses: actions/checkout@v4" in content
+    assert "cat scripts/deploy/remote_deploy.sh" in content
+    assert "'bash -s'" in content
+    assert "printf 'export INFISICAL_CLIENT_ID=%q\\n' \"$INFISICAL_CLIENT_ID\"" in content
+    # The secrets must NOT be baked into the committed script. Check the
+    # dotted GHA substitution form (`${{ secrets.NAME }}`) so the script's own
+    # explanatory comment (which mentions "${{ secrets }}" placeholders without
+    # a dot) doesn't trip this guard.
+    assert "${{ secrets." not in _REMOTE_DEPLOY.read_text(encoding="utf-8")
+
+
+def test_deploy_workflow_uses_centralized_runtime_helper() -> None:
+    content = _REMOTE_DEPLOY.read_text(encoding="utf-8")
 
     assert 'bash "$PROD_DIR/scripts/deploy_validate_runtime.sh"' in content
     assert '--expect-environment production' in content
@@ -34,7 +63,7 @@ def test_deploy_workflow_uses_centralized_runtime_helper() -> None:
 
 
 def test_deploy_workflow_restarts_python_services_on_stale_interpreter() -> None:
-    content = _DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+    content = _REMOTE_DEPLOY.read_text(encoding="utf-8")
 
     assert 'echo "--> Verifying Python services use current venv interpreter..."' in content
     assert 'ensure_current_venv_interpreter universal-agent-gateway' in content
@@ -47,7 +76,7 @@ def test_deploy_workflow_restarts_python_services_on_stale_interpreter() -> None
 
 
 def test_deploy_workflow_fails_when_post_restart_health_fails() -> None:
-    content = _DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+    content = _REMOTE_DEPLOY.read_text(encoding="utf-8")
 
     assert "trap cleanup_deployment_window EXIT" in content
     assert 'echo "--> Verifying production service health..."' in content
@@ -104,15 +133,17 @@ def test_production_systemd_installer_manages_discord_services() -> None:
     assert "ua-discord-intelligence.service.template" in content
     assert '"ua-discord-cc-bot.service"' in content
     assert '"ua-discord-intelligence.service"' in content
-    deploy_content = _DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+    # Discord restart + health gate moved into remote_deploy.sh with the rest
+    # of the deploy logic (Phase 1 decomposition, 2026-05-30).
+    remote_content = _REMOTE_DEPLOY.read_text(encoding="utf-8")
     # Discord services must still be restarted by deploy.
-    assert "ua-discord-cc-bot ua-discord-intelligence" in deploy_content
+    assert "ua-discord-cc-bot ua-discord-intelligence" in remote_content
     # Discord services must still be health-checked, but the gate is now
     # baseline-aware (see `check_discord_regression`) so chronic crash
     # loops don't false-positive the deploy. Pin the new mechanism so a
     # future refactor can't silently drop discord from the health gate.
-    assert "discord_cc_pre=" in deploy_content
-    assert "discord_intel_pre=" in deploy_content
-    assert "check_discord_regression()" in deploy_content
-    assert "check_discord_regression ua-discord-cc-bot" in deploy_content
-    assert "check_discord_regression ua-discord-intelligence" in deploy_content
+    assert "discord_cc_pre=" in remote_content
+    assert "discord_intel_pre=" in remote_content
+    assert "check_discord_regression()" in remote_content
+    assert "check_discord_regression ua-discord-cc-bot" in remote_content
+    assert "check_discord_regression ua-discord-intelligence" in remote_content
