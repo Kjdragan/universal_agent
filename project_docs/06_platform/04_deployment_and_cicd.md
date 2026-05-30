@@ -313,3 +313,42 @@ It returns cached `_VERSION_INFO` (`gateway_server.py::_capture_version_info`) i
 - **Lifecycle-miss during the deploy window is expected.** Restarts SIGTERM (exit 143) in-flight tasks; the `/tmp/ua-deployment-window` flag lets guardrails reclassify these as dashboard-only (no email/telegram) so deploy-restart noise doesn't page the operator.
 - **A deploy cannot heal an expired OAuth refresh token.** `gws` (Gmail/Calendar) and YouTube (`kevinjdragan@gmail.com`) creds are materialized from Infisical at *service start*, so a deploy re-applies whatever is stored — but while the OAuth apps are in Google "Testing" mode their refresh tokens expire ~7 days regardless. Symptom: `invalid_grant` (gws) / `401 Invalid authentication credentials` (YouTube). Durable fix: publish the OAuth app to production (operator defers; YouTube watchdog + one-tap re-auth is the interim). Full runbook: `ops-vps-recovery`.
 - **Telegram bot-token log hygiene (separate from deploy).** The interactive Telegram bot (`bot/main.py`) logs its `TELEGRAM_BOT_TOKEN` in the httpx getUpdates/sendMessage URL every ~10s to journald. Rotating that token + silencing httpx INFO logging is a tracked follow-up (operator-gated via @BotFather). This does not affect the deploy notifier, which uses the separate `UA_OPERATOR_TELEGRAM_*` channel.
+
+## Autonomous CI-failure auto-fix loop (Phase 2)
+
+**Status (2026-05-30):** LIVE. Phase 1 (#602) gave event-driven issue filing + label-gated auto-merge. Phase 2 closes the loop: when a watched workflow fails, the system autonomously fixes it (via Cody) or escalates to the operator — **event-driven (no polling), with no sleeping GHA runners, decoupled from Simone's cognition, and coordinated** so it never collides with whoever already owns the failure.
+
+```mermaid
+flowchart TD
+    A[CI workflow fails] -->|workflow_run completed, conclusion=failure| B[ci-failure-issue.yml file-issue job]
+    B --> C[File ci-failure GitHub issue]
+    B --> D[POST /api/v1/hooks/ci-failure\nx-ua-ops-token, public URL, non-fatal]
+    D --> E{Dedicated gateway route\nbefore the hooks catch-all}
+    E -->|dedup: 1 timer per pr|branch:workflow:sha| F[cron one-shot\nrun_at +15m, delete_after_run\nDURABLE — survives deploy restart]
+    F -->|grace fires| G[ci_failure_grace_recheck.py\nre-verify via gh]
+    G -->|issue closed / PR merged / newer push / run green / already claimed| H[Stand down\ncoordination win]
+    G -->|orphaned + autofixable workflow + PR| I[Claim issue: label ci-autofix-dispatched\nqueue Cody fix mission]
+    I --> J[Cody: STEP 0 re-verify-or-noop\nfix, push to PR branch\nself-label PR ci-autofix]
+    J --> K[pr-auto-merge.yml lands PR once green]
+    G -->|orphaned + Deploy/infra/secret/oauth/no-PR| L[Telegram escalate\nlabel needs-operator]
+```
+
+**Why a dedicated route, not the hooks engine.** `hooks_service.handle_request` only emits `agent`/`wake` actions — routing CI-failure through it would wake an agent and put CI triage back into Simone's cognition. The dedicated `@app.post("/api/v1/hooks/ci-failure")` route (defined *before* the `/api/v1/hooks/{subpath}` catch-all so it wins) keeps the loop deterministic and out of agent reasoning.
+
+**Why a grace window.** The session that owns a failure almost always fix-forwards it within minutes. So we never act immediately: the gateway schedules a durable one-shot ~15-min timer and `ci_failure_grace_recheck.py` re-verifies before doing anything. **Re-verify happens at every stage** (TOCTOU guard): schedule-time dedup, grace-fire `decide_action`, and the Cody brief's STEP 0.
+
+| Piece | Location |
+|---|---|
+| GHA POST step | `.github/workflows/ci-failure-issue.yml` → `file-issue` job, step "Notify UA CI-failure auto-fix hook" (public URL, `x-ua-ops-token`, **no `actions/checkout`, no Tailscale** → avoids the orphaned-gitlink `git exit 128` class; non-fatal) |
+| Inbound route | `gateway_server.py` → `@app.post("/api/v1/hooks/ci-failure")` (`_require_ops_auth`; schedules the cron one-shot) |
+| Durable grace timer | `cron_service.add_job(run_at=now+grace, delete_after_run=True, command="!script universal_agent.scripts.ci_failure_grace_recheck --payload-b64 …")` |
+| Grace-fire logic | `scripts/ci_failure_grace_recheck.py` — pure `classify_failure` / `decide_action` + `gh`-injectable `gather_repo_state`; executors `dispatch_cody_fix` / `escalate_to_operator` |
+| Cody enqueue | `services/proactive_task_builder.queue_proactive_task` (source_kind `proactive_codie`, `codebase_root` + `external_effect_policy`) |
+| Telegram escalate | `services/telegram_send.telegram_send_sync` (`UA_OPERATOR_TELEGRAM_*`) |
+| Tests | `tests/unit/test_ci_failure_grace_recheck.py` |
+
+**Classification.** Cody-fixable = `PR Validate` / `Documentation Audit` / `Nightly Documentation Health` **with a PR present** (the remedy is a code edit on the PR branch). Everything else — `Deploy`, `PR Auto-Merge`, `PR Rebase Watchdog`, or any push-to-main with no PR — escalates to the operator (the remedy is infra/secret/merge-state, not a code edit).
+
+**Config / secrets.** `UA_CI_AUTOFIX_ENABLED` (default on; kill switch), `UA_CI_AUTOFIX_GRACE_SECONDS` (default 900, min 60). `UA_OPS_TOKEN` must exist as a GitHub Actions repo secret (mirrors Infisical prod); the GHA step skips the POST if it's unset.
+
+**Interim being retired.** Until this hook is verified live, `memory/HEARTBEAT.md` "CI/CD Health Check" keeps Simone polling `ci-failure` issues each beat. Once live-verified, that directive is removed so CI triage fully leaves Simone's cognition.
