@@ -31,15 +31,20 @@ corpus; each is a decision or a scoped addition for after this PR merges.
 4. **Discord MCP bridge** (`mcp_bridge.py`) is registered in `.mcp.json` but has no in-repo consumer/launcher.
    Registered-but-unwired. **Decide:** wire or remove.
 
-## Engine / nightly transport (the one real "not done")
+## Engine / nightly transport — RESOLVED (ZAI)
 
-5. **LLM accuracy auditor transport is not yet wired.** The PR-time deterministic gate (`doc-audit.yml`) and
-   the nightly deterministic health + rotating accuracy-batch emitter (`doc-nightly.yml`) are live. The
-   **LLM-judge step** that consumes the batch (read doc + `code_paths` → judge accuracy → stamp
-   `last_verified`) still needs a transport decision: (a) Anthropic API call inside GHA (key in secrets,
-   self-contained, no VPS), or (b) trigger a Claude Code workflow like the reconstruction/verify pipeline.
-   Deliberately not shipping a fragile transport. `scripts/doc_audit.py::build_accuracy_batch` already
-   produces the work-list. **This is the single follow-up required to make the accuracy layer fully autonomous.**
+5. **LLM accuracy auditor — DONE (routed through ZAI/GLM).** `scripts/doc_accuracy_sweep.py` is the
+   LLM-judge step: it takes the oldest-verified batch (`doc_audit.build_accuracy_batch`), reads each doc +
+   the code its `code_paths` claims to document, and judges drift via the **ZAI proxy / GLM models**
+   (`resolve_sonnet` → `glm-5-turbo`, Anthropic-emulation client pointed at `ANTHROPIC_BASE_URL`, creds from
+   Infisical — no Anthropic spend, no new secret). Wired as the `accuracy-sweep` job in `doc-nightly.yml`
+   (opens a GH issue on drift; never fails the run). Verified locally against a real ZAI call.
+
+   Remaining refinements (minor): (a) **rotation** — `last_verified` is not auto-stamped yet, so the sweep
+   re-audits the same oldest-N until a docfix PR bumps dates; true rotation arrives once stamping is wired.
+   (b) **GHA env confirmation** — run one manual `workflow_dispatch` of "Nightly Documentation Health" to
+   confirm Infisical→ZAI bootstrap resolves on the GHA runner (it's proven locally; the job skips gracefully
+   if creds don't load).
 
 ## Cutover items deliberately deferred (to keep this PR low-risk)
 
