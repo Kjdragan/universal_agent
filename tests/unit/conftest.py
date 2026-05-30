@@ -15,8 +15,10 @@ instead of waiting the 15s production default.
 
 Notes
 -----
-- The DBs live under ``<tmp>/AGENT_RUN_WORKSPACES/`` so the rare test that
-  asserts ``"AGENT_RUN_WORKSPACES" in <db path>`` keeps passing.
+- The DBs live under ``<tmp>/ua_test_dbs/AGENT_RUN_WORKSPACES/`` — nested so we
+  don't occupy ``<tmp>/AGENT_RUN_WORKSPACES`` (which some tests ``mkdir``
+  themselves), while still keeping the ``AGENT_RUN_WORKSPACES`` component so the
+  rare test asserting ``"AGENT_RUN_WORKSPACES" in <db path>`` keeps passing.
 - Guardrail tests that verify *default* (unset-env) resolution already call
   ``monkeypatch.delenv(...)`` themselves; because ``delenv`` removes the key
   from ``os.environ``, it cleanly undoes this redirect within those tests, so
@@ -76,7 +78,12 @@ def _isolate_unit_test_databases(request, monkeypatch, tmp_path):
         monkeypatch.setenv("UA_SQLITE_BUSY_TIMEOUT_MS", "250")
         return
 
-    db_dir = tmp_path / "AGENT_RUN_WORKSPACES"
+    # Nest under a unique subdir so we don't occupy `tmp_path/AGENT_RUN_WORKSPACES`
+    # itself — some tests `mkdir()` that exact path (without exist_ok) and would
+    # hit FileExistsError if we pre-created it. The trailing AGENT_RUN_WORKSPACES
+    # component is kept so the rare test asserting it appears in a redirected DB
+    # path still passes.
+    db_dir = tmp_path / "ua_test_dbs" / "AGENT_RUN_WORKSPACES"
     db_dir.mkdir(parents=True, exist_ok=True)
     for var in _DB_PATH_ENV_VARS:
         monkeypatch.setenv(var, str(db_dir / _DB_FILENAMES[var]))
