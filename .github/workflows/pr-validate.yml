@@ -15,12 +15,10 @@ name: PR Validate
 
 on:
   pull_request:
-    # `develop` was retired 2026-05-10 — see PR retiring it. Merge model is
-    # now: <any-branch> → PR → CI → merge to `main` → deploy. `feature/latest2`
-    # remains in the list as a transitional convenience for the existing
-    # operator workflow; new bot/Claude branches PR directly to `main`.
+    # Merge model (post-2026-05-10): <any-branch> → PR → CI → merge to `main`
+    # → deploy. Both `develop` and `feature/latest2` were retired (2026-05-10 /
+    # 2026-05-13); only `main` is a real PR target now.
     branches:
-      - feature/latest2
       - main
   # Allow manual re-run from the Actions tab if a flaky test fails.
   workflow_dispatch:
@@ -194,6 +192,21 @@ jobs:
           # New unmarked YYYY-MM-DD literals fail this step; existing ones
           # are grandfathered via scripts/test_date_literal_baseline.txt.
           uv run python scripts/check_test_date_literals.py
+
+      - name: ShellCheck deploy scripts
+        run: |
+          # Now that the production deploy logic is a committed script
+          # (scripts/deploy/remote_deploy.sh, Phase 1 decomposition 2026-05-30)
+          # instead of bash buried in deploy.yml, lint it. shellcheck is
+          # preinstalled on ubuntu-latest runners. `-S warning` blocks real
+          # errors/warnings but allows style-level notes (the legacy deploy
+          # bash carries a few SC2086-class notes that aren't worth blocking).
+          if ls scripts/deploy/*.sh >/dev/null 2>&1; then
+            shellcheck -S warning scripts/deploy/*.sh
+            echo "shellcheck: scripts/deploy/*.sh clean (warning level)."
+          else
+            echo "No scripts/deploy/*.sh to check."
+          fi
 
       - name: Run unit tests
         run: |
