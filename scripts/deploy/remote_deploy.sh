@@ -4,9 +4,11 @@
 #
 # Extracted 2026-05-30 from the 420-line inline heredoc that used to live in
 # deploy.yml (the "Phase 1" decomposition). Keeping the logic in a committed,
-# shellcheck-able script — instead of bash-inside-YAML-inside-a-heredoc —
+# lintable script (analyzable by ShellCheck) instead of bash-in-YAML-in-a-heredoc
 # removes the GitHub-Actions-parser fragility (the 2026-05-27 quirk) and makes
 # the deploy logic testable/diffable locally. The workflow now stays ~60 lines.
+# NOTE: do not start a comment line with "# shellcheck" unless it's a real
+# ShellCheck directive — ShellCheck parses "# shellcheck ..." as a directive.
 #
 # The three INFISICAL_* bootstrap secrets are NOT baked into this file (no
 # ${{ secrets }} placeholders). deploy.yml prepends them as `export` lines on
