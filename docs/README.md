@@ -1,4 +1,13 @@
-# Universal Agent Documentation
+> # ⚠️ ARCHIVED — superseded by [`project_docs/`](../project_docs/README.md)
+>
+> As of **2026-05-29** this `docs/` tree was replaced by a code-first rebuild in
+> **`project_docs/`** (see [`project_docs/README.md`](../project_docs/README.md)). This tree is
+> kept for historical/emergency reference only and is **excluded from default project searches**
+> (`.rgignore`). Do not treat the documents below as current; the rebuilt, code-verified equivalents
+> live under `project_docs/`. Knowledge worth preserving was already salvaged into the new corpus
+> (`project_docs/02_GOTCHA_INVENTORY.md` + `_meta/consolidation_notes.md`).
+
+# Universal Agent Documentation (ARCHIVED)
 
 Welcome to the official technical documentation for the **Universal Agent**. This documentation is designed for junior developers to quickly understand the project's architecture, core logic, and operational workflows.
 

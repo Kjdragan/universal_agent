@@ -2,6 +2,15 @@
 
 This file provides quick working context for Claude (and other coding agents) in this repository.
 
+> ## 📚 Canonical documentation lives in [`project_docs/`](project_docs/README.md)
+> As of **2026-05-29** the documentation was rebuilt **code-first** (every doc reconstructed from
+> source, symbol-based citations, `code_paths` frontmatter, CI-audited via `scripts/doc_audit.py`).
+> Start at [`project_docs/README.md`](project_docs/README.md); editing rules are in
+> [`project_docs/CLAUDE.md`](project_docs/CLAUDE.md). The former `docs/` tree is **archived** — kept
+> on disk for historical reference but excluded from default searches via `.rgignore`. Legacy
+> `docs/...` links below still resolve to the archived copies; their rebuilt equivalents are under
+> `project_docs/`.
+
 > 👉 **Start here for daily work:** [`docs/WORKFLOW.md`](docs/WORKFLOW.md) is the one-page operator index. The deeper walkthrough is [`docs/06_Deployment_And_Environments/11_Daily_Dev_Workflow.md`](docs/06_Deployment_And_Environments/11_Daily_Dev_Workflow.md). Anything Claude-environment-related: [`docs/06_Deployment_And_Environments/10_Interactive_Coding_Environment.md`](docs/06_Deployment_And_Environments/10_Interactive_Coding_Environment.md).
 
 ## Project Description
