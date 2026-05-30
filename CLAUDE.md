@@ -75,45 +75,10 @@ When executing on the VPS (`uaonvps`), agents have direct, native filesystem acc
 - **Capability Implication**: **Never** build custom "file fetcher" tools or syncing scripts to move files from the desktop to the VPS for agent tasks. Instead, simply refer to the absolute `/home/kjdragan/...` path directly. Standard OS operations (`cat`, Python `open()`, etc.) will seamlessly resolve over the SSHFS mount.
 - **Architectural Tenet**: This demonstrates the core design philosophy of "expanding system capabilities at the OS level" rather than building complex, brittle agent workarounds.
 
-## Self-Service Infisical Secret Access
+## Secrets, Infisical & gws/Gmail auth
 
-You have machine-identity Infisical creds pre-loaded in your shell — use them to fetch secrets yourself instead of asking the operator. Sources: Kevin's desktop `~/.config/ua/infisical-machine-id`, VPS `/opt/universal_agent/.env`. Both export `INFISICAL_CLIENT_ID` / `INFISICAL_CLIENT_SECRET` / `INFISICAL_PROJECT_ID`. The interactive user-CLI session at `~/.infisical/infisical-config.json` is flaky for headless calls — **DO NOT rely on it; always use universal-auth (machine-identity)**.
-
-**Inject every secret into a child process (preferred pattern):**
-```bash
-TOK=$(infisical login --method=universal-auth \
-        --client-id="$INFISICAL_CLIENT_ID" \
-        --client-secret="$INFISICAL_CLIENT_SECRET" --plain --silent)
-INFISICAL_TOKEN="$TOK" infisical run \
-    --projectId="$INFISICAL_PROJECT_ID" --env=development --silent -- \
-    <your command>
-```
-
-**Single-key read:** swap `run … -- <cmd>` for `secrets get KEY_NAME --plain --silent` (token + projectId/env flags stay the same).
-
-**Guardrails — NON-NEGOTIABLE:**
-- **NEVER print secret VALUES to chat.** `infisical secrets` with `--plain` dumps `KEY=VALUE` pairs (not just keys). Filter with `awk -F= '{print $1}'` when you only want to enumerate names.
-- Prefer `infisical run -- CMD` over fetching to shell variables — the secret stays inside the child process and never lands in your env or command history.
-- Ask the operator before reading production secrets if the task could be done in dev.
-- Never `infisical secrets set` / delete / rotate without explicit operator approval.
-- For UA's own Python services, the canonical bootstrap is still `initialize_runtime_secrets()` — use the CLI only for ad-hoc diagnostics, script invocations, and one-off lookups.
-
-Also note: bare `claude` on Kevin's desktop lazy-loads `HOSTINGER_API_TOKEN` (and only that) via `_ua_load_mcp_secrets` in `~/.bashrc`, cached at `~/.cache/ua/hostinger_token`. Replaced the eager `infisical secrets get` block on 2026-05-17 because it was hanging Antigravity terminals on an interactive arrow-key prompt that `--silent` didn't suppress. If MCP Hostinger stops resolving, the user can `rm ~/.cache/ua/hostinger_token` to force refresh on next `claude` launch.
-
-## gws (Google Workspace CLI) Auth on the VPS — RUNBOOK (read before touching gws/Gmail)
-
-The `gws` CLI (`npx -y @googleworkspace/cli`) backs Gmail send/label, Calendar sync, and the AgentMail **429 → Gmail fallback** (`agentmail_service._send_via_gmail_cli`). Auth is the #1 time-sink here; this is the verified mechanism (don't re-derive it):
-
-- **How creds reach the VPS:** NOT a manual file copy. Four Infisical `production` secrets hold the base64 of the desktop's gws config — `GWS_CREDENTIALS_ENC_B64`, `GWS_TOKEN_CACHE_B64`, `GWS_ENCRYPTION_KEY_B64`, `GWS_CLIENT_SECRET_JSON_B64`. At runtime `discord_intelligence/calendar_sync.py` materializes them into `/home/ua/.config/gws/` and sets `GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file`. The gateway and discord daemon **both run as `ua` (HOME=/home/ua)** so they share that dir. The AgentMail fallback also self-defaults `KEYRING_BACKEND=file` in its subprocess env.
-- **Why it keeps breaking (`invalid_grant: Bad Request`):** the OAuth app is in Google "Testing" mode → refresh tokens **expire after ~7 days**. When the VPS (or desktop) `auth status` shows `token_valid: false`, the token died. **Durable fix (Kevin-only, one-time): publish the OAuth app "Testing" → "In production" in Google Cloud Console** — removes the 7-day expiry. Until then, creds must be refreshed ~weekly.
-- **To refresh creds (desktop is the source of truth):**
-  1. `unset GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE GOOGLE_WORKSPACE_CLI_TOKEN GOOGLE_WORKSPACE_CLI_IMPERSONATED_USER` (empty values are a footgun — gws treats `""` as a real path and dies with "points to , but file does not exist").
-  2. `npx -y @googleworkspace/cli auth login --scopes https://www.googleapis.com/auth/gmail.modify` (covers read+modify-labels+send). Approve in browser; click through "Google hasn't verified this app".
-  3. Push the 4 files into Infisical (values via shell vars so they never hit the transcript; **`KEY=@file` is NOT supported** — it stores the literal path):
-     `A=$(base64 -w0 ~/.config/gws/credentials.enc); infisical secrets set "GWS_CREDENTIALS_ENC_B64=$A" --token "$TOK" --projectId="$INFISICAL_PROJECT_ID" --env=production --silent` (repeat for token_cache.json→`GWS_TOKEN_CACHE_B64`, .encryption_key→`GWS_ENCRYPTION_KEY_B64`, client_secret.json→`GWS_CLIENT_SECRET_JSON_B64`). Verify with a SHA-256 round-trip before restarting prod.
-  4. **Restart needs sudo (you don't have passwordless sudo as `ua`):** either ship any service-code change (deploy.yml restarts `universal-agent-gateway` + `ua-discord-intelligence`) or ask Kevin to `sudo systemctl restart` them. New Infisical secrets load only at process start.
-- **Headless verification from a non-interactive shell** (your background-job shell can't unlock the OS keyring): set `GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file` so gws reads `.encryption_key` from disk, then `npx -y @googleworkspace/cli gmail users labels list --params '{"userId":"me"}'`. `--dry-run` still auth-checks first, so it can't validate args while the token is dead.
-- Full detail + the AgentMail-fallback labeling design: [`project_docs/05_channels/01_email_agentmail.md`](project_docs/05_channels/01_email_agentmail.md) § "Gmail (gws) CLI Fallback".
+- **Self-service secret access** (machine-identity CLI pattern, guardrails, the desktop Hostinger lazy-load) and the full Infisical contract: [`project_docs/06_platform/01_secrets_and_infisical.md`](project_docs/06_platform/01_secrets_and_infisical.md). TL;DR: agents have machine-id creds pre-loaded — fetch secrets yourself with `infisical run` (universal-auth, never the interactive CLI session); **never print secret values**; never `set`/delete/rotate without operator approval; UA Python services use `initialize_runtime_secrets()`, not the CLI.
+- **gws (Google Workspace CLI) auth on the VPS** — the ~weekly OAuth re-auth runbook (Testing-mode 7-day token expiry), how the 4 base64 Infisical secrets reach the VPS, and headless verification: [`project_docs/05_channels/01_email_agentmail.md`](project_docs/05_channels/01_email_agentmail.md) § "gws CLI auth on the VPS".
 
 ## Key Commands
 - Install deps: `uv sync`
@@ -150,9 +115,6 @@ UA runs **THREE Claude execution profiles** across the VPS and Kevin's desktop. 
 - ❌ "Typing `claude agent` (singular) opens a new agent UI." The real command is `claude agents` (plural). `claude agent` is parsed as a prompt argument and does nothing special.
 
 **Canonical reference (read this FIRST before touching any Claude env, settings.json, or Anthropic-related code):** [`project_docs/06_platform/05_environments.md`](project_docs/06_platform/05_environments.md) — the three execution profiles, per-machine matrix, local dev, demo execution, model routing. Model resolution internals: [`project_docs/01_architecture/04_model_choice_and_resolution.md`](project_docs/01_architecture/04_model_choice_and_resolution.md).
-
-## ClaudeDevs / CSI Intelligence
-Canonical doc: [`project_docs/04_intelligence/04_claudedevs_x_intel.md`](project_docs/04_intelligence/04_claudedevs_x_intel.md) (the @ClaudeDevs polling lane, packet outputs, vault-as-canonical-product) and the broader CSI architecture in [`project_docs/04_intelligence/01_csi_architecture.md`](project_docs/04_intelligence/01_csi_architecture.md). The original multi-phase v2 design docs and the deferred YouTube-demo-unification plan are point-in-time planning artifacts in the archived `docs/` tree — consult them only for historical rationale.
 
 ## Working Rules
 - **Local dev happens on Kevin's desktop, not the VPS.** Spin up the stack with `just dev` from `/home/kjdragan/lrepos/universal_agent/`. Autonomous loops (heartbeat, cron, dispatch sweep, AgentMail polling, etc.) are OFF in dev by default — set `UA_DEV_<NAME>_FORCE_ON=1` in `.env` to opt a specific loop in for testing. The VPS is production-only. Canonical runbook: [`project_docs/06_platform/05_environments.md`](project_docs/06_platform/05_environments.md). Doc index: [`project_docs/README.md`](project_docs/README.md).
