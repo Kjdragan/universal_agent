@@ -26,7 +26,7 @@ Release verification rule:
 | `PR Auto-Merge` | `pr-auto-merge.yml` | Pull request to `main` (any non-draft PR not from `codie/*`, `kevin/*`, or `feature/*`) | Enables GitHub auto-merge (squash + delete branch) so PR merges automatically once `Validate PR` passes. Uses `secrets.AUTO_MERGE_PAT` (fine-grained PAT) so the downstream squash-merge `push` event actually fires `deploy.yml` — see "Why a PAT" below. Tier-1 PRs through `/ship` already self-enable auto-merge. |
 | `PR Rebase Watchdog` | `pr-rebase-watchdog.yml` | Push to `main`, every 15 min cron, `workflow_dispatch` | Heals stuck auto-merge PRs that went `mergeStateStatus=DIRTY` after main moved. **GitHub does not run `Validate PR` on conflicting PRs**, so auto-merge has nothing to wait on and sits silently. The watchdog detects this state, auto-rebases `claude/*` and `worktree-*` branches (force-push with lease), and posts a comment with rebase instructions on `kevin/*`/`feature/*`/`codie/*` branches. A `rebase-needed-comment` label suppresses comment spam; it auto-clears once the branch is mergeable again. |
 | ~~`Post-Merge Deploy Dispatcher`~~ | ~~`post-merge-deploy.yml`~~ | **Deleted 2026-05-11 PM** | Was the workaround for the GITHUB_TOKEN suppression bug. With PR #232's PAT swap making `pr-auto-merge.yml` fire deploys via the natural `push` trigger, this bridge was redundant — every merge produced two Deploy runs (one from `push`, one from the bridge's `workflow_dispatch`). Removed to avoid double-deploys + Actions-tab clutter. |
-| `Deploy` | `deploy.yml` | Push to `main` (paths-ignore: docs/, **.md, reports/, state/, artifacts/, memory/**), or `workflow_dispatch` | Production Service. Concurrency guard (`deploy-production` group, `cancel-in-progress: false`) added 2026-05-11 PM — see "Concurrency guard" below. |
+| `Deploy` | `deploy.yml` (+ `scripts/deploy/remote_deploy.sh`) | Push to `main` (paths-ignore: docs/, **.md, reports/, state/, artifacts/, memory/**), or `workflow_dispatch` | Production Service. As of 2026-05-30 the remote deploy logic lives in the committed, shellcheck-able `scripts/deploy/remote_deploy.sh` (piped to the VPS over SSH stdin) instead of a 420-line inline heredoc — see "Deploy script decomposition" below. Concurrency guard (`deploy-production` group, `cancel-in-progress: false`) added 2026-05-11 PM. |
 
 ### End-to-End PR-to-Production Flow (2026-05-11)
 
@@ -57,6 +57,27 @@ When `pr-auto-merge.yml` previously called `gh pr merge --auto` with `GITHUB_TOK
 Fix: `pr-auto-merge.yml` now uses `secrets.AUTO_MERGE_PAT` (a fine-grained PAT scoped to `Kjdragan/universal_agent` with `Contents: Read+Write` and `Pull requests: Read+Write` only). The PAT-driven push fires `deploy.yml` normally. Fallback to `GITHUB_TOKEN` is preserved for the bootstrap window before the secret is configured.
 
 **PAT maintenance:** default fine-grained PATs expire after 1 year. When the token expires, `gh pr merge --auto` calls will 401/403 — regenerate the token, paste the new value into the existing `AUTO_MERGE_PAT` secret (overwrite), no workflow file change needed.
+
+#### Deploy script decomposition (2026-05-30)
+
+The remote deploy logic used to live as a ~420-line `ssh … << 'EOF' … EOF` heredoc inside `deploy.yml` (the file was 516 lines). That monolith was the single most failure-prone thing to edit in the repo: bash-inside-YAML-inside-a-heredoc is invisible to `shellcheck`, can't be run or diffed locally, and was prone to the GitHub-Actions-parser quirk (2026-05-27) where `actionlint`/`pyyaml` pass but the real workflow parser silently rejects the file. ~10 of the 15 most recent "deploy failures" were one session's bisect saga trying to edit it.
+
+It is now extracted to a committed, executable `scripts/deploy/remote_deploy.sh`. `deploy.yml` shrank to ~160 lines and feeds the script to the VPS over SSH **stdin**:
+
+```bash
+{
+  printf 'export INFISICAL_CLIENT_ID=%q\n'     "$INFISICAL_CLIENT_ID"
+  printf 'export INFISICAL_CLIENT_SECRET=%q\n' "$INFISICAL_CLIENT_SECRET"
+  printf 'export INFISICAL_PROJECT_ID=%q\n'    "$INFISICAL_PROJECT_ID"
+  cat scripts/deploy/remote_deploy.sh
+} | ssh … "$SSH_USER@$SSH_HOST" 'bash -s'
+```
+
+Key properties:
+- **Byte-for-byte identical deploy logic.** The script body is the exact bash that was in the heredoc, only dedented; the extraction was verified with a `diff` that returned no changes.
+- **Secrets via stdin, not argv.** The three `INFISICAL_*` bootstrap secrets are the only values `deploy.yml` injects (they were `${{ secrets.* }}` in the heredoc). They're now prepended as `export` lines through the same SSH stdin stream, so they never appear in the VPS process table — preserving the prior security property while keeping `remote_deploy.sh` free of `${{ }}` placeholders. The script fails fast (`${VAR:?}`) if any is missing.
+- **A new `actions/checkout` step** was added to `deploy.yml` so the runner has the repo to `cat` the script; it checks out the pushed commit, so the deploy-script version always matches the code being deployed.
+- **Removes the heredoc-parser fragility class entirely** — the workflow YAML no longer contains a large embedded bash block, and `remote_deploy.sh` can be `shellcheck`ed (planned PR-Validate gate) and reasoned about locally.
 
 #### Concurrency guard (added 2026-05-11 PM)
 
