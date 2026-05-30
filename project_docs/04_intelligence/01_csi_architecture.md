@@ -11,7 +11,7 @@ code_paths:
   - src/universal_agent/services/intel_lanes.py
   - src/universal_agent/config/intel_lanes.yaml
   - src/universal_agent/services/llm_classifier.py
-last_verified: 2026-05-29
+last_verified: 2026-05-30
 ---
 
 # CSI Architecture
@@ -209,6 +209,35 @@ non-empty `summary_text`), and upserts one `topic_signature` per new video into
 the activity DB (`conn`). Signatures carry `primary_topics` (≤3),
 `secondary_topics`, `key_claims`, `content_type`, and provenance metadata.
 If `csi_db_path` is None or missing, it returns zero-counts and does nothing.
+
+**Relevance gate (default ON).** The read excludes non-domain categories in SQL
+(`AND (a.category IS NULL OR LOWER(TRIM(a.category)) NOT IN (...))`) so
+politics / geopolitics / war / economics / cooking / health / noise videos never
+become signatures — and therefore never become ideation/convergence candidates
+or Atlas `evaluate-and-author-intel-brief` missions. It gates an
+*already-LLM-produced* judgment (`rss_event_analysis.category`), not new
+reasoning. Toggle `UA_RELEVANCE_GATE_ENABLED`; override the set with
+`UA_IDEATION_RELEVANCE_DENYLIST`. The excluded set is
+`proactive_convergence.py::_DEFAULT_RELEVANCE_DENYLIST`; full detail
+(history, the `technology` mixed-bucket decision) is in
+`04_intelligence/10_proactive_pipeline.md` § "Relevance gate".
+
+> **Category vocabulary (source of truth).** The live classifier emits
+> **single-token** categories, NOT the compound taxonomy
+> (`geopolitics_and_conflict`, `ai_coding_and_agents`) that older handoffs/prompts
+> assumed. As observed in live `csi.db` (2026-05-30):
+> - **Kept (domain):** `ai_coding`, `ai_models`, `ai_news_and_business`,
+>   `ai_business`, `ai_applications`, `software_engineering`, `technology`.
+> - **Excluded (non-domain):** `geopolitics`, `conflict`, `economics`, `cooking`,
+>   `personal_health`, `noise`, `other_signal`, `longform_interviews`, `from`
+>   (a junk label).
+>
+> The values are **classifier-defined** (set by the CSI Ingester's RSS semantic
+> enrichment, a separate deploy unit), not constrained by an enum in UA code — so
+> they can drift. Before trusting or editing any category-based gate, verify with
+> `SELECT category, COUNT(*) FROM rss_event_analysis GROUP BY category` against the
+> live `csi.db`. The 2026-05-30 gate-vocabulary incident (compound tokens matched
+> nothing; ~290 non-domain rows leaked) traces directly to skipping this check.
 
 ### 3.2 Detection: recall → precision
 
