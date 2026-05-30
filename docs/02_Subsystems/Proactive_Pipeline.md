@@ -5,7 +5,7 @@
 > the end-to-end system that makes agents DO work autonomously, not just respond
 > to user messages.
 >
-> **Last updated:** 2026-05-06 — meaningful multi-phase proactive work now has a documented mission-envelope + child-phase model on top of the existing Task Hub / `todo_execution` lifecycle, while ordinary heartbeat supervision remains outside the meaningful-work ledger.
+> **Last updated:** 2026-05-30 — added the deterministic category **relevance gate** on the ideation/convergence ingest (§3.1.1): non-domain CSI categories (geopolitics, cooking, health, noise) are excluded at `sync_topic_signatures_from_csi` so they never become topic signatures or Atlas ideation missions. Earlier (2026-05-06): meaningful multi-phase proactive work has a documented mission-envelope + child-phase model on top of the existing Task Hub / `todo_execution` lifecycle, while ordinary heartbeat supervision remains outside the meaningful-work ledger.
 > See `01_Architecture/05_Simone_First_Orchestration.md` for full
 > architectural rationale. Todoist decommissioned; Task Hub is the sole
 > dispatch and orchestration layer.
@@ -210,6 +210,27 @@ as tasks. The gateway routes based on a configurable policy:
 
 - **`agent_actionable`** → Creates a task with `source_kind='csi'` and `labels=['agent-ready']`
 - **`human_intervention_required`** → Creates a task needing human review
+
+#### 3.1.1 Relevance Gate — Ideation/Convergence Ingest
+
+A separate path, the convergence/ideation sweep (`services/proactive_convergence.py:sync_topic_signatures_from_csi`), reads transcript-backed CSI RSS analysis rows directly from the CSI database (`events` joined to `rss_event_analysis`) and materializes them as `proactive_topic_signatures` — the corpus that feeds cross-channel convergence detection and the Track-B ideation sweep, both of which write `convergence_candidate` evaluation handles for Atlas's `evaluate-and-author-intel-brief` skill.
+
+A **deterministic category relevance gate (default ON)** filters this ingest so non-domain videos (politics, geopolitics, war, cooking, health, noise) never become topic signatures, and therefore never become ideation/convergence candidates or Atlas missions. This gates an *already-LLM-produced* judgment — the per-video `rss_event_analysis.category` enum emitted by the first CSI inference (`CSI_Ingester/.../csi_rss_semantic_enrich.py`) — rather than adding new pseudo-reasoning, per the repo's "code gates, LLM synthesizes" rule.
+
+| | |
+|---|---|
+| **Denied categories** (excluded) | `geopolitics_and_conflict`, `cooking`, `personal_health`, `noise`, `other_signal`, `longform_interviews` |
+| **Kept categories** (domain) | `ai_coding_and_agents`, `ai_models_and_research`, `ai_news_and_business`, `software_engineering` |
+| **Unknown / NULL / empty category** | **Kept** — only *known* non-domain categories are excluded (conservative; new taxonomy values are not silently dropped) |
+
+The gate is applied in SQL (`AND (a.category IS NULL OR LOWER(TRIM(a.category)) NOT IN (...))`) so denied rows do not consume the query `LIMIT` budget — the sweep still gets up to `LIMIT` *domain-relevant* rows.
+
+Tunable without a deploy (per the `.env`-clobbered-by-deploy constraint, these are code defaults, not VPS `.env` edits):
+
+- `UA_RELEVANCE_GATE_ENABLED` (default `1`) — set `0` to restore legacy behaviour (ingest every category).
+- `UA_IDEATION_RELEVANCE_DENYLIST` — comma-separated, case-insensitive override of the denied set; falls back to the code default when unset/empty.
+
+Because `_load_recent_signatures` reads from `proactive_topic_signatures`, gating at ingest automatically keeps non-domain videos out of the ideation sweep corpus too — no second filter is needed downstream.
 
 ### 3.2 Email Task Bridge (`email_task_bridge.py`)
 
