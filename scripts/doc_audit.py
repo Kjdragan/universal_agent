@@ -49,18 +49,26 @@ META_DOCS = {"00_DOCUMENTATION_REFACTOR_PLAN.md", "01_TAXONOMY.md", "02_GOTCHA_I
 SEARCH_ROOTS = [REPO_ROOT, REPO_ROOT / "src" / "universal_agent", REPO_ROOT / "src"]
 
 
-def _resolve_cited_file(fil: str) -> Path | None:
-    """Resolve a cited path that may be package-relative (e.g. `durable/db.py` ->
-    src/universal_agent/durable/db.py). Tries known roots, then a PATH-SUFFIX glob
-    (not bare basename) so same-named files in other packages don't cause false hits."""
+def _resolve_cited_files(fil: str) -> list[Path]:
+    """Resolve a cited path (possibly package-relative or a bare ambiguous basename)
+    to ALL plausible files. A symbol is considered present if ANY candidate defines it,
+    so ambiguous bare names like `config.py`/`db.py` don't cause false negatives."""
     fil = fil.strip().strip('"').strip("'")
+    out: list[Path] = []
     for root in SEARCH_ROOTS:
         cand = root / fil
         if cand.exists():
-            return cand
-    # suffix glob: match the full cited subpath, not just the basename
-    matches = list(REPO_ROOT.glob(f"**/{fil}"))
-    return matches[0] if matches else None
+            out.append(cand)
+    # suffix glob: match the full cited subpath; if just a basename this matches all same-named files
+    out.extend(REPO_ROOT.glob(f"**/{fil}"))
+    # dedup preserving order
+    seen, uniq = set(), []
+    for p in out:
+        rp = p.resolve()
+        if rp not in seen:
+            seen.add(rp)
+            uniq.append(p)
+    return uniq
 
 
 def _glob_resolves(glob: str) -> bool:
@@ -146,7 +154,8 @@ def _split_frontmatter(text: str) -> tuple[dict, str]:
 
 
 def _doc_files() -> list[Path]:
-    return sorted(p for p in DOCS_DIR.rglob("*.md") if "_archive" not in p.parts)
+    return sorted(p for p in DOCS_DIR.rglob("*.md")
+                  if "_archive" not in p.parts and "_meta" not in p.parts)
 
 
 def check_frontmatter(path: Path, fm: dict, rep: Report):
@@ -187,18 +196,23 @@ def check_symbol_refs(path: Path, body: str, rep: Report):
         if (fil, sym) in seen:
             continue
         seen.add((fil, sym))
-        target = _resolve_cited_file(fil)
-        if target is None:
+        candidates = _resolve_cited_files(fil)
+        if not candidates:
             rep.add("warn", rel, "symbol_ref", f"cited file not found: `{fil}` (::{sym})")
             continue
-        try:
-            content = target.read_text(encoding="utf-8", errors="ignore")
-        except Exception:
-            continue
-        base = sym.split(".")[0]   # for Class.method, check Class or method token
-        if not re.search(rf"\b{re.escape(base)}\b", content):
+        base = sym.split(".")[0]   # for Class.method, check the leading token
+        found = False
+        for target in candidates:
+            try:
+                content = target.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+            if re.search(rf"\b{re.escape(base)}\b", content):
+                found = True
+                break
+        if not found:
             rep.add("error", rel, "symbol_ref",
-                    f"cited symbol `{fil}::{sym}` not found in file")
+                    f"cited symbol `{fil}::{sym}` not found in any matching file")
 
 
 def check_links(path: Path, body: str, rep: Report):
