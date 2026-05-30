@@ -25,12 +25,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass, field
 import json
+from pathlib import Path
 import re
 import subprocess
 import sys
-from dataclasses import dataclass, field
-from pathlib import Path
 
 REPO_ROOT = Path(
     subprocess.run(["git", "rev-parse", "--show-toplevel"],

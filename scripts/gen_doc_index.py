@@ -14,10 +14,10 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 import re
 import subprocess
 import sys
-from pathlib import Path
 
 REPO_ROOT = Path(subprocess.run(["git", "rev-parse", "--show-toplevel"],
                                 capture_output=True, text=True, check=True).stdout.strip())
@@ -93,7 +93,6 @@ def build_index() -> str:
             rel = d["filename"]
             title = fm.get("title", d["title"])
             lv = fm.get("last_verified", "")
-            tier = d.get("tier", "")
             scope = d.get("scope", "")
             # trim scope to one line
             scope = re.split(r"(?<=[.)])\s", scope)[0] if scope else ""
