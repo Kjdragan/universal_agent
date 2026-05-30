@@ -211,8 +211,18 @@ jobs:
       - name: Run unit tests
         run: |
           # tests/unit is the fast subset. Full suite runs nightly.
+          #
+          # --timeout=60 (pytest-timeout, thread method set in pyproject.toml)
+          # is a fail-fast backstop: one hung test aborts with a thread
+          # traceback naming the blocking call instead of silently eating the
+          # whole 15-minute job budget. Added after a local
+          # `pytest tests/unit -q` hung 38 minutes with zero output
+          # (2026-05-30) — see
+          # docs/03_Operations/135_Test_Suite_Hardening_And_Local_Run_Runbook.md.
+          # Explicit here (the ini sets it globally too) so the guarantee is
+          # visible at the CI call site.
           if [ -d tests/unit ]; then
-            uv run pytest tests/unit -x -q --no-header 2>&1 | tail -50
+            uv run pytest tests/unit -x -q --no-header --timeout=60 2>&1 | tail -50
           else
             echo "No tests/unit directory; skipping."
           fi
