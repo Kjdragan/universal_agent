@@ -80,7 +80,7 @@ This serializes deploys so simultaneous merges queue instead of colliding. `canc
 
 | Name | Trigger | Purpose |
 |------|---------|---------|
-
+| `Deploy Notify` (`deploy-notify.yml`) | `workflow_run` on `Deploy` **completed** (success AND failure) | Truthful deploy-complete signal to the operator's Telegram channel. Independently curls the public `/api/v1/version` and compares the **live** short SHA to the SHA `Deploy` ran on, then sends one of: ✅ success + live SHA confirmed / ⚠️ success but live SHA mismatch or endpoint down / ❌ deploy failed/cancelled/timed-out. Best-effort: a notifier outage warns in the run log and never hard-fails. Fills the gap where `deploy.yml` emailed only on failure and was silent on success. See "Deploy Complete Notification" below. |
 | `Nightly Doc Drift Audit` | Scheduled (daily) | Detect documentation drift via auto-merged PR |
 | `OpenClaw Release Sync` | Scheduled | Syncs OpenClaw updates |
 
@@ -139,6 +139,8 @@ This is intentional: deploys must not rely on manually created host-only base un
 - `INFISICAL_PROJECT_ID`
 - `AGENTMAIL_API_KEY` (deploy-failure email notification — best-effort; deploy does not double-fault if missing)
 - `AUTO_MERGE_PAT` (fine-grained PAT for auto-merge squash pushes that trigger deploy.yml)
+- `UA_OPERATOR_TELEGRAM_BOT_TOKEN` (Deploy Notify → operator Telegram channel; mirrors Infisical `UA_OPERATOR_TELEGRAM_BOT_TOKEN`. Notifier no-ops with a warning if absent.)
+- `UA_OPERATOR_TELEGRAM_CHAT_ID` (Deploy Notify → operator Telegram channel id; mirrors Infisical `UA_OPERATOR_TELEGRAM_CHAT_ID`.)
 
 ## Required Tailscale Policy Model
 
@@ -174,6 +176,9 @@ Allow `tag:ci-gha` to reach `tag:vps` on TCP/22 in your current ACL/grants model
 4. **Operator reviews and merges** the PR in GitHub UI.
 5. **Production deploy** triggers automatically when the merge moves `main`.
 6. **Post-release verification should use the deployed checkout SHA**. Hit `GET /api/v1/version` on production and confirm the `commit_sha` matches the merge SHA before declaring any browser-side check valid (Rule A from CLAUDE.md § Production Verification Rules).
+
+> [!TIP]
+> **Autonomous sessions: watch, don't poll.** After opening a PR, run the CI wait as a **backgrounded blocking watch** — `gh pr checks <pr> --watch` (or `gh run watch <run-id>`) — instead of a `sleep`+`gh pr view` poll loop. The harness re-invokes the session the instant CI/auto-merge completes, so a poll loop only burns turns. The `Deploy Complete Notification` (above) is the matching signal for the deploy half: you get a Telegram ping the moment production is confirmed live, so there is no need to poll `/api/v1/version` in a loop either. (Convention adopted 2026-05-30; saved as agent memory `feedback_background_watch_not_poll`.)
 
 ## Lessons From The April 5 Dashboard Incident
 
@@ -292,6 +297,22 @@ The workflow sets `/tmp/ua-deployment-window` before restarting services and cle
 ### Deploy Failure Notification (2026-05-28)
 
 When the deploy job fails (any step), a final best-effort step sends an email to the operator via AgentMail (`oddcity216@agentmail.to` → `kevinjdragan@gmail.com`). The email includes the commit SHA, branch, and a direct link to the failed workflow run with suggested next steps. The notification is gated on `secrets.AGENTMAIL_API_KEY` — if the secret is missing or the API call fails, the step exits cleanly without double-faulting the deploy.
+
+### Deploy Complete Notification (2026-05-30)
+
+`deploy-notify.yml` is a separate `workflow_run`-triggered workflow that fires on **every** terminal state of `Deploy` — success and failure — and pushes a single-line status to the operator's Telegram channel. It exists because `deploy.yml` only emailed on **failure** and was silent on success, so an autonomous session had no positive confirmation that its merge actually reached production.
+
+It is decoupled from `deploy.yml` on purpose: it fires even when the deploy job dies abruptly (a trailing step inside `deploy.yml` would not run), and a bug in the notifier can never break a production deploy.
+
+**Truthfulness (Rule A).** A green `Deploy` workflow is not proof the new code is live. The notifier independently curls the public `https://app.clearspringcg.com/api/v1/version` and compares the **live** `short_sha` to the SHA `Deploy` ran on, with a short retry loop to absorb the restart window. It then sends exactly one of:
+
+| Signal | Meaning |
+|---|---|
+| ✅ Deploy OK — live SHA confirmed | `Deploy` succeeded AND `/api/v1/version` reports the same SHA |
+| ⚠️ success but live SHA `X` (expected `Y`) / endpoint unreachable | `Deploy` reported success but production is not running the expected code — look now |
+| ❌ Deploy `<conclusion>` | `Deploy` failed / cancelled / timed out |
+
+Gated on `secrets.UA_OPERATOR_TELEGRAM_BOT_TOKEN` + `UA_OPERATOR_TELEGRAM_CHAT_ID`; if either is absent, or the Telegram send returns non-200, the workflow warns in its run log and exits cleanly (a notifier outage must never masquerade as a deploy problem). Docs-only merges never trigger `Deploy` (paths-ignore), so the notifier stays silent on doc commits by design. Runs 24/7 (infrastructure-event handler, exempt from active-hours dormancy).
 
 > [!IMPORTANT]
 > **Code changes only take effect after the service restarts.** If the deploy workflow completes but services are not restarted (e.g., `systemctl` is not available), the gateway will continue running the old code. The workflow logs a warning in this case.
