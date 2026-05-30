@@ -192,3 +192,6 @@ docs/architecture-view/vendor/
 # Local one-shot watchlist split backups (not for VCS)
 *.prebackup.json
 *.prebackup.*.json
+
+# Embedded agent-browser tool repo — local-only, was a broken gitlink (no .gitmodules); untracked 2026-05-30
+.claude/agents/agent-browser/

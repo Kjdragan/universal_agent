@@ -38,6 +38,21 @@ This subsystem governs how code moves from a branch to running production. Every
 
 Dependency bumps are automated by `.github/dependabot.yml` (`pip` + `github-actions`, weekly), which opens PRs against `main` that flow through the same gate.
 
+### Branch policy — single source of truth
+
+Two workflows make branch-prefix decisions (`pr-auto-merge.yml` auto-merge eligibility; `pr-rebase-watchdog.yml` rebase-vs-comment). They use different mechanisms (a GHA `if:` expression vs. a bash `case`) and encode *different* partitions, so they are intentionally not merged into one module — but this table is the **authoritative policy** both must match. If you change either workflow's branch handling, update this table in the same PR.
+
+| Branch prefix | Auto-merge? (`pr-auto-merge`) | DIRTY-PR action (`pr-rebase-watchdog`) |
+|---|---|---|
+| `claude/*` | ✅ auto-merge | auto-rebase (force-push) |
+| `worktree-*` (EnterWorktree) | ✅ auto-merge | auto-rebase (force-push) |
+| `fix/*`, `docs/*`, `chore/*`, `dependabot/*` | ✅ auto-merge | comment only |
+| `codie/*` | ❌ manual review | comment only |
+| `kevin/*`, `feature/*` | ❌ manual review (operator) | comment only |
+| **any** PR labeled `ci-autofix` | ✅ auto-merge (label override) | n/a |
+
+All auto-merges still wait for `pr-validate` + GitGuardian to pass — **safety is in CI, not in the branch name.**
+
 > **Branch-model history (baked into code comments):** `develop` was retired 2026-05-10 and `feature/latest2` 2026-05-13; both are gone, and `main` is the only PR target. A `post-merge-deploy.yml` bridge briefly existed to work around the GITHUB_TOKEN suppression bug and was deleted 2026-05-11 once the `AUTO_MERGE_PAT` swap made the natural `push` trigger fire deploys (it was producing double-deploys). The previous two scheduled content jobs (`nightly-doc-drift-audit.yml`, `openclaw-release-sync.yml`) were retired 2026-05-30 (#577).
 
 ### Production targets
@@ -229,7 +244,7 @@ Critical detail: every `run:` block uses `shell: bash -euo pipefail {0}`. GHA's 
 
 Gates, in order:
 
-1. **uv with dependency cache** (`astral-sh/setup-uv` + `enable-cache` keyed on `uv.lock`) and Python 3.13, then `uv sync --frozen`. (Cache effectiveness is currently modest — see Gotchas.)
+1. **uv install** (`astral-sh/setup-uv`) and Python 3.13, then `uv sync --frozen`. No package cache (see Gotchas — it was removed as net-negative).
 2. **Checkout** at `fetch-depth: 50` (sized for a triple-dot diff; the old `fetch-depth: 0` made the initial fetch stall-prone).
 3. **Identify changed `.py` files** (`git diff --diff-filter=AMR origin/$BASE_REF...HEAD -- '*.py'`); downstream steps skip when no Python changed.
 4. **py_compile** every changed `.py` (the SyntaxError class — the 2026-05-07 import storm).
@@ -302,12 +317,12 @@ It returns cached `_VERSION_INFO` (`gateway_server.py::_capture_version_info`) i
 - **`.env` is wiped on every deploy.** `remote_deploy.sh` rewrites `/opt/universal_agent/.env` from a fixed bootstrap dict each run. Manual VPS-side edits do not survive. Durable config must go in code defaults or that dict.
 - **`paths-ignore` is all-or-nothing.** Deploy skips only when *every* changed file matches an ignore glob. A single code file in a mostly-docs commit triggers a full deploy + restart.
 - **Auto-merge needs `AUTO_MERGE_PAT`.** With only `GITHUB_TOKEN`, merges succeed but `deploy.yml` never auto-fires (default-token pushes don't chain workflow events). The PAT also expires (~1 year for fine-grained PATs); on expiry `gh pr merge --auto` 401/403s and auto-merge silently stops — regenerate and overwrite the secret value (no workflow change).
-- **The deploy script is fetched, not checked out.** `deploy.yml` pulls `scripts/deploy/remote_deploy.sh` via `gh api` at `$GITHUB_SHA`. Adding `actions/checkout` back would reintroduce the Node-20 deprecation and the orphaned-gitlink exit-128 warning (`.claude/agents/agent-browser`, `test-remotion-project` are committed as submodule gitlinks with no `.gitmodules` — a separate repo-hygiene cleanup).
+- **The deploy script is fetched, not checked out.** `deploy.yml` pulls `scripts/deploy/remote_deploy.sh` via `gh api` at `$GITHUB_SHA`. Adding `actions/checkout` back would reintroduce the Node-20 deprecation. (The orphaned-gitlink exit-128 trap — `.claude/agents/agent-browser` / `test-remotion-project` committed as `.gitmodules`-less submodule pointers — was cleaned up 2026-05-30 via `git rm --cached` + `.gitignore`, so checkout would no longer choke on it; but `gh api` is still leaner and pins the deployed SHA.)
 - **No large shell blocks in workflow YAML.** The deploy logic lives in `remote_deploy.sh` (ShellCheck-gated) and the crashloop helper in `check_crashloop.sh`, specifically because GHA's workflow validator silently rejected `deploy.yml` on certain inline-shell edits (the `2026-05-27 deployyml-parser-quirk`). Keep new deploy logic in the script, not the YAML.
 - **Deploy concurrency queues; it does not cancel.** Near-simultaneous merges deploy serially (last-write-wins). A failed/hung deploy holds the queue — subsequent merges wait behind it.
 - **Health-gate timeouts are not necessarily failures.** The gateway's 8-min budget exists because cold-start can legitimately take minutes; #436/#437 timed out at the old 4-min window despite coming up healthy. Tightening it risks false-negative deploy failures.
 - **`pipefail` is opt-in in GHA.** Both `pr-validate.yml` (`defaults.run.shell: bash -euo pipefail {0}`) and `remote_deploy.sh` (`set -euo pipefail`) force it.
-- **The PR-Validate uv cache is currently near-ineffective.** Each PR writes its own `setup-uv` cache scoped to `refs/pull/N/merge`; the only `main`-ref caches are stale (keyed Python 3.12 from before the cp313 bump), so PRs cold-miss. The cache's ceiling is modest anyway — `pytest` (~150s+) dominates the ~5-min run. The real speedup lever is test parallelization, not caching; warm-on-main cache or pytest sharding are the options.
+- **No uv package cache in PR-Validate (removed 2026-05-30, verified net-negative).** A `setup-uv enable-cache` layer shipped briefly (PR #583) but never hit: `pr-validate` only runs on `pull_request`, so each PR wrote its own cache scoped to `refs/pull/N/merge` and `main` never populated a fresh-key cache to restore from — every PR cold-missed *and* paid the save/restore overhead. The cache's ceiling was modest regardless because `pytest` (~150s, roughly half the ~5-min run) dominates and a dep cache can't touch it. **The real PR-Validate speed lever is pytest sharding/parallelization** (a separate, higher-value effort). Don't re-add a uv cache without also warming it on `main` — and even then weigh it against just sharding pytest.
 - **Comment a `# shellcheck`-prefixed line breaks the ShellCheck gate.** ShellCheck parses any comment starting with `# shellcheck` as a directive (SC1073/1072). Don't open a comment line with that string in `scripts/deploy/*.sh`.
 - **`.venv` corruption blocks `uv sync` even as the right user.** A stale symlink to an inaccessible/old interpreter makes `uv sync` fail. `deploy_validate_runtime.sh::ensure_existing_venv_is_usable` detects this (missing `bin/python3`, unreadable, non-3.13) and force-rebuilds. Break-glass: `rm -rf /opt/universal_agent/.venv` then re-deploy.
 - **Lifecycle-miss during the deploy window is expected.** Restarts SIGTERM (exit 143) in-flight tasks; the `/tmp/ua-deployment-window` flag lets guardrails reclassify these as dashboard-only (no email/telegram) so deploy-restart noise doesn't page the operator.
