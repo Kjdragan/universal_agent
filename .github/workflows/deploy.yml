@@ -49,12 +49,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
-      - name: Checkout repository
-        # Needed so the runner can read scripts/deploy/remote_deploy.sh (piped
-        # to the VPS over SSH stdin below). Checks out the pushed commit, so the
-        # deploy script version always matches the code being deployed.
-        uses: actions/checkout@v4
-
       - name: Connect to Tailscale Network
         uses: tailscale/github-action@v4
         with:
@@ -72,6 +66,8 @@ jobs:
           INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
           INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
           INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_PROJECT_ID }}
+          # For fetching the deploy script via the GitHub API (no checkout step).
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p ~/.ssh
           echo "$SSH_KEY" > ~/.ssh/deploy_key
@@ -108,19 +104,30 @@ jobs:
           # docs/operations/2026-05-16_deploy_ssh_timeout_plan.md (Option A).
           # 30s keepalive × 120 max = up to 60 min of pure idle tolerance,
           # inside the outer `timeout 30m` envelope.
-          # Feed the committed deploy script over SSH stdin and run it on the
-          # VPS with `bash -s`. The three Infisical bootstrap secrets are
-          # prepended as `export` lines THROUGH STDIN (not argv — they never
-          # appear in the VPS process table) so scripts/deploy/remote_deploy.sh
-          # stays free of GitHub-Actions ${{ secrets }} placeholders and is
-          # shellcheck-able. This replaces the former 420-line inline heredoc
-          # (Phase 1 decomposition, 2026-05-30) and removes the GHA-parser
-          # fragility that the heredoc form was prone to (2026-05-27 quirk).
+          # Fetch the committed deploy script for THIS exact commit via the
+          # GitHub API — no `actions/checkout` step. Checkout would materialize
+          # the whole repo (and its post-job submodule cleanup chokes on the
+          # orphaned `.claude/agents/agent-browser` / `test-remotion-project`
+          # gitlinks that have no .gitmodules entry — a benign exit-128 warning),
+          # plus it pins us to a Node-20 action (deprecated). We only need one
+          # file, so pull it raw at $GITHUB_SHA.
+          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/deploy/remote_deploy.sh?ref=${GITHUB_SHA}" \
+            -H "Accept: application/vnd.github.raw" > /tmp/remote_deploy.sh
+          test -s /tmp/remote_deploy.sh || { echo "::error::failed to fetch remote_deploy.sh"; exit 1; }
+
+          # Feed the deploy script over SSH stdin and run it on the VPS with
+          # `bash -s`. The three Infisical bootstrap secrets are prepended as
+          # `export` lines THROUGH STDIN (not argv — they never appear in the
+          # VPS process table) so scripts/deploy/remote_deploy.sh stays free of
+          # GitHub-Actions ${{ secrets }} placeholders and is shellcheck-able.
+          # This replaces the former 420-line inline heredoc (Phase 1
+          # decomposition, 2026-05-30) and removes the GHA-parser fragility that
+          # the heredoc form was prone to (2026-05-27 quirk).
           {
             printf 'export INFISICAL_CLIENT_ID=%q\n' "$INFISICAL_CLIENT_ID"
             printf 'export INFISICAL_CLIENT_SECRET=%q\n' "$INFISICAL_CLIENT_SECRET"
             printf 'export INFISICAL_PROJECT_ID=%q\n' "$INFISICAL_PROJECT_ID"
-            cat scripts/deploy/remote_deploy.sh
+            cat /tmp/remote_deploy.sh
           } | timeout 30m ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=120 "$SSH_USER@$SSH_HOST" 'bash -s'
 
       # Operator notification when the deploy job fails. Posts an email
