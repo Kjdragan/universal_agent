@@ -2,7 +2,7 @@
   "extraction_date": "2026-03-05",
   "playlist_id": "PLjL3liQSixtvyu1yGb6IOwPUPMKeS067E",
   "total_videos_found": 930,
-  "unique_channels": 444,
+  "unique_channels": 334,
   "channels": [
     {
       "channel_id": "UC0m81bQuthaQZmFbXEY9QSw",
@@ -227,13 +227,6 @@
       "video_count": 5,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC5l7RouTQ60oUjLjt1Nh-UQ",
       "youtube_url": "https://www.youtube.com/channel/UC5l7RouTQ60oUjLjt1Nh-UQ"
-    },
-    {
-      "channel_id": "UC7-TPqKMViddKZeo4K2P2jg",
-      "channel_name": "Pyotr Kurzin | Geopolitics",
-      "video_count": 5,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC7-TPqKMViddKZeo4K2P2jg",
-      "youtube_url": "https://www.youtube.com/channel/UC7-TPqKMViddKZeo4K2P2jg"
     },
     {
       "channel_id": "UC6P5WCWjqhhXVFBqbJHNxyw",
@@ -551,13 +544,6 @@
       "youtube_url": "https://www.youtube.com/channel/UCPGrgwfbkjTIgPoOh2q1BAg"
     },
     {
-      "channel_id": "UCn5fhcGRrCvrmFibPbT6q1A",
-      "channel_name": "Brian Lagerstrom ",
-      "video_count": 3,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCn5fhcGRrCvrmFibPbT6q1A",
-      "youtube_url": "https://www.youtube.com/channel/UCn5fhcGRrCvrmFibPbT6q1A"
-    },
-    {
       "channel_id": "UCuGxbFmuThl3vWO-tozt43A",
       "channel_name": "Coding Crash Courses",
       "video_count": 3,
@@ -586,13 +572,6 @@
       "youtube_url": "https://www.youtube.com/channel/UCY0w_qU4qO5MgHpEkpRLocg"
     },
     {
-      "channel_id": "UC-kM5kL9CgjN9s9pim089gg",
-      "channel_name": "Adam Conover",
-      "video_count": 2,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC-kM5kL9CgjN9s9pim089gg",
-      "youtube_url": "https://www.youtube.com/channel/UC-kM5kL9CgjN9s9pim089gg"
-    },
-    {
       "channel_id": "UCOXRjenlq9PmlTqd_JhAbMQ",
       "channel_name": "Eric Tech",
       "video_count": 2,
@@ -607,20 +586,6 @@
       "youtube_url": "https://www.youtube.com/channel/UCOEqiv0-yg_hx0nJiaWJK4Q"
     },
     {
-      "channel_id": "UCp38w5n099xkvoqciOaeFag",
-      "channel_name": "Taylor Lorenz",
-      "video_count": 2,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCp38w5n099xkvoqciOaeFag",
-      "youtube_url": "https://www.youtube.com/channel/UCp38w5n099xkvoqciOaeFag"
-    },
-    {
-      "channel_id": "UC70SrI3VkT1MXALRtf0pcHg",
-      "channel_name": "Thomas DeLauer",
-      "video_count": 2,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC70SrI3VkT1MXALRtf0pcHg",
-      "youtube_url": "https://www.youtube.com/channel/UC70SrI3VkT1MXALRtf0pcHg"
-    },
-    {
       "channel_id": "UCqZMJXEtBw0umDvzFQ8oXtQ",
       "channel_name": "Letta",
       "video_count": 2,
@@ -633,13 +598,6 @@
       "video_count": 2,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCxVxcTULO9cFU6SB9qVaisQ",
       "youtube_url": "https://www.youtube.com/channel/UCxVxcTULO9cFU6SB9qVaisQ"
-    },
-    {
-      "channel_id": "UCH1kIzuOiRii_OwMet-DBZg",
-      "channel_name": "Chef Billy Parisi",
-      "video_count": 2,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCH1kIzuOiRii_OwMet-DBZg",
-      "youtube_url": "https://www.youtube.com/channel/UCH1kIzuOiRii_OwMet-DBZg"
     },
     {
       "channel_id": "UClbsdjQcVS_696NLB_z9_ug",
@@ -703,13 +661,6 @@
       "video_count": 2,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCZonap26CSIMtVKesNQN4dw",
       "youtube_url": "https://www.youtube.com/channel/UCZonap26CSIMtVKesNQN4dw"
-    },
-    {
-      "channel_id": "UCKlET6nkHSKNWef97D_UBkQ",
-      "channel_name": "Latifs Inspired",
-      "video_count": 2,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCKlET6nkHSKNWef97D_UBkQ",
-      "youtube_url": "https://www.youtube.com/channel/UCKlET6nkHSKNWef97D_UBkQ"
     },
     {
       "channel_id": "UCiGWNa6QK6CiKPvv5-YPv8g",
@@ -894,13 +845,6 @@
       "youtube_url": "https://www.youtube.com/channel/UCs5Y5_7XK8HLDX0SLNwkd3w"
     },
     {
-      "channel_id": "UC1yNl2E66ZzKApQdRuTQ4tw",
-      "channel_name": "Sabine Hossenfelder",
-      "video_count": 2,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC1yNl2E66ZzKApQdRuTQ4tw",
-      "youtube_url": "https://www.youtube.com/channel/UC1yNl2E66ZzKApQdRuTQ4tw"
-    },
-    {
       "channel_id": "UCuxhTSKtnMJizinblLs9xOA",
       "channel_name": "pixegami",
       "video_count": 2,
@@ -957,13 +901,6 @@
       "youtube_url": "https://www.youtube.com/channel/UCjNRVMBVI30Sak_p6HRWhIA"
     },
     {
-      "channel_id": "UCIzXayRP7-P0ANpq-nD-h5g",
-      "channel_name": "The Sun",
-      "video_count": 2,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCIzXayRP7-P0ANpq-nD-h5g",
-      "youtube_url": "https://www.youtube.com/channel/UCIzXayRP7-P0ANpq-nD-h5g"
-    },
-    {
       "channel_id": "UCh6wT1M9abL0wiJz4eZTwdw",
       "channel_name": "Moritz | AI Builder",
       "video_count": 2,
@@ -999,25 +936,11 @@
       "youtube_url": "https://www.youtube.com/channel/UCSHZKyawb77ixDdsGog4iWA"
     },
     {
-      "channel_id": "UCdn86UYrf54lXfVli9CB6Aw",
-      "channel_name": "Barack Obama",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCdn86UYrf54lXfVli9CB6Aw",
-      "youtube_url": "https://www.youtube.com/channel/UCdn86UYrf54lXfVli9CB6Aw"
-    },
-    {
       "channel_id": "UCPmHSkid9IOYbdN1Psh24lg",
       "channel_name": "Tiger Data (creators of TimescaleDB)",
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCPmHSkid9IOYbdN1Psh24lg",
       "youtube_url": "https://www.youtube.com/channel/UCPmHSkid9IOYbdN1Psh24lg"
-    },
-    {
-      "channel_id": "UC1rFmaGLYr0Ve_Y_soxZNWQ",
-      "channel_name": "Quinn's Ideas",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC1rFmaGLYr0Ve_Y_soxZNWQ",
-      "youtube_url": "https://www.youtube.com/channel/UC1rFmaGLYr0Ve_Y_soxZNWQ"
     },
     {
       "channel_id": "UC7XJj9pv_11a11FUxCMz15g",
@@ -1055,53 +978,11 @@
       "youtube_url": "https://www.youtube.com/channel/UC9H0HzpKf5JlazkADWnW1Jw"
     },
     {
-      "channel_id": "UCh8gHdtzO2tXd593_bjErWg",
-      "channel_name": "Doobydobap",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCh8gHdtzO2tXd593_bjErWg",
-      "youtube_url": "https://www.youtube.com/channel/UCh8gHdtzO2tXd593_bjErWg"
-    },
-    {
-      "channel_id": "UCstLIadsuuLmDdIzMZxesfg",
-      "channel_name": "WILD HOMESTEAD",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCstLIadsuuLmDdIzMZxesfg",
-      "youtube_url": "https://www.youtube.com/channel/UCstLIadsuuLmDdIzMZxesfg"
-    },
-    {
-      "channel_id": "UChIs72whgZI9w6d6FhwGGHA",
-      "channel_name": "Gamers Nexus",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UChIs72whgZI9w6d6FhwGGHA",
-      "youtube_url": "https://www.youtube.com/channel/UChIs72whgZI9w6d6FhwGGHA"
-    },
-    {
-      "channel_id": "UCGfFUc6eWxfbtjYeun6r9xg",
-      "channel_name": "FloatHeadPhysics",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCGfFUc6eWxfbtjYeun6r9xg",
-      "youtube_url": "https://www.youtube.com/channel/UCGfFUc6eWxfbtjYeun6r9xg"
-    },
-    {
       "channel_id": "UCs-2QQd9DYsjnQnHBrI4yJg",
       "channel_name": "WesOps",
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCs-2QQd9DYsjnQnHBrI4yJg",
       "youtube_url": "https://www.youtube.com/channel/UCs-2QQd9DYsjnQnHBrI4yJg"
-    },
-    {
-      "channel_id": "UCX-xHRN9CnoXto5gcPskANA",
-      "channel_name": "UNITED24",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCX-xHRN9CnoXto5gcPskANA",
-      "youtube_url": "https://www.youtube.com/channel/UCX-xHRN9CnoXto5gcPskANA"
-    },
-    {
-      "channel_id": "UCnRmC8k3qzn0Qxq-nQOWmOA",
-      "channel_name": "Wes O'Donnell",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCnRmC8k3qzn0Qxq-nQOWmOA",
-      "youtube_url": "https://www.youtube.com/channel/UCnRmC8k3qzn0Qxq-nQOWmOA"
     },
     {
       "channel_id": "UChKqZ1_RlN_MlP9NEeZqglA",
@@ -1118,13 +999,6 @@
       "youtube_url": "https://www.youtube.com/channel/UCCw3DHyZnOhaxf8d9PAfN4Q"
     },
     {
-      "channel_id": "UCK0z0_5uL7mb9IjntOKi5XQ",
-      "channel_name": "The Atlantic",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCK0z0_5uL7mb9IjntOKi5XQ",
-      "youtube_url": "https://www.youtube.com/channel/UCK0z0_5uL7mb9IjntOKi5XQ"
-    },
-    {
       "channel_id": "UCt9WqM6o0y5YGqQm1nffFWQ",
       "channel_name": "Boundary",
       "video_count": 1,
@@ -1137,13 +1011,6 @@
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC9x0AN7BWHpCDHSm9NiJFJQ",
       "youtube_url": "https://www.youtube.com/channel/UC9x0AN7BWHpCDHSm9NiJFJQ"
-    },
-    {
-      "channel_id": "UC1JoCw5K0iVcmA1Sf5SQv9g",
-      "channel_name": "مطبخنا اليمني Our Yemeni Kitchen",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC1JoCw5K0iVcmA1Sf5SQv9g",
-      "youtube_url": "https://www.youtube.com/channel/UC1JoCw5K0iVcmA1Sf5SQv9g"
     },
     {
       "channel_id": "UCVy16RS5eEDh8anP8j94G2A",
@@ -1160,13 +1027,6 @@
       "youtube_url": "https://www.youtube.com/channel/UCrB7UFnkosBjAhOg3a9NdWw"
     },
     {
-      "channel_id": "UCQTkxcTnQejxvlAxq4rpTGw",
-      "channel_name": "War & Politics 24",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCQTkxcTnQejxvlAxq4rpTGw",
-      "youtube_url": "https://www.youtube.com/channel/UCQTkxcTnQejxvlAxq4rpTGw"
-    },
-    {
       "channel_id": "UCBHGZpDF2fsqPIPi0pNyuTg",
       "channel_name": "Pivot with Kara Swisher and Scott Galloway",
       "video_count": 1,
@@ -1174,39 +1034,11 @@
       "youtube_url": "https://www.youtube.com/channel/UCBHGZpDF2fsqPIPi0pNyuTg"
     },
     {
-      "channel_id": "UCehBVAPy-bxmnbNARF-_tvA",
-      "channel_name": "More Perfect Union",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCehBVAPy-bxmnbNARF-_tvA",
-      "youtube_url": "https://www.youtube.com/channel/UCehBVAPy-bxmnbNARF-_tvA"
-    },
-    {
       "channel_id": "UCz-yrxeZYIYdpEZgHGvIydA",
       "channel_name": "Nic Barker",
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCz-yrxeZYIYdpEZgHGvIydA",
       "youtube_url": "https://www.youtube.com/channel/UCz-yrxeZYIYdpEZgHGvIydA"
-    },
-    {
-      "channel_id": "UCXuwhn5_41m4VxZJ3wcDyxA",
-      "channel_name": "Facts Matter with Roman Balmakov",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCXuwhn5_41m4VxZJ3wcDyxA",
-      "youtube_url": "https://www.youtube.com/channel/UCXuwhn5_41m4VxZJ3wcDyxA"
-    },
-    {
-      "channel_id": "UC4tpMC_bflphcXUtPk59Vyw",
-      "channel_name": "Feral Historian",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC4tpMC_bflphcXUtPk59Vyw",
-      "youtube_url": "https://www.youtube.com/channel/UC4tpMC_bflphcXUtPk59Vyw"
-    },
-    {
-      "channel_id": "UCCkFJmUgzrZdkeHl_qPItsA",
-      "channel_name": "Anne of All Trades",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCCkFJmUgzrZdkeHl_qPItsA",
-      "youtube_url": "https://www.youtube.com/channel/UCCkFJmUgzrZdkeHl_qPItsA"
     },
     {
       "channel_id": "UCtwRmIz_R9ZVI6JUWLiH6Ug",
@@ -1223,20 +1055,6 @@
       "youtube_url": "https://www.youtube.com/channel/UC_iUeUzozCHEReJ-shKcCYA"
     },
     {
-      "channel_id": "UCpb-xu6Oun_d41RjztUgFWA",
-      "channel_name": "How To Home",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCpb-xu6Oun_d41RjztUgFWA",
-      "youtube_url": "https://www.youtube.com/channel/UCpb-xu6Oun_d41RjztUgFWA"
-    },
-    {
-      "channel_id": "UCZnfMdVCt4Wg7qP2YKCGvQA",
-      "channel_name": "The Blood Pressure Doc",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCZnfMdVCt4Wg7qP2YKCGvQA",
-      "youtube_url": "https://www.youtube.com/channel/UCZnfMdVCt4Wg7qP2YKCGvQA"
-    },
-    {
       "channel_id": "UCA-mWX9CvCTVFWRMb9bKc9w",
       "channel_name": "Dan Martell",
       "video_count": 1,
@@ -1251,32 +1069,11 @@
       "youtube_url": "https://www.youtube.com/channel/UC4tQodst5JD0nHzD5VX0OAA"
     },
     {
-      "channel_id": "UCiq1FIgtEK7LRAOB1JXTPig",
-      "channel_name": "Silicon Valley Girl",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCiq1FIgtEK7LRAOB1JXTPig",
-      "youtube_url": "https://www.youtube.com/channel/UCiq1FIgtEK7LRAOB1JXTPig"
-    },
-    {
       "channel_id": "UCSouanxGVjunqQrxqjMDYXg",
       "channel_name": "Watch This Instead",
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCSouanxGVjunqQrxqjMDYXg",
       "youtube_url": "https://www.youtube.com/channel/UCSouanxGVjunqQrxqjMDYXg"
-    },
-    {
-      "channel_id": "UC3KfcvCLVi2PW_QY80hEwTA",
-      "channel_name": "Military & History",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC3KfcvCLVi2PW_QY80hEwTA",
-      "youtube_url": "https://www.youtube.com/channel/UC3KfcvCLVi2PW_QY80hEwTA"
-    },
-    {
-      "channel_id": "UCzuie21ADz_tGifBxkNXS9w",
-      "channel_name": "Ant's BBQ Story",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCzuie21ADz_tGifBxkNXS9w",
-      "youtube_url": "https://www.youtube.com/channel/UCzuie21ADz_tGifBxkNXS9w"
     },
     {
       "channel_id": "UC51fwc9aSHDgOu29cyo2-TQ",
@@ -1300,39 +1097,11 @@
       "youtube_url": "https://www.youtube.com/channel/UC0-7PyfpOIJpNyi8WrHiyXA"
     },
     {
-      "channel_id": "UC3J6Rx5Qcx6-v6W9BBgF8sw",
-      "channel_name": "Silicon Curtain",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC3J6Rx5Qcx6-v6W9BBgF8sw",
-      "youtube_url": "https://www.youtube.com/channel/UC3J6Rx5Qcx6-v6W9BBgF8sw"
-    },
-    {
-      "channel_id": "UCsT0YIqwnpJCM-mx7-gSA4Q",
-      "channel_name": "TEDx Talks",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCsT0YIqwnpJCM-mx7-gSA4Q",
-      "youtube_url": "https://www.youtube.com/channel/UCsT0YIqwnpJCM-mx7-gSA4Q"
-    },
-    {
       "channel_id": "UC4FK5DEcMLB3CyJcbJfZEJA",
       "channel_name": "Nick Puru | AI Automation",
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC4FK5DEcMLB3CyJcbJfZEJA",
       "youtube_url": "https://www.youtube.com/channel/UC4FK5DEcMLB3CyJcbJfZEJA"
-    },
-    {
-      "channel_id": "UCnjgxChqYYnyoqO4k_Q1d6Q",
-      "channel_name": "The Diary Of A CEO Clips",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCnjgxChqYYnyoqO4k_Q1d6Q",
-      "youtube_url": "https://www.youtube.com/channel/UCnjgxChqYYnyoqO4k_Q1d6Q"
-    },
-    {
-      "channel_id": "UCSNgS5ZY7JudYXoK6N3dqFA",
-      "channel_name": "Man Made",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCSNgS5ZY7JudYXoK6N3dqFA",
-      "youtube_url": "https://www.youtube.com/channel/UCSNgS5ZY7JudYXoK6N3dqFA"
     },
     {
       "channel_id": "UCVyRiMvfUNMA1UPlDPzG5Ow",
@@ -1354,27 +1123,6 @@
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC5w_8GUoH9PeRLWatDKJ79Q",
       "youtube_url": "https://www.youtube.com/channel/UC5w_8GUoH9PeRLWatDKJ79Q"
-    },
-    {
-      "channel_id": "UCGy7SkBjcIAgTiwkXEtPnYg",
-      "channel_name": "Andrei Jikh",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCGy7SkBjcIAgTiwkXEtPnYg",
-      "youtube_url": "https://www.youtube.com/channel/UCGy7SkBjcIAgTiwkXEtPnYg"
-    },
-    {
-      "channel_id": "UCpuqYFKLkcEryEieomiAv3Q",
-      "channel_name": "Therapy in a Nutshell",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCpuqYFKLkcEryEieomiAv3Q",
-      "youtube_url": "https://www.youtube.com/channel/UCpuqYFKLkcEryEieomiAv3Q"
-    },
-    {
-      "channel_id": "UCzYZk4bZ07yJeK7Zd_z37Cw",
-      "channel_name": "Food Network UK",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCzYZk4bZ07yJeK7Zd_z37Cw",
-      "youtube_url": "https://www.youtube.com/channel/UCzYZk4bZ07yJeK7Zd_z37Cw"
     },
     {
       "channel_id": "UC8LbCdO57DhJsCmhUeL-DZA",
@@ -1405,13 +1153,6 @@
       "youtube_url": "https://www.youtube.com/channel/UCPzxPFwYykRjEneXL7dL3oQ"
     },
     {
-      "channel_id": "UC-dmJ79518WlKMbsu50eMTQ",
-      "channel_name": "Clark Kegley",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC-dmJ79518WlKMbsu50eMTQ",
-      "youtube_url": "https://www.youtube.com/channel/UC-dmJ79518WlKMbsu50eMTQ"
-    },
-    {
       "channel_id": "UC1oAPWSf9lAfRGugPaeALHA",
       "channel_name": "Ghetto The NPC",
       "video_count": 1,
@@ -1424,27 +1165,6 @@
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCwffSP9kO8pMZVr1Ugqvbzw",
       "youtube_url": "https://www.youtube.com/channel/UCwffSP9kO8pMZVr1Ugqvbzw"
-    },
-    {
-      "channel_id": "UCAuUUnT6oDeKwE6v1NGQxug",
-      "channel_name": "TED",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCAuUUnT6oDeKwE6v1NGQxug",
-      "youtube_url": "https://www.youtube.com/channel/UCAuUUnT6oDeKwE6v1NGQxug"
-    },
-    {
-      "channel_id": "UCsQdi6X-12eUKBBBze46STA",
-      "channel_name": "Glucose Revolution",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCsQdi6X-12eUKBBBze46STA",
-      "youtube_url": "https://www.youtube.com/channel/UCsQdi6X-12eUKBBBze46STA"
-    },
-    {
-      "channel_id": "UCYHosdETLPp6dpJEsgIUTmw",
-      "channel_name": "Jake Broe",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCYHosdETLPp6dpJEsgIUTmw",
-      "youtube_url": "https://www.youtube.com/channel/UCYHosdETLPp6dpJEsgIUTmw"
     },
     {
       "channel_id": "UCqJxABBuzx4vj_RxogCbAFA",
@@ -1466,13 +1186,6 @@
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCyb38ARmbRdMlVEVXDBD4xw",
       "youtube_url": "https://www.youtube.com/channel/UCyb38ARmbRdMlVEVXDBD4xw"
-    },
-    {
-      "channel_id": "UC5fdyC4LxyyYv8Am6nDrkmg",
-      "channel_name": "FoundMyFitness Clips",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC5fdyC4LxyyYv8Am6nDrkmg",
-      "youtube_url": "https://www.youtube.com/channel/UC5fdyC4LxyyYv8Am6nDrkmg"
     },
     {
       "channel_id": "UCWZ_8BX5HpmKN4iTgLQGalw",
@@ -1566,13 +1279,6 @@
       "youtube_url": "https://www.youtube.com/channel/UCP4bf6IHJJQehibu6ai__cg"
     },
     {
-      "channel_id": "UCWmGT9NatF2mhCLgUcXkT0g",
-      "channel_name": "Testosterone Growth",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCWmGT9NatF2mhCLgUcXkT0g",
-      "youtube_url": "https://www.youtube.com/channel/UCWmGT9NatF2mhCLgUcXkT0g"
-    },
-    {
       "channel_id": "UCkQ2J1LUtzt_kNzH_cC24AA",
       "channel_name": "Internet Education",
       "video_count": 1,
@@ -1599,13 +1305,6 @@
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCTMRxtyHoE3LPcrl-kT4AQQ",
       "youtube_url": "https://www.youtube.com/channel/UCTMRxtyHoE3LPcrl-kT4AQQ"
-    },
-    {
-      "channel_id": "UCT09qC2vwlbJvofZRIdLalg",
-      "channel_name": "Flick Connection",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCT09qC2vwlbJvofZRIdLalg",
-      "youtube_url": "https://www.youtube.com/channel/UCT09qC2vwlbJvofZRIdLalg"
     },
     {
       "channel_id": "UCiv_dpEdqEJKPAdc0wpFAkA",
@@ -1713,25 +1412,11 @@
       "youtube_url": "https://www.youtube.com/channel/UCFxwS8HIGH5_ut1fk0PNAHw"
     },
     {
-      "channel_id": "UCQ9WFkn0FZwy0EyT5Di-ihg",
-      "channel_name": "ricette arabe",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCQ9WFkn0FZwy0EyT5Di-ihg",
-      "youtube_url": "https://www.youtube.com/channel/UCQ9WFkn0FZwy0EyT5Di-ihg"
-    },
-    {
       "channel_id": "UCecfdozd4wiDEuc6tq0hJoQ",
       "channel_name": "Daily AI Coding & Strategy | Parker Rex ",
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCecfdozd4wiDEuc6tq0hJoQ",
       "youtube_url": "https://www.youtube.com/channel/UCecfdozd4wiDEuc6tq0hJoQ"
-    },
-    {
-      "channel_id": "UCFiU1vIpPD3lQltke_18m3A",
-      "channel_name": "Wanderloots",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCFiU1vIpPD3lQltke_18m3A",
-      "youtube_url": "https://www.youtube.com/channel/UCFiU1vIpPD3lQltke_18m3A"
     },
     {
       "channel_id": "UCZf_9SblvM8iTTkouFEcHtA",
@@ -1804,32 +1489,11 @@
       "youtube_url": "https://www.youtube.com/channel/UC_9HuD0H59oFO3tShAMd8aQ"
     },
     {
-      "channel_id": "UCuj3s14vnc9QMkzBcXwN6Rg",
-      "channel_name": "U-Taste",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCuj3s14vnc9QMkzBcXwN6Rg",
-      "youtube_url": "https://www.youtube.com/channel/UCuj3s14vnc9QMkzBcXwN6Rg"
-    },
-    {
-      "channel_id": "UCD7amT5yMTtEnAgVhA68vgQ",
-      "channel_name": "Jeremy London, MD",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCD7amT5yMTtEnAgVhA68vgQ",
-      "youtube_url": "https://www.youtube.com/channel/UCD7amT5yMTtEnAgVhA68vgQ"
-    },
-    {
       "channel_id": "UC2xOn0xQj1HIpHJpOy5tvpA",
       "channel_name": "Stream Developers",
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC2xOn0xQj1HIpHJpOy5tvpA",
       "youtube_url": "https://www.youtube.com/channel/UC2xOn0xQj1HIpHJpOy5tvpA"
-    },
-    {
-      "channel_id": "UC9_p50tH3WmMslWRWKnM7dQ",
-      "channel_name": "Adam Ragusea",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC9_p50tH3WmMslWRWKnM7dQ",
-      "youtube_url": "https://www.youtube.com/channel/UC9_p50tH3WmMslWRWKnM7dQ"
     },
     {
       "channel_id": "UCYq0KbZ_0m81HTx5gdTK8kQ",
@@ -1839,13 +1503,6 @@
       "youtube_url": "https://www.youtube.com/channel/UCYq0KbZ_0m81HTx5gdTK8kQ"
     },
     {
-      "channel_id": "UCbyjYRUS9gADwAGuUxcfVcA",
-      "channel_name": "Sip and Feast",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCbyjYRUS9gADwAGuUxcfVcA",
-      "youtube_url": "https://www.youtube.com/channel/UCbyjYRUS9gADwAGuUxcfVcA"
-    },
-    {
       "channel_id": "UCFU9Go20p01kC64w-tmFORw",
       "channel_name": "Evren Ozkip",
       "video_count": 1,
@@ -1853,25 +1510,11 @@
       "youtube_url": "https://www.youtube.com/channel/UCFU9Go20p01kC64w-tmFORw"
     },
     {
-      "channel_id": "UCmvYCRYPDlzSHVNCI_ViJDQ",
-      "channel_name": "Tiago Forte",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCmvYCRYPDlzSHVNCI_ViJDQ",
-      "youtube_url": "https://www.youtube.com/channel/UCmvYCRYPDlzSHVNCI_ViJDQ"
-    },
-    {
       "channel_id": "UCHsThxa9HvDpSywv4bP55NA",
       "channel_name": "J. Gravelle",
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCHsThxa9HvDpSywv4bP55NA",
       "youtube_url": "https://www.youtube.com/channel/UCHsThxa9HvDpSywv4bP55NA"
-    },
-    {
-      "channel_id": "UC_oqZXtcxfJTaw1j2M1H1XQ",
-      "channel_name": "Sauce Stache",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC_oqZXtcxfJTaw1j2M1H1XQ",
-      "youtube_url": "https://www.youtube.com/channel/UC_oqZXtcxfJTaw1j2M1H1XQ"
     },
     {
       "channel_id": "UC0BHO4AbCeBpghWNifMbH5Q",
@@ -1893,13 +1536,6 @@
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCO60vEm-6WAAtGckVqCi6Vg",
       "youtube_url": "https://www.youtube.com/channel/UCO60vEm-6WAAtGckVqCi6Vg"
-    },
-    {
-      "channel_id": "UCDbZvuDA_tZ6XP5wKKFuemQ",
-      "channel_name": "Rainbow Plant Life",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCDbZvuDA_tZ6XP5wKKFuemQ",
-      "youtube_url": "https://www.youtube.com/channel/UCDbZvuDA_tZ6XP5wKKFuemQ"
     },
     {
       "channel_id": "UC08Fah8EIryeOZRkjBRohcQ",
@@ -1937,46 +1573,11 @@
       "youtube_url": "https://www.youtube.com/channel/UCpe4azYvizhOPP22aSYnxwQ"
     },
     {
-      "channel_id": "UCj3p_1jOCJXB_L_we-DjLbA",
-      "channel_name": "Physionic",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCj3p_1jOCJXB_L_we-DjLbA",
-      "youtube_url": "https://www.youtube.com/channel/UCj3p_1jOCJXB_L_we-DjLbA"
-    },
-    {
       "channel_id": "UCJ_twZENBaL3L6AmIGYHVrw",
       "channel_name": "Toni Dev",
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCJ_twZENBaL3L6AmIGYHVrw",
       "youtube_url": "https://www.youtube.com/channel/UCJ_twZENBaL3L6AmIGYHVrw"
-    },
-    {
-      "channel_id": "UCAl9Ld79qaZxp9JzEOwd3aA",
-      "channel_name": "Bankless",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCAl9Ld79qaZxp9JzEOwd3aA",
-      "youtube_url": "https://www.youtube.com/channel/UCAl9Ld79qaZxp9JzEOwd3aA"
-    },
-    {
-      "channel_id": "UCw3fku0sH3qA3c3pZeJwdAw",
-      "channel_name": "Daily Mail World",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCw3fku0sH3qA3c3pZeJwdAw",
-      "youtube_url": "https://www.youtube.com/channel/UCw3fku0sH3qA3c3pZeJwdAw"
-    },
-    {
-      "channel_id": "UCYjJeNVpgjAz-Sv4dhs13VQ",
-      "channel_name": "acooknamedMatt",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCYjJeNVpgjAz-Sv4dhs13VQ",
-      "youtube_url": "https://www.youtube.com/channel/UCYjJeNVpgjAz-Sv4dhs13VQ"
-    },
-    {
-      "channel_id": "UCjrE1Mdf8JKg6iu3_CvmtgA",
-      "channel_name": "Healthy Immune Doc",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCjrE1Mdf8JKg6iu3_CvmtgA",
-      "youtube_url": "https://www.youtube.com/channel/UCjrE1Mdf8JKg6iu3_CvmtgA"
     },
     {
       "channel_id": "UCEuoGOJFuXUZZhprSAAK85Q",
@@ -1986,25 +1587,11 @@
       "youtube_url": "https://www.youtube.com/channel/UCEuoGOJFuXUZZhprSAAK85Q"
     },
     {
-      "channel_id": "UC4w1YQAJMWOz4qtxinq55LQ",
-      "channel_name": "Level1Techs",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC4w1YQAJMWOz4qtxinq55LQ",
-      "youtube_url": "https://www.youtube.com/channel/UC4w1YQAJMWOz4qtxinq55LQ"
-    },
-    {
       "channel_id": "UConVfxXodg78Tzh5nNu85Ew",
       "channel_name": "Welch Labs",
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UConVfxXodg78Tzh5nNu85Ew",
       "youtube_url": "https://www.youtube.com/channel/UConVfxXodg78Tzh5nNu85Ew"
-    },
-    {
-      "channel_id": "UCilMYYyoot7vhLn4Tinzmmg",
-      "channel_name": "Mo Gawdat",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCilMYYyoot7vhLn4Tinzmmg",
-      "youtube_url": "https://www.youtube.com/channel/UCilMYYyoot7vhLn4Tinzmmg"
     },
     {
       "channel_id": "UCbd-KDLSBfuPMGxn1oXxZVg",
@@ -2019,13 +1606,6 @@
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCsVgseBnKuyIGaH54XVoK3Q",
       "youtube_url": "https://www.youtube.com/channel/UCsVgseBnKuyIGaH54XVoK3Q"
-    },
-    {
-      "channel_id": "UCIr0vkvqiYN3DGs44U5eGsw",
-      "channel_name": "G‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCIr0vkvqiYN3DGs44U5eGsw",
-      "youtube_url": "https://www.youtube.com/channel/UCIr0vkvqiYN3DGs44U5eGsw"
     },
     {
       "channel_id": "UCwyN-gKhx3dahEWpSnzwHfg",
@@ -2105,20 +1685,6 @@
       "youtube_url": "https://www.youtube.com/channel/UCKONdcQCTP3aozARj1ntKhw"
     },
     {
-      "channel_id": "UCvQECJukTDE2i6aCoMnS-Vg",
-      "channel_name": "Big Think",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCvQECJukTDE2i6aCoMnS-Vg",
-      "youtube_url": "https://www.youtube.com/channel/UCvQECJukTDE2i6aCoMnS-Vg"
-    },
-    {
-      "channel_id": "UCzH5n3Ih5kgQoiDAQt2FwLw",
-      "channel_name": "LifebyMikeG",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCzH5n3Ih5kgQoiDAQt2FwLw",
-      "youtube_url": "https://www.youtube.com/channel/UCzH5n3Ih5kgQoiDAQt2FwLw"
-    },
-    {
       "channel_id": "UCCKXnAHTnRLmyE_h6qUiqRA",
       "channel_name": "Glenn Raya",
       "video_count": 1,
@@ -2154,25 +1720,11 @@
       "youtube_url": "https://www.youtube.com/channel/UCsrVDPJBYeXItETFHG0qzyw"
     },
     {
-      "channel_id": "UCg-_lYeV8hBnDSay7nmphUA",
-      "channel_name": "Sampson Boat Co",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCg-_lYeV8hBnDSay7nmphUA",
-      "youtube_url": "https://www.youtube.com/channel/UCg-_lYeV8hBnDSay7nmphUA"
-    },
-    {
       "channel_id": "UCWb40FwBq3m8JBljAcwu7EA",
       "channel_name": "How To Do Stuff",
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCWb40FwBq3m8JBljAcwu7EA",
       "youtube_url": "https://www.youtube.com/channel/UCWb40FwBq3m8JBljAcwu7EA"
-    },
-    {
-      "channel_id": "UCfPQkvtb1HQD1_cBfaB3RAQ",
-      "channel_name": "Chantel Reads All Day",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCfPQkvtb1HQD1_cBfaB3RAQ",
-      "youtube_url": "https://www.youtube.com/channel/UCfPQkvtb1HQD1_cBfaB3RAQ"
     },
     {
       "channel_id": "UCKWaEZ-_VweaEx1j62do_vQ",
@@ -2203,32 +1755,11 @@
       "youtube_url": "https://www.youtube.com/channel/UCjqDDqUh1DgjrlNjLR5p8nw"
     },
     {
-      "channel_id": "UCqNkn5PNeSqbQTAR5RP-L-Q",
-      "channel_name": "Andy Cooks",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCqNkn5PNeSqbQTAR5RP-L-Q",
-      "youtube_url": "https://www.youtube.com/channel/UCqNkn5PNeSqbQTAR5RP-L-Q"
-    },
-    {
       "channel_id": "UCNU_lfiiWBdtULKOw6X0Dig",
       "channel_name": "Krish Naik",
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCNU_lfiiWBdtULKOw6X0Dig",
       "youtube_url": "https://www.youtube.com/channel/UCNU_lfiiWBdtULKOw6X0Dig"
-    },
-    {
-      "channel_id": "UClnEMtKghVQWqw1tOX2NeMQ",
-      "channel_name": "Kyiv Post",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UClnEMtKghVQWqw1tOX2NeMQ",
-      "youtube_url": "https://www.youtube.com/channel/UClnEMtKghVQWqw1tOX2NeMQ"
-    },
-    {
-      "channel_id": "UCiamy6DLsjIeCgfz8TLXg9Q",
-      "channel_name": "Violin MD",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCiamy6DLsjIeCgfz8TLXg9Q",
-      "youtube_url": "https://www.youtube.com/channel/UCiamy6DLsjIeCgfz8TLXg9Q"
     },
     {
       "channel_id": "UCUvkPEm38w6pq8w5QYgtPPw",
@@ -2252,13 +1783,6 @@
       "youtube_url": "https://www.youtube.com/channel/UCIAy0-SWMNxLjOmBCYSNBzg"
     },
     {
-      "channel_id": "UCE3Ay7LrWbJAOybaPvFkhmA",
-      "channel_name": "Michael Breitung",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCE3Ay7LrWbJAOybaPvFkhmA",
-      "youtube_url": "https://www.youtube.com/channel/UCE3Ay7LrWbJAOybaPvFkhmA"
-    },
-    {
       "channel_id": "UCn2bInQrjdDYKEEmbpwblLQ",
       "channel_name": "Langflow",
       "video_count": 1,
@@ -2273,13 +1797,6 @@
       "youtube_url": "https://www.youtube.com/channel/UCesrGc4OC4E6iSG6E5ivVcw"
     },
     {
-      "channel_id": "UCx-3sLMjglW_ydEwkvR1xbg",
-      "channel_name": "Mike the Credit Guy ",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCx-3sLMjglW_ydEwkvR1xbg",
-      "youtube_url": "https://www.youtube.com/channel/UCx-3sLMjglW_ydEwkvR1xbg"
-    },
-    {
       "channel_id": "UCA_gs2-Nzh8asC5DQFvREPQ",
       "channel_name": "Kevin Leneway",
       "video_count": 1,
@@ -2292,13 +1809,6 @@
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCbX3YkedQunLt7EQAdVxh7w",
       "youtube_url": "https://www.youtube.com/channel/UCbX3YkedQunLt7EQAdVxh7w"
-    },
-    {
-      "channel_id": "UCUBj_5pwQZaoXfBrEQQbADw",
-      "channel_name": "Chase Hughes",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCUBj_5pwQZaoXfBrEQQbADw",
-      "youtube_url": "https://www.youtube.com/channel/UCUBj_5pwQZaoXfBrEQQbADw"
     },
     {
       "channel_id": "UCI0vQvr9aFn27yR6Ej6n5UA",
@@ -2334,13 +1844,6 @@
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC05XpvbHZUQOfA6xk4dlmcw",
       "youtube_url": "https://www.youtube.com/channel/UC05XpvbHZUQOfA6xk4dlmcw"
-    },
-    {
-      "channel_id": "UCxQbYGpbdrh-b2ND-AfIybg",
-      "channel_name": "Maker's Muse",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCxQbYGpbdrh-b2ND-AfIybg",
-      "youtube_url": "https://www.youtube.com/channel/UCxQbYGpbdrh-b2ND-AfIybg"
     },
     {
       "channel_id": "UCKe0IIt9rF9fd--xw5j1MkQ",
@@ -2385,13 +1888,6 @@
       "youtube_url": "https://www.youtube.com/channel/UCs-hXDMwqs1Ri9Yh9QRgaqQ"
     },
     {
-      "channel_id": "UC_TneqvSfh-KsIyZMlJjVsQ",
-      "channel_name": "Kanal13",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC_TneqvSfh-KsIyZMlJjVsQ",
-      "youtube_url": "https://www.youtube.com/channel/UC_TneqvSfh-KsIyZMlJjVsQ"
-    },
-    {
       "channel_id": "UCvV2LZZGhxzTK2pSumTArEg",
       "channel_name": "Select10",
       "video_count": 1,
@@ -2420,13 +1916,6 @@
       "youtube_url": "https://www.youtube.com/channel/UCJcVFhNVcdYpG8VOms68wtg"
     },
     {
-      "channel_id": "UCK2-KwTwamfWK_LjfxGEe8Q",
-      "channel_name": "Off Duty Canvas",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCK2-KwTwamfWK_LjfxGEe8Q",
-      "youtube_url": "https://www.youtube.com/channel/UCK2-KwTwamfWK_LjfxGEe8Q"
-    },
-    {
       "channel_id": "UCkCehM7kj5tZLrrUN5T7T6w",
       "channel_name": "Pat Ruff",
       "video_count": 1,
@@ -2439,13 +1928,6 @@
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCAM8mXlq6gw0QXHR30CkKbg",
       "youtube_url": "https://www.youtube.com/channel/UCAM8mXlq6gw0QXHR30CkKbg"
-    },
-    {
-      "channel_id": "UCfWNZIJkm268rLO_yeRlcww",
-      "channel_name": "Business Basics",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCfWNZIJkm268rLO_yeRlcww",
-      "youtube_url": "https://www.youtube.com/channel/UCfWNZIJkm268rLO_yeRlcww"
     },
     {
       "channel_id": "UCVkTLOkJ9VLfT0K6PZ0Wthg",
@@ -2488,13 +1970,6 @@
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCjjhwmUo6aBpCRExIGWCxhA",
       "youtube_url": "https://www.youtube.com/channel/UCjjhwmUo6aBpCRExIGWCxhA"
-    },
-    {
-      "channel_id": "UCDNfdoa_IoS1QTldXJJ9fnQ",
-      "channel_name": "Half-Ass Movie Podcast",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCDNfdoa_IoS1QTldXJJ9fnQ",
-      "youtube_url": "https://www.youtube.com/channel/UCDNfdoa_IoS1QTldXJJ9fnQ"
     },
     {
       "channel_id": "UCBsT-SA6H9JXth2mb7_mfeg",
@@ -2553,34 +2028,6 @@
       "youtube_url": "https://www.youtube.com/channel/UCuudpdbKmQWq2PPzYgVCWlA"
     },
     {
-      "channel_id": "UC8URMa1fI4rlaLc-Lhev2fQ",
-      "channel_name": "Ryan McBeth",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC8URMa1fI4rlaLc-Lhev2fQ",
-      "youtube_url": "https://www.youtube.com/channel/UC8URMa1fI4rlaLc-Lhev2fQ"
-    },
-    {
-      "channel_id": "UCMiJRAwDNSNzuYeN2uWa0pA",
-      "channel_name": "Mrwhosetheboss",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCMiJRAwDNSNzuYeN2uWa0pA",
-      "youtube_url": "https://www.youtube.com/channel/UCMiJRAwDNSNzuYeN2uWa0pA"
-    },
-    {
-      "channel_id": "UCpjlh0e319ksmoOD7bQFSiw",
-      "channel_name": "Rich Roll",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCpjlh0e319ksmoOD7bQFSiw",
-      "youtube_url": "https://www.youtube.com/channel/UCpjlh0e319ksmoOD7bQFSiw"
-    },
-    {
-      "channel_id": "UCTvYEid8tmg0jqGPDkehc_Q",
-      "channel_name": "Preppy Kitchen",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCTvYEid8tmg0jqGPDkehc_Q",
-      "youtube_url": "https://www.youtube.com/channel/UCTvYEid8tmg0jqGPDkehc_Q"
-    },
-    {
       "channel_id": "UCqN4Z5KT_WnYgS4c19oXSvw",
       "channel_name": "Ben Goshawk",
       "video_count": 1,
@@ -2588,25 +2035,11 @@
       "youtube_url": "https://www.youtube.com/channel/UCqN4Z5KT_WnYgS4c19oXSvw"
     },
     {
-      "channel_id": "UCy287hC44mRWpFLj4hK8gKA",
-      "channel_name": "China Update",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCy287hC44mRWpFLj4hK8gKA",
-      "youtube_url": "https://www.youtube.com/channel/UCy287hC44mRWpFLj4hK8gKA"
-    },
-    {
       "channel_id": "UC0Wu-J4_SoFOYVKA8JRuRRg",
       "channel_name": "What The Func? w/ Ed Zynda",
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC0Wu-J4_SoFOYVKA8JRuRRg",
       "youtube_url": "https://www.youtube.com/channel/UC0Wu-J4_SoFOYVKA8JRuRRg"
-    },
-    {
-      "channel_id": "UCJDIGW0ywWw9Kh9_vtwqxXA",
-      "channel_name": "William Spaniel",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCJDIGW0ywWw9Kh9_vtwqxXA",
-      "youtube_url": "https://www.youtube.com/channel/UCJDIGW0ywWw9Kh9_vtwqxXA"
     },
     {
       "channel_id": "UCP7jMXSY2xbc3KCAE0MHQ-A",
@@ -2621,13 +2054,6 @@
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCpM_g95uzZ_OyhgukvrbbiQ",
       "youtube_url": "https://www.youtube.com/channel/UCpM_g95uzZ_OyhgukvrbbiQ"
-    },
-    {
-      "channel_id": "UCVGVbOl6F5rGF4wSYS6Y5yQ",
-      "channel_name": "MIgardener",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCVGVbOl6F5rGF4wSYS6Y5yQ",
-      "youtube_url": "https://www.youtube.com/channel/UCVGVbOl6F5rGF4wSYS6Y5yQ"
     },
     {
       "channel_id": "UCD75P6Wl2tbmCpFba81bQaA",
@@ -2651,46 +2077,11 @@
       "youtube_url": "https://www.youtube.com/channel/UC2H-_WWy_5z2C6C3Vgnk1Qw"
     },
     {
-      "channel_id": "UC27C_HWo-UmKkdWGsRJZ8EA",
-      "channel_name": "Pailin's Kitchen",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC27C_HWo-UmKkdWGsRJZ8EA",
-      "youtube_url": "https://www.youtube.com/channel/UC27C_HWo-UmKkdWGsRJZ8EA"
-    },
-    {
-      "channel_id": "UCL44k-cLrlsdr7PYuMU4yIw",
-      "channel_name": "That Chapter",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCL44k-cLrlsdr7PYuMU4yIw",
-      "youtube_url": "https://www.youtube.com/channel/UCL44k-cLrlsdr7PYuMU4yIw"
-    },
-    {
       "channel_id": "UCDVt6xCSRx3dqr_SGgc1hng",
       "channel_name": "Instantly",
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCDVt6xCSRx3dqr_SGgc1hng",
       "youtube_url": "https://www.youtube.com/channel/UCDVt6xCSRx3dqr_SGgc1hng"
-    },
-    {
-      "channel_id": "UC9r9HYFxEQOBXSopFS61ZWg",
-      "channel_name": "MeidasTouch",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC9r9HYFxEQOBXSopFS61ZWg",
-      "youtube_url": "https://www.youtube.com/channel/UC9r9HYFxEQOBXSopFS61ZWg"
-    },
-    {
-      "channel_id": "UCazRf1jcMNZEL1MS5i_rWQQ",
-      "channel_name": "Midwest Safety",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCazRf1jcMNZEL1MS5i_rWQQ",
-      "youtube_url": "https://www.youtube.com/channel/UCazRf1jcMNZEL1MS5i_rWQQ"
-    },
-    {
-      "channel_id": "UC88FeYcHJzqKsRJJxN8kAIA",
-      "channel_name": "feedthepudge",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC88FeYcHJzqKsRJJxN8kAIA",
-      "youtube_url": "https://www.youtube.com/channel/UC88FeYcHJzqKsRJJxN8kAIA"
     },
     {
       "channel_id": "UC8xQy0wlMBLTvvAcvehz0Kg",
@@ -2707,53 +2098,11 @@
       "youtube_url": "https://www.youtube.com/channel/UC9yXyitkbU_WSy7bd_41SqQ"
     },
     {
-      "channel_id": "UC1EasxeXGzoXJb2y3HTMsLA",
-      "channel_name": "Yishai Fleisher",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC1EasxeXGzoXJb2y3HTMsLA",
-      "youtube_url": "https://www.youtube.com/channel/UC1EasxeXGzoXJb2y3HTMsLA"
-    },
-    {
-      "channel_id": "UCuz8u0tRDZEnC1TgddBTnvA",
-      "channel_name": "Stoched",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCuz8u0tRDZEnC1TgddBTnvA",
-      "youtube_url": "https://www.youtube.com/channel/UCuz8u0tRDZEnC1TgddBTnvA"
-    },
-    {
-      "channel_id": "UCTrSsPMmZavLbc3Ex7VhjDg",
-      "channel_name": "Brandon Herrera",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCTrSsPMmZavLbc3Ex7VhjDg",
-      "youtube_url": "https://www.youtube.com/channel/UCTrSsPMmZavLbc3Ex7VhjDg"
-    },
-    {
       "channel_id": "UCKq-lHnyradGRmFClX_ACMw",
       "channel_name": "Ryan & Matt Data Science",
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCKq-lHnyradGRmFClX_ACMw",
       "youtube_url": "https://www.youtube.com/channel/UCKq-lHnyradGRmFClX_ACMw"
-    },
-    {
-      "channel_id": "UCJWKjrrUh2KL1d3zXQW79cQ",
-      "channel_name": "EXPLORE WITH US",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCJWKjrrUh2KL1d3zXQW79cQ",
-      "youtube_url": "https://www.youtube.com/channel/UCJWKjrrUh2KL1d3zXQW79cQ"
-    },
-    {
-      "channel_id": "UCQgC5luoDkJYjnM0222uJIg",
-      "channel_name": "Alex Gear & Tech",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCQgC5luoDkJYjnM0222uJIg",
-      "youtube_url": "https://www.youtube.com/channel/UCQgC5luoDkJYjnM0222uJIg"
-    },
-    {
-      "channel_id": "UCQBmS_gC-i1ddMCcp9Wt_Qw",
-      "channel_name": "Econ Lessons",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCQBmS_gC-i1ddMCcp9Wt_Qw",
-      "youtube_url": "https://www.youtube.com/channel/UCQBmS_gC-i1ddMCcp9Wt_Qw"
     },
     {
       "channel_id": "UC28n0tlcNSa1iPe5mettocg",
@@ -2805,32 +2154,11 @@
       "youtube_url": "https://www.youtube.com/channel/UCRyBAwyO6dX2kECLFdSzcLw"
     },
     {
-      "channel_id": "UCtZNqEGzfQ6jO4SXWz51bRw",
-      "channel_name": "New York Times Events",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCtZNqEGzfQ6jO4SXWz51bRw",
-      "youtube_url": "https://www.youtube.com/channel/UCtZNqEGzfQ6jO4SXWz51bRw"
-    },
-    {
       "channel_id": "UCJHK8REI-eDYKf1mLvI92-w",
       "channel_name": "Limitless AI",
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCJHK8REI-eDYKf1mLvI92-w",
       "youtube_url": "https://www.youtube.com/channel/UCJHK8REI-eDYKf1mLvI92-w"
-    },
-    {
-      "channel_id": "UC3w193M5tYPJqF0Hi-7U-2g",
-      "channel_name": "Dr. Eric Berg DC",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC3w193M5tYPJqF0Hi-7U-2g",
-      "youtube_url": "https://www.youtube.com/channel/UC3w193M5tYPJqF0Hi-7U-2g"
-    },
-    {
-      "channel_id": "UC-RKpEc4eE9PwJaupN91xYQ",
-      "channel_name": "Sprouts",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC-RKpEc4eE9PwJaupN91xYQ",
-      "youtube_url": "https://www.youtube.com/channel/UC-RKpEc4eE9PwJaupN91xYQ"
     },
     {
       "channel_id": "UCAZlsFFzPjkGamdPIse4olQ",
@@ -2868,20 +2196,6 @@
       "youtube_url": "https://www.youtube.com/channel/UCupGvsi8kOqBO6f3HOIUI5Q"
     },
     {
-      "channel_id": "UCDwe1zllqq7kLoxBe2c4mPA",
-      "channel_name": "CTMU Radio",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCDwe1zllqq7kLoxBe2c4mPA",
-      "youtube_url": "https://www.youtube.com/channel/UCDwe1zllqq7kLoxBe2c4mPA"
-    },
-    {
-      "channel_id": "UCldfgbzNILYZA4dmDt4Cd6A",
-      "channel_name": "Secular Talk",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCldfgbzNILYZA4dmDt4Cd6A",
-      "youtube_url": "https://www.youtube.com/channel/UCldfgbzNILYZA4dmDt4Cd6A"
-    },
-    {
       "channel_id": "UCTwwnM-YB8zWC0RWwhO5sGw",
       "channel_name": "Ben Young AI",
       "video_count": 1,
@@ -2910,13 +2224,6 @@
       "youtube_url": "https://www.youtube.com/channel/UCINkul2kgQYqt4GuD-352DQ"
     },
     {
-      "channel_id": "UC7sg9FpMWMamzWE2lJPY-Dg",
-      "channel_name": "The Back Focus",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC7sg9FpMWMamzWE2lJPY-Dg",
-      "youtube_url": "https://www.youtube.com/channel/UC7sg9FpMWMamzWE2lJPY-Dg"
-    },
-    {
       "channel_id": "UCHDvy-B0O0zFHaD36gF90TQ",
       "channel_name": "Systems Thinking with David Shapiro",
       "video_count": 1,
@@ -2931,46 +2238,11 @@
       "youtube_url": "https://www.youtube.com/channel/UCZjRcM1ukeciMZ7_fvzsezQ"
     },
     {
-      "channel_id": "UCdBK94H6oZT2Q7l0-b0xmMg",
-      "channel_name": "ShortCircuit",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCdBK94H6oZT2Q7l0-b0xmMg",
-      "youtube_url": "https://www.youtube.com/channel/UCdBK94H6oZT2Q7l0-b0xmMg"
-    },
-    {
-      "channel_id": "UChit3QKk051fCsqliwVrbuQ",
-      "channel_name": "OFF GRID with DOUG & STACY",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UChit3QKk051fCsqliwVrbuQ",
-      "youtube_url": "https://www.youtube.com/channel/UChit3QKk051fCsqliwVrbuQ"
-    },
-    {
-      "channel_id": "UC4_wTN-Jui5mQZGR_JBqg_A",
-      "channel_name": "Enfes Yemek Tarifleri",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC4_wTN-Jui5mQZGR_JBqg_A",
-      "youtube_url": "https://www.youtube.com/channel/UC4_wTN-Jui5mQZGR_JBqg_A"
-    },
-    {
       "channel_id": "UCHvm5vA2Rey8ukVdpEXb-jg",
       "channel_name": "Alex Volkov from ThursdAI",
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCHvm5vA2Rey8ukVdpEXb-jg",
       "youtube_url": "https://www.youtube.com/channel/UCHvm5vA2Rey8ukVdpEXb-jg"
-    },
-    {
-      "channel_id": "UC-nPM1_kSZf91ZGkcgy_95Q",
-      "channel_name": "How to ADHD",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC-nPM1_kSZf91ZGkcgy_95Q",
-      "youtube_url": "https://www.youtube.com/channel/UC-nPM1_kSZf91ZGkcgy_95Q"
-    },
-    {
-      "channel_id": "UCYEHmQ-b1iC02-LMeseQsvw",
-      "channel_name": "The Metaverse Guy",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCYEHmQ-b1iC02-LMeseQsvw",
-      "youtube_url": "https://www.youtube.com/channel/UCYEHmQ-b1iC02-LMeseQsvw"
     },
     {
       "channel_id": "UCBa5G_ESCn8Yd4vw5U-gIcg",
@@ -2987,13 +2259,6 @@
       "youtube_url": "https://www.youtube.com/channel/UCv83tO5cePwHMt1952IVVHw"
     },
     {
-      "channel_id": "UCaRv3TNtku5NNRzxWB_XZNg",
-      "channel_name": "Matthew Rathbun",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCaRv3TNtku5NNRzxWB_XZNg",
-      "youtube_url": "https://www.youtube.com/channel/UCaRv3TNtku5NNRzxWB_XZNg"
-    },
-    {
       "channel_id": "UCK2IvRB36OUwXwMRD1iDmvg",
       "channel_name": "Nodus Labs",
       "video_count": 1,
@@ -3008,13 +2273,6 @@
       "youtube_url": "https://www.youtube.com/channel/UCS2ZJXnzT2I3qI92naQRQ9A"
     },
     {
-      "channel_id": "UCmoEsq6a6ePXxgZeA4CVrUw",
-      "channel_name": "Ford Brewer MD MPH",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCmoEsq6a6ePXxgZeA4CVrUw",
-      "youtube_url": "https://www.youtube.com/channel/UCmoEsq6a6ePXxgZeA4CVrUw"
-    },
-    {
       "channel_id": "UCs10x-muRrTQMJ4Ya-fmIlw",
       "channel_name": "Snowflake Inc.",
       "video_count": 1,
@@ -3027,20 +2285,6 @@
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCuS26YCwztJJebH9rqba1yg",
       "youtube_url": "https://www.youtube.com/channel/UCuS26YCwztJJebH9rqba1yg"
-    },
-    {
-      "channel_id": "UCDIHy3udOhhuqUyWR1IolLg",
-      "channel_name": "Camirra's Kitchen",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCDIHy3udOhhuqUyWR1IolLg",
-      "youtube_url": "https://www.youtube.com/channel/UCDIHy3udOhhuqUyWR1IolLg"
-    },
-    {
-      "channel_id": "UCML7DcvQrG9sUw5kGqAGtaA",
-      "channel_name": "Soundproof Guide",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCML7DcvQrG9sUw5kGqAGtaA",
-      "youtube_url": "https://www.youtube.com/channel/UCML7DcvQrG9sUw5kGqAGtaA"
     },
     {
       "channel_id": "UCNJ1Ymd5yFuUPtn21xtRbbw",
@@ -3090,20 +2334,6 @@
       "video_count": 1,
       "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCFBjrAIU1Jht3oTq2hOsV-w",
       "youtube_url": "https://www.youtube.com/channel/UCFBjrAIU1Jht3oTq2hOsV-w"
-    },
-    {
-      "channel_id": "UCDsVC_ewpcEW_AQcO-H-RDQ",
-      "channel_name": "Jane Street",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCDsVC_ewpcEW_AQcO-H-RDQ",
-      "youtube_url": "https://www.youtube.com/channel/UCDsVC_ewpcEW_AQcO-H-RDQ"
-    },
-    {
-      "channel_id": "UCBnLhz50WZAvsF4S72xtESA",
-      "channel_name": "Dhru Purohit",
-      "video_count": 1,
-      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCBnLhz50WZAvsF4S72xtESA",
-      "youtube_url": "https://www.youtube.com/channel/UCBnLhz50WZAvsF4S72xtESA"
     },
     {
       "channel_id": "UCoy6cTJ7Tg0dqS-DI-_REsA",
