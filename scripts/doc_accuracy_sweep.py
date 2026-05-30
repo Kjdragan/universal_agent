@@ -32,6 +32,13 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from doc_audit import DOCS_DIR, REPO_ROOT, build_accuracy_batch  # noqa: E402
 
+# src-layout: the `universal_agent` package lives under src/ and the project declares no
+# build-system, so `uv sync` never installs it as an importable package. Put src/ on the
+# path so the Infisical/ZAI bootstrap import in _load_zai_env() resolves on CI runners —
+# not just local shells that happen to export PYTHONPATH=src. Without this the nightly
+# sweep silently no-ops with "[warn] ... No module named 'universal_agent'" (false green).
+sys.path.insert(0, str(REPO_ROOT / "src"))
+
 MAX_CODE_CHARS = 48_000   # cap code context fed to the judge (per doc)
 MAX_FILE_CHARS = 16_000   # cap any single source file
 
