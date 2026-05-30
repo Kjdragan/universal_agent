@@ -11,6 +11,7 @@ import pytest
 from universal_agent import task_hub
 from universal_agent.services.proactive_convergence import (
     extract_topic_signature_from_text,
+    get_topic_signature,
     sync_topic_signatures_from_csi,
     track_b_ideation_synthesis,
     upsert_topic_signature,
@@ -21,6 +22,120 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _build_csi_db(db_path: Path, rows: list[tuple[str, str, str, str]]) -> None:
+    """Create a minimal CSI db with (event_id, channel, category, title) rows."""
+    csi = sqlite3.connect(db_path)
+    csi.execute(
+        """
+        CREATE TABLE events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id TEXT UNIQUE NOT NULL,
+            source TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            occurred_at TEXT NOT NULL,
+            subject_json TEXT NOT NULL
+        )
+        """
+    )
+    csi.execute(
+        """
+        CREATE TABLE rss_event_analysis (
+            event_id TEXT UNIQUE NOT NULL,
+            transcript_status TEXT,
+            category TEXT,
+            summary_text TEXT,
+            analysis_json TEXT,
+            analyzed_at TEXT
+        )
+        """
+    )
+    recent_iso = datetime.now(timezone.utc).isoformat()
+    for event_id, channel, category, title in rows:
+        csi.execute(
+            "INSERT INTO events (event_id, source, event_type, occurred_at, subject_json) VALUES (?, 'youtube_channel_rss', 'channel_new_upload', ?, ?)",
+            (
+                event_id,
+                recent_iso,
+                json.dumps(
+                    {
+                        "video_id": event_id,
+                        "title": title,
+                        "channel_name": channel,
+                        "channel_id": channel.lower().replace(" ", "-"),
+                        "url": f"https://youtube.test/{event_id}",
+                    }
+                ),
+            ),
+        )
+        csi.execute(
+            "INSERT INTO rss_event_analysis (event_id, transcript_status, category, summary_text, analysis_json, analyzed_at) VALUES (?, 'ok', ?, ?, ?, ?)",
+            (
+                event_id,
+                category,
+                f"{title} summary",
+                json.dumps({"themes": [title], "key_claims": [f"{title} is notable."]}),
+                recent_iso,
+            ),
+        )
+    csi.commit()
+    csi.close()
+
+
+def test_sync_topic_signatures_excludes_denylisted_categories(tmp_path, monkeypatch):
+    """The relevance gate (default ON) drops non-domain categories at ingest so
+    geopolitics/cooking/health/noise videos never become topic signatures (and
+    therefore never become ideation candidates). Domain categories pass."""
+    monkeypatch.delenv("UA_RELEVANCE_GATE_ENABLED", raising=False)
+    monkeypatch.delenv("UA_IDEATION_RELEVANCE_DENYLIST", raising=False)
+    csi_db = tmp_path / "csi.db"
+    _build_csi_db(
+        csi_db,
+        [
+            ("vid-geo", "Geo Channel", "geopolitics_and_conflict", "UK arms embargo to Israel"),
+            ("vid-cook", "Food Channel", "cooking", "Perfect sourdough"),
+            ("vid-ai", "AI Channel", "ai_coding_and_agents", "Building agents with MCP"),
+            ("vid-swe", "Dev Channel", "software_engineering", "Refactoring patterns"),
+        ],
+    )
+
+    with _connect(tmp_path / "activity.db") as conn:
+        # No-op LLM so the convergence/ideation passes don't hit the network.
+        no_llm = AsyncMock(return_value="not json")
+        with patch("universal_agent.services.llm_classifier._call_llm", no_llm):
+            counts = sync_topic_signatures_from_csi(conn, csi_db_path=csi_db)
+
+        # Only the two domain-relevant videos become signatures.
+        assert counts["upserted"] == 2
+        assert get_topic_signature(conn, "vid-ai")
+        assert get_topic_signature(conn, "vid-swe")
+        assert get_topic_signature(conn, "vid-geo") is None
+        assert get_topic_signature(conn, "vid-cook") is None
+
+
+def test_sync_topic_signatures_relevance_gate_disabled_keeps_all(tmp_path, monkeypatch):
+    """UA_RELEVANCE_GATE_ENABLED=0 restores legacy behaviour: every category is
+    ingested, including non-domain ones."""
+    monkeypatch.setenv("UA_RELEVANCE_GATE_ENABLED", "0")
+    monkeypatch.delenv("UA_IDEATION_RELEVANCE_DENYLIST", raising=False)
+    csi_db = tmp_path / "csi.db"
+    _build_csi_db(
+        csi_db,
+        [
+            ("vid-geo", "Geo Channel", "geopolitics_and_conflict", "UK arms embargo to Israel"),
+            ("vid-ai", "AI Channel", "ai_coding_and_agents", "Building agents with MCP"),
+        ],
+    )
+
+    with _connect(tmp_path / "activity.db") as conn:
+        no_llm = AsyncMock(return_value="not json")
+        with patch("universal_agent.services.llm_classifier._call_llm", no_llm):
+            counts = sync_topic_signatures_from_csi(conn, csi_db_path=csi_db)
+
+        assert counts["upserted"] == 2
+        assert get_topic_signature(conn, "vid-geo")
+        assert get_topic_signature(conn, "vid-ai")
 
 
 def test_sync_topic_signatures_from_csi_writes_convergence_candidate(tmp_path):

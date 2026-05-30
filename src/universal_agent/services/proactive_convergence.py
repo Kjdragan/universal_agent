@@ -222,9 +222,28 @@ def sync_topic_signatures_from_csi(
     ensure_schema(conn)
     db = sqlite3.connect(str(csi_db_path))
     db.row_factory = sqlite3.Row
+
+    # Relevance gate (default ON): drop non-domain categories (geopolitics,
+    # cooking, health, noise, ...) at ingest so they never become topic
+    # signatures and therefore never become ideation/convergence candidates.
+    # Gates an already-LLM-produced judgment (rss_event_analysis.category) —
+    # the sanctioned "code gates, LLM synthesizes" pattern. Unknown/NULL/empty
+    # categories are KEPT (only known non-domain categories are excluded).
+    gate_clause = ""
+    gate_params: tuple[str, ...] = ()
+    if _relevance_gate_enabled():
+        denylist = sorted(_relevance_denylist())
+        if denylist:
+            placeholders = ", ".join("?" for _ in denylist)
+            gate_clause = (
+                f"      AND (a.category IS NULL "
+                f"OR LOWER(TRIM(a.category)) NOT IN ({placeholders}))\n"
+            )
+            gate_params = tuple(denylist)
+
     try:
         rows = db.execute(
-            """
+            f"""
             SELECT
                 e.event_id, e.occurred_at, e.subject_json,
                 a.category, a.summary_text, a.analysis_json, a.analyzed_at,
@@ -234,10 +253,10 @@ def sync_topic_signatures_from_csi(
             WHERE e.source = 'youtube_channel_rss'
               AND a.summary_text IS NOT NULL
               AND a.summary_text != ''
-            ORDER BY COALESCE(a.analyzed_at, e.occurred_at) DESC
+            {gate_clause}            ORDER BY COALESCE(a.analyzed_at, e.occurred_at) DESC
             LIMIT ?
             """,
-            (max(1, min(int(limit), 1000)),),
+            (*gate_params, max(1, min(int(limit), 1000))),
         ).fetchall()
     except sqlite3.Error:
         return {"seen": 0, "upserted": 0, "convergence_events": 0, "candidates_written": 0}
@@ -479,6 +498,40 @@ Rules:
 - If there is no genuine specific convergence, return
   {"is_convergence": false, "thesis": "", "converging_video_ids": [], "signal_strength": 0}.
 """
+
+
+# Non-domain CSI categories excluded from the ideation/convergence corpus by
+# the relevance gate. Mirrors the taxonomy emitted by the first CSI inference
+# (csi_rss_semantic_enrich.py). Domain categories kept: ai_coding_and_agents,
+# ai_models_and_research, ai_news_and_business, software_engineering.
+_DEFAULT_RELEVANCE_DENYLIST: frozenset[str] = frozenset({
+    "geopolitics_and_conflict",
+    "cooking",
+    "personal_health",
+    "noise",
+    "other_signal",
+    "longform_interviews",
+})
+
+
+def _relevance_gate_enabled() -> bool:
+    """Category relevance gate on by default; flip UA_RELEVANCE_GATE_ENABLED=0 to
+    ingest every category (legacy behaviour)."""
+    return str(os.getenv("UA_RELEVANCE_GATE_ENABLED", "1")).strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _relevance_denylist() -> frozenset[str]:
+    """Non-domain categories to exclude at ingest. Overridable via
+    UA_IDEATION_RELEVANCE_DENYLIST (comma-separated, case-insensitive) so the
+    list is tunable without a deploy; falls back to the code default when unset
+    or empty."""
+    raw = str(os.getenv("UA_IDEATION_RELEVANCE_DENYLIST", "")).strip()
+    if not raw:
+        return _DEFAULT_RELEVANCE_DENYLIST
+    parsed = {c.strip().lower() for c in raw.split(",") if c.strip()}
+    return frozenset(parsed) if parsed else _DEFAULT_RELEVANCE_DENYLIST
 
 
 def _llm_clustering_enabled() -> bool:
