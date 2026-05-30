@@ -25,11 +25,18 @@ name: CI Failure Issue Filer
 
 on:
   workflow_run:
+    # Every workflow whose failure should be surfaced to the operator. Names
+    # must match each workflow's `name:` exactly. Updated 2026-05-30: dropped
+    # the retired "Auto-Promote to Production" (dead — never matched); ADDED
+    # "PR Rebase Watchdog" (its failures were going unsurfaced — run
+    # 26691762645 had to be caught manually) plus the two doc workflows.
     workflows:
       - Deploy
       - PR Validate
       - PR Auto-Merge
-      - Auto-Promote to Production
+      - PR Rebase Watchdog
+      - Documentation Audit
+      - Nightly Documentation Health
     types: [completed]
 
 permissions:
