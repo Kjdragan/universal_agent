@@ -755,6 +755,11 @@ class CronService:
         self.workspaces_dir = workspaces_dir
         self.running = False
         self.task: Optional[asyncio.Task] = None
+        # The gateway's main event loop, captured in ``start()``. Used so
+        # loop-affine scheduling (``_schedule_retry_run``) still works when
+        # invoked from a worker thread — e.g. the lightweight ``!script``
+        # finalize path runs inside ``asyncio.to_thread`` (see ``_run_job``).
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
         self.jobs: Dict[str, CronJob] = {}
         self.running_jobs: set[str] = set()
         self.running_job_scheduled_at: dict[str, float] = {}
@@ -817,6 +822,10 @@ class CronService:
         if self.running:
             return
         self.running = True
+        # Capture the loop the scheduler runs on so off-loop callers (worker
+        # threads spawned via asyncio.to_thread) can schedule coroutines back
+        # onto it via run_coroutine_threadsafe.
+        self._loop = asyncio.get_running_loop()
         self.task = asyncio.create_task(self._scheduler_loop())
         logger.info("⏱️ Chron service started (%d jobs)", len(self.jobs))
         # Fire queued backfill runs for jobs that missed their window during
@@ -1128,8 +1137,9 @@ class CronService:
         workflow_attempt_id: str,
     ) -> None:
         self.running_jobs.add(job.job_id)
-        asyncio.create_task(
-            self._run_job(
+
+        def _build_retry_coro():
+            return self._run_job(
                 job,
                 scheduled_at=scheduled_at,
                 reason=reason,
@@ -1138,7 +1148,36 @@ class CronService:
                 workflow_attempt_id=workflow_attempt_id,
                 skip_workflow_admission=True,
             )
-        )
+
+        # This helper is loop-affine but is reachable from two contexts:
+        #   1. On the gateway event loop (most _finalize_workflow_attempt
+        #      callers invoke it directly inside the async _run_job).
+        #   2. From a worker thread — the lightweight `!script` finalize path
+        #      runs `await asyncio.to_thread(self._finalize_workflow_attempt, …)`
+        #      (the 2026-05-26 copytree hot-patch), and that thread has no
+        #      running loop. A bare `asyncio.create_task` there raised
+        #      `RuntimeError: no running event loop`, orphaning the _run_job
+        #      coroutine (the 2026-05-28/29/30 "no running event loop" cron
+        #      failures). Schedule onto the captured main loop instead.
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+
+        if running_loop is not None:
+            running_loop.create_task(_build_retry_coro())
+            return
+
+        main_loop = self._loop
+        if main_loop is None or main_loop.is_closed():
+            logger.error(
+                "Cannot schedule retry for job %s: called off-loop and no "
+                "captured main loop is available; retry dropped.",
+                job.job_id,
+            )
+            self.running_jobs.discard(job.job_id)
+            return
+        asyncio.run_coroutine_threadsafe(_build_retry_coro(), main_loop)
 
     def _finalize_workflow_attempt(
         self,
