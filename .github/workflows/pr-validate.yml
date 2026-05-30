@@ -74,17 +74,17 @@ jobs:
           # so the whole pyproject resolves cleanly on cp313.
           python-version: '3.13'
 
-      - name: Install uv (with dependency cache)
-        # 2026-05-30: replaced `pip install uv` (cold, uncached) with the
-        # official setup-uv action + cache. Previously every PR-Validate run
-        # cold-installed uv AND ran a full `uv sync` download with no cache
-        # layer — the dominant cost of the ~5-6 min wall-clock. enable-cache
-        # restores ~/.cache/uv keyed on uv.lock, so warm runs skip the
-        # download/resolve. `uv sync --frozen` semantics are unchanged.
+      - name: Install uv
+        # setup-uv is the clean way to install uv (faster than `pip install uv`).
+        # 2026-05-30: the `enable-cache` package cache shipped in PR #583 was
+        # REMOVED after verification — it never hit. pr-validate only runs on
+        # `pull_request`, so `main` never populates a fresh-key cache for PRs to
+        # restore from; every PR cold-missed AND paid the save/restore overhead
+        # (net-negative). The real PR-Validate cost is pytest (~150s, ~half the
+        # run), which a uv cache can't touch — so the right speed lever is pytest
+        # sharding/parallelization (separate effort), not dep caching. Dropped
+        # the cache to avoid the overhead + a misleading "we cache deps" claim.
         uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
 
       - name: Install project dependencies
         run: uv sync --frozen --no-progress 2>&1 | tail -5

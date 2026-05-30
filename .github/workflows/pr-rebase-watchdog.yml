@@ -98,7 +98,9 @@ jobs:
 
           while IFS=$'\t' read -r pr_num head_ref labels; do
             echo "::group::PR #${pr_num} (${head_ref})"
-            # Branch classifier:
+            # Branch classifier (AUTHORITATIVE policy — keep in sync with
+            # pr-auto-merge.yml + project_docs/06_platform/04_deployment_and_cicd.md
+            # § "Branch policy — single source of truth"):
             #   - claude/*, worktree-* → autonomous-author, safe to auto-rebase
             #   - kevin/*, feature/*, codie/* → human/Cody-author, comment only
             #   - everything else → comment only (conservative default)
