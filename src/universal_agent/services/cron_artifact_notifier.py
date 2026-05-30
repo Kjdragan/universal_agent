@@ -47,16 +47,30 @@ DEFAULT_ARTIFACT_TYPE = "cron_run_output"
 DEFAULT_SOURCE_KIND = "cron_artifact"
 
 # Files to skip when falling back to a recursive scan of work_products/.
-# Cron LLM runs ship a lot of internal scaffolding (sync_ready_*.json,
-# BOOTSTRAP_*.md, HEARTBEAT_*.md, TOOLS_*.md, description_*.txt) that
-# isn't an "artifact" by any reasonable definition.
+# Cron LLM runs ship a lot of internal scaffolding — the agent
+# context-snapshot family (AGENTS.md, SOUL.md, IDENTITY.md, USER.md,
+# capabilities.md, HEARTBEAT.md, BOOTSTRAP.md, TOOLS.md, ...), each emitted
+# both bare and numbered (AGENTS_31.md), plus run bookkeeping (sync_ready_*,
+# cron_result_*, run_manifest_*, context_brief_*, description_*). None of it
+# is an "artifact" by any reasonable definition. Prefixes are matched bare
+# (no trailing "_") so both ``AGENTS.md`` and ``AGENTS_31.md`` are skipped.
+# Without this, ~40 numbered AGENTS_*.md scaffolding files (uppercase, so
+# they sort first) exhaust the file cap before the scan ever descends into
+# the skill's output subdir where the real deliverables live.
 _SCAN_SKIP_NAME_PREFIXES = (
-    "sync_ready_",
-    "BOOTSTRAP_",
-    "HEARTBEAT_",
-    "TOOLS_",
+    "sync_ready",
+    "BOOTSTRAP",
+    "HEARTBEAT",
+    "TOOLS",
+    "AGENTS",
+    "SOUL",
+    "IDENTITY",
+    "USER",
+    "capabilities",
+    "context_brief",
+    "cron_result",
+    "run_manifest",
     "description_",
-    "SOUL.md",
     "_internal",
     ".",  # dotfiles
 )
@@ -331,12 +345,24 @@ def _extract_manifest_items(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     """Read a heterogeneous manifest shape into a flat artifacts list.
 
     Tolerates: ``manifest["artifacts"] = [...]``, ``manifest["outputs"] = [...]``,
-    or a top-level dict where each value is an artifact descriptor.
+    ``manifest["artifacts"] = {name: descriptor, ...}``, or a top-level dict
+    where each value is an artifact descriptor.
     """
     for key in ("artifacts", "outputs", "files", "items"):
         raw = manifest.get(key)
         if isinstance(raw, list):
             return [_coerce_item(entry) for entry in raw if entry]
+        # A dict-of-descriptors keyed by artifact name, e.g. the
+        # paper_to_podcast manifest's
+        # ``{"podcast": {...}, "quiz": {...}, "flashcards": {...}}``.
+        if isinstance(raw, dict) and raw:
+            return [
+                _coerce_item({"title": name, **descriptor})
+                if isinstance(descriptor, dict)
+                else _coerce_item(descriptor)
+                for name, descriptor in raw.items()
+                if descriptor
+            ]
     # Top-level dict of {name: descriptor}.
     if all(isinstance(v, dict) for v in manifest.values()):
         return [
