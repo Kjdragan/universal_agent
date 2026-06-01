@@ -1716,14 +1716,22 @@ def _render_email_body_html(
 ) -> str:
     """Render the email body as inline-styled HTML.
 
-    When ``full_content`` is provided, the body renders the WHOLE digest —
-    intro + clickable per-video TOC + meta-synthesis + per-video retellings —
-    with anchors that the TOC can jump to. This is the layout Kevin wants:
-    everything in one scrollable email, no attachment hunting.
+    PRODUCTION PATH (``full_content`` omitted / ``None``): the body renders
+    only ``body_md`` — the short meta-synthesis summary — with NO inline TOC.
+    This is what the digest cron sends. The full per-video retellings and the
+    clickable per-video index live in the standalone HTML attachment
+    (``_render_full_digest_html``), where anchors resolve in a browser.
 
-    When ``full_content`` is ``None`` (legacy callsite), only ``body_md`` is
-    rendered without TOC (used historically when the per-video body lived
-    only in the attachment).
+    INLINE-EVERYTHING PATH (``full_content`` provided): renders the WHOLE
+    digest inline — intro + clickable per-video TOC + meta-synthesis +
+    per-video retellings — with ``#anchor`` jump links. This was the
+    2026-05-28 "index at the beginning of the email" layout, but it does not
+    work in Gmail: Gmail strips ``id=`` attributes at render time (so the TOC
+    anchors have no targets) and clips messages over ~102KB (the inlined
+    digest is ~130KB), hiding most sections behind "View entire message".
+    Kept as a capability for clients that DO honor in-message anchors (e.g.
+    Apple Mail) and for tests, but the cron no longer uses it (reverted
+    2026-05-31).
 
     Gmail strips ``<style>`` so every visual rule is inlined per-element via
     ``_inline_email_styles``.
@@ -2749,15 +2757,23 @@ def process_daily_digest(
             '<p style="margin:0 0 14px;">'
             f"Here's today's daily synthesis across <strong>{attachment_count}</strong> "
             f"video{'s' if attachment_count != 1 else ''} from your <em>{day_name.title()}</em> "
-            "playlist. The clickable index below jumps straight to any video; "
-            "the same content is also attached as a standalone HTML report."
+            "playlist. The themes are summarized below; the full per-video "
+            "retellings — with a clickable index that jumps to any video — are in "
+            "the attached HTML report. Open the attachment in a browser to navigate it."
             "</p>"
         )
-        # `full_content` here gives the email body the per-video sections + TOC
-        # inline (so anchors resolve). `attachment_md` mirrors that content as
-        # a standalone HTML file for archive / print.
+        # The email body is the short meta-synthesis summary only (no inline
+        # per-video TOC). In-email `#anchor` jump links cannot work in Gmail:
+        # Gmail strips `id=` attributes at render time so the anchor targets
+        # vanish, and the fully-inlined digest (~130KB) also blew past Gmail's
+        # ~102KB clip threshold (hiding most sections behind "View entire
+        # message"). The clickable per-video index lives in the standalone HTML
+        # attachment, where anchors resolve when the file is opened in a browser.
+        # (The digest was inlined 2026-05-28 to put an index "at the beginning
+        # of the email"; reverted 2026-05-31 after the index proved unclickable
+        # in Gmail — see _render_email_body_html docstring.)
         email_html = _render_email_body_html(
-            body_md, intro_html=intro_html, full_content=full_content,
+            body_md, intro_html=intro_html,
         )
         attachment_html = _render_full_digest_html(
             attachment_md, day_name=day_name, date_str=date_str,
