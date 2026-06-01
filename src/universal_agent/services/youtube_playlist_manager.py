@@ -144,7 +144,7 @@ def remove_playlist_item(playlist_item_id: str) -> bool:
         if response.status_code == 204:
             return True
         elif response.status_code == 404:
-            logger.warning(f"Playlist item {playlist_item_id} already deleted or not found.")
+            logger.warning("Playlist item %s already deleted or not found.", playlist_item_id)
             return True
         else:
             raise YouTubeAPIError(f"Failed to delete playlist item {playlist_item_id}: {response.text}")
