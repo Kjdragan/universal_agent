@@ -9,7 +9,7 @@ WorkingDirectory=/opt/universal_agent/CSI_Ingester/development
 Environment=PYTHONPATH=/opt/universal_agent/src
 EnvironmentFile=-/opt/universal_agent/.env
 EnvironmentFile=/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.env
-ExecStart=/opt/universal_agent/CSI_Ingester/development/scripts/csi_run.sh /opt/universal_agent/CSI_Ingester/development/.venv/bin/python /opt/universal_agent/CSI_Ingester/development/scripts/csi_youtube_transcript_canary.py --db-path /var/lib/universal-agent/csi/csi.db --window-hours 24 --stale-after-hours 2
+ExecStart=/opt/universal_agent/CSI_Ingester/development/scripts/csi_run.sh /opt/universal_agent/CSI_Ingester/development/.venv/bin/python /opt/universal_agent/CSI_Ingester/development/scripts/csi_youtube_transcript_canary.py --db-path /var/lib/universal-agent/csi/csi.db --window-hours 24 --stale-after-hours 6
 
 [Install]
 WantedBy=multi-user.target
