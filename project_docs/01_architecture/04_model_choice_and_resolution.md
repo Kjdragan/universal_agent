@@ -12,7 +12,7 @@ code_paths:
   - scripts/_claude_launcher.py
   - scripts/claude_with_mcp_env.sh
   - src/universal_agent/services/invariants/zai_inference_health.py
-last_verified: 2026-05-29
+last_verified: 2026-05-31
 ---
 
 # Model Choice & Resolution

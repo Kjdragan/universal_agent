@@ -10,7 +10,7 @@ code_paths:
   - src/universal_agent/timeout_policy.py
   - src/universal_agent/api/server.py
   - src/universal_agent/api/gateway_bridge.py
-last_verified: 2026-05-29
+last_verified: 2026-05-31
 ---
 
 # Gateway, Sessions & Execution
