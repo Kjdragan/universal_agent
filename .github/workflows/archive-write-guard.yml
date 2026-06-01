@@ -1,0 +1,56 @@
+name: Archive Write Guard
+
+# Mechanical backstop: block any PR that adds or edits files in the ARCHIVED
+# `docs/` tree (superseded 2026-05-29 by the code-first `project_docs/` rebuild;
+# see docs/README.md banner + .rgignore). Agents keep writing to the archive
+# because `.rgignore` only hides it from `rg`, not from a known path or `grep`.
+#
+# This workflow is intentionally a STANDALONE, always-on check (no `on.paths`
+# filter, no job-level `if:` skip) so it posts an explicit pass/fail conclusion
+# on EVERY PR. That is what makes it safe to mark as a REQUIRED status check:
+# a path-filtered or skipped required check never reports and would block every
+# unrelated PR forever. The label exemption is handled in-script (exit 0), not
+# via a job skip, for the same reason.
+#
+# Sanctioned archive cleanup (e.g. removing content wrongly added there) is
+# allowed by adding the `archive-edit-approved` label to the PR. The `labeled`/
+# `unlabeled` trigger types ensure the check re-runs when the label changes, so
+# a cleanup PR turns green without needing a new commit.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+jobs:
+  archive-write-guard:
+    name: No new writes to archived docs/
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Fail on added/modified files under archived docs/
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          APPROVED: ${{ contains(github.event.pull_request.labels.*.name, 'archive-edit-approved') }}
+        run: |
+          if [ "$APPROVED" = "true" ]; then
+            echo "OK — 'archive-edit-approved' label present; archive edit sanctioned."
+            exit 0
+          fi
+          # Only added (A) or modified (M) files under docs/ are forbidden;
+          # deletions are fine. README.md / Documentation_Status.md are the
+          # archive's own index and are exempt (so deletions stay linkable).
+          offenders="$(git diff --diff-filter=AM --name-only "$BASE_SHA" "$HEAD_SHA" -- 'docs/' \
+            | grep -vE '^docs/(README\.md|Documentation_Status\.md)$' || true)"
+          if [ -n "$offenders" ]; then
+            echo "::error::This PR adds or edits files in the ARCHIVED docs/ tree. Canonical documentation lives in project_docs/ (see project_docs/README.md). Move the change there. If this archive edit is genuinely intended, add the 'archive-edit-approved' label."
+            echo "$offenders" | sed 's/^/  /'
+            exit 1
+          fi
+          echo "OK — no new writes to archived docs/."
