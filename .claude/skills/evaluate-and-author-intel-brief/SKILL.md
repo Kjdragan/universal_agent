@@ -5,8 +5,12 @@ description: >
   authoring intel briefs for those that clear the bar. Reads the recent
   briefs index for prior-verdict context, processes candidates serially
   within the same mission, and produces ship/skip/defer verdicts plus
-  full HTML briefs for ships. Pre-signs feedback URLs at artifact-write
-  time and stores them in artifact metadata.
+  full HTML briefs for ships. When a candidate was already shipped by the
+  pre-Task-Hub triage (``metadata.triage.kind=='ship'``) the in-mission
+  ship/skip/defer rubric is SKIPPED — the verdict is already 'ship' and the
+  skill only authors. When no triage verdict is present (triage disabled /
+  legacy task) the skill decides as before. Pre-signs feedback URLs at
+  artifact-write time and stores them in artifact metadata.
 ---
 
 # Evaluate and Author Intel Brief
@@ -53,6 +57,11 @@ From the Task Hub task metadata (one item per candidate in the batch):
 - `index_path` — absolute path to `recent_briefs_index.md` (empty string
   means: use the helper's default)
 - `invoke_skill` — should be `evaluate-and-author-intel-brief`
+- `triage` — present when the upstream pre-Task-Hub triage decided this
+  candidate. Shape: `{"kind": "ship", "reasoning": str, "demo_amenable": bool,
+  "model": str}`. When `kind=='ship'`, **the verdict is already decided** —
+  see Phase 0.5; do not re-run the rubric. Absent ⇒ triage was off / legacy
+  task ⇒ decide in Phase 1 (kill-switch path).
 
 From environment (resolved at runtime, NOT from task metadata):
 
@@ -96,6 +105,37 @@ Open a Python helper task and:
    `[SKIP]`, `[DEFER]` blocks with their `thesis`, `decided_at`,
    `key_entities`, `operator_rating`. The structured markdown is grep-friendly
    on purpose — Atlas should read it as context, not as data.
+
+## Phase 0.5 — Triage short-circuit (validation already done upstream)
+
+The ship/skip/defer decision now happens **before** the Task Hub, in the
+cheap pre-Task-Hub triage (`services/proactive_convergence.py::triage_candidate`).
+A `convergence_candidate` Task Hub item is **only created when triage already
+returned `ship`** — skip/defer/retry candidates never become tasks (and never
+reach this skill). So for any task carrying a triage verdict, re-deciding here
+is redundant double-work.
+
+For each candidate, read its task metadata (and the `convergence_candidates`
+row's `metadata_json.triage`). Then:
+
+- **`metadata.triage.kind == "ship"`** (the normal path under triage):
+  the verdict is **already `ship`**. **Do NOT run the Phase 1 decision rubric.**
+  Set `verdict = "ship"`, `verdict_reasoning =` the triage reasoning
+  (`metadata.triage.reasoning`), capture `demo_amenable =
+  bool(metadata.triage.demo_amenable)`, append the verdict to the index
+  (Phase 1.3), then go straight to **Phase 2 (author)**. This is the common
+  case and the whole point of the upstream triage — author, don't re-judge.
+
+- **No `metadata.triage` present** (triage disabled via
+  `UA_INTEL_TRIAGE_ENABLED=0`, or a legacy task queued before triage existed):
+  fall through to **Phase 1** and decide ship/skip/defer here exactly as
+  described below. This preserves the kill-switch: with triage off, this skill
+  is still the gate. `demo_amenable` is unknown in this path — treat as `false`.
+
+> Why this is safe: `write_convergence_candidate` only queues a task on a
+> triage `ship`, so the only triage verdict this skill can observe is `ship`.
+> The branch above is therefore "author-only when triage decided, decide-then-
+> author when it didn't" — no candidate is ever published without *some* gate.
 
 ## Phase 1 — Evaluate each candidate serially
 
@@ -184,6 +224,8 @@ append_verdict_to_index(
 ```
 
 ## Phase 2 — Author the brief (ship verdicts only)
+
+> `demo_amenable` was captured in Phase 0.5 (from `metadata.triage.demo_amenable`, or `false` on the legacy/triage-off path). Carry it into the artifact metadata in Phase 3.3 — it is the only field this skill propagates for the (future) code-demo bridge; this skill does NOT itself dispatch a demo build.
 
 For each `ship` verdict, write the full HTML brief with these required
 sections, in order:
@@ -277,6 +319,11 @@ upsert_artifact(
         "feedback_url_down": feedback_url_down,
         "channel_count": channel_count,
         "video_ids": video_ids,
+        # Preserve the upstream triage signal so downstream consumers (e.g. a
+        # future intel-ship -> Cody demo bridge) can find code-amenable briefs.
+        # `demo_amenable` is True only when triage flagged a concrete buildable
+        # software/coding demo; False/absent otherwise (incl. the legacy path).
+        "demo_amenable": bool(demo_amenable),
     },
 )
 ```

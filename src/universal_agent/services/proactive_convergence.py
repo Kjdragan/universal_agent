@@ -1220,6 +1220,12 @@ def _candidate_task_description(
     ]
     common_tail = [
         "",
+        "VALIDATION ALREADY DONE: this task exists only because the pre-Task-Hub",
+        "triage already returned verdict='ship'. Check task metadata.triage — if",
+        "metadata.triage.kind=='ship', DO NOT re-run the ship/skip/defer rubric;",
+        "the verdict is 'ship', just AUTHOR the brief (see the skill's Phase 0.5).",
+        "Carry metadata.triage.demo_amenable into the artifact metadata.",
+        "",
         "If multiple candidate tasks are claimed in the same batch, process them",
         "serially — each evaluation's verdict appears in the recent briefs index",
         "before the next one runs, enabling consistency across the batch.",
