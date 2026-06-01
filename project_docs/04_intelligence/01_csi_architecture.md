@@ -11,7 +11,7 @@ code_paths:
   - src/universal_agent/services/intel_lanes.py
   - src/universal_agent/config/intel_lanes.yaml
   - src/universal_agent/services/llm_classifier.py
-last_verified: 2026-05-30
+last_verified: 2026-06-01
 ---
 
 # CSI Architecture
@@ -376,27 +376,26 @@ Related split-brain hazards from the gotcha inventory:
 
 ### 5.2 ZAI content-safety is fail-closed
 
-**Code-verified shape:** `_refine_cluster_with_llm` is fully fail-closed. Its
-docstring states it returns `None` when the LLM call or parse fails ("fail
-closed, no candidate"), and the body has several `return None` paths under
-`except Exception` / `except (TypeError, ValueError)`. So *any* refine failure —
-content-safety rejection, transport error, or unparseable output — silently
-drops that bucket's candidate. The same fail-closed shape applies anywhere
-`llm_classifier._call_llm` is wrapped in a try/except that returns None/empty on
-failure.
+**Code-verified shape:** `_refine_cluster_with_llm` is fail-closed and returns
+`None` when the LLM call or parse fails ("fail closed, no candidate"). The
+**failure path is logged, not silent** (verified 2026-06-01): its `except` block
+does `logger.warning("convergence LLM refine failed (bucket size=%d): %s",
+len(bucket), exc)`, so a content-safety rejection or transport error surfaces at
+WARNING with the exception text (which carries the ZAI error code). The other
+`return None` paths — not-a-convergence, `signal_strength` below floor, no
+multi-channel subset — are legitimate negative results and intentionally
+unlogged. The ideation sweep and `triage_candidate` log the same generic shape.
 
-> [VERIFY: the specific ZAI/GLM content-safety **error code 1301** is an
-> operational observation, NOT a code constant — the string "1301" does not
-> appear anywhere under `src/universal_agent/`. It is the error code ZAI is
-> reported to return when GLM trips its content guardrail; treat it as an
-> external-service detail to grep for in logs, not something the codebase
-> branches on.]
+> **Resolved 2026-06-01:** the ZAI/GLM content-safety **error code 1301** is an
+> external-service detail, NOT a code constant — the string "1301" does not appear
+> under `src/universal_agent/`; the code branches on no such constant. It rides in
+> the exception text of the WARNING above. Grep prod logs for `1301` (or
+> "convergence LLM refine failed") to spot a content-safety drop.
 
-> [VERIFY: the 2026-05-29 Phase 0 observation that a 29-video bucket was dropped
-> because its content tripped the guardrail, and the "Phase 2 resilience"
-> design decision (keep fail-closed, do not retry/reroute, but ensure the drop
-> is *logged, not silent*) are operational/roadmap claims, not verifiable from
-> the cited code paths.]
+> **Resolved 2026-06-01:** the "logged, not silent" resilience goal is **met** — the
+> 29-video-bucket-style drop is logged at WARNING (see above). The accepted tradeoff
+> stands: keep fail-closed, no retry/reroute; political/conflict convergences that
+> trip the guardrail will not surface.
 
 Practical consequence: political / conflict convergences that trip the
 guardrail will not surface — an accepted tradeoff, not a bug. If convergence
