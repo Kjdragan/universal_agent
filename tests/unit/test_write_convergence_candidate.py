@@ -15,6 +15,7 @@ PR C scope. Covers:
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -373,11 +374,17 @@ def test_sync_topic_signatures_llm_clustering_default(tmp_path):
         )
         """
     )
+    # Use a now-relative timestamp so the row stays inside the sync's default
+    # 72h rolling window regardless of the wall-clock date the suite runs on.
+    # (A hardcoded date here is a time-bomb: it silently falls out of the window
+    # 72h after that date and the test then asserts await_count>=1 against 0.)
+    recent_iso = datetime.now(timezone.utc).isoformat()
     for event_id, channel in (("evt-a", "Channel A"), ("evt-b", "Channel B")):
         csi.execute(
-            "INSERT INTO events (event_id, source, event_type, occurred_at, subject_json) VALUES (?, 'youtube_channel_rss', 'channel_new_upload', '2026-05-28T10:00:00+00:00', ?)",
+            "INSERT INTO events (event_id, source, event_type, occurred_at, subject_json) VALUES (?, 'youtube_channel_rss', 'channel_new_upload', ?, ?)",
             (
                 event_id,
+                recent_iso,
                 json.dumps(
                     {
                         "video_id": event_id,
@@ -492,11 +499,17 @@ def test_sync_topic_signatures_skips_clusters_without_multi_channel_coverage(tmp
         )
         """
     )
+    # Relative timestamp so both events land inside the 72h clustering window
+    # on any run date — otherwise this test passes vacuously (rows aged out of
+    # the window can't form a cluster, so n==0 regardless of the single-channel
+    # rule it means to exercise).
+    recent = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
     for event_id in ("evt-a", "evt-b"):
         csi.execute(
-            "INSERT INTO events (event_id, source, event_type, occurred_at, subject_json) VALUES (?, 'youtube_channel_rss', 'channel_new_upload', '2026-05-28T10:00:00+00:00', ?)",
+            "INSERT INTO events (event_id, source, event_type, occurred_at, subject_json) VALUES (?, 'youtube_channel_rss', 'channel_new_upload', ?, ?)",
             (
                 event_id,
+                recent,
                 json.dumps(
                     {
                         "video_id": event_id,
