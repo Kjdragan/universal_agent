@@ -461,7 +461,7 @@ than screaming). Probes (all consume `activity_conn` and/or `artifacts_dir`):
 | `morning_briefing_freshness` | today's `DAILY_BRIEFING.md` exists after 6:30 AM | warn |
 | `proactive_artifact_digest_delivery` | digest emailed in last ~30h | warn |
 | `hackernews_snapshot_cadence` | HN snapshot < 45 min old in active hours | warn |
-| `csi_convergence_sync_freshness` | `proactive_convergence_events` max(detected_at) < 90 min | warn |
+| `csi_convergence_sync_freshness` | `convergence_candidates` max(created_at) < 3h **during active hours (8–21 CT)** | warn |
 | `nightly_wiki_persistent_silence` | a wiki appeared in last 7 days | warn |
 | `proactive_reports_daily_trio` | ≥2 of 3 daily reports by 5 PM | warn |
 | `claude_code_intel_packet_freshness` | packet in last 9h (active hours) | warn |
@@ -471,10 +471,20 @@ than screaming). Probes (all consume `activity_conn` and/or `artifacts_dir`):
 | `proactive_brief_task_funnel` | artifacts produce matching `task_hub_items` | warn |
 
 The `proactive_brief_task_funnel` probe is the direct guard against the
-implicit-poison failure mode: if a proactive `source_kind`
-(`convergence_detection`, `insight_detection`, `tutorial_build`) produces ≥5
+implicit-poison failure mode: if a proactive `source_kind` produces ≥5
 artifacts in 48h but **zero** `task_hub_items`, the preference gate / dedup /
-queue-insert path is silently dropping work.
+queue-insert path is silently dropping work. It tracks only `tutorial_build`
+today — the legacy `convergence_detection` / `insight_detection` source_kinds
+were decommissioned (#568), and the live convergence/ideation path uses
+`convergence_candidate` with inline triage (#628), whose silent-drop guard is
+the triage verdict + dispatch path (candidate→task), not this artifact→task funnel.
+
+> **Probe correction (2026-06-01).** `csi_convergence_sync_freshness` previously
+> read the decommissioned `proactive_convergence_events` table (frozen 2026-05-28),
+> firing a permanent false-RED while the pipeline was healthy. It now reads the live
+> `convergence_candidates` table with an active-hours gate matching the real
+> `0 6-21` cron. The `proactive_brief_task_funnel` source_kinds were likewise
+> repointed off the dead `convergence_detection`/`insight_detection` kinds.
 
 ---
 
