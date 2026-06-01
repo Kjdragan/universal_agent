@@ -237,7 +237,7 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
     raw_priority_tier = str(args.get("priority_tier") or "").strip() or None
     if raw_priority_tier is not None:
         try:
-            from universal_agent.vp.mission_priority import is_valid_tier, TIERS
+            from universal_agent.vp.mission_priority import TIERS, is_valid_tier
             if not is_valid_tier(raw_priority_tier):
                 return _result(
                     _error_payload(
@@ -516,6 +516,43 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
                     },
                 },
             )
+
+            # P3 demo-loop linkage (the fix for the dead evaluator). When this
+            # mission is the build for a `cody_demo_task`, stamp the join key the
+            # VP-completion bridge needs and flip the demo row to `delegated` —
+            # exactly how every other delegated task behaves. Simone dispatches
+            # demo builds via this tool directly (not via perform_task_action),
+            # so the demo row historically never got `delegation.mission_id` nor
+            # status=`delegated`. That made `find_delegated_task_by_mission_id`
+            # (status=delegated AND delegation.mission_id=<id>) miss it, so
+            # `_bridge_vp_events_once` -> `transition_to_pending_review` no-oped
+            # on mission completion, the mechanical evaluator
+            # (cody_evaluation.evaluate_demo) never fired, and the row was parked
+            # instead of reviewed. Composing with the existing `delegate` verb
+            # keeps the demo lifecycle identical to generic VP delegation.
+            _mission_id = str(mission.get("mission_id") or "").strip()
+            if linked_task_id and _mission_id:
+                try:
+                    _linked = task_hub.get_item(th_conn, linked_task_id)
+                    if _linked and str(_linked.get("source_kind") or "") == "cody_demo_task":
+                        task_hub.perform_task_action(
+                            th_conn,
+                            task_id=linked_task_id,
+                            action="delegate",
+                            reason=vp_id,
+                            note=f"mission_id={_mission_id}",
+                            agent_id="simone_vp_dispatch",
+                        )
+                except Exception:
+                    import logging as _logging
+
+                    _logging.getLogger(__name__).exception(
+                        "cody_demo_task delegation-linkage stamp failed "
+                        "(linked_task_id=%s mission=%s) — demo evaluator may not fire",
+                        linked_task_id,
+                        _mission_id,
+                    )
+
             th_conn.close()
         except Exception:
             pass  # Task Hub registration is best-effort
