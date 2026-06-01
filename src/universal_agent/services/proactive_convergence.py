@@ -12,6 +12,7 @@ from pathlib import Path
 import sqlite3
 from typing import Any, Callable, Optional
 
+from universal_agent.services.llm_classifier import _call_llm, _parse_json_response
 from universal_agent.services.proactive_artifacts import (
     ARTIFACT_STATUS_CANDIDATE,
     make_artifact_id,
@@ -773,6 +774,135 @@ def _run_ideation_sweep(
     return loop.run_until_complete(coro)
 
 
+# ── Pre-Task-Hub editorial triage ──────────────────────────────────────
+#
+# Today every candidate (convergence + ideation) unconditionally creates a Task
+# Hub item, and a downstream VP mission decides ship/skip — so every idea,
+# including skips, becomes a Kanban card. This cheap LLM triage runs at the
+# candidate-write chokepoint so ONLY "ship" candidates create a Task Hub item.
+# skip/defer get a recorded verdict but NO task and NO card. Mirrors Phase 1 of
+# the .claude/skills/evaluate-and-author-intel-brief/SKILL.md editorial test.
+
+_INTEL_TRIAGE_SYSTEM = """\
+You are an editorial gate for a proactive intelligence system. A candidate
+pattern has been detected across recent AI/developer videos. Decide whether it
+is worth turning into an operator-facing intel brief.
+
+You are given the candidate's thesis, an optional "why it matters" value, the
+per-source claims that support it, and an index of the recent briefs already
+shipped/skipped in the last 48 hours.
+
+Apply this editorial test:
+- SHIP only if it is a REAL pattern genuinely supported by the claims of >=2 of
+  its sources (not apophenia or over-generalization from too few/weak signals)
+  AND it is NOVEL versus the recent briefs index (not a near-duplicate of
+  something already shipped OR skipped in the last 48h).
+- SKIP if it is generic, unsupported by the sources, or a duplicate of a recent
+  brief/verdict.
+- DEFER if it is promising but under-sourced (worth revisiting once more sources
+  land).
+
+Also set demo_amenable=true ONLY if the candidate implies a concrete, buildable
+software/coding demo.
+
+Return ONLY JSON:
+{"verdict":"ship|skip|defer","reasoning":"one or two sentences","demo_amenable":false}
+"""
+
+_TRIAGE_ALLOWED_VERDICTS = {"ship", "skip", "defer"}
+
+
+def _intel_triage_enabled() -> bool:
+    return str(os.getenv("UA_INTEL_TRIAGE_ENABLED", "1")).strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _run_triage_llm(*, system: str, user: str, max_tokens: int = 400, model: str | None = None) -> str:
+    """Sync wrapper around the async ``_call_llm`` seam.
+
+    Kept thin and separate so tests can monkeypatch
+    ``proactive_convergence._call_llm`` with either a sync or async callable.
+    Mirrors the loop-handling pattern used by the clustering/ideation wrappers.
+    """
+    result = _call_llm(system=system, user=user, max_tokens=max_tokens, model=model)
+    if not asyncio.iscoroutine(result):
+        return result
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(result)
+    import nest_asyncio
+
+    nest_asyncio.apply()
+    return loop.run_until_complete(result)
+
+
+def triage_candidate(
+    conn: sqlite3.Connection,
+    *,
+    candidate_kind: str,
+    thesis: str,
+    value: str,
+    signatures: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Cheap editorial validation BEFORE Task Hub.
+
+    Returns ``{"kind": "ship"|"skip"|"defer"|"retry", "reasoning": str,
+    "demo_amenable": bool, "model": str}``. ``'retry'`` means the LLM call
+    failed/parsed badly — the caller must NOT finalize and NOT create a task
+    (it will be re-tried on the next sweep run because verdict='' is not final).
+    """
+    from universal_agent.services.recent_briefs_index import read_index_or_fallback
+
+    try:
+        idx = read_index_or_fallback(conn, lookback_hours=48, limit=200)
+    except Exception:  # noqa: BLE001 — defensive; helper should never raise.
+        idx = ""
+
+    compact_sources = [
+        {
+            "channel_name": s.get("channel_name") or s.get("channel_id") or "",
+            "video_title": s.get("video_title") or "",
+            "key_claims": (s.get("key_claims") or [])[:6],
+        }
+        for s in (signatures or [])
+    ]
+    user = json.dumps(
+        {
+            "candidate_kind": str(candidate_kind or "convergence"),
+            "thesis": str(thesis or ""),
+            "value": str(value or ""),
+            "sources": compact_sources,
+            "recent_briefs_index": idx,
+        },
+        ensure_ascii=True,
+    )
+
+    from universal_agent.utils.model_resolution import resolve_haiku
+
+    # Triage is deliberately cheap (Haiku tier); override with UA_INTEL_TRIAGE_MODEL.
+    model = os.getenv("UA_INTEL_TRIAGE_MODEL", "").strip() or resolve_haiku()
+    try:
+        raw = _run_triage_llm(system=_INTEL_TRIAGE_SYSTEM, user=user, max_tokens=400, model=model)
+        parsed = _parse_json_response(raw)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("intel triage LLM failed: %s", exc)
+        return {"kind": "retry", "reasoning": "triage unavailable", "demo_amenable": False, "model": model}
+
+    if not isinstance(parsed, dict):
+        return {"kind": "retry", "reasoning": "triage unavailable", "demo_amenable": False, "model": model}
+    verdict = str(parsed.get("verdict") or "").strip().lower()
+    if verdict not in _TRIAGE_ALLOWED_VERDICTS:
+        return {"kind": "retry", "reasoning": "triage unavailable", "demo_amenable": False, "model": model}
+    return {
+        "kind": verdict,
+        "reasoning": str(parsed.get("reasoning") or "").strip(),
+        "demo_amenable": bool(parsed.get("demo_amenable")),
+        "model": model,
+    }
+
+
 def write_convergence_candidate(
     conn: sqlite3.Connection,
     *,
@@ -903,21 +1033,96 @@ def write_convergence_candidate(
         title = f"ATLAS evaluate convergence candidate: {headline}"
         labels = ["agent-ready", "convergence", "atlas", "candidate"]
 
-    task = queue_proactive_task(
-        conn,
-        task_id=task_id,
-        source_kind="convergence_candidate",
-        source_ref=candidate_id,
-        title=title,
-        description=description,
-        priority=3,
-        labels=labels,
-        metadata=metadata_payload,
-    )
+    # ── Pre-Task-Hub editorial triage ──────────────────────────────
+    # Decide whether this candidate is worth a Task Hub item BEFORE we create
+    # one. With triage disabled we preserve the legacy behavior exactly (always
+    # queue, verdict='') so the flag is a clean rollback.
+    triage: dict[str, Any] = {}
+    row_verdict = ""
+    row_verdict_reasoning = ""
+    row_evaluated_at = ""
+    persist_task_id = ""
+    task: dict[str, Any] = {}
+    newly_queued = False
+
+    if not _intel_triage_enabled():
+        # Legacy path: always queue a task, persist row with verdict=''.
+        task = queue_proactive_task(
+            conn,
+            task_id=task_id,
+            source_kind="convergence_candidate",
+            source_ref=candidate_id,
+            title=title,
+            description=description,
+            priority=3,
+            labels=labels,
+            metadata=metadata_payload,
+        )
+        persist_task_id = str(task.get("task_id") or task_id)
+        newly_queued = True
+    else:
+        triage = triage_candidate(
+            conn,
+            candidate_kind=candidate_kind,
+            thesis=thesis,
+            value=value,
+            signatures=signatures,
+        )
+        v = str(triage.get("kind") or "retry")
+        if v == "ship":
+            # Worth a card — queue the Task Hub item exactly as before. The
+            # deterministic task_id keeps a re-queue on a later run idempotent.
+            metadata_payload["triage"] = {
+                "kind": v,
+                "reasoning": triage.get("reasoning", ""),
+                "demo_amenable": bool(triage.get("demo_amenable")),
+                "model": triage.get("model", ""),
+            }
+            task = queue_proactive_task(
+                conn,
+                task_id=task_id,
+                source_kind="convergence_candidate",
+                source_ref=candidate_id,
+                title=title,
+                description=description,
+                priority=3,
+                labels=labels,
+                metadata=metadata_payload,
+            )
+            persist_task_id = str(task.get("task_id") or task_id)
+            newly_queued = True
+            # verdict stays '' so the downstream mission/skill still finalizes it.
+        elif v in ("skip", "defer"):
+            # Recorded verdict, NO task, NO card.
+            row_verdict = v
+            row_verdict_reasoning = str(triage.get("reasoning") or "")
+            row_evaluated_at = _now_iso()
+            newly_queued = False
+        else:
+            # retry: triage unavailable — persist with verdict='' and NO task so
+            # it is re-tried on the next sweep run (verdict='' is not final).
+            newly_queued = False
 
     # Persist / refresh the candidate row.
     now = _now_iso()
     created_at = (existing or {}).get("created_at") or now
+    row_metadata = {
+        "preferred_vp": "vp.general.primary",
+        "headline": headline,
+        "candidate_kind": "ideation" if is_ideation else "convergence",
+        "thesis": thesis,
+        "value": value,
+        "signal_strength": float(signal_strength or 0.0),
+        "source_window_hours": int(source_window_hours),
+        "task_status": str(task.get("status") or ""),
+    }
+    if triage:
+        row_metadata["triage"] = {
+            "kind": triage.get("kind", ""),
+            "reasoning": triage.get("reasoning", ""),
+            "demo_amenable": bool(triage.get("demo_amenable")),
+            "model": triage.get("model", ""),
+        }
     conn.execute(
         """
         INSERT INTO convergence_candidates (
@@ -925,7 +1130,7 @@ def write_convergence_candidate(
             primary_topics_json, signatures_json, task_id, verdict,
             verdict_reasoning, artifact_id, detected_at, evaluated_at,
             created_at, updated_at, metadata_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, '', '', '', ?, '', ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?)
         ON CONFLICT(candidate_id) DO UPDATE SET
             video_ids_json=excluded.video_ids_json,
             channel_names_json=excluded.channel_names_json,
@@ -933,6 +1138,9 @@ def write_convergence_candidate(
             primary_topics_json=excluded.primary_topics_json,
             signatures_json=excluded.signatures_json,
             task_id=excluded.task_id,
+            verdict=excluded.verdict,
+            verdict_reasoning=excluded.verdict_reasoning,
+            evaluated_at=excluded.evaluated_at,
             updated_at=excluded.updated_at,
             metadata_json=excluded.metadata_json
         """,
@@ -943,26 +1151,20 @@ def write_convergence_candidate(
             len(channel_names),
             _json_dumps(primary_topics),
             _json_dumps(compact_signatures),
-            str(task.get("task_id") or task_id),
+            persist_task_id,
+            row_verdict,
+            row_verdict_reasoning,
             now,
+            row_evaluated_at,
             created_at,
             now,
-            _json_dumps({
-                "preferred_vp": "vp.general.primary",
-                "headline": headline,
-                "candidate_kind": "ideation" if is_ideation else "convergence",
-                "thesis": thesis,
-                "value": value,
-                "signal_strength": float(signal_strength or 0.0),
-                "source_window_hours": int(source_window_hours),
-                "task_status": str(task.get("status") or ""),
-            }),
+            _json_dumps(row_metadata),
         ),
     )
     conn.commit()
 
     row = _get_convergence_candidate(conn, candidate_id) or {}
-    row["_newly_queued"] = True
+    row["_newly_queued"] = newly_queued
     row["_task"] = task
     return row
 
