@@ -41,6 +41,7 @@ from universal_agent.services.cody_implementation import (
     BriefingBundle,
     DemoManifest,
     RunResult,
+    canonicalize_endpoint,
     detect_endpoint_from_text,
     list_sources,
     load_briefing,
@@ -224,11 +225,16 @@ def evaluate_demo(
             ok=True,
             detail="endpoint_required is 'any' — no constraint",
         )
-    elif manifest_obj.endpoint_hit == manifest_obj.endpoint_required:
+    elif canonicalize_endpoint(manifest_obj.endpoint_hit) == canonicalize_endpoint(
+        manifest_obj.endpoint_required
+    ):
         endpoint_match = CheckResult(
             name="endpoint_match",
             ok=True,
-            detail=f"manifest.endpoint_hit == manifest.endpoint_required ({manifest_obj.endpoint_hit})",
+            detail=(
+                f"endpoint_hit satisfies endpoint_required "
+                f"({manifest_obj.endpoint_hit!r} → {canonicalize_endpoint(manifest_obj.endpoint_hit)})"
+            ),
         )
     else:
         endpoint_match = CheckResult(
@@ -236,7 +242,9 @@ def evaluate_demo(
             ok=False,
             detail=(
                 f"endpoint mismatch: required={manifest_obj.endpoint_required!r} "
-                f"hit={manifest_obj.endpoint_hit!r} — likely env-leak"
+                f"({canonicalize_endpoint(manifest_obj.endpoint_required)}) "
+                f"hit={manifest_obj.endpoint_hit!r} "
+                f"({canonicalize_endpoint(manifest_obj.endpoint_hit)}) — likely env-leak"
             ),
         )
 

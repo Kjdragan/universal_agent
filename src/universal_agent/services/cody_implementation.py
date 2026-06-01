@@ -598,6 +598,34 @@ def detect_endpoint_from_text(text: str) -> str:
     return "unknown"
 
 
+def canonicalize_endpoint(value: str) -> str:
+    """Fold an endpoint label OR an observed host/marker into the canonical enum.
+
+    The single source of truth that bridges what Cody free-hands into
+    manifest.json (frequently the raw host ``api.anthropic.com``) and the
+    canonical token the evaluator compares against (``anthropic_native``).
+    Without this, ``evaluate_demo`` did a raw ``==`` and FALSE-REJECTED demos
+    that genuinely ran on Anthropic — ``"api.anthropic.com" != "anthropic_native"``.
+
+    Returns one of ``anthropic_native`` | ``zai`` | ``unknown``, or passes
+    through the no-constraint sentinels ``""`` / ``any`` unchanged so the
+    "no constraint" branch in ``evaluate_demo`` keeps working. ZAI hints win
+    over Anthropic hints (matches ``detect_endpoint_from_text``) so an env-leak
+    that name-drops a Claude model is still flagged ``zai``.
+    """
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    low = raw.lower()
+    if low in ("any", "anthropic_native", "zai", "unknown"):
+        return low
+    if any(hint.lower() in low for hint in _ZAI_HINTS):
+        return "zai"
+    if any(hint.lower() in low for hint in _ANTHROPIC_NATIVE_HINTS):
+        return "anthropic_native"
+    return low
+
+
 # ── Manifest ────────────────────────────────────────────────────────────────
 
 
@@ -642,7 +670,7 @@ class DemoManifest:
         """Return True when endpoint_hit satisfies endpoint_required (or required is 'any')."""
         if not self.endpoint_required or self.endpoint_required == "any":
             return True
-        return self.endpoint_required == self.endpoint_hit
+        return canonicalize_endpoint(self.endpoint_required) == canonicalize_endpoint(self.endpoint_hit)
 
 
 def write_manifest(workspace_dir: Path, manifest: DemoManifest) -> Path:
