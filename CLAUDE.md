@@ -94,6 +94,17 @@ Default to running it. Stop and ask first only for: destructive operations (dele
 
 Diagnostic reads, log tails, manual cron triggers, status checks, restarting the `universal-agent-gateway` service after a change you just made, and similar operational steps: just do them, narrate the result.
 
+### VPS sudo + the Tailnet HTML Scratchpad (added 2026-06-01)
+
+**`ua` has passwordless sudo on the VPS.** As of 2026-06-01, `/etc/sudoers.d/ua-nopasswd` grants `ua ALL=(ALL) NOPASSWD: ALL`. So `sudo` works non-interactively over `ssh ua@uaonvps` — restart services (`sudo systemctl restart universal-agent-gateway`), edit + reload nginx (`sudo nginx -t && sudo systemctl reload nginx`), manage `tailscale serve`, etc., **all autonomously**. Any older note in this file saying "you don't have passwordless sudo as `ua`" / "ask Kevin to `sudo`" is **obsolete** — do it yourself. (Standing guardrails still hold: confirm before destructive, outward-facing, or secret-leaking operations.)
+
+**The Tailnet HTML Scratchpad — how to show the terminal-only operator rendered HTML.** Kevin runs Claude Code terminal-only (no IDE), and email/PDF viewers don't honor clickable links — so the reliable way to surface a rendered page (digest reports, diffs, architecture diagrams, visual-explainer pages, any HTML artifact) is to publish it to the VPS scratchpad and hand him a link:
+
+- **Serve:** `tailscale serve --bg --set-path /scratch /home/ua/ua_scratch` (already configured; served directly by the Tailscale daemon, so it's reboot-safe with no extra process to babysit). `--set-path` / directory serves need root → use `sudo`; plain port-proxy serves work under the operator grant without sudo.
+- **Host:** `uaonvps.taildcc090.ts.net` — the VPS's Tailscale MagicDNS name, auto-HTTPS. All of Kevin's devices (desktop, phone, tablet) are on this tailnet, so the links open everywhere he reads mail. Tailnet membership **is** the auth — these URLs are private to his devices and never exposed to the public internet (no capability token needed, though an unguessable subdir is good hygiene).
+- **Publish:** write the HTML to an unguessable token subdir — `/home/ua/ua_scratch/<token>/<name>.html` — then give the URL `https://uaonvps.taildcc090.ts.net/scratch/<token>/<name>.html`. The scratch dir lives in `ua`'s home, so it survives `/opt/universal_agent` deploys.
+- **Don't disturb** the other `tailscale serve` mappings (`/`→:3000 dashboard, `:8443`→:8002, etc.). Only ever add/modify the `/scratch` path. Verify with `tailscale serve status` after any change.
+
 ## Git Workflow (MUST READ)
 - Read [`project_docs/06_platform/04_deployment_and_cicd.md`](project_docs/06_platform/04_deployment_and_cicd.md) before your first commit. It defines branch discipline, commit conventions, `/ship` handoff, and the deploy pipeline.
 - **Branch model:** any branch → PR → `main` → Deploy. `develop` retired 2026-05-10. See [`project_docs/06_platform/04_deployment_and_cicd.md`](project_docs/06_platform/04_deployment_and_cicd.md).
