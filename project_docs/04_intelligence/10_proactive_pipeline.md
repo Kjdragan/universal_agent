@@ -12,7 +12,7 @@ code_paths:
   - src/universal_agent/services/intel_lanes.py
   - src/universal_agent/services/invariants/proactive_pipeline_invariants.py
   - src/universal_agent/proactive_signals.py
-last_verified: 2026-05-30
+last_verified: 2026-06-01
 ---
 
 # Proactive Pipeline
@@ -308,16 +308,38 @@ cluster/insight becomes queued work:
   stable across CSI runs for the exact same source cluster.
 - **Write-once verdict semantics:** if the candidate already carries a final
   verdict (`ship`/`skip`/`defer`/`error`), the call is a no-op returning the
-  existing row. New or mid-processing (`verdict=''`) candidates are upserted and
-  queue a Task Hub item.
+  existing row.
+- **Pre-Task-Hub triage (2026-05-30, `proactive_convergence.py::triage_candidate`).**
+  New/mid-processing candidates are NOT queued unconditionally. A cheap Haiku-tier
+  LLM triage runs at candidate-write time — loading the 48h recent-briefs index
+  plus the candidate's source claims — and returns `ship` / `skip` / `defer` /
+  `retry`. **Only `ship` queues a Task Hub item (and a Kanban card);** `skip`/`defer`
+  record the verdict on the `convergence_candidates` row for audit but create **no
+  task**; `retry` (LLM unavailable) leaves the row non-final for the next sweep.
+  Flags: `UA_INTEL_TRIAGE_ENABLED` (default `1`; `0` = legacy "always queue, mission
+  decides"), `UA_INTEL_TRIAGE_MODEL`. The triage verdict is carried in
+  `metadata.triage = {kind, reasoning, demo_amenable, model}` on both the task and
+  the candidate row.
 - Queues a task via `queue_proactive_task` with `source_kind='convergence_candidate'`,
   `metadata.preferred_vp='vp.general.primary'`, `metadata.candidate_id`,
   `metadata.invoke_skill='evaluate-and-author-intel-brief'`, priority 3, and
   `candidate_kind` `convergence` or `ideation`. Task title:
   `ATLAS evaluate convergence candidate: <headline>` (or `... ideation insight: ...`).
 - The downstream consumer is **Atlas**, invoking the
-  `evaluate-and-author-intel-brief` skill, which authors the intel-brief
-  artifact and writes a `ship`/`skip`/`defer` verdict back onto the candidate.
+  `evaluate-and-author-intel-brief` skill. Since triage already decided, the skill
+  is **triage-aware (Phase 0.5 short-circuit, 2026-05-31):** when
+  `metadata.triage.kind == "ship"` it **skips re-deciding** and only authors the
+  intel-brief artifact (verdict + reasoning come from triage). When `metadata.triage`
+  is **absent** (triage off via `UA_INTEL_TRIAGE_ENABLED=0`, or a legacy pre-triage
+  task) the skill falls back to its own `ship`/`skip`/`defer` rubric — so the kill
+  switch still has a gate. `metadata.triage.demo_amenable` is propagated into the
+  `proactive_artifacts` metadata.
+  - **Deferred (not built):** an intel-ship → Cody demo-build bridge. `demo_amenable`
+    is captured/preserved but nothing dispatches a demo — `cody_dispatch.py::dispatch_cody_demo_task`
+    requires a scaffolded `/opt/ua_demos/<id>/` workspace from the separate (currently
+    dormant) ClaudeDevs-Intel-v2 entity-demo pipeline, with no producer linking the two.
+    Wiring it is a cross-pipeline feature, not cleanup; intentionally left as a scoped
+    follow-up.
 
 `queue_proactive_task` (`proactive_task_builder.py`) is the standardized creation
 path for *all* proactive services. It applies two gates before the Task Hub upsert:
