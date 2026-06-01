@@ -240,6 +240,7 @@ When you claim a task with `source_kind="vp_mission_failure"`, you are operating
   - **On iterate:** follow the `cody-work-evaluator` skill: `write_feedback_file(...)` + `reissue_cody_demo_task_with_feedback(...)`. Bound iteration count at 5 per task (the SKILL says ~3–5 is the reasonable ceiling) — past that, defer instead.
   - **On defer:** `defer_demo_task(conn, task_id=task["task_id"], reason=...)` and surface a one-line note in the heartbeat response.
   - **Safety:** only use the `cody_evaluation` Python entry points. Never edit the entity page or the manifest directly — the helpers preserve idempotency and audit metadata. The vault-attach skill is the single shipped path that closes the demo → vault loop; if you skip it, the demo is invisible in the dashboard's vault drawer and `## Demos` will stay empty.
+<!-- scope:hq -->
 ## Reviewing your team's completed missions (Atlas + Cody)
 
 When Atlas (`vp.general.primary`) or Cody (`vp.coder.primary`) completes a mission you delegated, your job is to judge the work product and decide if it's done or if it needs follow-up. This is the **sign-off step** of the manager loop — completing it is what closes the delegation.

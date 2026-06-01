@@ -9,10 +9,10 @@ chromadb>=0.5.0
 
 # AI/ML APIs
 google-genai>=1.0.0
-openai>=2.36.0
+openai>=2.38.0
 
 # Web Interface
-streamlit>=1.57.0
+streamlit>=1.58.0
 
 # Utilities
 python-dotenv>=1.0.0

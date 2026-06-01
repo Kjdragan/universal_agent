@@ -337,11 +337,50 @@ If you want to study this part of the system in code, start here:
   - run-kind-specific extra disallowed tool policy
 - `src/universal_agent/mission_guardrails.py`
   - enforcement that `todo_execution` must end with a durable lifecycle mutation
+- `src/universal_agent/gateway_server.py`
+  - `_enforce_todo_execution_lifecycle` — runs the guardrail at turn end, reopens the assignment on a miss
+  - `_lifecycle_miss_notification_routing` — deploy-restart casualty suppression (see § 8.1)
 
 And for tests:
 
 - `tests/unit/test_hooks_task_stop_guardrail.py`
 - `tests/unit/test_main_pretool_taskstop_guardrail.py`
+- `tests/unit/test_lifecycle_miss_deploy_suppression.py`
+
+### 8.1 Deploy-restart casualty suppression (2026-05-29)
+
+The lifecycle guardrail is correct but **noisy during deploys**. When a deploy
+(or operator `systemctl restart`) SIGTERMs the Claude subprocess mid-run, the
+turn returns with no durable lifecycle mutation, so the guardrail fires and
+emails the operator an `[ERROR] Execution Missing Lifecycle Mutation`. This is a
+self-healing non-event: `_enforce_todo_execution_lifecycle` already called
+`finalize_assignments(reopen_in_progress=True)`, so the todo dispatcher
+re-claims and retries the work item on the next sweep (typically within
+minutes).
+
+Regression that motivated the fix: notification `ntf_1780067280822_501`
+(2026-05-29 10:08 AM Houston). PR #559's deploy SIGTERM'd (exit 143) a Simone
+ToDo run holding `convergence-candidate:aabfb9575c280a89`; the guardrail fired,
+the operator got an `[ERROR]` email, and the task delegated cleanly to Atlas on
+the retry 4 minutes later. The email was pure noise.
+
+**The fix** (`_lifecycle_miss_notification_routing`) mirrors the existing cron
+deploy-window reclassification (`cron_service._is_deploy_window_active`, which
+checks the `/tmp/ua-deployment-window` marker flag OR process uptime < 60s):
+
+| Condition | Severity | `requires_action` | Channels |
+|---|---|---|---|
+| Lifecycle miss **inside** a deploy window | `warning` | `False` | `["dashboard"]` (no email/telegram) |
+| Lifecycle miss **outside** a deploy window | `error` | `True` | global (dashboard + email + telegram) |
+| Any **other** guardrail kind | `error` | `True` | global |
+
+The downgrade only applies to `execution_missing_lifecycle_mutation`. The deploy
+window is conservative — it only *widens* the suppression window, never narrows
+it — so a genuine stuck task outside a deploy/restart still pages the operator
+loudly, exactly as before. The failure record and assignment reopen are
+unchanged, so retry behavior is unaffected; only the notification routing
+changes. The `deploy_restart_casualty` boolean is stamped into the
+notification's `metadata` for dashboard auditability.
 
 ## 9. Lessons Learned
 

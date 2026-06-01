@@ -1,0 +1,133 @@
+name: Deploy Notify
+
+# Truthful deploy-complete notifier (the "B" half of the 2026-05-30 CI/CD
+# A+B PR). Fires on EVERY terminal state of the Deploy workflow — success
+# AND failure — and pushes a single-line status to the operator's Telegram
+# channel. Closes the long-standing gap where Deploy emailed ONLY on failure
+# (deploy.yml "Notify operator on deploy failure via AgentMail") and stayed
+# silent on success, so an autonomous session had no positive confirmation
+# that its merge actually reached production.
+#
+# Why a separate workflow_run trigger (not an extra step inside deploy.yml):
+#   - It fires on ALL terminal conclusions of Deploy — success, failure,
+#     cancelled, timed_out — including the abrupt-failure cases where
+#     deploy.yml's own trailing steps would never run.
+#   - It is decoupled: a bug here can never break a production deploy.
+#
+# Truthfulness (repo Production-Verification Rule A): a green Deploy workflow
+# is NOT proof the new code is live. This notifier independently curls the
+# PUBLIC version endpoint and compares the live short SHA to the SHA that
+# Deploy ran on. The three real-world outcomes are reported distinctly:
+#   ✅ Deploy succeeded AND live SHA matches      -> confirmed live
+#   ⚠️ Deploy succeeded BUT live SHA differs/down -> mismatch, look now
+#   ❌ Deploy did not succeed                      -> failed/cancelled/timeout
+#
+# Runs 24/7 (infrastructure-event handler, exempt from active-hours dormancy
+# per docs/operations/operating_hours_dormancy.md § "Scope"). A deploy can
+# land at any wall-clock time and a silent broken prod until 6 AM is
+# unacceptable.
+#
+# Docs-only merges never trigger Deploy (deploy.yml paths-ignore), so this
+# notifier stays silent on doc commits — by design, nothing was deployed.
+#
+# Required repo secrets (set 2026-05-30 from Infisical UA_OPERATOR_TELEGRAM_*):
+#   UA_OPERATOR_TELEGRAM_BOT_TOKEN  — operator-channel bot token
+#   UA_OPERATOR_TELEGRAM_CHAT_ID    — operator channel id
+# If either is absent the workflow no-ops with a warning (never hard-fails).
+
+on:
+  workflow_run:
+    workflows:
+      - Deploy
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  # Serialize notifications per Deploy run; never cancel an in-flight ping.
+  group: deploy-notify-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    name: Notify operator of deploy result
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    env:
+      VERSION_URL: https://app.clearspringcg.com/api/v1/version
+      CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
+      HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+      RUN_URL: ${{ github.event.workflow_run.html_url }}
+      COMMIT_TITLE: ${{ github.event.workflow_run.display_title }}
+      TG_BOT_TOKEN: ${{ secrets.UA_OPERATOR_TELEGRAM_BOT_TOKEN }}
+      TG_CHAT_ID: ${{ secrets.UA_OPERATOR_TELEGRAM_CHAT_ID }}
+    steps:
+      - name: Compose and send deploy status
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          if [ -z "${TG_BOT_TOKEN:-}" ] || [ -z "${TG_CHAT_ID:-}" ]; then
+            echo "::warning::Operator Telegram secrets absent; skipping notification."
+            exit 0
+          fi
+
+          DEPLOY_SHORT="${DEPLOY_SHA:0:8}"
+
+          # --- Confirm the LIVE deployed SHA (Rule A) -------------------
+          # On success the gateway is already healthy (Deploy's own health
+          # gate waited for it), so a short poll suffices. We still retry a
+          # few times to absorb the brief restart window.
+          LIVE_SHORT=""
+          ENDPOINT_OK="false"
+          for attempt in 1 2 3 4 5 6; do
+            BODY="$(curl -fsS --max-time 12 "$VERSION_URL" 2>/dev/null || true)"
+            if [ -n "$BODY" ]; then
+              ENDPOINT_OK="true"
+              # JSON parse (not regex) — the right primitive for a JSON body.
+              LIVE_SHORT="$(printf '%s' "$BODY" | python3 -c "import sys,json;d=json.load(sys.stdin);print((d.get('short_sha') or d.get('commit_sha') or '')[:8])" 2>/dev/null || true)"
+              [ -n "$LIVE_SHORT" ] && break
+            fi
+            sleep 10
+          done
+
+          # --- Decide the one-line status -------------------------------
+          if [ "$CONCLUSION" = "success" ]; then
+            if [ "$ENDPOINT_OK" != "true" ]; then
+              ICON="⚠️"
+              STATUS="Deploy succeeded but version endpoint is unreachable — verify prod manually"
+            elif [ "$LIVE_SHORT" = "$DEPLOY_SHORT" ]; then
+              ICON="✅"
+              STATUS="Deploy OK — live SHA confirmed"
+            else
+              ICON="⚠️"
+              STATUS="Deploy reported success but live SHA is ${LIVE_SHORT} (expected ${DEPLOY_SHORT}) — look now"
+            fi
+          else
+            ICON="❌"
+            STATUS="Deploy ${CONCLUSION}"
+          fi
+
+          # Compact multi-line message built with printf (keeps every line
+          # at/above the YAML block indent). No parse_mode (plain text) to
+          # avoid Markdown-escaping brittleness on commit titles.
+          MSG="$(printf '%s %s\nbranch=%s @%s | live=%s\n%s\n%s' \
+            "$ICON" "$STATUS" "$HEAD_BRANCH" "$DEPLOY_SHORT" "${LIVE_SHORT:-unknown}" "$COMMIT_TITLE" "$RUN_URL")"
+
+          echo "Sending: ${ICON} ${STATUS} (deploy=${DEPLOY_SHORT} live=${LIVE_SHORT:-unknown})"
+
+          HTTP="$(curl -sS -o /tmp/tg_resp.json -w '%{http_code}' --max-time 15 \
+            -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TG_CHAT_ID}" \
+            --data-urlencode "text=${MSG}" \
+            --data "disable_web_page_preview=true" || echo "000")"
+
+          echo "Telegram HTTP ${HTTP}"
+          if [ "$HTTP" != "200" ]; then
+            echo "::warning::Telegram send returned HTTP ${HTTP}"
+            head -c 400 /tmp/tg_resp.json 2>/dev/null || true
+            # Don't hard-fail: a notifier outage must not look like a deploy
+            # problem. The failure is surfaced as a warning in the run log.
+          fi

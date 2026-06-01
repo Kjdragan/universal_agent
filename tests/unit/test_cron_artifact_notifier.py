@@ -137,6 +137,35 @@ def test_manifest_preferred_over_scan(tmp_path: Path) -> None:
     assert listing[0]["title"] == "podcast.mp3"
 
 
+def test_newest_manifest_wins_over_stale_undated(tmp_path: Path) -> None:
+    """Regression: reused cron workspace where a date-stamped manifest is
+    written each run but the undated ``manifest.json`` is left frozen at a
+    prior run. The disclosure must reflect the newest run, not the stale
+    undated file. (Paper-to-podcast false "wrong topic" alarm, 2026-05-31.)
+    """
+    workspace = tmp_path / "ws"
+    sub = workspace / "work_products" / "paper_to_podcast"
+    sub.mkdir(parents=True)
+
+    stale = sub / "manifest.json"
+    stale.write_text(
+        json.dumps({"topic": "Open-source AI democratization (yesterday)"}),
+        encoding="utf-8",
+    )
+    fresh = sub / "manifest_20260531.json"
+    fresh.write_text(
+        json.dumps({"topic": "Agentic AI architectures (today)"}),
+        encoding="utf-8",
+    )
+    # Make the undated file older than the date-stamped one.
+    os.utime(stale, (1_780_000_000, 1_780_000_000))
+    os.utime(fresh, (1_780_100_000, 1_780_100_000))
+
+    manifest = _load_manifest(workspace)
+    assert manifest is not None
+    assert manifest["topic"] == "Agentic AI architectures (today)"
+
+
 def test_scan_fallback_when_no_manifest(tmp_path: Path) -> None:
     workspace = tmp_path / "ws"
     workspace.mkdir()
@@ -161,6 +190,65 @@ def test_empty_workspace_yields_no_listing(tmp_path: Path) -> None:
     workspace.mkdir()
     listing = _build_artifacts_listing(workspace, None)
     assert listing == []
+
+
+def test_manifest_artifacts_as_dict_of_descriptors(tmp_path: Path) -> None:
+    """Regression: paper_to_podcast stores ``artifacts`` as a dict keyed by
+    artifact name, not a list. The extractor must still surface them instead
+    of falling through to the work_products scan."""
+    workspace = tmp_path / "ws"
+    (workspace / "work_products" / "paper_to_podcast").mkdir(parents=True)
+    (workspace / "work_products" / "paper_to_podcast" / "manifest.json").write_text(
+        json.dumps(
+            {
+                "pipeline": "paper_to_podcast",
+                "topic": "Open-source AI democratization",
+                "artifacts": {
+                    "podcast": {"type": "audio", "file": "podcast_deep_dive.m4a"},
+                    "quiz": {"type": "quiz", "file": "quiz.html"},
+                    "flashcards": {"type": "flashcards", "file": "flashcards.html"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest = _load_manifest(workspace)
+    assert manifest is not None
+    listing = _build_artifacts_listing(workspace, manifest)
+    titles = sorted(item["title"] for item in listing)
+    assert titles == ["flashcards", "podcast", "quiz"]
+    paths = {item["path"] for item in listing}
+    assert "podcast_deep_dive.m4a" in paths
+
+
+def test_scan_skips_agent_scaffolding_and_reaches_subdir_deliverables(
+    tmp_path: Path,
+) -> None:
+    """Regression for the May-30 false 'no deliverable artifacts' alarm:
+    numbered agent context-dumps (AGENTS_*.md, IDENTITY_*.md, ...) must not
+    crowd out the real deliverables that live in a skill output subdir."""
+    workspace = tmp_path / "ws"
+    work_products = workspace / "work_products"
+    work_products.mkdir(parents=True)
+    # ~40 numbered context-snapshot files — these sort before "paper_to_podcast/"
+    # and previously exhausted the 25-file cap.
+    for family in ("AGENTS", "IDENTITY", "USER", "capabilities", "SOUL", "HEARTBEAT"):
+        (work_products / f"{family}.md").write_text("scaffold")
+        for n in range(1, 8):
+            (work_products / f"{family}_{n}.md").write_text("scaffold")
+    (work_products / "cron_result_18.md").write_text("scaffold")
+    (work_products / "run_manifest_39.json").write_text("scaffold")
+    # The real deliverables in the skill subdir.
+    skill = work_products / "paper_to_podcast"
+    skill.mkdir()
+    (skill / "podcast_deep_dive.m4a").write_text("audio")
+    (skill / "quiz.html").write_text("quiz")
+    (skill / "flashcards.html").write_text("cards")
+
+    listing = _build_artifacts_listing(workspace, None)
+    titles = {item["title"] for item in listing}
+    assert {"podcast_deep_dive.m4a", "quiz.html", "flashcards.html"} <= titles
+    assert not any(t.startswith(("AGENTS", "IDENTITY", "USER", "SOUL")) for t in titles)
 
 
 @pytest.mark.asyncio

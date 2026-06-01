@@ -41,9 +41,17 @@ jobs:
     steps:
       - name: Find stuck PRs and dispatch action
         env:
-          # AUTO_MERGE_PAT so any push-triggered downstream workflows fire
-          # (same reason as pr-auto-merge.yml). Falls back to GITHUB_TOKEN.
-          GH_TOKEN: ${{ secrets.AUTO_MERGE_PAT || secrets.GITHUB_TOKEN }}
+          # Two tokens, each for its own purpose (2026-05-30):
+          #   GH_TOKEN  = GITHUB_TOKEN — used by `gh pr comment/edit` (the
+          #     workflow grants pull-requests: write, so it can comment/label).
+          #     The fine-grained AUTO_MERGE_PAT lacks the PR-comment scope, which
+          #     made every conflict-comment fail with "Resource not accessible by
+          #     personal access token (addComment)" and hard-failed the whole run.
+          #   PUSH_PAT  = AUTO_MERGE_PAT — used ONLY in the git push URL, so the
+          #     force-push fires downstream Validate (GITHUB_TOKEN pushes don't
+          #     trigger workflows). Falls back to GITHUB_TOKEN if the PAT is absent.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUSH_PAT: ${{ secrets.AUTO_MERGE_PAT || secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
@@ -90,7 +98,9 @@ jobs:
 
           while IFS=$'\t' read -r pr_num head_ref labels; do
             echo "::group::PR #${pr_num} (${head_ref})"
-            # Branch classifier:
+            # Branch classifier (AUTHORITATIVE policy — keep in sync with
+            # pr-auto-merge.yml + project_docs/06_platform/04_deployment_and_cicd.md
+            # § "Branch policy — single source of truth"):
             #   - claude/*, worktree-* → autonomous-author, safe to auto-rebase
             #   - kevin/*, feature/*, codie/* → human/Cody-author, comment only
             #   - everything else → comment only (conservative default)
@@ -108,8 +118,9 @@ jobs:
               # Attempt non-destructive rebase. Fresh clone each iter to
               # avoid cross-PR worktree contamination.
               rm -rf wt && mkdir wt && cd wt
-              # Use a token in the URL so we can force-push back.
-              auth_url="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+              # Use the PUSH_PAT in the URL so the force-push fires downstream
+              # Validate (GITHUB_TOKEN pushes don't trigger workflows).
+              auth_url="https://x-access-token:${PUSH_PAT}@github.com/${REPO}.git"
               git clone --no-tags --depth 50 "$auth_url" .
               git fetch origin "$head_ref":"$head_ref"
               git checkout "$head_ref"
@@ -118,11 +129,11 @@ jobs:
                 if git push --force-with-lease origin "$head_ref"; then
                   echo "Rebased and force-pushed PR #${pr_num} cleanly."
                   gh pr comment "$pr_num" --repo "$REPO" --body \
-                    "🤖 **pr-rebase-watchdog**: rebased \`${head_ref}\` onto current \`main\` (branch was DIRTY against main with auto-merge enabled). Validate PR will run on the new tip."
+                    "🤖 **pr-rebase-watchdog**: rebased \`${head_ref}\` onto current \`main\` (branch was DIRTY against main with auto-merge enabled). Validate PR will run on the new tip." || true
                 else
                   echo "Push failed for PR #${pr_num}."
                   gh pr comment "$pr_num" --repo "$REPO" --body \
-                    "🤖 **pr-rebase-watchdog**: rebase succeeded locally but force-push to \`${head_ref}\` failed. Likely a concurrent push — will retry on next sweep."
+                    "🤖 **pr-rebase-watchdog**: rebase succeeded locally but force-push to \`${head_ref}\` failed. Likely a concurrent push — will retry on next sweep." || true
                 fi
               else
                 echo "Rebase conflict for PR #${pr_num}."
@@ -140,7 +151,7 @@ jobs:
                   "" \
                   "Auto-merge stays enabled — once the branch is mergeable again Validate PR will run and the merge will fire." \
                   > /tmp/comment.md
-                gh pr comment "$pr_num" --repo "$REPO" --body-file /tmp/comment.md
+                gh pr comment "$pr_num" --repo "$REPO" --body-file /tmp/comment.md || true
               fi
               cd ..
             else
@@ -161,7 +172,7 @@ jobs:
                   "" \
                   "(Comment posted once per dirty cycle — the \`rebase-needed-comment\` label suppresses repeats. Push to the branch to clear it.)" \
                   > /tmp/comment.md
-                gh pr comment "$pr_num" --repo "$REPO" --body-file /tmp/comment.md
+                gh pr comment "$pr_num" --repo "$REPO" --body-file /tmp/comment.md || true
                 gh pr edit "$pr_num" --repo "$REPO" --add-label "rebase-needed-comment" || true
               fi
             fi
@@ -170,7 +181,9 @@ jobs:
 
       - name: Clear rebase-needed-comment labels on now-clean PRs
         env:
-          GH_TOKEN: ${{ secrets.AUTO_MERGE_PAT || secrets.GITHUB_TOKEN }}
+          # Only reads PRs + removes a label (no push) — GITHUB_TOKEN has the
+          # pull-requests: write granted by this workflow, so no PAT needed here.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail

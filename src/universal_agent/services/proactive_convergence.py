@@ -12,6 +12,7 @@ from pathlib import Path
 import sqlite3
 from typing import Any, Callable, Optional
 
+from universal_agent.services.llm_classifier import _call_llm, _parse_json_response
 from universal_agent.services.proactive_artifacts import (
     ARTIFACT_STATUS_CANDIDATE,
     make_artifact_id,
@@ -32,19 +33,6 @@ Return ONLY JSON with this shape:
   "key_claims": ["2-6 concise claims from the source"],
   "content_type": "tutorial" | "analysis" | "news" | "opinion" | "other"
 }
-"""
-
-_MATCH_SYSTEM = """\
-You judge whether recent videos from independent channels substantially cover the same subject.
-Return ONLY JSON:
-{
-  "matches": [
-    {"video_id": "id", "reason": "short reason"}
-  ],
-  "signal_strength": 8
-}
-Match on semantic topic convergence, not exact wording. Exclude weakly related items.
-Rate the convergence signal_strength from 1-10 (10 being an extremely tight, actionable match).
 """
 
 _IDEATION_SYSTEM = """\
@@ -211,17 +199,19 @@ def sync_topic_signatures_from_csi(
 ) -> dict[str, int]:
     """Sync transcript-backed CSI RSS analysis rows into topic signatures.
 
-    After syncing new signatures, performs deterministic SQL-only cluster
-    detection (GROUP BY primary_topic across distinct channels within
-    ``source_window_hours``) and writes a ``convergence_candidate`` per
-    cluster via :func:`write_convergence_candidate`. The candidate is the
-    new evaluation handle for Atlas's ``/evaluate-and-author-intel-brief``
-    skill.
+    After syncing new signatures, runs convergence detection — SQL recall
+    (GROUP BY topic across distinct channels within ``source_window_hours``)
+    refined by an optional per-bucket LLM precision pass
+    (``_detect_clusters_llm``, default on) — and an ideation sweep
+    (``_run_ideation_sweep`` -> :func:`track_b_ideation_synthesis`) for
+    non-obvious cross-cutting patterns. Both write a ``convergence_candidate``
+    per cluster via :func:`write_convergence_candidate`, the evaluation handle
+    for Atlas's ``/evaluate-and-author-intel-brief`` skill.
 
-    The legacy LLM-driven Track A/B pipeline (``detect_and_queue_convergence``,
-    ``track_a_concrete_convergence``, ``track_b_ideation_synthesis``) is NOT
-    invoked here anymore — it remains callable from the gateway's two
-    hand-trigger convergence endpoints until PR E cleans it up.
+    The legacy per-signature LLM pipeline (``detect_and_queue_convergence`` /
+    ``track_a_concrete_convergence`` / ``create_insight_brief_task``) was
+    removed 2026-05; ``track_b_ideation_synthesis`` is retained and driven by
+    the ideation sweep.
 
     Return shape preserved for backward compatibility with callers that
     assert on ``upserted`` / ``seen``. ``convergence_events`` now reports the
@@ -233,9 +223,28 @@ def sync_topic_signatures_from_csi(
     ensure_schema(conn)
     db = sqlite3.connect(str(csi_db_path))
     db.row_factory = sqlite3.Row
+
+    # Relevance gate (default ON): drop non-domain categories (geopolitics,
+    # cooking, health, noise, ...) at ingest so they never become topic
+    # signatures and therefore never become ideation/convergence candidates.
+    # Gates an already-LLM-produced judgment (rss_event_analysis.category) —
+    # the sanctioned "code gates, LLM synthesizes" pattern. Unknown/NULL/empty
+    # categories are KEPT (only known non-domain categories are excluded).
+    gate_clause = ""
+    gate_params: tuple[str, ...] = ()
+    if _relevance_gate_enabled():
+        denylist = sorted(_relevance_denylist())
+        if denylist:
+            placeholders = ", ".join("?" for _ in denylist)
+            gate_clause = (
+                f"      AND (a.category IS NULL "
+                f"OR LOWER(TRIM(a.category)) NOT IN ({placeholders}))\n"
+            )
+            gate_params = tuple(denylist)
+
     try:
         rows = db.execute(
-            """
+            f"""
             SELECT
                 e.event_id, e.occurred_at, e.subject_json,
                 a.category, a.summary_text, a.analysis_json, a.analyzed_at,
@@ -245,10 +254,10 @@ def sync_topic_signatures_from_csi(
             WHERE e.source = 'youtube_channel_rss'
               AND a.summary_text IS NOT NULL
               AND a.summary_text != ''
-            ORDER BY COALESCE(a.analyzed_at, e.occurred_at) DESC
+            {gate_clause}            ORDER BY COALESCE(a.analyzed_at, e.occurred_at) DESC
             LIMIT ?
             """,
-            (max(1, min(int(limit), 1000)),),
+            (*gate_params, max(1, min(int(limit), 1000))),
         ).fetchall()
     except sqlite3.Error:
         return {"seen": 0, "upserted": 0, "convergence_events": 0, "candidates_written": 0}
@@ -379,6 +388,7 @@ def _detect_clusters_sql(
     *,
     source_window_hours: int,
     min_channels: int,
+    include_secondary: bool = False,
 ) -> list[list[dict[str, Any]]]:
     """Group recent signatures by shared primary topic across ≥ ``min_channels`` channels.
 
@@ -401,13 +411,24 @@ def _detect_clusters_sql(
     ).fetchall()
     signatures = [_hydrate_signature(dict(row)) for row in rows]
 
-    # Bucket by primary topic (case-insensitive, trimmed).
+    # Bucket by topic (case-insensitive, trimmed). Recall stage: when
+    # ``include_secondary`` is set (the LLM-gated path), a video also joins
+    # buckets for its SECONDARY topics so convergences that share only a
+    # secondary topic are surfaced for the downstream LLM precision refine to
+    # judge. The raw-SQL fallback keeps primary-only bucketing because it has
+    # no precision gate to drop the looser matches. (Ported from the retired
+    # track_a fast-filter, which scored overlap on primary + secondary topics.)
     buckets: dict[str, list[dict[str, Any]]] = {}
     for sig in signatures:
-        for topic in sig.get("primary_topics") or []:
+        topics = list(sig.get("primary_topics") or [])
+        if include_secondary:
+            topics += list(sig.get("secondary_topics") or [])
+        seen_keys: set[str] = set()
+        for topic in topics:
             key = str(topic or "").strip().lower()
-            if not key:
+            if not key or key in seen_keys:
                 continue
+            seen_keys.add(key)
             buckets.setdefault(key, []).append(sig)
 
     threshold = max(2, int(min_channels or 2))
@@ -478,6 +499,55 @@ Rules:
 - If there is no genuine specific convergence, return
   {"is_convergence": false, "thesis": "", "converging_video_ids": [], "signal_strength": 0}.
 """
+
+
+# Non-domain CSI categories excluded from the ideation/convergence corpus by
+# the relevance gate. These are the EMPIRICAL category values the live CSI
+# classifier actually emits (verified against rss_event_analysis.category in
+# /var/lib/universal-agent/csi/csi.db, 2026-05-30), NOT the compound taxonomy
+# (`geopolitics_and_conflict`, `ai_coding_and_agents`) an earlier handoff
+# assumed — that mismatch let `geopolitics`/`conflict`/`economics` leak through.
+#
+# Kept (domain): ai_coding, ai_models, ai_news_and_business, ai_business,
+# ai_applications, software_engineering, and `technology`. `technology` is a
+# mixed bucket (genuine vibe-coding/dev content alongside occasional politics);
+# coarse category gating intentionally keeps it rather than discard real dev
+# content — disambiguating within a category is Stage 2's per-video job.
+#
+# Compound aliases (`geopolitics_and_conflict`) are retained as harmless
+# belt-and-suspenders in case the classifier taxonomy reverts.
+_DEFAULT_RELEVANCE_DENYLIST: frozenset[str] = frozenset({
+    "geopolitics",
+    "conflict",
+    "economics",
+    "cooking",
+    "personal_health",
+    "noise",
+    "other_signal",
+    "longform_interviews",
+    "from",  # malformed/junk classifier label (e.g. "From the I/O main stage…")
+    "geopolitics_and_conflict",  # compound-taxonomy alias (defensive)
+})
+
+
+def _relevance_gate_enabled() -> bool:
+    """Category relevance gate on by default; flip UA_RELEVANCE_GATE_ENABLED=0 to
+    ingest every category (legacy behaviour)."""
+    return str(os.getenv("UA_RELEVANCE_GATE_ENABLED", "1")).strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _relevance_denylist() -> frozenset[str]:
+    """Non-domain categories to exclude at ingest. Overridable via
+    UA_IDEATION_RELEVANCE_DENYLIST (comma-separated, case-insensitive) so the
+    list is tunable without a deploy; falls back to the code default when unset
+    or empty."""
+    raw = str(os.getenv("UA_IDEATION_RELEVANCE_DENYLIST", "")).strip()
+    if not raw:
+        return _DEFAULT_RELEVANCE_DENYLIST
+    parsed = {c.strip().lower() for c in raw.split(",") if c.strip()}
+    return frozenset(parsed) if parsed else _DEFAULT_RELEVANCE_DENYLIST
 
 
 def _llm_clustering_enabled() -> bool:
@@ -578,6 +648,7 @@ async def _detect_clusters_llm_async(
         conn,
         source_window_hours=source_window_hours,
         min_channels=min_channels,
+        include_secondary=True,
     )
     confirmed: list[dict[str, Any]] = []
     for bucket in buckets:
@@ -594,7 +665,7 @@ def _detect_clusters_llm(
     min_channels: int,
 ) -> list[dict[str, Any]]:
     """Sync wrapper around the async LLM clustering (mirrors the loop-handling
-    pattern used by ``detect_and_queue_convergence``)."""
+    pattern used by the other sync wrappers in this module)."""
     coro = _detect_clusters_llm_async(
         conn, source_window_hours=source_window_hours, min_channels=min_channels
     )
@@ -701,6 +772,135 @@ def _run_ideation_sweep(
 
     nest_asyncio.apply()
     return loop.run_until_complete(coro)
+
+
+# ── Pre-Task-Hub editorial triage ──────────────────────────────────────
+#
+# Today every candidate (convergence + ideation) unconditionally creates a Task
+# Hub item, and a downstream VP mission decides ship/skip — so every idea,
+# including skips, becomes a Kanban card. This cheap LLM triage runs at the
+# candidate-write chokepoint so ONLY "ship" candidates create a Task Hub item.
+# skip/defer get a recorded verdict but NO task and NO card. Mirrors Phase 1 of
+# the .claude/skills/evaluate-and-author-intel-brief/SKILL.md editorial test.
+
+_INTEL_TRIAGE_SYSTEM = """\
+You are an editorial gate for a proactive intelligence system. A candidate
+pattern has been detected across recent AI/developer videos. Decide whether it
+is worth turning into an operator-facing intel brief.
+
+You are given the candidate's thesis, an optional "why it matters" value, the
+per-source claims that support it, and an index of the recent briefs already
+shipped/skipped in the last 48 hours.
+
+Apply this editorial test:
+- SHIP only if it is a REAL pattern genuinely supported by the claims of >=2 of
+  its sources (not apophenia or over-generalization from too few/weak signals)
+  AND it is NOVEL versus the recent briefs index (not a near-duplicate of
+  something already shipped OR skipped in the last 48h).
+- SKIP if it is generic, unsupported by the sources, or a duplicate of a recent
+  brief/verdict.
+- DEFER if it is promising but under-sourced (worth revisiting once more sources
+  land).
+
+Also set demo_amenable=true ONLY if the candidate implies a concrete, buildable
+software/coding demo.
+
+Return ONLY JSON:
+{"verdict":"ship|skip|defer","reasoning":"one or two sentences","demo_amenable":false}
+"""
+
+_TRIAGE_ALLOWED_VERDICTS = {"ship", "skip", "defer"}
+
+
+def _intel_triage_enabled() -> bool:
+    return str(os.getenv("UA_INTEL_TRIAGE_ENABLED", "1")).strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _run_triage_llm(*, system: str, user: str, max_tokens: int = 400, model: str | None = None) -> str:
+    """Sync wrapper around the async ``_call_llm`` seam.
+
+    Kept thin and separate so tests can monkeypatch
+    ``proactive_convergence._call_llm`` with either a sync or async callable.
+    Mirrors the loop-handling pattern used by the clustering/ideation wrappers.
+    """
+    result = _call_llm(system=system, user=user, max_tokens=max_tokens, model=model)
+    if not asyncio.iscoroutine(result):
+        return result
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(result)
+    import nest_asyncio
+
+    nest_asyncio.apply()
+    return loop.run_until_complete(result)
+
+
+def triage_candidate(
+    conn: sqlite3.Connection,
+    *,
+    candidate_kind: str,
+    thesis: str,
+    value: str,
+    signatures: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Cheap editorial validation BEFORE Task Hub.
+
+    Returns ``{"kind": "ship"|"skip"|"defer"|"retry", "reasoning": str,
+    "demo_amenable": bool, "model": str}``. ``'retry'`` means the LLM call
+    failed/parsed badly — the caller must NOT finalize and NOT create a task
+    (it will be re-tried on the next sweep run because verdict='' is not final).
+    """
+    from universal_agent.services.recent_briefs_index import read_index_or_fallback
+
+    try:
+        idx = read_index_or_fallback(conn, lookback_hours=48, limit=200)
+    except Exception:  # noqa: BLE001 — defensive; helper should never raise.
+        idx = ""
+
+    compact_sources = [
+        {
+            "channel_name": s.get("channel_name") or s.get("channel_id") or "",
+            "video_title": s.get("video_title") or "",
+            "key_claims": (s.get("key_claims") or [])[:6],
+        }
+        for s in (signatures or [])
+    ]
+    user = json.dumps(
+        {
+            "candidate_kind": str(candidate_kind or "convergence"),
+            "thesis": str(thesis or ""),
+            "value": str(value or ""),
+            "sources": compact_sources,
+            "recent_briefs_index": idx,
+        },
+        ensure_ascii=True,
+    )
+
+    from universal_agent.utils.model_resolution import resolve_haiku
+
+    # Triage is deliberately cheap (Haiku tier); override with UA_INTEL_TRIAGE_MODEL.
+    model = os.getenv("UA_INTEL_TRIAGE_MODEL", "").strip() or resolve_haiku()
+    try:
+        raw = _run_triage_llm(system=_INTEL_TRIAGE_SYSTEM, user=user, max_tokens=400, model=model)
+        parsed = _parse_json_response(raw)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("intel triage LLM failed: %s", exc)
+        return {"kind": "retry", "reasoning": "triage unavailable", "demo_amenable": False, "model": model}
+
+    if not isinstance(parsed, dict):
+        return {"kind": "retry", "reasoning": "triage unavailable", "demo_amenable": False, "model": model}
+    verdict = str(parsed.get("verdict") or "").strip().lower()
+    if verdict not in _TRIAGE_ALLOWED_VERDICTS:
+        return {"kind": "retry", "reasoning": "triage unavailable", "demo_amenable": False, "model": model}
+    return {
+        "kind": verdict,
+        "reasoning": str(parsed.get("reasoning") or "").strip(),
+        "demo_amenable": bool(parsed.get("demo_amenable")),
+        "model": model,
+    }
 
 
 def write_convergence_candidate(
@@ -833,21 +1033,96 @@ def write_convergence_candidate(
         title = f"ATLAS evaluate convergence candidate: {headline}"
         labels = ["agent-ready", "convergence", "atlas", "candidate"]
 
-    task = queue_proactive_task(
-        conn,
-        task_id=task_id,
-        source_kind="convergence_candidate",
-        source_ref=candidate_id,
-        title=title,
-        description=description,
-        priority=3,
-        labels=labels,
-        metadata=metadata_payload,
-    )
+    # ── Pre-Task-Hub editorial triage ──────────────────────────────
+    # Decide whether this candidate is worth a Task Hub item BEFORE we create
+    # one. With triage disabled we preserve the legacy behavior exactly (always
+    # queue, verdict='') so the flag is a clean rollback.
+    triage: dict[str, Any] = {}
+    row_verdict = ""
+    row_verdict_reasoning = ""
+    row_evaluated_at = ""
+    persist_task_id = ""
+    task: dict[str, Any] = {}
+    newly_queued = False
+
+    if not _intel_triage_enabled():
+        # Legacy path: always queue a task, persist row with verdict=''.
+        task = queue_proactive_task(
+            conn,
+            task_id=task_id,
+            source_kind="convergence_candidate",
+            source_ref=candidate_id,
+            title=title,
+            description=description,
+            priority=3,
+            labels=labels,
+            metadata=metadata_payload,
+        )
+        persist_task_id = str(task.get("task_id") or task_id)
+        newly_queued = True
+    else:
+        triage = triage_candidate(
+            conn,
+            candidate_kind=candidate_kind,
+            thesis=thesis,
+            value=value,
+            signatures=signatures,
+        )
+        v = str(triage.get("kind") or "retry")
+        if v == "ship":
+            # Worth a card — queue the Task Hub item exactly as before. The
+            # deterministic task_id keeps a re-queue on a later run idempotent.
+            metadata_payload["triage"] = {
+                "kind": v,
+                "reasoning": triage.get("reasoning", ""),
+                "demo_amenable": bool(triage.get("demo_amenable")),
+                "model": triage.get("model", ""),
+            }
+            task = queue_proactive_task(
+                conn,
+                task_id=task_id,
+                source_kind="convergence_candidate",
+                source_ref=candidate_id,
+                title=title,
+                description=description,
+                priority=3,
+                labels=labels,
+                metadata=metadata_payload,
+            )
+            persist_task_id = str(task.get("task_id") or task_id)
+            newly_queued = True
+            # verdict stays '' so the downstream mission/skill still finalizes it.
+        elif v in ("skip", "defer"):
+            # Recorded verdict, NO task, NO card.
+            row_verdict = v
+            row_verdict_reasoning = str(triage.get("reasoning") or "")
+            row_evaluated_at = _now_iso()
+            newly_queued = False
+        else:
+            # retry: triage unavailable — persist with verdict='' and NO task so
+            # it is re-tried on the next sweep run (verdict='' is not final).
+            newly_queued = False
 
     # Persist / refresh the candidate row.
     now = _now_iso()
     created_at = (existing or {}).get("created_at") or now
+    row_metadata = {
+        "preferred_vp": "vp.general.primary",
+        "headline": headline,
+        "candidate_kind": "ideation" if is_ideation else "convergence",
+        "thesis": thesis,
+        "value": value,
+        "signal_strength": float(signal_strength or 0.0),
+        "source_window_hours": int(source_window_hours),
+        "task_status": str(task.get("status") or ""),
+    }
+    if triage:
+        row_metadata["triage"] = {
+            "kind": triage.get("kind", ""),
+            "reasoning": triage.get("reasoning", ""),
+            "demo_amenable": bool(triage.get("demo_amenable")),
+            "model": triage.get("model", ""),
+        }
     conn.execute(
         """
         INSERT INTO convergence_candidates (
@@ -855,7 +1130,7 @@ def write_convergence_candidate(
             primary_topics_json, signatures_json, task_id, verdict,
             verdict_reasoning, artifact_id, detected_at, evaluated_at,
             created_at, updated_at, metadata_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, '', '', '', ?, '', ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?)
         ON CONFLICT(candidate_id) DO UPDATE SET
             video_ids_json=excluded.video_ids_json,
             channel_names_json=excluded.channel_names_json,
@@ -863,6 +1138,9 @@ def write_convergence_candidate(
             primary_topics_json=excluded.primary_topics_json,
             signatures_json=excluded.signatures_json,
             task_id=excluded.task_id,
+            verdict=excluded.verdict,
+            verdict_reasoning=excluded.verdict_reasoning,
+            evaluated_at=excluded.evaluated_at,
             updated_at=excluded.updated_at,
             metadata_json=excluded.metadata_json
         """,
@@ -873,26 +1151,20 @@ def write_convergence_candidate(
             len(channel_names),
             _json_dumps(primary_topics),
             _json_dumps(compact_signatures),
-            str(task.get("task_id") or task_id),
+            persist_task_id,
+            row_verdict,
+            row_verdict_reasoning,
             now,
+            row_evaluated_at,
             created_at,
             now,
-            _json_dumps({
-                "preferred_vp": "vp.general.primary",
-                "headline": headline,
-                "candidate_kind": "ideation" if is_ideation else "convergence",
-                "thesis": thesis,
-                "value": value,
-                "signal_strength": float(signal_strength or 0.0),
-                "source_window_hours": int(source_window_hours),
-                "task_status": str(task.get("status") or ""),
-            }),
+            _json_dumps(row_metadata),
         ),
     )
     conn.commit()
 
     row = _get_convergence_candidate(conn, candidate_id) or {}
-    row["_newly_queued"] = True
+    row["_newly_queued"] = newly_queued
     row["_task"] = task
     return row
 
@@ -1012,115 +1284,6 @@ def get_topic_signature(conn: sqlite3.Connection, video_id: str) -> Optional[dic
     return _hydrate_signature(dict(row)) if row else None
 
 
-def detect_and_queue_convergence(
-    conn: sqlite3.Connection,
-    *,
-    signature: dict[str, Any],
-    window_hours: int = 72,
-    min_channels: int = 2,
-) -> list[dict[str, Any]]:
-    """Detect concrete convergence and abstract insights synchronously.
-
-    Legacy LLM-driven pipeline. Still callable from gateway hand-trigger
-    endpoints; no longer invoked by ``sync_topic_signatures_from_csi``
-    (replaced by SQL cluster detection + ``write_convergence_candidate``).
-    Scheduled for removal in PR E.
-    """
-    coro = _detect_and_queue_convergence_async(
-        conn,
-        signature=signature,
-        window_hours=window_hours,
-        min_channels=min_channels,
-    )
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-    if loop.is_running():
-        import nest_asyncio
-
-        nest_asyncio.apply()
-        return loop.run_until_complete(coro)
-    return loop.run_until_complete(coro)
-
-
-async def detect_and_queue_convergence_llm(
-    conn: sqlite3.Connection,
-    *,
-    signature: dict[str, Any],
-    window_hours: int = 72,
-    min_channels: int = 2,
-) -> list[dict[str, Any]]:
-    """Async API used by gateway endpoints that already run inside an event loop."""
-    return await _detect_and_queue_convergence_async(
-        conn,
-        signature=signature,
-        window_hours=window_hours,
-        min_channels=min_channels,
-    )
-
-
-async def _detect_and_queue_convergence_async(
-    conn: sqlite3.Connection,
-    *,
-    signature: dict[str, Any],
-    window_hours: int = 72,
-    min_channels: int = 2,
-) -> list[dict[str, Any]]:
-    """Core async convergence detection across both Track A and Track B."""
-    ensure_schema(conn)
-    candidates = _recent_other_channel_signatures(conn, signature=signature, window_hours=window_hours)
-
-    created_events = []
-
-    matched_a, insights_b = await asyncio.gather(
-        track_a_concrete_convergence(signature, candidates),
-        track_b_ideation_synthesis([signature] + candidates[:19]),
-    )
-
-    # Process Track A
-    channels_a = {
-        str(signature.get("channel_name") or signature.get("channel_id") or "").strip(),
-        *[str(item.get("channel_name") or item.get("channel_id") or "").strip() for item in matched_a],
-    }
-    channels_a.discard("")
-    if len(channels_a) >= max(2, int(min_channels or 2)):
-        participants = [signature, *matched_a]
-        # Pull the stashed signal_strength off any matched item (set by
-        # track_a_concrete_convergence). Default 0.0 when not present so callers
-        # of create_convergence_brief_task can still invoke it with raw sigs.
-        signal_strength = 0.0
-        for item in matched_a:
-            val = item.get("_signal_strength")
-            if val is not None:
-                try:
-                    signal_strength = float(val)
-                except (TypeError, ValueError):
-                    signal_strength = 0.0
-                break
-        result_a = create_convergence_brief_task(
-            conn, signatures=participants, signal_strength=signal_strength
-        )
-        created_events.append(result_a)
-
-    # Process Track B
-    for insight in insights_b:
-        sigs = insight["signatures"]
-        channels_b = {str(item.get("channel_name") or item.get("channel_id") or "").strip() for item in sigs}
-        channels_b.discard("")
-        if len(channels_b) >= max(2, int(min_channels or 2)):
-            result_b = create_insight_brief_task(
-                conn,
-                narrative=insight["narrative"],
-                value=insight["value"],
-                signatures=sigs,
-                confidence=float(insight.get("confidence") or 0.0),
-            )
-            created_events.append(result_b)
-
-    return created_events
-
-
 async def extract_topic_signature_from_text(
     *,
     video_id: str,
@@ -1168,97 +1331,6 @@ async def extract_topic_signature_from_text(
         "content_type": str((parsed or {}).get("content_type") or "other").strip().lower(),
         "metadata": {**(metadata or {}), "signature_method": "llm" if "fallback_error" not in (parsed or {}) else "fallback", **({"fallback_error": parsed.get("fallback_error")} if isinstance(parsed, dict) and parsed.get("fallback_error") else {})},
     }
-
-
-async def track_a_concrete_convergence(
-    signature: dict[str, Any],
-    candidates: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Track A: Fast Filter -> Deep Semantic Comparison -> Quality Gate."""
-    if not candidates:
-        return []
-
-    # 1. Fast Filter
-    sig_topics = set(signature.get("primary_topics", []) + signature.get("secondary_topics", []))
-    sig_topics = {t.lower() for t in sig_topics}
-
-    scored_candidates = []
-    for cand in candidates:
-        cand_topics = set(cand.get("primary_topics", []) + cand.get("secondary_topics", []))
-        cand_topics = {t.lower() for t in cand_topics}
-        overlap = len(sig_topics.intersection(cand_topics))
-        scored_candidates.append((overlap, cand))
-
-    # Keep top 10 with at least some overlap
-    scored_candidates.sort(key=lambda x: x[0], reverse=True)
-    top_candidates = [cand for overlap, cand in scored_candidates[:10] if overlap > 0]
-
-    if not top_candidates:
-        return []
-
-    # 2. Deep Semantic Comparison
-    compact_candidates = [
-        {
-            "video_id": item.get("video_id"),
-            "channel": item.get("channel_name") or item.get("channel_id"),
-            "title": item.get("video_title"),
-            "primary_topics": item.get("primary_topics"),
-            "secondary_topics": item.get("secondary_topics"),
-            "key_claims": item.get("key_claims"),
-        }
-        for item in top_candidates
-    ]
-    user = json.dumps(
-        {
-            "new_signature": {
-                "video_id": signature.get("video_id"),
-                "channel": signature.get("channel_name") or signature.get("channel_id"),
-                "title": signature.get("video_title"),
-                "primary_topics": signature.get("primary_topics"),
-                "secondary_topics": signature.get("secondary_topics"),
-                "key_claims": signature.get("key_claims"),
-            },
-            "recent_candidates": compact_candidates,
-        },
-        ensure_ascii=True,
-    )
-    try:
-        from universal_agent.services.llm_classifier import (
-            _call_llm,
-            _parse_json_response,
-        )
-
-        raw = await _call_llm(system=_MATCH_SYSTEM, user=user, max_tokens=1200)
-        parsed = _parse_json_response(raw)
-
-        # 3. Quality Gate
-        if not isinstance(parsed, dict):
-            return []
-
-        signal_strength = parsed.get("signal_strength", 0)
-        if signal_strength < 8:
-            return []
-
-        matched_ids = {
-            str(item.get("video_id") or "").strip()
-            for item in (parsed.get("matches") if isinstance(parsed.get("matches"), list) else []) or []
-            if isinstance(item, dict)
-        }
-        matched = [item for item in candidates if str(item.get("video_id") or "").strip() in matched_ids]
-        if matched:
-            # Stash the LLM-rated signal_strength on a sentinel key so the caller
-            # can persist it into the brief artifact metadata downstream. Using a
-            # leading underscore avoids colliding with topic signature fields.
-            try:
-                strength_val = float(signal_strength)
-            except (TypeError, ValueError):
-                strength_val = 0.0
-            for item in matched:
-                item["_signal_strength"] = strength_val
-            return matched
-    except Exception:
-        pass
-    return []
 
 
 async def track_b_ideation_synthesis(
@@ -1331,251 +1403,6 @@ async def track_b_ideation_synthesis(
     return []
 
 
-def create_convergence_brief_task(
-    conn: sqlite3.Connection,
-    *,
-    signatures: list[dict[str, Any]],
-    signal_strength: float = 0.0,
-) -> dict[str, Any]:
-    """Queue a convergence brief task and artifact from matched signatures.
-
-    ``signal_strength`` is the LLM-rated 1-10 convergence score from
-    :func:`track_a_concrete_convergence`. It is persisted into the artifact
-    metadata under ``signal_strength`` (normalized to a float) for downstream
-    scoring (e.g. ``hourly_insight_email``)."""
-    ensure_schema(conn)
-    if len(signatures) < 2:
-        raise ValueError("at least two signatures are required")
-    try:
-        strength = float(signal_strength)
-    except (TypeError, ValueError):
-        strength = 0.0
-    # Count of distinct channels backing this convergence — used by the
-    # hourly-email composite-score channel_breadth term.
-    supporting_channels = {
-        str(item.get("channel_name") or item.get("channel_id") or "").strip()
-        for item in signatures
-    }
-    supporting_channels.discard("")
-    supporting_channel_count = len(supporting_channels)
-    primary_topic = _primary_topic(signatures)
-    video_ids = [str(item.get("video_id") or "").strip() for item in signatures if str(item.get("video_id") or "").strip()]
-    event_id = _convergence_event_id(primary_topic=primary_topic, video_ids=video_ids)
-    task_id = f"convergence-brief:{event_id.removeprefix('conv_')}"
-    preference_context = _preference_context(conn, task_type="convergence_brief", topic_tags=["convergence", primary_topic])
-    description = _brief_task_description(
-        primary_topic=primary_topic,
-        signatures=signatures,
-        preference_context=preference_context,
-    )
-    task = queue_proactive_task(
-        conn,
-        task_id=task_id,
-        source_kind="convergence_detection",
-        source_ref=event_id,
-        title=f"ATLAS convergence brief: {primary_topic}",
-        description=description,
-        priority=3,
-        labels=["agent-ready", "convergence", "atlas", "research"],
-        metadata={
-            "source": "convergence_detection",
-            "event_id": event_id,
-            "primary_topic": primary_topic,
-            "video_ids": video_ids,
-            "preferred_vp": "vp.general.primary",
-        },
-    )
-    artifact = upsert_artifact(
-        conn,
-        artifact_id=make_artifact_id(
-            source_kind="convergence_detection",
-            source_ref=event_id,
-            artifact_type="convergence_brief_task",
-            title=primary_topic,
-        ),
-        artifact_type="convergence_brief_task",
-        source_kind="convergence_detection",
-        source_ref=event_id,
-        title=str(task.get("title") or ""),
-        summary=f"Queued ATLAS convergence brief for {len(signatures)} independent sources on {primary_topic}.",
-        status=ARTIFACT_STATUS_CANDIDATE,
-        priority=3,
-        topic_tags=["convergence", primary_topic],
-        metadata={
-            "task_id": task_id,
-            "event_id": event_id,
-            "video_ids": video_ids,
-            "signal_strength": strength,
-            "supporting_channel_count": supporting_channel_count,
-        },
-    )
-    _record_convergence_event(conn, event_id=event_id, primary_topic=primary_topic, signatures=signatures, task_id=task_id, artifact_id=artifact["artifact_id"])
-    return {"event": get_convergence_event(conn, event_id), "task": task, "artifact": artifact}
-
-
-def create_insight_brief_task(
-    conn: sqlite3.Connection,
-    *,
-    narrative: str,
-    value: str,
-    signatures: list[dict[str, Any]],
-    confidence: float = 0.0,
-) -> dict[str, Any]:
-    """Queue an insight brief task from an abstract ideation narrative.
-
-    ``confidence`` is the LLM self-rating (0.0-1.0) from the Track-B ideation
-    prompt and is persisted into the artifact metadata under ``confidence``
-    for downstream scoring (e.g. ``hourly_insight_email``)."""
-    ensure_schema(conn)
-    primary_topic = (narrative[:47] + "...") if len(narrative) > 50 else narrative
-    video_ids = [str(item.get("video_id") or "").strip() for item in signatures if str(item.get("video_id") or "").strip()]
-    event_id = _convergence_event_id(primary_topic=primary_topic, video_ids=video_ids)
-    try:
-        conf = float(confidence)
-    except (TypeError, ValueError):
-        conf = 0.0
-    conf = max(0.0, min(1.0, conf))
-    supporting_channels = {
-        str(item.get("channel_name") or item.get("channel_id") or "").strip()
-        for item in signatures
-    }
-    supporting_channels.discard("")
-    supporting_channel_count = len(supporting_channels)
-
-    task_id = f"insight-brief:{event_id.removeprefix('conv_')}"
-    preference_context = _preference_context(conn, task_type="insight_brief", topic_tags=["insight", primary_topic])
-
-    lines = [
-        "FRAMING: This task was generated by the csi_convergence_sync cron, NOT by Kevin.",
-        "Kevin did not ask for this. When composing any email or chat reply, open with",
-        "phrasing like 'I noticed a non-obvious pattern emerging — here's the insight' or",
-        "'Heads up: insight signal on X.' Do NOT say 'as you requested', 'you asked for',",
-        "'here's the X evaluation you wanted', or any framing that implies this was",
-        "operator-initiated. If you cannot honestly attribute the request to Kevin, you",
-        "must frame it as proactive discovery.",
-        "",
-        f"Generate an insight brief about: {primary_topic}",
-        "",
-        "An abstract macro-trend or non-obvious relationship has been detected.",
-        f"Narrative: {narrative}",
-        f"Value/Actionability: {value}",
-        "",
-        "Sources:",
-    ]
-    for item in signatures:
-        claims = "; ".join(item.get("key_claims") or []) or "(no extracted claims)"
-        lines.append(
-            f"- {item.get('channel_name') or item.get('channel_id')}: {item.get('video_title') or item.get('video_id')} | {item.get('video_url') or ''} | claims: {claims}"
-        )
-    lines.extend(
-        [
-            "",
-            "Produce a concise brief with:",
-            "1. THE INSIGHT: what is the non-obvious relationship or macro-trend.",
-            "2. THE EVIDENCE: how the sources support this.",
-            "3. SO WHAT: why Kevin should care and what is actionable.",
-            "",
-            "DELIVERABLE FILENAME CONTRACT (mandatory):",
-            "- HTML rendering MUST be saved as `insight_artifact.html` at the workspace root.",
-            "- PDF rendering MUST be saved as `insight_artifact.pdf` at the workspace root.",
-            "- Do NOT use `brief.html` / `brief.pdf` — those collide visually with `BRIEF.md`",
-            "  (the pre-work self-briefing artifact) and have caused operator confusion.",
-            "- If you delegate this work to another VP/agent, propagate this contract verbatim.",
-            "",
-            "Store the final brief as a durable artifact via "
-            "services.proactive_artifacts.upsert_artifact. Do NOT email Kevin",
-            "directly. Delivery is handled by the consolidated digest pipeline.",
-        ]
-    )
-    if preference_context:
-        lines.extend(["", "Preference context:", preference_context])
-    description = "\n".join(lines)
-
-    task = queue_proactive_task(
-        conn,
-        task_id=task_id,
-        source_kind="insight_detection",
-        source_ref=event_id,
-        title=f"ATLAS insight brief: {primary_topic}",
-        description=description,
-        priority=3,
-        labels=["agent-ready", "insight", "atlas", "research"],
-        metadata={
-            "source": "insight_detection",
-            "event_id": event_id,
-            "primary_topic": primary_topic,
-            "video_ids": video_ids,
-            "preferred_vp": "vp.general.primary",
-        },
-    )
-    artifact = upsert_artifact(
-        conn,
-        artifact_id=make_artifact_id(
-            source_kind="insight_detection",
-            source_ref=event_id,
-            artifact_type="insight_brief_task",
-            title=primary_topic,
-        ),
-        artifact_type="insight_brief_task",
-        source_kind="insight_detection",
-        source_ref=event_id,
-        title=str(task.get("title") or ""),
-        summary=f"Queued ATLAS insight brief for {len(signatures)} sources.",
-        status=ARTIFACT_STATUS_CANDIDATE,
-        priority=3,
-        topic_tags=["insight", primary_topic],
-        metadata={
-            "task_id": task_id,
-            "event_id": event_id,
-            "video_ids": video_ids,
-            "confidence": conf,
-            "supporting_channel_count": supporting_channel_count,
-        },
-    )
-    _record_convergence_event(conn, event_id=event_id, primary_topic=primary_topic, signatures=signatures, task_id=task_id, artifact_id=artifact["artifact_id"])
-    return {"event": get_convergence_event(conn, event_id), "task": task, "artifact": artifact}
-
-
-def get_convergence_event(conn: sqlite3.Connection, event_id: str) -> Optional[dict[str, Any]]:
-    """Fetch a single convergence event by event_id, returning None if not found."""
-    ensure_schema(conn)
-    row = conn.execute(
-        "SELECT * FROM proactive_convergence_events WHERE event_id = ? LIMIT 1",
-        (str(event_id or "").strip(),),
-    ).fetchone()
-    return _hydrate_event(dict(row)) if row else None
-
-
-def _recent_other_channel_signatures(
-    conn: sqlite3.Connection,
-    *,
-    signature: dict[str, Any],
-    window_hours: int,
-) -> list[dict[str, Any]]:
-    """Query signatures from other channels within a rolling time window."""
-    ingested = _parse_time(signature.get("ingested_at")) or datetime.now(timezone.utc)
-    start = (ingested - timedelta(hours=max(1, int(window_hours or 72)))).isoformat()
-    end = ingested.isoformat()
-    channel_id = str(signature.get("channel_id") or "").strip()
-    video_id = str(signature.get("video_id") or "").strip()
-    content_type = str(signature.get("content_type") or "").strip()
-    rows = conn.execute(
-        """
-        SELECT *
-        FROM proactive_topic_signatures
-        WHERE ingested_at >= ?
-          AND ingested_at <= ?
-          AND video_id != ?
-          AND (? = '' OR channel_id != ?)
-          AND (? = '' OR content_type = ?)
-        ORDER BY ingested_at DESC
-        LIMIT 80
-        """,
-        (start, end, video_id, channel_id, channel_id, content_type, content_type),
-    ).fetchall()
-    return [_hydrate_signature(dict(row)) for row in rows]
-
-
 def _analysis_topics(*, analysis: dict[str, Any], category: str, title: str) -> list[str]:
     """Extract topic strings from CSI analysis fields and category."""
     raw_topics: list[Any] = []
@@ -1639,47 +1466,6 @@ def _primary_topic(signatures: list[dict[str, Any]]) -> str:
     return sorted(counts.items(), key=lambda item: (-item[1], item[0].lower()))[0][0]
 
 
-def _brief_task_description(*, primary_topic: str, signatures: list[dict[str, Any]], preference_context: str = "") -> str:
-    """Build the task description for a convergence brief research task."""
-    lines = [
-        "FRAMING: This task was generated by the csi_convergence_sync cron, NOT by Kevin.",
-        "Kevin did not ask for this. When composing any email or chat reply, open with",
-        "phrasing like 'I noticed multiple independent sources are covering X — here's a",
-        "synthesis' or 'Heads up: convergence signal on X.' Do NOT say 'as you requested',",
-        "'you asked for', 'here's the X evaluation you wanted', or any framing that implies",
-        "this was operator-initiated. If you cannot honestly attribute the request to Kevin,",
-        "you must frame it as proactive discovery.",
-        "",
-        f"Generate a convergence brief about: {primary_topic}",
-        "",
-        "Multiple independent channels covered this topic recently.",
-        "",
-        "Sources:",
-    ]
-    for item in signatures:
-        claims = "; ".join(item.get("key_claims") or []) or "(no extracted claims)"
-        lines.append(
-            f"- {item.get('channel_name') or item.get('channel_id')}: {item.get('video_title') or item.get('video_id')} | {item.get('video_url') or ''} | claims: {claims}"
-        )
-    lines.extend(
-        [
-            "",
-            "Produce a concise brief with:",
-            "1. CONVERGENCE SIGNAL: what topic is converging and why now.",
-            "2. CONSENSUS: where sources agree.",
-            "3. DIVERGENCE: where sources differ.",
-            "4. SO WHAT: why Kevin should care and what is actionable.",
-            "",
-            "Store the final brief as a durable artifact via "
-            "services.proactive_artifacts.upsert_artifact. Do NOT email Kevin",
-            "directly. Delivery is handled by the consolidated digest pipeline.",
-        ]
-    )
-    if preference_context:
-        lines.extend(["", "Preference context:", preference_context])
-    return "\n".join(lines)
-
-
 def _preference_context(conn: sqlite3.Connection, *, task_type: str, topic_tags: list[str]) -> str:
     """Fetch preference delegation context, returning empty string on failure."""
     try:
@@ -1690,50 +1476,6 @@ def _preference_context(conn: sqlite3.Connection, *, task_type: str, topic_tags:
         return get_delegation_context(conn, task_type=task_type, topic_tags=topic_tags)
     except Exception:
         return ""
-
-
-def _record_convergence_event(
-    conn: sqlite3.Connection,
-    *,
-    event_id: str,
-    primary_topic: str,
-    signatures: list[dict[str, Any]],
-    task_id: str,
-    artifact_id: str,
-) -> None:
-    """Persist a convergence event row to the database."""
-    now = _now_iso()
-    video_ids = [str(item.get("video_id") or "").strip() for item in signatures if str(item.get("video_id") or "").strip()]
-    channel_names = [str(item.get("channel_name") or item.get("channel_id") or "").strip() for item in signatures]
-    conn.execute(
-        """
-        INSERT INTO proactive_convergence_events (
-            event_id, primary_topic, video_ids_json, channel_names_json,
-            brief_task_id, artifact_id, detected_at, metadata_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(event_id) DO UPDATE SET
-            brief_task_id=excluded.brief_task_id,
-            artifact_id=excluded.artifact_id,
-            metadata_json=excluded.metadata_json
-        """,
-        (
-            event_id,
-            primary_topic,
-            _json_dumps(video_ids),
-            _json_dumps(channel_names),
-            task_id,
-            artifact_id,
-            now,
-            _json_dumps({"source_count": len(signatures)}),
-        ),
-    )
-    conn.commit()
-
-
-def _convergence_event_id(*, primary_topic: str, video_ids: list[str]) -> str:
-    """Generate a deterministic convergence event ID from topic and video IDs."""
-    seed = "|".join([primary_topic.lower(), *sorted(video_ids)])
-    return f"conv_{hashlib.sha256(seed.encode()).hexdigest()[:16]}"
 
 
 def _hydrate_signature(row: dict[str, Any]) -> dict[str, Any]:

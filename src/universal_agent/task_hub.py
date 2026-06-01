@@ -24,21 +24,48 @@ TASK_STATUS_DELEGATED = "delegated"           # VP is actively working this
 TASK_STATUS_PENDING_REVIEW = "pending_review"  # VP done, Simone sign-off needed
 TASK_STATUS_SCHEDULED = "scheduled"            # Time-bound: cron trigger will execute at due_at
 
+# stale_state marker for terminal-SUCCESS tasks the operator cleared off the
+# dashboard. Such rows keep ``status = completed`` — they are deliberately NOT
+# demoted to ``parked``. Demoting them used to corrupt status-count consumers
+# (Simone's morning digest read archived-done work as a "parked backlog needing
+# triage" — a recurring false positive). ``parked`` is reserved for genuinely
+# deferred / abandoned work. See docs/03_Operations/107_Task_Hub_Master_Reference.
+STALE_STATE_DASHBOARD_HIDDEN = "dashboard_hidden"
+
 TERMINAL_STATUSES = {TASK_STATUS_COMPLETED, TASK_STATUS_PARKED, TASK_STATUS_CANCELLED}
 ACTIVE_STATUSES = {
     TASK_STATUS_OPEN, TASK_STATUS_IN_PROGRESS, TASK_STATUS_BLOCKED,
     TASK_STATUS_REVIEW, TASK_STATUS_DELEGATED, TASK_STATUS_PENDING_REVIEW,
     TASK_STATUS_SCHEDULED,
 }
+# Task action verbs accepted by perform_task_action. Named constants mirror the
+# TASK_STATUS_* pattern above so consumers can reference symbols instead of raw
+# string literals scattered across the codebase.
+ACTION_SEIZE = "seize"
+ACTION_REJECT = "reject"
+ACTION_BLOCK = "block"
+ACTION_UNBLOCK = "unblock"
+ACTION_REVIEW = "review"
+ACTION_COMPLETE = "complete"
+ACTION_PARK = "park"
+ACTION_SNOOZE = "snooze"
+ACTION_DELEGATE = "delegate"
+ACTION_APPROVE = "approve"
+# Hermes-adaptation Phase B.1 — operator-driven "unstick" verbs.
+ACTION_REHYDRATE = "rehydrate"
+ACTION_RE_EVALUATE = "re_evaluate"
+ACTION_REDIRECT_TO = "redirect_to"
+ACTION_REQUEST_REVISION = "request_revision"
+
 VALID_ACTIONS = {
-    "seize", "reject", "block", "unblock", "review", "complete", "park",
-    "snooze", "delegate", "approve",
+    ACTION_SEIZE, ACTION_REJECT, ACTION_BLOCK, ACTION_UNBLOCK, ACTION_REVIEW,
+    ACTION_COMPLETE, ACTION_PARK, ACTION_SNOOZE, ACTION_DELEGATE, ACTION_APPROVE,
     # Hermes-adaptation Phase B.1 — operator-driven "unstick" verbs.
     # Defined for tasks wedged in needs_review / blocked because the
     # heartbeat or todo retry budget tripped. Operator-only initially;
     # Simone-callable tool surface ships in Phase D once task_hub_runs
     # gives her the failure-context evidence to judge from.
-    "rehydrate", "re_evaluate", "redirect_to", "request_revision",
+    ACTION_REHYDRATE, ACTION_RE_EVALUATE, ACTION_REDIRECT_TO, ACTION_REQUEST_REVISION,
 }
 
 TRIGGER_TYPES = {"immediate", "scheduled", "event_triggered", "human_approved", "brainstorm", "heartbeat_poll", "vp_dispatch"}
@@ -2834,11 +2861,12 @@ def list_completed_tasks(conn: sqlite3.Connection, *, limit: int = 80) -> list[d
         SELECT *
         FROM task_hub_items
         WHERE status = ?
+          AND COALESCE(stale_state, '') != ?
           AND {_VP_MISSION_MIRROR_HAS_PARENT_CLAUSE}
         ORDER BY updated_at DESC
         LIMIT ?
         """,
-        (TASK_STATUS_COMPLETED, max(1, min(int(limit), 500))),
+        (TASK_STATUS_COMPLETED, STALE_STATE_DASHBOARD_HIDDEN, max(1, min(int(limit), 500))),
     ).fetchall()
 
     out: list[dict[str, Any]] = []

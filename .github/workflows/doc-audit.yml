@@ -1,0 +1,98 @@
+name: Documentation Audit
+
+# Deterministic documentation gate (the "teeth" from the doc refactor plan §3).
+# Runs scripts/doc_audit.py on PRs that touch project_docs/ or the engine itself:
+#   - frontmatter schema present + code_paths globs resolve
+#   - every `file::symbol` citation resolves in code
+#   - zero line-number citations (they rot)
+#   - internal links resolve; canonical docs are indexed in README
+# Plus a tripwire: an automated doc-fix PR (head branch docfix/*) must touch ONLY
+# documentation paths — a hard mechanical replacement for the prompt-only firewall
+# that was bypassed on 2026-04-24.
+
+on:
+  pull_request:
+    paths:
+      - 'project_docs/**'
+      - 'docs/**'
+      - 'scripts/doc_audit.py'
+      - '.github/workflows/doc-audit.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic-audit:
+    name: Deterministic doc audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Run doc_audit.py (stdlib-only; errors fail the PR)
+        run: python scripts/doc_audit.py
+
+  docfix-tripwire:
+    name: Doc-fix PR touches docs only
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    # Only enforced for automated documentation-fix PRs.
+    if: startsWith(github.head_ref, 'docfix/')
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Fail if any non-documentation path changed
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          echo "Changed files in this doc-fix PR:"
+          changed="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
+          echo "$changed"
+          # Allowed: project_docs/**, docs/** (legacy/archive), root *.md, AGENTS.md
+          violations="$(echo "$changed" | grep -vE '^(project_docs/|docs/|[^/]+\.md$|AGENTS\.md$)' || true)"
+          if [ -n "$violations" ]; then
+            echo "::error::Doc-fix PR modified non-documentation paths:"
+            echo "$violations"
+            exit 1
+          fi
+          echo "OK — doc-fix PR touches documentation only."
+
+  archive-write-guard:
+    name: No new writes to archived docs/
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    # The legacy `docs/` tree was superseded 2026-05-29 by the code-first
+    # `project_docs/` rebuild. Adding or editing files there is almost always a
+    # mistake (the canonical home is project_docs/) — and `.rgignore` only hides
+    # it from `rg`, not from raw `grep` or a known path, so agents keep writing
+    # to the archive. This is the mechanical backstop. Deletions (archive
+    # cleanup) are allowed; the two archive index files are exempt so deletions
+    # can still be reflected. Genuine archive edits: add the
+    # `archive-edit-approved` label to the PR.
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'archive-edit-approved') }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Fail on added/modified files under archived docs/
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Only added (A) or modified (M) files under docs/ are forbidden;
+          # deletions are fine. README.md / Documentation_Status.md are the
+          # archive's own index and are exempt (so deletions stay linkable).
+          offenders="$(git diff --diff-filter=AM --name-only "$BASE_SHA" "$HEAD_SHA" -- 'docs/' \
+            | grep -vE '^docs/(README\.md|Documentation_Status\.md)$' || true)"
+          if [ -n "$offenders" ]; then
+            echo "::error::This PR adds or edits files in the ARCHIVED docs/ tree. Canonical documentation lives in project_docs/ (see project_docs/README.md). Move the change there. If this archive edit is genuinely intended, add the 'archive-edit-approved' label."
+            echo "$offenders" | sed 's/^/  /'
+            exit 1
+          fi
+          echo "OK — no new writes to archived docs/."

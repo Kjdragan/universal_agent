@@ -47,16 +47,30 @@ DEFAULT_ARTIFACT_TYPE = "cron_run_output"
 DEFAULT_SOURCE_KIND = "cron_artifact"
 
 # Files to skip when falling back to a recursive scan of work_products/.
-# Cron LLM runs ship a lot of internal scaffolding (sync_ready_*.json,
-# BOOTSTRAP_*.md, HEARTBEAT_*.md, TOOLS_*.md, description_*.txt) that
-# isn't an "artifact" by any reasonable definition.
+# Cron LLM runs ship a lot of internal scaffolding — the agent
+# context-snapshot family (AGENTS.md, SOUL.md, IDENTITY.md, USER.md,
+# capabilities.md, HEARTBEAT.md, BOOTSTRAP.md, TOOLS.md, ...), each emitted
+# both bare and numbered (AGENTS_31.md), plus run bookkeeping (sync_ready_*,
+# cron_result_*, run_manifest_*, context_brief_*, description_*). None of it
+# is an "artifact" by any reasonable definition. Prefixes are matched bare
+# (no trailing "_") so both ``AGENTS.md`` and ``AGENTS_31.md`` are skipped.
+# Without this, ~40 numbered AGENTS_*.md scaffolding files (uppercase, so
+# they sort first) exhaust the file cap before the scan ever descends into
+# the skill's output subdir where the real deliverables live.
 _SCAN_SKIP_NAME_PREFIXES = (
-    "sync_ready_",
-    "BOOTSTRAP_",
-    "HEARTBEAT_",
-    "TOOLS_",
+    "sync_ready",
+    "BOOTSTRAP",
+    "HEARTBEAT",
+    "TOOLS",
+    "AGENTS",
+    "SOUL",
+    "IDENTITY",
+    "USER",
+    "capabilities",
+    "context_brief",
+    "cron_result",
+    "run_manifest",
     "description_",
-    "SOUL.md",
     "_internal",
     ".",  # dotfiles
 )
@@ -282,17 +296,49 @@ def notify_cron_artifact_fire_and_forget(
 
 
 def _load_manifest(workspace_dir: Path) -> Optional[dict[str, Any]]:
-    """Load ``manifest.json`` from the workspace (root or
-    ``work_products/<skill>/``) if present."""
-    candidates = [
-        workspace_dir / "manifest.json",
-        workspace_dir / "work_products" / "manifest.json",
-    ]
-    for sub in (workspace_dir / "work_products").glob("*/manifest.json"):
-        candidates.append(sub)
-    for path in candidates:
-        if not path.exists() or not path.is_file():
+    """Load the most recent ``manifest*.json`` from the workspace (root
+    or ``work_products/<skill>/``).
+
+    Cron workspaces are reused across runs and accumulate one manifest
+    per run. Some pipelines (e.g. paper-to-podcast) write a date-stamped
+    copy each run — ``manifest_20260531.json`` — *without* overwriting
+    the canonical ``manifest.json``, so the undated file stays frozen at
+    a prior run's content. Returning the first literal ``manifest.json``
+    therefore discloses yesterday's topic/artifacts for today's run.
+
+    We instead collect every ``manifest*.json`` (date-stamped included)
+    and pick the newest by mtime, so the disclosure always reflects the
+    run that just finished. Older manifests are only consulted if the
+    newest fails to parse.
+    """
+    work_products = workspace_dir / "work_products"
+    seen: set[Path] = set()
+    candidates: list[Path] = []
+    for root, pattern in (
+        (workspace_dir, "manifest*.json"),
+        (work_products, "manifest*.json"),
+        (work_products, "*/manifest*.json"),
+    ):
+        try:
+            for path in root.glob(pattern):
+                if path.is_file() and path not in seen:
+                    seen.add(path)
+                    candidates.append(path)
+        except OSError:
             continue
+
+    # Newest run wins; fall through to older manifests only on parse
+    # failure. stat() is taken once up front so a vanished file can't
+    # crash the sort.
+    scored: list[tuple[float, Path]] = []
+    for path in candidates:
+        try:
+            scored.append((path.stat().st_mtime, path))
+        except OSError:
+            continue
+    scored.sort(key=lambda t: t[0], reverse=True)
+
+    for _, path in scored:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(data, dict):
@@ -331,12 +377,24 @@ def _extract_manifest_items(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     """Read a heterogeneous manifest shape into a flat artifacts list.
 
     Tolerates: ``manifest["artifacts"] = [...]``, ``manifest["outputs"] = [...]``,
-    or a top-level dict where each value is an artifact descriptor.
+    ``manifest["artifacts"] = {name: descriptor, ...}``, or a top-level dict
+    where each value is an artifact descriptor.
     """
     for key in ("artifacts", "outputs", "files", "items"):
         raw = manifest.get(key)
         if isinstance(raw, list):
             return [_coerce_item(entry) for entry in raw if entry]
+        # A dict-of-descriptors keyed by artifact name, e.g. the
+        # paper_to_podcast manifest's
+        # ``{"podcast": {...}, "quiz": {...}, "flashcards": {...}}``.
+        if isinstance(raw, dict) and raw:
+            return [
+                _coerce_item({"title": name, **descriptor})
+                if isinstance(descriptor, dict)
+                else _coerce_item(descriptor)
+                for name, descriptor in raw.items()
+                if descriptor
+            ]
     # Top-level dict of {name: descriptor}.
     if all(isinstance(v, dict) for v in manifest.values()):
         return [

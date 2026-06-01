@@ -74,7 +74,7 @@ dependencies = [
     "redis>=7.2.1",
     "agentmail>=0.2.22",
     "email-reply-parser>=0.5.12",
-    "chardet>=5.2.0,<6",
+    "chardet>=5.2.0,<8",
     "typer>=0.12",
     # Removed 2026-05-12: replaced with the pure-Python REST path already
     # in src/universal_agent/infisical_loader.py. Upstream infisical-python
@@ -115,6 +115,7 @@ dev = [
     "pexpect>=4.9.0",
     "pytest>=9.0.2",
     "pytest-asyncio>=0.23.8",
+    "pytest-timeout>=2.3.0",
     "ruff>=0.15.12",
 ]
 # Manim is only used by the manim_skill (.claude/skills/manim_skill/),
@@ -139,6 +140,18 @@ markers = [
     "llm: requires live LLM connectivity",
 ]
 addopts = "-m 'not llm'"
+# Global fail-fast: abort any test running longer than 60s and dump a
+# traceback of every thread (naming the exact blocking call). Without this a
+# single hung test consumed 38 minutes with zero output (2026-05-30) — a
+# "unit" test ran fsync-heavy SQLite DDL against the real activity DB while
+# the host was saturated by concurrent agent sessions. `thread` is the
+# required method here: this is an asyncio-heavy suite (asyncio_mode=auto,
+# pytest-asyncio) and the default `signal` method only fires on the main
+# thread / misbehaves when work runs off the event loop's thread. Override
+# per test with `@pytest.mark.timeout(N)` (0 disables) for genuinely long
+# cases. See docs/03_Operations/135_Test_Suite_Hardening_And_Local_Run_Runbook.md.
+timeout = 60
+timeout_method = "thread"
 
 [tool.uv.sources]
 crawl4ai-cloud-sdk = { git = "https://github.com/unclecode/crawl4ai-cloud-sdk.git", subdirectory = "python" }

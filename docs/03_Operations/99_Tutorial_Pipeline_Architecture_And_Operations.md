@@ -3,7 +3,7 @@
 > **Canonical source-of-truth** for the YouTube Tutorial Pipeline. All other
 > tutorial-related documentation should reference this file.
 >
-> **Last updated:** 2026-05-26 (PM) — **Daily playlist auto-recreate after a successful digest.** The cron now clears the day-of-week playlist (e.g. "Monday Digest") at the tail of `process_daily_digest` so the user gets a fresh, empty playlist for the next day's manual additions. Implementation: read old playlist title/description/privacy via `get_playlist_metadata` (1 quota unit), create a new playlist with the same metadata via `create_playlist` (50 units), write the new playlist ID to Infisical via `upsert_infisical_secret`, and only after that succeeds, delete the old playlist via `delete_playlist` (50 units). Quota cost: **~101 units flat per recreate**, regardless of video count — vs the never-shipped per-video-delete design which would have cost N×50 per video (3250 units on a 65-video day). Trigger condition: `processed_count > 0` (option #3 — empty days leave the playlist alone). Kill switch: `UA_YOUTUBE_PLAYLIST_RECREATE_ENABLED=0`. Safety: create-then-persist-then-delete ordering means a mid-flight failure leaves an orphan (manual cleanup) rather than zero playlists (would break the next cron). Test coverage: 17 new unit tests covering all four failure modes + the happy path + the empty-day skip (`tests/unit/test_youtube_playlist_recreate.py`). New helpers in `services/youtube_playlist_manager.py`: `get_playlist_metadata`, `create_playlist`, `delete_playlist`. **Earlier 2026-05-23 (PM)** — **Retired the UA-native playlist watcher.** The standalone `services/youtube_playlist_watcher.py` (Pipeline A in this doc) was removed; its `YT_TUTORIALS_PLAYLIST_ID` env var, `UA_YT_PLAYLIST_WATCHER_ENABLED` toggle, ops endpoints (`/api/v1/ops/youtube-playlist-watcher{,/poll}`), state file (`AGENT_RUN_WORKSPACES/youtube_playlist_watcher_state.json`), and db-health check are gone. The hook route `/api/v1/hooks/youtube/manual` and the `manual_youtube_transform.py` webhook transform are **kept** because the Daily YouTube Digest cron still dispatches via that route (the watcher and the digest were two triggers feeding the same downstream agent). Pipeline B (CSI RSS) is unchanged. **Earlier same-day 2026-05-23 (AM)** — **Gold-channel RSS auto-add + per-channel duration override**. New `tier` field on `channels_watchlist.json` records (`gold` / `sidecar` / `blocked`). New `services/youtube_gold_channel_poller.py` cron runs at 5:30 AM Houston (30 min before the digest cron), fetches RSS feeds for every `tier:"gold"` channel, dedups against existing playlist contents + processed-videos SQLite + the local 30h lookback window, and adds new videos to the right day-of-week playlist (routed by `published_at.astimezone(America/Chicago).strftime('%A')`). Daily cap default 10, configurable via `UA_YOUTUBE_GOLD_DAILY_CAP`. Per-channel `duration_max_seconds_override` field lets the pre-ingest triage gate honor a per-channel cap — Lex Fridman's seed value is 86400 (24h, effectively unlimited) so his 2-4 hour interviews aren't auto-triaged out by the global 90min cap. Plumbed through `_should_skip_video_by_metadata` and `ingest_youtube_transcript`. 22 channels seeded as gold (AICodeKing, Cole Medin, IndyDevDan, Discover AI, Sam Witteveen, Prompt Engineering, Matthew Berman, Adam Lucek, Ray Fernando, AI Engineer, AI Jason, Chris Hay, All About AI, Wes Roth, TheAIGRID, Pyotr Kurzin, Anthropic, Latent Space, Dwarkesh Patel, Brian Lagerstrom, Simon Willison, Lex Fridman); 4 seeded as `blocked` (LangChain, Fahd Mirza, MCP Developers Summit, Cloudflare Developers); ~417 remain default `sidecar` for later review. Gateway boot helper registers `_ensure_youtube_gold_poller_cron_job` alongside the existing digest helper. Kill switch: `UA_YOUTUBE_GOLD_POLLER_ENABLED=0`. Test coverage: 26 new unit tests (`tests/unit/test_youtube_gold_channel_poller.py` + `tests/unit/test_youtube_ingest_duration_override.py`). Earlier 2026-05-22 — **Daily Digest email/template overhaul + transcript reliability**. Email body now contains intro + meta-synthesis only; full per-video retellings + tutorial dispatch summary ship as a styled `text/html` attachment (`YouTube_Daily_Digest_<date>_<Day>.html`) with a per-video TOC, anchor links, and a compact "Channel · Duration · Published · watch ↗" metadata strip on every video card. `nl2br` markdown extension dropped (the cause of "way too much spacing" between paragraphs in pre-2026-05-22 deliveries). Per-video metadata (channel name, ISO-formatted duration, "Mon DD, YYYY" upload date, YouTube watch URL) is now threaded from `ingest_youtube_transcript` → `VideoTranscriptPayload.metadata` → a deterministic Python-built header (no LLM trust). Transcript reliability: `UA_YOUTUBE_TRANSCRIPT_PROXY_RETRIES` default bumped 3 → 6 (each retry pulls a fresh DataImpulse residential IP; flagged-IP miss budget drops from 25%³≈1.6% to 25%⁶≈0.02%), and mixed `TranscriptsDisabled`+`RequestBlocked` patterns across attempts now classify as `request_blocked` instead of `transcript_unavailable` so logs surface the real cause. Diagnosed 2026-05-21 WEDNESDAY 52% metadata-only fallback rate (15/29) as proxy-IP block masquerading as creator-disabled subs. 2026-05-20: **Tier A scoring rubric** added inline to `RETELL_PROMPT` with anchored buckets (90-100 / 75-89 / 60-74 / 40-59 / 20-39 / 0-19) + disqualifier caps (sales-pitch / view-count / metadata-only) + explicit "do not default to 95" guidance.  Addresses score saturation surfaced by the 2026-05-20 WEDNESDAY dry-run (12 of 29 videos got 95).  See § 1.1B for the full multi-tier roadmap (Tier A current, Tier B/C/D deferred). Earlier 2026-05-20: deterministic `youtube_digest_decisions` JSON block built from `MapResult` classifications in Python (PR #407) so reducer LLM failures can no longer drop tutorial dispatch to zero; orphan `---` removed + Houston-friendly banner time (PR #408).  2026-05-19: delivery-reminder signals (Telegram + dashboard tile) with `UA_DIGEST_REMINDER_TTL_MINUTES` (default 90).  2026-05-18: Daily Digest ships on a **map-reduce pipeline** (per-video retell on `glm-4.5-air` @ conc=3, meta-synthesis on `glm-5.1`), 50%-length retelling, deterministic **demo-worthiness gate** (score ≥ 70, value_tier ≠ low/unknown, evidence_quality ≠ metadata_only). `required_secrets` preflight includes `YOUTUBE_OAUTH_*`. PRs #356, #357, #360, #361, #363, #391, #393, #394, #407, #408, #411.
+> **Last updated:** 2026-05-30 — **Digest ranking saturation fixes (3).** The FRIDAY digest scored **6 videos at exactly 85** (top of the 75-89 band) with a static `auto_tutorial_top_n=4`, so ranks 5-6 (two genuinely buildable talks) were dropped purely by arbitrary tie-order. Three fixes: **(1) Dynamic top_n / tie-extension** — `_select_tutorial_dispatch_candidates` now rescues eligible videos tied at the cutoff score, bounded by a hard ceiling (default `2×top_n`, override `UA_YOUTUBE_DIGEST_AUTO_TUTORIAL_MAX_N`); rescued rows are flagged `dispatch_tie_extended=true` and the saved candidates JSON records `auto_tutorial_max_n`. **(2) Within-band additive scoring (Tier A refinement)** — the map step scores each video IN ISOLATION (no cross-video view), so "spread across the batch" was structurally impossible and coarse bands collapsed to round anchors (95 on May-20, then 85). `RETELL_PROMPT` now tells the LLM to start at the band FLOOR and add points for concrete per-video signals (named files/commands, mechanism explanations, visible code) so two different videos compute to different numbers; "85 is the TOP of the 75-89 band, not a default." Measure the 75-89 distribution over 1-2 weeks — re-clustering is the Tier B/C trigger. **(3) AgentMail teardown** — `AgentMailService` now owns the injected `httpx.AsyncClient` (SDK `httpx_client=` kwarg) and `aclose()`s it in `shutdown()`, eliminating the `RuntimeError: Event loop is closed` finalizer traceback that polluted **all 6 one-shot crons** using `startup()/shutdown()` under `asyncio.run` (digest, `youtube_oauth_watchdog`, `hourly_insight_email`, `insight_scoring_health`, `dependency_upgrade`, `claude_code_intel_run_report`). NOTE: the separate "no running event loop" errors in `hackernews_snapshot`/`atlas_direct_dispatch` do NOT touch AgentMailService and remain a distinct, still-open issue. Tests: 5 new tie-extension cases in `test_youtube_daily_digest_demo_gate.py`, 2 new in `test_agentmail_shutdown_closes_client.py`. See § 1.1B. **Earlier 2026-05-29 — Pipeline B buildability judge: `no_summary` is no longer a terminal cached verdict.** `is_video_buildable_with_judge` (`services/proactive_tutorial_builds.py`) used to cache `method="no_summary", buildable=False` whenever it saw a CSI video before its transcript summary had been analyzed (the normal ingestion→analysis lag), then short-circuit on that cached row on every later sweep — permanently locking the video out even after the summary landed. Production evidence: the `tutorial_build_judge` cache was **534/534 `no_summary`** with **zero** buildable candidates ever produced, while `csi.db.rss_event_analysis` held 937/937 populated summaries. Fix: the empty-summary path now returns `False` **without caching**, and `_get_cached_judge_verdict` treats any legacy `method="no_summary"` row as a **cache miss** so those videos re-judge on the next sweep. No migration needed. Tests: 3 new in `tests/unit/test_proactive_tutorial_builds.py`. See § "Pipeline B" judge step. **Earlier same-day 2026-05-29 — OAuth token watchdog + one-tap email re-auth, and digest subject rename.** (1) New daily cron `youtube_oauth_watchdog` (7 AM Central) actively tests the YouTube refresh token's liveness against Google AND checks its age via a new `YOUTUBE_OAUTH_REFRESH_TOKEN_MINTED_AT` Infisical stamp; when the token is dead or ≥`UA_YOUTUBE_OAUTH_WARN_AGE_DAYS` (default 5) days old it emails the operator a **one-tap re-auth button** (HMAC-signed link → `/api/v1/youtube-oauth/start` → Google consent → `/api/v1/youtube-oauth/callback` writes the fresh token + minted-at to production Infisical). Works from a phone; the next digest/poller subprocess bootstraps secrets fresh so no gateway restart is needed. **One-time prerequisite:** the redirect URI `https://app.clearspringcg.com/api/v1/youtube-oauth/callback` must be registered on the OAuth client (`YOUTUBE_OAUTH_CLIENT_ID`, must be a "Web application" client) in Google Cloud Console. The legacy localhost CLI `youtube_oauth2_setup.py` remains a fallback and now also writes the minted-at stamp. Kill switch: `UA_YOUTUBE_OAUTH_WATCHDOG_ENABLED=0`. New module `services/youtube_oauth_health.py`; new script `scripts/youtube_oauth_watchdog.py`; 11 unit tests (`tests/unit/test_youtube_oauth_health.py`). See § 1.1C. (2) Digest email subject changed from `Daily YouTube Digest: <Day>` to `Daily YouTube Summaries — <date>` to remove day-name mismatch confusion — the cron intentionally digests the *prior* day's playlist via a `now()-1day` shift (`youtube_daily_digest.py:2367`), so a Friday-morning run is correctly labeled "Thursday" inside the body; the subject no longer carries the day name. **Earlier 2026-05-26 (PM)** — **Daily playlist auto-recreate after a successful digest.** The cron now clears the day-of-week playlist (e.g. "Monday Digest") at the tail of `process_daily_digest` so the user gets a fresh, empty playlist for the next day's manual additions. Implementation: read old playlist title/description/privacy via `get_playlist_metadata` (1 quota unit), create a new playlist with the same metadata via `create_playlist` (50 units), write the new playlist ID to Infisical via `upsert_infisical_secret`, and only after that succeeds, delete the old playlist via `delete_playlist` (50 units). Quota cost: **~101 units flat per recreate**, regardless of video count — vs the never-shipped per-video-delete design which would have cost N×50 per video (3250 units on a 65-video day). Trigger condition: `processed_count > 0` (option #3 — empty days leave the playlist alone). Kill switch: `UA_YOUTUBE_PLAYLIST_RECREATE_ENABLED=0`. Safety: create-then-persist-then-delete ordering means a mid-flight failure leaves an orphan (manual cleanup) rather than zero playlists (would break the next cron). Test coverage: 17 new unit tests covering all four failure modes + the happy path + the empty-day skip (`tests/unit/test_youtube_playlist_recreate.py`). New helpers in `services/youtube_playlist_manager.py`: `get_playlist_metadata`, `create_playlist`, `delete_playlist`. **Earlier 2026-05-23 (PM)** — **Retired the UA-native playlist watcher.** The standalone `services/youtube_playlist_watcher.py` (Pipeline A in this doc) was removed; its `YT_TUTORIALS_PLAYLIST_ID` env var, `UA_YT_PLAYLIST_WATCHER_ENABLED` toggle, ops endpoints (`/api/v1/ops/youtube-playlist-watcher{,/poll}`), state file (`AGENT_RUN_WORKSPACES/youtube_playlist_watcher_state.json`), and db-health check are gone. The hook route `/api/v1/hooks/youtube/manual` and the `manual_youtube_transform.py` webhook transform are **kept** because the Daily YouTube Digest cron still dispatches via that route (the watcher and the digest were two triggers feeding the same downstream agent). Pipeline B (CSI RSS) is unchanged. **Earlier same-day 2026-05-23 (AM)** — **Gold-channel RSS auto-add + per-channel duration override**. New `tier` field on `channels_watchlist.json` records (`gold` / `sidecar` / `blocked`). New `services/youtube_gold_channel_poller.py` cron runs at 5:30 AM Houston (30 min before the digest cron), fetches RSS feeds for every `tier:"gold"` channel, dedups against existing playlist contents + processed-videos SQLite + the local 30h lookback window, and adds new videos to the right day-of-week playlist (routed by `published_at.astimezone(America/Chicago).strftime('%A')`). Daily cap default 10, configurable via `UA_YOUTUBE_GOLD_DAILY_CAP`. Per-channel `duration_max_seconds_override` field lets the pre-ingest triage gate honor a per-channel cap — Lex Fridman's seed value is 86400 (24h, effectively unlimited) so his 2-4 hour interviews aren't auto-triaged out by the global 90min cap. Plumbed through `_should_skip_video_by_metadata` and `ingest_youtube_transcript`. 22 channels seeded as gold (AICodeKing, Cole Medin, IndyDevDan, Discover AI, Sam Witteveen, Prompt Engineering, Matthew Berman, Adam Lucek, Ray Fernando, AI Engineer, AI Jason, Chris Hay, All About AI, Wes Roth, TheAIGRID, Pyotr Kurzin, Anthropic, Latent Space, Dwarkesh Patel, Brian Lagerstrom, Simon Willison, Lex Fridman); 4 seeded as `blocked` (LangChain, Fahd Mirza, MCP Developers Summit, Cloudflare Developers); ~417 remain default `sidecar` for later review. Gateway boot helper registers `_ensure_youtube_gold_poller_cron_job` alongside the existing digest helper. Kill switch: `UA_YOUTUBE_GOLD_POLLER_ENABLED=0`. Test coverage: 26 new unit tests (`tests/unit/test_youtube_gold_channel_poller.py` + `tests/unit/test_youtube_ingest_duration_override.py`). Earlier 2026-05-22 — **Daily Digest email/template overhaul + transcript reliability**. Email body now contains intro + meta-synthesis only; full per-video retellings + tutorial dispatch summary ship as a styled `text/html` attachment (`YouTube_Daily_Digest_<date>_<Day>.html`) with a per-video TOC, anchor links, and a compact "Channel · Duration · Published · watch ↗" metadata strip on every video card. `nl2br` markdown extension dropped (the cause of "way too much spacing" between paragraphs in pre-2026-05-22 deliveries). Per-video metadata (channel name, ISO-formatted duration, "Mon DD, YYYY" upload date, YouTube watch URL) is now threaded from `ingest_youtube_transcript` → `VideoTranscriptPayload.metadata` → a deterministic Python-built header (no LLM trust). Transcript reliability: `UA_YOUTUBE_TRANSCRIPT_PROXY_RETRIES` default bumped 3 → 6 (each retry pulls a fresh DataImpulse residential IP; flagged-IP miss budget drops from 25%³≈1.6% to 25%⁶≈0.02%), and mixed `TranscriptsDisabled`+`RequestBlocked` patterns across attempts now classify as `request_blocked` instead of `transcript_unavailable` so logs surface the real cause. Diagnosed 2026-05-21 WEDNESDAY 52% metadata-only fallback rate (15/29) as proxy-IP block masquerading as creator-disabled subs. 2026-05-20: **Tier A scoring rubric** added inline to `RETELL_PROMPT` with anchored buckets (90-100 / 75-89 / 60-74 / 40-59 / 20-39 / 0-19) + disqualifier caps (sales-pitch / view-count / metadata-only) + explicit "do not default to 95" guidance.  Addresses score saturation surfaced by the 2026-05-20 WEDNESDAY dry-run (12 of 29 videos got 95).  See § 1.1B for the full multi-tier roadmap (Tier A current, Tier B/C/D deferred). Earlier 2026-05-20: deterministic `youtube_digest_decisions` JSON block built from `MapResult` classifications in Python (PR #407) so reducer LLM failures can no longer drop tutorial dispatch to zero; orphan `---` removed + Houston-friendly banner time (PR #408).  2026-05-19: delivery-reminder signals (Telegram + dashboard tile) with `UA_DIGEST_REMINDER_TTL_MINUTES` (default 90).  2026-05-18: Daily Digest ships on a **map-reduce pipeline** (per-video retell on `glm-4.5-air` @ conc=3, meta-synthesis on `glm-5.1`), 50%-length retelling, deterministic **demo-worthiness gate** (score ≥ 70, value_tier ≠ low/unknown, evidence_quality ≠ metadata_only). `required_secrets` preflight includes `YOUTUBE_OAUTH_*`. PRs #356, #357, #360, #361, #363, #391, #393, #394, #407, #408, #411.
 
 ## 1. Pipeline Overview
 
@@ -167,11 +167,15 @@ to the tutorial pipeline. The gate only works as a discriminator if scores
 actually spread across 0-100. The 2026-05-20 WEDNESDAY dry-run smoke
 exposed a saturation regression: 12 of 29 videos got `value_score=95`, so
 with `top_n=4` the tutorial dispatch became effectively arbitrary among
-ties.
+ties. The 2026-05-30 FRIDAY run showed the **same failure mode at a new
+anchor**: 6 of 12 videos scored exactly 85 (the top of the 75-89 band).
+The structural cause is that the map step scores **each video in isolation**
+— it never sees the other videos — so it cannot "spread" scores across a
+batch and coarse bands collapse onto round anchor values (95, then 85).
 
-**Tier A — Inline anchored rubric (shipped 2026-05-20)**
+**Tier A — Inline anchored rubric (current; refined 2026-05-30)**
 
-`RETELL_PROMPT` now contains an explicit SCORING RUBRIC section with:
+`RETELL_PROMPT` contains an explicit SCORING RUBRIC section with:
 
 - **Anchored buckets** with named examples of what each range earns:
   - `90-100` Concrete build tutorial with named files, commands, visible code
@@ -180,6 +184,14 @@ ties.
   - `40-59` Survey / overview / opinion / commentary
   - `20-39` Sales / marketing / promotional content
   - `0-19` Off-topic, clickbait, low-signal
+
+- **Within-band additive scoring (added 2026-05-30)**: pick the band, START AT
+  ITS FLOOR, and add points only for concrete signals actually present (named
+  runnable files/commands, end-to-end reproducibility, mechanism explanations,
+  visible partial code/config). The LLM computes the exact number from features
+  rather than parking on a round value — "85 is the TOP of 75-89, not a
+  default." This is the per-call lever that "spread across the batch" cannot
+  be (the map step is per-video and blind to the others).
 
 - **Disqualifier caps** that override bucket selection:
   - Sales-pitch framing ("Make $X with...", "Anyone can start...") → CAP 50
@@ -194,10 +206,23 @@ ties.
   build agent could realistically attempt to reproduce the result (named tools,
   commands, config, file paths). Concept explainers default to `False`.
 
-- **Explicit "do not default to 95"** admonition.
+- **Explicit "do not default to 95 OR 85"** admonition.
 
 The rubric lives inline in `src/universal_agent/scripts/youtube_daily_digest.py`
 under the `RETELL_PROMPT` definition. Edits are PRs against that file.
+
+**Dynamic top_n tie-extension (added 2026-05-30) — defense in depth.** Even
+with a tighter rubric, genuine ties at the cutoff score can still occur. Rather
+than splitting a tied cohort by arbitrary order, `_select_tutorial_dispatch_candidates`
+now selects the first `top_n` eligible rows AND any further eligible rows tied
+with the `top_n`-th on `value_score`, bounded by a hard ceiling
+(`UA_YOUTUBE_DIGEST_AUTO_TUTORIAL_MAX_N`, default `2×top_n`). Rescued rows are
+marked `dispatch_tie_extended=true`; the saved candidates JSON records
+`auto_tutorial_max_n` and the email's dispatch summary notes when tie-extension
+fired. On 2026-05-30 this would have dispatched all 6 videos tied at 85 instead
+of an arbitrary 4. **Measurement note:** watch the 75-89 score distribution over
+the next 1-2 weeks. If it re-clusters despite the within-band rubric, that is the
+trigger to promote Tier B (extract rubric to a file) + Tier C (labeled outcomes).
 
 **Tier B — Extract `youtube_scoring_rubric.md` (deferred)**
 
@@ -243,6 +268,91 @@ documented inline above `RETELL_PROMPT` in
 `src/universal_agent/scripts/youtube_daily_digest.py` so future maintainers
 encounter the plan before editing scoring guidance.
 
+### 1.1C OAuth Token Lifecycle — watchdog + one-tap email re-auth
+
+**The problem.** The YouTube OAuth app is in Google "Testing" mode, so refresh
+tokens expire ~7 days after minting. When the token dies, both the 6 AM digest
+cron and the 5:30 AM gold poller fail to reach Google — silently, until the
+operator notices no digest arrived. Historically the only fix was to re-run the
+localhost CLI `youtube_oauth2_setup.py` on a machine with a browser (~weekly toil).
+
+**The fix (shipped 2026-05-29).** Two complementary mechanisms:
+
+1. **Watchdog cron `youtube_oauth_watchdog`** (`scripts/youtube_oauth_watchdog.py`),
+   registered at 7 AM Central by `_ensure_youtube_oauth_watchdog_cron_job`
+   (`lightweight=True`, `skip_task_hub_link=True`). Each run:
+   - **Liveness:** exchanges the stored refresh token for an access token
+     (`grant_type=refresh_token`). An `invalid_grant` means the token is already
+     dead → urgent email.
+   - **Age:** reads the `YOUTUBE_OAUTH_REFRESH_TOKEN_MINTED_AT` stamp and computes
+     age. ≥ `UA_YOUTUBE_OAUTH_WARN_AGE_DAYS` (default 5) days → proactive
+     "expiring soon" email (~2-day lead before the 7-day cutoff).
+   - A healthy token sends nothing. The watchdog never crashes the cron on a
+     transient network blip (liveness errors are treated as "inconclusive/alive").
+
+2. **One-tap email re-auth** — the warning email carries an HMAC-signed button
+   (same signer family as the brief-feedback links, `services/youtube_oauth_health.py`):
+
+   - `GET /api/v1/youtube-oauth/start?t=<signed>` — verifies the signed token,
+     then 302-redirects to Google's consent screen (offline access, forced consent),
+     carrying a short-TTL signed `state` for CSRF.
+   - `GET /api/v1/youtube-oauth/callback?code=…&state=…` — verifies `state`,
+     exchanges the code server-side, and writes `YOUTUBE_OAUTH_REFRESH_TOKEN` +
+     `YOUTUBE_OAUTH_REFRESH_TOKEN_MINTED_AT` to **production** Infisical
+     (`upsert_infisical_secret`; the gateway process env is `production` on the VPS).
+
+   Because the digest/poller `!script` subprocesses call
+   `initialize_runtime_secrets()` at startup, the next run picks up the new token
+   with **no gateway restart**. The flow works from a phone — only a Google *test
+   user* (Kevin) can complete consent, so a forged `/start` hit yields no token.
+
+```mermaid
+sequenceDiagram
+    participant Cron as youtube_oauth_watchdog (7 AM)
+    participant Google
+    participant Email as Operator inbox
+    participant Op as Operator (phone)
+    participant GW as Gateway /youtube-oauth/*
+    participant Inf as Infisical (prod)
+    participant Digest as Next digest run
+
+    Cron->>Google: refresh_token grant (liveness)
+    Cron->>Cron: read MINTED_AT, compute age
+    alt dead OR age >= warn threshold
+        Cron->>Email: warning + signed re-auth button
+        Op->>GW: GET /start?t=signed
+        GW->>GW: verify signed t
+        GW-->>Op: 302 → Google consent
+        Op->>Google: approve (test user)
+        Google-->>GW: GET /callback?code&state
+        GW->>GW: verify state
+        GW->>Google: exchange code → refresh_token
+        GW->>Inf: upsert REFRESH_TOKEN + MINTED_AT
+        GW-->>Op: "Re-authorized ✓"
+        Digest->>Inf: initialize_runtime_secrets() (fresh token)
+    else healthy
+        Cron->>Cron: no email
+    end
+```
+
+**One-time prerequisite (Google Cloud Console).** The redirect URI
+`https://app.clearspringcg.com/api/v1/youtube-oauth/callback` must be an Authorized
+redirect URI on the OAuth client behind `YOUTUBE_OAUTH_CLIENT_ID`, and that client
+must be a **"Web application"** type (Desktop clients only allow `localhost`
+redirects). Until that's registered, the button's `/callback` exchange returns a
+friendly "redirect URI not registered" page and the operator falls back to the CLI
+`youtube_oauth2_setup.py` (which also now stamps `MINTED_AT`).
+
+**Permanent fix (removes the toil entirely).** Publish the OAuth app from "Testing"
+to "In production" in Google Cloud Console — this removes the 7-day refresh-token
+expiry, after which the watchdog effectively never fires.
+
+| Knob | Default | Effect |
+|---|---|---|
+| `UA_YOUTUBE_OAUTH_WATCHDOG_ENABLED` | `1` | Master kill switch for the watchdog cron |
+| `UA_YOUTUBE_OAUTH_WATCHDOG_CRON` | `0 7 * * *` | Schedule (must stay inside 6 AM–10 PM active window) |
+| `UA_YOUTUBE_OAUTH_WARN_AGE_DAYS` | `5` | Token age (days) that triggers the proactive warning |
+
 ### 1.1 Dual-Pipeline Architecture
 
 ```mermaid
@@ -267,6 +377,8 @@ flowchart LR
     DIG -.->|seen-id state| YDS[(youtube_ingestion_state.db)]
     RSS -.->|source_state table| SS[(csi.db → source_state)]
 ```
+
+> **Buildability-judge caching contract (Pipeline B).** `is_video_buildable_with_judge` caches its verdict per `video_id` in `tutorial_build_judge`. Only **real** verdicts are terminal: a genuine LLM `buildable`/`not-buildable` decision is cached and honored on later sweeps. A missing transcript summary at judge time is **transient** (the sweep ran before CSI finished analysis) — it returns `False` **without** caching, and any legacy `method="no_summary"` row is treated as a **cache miss** so the video is re-judged once its summary exists. This prevents the ingestion→analysis race from permanently starving the lane.
 
 | Aspect | Pipeline A: Daily Digest | Pipeline B: CSI RSS Channel Feed |
 |--------|------------------------------|-----------------------------------|

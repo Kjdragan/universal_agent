@@ -26,7 +26,7 @@ Release verification rule:
 | `PR Auto-Merge` | `pr-auto-merge.yml` | Pull request to `main` (any non-draft PR not from `codie/*`, `kevin/*`, or `feature/*`) | Enables GitHub auto-merge (squash + delete branch) so PR merges automatically once `Validate PR` passes. Uses `secrets.AUTO_MERGE_PAT` (fine-grained PAT) so the downstream squash-merge `push` event actually fires `deploy.yml` — see "Why a PAT" below. Tier-1 PRs through `/ship` already self-enable auto-merge. |
 | `PR Rebase Watchdog` | `pr-rebase-watchdog.yml` | Push to `main`, every 15 min cron, `workflow_dispatch` | Heals stuck auto-merge PRs that went `mergeStateStatus=DIRTY` after main moved. **GitHub does not run `Validate PR` on conflicting PRs**, so auto-merge has nothing to wait on and sits silently. The watchdog detects this state, auto-rebases `claude/*` and `worktree-*` branches (force-push with lease), and posts a comment with rebase instructions on `kevin/*`/`feature/*`/`codie/*` branches. A `rebase-needed-comment` label suppresses comment spam; it auto-clears once the branch is mergeable again. |
 | ~~`Post-Merge Deploy Dispatcher`~~ | ~~`post-merge-deploy.yml`~~ | **Deleted 2026-05-11 PM** | Was the workaround for the GITHUB_TOKEN suppression bug. With PR #232's PAT swap making `pr-auto-merge.yml` fire deploys via the natural `push` trigger, this bridge was redundant — every merge produced two Deploy runs (one from `push`, one from the bridge's `workflow_dispatch`). Removed to avoid double-deploys + Actions-tab clutter. |
-| `Deploy` | `deploy.yml` | Push to `main` (paths-ignore: docs/, **.md, reports/, state/, artifacts/, memory/**), or `workflow_dispatch` | Production Service. Concurrency guard (`deploy-production` group, `cancel-in-progress: false`) added 2026-05-11 PM — see "Concurrency guard" below. |
+| `Deploy` | `deploy.yml` (+ `scripts/deploy/remote_deploy.sh`) | Push to `main` (paths-ignore: docs/, **.md, reports/, state/, artifacts/, memory/**), or `workflow_dispatch` | Production Service. As of 2026-05-30 the remote deploy logic lives in the committed, shellcheck-able `scripts/deploy/remote_deploy.sh` (piped to the VPS over SSH stdin) instead of a 420-line inline heredoc — see "Deploy script decomposition" below. Concurrency guard (`deploy-production` group, `cancel-in-progress: false`) added 2026-05-11 PM. |
 
 ### End-to-End PR-to-Production Flow (2026-05-11)
 
@@ -58,6 +58,27 @@ Fix: `pr-auto-merge.yml` now uses `secrets.AUTO_MERGE_PAT` (a fine-grained PAT s
 
 **PAT maintenance:** default fine-grained PATs expire after 1 year. When the token expires, `gh pr merge --auto` calls will 401/403 — regenerate the token, paste the new value into the existing `AUTO_MERGE_PAT` secret (overwrite), no workflow file change needed.
 
+#### Deploy script decomposition (2026-05-30)
+
+The remote deploy logic used to live as a ~420-line `ssh … << 'EOF' … EOF` heredoc inside `deploy.yml` (the file was 516 lines). That monolith was the single most failure-prone thing to edit in the repo: bash-inside-YAML-inside-a-heredoc is invisible to `shellcheck`, can't be run or diffed locally, and was prone to the GitHub-Actions-parser quirk (2026-05-27) where `actionlint`/`pyyaml` pass but the real workflow parser silently rejects the file. ~10 of the 15 most recent "deploy failures" were one session's bisect saga trying to edit it.
+
+It is now extracted to a committed, executable `scripts/deploy/remote_deploy.sh`. `deploy.yml` shrank to ~160 lines and feeds the script to the VPS over SSH **stdin**:
+
+```bash
+{
+  printf 'export INFISICAL_CLIENT_ID=%q\n'     "$INFISICAL_CLIENT_ID"
+  printf 'export INFISICAL_CLIENT_SECRET=%q\n' "$INFISICAL_CLIENT_SECRET"
+  printf 'export INFISICAL_PROJECT_ID=%q\n'    "$INFISICAL_PROJECT_ID"
+  cat scripts/deploy/remote_deploy.sh
+} | ssh … "$SSH_USER@$SSH_HOST" 'bash -s'
+```
+
+Key properties:
+- **Byte-for-byte identical deploy logic.** The script body is the exact bash that was in the heredoc, only dedented; the extraction was verified with a `diff` that returned no changes.
+- **Secrets via stdin, not argv.** The three `INFISICAL_*` bootstrap secrets are the only values `deploy.yml` injects (they were `${{ secrets.* }}` in the heredoc). They're now prepended as `export` lines through the same SSH stdin stream, so they never appear in the VPS process table — preserving the prior security property while keeping `remote_deploy.sh` free of `${{ }}` placeholders. The script fails fast (`${VAR:?}`) if any is missing.
+- **No `actions/checkout`** — the script is fetched for the exact `$GITHUB_SHA` via the GitHub API (`gh api … contents/scripts/deploy/remote_deploy.sh`). A full checkout would pin a deprecated Node-20 action and its post-job submodule cleanup chokes (benign exit-128 warning) on the repo's orphaned `.claude/agents/agent-browser` / `test-remotion-project` gitlinks (committed with no `.gitmodules`). Fetching one file sidesteps both.
+- **Removes the heredoc-parser fragility class entirely** — the workflow YAML no longer contains a large embedded bash block, and `remote_deploy.sh` can be `shellcheck`ed (planned PR-Validate gate) and reasoned about locally.
+
 #### Concurrency guard (added 2026-05-11 PM)
 
 During the 2026-05-11 PM incident, three Dependabot/operator PRs (#231, #226, plus the chain catch-up commit) merged within seconds of each other, three deploy runs raced on `/opt/universal_agent/.git/index.lock` and all three failed with:
@@ -80,7 +101,7 @@ This serializes deploys so simultaneous merges queue instead of colliding. `canc
 
 | Name | Trigger | Purpose |
 |------|---------|---------|
-
+| `Deploy Notify` (`deploy-notify.yml`) | `workflow_run` on `Deploy` **completed** (success AND failure) | Truthful deploy-complete signal to the operator's Telegram channel. Independently curls the public `/api/v1/version` and compares the **live** short SHA to the SHA `Deploy` ran on, then sends one of: ✅ success + live SHA confirmed / ⚠️ success but live SHA mismatch or endpoint down / ❌ deploy failed/cancelled/timed-out. Best-effort: a notifier outage warns in the run log and never hard-fails. Fills the gap where `deploy.yml` emailed only on failure and was silent on success. See "Deploy Complete Notification" below. |
 | `Nightly Doc Drift Audit` | Scheduled (daily) | Detect documentation drift via auto-merged PR |
 | `OpenClaw Release Sync` | Scheduled | Syncs OpenClaw updates |
 
@@ -139,6 +160,8 @@ This is intentional: deploys must not rely on manually created host-only base un
 - `INFISICAL_PROJECT_ID`
 - `AGENTMAIL_API_KEY` (deploy-failure email notification — best-effort; deploy does not double-fault if missing)
 - `AUTO_MERGE_PAT` (fine-grained PAT for auto-merge squash pushes that trigger deploy.yml)
+- `UA_OPERATOR_TELEGRAM_BOT_TOKEN` (Deploy Notify → operator Telegram channel; mirrors Infisical `UA_OPERATOR_TELEGRAM_BOT_TOKEN`. Notifier no-ops with a warning if absent.)
+- `UA_OPERATOR_TELEGRAM_CHAT_ID` (Deploy Notify → operator Telegram channel id; mirrors Infisical `UA_OPERATOR_TELEGRAM_CHAT_ID`.)
 
 ## Required Tailscale Policy Model
 
@@ -174,6 +197,9 @@ Allow `tag:ci-gha` to reach `tag:vps` on TCP/22 in your current ACL/grants model
 4. **Operator reviews and merges** the PR in GitHub UI.
 5. **Production deploy** triggers automatically when the merge moves `main`.
 6. **Post-release verification should use the deployed checkout SHA**. Hit `GET /api/v1/version` on production and confirm the `commit_sha` matches the merge SHA before declaring any browser-side check valid (Rule A from CLAUDE.md § Production Verification Rules).
+
+> [!TIP]
+> **Autonomous sessions: watch, don't poll.** After opening a PR, run the CI wait as a **backgrounded blocking watch** — `gh pr checks <pr> --watch` (or `gh run watch <run-id>`) — instead of a `sleep`+`gh pr view` poll loop. The harness re-invokes the session the instant CI/auto-merge completes, so a poll loop only burns turns. The `Deploy Complete Notification` (above) is the matching signal for the deploy half: you get a Telegram ping the moment production is confirmed live, so there is no need to poll `/api/v1/version` in a loop either. (Convention adopted 2026-05-30; saved as agent memory `feedback_background_watch_not_poll`.)
 
 ## Lessons From The April 5 Dashboard Incident
 
@@ -292,6 +318,22 @@ The workflow sets `/tmp/ua-deployment-window` before restarting services and cle
 ### Deploy Failure Notification (2026-05-28)
 
 When the deploy job fails (any step), a final best-effort step sends an email to the operator via AgentMail (`oddcity216@agentmail.to` → `kevinjdragan@gmail.com`). The email includes the commit SHA, branch, and a direct link to the failed workflow run with suggested next steps. The notification is gated on `secrets.AGENTMAIL_API_KEY` — if the secret is missing or the API call fails, the step exits cleanly without double-faulting the deploy.
+
+### Deploy Complete Notification (2026-05-30)
+
+`deploy-notify.yml` is a separate `workflow_run`-triggered workflow that fires on **every** terminal state of `Deploy` — success and failure — and pushes a single-line status to the operator's Telegram channel. It exists because `deploy.yml` only emailed on **failure** and was silent on success, so an autonomous session had no positive confirmation that its merge actually reached production.
+
+It is decoupled from `deploy.yml` on purpose: it fires even when the deploy job dies abruptly (a trailing step inside `deploy.yml` would not run), and a bug in the notifier can never break a production deploy.
+
+**Truthfulness (Rule A).** A green `Deploy` workflow is not proof the new code is live. The notifier independently curls the public `https://app.clearspringcg.com/api/v1/version` and compares the **live** `short_sha` to the SHA `Deploy` ran on, with a short retry loop to absorb the restart window. It then sends exactly one of:
+
+| Signal | Meaning |
+|---|---|
+| ✅ Deploy OK — live SHA confirmed | `Deploy` succeeded AND `/api/v1/version` reports the same SHA |
+| ⚠️ success but live SHA `X` (expected `Y`) / endpoint unreachable | `Deploy` reported success but production is not running the expected code — look now |
+| ❌ Deploy `<conclusion>` | `Deploy` failed / cancelled / timed out |
+
+Gated on `secrets.UA_OPERATOR_TELEGRAM_BOT_TOKEN` + `UA_OPERATOR_TELEGRAM_CHAT_ID`; if either is absent, or the Telegram send returns non-200, the workflow warns in its run log and exits cleanly (a notifier outage must never masquerade as a deploy problem). Docs-only merges never trigger `Deploy` (paths-ignore), so the notifier stays silent on doc commits by design. Runs 24/7 (infrastructure-event handler, exempt from active-hours dormancy).
 
 > [!IMPORTANT]
 > **Code changes only take effect after the service restarts.** If the deploy workflow completes but services are not restarted (e.g., `systemctl` is not available), the gateway will continue running the old code. The workflow logs a warning in this case.

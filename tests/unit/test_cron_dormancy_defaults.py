@@ -20,8 +20,7 @@ from pathlib import Path
 import re
 
 GATEWAY_SERVER = Path("src/universal_agent/gateway_server.py")
-NIGHTLY_DOC_DRIFT = Path(".github/workflows/nightly-doc-drift-audit.yml")
-OPENCLAW_SYNC = Path(".github/workflows/openclaw-release-sync.yml")
+DOC_NIGHTLY = Path(".github/workflows/doc-nightly.yml")
 DORMANCY_DOC = Path("docs/operations/operating_hours_dormancy.md")
 POST_MERGE_DEPLOY = Path(".github/workflows/post-merge-deploy.yml")
 CI_FAILURE_ISSUE = Path(".github/workflows/ci-failure-issue.yml")
@@ -138,7 +137,9 @@ def test_claude_md_links_to_dormancy_doc() -> None:
     rule MUST be visible there or it'll get violated routinely.
     """
     body = Path("CLAUDE.md").read_text(encoding="utf-8")
-    assert "operating_hours_dormancy.md" in body
+    # Canonical dormancy doc moved to project_docs/ in the 2026-05-29 doc rebuild;
+    # CLAUDE.md links the rebuilt doc now (this guards the link, not the old path).
+    assert "03_dormancy_and_operating_hours.md" in body
     assert "6:00 AM" in body and "10:00 PM" in body
     assert "Houston" in body
 
@@ -220,12 +221,17 @@ def test_vp_coder_workspace_pruning_moved_to_active_hours() -> None:
     )
 
 
-def test_nightly_doc_drift_audit_runs_in_active_hours() -> None:
-    """GitHub Actions schedule must be inside the active window (UTC)."""
-    body = NIGHTLY_DOC_DRIFT.read_text(encoding="utf-8")
+def test_doc_nightly_runs_in_active_hours() -> None:
+    """The nightly documentation-health workflow schedule must be inside the active window (UTC).
+
+    Replaces the retired nightly-doc-drift-audit / openclaw-release-sync schedule checks
+    (both pipelines retired 2026-05-30; see project_docs/_meta/FOLLOWUPS.md). doc-nightly.yml
+    is the deterministic full-corpus health sweep that replaced the doc-drift heuristic.
+    """
+    body = DOC_NIGHTLY.read_text(encoding="utf-8")
     # Find the cron schedule
     m = re.search(r"-\s*cron:\s*'([^']+)'", body)
-    assert m, f"Could not find cron schedule in {NIGHTLY_DOC_DRIFT}"
+    assert m, f"Could not find cron schedule in {DOC_NIGHTLY}"
     cron = m.group(1)
     hours = _hours_used_by_cron(cron)
     # GHA schedules are UTC. CDT active = 11-01 UTC, CST active = 12-02 UTC.
@@ -233,24 +239,9 @@ def test_nightly_doc_drift_audit_runs_in_active_hours() -> None:
     # intersection of CDT-active and CST-active).
     safe_utc_active = set(range(12, 24)) | {0, 1}
     assert hours.issubset(safe_utc_active), (
-        f"nightly-doc-drift-audit cron={cron!r} hits UTC hour(s) "
+        f"doc-nightly cron={cron!r} hits UTC hour(s) "
         f"{sorted(hours - safe_utc_active)} outside the safe DST-overlap "
         f"active window 12-01 UTC. Use a UTC hour in 12-23 or 00-01."
-    )
-
-
-def test_openclaw_release_sync_runs_in_active_hours() -> None:
-    """Same check for the openclaw-release-sync workflow."""
-    body = OPENCLAW_SYNC.read_text(encoding="utf-8")
-    m = re.search(r"-\s*cron:\s*'([^']+)'", body)
-    assert m, f"Could not find cron schedule in {OPENCLAW_SYNC}"
-    cron = m.group(1)
-    hours = _hours_used_by_cron(cron)
-    safe_utc_active = set(range(12, 24)) | {0, 1}
-    assert hours.issubset(safe_utc_active), (
-        f"openclaw-release-sync cron={cron!r} hits UTC hour(s) "
-        f"{sorted(hours - safe_utc_active)} outside the safe DST-overlap "
-        f"active window 12-01 UTC."
     )
 
 

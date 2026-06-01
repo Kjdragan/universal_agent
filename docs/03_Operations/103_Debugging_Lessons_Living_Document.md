@@ -632,6 +632,82 @@ Reusable rule:
 
 ---
 
+## 2026-05-30: "no running event loop" Cron Failures Were In The Orchestrator, Not The Scripts
+
+### Incident Summary
+
+Two `[ERROR] Autonomous Task Failed` emails fired on consecutive days for the
+lightweight `!script` crons `hackernews_snapshot` (`a3c4deeb3b`) and
+`atlas_direct_dispatch` (`cdbc052ed5`), both with `error: no running event loop`.
+The same signature appeared in `journalctl -u universal-agent-gateway` at
+~11:08 UTC on 2026-05-28, 05-29, and 05-30 — a recurring daily window, always
+coincident with an in-process Claude Agent SDK heartbeat iteration.
+
+The decisive log line was a pair, not a single error:
+
+```
+ERROR:universal_agent.cron_service:Chron job a3c4deeb3b failed: no running event loop
+RuntimeWarning: coroutine 'CronService._run_job' was never awaited
+```
+
+### Lesson 1: A Fully-Synchronous Script Failing With An Asyncio Error Means The Error Is Not In The Script
+
+The handoff hypothesis was that the script entrypoints were missing
+`asyncio.run(...)`. But `hackernews_snapshot.py` has **zero** asyncio, and
+`atlas_direct_dispatch.py` already wraps its work in `asyncio.run(...)`. Two
+entrypoints with opposite async shapes failing **identically** is a tell that
+the fault lives in the **shared orchestration** that wraps both, not in either
+script. Additionally, `atlas_direct_dispatch` returns early (exit 0) when
+disabled — yet still "failed", proving the error fired before the script did
+any work of its own.
+
+### Lesson 2: The Allocation Site In A `coroutine was never awaited` Warning Is Not Where It Was Created (Unless tracemalloc Is On)
+
+The warning's traceback pointed at `asyncio/runners.py:118 run_until_complete`
+— the in-process SDK heartbeat's own `asyncio.run`, a red herring. With
+`tracemalloc` off ("Enable tracemalloc to get the object allocation traceback"),
+that frame is just *where the GC surfaced the unraisable warning*, not where the
+orphaned coroutine was built. The real creator was found by grepping every
+`create_task(self._run_job(...))` site.
+
+### Root Cause
+
+`cron_service.py` finalizes the lightweight `!script` path via
+`await asyncio.to_thread(self._finalize_workflow_attempt, …)` (a 2026-05-26
+hot-patch that moved a blocking `shutil.copytree` off the event loop). When such
+a run exits **non-zero**, `_finalize_workflow_attempt` walks the retry path and
+calls `_schedule_retry_run`, which used a bare
+`asyncio.create_task(self._run_job(...))`. `create_task` is **loop-affine**:
+inside the `to_thread` worker thread there is no running loop, so it raised
+`RuntimeError: no running event loop` and orphaned the `_run_job` coroutine.
+Intermittent because it only fires when a lightweight script exits non-zero
+**and** the admission service queues a retry attempt. The other seven
+`_finalize_workflow_attempt` call sites run on the loop and were unaffected.
+
+### Fix
+
+Make `_schedule_retry_run` loop-agnostic: capture the gateway's main loop in
+`CronService.start()` (`self._loop = asyncio.get_running_loop()`); use
+`running_loop.create_task(...)` when already on a loop, and
+`asyncio.run_coroutine_threadsafe(coro, self._loop)` when called from a worker
+thread. Regression test: `tests/unit/test_cron_retry_offloop_scheduling.py`
+schedules a retry from inside `asyncio.to_thread` and asserts it lands on the
+main loop without raising. Root-cause fix per CLAUDE.md (make the helper correct
+under both call contexts), not a `try/except RuntimeError` band-aid.
+
+### Reusable Rule
+
+Any sync helper that calls `asyncio.create_task` / `get_running_loop` /
+`ensure_future` can be detonated by being moved (even transitively) under an
+`asyncio.to_thread(...)` call. When you wrap something in `to_thread` to unblock
+the loop, audit the **whole** transitive call tree of the wrapped callable for
+loop-affine primitives. The loop-agnostic pattern (`get_running_loop()` →
+fast-path `create_task`; `RuntimeError` → `run_coroutine_threadsafe` onto a
+captured main loop) is the standard fix. See also the prior cron orphan-retry
+fix (#224) — this code path is a recurring async-correctness hotspot.
+
+---
+
 ## Seed Questions For Future Entries
 
 When adding a new lesson, answer these:

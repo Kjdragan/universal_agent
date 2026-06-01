@@ -378,6 +378,16 @@ def _get_cached_judge_verdict(conn: sqlite3.Connection, video_id: str) -> dict[s
     ).fetchone()
     if row is None:
         return None
+    # ``no_summary`` is NOT a real verdict — it means the transcript summary
+    # hadn't been analyzed yet when we first saw this video (the normal
+    # ingestion->analysis lag). Treat such rows as a cache MISS so the video is
+    # re-judged once the summary is backfilled, instead of being permanently
+    # locked out. Without this, a verdict written during the race short-circuits
+    # the LLM judge on every later sweep even after the summary lands — which is
+    # exactly how the production cache ended up 534/534 ``no_summary`` with zero
+    # buildable candidates ever produced.
+    if str(row[2] or "") == "no_summary":
+        return None
     return {
         "buildable": bool(row[0]),
         "reasoning": row[1] or "",
@@ -433,12 +443,14 @@ def is_video_buildable_with_judge(
     """
     clean_summary = str(summary_text or "").strip()
     if not clean_summary:
-        _cache_judge_verdict(
-            conn,
-            video_id=video_id,
-            buildable=False,
-            reasoning="no transcript summary available — cannot judge buildability",
-            method="no_summary",
+        # No transcript summary yet — almost always the normal ingestion->analysis
+        # lag (the sweep saw this CSI event before its summary was written). Skip
+        # WITHOUT caching a terminal verdict so the next sweep re-judges once the
+        # summary lands. (Mirrors the non-caching ``_judge_disabled`` path below;
+        # caching here was what permanently starved the tutorial-build lane.)
+        logger.debug(
+            "tutorial-build judge: no summary yet for %s; skipping without caching (will re-judge later)",
+            video_id,
         )
         return False
 

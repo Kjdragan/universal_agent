@@ -95,9 +95,25 @@ dev-kill:
 test:
     PYTHONPATH=src uv run --frozen pytest tests/unit -x -q
 
+# Fast local unit run with an explicit per-test fail-fast timeout and no
+# cache plugin. Use this — NOT a bare backgrounded `pytest -q` — when iterating
+# locally. A bare backgrounded full-suite run buffers all output, so a hung
+# test is indistinguishable from a slow one, and several concurrent sessions
+# each launching the full suite saturate the host (load spikes turn every
+# SQLite fsync into a multi-second stall).
+#
+# TARGET scopes the run (a path REPLACES the default `tests/unit`); ARGS are
+# extra pytest flags. Examples:
+#   just test-fast                                  # whole unit suite, fail-fast
+#   just test-fast tests/unit/test_loop_control.py  # one file
+#   just test-fast tests/unit -k agentmail          # keyword filter within unit
+# See: docs/03_Operations/135_Test_Suite_Hardening_And_Local_Run_Runbook.md
+test-fast TARGET="tests/unit" *ARGS:
+    PYTHONPATH=src uv run --frozen pytest {{TARGET}} -x -q -p no:cacheprovider --timeout=60 {{ARGS}}
+
 # Run a specific test file or test ID (e.g., `just test-one tests/unit/test_loop_control.py`).
 test-one TEST:
-    PYTHONPATH=src uv run --frozen pytest {{TEST}} -x -q
+    PYTHONPATH=src uv run --frozen pytest {{TEST}} -x -q --timeout=60
 
 # Whole-repo ruff scan (all rules, all files). Surfaces pre-existing rot
 # the codebase has accumulated. Use this when you want a full picture;

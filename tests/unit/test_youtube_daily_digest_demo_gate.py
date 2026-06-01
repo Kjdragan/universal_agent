@@ -152,3 +152,105 @@ def test_min_score_override_via_kwarg():
     decisions2 = {"ranked_videos": [_make_row(video_id="a", rank=1, score=65, tier="medium")]}
     selected_loose = ydd._select_tutorial_dispatch_candidates(decisions2, top_n=4, min_score=60)
     assert [r["video_id"] for r in selected_loose] == ["a"]
+
+
+# ---------------------------------------------------------------------------
+# Dynamic top_n: tie-extension at the cutoff score.
+#
+# Motivation: 2026-05-30 FRIDAY digest scored 6 videos at exactly 85 with a
+# static top_n=4, so ranks 5-6 (two genuinely buildable talks) were dropped
+# purely by arbitrary tie-order. When the cutoff score is a tie, every eligible
+# video tied at that score should dispatch — up to a hard ceiling that bounds
+# build fan-out.
+# ---------------------------------------------------------------------------
+
+
+def test_tie_extension_rescues_videos_tied_at_cutoff_score():
+    """Six eligible videos all tied at 85 with top_n=4 should dispatch all six
+    (the two beyond top_n tie the cutoff score and get rescued)."""
+    decisions = {
+        "ranked_videos": [
+            _make_row(video_id=f"v{i}", rank=i, score=85, tier="high") for i in range(1, 7)
+        ]
+    }
+    selected = ydd._select_tutorial_dispatch_candidates(decisions, top_n=4, min_score=70)
+    assert [r["video_id"] for r in selected] == ["v1", "v2", "v3", "v4", "v5", "v6"]
+    statuses = {r["video_id"]: r["dispatch_status"] for r in decisions["ranked_videos"]}
+    assert all(s == "selected" for s in statuses.values())
+    # Rows rescued beyond top_n are flagged for observability.
+    tie_extended = {r["video_id"]: r.get("dispatch_tie_extended") for r in decisions["ranked_videos"]}
+    assert tie_extended["v5"] is True and tie_extended["v6"] is True
+    assert tie_extended["v1"] is False
+
+
+def test_tie_extension_does_not_rescue_lower_scores():
+    """Only videos tied at the cutoff score are rescued; strictly-lower-scored
+    eligible videos remain overflow."""
+    decisions = {
+        "ranked_videos": [
+            _make_row(video_id="a", rank=1, score=90),
+            _make_row(video_id="b", rank=2, score=85),
+            _make_row(video_id="c", rank=3, score=85),  # ties cutoff -> rescued
+            _make_row(video_id="d", rank=4, score=80),  # below cutoff -> overflow
+        ]
+    }
+    selected = ydd._select_tutorial_dispatch_candidates(decisions, top_n=2, min_score=70)
+    # top_n=2 selects a(90), b(85). Cutoff score = 85. c(85) ties -> rescued.
+    # d(80) is below cutoff -> overflow.
+    assert [r["video_id"] for r in selected] == ["a", "b", "c"]
+    statuses = {r["video_id"]: r["dispatch_status"] for r in decisions["ranked_videos"]}
+    assert statuses == {
+        "a": "selected",
+        "b": "selected",
+        "c": "selected",
+        "d": "eligible_overflow",
+    }
+
+
+def test_tie_extension_respects_max_n_ceiling():
+    """Tie-extension never exceeds the hard ceiling (default 2x top_n)."""
+    decisions = {
+        "ranked_videos": [
+            _make_row(video_id=f"v{i}", rank=i, score=85, tier="high") for i in range(1, 13)
+        ]
+    }
+    # top_n=4 -> default ceiling 8. 12 videos tied at 85 -> only 8 dispatch.
+    selected = ydd._select_tutorial_dispatch_candidates(decisions, top_n=4, min_score=70)
+    assert len(selected) == 8
+    overflow = [r for r in decisions["ranked_videos"] if r["dispatch_status"] == "eligible_overflow"]
+    assert len(overflow) == 4
+
+
+def test_tie_extension_max_n_kwarg_override():
+    """An explicit max_n kwarg overrides the default ceiling."""
+    decisions = {
+        "ranked_videos": [
+            _make_row(video_id=f"v{i}", rank=i, score=85, tier="high") for i in range(1, 7)
+        ]
+    }
+    selected = ydd._select_tutorial_dispatch_candidates(
+        decisions, top_n=4, min_score=70, max_n=5
+    )
+    assert len(selected) == 5
+
+
+def test_no_tie_when_cutoff_is_unique_score():
+    """Regression guard: distinct scores around the cutoff must NOT tie-extend
+    (preserves the original top_n behaviour for non-saturated days)."""
+    decisions = {
+        "ranked_videos": [
+            _make_row(video_id="a", rank=1, score=95),
+            _make_row(video_id="b", rank=2, score=90),
+            _make_row(video_id="c", rank=3, score=85),
+            _make_row(video_id="d", rank=4, score=80),
+        ]
+    }
+    selected = ydd._select_tutorial_dispatch_candidates(decisions, top_n=2, min_score=70)
+    assert [r["video_id"] for r in selected] == ["a", "b"]
+    statuses = {r["video_id"]: r["dispatch_status"] for r in decisions["ranked_videos"]}
+    assert statuses == {
+        "a": "selected",
+        "b": "selected",
+        "c": "eligible_overflow",
+        "d": "eligible_overflow",
+    }

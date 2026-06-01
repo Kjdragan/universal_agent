@@ -110,7 +110,12 @@ def test_reminder_fires_when_email_succeeds(monkeypatch, digest_module):
         "On a successful email, the digest must fire exactly one reminder"
     )
     call = reminder_calls[0]
-    assert call["subject"] == "Daily YouTube Digest: Monday"
+    # Subject is "Daily YouTube Summaries — <date>" (date varies by run day),
+    # so assert the stable prefix rather than the day-specific tail. The day
+    # name was intentionally dropped from the subject (2026-05-29) because the
+    # cron digests the *prior* day's playlist, which made the old day-named
+    # subject mismatch the delivery day.
+    assert call["subject"].startswith("Daily YouTube Summaries — ")
     assert call["recipient"] == "kevinjdragan@gmail.com"
     assert "sent_at_utc" in call
 

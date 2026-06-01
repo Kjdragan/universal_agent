@@ -254,7 +254,7 @@ def park_task_for_protocol_violation(
         task_hub.perform_task_action(
             conn,
             task_id=tid,
-            action="review",
+            action=task_hub.ACTION_REVIEW,
             reason=combined_reason,
             agent_id=agent_id,
         )

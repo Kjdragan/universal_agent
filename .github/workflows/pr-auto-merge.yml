@@ -10,6 +10,18 @@ name: PR Auto-Merge
 # Everything else (claude/*, worktree-*, fix/*, docs/*, etc.) auto-merges
 # once pr-validate.yml passes. Safety is in CI, not in branch naming.
 #
+# AUTHORITATIVE branch policy (keep this + pr-rebase-watchdog.yml in sync):
+#   project_docs/06_platform/04_deployment_and_cicd.md § "Branch policy — single source of truth"
+#
+# EXCEPTION — the `ci-autofix` label (2026-05-30): a PR carrying that label
+# auto-merges regardless of branch prefix (including codie/*). The label is
+# applied ONLY by the autonomous CI-failure auto-fix loop (Simone's heartbeat
+# CI/CD Health monitor dispatches a Cody fix and has it self-label). Rationale:
+# a CI-fix is self-gating — it has to make pr-validate + GitGuardian green to
+# merge — so auto-merging it is safe AND necessary (otherwise a codie/* fix PR
+# sits unmerged for hours and the dark-factory loop never closes). General
+# codie/* PRs (no label) still require manual review.
+#
 # History:
 # 2026-05-11: Original — only triggered for claude/* heads.
 # 2026-05-15: Added codie/* after Codie PRs sat green-CI but unmerged.
@@ -17,10 +29,14 @@ name: PR Auto-Merge
 #             silently fell through the allowlist (PR #316 incident).
 #             Operator then clarified: Codie PRs should NOT auto-merge —
 #             keep them for review. All other non-operator branches do.
+# 2026-05-30: Added the `ci-autofix` label exception + `labeled` trigger to
+#             close the autonomous CI-failure fix loop.
 
 on:
   pull_request_target:
-    types: [opened, reopened, synchronize, ready_for_review]
+    # `labeled` so applying `ci-autofix` to an existing codie/* PR re-evaluates
+    # and enables auto-merge.
+    types: [opened, reopened, synchronize, ready_for_review, labeled]
     branches: [main]
 
 permissions:
@@ -30,11 +46,18 @@ permissions:
 jobs:
   enable-automerge:
     name: Enable auto-merge (squash)
+    # Auto-merge when NOT a draft AND either:
+    #   (a) the branch is not an operator/Codie-review branch, OR
+    #   (b) the PR carries the `ci-autofix` label (autonomous CI-fix override).
     if: |
-      !startsWith(github.event.pull_request.head.ref, 'codie/') &&
-      !startsWith(github.event.pull_request.head.ref, 'kevin/') &&
-      !startsWith(github.event.pull_request.head.ref, 'feature/') &&
-      !github.event.pull_request.draft
+      !github.event.pull_request.draft && (
+        (
+          !startsWith(github.event.pull_request.head.ref, 'codie/') &&
+          !startsWith(github.event.pull_request.head.ref, 'kevin/') &&
+          !startsWith(github.event.pull_request.head.ref, 'feature/')
+        ) ||
+        contains(github.event.pull_request.labels.*.name, 'ci-autofix')
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

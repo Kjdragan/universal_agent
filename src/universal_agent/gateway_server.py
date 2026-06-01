@@ -285,7 +285,7 @@ _default_ws_dir = BASE_DIR / "AGENT_RUN_WORKSPACES"
 env_ws_dir = os.getenv("UA_WORKSPACES_DIR")
 if env_ws_dir:
     WORKSPACES_DIR = Path(env_ws_dir).resolve()
-    logger.info(f"📁 Workspaces Directory Overridden: {WORKSPACES_DIR}")
+    logger.info("Workspaces Directory Overridden: %s", WORKSPACES_DIR)
 else:
     WORKSPACES_DIR = _default_ws_dir
 
@@ -461,6 +461,14 @@ YOUTUBE_DAILY_DIGEST_DEFAULT_TIMEZONE = (
 YOUTUBE_GOLD_POLLER_JOB_KEY = "youtube_gold_channel_poller"
 YOUTUBE_GOLD_POLLER_DEFAULT_CRON = "30 5 * * *"  # 5:30 AM Central daily
 YOUTUBE_GOLD_POLLER_DEFAULT_TIMEZONE = YOUTUBE_DAILY_DIGEST_DEFAULT_TIMEZONE
+YOUTUBE_OAUTH_WATCHDOG_JOB_KEY = "youtube_oauth_watchdog"
+# 7 AM Central: inside the active window (6 AM–10 PM) so it passes the
+# dormancy guard, and late enough that the operator is likely awake to tap
+# the re-auth button when the token is already dead. The proactive (age)
+# warning fires ~2 days before expiry, so same-morning timing isn't
+# load-bearing for the common case.
+YOUTUBE_OAUTH_WATCHDOG_DEFAULT_CRON = "0 7 * * *"
+YOUTUBE_OAUTH_WATCHDOG_DEFAULT_TIMEZONE = YOUTUBE_DAILY_DIGEST_DEFAULT_TIMEZONE
 CODIE_PROACTIVE_CLEANUP_JOB_KEY = "codie_proactive_cleanup"
 CODIE_PROACTIVE_CLEANUP_DEFAULT_CRON = "30 1 * * *"
 CODIE_PROACTIVE_CLEANUP_DEFAULT_TIMEZONE = (
@@ -1825,7 +1833,7 @@ if _allowed_users_str:
             "➕ Added runtime identities to allowlist: %s",
             ", ".join(_added_runtime_identities),
         )
-    logger.info(f"🔒 Authenticated Access Only. Allowed Users: {len(ALLOWED_USERS)}")
+    logger.info("Authenticated Access Only. Allowed Users: %s", len(ALLOWED_USERS))
 else:
     logger.info("🔓 Public Access Mode (No Allowlist configured)")
 
@@ -2314,19 +2322,6 @@ class ProactiveTopicSignatureExtractRequest(BaseModel):
     use_llm_match: bool = True
     window_hours: Optional[int] = 72
     min_channels: Optional[int] = 2
-
-
-def _primary_convergence_result(results: Any) -> Optional[dict[str, Any]]:
-    """Return the preferred single-object convergence result for API compatibility."""
-    if not isinstance(results, list) or not results:
-        return None
-    for result in results:
-        if not isinstance(result, dict):
-            continue
-        task = result.get("task") if isinstance(result.get("task"), dict) else {}
-        if str(task.get("source_kind") or "").strip() == "convergence_detection":
-            return result
-    return next((result for result in results if isinstance(result, dict)), None)
 
 
 class DashboardEventPresetCreateRequest(BaseModel):
@@ -6846,6 +6841,59 @@ def _enforce_todo_execution_lifecycle(
     return goal_satisfaction
 
 
+def _lifecycle_miss_notification_routing(
+    *,
+    notification_kind: str,
+    goal_message: str,
+) -> tuple[str, bool, Optional[list[str]], bool, str]:
+    """Decide notification routing for a todo-execution lifecycle miss.
+
+    Returns ``(severity, requires_action, channels, deploy_restart_casualty,
+    message)``.
+
+    When a deploy (or operator ``systemctl restart``) SIGTERMs the Claude
+    subprocess mid-run, the turn comes back with no durable Task Hub lifecycle
+    mutation and the ``execution_missing_lifecycle_mutation`` guardrail
+    correctly fires — but this is a transient non-event, not a stuck task. The
+    caller's ``finalize_assignments(reopen_in_progress=True)`` already reopened
+    the work item, so the todo dispatcher will re-claim and retry it on the next
+    sweep (typically within minutes). Emailing/Telegraming the operator an
+    ``[ERROR]`` for a self-healing deploy casualty is pure noise.
+
+    Mirror the cron path (``cron_service.py`` deploy-window reclassification):
+    when ``_is_deploy_window_active()`` is true, downgrade to a dashboard-only
+    ``warning`` so the signal stays observable on the dashboard without paging
+    the operator. The deploy window is conservative (deploy-marker flag OR
+    process uptime < 60s), so genuine lifecycle misses outside a deploy/restart
+    still surface loudly as ``error`` on every channel, exactly as before.
+
+    Only ``execution_missing_lifecycle_mutation`` is eligible for this
+    downgrade; every other guardrail kind keeps its original error routing.
+    """
+    severity = "error"
+    requires_action = True
+    channels: Optional[list[str]] = None
+    deploy_restart_casualty = False
+    if notification_kind == "execution_missing_lifecycle_mutation":
+        try:
+            from universal_agent.cron_service import _is_deploy_window_active
+
+            deploy_restart_casualty = bool(_is_deploy_window_active())
+        except Exception:  # noqa: BLE001 — never block the failure path
+            deploy_restart_casualty = False
+        if deploy_restart_casualty:
+            severity = "warning"
+            requires_action = False
+            channels = ["dashboard"]
+            goal_message = (
+                f"{goal_message} (Deploy/restart in flight — the run's "
+                "subprocess was terminated before it could close the Task Hub "
+                "lifecycle; the work item was reopened and will be retried "
+                "automatically. Dashboard-only; no operator action required.)"
+            )
+    return severity, requires_action, channels, deploy_restart_casualty, goal_message
+
+
 def _record_todo_execution_result(
     *,
     session_id: str,
@@ -7316,18 +7364,35 @@ async def _run_gateway_session_request(
                     result_state="failed",
                     detail=goal_message,
                 )
+            # Deploy-restart casualty suppression: when a deploy/restart
+            # SIGTERMs the run mid-flight, the lifecycle miss is a transient
+            # non-event (the work item was already reopened above and will be
+            # retried) — downgrade to a dashboard-only warning instead of
+            # paging the operator. See helper docstring for full rationale.
+            (
+                notification_severity,
+                notification_requires_action,
+                notification_channels,
+                deploy_restart_casualty,
+                goal_message,
+            ) = _lifecycle_miss_notification_routing(
+                notification_kind=notification_kind,
+                goal_message=goal_message,
+            )
             _add_notification(
                 kind=notification_kind,
                 title=notification_title,
                 message=goal_message,
                 session_id=session_id,
-                severity="error",
-                requires_action=True,
+                severity=notification_severity,
+                requires_action=notification_requires_action,
+                channels=notification_channels,
                 metadata={
                     "goal_satisfaction": goal_satisfaction,
                     "run_id": _session_run_id(session),
                     "workspace_dir": active_execution_workspace or session.workspace_dir or "",
                     "active_run_workspace": _session_active_run_workspace(session) or active_execution_workspace or "",
+                    "deploy_restart_casualty": deploy_restart_casualty,
                 },
             )
             await manager.broadcast(
@@ -14234,12 +14299,12 @@ class ConnectionManager:
         self.session_connections[session_id].add(connection_id)
         _set_session_connections(session_id, len(self.session_connections.get(session_id, set())))
         
-        logger.info(f"Gateway WebSocket connected: {connection_id} (session: {session_id})")
+        logger.info("Gateway WebSocket connected: %s (session: %s)", connection_id, session_id)
 
     def disconnect(self, connection_id: str, session_id: str):
         if connection_id in self.active_connections:
             del self.active_connections[connection_id]
-            logger.info(f"Gateway WebSocket disconnected: {connection_id}")
+            logger.info("Gateway WebSocket disconnected: %s", connection_id)
             
         if session_id in self.session_connections:
             self.session_connections[session_id].discard(connection_id)
@@ -14282,7 +14347,7 @@ class ConnectionManager:
                 if stale_session:
                     self.disconnect(connection_id, stale_session)
                 _increment_metric("ws_stale_evictions")
-                logger.error(f"Failed to send to {connection_id}: {e}")
+                logger.error("Failed to send to %s: %s", connection_id, e)
 
     async def broadcast(self, session_id: str, data: dict, exclude_connection_id: Optional[str] = None):
         """Send a message to all connections associated with a session_id."""
@@ -14327,7 +14392,7 @@ class ConnectionManager:
                 except Exception as e:
                     _increment_metric("ws_send_failures")
                     stale_connections.append(connection_id)
-                    logger.error(f"Failed to broadcast to {connection_id}: {e}")
+                    logger.error("Failed to broadcast to %s: %s", connection_id, e)
 
         for connection_id in global_targets:
             if connection_id == exclude_connection_id:
@@ -14351,7 +14416,7 @@ class ConnectionManager:
                 except Exception as e:
                     _increment_metric("ws_send_failures")
                     stale_connections.append(connection_id)
-                    logger.error(f"Failed to broadcast annotated payload to {connection_id}: {e}")
+                    logger.error("Failed to broadcast annotated payload to %s: %s", connection_id, e)
 
         for stale_connection in stale_connections:
             stale_session = self._session_id_for_connection(stale_connection) or session_id
@@ -14546,7 +14611,7 @@ async def lifespan(app: FastAPI):
     # Initialize runtime database (required by ProcessTurnAdapter -> setup_session)
     import universal_agent.main as main_module
     db_path = get_runtime_db_path()
-    logger.info(f"📊 Connecting to runtime DB: {db_path}")
+    logger.info("Connecting to runtime DB: %s", db_path)
     main_module.runtime_db_conn = connect_runtime_db(db_path)
     # Enable WAL mode for concurrent access (CLI + gateway can coexist)
     main_module.runtime_db_conn.execute("PRAGMA journal_mode=WAL")
@@ -14798,6 +14863,7 @@ async def lifespan(app: FastAPI):
                 _ensure_paper_to_podcast_cron_job()
                 _ensure_youtube_daily_digest_cron_job()
                 _ensure_youtube_gold_poller_cron_job()
+                _ensure_youtube_oauth_watchdog_cron_job()
                 _ensure_nightly_wiki_cron_job()
                 _ensure_morning_briefing_cron_job()
                 _ensure_evening_briefing_cron_job()
@@ -15527,6 +15593,126 @@ async def issue_ops_token_endpoint(request: Request, payload: OpsTokenIssueReque
     )
 
 
+@app.post("/api/v1/hooks/ci-failure")
+async def ci_failure_hook_endpoint(request: Request):
+    """Event-driven entry point for the autonomous CI-failure auto-fix loop.
+
+    Called by ``.github/workflows/ci-failure-issue.yml`` on a
+    ``workflow_run: completed`` (``conclusion == failure``) event. We do NOT act
+    immediately: a session almost always fix-forwards its own CI failure within
+    minutes, so we schedule a **durable one-shot grace timer** (~15 min) and let
+    ``universal_agent.scripts.ci_failure_grace_recheck`` re-verify and act only on
+    a genuinely orphaned, still-red failure. The timer is a persisted cron
+    ``run_at`` job, so it survives the gateway restart that a deploy triggers.
+
+    Deterministic and decoupled from agent cognition — this is a dedicated route,
+    not the agent-dispatch hooks engine, so CI triage never enters Simone's loop.
+    Defined before the ``/api/v1/hooks/{subpath}`` catch-all so it wins routing.
+    """
+    _require_ops_auth(request)
+
+    if (os.getenv("UA_CI_AUTOFIX_ENABLED", "1").strip() not in {"1", "true", "True", "yes"}):
+        return JSONResponse({"ok": True, "disabled": True})
+
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "invalid_json"})
+    if not isinstance(payload, dict):
+        return JSONResponse(status_code=400, content={"ok": False, "error": "payload_not_object"})
+
+    workflow = str(payload.get("workflow") or payload.get("workflow_name") or "").strip()
+    head_sha = str(payload.get("head_sha") or "").strip()
+    run_id = str(payload.get("run_id") or "").strip()
+    if not workflow or not run_id:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "error": "missing_required_fields", "need": ["workflow", "run_id"]},
+        )
+
+    if _cron_service is None:
+        return JSONResponse(status_code=503, content={"ok": False, "error": "cron_service_unavailable"})
+
+    pr_number = payload.get("pr_number")
+    branch = str(payload.get("head_branch") or "").strip()
+    idempotency_key = f"{pr_number or branch}:{workflow}:{head_sha}"
+
+    # Dedup at the schedule stage: one pending grace timer per failure identity.
+    try:
+        for job in _cron_service.list_jobs():
+            meta = job.metadata or {}
+            if (
+                meta.get("system_job") == "ci_failure_grace_recheck"
+                and meta.get("idempotency_key") == idempotency_key
+                and job.next_run_at is not None
+            ):
+                return JSONResponse(
+                    {"ok": True, "deduped": True, "job_id": job.job_id, "idempotency_key": idempotency_key}
+                )
+    except Exception:
+        pass  # Dedup is best-effort; the grace-fire re-verify is the real guard.
+
+    try:
+        grace_seconds = int(os.getenv("UA_CI_AUTOFIX_GRACE_SECONDS", "900"))
+    except ValueError:
+        grace_seconds = 900
+    grace_seconds = max(60, grace_seconds)
+
+    # Pass the full context to the grace script as urlsafe-base64 JSON (no spaces,
+    # survives shlex tokenization of the `!script` command).
+    payload_b64 = base64.urlsafe_b64encode(
+        json.dumps(payload, ensure_ascii=True, default=str).encode("utf-8")
+    ).decode("ascii")
+    command = (
+        "!script universal_agent.scripts.ci_failure_grace_recheck "
+        f"--payload-b64 {payload_b64}"
+    )
+
+    try:
+        job = _cron_service.add_job(
+            user_id="ci_autofix_hook",
+            workspace_dir=None,
+            command=command,
+            description=f"CI auto-fix grace re-check: {workflow} run {run_id}",
+            run_at=time.time() + grace_seconds,
+            delete_after_run=True,
+            timeout_seconds=600,
+            enabled=True,
+            metadata={
+                "system_job": "ci_failure_grace_recheck",
+                "source": "ci_failure_hook",
+                "idempotency_key": idempotency_key,
+                "workflow": workflow,
+                "run_id": run_id,
+                "pr_number": pr_number,
+                "head_sha": head_sha,
+            },
+        )
+    except Exception as exc:
+        logger.exception("ci-failure hook: failed to schedule grace timer")
+        return JSONResponse(
+            status_code=500, content={"ok": False, "error": f"schedule_failed:{type(exc).__name__}"}
+        )
+
+    logger.info(
+        "ci-failure hook: scheduled grace re-check job=%s workflow=%s run=%s pr=%s grace=%ss",
+        job.job_id,
+        workflow,
+        run_id,
+        pr_number,
+        grace_seconds,
+    )
+    return JSONResponse(
+        {
+            "ok": True,
+            "scheduled": True,
+            "job_id": job.job_id,
+            "grace_seconds": grace_seconds,
+            "idempotency_key": idempotency_key,
+        }
+    )
+
+
 @app.post("/api/v1/hooks/{subpath:path}")
 async def hooks_endpoint(request: Request, subpath: str):
     if not _hooks_service:
@@ -15914,7 +16100,7 @@ def _scan_freelance_opportunities() -> list[dict]:
                         "created_at": created_at,
                     })
             except Exception as e:
-                logger.warning(f"Failed to parse opportunity file {filepath}: {e}")
+                logger.warning("Failed to parse opportunity file %s: %s", filepath, e)
     return opportunities
 
 
@@ -15958,7 +16144,7 @@ def _scan_freelance_applications() -> list[dict]:
                         "artifact_path": str(filepath),
                     })
             except Exception as e:
-                logger.warning(f"Failed to parse application file {filepath}: {e}")
+                logger.warning("Failed to parse application file %s: %s", filepath, e)
     return applications
 
 
@@ -16045,7 +16231,7 @@ async def health(response: Response):
         db_status = "error"
         db_error = str(e)
         is_healthy = False
-        logger.error(f"Health check failed: {e}")
+        logger.error("Health check failed: %s", e)
 
     if not is_healthy:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
@@ -17161,7 +17347,7 @@ async def upload_session_file(
             text_content = content_bytes.decode("utf-8", errors="replace")
         result["content"] = text_content
 
-    logger.info(f"📎 File uploaded: {relative_path} ({len(content_bytes)} bytes) for session {safe_id}")
+    logger.info("File uploaded: %s (%s bytes) for session %s", relative_path, len(content_bytes), safe_id)
     return result
 
 
@@ -17199,7 +17385,7 @@ async def create_session(request: CreateSessionRequest, http_request: Request):
     # 1. Enforce Allowlist
     final_user_id = resolve_user_id(request.user_id)
     if not is_user_allowed(final_user_id):
-        logger.warning(f"⛔ Access Denied: User '{final_user_id}' not in allowlist.")
+        logger.warning("Access Denied: User '%s' not in allowlist.", final_user_id)
         raise HTTPException(status_code=403, detail="Access denied: User not allowed.")
 
     workspace_dir = _sanitize_workspace_dir_or_400(request.workspace_dir)
@@ -17245,7 +17431,7 @@ async def create_session(request: CreateSessionRequest, http_request: Request):
             is_live_session=True,
         )
     except Exception as e:
-        logger.error(f"Failed to create session: {e}")
+        logger.error("Failed to create session: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -17878,7 +18064,7 @@ async def dashboard_discord_recent_messages(
                     data = json.load(f)
                 target_server_ids = {srv["server_id"] for srv in data.get("servers", []) if srv.get("domain") == category}
             except Exception as e:
-                logger.error(f"Error reading discord watchlist for category filter: {e}")
+                logger.error("Error reading discord watchlist for category filter: %s", e)
                 target_server_ids = set()
 
     conn = _discord_connect()
@@ -19063,6 +19249,42 @@ def _ensure_youtube_gold_poller_cron_job() -> Optional[dict[str, Any]]:
     return job.to_dict() if hasattr(job, "to_dict") else {"job_id": str(getattr(job, "job_id", ""))}
 
 
+def _youtube_oauth_watchdog_enabled() -> bool:
+    return os.getenv("UA_YOUTUBE_OAUTH_WATCHDOG_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _ensure_youtube_oauth_watchdog_cron_job() -> Optional[dict[str, Any]]:
+    """Idempotently register the YouTube OAuth watchdog cron.
+
+    Runs daily at 7 AM Central: tests the refresh token's liveness and age,
+    and emails a one-tap re-auth button before the ~7-day token expiry breaks
+    the morning digest. Pure stdlib + httpx + AgentMail — no agent session
+    needed, so ``lightweight=True``. ``skip_task_hub_link=True`` because it's
+    a credential-health check that produces no tracked work-product (it only
+    conditionally emits a warning email).
+    """
+    if not _cron_service or not _youtube_oauth_watchdog_enabled():
+        return None
+    return _register_system_cron_job(
+        system_job=YOUTUBE_OAUTH_WATCHDOG_JOB_KEY,
+        default_cron=YOUTUBE_OAUTH_WATCHDOG_DEFAULT_CRON,
+        default_timezone=YOUTUBE_OAUTH_WATCHDOG_DEFAULT_TIMEZONE,
+        command="!script universal_agent.scripts.youtube_oauth_watchdog",
+        description="YouTube OAuth watchdog: daily liveness + expiry check; emails a one-tap re-auth button before the 7-day token expires.",
+        timeout_seconds=120,
+        enabled=True,
+        cron_env_var="UA_YOUTUBE_OAUTH_WATCHDOG_CRON",
+        timezone_env_var="UA_YOUTUBE_OAUTH_WATCHDOG_TIMEZONE",
+        required_secrets=[
+            "YOUTUBE_OAUTH_CLIENT_ID",
+            "YOUTUBE_OAUTH_CLIENT_SECRET",
+            "YOUTUBE_OAUTH_REFRESH_TOKEN",
+        ],
+        skip_task_hub_link=True,
+        lightweight=True,
+    )
+
+
 def _proactive_cron_enabled(env_var: str, default: str = "1") -> bool:
     return os.getenv(env_var, default).strip().lower() in {"1", "true", "yes", "on"}
 
@@ -19378,7 +19600,16 @@ def _ensure_atlas_direct_dispatch_cron_job() -> Optional[dict[str, Any]]:
             "bypasses Simone-heartbeat throttle (Hermes Phase C)."
         ),
         timeout_seconds=60,
-        enabled=_proactive_cron_enabled("UA_ATLAS_DIRECT_DISPATCH_ENABLED"),
+        # default="0" so an UNSET flag disables the cron, matching the
+        # script's own `_is_enabled()` gate (which also defaults OFF).
+        # Previously this defaulted to "1": with the flag unset in prod the
+        # cron fired every 60s (1,440 spawns/day) while the script no-opped
+        # every tick — wasted `create_subprocess_exec` calls that also fed
+        # the 6 AM event-loop spawn-pressure (EAGAIN) failures. Re-registering
+        # disabled trips the #539 disable-on-flip path and stops the row.
+        enabled=_proactive_cron_enabled(
+            "UA_ATLAS_DIRECT_DISPATCH_ENABLED", default="0"
+        ),
         cron_env_var="UA_ATLAS_DIRECT_DISPATCH_CRON",
         timezone_env_var="UA_ATLAS_DIRECT_DISPATCH_TIMEZONE",
         # Ship 4 (Task Hub Observability Protocol): opted IN. The tasks
@@ -20573,14 +20804,28 @@ def _ack_artifact(conn: sqlite3.Connection, artifact_id: str) -> Optional[dict[s
 async def artifacts_ack_get(artifact_id: str, t: str = ""):
     """Signed-URL acknowledge endpoint for email "Acknowledge" links.
 
-    Validates the HMAC token against the artifact_id (signing key shared
-    with ``cron_artifact_notifier.sign_ack_token``). Idempotent — repeat
-    clicks return the same OK response.
+    Silent by design: the operator clicks the link in their mail client,
+    we mark the artifact accepted server-side (which drops it out of the
+    ``cron_artifact_reminders`` sweep), and we return ``204 No Content`` so
+    the browser shows a blank tab — no JSON blob, no confirmation screen.
+    Every benign outcome (valid click, already-acked, missing artifact,
+    even an invalid/expired token) returns 204 so the operator never sees
+    an error page; the ack itself is only performed when the HMAC token
+    validates. Idempotent — repeat clicks are a no-op.
     """
+    from fastapi import Response
+
     from universal_agent.services.cron_artifact_notifier import verify_ack_token
 
     if not verify_ack_token(artifact_id, t):
-        raise HTTPException(status_code=401, detail="invalid acknowledgement token")
+        # Tampered / expired link. Do nothing, but stay silent for the
+        # operator (blank tab); log for server-side diagnosability.
+        logger.info(
+            "artifacts_ack_get: invalid/expired ack token for artifact %s (no-op)",
+            artifact_id,
+        )
+        return Response(status_code=204)
+
     with _activity_store_lock:
         conn = _activity_connect()
         try:
@@ -20588,13 +20833,16 @@ async def artifacts_ack_get(artifact_id: str, t: str = ""):
         finally:
             conn.close()
     if artifact is None:
-        raise HTTPException(status_code=404, detail="artifact not found")
-    return {
-        "status": "ok",
-        "artifact_id": artifact_id,
-        "title": artifact.get("title"),
-        "message": "Acknowledged. You won't get further reminders for this artifact.",
-    }
+        logger.info(
+            "artifacts_ack_get: artifact %s not found (no-op)", artifact_id
+        )
+    else:
+        logger.info(
+            "artifacts_ack_get: acknowledged artifact %s (%s) — reminders halted",
+            artifact_id,
+            (artifact.get("title") or "")[:80],
+        )
+    return Response(status_code=204)
 
 
 # ── PR B: Insight pipeline feedback / viewer / pause endpoints ─────────
@@ -20835,6 +21083,174 @@ async def briefs_viewer_get(artifact_id: str):
     return HTMLResponse(content=body, status_code=200)
 
 
+# ── YouTube OAuth email-button re-auth flow ──────────────────────────────
+#
+# The youtube_oauth_watchdog cron emails a signed link to `/start` when the
+# refresh token is dead or near its 7-day expiry. `/start` bounces the
+# operator to Google's consent screen; Google redirects back to `/callback`,
+# which exchanges the code and writes the fresh token (+ minted-at stamp) to
+# production Infisical. The next digest/poller subprocess bootstraps secrets
+# fresh, so no gateway restart is needed.
+#
+# PREREQUISITE (one-time, GCP console): the redirect URI
+# `https://<public-base>/api/v1/youtube-oauth/callback` must be registered as
+# an Authorized redirect URI on the OAuth client behind YOUTUBE_OAUTH_CLIENT_ID
+# (a "Web application" client — desktop clients only allow localhost redirects).
+
+
+@app.get("/api/v1/youtube-oauth/start")
+async def youtube_oauth_start(t: str = ""):
+    """Redirect the operator to Google's consent screen for a YouTube re-auth.
+
+    Requires a valid signed ``t`` (minted by the watchdog email) so this
+    endpoint can't be used as an open "trigger a consent screen" nuisance.
+    """
+    from fastapi.responses import HTMLResponse, RedirectResponse
+
+    from universal_agent.services import youtube_oauth_health as yoh
+
+    if not yoh.check_signed_param("start", t or ""):
+        return HTMLResponse(
+            _brief_chrome(
+                "Link expired or invalid",
+                "<p>This re-auth link is invalid or has expired. The next daily "
+                "watchdog run will email a fresh one, or re-mint from a terminal "
+                "with <code>uv run python -m universal_agent.scripts.youtube_oauth2_setup</code>.</p>",
+                status_color="#cf222e",
+            ),
+            status_code=401,
+        )
+    client_id = (os.getenv("YOUTUBE_OAUTH_CLIENT_ID") or "").strip()
+    if not client_id:
+        return HTMLResponse(
+            _brief_chrome(
+                "OAuth not configured",
+                "<p>YOUTUBE_OAUTH_CLIENT_ID is not set in this environment.</p>",
+                status_color="#cf222e",
+            ),
+            status_code=500,
+        )
+    base = yoh.public_base_url()
+    redirect_uri = f"{base}{yoh.CALLBACK_PATH}"
+    state = yoh.mint_signed_param("state", 1800)  # 30 min to complete consent
+    consent_url = yoh.build_consent_url(client_id, redirect_uri, state)
+    return RedirectResponse(consent_url, status_code=302)
+
+
+@app.get("/api/v1/youtube-oauth/callback")
+async def youtube_oauth_callback(code: str = "", state: str = "", error: str = ""):
+    """Exchange the Google auth code for a refresh token and persist it.
+
+    Writes ``YOUTUBE_OAUTH_REFRESH_TOKEN`` + ``YOUTUBE_OAUTH_REFRESH_TOKEN_MINTED_AT``
+    to Infisical (the gateway process env is ``production`` on the VPS).
+    """
+    import asyncio as _asyncio
+
+    from fastapi.responses import HTMLResponse
+
+    from universal_agent.infisical_loader import upsert_infisical_secret
+    from universal_agent.services import youtube_oauth_health as yoh
+
+    if error:
+        return HTMLResponse(
+            _brief_chrome(
+                "Authorization failed",
+                f"<p>Google returned an error: <code>{str(error)[:200]}</code></p>",
+                status_color="#cf222e",
+            ),
+            status_code=400,
+        )
+    if not yoh.check_signed_param("state", state or ""):
+        return HTMLResponse(
+            _brief_chrome(
+                "Link expired or invalid",
+                "<p>The authorization state could not be verified (it may have "
+                "expired — you have 30 minutes to complete consent). Start again "
+                "from the link in your email.</p>",
+                status_color="#cf222e",
+            ),
+            status_code=401,
+        )
+    if not code:
+        return HTMLResponse(
+            _brief_chrome(
+                "Missing authorization code",
+                "<p>No authorization code was returned by Google.</p>",
+                status_color="#cf222e",
+            ),
+            status_code=400,
+        )
+
+    client_id = (os.getenv("YOUTUBE_OAUTH_CLIENT_ID") or "").strip()
+    client_secret = (os.getenv("YOUTUBE_OAUTH_CLIENT_SECRET") or "").strip()
+    base = yoh.public_base_url()
+    redirect_uri = f"{base}{yoh.CALLBACK_PATH}"
+
+    try:
+        # httpx.post is sync — keep it off the event loop.
+        token_data = await _asyncio.to_thread(
+            yoh.exchange_code, client_id, client_secret, code, redirect_uri,
+        )
+    except Exception as exc:  # noqa: BLE001 — surface a friendly page
+        logger.error("youtube_oauth_callback: token exchange failed: %s", exc)
+        return HTMLResponse(
+            _brief_chrome(
+                "Token exchange failed",
+                f"<p>Google rejected the code exchange: <code>{str(exc)[:300]}</code></p>"
+                "<p>If this says the redirect URI is not registered, add "
+                f"<code>{redirect_uri}</code> to the OAuth client's authorized "
+                "redirect URIs in Google Cloud Console.</p>",
+                status_color="#cf222e",
+            ),
+            status_code=502,
+        )
+
+    refresh_token = (token_data.get("refresh_token") or "").strip()
+    if not refresh_token:
+        return HTMLResponse(
+            _brief_chrome(
+                "No refresh token returned",
+                "<p>Google did not return a refresh token. Revoke 'Universal Agent' "
+                "at <a href='https://myaccount.google.com/permissions'>myaccount.google.com/permissions</a> "
+                "and try the re-auth link again.</p>",
+                status_color="#cf222e",
+            ),
+            status_code=400,
+        )
+
+    minted_at = yoh.current_iso()
+    ok_token = upsert_infisical_secret(yoh.REFRESH_TOKEN_KEY, refresh_token)
+    ok_stamp = upsert_infisical_secret(yoh.MINTED_AT_KEY, minted_at)
+    logger.info(
+        "youtube_oauth_callback: re-auth complete token_saved=%s stamp_saved=%s minted_at=%s",
+        ok_token, ok_stamp, minted_at,
+    )
+
+    if ok_token:
+        return HTMLResponse(
+            _brief_chrome(
+                "YouTube access re-authorized ✓",
+                "<p>The fresh token has been saved to production. Tomorrow's "
+                "digest will use it automatically — nothing else to do.</p>"
+                "<p style='font-size:12px;color:#6b7280;'>To stop these weekly "
+                "re-auths for good, publish the OAuth app to “In production” in "
+                "Google Cloud Console.</p>",
+                status_color="#1a7f37",
+            ),
+            status_code=200,
+        )
+    return HTMLResponse(
+        _brief_chrome(
+            "Re-auth partially complete",
+            "<p>A new token was obtained but could not be written to Infisical "
+            "(missing machine credentials in this process). Re-mint from a "
+            "terminal with <code>uv run python -m universal_agent.scripts.youtube_oauth2_setup</code>.</p>",
+            status_color="#bf8700",
+        ),
+        status_code=500,
+    )
+
+
 @app.get("/api/v1/digest/pause")
 async def digest_pause_get(hours: int = 24, t: str = ""):
     """Operator pause endpoint for the hourly intel digest.
@@ -21047,110 +21463,6 @@ async def dashboard_proactive_tutorial_build_artifact(
         finally:
             conn.close()
     return {"status": "ok", "artifact": artifact}
-
-
-@app.post("/api/v1/dashboard/proactive-artifacts/convergence/signature")
-async def dashboard_proactive_convergence_signature(
-    request: Request,
-    payload: ProactiveTopicSignatureRequest,
-):
-    _require_ops_auth(request)
-    from universal_agent.services.proactive_convergence import (
-        detect_and_queue_convergence,
-        upsert_topic_signature,
-    )
-
-    with _activity_store_lock:
-        conn = _activity_connect()
-        try:
-            try:
-                signature = upsert_topic_signature(
-                    conn,
-                    video_id=payload.video_id,
-                    channel_id=str(payload.channel_id or ""),
-                    channel_name=str(payload.channel_name or ""),
-                    video_title=str(payload.video_title or ""),
-                    video_url=str(payload.video_url or ""),
-                    ingested_at=str(payload.ingested_at or ""),
-                    primary_topics=payload.primary_topics,
-                    secondary_topics=payload.secondary_topics,
-                    key_claims=payload.key_claims,
-                    content_type=str(payload.content_type or ""),
-                    metadata=dict(payload.metadata or {}),
-                )
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc))
-            convergence_results = (
-                detect_and_queue_convergence(
-                    conn,
-                    signature=signature,
-                    window_hours=max(1, int(payload.window_hours or 72)),
-                    min_channels=max(2, int(payload.min_channels or 2)),
-                )
-                if payload.detect
-                else []
-            )
-        finally:
-            conn.close()
-    return {
-        "status": "ok",
-        "signature": signature,
-        "convergence": _primary_convergence_result(convergence_results),
-        "convergences": convergence_results,
-    }
-
-
-@app.post("/api/v1/dashboard/proactive-artifacts/convergence/extract")
-async def dashboard_proactive_convergence_extract(
-    request: Request,
-    payload: ProactiveTopicSignatureExtractRequest,
-):
-    _require_ops_auth(request)
-    from universal_agent.services.proactive_convergence import (
-        detect_and_queue_convergence,
-        detect_and_queue_convergence_llm,
-        extract_topic_signature_from_text,
-        upsert_topic_signature,
-    )
-
-    extracted = await extract_topic_signature_from_text(
-        video_id=payload.video_id,
-        title=str(payload.title or ""),
-        transcript_text=str(payload.transcript_text or ""),
-        summary_text=str(payload.summary_text or ""),
-        channel_id=str(payload.channel_id or ""),
-        channel_name=str(payload.channel_name or ""),
-        video_url=str(payload.video_url or ""),
-        ingested_at=str(payload.ingested_at or ""),
-        metadata=dict(payload.metadata or {}),
-    )
-    conn = _activity_connect()
-    try:
-        signature = upsert_topic_signature(conn, **extracted)
-        if not payload.detect:
-            convergence_results = []
-        elif payload.use_llm_match:
-            convergence_results = await detect_and_queue_convergence_llm(
-                conn,
-                signature=signature,
-                window_hours=max(1, int(payload.window_hours or 72)),
-                min_channels=max(2, int(payload.min_channels or 2)),
-            )
-        else:
-            convergence_results = detect_and_queue_convergence(
-                conn,
-                signature=signature,
-                window_hours=max(1, int(payload.window_hours or 72)),
-                min_channels=max(2, int(payload.min_channels or 2)),
-            )
-    finally:
-        conn.close()
-    return {
-        "status": "ok",
-        "signature": signature,
-        "convergence": _primary_convergence_result(convergence_results),
-        "convergences": convergence_results,
-    }
 
 
 @app.get("/api/v1/dashboard/csi/reports")
@@ -24487,8 +24799,8 @@ async def dashboard_todolist_get_goal_artifacts(task_id: str):
     # mission was dispatched to produce. We surface metadata (path + size)
     # so the dashboard can link / download / preview, but we do not inline
     # PDF content. HTML content is small enough to inline as a preview.
-    # Filenames mirror the contract in create_insight_brief_task plus the
-    # legacy `brief.*` names produced before that contract existed.
+    # Filenames cover the historical insight/brief artifact contracts
+    # (insight_artifact, brief, insight_brief .html/.pdf) produced by past runs.
     deliverable_names = (
         "insight_artifact.html",
         "insight_artifact.pdf",
@@ -25557,7 +25869,13 @@ async def dashboard_todolist_completed(limit: int = 60):
 
 @app.delete("/api/v1/dashboard/todolist/completed/{task_id}")
 async def dashboard_todolist_delete_completed(task_id: str):
-    """Hide a completed task from the dashboard by parking it."""
+    """Hide a completed task from the dashboard.
+
+    The task stays ``status=completed`` (terminal SUCCESS) and is flagged
+    ``stale_state=dashboard_hidden`` so it drops off the completed tab without
+    being demoted to ``parked``. Demoting completed work to ``parked`` used to
+    make Simone's digest miscount archived-done tasks as a deferred backlog.
+    """
     tid = str(task_id or "").strip()
     if not tid:
         raise HTTPException(status_code=400, detail="task_id is required")
@@ -25577,31 +25895,42 @@ async def dashboard_todolist_delete_completed(task_id: str):
                     detail=f"Task is not completed (status={current_status})",
                 )
             conn.execute(
-                "UPDATE task_hub_items SET status=?, stale_state=?, updated_at=? WHERE task_id=?",
-                (task_hub.TASK_STATUS_PARKED, "dashboard_hidden", _utc_now_iso(), tid),
+                "UPDATE task_hub_items SET stale_state=?, updated_at=? WHERE task_id=?",
+                (task_hub.STALE_STATE_DASHBOARD_HIDDEN, _utc_now_iso(), tid),
             )
             conn.commit()
         finally:
             conn.close()
-    return {"status": "ok", "task_id": tid, "new_status": task_hub.TASK_STATUS_PARKED}
+    return {"status": "ok", "task_id": tid, "new_status": task_hub.TASK_STATUS_COMPLETED}
 
 
 @app.delete("/api/v1/dashboard/todolist/completed")
 async def dashboard_todolist_delete_all_completed():
-    """Hide all completed tasks from the dashboard by parking them."""
+    """Hide all completed tasks from the dashboard.
+
+    Tasks stay ``status=completed`` (terminal SUCCESS) and are flagged
+    ``stale_state=dashboard_hidden`` so they drop off the completed tab without
+    being demoted to ``parked`` (which corrupts status-count consumers).
+    """
     with _activity_store_lock:
         conn = _task_hub_open_conn()
         try:
             conn.execute(
-                "UPDATE task_hub_items SET status=?, stale_state=?, updated_at=? WHERE status=?",
-                (task_hub.TASK_STATUS_PARKED, "dashboard_hidden", _utc_now_iso(), task_hub.TASK_STATUS_COMPLETED),
+                "UPDATE task_hub_items SET stale_state=?, updated_at=? "
+                "WHERE status=? AND COALESCE(stale_state,'') != ?",
+                (
+                    task_hub.STALE_STATE_DASHBOARD_HIDDEN,
+                    _utc_now_iso(),
+                    task_hub.TASK_STATUS_COMPLETED,
+                    task_hub.STALE_STATE_DASHBOARD_HIDDEN,
+                ),
             )
             row = conn.execute("SELECT changes() AS c").fetchone()
             count = row["c"] if row else 0
             conn.commit()
         finally:
             conn.close()
-    return {"status": "ok", "hidden_count": count, "new_status": task_hub.TASK_STATUS_PARKED}
+    return {"status": "ok", "hidden_count": count, "new_status": task_hub.TASK_STATUS_COMPLETED}
 
 
 def _clear_email_quarantine_local(conn, task_id: str) -> Optional[str]:
@@ -28166,9 +28495,9 @@ async def dashboard_tutorial_run_delete(run_path: str):
 
     try:
         shutil.rmtree(run_dir)
-        logger.info(f"Deleted tutorial run directory: {run_dir}")
+        logger.info("Deleted tutorial run directory: %s", run_dir)
     except Exception as exc:
-        logger.error(f"Failed to delete tutorial run directory {run_dir}: {exc}")
+        logger.error("Failed to delete tutorial run directory %s: %s", run_dir, exc)
         raise HTTPException(status_code=500, detail=f"Failed to delete run: {exc}")
 
     return {"deleted": True, "run_path": rel}
@@ -29399,7 +29728,7 @@ async def vision_describe(request: VisionDescribeRequest):
                 "description": description
             }
     except httpx.HTTPStatusError as e:
-        logger.error(f"Vision API HTTP error: {e.response.text}")
+        logger.error("Vision API HTTP error: %s", e.response.text)
         raise HTTPException(status_code=502, detail=f"Vision API returned an error: {e.response.status_code}")
     except Exception as e:
         logger.exception("Vision API error")
@@ -31439,7 +31768,7 @@ async def run_cron_job(job_id: str):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Failed to run chron job: {e}")
+        logger.error("Failed to run chron job: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -33373,22 +33702,22 @@ async def ops_skill_doc(request: Request, skill_key: str):
     _require_ops_auth(request)
     catalog = _load_skill_catalog()
     normalized = skill_key.strip().lower()
-    logger.info(f"Docs requested for skill: '{skill_key}' (normalized: '{normalized}')")
+    logger.info("Docs requested for skill: '%s' (normalized: '%s')", skill_key, normalized)
     
     for s in catalog:
         name_norm = str(s.get("name", "")).strip().lower()
         if name_norm == normalized:
             path = s.get("path")
-            logger.info(f"Found match: {s.get('name')} at path: {path}")
+            logger.info("Found match: %s at path: %s", s.get('name'), path)
             if path and os.path.exists(path):
                 return {"skill": s.get("name"), "content": Path(path).read_text(encoding="utf-8")}
             else:
-                logger.warning(f"Skill path does not exist: {path}")
+                logger.warning("Skill path does not exist: %s", path)
                 # Fallback: check if path is relative to repo root?
                 # The path should be absolute from _load_skill_catalog but let's be sure
                 return {"skill": s.get("name"), "content": f"Use locally at: {path}\n\n(File not found at server runtime)"}
                 
-    logger.warning(f"Skill not found in catalog: {normalized}. Available: {[s.get('name') for s in catalog]}")
+    logger.warning("Skill not found in catalog: %s. Available: %s", normalized, [s.get('name') for s in catalog])
     raise HTTPException(status_code=404, detail="Skill documentation not found")
 
 
@@ -34041,7 +34370,7 @@ async def websocket_stream(
             _increment_metric("resume_failures")
             _increment_metric("ws_attach_attempts")
             _increment_metric("ws_attach_failures")
-            logger.exception(f"Failed to resume session {session_id}")
+            logger.exception("Failed to resume session %s", session_id)
             await websocket.close(code=1011, reason="Internal Error")
             manager.disconnect(connection_id, session_id)
             return
@@ -34053,7 +34382,7 @@ async def websocket_stream(
 
     # 1. Enforce Allowlist for WebSocket
     if session_id != "global_agent_flow" and not is_user_allowed(session.user_id):
-        logger.warning(f"⛔ Access Denied (WS): User '{session.user_id}' not in allowlist.")
+        logger.warning("Access Denied (WS): User '%s' not in allowlist.", session.user_id)
         _increment_metric("ws_attach_failures")
         await websocket.close(code=4003, reason="Access denied")
         manager.disconnect(connection_id, session_id)
@@ -34631,9 +34960,9 @@ async def websocket_stream(
                                  success = True
                     
                     if not success:
-                         logger.warning(f"Failed to resolve input {input_id} for session {session_id}")
+                         logger.warning("Failed to resolve input %s for session %s", input_id, session_id)
                     else:
-                         logger.info(f"Resolved input {input_id} for session {session_id}")
+                         logger.info("Resolved input %s for session %s", input_id, session_id)
                 
                 elif msg_type == "broadcast_test":
                      # Test event to verify broadcast capability (Phase 1 verification)
@@ -34672,7 +35001,7 @@ async def websocket_stream(
                     )
 
             except Exception as e:
-                logger.error(f"Error handling message: {e}")
+                logger.error("Error handling message: %s", e)
                 await manager.send_json(
                     connection_id,
                     {
@@ -34690,11 +35019,11 @@ async def websocket_stream(
             endpoint="gateway_session_stream",
         )
         manager.disconnect(connection_id, session_id)
-        logger.info(f"Gateway WebSocket disconnected: {connection_id}")
+        logger.info("Gateway WebSocket disconnected: %s", connection_id)
     except Exception as e:
         _record_ws_close(None, str(e), endpoint="gateway_session_stream")
         manager.disconnect(connection_id, session_id)
-        logger.error(f"Gateway WebSocket error: {e}")
+        logger.error("Gateway WebSocket error: %s", e)
 
 
 # =============================================================================

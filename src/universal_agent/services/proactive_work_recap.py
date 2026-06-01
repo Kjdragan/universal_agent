@@ -17,6 +17,13 @@ import sqlite3
 from typing import Any, Optional
 import uuid
 
+from universal_agent.task_hub import (
+    ACTION_APPROVE,
+    ACTION_BLOCK,
+    ACTION_COMPLETE,
+    ACTION_PARK,
+    ACTION_REVIEW,
+)
 from universal_agent.utils.model_resolution import resolve_opus
 
 logger = logging.getLogger(__name__)
@@ -582,11 +589,11 @@ def _known_issues(
 ) -> str:
     """Detect and describe known issues from terminal action, workspace, and artifact state."""
     issues: list[str] = []
-    if action in {"block", "review", "park"}:
+    if action in {ACTION_BLOCK, ACTION_REVIEW, ACTION_PARK}:
         issues.append(reason or result_summary or f"Terminal action was {action}.")
     if workspace_dir and not workspace_exists:
         issues.append("Recorded workspace directory is not available for audit.")
-    if action in {"complete", "approve"} and not work_products and not result_summary:
+    if action in {ACTION_COMPLETE, ACTION_APPROVE} and not work_products and not result_summary:
         issues.append("No result summary or work product files were found.")
     return " ".join(issues)
 
@@ -604,22 +611,22 @@ def _success_assessment(
     has_evidence = bool(implemented.strip()) and (
         bool(work_products) or bool(transcript_tail) or bool(run_log_tail)
     )
-    if action in {"complete", "approve"} and not known_issues and has_evidence:
+    if action in {ACTION_COMPLETE, ACTION_APPROVE} and not known_issues and has_evidence:
         return "Successful based on terminal status plus available session evidence.", 0.78
-    if action in {"complete", "approve"}:
+    if action in {ACTION_COMPLETE, ACTION_APPROVE}:
         return "Completed, but success confidence is limited by sparse session evidence.", 0.52
-    if action in {"block", "review"}:
+    if action in {ACTION_BLOCK, ACTION_REVIEW}:
         return "Not yet successful; the task requires follow-up before counting as completed proactive work.", 0.7
-    if action == "park":
+    if action == ACTION_PARK:
         return "Parked; useful context may exist, but the work is not complete.", 0.62
     return "Terminal status was recorded; evaluator confidence is limited.", 0.45
 
 
 def _recommended_next_action(*, action: str, known_issues: str, work_products: list[str]) -> str:
     """Suggest a follow-up action based on terminal state and available evidence."""
-    if action in {"block", "review"}:
+    if action in {ACTION_BLOCK, ACTION_REVIEW}:
         return "Create a fresh continuation session that reuses the recorded workspace and addresses the issue above."
-    if action == "park":
+    if action == ACTION_PARK:
         return "Re-score later or create a smaller continuation task if the opportunity remains valuable."
     if known_issues:
         return "Review the three-panel session and decide whether to spawn a continuation task."

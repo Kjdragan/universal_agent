@@ -34,8 +34,6 @@ src/universal_agent/delegation/system_handlers.py
 src/universal_agent/gateway_server.py
 src/universal_agent/notebooklm_runtime.py
 src/universal_agent/scripts/dependency_currency_sweep.py
-src/universal_agent/scripts/doc_drift_auditor.py
-src/universal_agent/scripts/openclaw_release_scanner.py
 src/universal_agent/scripts/youtube_provision_digest_playlists.py
 src/universal_agent/services/agentmail_service.py
 src/universal_agent/services/csi_url_judge.py
@@ -56,3 +54,9 @@ src/universal_agent/vp/worker_loop.py
 src/universal_agent/vp/worker_main.py
 src/universal_agent/vp/worktree_utils.py
 src/universal_agent/worker.py
+
+# ci_failure_grace_recheck.py: the only subprocess use is ephemeral read-only
+# `gh` CLI calls (GitHub issue/PR/run state re-verification + issue label edits)
+# at grace-fire time. It is NOT a Task-Hub worker spawning a tracked unit of work,
+# so the worker-exit/PID observability protocol does not apply. (ci-autofix hook, 2026-05-30)
+src/universal_agent/scripts/ci_failure_grace_recheck.py

@@ -219,11 +219,25 @@ Here are the videos:
 #
 # Improvement plan (live tiers vs deferred tiers):
 #
-#   Tier A — TIGHTEN RUBRIC IN PROMPT (CURRENT STATE, shipped 2026-05-20)
-#     Inline anchored buckets + disqualifier caps + explicit "do not default
-#     to 95" guidance directly in this RETELL_PROMPT.  Lowest cost; works
-#     within the existing single-call map step.  See the SCORING RUBRIC
-#     section of the prompt below.
+#   Tier A — TIGHTEN RUBRIC IN PROMPT (CURRENT STATE)
+#     Inline anchored buckets + disqualifier caps + explicit "do not default"
+#     guidance directly in this RETELL_PROMPT.  Lowest cost; works within the
+#     existing single-call map step.  See the SCORING RUBRIC section below.
+#     - 2026-05-20: anchored buckets + caps shipped (killed the 95-clustering
+#       where 12/29 videos scored 95).
+#     - 2026-05-30: WITHIN-BAND additive scoring added after a NEW saturation
+#       point surfaced — the FRIDAY digest scored 6 videos at exactly 85 (top
+#       of the 75-89 band), so static top_n=4 dropped two buildable talks by
+#       arbitrary tie-order.  Root cause is structural: the map step scores
+#       each video IN ISOLATION (no cross-video view), so "spread across the
+#       batch" is impossible per-call and coarse bands collapse to round
+#       anchors (95, then 85).  Fix: compute the score from additive per-video
+#       signals (start at band floor, add for named files/mechanism/code) so
+#       two different videos land on different numbers.  Paired with dynamic
+#       top_n tie-extension in `_select_tutorial_dispatch_candidates` so any
+#       residual ties at the cutoff all dispatch (up to a 2x ceiling) instead
+#       of being split arbitrarily.  Measure the 75-89 distribution over the
+#       next 1-2 weeks; if it re-clusters, that is the Tier B/C trigger.
 #
 #   Tier B — EXTRACT RUBRIC TO ITS OWN FILE (deferred)
 #     Move the scoring section into `youtube_scoring_rubric.md` in the repo;
@@ -295,12 +309,18 @@ REQUIRED OUTPUT FORMAT (markdown — do not deviate):
 
 SCORING RUBRIC — READ THIS CAREFULLY BEFORE ASSIGNING value_score.
 
-`value_score` is a 0-100 integer that ranks this video against an idealized
-"buildable technical tutorial." USE THE FULL RANGE. A typical day's batch
-should have scores spread from ~20 to ~95, NOT cluster at 90+. Defaulting
-to 95 because the transcript exists is WRONG — most videos do not earn 95.
+`value_score` is a 0-100 integer rating THIS video against an idealized
+"buildable technical tutorial." You are scoring ONE video in isolation — you
+cannot see the others — so do not try to "spread" scores across a batch.
+Instead, COMPUTE the score from the concrete features actually present in the
+transcript (see "Within-band scoring" below) rather than parking on a round
+band-anchor. Most videos do not earn 90+, and a strong-but-codeless explainer
+is NOT automatically an 85. Defaulting to 95 OR 85 because "it's a solid AI
+video and has a transcript" is WRONG.
 
-Anchored buckets (assign by best fit, not by ceiling):
+Anchored buckets (pick the band by best fit, then refine WITHIN the band — see
+"Within-band scoring" below — so two genuinely different videos rarely land on
+the exact same number):
 
   - 90-100: CONCRETE BUILD TUTORIAL. Contains named files, specific commands,
     visible code or config, and a reproducible setup the reader could follow
@@ -330,6 +350,26 @@ Anchored buckets (assign by best fit, not by ceiling):
 
   - 0-19: OFF-TOPIC, CLICKBAIT, OR LOW-SIGNAL.  Unrelated to the operator's
     technical domain; pure entertainment; deceptive framing.
+
+WITHIN-BAND SCORING (compute the exact number; do NOT park on a round value
+like 85 or 95). Pick the band, START AT ITS FLOOR, and add points only for
+concrete signals actually present in the transcript. Never sit at a band's
+ceiling unless every listed signal is genuinely present:
+
+  - 90-100 band: start at 90. +3 if named runnable files/commands appear
+    verbatim; +3 if the setup is reproducible end-to-end from the transcript
+    alone; +4 if it walks specific code paths line-by-line. A talk that only
+    *mentions* code without showing it does not clear 90 — it belongs in 75-89.
+
+  - 75-89 band: start at 75. +4 if it names 3+ specific tools/systems/products;
+    +5 if it explains MECHANISM ("this works because…"), not just outcomes;
+    +5 if it shows partial code/config/architecture (but not reproducible).
+    85 is the TOP of this band — reserve it for explainers that are nearly
+    buildable, NOT as a default for "solid technical video."
+
+  - 60-74 / 40-59 / 20-39 bands: start at the floor and add up toward the band
+    ceiling based on how much concrete, named, technically-actionable substance
+    is present versus generic commentary.
 
 DISQUALIFIER CAPS (apply BEFORE the bucket choice; the cap wins):
 
@@ -1676,14 +1716,22 @@ def _render_email_body_html(
 ) -> str:
     """Render the email body as inline-styled HTML.
 
-    When ``full_content`` is provided, the body renders the WHOLE digest —
-    intro + clickable per-video TOC + meta-synthesis + per-video retellings —
-    with anchors that the TOC can jump to. This is the layout Kevin wants:
-    everything in one scrollable email, no attachment hunting.
+    PRODUCTION PATH (``full_content`` omitted / ``None``): the body renders
+    only ``body_md`` — the short meta-synthesis summary — with NO inline TOC.
+    This is what the digest cron sends. The full per-video retellings and the
+    clickable per-video index live in the standalone HTML attachment
+    (``_render_full_digest_html``), where anchors resolve in a browser.
 
-    When ``full_content`` is ``None`` (legacy callsite), only ``body_md`` is
-    rendered without TOC (used historically when the per-video body lived
-    only in the attachment).
+    INLINE-EVERYTHING PATH (``full_content`` provided): renders the WHOLE
+    digest inline — intro + clickable per-video TOC + meta-synthesis +
+    per-video retellings — with ``#anchor`` jump links. This was the
+    2026-05-28 "index at the beginning of the email" layout, but it does not
+    work in Gmail: Gmail strips ``id=`` attributes at render time (so the TOC
+    anchors have no targets) and clips messages over ~102KB (the inlined
+    digest is ~130KB), hiding most sections behind "View entire message".
+    Kept as a capability for clients that DO honor in-message anchors (e.g.
+    Apple Mail) and for tests, but the cron no longer uses it (reverted
+    2026-05-31).
 
     Gmail strips ``<style>`` so every visual rule is inlined per-element via
     ``_inline_email_styles``.
@@ -1809,31 +1857,88 @@ def _is_demo_worthy(row: dict[str, Any], *, min_score: int) -> tuple[bool, str]:
     return True, "ok"
 
 
+def _resolve_auto_tutorial_max_n(top_n: int) -> int:
+    """Resolve the hard ceiling on tutorial dispatches when tie-extension
+    rescues videos tied at the cutoff score.
+
+    Score saturation (e.g. 2026-05-30 FRIDAY: 6 videos tied at exactly 85)
+    means a static `top_n` cuts the tied cohort by arbitrary tie-order,
+    dropping builds that are exactly as worthy as the last selected one.
+    Tie-extension rescues those, but each dispatch triggers a full Cody
+    tutorial build (real cost), so we bound the fan-out with this ceiling.
+
+    Default is 2x top_n. Override with an absolute integer via
+    UA_YOUTUBE_DIGEST_AUTO_TUTORIAL_MAX_N. The ceiling is never allowed below
+    top_n (a ceiling under the target would make no sense).
+    """
+    raw = os.getenv("UA_YOUTUBE_DIGEST_AUTO_TUTORIAL_MAX_N")
+    if raw is not None and raw.strip():
+        try:
+            return max(top_n, int(raw))
+        except ValueError:
+            logger.warning(
+                "Invalid UA_YOUTUBE_DIGEST_AUTO_TUTORIAL_MAX_N=%r; using default (2x top_n)",
+                raw,
+            )
+    return max(top_n, top_n * 2)
+
+
 def _select_tutorial_dispatch_candidates(
     decisions: dict[str, Any],
     *,
     top_n: int,
     min_score: int | None = None,
+    max_n: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Annotate every ranked row with a `dispatch_*` triplet and return only
-    the top-N rows that pass the deterministic demo-worthiness gate.
+    """Annotate every ranked row with a `dispatch_*` quartet and return the
+    rows that pass the deterministic demo-worthiness gate AND fall within the
+    dispatch budget.
+
+    Selection budget:
+      - The first `top_n` eligible rows (sorted by value_score descending) are
+        always selected.
+      - TIE-EXTENSION: when the `top_n`-th selected row ties subsequent eligible
+        rows on `value_score`, those tied rows are ALSO selected so the tied
+        cohort isn't split by arbitrary tie-order. This is bounded by `max_n`
+        (default 2x top_n; see `_resolve_auto_tutorial_max_n`). Rescued rows are
+        marked `dispatch_tie_extended=True` for observability.
+      - Eligible rows scored strictly below the cutoff, or beyond `max_n`, are
+        marked `eligible_overflow`.
 
     Side-effect: each ranked row in `decisions["ranked_videos"]` gains
-    `dispatch_eligible`, `dispatch_reject_reason`, and `dispatch_status`
-    fields so the saved candidates JSON and the human-facing email both
-    surface why a video was (or wasn't) sent to the tutorial pipeline.
+    `dispatch_eligible`, `dispatch_reject_reason`, `dispatch_status`, and
+    `dispatch_tie_extended` fields so the saved candidates JSON and the
+    human-facing email both surface why a video was (or wasn't) sent to the
+    tutorial pipeline.
     """
     threshold = DEMO_GATE_MIN_SCORE_DEFAULT if min_score is None else max(0, int(min_score))
+    ceiling = _resolve_auto_tutorial_max_n(top_n) if max_n is None else max(top_n, int(max_n))
     selected: list[dict[str, Any]] = []
+    # Score of the top_n-th selected row; once set, subsequent eligible rows
+    # tying this score are rescued (up to `ceiling`). Rows are sorted by score
+    # descending, so once a row scores below the cutoff no further ties exist.
+    cutoff_score: int | None = None
     for row in decisions.get("ranked_videos", []):
         ok, reason = _is_demo_worthy(row, min_score=threshold)
         row["dispatch_eligible"] = ok
         row["dispatch_reject_reason"] = "" if ok else reason
+        row["dispatch_tie_extended"] = False
         if top_n <= 0 or not ok:
             row["dispatch_status"] = "rejected" if not ok else "disabled_top_n_zero"
             continue
+        score = int(row.get("value_score") or 0)
         if len(selected) < top_n:
             row["dispatch_status"] = "selected"
+            selected.append(row)
+            if len(selected) == top_n:
+                cutoff_score = score
+        elif (
+            cutoff_score is not None
+            and score == cutoff_score
+            and len(selected) < ceiling
+        ):
+            row["dispatch_status"] = "selected"
+            row["dispatch_tie_extended"] = True
             selected.append(row)
         else:
             row["dispatch_status"] = "eligible_overflow"
@@ -1849,6 +1954,7 @@ def _save_tutorial_candidates(
     selected: list[dict[str, Any]],
     dry_run: bool,
     top_n: int,
+    max_n: int | None = None,
 ) -> Path:
     path = _tutorial_candidates_path(day_name=day_name, date_str=date_str)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1860,6 +1966,10 @@ def _save_tutorial_candidates(
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "dry_run": dry_run,
         "auto_tutorial_top_n": top_n,
+        # Hard ceiling that tie-extension may grow the selection to when videos
+        # tie at the cutoff score (default 2x top_n). selected_count > top_n
+        # means tie-extension rescued videos this run.
+        "auto_tutorial_max_n": max_n if max_n is not None else top_n,
         "selected_count": len(selected),
         "selected_video_ids": [str(row.get("video_id") or "") for row in selected],
         "ranked_videos": decisions.get("ranked_videos", []),
@@ -1983,14 +2093,24 @@ def _format_tutorial_dispatch_summary(
     top_n: int,
     min_score: int,
     dry_run: bool,
+    max_n: int | None = None,
 ) -> str:
     """Build the human-facing tutorial pipeline section for the digest email/artifact."""
+    ceiling = max_n if max_n is not None else top_n
+    target_line = (
+        f"Automation target: top {max(0, top_n)} code implementation prospects "
+        f"(deterministic demo-worthiness gate: score >= {min_score}, "
+        f"value_tier not in {{low, unknown}}, evidence_quality != metadata_only)."
+    )
+    if ceiling > top_n:
+        target_line += (
+            f" Tie-extension is enabled: videos tied at the cutoff score also "
+            f"dispatch, up to {ceiling} total."
+        )
     lines = [
         "## YouTube Tutorial Pipeline Dispatch",
         "",
-        f"Automation target: top {max(0, top_n)} code implementation prospects "
-        f"(deterministic demo-worthiness gate: score >= {min_score}, "
-        f"value_tier not in {{low, unknown}}, evidence_quality != metadata_only).",
+        target_line,
     ]
     if dry_run:
         lines.append("Mode: dry run; no tutorial pipeline dispatches were sent.")
@@ -2008,10 +2128,11 @@ def _format_tutorial_dispatch_summary(
             video_id = str(row.get("video_id") or "")
             result = result_by_id.get(video_id, {})
             status = "accepted" if result.get("ok") else f"not accepted ({result.get('reason') or result.get('status') or 'unknown'})"
+            tie_note = " (tie-extended)" if row.get("dispatch_tie_extended") else ""
             lines.append(
                 "- "
                 f"#{row.get('rank')} {row.get('title') or video_id} "
-                f"({video_id}) — score {row.get('value_score')}; {status}. "
+                f"({video_id}) — score {row.get('value_score')}{tie_note}; {status}. "
                 f"Reason: {row.get('reason') or 'classified as a code implementation prospect.'}"
             )
 
@@ -2546,6 +2667,7 @@ def process_daily_digest(
             DEMO_GATE_MIN_SCORE_DEFAULT,
         )
         configured_min_score = DEMO_GATE_MIN_SCORE_DEFAULT
+    configured_max_n = _resolve_auto_tutorial_max_n(configured_top_n)
     decisions = _rank_digest_decisions(
         _extract_decision_json(digest_content),
         processed_items,
@@ -2554,6 +2676,7 @@ def process_daily_digest(
         decisions,
         top_n=configured_top_n,
         min_score=configured_min_score,
+        max_n=configured_max_n,
     )
     candidates_path = _save_tutorial_candidates(
         day_name=day_name,
@@ -2563,6 +2686,7 @@ def process_daily_digest(
         selected=selected_tutorial_candidates,
         dry_run=dry_run,
         top_n=configured_top_n,
+        max_n=configured_max_n,
     )
     dispatch_results = _dispatch_tutorial_candidates(
         selected=selected_tutorial_candidates,
@@ -2586,6 +2710,7 @@ def process_daily_digest(
         dispatch_path=dispatch_path,
         top_n=configured_top_n,
         min_score=configured_min_score,
+        max_n=configured_max_n,
         dry_run=dry_run,
     )
     full_content = (
@@ -2632,15 +2757,23 @@ def process_daily_digest(
             '<p style="margin:0 0 14px;">'
             f"Here's today's daily synthesis across <strong>{attachment_count}</strong> "
             f"video{'s' if attachment_count != 1 else ''} from your <em>{day_name.title()}</em> "
-            "playlist. The clickable index below jumps straight to any video; "
-            "the same content is also attached as a standalone HTML report."
+            "playlist. The themes are summarized below; the full per-video "
+            "retellings — with a clickable index that jumps to any video — are in "
+            "the attached HTML report. Open the attachment in a browser to navigate it."
             "</p>"
         )
-        # `full_content` here gives the email body the per-video sections + TOC
-        # inline (so anchors resolve). `attachment_md` mirrors that content as
-        # a standalone HTML file for archive / print.
+        # The email body is the short meta-synthesis summary only (no inline
+        # per-video TOC). In-email `#anchor` jump links cannot work in Gmail:
+        # Gmail strips `id=` attributes at render time so the anchor targets
+        # vanish, and the fully-inlined digest (~130KB) also blew past Gmail's
+        # ~102KB clip threshold (hiding most sections behind "View entire
+        # message"). The clickable per-video index lives in the standalone HTML
+        # attachment, where anchors resolve when the file is opened in a browser.
+        # (The digest was inlined 2026-05-28 to put an index "at the beginning
+        # of the email"; reverted 2026-05-31 after the index proved unclickable
+        # in Gmail — see _render_email_body_html docstring.)
         email_html = _render_email_body_html(
-            body_md, intro_html=intro_html, full_content=full_content,
+            body_md, intro_html=intro_html,
         )
         attachment_html = _render_full_digest_html(
             attachment_md, day_name=day_name, date_str=date_str,
@@ -2658,7 +2791,7 @@ def process_daily_digest(
             try:
                 await mail.send_email(
                     to=email_to,
-                    subject=f"Daily YouTube Digest: {day_name.title()}",
+                    subject=f"Daily YouTube Summaries — {date_str}",
                     html=email_html,
                     text=body_md + (
                         f"\n\n(Full per-video retellings + dispatch summary are in the "
@@ -2681,7 +2814,7 @@ def process_daily_digest(
             try:
                 from datetime import datetime as _dt, timezone as _tz
                 reminder = send_digest_delivery_reminder(
-                    subject=f"Daily YouTube Digest: {day_name.title()}",
+                    subject=f"Daily YouTube Summaries — {date_str}",
                     recipient=email_to,
                     sent_at_utc=_dt.now(_tz.utc),
                 )
