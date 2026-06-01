@@ -11,7 +11,7 @@ code_paths:
   - src/universal_agent/services/agent_router.py
   - scripts/check_heartbeat_liveness.py
   - memory/HEARTBEAT.md
-last_verified: 2026-05-29
+last_verified: 2026-06-01
 ---
 
 # Heartbeat Service
