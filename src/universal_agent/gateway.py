@@ -14,6 +14,22 @@ import time
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 import uuid
 
+try:
+    import logfire
+except ImportError:
+    logfire = None  # type: ignore
+
+# Optional dependencies for ExternalGateway
+try:
+    import httpx
+    import websockets
+    EXTERNAL_DEPS_AVAILABLE = True
+except ImportError:
+    EXTERNAL_DEPS_AVAILABLE = False
+    httpx = None  # type: ignore
+    websockets = None  # type: ignore
+
+from universal_agent.api.agent_bridge import AgentBridge
 from universal_agent.constants import TODO_EXECUTION_DISALLOWED_TOOLS
 from universal_agent.durable.db import (
     connect_runtime_db,
@@ -23,6 +39,22 @@ from universal_agent.durable.db import (
 )
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.durable.state import get_vp_session
+
+try:
+    from universal_agent.agent_core import AgentEvent, EventType
+except Exception:  # pragma: no cover - import safety for tooling
+    AgentEvent = Any  # type: ignore
+    EventType = Any  # type: ignore
+
+# Import ProcessTurnAdapter for unified execution engine
+try:
+    from universal_agent.execution_engine import EngineConfig, ProcessTurnAdapter
+    EXECUTION_ENGINE_AVAILABLE = True
+except ImportError:
+    EXECUTION_ENGINE_AVAILABLE = False
+    ProcessTurnAdapter = None  # type: ignore
+    EngineConfig = None  # type: ignore
+
 from universal_agent.feature_flags import (
     coder_vp_display_name,
     coder_vp_id,
@@ -48,39 +80,6 @@ from universal_agent.vp import (
     dispatch_mission_with_retry,
 )
 from universal_agent.workspace import seed_workspace_bootstrap
-
-try:
-    from universal_agent.agent_core import AgentEvent, EventType
-except Exception:  # pragma: no cover - import safety for tooling
-    AgentEvent = Any  # type: ignore
-    EventType = Any  # type: ignore
-
-try:
-    import logfire
-except ImportError:
-    logfire = None  # type: ignore
-
-# Import ProcessTurnAdapter for unified execution engine
-try:
-    from universal_agent.execution_engine import EngineConfig, ProcessTurnAdapter
-    EXECUTION_ENGINE_AVAILABLE = True
-except ImportError:
-    EXECUTION_ENGINE_AVAILABLE = False
-    ProcessTurnAdapter = None  # type: ignore
-    EngineConfig = None  # type: ignore
-
-# Legacy import for backward compatibility (will be deprecated)
-from universal_agent.api.agent_bridge import AgentBridge
-
-# Optional dependencies for ExternalGateway
-try:
-    import httpx
-    import websockets
-    EXTERNAL_DEPS_AVAILABLE = True
-except ImportError:
-    EXTERNAL_DEPS_AVAILABLE = False
-    httpx = None  # type: ignore
-    websockets = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 

@@ -1,15 +1,25 @@
-
 import asyncio
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
+import hashlib
 import json
 import logging
 import os
 from pathlib import Path
+import re
 import shutil
 import sqlite3
 import time
 from typing import Any, Callable, Dict, Optional
+
+try:
+    import logfire
+    _LOGFIRE_AVAILABLE = bool(os.getenv("LOGFIRE_TOKEN") or os.getenv("LOGFIRE_WRITE_TOKEN"))
+except ImportError:
+    logfire = None  # type: ignore
+    _LOGFIRE_AVAILABLE = False
+
+import pytz
 
 from universal_agent import task_hub
 from universal_agent.agent_core import EventType
@@ -19,19 +29,7 @@ from universal_agent.loop_control import should_run_loop
 from universal_agent.utils.heartbeat_findings_schema import HeartbeatFindings
 from universal_agent.utils.json_utils import extract_json_payload
 
-try:
-    import logfire
-    _LOGFIRE_AVAILABLE = bool(os.getenv("LOGFIRE_TOKEN") or os.getenv("LOGFIRE_WRITE_TOKEN"))
-except ImportError:
-    logfire = None  # type: ignore
-    _LOGFIRE_AVAILABLE = False
-
 logger = logging.getLogger(__name__)
-
-import hashlib
-import re
-
-import pytz
 
 # Constants
 PROJECT_ROOT = Path(__file__).parent.parent.parent

@@ -39,7 +39,6 @@ try:
 except Exception:  # pragma: no cover - degraded runtime fallback
     httpx = None  # type: ignore[assignment]
 
-BASE_DIR = Path(__file__).parent.parent.parent
 from fastapi import (
     BackgroundTasks,
     FastAPI,
@@ -56,8 +55,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from universal_agent import get_logfire_runtime_state, process_heartbeat
+from universal_agent import get_logfire_runtime_state, process_heartbeat, task_hub
 from universal_agent.agent_core import AgentEvent, EventType
+from universal_agent.api.error_handlers import register_error_handlers
 from universal_agent.approvals import (
     clear_approvals,
     list_approvals,
@@ -157,6 +157,7 @@ from universal_agent.proactive_signals import (
 )
 from universal_agent.run_catalog import RunCatalogService
 from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
+from universal_agent.runtime_env import ensure_runtime_path, runtime_tool_status
 from universal_agent.runtime_role import FactoryRole, build_factory_runtime_policy
 from universal_agent.sdk import session_history_adapter
 from universal_agent.security_paths import (
@@ -182,9 +183,21 @@ from universal_agent.services.execution_run_service import (
     resolve_active_execution_workspace,
 )
 from universal_agent.services.gws_event_listener import GwsEventListener
+from universal_agent.services.mission_control_chief_of_staff import (
+    generate_and_store_readout as generate_mission_control_readout,
+    get_latest_readout as get_latest_mission_control_readout,
+    get_recent_journal as get_mission_control_journal,
+)
 from universal_agent.services.refinement_agent import (
     RefinementError,
     refine_with_llm,
+)
+from universal_agent.services.routing_markers import (
+    CSI_AGENT_HINTS_RE,
+    CSI_CODE_RE,
+    CSI_HUMAN_HINTS_RE,
+    CSI_RESEARCH_RE,
+    CSI_WRITER_RE,
 )
 from universal_agent.session_hub import (
     clear_active_sidebar,
@@ -202,6 +215,18 @@ from universal_agent.signals_ingest import (
     extract_valid_events,
     process_signals_ingest_payload,
     to_manual_youtube_payload,
+)
+from universal_agent.supervisors import (
+    build_csi_snapshot,
+    build_factory_snapshot,
+    find_supervisor,
+    list_snapshot_runs,
+    persist_snapshot,
+    supervisor_registry,
+)
+from universal_agent.timeout_policy import (
+    gateway_ws_send_timeout_seconds,
+    session_cancel_wait_seconds,
 )
 from universal_agent.utils.heartbeat_findings_schema import HeartbeatFindings
 from universal_agent.utils.json_utils import extract_json_payload
@@ -231,31 +256,13 @@ from universal_agent.youtube_mode_utils import (
     youtube_probably_code,
 )
 
+BASE_DIR = Path(__file__).parent.parent.parent
+
 
 # CSI Redesign (2026-03-15): csi_confidence module deleted.
 # These stubs prevent NameErrors in any remaining dead-code references.
 def _csi_confidence_baseline_model(*a, **kw): return {}  # noqa: E731
 def _csi_score_event_confidence(*a, **kw): return {}  # noqa: E731
-from universal_agent import task_hub
-from universal_agent.api.error_handlers import register_error_handlers
-from universal_agent.runtime_env import ensure_runtime_path, runtime_tool_status
-from universal_agent.services.mission_control_chief_of_staff import (
-    generate_and_store_readout as generate_mission_control_readout,
-    get_latest_readout as get_latest_mission_control_readout,
-    get_recent_journal as get_mission_control_journal,
-)
-from universal_agent.supervisors import (
-    build_csi_snapshot,
-    build_factory_snapshot,
-    find_supervisor,
-    list_snapshot_runs,
-    persist_snapshot,
-    supervisor_registry,
-)
-from universal_agent.timeout_policy import (
-    gateway_ws_send_timeout_seconds,
-    session_cancel_wait_seconds,
-)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -5342,13 +5349,6 @@ _CSI_RECOMMENDATION_TEXT_KEYS = (
     "description",
     "text",
     "name",
-)
-from universal_agent.services.routing_markers import (
-    CSI_AGENT_HINTS_RE,
-    CSI_CODE_RE,
-    CSI_HUMAN_HINTS_RE,
-    CSI_RESEARCH_RE,
-    CSI_WRITER_RE,
 )
 
 
