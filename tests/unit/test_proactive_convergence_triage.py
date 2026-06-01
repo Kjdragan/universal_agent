@@ -209,3 +209,96 @@ def test_skip_verdict_omitted_from_task_hub(monkeypatch):
     expected_task_id = "convergence-candidate:" + result["candidate_id"].removeprefix("cand_")
     assert task_hub.get_item(conn, expected_task_id) is None
     conn.close()
+
+
+# ── Phase 2 contract: the skill's "author-only when triage decided" branch ──
+# relies on the triage verdict being readable from BOTH the Task Hub item
+# metadata and the convergence_candidates row. These tests pin that contract so
+# the skill's Phase 0.5 short-circuit can trust it.
+
+
+def test_ship_task_metadata_carries_triage_verdict(monkeypatch):
+    """On a triage-ship the Task Hub item metadata must expose
+    triage.kind=='ship' + reasoning + demo_amenable so the mission can skip the
+    in-mission rubric and author directly (Phase 2)."""
+    monkeypatch.setenv("UA_INTEL_TRIAGE_ENABLED", "1")
+    _patch_triage_llm(
+        monkeypatch,
+        {"verdict": "ship", "reasoning": "real, novel, buildable", "demo_amenable": True},
+    )
+    conn = _conn()
+    sigs = [_sig("v1", "Chan A", "agents"), _sig("v2", "Chan B", "agents")]
+
+    result = pc.write_convergence_candidate(conn, signatures=sigs)
+    task_id = "convergence-candidate:" + result["candidate_id"].removeprefix("cand_")
+
+    item = task_hub.get_item(conn, task_id)
+    assert item is not None
+    triage_meta = item["metadata"]["triage"]
+    assert triage_meta["kind"] == "ship"
+    assert triage_meta["reasoning"] == "real, novel, buildable"
+    assert triage_meta["demo_amenable"] is True
+    assert "model" in triage_meta
+    conn.close()
+
+
+def test_ship_candidate_row_carries_triage_and_demo_amenable(monkeypatch):
+    """The convergence_candidates row metadata must also carry the triage block
+    (incl. demo_amenable) — it is the durable provenance the future intel-ship
+    -> Cody demo bridge will query, and a fallback source for the skill."""
+    monkeypatch.setenv("UA_INTEL_TRIAGE_ENABLED", "1")
+    _patch_triage_llm(
+        monkeypatch,
+        {"verdict": "ship", "reasoning": "buildable demo", "demo_amenable": True},
+    )
+    conn = _conn()
+    sigs = [_sig("v1", "Chan A", "agents"), _sig("v2", "Chan B", "agents")]
+
+    result = pc.write_convergence_candidate(conn, signatures=sigs)
+    row = pc._get_convergence_candidate(conn, result["candidate_id"])
+    triage_meta = row["metadata"]["triage"]
+    assert triage_meta["kind"] == "ship"
+    assert triage_meta["demo_amenable"] is True
+    conn.close()
+
+
+def test_ship_non_demo_sets_demo_amenable_false(monkeypatch):
+    """A ship that is NOT code-amenable must record demo_amenable=False (not
+    missing) so the downstream bridge can filter deterministically."""
+    monkeypatch.setenv("UA_INTEL_TRIAGE_ENABLED", "1")
+    _patch_triage_llm(
+        monkeypatch,
+        {"verdict": "ship", "reasoning": "insightful but not buildable", "demo_amenable": False},
+    )
+    conn = _conn()
+    sigs = [_sig("v1", "Chan A", "agents"), _sig("v2", "Chan B", "agents")]
+
+    result = pc.write_convergence_candidate(conn, signatures=sigs)
+    task_id = "convergence-candidate:" + result["candidate_id"].removeprefix("cand_")
+    item = task_hub.get_item(conn, task_id)
+    assert item["metadata"]["triage"]["demo_amenable"] is False
+    conn.close()
+
+
+def test_legacy_task_has_no_triage_metadata(monkeypatch):
+    """Kill-switch path (UA_INTEL_TRIAGE_ENABLED=0): the task is created WITHOUT
+    a triage block, so the skill falls through to its own Phase 1 decision
+    rubric (the gate when triage is off). This pins that the absence-of-triage
+    signal the skill branches on is real."""
+    monkeypatch.setenv("UA_INTEL_TRIAGE_ENABLED", "0")
+
+    def _boom(**_kwargs):
+        raise AssertionError("triage must not run when disabled")
+
+    monkeypatch.setattr(pc, "_call_llm", _boom)
+    conn = _conn()
+    sigs = [_sig("v1", "Chan A", "agents"), _sig("v2", "Chan B", "agents")]
+
+    result = pc.write_convergence_candidate(conn, signatures=sigs)
+    task_id = "convergence-candidate:" + result["candidate_id"].removeprefix("cand_")
+    item = task_hub.get_item(conn, task_id)
+    assert item is not None
+    assert "triage" not in item["metadata"]  # skill will decide for itself
+    row = pc._get_convergence_candidate(conn, result["candidate_id"])
+    assert "triage" not in row["metadata"]
+    conn.close()

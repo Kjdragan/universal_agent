@@ -29,7 +29,9 @@
 > - **skip / defer** → verdict recorded on the `convergence_candidates` row for audit, but **no Task Hub item and no Kanban card**.
 > - **retry** (LLM unavailable / unparseable) → row left non-final (`verdict=''`), no task; re-tried next sweep.
 >
-> Flags: `UA_INTEL_TRIAGE_ENABLED` (default `1`; `0` = legacy "always queue, mission decides"), `UA_INTEL_TRIAGE_MODEL`. **Phase 2 (pending):** split `evaluate-and-author-intel-brief` into an execution-only `author-intel-brief` (report + `/goal` coding demo) now that validation moved upstream.
+> Flags: `UA_INTEL_TRIAGE_ENABLED` (default `1`; `0` = legacy "always queue, mission decides"), `UA_INTEL_TRIAGE_MODEL`.
+>
+> **2026-05-31 — Phase 2 (shipped): skill is triage-aware, author-only on the normal path.** Because `write_convergence_candidate()` only creates a Task Hub item when triage already returned `ship`, the only verdict the `evaluate-and-author-intel-brief` skill can observe is `ship`. The skill now has a **Phase 0.5 short-circuit**: when the task's `metadata.triage.kind == "ship"`, it **skips** the in-mission ship/skip/defer rubric and goes straight to authoring (verdict + reasoning come from triage). When `metadata.triage` is **absent** (triage off via `UA_INTEL_TRIAGE_ENABLED=0`, or a legacy pre-triage task), the skill falls through to its own Phase 1 rubric — so the kill switch still has a gate. This removes the redundant double-judge without orphaning in-flight tasks (**the skill keeps its name**; no rename, no `invoke_skill` migration). `metadata.triage.demo_amenable` is propagated into `proactive_artifacts.metadata` so a code-amenable brief is queryable. **Deferred (not built):** the actual intel-ship → Cody/`/goal` demo-build bridge — `demo_amenable` is captured and preserved but nothing dispatches a demo yet; that bridge is a separate feature requiring a live Cody mission to verify (`services/cody_dispatch.py::dispatch_cody_demo_task` is the target primitive).
 
 ## 1. What Is the Proactive Pipeline?
 
