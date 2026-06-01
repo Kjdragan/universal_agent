@@ -36,7 +36,14 @@ MORNING_BRIEFING_MAX_AGE_HOURS = 4.0
 HACKERNEWS_MAX_GAP_MINUTES = 45.0
 HACKERNEWS_ACTIVE_HOUR_MIN = 6  # inclusive
 HACKERNEWS_ACTIVE_HOUR_MAX = 21  # inclusive (last tick :30 of hour 21 = 9:30 PM CDT)
-CSI_CONVERGENCE_MAX_AGE_MINUTES = 90.0  # one missed cycle of grace
+# csi_convergence_sync writes `convergence_candidates` sporadically (only when a
+# real convergence/ideation is detected) on an hourly active-hours cron — NOT the
+# decommissioned `proactive_convergence_events` table on a 30-min 24/7 cadence the
+# old probe assumed. 3h ≈ a few active-hour cron cycles of grace absorbs natural
+# detection lulls; the active-hours gate below absorbs the overnight no-cron window.
+CSI_CONVERGENCE_MAX_AGE_MINUTES = 180.0
+CSI_CONVERGENCE_ACTIVE_HOUR_MIN = 8  # cron is `0 6-21`; allow 2 post-6AM cycles to produce
+CSI_CONVERGENCE_ACTIVE_HOUR_MAX = 21
 PROACTIVE_DIGEST_MAX_AGE_HOURS = 30.0  # 24h + 6h grace
 NIGHTLY_WIKI_WINDOW_END_HOUR = 5
 # `nightly_wiki` cron is "produce only when fresh CSI signals" — quiet
@@ -59,11 +66,15 @@ VAULT_LINT_DAY_OF_MONTH_GATE = 2  # only probe after the 2nd to give the 1st's c
 # 2026-04-18 implicit-park-poison incident exposed.
 BRIEF_TASK_FUNNEL_WINDOW_HOURS = 48
 BRIEF_TASK_FUNNEL_MIN_ARTIFACTS = 5  # below this it's plausibly just slow CSI inputs
-BRIEF_TASK_FUNNEL_SOURCE_KINDS = (
-    "convergence_detection",
-    "insight_detection",
-    "tutorial_build",
-)
+# `convergence_detection` / `insight_detection` were the legacy per-signature
+# pipeline's source_kinds, removed in 2026-05 (#568). The live convergence/ideation
+# path uses source_kind `convergence_candidate` and a different silent-drop guard:
+# inline triage (#628) decides ship→task at candidate-write time, so its failure
+# mode is "ship-triaged candidate with no task_hub_item", not "artifact with no
+# task" — not the artifact→task shape this funnel checks. Tracking the dead
+# source_kinds here just left an inert probe; `tutorial_build` (Cody tutorial
+# builds) still produces artifacts+tasks in the artifact→task shape this guards.
+BRIEF_TASK_FUNNEL_SOURCE_KINDS = ("tutorial_build",)
 
 
 def _today_houston() -> str:
@@ -305,33 +316,44 @@ def hackernews_snapshot_cadence(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]
 
 @invariant(
     id="csi_convergence_sync_freshness",
-    title="CSI convergence detected_at within last 90 min",
+    title="CSI convergence candidate created within last 3h (active hours)",
     description=(
-        "Cron `csi_convergence_sync` runs every 30 min (24/7) and records "
-        "proactive_convergence_events rows when multiple independent sources "
-        "converge on the same topic. If max(detected_at) is older than 90 min, "
-        "the sync is either failing or the upstream CSI signal table has "
-        "stopped producing — both block morning_briefing's signal feed."
+        "Cron `csi_convergence_sync` runs hourly 06:00–21:00 America/Chicago "
+        "(`UA_CSI_CONVERGENCE_CRON_EXPR`, default `0 6-21 * * *`) and writes "
+        "`convergence_candidates` rows when YouTube RSS topic signatures converge "
+        "or an ideation insight is synthesized. Reads the LIVE "
+        "`convergence_candidates` table — the legacy `proactive_convergence_events` "
+        "table was DECOMMISSIONED 2026-05-28 (frozen), so the old probe that read it "
+        "fired a permanent false-RED while the pipeline was healthy. If no candidate "
+        "has been created in 3h during active hours, the sync is failing or upstream "
+        "CSI signal has dried up. Quiet outside active hours (no overnight cron)."
     ),
     severity="warn",
     runbook_command=(
-        "sqlite3 \"$UA_ACTIVITY_DB_PATH\" \"SELECT MAX(detected_at) latest, "
-        "COUNT(*) total FROM proactive_convergence_events;\""
+        "sqlite3 \"$UA_ACTIVITY_DB_PATH\" \"SELECT MAX(created_at) latest, "
+        "COUNT(*) total FROM convergence_candidates;\""
     ),
     metadata={
         "pipeline": "csi_convergence_sync",
-        "cron_expr": "*/30 * * * *",
-        "tables": ["proactive_convergence_events"],
+        "cron_expr": "0 6-21 * * *",
+        "tz": "America/Chicago",
+        "tables": ["convergence_candidates"],
     },
 )
 def csi_convergence_sync_freshness(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     conn = ctx.get("activity_conn")
     if conn is None:
         return None
+    now = _now_houston()
+    # The cron only runs 06:00–21:00 CT and detection is sporadic, so the
+    # overnight no-cron window (22:00–05:00) plus a couple of post-6AM cycles
+    # would otherwise false-fire. Only probe once we're well into active hours.
+    if not (CSI_CONVERGENCE_ACTIVE_HOUR_MIN <= now.hour <= CSI_CONVERGENCE_ACTIVE_HOUR_MAX):
+        return None
     try:
         row = conn.execute(
-            "SELECT MAX(detected_at) AS latest, COUNT(*) AS total "
-            "FROM proactive_convergence_events"
+            "SELECT MAX(created_at) AS latest, COUNT(*) AS total "
+            "FROM convergence_candidates"
         ).fetchone()
     except sqlite3.Error as exc:
         logger.debug("csi_convergence_sync_freshness: query failed (%s)", exc)
@@ -354,17 +376,17 @@ def csi_convergence_sync_freshness(ctx: Dict[str, Any]) -> Optional[Dict[str, An
     if age_minutes > CSI_CONVERGENCE_MAX_AGE_MINUTES:
         return {
             "observed_value": {
-                "latest_detected_at": latest.isoformat(),
+                "latest_created_at": latest.isoformat(),
                 "age_minutes": round(age_minutes, 1),
                 "total_rows": total,
             },
             "message": (
-                f"Latest convergence event is {age_minutes:.1f} min old "
-                f"(threshold {CSI_CONVERGENCE_MAX_AGE_MINUTES:.0f} min). The "
-                "30-min sync cron may be failing or the upstream signal "
-                "table has dried up — investigate before morning_briefing reads it."
+                f"Latest convergence_candidate is {age_minutes:.1f} min old "
+                f"(threshold {CSI_CONVERGENCE_MAX_AGE_MINUTES:.0f} min). The hourly "
+                "csi_convergence_sync cron may be failing or the upstream CSI signal "
+                "(YouTube RSS topic signatures) has dried up."
             ),
-            "threshold_text": f"age <= {CSI_CONVERGENCE_MAX_AGE_MINUTES:.0f} min",
+            "threshold_text": f"age <= {CSI_CONVERGENCE_MAX_AGE_MINUTES:.0f} min during active hours",
         }
     return None
 

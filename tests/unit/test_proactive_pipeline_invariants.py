@@ -74,6 +74,12 @@ def _seeded_activity_conn() -> sqlite3.Connection:
             detected_at TEXT NOT NULL,
             metadata_json TEXT NOT NULL DEFAULT '{}'
         );
+        CREATE TABLE convergence_candidates (
+            candidate_id TEXT PRIMARY KEY,
+            detected_at TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
         """
     )
     conn.commit()
@@ -275,28 +281,30 @@ def test_hn_silent_in_early_6am_window(tmp_path: Path, monkeypatch) -> None:
 # === 4. csi_convergence_sync_freshness ===
 
 
-def test_csi_convergence_fresh_emits_nothing(monkeypatch) -> None:
-    _set_now(monkeypatch, datetime(2026, 5, 19, 14, 0, tzinfo=HOUSTON))
-    conn = _seeded_proactive_artifacts_conn()
+def _insert_candidate(conn, candidate_id: str, minutes_ago: int) -> None:
+    ts = (datetime.now(UTC) - timedelta(minutes=minutes_ago)).isoformat()
     conn.execute(
-        "INSERT INTO proactive_convergence_events (event_id, primary_topic, detected_at) "
-        "VALUES ('e1', 'MCP', ?)",
-        ((datetime.now(UTC) - timedelta(minutes=20)).isoformat(),),
+        "INSERT INTO convergence_candidates (candidate_id, created_at) VALUES (?, ?)",
+        (candidate_id, ts),
     )
     conn.commit()
+
+
+def test_csi_convergence_fresh_emits_nothing(monkeypatch) -> None:
+    # Reads the LIVE convergence_candidates table (not the decommissioned
+    # proactive_convergence_events). 20 min old < 180 min threshold → quiet.
+    _set_now(monkeypatch, datetime(2026, 5, 19, 14, 0, tzinfo=HOUSTON))
+    conn = _seeded_proactive_artifacts_conn()
+    _insert_candidate(conn, "c1", minutes_ago=20)
     findings = run_invariants({"activity_conn": conn})
     assert _only(findings, "csi_convergence_sync_freshness") == []
 
 
 def test_csi_convergence_stale_emits_warn(monkeypatch) -> None:
+    # 240 min old > 180 min threshold, during active hours → warn.
     _set_now(monkeypatch, datetime(2026, 5, 19, 14, 0, tzinfo=HOUSTON))
     conn = _seeded_proactive_artifacts_conn()
-    conn.execute(
-        "INSERT INTO proactive_convergence_events (event_id, primary_topic, detected_at) "
-        "VALUES ('e1', 'MCP', ?)",
-        ((datetime.now(UTC) - timedelta(minutes=120)).isoformat(),),
-    )
-    conn.commit()
+    _insert_candidate(conn, "c1", minutes_ago=240)
     findings = run_invariants({"activity_conn": conn})
     matches = _only(findings, "csi_convergence_sync_freshness")
     assert len(matches) == 1
@@ -306,6 +314,33 @@ def test_csi_convergence_stale_emits_warn(monkeypatch) -> None:
 def test_csi_convergence_empty_table_stays_quiet(monkeypatch) -> None:
     _set_now(monkeypatch, datetime(2026, 5, 19, 14, 0, tzinfo=HOUSTON))
     conn = _seeded_proactive_artifacts_conn()
+    findings = run_invariants({"activity_conn": conn})
+    assert _only(findings, "csi_convergence_sync_freshness") == []
+
+
+def test_csi_convergence_stale_but_outside_active_hours_stays_quiet(monkeypatch) -> None:
+    # Same stale candidate, but at 02:00 CT (no cron overnight) → must stay quiet
+    # so the overnight no-cron gap doesn't fire a false-RED.
+    _set_now(monkeypatch, datetime(2026, 5, 19, 2, 0, tzinfo=HOUSTON))
+    conn = _seeded_proactive_artifacts_conn()
+    _insert_candidate(conn, "c1", minutes_ago=240)
+    findings = run_invariants({"activity_conn": conn})
+    assert _only(findings, "csi_convergence_sync_freshness") == []
+
+
+def test_csi_convergence_does_not_read_decommissioned_table(monkeypatch) -> None:
+    # A row in the OLD proactive_convergence_events table (frozen 2026-05-28)
+    # must NOT keep the probe quiet — only convergence_candidates counts now.
+    _set_now(monkeypatch, datetime(2026, 5, 19, 14, 0, tzinfo=HOUSTON))
+    conn = _seeded_proactive_artifacts_conn()
+    conn.execute(
+        "INSERT INTO proactive_convergence_events (event_id, primary_topic, detected_at) "
+        "VALUES ('old', 'MCP', ?)",
+        (datetime.now(UTC).isoformat(),),
+    )
+    conn.commit()
+    # convergence_candidates is empty → probe stays quiet (empty-table guard),
+    # proving it is NOT consulting the fresh row in the dead table.
     findings = run_invariants({"activity_conn": conn})
     assert _only(findings, "csi_convergence_sync_freshness") == []
 
@@ -399,6 +434,12 @@ def _seeded_proactive_artifacts_conn() -> sqlite3.Connection:
             artifact_id TEXT NOT NULL DEFAULT '',
             feedback_score INTEGER,
             detected_at TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE TABLE convergence_candidates (
+            candidate_id TEXT PRIMARY KEY,
+            detected_at TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
             metadata_json TEXT NOT NULL DEFAULT '{}'
         );
         CREATE TABLE proactive_intelligence_reports (
@@ -755,10 +796,17 @@ def _seed_tasks(conn: sqlite3.Connection, *, source_kind: str, n: int, hours_old
     conn.commit()
 
 
+# NOTE: the funnel now tracks only `tutorial_build` (the artifact→task shape).
+# `convergence_detection`/`insight_detection` were the decommissioned legacy
+# per-signature pipeline source_kinds (removed 2026-05, #568); the live
+# convergence/ideation path uses `convergence_candidate` + inline triage (#628),
+# a different (candidate→task) guard. See BRIEF_TASK_FUNNEL_SOURCE_KINDS.
+
+
 def test_funnel_quiet_when_artifacts_and_tasks_keep_pace() -> None:
     conn = _seeded_funnel_conn()
-    _seed_artifacts(conn, source_kind="convergence_detection", n=12)
-    _seed_tasks(conn, source_kind="convergence_detection", n=10)
+    _seed_artifacts(conn, source_kind="tutorial_build", n=12)
+    _seed_tasks(conn, source_kind="tutorial_build", n=10)
     findings = run_invariants({"activity_conn": conn})
     assert _only(findings, "proactive_brief_task_funnel") == []
 
@@ -766,25 +814,21 @@ def test_funnel_quiet_when_artifacts_and_tasks_keep_pace() -> None:
 def test_funnel_warns_when_artifacts_produce_zero_tasks() -> None:
     """Replays the May-2026 incident shape: many artifacts, zero queued tasks."""
     conn = _seeded_funnel_conn()
-    _seed_artifacts(conn, source_kind="insight_detection", n=40)
-    _seed_artifacts(conn, source_kind="convergence_detection", n=30)
-    # tutorial_build is healthy in this scenario — only insight/convergence
-    # pipelines should fire.
-    _seed_artifacts(conn, source_kind="tutorial_build", n=6)
-    _seed_tasks(conn, source_kind="tutorial_build", n=6)
+    _seed_artifacts(conn, source_kind="tutorial_build", n=40)
+    # zero tutorial_build tasks → silent-drop shape the funnel guards.
 
     findings = run_invariants({"activity_conn": conn})
     matches = _only(findings, "proactive_brief_task_funnel")
     assert len(matches) == 1
     obs = matches[0].observed_value
     starved_kinds = {row["source_kind"] for row in obs["starved_pipelines"]}
-    assert starved_kinds == {"insight_detection", "convergence_detection"}
+    assert starved_kinds == {"tutorial_build"}
 
 
 def test_funnel_quiet_when_artifact_volume_below_floor() -> None:
-    """Genuinely slow CSI input — don't false-fire."""
+    """Genuinely slow input — don't false-fire."""
     conn = _seeded_funnel_conn()
-    _seed_artifacts(conn, source_kind="convergence_detection", n=2)  # below MIN=5
+    _seed_artifacts(conn, source_kind="tutorial_build", n=2)  # below MIN=5
     findings = run_invariants({"activity_conn": conn})
     assert _only(findings, "proactive_brief_task_funnel") == []
 
@@ -792,7 +836,7 @@ def test_funnel_quiet_when_artifact_volume_below_floor() -> None:
 def test_funnel_ignores_artifacts_outside_window() -> None:
     """Old artifacts past the 48h window shouldn't count."""
     conn = _seeded_funnel_conn()
-    _seed_artifacts(conn, source_kind="convergence_detection", n=20, hours_old=72.0)
+    _seed_artifacts(conn, source_kind="tutorial_build", n=20, hours_old=72.0)
     findings = run_invariants({"activity_conn": conn})
     assert _only(findings, "proactive_brief_task_funnel") == []
 
