@@ -2504,6 +2504,62 @@ def _save_processed_videos(items: list[dict], day_name: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Transcript-required mode
+# ---------------------------------------------------------------------------
+# When on (default), videos with no usable transcript are EXCLUDED from the
+# digest rather than getting a low-value metadata-only retelling (which can
+# never become a demo anyway — the demo gate rejects evidence_quality=
+# metadata_only). The exclusion branches on WHY the transcript was missing:
+#   * permanent (no captions exist) -> drop AND mark processed (don't retry).
+#   * transient fetch block -> drop but do NOT mark processed, so it retries on
+#     a later run (gold-channel videos re-enter via the poller's 30h window;
+#     manually-queued videos retry if re-added). This avoids silently losing a
+#     transcript-having video to a proxy/IP hiccup.
+# Both are surfaced in a "Skipped — No Transcript" footer so nothing vanishes
+# silently. Disable (restore metadata-only fallback) with
+# UA_YOUTUBE_DIGEST_REQUIRE_TRANSCRIPT=0.
+_RETRYABLE_TRANSCRIPT_FAILURE_CLASSES = {"request_blocked", "api_unavailable"}
+
+
+def _require_transcript() -> bool:
+    return os.getenv("UA_YOUTUBE_DIGEST_REQUIRE_TRANSCRIPT", "1").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _build_skipped_videos_footer(skipped: list[dict[str, Any]]) -> str:
+    """Render a human-facing footer listing videos excluded for lack of a
+    transcript, split into permanent (not retried) vs transient (will retry)."""
+    if not skipped:
+        return ""
+    perm = [s for s in skipped if not s.get("retryable")]
+    retry = [s for s in skipped if s.get("retryable")]
+    lines = ["## Skipped — No Transcript", ""]
+
+    def _row(s: dict[str, Any]) -> str:
+        vid = s.get("video_id", "")
+        return (
+            f"- {s.get('title') or vid} — `{s.get('failure_class') or 'unknown'}` "
+            f"([watch](https://www.youtube.com/watch?v={vid}))"
+        )
+
+    if perm:
+        lines.append(
+            f"**Excluded ({len(perm)})** — no usable transcript available; not retried:"
+        )
+        lines.extend(_row(s) for s in perm)
+        lines.append("")
+    if retry:
+        lines.append(
+            f"**Deferred ({len(retry)})** — transcript fetch failed transiently; "
+            "left unprocessed to retry on a later run:"
+        )
+        lines.extend(_row(s) for s in retry)
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+# ---------------------------------------------------------------------------
 # Main processing
 # ---------------------------------------------------------------------------
 
@@ -2557,8 +2613,15 @@ def process_daily_digest(
 
     transcripts: list[str] = []
     transcript_payloads: list[VideoTranscriptPayload] = []
-    processed_items: list[dict] = []
+    processed_items: list[dict] = []  # videos retold / included in the digest
+    # Videos to write to processed_videos. == retold videos, PLUS permanently
+    # transcript-less videos (so we don't re-fetch dead videos), but NOT
+    # transiently-blocked ones (left unprocessed to retry). Diverges from
+    # processed_items only in transcript-required mode.
+    videos_to_persist: list[dict] = []
+    skipped_videos: list[dict[str, Any]] = []  # excluded for lack of transcript
     video_titles: list[str] = []
+    require_transcript = _require_transcript()
 
     # Load gold-channel duration overrides once. Maps video_owner_channel_id ->
     # max_duration_seconds_override. Used so e.g. Lex Fridman 3-hour interviews
@@ -2569,7 +2632,6 @@ def process_daily_digest(
         video_id = item["video_id"]
         title = item["title"]
         logger.info("Ingesting: %s (%s)", title, video_id)
-        video_titles.append(title)
 
         owner_channel_id = item.get("video_owner_channel_id") or ""
         duration_override = gold_duration_overrides.get(owner_channel_id)
@@ -2616,6 +2678,8 @@ def process_daily_digest(
                 )
             )
             processed_items.append(item)
+            videos_to_persist.append(item)
+            video_titles.append(title)
         else:
             if result:
                 error_class = result.get("failure_class") or "unknown"
@@ -2630,7 +2694,38 @@ def process_daily_digest(
                 video_id, error_class, error_name, error_detail,
             )
 
-            # Metadata-only fallback: use title for synthesis (playlist API doesn't return description)
+            if require_transcript:
+                # No usable transcript -> exclude from the digest entirely (a
+                # metadata-only retelling has no real content and can never be a
+                # demo). Branch on WHY so we don't permanently lose a video that
+                # only failed to fetch.
+                retryable = error_class in _RETRYABLE_TRANSCRIPT_FAILURE_CLASSES
+                skipped_videos.append({
+                    "video_id": video_id,
+                    "title": title,
+                    "failure_class": error_class,
+                    "retryable": retryable,
+                })
+                if retryable:
+                    # Transient fetch block: leave UNPROCESSED so it retries on a
+                    # later run (gold videos re-enter via the poller's 30h window;
+                    # manual ones retry if re-queued).
+                    logger.info(
+                        "Skipping %s (transient %s) — left unprocessed to retry.",
+                        video_id, error_class,
+                    )
+                else:
+                    # Genuinely no transcript: mark processed so we don't re-fetch
+                    # a dead video every run, but keep it out of the digest.
+                    videos_to_persist.append(item)
+                    logger.info(
+                        "Skipping %s (%s) — no transcript; marked processed.",
+                        video_id, error_class,
+                    )
+                continue
+
+            # Legacy metadata-only fallback (UA_YOUTUBE_DIGEST_REQUIRE_TRANSCRIPT=0):
+            # use title for synthesis (playlist API doesn't return description).
             # We still capture the metadata dict from the failed-fetch result if present —
             # the YouTube Data API call inside ingest_youtube_transcript runs even when the
             # transcript fetch fails, so channel/duration/upload_date are usually populated.
@@ -2651,10 +2746,21 @@ def process_daily_digest(
                 )
             )
             processed_items.append(item)
+            videos_to_persist.append(item)
+            video_titles.append(title)
             logger.info("Using metadata-only fallback for %s", video_id)
 
     if not transcripts:
-        logger.info("No transcripts could be extracted. Exiting.")
+        # No digest to produce or deliver. We intentionally do NOT mark anything
+        # processed here — that preserves the invariant that processed-videos
+        # writes only happen after a successful delivery (or email_to=None). The
+        # cost is that on a rare all-transcript-less day these videos are
+        # re-attempted next run; the common path (some transcripts succeed) still
+        # marks the permanent-fails processed after delivery, below.
+        logger.info(
+            "No usable transcripts extracted (%d skipped). Exiting without a digest.",
+            len(skipped_videos),
+        )
         return
 
     # date_str is needed by both the map_reduce pipeline (passed to the reducer
@@ -2752,10 +2858,13 @@ def process_daily_digest(
         max_n=configured_max_n,
         dry_run=dry_run,
     )
+    skipped_footer = _build_skipped_videos_footer(skipped_videos)
     full_content = (
         f"# Daily YouTube Digest: {day_name.title()}, {date_str}\n\n"
         f"{human_digest_content}\n\n---\n\n{tutorial_dispatch_summary}\n"
     )
+    if skipped_footer:
+        full_content += f"\n\n---\n\n{skipped_footer}\n"
 
     with open(artifact_path, "w", encoding="utf-8") as f:
         f.write(full_content)
@@ -2911,8 +3020,14 @@ def process_daily_digest(
         return
 
     logger.info("Saving state to processed_videos database...")
-    _save_processed_videos(processed_items, day_name)
-    logger.info("Successfully recorded %d videos as processed for %s.", len(processed_items), day_name)
+    _save_processed_videos(videos_to_persist, day_name)
+    logger.info(
+        "Recorded %d videos as processed for %s (%d retold + %d transcript-less; "
+        "%d transient skips left for retry).",
+        len(videos_to_persist), day_name, len(processed_items),
+        len(videos_to_persist) - len(processed_items),
+        sum(1 for s in skipped_videos if s.get("retryable")),
+    )
 
     # Recreate the day-of-week playlist with the same name so the next day's
     # additions land in an empty playlist. Quota-cheap: 101 units flat instead
@@ -2924,7 +3039,7 @@ def process_daily_digest(
             _recreate_playlist_after_digest(
                 day_name=day_name,
                 old_playlist_id=playlist_id,
-                processed_count=len(processed_items),
+                processed_count=len(videos_to_persist),
             )
         except Exception as recreate_exc:  # broad on purpose — never block on cleanup
             logger.warning(
