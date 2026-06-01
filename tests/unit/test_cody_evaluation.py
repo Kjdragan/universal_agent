@@ -155,6 +155,31 @@ def test_evaluate_demo_endpoint_required_any_passes_anything(tmp_path: Path):
     assert report.endpoint_match.ok is True
 
 
+def test_evaluate_demo_accepts_raw_anthropic_host(tmp_path: Path):
+    """Regression: Cody free-hands the raw host 'api.anthropic.com' into the
+    manifest; it IS the native endpoint and must satisfy required=anthropic_native
+    instead of false-rejecting (the historical P3 conversion bug)."""
+    workspace = tmp_path / "ws"
+    _populate_workspace(
+        workspace, endpoint_required="anthropic_native", endpoint_hit="api.anthropic.com"
+    )
+    report = evaluate_demo(workspace, demo_id="hooks__demo-1")
+    assert report.endpoint_match.ok is True
+    assert report.overall_mechanical_ok is True
+
+
+def test_evaluate_demo_still_flags_real_zai_leak_against_anthropic(tmp_path: Path):
+    """The normalizer must not paper over a genuine env-leak: a ZAI host hit
+    against a required anthropic_native is still a mismatch."""
+    workspace = tmp_path / "ws"
+    _populate_workspace(
+        workspace, endpoint_required="anthropic_native", endpoint_hit="api.z.ai"
+    )
+    report = evaluate_demo(workspace, demo_id="hooks__demo-1")
+    assert report.endpoint_match.ok is False
+    assert report.overall_mechanical_ok is False
+
+
 def test_evaluate_demo_flags_cody_self_reported_failure(tmp_path: Path):
     workspace = tmp_path / "ws"
     _populate_workspace(workspace, acceptance_passed=False)

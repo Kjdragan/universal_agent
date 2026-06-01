@@ -19,6 +19,7 @@ from universal_agent.services.cody_implementation import (
     WorkspaceArtifacts,
     WorkspaceReadiness,
     append_build_note,
+    canonicalize_endpoint,
     detect_endpoint_from_text,
     list_sources,
     load_briefing,
@@ -30,6 +31,52 @@ from universal_agent.services.cody_implementation import (
     write_manifest,
     write_run_output,
 )
+
+# ── canonicalize_endpoint (single source of truth for endpoint matching) ─────
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("anthropic_native", "anthropic_native"),
+        ("api.anthropic.com", "anthropic_native"),  # the raw host Cody free-hands
+        ("anthropic-version: 2023-06-01", "anthropic_native"),
+        ("claude-opus-4-8", "anthropic_native"),
+        ("Claude Max", "anthropic_native"),
+        ("zai", "zai"),
+        ("api.z.ai", "zai"),
+        ("glm-5.1", "zai"),
+        ("z.ai/api/anthropic", "zai"),  # ZAI wins even though it contains 'anthropic'
+        ("any", "any"),  # no-constraint sentinel preserved
+        ("", ""),  # empty preserved
+        ("  ", ""),  # whitespace-only collapses to empty
+        ("unknown", "unknown"),
+    ],
+)
+def test_canonicalize_endpoint(value: str, expected: str):
+    assert canonicalize_endpoint(value) == expected
+
+
+def test_demo_manifest_endpoint_matches_required_normalizes_host():
+    """The raw host must satisfy the canonical required token."""
+    m = DemoManifest(
+        demo_id="hooks__demo-1",
+        feature="hooks",
+        endpoint_required="anthropic_native",
+        endpoint_hit="api.anthropic.com",
+    )
+    assert m.endpoint_matches_required is True
+
+
+def test_demo_manifest_endpoint_matches_required_still_catches_leak():
+    m = DemoManifest(
+        demo_id="hooks__demo-1",
+        feature="hooks",
+        endpoint_required="anthropic_native",
+        endpoint_hit="api.z.ai",
+    )
+    assert m.endpoint_matches_required is False
+
 
 # ── WorkspaceArtifacts shape ────────────────────────────────────────────────
 
