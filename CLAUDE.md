@@ -75,6 +75,25 @@ When executing on the VPS (`uaonvps`), agents have direct, native filesystem acc
 - **Capability Implication**: **Never** build custom "file fetcher" tools or syncing scripts to move files from the desktop to the VPS for agent tasks. Instead, simply refer to the absolute `/home/kjdragan/...` path directly. Standard OS operations (`cat`, Python `open()`, etc.) will seamlessly resolve over the SSHFS mount.
 - **Architectural Tenet**: This demonstrates the core design philosophy of "expanding system capabilities at the OS level" rather than building complex, brittle agent workarounds.
 
+## Tailnet HTML Scratchpad — how to hand the operator a rendered report
+
+Kevin runs Claude Code terminal-only. Markdown shows as raw text, and HTML/PDF email attachments get their links + anchors stripped. **When you produce a report, analysis, diff review, or anything that benefits from real HTML rendering (styling, Mermaid/SVG diagrams, working in-page anchors), publish it to the tailnet HTML scratchpad and hand over the link** instead of pasting markdown or attaching a file.
+
+One command does it — `scripts/publish_scratch.sh` auto-detects whether it runs on the VPS (writes directly) or anywhere else on the tailnet (copies over `ssh ua@uaonvps`), generates an unguessable slug, and prints the URL:
+
+```bash
+scripts/publish_scratch.sh report.html                       # random slug
+scripts/publish_scratch.sh report.html my-analysis           # readable slug -> /scratch/my-analysis/report.html
+URL=$(scripts/publish_scratch.sh report.html)                # capture URL (stdout = URL only)
+scripts/publish_scratch.sh --init    # one-time/idempotent setup of the /scratch mapping
+scripts/publish_scratch.sh --status  # verify mappings (must still show / -> :3000)
+```
+
+- **URL shape:** `https://uaonvps.taildcc090.ts.net/scratch/<slug>/<file>.html` — auto-HTTPS, **tailnet-only** (private to Kevin's own devices; never public). Tailnet membership is the auth boundary, not the slug.
+- **Mechanism:** `tailscale serve` path-mount of `/home/ua/ua_scratch` (daemon-managed, reboot-safe; survives `/opt/universal_agent` deploys). Don't disturb the other serve mappings.
+- **Workflow:** write your HTML anywhere, run the script, paste the printed URL back to Kevin. That's the whole loop for "spin up a report and give me the link."
+- Full reference (mechanism, diagram, failure signatures): `docs/03_Operations/87_Tailscale_Architecture_And_Operations_Source_Of_Truth_2026-03-06.md` § 6. The `visual-explainer` skill is a good way to generate the HTML itself.
+
 ## Secrets, Infisical & gws/Gmail auth
 
 - **Self-service secret access** (machine-identity CLI pattern, guardrails, the desktop Hostinger lazy-load) and the full Infisical contract: [`project_docs/06_platform/01_secrets_and_infisical.md`](project_docs/06_platform/01_secrets_and_infisical.md). TL;DR: agents have machine-id creds pre-loaded — fetch secrets yourself with `infisical run` (universal-auth, never the interactive CLI session); **never print secret values**; never `set`/delete/rotate without operator approval; UA Python services use `initialize_runtime_secrets()`, not the CLI.
