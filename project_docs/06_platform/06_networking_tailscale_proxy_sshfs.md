@@ -17,6 +17,7 @@ code_paths:
   - "scripts/update_webshare_proxy_credentials.py"
   - "src/universal_agent/youtube_ingest.py"
   - "scripts/sync_remote_workspaces.sh"
+  - "scripts/publish_scratch.sh"
 last_verified: 2026-06-01
 ---
 
@@ -138,7 +139,7 @@ A reusable delivery pattern: render an artifact as **standalone HTML**, publish 
 
 - **Serve config (live on the VPS):** `sudo tailscale serve --bg --set-path /scratch /home/ua/ua_scratch`. Served directly by the Tailscale daemon — reboot-safe, no extra static-server process to babysit. `--set-path` / directory serves require root (`sudo`; `ua` has passwordless sudo as of 2026-06-01); plain port-proxy serves work under the `tailscale set --operator=ua` grant *without* sudo.
 - **URL shape:** `https://uaonvps.taildcc090.ts.net/scratch/<token>/<name>.html` — auto-HTTPS via the `ts.net` cert. **Tailnet membership is the auth**: reachable only from the operator's own devices, never the public internet. An unguessable `<token>` subdir is good hygiene but not the security boundary.
-- **Publish:** write the HTML to `/home/ua/ua_scratch/<token>/<name>.html` (token = unguessable slug), then return the URL. The scratch dir lives in `ua`'s home, so it survives `/opt/universal_agent` deploys; the served `/scratch` mapping survives reboots.
+- **Publish:** use `scripts/publish_scratch.sh <html-file> [slug]` (`scripts/publish_scratch.sh::cmd_publish`) — it auto-detects whether it runs on the VPS (writes directly) or anywhere else on the tailnet (copies over `ssh ua@uaonvps`), generates an unguessable slug, sets readable perms (dir `0755`/file `0644`), and prints the URL on stdout (so `URL=$(scripts/publish_scratch.sh f.html)` works). `--init` idempotently (re-)establishes the `/scratch` serve mapping; `--status` prints `tailscale serve status`. Manual fallback: write the HTML to `/home/ua/ua_scratch/<token>/<name>.html` (token = unguessable slug), then return the URL. The scratch dir lives in `ua`'s home, so it survives `/opt/universal_agent` deploys; the served `/scratch` mapping survives reboots.
 - **Don't disturb** the other serve mappings (`/`→:3000 dashboard, `:8443`→:8002 API, etc.) — only add/modify `/scratch`. Verify with `tailscale serve status` after any change (it must still list `/` → :3000).
 - **Origin:** the YouTube daily digest "clickable TOC" problem (see `04_intelligence/05_youtube_csi_flow.md` § A.9). The digest emails a meta-synthesis summary; the full per-video report with its clickable index is published here and linked.
 
