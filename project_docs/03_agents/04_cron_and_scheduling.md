@@ -6,7 +6,7 @@ subsystem: agents-cron
 code_paths:
   - src/universal_agent/cron_service.py
   - src/universal_agent/gateway_server.py
-last_verified: 2026-05-29
+last_verified: 2026-06-01
 ---
 
 # Cron & Scheduling
@@ -198,7 +198,7 @@ Default `max_attempts` is **3** (`_max_attempts_for_job`, overridable via
 |---|---|
 | `success` | `mark_completed`; emits a success intelligence event (unless `mission_control_silent`). |
 | `auth_required` | `mark_needs_review` (no retry) — surfaces a Composio connect link. |
-| `error`, retryable | `queue_retry`; if a new attempt is granted, status becomes `retry_queued` and `_schedule_retry_run` fires a fresh `_run_job` with `skip_workflow_admission=True`. |
+| `error`, retryable | `queue_retry`; if a new attempt is granted, status becomes `retry_queued` and `_schedule_retry_run` fires a fresh `_run_job` with `skip_workflow_admission=True`. `_schedule_retry_run` is **loop-agnostic** (see below) — it must be, because the lightweight finalize path reaches it from a worker thread. |
 | `cancelled` | `failure_class="cancelled"`, **never retried** (see deploy-window below). |
 | rate-limited error | `_is_rate_limit_exception` matches Vercel/429/"too many requests" bodies → `retryable=False`; the cron's natural schedule is the backoff. |
 
@@ -297,7 +297,24 @@ Phase F SQL runs synchronously inside async coroutines; `_phase_f_start` /
 event-loop freeze can be pinpointed to the hanging step. The `mark_completed`
 evidence-sync (`shutil.copytree`) on the lightweight path is wrapped in
 `asyncio.to_thread` for the same reason (hot-patch 2026-05-26, confirmed by
-py-spy).
+py-spy) — `_run_job` calls `await asyncio.to_thread(self._finalize_workflow_attempt, …)`.
+
+> **Loop-affinity gotcha (fixed 2026-05-31).** Moving the *whole*
+> `_finalize_workflow_attempt` onto a worker thread silently broke the retry
+> path: on a non-zero-exit lightweight run that helper calls
+> `_schedule_retry_run`, which originally used a bare
+> `asyncio.create_task(...)`. `create_task` is loop-affine and the worker
+> thread has no running loop, so it raised `RuntimeError: no running event
+> loop` and orphaned the `_run_job` coroutine — the intermittent "no running
+> event loop" cron failures on hackernews_snapshot / atlas_direct_dispatch
+> (only firing when a lightweight script exited non-zero *and* a retry was
+> queued). The fix makes `_schedule_retry_run` loop-agnostic: `CronService.start`
+> captures the scheduler loop in `self._loop`; the helper uses
+> `asyncio.get_running_loop().create_task(...)` when already on a loop and
+> `asyncio.run_coroutine_threadsafe(coro, self._loop)` when called from a worker
+> thread. The other seven `_finalize_workflow_attempt` call sites run on-loop
+> and were unaffected. Regression test:
+> `tests/unit/test_cron_retry_offloop_scheduling.py`.
 
 ## Outputs, persistence & wake
 
@@ -364,6 +381,14 @@ See `08_operations/03_dormancy_and_operating_hours.md` for the full policy.
   (agent bootstrap, Phase F SQL, `copytree`) blocks the whole gateway. The
   lightweight path, `to_thread` wrap, and Phase-F timing instrumentation all
   exist because of this.
+- **`to_thread` cuts both ways — audit the callee for loop-affine calls.**
+  Wrapping a callable in `asyncio.to_thread` to unblock the loop runs it on a
+  worker thread with **no running loop**, so any transitive
+  `asyncio.create_task` / `get_running_loop` / `ensure_future` inside it raises
+  `RuntimeError: no running event loop`. This is exactly how
+  `_finalize_workflow_attempt → _schedule_retry_run` broke (see Phase F above).
+  The standard fix is the loop-agnostic pattern: fast-path `create_task` when a
+  loop is running, else `run_coroutine_threadsafe` onto a loop captured up front.
 - **Backfill is off by default** — do not assume missed crons replay at boot.
 - **`cancelled` is terminal, not retryable.** Deploy-window kills and session-
   reaper cancellations both land here; the explicit `asyncio.CancelledError`

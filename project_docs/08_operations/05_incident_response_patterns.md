@@ -15,7 +15,7 @@ code_paths:
   - "scripts/deploy_validate_runtime.sh"
   - "scripts/check_crashloop.sh"
   - "scripts/check_heartbeat_liveness.py"
-last_verified: 2026-05-30
+last_verified: 2026-06-01
 ---
 
 # Incident Response Patterns
@@ -312,6 +312,14 @@ health check allows **96 attempts × 5s = 8 minutes**
   failures (lifespan blocking → thread starvation → bind/storm), fixed across PRs #289/#291/#293.
   Take a careful layer-by-layer diagnosis; do not assume the first hypothesis is the whole
   story.
+- **`to_thread` is loop-affinity poison for the callee.** The same offload-to-thread fix used
+  here unblocks the loop, but the wrapped callable then runs with **no running loop** — any
+  transitive `asyncio.create_task` / `get_running_loop` inside it raises `RuntimeError: no
+  running event loop`. This bit `cron_service.py::_schedule_retry_run` after the lightweight
+  finalize path was moved under `asyncio.to_thread` (intermittent "no running event loop" cron
+  failures, fixed 2026-05-31). When you wrap something in `to_thread`, audit its whole
+  transitive call tree for loop-affine calls; the fix is to capture the loop up front and use
+  `run_coroutine_threadsafe` off-thread. See `03_agents/04_cron_and_scheduling.md` (Phase F).
 
 ---
 
