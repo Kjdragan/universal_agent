@@ -10,7 +10,7 @@ code_paths:
   - src/universal_agent/services/execution_run_service.py
   - src/universal_agent/services/worker_exit_classifier.py
   - src/universal_agent/services/cron_task_hub_link.py
-last_verified: 2026-05-29
+last_verified: 2026-06-01
 ---
 
 # Task Hub & Dispatch
@@ -119,7 +119,9 @@ adjusted by:
 - priority weight (`_priority_weight`) and due-urgency (`_due_urgency_score`)
 - project-key bonus (`mission`/`immediate` `+0.6`; `memory`/`proactive`/`approval` `+0.3`)
 - `+1.0` if it is a "system schedule" task (`_is_system_schedule_task`)
-- historical-completion bonus, memory-relevance bonus
+- historical-completion bonus, memory-relevance bonus (**memory-relevance is OFF
+  by default** — see the performance gotcha below; gate
+  `UA_DISPATCH_MEMORY_RELEVANCE_ENABLED`)
 - staleness bonus by age (`+0.5`/`+1.0`/`+2.0` at 2h/6h/24h) — this is the
   anti-languish mechanism so old tasks naturally float up. The age basis is
   `created_at` (`score_task` reads `task.get("created_at")`), **not** last-touched
@@ -177,6 +179,30 @@ helpers (`overview`, `list_agent_queue`, `get_agent_activity`) should return the
 latest stored snapshot rather than rebuilding inline. Driving a queue rebuild
 from a read path was a documented dashboard read-path performance regression —
 the fix is to read the snapshot, not to raise the proxy timeout.
+
+### Rebuild cost is O(N tasks) — keep it off hot/boolean paths (2026-06-01 incident)
+
+`rebuild_dispatch_queue` calls `score_task` for **every** non-terminal task, and
+`score_task`'s memory-relevance bonus used to run a per-task
+`memory.orchestrator.search()` unconditionally. On a ~320-task board that made a
+single rebuild a **~14s synchronous block** on the asyncio event loop (measured:
+14.4s with the per-task memory search, 2.6s without). Two things made this fatal:
+
+1. `_memory_relevance_bonus` ran the memory search on every scored task. It is now
+   **OFF by default**, gated behind `UA_DISPATCH_MEMORY_RELEVANCE_ENABLED`. The
+   `+0.4` is an advisory ordering nudge; doing O(N) memory IO inside the synchronous
+   rebuild is not worth it until relevance is precomputed off the hot path.
+2. `gateway_server._task_hub_has_dispatch_eligible_items` ran a **full rebuild just
+   to return a boolean**, and it fires on every autonomous-cron success
+   (`_maybe_wake_heartbeat_after_autonomous_cron`). With `*/1` autonomous crons
+   (`atlas_direct_dispatch`, `simone_chat_auto_complete`) that was a 14s event-loop
+   block per minute, which wedged the `daemon_simone_todo` dispatch loop and halted
+   intel-brief authoring for ~20h. It now does a cheap indexed existence check over
+   the persisted `score` column instead of rebuilding.
+
+General rule: **never call `rebuild_dispatch_queue` from a boolean check, a
+read/GET handler, or any per-event hot path.** Rebuild only from the actual claim
+path (`claim_next_dispatch_tasks`) and the scheduled rebuild cadence.
 
 ## Atomic claiming
 
@@ -469,6 +495,7 @@ into Task Hub rather than running invisibly. The canonical helpers:
 | Env var | Default | Effect |
 |---|---|---|
 | `UA_TASK_AGENT_THRESHOLD` | 3 (clamped 1–10) | Min score to be dispatch-eligible |
+| `UA_DISPATCH_MEMORY_RELEVANCE_ENABLED` | `0` (off) | Per-task memory-orchestrator search in `score_task`. OFF since the 2026-06-01 rebuild-starvation incident — enabling it makes a queue rebuild O(N tasks × memory search) (~14s on a large board). |
 | `UA_TASK_STALE_ENABLED` | `0` (off) | Park idle tasks by cycles+age |
 | `UA_TASK_STALE_MIN_CYCLES` | 4 | Min missed cycles before stale-park |
 | `UA_TASK_STALE_MIN_AGE_MINUTES` | 180 | Min wall-clock age before stale-park |

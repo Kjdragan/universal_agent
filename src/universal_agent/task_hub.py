@@ -1421,7 +1421,24 @@ def _memory_relevance_bonus(task: dict[str, Any]) -> float:
     title.  Returns +0.4 when relevant institutional memory exists so that
     tasks the agent has context for are prioritised.  Never raises — memory
     is advisory, not a hard dependency.
+
+    OFF by default (``UA_DISPATCH_MEMORY_RELEVANCE_ENABLED``).
+    ``rebuild_dispatch_queue`` calls ``score_task`` for *every* non-terminal
+    task, so an enabled per-task ``broker.search()`` turns a full rebuild into
+    O(N_tasks × memory_search) — measured at ~14s on a ~320-task board, run
+    synchronously on the asyncio event loop and invoked from hot paths (every
+    claim + the per-autonomous-cron wake check). That synchronous block starved
+    the todo-dispatch loop in prod, halting intel-brief authoring (2026-05-31).
+    The +0.4 is an advisory ordering nudge only; re-enable once memory relevance
+    is precomputed off the hot path rather than searched per task per rebuild.
     """
+    if os.getenv("UA_DISPATCH_MEMORY_RELEVANCE_ENABLED", "0").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return 0.0
     try:
         title = str(task.get("title") or "").strip()
         if len(title) < 5:
