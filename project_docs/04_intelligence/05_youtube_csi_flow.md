@@ -119,6 +119,26 @@ and the gateway `/api/v1/youtube/ingest` endpoint. Sequence:
 Return dict carries `status` (`succeeded`/`failed`/`skipped`), `failure_class`,
 `metadata`, and an `attempts` list.
 
+**Transcript-required mode (default ON, `UA_YOUTUBE_DIGEST_REQUIRE_TRANSCRIPT`).**
+A video with no usable transcript is **excluded** from the digest rather than
+retold from metadata only (a metadata-only retelling has no real content and can
+never pass the demo gate). The digest loop branches on `failure_class`:
+- **Permanent** (`transcript_unavailable`, `video_unavailable`,
+  `empty_or_low_quality_transcript`, or any non-retryable class): dropped **and**
+  marked processed (in `videos_to_persist`) so a dead video isn't re-fetched daily.
+- **Transient block** (`_RETRYABLE_TRANSCRIPT_FAILURE_CLASSES` =
+  `{request_blocked, api_unavailable}`): dropped but **not** marked processed, so
+  it retries on a later run — gold-channel videos re-enter via the poller's 30h
+  window; manually-queued ones retry if re-added. This prevents silently losing a
+  transcript-having video to a proxy/IP hiccup.
+
+Both are surfaced in a **"Skipped — No Transcript"** footer on the report
+(`_build_skipped_videos_footer`), split into *Excluded* vs *Deferred*. Set the
+flag to `0` to restore the legacy metadata-only fallback. Note: `processed_items`
+(retold/in-digest videos) and `videos_to_persist` (videos written to
+`processed_videos`) diverge only in this mode; the processed-videos write stays
+gated on successful delivery.
+
 ### A.5 Residential proxy (the anti-bot core)
 
 YouTube blocks transcript fetches from datacenter IPs (the VPS), so a
@@ -424,6 +444,7 @@ native playlist learning dispatch. Keyword sets: `YOUTUBE_CODE_HINT_KEYWORDS`
 | `UA_YOUTUBE_DIGEST_REDUCE_MODEL` | `opus`→`glm-5.1` | Reduce-step model |
 | `UA_YOUTUBE_DIGEST_AUTO_TUTORIAL_TOP_N` | `4` | Tutorial dispatch count |
 | `UA_YOUTUBE_DIGEST_DEMO_GATE_MIN_SCORE` | `70` | Demo-worthiness score floor |
+| `UA_YOUTUBE_DIGEST_REQUIRE_TRANSCRIPT` | `1` | Exclude no-transcript videos (vs legacy metadata-only retelling) — see A.4 |
 | `UA_YOUTUBE_DIGEST_TUTORIAL_HOOK_URL` / `UA_GATEWAY_URL` | `http://127.0.0.1:8002` | Tutorial dispatch target |
 | `UA_HOOKS_TOKEN` | — | Bearer for tutorial dispatch |
 | `UA_YOUTUBE_PLAYLIST_RECREATE_ENABLED` | `1` | Recreate empty playlist after digest |

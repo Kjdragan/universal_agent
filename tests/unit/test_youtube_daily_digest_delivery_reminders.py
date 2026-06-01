@@ -31,7 +31,7 @@ def digest_module(monkeypatch, tmp_path):
     monkeypatch.setattr(
         ydd,
         "ingest_youtube_transcript",
-        lambda video_url=None, video_id=None, require_proxy=True: {
+        lambda video_url=None, video_id=None, require_proxy=True, **kwargs: {
             "ok": True,
             "transcript_text": "fake transcript content",
         },
