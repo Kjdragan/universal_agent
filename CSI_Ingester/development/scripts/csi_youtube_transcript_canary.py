@@ -266,7 +266,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db-path", default="/var/lib/universal-agent/csi/csi.db")
     parser.add_argument("--window-hours", type=int, default=24)
-    parser.add_argument("--stale-after-hours", type=int, default=2)
+    # Default 6h spans one full analyzer interval (csi-rss-semantic-enrich runs
+    # every 4h) plus headroom; 2h false-RED'd in the gaps between runs.
+    parser.add_argument("--stale-after-hours", type=int, default=6)
     parser.add_argument("--min-ok-rate", type=float, default=0.25)
     parser.add_argument("--max-http-error-rate", type=float, default=0.50)
     parser.add_argument("--require-min-events", type=int, default=5)

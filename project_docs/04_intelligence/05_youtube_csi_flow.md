@@ -371,7 +371,10 @@ facts (verified live 2026-06-01):
   `ai_coding`, `ai_models`, `ai_news_and_business`, `ai_business`,
   `ai_applications`, `software_engineering`, `technology`. Before this change the
   analyzer ran FIFO-oldest-first and had drifted to a ~10-day analysis lag on
-  ~50% non-domain videos.
+  ~50% non-domain videos. Env levers: `CSI_RSS_SELECTION_GOLD_FIRST` (default on;
+  `0` restores legacy FIFO), `CSI_RSS_GOLD_WATCHLIST_PATH` (gold-tier source,
+  default `/opt/universal_agent/channels_watchlist.json`),
+  `CSI_RSS_SELECTION_ALWAYS_KEEP` (comma-separated pinned channels).
   - **Channel-based, not category-based, by necessity:** a video's category is
     assigned *at analysis time*, so the skip cannot be category-based at selection
     time. A majority-domain channel that posts one off-topic (e.g.
@@ -385,10 +388,19 @@ facts (verified live 2026-06-01):
   one-each across majority-domain channels (classifier noise), confirming the
   skip-set does **not** over-skip.
 
-> Operational note: these analyzer edits are LIVE + on-disk + restart-durable on
-> the VPS but live in the stale `csi-ingester` checkout (a feature branch ~242
-> commits behind origin), so they are **not yet git-durable**. Permanently landing
-> them is tracked as the CSI-Ingester deploy-durability work (Phase D).
+> Deploy-durability note: the CSI ingester is **not a separate stale checkout** —
+> `CSI_Ingester/development/` is a regular subtree of the one `/opt/universal_agent`
+> monorepo (the production checkout sits on a misleadingly-named local branch but
+> its *content* is `main`). `remote_deploy.sh` does `git reset --hard origin/main`
+> and re-installs the systemd units from the repo source on every deploy, so any
+> **uncommitted** VPS edit (analyzer selection policy, `--max-events`, canary
+> threshold) is reverted on the next deploy — which is exactly what happened on
+> 2026-06-01 (a deploy at 20:59 UTC wiped the hot-patched selection policy ~13 min
+> after it was verified). The durable fix is therefore the **normal branch → PR →
+> `main`** flow, committing these to the tracked source: the analyzer
+> `_select_pending` policy + `CSI_RSS_SELECTION_*` env levers, the
+> `--max-events 40` source unit, and the canary `--stale-after-hours 6` source unit
+> + script default. No 242-commit reconciliation is involved.
 
 ### B.3 Transcript-pipeline canary
 

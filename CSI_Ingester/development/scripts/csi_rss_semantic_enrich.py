@@ -290,18 +290,113 @@ def _analyze_with_claude(
     return parsed, usage
 
 
+# ── Selection policy (2026-06-01): gold-first + newest-first + skip non-domain ──
+# The downstream convergence relevance-gate discards non-domain categories, so we
+# don't spend GLM analyzing channels whose history is majority non-domain. Gold
+# channels are always prioritized; the rest are processed newest-first (current
+# signal) instead of the old FIFO-oldest-first (which had drifted ~10 days stale).
+# Kill switch: CSI_RSS_SELECTION_GOLD_FIRST=0 restores the legacy FIFO behavior.
+_DEFAULT_GOLD_WATCHLIST_PATH = "/opt/universal_agent/channels_watchlist.json"
+_DEFAULT_ALWAYS_KEEP = "Pyotr Kurzin | Geopolitics,Jake Broe"
+_DOMAIN_CATS = {
+    "ai_coding", "ai_models", "ai_news_and_business", "ai_business",
+    "ai_applications", "software_engineering", "technology",
+}
+
+
+def _always_keep_names() -> set[str]:
+    """Operator-pinned channels exempt from the non-domain skip (kept despite a
+    majority-non-domain history). Override with CSI_RSS_SELECTION_ALWAYS_KEEP
+    (comma-separated channel names)."""
+    raw = os.environ.get("CSI_RSS_SELECTION_ALWAYS_KEEP", _DEFAULT_ALWAYS_KEEP)
+    return {n.strip() for n in raw.split(",") if n.strip()}
+
+
+def _gold_channel_names() -> set[str]:
+    path = os.environ.get("CSI_RSS_GOLD_WATCHLIST_PATH", _DEFAULT_GOLD_WATCHLIST_PATH)
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+        channels = data.get("channels", data) if isinstance(data, dict) else data
+        return {
+            c.get("channel_name")
+            for c in channels
+            if isinstance(c, dict)
+            and str(c.get("tier", "")).lower() == "gold"
+            and c.get("channel_name")
+        }
+    except Exception:
+        return set()
+
+
+def _nondomain_skip_names(conn: sqlite3.Connection) -> set[str]:
+    """Channels whose analysis history is majority non-domain (>=2 analyses)."""
+    agg: dict[str, list[int]] = {}  # name -> [nondomain, total]
+    try:
+        rows = conn.execute(
+            "SELECT channel_name, category FROM rss_event_analysis "
+            "WHERE source='youtube_channel_rss' AND category IS NOT NULL AND category!=''"
+        ).fetchall()
+    except Exception:
+        return set()
+    for channel_name, category in rows:
+        bucket = agg.setdefault(channel_name, [0, 0])
+        bucket[1] += 1
+        if category not in _DOMAIN_CATS:
+            bucket[0] += 1
+    skip = {n for n, (nd, total) in agg.items() if total >= 2 and nd > (total - nd)}
+    return skip - _always_keep_names()
+
+
 def _select_pending(conn: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
-    return conn.execute(
-        """
-        SELECT e.id, e.event_id, e.source, e.subject_json, e.created_at
-        FROM events e
-        LEFT JOIN rss_event_analysis a ON a.event_id = e.event_id
-        WHERE e.source = 'youtube_channel_rss' AND e.delivered = 1 AND a.event_id IS NULL
-        ORDER BY e.id ASC
-        LIMIT ?
-        """,
-        (max(1, int(limit)),),
-    ).fetchall()
+    gold_first = os.environ.get("CSI_RSS_SELECTION_GOLD_FIRST", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+    if not gold_first:
+        # Legacy FIFO-oldest-first behavior (kill-switch path).
+        return conn.execute(
+            """
+            SELECT e.id, e.event_id, e.source, e.subject_json, e.created_at
+            FROM events e
+            LEFT JOIN rss_event_analysis a ON a.event_id = e.event_id
+            WHERE e.source = 'youtube_channel_rss' AND e.delivered = 1 AND a.event_id IS NULL
+            ORDER BY e.id ASC
+            LIMIT ?
+            """,
+            (max(1, int(limit)),),
+        ).fetchall()
+
+    gold = sorted(_gold_channel_names())
+    skip = sorted(_nondomain_skip_names(conn))
+    params: list[Any] = []
+    skip_clause = ""
+    if skip:
+        skip_clause = (
+            "AND COALESCE(json_extract(e.subject_json,'$.channel_name'),'') "
+            "NOT IN (%s) " % ",".join("?" for _ in skip)
+        )
+        params += skip
+    order_gold = ""
+    if gold:
+        order_gold = (
+            "CASE WHEN COALESCE(json_extract(e.subject_json,'$.channel_name'),'') "
+            "IN (%s) THEN 0 ELSE 1 END ASC, " % ",".join("?" for _ in gold)
+        )
+        params += gold
+    params.append(max(1, int(limit)))
+    sql = (
+        "SELECT e.id, e.event_id, e.source, e.subject_json, e.created_at "
+        "FROM events e "
+        "LEFT JOIN rss_event_analysis a ON a.event_id = e.event_id "
+        "WHERE e.source = 'youtube_channel_rss' AND e.delivered = 1 AND a.event_id IS NULL "
+        f"{skip_clause}"
+        f"ORDER BY {order_gold}e.id DESC "
+        "LIMIT ?"
+    )
+    return conn.execute(sql, params).fetchall()
 
 
 def _upsert_analysis(
