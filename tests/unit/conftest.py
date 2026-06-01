@@ -95,6 +95,13 @@ def _isolate_unit_test_databases(request, monkeypatch, tmp_path):
     for var in _DB_PATH_ENV_VARS:
         monkeypatch.setenv(var, str(db_dir / _DB_FILENAMES[var]))
 
+    # Isolate the recent-briefs index file per test. It resolves to a single
+    # shared default path (``$AGENT_RUN_WORKSPACES/recent_briefs_index.md`` or
+    # repo ``artifacts/``) — under parallel xdist, concurrent read/rebuild/write
+    # of that one file corrupts it, and the convergence sync's try/except then
+    # swallows the error → candidates silently dropped. Per-test path fixes it.
+    monkeypatch.setenv("UA_RECENT_BRIEFS_INDEX_PATH", str(db_dir / "recent_briefs_index.md"))
+
     # A contended lock should fail fast in tests, not block for the 15s prod
     # default. Tests that exercise the busy-timeout itself set/delenv this var
     # themselves (their value wins / restores the default).
