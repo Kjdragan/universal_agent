@@ -137,6 +137,35 @@ def test_manifest_preferred_over_scan(tmp_path: Path) -> None:
     assert listing[0]["title"] == "podcast.mp3"
 
 
+def test_newest_manifest_wins_over_stale_undated(tmp_path: Path) -> None:
+    """Regression: reused cron workspace where a date-stamped manifest is
+    written each run but the undated ``manifest.json`` is left frozen at a
+    prior run. The disclosure must reflect the newest run, not the stale
+    undated file. (Paper-to-podcast false "wrong topic" alarm, 2026-05-31.)
+    """
+    workspace = tmp_path / "ws"
+    sub = workspace / "work_products" / "paper_to_podcast"
+    sub.mkdir(parents=True)
+
+    stale = sub / "manifest.json"
+    stale.write_text(
+        json.dumps({"topic": "Open-source AI democratization (yesterday)"}),
+        encoding="utf-8",
+    )
+    fresh = sub / "manifest_20260531.json"
+    fresh.write_text(
+        json.dumps({"topic": "Agentic AI architectures (today)"}),
+        encoding="utf-8",
+    )
+    # Make the undated file older than the date-stamped one.
+    os.utime(stale, (1_780_000_000, 1_780_000_000))
+    os.utime(fresh, (1_780_100_000, 1_780_100_000))
+
+    manifest = _load_manifest(workspace)
+    assert manifest is not None
+    assert manifest["topic"] == "Agentic AI architectures (today)"
+
+
 def test_scan_fallback_when_no_manifest(tmp_path: Path) -> None:
     workspace = tmp_path / "ws"
     workspace.mkdir()
