@@ -24,6 +24,13 @@
 
 ---
 
+> **2026-05-30 — Triage-before-Task-Hub (Phase 0–1).** The SHIP/SKIP/DEFER decision now runs as a **cheap LLM triage at candidate-write time**, *before* any Task Hub item is created, instead of inside the Atlas VP mission. `write_convergence_candidate()` calls `triage_candidate()` (`services/proactive_convergence.py`), which loads the recent-briefs index (48h) plus the candidate's source claims and judges novelty + real-pattern + source-support on the Haiku tier.
+> - **ship** → a Task Hub item / Kanban card is created (as before).
+> - **skip / defer** → verdict recorded on the `convergence_candidates` row for audit, but **no Task Hub item and no Kanban card**.
+> - **retry** (LLM unavailable / unparseable) → row left non-final (`verdict=''`), no task; re-tried next sweep.
+>
+> Flags: `UA_INTEL_TRIAGE_ENABLED` (default `1`; `0` = legacy "always queue, mission decides"), `UA_INTEL_TRIAGE_MODEL`. **Phase 2 (pending):** split `evaluate-and-author-intel-brief` into an execution-only `author-intel-brief` (report + `/goal` coding demo) now that validation moved upstream.
+
 ## 1. What Is the Proactive Pipeline?
 
 The Proactive Pipeline is the integration of **seven subsystems** that work together
