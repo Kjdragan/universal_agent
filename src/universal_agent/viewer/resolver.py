@@ -161,6 +161,7 @@ def _cody_workspace_from_task_hub(session_id: str) -> Optional[Path]:
         return None
     try:
         import sqlite3 as _sqlite3
+
         from universal_agent.durable.db import (
             connect_runtime_db,
             get_activity_db_path,

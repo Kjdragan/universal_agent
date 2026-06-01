@@ -237,7 +237,7 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
     raw_priority_tier = str(args.get("priority_tier") or "").strip() or None
     if raw_priority_tier is not None:
         try:
-            from universal_agent.vp.mission_priority import is_valid_tier, TIERS
+            from universal_agent.vp.mission_priority import TIERS, is_valid_tier
             if not is_valid_tier(raw_priority_tier):
                 return _result(
                     _error_payload(
