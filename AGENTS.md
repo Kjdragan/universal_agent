@@ -34,3 +34,20 @@ When working on frontend bugs, local web apps, or browser-based verification:
 7. After edits, retest in the browser to confirm the fix.
 
 Do not claim a UI bug is fixed unless it has been verified through the browser tools.
+
+## Tailnet HTML Scratchpad — handing the operator a rendered report
+
+The operator runs terminal-only; markdown shows as raw text and HTML/PDF email attachments lose their links and anchors. When you produce a report, analysis, diff review, or any output that benefits from real HTML rendering (styling, diagrams, in-page anchors), **publish it to the private tailnet scratchpad and hand back the link** rather than pasting markdown or attaching a file.
+
+One command — `scripts/publish_scratch.sh` — auto-detects VPS vs. tailnet, generates an unguessable slug, and prints the URL on stdout:
+
+```bash
+scripts/publish_scratch.sh report.html                 # random slug
+scripts/publish_scratch.sh report.html my-analysis     # readable slug -> /scratch/my-analysis/report.html
+URL=$(scripts/publish_scratch.sh report.html)          # capture (stdout = URL only)
+scripts/publish_scratch.sh --status                    # verify mappings
+```
+
+- **URL shape:** `https://uaonvps.taildcc090.ts.net/scratch/<slug>/<file>.html` — auto-HTTPS, **tailnet-only** (private to the operator's own devices; never public). Tailnet membership is the auth boundary, not the slug.
+- **Mechanism:** a `tailscale serve` path-mount of `/home/ua/ua_scratch` (daemon-managed, reboot-safe; survives deploys). Don't disturb the other serve mappings (`/` → :3000 dashboard, etc.).
+- Canonical reference: `project_docs/06_platform/06_networking_tailscale_proxy_sshfs.md` § 1.6.

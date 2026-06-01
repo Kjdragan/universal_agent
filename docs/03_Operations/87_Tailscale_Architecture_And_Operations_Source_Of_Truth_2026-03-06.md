@@ -309,6 +309,78 @@ Purpose:
 - The VPS `root` (or `ua`) user connects via `id_ed25519` key to the workstation over its Tailscale IP.
 - This creates a seamless bidirectional file-referencing environment.
 
+## 6. Tailnet HTML Scratchpad — surfacing rendered HTML reports to a terminal-only operator (Added 2026-06-01)
+
+Primary implementation:
+- `scripts/publish_scratch.sh` (publish helper; also `--init` / `--status`)
+- `tailscale serve` path-mount (daemon-managed, reboot-safe)
+
+**Why this exists.** The operator (Kevin) runs Claude Code terminal-only — no IDE preview pane. Markdown renders as raw text; HTML and PDF email attachments get their clickable links and anchors stripped by the mail/PDF viewer (this surfaced repeatedly in the YouTube-digest "clickable TOC" saga). The fix is to **host the HTML on the private tailnet and hand over a link**: the operator opens it in a real browser on any of their devices and sees a fully-rendered, styled page — diagrams, tables, working in-page anchors, the lot.
+
+**Mechanism (live, code-verified `tailscale serve status` on 2026-06-01):**
+
+```
+https://uaonvps.taildcc090.ts.net (tailnet only)
+|-- /         proxy http://127.0.0.1:3000     <- dashboard (do not touch)
+|-- /scratch/ path  /home/ua/ua_scratch       <- the scratchpad
+```
+
+- **Serve config:** `sudo tailscale serve --bg --set-path /scratch /home/ua/ua_scratch`. Served directly by the Tailscale daemon — reboot-safe, no extra static-file process to babysit. `--set-path` (directory serves) requires root; `ua` has passwordless sudo as of 2026-06-01.
+- **URL shape:** `https://uaonvps.taildcc090.ts.net/scratch/<slug>/<file>.html`. Auto-HTTPS via the `ts.net` cert. **Tailnet membership is the auth** — reachable only from the operator's own enrolled devices (desktop/phone/tablet), never the public internet. An unguessable `<slug>` subdir is good hygiene but is *not* the security boundary.
+- **Publish location:** `/home/ua/ua_scratch/<slug>/<file>.html`. The scratch dir lives in `ua`'s home, so it survives `/opt/universal_agent` deploys; the `/scratch` serve mapping survives reboots.
+- **Don't disturb** the other serve mappings (`/`→:3000 dashboard, `:8443`→:8002 API, etc.). Only add/modify `/scratch`. After any change, run `tailscale serve status` and confirm `/` → :3000 is still listed.
+
+### How to publish (the one-command path)
+
+Use `scripts/publish_scratch.sh` — it auto-detects whether it is running on the VPS (writes directly) or anywhere else on the tailnet (copies over `ssh ua@uaonvps`), generates an unguessable slug, sets readable perms, and prints the tailnet URL on stdout:
+
+```bash
+# Publish a report and get its link (random slug):
+scripts/publish_scratch.sh report.html
+
+# Readable slug (becomes the URL subdir):
+scripts/publish_scratch.sh demo-pipeline-audit.html demo-pipeline-audit
+# -> https://uaonvps.taildcc090.ts.net/scratch/demo-pipeline-audit/demo-pipeline-audit.html
+
+# Capture the URL programmatically (URL is the only thing on stdout):
+URL=$(scripts/publish_scratch.sh report.html)
+
+# One-time / idempotent setup of the /scratch mapping, and a health check:
+scripts/publish_scratch.sh --init
+scripts/publish_scratch.sh --status
+```
+
+### Publish / serve flow
+
+```mermaid
+sequenceDiagram
+    participant Agent as Claude Code agent
+    participant Script as publish_scratch.sh
+    participant VPS as VPS /home/ua/ua_scratch
+    participant TS as tailscale serve daemon
+    participant Op as Operator browser (tailnet device)
+
+    Agent->>Script: publish_scratch.sh report.html [slug]
+    alt running on VPS as ua
+        Script->>VPS: install -m644 into <slug>/
+    else running on desktop / tailnet
+        Script->>VPS: ssh+scp into <slug>/
+    end
+    Script-->>Agent: https://uaonvps.taildcc090.ts.net/scratch/<slug>/report.html
+    Agent-->>Op: hand over the URL
+    Op->>TS: GET /scratch/<slug>/report.html (auto-HTTPS, tailnet-only)
+    TS->>VPS: read file
+    VPS-->>Op: rendered HTML (styled, diagrams, working anchors)
+```
+
+### Constraints / failure signatures
+
+- `tailscale serve` must be enabled by tailnet policy for the node (same prerequisite as § 3 staging).
+- If `--status` does not list `/scratch/ path /home/ua/ua_scratch`, run `--init` to (re-)establish it.
+- A 404 for a published file usually means a perms issue — the script sets dir `0755` / file `0644`; verify with `ssh ua@uaonvps ls -la /home/ua/ua_scratch/<slug>/`.
+
+> **Mirror in the `project_docs/` tree:** `project_docs/06_platform/06_networking_tailscale_proxy_sshfs.md` § 1.6 carries the same mechanism for Codex/Antigravity agents. Keep the two in sync when the serve config or URL host changes.
+
 ## Operational Workflow Today
 
 ## Primary Current Workflow
