@@ -13,7 +13,7 @@ code_paths:
   - src/universal_agent/services/invariants/youtube_invariants.py
   - src/universal_agent/youtube_mode_utils.py
   - src/universal_agent/proactive_signals.py
-last_verified: 2026-05-29
+last_verified: 2026-06-01
 ---
 
 # YouTube CSI Flow
@@ -276,12 +276,20 @@ biggest conflation hazard.
   `sidecar` = wide net, feeds Pipeline B convergence only; `blocked` = excluded.
   Promotion sidecar→gold is driven by the metric fields.
 
-> [VERIFY: tier distribution (~gold=22 · sidecar=417 · blocked=4, ~443
-> channels) and the `csi_source_liveness.py` "444-channel" comment are
-> data/operational facts from the 2026-05-29 handoff; counts drift as the
-> watchlist is edited. The `youtube_channel_rss` cadence is comment-documented
-> at 12h liveness floor / "hourly-ish per channel" in
-> `csi_source_liveness.py`.]
+> [VERIFY: tier counts drift as the watchlist is edited. Verified 2026-06-01 in
+> the gold-poller/analyzer copy (`/opt/universal_agent/channels_watchlist.json`):
+> **gold=20, total=333**. The `csi_source_liveness.py` "444-channel" comment and
+> the earlier ~443/sidecar=417/blocked=4 figures are point-in-time operational
+> facts. The `youtube_channel_rss` cadence is comment-documented at 12h liveness
+> floor / "hourly-ish per channel" in `csi_source_liveness.py`.]
+>
+> **Watchlist drift (2026-06-01):** the CSI watchlist had drifted to include many
+> political/news/cooking/health channels, so ~50% of the GLM analysis budget was
+> being spent on videos the convergence relevance-gate later discards. The
+> **durable fix is the analyzer selection policy (B.2)**, which skips
+> majority-non-domain channels regardless of how they got ingested; pruning the
+> watchlist JSON / SQLite source registry is secondary hygiene (the biggest
+> offenders were a backlog in the `events` table, not the JSON).
 
 ### B.1 Cards + convergence consumers
 
@@ -327,7 +335,72 @@ downstream pipeline (`services/invariants/proactive_pipeline_invariants.py`,
 its lifecycle/backlog status is owned by the proactive-pipeline doc (cross-ref
 intel-proactive).
 
-### B.1 Health invariants
+### B.2 Semantic enrichment analyzer (the GLM classifier + selection policy)
+
+The `rss_event_analysis` rows that B.1 reads are written by a **separate
+service** — the `csi-ingester` systemd unit, whose code lives in its own checkout
+(`/opt/universal_agent/CSI_Ingester/development/`, **not** in this repo's
+`src/universal_agent/`). UA only *consumes* its output. The relevant operational
+facts (verified live 2026-06-01):
+
+- **Cadence.** Script `scripts/csi_rss_semantic_enrich.py`, driven by
+  `csi-rss-semantic-enrich.timer` (`OnCalendar=0/4:02` — every 4h at :02). Each
+  run selects unanalyzed `events WHERE source='youtube_channel_rss'`, fetches the
+  transcript, classifies + summarizes via LLM, and upserts an `rss_event_analysis`
+  row (`category`, `summary`, `themes`, `content_schema`, `confidence`,
+  `model_name`). `--max-events 40` per run ⇒ ~240 videos/day analysis capacity.
+- **LLM reality — GLM-via-ZAI, not real Anthropic Haiku (code+live verified).**
+  The analyzer's `_analyze_with_claude` POSTs `model=claude-3-5-haiku-latest` to
+  `{ANTHROPIC_BASE_URL}/v1/messages`. In UA production `ANTHROPIC_BASE_URL`
+  resolves to the **ZAI proxy** (`https://api.z.ai/api/anthropic`), so the request
+  is served by **GLM**, not real Anthropic Haiku — consistent with UA's
+  "autonomous principals → ZAI/GLM" execution profile (see root `CLAUDE.md`). The
+  `model_name` string persisted in each row (`claude-3-5-haiku-latest`) is
+  therefore **cosmetic**. LLM classification is gated by
+  `CSI_RSS_ANALYSIS_USE_CLAUDE`; when that flag is missing the analyzer silently
+  falls back to keyword-substring classification (the 2026-05-29 "classifier
+  dark" incident — cross-ref intel-proactive).
+- **Selection policy (2026-06-01): gold-first + newest-first + skip-non-domain.**
+  The `_select_pending` query orders candidates **gold channels first, then
+  newest-first** (`ORDER BY <gold?0:1>, e.id DESC`), and **excludes channels whose
+  analysis history is majority-non-domain** (≥2 prior analyses), minus two
+  operator-pinned keeps (Pyotr Kurzin, Jake Broe). Rationale: the downstream
+  convergence relevance-gate discards non-domain categories
+  (geopolitics/conflict/cooking/personal_health/economics/etc.), so analyzing them
+  burns GLM budget on output that is thrown away. **Domain categories kept:**
+  `ai_coding`, `ai_models`, `ai_news_and_business`, `ai_business`,
+  `ai_applications`, `software_engineering`, `technology`. Before this change the
+  analyzer ran FIFO-oldest-first and had drifted to a ~10-day analysis lag on
+  ~50% non-domain videos.
+  - **Channel-based, not category-based, by necessity:** a video's category is
+    assigned *at analysis time*, so the skip cannot be category-based at selection
+    time. A majority-domain channel that posts one off-topic (e.g.
+    `personal_health`) video will still have that one video analyzed — that
+    residual per-video noise is expected and handled by the downstream gate, not
+    by over-skipping a good channel.
+- **Verified result (2026-06-01, first post-change run, 40/40 analyzed).** Newest
+  40 rows: **~78% domain** (ai_coding 19, ai_models 11, technology 1), **avg
+  publish→analyze lag 0.5 days** (down from ~10 days), top channels all gold/domain
+  (AI Engineer, OpenAI, AICodeKing, Discover AI). The residual non-domain was
+  one-each across majority-domain channels (classifier noise), confirming the
+  skip-set does **not** over-skip.
+
+> Operational note: these analyzer edits are LIVE + on-disk + restart-durable on
+> the VPS but live in the stale `csi-ingester` checkout (a feature branch ~242
+> commits behind origin), so they are **not yet git-durable**. Permanently landing
+> them is tracked as the CSI-Ingester deploy-durability work (Phase D).
+
+### B.3 Transcript-pipeline canary
+
+`csi-youtube-transcript-canary.service` (timer `OnCalendar=*:17`, hourly) probes
+whether the YouTube transcript/analysis pipeline is fresh and pings Telegram RED
+when it goes stale. The staleness threshold `--stale-after-hours` was **raised
+2 → 6 on 2026-06-01**: at 2h it false-RED'd in the gaps between the analyzer's
+**4h** cadence (a run every 4h can't keep a 2h freshness window green). 6h spans
+one full analyzer interval plus headroom. The fix is live in the unit file and in
+the deployed-source systemd template + script default.
+
+### B.4 Health invariants
 
 The original incident: 100% of YouTube cards showed `transcript_status='missing'`
 because the dashboard LEFT JOIN coalesced NULLs to "missing" when enrichment
