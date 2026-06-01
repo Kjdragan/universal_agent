@@ -72,6 +72,13 @@ def _isolate_unit_test_databases(request, monkeypatch, tmp_path):
     Opt out with ``@pytest.mark.no_db_redirect`` for the rare test that must
     observe the real default path without calling ``monkeypatch.delenv``.
     """
+    # Intel triage (write_convergence_candidate) makes a live LLM call by
+    # default. Force it OFF for the whole unit suite so no test accidentally
+    # hits the network — same "no real resources in unit tests" backstop as the
+    # DB redirect below. Triage's own tests opt back in via
+    # monkeypatch.setenv("UA_INTEL_TRIAGE_ENABLED","1") + a mocked LLM.
+    monkeypatch.setenv("UA_INTEL_TRIAGE_ENABLED", "0")
+
     if request.node.get_closest_marker("no_db_redirect") is not None:
         # Still cap the busy-timeout so even an opted-out test can't wait 15s
         # on a lock; the redirect of DB paths is what we skip.
