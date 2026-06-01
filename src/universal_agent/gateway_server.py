@@ -8637,9 +8637,28 @@ def _task_hub_has_dispatch_eligible_items() -> bool:
     with _activity_store_lock:
         conn = _task_hub_open_conn()
         try:
-            task_hub.rebuild_dispatch_queue(conn)
-            queue = task_hub.get_dispatch_queue(conn, limit=1)
-            return int(queue.get("eligible_total") or 0) > 0
+            # WAKE heuristic only — do NOT rebuild_dispatch_queue here. That
+            # rebuild scores every non-terminal task and runs ~14s synchronously
+            # on the asyncio event loop. This boolean fires on *every* autonomous
+            # cron success (_maybe_wake_heartbeat_after_autonomous_cron), so
+            # rebuilding here meant a 14s event-loop block per cron tick — with
+            # */1 autonomous crons that wedged the todo-dispatch loop and halted
+            # intel-brief authoring (2026-05-31). A cheap indexed existence check
+            # over the persisted `score` (kept current by the claim-path rebuild)
+            # is sufficient to decide whether to bother waking the heartbeat; the
+            # heartbeat/claim path recomputes the authoritative eligibility.
+            threshold = float(task_hub.current_policy().agent_threshold)
+            row = conn.execute(
+                """
+                SELECT 1 FROM task_hub_items
+                WHERE status IN ('open', 'review')
+                  AND agent_ready = 1
+                  AND score >= ?
+                LIMIT 1
+                """,
+                (threshold,),
+            ).fetchone()
+            return row is not None
         except Exception:
             return False
         finally:
