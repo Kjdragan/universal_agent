@@ -1553,7 +1553,12 @@ def _inject_video_anchors(html_fragment: str) -> str:
     def repl(m: re.Match) -> str:
         inner = m.group(1)
         counter["i"] += 1
-        stripped = re.sub(r"<[^>]+>", "", inner).strip()
+        # Unescape HTML entities before slugifying: the rendered h2 text has
+        # `&` → `&amp;` etc., but `_build_toc_html` slugifies the raw markdown
+        # title (unescaped). Without this, any title containing `&`/`<`/`>`
+        # (e.g. "Antigravity & AGY CLI") gets a mismatched anchor (`...-amp-...`)
+        # and its TOC link dies.
+        stripped = html_module.unescape(re.sub(r"<[^>]+>", "", inner)).strip()
         anchor = _slugify_anchor(stripped, counter["i"])
         return f'<h2 id="{anchor}">{inner}</h2>'
 
@@ -1608,6 +1613,40 @@ def _render_full_digest_html(
         "</head>\n"
         f"<body>{fragment}</body>\n"
         "</html>\n"
+    )
+
+
+# Print stylesheet applied ONLY when rendering the digest to PDF. The screen
+# CSS (`_DIGEST_HTML_HEAD_CSS`) centers a 780px column with `margin:0 auto`,
+# which on an A4 page can run into the printable-area edge. For PDF we let the
+# `@page` margins own the whitespace and flow the content full printable width.
+_DIGEST_PDF_PRINT_CSS = """
+  @page { size: A4; margin: 1.6cm 1.4cm; }
+  body { max-width: none; margin: 0; padding: 0; }
+"""
+
+
+def _render_full_digest_pdf(full_digest_html: str) -> bytes:
+    """Render the standalone digest HTML (output of ``_render_full_digest_html``)
+    into PDF bytes via WeasyPrint.
+
+    PDF is the email attachment format because Gmail renders PDF attachments
+    inline on click (one tap → rendered page), whereas it refuses to render
+    `.html` attachments and shows their raw source instead. WeasyPrint:
+      * honours the document's `<style>` block,
+      * turns the per-video `<a href="#anchor">` TOC links into clickable
+        intra-document PDF links (the `id=` anchors survive — unlike Gmail's
+        inline-HTML path, which strips them), and
+      * auto-generates a PDF outline/bookmark tree from the `<h1>/<h2>`
+        headings, giving a native sidebar TOC on top of the in-page index.
+
+    WeasyPrint is imported lazily so module import (and the test suite) does not
+    pay its cost unless a PDF is actually being produced.
+    """
+    from weasyprint import CSS, HTML  # lazy: heavy import, isolates native-lib failures
+
+    return HTML(string=full_digest_html).write_pdf(
+        stylesheets=[CSS(string=_DIGEST_PDF_PRINT_CSS)],
     )
 
 
@@ -2748,7 +2787,7 @@ def process_daily_digest(
     email_succeeded = email_to is None
     if email_to:
         logger.info("Sending email digest to %s...", email_to)
-        # Build body (meta-synthesis only) + standalone HTML attachment (full digest).
+        # Build body (meta-synthesis only) + standalone PDF attachment (full digest).
         # The attachment is what the user reads when they want the full retellings;
         # the body is a scannable "today's themes" summary they can read inline.
         body_md, attachment_md = _split_email_body_and_attachment(full_content)
@@ -2759,7 +2798,7 @@ def process_daily_digest(
             f"video{'s' if attachment_count != 1 else ''} from your <em>{day_name.title()}</em> "
             "playlist. The themes are summarized below; the full per-video "
             "retellings — with a clickable index that jumps to any video — are in "
-            "the attached HTML report. Open the attachment in a browser to navigate it."
+            "the attached PDF report. Click the attachment to view it inline."
             "</p>"
         )
         # The email body is the short meta-synthesis summary only (no inline
@@ -2778,12 +2817,32 @@ def process_daily_digest(
         attachment_html = _render_full_digest_html(
             attachment_md, day_name=day_name, date_str=date_str,
         )
-        attachment_filename = f"YouTube_Daily_Digest_{date_str}_{day_name.title()}.html"
-        attachment_payload = {
-            "content": base64.b64encode(attachment_html.encode("utf-8")).decode("ascii"),
-            "filename": attachment_filename,
-            "content_type": "text/html",
-        }
+        # Attach the digest as PDF: Gmail renders PDF attachments inline on click,
+        # but shows `.html` attachments as raw source. Fall back to the HTML file
+        # only if PDF rendering fails (e.g. a WeasyPrint native-lib hiccup) — a
+        # raw-but-delivered report beats a dropped digest.
+        try:
+            attachment_pdf = _render_full_digest_pdf(attachment_html)
+            attachment_filename = (
+                f"YouTube_Daily_Digest_{date_str}_{day_name.title()}.pdf"
+            )
+            attachment_payload = {
+                "content": base64.b64encode(attachment_pdf).decode("ascii"),
+                "filename": attachment_filename,
+                "content_type": "application/pdf",
+            }
+        except Exception as pdf_exc:  # noqa: BLE001 — degrade to HTML, never drop the digest
+            logger.warning(
+                "PDF render failed (%s); falling back to HTML attachment.", pdf_exc,
+            )
+            attachment_filename = (
+                f"YouTube_Daily_Digest_{date_str}_{day_name.title()}.html"
+            )
+            attachment_payload = {
+                "content": base64.b64encode(attachment_html.encode("utf-8")).decode("ascii"),
+                "filename": attachment_filename,
+                "content_type": "text/html",
+            }
 
         async def _send():
             mail = AgentMailService()
