@@ -1,6 +1,6 @@
 # Email Architecture and AgentMail Source of Truth
 
-> **Last updated: 2026-05-31** — reverted the YouTube digest to a short summary body + standalone HTML report attachment (the clickable index lives in the attachment). The 2026-05-28 inline-everything layout's in-email index was unclickable in Gmail (Gmail strips `id=` anchors + clips >102KB bodies). See `Daily YouTube Digest — Email Layout`. Prior: 2026-05-19 added outbound subject-tag system (`[ACTION/KIND] subject` + body banner) so the operator can eyeball-triage their inbox. See `Outbound Subject Tagging` section. Prior: 2026-05-01 added pre-triage deterministic security screening (injection scanner, unknown @agentmail.to auto-quarantine, sender reputation tracking with auto-escalation).
+> **Last updated: 2026-06-01** — switched the YouTube digest attachment from HTML to **PDF** (Gmail showed `.html` attachments as raw source; it renders PDF inline on click) and fixed the `&`/`<`/`>` anchor-slug mismatch that broke those videos' TOC links. Prior 2026-05-31: reverted the digest to a short summary body + standalone report attachment (the clickable index lives in the attachment). The 2026-05-28 inline-everything layout's in-email index was unclickable in Gmail (Gmail strips `id=` anchors + clips >102KB bodies). See `Daily YouTube Digest — Email Layout`. Prior: 2026-05-19 added outbound subject-tag system (`[ACTION/KIND] subject` + body banner) so the operator can eyeball-triage their inbox. See `Outbound Subject Tagging` section. Prior: 2026-05-01 added pre-triage deterministic security screening (injection scanner, unknown @agentmail.to auto-quarantine, sender reputation tracking with auto-escalation).
 
 ## Purpose
 
@@ -519,35 +519,39 @@ Digest/report mail to Kevin uses AgentMail, not Gmail:
 - Kevin sees the message as coming from Simone
 - Avoids Kevin appearing to email himself
 
-### Daily YouTube Digest — Email Layout (revised 2026-05-31)
+### Daily YouTube Digest — Email Layout (revised 2026-06-01)
 
-The digest is delivered as a **short summary email body + a standalone HTML report attachment**. The clickable per-video index lives in the **attachment**, not the email body. Layout:
+The digest is delivered as a **short summary email body + a standalone PDF report attachment**. The clickable per-video index lives in the **attachment**, not the email body. Layout:
 
 **Email body** (`_render_email_body_html(body_md, intro_html=...)`, `full_content` omitted) — kept short and scannable:
-1. **Intro paragraph** — synthesis count + playlist day name + a pointer to the attached report ("open it in a browser to jump straight to any video").
+1. **Intro paragraph** — synthesis count + playlist day name + a pointer to the attached PDF report ("click the attachment to view it inline").
 2. **Meta-synthesis** — Cross-Video Themes / Learning Insights / Neglected Opportunities.
 
 That's it — no inline per-video retellings, no inline TOC. The body renders at ~5KB.
 
-**Attachment** (`_render_full_digest_html`, `YouTube_Daily_Digest_<date>_<Day>.html`) — the full read surface:
+**Attachment** (`_render_full_digest_pdf(_render_full_digest_html(...))`, `YouTube_Daily_Digest_<date>_<Day>.pdf`, `content_type: application/pdf`) — the full read surface:
 1. Meta-synthesis.
 2. **"Jump to a video" TOC** — styled grey box, one `<a href="#vN-slug">` per video ("Channel — Title"), slug from `_slugify_anchor`.
 3. **Per-video retellings** — each `<h2>` carries its matching `id="vN-..."` anchor (`_inject_video_anchors`).
 4. **Tutorial Pipeline Dispatch** summary.
 
-Open the attachment in a browser and the TOC anchors resolve, scrolling to the right section.
+`_render_full_digest_html` builds the standalone HTML; `_render_full_digest_pdf` renders it to PDF with **WeasyPrint**. WeasyPrint turns each `<a href="#vN-...">` into a clickable intra-document PDF link (the `id=` anchors survive — unlike Gmail's inline-HTML path), and auto-generates a PDF outline/bookmark tree from the `<h1>/<h2>` headings (native sidebar TOC on top of the in-page index). WeasyPrint is imported lazily inside the function. If PDF rendering ever raises, the send path falls back to the original `.html` attachment so a render hiccup never drops the digest.
 
-**Why this layout — the in-email index does NOT work in Gmail.** The 2026-05-28 design (PR #536) inlined the entire digest into the email body with a clickable in-body TOC, on the operator preference "everything in one scrollable email." It was reverted 2026-05-31 because the in-email index proved unclickable in Gmail, for two compounding reasons:
+**Why PDF, not an HTML attachment (changed 2026-06-01).** Through 2026-05-31 the attachment was a `.html` file. The operator reported that clicking it showed **raw HTML source**, not a rendered page: Gmail refuses to render HTML attachments (XSS risk) and hands them to the Google Docs viewer, which displays the markup as text. Gmail *does* render PDF attachments inline — one click opens a rendered page in Gmail's PDF viewer, with the TOC as working internal links — so the attachment format switched to PDF. The content pipeline (`_render_full_digest_html` + the TOC/anchor logic) is unchanged; only the final serialization differs.
+
+**Anchor-slug parity fix (2026-06-01).** `_build_toc_html` slugs the **raw markdown** title (`Antigravity & AGY CLI` → `v1-antigravity-agy-cli`), while `_inject_video_anchors` slugged the **rendered** `<h2>` text, where markdown had escaped `&` → `&amp;`, yielding `v1-antigravity-amp-agy-cli`. Any title containing `&`/`<`/`>` therefore got a mismatched anchor and a dead TOC link (silent in a browser, a logged WeasyPrint error in PDF). Fix: `_inject_video_anchors` now `html.unescape()`s the stripped h2 text before slugifying, so both sides agree. Regression test: `test_toc_anchor_alignment_when_title_contains_ampersand`.
+
+**Why the index lives in the attachment at all — the in-email index does NOT work in Gmail.** The 2026-05-28 design (PR #536) inlined the entire digest into the email body with a clickable in-body TOC, on the operator preference "everything in one scrollable email." It was reverted 2026-05-31 because the in-email index proved unclickable in Gmail, for two compounding reasons:
 - **Gmail strips `id=` attributes** from HTML email at render time. The `<h2 id="vN-...">` anchor targets are removed, so the `href="#vN-..."` links have nothing to scroll to. (Apple Mail honors in-message anchors; Gmail web + mobile do not — and the operator reads in Gmail.)
-- **The fully-inlined body is ~130KB, over Gmail's ~102KB clip threshold.** Gmail truncates it behind "[Message clipped] View entire message," so most per-video sections (the jump targets) are in the clipped region regardless. The earlier note here — "the TOC sits above the clip line so all entries remain clickable" — was wrong: it missed the id-stripping problem entirely.
+- **The fully-inlined body is ~130KB, over Gmail's ~102KB clip threshold.** Gmail truncates it behind "[Message clipped] View entire message," so most per-video sections (the jump targets) are in the clipped region regardless.
 
-Anchors only work in a real browser document, which is exactly what the standalone HTML **attachment** is. So the index moved back to the attachment.
+Anchors only resolve in a real rendered document — now the PDF attachment (previously the standalone HTML file).
 
-**Inline styling (still required for the short body).** Gmail strips `<style>` blocks from email bodies. `_inline_email_styles` injects per-tag `style="..."` for every supported element (h1/h2/h3/p/ul/ol/li/small/blockquote/code/pre/hr/a/table/th/td). The attachment, being a standalone file, uses a `<style>` block.
+**Inline styling (still required for the short body).** Gmail strips `<style>` blocks from email bodies. `_inline_email_styles` injects per-tag `style="..."` for every supported element (h1/h2/h3/p/ul/ol/li/small/blockquote/code/pre/hr/a/table/th/td). The attachment, being a standalone document, uses a `<style>` block (plus a PDF-only `@page` print stylesheet, `_DIGEST_PDF_PRINT_CSS`, so the 780px screen column doesn't clip on A4).
 
 **Retained capability.** `_render_email_body_html(..., full_content=<md>)` still renders the whole digest inline with an in-body TOC (`_build_inline_toc_html`). The cron no longer uses it, but it's kept for clients that honor in-message anchors (e.g. Apple Mail) and is exercised by a backward-compat test.
 
-**Test coverage:** `tests/unit/test_youtube_daily_digest_email_html.py` — production body has no inline TOC, renders meta-synthesis only, stays under the Gmail clip threshold, h2/p inline-styled; attachment carries the working TOC with href↔id parity; the inline-everything path still works when explicitly requested.
+**Test coverage:** `tests/unit/test_youtube_daily_digest_email_html.py` — production body has no inline TOC, renders meta-synthesis only, stays under the Gmail clip threshold, h2/p inline-styled; attachment carries the working TOC with href↔id parity; the inline-everything path still works when explicitly requested. `tests/unit/test_youtube_digest_toc.py` — adds `test_toc_anchor_alignment_when_title_contains_ampersand` (href↔id parity for `&`-bearing titles) and `test_render_full_digest_pdf_produces_valid_pdf` (WeasyPrint emits a valid PDF).
 
 ### Gmail (gws) CLI Fallback on AgentMail 429
 

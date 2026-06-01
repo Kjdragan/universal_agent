@@ -1,12 +1,15 @@
 """Tests for the channel-enriched TOC + end-of-executive-summary positioning."""
 from __future__ import annotations
 
+import re
+
 from universal_agent.scripts.youtube_daily_digest import (
     VideoTranscriptPayload,
     _build_per_video_header,
     _extract_channel_from_meta,
     _extract_video_entries,
     _render_full_digest_html,
+    _render_full_digest_pdf,
 )
 
 
@@ -203,3 +206,45 @@ def test_toc_renders_with_single_video_returns_empty_string():
     # The CSS block always contains `.digest-toc` selectors; check for the
     # body-side div instead.
     assert '<div class="digest-toc"' not in html
+
+
+def test_toc_anchor_alignment_when_title_contains_ampersand():
+    """Regression: titles with `&`/`<`/`>` must still produce a TOC link whose
+    `#anchor` matches the injected `id=` on the per-video <h2>.
+
+    The bug: `_build_toc_html` slugs the raw markdown title (`A & B` → `a-b`),
+    but `_inject_video_anchors` slugged the rendered h2 text where markdown had
+    escaped `&` → `&amp;`, yielding `a-amp-b`. The TOC link then pointed at a
+    non-existent anchor and silently died (browser) / logged an error (PDF).
+    """
+    blocks = [
+        _video_block("Antigravity & AGY CLI", "AICodeKing", 754, "20260519", "abc"),
+        _video_block("Plain Second", "Cole Medin", 1500, "20260520", "def"),
+    ]
+    md = _digest_md(blocks)
+    html = _render_full_digest_html(md, day_name="Friday", date_str="2026-05-22")  # date-pinned-ok: display-only fixture
+
+    # Every TOC href must resolve to an id defined in the document.
+    hrefs = set(re.findall(r'href="#(v\d+-[^"]+)"', html))
+    ids = set(re.findall(r'id="(v\d+-[^"]+)"', html))
+    assert hrefs, "expected at least one TOC anchor link"
+    assert hrefs <= ids, f"dangling TOC anchors: {hrefs - ids}"
+    # The ampersand-bearing title resolves cleanly and never leaks `amp`.
+    assert 'href="#v1-antigravity-agy-cli"' in html
+    assert 'id="v1-antigravity-agy-cli"' in html
+    assert "amp" not in "".join(hrefs)
+
+
+def test_render_full_digest_pdf_produces_valid_pdf():
+    """The email attachment is a PDF (Gmail renders PDF inline; it shows `.html`
+    attachments as raw source). WeasyPrint must turn the digest HTML into a
+    valid PDF carrying clickable intra-document links for the TOC."""
+    blocks = [
+        _video_block("First Vid", "AICodeKing", 754, "20260519", "abc"),
+        _video_block("Second Vid", "Cole Medin", 1500, "20260520", "def"),
+    ]
+    md = _digest_md(blocks)
+    html = _render_full_digest_html(md, day_name="Friday", date_str="2026-05-22")  # date-pinned-ok: display-only fixture
+    pdf = _render_full_digest_pdf(html)
+    assert pdf[:5] == b"%PDF-"
+    assert len(pdf) > 1000
