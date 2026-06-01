@@ -11,13 +11,19 @@
 
 Welcome to the official technical documentation for the **Universal Agent**. This documentation is designed for junior developers to quickly understand the project's architecture, core logic, and operational workflows.
 
-## ⚠️ MANDATORY: Documentation Rules
+## ⛔ STOP — Do NOT add or edit documentation here
 
-This `README.md` and `Documentation_Status.md` serve as the **authoritative indexes** for all project documentation.
+This tree is **archived** (superseded 2026-05-29). The rules that used to live here are
+**historical** and no longer apply — this index is kept only so old links resolve.
 
-- All documentation MUST be located within the `docs/` directory.
-- Before creating a new document, search these indexes to ensure the topic isn't already covered. Always prefer updating an existing document over creating a new one.
-- **Rule:** If you create a new documentation file, you MUST add a link to it in this `README.md` index and in `Documentation_Status.md`.
+- **Canonical documentation lives in [`project_docs/`](../project_docs/README.md).** Author and
+  update docs there, following [`project_docs/CLAUDE.md`](../project_docs/CLAUDE.md).
+- **Do not create new files or edit existing files under `docs/`.** A CI guard
+  (`.github/workflows/doc-audit.yml` → `archive-write-guard`) fails any PR that adds or modifies a
+  file here. Deletions (archive cleanup) are allowed; a genuinely-intended archive edit requires the
+  `archive-edit-approved` PR label.
+- The former "all documentation MUST live in `docs/`" rule is **void** — it was the single biggest
+  cause of agents writing into this archive by mistake.
 
 ## Deployment Notice
 
