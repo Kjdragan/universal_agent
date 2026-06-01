@@ -86,7 +86,7 @@ def _render_body() -> str:
 def _render_attachment() -> str:
     _, attachment_md = _split_email_body_and_attachment(SAMPLE_DIGEST)
     return _render_full_digest_html(
-        attachment_md, day_name="Wednesday", date_str="2026-05-28"
+        attachment_md, day_name="Wednesday", date_str="2026-05-28"  # date-pinned-ok: display-only fixture
     )
 
 
