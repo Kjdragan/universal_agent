@@ -8,7 +8,7 @@ code_paths:
   - AgentCollege/logfire_fetch/**
   - Memory_System/manager.py
   - Memory_System/storage.py
-last_verified: 2026-05-29
+last_verified: 2026-06-01
 ---
 
 # Agent College

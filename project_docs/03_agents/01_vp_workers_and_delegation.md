@@ -10,7 +10,7 @@ code_paths:
   - src/universal_agent/tools/vp_orchestration.py
   - src/universal_agent/services/cody_mode.py
   - src/universal_agent/services/self_briefing.py
-last_verified: 2026-05-29
+last_verified: 2026-06-01
 ---
 
 # VP Workers & Delegation

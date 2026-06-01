@@ -7,7 +7,7 @@ code_paths:
   - src/universal_agent/hooks.py
   - src/universal_agent/guardrails/workspace_guard.py
   - src/universal_agent/constants.py
-last_verified: 2026-05-29
+last_verified: 2026-06-01
 ---
 
 # SDK Lifecycle Hooks & Guardrails
