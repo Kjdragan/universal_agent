@@ -656,7 +656,7 @@ class ToDoDispatchService:
         if session_role not in {"todo_execution", "todo"}:
             logger.debug("Skipping session %s for todo_dispatch (session_role=%s)", session.session_id, session_role or "none")
             return
-        logger.info(f"Registering session {session.session_id} for todo_dispatch")
+        logger.info("Registering session %s for todo_dispatch", session.session_id)
         self.active_sessions[session.session_id] = session
         if self.event_callback:
             self.event_callback({
@@ -702,7 +702,7 @@ class ToDoDispatchService:
                 sleep_time = max(0.5, 2.0 - elapsed)
                 await asyncio.sleep(sleep_time)
             except Exception as e:
-                logger.critical(f"ToDo Dispatch scheduler crash: {e}", exc_info=True)
+                logger.critical("ToDo Dispatch scheduler crash: %s", e, exc_info=True)
                 await asyncio.sleep(5)
 
     async def _process_session(self, session: GatewaySession):

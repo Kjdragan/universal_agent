@@ -1,5 +1,7 @@
 """Unit tests for utils/json_utils.py — 5-layer JSON extraction."""
 
+import logging
+
 from pydantic import BaseModel
 import pytest
 
@@ -108,3 +110,37 @@ class TestPydanticValidation:
     def test_no_model_returns_dict(self):
         result = extract_json_payload('{"anything": "goes"}')
         assert isinstance(result, dict)
+
+
+# ── Error context: terminal failure carries an input snippet + debug logs ─
+
+
+class TestFailureDiagnostics:
+    """The terminal ValueError and the swallowed-layer except blocks must carry
+    enough context to diagnose *what* failed without re-running blind."""
+
+    def test_failure_message_includes_input_snippet(self):
+        text = "SENTINEL_TOKEN_42 this is plainly not json at all"
+        with pytest.raises(ValueError) as excinfo:
+            extract_json_payload(text)
+        # Existing callers/tests rely on this stable prefix.
+        assert "Failed to extract or repair JSON" in str(excinfo.value)
+        # New: the offending input must be quoted back for diagnosis.
+        assert "SENTINEL_TOKEN_42" in str(excinfo.value)
+
+    def test_failure_message_snippet_is_truncated(self):
+        text = "no json here " + ("x" * 5000)
+        with pytest.raises(ValueError) as excinfo:
+            extract_json_payload(text)
+        # Snippet must be bounded so a huge LLM blob can't bloat the message/log.
+        assert len(str(excinfo.value)) < 600
+
+    def test_swallowed_layer_failure_is_logged_at_debug(self, caplog):
+        with caplog.at_level(logging.DEBUG, logger="universal_agent.utils.json_utils"):
+            with pytest.raises(ValueError):
+                extract_json_payload("definitely not json, no braces anywhere")
+        # At least one layer's swallowed failure should leave a debug breadcrumb.
+        assert any(
+            rec.levelno == logging.DEBUG and "json" in rec.getMessage().lower()
+            for rec in caplog.records
+        ), "expected a DEBUG breadcrumb from a swallowed extraction layer"
