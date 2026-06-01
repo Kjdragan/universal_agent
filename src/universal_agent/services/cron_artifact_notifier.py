@@ -296,17 +296,49 @@ def notify_cron_artifact_fire_and_forget(
 
 
 def _load_manifest(workspace_dir: Path) -> Optional[dict[str, Any]]:
-    """Load ``manifest.json`` from the workspace (root or
-    ``work_products/<skill>/``) if present."""
-    candidates = [
-        workspace_dir / "manifest.json",
-        workspace_dir / "work_products" / "manifest.json",
-    ]
-    for sub in (workspace_dir / "work_products").glob("*/manifest.json"):
-        candidates.append(sub)
-    for path in candidates:
-        if not path.exists() or not path.is_file():
+    """Load the most recent ``manifest*.json`` from the workspace (root
+    or ``work_products/<skill>/``).
+
+    Cron workspaces are reused across runs and accumulate one manifest
+    per run. Some pipelines (e.g. paper-to-podcast) write a date-stamped
+    copy each run — ``manifest_20260531.json`` — *without* overwriting
+    the canonical ``manifest.json``, so the undated file stays frozen at
+    a prior run's content. Returning the first literal ``manifest.json``
+    therefore discloses yesterday's topic/artifacts for today's run.
+
+    We instead collect every ``manifest*.json`` (date-stamped included)
+    and pick the newest by mtime, so the disclosure always reflects the
+    run that just finished. Older manifests are only consulted if the
+    newest fails to parse.
+    """
+    work_products = workspace_dir / "work_products"
+    seen: set[Path] = set()
+    candidates: list[Path] = []
+    for root, pattern in (
+        (workspace_dir, "manifest*.json"),
+        (work_products, "manifest*.json"),
+        (work_products, "*/manifest*.json"),
+    ):
+        try:
+            for path in root.glob(pattern):
+                if path.is_file() and path not in seen:
+                    seen.add(path)
+                    candidates.append(path)
+        except OSError:
             continue
+
+    # Newest run wins; fall through to older manifests only on parse
+    # failure. stat() is taken once up front so a vanished file can't
+    # crash the sort.
+    scored: list[tuple[float, Path]] = []
+    for path in candidates:
+        try:
+            scored.append((path.stat().st_mtime, path))
+        except OSError:
+            continue
+    scored.sort(key=lambda t: t[0], reverse=True)
+
+    for _, path in scored:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(data, dict):
