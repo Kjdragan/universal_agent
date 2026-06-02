@@ -55,6 +55,7 @@ from universal_agent.services.digest_delivery_reminder import (
     send_digest_delivery_reminder,
 )
 from universal_agent.services.email_tags import ActionTag, KindTag
+from universal_agent.services.scratch_publish import publish_html_to_scratch
 from universal_agent.services.youtube_playlist_manager import (
     YouTubeAPIError,
     YouTubeOAuthError,
@@ -2896,62 +2897,110 @@ def process_daily_digest(
     email_succeeded = email_to is None
     if email_to:
         logger.info("Sending email digest to %s...", email_to)
-        # Build body (meta-synthesis only) + standalone PDF attachment (full digest).
-        # The attachment is what the user reads when they want the full retellings;
-        # the body is a scannable "today's themes" summary they can read inline.
+        # Build body (meta-synthesis only) + the full standalone HTML report.
+        #
+        # PRIMARY delivery is a LINK to the report published on the tailnet HTML
+        # scratchpad. That page renders fully — styling AND the clickable per-video
+        # index whose `#anchor` links actually jump to a section — on every one of the
+        # operator's devices. An email ATTACHMENT cannot do that: Gmail strips in-email
+        # `id=` anchors, flattens `.html` attachments to raw source, and a PDF only gets
+        # a static bookmark outline (no in-document jump links). The scratchpad is
+        # tailnet-only, which is fine here because the digest goes solely to the operator.
+        #
+        # We fall back to the PDF attachment (the prior behavior) ONLY if publishing
+        # fails, so a digest is never dropped — a raw-but-delivered report beats nothing.
         body_md, attachment_md = _split_email_body_and_attachment(full_content)
         attachment_count = len(processed_items)
-        intro_html = (
-            '<p style="margin:0 0 14px;">'
-            f"Here's today's daily synthesis across <strong>{attachment_count}</strong> "
-            f"video{'s' if attachment_count != 1 else ''} from your <em>{day_name.title()}</em> "
-            "playlist. The themes are summarized below; the full per-video "
-            "retellings — with a clickable index that jumps to any video — are in "
-            "the attached PDF report. Click the attachment to view it inline."
-            "</p>"
-        )
-        # The email body is the short meta-synthesis summary only (no inline
-        # per-video TOC). In-email `#anchor` jump links cannot work in Gmail:
-        # Gmail strips `id=` attributes at render time so the anchor targets
-        # vanish, and the fully-inlined digest (~130KB) also blew past Gmail's
-        # ~102KB clip threshold (hiding most sections behind "View entire
-        # message"). The clickable per-video index lives in the standalone HTML
-        # attachment, where anchors resolve when the file is opened in a browser.
-        # (The digest was inlined 2026-05-28 to put an index "at the beginning
-        # of the email"; reverted 2026-05-31 after the index proved unclickable
-        # in Gmail — see _render_email_body_html docstring.)
-        email_html = _render_email_body_html(
-            body_md, intro_html=intro_html,
-        )
         attachment_html = _render_full_digest_html(
             attachment_md, day_name=day_name, date_str=date_str,
         )
-        # Attach the digest as PDF: Gmail renders PDF attachments inline on click,
-        # but shows `.html` attachments as raw source. Fall back to the HTML file
-        # only if PDF rendering fails (e.g. a WeasyPrint native-lib hiccup) — a
-        # raw-but-delivered report beats a dropped digest.
-        try:
-            attachment_pdf = _render_full_digest_pdf(attachment_html)
-            attachment_filename = (
-                f"YouTube_Daily_Digest_{date_str}_{day_name.title()}.pdf"
+
+        videos_phrase = (
+            f"<strong>{attachment_count}</strong> "
+            f"video{'s' if attachment_count != 1 else ''} from your "
+            f"<em>{day_name.title()}</em> playlist"
+        )
+
+        scratch_url = publish_html_to_scratch(
+            attachment_html,
+            slug=f"yt-digest-{date_str}",
+            filename=f"youtube-digest-{date_str}-{day_name.lower()}.html",
+        )
+
+        attachments_list: list[dict] = []
+        if scratch_url:
+            intro_html = (
+                '<p style="margin:0 0 14px;">'
+                f"Here's today's daily synthesis across {videos_phrase}. The themes "
+                "are summarized below; the full per-video retellings — with a clickable "
+                "index that jumps to any video — are in the rendered report:"
+                "</p>"
+                '<p style="margin:0 0 14px;">'
+                f'<a href="{scratch_url}" '
+                'style="display:inline-block;padding:9px 16px;background:#0969da;'
+                'color:#ffffff;text-decoration:none;border-radius:6px;font-weight:600;">'
+                "📄 Open the full YouTube digest</a>"
+                "</p>"
+                '<p style="margin:0 0 14px;color:#57606a;font-size:13px;">'
+                "Opens on your own devices only (private, tailnet-served). Direct link: "
+                f'<a href="{scratch_url}">{scratch_url}</a>'
+                "</p>"
             )
-            attachment_payload = {
-                "content": base64.b64encode(attachment_pdf).decode("ascii"),
-                "filename": attachment_filename,
-                "content_type": "application/pdf",
-            }
-        except Exception as pdf_exc:  # noqa: BLE001 — degrade to HTML, never drop the digest
+            text_tail = (
+                "\n\nFull per-video retellings + dispatch summary (rendered report, "
+                f"with a clickable index): {scratch_url}\n"
+            )
+        else:
+            # Publish failed — attach the report so the digest still lands. PDF first
+            # (Gmail renders it inline on click); raw HTML only if PDF render itself
+            # fails (e.g. a WeasyPrint native-lib hiccup).
             logger.warning(
-                "PDF render failed (%s); falling back to HTML attachment.", pdf_exc,
+                "Scratch publish returned no URL; falling back to email attachment.",
             )
-            attachment_filename = (
-                f"YouTube_Daily_Digest_{date_str}_{day_name.title()}.html"
+            intro_html = (
+                '<p style="margin:0 0 14px;">'
+                f"Here's today's daily synthesis across {videos_phrase}. The themes "
+                "are summarized below; the full per-video retellings — with a clickable "
+                "index that jumps to any video — are in the attached report. Click the "
+                "attachment to view it inline."
+                "</p>"
             )
-            attachment_payload = {
-                "content": base64.b64encode(attachment_html.encode("utf-8")).decode("ascii"),
-                "filename": attachment_filename,
-                "content_type": "text/html",
-            }
+            try:
+                attachment_pdf = _render_full_digest_pdf(attachment_html)
+                attachment_filename = (
+                    f"YouTube_Daily_Digest_{date_str}_{day_name.title()}.pdf"
+                )
+                attachment_payload = {
+                    "content": base64.b64encode(attachment_pdf).decode("ascii"),
+                    "filename": attachment_filename,
+                    "content_type": "application/pdf",
+                }
+            except Exception as pdf_exc:  # noqa: BLE001 — degrade to HTML, never drop the digest
+                logger.warning(
+                    "PDF render failed (%s); falling back to HTML attachment.", pdf_exc,
+                )
+                attachment_filename = (
+                    f"YouTube_Daily_Digest_{date_str}_{day_name.title()}.html"
+                )
+                attachment_payload = {
+                    "content": base64.b64encode(attachment_html.encode("utf-8")).decode("ascii"),
+                    "filename": attachment_filename,
+                    "content_type": "text/html",
+                }
+            attachments_list = [attachment_payload]
+            text_tail = (
+                "\n\n(Full per-video retellings + dispatch summary are in the "
+                f"attached file: {attachment_filename})\n"
+            )
+
+        # The email body is the short meta-synthesis summary only. In-email `#anchor`
+        # jump links cannot work in Gmail (it strips `id=` attributes at render time),
+        # and fully inlining the ~130KB digest blew past Gmail's ~102KB clip threshold.
+        # The clickable per-video index lives in the rendered report (scratchpad link,
+        # or the attachment in the fallback path), where anchors resolve in a browser.
+        email_html = _render_email_body_html(
+            body_md, intro_html=intro_html,
+        )
 
         async def _send():
             mail = AgentMailService()
@@ -2961,11 +3010,8 @@ def process_daily_digest(
                     to=email_to,
                     subject=f"Daily YouTube Summaries — {date_str}",
                     html=email_html,
-                    text=body_md + (
-                        f"\n\n(Full per-video retellings + dispatch summary are in the "
-                        f"attached file: {attachment_filename})\n"
-                    ),
-                    attachments=[attachment_payload],
+                    text=body_md + text_tail,
+                    attachments=attachments_list or None,
                     force_send=True,
                     require_approval=False,
                     action=ActionTag.FYI,

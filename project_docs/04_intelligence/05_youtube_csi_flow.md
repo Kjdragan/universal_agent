@@ -13,7 +13,8 @@ code_paths:
   - src/universal_agent/services/invariants/youtube_invariants.py
   - src/universal_agent/youtube_mode_utils.py
   - src/universal_agent/proactive_signals.py
-last_verified: 2026-06-01
+  - src/universal_agent/services/scratch_publish.py
+last_verified: 2026-06-02
 ---
 
 # YouTube CSI Flow
@@ -246,6 +247,35 @@ Top-`UA_YOUTUBE_DIGEST_AUTO_TUTORIAL_TOP_N` (default 4) survivors are POSTed via
   Pipeline B.
 - Delivery reminder fan-out (`send_digest_delivery_reminder`) pings Telegram +
   dashboard after a successful send; failure there is non-fatal.
+
+### A.9 Email composition & delivery format (link-first scratchpad)
+
+`process_daily_digest` builds two artifacts from the synthesized content via
+`_split_email_body_and_attachment`:
+
+- **Email body** — the short meta-synthesis summary only (Cross-Video Themes /
+  Learning Insights / Neglected Opportunities), rendered by
+  `_render_email_body_html`. In-email `#anchor` jump links are intentionally
+  **not** used: Gmail strips `id=` attributes at render time, and fully inlining
+  the ~130 KB report blew past Gmail's ~102 KB clip threshold.
+- **Full report** — the per-video retellings with a working clickable
+  table-of-contents, rendered as a standalone HTML doc by
+  `_render_full_digest_html` (`_build_toc_html` + `_inject_video_anchors`).
+
+**Delivery is link-first (as of 2026-06-02).** The full HTML report is published
+to the tailnet HTML scratchpad via `scratch_publish.py::publish_html_to_scratch`
+and the email **leads with the link** — no attachment. The scratchpad page
+renders fully in a browser with the clickable index actually jumping to each
+video, on any of the operator's tailnet devices. See
+`06_platform/06_networking_tailscale_proxy_sshfs.md` § 1.6.
+
+**PDF is now only a fallback.** If `publish_html_to_scratch` returns `None`
+(publish failed), delivery degrades to the prior behavior: attach the report as
+a WeasyPrint PDF (`_render_full_digest_pdf`), or raw HTML if the PDF render
+itself fails. A raw-but-delivered report beats a dropped digest. This replaced
+the previous "always email a PDF attachment" approach, which fought Gmail's
+attachment rendering and flattened the in-document jump links into a static PDF
+bookmark outline.
 
 ---
 

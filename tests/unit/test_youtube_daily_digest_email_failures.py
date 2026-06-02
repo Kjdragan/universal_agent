@@ -75,6 +75,13 @@ def digest_module(monkeypatch, tmp_path):
         lambda **kw: tmp_path / "fake_candidates.json",
     )
     monkeypatch.setattr(ydd, "_dispatch_tutorial_candidates", lambda **kw: [])
+    # Don't shell out to the scratchpad publish script in tests: return a fake URL
+    # so delivery takes the link-first path (no SSH, no WeasyPrint render).
+    monkeypatch.setattr(
+        ydd,
+        "publish_html_to_scratch",
+        lambda *a, **kw: "https://uaonvps.taildcc090.ts.net/scratch/test/digest.html",
+    )
     return ydd
 
 

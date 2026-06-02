@@ -92,6 +92,7 @@ scripts/publish_scratch.sh --status  # verify mappings (must still show / -> :30
 - **URL shape:** `https://uaonvps.taildcc090.ts.net/scratch/<slug>/<file>.html` — auto-HTTPS, **tailnet-only** (private to Kevin's own devices; never public). Tailnet membership is the auth boundary, not the slug.
 - **Mechanism:** `tailscale serve` path-mount of `/home/ua/ua_scratch` (daemon-managed, reboot-safe; survives `/opt/universal_agent` deploys). Don't disturb the other serve mappings.
 - **Workflow:** write your HTML anywhere, run the script, paste the printed URL back to Kevin. That's the whole loop for "spin up a report and give me the link."
+- **Two reusable front doors (one mechanism — both wrap `publish_scratch.sh`):** for **agentic** work, invoke the **`publish-to-scratchpad` skill** (it triggers whenever you're about to paste markdown or attach a report — publish + hand over the link instead). For **deterministic Python pipelines** (cron/services, which can't invoke a skill), call `from universal_agent.services.scratch_publish import publish_html_to_scratch` — returns the URL, or `None` so you can fall back to attaching the file. The YouTube daily digest uses this helper for **link-first** delivery (PDF only as a fallback).
 - Full reference (mechanism, failure signatures): `project_docs/06_platform/06_networking_tailscale_proxy_sshfs.md` § 1.6. The `visual-explainer` skill is a good way to generate the HTML itself.
 
 ## Secrets, Infisical & gws/Gmail auth

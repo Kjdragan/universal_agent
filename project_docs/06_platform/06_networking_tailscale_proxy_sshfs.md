@@ -18,7 +18,9 @@ code_paths:
   - "src/universal_agent/youtube_ingest.py"
   - "scripts/sync_remote_workspaces.sh"
   - "scripts/publish_scratch.sh"
-last_verified: 2026-06-01
+  - "src/universal_agent/services/scratch_publish.py"
+  - ".claude/skills/publish-to-scratchpad/SKILL.md"
+last_verified: 2026-06-02
 ---
 
 # Networking: Tailscale, Residential Proxy, SSHFS
@@ -141,7 +143,10 @@ A reusable delivery pattern: render an artifact as **standalone HTML**, publish 
 - **URL shape:** `https://uaonvps.taildcc090.ts.net/scratch/<token>/<name>.html` — auto-HTTPS via the `ts.net` cert. **Tailnet membership is the auth**: reachable only from the operator's own devices, never the public internet. An unguessable `<token>` subdir is good hygiene but not the security boundary.
 - **Publish:** use `scripts/publish_scratch.sh <html-file> [slug]` (`scripts/publish_scratch.sh::cmd_publish`) — it auto-detects whether it runs on the VPS (writes directly) or anywhere else on the tailnet (copies over `ssh ua@uaonvps`), generates an unguessable slug, sets readable perms (dir `0755`/file `0644`), and prints the URL on stdout (so `URL=$(scripts/publish_scratch.sh f.html)` works). `--init` idempotently (re-)establishes the `/scratch` serve mapping; `--status` prints `tailscale serve status`. Manual fallback: write the HTML to `/home/ua/ua_scratch/<token>/<name>.html` (token = unguessable slug), then return the URL. The scratch dir lives in `ua`'s home, so it survives `/opt/universal_agent` deploys; the served `/scratch` mapping survives reboots.
 - **Don't disturb** the other serve mappings (`/`→:3000 dashboard, `:8443`→:8002 API, etc.) — only add/modify `/scratch`. Verify with `tailscale serve status` after any change (it must still list `/` → :3000).
-- **Origin:** the YouTube daily digest "clickable TOC" problem (see `04_intelligence/05_youtube_csi_flow.md` § A.9). The digest emails a meta-synthesis summary; the full per-video report with its clickable index is published here and linked.
+- **Two reusable front doors, one mechanism.** Both wrap `scripts/publish_scratch.sh`, so there is a single source of truth:
+  - **Agentic callers** (interactive Claude, Simone/Cody producing an ad-hoc report) use the **`publish-to-scratchpad` skill** (`.claude/skills/publish-to-scratchpad/SKILL.md`). It triggers whenever an agent is about to paste markdown or attach a report file, and tells it to publish + hand over the link instead.
+  - **Deterministic Python pipelines** (cron scripts, services — which have no LLM in the loop and can't invoke a skill) call `scratch_publish.py::publish_html_to_scratch`, which shells out to the same script and returns the URL (or `None` so the caller can fall back to attaching the artifact). The YouTube daily digest cron uses this path.
+- **Origin & first production user:** the YouTube daily digest "clickable TOC" problem (see `04_intelligence/05_youtube_csi_flow.md` § A.9). As of 2026-06-02 the digest's **primary** delivery is a scratchpad **link** (the full per-video report with its working clickable index renders live in the browser); the PDF attachment is now only a **fallback** used when `publish_html_to_scratch` returns `None`, so a digest is never dropped. This replaced the prior "email a PDF attachment" approach, which fought Gmail's attachment rendering and degraded the in-document jump links to a static PDF bookmark outline.
 
 ---
 
