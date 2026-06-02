@@ -241,7 +241,11 @@ def select_candidates_for_current_hour(
         WHERE verdict = 'ship'
           AND (delivered_at IS NULL OR delivered_at = '')
           AND artifact_type IN ({placeholders})
-          AND created_at >= datetime('now', ?)
+          -- Compare numerically: stored created_at is ISO-8601 ('T' + offset)
+          -- while datetime('now', ?) is space-separated, so a raw string ``>=``
+          -- mis-orders them ('T' > ' ') and leaks >lookback briefs whenever both
+          -- land on the same calendar date. julianday() parses both forms.
+          AND julianday(created_at) >= julianday('now', ?)
         ORDER BY
           CASE WHEN json_extract(metadata_json, '$.needs_attention') = 1
                THEN 0 ELSE 1 END,
