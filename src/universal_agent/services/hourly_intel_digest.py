@@ -205,16 +205,34 @@ def is_throttled(conn: sqlite3.Connection) -> bool:
 # ── Candidate selection ────────────────────────────────────────────────
 
 
+def _brief_lookback_hours() -> int:
+    """How far back the digest looks for undelivered ``verdict='ship'`` briefs.
+
+    Was an exact current-clock-hour gate, which orphaned ~40% of ship briefs:
+    a brief authored at HH:MM is only eligible during clock-hour HH, so any run
+    that didn't catch it in its authoring hour lost it forever. A lookback window
+    surfaces any recent undelivered ship brief on the next digest run instead
+    (``delivered_at IS NULL`` still guarantees each brief is emailed at most
+    once). Override with ``UA_DIGEST_BRIEF_LOOKBACK_HOURS`` (default 24)."""
+    raw = str(os.getenv("UA_DIGEST_BRIEF_LOOKBACK_HOURS", "24")).strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 24
+
+
 def select_candidates_for_current_hour(
     conn: sqlite3.Connection,
 ) -> list[dict[str, Any]]:
-    """Pull qualifying ``verdict='ship'`` briefs created this clock hour.
+    """Pull qualifying ``verdict='ship'`` briefs that are undelivered and were
+    authored within the last ``_brief_lookback_hours`` (default 24h).
 
     Sort order pins ``needs_attention=true`` to the top regardless of
     composite_score; ties break by composite_score descending.
     """
     ensure_schema_addons(conn)
     placeholders = ",".join("?" for _ in ARTIFACT_TYPES)
+    lookback_modifier = f"-{_brief_lookback_hours()} hours"
     rows = conn.execute(
         f"""
         SELECT artifact_id, title, summary, artifact_path, metadata_json,
@@ -223,13 +241,13 @@ def select_candidates_for_current_hour(
         WHERE verdict = 'ship'
           AND (delivered_at IS NULL OR delivered_at = '')
           AND artifact_type IN ({placeholders})
-          AND strftime('%Y-%m-%d %H', created_at) = strftime('%Y-%m-%d %H', 'now')
+          AND created_at >= datetime('now', ?)
         ORDER BY
           CASE WHEN json_extract(metadata_json, '$.needs_attention') = 1
                THEN 0 ELSE 1 END,
           CAST(json_extract(metadata_json, '$.composite_score') AS REAL) DESC
         """,
-        ARTIFACT_TYPES,
+        (*ARTIFACT_TYPES, lookback_modifier),
     ).fetchall()
     out: list[dict[str, Any]] = []
     for row in rows:
