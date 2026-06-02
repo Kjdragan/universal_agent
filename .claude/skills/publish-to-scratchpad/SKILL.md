@@ -106,6 +106,36 @@ This skill publishes HTML — it doesn't author it. To produce a polished page, 
 tables) or render your own markdown→HTML. Whatever produces the HTML, this skill is the
 last step: publish it and hand over the link.
 
+## Light mode is mandatory
+
+Operator reports must render in **light mode**, regardless of the device's dark-mode
+setting. Kevin reads these on a phone that's often in dark mode, and a report that
+auto-inverts to dark (or, worse, half-inverts) is hard to read and looks broken. The
+generator's default theme does NOT count — many HTML generators (incl. some
+visual-explainer outputs) default to dark or follow `prefers-color-scheme`. You are
+responsible for forcing light at publish time.
+
+Before publishing, confirm the HTML's `<head>` pins light mode and the body sets an
+explicit light background + dark text — never rely on user-agent defaults:
+
+```html
+<head>
+  <meta charset="utf-8">
+  <meta name="color-scheme" content="light">   <!-- stops dark-mode UAs auto-inverting -->
+  <style>
+    :root { color-scheme: light; }
+    body  { background: #ffffff; color: #1f2328; }   <!-- explicit, not UA default -->
+  </style>
+</head>
+```
+
+Also: do NOT ship a `@media (prefers-color-scheme: dark) { ... }` block that darkens the
+page — that's the most common way a "light" report still renders dark on Kevin's phone.
+If you used visual-explainer (or any generator), open the produced HTML and verify these
+before calling `publish_scratch.sh`. The canonical reference implementation is the
+YouTube digest report CSS (`youtube_daily_digest.py::_DIGEST_HTML_HEAD_CSS` +
+`_render_full_digest_html`) — match its GitHub-light palette.
+
 ## Notes and boundaries
 
 - **Tailnet-only.** The link is private to Kevin's devices and dead off-tailnet. Never
