@@ -527,6 +527,37 @@ def mark_all_delivered(conn: sqlite3.Connection, artifact_ids: list[str]) -> Non
     conn.commit()
 
 
+def mark_superseded(conn: sqlite3.Connection, artifact_ids: list[str]) -> None:
+    """Durably suppress near-duplicate briefs collapsed by the dedup backstop.
+
+    Stamps ``delivered_at`` so :func:`select_candidates_for_current_hour` stops
+    surfacing them (otherwise a dropped near-duplicate would re-appear in the
+    next hour's digest once its kept twin is delivered). Sets
+    ``delivery_state='superseded'`` (NOT ``'emailed'``) so it is not counted as a
+    digest delivery by :func:`is_throttled`."""
+    ensure_schema_addons(conn)
+    now_iso = _now_utc().isoformat()
+    for raw_id in artifact_ids:
+        artifact_id = str(raw_id or "").strip()
+        if not artifact_id:
+            continue
+        try:
+            _pa.mark_artifact_delivered(conn, artifact_id=artifact_id, delivered_at=now_iso)
+        except KeyError:
+            logger.warning("hourly_intel_digest: superseded artifact %s missing at stamp", artifact_id)
+            continue
+        conn.execute(
+            """
+            UPDATE proactive_artifacts
+            SET delivery_state = 'superseded',
+                updated_at = ?
+            WHERE artifact_id = ?
+            """,
+            (now_iso, artifact_id),
+        )
+    conn.commit()
+
+
 # ── Pause-token signing (PR-B shim) ────────────────────────────────────
 
 
@@ -557,6 +588,71 @@ def verify_digest_pause_token(hours: int, token: str) -> bool:
     return hmac.compare_digest(expected, token.strip())
 
 
+# ── Near-duplicate suppression (Phase 4 — digest deterministic backstop) ──
+
+
+def _dedup_jaccard_threshold() -> float:
+    """Token-overlap threshold above which two briefs are near-duplicates.
+
+    Decision D: Atlas's recent-briefs index is the primary dedup (it skips a
+    near-identical second cluster at authoring time); this is the deterministic
+    digest-side backstop for any that slip through into the same email. The
+    default (0.6) is intentionally conservative — a false collapse hides a
+    distinct brief, which is worse than letting a near-duplicate through (the
+    operator just sees two similar items). Set ``UA_DIGEST_DEDUP_JACCARD`` to
+    ``1.0`` to disable the backstop entirely."""
+    raw = str(os.getenv("UA_DIGEST_DEDUP_JACCARD", "0.6")).strip()
+    try:
+        return max(0.0, min(1.0, float(raw)))
+    except ValueError:
+        return 0.6
+
+
+def _brief_dedup_tokens(brief: dict[str, Any]) -> frozenset[str]:
+    """Normalized token set over a brief's title + thesis + key entities."""
+    meta = brief.get("metadata") or {}
+    entities = meta.get("key_entities") or []
+    parts = [
+        str(brief.get("title") or ""),
+        str(meta.get("thesis") or ""),
+        " ".join(str(e) for e in entities),
+    ]
+    text = "".join(c if c.isalnum() else " " for c in " ".join(parts).lower())
+    return frozenset(t for t in text.split() if len(t) > 2)
+
+
+def _jaccard(a: frozenset[str], b: frozenset[str]) -> float:
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def dedup_near_duplicate_briefs(
+    briefs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Collapse near-duplicate briefs, keeping the first of each group.
+
+    Input is pre-sorted best-first (needs_attention pinned, then composite_score
+    desc), so the higher-priority brief in a near-duplicate group is the one
+    kept. Fail-open: always returns >= 1 brief when given >= 1."""
+    threshold = _dedup_jaccard_threshold()
+    if threshold >= 1.0 or len(briefs) <= 1:
+        return briefs
+    kept: list[dict[str, Any]] = []
+    kept_tokens: list[frozenset[str]] = []
+    for brief in briefs:
+        toks = _brief_dedup_tokens(brief)
+        if toks and any(_jaccard(toks, kt) >= threshold for kt in kept_tokens):
+            logger.info(
+                "digest dedup: collapsing near-duplicate brief %s",
+                brief.get("artifact_id"),
+            )
+            continue
+        kept.append(brief)
+        kept_tokens.append(toks)
+    return kept
+
+
 # ── High-level summary helper for skill ────────────────────────────────
 
 
@@ -576,7 +672,12 @@ def compose_send_payload(
         return {"status": "paused"}
     if is_throttled(conn):
         return {"status": "throttled"}
-    briefs = select_candidates_for_current_hour(conn)
+    selected = select_candidates_for_current_hour(conn)
+    briefs = dedup_near_duplicate_briefs(selected)
+    kept_ids = {b["artifact_id"] for b in briefs}
+    superseded = [b["artifact_id"] for b in selected if b["artifact_id"] not in kept_ids]
+    if superseded:
+        mark_superseded(conn, superseded)
     if not briefs:
         return {"status": "no_candidates"}
 
@@ -620,6 +721,8 @@ __all__ = [
     "set_pause",
     "is_throttled",
     "select_candidates_for_current_hour",
+    "dedup_near_duplicate_briefs",
+    "mark_superseded",
     "render_subject",
     "render_digest_html",
     "mark_all_delivered",

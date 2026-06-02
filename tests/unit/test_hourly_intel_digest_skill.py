@@ -344,14 +344,16 @@ class ComposeReadyTests(unittest.TestCase):
             conn,
             artifact_id="pa_ready_a",
             title="ATLAS insight brief: Topic A",
-            thesis="Topic A is emerging.",
+            thesis="Retrieval-augmented agents are converging on graph memory.",
+            key_entities=["GraphRAG", "vector store", "agent memory"],
             composite_score=0.90,
         )
         _insert_ship_artifact(
             conn,
             artifact_id="pa_ready_b",
             title="ATLAS insight brief: Topic B",
-            thesis="Topic B is emerging.",
+            thesis="Local inference hardware is reshaping edge deployment.",
+            key_entities=["Apple Silicon", "quantization", "edge"],
             composite_score=0.60,
         )
         payload = digest.compose_send_payload(conn)
@@ -428,6 +430,85 @@ class SendFailureRecoveryTests(unittest.TestCase):
         next_tick = digest.select_candidates_for_current_hour(conn)
         self.assertEqual(len(next_tick), 1)
         self.assertEqual(next_tick[0]["artifact_id"], "pa_retry_1")
+
+
+def _brief(artifact_id: str, title: str, thesis: str, entities: list[str]) -> dict[str, Any]:
+    return {
+        "artifact_id": artifact_id,
+        "title": title,
+        "summary": thesis,
+        "artifact_path": "",
+        "metadata": {"thesis": thesis, "key_entities": entities},
+        "created_at": "2026-06-02T00:00:00+00:00",
+    }
+
+
+class DigestDedupTests(unittest.TestCase):
+    def test_collapses_near_duplicates_keeping_first(self) -> None:
+        # Two briefs about the same Google I/O 2026 keynote (the spec's canonical
+        # near-duplicate). Input is pre-sorted best-first, so the first survives.
+        a = _brief("pa_io_a", "Google Gemini 3 keynote launch announcement",
+                   "Google unveiled Gemini 3 keynote launch announcement agentic coding",
+                   ["Google", "Gemini", "keynote"])
+        b = _brief("pa_io_b", "Google Gemini 3 keynote launch announcement",
+                   "Google unveiled Gemini 3 keynote launch announcement agentic coding model",
+                   ["Google", "Gemini", "keynote"])
+        out = digest.dedup_near_duplicate_briefs([a, b])
+        self.assertEqual([x["artifact_id"] for x in out], ["pa_io_a"])
+
+    def test_keeps_distinct_briefs(self) -> None:
+        a = _brief("pa_a", "Anthropic ships Claude Code teams",
+                   "Claude Code gains multi-agent team execution",
+                   ["Anthropic", "Claude Code"])
+        b = _brief("pa_b", "OpenAI releases new embeddings model",
+                   "A cheaper, higher-recall embeddings endpoint",
+                   ["OpenAI", "embeddings"])
+        out = digest.dedup_near_duplicate_briefs([a, b])
+        self.assertEqual(len(out), 2)
+
+    def test_disabled_at_threshold_one(self) -> None:
+        # UA_DIGEST_DEDUP_JACCARD=1.0 disables the backstop entirely — even two
+        # identical briefs pass through (Atlas's index is the primary dedup).
+        a = _brief("pa_io_a", "Google I/O 2026 keynote", "Gemini 3 launch", ["Google", "Gemini 3"])
+        b = _brief("pa_io_b", "Google I/O 2026 keynote", "Gemini 3 launch", ["Google", "Gemini 3"])
+        with patch.dict(os.environ, {"UA_DIGEST_DEDUP_JACCARD": "1.0"}):
+            out = digest.dedup_near_duplicate_briefs([a, b])
+        self.assertEqual(len(out), 2)
+
+    def test_fail_open_single_brief(self) -> None:
+        a = _brief("pa_solo", "Solo brief", "Only one", ["X"])
+        self.assertEqual(digest.dedup_near_duplicate_briefs([a]), [a])
+
+    def test_compose_durably_supersedes_dropped_near_duplicate(self) -> None:
+        # The dropped near-dup must be marked superseded so it can't re-surface
+        # in a later hour's digest once its kept twin is delivered.
+        conn = _mk_conn()
+        _insert_ship_artifact(
+            conn, artifact_id="pa_dup_keep",
+            title="ATLAS insight brief: Gemini 3 keynote launch",
+            thesis="Google unveiled Gemini 3 keynote launch agentic coding",
+            key_entities=["Google", "Gemini", "keynote"], composite_score=0.90,
+        )
+        _insert_ship_artifact(
+            conn, artifact_id="pa_dup_drop",
+            title="ATLAS insight brief: Gemini 3 keynote launch",
+            thesis="Google unveiled Gemini 3 keynote launch agentic coding model",
+            key_entities=["Google", "Gemini", "keynote"], composite_score=0.50,
+        )
+        payload = digest.compose_send_payload(conn)
+        self.assertEqual(payload["status"], "ready")
+        self.assertEqual(payload["brief_count"], 1)
+        self.assertEqual(payload["artifact_ids"], ["pa_dup_keep"])
+        row = conn.execute(
+            "SELECT delivery_state, delivered_at FROM proactive_artifacts WHERE artifact_id='pa_dup_drop'"
+        ).fetchone()
+        self.assertEqual(row["delivery_state"], "superseded")
+        self.assertTrue(row["delivered_at"])
+        # next selection no longer surfaces the superseded dup
+        self.assertEqual(
+            [b["artifact_id"] for b in digest.select_candidates_for_current_hour(conn)],
+            ["pa_dup_keep"],
+        )
 
 
 if __name__ == "__main__":
