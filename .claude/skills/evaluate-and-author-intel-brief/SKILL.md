@@ -379,7 +379,7 @@ task_hub.perform_task_action(
     conn,
     task_id=task_id,             # from the candidate row
     action="complete",
-    actor="atlas",
+    agent_id="atlas",
     note=f"Verdict: {verdict}. {verdict_reasoning[:160]}",
 )
 ```
