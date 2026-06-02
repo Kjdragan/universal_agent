@@ -401,7 +401,15 @@ class InlineFeedbackLinkTests(unittest.TestCase):
     the ``/briefs/{id}`` viewer mints fresh tokens per request.
     """
 
-    SECRET_ENV = {"UA_FEEDBACK_HMAC_SECRET": "x" * 32}
+    # `sign_feedback_token` derives its key from `cron_artifact_notifier._ack_secret`,
+    # which reads UA_ARTIFACT_ACK_SECRET / UA_OPS_TOKEN / UA_INTERNAL_API_TOKEN —
+    # NOT UA_FEEDBACK_HMAC_SECRET. Patch the var the signer actually reads (first in
+    # that chain) so the test is hermetic in CI, where none are ambient. Setting both
+    # also covers the digest pause-token resolver, which does read the HMAC var.
+    SECRET_ENV = {
+        "UA_ARTIFACT_ACK_SECRET": "x" * 32,
+        "UA_FEEDBACK_HMAC_SECRET": "x" * 32,
+    }
 
     def test_compose_mints_signed_feedback_links_when_artifact_lacks_them(self) -> None:
         conn = _mk_conn()
