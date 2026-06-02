@@ -2479,6 +2479,29 @@ class HeartbeatService:
             final_text: Optional[str] = None
             saw_streaming_text = False
 
+            # Pending Cody demo reviews must not be starved by a later
+            # higher-priority skip (proactive_curation_dispatched /
+            # daily_budget_exhausted). _heartbeat_guard_policy already keeps
+            # `no_actionable_work` from firing when reviews are pending, but those
+            # downstream overrides re-set guard_skip_reason afterward and were
+            # masking the wake signal in prod. Demo review is bounded (1/cycle,
+            # self-draining), so let it win over those skips — but NOT over
+            # actionable_over_capacity, where the system is genuinely saturated.
+            if (
+                _pending_demo_review_count > 0
+                and guard_skip_reason
+                and guard_skip_reason != "actionable_over_capacity"
+            ):
+                logger.info(
+                    "Heartbeat wake forced for %s: %d pending demo review(s) override skip=%s",
+                    session.session_id, _pending_demo_review_count, guard_skip_reason,
+                )
+                guard_skip_reason = ""
+                metadata.setdefault("heartbeat_guard", {})
+                if isinstance(metadata.get("heartbeat_guard"), dict):
+                    metadata["heartbeat_guard"]["skip_reason"] = None
+                    metadata["heartbeat_guard"]["demo_review_override"] = True
+
             # Enforce deterministic guard policy before expensive agent execution.
             should_skip_agent_run = bool(guard_skip_reason)
 

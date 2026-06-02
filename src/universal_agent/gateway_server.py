@@ -25863,7 +25863,24 @@ async def dashboard_todolist_completed(limit: int = 60):
         assignment_session_id = str(assignment.get("session_id") or "")
         assignment_workspace = str(assignment.get("workspace_dir") or "")
 
-        if cody_workspace_dir or cody_mission_id or cody_session_id:
+        item_source_kind = str(item.get("source_kind") or "")
+        demo_workspace = str(metadata.get("workspace_dir") or "").strip()
+        demo_mission_id = str(metadata.get("linked_mission_id") or "").strip() or cody_mission_id
+
+        if item_source_kind == "cody_demo_task" and demo_workspace:
+            # A demo's real artifacts (manifest.json, src/, run_output.txt,
+            # BUILD_NOTES.md) live in its /opt/ua_demos/<id>/ workspace
+            # (metadata.workspace_dir) — NOT the VP mission dir the CLI client
+            # records, and the SDK/ZAI client records nothing at all. Point the
+            # Workspace button + three-panel/file-browser at the demo workspace
+            # for BOTH execution modes, using linked_mission_id as the session so
+            # the frontend's vp-mission special-case renders the three-panel view.
+            link_session_id = demo_mission_id or assignment_session_id
+            link_workspace = demo_workspace
+            item["canonical_execution_session_id"] = link_session_id or None
+            item["canonical_execution_run_id"] = demo_mission_id or None
+            item["canonical_execution_workspace"] = demo_workspace
+        elif cody_workspace_dir or cody_mission_id or cody_session_id:
             # vp-mission-<id> as the session_id triggers the frontend's
             # VP-mission special-case (web-ui/app/page.tsx) which knows how
             # to render the three-panel view from the workspace dir. The
