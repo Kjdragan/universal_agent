@@ -196,10 +196,21 @@ class CandidateSelectionTests(unittest.TestCase):
         conn.commit()
         self.assertEqual(digest.select_candidates_for_current_hour(conn), [])
 
-    def test_skips_prior_hour_briefs(self) -> None:
+    def test_picks_up_recent_undelivered_ship_briefs(self) -> None:
+        # Orphan recovery (2026-06-02): a ship brief authored in a prior hour
+        # that was never delivered must still be surfaced — the old
+        # current-clock-hour gate orphaned ~40% of ship briefs whenever no
+        # digest run caught them in their authoring hour.
         conn = _mk_conn()
         prior = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
         _insert_ship_artifact(conn, artifact_id="pa_prior_001", created_at=prior)
+        out = digest.select_candidates_for_current_hour(conn)
+        self.assertEqual([b["artifact_id"] for b in out], ["pa_prior_001"])
+
+    def test_skips_briefs_older_than_lookback(self) -> None:
+        conn = _mk_conn()
+        old = (datetime.now(timezone.utc) - timedelta(hours=30)).isoformat()
+        _insert_ship_artifact(conn, artifact_id="pa_old_001", created_at=old)
         self.assertEqual(digest.select_candidates_for_current_hour(conn), [])
 
     def test_needs_attention_pinned_to_top(self) -> None:

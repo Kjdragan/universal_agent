@@ -36,7 +36,7 @@ last_verified: 2026-06-02
 | Atlas claims + authors `intel_brief` | ✅ Working | 5+ `intel_brief` artifacts; newest pa_7d3a3f50 (06-01 18:00), pa_a68d4fbc (06-01 16:23) |
 | `daemon_simone_todo` dispatch | ✅ Healthy | 1103 completed, 94 failed, 20 abandoned; last completed 06-01 18:12 |
 | `recent_briefs_index.md` (Atlas prior-verdict memory) | ✅ Written | 384 KB, updated 06-01 18:51 |
-| **Brief → digest EMAIL leg** | ❌ **GAP** | 2 newest briefs `delivery_state='not_surfaced'`; late-May briefs were `emailed`/`hourly_digest` |
+| **Brief → digest EMAIL leg** | ✅ **FIXED (Phase 0.5, 2026-06-02)** | was: 2 ship briefs orphaned `not_surfaced` by a current-clock-hour selector gate (~40% of ship briefs); now a lookback window (`UA_DIGEST_BRIEF_LOOKBACK_HOURS`) surfaces undelivered ship briefs |
 | Digest dedup | ❌ Missing in digest | `hourly_intel_digest.py` has no Jaccard/overlap suppression (index-side only) |
 | Operator feedback loop | 🟡 Built, ~unexercised | `proactive_artifact_feedback`: **1 row** total |
 | `csi_convergence_sync` cron health | ✅ **Fixed 2026-06-02 (PR #665)** | was 900s-timeout flood; now parallelized + time-boxed (separate work) |
@@ -102,39 +102,35 @@ flowchart TD
 `hourly_intel_digest.py::select_candidates_for_current_hour` (or the heartbeat
 cadence that invokes it) is no longer selecting them.
 
-**Investigate first (read bodies, don't assume):**
-1. Read `hourly_intel_digest.py::select_candidates_for_current_hour` — the exact
-   WHERE clause: which `status`/`verdict`/`delivery_state`/recency predicates
-   gate a brief into the hour's batch. (Recon showed it filters on
-   `delivery_state='emailed'` for the *already-sent* exclusion at the symbol near
-   `WHERE delivery_state = 'emailed' AND delivery_channel = ?` — confirm the
-   *inclusion* predicate.)
-2. Check the heartbeat invoker: is `/hourly-intel-digest` running each active
-   hour, and does it see these briefs? (The two stuck briefs are 16:23 and 18:00
-   on 06-01; confirm the digest ran those hours and returned `no_candidates` vs
-   never ran.)
-3. Confirm the briefs' `verdict` — are pa_7d3a3f50 / pa_a68d4fbc `verdict='ship'`?
-   If they're `skip`/`defer`, `not_surfaced` is **correct** (only ship briefs
-   email) and there is NO gap — the "gap" is just a low ship rate. **This check
-   decides whether 0.5 is a bug or a no-op.**
+**RESOLVED — real bug (2026-06-02): SHIPPED.** Both stuck briefs are
+**`verdict='ship'`** but `not_surfaced` / `delivered_at IS NULL`. The intel_brief
+matrix: **3 ship `emailed`, 2 ship `not_surfaced`** — i.e. **~40% of ship briefs
+were authored but never emailed**, so this was a real bug, not a no-op.
 
-**Likely outcomes & fix:**
-- **(a) Briefs are `ship` but the selector's recency/window predicate drops them**
-  → widen/correct the predicate so a ship brief authored this active-window hour
-  is surfaced once. Acceptance: the two stuck ship briefs (or the next ship brief)
-  reach `delivery_state='emailed'` within the hour.
-- **(b) Briefs are `skip`/`defer`** → not a bug. Document that `not_surfaced` is
-  the correct terminal state for non-ship briefs; close 0.5 as verified-correct;
-  the real lever is ship-rate/source-mix (a separate follow-on, see §7).
+**Root cause:** `hourly_intel_digest.py::select_candidates_for_current_hour`
+gated on the *exact current clock hour*:
+`strftime('%Y-%m-%d %H', created_at) = strftime('%Y-%m-%d %H', 'now')`. A ship
+brief authored at HH:MM is eligible only during clock-hour HH; if no digest run
+catches it that hour (timing — e.g. the hour's digest already ran before the
+brief landed), it is orphaned forever (next hour `created_at`-hour ≠ now-hour).
+`delivered_at IS NULL` already prevents re-sends, so the hour-gate was
+over-restrictive.
+
+**Fix:** replaced the clock-hour equality with a lookback window —
+`created_at >= datetime('now', '-N hours')`, N = `_brief_lookback_hours()`
+(`UA_DIGEST_BRIEF_LOOKBACK_HOURS`, default 24). Any recent undelivered ship brief
+is now surfaced on the next digest run and emailed exactly once
+(`delivered_at IS NULL` gates re-delivery; the per-hour delivery throttle still
+caps one email/hour).
 
 | Field | Value |
 |---|---|
-| Files | `services/hourly_intel_digest.py::select_candidates_for_current_hour` (+ heartbeat invoker in `memory/HEARTBEAT.md` if cadence) |
-| Acceptance | A `ship` brief authored in an active hour is emailed exactly once and stamped `emailed`/`hourly_digest`/`delivered_at`; non-ship briefs correctly stay `not_surfaced` |
-| Tests | unit: seed a ship brief + a skip brief → selector returns only the ship one; seed an already-`emailed` brief → excluded |
-| Verify (prod) | Gmail MCP shows one digest containing the brief; `proactive_artifacts` delivery columns set |
-| Env flag / rollback | none new (behavior fix); revert = one commit |
-| Risk | LOW — read-mostly; main risk is widening the predicate and double-emailing → guarded by the existing `delivery_state='emailed'` exclusion |
+| Files | `services/hourly_intel_digest.py::select_candidates_for_current_hour` + `::_brief_lookback_hours` |
+| Acceptance | a ship brief authored in any of the last N hours, undelivered, is surfaced once and stamped `emailed`/`hourly_digest`/`delivered_at`; an already-delivered brief and a too-old (>N h) brief are excluded |
+| Tests | `tests/unit/test_hourly_intel_digest_skill.py::test_picks_up_recent_undelivered_ship_briefs` + `::test_skips_briefs_older_than_lookback` (orphan recovery + bound); existing skip-delivered / skip-non-ship still green (27 passed) |
+| Verify (prod) | after deploy, the 2 orphaned ship briefs (pa_7d3a3f50, pa_a68d4fbc) are picked up by the next digest run and stamped `emailed` |
+| Env flag / rollback | `UA_DIGEST_BRIEF_LOOKBACK_HOURS` (set to `1` ≈ old current-hour-ish behavior); revert = one commit |
+| Risk | LOW — `delivered_at IS NULL` prevents double-emailing; lookback bounds staleness |
 
 ---
 
