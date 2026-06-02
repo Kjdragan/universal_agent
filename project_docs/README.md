@@ -65,6 +65,7 @@ _CSI, intel lanes, research, wiki, memory, proactive pipeline, mission control, 
 - **[Proactive Pipeline](04_intelligence/10_proactive_pipeline.md)** — raw→knowledge blocks→bounded retrieval→LLM synthesis→gated action. _(verified 2026-05-29)_
 - **[Mission Control Intelligence](04_intelligence/11_mission_control_intelligence.md)** — Operator intelligence surface, supervisor snapshots (note: Operator Brief panel removed Phase 8). _(verified 2026-05-29)_
 - **[Discord Intelligence](04_intelligence/12_discord_intelligence.md)** — Discord message pipeline, triage, calendar sync (gws materialization). _(verified 2026-05-29)_
+- **[Insight Pipeline Build Plan (0.5/4/5/6)](04_intelligence/13_insight_pipeline_build_plan.md)** — Living build/status plan: close the brief→digest email gap, digest dedup+template, feedback/index verify, gated legacy deletion. Companion to the proactive-pipeline doc. _(verified 2026-06-02)_
 
 ## 05_channels
 
