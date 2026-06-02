@@ -9050,31 +9050,13 @@ def _bridge_vp_events_once(*, limit: int = 200) -> int:
                             "🔄 VP event bridge: task %s → pending_review (mission=%s event=%s)",
                             updated.get("task_id", "?"), mission_id, event_type,
                         )
-                        # Direct/ungated demo lane: a cody_demo_task dispatched
-                        # with review_required=False skips Simone's review —
-                        # auto-finalize on the mechanical endpoint check instead
-                        # of waiting in pending_review.
-                        try:
-                            _u_meta = dict(updated.get("metadata") or {})
-                            if (
-                                str(updated.get("source_kind") or "") == "cody_demo_task"
-                                and _u_meta.get("review_required") is False
-                            ):
-                                from universal_agent.services.cody_evaluation import (
-                                    finalize_direct_demo,
-                                )
-                                _fin = finalize_direct_demo(
-                                    runtime_conn, task_id=str(updated.get("task_id") or "")
-                                )
-                                logger.info(
-                                    "🟢 VP event bridge: direct demo %s auto-finalized → %s",
-                                    updated.get("task_id", "?"), _fin.get("status"),
-                                )
-                        except Exception:
-                            logger.exception(
-                                "VP event bridge: direct-demo auto-finalize failed (mission=%s)",
-                                mission_id,
-                            )
+                        # NOTE: cody_demo_task terminal routing (direct → endpoint-checked
+                        # finalize, curated → pending_review) is owned SYNCHRONOUSLY by the
+                        # VP worker's terminal handler (vp/worker_loop.py). By the time this
+                        # 1s-poll bridge runs, a demo row is already terminal, so the
+                        # transition_to_pending_review above no-ops on it. The former
+                        # bridge-side finalize_direct_demo branch was removed to eliminate
+                        # the duplicate/raced completion path.
             except Exception as exc:
                 logger.warning(
                     "VP event bridge: failed transitioning task for mission %s: %s",

@@ -746,18 +746,62 @@ class VpWorkerLoop:
             _source_task_id = _resolve_source_task_id_from_payload(_mission_payload)
             if _source_task_id and _source_task_id != mission_id:
                 try:
-                    task_hub.upsert_item(th_conn, {
-                        "task_id": _source_task_id,
-                        "status": th_status,
-                        "metadata": {
-                            **_terminal_meta,
-                            "linked_mission_id": mission_id,
-                        },
-                    })
-                    logger.info(
-                        "Source task closed after VP terminal: source_task_id=%s mission_id=%s status=%s",
-                        _source_task_id, mission_id, th_status,
-                    )
+                    _src_item = task_hub.get_item(th_conn, _source_task_id)
+                    _src_kind = str((_src_item or {}).get("source_kind") or "")
+                    _src_meta = dict((_src_item or {}).get("metadata") or {})
+
+                    if _src_kind == "cody_demo_task" and event_type == "vp.mission.completed":
+                        # Consolidated, SINGLE owner of cody_demo_task terminal routing.
+                        # Previously this blind "→ completed" raced the gateway VP-event
+                        # bridge (which routed demos to pending_review / finalize) and
+                        # always won synchronously, pre-empting the review + endpoint
+                        # gates. Doing the routing HERE — in-worker, synchronous,
+                        # restart-safe — removes that race and the duplicate bridge path.
+                        if _src_meta.get("review_required") is False:
+                            # Direct/ungated demo → enforce the mechanical endpoint check
+                            # and complete on pass; on a miss leave it in pending_review
+                            # (visible, not a delegated zombie).
+                            from universal_agent.services.cody_evaluation import (
+                                finalize_direct_demo,
+                            )
+                            _fin = finalize_direct_demo(th_conn, task_id=_source_task_id)
+                            if _fin.get("status") != "completed":
+                                task_hub.upsert_item(th_conn, {
+                                    "task_id": _source_task_id,
+                                    "status": task_hub.TASK_STATUS_PENDING_REVIEW,
+                                    "metadata": {**_terminal_meta, "linked_mission_id": mission_id},
+                                })
+                            logger.info(
+                                "Direct demo terminal-routed: source_task_id=%s mission=%s → %s",
+                                _source_task_id, mission_id, _fin.get("status"),
+                            )
+                        else:
+                            # Curated demo → pending_review for Simone's evaluator (do
+                            # NOT auto-complete; the review gate owns the outcome).
+                            task_hub.upsert_item(th_conn, {
+                                "task_id": _source_task_id,
+                                "status": task_hub.TASK_STATUS_PENDING_REVIEW,
+                                "metadata": {**_terminal_meta, "linked_mission_id": mission_id},
+                            })
+                            logger.info(
+                                "Curated demo → pending_review: source_task_id=%s mission=%s",
+                                _source_task_id, mission_id,
+                            )
+                    else:
+                        # Default: close the source task. Zombie prevention for every
+                        # non-demo delegation, plus demo failed/cancelled missions.
+                        task_hub.upsert_item(th_conn, {
+                            "task_id": _source_task_id,
+                            "status": th_status,
+                            "metadata": {
+                                **_terminal_meta,
+                                "linked_mission_id": mission_id,
+                            },
+                        })
+                        logger.info(
+                            "Source task closed after VP terminal: source_task_id=%s mission_id=%s status=%s",
+                            _source_task_id, mission_id, th_status,
+                        )
                 except Exception as src_exc:
                     logger.warning(
                         "Source-task close failed for %s ← mission %s: %s",
