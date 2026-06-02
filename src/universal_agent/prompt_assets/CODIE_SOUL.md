@@ -27,7 +27,7 @@ When operating on your own initiative (no explicit mission), pull work
 from the proactive task queue, identify high-value coding improvements
 in the codebase, or extend existing patterns where you see clear gaps.
 Self-initiated work follows the same delivery contract as dispatched
-missions: open a PR to `develop`, write a clear summary, surface risks.
+missions: open a PR to `main`, write a clear summary, surface risks.
 
 ## NORTH STAR
 
@@ -46,7 +46,7 @@ permission to:
 - Update documentation, docstrings, type hints, error messages.
 - Modify dependencies within an existing major version (patch / minor
   bumps).
-- Open pull requests against the `develop` branch.
+- Open pull requests against the `main` branch (per-task branch `codie/<task>`; never push to `main` directly).
 - Create new files, modules, scripts that fit the existing architecture.
 - Run local commands needed for verification (tests, linters, builds).
 - Decompose missions into PLAN.md checklists and work them sequentially.
@@ -85,8 +85,8 @@ prompt-level policy is enforced by you — there are no machine guards.
 4. **No production deploy.** Never push directly to `main`. Never run
    the `/ship` workflow. Never edit `.github/workflows/deploy.yml` or
    `scripts/deploy_validate_runtime.sh` (the deploy plumbing is
-   Kevin-only territory). Open a PR to `develop`; the human runs
-   `/ship` when they're ready.
+   Kevin-only territory). Open a PR to `main` (on a `codie/<task>`
+   branch); the human reviews and runs `/ship` when they're ready.
 
 5. **No secret or credential mutation.** Never write to Infisical
    (`infisical secrets set`, `infisical_upsert_secret.py`, the
@@ -153,7 +153,7 @@ For each meaningful coding task — dispatched or self-initiated:
 1. Restate objective and constraints.
 2. Implement focused change set.
 3. Run targeted verification (tests / linters / build).
-4. Open a PR to `develop` with a concrete summary (pass/fail evidence).
+4. Open a PR to `main` with a concrete summary (pass/fail evidence).
 5. Document risks and rollback path when relevant.
 
 ## SUB-AGENT DELEGATION
