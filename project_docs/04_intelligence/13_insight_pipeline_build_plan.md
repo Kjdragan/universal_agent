@@ -37,7 +37,7 @@ last_verified: 2026-06-02
 | `daemon_simone_todo` dispatch | ✅ Healthy | 1103 completed, 94 failed, 20 abandoned; last completed 06-01 18:12 |
 | `recent_briefs_index.md` (Atlas prior-verdict memory) | ✅ Written | 384 KB, updated 06-01 18:51 |
 | **Brief → digest EMAIL leg** | ✅ **FIXED (Phase 0.5, 2026-06-02)** | was: 2 ship briefs orphaned `not_surfaced` by a current-clock-hour selector gate (~40% of ship briefs); now a lookback window (`UA_DIGEST_BRIEF_LOOKBACK_HOURS`) surfaces undelivered ship briefs |
-| Digest dedup | ❌ Missing in digest | `hourly_intel_digest.py` has no Jaccard/overlap suppression (index-side only) |
+| Digest dedup | ✅ **SHIPPED (Phase 4, 2026-06-02)** | `hourly_intel_digest.py::dedup_near_duplicate_briefs` (Jaccard backstop, `UA_DIGEST_DEDUP_JACCARD`) + `::mark_superseded` for durable suppression |
 | Operator feedback loop | 🟡 Built, ~unexercised | `proactive_artifact_feedback`: **1 row** total |
 | `csi_convergence_sync` cron health | ✅ **Fixed 2026-06-02 (PR #665)** | was 900s-timeout flood; now parallelized + time-boxed (separate work) |
 | Legacy Track A/B + hand-trigger endpoints | ⚠️ Dead but present | Phase 6 deletion target |
@@ -136,42 +136,40 @@ caps one email/hour).
 
 ## 4. Phase 4 — Digest dedup + template (decision D: both)
 
-**4.1 Near-duplicate suppression (index primary + digest backstop).**
-- **Index side (primary):** confirm `recent_briefs_index` makes Atlas skip a
-  near-identical second cluster at authoring time (it caught the two Google I/O
-  clusters on 2026-05-29). Mostly verification; gap-fill only if it regressed.
-- **Digest side (deterministic backstop):** add topic/thesis-overlap suppression
-  to `select_candidates_for_current_hour` so two near-identical briefs in one
-  hour collapse to one. Method: Jaccard over a normalized token set of
-  `{primary_topics ∪ thesis n-grams}`; threshold env-flagged
-  `UA_DIGEST_DEDUP_JACCARD` (default e.g. 0.6); keep the higher-`signal_strength`
-  brief, mark the other `delivery_state='superseded'` (new terminal, not emailed).
-
-```python
-# services/hourly_intel_digest.py — sketch (fail-open: never drop below 1)
-def _dedup_near_duplicates(briefs: list[dict], threshold: float) -> list[dict]:
-    kept: list[dict] = []
-    for b in sorted(briefs, key=lambda x: -float(x.get("signal_strength") or 0)):
-        toks = _topic_thesis_tokens(b)
-        if any(_jaccard(toks, _topic_thesis_tokens(k)) >= threshold for k in kept):
-            continue  # near-duplicate of an already-kept, higher-strength brief
-        kept.append(b)
-    return kept
-```
+**4.1 Near-duplicate suppression — SHIPPED (2026-06-02).**
+- **Index side (primary):** verified — `recent_briefs_index.py` builds the
+  ship + skip/defer index Atlas reads; the "index-primary" dedup is Atlas's LLM
+  judgment grounded in that index (it caught the two Google I/O clusters on
+  2026-05-29). No code-level similarity function — and none needed. No regression.
+- **Digest side (deterministic backstop):** implemented in
+  `hourly_intel_digest.py::dedup_near_duplicate_briefs`, called from
+  `::compose_send_payload` after selection (the selector stays pure). Jaccard over
+  a normalized token set of `{title + thesis + key_entities}` (alnum tokens,
+  len>2); threshold `UA_DIGEST_DEDUP_JACCARD` (default **0.6**, intentionally
+  conservative — a false collapse hides a distinct brief, worse than letting a
+  near-dup through; `1.0` disables). Input is pre-sorted best-first
+  (needs_attention pinned, then composite_score desc), so the higher-priority
+  brief survives. **Fail-open:** always returns ≥1.
+- **Durable suppression:** `compose_send_payload` marks each dropped near-dup via
+  `::mark_superseded` (`delivered_at` stamped so the selector stops surfacing it;
+  `delivery_state='superseded'`, NOT `'emailed'`, so `is_throttled` doesn't count
+  it). Without this the dropped dup would re-appear in the next hour's digest once
+  its kept twin was delivered — the per-batch collapse alone is insufficient.
 
 | Field | Value |
 |---|---|
-| Files | `services/hourly_intel_digest.py` (+ verify `services/recent_briefs_index.py`), 1 test |
-| Acceptance | two near-identical briefs in one hour → one in the email; the dropped one recorded (not silently lost) |
-| Tests | unit: two overlapping briefs (Jaccard > threshold) → one rendered; two distinct → both |
-| Env flag / rollback | `UA_DIGEST_DEDUP_JACCARD` (set very high ⇒ effectively off) |
-| Risk | MED — over-aggressive dedup hides distinct briefs → conservative default + fail-open (always keep ≥1) |
+| Files | `services/hourly_intel_digest.py::dedup_near_duplicate_briefs` / `::mark_superseded` / `::compose_send_payload` |
+| Acceptance | two near-identical briefs collapse to one in the email AND the dropped one is durably suppressed (`superseded`, not re-selected next hour); two distinct briefs both ship |
+| Tests | `test_hourly_intel_digest_skill.py::DigestDedupTests` (collapse-keeps-first / keeps-distinct / disabled-at-1.0 / fail-open / `compose_durably_supersedes_dropped_near_duplicate`) — 32 passed |
+| Env flag / rollback | `UA_DIGEST_DEDUP_JACCARD=1.0` disables the backstop |
+| Risk | MED — over-aggressive dedup hides distinct briefs → conservative 0.6 default + fail-open (always ≥1) |
 
-**4.2 Render review.** Eyeball `render_digest_html` output (subject, ribbons,
-per-brief links, thumbs feedback links). Verify by sending a real digest (Phase
-0.5 / manual) and viewing via Gmail MCP. Fix any broken links/anchors (operator
-is terminal-only; links must resolve). Acceptance: operator confirms it "looks
-good." No env flag (presentation).
+**4.2 Render review.** `render_digest_html` reviewed (code): per-card title +
+thesis + why + tags, "Read full brief →" button (`{base_url}/briefs/{id}`),
+thumbs feedback buttons, footer (prefs / pause-24h / "why these?"), Gmail-safe
+inline CSS — no rendering defects found. The live eyeball (links resolve in a
+real inbox) happens naturally on the next scheduled digest; **not force-sent**
+(would increase operator email volume — needs operator OK). No code.
 
 ---
 
