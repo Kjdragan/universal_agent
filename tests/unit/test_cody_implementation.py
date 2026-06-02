@@ -25,6 +25,7 @@ from universal_agent.services.cody_implementation import (
     load_briefing,
     probe_versions,
     read_manifest,
+    resolve_demo_artifacts_dir,
     run_in_workspace,
     verify_workspace_ready,
     workspace_for,
@@ -393,6 +394,55 @@ def test_write_and_read_manifest_round_trip(tmp_path: Path):
 
 def test_read_manifest_returns_none_when_missing(tmp_path: Path):
     assert read_manifest(tmp_path / "ws") is None
+
+
+# ── resolve_demo_artifacts_dir (curated demos write to vp-mission subdir) ─────
+
+
+def test_resolve_demo_artifacts_dir_prefers_root_manifest(tmp_path: Path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "manifest.json").write_text("{}", encoding="utf-8")
+    # A stray vp-mission subdir must NOT override an existing root manifest.
+    sub = ws / "vp-mission-abc"
+    sub.mkdir()
+    (sub / "manifest.json").write_text("{}", encoding="utf-8")
+    assert resolve_demo_artifacts_dir(ws) == ws.resolve()
+
+
+def test_resolve_demo_artifacts_dir_falls_back_to_vp_mission_subdir(tmp_path: Path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    sub = ws / "vp-mission-9205c125cba0e649e62323ec"
+    sub.mkdir()
+    (sub / "manifest.json").write_text("{}", encoding="utf-8")
+    assert resolve_demo_artifacts_dir(ws) == sub.resolve()
+
+
+def test_resolve_demo_artifacts_dir_returns_root_when_no_manifest(tmp_path: Path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    assert resolve_demo_artifacts_dir(ws) == ws.resolve()
+
+
+def test_read_manifest_resolves_vp_mission_subdir(tmp_path: Path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    sub = ws / "vp-mission-abc123"
+    sub.mkdir()
+    manifest = DemoManifest(
+        demo_id="code-review__demo-1",
+        feature="code-review",
+        endpoint_required="anthropic_native",
+        endpoint_hit="anthropic_native",
+        acceptance_passed=False,
+        iteration=1,
+    )
+    write_manifest(sub, manifest)  # writes into the subdir, not the root
+    assert not (ws / "manifest.json").exists()
+    loaded = read_manifest(ws)
+    assert loaded is not None
+    assert loaded.demo_id == "code-review__demo-1"
 
 
 def test_manifest_endpoint_match_check():

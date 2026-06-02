@@ -147,6 +147,37 @@ def workspace_for(workspace_dir: Path) -> WorkspaceArtifacts:
     return WorkspaceArtifacts(workspace_dir=workspace_dir.resolve())
 
 
+def resolve_demo_artifacts_dir(workspace_dir: Path) -> Path:
+    """Return the directory that actually holds a demo's build artifacts.
+
+    Direct demo builds write `manifest.json` / `run_output.txt` / `BUILD_NOTES.md`
+    at the workspace root. Curated demos built via a VP mission (the VP worker
+    terminal handler that routes them to `pending_review`) write those build
+    artifacts into a per-mission subdir `<workspace_dir>/vp-mission-<id>/`, while
+    the Phase-2 scaffold files (BRIEF/ACCEPTANCE/business_relevance) stay at root.
+
+    This resolver prefers the workspace root when it carries a manifest, and
+    otherwise falls back to the newest `vp-mission-*/` subdir that contains one.
+    The fallback only fires when the root manifest is absent, so existing
+    root-layout behavior is never altered. Returns the workspace root when no
+    manifest exists anywhere (caller treats that as "no manifest").
+    """
+    root = workspace_dir.resolve()
+    if (root / "manifest.json").exists():
+        return root
+    try:
+        mission_manifests = sorted(
+            root.glob("vp-mission-*/manifest.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        mission_manifests = []
+    if mission_manifests:
+        return mission_manifests[0].parent
+    return root
+
+
 # ── Pre-build verification ──────────────────────────────────────────────────
 
 
@@ -685,8 +716,13 @@ def write_manifest(workspace_dir: Path, manifest: DemoManifest) -> Path:
 
 
 def read_manifest(workspace_dir: Path) -> DemoManifest | None:
-    """Read and parse manifest.json from the workspace; return None if absent or malformed."""
-    target = workspace_for(workspace_dir).manifest_path
+    """Read and parse manifest.json from the workspace; return None if absent or malformed.
+
+    Resolves the effective artifacts dir first so curated demos whose build
+    manifest landed in a `vp-mission-<id>/` subdir are read correctly, not just
+    direct demos that write the manifest at the workspace root.
+    """
+    target = resolve_demo_artifacts_dir(workspace_dir) / "manifest.json"
     if not target.exists():
         return None
     try:

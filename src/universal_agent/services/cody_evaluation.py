@@ -46,6 +46,7 @@ from universal_agent.services.cody_implementation import (
     list_sources,
     load_briefing,
     read_manifest,
+    resolve_demo_artifacts_dir,
     run_in_workspace,
     workspace_for,
 )
@@ -68,8 +69,15 @@ VALID_VERDICTS = (VERDICT_PASS, VERDICT_ITERATE, VERDICT_DEFER)
 def monitor_demo_tasks(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     """List every Task Hub item with source_kind=cody_demo_task.
 
-    Returns rows enriched with their iteration count and a derived
-    Simone-facing 'state' field summarizing what action she should take.
+    Returns rows enriched with their iteration count, a `manifest_present`
+    filesystem signal, a derived `ready_for_review` boolean, and a
+    Simone-facing `state` field summarizing what action she should take.
+
+    `ready_for_review` is the canonical Phase-4 eligibility gate: it is True
+    exactly when `status == 'pending_review'` AND a manifest.json exists in the
+    workspace (resolved via `resolve_demo_artifacts_dir`, so VP-mission subdir
+    layouts count). This keeps the readiness decision in code (deterministic
+    gate) while Simone still makes the pass/iterate/defer judgment.
     """
     task_hub.ensure_schema(conn)
     cur = conn.execute(
@@ -83,15 +91,29 @@ def monitor_demo_tasks(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         metadata = hydrated.get("metadata") or {}
         if not isinstance(metadata, dict):
             metadata = {}
+        status = hydrated.get("status")
+        workspace_dir = metadata.get("workspace_dir")
+        manifest_present = False
+        if workspace_dir:
+            try:
+                manifest_present = (
+                    resolve_demo_artifacts_dir(Path(workspace_dir)) / "manifest.json"
+                ).exists()
+            except OSError:
+                manifest_present = False
+        ready_for_review = status == "pending_review" and manifest_present
         rows.append(
             {
                 "task_id": hydrated.get("task_id"),
                 "title": hydrated.get("title"),
-                "status": hydrated.get("status"),
+                "status": status,
+                "state": _derive_demo_state(status, manifest_present),
+                "ready_for_review": ready_for_review,
+                "manifest_present": manifest_present,
                 "priority": int(hydrated.get("priority") or 0),
                 "demo_id": metadata.get("demo_id"),
                 "entity_slug": metadata.get("entity_slug"),
-                "workspace_dir": metadata.get("workspace_dir"),
+                "workspace_dir": workspace_dir,
                 "iteration": int(metadata.get("iteration") or 1),
                 "endpoint_required": metadata.get("endpoint_required") or "anthropic_native",
                 "queue_policy": metadata.get("queue_policy") or "wait_indefinitely",
@@ -100,6 +122,30 @@ def monitor_demo_tasks(conn: sqlite3.Connection) -> list[dict[str, Any]]:
             }
         )
     return rows
+
+
+def _derive_demo_state(status: Any, manifest_present: bool) -> str:
+    """Map raw Task Hub status to a Simone-facing action label.
+
+    The whole point of this label is to remove ambiguity at the point of
+    surfacing: a `pending_review` row WITH a manifest is unambiguously
+    `ready_for_review`; without one it is `pending_review_no_manifest` (a
+    build that reached terminal routing but produced no manifest — defer).
+    """
+    s = str(status or "")
+    if s == "pending_review":
+        return "ready_for_review" if manifest_present else "pending_review_no_manifest"
+    if s in ("needs_review",):
+        return "ready_for_review" if manifest_present else "needs_review_no_manifest"
+    if s in ("in_progress", "delegated", "claimed"):
+        return "building"
+    if s == "open":
+        return "queued"
+    if s == "completed":
+        return "completed"
+    if s in ("parked", "deferred"):
+        return "deferred"
+    return s or "unknown"
 
 
 # ── Evaluation ──────────────────────────────────────────────────────────────
@@ -192,7 +238,9 @@ def evaluate_demo(
     supervised. Simone passes a command when she wants to verify the demo
     runs end-to-end again.
     """
-    artifacts = workspace_for(workspace_dir)
+    # Build artifacts (manifest / run_output / BUILD_NOTES) may live in a
+    # vp-mission-<id>/ subdir for curated demos; briefing/sources stay at root.
+    artifacts_dir = resolve_demo_artifacts_dir(workspace_dir)
 
     # Manifest & briefing
     manifest_obj = read_manifest(workspace_dir)
@@ -282,8 +330,8 @@ def evaluate_demo(
         manifest=manifest_dict,
         briefing_present=workspace_complete.ok,
         sources_count=len(sources),
-        build_notes_excerpt=_read_excerpt(artifacts.build_notes_path),
-        run_output_excerpt=_read_excerpt(artifacts.run_output_path),
+        build_notes_excerpt=_read_excerpt(artifacts_dir / "BUILD_NOTES.md"),
+        run_output_excerpt=_read_excerpt(artifacts_dir / "run_output.txt"),
         rerun=rerun_dict,
         endpoint_match=endpoint_match,
         cody_self_reported_pass=cody_self_reported_pass,
