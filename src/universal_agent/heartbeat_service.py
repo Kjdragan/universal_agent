@@ -843,6 +843,7 @@ def _heartbeat_guard_policy(
     has_exec_completion: bool,
     has_heartbeat_content: bool = False,
     pending_question_count: int = 0,
+    pending_demo_review_count: int = 0,
 ) -> dict[str, object]:
     autonomous_enabled = _parse_bool(
         os.getenv("UA_HEARTBEAT_AUTONOMOUS_ENABLED"),
@@ -884,6 +885,14 @@ def _heartbeat_guard_policy(
         and not has_exec_completion
         and not has_heartbeat_content
         and pending_question_count <= 0
+        # Demo review (cody_demo_task in pending_review) is real work but is NOT
+        # a *dispatchable* queue item, so it never increments actionable_count.
+        # Without this, the heartbeat skips agent execution and Simone never
+        # runs the Phase-4 demo-review directive — the P3 loop's final stall.
+        # Counted as a "don't skip" signal, NOT added to actionable_count, so
+        # it can't trip the over-capacity skip. Self-draining (1 review/cycle;
+        # pass/iterate/defer all move the row OUT of pending_review).
+        and pending_demo_review_count <= 0
     ):
         # Autonomous Ideation Mode — instead of always sleeping when the
         # queue is empty, check if the reflection engine is enabled.  If so,
@@ -2034,6 +2043,7 @@ class HeartbeatService:
             # Proactive advisor variables (set inside Task Hub block, used after)
             _brainstorm_ctx_text = ""
             _pending_q_count = 0
+            _pending_demo_review_count = 0
             _morning_text = ""
 
             # Deterministic Task Hub pre-step: heartbeat consumes prepared dispatch queue.
@@ -2067,6 +2077,19 @@ class HeartbeatService:
 
                     queue = task_hub.get_dispatch_queue(conn, limit=max(3, max_proactive_per_cycle * 4))
                     dispatch_actionable_count = int(queue.get("eligible_total") or 0)
+
+                    # Pending demo reviews keep the heartbeat awake even when the
+                    # dispatch queue is empty (see _heartbeat_guard_policy). Cheap
+                    # COUNT only — the Phase-4 directive does the manifest check.
+                    try:
+                        _pending_demo_review_count = int(
+                            conn.execute(
+                                "SELECT COUNT(*) FROM task_hub_items "
+                                "WHERE source_kind='cody_demo_task' AND status='pending_review'"
+                            ).fetchone()[0]
+                        )
+                    except Exception:
+                        _pending_demo_review_count = 0
 
                     # ── Capacity Governor gate ──────────────────────────
                     # Check system-level capacity before claiming tasks.
@@ -2329,6 +2352,7 @@ class HeartbeatService:
                 has_exec_completion=has_exec_completion,
                 has_heartbeat_content=bool(heartbeat_content.strip()),
                 pending_question_count=_pending_q_count,
+                pending_demo_review_count=_pending_demo_review_count,
             )
             guard_skip_reason = str(guard_policy.get("skip_reason") or "").strip()
             _is_reflection_mode = bool(guard_policy.get("reflection_mode", False))
@@ -2348,6 +2372,7 @@ class HeartbeatService:
                 "actionable_count": int(dispatch_actionable_count or 0),
                 "brainstorm_candidate_count": int(dispatch_claimed_count or 0),
                 "system_event_count": len(system_events),
+                "pending_demo_review_count": int(_pending_demo_review_count or 0),
                 "skip_reason": guard_skip_reason or None,
                 "reflection_mode": _is_reflection_mode,
             }

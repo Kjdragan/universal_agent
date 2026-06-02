@@ -371,6 +371,69 @@ class TestReflection24x7:
         assert policy["skip_reason"] is None
 
 
+class TestHeartbeatDemoReviewGuard:
+    """pending_review cody_demo_task work must keep the heartbeat awake even when
+    the dispatch queue is empty — otherwise Simone's Phase-4 demo-review directive
+    never runs and the P3 loop stalls (the bug found 2026-06-01)."""
+
+    @mock.patch.dict(os.environ, {
+        "UA_HEARTBEAT_AUTONOMOUS_ENABLED": "1",
+        "UA_REFLECTION_ENABLED": "0",
+    }, clear=False)
+    def test_empty_queue_no_demos_skips(self):
+        from universal_agent.heartbeat_service import _heartbeat_guard_policy
+
+        policy = _heartbeat_guard_policy(
+            actionable_count=0,
+            brainstorm_candidate_count=0,
+            system_event_count=0,
+            has_exec_completion=False,
+            has_heartbeat_content=False,
+            pending_question_count=0,
+            pending_demo_review_count=0,
+        )
+        assert policy["skip_reason"] == "no_actionable_work"
+
+    @mock.patch.dict(os.environ, {
+        "UA_HEARTBEAT_AUTONOMOUS_ENABLED": "1",
+        "UA_REFLECTION_ENABLED": "0",
+    }, clear=False)
+    def test_pending_demo_review_keeps_heartbeat_awake(self):
+        from universal_agent.heartbeat_service import _heartbeat_guard_policy
+
+        policy = _heartbeat_guard_policy(
+            actionable_count=0,
+            brainstorm_candidate_count=0,
+            system_event_count=0,
+            has_exec_completion=False,
+            has_heartbeat_content=False,
+            pending_question_count=0,
+            pending_demo_review_count=3,
+        )
+        assert policy["skip_reason"] is None
+
+    @mock.patch.dict(os.environ, {
+        "UA_HEARTBEAT_AUTONOMOUS_ENABLED": "1",
+        "UA_REFLECTION_ENABLED": "0",
+    }, clear=False)
+    def test_demo_review_backlog_does_not_trip_over_capacity(self):
+        # Demo-review count must NOT be folded into actionable_count, so even a
+        # large backlog keeps the heartbeat running instead of tripping the
+        # actionable_over_capacity skip.
+        from universal_agent.heartbeat_service import _heartbeat_guard_policy
+
+        policy = _heartbeat_guard_policy(
+            actionable_count=0,
+            brainstorm_candidate_count=0,
+            system_event_count=0,
+            has_exec_completion=False,
+            has_heartbeat_content=False,
+            pending_question_count=0,
+            pending_demo_review_count=999,
+        )
+        assert policy["skip_reason"] is None
+
+
 class TestReflectionIdeationPrompt:
     """Tests verifying the reflection prompt is ideation-only."""
 
