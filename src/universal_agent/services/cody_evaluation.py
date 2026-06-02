@@ -345,6 +345,66 @@ def complete_demo_task(
     return task_hub.upsert_item(conn, updated)
 
 
+def finalize_direct_demo(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+) -> dict[str, Any]:
+    """Auto-finalize a direct/ungated (review_required=False) demo — no Simone.
+
+    The "keep manifest + endpoint check, skip review" contract: run the mechanical
+    evaluator and mark the task COMPLETED when a manifest exists AND endpoint_hit
+    satisfies endpoint_required. Deliberately does NOT require
+    `manifest.acceptance_passed` (Cody's CLI build never sets it) and does NOT
+    touch the vault. On a mechanical miss the row is left in pending_review so a
+    bad direct demo stays visible instead of silently passing.
+
+    Returns {status, endpoint_ok, report}. Invoked by the VP-event bridge
+    (`gateway_server._bridge_vp_events_once`) for cody_demo_task rows whose
+    metadata carries review_required=False.
+    """
+    item = task_hub.get_item(conn, task_id)
+    if not item:
+        raise KeyError(f"task not found: {task_id}")
+    meta = dict(item.get("metadata") or {})
+    workspace_dir = Path(str(meta.get("workspace_dir") or ""))
+    demo_id = str(meta.get("demo_id") or "")
+    entity_slug = str(meta.get("entity_slug") or "")
+
+    report = evaluate_demo(workspace_dir, demo_id=demo_id, entity_slug=entity_slug)
+
+    # Authoritative endpoint check: compare the manifest's endpoint_hit against
+    # the TASK's declared endpoint_required (set per cody_mode by the dispatcher),
+    # NOT the manifest's self-declared endpoint_required — Cody's CLI build often
+    # omits it, so read_manifest would default it to 'anthropic_native' and a
+    # legitimate ZAI demo would spuriously mismatch.
+    required = canonicalize_endpoint(str(meta.get("endpoint_required") or "anthropic_native"))
+    manifest = read_manifest(workspace_dir)
+    hit = canonicalize_endpoint(manifest.endpoint_hit) if manifest else ""
+    endpoint_ok = bool(
+        manifest is not None and (required in ("", "any") or hit == required)
+    )
+
+    if endpoint_ok:
+        summary = (
+            "Direct demo auto-finalized (review skipped): manifest present, "
+            f"endpoint_hit {manifest.endpoint_hit!r} satisfies required {required!r}"
+        )
+        complete_demo_task(conn, task_id=task_id, completion_summary=summary)
+        logger.info(
+            "🟢 Direct demo %s auto-finalized → completed (hit=%s required=%s)",
+            task_id, hit or "<none>", required,
+        )
+        return {"status": "completed", "endpoint_ok": True, "report": report.to_dict()}
+
+    logger.warning(
+        "Direct demo %s did NOT pass the endpoint check (manifest_present=%s hit=%s required=%s) — "
+        "left in pending_review for attention",
+        task_id, manifest is not None, hit or "<none>", required,
+    )
+    return {"status": "needs_attention", "endpoint_ok": False, "report": report.to_dict()}
+
+
 def defer_demo_task(
     conn: sqlite3.Connection,
     *,
