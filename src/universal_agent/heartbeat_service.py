@@ -923,6 +923,19 @@ def _heartbeat_guard_policy(
     }
 
 
+def _should_force_demo_review_wake(
+    pending_demo_review_count: int, guard_skip_reason: str
+) -> bool:
+    """Whether a pending demo review should override a heartbeat skip.
+
+    Demo review is bounded (1/cycle, self-draining) and orthogonal to the
+    dispatch backlog, so a pending review wakes the heartbeat agent over ANY
+    skip reason — including ``actionable_over_capacity``. Returns True only
+    when there is at least one pending review AND a skip was actually requested.
+    """
+    return pending_demo_review_count > 0 and bool(guard_skip_reason)
+
+
 def _coerce_bool(value: Optional[object], default: Optional[bool] = None) -> Optional[bool]:
     if value is None:
         return default
@@ -2484,14 +2497,15 @@ class HeartbeatService:
             # daily_budget_exhausted). _heartbeat_guard_policy already keeps
             # `no_actionable_work` from firing when reviews are pending, but those
             # downstream overrides re-set guard_skip_reason afterward and were
-            # masking the wake signal in prod. Demo review is bounded (1/cycle,
-            # self-draining), so let it win over those skips — but NOT over
-            # actionable_over_capacity, where the system is genuinely saturated.
-            if (
-                _pending_demo_review_count > 0
-                and guard_skip_reason
-                and guard_skip_reason != "actionable_over_capacity"
-            ):
+            # masking the wake signal in prod. A pending demo review now overrides
+            # ANY skip reason — INCLUDING actionable_over_capacity. Demo review is
+            # bounded (1/cycle, self-draining) and orthogonal to the dispatch
+            # backlog that the over-capacity guard protects, so saturation of the
+            # dispatch queue is not a reason to starve a self-draining review.
+            # This fixes the 2026-06-02 bug where the actionable_over_capacity
+            # exclusion (a symptom of the dispatch head-of-line block) kept the
+            # heartbeat agent skipped and the Phase-4 demo-review directive never ran.
+            if _should_force_demo_review_wake(_pending_demo_review_count, guard_skip_reason):
                 logger.info(
                     "Heartbeat wake forced for %s: %d pending demo review(s) override skip=%s",
                     session.session_id, _pending_demo_review_count, guard_skip_reason,
@@ -2691,8 +2705,8 @@ class HeartbeatService:
             if should_skip_agent_run:
                 full_response = schedule.ok_tokens[0] if schedule.ok_tokens else DEFAULT_OK_TOKENS[0]
                 logger.info(
-                    "Skipping heartbeat agent execution for %s (no actionable task-hub dispatch items)",
-                    session.session_id,
+                    "Skipping heartbeat agent execution for %s (guard skip_reason=%s)",
+                    session.session_id, guard_skip_reason,
                 )
             elif os.getenv("UA_HEARTBEAT_MOCK_RESPONSE", "0").lower() in {"1", "true", "yes"}:
                 full_response = _mock_heartbeat_response(heartbeat_content)

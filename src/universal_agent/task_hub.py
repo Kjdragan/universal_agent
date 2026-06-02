@@ -1395,6 +1395,8 @@ def _is_system_schedule_task(task: dict[str, Any]) -> bool:
 def _dispatch_skip_reason(item: dict[str, Any], *, eligible: bool, threshold: float) -> Optional[str]:
     if eligible:
         return None
+    if str(item.get("completion_token") or "").strip():
+        return "completion_locked"
     status = str(item.get("status") or TASK_STATUS_OPEN).strip().lower()
     if status == TASK_STATUS_BLOCKED:
         return "blocked"
@@ -1712,6 +1714,16 @@ def rebuild_dispatch_queue(conn: sqlite3.Connection) -> dict[str, Any]:
                 score_confidence=confidence,
                 judge_payload=judge_payload,
             )
+
+        # ── completion_token guard (head-of-line fix, 2026-06-02): a finalized
+        # task carries a non-empty completion_token. If such a row is ever
+        # reverted to status=open WITHOUT clearing its token, it leaks back into
+        # the eligible set, the claim path skips it as completion-locked, and —
+        # because the claim SELECT used to fetch only LIMIT=claim_limit rows —
+        # everything ranked behind it starved. A finalized task must never be
+        # dispatchable regardless of a stale open/review status.
+        if str(item.get("completion_token") or "").strip():
+            eligible = False
 
         item["score"] = score
         item["score_confidence"] = confidence
@@ -2243,11 +2255,19 @@ def claim_next_dispatch_tasks(
         forbidden_filter = ""
         forbidden_params = ()
 
+    # Decouple the fetch window from the claim target (head-of-line fix,
+    # 2026-06-02). Previously the SELECT bound LIMIT to claim_limit (=1), so a
+    # single un-claimable head row (e.g. a completion-locked task that leaked
+    # back to status=open) starved every claimable row behind it. Over-fetch a
+    # generous candidate window and let the per-item loop's existing
+    # `if len(claimed) >= claim_limit: break` cap the actual claims, so the
+    # backlog is no longer held hostage by one bad head row.
+    fetch_limit = max(claim_limit * 20, 100)
     params: tuple = (
         (queue_build_id, TASK_STATUS_OPEN, TASK_STATUS_REVIEW)
         + trigger_params
         + forbidden_params
-        + (claim_limit,)
+        + (fetch_limit,)
     )
 
     rows = conn.execute(

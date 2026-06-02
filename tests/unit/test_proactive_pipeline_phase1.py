@@ -433,6 +433,29 @@ class TestHeartbeatDemoReviewGuard:
         )
         assert policy["skip_reason"] is None
 
+    def test_force_wake_over_actionable_over_capacity(self):
+        # 2026-06-02 fix: a pending demo review now overrides ANY skip reason,
+        # including actionable_over_capacity (a symptom of the dispatch
+        # head-of-line block), because demo review is bounded and self-draining.
+        from universal_agent.heartbeat_service import _should_force_demo_review_wake
+
+        assert _should_force_demo_review_wake(1, "actionable_over_capacity") is True
+
+    def test_force_wake_over_no_actionable_work(self):
+        from universal_agent.heartbeat_service import _should_force_demo_review_wake
+
+        assert _should_force_demo_review_wake(1, "no_actionable_work") is True
+
+    def test_no_force_wake_when_no_skip_requested(self):
+        from universal_agent.heartbeat_service import _should_force_demo_review_wake
+
+        assert _should_force_demo_review_wake(1, "") is False
+
+    def test_no_force_wake_without_pending_review(self):
+        from universal_agent.heartbeat_service import _should_force_demo_review_wake
+
+        assert _should_force_demo_review_wake(0, "actionable_over_capacity") is False
+
 
 class TestReflectionIdeationPrompt:
     """Tests verifying the reflection prompt is ideation-only."""
