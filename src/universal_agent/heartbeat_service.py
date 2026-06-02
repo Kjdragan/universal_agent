@@ -544,15 +544,34 @@ def _compose_heartbeat_prompt(
         lines.append(f"\nClaimed task_ids: {', '.join(task_ids) if task_ids else '(none)'}")
         prompt = f"{prompt}\n\n" + "\n".join(lines)
 
+    # ── Phase 4: pending-review surfacing (VP missions + Cody demos) ──
+    # Open a dedicated runtime connection for review-prompt injection. We must
+    # NOT rely on a caller-passed runtime_conn alone: in production the heartbeat
+    # passed None here (the gateway exposes no `get_db_conn`, so the old
+    # `getattr(self.gateway, 'get_db_conn', lambda: None)()` always returned
+    # None), which silently killed BOTH the VP and Cody-demo review blocks.
+    # Mirror the reflection path — open the activity DB directly, close at the
+    # end. A caller-supplied runtime_conn (e.g. unit tests) takes precedence.
+    _review_conn = runtime_conn
+    _owns_review_conn = False
+    if _review_conn is None:
+        try:
+            _review_conn = connect_runtime_db(get_activity_db_path())
+            _review_conn.row_factory = sqlite3.Row
+            _owns_review_conn = True
+        except Exception as _conn_exc:
+            logger.debug("Review-prompt runtime connection unavailable: %s", _conn_exc)
+            _review_conn = None
+
     # ── Phase 4: VP Completion Review Prompt ──
     # Inject pending_review tasks for Simone's sign-off
-    if runtime_conn is not None:
+    if _review_conn is not None:
         try:
             from universal_agent.task_hub import (
                 get_pending_review_tasks,
                 reopen_stale_delegations,
             )
-            _runtime_conn = runtime_conn
+            _runtime_conn = _review_conn
             if _runtime_conn is not None:
                 # 1. Reopen stale delegations (>4h without VP progress)
                 stale_reopened = reopen_stale_delegations(_runtime_conn, stale_hours=4.0)
@@ -617,13 +636,13 @@ def _compose_heartbeat_prompt(
     # buried HEARTBEAT.md directive alone let the demo sit unreviewed across many
     # heartbeats (it was mis-surfaced as a VP mission). Separate try/except so a
     # demo-block failure never discards the VP review additions above.
-    if runtime_conn is not None:
+    if _review_conn is not None:
         try:
             from universal_agent.services.cody_evaluation import monitor_demo_tasks
 
             demo_rows = [
                 d
-                for d in monitor_demo_tasks(runtime_conn)
+                for d in monitor_demo_tasks(_review_conn)
                 if d.get("status") == "pending_review"
             ]
             if demo_rows:
@@ -688,6 +707,14 @@ def _compose_heartbeat_prompt(
                 prompt = f"{prompt}\n" + "\n".join(demo_lines)
         except Exception as _demo_review_exc:
             logger.debug("Cody demo review prompt injection skipped: %s", _demo_review_exc)
+
+    # Close the dedicated review connection if we opened it here (both review
+    # blocks above swallow their own exceptions, so reaching here is normal).
+    if _owns_review_conn and _review_conn is not None:
+        try:
+            _review_conn.close()
+        except Exception:
+            pass
 
     # Inject brainstorm context so the agent is aware of refinement stages
     # Skip brainstorm and morning report in task-focused mode — they add noise
@@ -2544,13 +2571,13 @@ class HeartbeatService:
                 if "{ok_token}" in base_prompt:
                     ok_token = schedule.ok_tokens[0] if schedule.ok_tokens else DEFAULT_OK_TOKENS[0]
                     base_prompt = base_prompt.replace("{ok_token}", ok_token)
-            # Get runtime DB connection for VP review prompt injection
+            # The runtime DB connection for review-prompt injection is opened
+            # inside _compose_heartbeat_prompt itself. The gateway has no
+            # get_db_conn method, so the old getattr(..., lambda: None)() always
+            # returned None and silently disabled the VP + Cody-demo review
+            # blocks. Pass None and let the composer open the activity DB itself.
             _hb_runtime_conn = None
-            try:
-                _hb_runtime_conn = getattr(self.gateway, 'get_db_conn', lambda: None)()
-            except Exception:
-                pass
-                
+
             _recent_topics_text = ""
             try:
                 from universal_agent.services.proactive_topic_tracker import (

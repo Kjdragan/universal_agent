@@ -9033,8 +9033,11 @@ def _bridge_vp_events_once(*, limit: int = 200) -> int:
         if event_type in _VP_TERMINAL_EVENT_TYPES and mission_id:
             try:
                 from universal_agent.task_hub import transition_to_pending_review
-                runtime_conn = getattr(gateway, "get_db_conn", lambda: None)()
-                if runtime_conn is not None:
+                # Open the activity DB directly. The gateway has no get_db_conn
+                # method, so the old getattr(..., lambda: None)() always returned
+                # None and this VP-completion → pending_review bridge never ran.
+                runtime_conn = connect_runtime_db(get_activity_db_path())
+                try:
                     vp_id = str(row["vp_id"] or "").strip()
                     terminal_status = event_type.replace("vp.mission.", "", 1)
                     result_summary = str(mission_context.get("objective") or "")[:200]
@@ -9057,6 +9060,8 @@ def _bridge_vp_events_once(*, limit: int = 200) -> int:
                         # transition_to_pending_review above no-ops on it. The former
                         # bridge-side finalize_direct_demo branch was removed to eliminate
                         # the duplicate/raced completion path.
+                finally:
+                    runtime_conn.close()
             except Exception as exc:
                 logger.warning(
                     "VP event bridge: failed transitioning task for mission %s: %s",

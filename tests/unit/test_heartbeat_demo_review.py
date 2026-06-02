@@ -115,3 +115,33 @@ def test_no_demo_block_when_none_pending(conn, tmp_path: Path):
         runtime_conn=conn,
     )
     assert "== CODY DEMO REVIEW (Phase 4) ==" not in prompt
+
+
+def test_self_opens_connection_when_runtime_conn_none(tmp_path: Path, monkeypatch):
+    """Regression for the production deadness: the heartbeat passed runtime_conn=None
+    (the gateway has no get_db_conn), so the review block never rendered. The
+    composer must open its OWN connection and still surface the demo."""
+    from universal_agent.durable.db import connect_runtime_db
+    import universal_agent.heartbeat_service as hs
+
+    db_path = tmp_path / "activity.db"
+    seed = connect_runtime_db(str(db_path))
+    seed.row_factory = sqlite3.Row
+    task_hub.ensure_schema(seed)
+    ensure_artifacts_schema(seed)
+    task = _pending_review_demo(seed, tmp_path)
+    seed.commit()
+    seed.close()
+
+    # Point the composer's self-open path at our temp activity DB.
+    monkeypatch.setattr(hs, "get_activity_db_path", lambda: str(db_path))
+
+    prompt = _compose_heartbeat_prompt(
+        "BASE",
+        investigation_only=False,
+        task_hub_claims=[],
+        runtime_conn=None,  # exactly the production condition
+    )
+    assert "== CODY DEMO REVIEW (Phase 4) ==" in prompt
+    assert task["task_id"] in prompt
+    assert "manifest_present=True" in prompt
