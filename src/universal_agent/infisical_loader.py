@@ -88,9 +88,40 @@ def _resolve_profile(profile: str | None) -> str:
     return "local_workstation"
 
 
+def _on_production_vps() -> bool:
+    """True when this process is running on the production VPS.
+
+    The deploy target `/opt/universal_agent` exists ONLY on the VPS (the deploy
+    pipeline checks the repo out there). It is never present on Kevin's desktop
+    (the repo lives at `/home/kjdragan/lrepos/universal_agent`) or in CI, and the
+    SSHFS bridge mounts the desktop tree onto the VPS, not the reverse — so it is a
+    reliable, env-independent "am I on the prod box?" signal.
+    """
+    try:
+        return Path("/opt/universal_agent").is_dir()
+    except OSError:
+        return False
+
+
 def _normalize_infisical_environment(raw_environment: str | None) -> str:
     raw = str(raw_environment or "").strip()
     if not raw:
+        # The VPS is production-only (see CLAUDE.md). When INFISICAL_ENVIRONMENT is
+        # unset there, the right default is "production", NOT "development" — the
+        # services set it explicitly via systemd, so only manual/standalone runs
+        # (cron-style scripts, an operator's ad-hoc `python ...`) hit this path, and
+        # silently loading DEV secrets on the prod box is a recurring footgun: toggles
+        # like UA_AGENTMAIL_ENABLED default off in dev, so things fail confusingly
+        # (a digest "sends" but AgentMail is disabled) instead of working. Default to
+        # production on the prod host; everywhere else stays "development". An explicit
+        # INFISICAL_ENVIRONMENT=development still wins (handled below).
+        if _on_production_vps():
+            logger.warning(
+                "INFISICAL_ENVIRONMENT is unset on the production VPS — defaulting to "
+                "'production' (not 'development'). Set INFISICAL_ENVIRONMENT explicitly "
+                "to override (e.g. =development to intentionally use dev secrets here)."
+            )
+            return "production"
         return "development"
     lowered = raw.lower()
     return _LEGACY_INFISICAL_ENV_ALIASES.get(lowered, lowered)
