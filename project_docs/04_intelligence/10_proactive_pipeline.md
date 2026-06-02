@@ -11,6 +11,8 @@ code_paths:
   - src/universal_agent/services/intel_auto_promoter.py
   - src/universal_agent/services/intel_lanes.py
   - src/universal_agent/services/invariants/proactive_pipeline_invariants.py
+  - src/universal_agent/services/hourly_intel_digest.py
+  - src/universal_agent/scripts/hourly_intel_digest_cron.py
   - src/universal_agent/proactive_signals.py
 last_verified: 2026-06-02
 ---
@@ -449,6 +451,20 @@ implicit signals without understanding this loop.
 - **Proactive artifact digest** (`proactive_artifact_digest`, 8:35 AM Houston):
   emails Kevin a digest of new CODIE PRs, tutorial builds, convergence insights;
   delivery recorded in `proactive_artifact_emails`.
+- **Hourly intel digest** — the convergence-brief digest (one collated email of
+  `intel_brief` ships per active hour). The composition/render/throttle contract
+  lives in `hourly_intel_digest.py::compose_send_payload` (per-brief 👍/👎 links
+  minted at send time by `::_attach_feedback_urls`). Two delivery paths invoke it,
+  guarded against double-send by the per-clock-hour throttle (`is_throttled`) +
+  `delivered_at IS NULL`: (1) **primary** — the deterministic
+  `hourly_intel_digest` cron (`0 6-21 * * *` Houston,
+  `hourly_intel_digest_cron.py::run_once`, kill-switch
+  `UA_INTEL_DIGEST_CRON_ENABLED`), which sends via `AgentMailService` and stamps
+  `mark_all_delivered` without needing an LLM; (2) **backup** — Simone's
+  `/hourly-intel-digest` heartbeat directive, which proved unreliable (the
+  heartbeat LLM silently stopped invoking it after 2026-05-30), motivating the
+  cron. Distinct from the legacy `hourly_insight_email` cron (disabled;
+  Phase-6 deletion target).
 - **Intelligence emitter** (`intelligence_emitter.py`): the canonical, dependency-
   free, **never-raises** hook for background workers to write `activity_events`
   rows that Mission Control's tier-1 LLM card discovery reads. `emit_intelligence_event`

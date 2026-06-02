@@ -5,6 +5,7 @@ canonical: false
 subsystem: intel-proactive
 code_paths:
   - src/universal_agent/services/hourly_intel_digest.py
+  - src/universal_agent/scripts/hourly_intel_digest_cron.py
   - src/universal_agent/services/recent_briefs_index.py
   - src/universal_agent/services/proactive_convergence.py
 last_verified: 2026-06-02
@@ -40,6 +41,7 @@ last_verified: 2026-06-02
 | Digest dedup | ✅ **SHIPPED (Phase 4, 2026-06-02)** | `hourly_intel_digest.py::dedup_near_duplicate_briefs` (Jaccard backstop, `UA_DIGEST_DEDUP_JACCARD`) + `::mark_superseded` for durable suppression |
 | Operator feedback loop | ✅ **SHIPPED (Phase 5, 2026-06-02)** | was: built but **dead in-email** — `_render_card` read `metadata.feedback_url_up/down` but nothing populated them (Atlas authors thesis/entities, not URLs), so the digest emailed only a "Read full brief →" link and the 👍/👎 buttons never rendered (`proactive_artifact_feedback`: **1 row** total). Now `hourly_intel_digest.py::_attach_feedback_urls` mints fresh HMAC-signed per-brief links at send time (`UA_DIGEST_INLINE_FEEDBACK_LINKS`, default on). Endpoint→DB→index→Atlas legs verified wired. |
 | `csi_convergence_sync` cron health | ✅ **Fixed 2026-06-02 (PR #665)** | was 900s-timeout flood; now parallelized + time-boxed (separate work) |
+| **Digest actually EMAILING** | ✅ **FIXED (deterministic cron, 2026-06-02)** | was: no digest emailed since 2026-05-30 — Simone's heartbeat LLM silently stopped invoking `/hourly-intel-digest` (the selector/secret/scope were all healthy; `compose_send_payload` returns `ready`). Root-caused to the LLM-driven delivery path, not the digest code. Fix: new deterministic `hourly_intel_digest` cron (`hourly_intel_digest_cron.py::run_once`, `0 6-21 * * *` Houston, `UA_INTEL_DIGEST_CRON_ENABLED`) runs the same pipeline + sends via `AgentMailService` without an LLM. Heartbeat directive stays as harmless backup (throttle dedupes). |
 | Legacy Track A/B + hand-trigger endpoints | ⚠️ Dead but present | Phase 6 deletion target |
 
 **The dominant remaining gap is delivery, not detection.** Detection, authoring,
@@ -117,11 +119,21 @@ brief landed), it is orphaned forever (next hour `created_at`-hour ≠ now-hour)
 over-restrictive.
 
 **Fix:** replaced the clock-hour equality with a lookback window —
-`created_at >= datetime('now', '-N hours')`, N = `_brief_lookback_hours()`
+`julianday(created_at) >= julianday('now', '-N hours')`, N = `_brief_lookback_hours()`
 (`UA_DIGEST_BRIEF_LOOKBACK_HOURS`, default 24). Any recent undelivered ship brief
 is now surfaced on the next digest run and emailed exactly once
 (`delivered_at IS NULL` gates re-delivery; the per-hour delivery throttle still
 caps one email/hour).
+
+> **Follow-up correctness fix (2026-06-02):** the comparison was originally a
+> raw string `created_at >= datetime('now', ?)`. The stored `created_at` is
+> ISO-8601 (`...T...+00:00`) while `datetime('now', ?)` is space-separated, so
+> the string compare mis-ordered them (`'T'` > `' '`) and **leaked briefs older
+> than the lookback** whenever both timestamps fell on the same calendar date
+> (also making `test_skips_briefs_older_than_lookback` flaky — it only passed
+> when the 24h cutoff crossed a day boundary). Now both sides go through
+> `julianday()` (numeric, format-agnostic). This matters for the deterministic
+> delivery cron below, which emails whatever the selector returns.
 
 | Field | Value |
 |---|---|
@@ -227,8 +239,41 @@ preference path. Atlas's preference snapshot (`get_preference_snapshot`) remains
 | Acceptance | the digest email renders a signed per-brief `/api/v1/briefs/{id}/feedback?v=up\|down&t=<hmac>` link that verifies against the endpoint secret; a thumbs-down is recorded + surfaced to the index + Atlas's rule 4 |
 | Tests | `test_hourly_intel_digest_skill.py::InlineFeedbackLinkTests` (mint-when-absent / token-verifies-against-endpoint / disabled-by-flag / no-secret-degrades) — 36 passed |
 | Env flag / rollback | `UA_DIGEST_INLINE_FEEDBACK_LINKS=0` disables the in-email mint (briefs still ship; rate via the `/briefs/{id}` viewer) |
-| Verify (prod) | read-only: deployed `compose_send_payload` probe vs prod DB shows signed feedback URLs in the HTML (no force-send, no rating mutation) |
+| Verify (prod) | read-only: deployed `compose_send_payload` probe vs prod DB shows signed feedback URLs in the HTML (no force-send, no rating mutation) — confirmed 4 signed links render for the 2 ship briefs and round-trip through `verify_feedback_token` |
 | Risk | LOW — additive, fail-open (no secret → no buttons), `explicit_feedback`-scoped |
+
+### 5.5 Deterministic delivery cron — SHIPPED (2026-06-02)
+
+**Problem (diagnosed live):** the digest stopped EMAILING after 2026-05-30. The
+digest code was healthy — the deployed `select_candidates_for_current_hour`
+returns `ready` with the orphaned ship briefs, not paused, not throttled, secret
+resolves, scope filter keeps the `scope:hq` directive. The break was the
+**delivery path**: the digest is invoked by Simone's `/hourly-intel-digest`
+heartbeat directive, and the heartbeat LLM silently stopped invoking it (the
+~hourly heartbeat tick emits `UA_HEARTBEAT_OK` with no tool calls; last actual
+`compose_send_payload` execution ~2026-05-30 15:52 UTC).
+
+**Fix:** a deterministic cron removes the LLM dependency.
+`scripts/hourly_intel_digest_cron.py::run_once` runs the same
+`compose_send_payload` pipeline, sends via `services/agentmail_service.py::AgentMailService`,
+and stamps `mark_all_delivered` + `record_email_delivery` — no agent session.
+Registered by `gateway_server.py::_ensure_hourly_intel_digest_cron_job`
+(`0 6-21 * * *` America/Chicago, content-generation so dormancy-compliant). The
+heartbeat directive stays as a harmless backup — `compose_send_payload` is
+idempotent per clock hour (`is_throttled` + `delivered_at IS NULL`), so whichever
+path fires first sends and the other sees `throttled`.
+
+| Field | Value |
+|---|---|
+| Files | `scripts/hourly_intel_digest_cron.py::run_once` + `gateway_server.py::_ensure_hourly_intel_digest_cron_job` |
+| Acceptance | a `ready` payload is emailed + stamped without any LLM; non-ready/disabled/send-failure paths send nothing and leave briefs eligible |
+| Tests | `test_hourly_intel_digest_cron.py::RunOnceTests` (ready-sends-and-marks / not-ready-skips / disabled-flag / send-failure-no-stamp) |
+| Env flag / rollback | `UA_INTEL_DIGEST_CRON_ENABLED=0` (default on) composes but does not send |
+| Risk | LOW — idempotent throttle prevents double-send with the heartbeat backup; fail-open (send error → no stamp → retried next hour) |
+
+> **Distinct from the legacy `hourly_insight_email` cron** (disabled,
+> Phase-6 deletion target) — that is the OLD per-insight scorer, not this
+> convergence-brief digest.
 
 ---
 
