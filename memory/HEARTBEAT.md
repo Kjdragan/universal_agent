@@ -387,6 +387,7 @@ Kevin runs Claude Code **terminal-only** and reads mail in clients that strip hy
 Instead: render the artifact as **standalone HTML**, publish it to the tailnet HTML scratchpad, and **lead the email with the link**. Invoke the **`publish-to-scratchpad` skill** (it wraps `scripts/publish_scratch.sh`; on the VPS it writes directly and prints the private `https://uaonvps.taildcc090.ts.net/scratch/...` URL). The page then opens fully rendered, with working anchors, on every one of Kevin's tailnet devices.
 
 - The short email body still follows the **light-theme palette rules above** — only the heavy report moves to the scratchpad link.
+- **The scratchpad report itself must render in light mode**, not just the email. Kevin reads on a dark-mode phone; pin the report's `<head>` to light (`<meta name="color-scheme" content="light">` + `:root{color-scheme:light}` + explicit `background:#ffffff; color:#1f2328`) and ship no `prefers-color-scheme: dark` override. The `publish-to-scratchpad` skill has the exact recipe; verify the generated HTML before publishing.
 - The scratchpad is **tailnet-only** (private to Kevin's devices). Never use it for mail to external recipients — attach a file for those.
 - The YouTube daily digest already does this in code (`youtube_daily_digest.py` → `scratch_publish.py::publish_html_to_scratch`, link-first with a PDF fallback). Mirror that pattern for anything you deliver by hand.
 

@@ -1609,6 +1609,9 @@ def _render_full_digest_html(
         '<html lang="en">\n'
         "<head>\n"
         '  <meta charset="utf-8">\n'
+        # Force light rendering: pair the `:root{color-scheme:light}` CSS rule with
+        # the meta so user agents (incl. dark-mode phones) don't auto-invert the page.
+        '  <meta name="color-scheme" content="light">\n'
         f"  <title>{html_module.escape(title)}</title>\n"
         f"  <style>{_DIGEST_HTML_HEAD_CSS}</style>\n"
         "</head>\n"
