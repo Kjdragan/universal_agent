@@ -5329,6 +5329,28 @@ def transition_to_pending_review(
         delegation["result_summary"] = result_summary[:500]
     metadata["delegation"] = delegation
 
+    # Refresh the mission pointer to the mission that just completed so the
+    # dashboard Workspace button deep-links to THIS run, not a stale earlier
+    # attempt. This bridge path previously left ``linked_mission_id`` pinned to
+    # the FIRST dispatch (the worker-loop terminal close sets it, but a re-run
+    # that completes via this bridge did not), so a re-run (iteration 2+) that
+    # succeeded under a new mission still pointed the three-panel viewer at the
+    # original (often failed) mission. The completed-panel link builder
+    # (gateway_server.dashboard_todolist_completed) reads ``linked_mission_id``.
+    metadata["linked_mission_id"] = mission_id
+    # For Cody demo tasks also refresh the dispatch-trace mission id (read by
+    # older link builders) and point the workspace at the demo ROOT, where the
+    # successful build writes its artifacts (a per-mission subdir captured on an
+    # earlier failed attempt would render an empty viewer).
+    if str(task.get("source_kind") or "") == "cody_demo_task":
+        dispatch = metadata.get("dispatch")
+        dispatch = dict(dispatch) if isinstance(dispatch, dict) else {}
+        dispatch["cody_mission_id"] = mission_id
+        _ws_root = str(metadata.get("workspace_dir") or "").strip()
+        if _ws_root:
+            dispatch["cody_workspace_dir"] = _ws_root
+        metadata["dispatch"] = dispatch
+
     conn.execute(
         "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
         (TASK_STATUS_PENDING_REVIEW, "pending_review", _json_dumps(metadata), _now_iso(), task_id),
