@@ -47,12 +47,24 @@ with sqlite3.connect(get_activity_db_path()) as conn:
 `source_kind=cody_demo_task` and returns hydrated dicts with:
 
 - `task_id`, `title`, `status`, `priority`
+- `state` — derived action label (`ready_for_review`, `pending_review_no_manifest`,
+  `building`, `queued`, `completed`, `deferred`)
+- `ready_for_review` — `True` exactly when `status=pending_review` AND a manifest
+  exists (the canonical Phase-4 eligibility gate)
+- `manifest_present` — whether a `manifest.json` was found (resolving the
+  `vp-mission-<id>/` subdir layout used by curated builds)
 - `demo_id`, `entity_slug`, `workspace_dir`
 - `iteration` (1 = first attempt; >1 = post-feedback)
 - `endpoint_required`, `queue_policy`
 - `created_at`, `updated_at`
 
-Read-only — no Task Hub writes, no workspace edits, no LLM calls.
+Read-only — no Task Hub writes, no workspace edits, no LLM calls. (Computes
+`manifest_present` via a filesystem stat, so it is no longer a pure DB read.)
+
+When a demo is in `pending_review`, the heartbeat also injects a
+`== CODY DEMO REVIEW (Phase 4) ==` block into Simone's prompt — so you usually
+do not need to call this skill manually to discover review-ready demos; act on
+that block. Use this skill for a fuller situational read across all states.
 
 ## What Simone does with this
 

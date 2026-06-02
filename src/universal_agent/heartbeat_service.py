@@ -564,8 +564,18 @@ def _compose_heartbeat_prompt(
                     stale_lines.append("These are back in the open queue for re-triage.")
                     prompt = f"{prompt}\n" + "\n".join(stale_lines)
 
-                # 2. Show pending_review tasks for sign-off
-                pending_reviews = get_pending_review_tasks(_runtime_conn)
+                # 2. Show pending_review tasks for sign-off.
+                #    cody_demo_task rows also land in pending_review but have a
+                #    DEDICATED Phase-4 review lane (cody-work-evaluator) — they
+                #    must NOT be framed as VP missions here (their delegation
+                #    metadata would mislabel them "delegated to vp.coder.primary"
+                #    and point Simone at the wrong approve/review protocol). They
+                #    are surfaced separately below in CODY DEMO REVIEW.
+                pending_reviews = [
+                    pr
+                    for pr in get_pending_review_tasks(_runtime_conn)
+                    if str(pr.get("source_kind") or "") != "cody_demo_task"
+                ]
                 if pending_reviews:
                     review_lines = ["\n== VP COMPLETION REVIEW =="]
                     review_lines.append(f"{len(pending_reviews)} VP-completed task(s) await your sign-off:\n")
@@ -600,6 +610,84 @@ def _compose_heartbeat_prompt(
                     prompt = f"{prompt}\n" + "\n".join(review_lines)
         except Exception as _review_exc:
             logger.debug("VP review prompt injection skipped: %s", _review_exc)
+
+    # ── Phase 4 (demos): Cody Demo Review Prompt ──
+    # cody_demo_task rows in pending_review close ONLY via the cody-work-evaluator
+    # lane. Surface them in-context with the correct protocol — relying on the
+    # buried HEARTBEAT.md directive alone let the demo sit unreviewed across many
+    # heartbeats (it was mis-surfaced as a VP mission). Separate try/except so a
+    # demo-block failure never discards the VP review additions above.
+    if runtime_conn is not None:
+        try:
+            from universal_agent.services.cody_evaluation import monitor_demo_tasks
+
+            demo_rows = [
+                d
+                for d in monitor_demo_tasks(runtime_conn)
+                if d.get("status") == "pending_review"
+            ]
+            if demo_rows:
+                demo_rows.sort(key=lambda d: str(d.get("updated_at") or ""))
+                ready_now = [d for d in demo_rows if d.get("ready_for_review")]
+                demo_lines = ["\n== CODY DEMO REVIEW (Phase 4) =="]
+                demo_lines.append(
+                    f"{len(demo_rows)} curated demo(s) in pending_review await your "
+                    f"cody-work-evaluator review "
+                    f"({len(ready_now)} with a manifest, ready now):\n"
+                )
+                for idx, d in enumerate(demo_rows, 1):
+                    demo_lines.append(
+                        f"Demo {idx}: [{d.get('task_id')}] "
+                        f"{d.get('demo_id') or '(no demo_id)'}"
+                    )
+                    demo_lines.append(
+                        f"  state={d.get('state')} "
+                        f"manifest_present={d.get('manifest_present')} "
+                        f"iteration={d.get('iteration')} "
+                        f"entity={d.get('entity_slug')}"
+                    )
+                    demo_lines.append(f"  workspace: {d.get('workspace_dir')}")
+                demo_lines.append("")
+                demo_lines.append(
+                    "## Demo Review Protocol (do these BEFORE Phase-2 scaffold work this cycle)"
+                )
+                demo_lines.append(
+                    "Review at most ONE demo per cycle — oldest updated_at first."
+                )
+                demo_lines.append(
+                    "Do NOT use task_hub_task_action(approve/review) on these — that is the"
+                )
+                demo_lines.append(
+                    "VP-mission path. cody_demo_task rows close ONLY via cody_evaluation entry points:"
+                )
+                demo_lines.append(
+                    "1. Invoke the `cody-work-evaluator` skill on the chosen task (it reads"
+                )
+                demo_lines.append(
+                    "   BRIEF/ACCEPTANCE/business_relevance/manifest/run_output via evaluate_demo)."
+                )
+                demo_lines.append(
+                    "2. On PASS  -> `complete_demo_task(conn, task_id=...)`, then invoke the"
+                )
+                demo_lines.append(
+                    "   `vault-demo-attach` skill to append the `## Demos` vault bullet."
+                )
+                demo_lines.append(
+                    "3. On ITERATE -> `write_feedback_file(...)` + "
+                    "`reissue_cody_demo_task_with_feedback(...)` (cap 5, then defer)."
+                )
+                demo_lines.append(
+                    "4. On DEFER -> `defer_demo_task(conn, task_id=..., reason=...)`."
+                )
+                demo_lines.append(
+                    "A missing/false manifest.acceptance_passed is expected — YOU make the call"
+                )
+                demo_lines.append(
+                    "from the full EvaluationReport. Complete the demo review BEFORE new scaffold work."
+                )
+                prompt = f"{prompt}\n" + "\n".join(demo_lines)
+        except Exception as _demo_review_exc:
+            logger.debug("Cody demo review prompt injection skipped: %s", _demo_review_exc)
 
     # Inject brainstorm context so the agent is aware of refinement stages
     # Skip brainstorm and morning report in task-focused mode — they add noise

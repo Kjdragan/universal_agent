@@ -125,6 +125,112 @@ def test_monitor_demo_tasks_carries_iteration_count(conn, tmp_path: Path):
     assert rows[0]["iteration"] == 3
 
 
+def _set_status(conn, task_id: str, status: str) -> None:
+    conn.execute(
+        "UPDATE task_hub_items SET status=? WHERE task_id=?", (status, task_id)
+    )
+    conn.commit()
+
+
+def test_monitor_demo_tasks_marks_ready_for_review_with_manifest(conn, tmp_path: Path):
+    workspace = tmp_path / "ws"
+    _populate_workspace(workspace)  # writes a root manifest.json
+    task = dispatch_cody_demo_task(
+        conn,
+        workspace_dir=workspace,
+        entity_slug="skills",
+        entity_path=tmp_path / "skills.md",
+        demo_id="skills__demo-1",
+    )
+    _set_status(conn, task["task_id"], task_hub.TASK_STATUS_PENDING_REVIEW)
+    row = monitor_demo_tasks(conn)[0]
+    assert row["status"] == "pending_review"
+    assert row["manifest_present"] is True
+    assert row["ready_for_review"] is True
+    assert row["state"] == "ready_for_review"
+
+
+def test_monitor_demo_tasks_pending_review_without_manifest_not_ready(conn, tmp_path: Path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()  # no manifest written
+    task = dispatch_cody_demo_task(
+        conn,
+        workspace_dir=workspace,
+        entity_slug="skills",
+        entity_path=tmp_path / "skills.md",
+        demo_id="skills__demo-1",
+    )
+    _set_status(conn, task["task_id"], task_hub.TASK_STATUS_PENDING_REVIEW)
+    row = monitor_demo_tasks(conn)[0]
+    assert row["manifest_present"] is False
+    assert row["ready_for_review"] is False
+    assert row["state"] == "pending_review_no_manifest"
+
+
+def test_monitor_demo_tasks_state_building_when_delegated(conn, tmp_path: Path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    task = dispatch_cody_demo_task(
+        conn,
+        workspace_dir=workspace,
+        entity_slug="skills",
+        entity_path=tmp_path / "skills.md",
+        demo_id="skills__demo-1",
+    )
+    _set_status(conn, task["task_id"], task_hub.TASK_STATUS_DELEGATED)
+    row = monitor_demo_tasks(conn)[0]
+    assert row["ready_for_review"] is False
+    assert row["state"] == "building"
+
+
+def test_monitor_demo_tasks_resolves_vp_mission_manifest(conn, tmp_path: Path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    # Curated build: manifest lands in a vp-mission subdir, not the root.
+    sub = workspace / "vp-mission-abc123"
+    _populate_workspace(sub)
+    task = dispatch_cody_demo_task(
+        conn,
+        workspace_dir=workspace,
+        entity_slug="skills",
+        entity_path=tmp_path / "skills.md",
+        demo_id="skills__demo-1",
+    )
+    _set_status(conn, task["task_id"], task_hub.TASK_STATUS_PENDING_REVIEW)
+    row = monitor_demo_tasks(conn)[0]
+    assert row["manifest_present"] is True
+    assert row["ready_for_review"] is True
+
+
+def test_evaluate_demo_reads_vp_mission_subdir_artifacts(tmp_path: Path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    # Phase-2 scaffold files stay at root...
+    (workspace / "BRIEF.md").write_text("# brief\nreal\n", encoding="utf-8")
+    (workspace / "ACCEPTANCE.md").write_text("1. MUST ok\n", encoding="utf-8")
+    (workspace / "business_relevance.md").write_text("value\n", encoding="utf-8")
+    # ...but the VP-built artifacts land in a mission subdir.
+    sub = workspace / "vp-mission-abc123"
+    sub.mkdir()
+    (sub / "BUILD_NOTES.md").write_text("notes from the mission subdir\n", encoding="utf-8")
+    (sub / "run_output.txt").write_text("RAN in subdir\n", encoding="utf-8")
+    write_manifest(
+        sub,
+        DemoManifest(
+            demo_id="skills__demo-1",
+            feature="skills",
+            endpoint_required="anthropic_native",
+            endpoint_hit="anthropic_native",
+            acceptance_passed=True,
+            iteration=1,
+        ),
+    )
+    report = evaluate_demo(workspace, demo_id="skills__demo-1", entity_slug="skills")
+    assert report.manifest_present is True
+    assert "subdir" in report.build_notes_excerpt
+    assert "RAN in subdir" in report.run_output_excerpt
+
+
 # ── evaluate_demo ───────────────────────────────────────────────────────────
 
 
