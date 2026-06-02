@@ -12,7 +12,7 @@ code_paths:
   - src/universal_agent/services/intel_lanes.py
   - src/universal_agent/services/invariants/proactive_pipeline_invariants.py
   - src/universal_agent/proactive_signals.py
-last_verified: 2026-06-01
+last_verified: 2026-06-02
 ---
 
 # Proactive Pipeline
@@ -123,8 +123,13 @@ America/Chicago, overridable via `UA_CSI_CONVERGENCE_CRON_EXPR`) runs
 `proactive_convergence.sync_topic_signatures_from_csi`. The cron command is
 `!script universal_agent.scripts.csi_convergence_sync`; registration is in
 `gateway_server.py` (`job_id = "csi_convergence_sync"`) and is gated by
-`UA_CSI_CONVERGENCE_CRON_ENABLED` (default `1`). The script is
-pure-SQL/sqlite (no Claude SDK in the cron itself).
+`UA_CSI_CONVERGENCE_CRON_ENABLED` (default `1`). The cron runs as a
+`lightweight=True` `!script` subprocess (no heavyweight Claude-agent bootstrap,
+no Composio tool-router), but it is **not** pure-SQL: it does SQL sync **plus**
+bounded LLM clustering, an ideation sweep, and per-candidate triage via the SDK
+directly. Those LLM phases are parallelised and time-boxed (see step 3) so the
+run finishes under the cron's `timeout_seconds`
+(`UA_CSI_CONVERGENCE_CRON_TIMEOUT_SECONDS`, default 900s).
 
 `sync_topic_signatures_from_csi`:
 
@@ -140,6 +145,17 @@ pure-SQL/sqlite (no Claude SDK in the cron itself).
    per-bucket LLM judge (`_detect_clusters_llm`) that confirms a genuine shared
    thesis and emits only high-strength clusters (floor `UA_CONVERGENCE_MIN_STRENGTH`,
    default 7). Set the flag to 0 to fall back to raw SQL buckets.
+   - **Bounded cost (2026-06-02 fix).** `include_secondary` recall yields *dozens*
+     of buckets; refining them one-at-a-time at ~5–15s each (opus-tier) overran
+     the 900s cron timeout *every* run (consistent `[ERROR] Autonomous Task
+     Failed` flood). The per-bucket refines now run **concurrently**, bounded by
+     `UA_CONVERGENCE_LLM_CONCURRENCY` (default 6), and the whole LLM section
+     (clustering + triage + ideation) is time-boxed by a shared deadline
+     `UA_CSI_CONVERGENCE_BUDGET_SECONDS` (default 600s): work not reached this run
+     is idempotently re-detected next tick. Every LLM call is also bounded by
+     `UA_LLM_CALL_TIMEOUT_SECONDS` (default 60s) / `UA_LLM_CALL_MAX_RETRIES`
+     (`llm_classifier.py::_get_anthropic_client`) so a stalled ZAI proxy can't
+     hang a call for the SDK-default ~10 min.
 4. **Ideation sweep (Track B).** When `UA_IDEATION_SWEEP_ENABLED=1` (default),
    `_run_ideation_sweep` → `track_b_ideation_synthesis` runs an LLM over the
    recent signature corpus looking for *non-obvious* abstract patterns
