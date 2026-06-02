@@ -53,6 +53,7 @@ def dispatch_cody_demo_task(
     endpoint_required: str = "anthropic_native",
     wall_time_max_minutes: int = DEFAULT_WALL_TIME_MAX_MINUTES,
     iteration: int = 1,
+    review_required: bool = True,
     extra_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Queue a `cody_demo_task` for Cody. Returns the upserted task dict.
@@ -87,6 +88,12 @@ def dispatch_cody_demo_task(
         "endpoint_required": endpoint_required,
         "iteration": int(iteration),
         "wall_time_max_minutes": int(wall_time_max_minutes),
+        # Curated CSI demos default review_required=True → on build completion the
+        # VP-event bridge leaves the row in pending_review for Simone's evaluator.
+        # Direct/ungated (test/on-demand) demos pass review_required=False → the
+        # bridge auto-finalizes via cody_evaluation.finalize_direct_demo on the
+        # mechanical endpoint check, no Simone review.
+        "review_required": bool(review_required),
         "queue_policy": "wait_indefinitely",
         "preferred_vp": "vp.coder.primary",
         "knowledge_base_slug": "claude-code-intelligence",

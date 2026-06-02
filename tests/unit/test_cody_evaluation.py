@@ -22,6 +22,7 @@ from universal_agent.services.cody_evaluation import (
     defer_demo_task,
     detach_demo_from_vault_entity,
     evaluate_demo,
+    finalize_direct_demo,
     monitor_demo_tasks,
     write_feedback_file,
 )
@@ -321,6 +322,73 @@ def test_defer_demo_task_parks_with_reason(conn, tmp_path: Path):
 def test_defer_demo_task_raises_for_missing_task_id(conn):
     with pytest.raises(KeyError):
         defer_demo_task(conn, task_id="never_existed:abc", reason="x")
+
+
+# ── direct/ungated demo lane (review_required=False) ────────────────────────
+
+
+def test_dispatch_records_review_required_flag(conn, tmp_path: Path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    task = dispatch_cody_demo_task(
+        conn, workspace_dir=workspace, entity_slug="d", entity_path=tmp_path / "d.md",
+        demo_id="d__direct", review_required=False,
+    )
+    assert (task.get("metadata") or {}).get("review_required") is False
+
+
+def test_dispatch_review_required_defaults_true(conn, tmp_path: Path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    task = dispatch_cody_demo_task(
+        conn, workspace_dir=workspace, entity_slug="d", entity_path=tmp_path / "d.md",
+        demo_id="d__curated",
+    )
+    assert (task.get("metadata") or {}).get("review_required") is True
+
+
+def test_finalize_direct_demo_completes_on_anthropic_match(conn, tmp_path: Path):
+    workspace = tmp_path / "ws"
+    _populate_workspace(workspace, demo_id="a__direct", endpoint_hit="api.anthropic.com")
+    task = dispatch_cody_demo_task(
+        conn, workspace_dir=workspace, entity_slug="a", entity_path=workspace / "BRIEF.md",
+        demo_id="a__direct", endpoint_required="anthropic_native", review_required=False,
+    )
+    res = finalize_direct_demo(conn, task_id=task["task_id"])
+    assert res["status"] == "completed"
+    assert res["endpoint_ok"] is True
+    assert task_hub.get_item(conn, task["task_id"])["status"] == task_hub.TASK_STATUS_COMPLETED
+
+
+def test_finalize_direct_demo_completes_on_zai_match(conn, tmp_path: Path):
+    # ZAI demo: task requires 'zai', manifest hit 'api.z.ai' → canonical match → done.
+    workspace = tmp_path / "ws"
+    _populate_workspace(
+        workspace, demo_id="z__direct", endpoint_required="zai", endpoint_hit="api.z.ai"
+    )
+    task = dispatch_cody_demo_task(
+        conn, workspace_dir=workspace, entity_slug="z", entity_path=workspace / "BRIEF.md",
+        demo_id="z__direct", endpoint_required="zai", review_required=False,
+    )
+    res = finalize_direct_demo(conn, task_id=task["task_id"])
+    assert res["status"] == "completed"
+    assert task_hub.get_item(conn, task["task_id"])["status"] == task_hub.TASK_STATUS_COMPLETED
+
+
+def test_finalize_direct_demo_flags_endpoint_miss(conn, tmp_path: Path):
+    # Required anthropic_native but ran on ZAI → needs_attention, NOT completed.
+    workspace = tmp_path / "ws"
+    _populate_workspace(
+        workspace, demo_id="m__direct", endpoint_required="anthropic_native", endpoint_hit="api.z.ai"
+    )
+    task = dispatch_cody_demo_task(
+        conn, workspace_dir=workspace, entity_slug="m", entity_path=workspace / "BRIEF.md",
+        demo_id="m__direct", endpoint_required="anthropic_native", review_required=False,
+    )
+    res = finalize_direct_demo(conn, task_id=task["task_id"])
+    assert res["status"] == "needs_attention"
+    assert res["endpoint_ok"] is False
+    assert task_hub.get_item(conn, task["task_id"])["status"] != task_hub.TASK_STATUS_COMPLETED
 
 
 # ── attach_demo_to_vault_entity ─────────────────────────────────────────────
