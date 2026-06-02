@@ -60,3 +60,11 @@ src/universal_agent/worker.py
 # at grace-fire time. It is NOT a Task-Hub worker spawning a tracked unit of work,
 # so the worker-exit/PID observability protocol does not apply. (ci-autofix hook, 2026-05-30)
 src/universal_agent/scripts/ci_failure_grace_recheck.py
+
+# scratch_publish.py [rationale (a) — not a task unit]: the only subprocess use is a
+# single short-lived, synchronous shell-out to `scripts/publish_scratch.sh` (publish
+# one HTML file to the tailnet scratchpad, capture the printed URL, return). There is
+# no long-running PID to classify or persist and no task_hub_items row — it is infra,
+# not a tracked unit of work — so the worker-exit/PID protocol does not apply.
+# (scratchpad delivery, 2026-06-02)
+src/universal_agent/services/scratch_publish.py
