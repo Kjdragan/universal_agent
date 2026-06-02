@@ -107,6 +107,21 @@ underscore) to form the filename.
 | `universal-agent-telegram` | — | `/var/lib/universal-agent/heartbeat/telegram.heartbeat` | **heartbeat** |
 | `csi-ingester` | `http://127.0.0.1:8091/healthz` | — | HTTP |
 
+> **CSI Ingester health path is `/healthz`, not `/health`.** The CSI service
+> (`CSI_Ingester/development/csi_ingester/app.py`) intentionally exposes only
+> `/healthz`, `/readyz`, and `/metrics` — there is **no** `/health` route, so a
+> manual `curl http://127.0.0.1:8091/health` returns **404**. That 404 means
+> "wrong path," **not** "service down" — do not raise a CSI-down alert off it.
+> The systemd watchdog (`scripts/vps_service_watchdog.sh`) and the heartbeat
+> directive (`memory/HEARTBEAT.md` → VPS System Health Check item 10) already
+> use `/healthz`. Separately, CSI *content* freshness (are the 444 YouTube RSS
+> channels polling?) is a DB-based signal in
+> `utils/db_health_monitor.py::check_csi_source_freshness` (a SQLite query on
+> `source_state`, never an HTTP probe); never conflate an HTTP-path 404 with
+> channel staleness. (Optional hardening, operator-approval + CSI restart
+> required: add a `/health` → `/healthz` alias in CSI's `app.py` so the
+> conventional path also answers 200.)
+
 > [VERIFY: legacy runbook 24 lists telegram as "active-state only, no HTTP
 > probe." Code now configures a telegram **heartbeat file** by default. The
 > active-state check still runs first; the heartbeat is the secondary liveness
