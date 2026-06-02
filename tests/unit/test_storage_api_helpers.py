@@ -297,3 +297,41 @@ async def test_enforce_session_owner_allows_run_hook_session_for_primary_owner(m
         "owner_primary",
         True,
     )
+
+
+# ── demos scope (Cody demo workspaces under /opt/ua_demos) ──────────────────
+
+
+def test_demos_scope_normalizes_and_roots_to_demos_dir():
+    assert api_server._normalize_storage_scope("demos") == "demos"
+    assert api_server._storage_root("demos", "local") == api_server.DEMOS_DIR
+
+
+def test_demos_scope_lists_demo_workspace_artifacts(tmp_path: Path, monkeypatch):
+    # Simulate /opt/ua_demos/<slug>__demo-N with real build artifacts at the root.
+    demo = tmp_path / "code-review__demo-2"
+    demo.mkdir()
+    (demo / "manifest.json").write_text('{"success": true}\n', encoding="utf-8")
+    (demo / "demo_src.py").write_text("print('x')\n", encoding="utf-8")
+    (demo / "sample_repo").mkdir()
+
+    monkeypatch.setattr(api_server, "DEMOS_DIR", tmp_path)
+
+    client = TestClient(api_server.app)
+    resp = client.get("/api/vps/files", params={"scope": "demos", "path": "code-review__demo-2"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["scope"] == "demos"
+    names = {f["name"] for f in body.get("files", [])}
+    assert {"manifest.json", "demo_src.py", "sample_repo"} <= names
+
+
+def test_demos_scope_reads_a_demo_file(tmp_path: Path, monkeypatch):
+    demo = tmp_path / "code-review__demo-2"
+    demo.mkdir()
+    (demo / "manifest.json").write_text('{"success": true}\n', encoding="utf-8")
+    monkeypatch.setattr(api_server, "DEMOS_DIR", tmp_path)
+
+    client = TestClient(api_server.app)
+    resp = client.get("/api/vps/file", params={"scope": "demos", "path": "code-review__demo-2/manifest.json"})
+    assert resp.status_code == 200
