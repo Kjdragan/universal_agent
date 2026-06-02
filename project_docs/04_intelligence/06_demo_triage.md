@@ -12,7 +12,7 @@ code_paths:
   - src/universal_agent/scripts/csi_demo_triage_apply_policy.py
   - src/universal_agent/scripts/intel_auto_promoter_cron.py
   - src/universal_agent/services/claude_code_intel_replay.py
-last_verified: 2026-05-29
+last_verified: 2026-06-02
 ---
 
 # Demo Triage
