@@ -12,7 +12,7 @@ last_verified: 2026-06-02
 
 # Build Plan — Insight Pipeline Phases 0.5 / 4 / 5 / 6
 
-**Status:** PLAN for operator sign-off (not yet implemented).
+**Status:** Phases 0.5 / 4 / 5 SHIPPED + deployed. Phase 6 GATED (≥24h stable + operator sign-off).
 **Author:** Claude (Opus 4.8), 2026-06-02 (Houston: 2026-06-01 late evening).
 **Grounding:** live prod recon `ua@uaonvps` 2026-06-02 ~02:55 UTC + canonical
 `project_docs/04_intelligence/10_proactive_pipeline.md` (last_verified 2026-06-02)
@@ -38,7 +38,7 @@ last_verified: 2026-06-02
 | `recent_briefs_index.md` (Atlas prior-verdict memory) | ✅ Written | 384 KB, updated 06-01 18:51 |
 | **Brief → digest EMAIL leg** | ✅ **FIXED (Phase 0.5, 2026-06-02)** | was: 2 ship briefs orphaned `not_surfaced` by a current-clock-hour selector gate (~40% of ship briefs); now a lookback window (`UA_DIGEST_BRIEF_LOOKBACK_HOURS`) surfaces undelivered ship briefs |
 | Digest dedup | ✅ **SHIPPED (Phase 4, 2026-06-02)** | `hourly_intel_digest.py::dedup_near_duplicate_briefs` (Jaccard backstop, `UA_DIGEST_DEDUP_JACCARD`) + `::mark_superseded` for durable suppression |
-| Operator feedback loop | 🟡 Built, ~unexercised | `proactive_artifact_feedback`: **1 row** total |
+| Operator feedback loop | ✅ **SHIPPED (Phase 5, 2026-06-02)** | was: built but **dead in-email** — `_render_card` read `metadata.feedback_url_up/down` but nothing populated them (Atlas authors thesis/entities, not URLs), so the digest emailed only a "Read full brief →" link and the 👍/👎 buttons never rendered (`proactive_artifact_feedback`: **1 row** total). Now `hourly_intel_digest.py::_attach_feedback_urls` mints fresh HMAC-signed per-brief links at send time (`UA_DIGEST_INLINE_FEEDBACK_LINKS`, default on). Endpoint→DB→index→Atlas legs verified wired. |
 | `csi_convergence_sync` cron health | ✅ **Fixed 2026-06-02 (PR #665)** | was 900s-timeout flood; now parallelized + time-boxed (separate work) |
 | Legacy Track A/B + hand-trigger endpoints | ⚠️ Dead but present | Phase 6 deletion target |
 
@@ -166,34 +166,69 @@ caps one email/hour).
 
 **4.2 Render review.** `render_digest_html` reviewed (code): per-card title +
 thesis + why + tags, "Read full brief →" button (`{base_url}/briefs/{id}`),
-thumbs feedback buttons, footer (prefs / pause-24h / "why these?"), Gmail-safe
-inline CSS — no rendering defects found. The live eyeball (links resolve in a
-real inbox) happens naturally on the next scheduled digest; **not force-sent**
-(would increase operator email volume — needs operator OK). No code.
+footer (prefs / pause-24h / "why these?"), Gmail-safe inline CSS — no rendering
+defects found. **The per-card 👍/👎 buttons were present in the template but
+never rendered** because `_render_card` reads them from `metadata.feedback_url_up/down`
+and nothing populated those fields — fixed in Phase 5 below. The live eyeball
+(links resolve in a real inbox) happens naturally on the next scheduled digest;
+**not force-sent** (would increase operator email volume — needs operator OK).
 
 ---
 
-## 5. Phase 5 — Feedback loop + recent-briefs index verification
+## 5. Phase 5 — Feedback loop + recent-briefs index verification — SHIPPED (2026-06-02)
 
-**State:** `proactive_artifact_feedback` has **1 row** — the loop is built but
-essentially unexercised. This phase is mostly verification + small gap-fill.
+**State (before):** `proactive_artifact_feedback` had **1 row** — the loop was
+built but essentially unexercised. Verification found all four legs wired except
+the **send-time link mint**, which was the dead leg.
 
-- **5.1** Trace `/api/v1/briefs/{id}/feedback` (`gateway_server.py` — grep the
-  symbol, line numbers in the spec are stale): confirm a thumbs-down writes
-  `operator_rating` to `proactive_artifact_feedback`, and that the rating flows
-  into `recent_briefs_index` (and/or the explicit-feedback preference snapshot
-  that feeds Atlas's `get_delegation_context`).
-- **5.2** Confirm Atlas READS the index for prior-verdict awareness (skips a
-  convergence it already shipped). Provide a real per-brief feedback link in the
-  digest (depends on Phase 4.2 render).
+**The four legs (all verified on `origin/main`):**
+
+- **5.1 Endpoint → DB.** `gateway_server.py::briefs_feedback_get` verifies the
+  HMAC token (`cron_artifact_notifier.py::verify_feedback_token`), writes the
+  rating to `proactive_artifact_feedback` via
+  `proactive_artifacts.py::record_feedback`, updates the most-recent
+  `proactive_brief_scoring_log` row's `operator_rating`, and calls
+  `recent_briefs_index.py::update_operator_rating_in_index`. ✅ wired.
+- **5.2 Index reflects it.** `update_operator_rating_in_index` surgically
+  rewrites the `operator_rating:` line on the matching `[SHIP]` block; a full
+  rebuild (`_ship_block_from_artifact`) independently derives the rating from
+  `feedback_json.last_score`. Index inclusion is gated on `verdict='ship'`, NOT
+  on artifact `status`, and `update_artifact_state` never touches `verdict` — so
+  a thumbs-down brief stays in the index carrying `operator_rating: 1`. ✅ wired.
+- **5.3 Atlas reads it.** `evaluate-and-author-intel-brief/SKILL.md` rule 1
+  (same-thesis-as-recent-ship → skip) and rule 4 (≥2 recent `operator_rating: 1`
+  hits on matching `key_entities` → stricter bar, tilt to skip). ✅ wired.
+- **5.4 The dead leg (GAP-FILLED).** `_render_card` reads
+  `metadata.feedback_url_up/down` to emit the in-email 👍/👎 buttons, but the
+  authoring pipeline never populated them (Atlas writes thesis/entities; the URL
+  base + HMAC secret are send-time concerns), and `sign_feedback_token` was
+  called only in the `/briefs/{id}` web viewer — so the **digest email's
+  one-click feedback buttons never rendered**, which is exactly why the table had
+  1 row. Fix: `hourly_intel_digest.py::_attach_feedback_urls` mints fresh
+  HMAC-signed per-brief links at send time inside `::compose_send_payload`
+  (mirroring the viewer's per-request mint), gated by `_inline_feedback_enabled`.
+
+**CRITICAL boundary (held):** the feedback path writes ONLY to
+`proactive_artifact_feedback` + the index — it never writes a
+`proactive_preference_signal`, so it cannot re-introduce an implicit-outcome
+preference path. Atlas's preference snapshot (`get_preference_snapshot`) remains
+`explicit_feedback`-only (the 2026-05-24 poison-gate lesson).
+
+> **Noted, out of scope:** `record_feedback` maps score `{1,5}→ACCEPTED` and
+> `{3,4}→REJECTED` (a thumbs-down marks the artifact "accepted"). This is
+> pre-existing, test-pinned behavior on the shared **email-reply** feedback path
+> (`test_proactive_intelligence_phase1.py`) and does NOT affect the index/Atlas
+> payoff (which keys off `score`/`last_score`→`operator_rating`, gated on
+> `verdict` not `status`). Left untouched to avoid conflating code paths.
 
 | Field | Value |
 |---|---|
-| Files | verification; gap-fill in `recent_briefs_index.py` / the feedback endpoint; ≤1 test |
-| Acceptance | a simulated thumbs-down is recorded AND surfaced to a subsequent Atlas mission's context/index; Atlas skips an already-shipped convergence |
-| Tests | unit: POST feedback → row written + index reflects it |
-| Verify (prod) | simulate via endpoint; inspect `proactive_artifact_feedback` + `recent_briefs_index.md` + next mission context |
-| Risk | LOW — additive; **must stay scoped to `explicit_feedback`** (the 2026-05-24 poison-gate lesson — never let implicit park/skip bursts move preference) |
+| Files | `services/hourly_intel_digest.py::_attach_feedback_urls` / `::_inline_feedback_enabled` / `::compose_send_payload` |
+| Acceptance | the digest email renders a signed per-brief `/api/v1/briefs/{id}/feedback?v=up\|down&t=<hmac>` link that verifies against the endpoint secret; a thumbs-down is recorded + surfaced to the index + Atlas's rule 4 |
+| Tests | `test_hourly_intel_digest_skill.py::InlineFeedbackLinkTests` (mint-when-absent / token-verifies-against-endpoint / disabled-by-flag / no-secret-degrades) — 36 passed |
+| Env flag / rollback | `UA_DIGEST_INLINE_FEEDBACK_LINKS=0` disables the in-email mint (briefs still ship; rate via the `/briefs/{id}` viewer) |
+| Verify (prod) | read-only: deployed `compose_send_payload` probe vs prod DB shows signed feedback URLs in the HTML (no force-send, no rating mutation) |
+| Risk | LOW — additive, fail-open (no secret → no buttons), `explicit_feedback`-scoped |
 
 ---
 
