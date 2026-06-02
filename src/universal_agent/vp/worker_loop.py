@@ -1029,20 +1029,41 @@ class VpWorkerLoop:
         worktree_path = (self.profile.workspace_root / mission_id).resolve()
         branch_name = f"vp-task-{mission_id[:8]}"
 
-        # Create worktree
-        logger.info("Provisioning git worktree at %s (branch: %s)", worktree_path, branch_name)
+        # Create the worktree on a branch based on a freshly-fetched
+        # origin/<base> (main), NOT the deploy tree's local HEAD. The live
+        # /opt/universal_agent checkout can sit on a diverged/renamed local
+        # branch; branching off that HEAD yields a worktree with no merge-base
+        # to origin/main → disjoint-history PRs (e.g. #646). The fetch is
+        # best-effort so offline/dev runs gracefully fall back to HEAD below.
+        logger.info("Provisioning git worktree at %s (branch: %s, base: origin/%s)", worktree_path, branch_name, _PR_BASE_BRANCH)
+        subprocess.run(
+            ["git", "fetch", "origin", _PR_BASE_BRANCH],
+            cwd=str(target_path),
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
         result = subprocess.run(
-            ["git", "worktree", "add", str(worktree_path), "-b", branch_name],
+            ["git", "worktree", "add", str(worktree_path), "-b", branch_name, f"origin/{_PR_BASE_BRANCH}"],
             cwd=str(target_path),
             capture_output=True,
             text=True
         )
-        
+
         if result.returncode != 0:
-            # If the branch already exists or some other failure, try to just add without -b
-            if "already exists" in result.stderr:
+            if "already exists" in (result.stderr or ""):
+                # Branch already exists (re-run of the same mission) — reuse it.
                 result = subprocess.run(
                     ["git", "worktree", "add", str(worktree_path), branch_name],
+                    cwd=str(target_path),
+                    capture_output=True,
+                    text=True
+                )
+            else:
+                # origin/<base> unavailable (offline / fresh clone without the
+                # remote ref) — fall back to branching off the current HEAD.
+                result = subprocess.run(
+                    ["git", "worktree", "add", str(worktree_path), "-b", branch_name],
                     cwd=str(target_path),
                     capture_output=True,
                     text=True
@@ -1050,7 +1071,7 @@ class VpWorkerLoop:
             if result.returncode != 0:
                 logger.warning("Failed to provision git worktree: %s", result.stderr.strip())
                 worktree_path.mkdir(parents=True, exist_ok=True)
-                
+
         return worktree_path
 
     async def _teardown_workspace(self, workspace_path: Path) -> None:
