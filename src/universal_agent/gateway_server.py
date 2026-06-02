@@ -14894,6 +14894,7 @@ async def lifespan(app: FastAPI):
                 _ensure_morning_briefing_cron_job()
                 _ensure_evening_briefing_cron_job()
                 _ensure_hourly_insight_email_cron_job()
+                _ensure_hourly_intel_digest_cron_job()
                 _ensure_insight_scoring_health_cron_job()
                 _ensure_proactive_report_morning_cron_job()
                 _ensure_proactive_report_midday_cron_job()
@@ -19532,6 +19533,35 @@ def _ensure_hourly_insight_email_cron_job() -> Optional[dict[str, Any]]:
         enabled=_proactive_cron_enabled("UA_INSIGHT_HOURLY_EMAIL_ENABLED", default="0"),  # PR D: disabled by default — Simone /hourly-intel-digest skill replaces this. Flip env to "1" to re-enable the legacy cron.
         cron_env_var="UA_INSIGHT_HOURLY_EMAIL_CRON",
         timezone_env_var="UA_INSIGHT_HOURLY_EMAIL_TIMEZONE",
+    )
+
+
+def _ensure_hourly_intel_digest_cron_job() -> Optional[dict[str, Any]]:
+    """Register the deterministic hourly intel-digest delivery cron.
+
+    Schedule: ``0 6-21 * * *`` America/Chicago — top of every active-window
+    hour (content-generation work, respects the dormancy default). This is the
+    LLM-independent delivery path for the convergence-brief digest: it runs the
+    same ``hourly_intel_digest.compose_send_payload`` pipeline the
+    ``/hourly-intel-digest`` skill does, then sends + stamps directly. Simone's
+    heartbeat stopped reliably invoking that skill after 2026-05-30; this cron
+    removes the dependency on the heartbeat LLM. The skill/heartbeat directive
+    may stay as a harmless backup — ``compose_send_payload`` is idempotent per
+    clock hour (``is_throttled`` + ``delivered_at IS NULL``), so whichever fires
+    first sends and the other sees ``throttled``.
+
+    Pause lever: ``UA_INTEL_DIGEST_CRON_ENABLED=0`` (default on).
+    """
+    return _register_system_cron_job(
+        system_job="hourly_intel_digest",
+        default_cron="0 6-21 * * *",
+        default_timezone="America/Chicago",
+        command="!script universal_agent.scripts.hourly_intel_digest_cron",
+        description="Deterministic hourly intel-digest delivery (LLM-independent path).",
+        timeout_seconds=300,
+        enabled=_proactive_cron_enabled("UA_INTEL_DIGEST_CRON_ENABLED", default="1"),
+        cron_env_var="UA_INTEL_DIGEST_CRON",
+        timezone_env_var="UA_INTEL_DIGEST_CRON_TIMEZONE",
     )
 
 
