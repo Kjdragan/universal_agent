@@ -464,6 +464,22 @@ function workspaceRelativePathFromAbsolute(pathValue: string): string {
   return "";
 }
 
+// Cody demo workspaces live at /opt/ua_demos/<slug>__demo-N — OUTSIDE
+// AGENT_RUN_WORKSPACES — so they can't be expressed as a workspaces-scope
+// relative path. Detect the /ua_demos/ marker and return the path relative to
+// the demos root (e.g. "code-review__demo-2") for the file browser's
+// scope=demos mode. Returns "" when the path isn't a demo workspace.
+function demoRelativePathFromAbsolute(pathValue: string): string {
+  const normalized = String(pathValue || "").replace(/\\/g, "/");
+  if (!normalized) return "";
+  const marker = "/ua_demos/";
+  const idx = normalized.indexOf(marker);
+  if (idx >= 0) {
+    return normalized.slice(idx + marker.length).replace(/^\/+|\/+$/g, "");
+  }
+  return "";
+}
+
 function parseIsoMillis(value: string): number {
   const parsed = Date.parse(String(value || ""));
   return Number.isFinite(parsed) ? parsed : 0;
@@ -591,9 +607,11 @@ function FileViewer() {
         ? `${API_BASE}/api/vps/file?scope=workspaces&path=${encodeURIComponent(viewingFile.path)}`
         : viewingFile.type === "vps_artifact"
           ? `${API_BASE}/api/vps/file?scope=artifacts&path=${encodeURIComponent(viewingFile.path)}`
-          : viewingFile.type === "session_file"
-            ? buildSessionFileUrl(currentSession, viewingFile.path)
-          : buildDurableFileUrl(currentSession, viewingFile.path)
+          : viewingFile.type === "vps_demo"
+            ? `${API_BASE}/api/vps/file?scope=demos&path=${encodeURIComponent(viewingFile.path)}`
+            : viewingFile.type === "session_file"
+              ? buildSessionFileUrl(currentSession, viewingFile.path)
+            : buildDurableFileUrl(currentSession, viewingFile.path)
     : "";
 
   useEffect(() => {
@@ -748,7 +766,7 @@ function buildSessionFileUrl(
 function FileExplorer() {
   const currentSession = useAgentStore((s) => s.currentSession);
   const setViewingFile = useAgentStore((s) => s.setViewingFile);
-  const [mode, setMode] = useState<"session" | "artifacts" | "vps_workspaces" | "vps_artifacts" | "local">("session");
+  const [mode, setMode] = useState<"session" | "artifacts" | "vps_workspaces" | "vps_artifacts" | "vps_demos" | "local">("session");
   const [path, setPath] = useState("");
   const [files, setFiles] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -843,6 +861,15 @@ function FileExplorer() {
     const sid = currentSession?.session_id || "";
     const ws = currentSession?.workspace || "";
     if (/^vp-mission-/i.test(sid) && ws) {
+      // Cody demo workspaces (/opt/ua_demos/<id>) are outside
+      // AGENT_RUN_WORKSPACES — browse them via the dedicated demos scope so the
+      // Workspace button surfaces the build artifacts instead of an empty pane.
+      const demoRel = demoRelativePathFromAbsolute(ws);
+      if (demoRel) {
+        setMode("vps_demos");
+        setPath(demoRel);
+        return;
+      }
       const vpWorkspaceRel = workspaceRelativePathFromAbsolute(ws);
       if (vpWorkspaceRel) {
         setMode("vps_workspaces");
@@ -880,7 +907,9 @@ function FileExplorer() {
         ? `${API_BASE}/api/vps/files?scope=workspaces&path=${encodeURIComponent(path)}`
         : mode === "vps_artifacts"
           ? `${API_BASE}/api/vps/files?scope=artifacts&path=${encodeURIComponent(path)}`
-          : buildDurableFileListUrl(currentSession, path);
+          : mode === "vps_demos"
+            ? `${API_BASE}/api/vps/files?scope=demos&path=${encodeURIComponent(path)}`
+            : buildDurableFileListUrl(currentSession, path);
     fetch(url, { cache: "no-store", signal: ac.signal })
       .then(res => res.json())
       .then(data => {
@@ -942,9 +971,11 @@ function FileExplorer() {
             ? "vps_workspace"
             : mode === "vps_artifacts"
               ? "vps_artifact"
-              : mode === "session"
-                ? "session_file"
-              : "file";
+              : mode === "vps_demos"
+                ? "vps_demo"
+                : mode === "session"
+                  ? "session_file"
+                : "file";
       setViewingFile({ name: itemName, path: fullPath, type: fileType });
       return;
     }
@@ -978,6 +1009,8 @@ function FileExplorer() {
                 ? (path ? `VPS WS/.../${path.split("/").pop()}` : "VPS Workspaces")
                 : mode === "vps_artifacts"
                   ? (path ? `VPS Artifacts/.../${path.split("/").pop()}` : "VPS Artifacts")
+                  : mode === "vps_demos"
+                    ? (path ? `Demo/.../${path.split("/").pop()}` : "Demo Workspace")
                   : mode === "local"
                     ? (path ? `Local/.../${path.split("/").pop()}` : `Local: ${localRootName || "(none)"}`)
                     : (path ? `.../${path.split("/").pop()}` : "Files")}
@@ -993,6 +1026,19 @@ function FileExplorer() {
             >
               SESSION
             </button>
+            {demoRelativePathFromAbsolute(currentSession?.workspace || "") && (
+              <button
+                type="button"
+                onClick={() => {
+                  setMode("vps_demos");
+                  setPath(demoRelativePathFromAbsolute(currentSession?.workspace || ""));
+                }}
+                className={`text-[9px] px-2 py-1 rounded border font-medium transition-all ${mode === "vps_demos" ? "bg-primary/20 text-primary border-primary/40" : "bg-card/40 text-muted-foreground/70 border-border/40 hover:bg-card/60"}`}
+                title="Browse this demo's build artifacts"
+              >
+                DEMO
+              </button>
+            )}
             <button
               type="button"
               onClick={() => { setMode("artifacts"); setPath(""); }}

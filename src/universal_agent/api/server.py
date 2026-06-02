@@ -48,6 +48,13 @@ BASE_DIR = Path(__file__).parent.parent.parent.parent
 WORKSPACES_DIR = BASE_DIR / "AGENT_RUN_WORKSPACES"
 ARTIFACTS_DIR = Path(os.getenv("UA_ARTIFACTS_DIR", str(BASE_DIR / "artifacts"))).expanduser()
 ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+# Cody demo workspaces live OUTSIDE AGENT_RUN_WORKSPACES (the production VPS
+# layout is /opt/ua_demos/<slug>__demo-N). The file-browser ``demos`` scope
+# roots here so the viewer's Workspace button can browse a demo's build
+# artifacts (manifest.json, demo_src.py, review_output.txt, sample_repo/, …).
+# Mirrors gateway_server._demos_root (UA_DEMOS_ROOT override, /opt/ua_demos
+# default).
+DEMOS_DIR = Path(os.getenv("UA_DEMOS_ROOT", "/opt/ua_demos")).expanduser()
 VPS_WORKSPACES_MIRROR_DIR = Path(
     os.getenv(
         "UA_VPS_WORKSPACES_MIRROR_DIR",
@@ -84,7 +91,7 @@ TEXT_EXTENSIONS = (
     ".csv",
 )
 _STORAGE_ROOT_SOURCES = {"local", "mirror"}
-_STORAGE_SCOPES = {"workspaces", "artifacts", "vps"}
+_STORAGE_SCOPES = {"workspaces", "artifacts", "vps", "demos"}
 _SESSION_PREFIXES = ("session_", "session-hook_", "session_hook_", "tg_", "api_", "vp_", "daemon_")
 _PROTECTED_STORAGE_DELETE_SUFFIXES = (".db", ".db-shm", ".db-wal")
 _SYSTEM_SESSION_OWNERS = {
@@ -672,7 +679,10 @@ class VpsStorageDeleteRequest(BaseModel):
 def _normalize_storage_scope(raw_scope: str) -> str:
     scope_clean = (raw_scope or "").strip().lower()
     if scope_clean not in _STORAGE_SCOPES:
-        raise HTTPException(status_code=400, detail="scope must be 'workspaces', 'artifacts', or 'vps'")
+        raise HTTPException(
+            status_code=400,
+            detail="scope must be 'workspaces', 'artifacts', 'vps', or 'demos'",
+        )
     return scope_clean
 
 
@@ -688,6 +698,10 @@ def _storage_root(scope: str, root_source: str) -> Path:
     source_clean = _normalize_storage_root_source(root_source)
     if scope_clean == "vps":
         return BASE_DIR
+    if scope_clean == "demos":
+        # Demo workspaces are local-only (no VPS mirror); the demos root is the
+        # same absolute path on the VPS and via the desktop SSHFS mount.
+        return DEMOS_DIR
     if scope_clean == "workspaces":
         return WORKSPACES_DIR if source_clean == "local" else VPS_WORKSPACES_MIRROR_DIR
     return ARTIFACTS_DIR if source_clean == "local" else VPS_ARTIFACTS_MIRROR_DIR
