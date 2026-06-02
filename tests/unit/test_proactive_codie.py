@@ -78,7 +78,7 @@ def test_queue_cleanup_task_creates_agent_ready_review_gated_task(tmp_path):
     assert task["metadata"]["workflow_manifest"]["target_agent"] == "vp.coder.primary"
     assert task["metadata"]["workflow_manifest"]["codebase_root"].endswith("/universal_agent")
     assert task["metadata"]["complexity_target"] == "low_to_medium"
-    assert task["metadata"]["expected_work_product"] == "pull_request_to_develop"
+    assert task["metadata"]["expected_work_product"] == "pull_request_to_main"
     assert "low-to-medium complexity" in task["description"].lower()
     assert "pr is the required final work product" in task["description"].lower()
     assert "red-green tdd" in task["description"].lower()

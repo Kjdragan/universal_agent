@@ -93,9 +93,9 @@ def queue_cleanup_task(
         metadata={
             "source": "proactive_codie",
             "theme": chosen_theme,
-            "review_gate": "pr_to_develop",
+            "review_gate": "pr_to_main",
             "complexity_target": "low_to_medium",
-            "expected_work_product": "pull_request_to_develop",
+            "expected_work_product": "pull_request_to_main",
             "target_agent": CODIE_TARGET_AGENT,
             "codebase_root": _resolve_default_codebase_root(),
             "external_effect_policy": {
