@@ -388,6 +388,121 @@ class ComposeReadyTests(unittest.TestCase):
         self.assertTrue(payload["needs_attention"])
 
 
+# ── In-email feedback links (Phase 5) ──────────────────────────────────
+
+
+class InlineFeedbackLinkTests(unittest.TestCase):
+    """The digest must mint signed per-brief 👍/👎 links at send time.
+
+    In production Atlas authors the brief but never writes feedback URLs
+    into its metadata, so the buttons were never rendered (the loop was
+    dead — ``proactive_artifact_feedback`` had 1 row). ``compose_send_payload``
+    must mint fresh HMAC-signed feedback URLs per ship brief, exactly like
+    the ``/briefs/{id}`` viewer mints fresh tokens per request.
+    """
+
+    # `sign_feedback_token` derives its key from `cron_artifact_notifier._ack_secret`,
+    # which reads UA_ARTIFACT_ACK_SECRET / UA_OPS_TOKEN / UA_INTERNAL_API_TOKEN —
+    # NOT UA_FEEDBACK_HMAC_SECRET. Patch the var the signer actually reads (first in
+    # that chain) so the test is hermetic in CI, where none are ambient. Setting both
+    # also covers the digest pause-token resolver, which does read the HMAC var.
+    SECRET_ENV = {
+        "UA_ARTIFACT_ACK_SECRET": "x" * 32,
+        "UA_FEEDBACK_HMAC_SECRET": "x" * 32,
+    }
+
+    def test_compose_mints_signed_feedback_links_when_artifact_lacks_them(self) -> None:
+        conn = _mk_conn()
+        # Realistic prod artifact: no feedback URLs in metadata.
+        _insert_ship_artifact(
+            conn,
+            artifact_id="pa_inline_fb",
+            title="ATLAS insight brief: Inline feedback",
+            feedback_up="",
+            feedback_down="",
+        )
+        with patch.dict(os.environ, self.SECRET_ENV):
+            payload = digest.compose_send_payload(conn)
+        self.assertEqual(payload["status"], "ready")
+        html = payload["html"]
+        # The up/down endpoints with a non-empty signed token are present.
+        # `&` is HTML-escaped to `&amp;` inside the href attribute.
+        self.assertRegex(
+            html,
+            r"/api/v1/briefs/pa_inline_fb/feedback\?v=up&amp;t=[0-9a-f]+",
+        )
+        self.assertRegex(
+            html,
+            r"/api/v1/briefs/pa_inline_fb/feedback\?v=down&amp;t=[0-9a-f]+",
+        )
+        # The visible button labels render.
+        self.assertIn("👍 More", html)
+        self.assertIn("👎 Less", html)
+
+    def test_minted_feedback_token_verifies_against_the_endpoint_secret(self) -> None:
+        import re as _re
+
+        from universal_agent.services.cron_artifact_notifier import (
+            verify_feedback_token,
+        )
+
+        conn = _mk_conn()
+        _insert_ship_artifact(
+            conn,
+            artifact_id="pa_inline_verify",
+            feedback_up="",
+            feedback_down="",
+        )
+        with patch.dict(os.environ, self.SECRET_ENV):
+            payload = digest.compose_send_payload(conn)
+            m = _re.search(
+                r"/api/v1/briefs/pa_inline_verify/feedback\?v=up&amp;t=([0-9a-f]+)",
+                payload["html"],
+            )
+            self.assertIsNotNone(m, "no signed up-vote feedback URL rendered")
+            token = m.group(1)
+            self.assertTrue(
+                verify_feedback_token("pa_inline_verify", "up", token)
+            )
+
+    def test_inline_feedback_disabled_by_env_flag(self) -> None:
+        conn = _mk_conn()
+        _insert_ship_artifact(
+            conn,
+            artifact_id="pa_inline_off",
+            feedback_up="",
+            feedback_down="",
+        )
+        env = dict(self.SECRET_ENV)
+        env["UA_DIGEST_INLINE_FEEDBACK_LINKS"] = "0"
+        with patch.dict(os.environ, env):
+            payload = digest.compose_send_payload(conn)
+        self.assertEqual(payload["status"], "ready")
+        self.assertNotIn("/feedback?v=up&t=", payload["html"])
+
+    def test_no_feedback_links_when_secret_absent(self) -> None:
+        conn = _mk_conn()
+        _insert_ship_artifact(
+            conn,
+            artifact_id="pa_inline_nosecret",
+            feedback_up="",
+            feedback_down="",
+        )
+        secrets = [
+            "UA_FEEDBACK_HMAC_SECRET",
+            "UA_ARTIFACT_ACK_SECRET",
+            "UA_OPS_TOKEN",
+            "UA_INTERNAL_API_TOKEN",
+        ]
+        with patch.dict(os.environ, {k: "" for k in secrets}, clear=False):
+            for k in secrets:
+                os.environ.pop(k, None)
+            payload = digest.compose_send_payload(conn)
+        self.assertEqual(payload["status"], "ready")
+        # Gracefully degrades: no buttons, brief still ships.
+        self.assertNotIn("/feedback?v=up&t=", payload["html"])
+
+
 # ── Pause-token signing ────────────────────────────────────────────────
 
 

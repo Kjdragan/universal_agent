@@ -309,6 +309,58 @@ def _gateway_base_url() -> str:
     return base
 
 
+def _inline_feedback_enabled() -> bool:
+    """Whether the digest mints in-email per-brief 👍/👎 links (Phase 5).
+
+    Default ON. Set ``UA_DIGEST_INLINE_FEEDBACK_LINKS=0`` to disable (the
+    rollback lever) — briefs still ship, and the operator can rate them
+    from the ``/briefs/{id}`` viewer, which mints its own fresh tokens."""
+    raw = str(os.getenv("UA_DIGEST_INLINE_FEEDBACK_LINKS", "1")).strip().lower()
+    return raw not in {"0", "false", "no", "off", ""}
+
+
+def _attach_feedback_urls(briefs: list[dict[str, Any]], base_url: str) -> None:
+    """Mint signed per-brief thumbs URLs into each brief's metadata in place.
+
+    ``_render_card`` reads ``metadata.feedback_url_up`` /
+    ``feedback_url_down`` to emit the in-email buttons, but nothing in the
+    authoring pipeline populates them (Atlas writes thesis/entities, not
+    feedback URLs — and the URL base + HMAC secret are send-time concerns).
+    So we mint fresh HMAC-signed URLs here at send time, mirroring the
+    ``/briefs/{id}`` viewer which mints fresh tokens per request.
+
+    Best-effort: a brief with no ``artifact_id``, a disabled flag, or a
+    missing signing secret simply renders without buttons (falls back to
+    the "Read full brief →" link)."""
+    if not _inline_feedback_enabled():
+        return
+    try:
+        from universal_agent.services.cron_artifact_notifier import (
+            sign_feedback_token,
+        )
+    except Exception:  # noqa: BLE001 — never block a send on import edge cases
+        return
+    for brief in briefs:
+        artifact_id = str(brief.get("artifact_id") or "").strip()
+        if not artifact_id:
+            continue
+        up_token = sign_feedback_token(artifact_id, "up")
+        down_token = sign_feedback_token(artifact_id, "down")
+        if not (up_token and down_token):
+            # No secret configured → degrade gracefully (no buttons).
+            continue
+        meta = brief.get("metadata")
+        if not isinstance(meta, dict):
+            meta = {}
+            brief["metadata"] = meta
+        meta["feedback_url_up"] = (
+            f"{base_url}/api/v1/briefs/{artifact_id}/feedback?v=up&t={up_token}"
+        )
+        meta["feedback_url_down"] = (
+            f"{base_url}/api/v1/briefs/{artifact_id}/feedback?v=down&t={down_token}"
+        )
+
+
 def render_subject(briefs: list[dict[str, Any]], now_ct: Optional[datetime] = None) -> str:
     """Produce the digest subject line per spec §7.3.
 
@@ -682,6 +734,10 @@ def compose_send_payload(
         return {"status": "no_candidates"}
 
     base_url = _gateway_base_url()
+    # Mint signed in-email 👍/👎 links per ship brief (Phase 5). Done here at
+    # send time — the authoring pipeline never populates these (the URL base +
+    # HMAC secret are send-time concerns), which is why the loop was unexercised.
+    _attach_feedback_urls(briefs, base_url)
     pause_token = sign_digest_pause_token(24)
     now_ct = _houston_now()
     subject = render_subject(briefs, now_ct=now_ct)
