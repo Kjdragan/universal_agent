@@ -19849,12 +19849,14 @@ def _ensure_csi_convergence_cron_job() -> None:
     job_id = "csi_convergence_sync"
     command = "!script universal_agent.scripts.csi_convergence_sync"
     # Cadence: top of every active-window hour (06:00-21:00 Houston). The
-    # detection pass now runs an LLM precision layer (ZAI/GLM, abundant quota),
-    # so per-run cost is negligible and hourly cadence gives the hourly digest
-    # fresh, high-precision candidates to draw from. Respects the content-
-    # generation dormancy window (no overnight runs). PR A had cut this to
-    # 3x/day ("0 7,13,19 * * *") purely to limit the cost of an LLM detection
-    # pass that was then removed entirely; that constraint no longer applies.
+    # detection pass runs an LLM precision layer + an ideation sweep + per-
+    # candidate triage (ZAI/GLM, abundant quota). That is NOT cheap: a coarse
+    # recall window yields dozens of buckets, so the work is parallelized and
+    # time-boxed by `UA_CSI_CONVERGENCE_BUDGET_SECONDS` (default 700s) to finish
+    # under the cron's 900s timeout — see proactive_convergence.sync_topic_
+    # signatures_from_csi (budget default 600s). Hourly cadence gives the digest fresh,
+    # high-precision candidates. Respects the content-generation dormancy window
+    # (no overnight runs). PR A had cut this to 3x/day purely to limit LLM cost.
     cron_expr = os.getenv("UA_CSI_CONVERGENCE_CRON_EXPR", "0 6-21 * * *").strip() or "0 6-21 * * *"
     timezone_name = os.getenv("UA_CSI_CONVERGENCE_CRON_TIMEZONE", "America/Chicago").strip() or "America/Chicago"
     workspace_dir = str(WORKSPACES_DIR / "cron_csi_convergence_sync")
@@ -19864,12 +19866,15 @@ def _ensure_csi_convergence_cron_job() -> None:
         "autonomous": True,
         "proactive_producer": "csi_convergence",
         "session_id": "cron_csi_convergence_sync",
-        # Pure-SQL housekeeping: `scripts/csi_convergence_sync.py` only
-        # calls `sync_topic_signatures_from_csi` (SQL + sqlite3). No
-        # Composio tools, no agent session — same shape as atlas's
-        # direct dispatcher above. Skipping the heavyweight bootstrap
-        # avoids the per-tick Composio tool-router session creation
-        # that triggered the 2026-05-23 Vercel-edge 429 storm.
+        # `scripts/csi_convergence_sync.py` runs as a plain `!script`
+        # subprocess: it does SQL sync PLUS bounded LLM clustering, an
+        # ideation sweep, and per-candidate triage (via the SDK directly),
+        # but NO Composio tools and NO heavyweight Claude-agent session.
+        # `lightweight=True` skips that agent bootstrap (same shape as
+        # atlas's direct dispatcher), avoiding the per-tick Composio
+        # tool-router session that triggered the 2026-05-23 Vercel-edge 429
+        # storm. The LLM work is time-boxed (UA_CSI_CONVERGENCE_BUDGET_SECONDS)
+        # to stay under timeout_seconds; it is NOT "pure-SQL / negligible cost".
         "lightweight": True,
     }
     existing = _cron_service.get_job(job_id)

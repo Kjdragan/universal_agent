@@ -10,6 +10,7 @@ import logging
 import os
 from pathlib import Path
 import sqlite3
+import time
 from typing import Any, Callable, Optional
 
 from universal_agent.services.llm_classifier import _call_llm, _parse_json_response
@@ -305,12 +306,18 @@ def sync_topic_signatures_from_csi(
     # LLM precision layer (default): SQL recall buckets → per-bucket LLM judge
     # that confirms a genuine shared thesis and emits only high-strength
     # clusters. Falls back to raw SQL buckets when UA_CONVERGENCE_LLM_CLUSTERING=0.
+    # Overall wall-clock budget shared by the LLM clustering, candidate-write
+    # (triage), and ideation phases so the run always finishes under the cron's
+    # 900s timeout. Work not reached this run is idempotently re-detected next.
+    deadline = time.monotonic() + _convergence_budget_seconds()
+
     candidates_written = 0
     if _llm_clustering_enabled():
         confirmed = _detect_clusters_llm(
             conn,
             source_window_hours=source_window_hours,
             min_channels=min_channels,
+            deadline=deadline,
         )
         clusters = [
             (c["signatures"], c.get("thesis", ""), float(c.get("signal_strength") or 0))
@@ -327,6 +334,8 @@ def sync_topic_signatures_from_csi(
         ]
 
     for cluster_signatures, thesis, strength in clusters:
+        if time.monotonic() >= deadline:
+            break
         try:
             result = write_convergence_candidate(
                 conn,
@@ -351,13 +360,17 @@ def sync_topic_signatures_from_csi(
     # de-poisoned convergence_candidate → Atlas → digest path with
     # candidate_kind='ideation'. Disable via UA_IDEATION_SWEEP_ENABLED=0.
     ideation_written = 0
-    if _ideation_sweep_enabled():
+    if _ideation_sweep_enabled() and time.monotonic() < deadline:
         try:
-            ideations = _run_ideation_sweep(conn, source_window_hours=source_window_hours)
+            ideations = _run_ideation_sweep(
+                conn, source_window_hours=source_window_hours, deadline=deadline
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning("ideation sweep failed: %s", exc)
             ideations = []
         for ins in ideations:
+            if time.monotonic() >= deadline:
+                break
             try:
                 result = write_convergence_candidate(
                     conn,
@@ -566,6 +579,35 @@ def _min_signal_strength() -> int:
         return 7
 
 
+def _convergence_llm_concurrency() -> int:
+    """Max concurrent per-bucket refine calls. `include_secondary` recall
+    produces dozens of coarse buckets; refining them one-at-a-time at ~5-15s
+    each (opus-tier) overran the 900s cron budget. The refine LLM path has no
+    rate limiter, so this bounds concurrent load on the ZAI proxy. Default 6."""
+    raw = str(os.getenv("UA_CONVERGENCE_LLM_CONCURRENCY", "6")).strip()
+    try:
+        return max(1, min(16, int(raw)))
+    except ValueError:
+        return 6
+
+
+def _convergence_budget_seconds() -> float:
+    """Overall wall-clock budget for the LLM convergence + ideation phases.
+    Kept well under the cron's timeout (UA_CSI_CONVERGENCE_CRON_TIMEOUT_SECONDS,
+    default 900s) so the run always exits cleanly with partial-but-durable
+    results (candidate writes are idempotent; the cron's schedule resumes the
+    rest next tick) instead of being SIGKILLed mid-flight and alert-emailing.
+    The deadline is checked between calls, so an in-flight call (bounded by
+    UA_LLM_CALL_TIMEOUT_SECONDS, default 60s) can overrun it — a live run under
+    ZAI throttling overran a 700s budget to ~796s. Default 600s keeps the worst
+    case (~660s) comfortably under 900s."""
+    raw = str(os.getenv("UA_CSI_CONVERGENCE_BUDGET_SECONDS", "600")).strip()
+    try:
+        return max(30.0, float(raw))
+    except ValueError:
+        return 600.0
+
+
 def _independent_channels(signatures: list[dict[str, Any]]) -> set[str]:
     out = {
         str(s.get("channel_name") or s.get("channel_id") or "").strip()
@@ -641,21 +683,39 @@ async def _detect_clusters_llm_async(
     *,
     source_window_hours: int,
     min_channels: int,
+    deadline: float | None = None,
 ) -> list[dict[str, Any]]:
     """Recall (SQL buckets) → precision (LLM refine each). Returns confirmed
-    clusters as dicts with ``signatures`` / ``thesis`` / ``signal_strength``."""
+    clusters as dicts with ``signatures`` / ``thesis`` / ``signal_strength``.
+
+    The per-bucket refine calls are independent, so they run concurrently
+    (bounded by ``_convergence_llm_concurrency``) instead of serially — a coarse
+    recall window routinely yields dozens of buckets, and one-at-a-time opus
+    refines overran the 900s cron budget. ``deadline`` (monotonic seconds) caps
+    total wall time: buckets not yet started when the budget is spent are skipped
+    cheaply and re-detected on the next run (candidate writes are idempotent)."""
     buckets = _detect_clusters_sql(
         conn,
         source_window_hours=source_window_hours,
         min_channels=min_channels,
         include_secondary=True,
     )
-    confirmed: list[dict[str, Any]] = []
-    for bucket in buckets:
-        refined = await _refine_cluster_with_llm(bucket, min_channels=min_channels)
-        if refined:
-            confirmed.append(refined)
-    return confirmed
+    if not buckets:
+        return []
+    sem = asyncio.Semaphore(_convergence_llm_concurrency())
+
+    async def _refine_one(bucket: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+        async with sem:
+            if deadline is not None and time.monotonic() >= deadline:
+                return None
+            try:
+                return await _refine_cluster_with_llm(bucket, min_channels=min_channels)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("convergence refine task failed: %s", exc)
+                return None
+
+    results = await asyncio.gather(*[_refine_one(b) for b in buckets])
+    return [r for r in results if r]
 
 
 def _detect_clusters_llm(
@@ -663,11 +723,15 @@ def _detect_clusters_llm(
     *,
     source_window_hours: int,
     min_channels: int,
+    deadline: float | None = None,
 ) -> list[dict[str, Any]]:
     """Sync wrapper around the async LLM clustering (mirrors the loop-handling
     pattern used by the other sync wrappers in this module)."""
     coro = _detect_clusters_llm_async(
-        conn, source_window_hours=source_window_hours, min_channels=min_channels
+        conn,
+        source_window_hours=source_window_hours,
+        min_channels=min_channels,
+        deadline=deadline,
     )
     try:
         loop = asyncio.get_running_loop()
@@ -729,6 +793,7 @@ async def _run_ideation_sweep_async(
     *,
     source_window_hours: int,
     max_signatures: int = 60,
+    deadline: float | None = None,
 ) -> list[dict[str, Any]]:
     """Run Track B ideation synthesis over the recent corpus.
 
@@ -736,6 +801,8 @@ async def _run_ideation_sweep_async(
     20 recent videos are covered, gates each insight on the confidence floor,
     and returns ``[{narrative, value, confidence, signatures}]``. Fails closed
     per batch (a failed LLM call drops that batch, never a false insight).
+    ``deadline`` (monotonic seconds) stops launching new batches once the
+    convergence budget is spent.
     """
     sigs = _load_recent_signatures(
         conn, source_window_hours=source_window_hours, limit=max_signatures
@@ -745,6 +812,8 @@ async def _run_ideation_sweep_async(
     floor = _ideation_min_confidence()
     insights: list[dict[str, Any]] = []
     for start in range(0, len(sigs), 20):
+        if deadline is not None and time.monotonic() >= deadline:
+            break
         batch = sigs[start:start + 20]
         if len(batch) < 2:
             continue
@@ -760,10 +829,12 @@ async def _run_ideation_sweep_async(
 
 
 def _run_ideation_sweep(
-    conn: sqlite3.Connection, *, source_window_hours: int
+    conn: sqlite3.Connection, *, source_window_hours: int, deadline: float | None = None
 ) -> list[dict[str, Any]]:
     """Sync wrapper around the async ideation sweep (loop-handling like clustering)."""
-    coro = _run_ideation_sweep_async(conn, source_window_hours=source_window_hours)
+    coro = _run_ideation_sweep_async(
+        conn, source_window_hours=source_window_hours, deadline=deadline
+    )
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:

@@ -99,6 +99,20 @@ async def _get_anthropic_client() -> Any:
     if base_url:
         client_kwargs["base_url"] = base_url
 
+    # Bound every call. The Anthropic SDK default is a 600s/attempt timeout with
+    # 2 retries — far too long for our cron budgets: a single stalled upstream
+    # (e.g. the ZAI proxy under fair-usage throttling) could hang a caller for
+    # up to ~30 min. Cap it so a stall fails fast and the caller can move on.
+    # Env-overridable for callers that legitimately need longer.
+    try:
+        client_kwargs["timeout"] = float(os.getenv("UA_LLM_CALL_TIMEOUT_SECONDS", "60") or "60")
+    except (TypeError, ValueError):
+        client_kwargs["timeout"] = 60.0
+    try:
+        client_kwargs["max_retries"] = int(os.getenv("UA_LLM_CALL_MAX_RETRIES", "1") or "1")
+    except (TypeError, ValueError):
+        client_kwargs["max_retries"] = 1
+
     return AsyncAnthropic(**client_kwargs)
 
 
