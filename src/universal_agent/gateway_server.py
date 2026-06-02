@@ -14907,6 +14907,7 @@ async def lifespan(app: FastAPI):
                 _ensure_proactive_artifact_digest_cron_job()
                 _ensure_cron_artifact_reminders_sweep_cron_job()
                 _ensure_vp_coder_workspace_pruning_cron_job()
+                _ensure_scratch_pruning_cron_job()
                 _ensure_vp_mission_pr_reconciler_cron_job()
                 _ensure_architecture_canvas_drift_cron_job()
                 _ensure_hackernews_snapshot_cron_job()
@@ -18957,6 +18958,34 @@ def _ensure_vp_coder_workspace_pruning_cron_job() -> Optional[dict[str, Any]]:
         timezone_env_var="UA_VP_CODER_WORKSPACE_PRUNING_TIMEZONE",
         # Ship 4 (Task Hub Observability Protocol): opted IN. Even GC
         # sweeps benefit from "did it run cleanly?" visibility.
+    )
+
+
+def _ensure_scratch_pruning_cron_job() -> Optional[dict[str, Any]]:
+    """Daily pruning of stale tailnet-scratchpad artifacts.
+
+    Published scratchpad reports (`/home/ua/ua_scratch/<slug>/`) are a delivery
+    surface, not a system of record — the durable copy of each report lives
+    elsewhere (e.g. digest markdown under AGENT_RUN_WORKSPACES/daily_digests/).
+    Once a report is older than UA_SCRATCH_RETENTION_DAYS (default 30) nobody
+    will click the email link, so the slug-dir is just clutter and, left
+    unbounded, the scratch root grows without limit. Runs daily 07:00 CT (active
+    hours, dormancy-compliant). Pure-filesystem GC sweep → skip_task_hub_link.
+    """
+    return _register_system_cron_job(
+        system_job="scratch_pruning",
+        default_cron="0 7 * * *",
+        default_timezone="America/Chicago",
+        command="!script universal_agent.scripts.prune_scratch",
+        description=(
+            "Daily pruning of tailnet-scratchpad artifacts older than "
+            "UA_SCRATCH_RETENTION_DAYS (default 30 days)."
+        ),
+        timeout_seconds=300,
+        enabled=_proactive_cron_enabled("UA_SCRATCH_PRUNING_ENABLED"),
+        cron_env_var="UA_SCRATCH_PRUNING_CRON",
+        timezone_env_var="UA_SCRATCH_PRUNING_TIMEZONE",
+        skip_task_hub_link=True,
     )
 
 
