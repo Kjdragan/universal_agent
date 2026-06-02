@@ -87,6 +87,7 @@ _Secrets/Infisical, runtime bootstrap, identity/auth, deployment/CI, environment
 - **[Deployment & CI/CD](06_platform/04_deployment_and_cicd.md)** — Branch model (any→PR→main→deploy; develop retired; feature/latest2 retired), pr-validate gates, auto-merge allowlist + PAT, concurrency guard, healthcheck gates, paths-ignore, crashloop abort. _(verified 2026-05-29)_
 - **[Execution Environments](06_platform/05_environments.md)** — Three Claude execution profiles (interactive Max / autonomous ZAI / Cody Anthropic-default-since-2026-05-11), local dev (just dev), demo execution, model routing. _(verified 2026-05-29)_
 - **["Networking: Tailscale, Residential Proxy, SSHFS"](06_platform/06_networking_tailscale_proxy_sshfs.md)** — Tailscale (uaonvps MagicDNS vs srv1360701 raw hostname), `tailscale serve` + the **tailnet HTML scratchpad** (emailed reports → live interactive HTML at `…/scratch/<token>/…`, openable on any tailnet device), residential proxy (DataImpulse default/Webshare failover, VPS-only), SSHFS cross-machine mount. _(verified 2026-06-01)_
+- **[Claude Max OAuth Credentials](06_platform/07_claude_max_oauth_credentials.md)** — `CLAUDE_CODE_OAUTH_TOKEN` in Infisical (env `production`) is the single source of truth for Cody-on-Anthropic / demo builds; `claude setup-token` refresh runbook, live-validity diagnostic, the `/proc/environ` gotcha, and the orphan `~/.claude/.credentials.json` (deleted — production never read it). _(verified 2026-06-02)_
 
 ## 07_tools
 
