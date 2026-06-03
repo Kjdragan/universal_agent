@@ -30,6 +30,7 @@ from universal_agent.services.cody_mode import (
     set_default_mode,
 )
 from universal_agent.vp.clients.claude_cli_client import _build_cli_env
+from universal_agent.vp.profiles import get_vp_profile
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -246,3 +247,70 @@ def test_build_cli_env_anthropic_preserves_workspace_signal(
     )
     assert env["CURRENT_RUN_WORKSPACE"] == str(tmp_path)
     assert env["CURRENT_SESSION_WORKSPACE"] == str(tmp_path)
+
+
+# ── Per-VP profile inference binding (2026-06-03) ──────────────────────────
+#
+# The agent defines its own inference backend, not the dispatching function:
+# CODIE (vp.coder.primary) → anthropic (Max, for demo/coding features);
+# ATLAS (vp.general.primary) and any other VP → zai. This replaced the
+# VP-blind hardcoded "anthropic" default that silently forced ATLAS
+# research/intel missions onto the Max plan.
+
+
+def test_profile_carries_inference_mode() -> None:
+    """VpProfile binds the inference backend per agent."""
+    coder = get_vp_profile("vp.coder.primary")
+    general = get_vp_profile("vp.general.primary")
+    assert coder is not None and coder.inference_mode == "anthropic"
+    assert general is not None and general.inference_mode == "zai"
+
+
+def test_resolve_atlas_defaults_to_zai(monkeypatch) -> None:
+    """ATLAS (generalist) defaults to zai when no override is set."""
+    monkeypatch.delenv("UA_CODY_DEFAULT_MODE", raising=False)
+    assert resolve_cody_mode(None, vp_id="vp.general.primary") == "zai"
+    assert resolve_cody_mode({}, vp_id="vp.general.primary") == "zai"
+
+
+def test_resolve_codie_defaults_to_anthropic(monkeypatch) -> None:
+    """CODIE (coder) defaults to anthropic (Max) for coding/demo work."""
+    monkeypatch.delenv("UA_CODY_DEFAULT_MODE", raising=False)
+    assert resolve_cody_mode(None, vp_id="vp.coder.primary") == "anthropic"
+
+
+def test_resolve_unknown_vp_falls_back_to_hardcoded(monkeypatch) -> None:
+    """Unknown/disabled VP → legacy hardcoded fallback (anthropic)."""
+    monkeypatch.delenv("UA_CODY_DEFAULT_MODE", raising=False)
+    assert resolve_cody_mode(None, vp_id="vp.does.not.exist") == "anthropic"
+
+
+def test_no_vp_id_preserves_legacy_default(monkeypatch) -> None:
+    """Omitting vp_id (e.g. demo path) preserves the legacy default."""
+    monkeypatch.delenv("UA_CODY_DEFAULT_MODE", raising=False)
+    assert resolve_cody_mode(None) == "anthropic"
+
+
+def test_per_task_override_beats_profile() -> None:
+    """Per-task cody_mode wins over the per-VP profile default (both ways)."""
+    assert (
+        resolve_cody_mode({"cody_mode": "anthropic"}, vp_id="vp.general.primary")
+        == "anthropic"
+    )
+    assert (
+        resolve_cody_mode({"cody_mode": "zai"}, vp_id="vp.coder.primary") == "zai"
+    )
+
+
+def test_db_setting_beats_profile_the_switch(conn: sqlite3.Connection, monkeypatch) -> None:
+    """The operator DB switch flips CODIE off Max to zai without code change."""
+    monkeypatch.delenv("UA_CODY_DEFAULT_MODE", raising=False)
+    set_default_mode(conn, "zai", updated_by="operator")
+    # CODIE would default to anthropic via profile, but the global switch wins.
+    assert resolve_cody_mode(None, conn=conn, vp_id="vp.coder.primary") == "zai"
+
+
+def test_env_beats_profile(monkeypatch) -> None:
+    """UA_CODY_DEFAULT_MODE overrides the per-VP profile default."""
+    monkeypatch.setenv("UA_CODY_DEFAULT_MODE", "zai")
+    assert resolve_cody_mode(None, vp_id="vp.coder.primary") == "zai"

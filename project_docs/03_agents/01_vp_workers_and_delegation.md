@@ -10,7 +10,7 @@ code_paths:
   - src/universal_agent/tools/vp_orchestration.py
   - src/universal_agent/services/cody_mode.py
   - src/universal_agent/services/self_briefing.py
-last_verified: 2026-06-01
+last_verified: 2026-06-03
 ---
 
 # VP Workers & Delegation
@@ -21,10 +21,10 @@ A "VP" (Vice President) is an autonomous worker agent that executes a discrete
 **mission** in its own isolated workspace, separate from the Simone orchestrator
 that dispatched it. Two VPs are enabled by default:
 
-| Registry ID | Display name | `client_kind` | Soul file | Workspace |
-|---|---|---|---|---|
-| `vp.coder.primary` | **CODIE** (a.k.a. "Cody") | `claude_code` | `CODIE_SOUL.md` | per-mission, often a git worktree |
-| `vp.general.primary` | **ATLAS** | `claude_generalist` | `ATLAS_SOUL.md` | per-mission directory |
+| Registry ID | Display name | `client_kind` | `inference_mode` | Soul file | Workspace |
+|---|---|---|---|---|---|
+| `vp.coder.primary` | **CODIE** (a.k.a. "Cody") | `claude_code` | `anthropic` (Max) | `CODIE_SOUL.md` | per-mission, often a git worktree |
+| `vp.general.primary` | **ATLAS** | `claude_generalist` | `zai` | `ATLAS_SOUL.md` | per-mission directory |
 
 These are defined in `vp/profiles.py::resolve_vp_profiles`. The enabled set is
 controlled by `UA_VP_ENABLED_IDS` (default both); disabling one removes it from
@@ -219,24 +219,49 @@ Replaces the autonomous loop with a deterministic state machine
 (inline dict) or `payload.dag_definition_path` (YAML). Supports a
 `waiting_for_human` gate (mapped to a `completed` outcome with paused metadata).
 
-## Cody-mode routing (ZAI vs Anthropic)
+## Inference-mode routing (ZAI vs Anthropic) — the agent defines its own backend
 
-`services/cody_mode.py` picks Cody's execution endpoint. Resolution order
-(`resolve_cody_mode`):
+`services/cody_mode.py::resolve_cody_mode` picks a VP mission's inference
+endpoint. The governing principle: **inference is a property of the agent, not
+of the dispatching function.** Each `VpProfile` carries an `inference_mode`
+(`vp/profiles.py::VpProfile`):
 
-1. `task.cody_mode` (per-task override on `task_hub_items`)
-2. DB setting `cody_default_mode` (dashboard tile, `task_hub_settings`)
-3. `UA_CODY_DEFAULT_MODE` env var
-4. Hardcoded fallback `"anthropic"` — **flipped from `"zai"` on 2026-05-11 PM**
-   per operator decision.
+| VP | `inference_mode` | Why |
+|---|---|---|
+| `vp.coder.primary` (CODIE) | `anthropic` | Builds runnable demos/coding artifacts that may rely on Anthropic-specific features; runs on the real Max plan via workspace OAuth. |
+| `vp.general.primary` (ATLAS) | `zai` | Research, intel-brief synthesis, general reasoning — kept cheap on ZAI/GLM and off the scarce Max 5-hour-window credits. |
 
-`vp_dispatch_mission` resolves the mode at dispatch and plumbs it into
-`metadata.cody_mode`. Critically, **when `cody_mode == "anthropic"` it FORCES
-`execution_mode="cli"`** and ignores any conflicting explicit `execution_mode`
-(logging a warning). Rationale: `/goal` and Agent Teams are Anthropic Claude
-Code features that only function through the CLI subprocess with workspace-local
-OAuth — an SDK in-process route would run on ZAI/GLM. To use the SDK path
-deliberately, pass `cody_mode="zai"`.
+Resolution order (highest priority first):
+
+1. `task.cody_mode` (per-task override on `task_hub_items`) — wins either way.
+2. DB setting `cody_default_mode` (dashboard tile, `task_hub_settings`) — the
+   operator "switch" that flips the default globally (e.g. CODIE → `zai` to save
+   cost) without a code change.
+3. `UA_CODY_DEFAULT_MODE` env var.
+4. **Per-VP profile default** `VpProfile.inference_mode` when `vp_dispatch_mission`
+   passes `vp_id` — CODIE → `anthropic`, ATLAS (and any other VP) → `zai`.
+5. Hardcoded last-resort `"anthropic"` — used only when no `vp_id` is known
+   (e.g. the demo `cody_demo_task` path, which is always CODIE coding work).
+
+> **2026-06-03 fix.** Before this, step 4 didn't exist and step 5 was a
+> VP-blind hardcoded `"anthropic"` (flipped from `"zai"` on 2026-05-11). Because
+> `resolve_cody_mode` ignored `vp_id`, **every** VP mission — including ATLAS
+> intel-brief/convergence evaluation — defaulted to Anthropic Max, which forced
+> `execution_mode="cli"` and ran ATLAS through CODIE's CLI harness on the Max
+> plan. Symptom: ATLAS missions failing with `out_of_credits / five_hour window`
+> rate-limit errors (the Max OAuth signature), and `cody_token_usage` showing
+> 100% `anthropic`. Binding the mode to the profile lets ATLAS run its own SDK
+> client on inherited ZAI routing.
+
+`vp_dispatch_mission` resolves the mode at dispatch (passing `vp_id`) and plumbs
+it into `metadata.cody_mode`. Critically, **when the resolved `cody_mode ==
+"anthropic"` it FORCES `execution_mode="cli"`** and ignores any conflicting
+explicit `execution_mode` (logging a warning). Rationale: `/goal` and Agent
+Teams are Anthropic Claude Code features that only function through the CLI
+subprocess with workspace-local OAuth — an SDK in-process route would run on
+ZAI/GLM. When the resolved mode is `zai` (ATLAS's default), `execution_mode`
+stays `sdk` and the generalist client runs in-process on the inherited
+ZAI-routed env.
 
 In the CLI client, `_build_cli_env` honors the mode:
 
@@ -515,7 +540,7 @@ capability).
 | `UA_VP_HARD_BLOCK_UA_REPO` | on | block writes into repo/runtime roots |
 | `UA_VP_HANDOFF_ROOT` | `/opt/universal_agent/vp_handoff` | allowlisted external write root |
 | `UA_VP_CODER_WORKSPACE_ROOT` / `UA_VP_GENERAL_WORKSPACE_ROOT` | unset | workspace root overrides |
-| `UA_CODY_DEFAULT_MODE` | (unset → `anthropic`) | default Cody endpoint |
+| `UA_CODY_DEFAULT_MODE` | (unset → per-VP profile: CODIE `anthropic`, ATLAS `zai`) | global override of the per-VP inference default |
 | `UA_CODY_CLI_MODEL` | `claude-opus-4-8` | CLI model in anthropic mode |
 | `UA_VP_GOAL_ENABLED` | off | global `/goal` self-brief + attestation |
 | `UA_DISABLE_CODER_VP` / `UA_ENABLE_CODER_VP` | — | CODIE routing toggles |
@@ -532,6 +557,15 @@ capability).
   warning when the resolved mode is anthropic. To deliberately use the SDK
   in-process path, set `cody_mode="zai"`. (This footgun ran a `/goal` smoke test
   on glm-5 and then spuriously demoted the success.)
+- **Inference is bound to the agent, not the task type.** `resolve_cody_mode`
+  takes `vp_id` and defaults from `VpProfile.inference_mode`. If you dispatch a
+  *coding* mission to ATLAS it will run on ZAI (ATLAS's default), and a
+  *research* mission dispatched to CODIE will run on Max — the mode follows the
+  VP, not the work. Route coding/demo work to CODIE and everything else to
+  ATLAS, or set a per-task `cody_mode` to override. The global
+  `cody_default_mode` DB setting / `UA_CODY_DEFAULT_MODE` still override the
+  per-VP default (they sit above it), so flipping the dashboard switch to `zai`
+  takes CODIE off Max too.
 - **Canonical Task Hub DB is `activity_state.db`**, resolved via
   `durable/db.get_activity_db_path()` — NOT `task_hub.db`. VP mission state lives
   in a separate `vp_state.db` (`get_vp_db_path()`).
