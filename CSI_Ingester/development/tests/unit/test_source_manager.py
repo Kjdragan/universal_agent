@@ -7,12 +7,10 @@ from pathlib import Path
 
 from csi_ingester.store.source_manager import (
     auto_promote_demote,
-    get_active_reddit_sources,
     get_active_threads_terms,
     get_active_youtube_channels,
     get_source_summary,
     record_quality_assessment,
-    seed_reddit_sources,
     seed_threads_terms,
     seed_youtube_channels,
 )
@@ -96,24 +94,6 @@ def test_seed_youtube_idempotent(db_conn, tmp_path: Path):
 
     row = db_conn.execute("SELECT quality_score FROM youtube_channels WHERE channel_id = 'UC_X'").fetchone()
     assert float(row["quality_score"]) == 0.9  # Not overwritten
-
-
-def test_seed_reddit_sources(db_conn, tmp_path: Path):
-    seed = {
-        "subreddits": [
-            {"name": "LocalLLaMA", "domain": "ai_models", "tier": 1, "note": "User sub"},
-            {"name": "geopolitics", "domain": "geopolitics", "tier": 2},
-        ]
-    }
-    seed_file = tmp_path / "reddit.json"
-    seed_file.write_text(json.dumps(seed))
-
-    count = seed_reddit_sources(db_conn, seed_file)
-    assert count == 2
-
-    sources = get_active_reddit_sources(db_conn)
-    assert len(sources) == 2
-    assert sources[0]["subreddit"] == "LocalLLaMA"  # tier 1 sorts first
 
 
 def test_seed_threads_terms(db_conn):

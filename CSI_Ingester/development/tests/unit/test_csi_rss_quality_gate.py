@@ -55,7 +55,7 @@ def test_recent_rss_dlq_count_filters_to_rss_source(tmp_path: Path):
     conn = connect(db)
     ensure_schema(conn)
     _insert_dead_letter(conn, source="youtube_channel_rss")
-    _insert_dead_letter(conn, source="reddit_discovery")
+    _insert_dead_letter(conn, source="hackernews")
 
     count = csi_rss_quality_gate._recent_rss_dlq_count(conn, "-6 hours")
     assert count == 1
@@ -68,9 +68,9 @@ def test_get_metrics_reports_rss_scoped_dlq(tmp_path: Path):
     conn = connect(db)
     ensure_schema(conn)
     _insert_event(conn, source="youtube_channel_rss", delivered=0)
-    _insert_event(conn, source="reddit_discovery", delivered=0)
+    _insert_event(conn, source="hackernews", delivered=0)
     _insert_dead_letter(conn, source="youtube_channel_rss")
-    _insert_dead_letter(conn, source="reddit_discovery")
+    _insert_dead_letter(conn, source="hackernews")
 
     metrics = csi_rss_quality_gate._get_metrics(conn, window_hours=6)
     assert metrics["rss_events_recent"] == 1

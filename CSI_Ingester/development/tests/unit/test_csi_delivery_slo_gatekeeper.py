@@ -106,18 +106,18 @@ def test_evaluate_slo_flags_breach_and_top_root_causes(tmp_path: Path):
         status_code=503,
     )
 
-    # Keep reddit stale by inserting only old data.
+    # Keep hackernews stale by inserting only old data.
     _insert_event(
         conn,
-        source="reddit_discovery",
-        event_type="subreddit_new_post",
+        source="hackernews",
+        event_type="hn_story",
         created_at=previous_start + timedelta(hours=1),
         delivered=1,
     )
 
     # DLQ growth in current window.
     _insert_dead_letter(conn, source="youtube_channel_rss", created_at=start + timedelta(hours=11))
-    _insert_dead_letter(conn, source="reddit_discovery", created_at=start + timedelta(hours=12))
+    _insert_dead_letter(conn, source="hackernews", created_at=start + timedelta(hours=12))
 
     # Frequent canary regressions.
     for hour in (7, 8, 9):
@@ -150,7 +150,7 @@ def test_evaluate_slo_flags_breach_and_top_root_causes(tmp_path: Path):
     assert "delivery_success_ratio_below_min" in codes
     assert "dlq_backlog_exceeds_max" in codes
     assert "canary_regression_frequency_exceeds_max" in codes
-    assert any(code.startswith("source_freshness_lag_exceeds_max:reddit_discovery") for code in codes)
+    assert any(code.startswith("source_freshness_lag_exceeds_max:hackernews") for code in codes)
 
 
 def test_run_once_supports_backfill_day_and_state_history(tmp_path: Path):
@@ -169,10 +169,10 @@ def test_run_once_supports_backfill_day_and_state_history(tmp_path: Path):
         created_at=start + timedelta(hours=12),
         delivered=1,
     )
-    reddit_event = _insert_event(
+    hn_event = _insert_event(
         conn,
-        source="reddit_discovery",
-        event_type="subreddit_new_post",
+        source="hackernews",
+        event_type="hn_story",
         created_at=start + timedelta(hours=11),
         delivered=1,
     )
@@ -184,7 +184,7 @@ def test_run_once_supports_backfill_day_and_state_history(tmp_path: Path):
         delivered=1,
     )
     _insert_attempt(conn, event_id=rss_event, created_at=start + timedelta(hours=12, minutes=3), delivered=1, status_code=200)
-    _insert_attempt(conn, event_id=reddit_event, created_at=start + timedelta(hours=11, minutes=4), delivered=1, status_code=200)
+    _insert_attempt(conn, event_id=hn_event, created_at=start + timedelta(hours=11, minutes=4), delivered=1, status_code=200)
     conn.close()
 
     env_file = tmp_path / ".env"

@@ -138,7 +138,7 @@ async def _emit_smoke_events(
     settle_seconds: int,
 ) -> tuple[bool, list[dict[str, Any]]]:
     emitter = UAEmitter(endpoint=endpoint, shared_secret=secret, instance_id=instance_id)
-    smoke_types = ["rss_trend_report", "reddit_trend_report"]
+    smoke_types = ["rss_trend_report"]
     results: list[dict[str, Any]] = []
     runtime_conn = _connect(runtime_db_path)
     try:
@@ -181,12 +181,11 @@ async def _emit_smoke_events(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate CSI RSS/Reddit data-plane and optional live smoke flow.")
+    parser = argparse.ArgumentParser(description="Validate CSI RSS data-plane and optional live smoke flow.")
     parser.add_argument("--csi-db", default="/var/lib/universal-agent/csi/csi.db")
     parser.add_argument("--ua-runtime-db", default=os.getenv("UA_RUNTIME_DB_PATH", "/opt/universal_agent/runtime_state.db"))
     parser.add_argument("--lookback-hours", type=int, default=24)
     parser.add_argument("--min-rss-events", type=int, default=1)
-    parser.add_argument("--min-reddit-events", type=int, default=1)
     parser.add_argument("--emit-smoke", action="store_true")
     parser.add_argument("--smoke-settle-seconds", type=int, default=20)
     parser.add_argument("--verify-minutes", type=int, default=30)
@@ -208,7 +207,6 @@ def main() -> int:
     conn = _connect(csi_db_path)
     try:
         rss_metrics = _recent_source_metrics(conn, source="youtube_channel_rss", lookback_hours=max(1, args.lookback_hours))
-        reddit_metrics = _recent_source_metrics(conn, source="reddit_discovery", lookback_hours=max(1, args.lookback_hours))
     finally:
         conn.close()
 
@@ -216,7 +214,6 @@ def main() -> int:
         "checked_at_utc": _utc_now_iso(),
         "lookback_hours": max(1, args.lookback_hours),
         "rss": rss_metrics,
-        "reddit": reddit_metrics,
         "smoke": {"enabled": bool(args.emit_smoke), "results": []},
     }
     print("LIVE_FLOW_SUMMARY", json.dumps(summary, ensure_ascii=False, separators=(",", ":")))
@@ -226,10 +223,6 @@ def main() -> int:
         if int(rss_metrics["events_recent"]) < max(0, int(args.min_rss_events)):
             failures.append(
                 f"rss_events_recent_below_min({int(rss_metrics['events_recent'])}<{int(args.min_rss_events)})"
-            )
-        if int(reddit_metrics["events_recent"]) < max(0, int(args.min_reddit_events)):
-            failures.append(
-                f"reddit_events_recent_below_min({int(reddit_metrics['events_recent'])}<{int(args.min_reddit_events)})"
             )
 
     if args.emit_smoke:

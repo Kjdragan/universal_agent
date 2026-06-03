@@ -8,7 +8,6 @@ import time
 from typing import Any
 
 from csi_ingester.adapters.base import SourceAdapter
-from csi_ingester.adapters.reddit_discovery import RedditDiscoveryAdapter
 from csi_ingester.adapters.threads_owned import ThreadsOwnedAdapter
 from csi_ingester.adapters.threads_trends_broad import ThreadsBroadTrendsAdapter
 from csi_ingester.adapters.threads_trends_seeded import ThreadsSeededTrendsAdapter
@@ -91,9 +90,6 @@ class CSIService:
         yt_rss_cfg = sources.get("youtube_channel_rss")
         if isinstance(yt_rss_cfg, dict) and yt_rss_cfg.get("enabled", False):
             self.adapters["youtube_channel_rss"] = YouTubeChannelRSSAdapter(yt_rss_cfg)
-        reddit_cfg = sources.get("reddit_discovery")
-        if isinstance(reddit_cfg, dict) and reddit_cfg.get("enabled", False):
-            self.adapters["reddit_discovery"] = RedditDiscoveryAdapter(reddit_cfg)
         threads_owned_cfg = sources.get("threads_owned")
         if isinstance(threads_owned_cfg, dict) and threads_owned_cfg.get("enabled", False):
             self.adapters["threads_owned"] = ThreadsOwnedAdapter(threads_owned_cfg)

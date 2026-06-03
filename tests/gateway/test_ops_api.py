@@ -1301,7 +1301,7 @@ def test_dashboard_csi_reports_include_specialist_synthesis_notifications(client
             "report_key": "csi_specialist_hourly_synthesis:2026-02-27T14:00:00Z",
             "report_class": "specialist_hourly",
             "window_hours": 1,
-            "source_mix": {"rss": 3, "reddit": 1},
+            "source_mix": {"rss": 3},
         },
     )
 
@@ -1358,7 +1358,7 @@ def test_dashboard_csi_health_includes_overnight_and_source_health(client, tmp_p
         )
         conn.execute(
             "INSERT INTO events (event_id, source, event_type, occurred_at, delivered) VALUES (?, ?, ?, ?, ?)",
-            ("evt-2", "reddit_discovery", "reddit_trend_report", recent, 1),
+            ("evt-2", "youtube_channel_rss", "channel_new_upload", recent, 1),
         )
         conn.execute(
             """
@@ -1428,7 +1428,7 @@ def test_dashboard_csi_delivery_health_reports_source_and_adapter_state(client, 
         )
         conn.execute(
             "INSERT INTO events (event_id, source, event_type, created_at, delivered) VALUES (?, ?, ?, ?, ?)",
-            ("evt-reddit-1", "reddit_discovery", "subreddit_new_post", now, 0),
+            ("evt-threads-1", "threads_owned", "threads_new_post", now, 0),
         )
         conn.execute(
             """
@@ -1442,17 +1442,17 @@ def test_dashboard_csi_delivery_health_reports_source_and_adapter_state(client, 
             INSERT INTO delivery_attempts (event_id, target, delivered, status_code, error_class, error_detail, attempted_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            ("evt-reddit-1", "ua_signals_ingest", 0, 503, "upstream_5xx", "boom", now),
+            ("evt-threads-1", "ua_signals_ingest", 0, 503, "upstream_5xx", "boom", now),
         )
         conn.execute(
             "INSERT INTO dead_letter (event_id, event_json, created_at) VALUES (?, ?, ?)",
-            ("evt-reddit-1", json.dumps({"source": "reddit_discovery"}), now),
+            ("evt-threads-1", json.dumps({"source": "threads_owned"}), now),
         )
         conn.execute(
             "INSERT INTO source_state (source_key, state_json, updated_at) VALUES (?, ?, ?)",
             (
-                "adapter_health:reddit_discovery",
-                json.dumps({"adapter": "reddit_discovery", "ok": False, "consecutive_failures": 3}),
+                "adapter_health:threads_owned",
+                json.dumps({"adapter": "threads_owned", "ok": False, "consecutive_failures": 3}),
                 now,
             ),
         )
@@ -1470,12 +1470,12 @@ def test_dashboard_csi_delivery_health_reports_source_and_adapter_state(client, 
     assert isinstance(payload.get("sources"), list)
     by_source = {str(item.get("source") or ""): item for item in payload.get("sources") or []}
     assert "youtube_channel_rss" in by_source
-    assert "reddit_discovery" in by_source
+    assert "threads_owned" in by_source
     assert int((by_source["youtube_channel_rss"] or {}).get("events_recent") or 0) >= 1
-    assert int((by_source["reddit_discovery"] or {}).get("delivery_attempts_failed") or 0) >= 1
-    assert isinstance((by_source["reddit_discovery"] or {}).get("repair_hints"), list)
-    assert len((by_source["reddit_discovery"] or {}).get("repair_hints") or []) >= 1
-    assert isinstance((by_source["reddit_discovery"] or {}).get("adapter_health"), dict)
+    assert int((by_source["threads_owned"] or {}).get("delivery_attempts_failed") or 0) >= 1
+    assert isinstance((by_source["threads_owned"] or {}).get("repair_hints"), list)
+    assert len((by_source["threads_owned"] or {}).get("repair_hints") or []) >= 1
+    assert isinstance((by_source["threads_owned"] or {}).get("adapter_health"), dict)
     assert isinstance(payload.get("adapter_health"), list)
 
 
@@ -1571,7 +1571,7 @@ def test_dashboard_csi_reports_includes_opportunity_bundle_events(client, tmp_pa
                 {
                     "opportunity_id": "agentic-ai-01",
                     "title": "Momentum theme: Agentic AI",
-                    "source_mix": {"youtube_channel_rss": 9, "reddit_discovery": 4},
+                    "source_mix": {"youtube_channel_rss": 9},
                     "confidence_score": 0.86,
                     "novelty_score": 0.73,
                 }
@@ -1643,7 +1643,7 @@ def test_dashboard_csi_opportunities_reads_bundle_table(client, tmp_path, monkey
                         {
                             "opportunity_id": "opp-1",
                             "title": "Topic breakout: workflows",
-                            "source_mix": {"youtube_channel_rss": 7, "reddit_discovery": 5},
+                            "source_mix": {"youtube_channel_rss": 7},
                             "confidence_score": 0.88,
                         }
                     ]
@@ -1767,8 +1767,8 @@ def test_dashboard_csi_specialist_loop_triage_applies_remediation(client):
         suppressed_until=(now - timedelta(minutes=5)).isoformat(),
     )
     _insert_specialist_loop(
-        topic_key="reddit:triage:budget",
-        topic_label="reddit :: budget",
+        topic_key="threads:triage:budget",
+        topic_label="threads :: budget",
         status="budget_exhausted",
         confidence_score=0.58,
         follow_up_budget_remaining=0,
@@ -1787,7 +1787,7 @@ def test_dashboard_csi_specialist_loop_triage_applies_remediation(client):
     assert len(applied) >= 2
     applied_by_key = {str(item.get("topic_key") or ""): item for item in applied}
     assert str((applied_by_key.get("rss:triage:suppressed") or {}).get("after_status") or "") == "open"
-    assert str((applied_by_key.get("reddit:triage:budget") or {}).get("after_status") or "") == "open"
+    assert str((applied_by_key.get("threads:triage:budget") or {}).get("after_status") or "") == "open"
 
 
 def test_dashboard_csi_specialist_loop_cleanup_deletes_stale_closed(client):

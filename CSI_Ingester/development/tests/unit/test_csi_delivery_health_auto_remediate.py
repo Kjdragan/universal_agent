@@ -137,16 +137,15 @@ def test_collect_actions_and_state_roundtrip(tmp_path: Path):
         "status": "failing",
         "remediation_steps": [
             {"code": "delivery_failures_detected", "source": "youtube_channel_rss"},
-            {"code": "adapter_consecutive_failures", "source": "reddit_discovery"},
+            {"code": "adapter_consecutive_failures", "source": "hackernews"},
         ],
     }
     actions = auto._collect_actions(health)
     conn.close()
     keys = {f"{a['handler']}::{a['source']}" for a in actions}
     assert "replay_dlq::youtube_channel_rss" in keys
-    assert "restart_ingester::reddit_discovery" in keys
+    assert "restart_ingester::hackernews" in keys
     assert "cursor_reset_rss::youtube_channel_rss" in keys
-    assert "cursor_reset_reddit::reddit_discovery" in keys
 
 
 def test_run_once_dry_run_executes_actions_on_regression(tmp_path: Path):
@@ -168,8 +167,6 @@ def test_run_once_dry_run_executes_actions_on_regression(tmp_path: Path):
 
     rss_state = tmp_path / "rss_state.json"
     rss_state.write_text('{"last_sent_id": 999}', encoding="utf-8")
-    reddit_state = tmp_path / "reddit_state.json"
-    reddit_state.write_text('{"last_sent_id": 999}', encoding="utf-8")
 
     env_file = tmp_path / ".env"
     env_file.write_text("", encoding="utf-8")
@@ -180,7 +177,6 @@ def test_run_once_dry_run_executes_actions_on_regression(tmp_path: Path):
         db_path=str(db),
         state_key="runtime_canary:auto_remediation:test",
         rss_state_path=str(rss_state),
-        reddit_state_path=str(reddit_state),
         cooldown_minutes=1,
         max_attempts_per_window=5,
         attempt_window_minutes=360,

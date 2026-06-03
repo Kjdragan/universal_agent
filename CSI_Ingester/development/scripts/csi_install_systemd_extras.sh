@@ -52,10 +52,6 @@ CANONICAL_UNITS=(
   csi-global-trend-brief.timer
   csi-quality-assessment.service
   csi-quality-assessment.timer
-  csi-reddit-semantic-enrich.service
-  csi-reddit-semantic-enrich.timer
-  csi-reddit-trend-report.service
-  csi-reddit-trend-report.timer
   csi-replay-dlq.service
   csi-replay-dlq.timer
   csi-rss-semantic-enrich.service

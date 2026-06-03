@@ -95,20 +95,13 @@ def _check_csi_db(csi_db: Path, lookback_hours: int) -> CheckResult:
             ).fetchone()["c"]
             or 0
         )
-        reddit_events = int(
-            conn.execute(
-                "SELECT COUNT(*) AS c FROM events WHERE occurred_at >= ? AND source = 'reddit_discovery'",
-                (since,),
-            ).fetchone()["c"]
-            or 0
-        )
         insight_reports = int(
             conn.execute("SELECT COUNT(*) AS c FROM insight_reports WHERE created_at >= ?", (since,)).fetchone()["c"] or 0
         )
         trend_reports = int(
             conn.execute("SELECT COUNT(*) AS c FROM trend_reports WHERE created_at >= ?", (since,)).fetchone()["c"] or 0
         )
-        ok = total_events > 0 and insight_reports > 0 and trend_reports > 0 and reddit_events > 0
+        ok = total_events > 0 and insight_reports > 0 and trend_reports > 0
         detail = "CSI database checks passed." if ok else "CSI database checks failed minimum thresholds."
         return CheckResult(
             "csi_db",
@@ -118,7 +111,6 @@ def _check_csi_db(csi_db: Path, lookback_hours: int) -> CheckResult:
                 "lookback_hours": lookback_hours,
                 "total_events": total_events,
                 "rss_events": rss_events,
-                "reddit_events": reddit_events,
                 "insight_reports": insight_reports,
                 "trend_reports": trend_reports,
             },

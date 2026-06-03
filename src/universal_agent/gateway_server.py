@@ -4782,7 +4782,6 @@ def _csi_is_high_value_event(event_type: str) -> bool:
     lowered = str(event_type or "").strip().lower()
     return lowered in {
         "rss_trend_report",
-        "reddit_trend_report",
         "threads_trend_report",
         "rss_insight_emerging",
         "rss_insight_daily",
@@ -4979,7 +4978,6 @@ def _csi_event_notification_policy(event: Any) -> dict[str, Any]:
             "report_product_ready",
             "opportunity_bundle_ready",
             "rss_trend_report",
-            "reddit_trend_report",
             "threads_trend_report",
             "delivery_health_regression",
             "delivery_reliability_slo_breached",
@@ -5331,7 +5329,6 @@ def classify_csi_project_key(
         key in mix_obj
         for key in (
             "youtube_channel_rss",
-            "reddit_discovery",
             "threads_owned",
             "threads_trends_seeded",
             "threads_trends_broad",
@@ -5628,7 +5625,7 @@ def _build_csi_recommendation_task_items(
     return out
 
 
-_CSI_SOURCE_BUCKET_KEYWORDS = ("threads", "reddit", "rss", "youtube", "analysis_task")
+_CSI_SOURCE_BUCKET_KEYWORDS = ("threads", "rss", "youtube", "analysis_task")
 
 
 def _csi_source_bucket(event: Any) -> str:
@@ -11743,7 +11740,6 @@ def _activity_digest_should_compact(
     event_type = str(metadata.get("event_type") or "").strip().lower()
     if event_type in {
         "rss_trend_report",
-        "reddit_trend_report",
         "threads_trend_report",
         "rss_insight_daily",
         "rss_insight_emerging",
@@ -16998,7 +16994,7 @@ async def ops_telegram_status(request: Request):
         metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
         if source_domain in {"tutorial", "csi"}:
             return True
-        if kind.startswith(("telegram_", "youtube_", "csi_", "rss_", "reddit_")):
+        if kind.startswith(("telegram_", "youtube_", "csi_", "rss_")):
             return True
         if any(token in kind for token in ("tutorial", "playlist", "delivery", "ingest", "recovery")):
             return True
@@ -17104,7 +17100,6 @@ async def ops_telegram_status(request: Request):
     channels: list[dict[str, Any]] = []
     for name, env_key in [
         ("UA RSS Feed", "CSI_RSS_TELEGRAM_CHAT_ID"),
-        ("UA Reddit Feed", "CSI_REDDIT_TELEGRAM_CHAT_ID"),
     ]:
         chat_id = os.getenv(env_key, "").strip() or csi_env_values.get(env_key, "")
         channels.append({"name": name, "env_var": env_key, "configured": bool(chat_id), "chat_id": chat_id[:6] + "..." if len(chat_id) > 6 else chat_id})
@@ -21821,8 +21816,6 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
             return {"brief_items": total_items}
         if "threads" in lowered:
             return {"threads": total_items}
-        if "reddit" in lowered:
-            return {"reddit": total_items}
         if "rss" in lowered or lowered in {"daily", "emerging", "trend"}:
             return {"rss": total_items}
         if lowered == "hourly_report_product":
@@ -21898,7 +21891,7 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
 
     def _entity_set(report_data: dict[str, Any]) -> set[str]:
         entities: set[str] = set()
-        for key in ("top_channels", "top_subreddits", "top_sources", "top_themes"):
+        for key in ("top_channels", "top_sources", "top_themes"):
             value = report_data.get(key)
             if not isinstance(value, list):
                 continue
@@ -21908,7 +21901,6 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
                         item.get("name")
                         or item.get("theme")
                         or item.get("channel")
-                        or item.get("subreddit")
                         or item.get("label")
                         or ""
                     ).strip().lower()
@@ -22361,7 +22353,6 @@ async def dashboard_csi_health():
         ).fetchall()
         tracked_types = {
             "rss_trend_report": 180,
-            "reddit_trend_report": 180,
             "threads_trend_report": 180,
             "global_trend_brief_ready": 180,
             "csi_global_brief_review_due": 720,
@@ -22552,7 +22543,6 @@ def _parse_source_min_events_spec(raw: str) -> dict[str, int]:
 def _default_delivery_source_min_events() -> dict[str, int]:
     defaults = {
         "youtube_channel_rss": 1,
-        "reddit_discovery": 1,
         "threads_owned": 0,
         "threads_trends_seeded": 0,
         "threads_trends_broad": 0,
@@ -22577,17 +22567,6 @@ def _delivery_hint_for_source(source_name: str, *, under_min_volume: bool, stale
                 "journalctl -u csi-ingester -n 120 --no-pager"
             ),
         }
-    if source_name == "reddit_discovery":
-        return {
-            "code": "reddit_source_stale_or_low_volume",
-            "severity": "warning",
-            "title": "Reddit source volume below threshold",
-            "action": "Check reddit watchlist and endpoint reachability/fallback behavior.",
-            "runbook_command": (
-                "python3 /opt/universal_agent/CSI_Ingester/development/scripts/csi_reddit_probe.py "
-                "--watchlist-file /opt/universal_agent/CSI_Ingester/development/reddit_watchlist.json"
-            ),
-        }
     if source_name in {"threads_owned", "threads_trends_seeded", "threads_trends_broad"}:
         return {
             "code": "threads_source_stale_or_low_volume",
@@ -22608,7 +22587,6 @@ async def dashboard_csi_delivery_health(
     stale_minutes: int = 240,
     max_failed_attempt_ratio: Optional[float] = None,
     min_rss_events: Optional[int] = None,
-    min_reddit_events: Optional[int] = None,
     min_threads_owned_events: Optional[int] = None,
     min_threads_seeded_events: Optional[int] = None,
     min_threads_broad_events: Optional[int] = None,
@@ -22626,8 +22604,6 @@ async def dashboard_csi_delivery_health(
     source_min_map.update(_parse_source_min_events_spec(str(source_min_events or "")))
     if min_rss_events is not None:
         source_min_map["youtube_channel_rss"] = max(0, int(min_rss_events))
-    if min_reddit_events is not None:
-        source_min_map["reddit_discovery"] = max(0, int(min_reddit_events))
     if min_threads_owned_events is not None:
         source_min_map["threads_owned"] = max(0, int(min_threads_owned_events))
     if min_threads_seeded_events is not None:
@@ -22904,7 +22880,6 @@ async def dashboard_csi_delivery_health(
                 "max_failed_attempt_ratio": tuned_max_failed_attempt_ratio,
                 "source_min_events": source_min_map,
                 "min_rss_events": int(source_min_map.get("youtube_channel_rss") or 0),
-                "min_reddit_events": int(source_min_map.get("reddit_discovery") or 0),
                 "min_threads_owned_events": int(source_min_map.get("threads_owned") or 0),
                 "min_threads_seeded_events": int(source_min_map.get("threads_trends_seeded") or 0),
                 "min_threads_broad_events": int(source_min_map.get("threads_trends_broad") or 0),

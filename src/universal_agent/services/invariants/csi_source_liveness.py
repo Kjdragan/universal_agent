@@ -1,9 +1,9 @@
 """Universal CSI source liveness invariant.
 
 One probe that watches every active CSI adapter (youtube_channel_rss,
-reddit_discovery, threads_owned, threads_trends_seeded, threads_trends_broad,
-hackernews, csi_analytics) by checking `max(occurred_at)` per source in
-csi.db's `events` table against a per-source expected-max-silence threshold.
+threads_owned, threads_trends_seeded, threads_trends_broad, hackernews,
+csi_analytics) by checking `max(occurred_at)` per source in csi.db's
+`events` table against a per-source expected-max-silence threshold.
 
 `youtube_playlist` was dropped from monitoring 2026-06-03: the
 youtube_playlist_watcher was retired in PR #438 (daily digest is the
@@ -80,7 +80,6 @@ SOURCE_THRESHOLDS_HOURS: Dict[str, float] = {
     "hackernews": 3.0,                   # very high frequency (every 30 min cron + adapter poll)
     "csi_analytics": 12.0,               # downstream aggregator — depends on upstream cadence
     "youtube_channel_rss": 12.0,         # 444-channel watchlist, hourly-ish per channel
-    "reddit_discovery": 12.0,            # subreddit polling
     "threads_owned": 12.0,               # owned-handle polling
     "threads_trends_seeded": 24.0,       # broad seeded queries, lower cadence
     "threads_trends_broad": 24.0,        # broadest sweep, lower cadence

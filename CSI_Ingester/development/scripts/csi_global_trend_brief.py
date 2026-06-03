@@ -169,13 +169,13 @@ def _default_markdown(payload: dict[str, Any]) -> str:
     lines.append("")
     lines.append("## Executive Summary")
     lines.append(
-        "Cross-source signals were synthesized from YouTube RSS, Reddit discovery, and Threads trends. "
+        "Cross-source signals were synthesized from YouTube RSS and Threads trends. "
         "This briefing prioritizes narrative clarity with evidence references."
     )
     lines.append("")
 
     lines.append("## Source Throughput (Current vs Previous Window)")
-    for source_key in ("youtube", "reddit", "threads"):
+    for source_key in ("youtube", "threads"):
         current = int(source_totals.get(source_key) or 0)
         previous = int(previous_source_totals.get(source_key) or 0)
         lines.append(f"- {source_key}: {current} ({_source_delta(current, previous)})")
@@ -265,7 +265,6 @@ def _build_payload(inputs: dict[str, Any], start_dt: datetime, end_dt: datetime)
     rss_trends = inputs.get("rss_trends") if isinstance(inputs.get("rss_trends"), list) else []
     recent_global = inputs.get("recent_global_briefs") if isinstance(inputs.get("recent_global_briefs"), list) else []
 
-    reddit_report = _first_report_by_type(insights, "reddit_trend_report")
     threads_report = _first_report_by_type(insights, "threads_trend_report")
     rss_report = rss_trends[0] if rss_trends else _first_report_by_type(insights, "rss_trend_report")
 
@@ -277,18 +276,16 @@ def _build_payload(inputs: dict[str, Any], start_dt: datetime, end_dt: datetime)
 
     source_totals = {
         "youtube": _extract_total(rss_report),
-        "reddit": _extract_total(reddit_report),
         "threads": _extract_total(threads_report),
     }
 
-    previous_source_totals = {"youtube": 0, "reddit": 0, "threads": 0}
+    previous_source_totals = {"youtube": 0, "threads": 0}
     if recent_global:
         previous = recent_global[0].get("brief_json") if isinstance(recent_global[0], dict) else {}
         if isinstance(previous, dict):
             prev_totals = previous.get("source_totals") if isinstance(previous.get("source_totals"), dict) else {}
             previous_source_totals = {
                 "youtube": int(prev_totals.get("youtube") or 0),
-                "reddit": int(prev_totals.get("reddit") or 0),
                 "threads": int(prev_totals.get("threads") or 0),
             }
 
@@ -320,14 +317,11 @@ def _build_payload(inputs: dict[str, Any], start_dt: datetime, end_dt: datetime)
             )
 
     _add_narratives(rss_report, "YouTube")
-    _add_narratives(reddit_report, "Reddit")
     _add_narratives(threads_report, "Threads")
 
     contradictions: list[str] = []
     if source_totals["threads"] > 0 and source_totals["youtube"] == 0:
         contradictions.append("Threads activity high while YouTube watchlist is quiet; cross-platform lag likely.")
-    if source_totals["reddit"] > source_totals["youtube"] * 2 and source_totals["youtube"] > 0:
-        contradictions.append("Reddit is outpacing YouTube signal volume in this window.")
 
     return {
         "window_start_utc": start_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -338,7 +332,7 @@ def _build_payload(inputs: dict[str, Any], start_dt: datetime, end_dt: datetime)
         "contradictions": contradictions,
         "evidence_report_keys": [
             str(item.get("report_key") or "")
-            for item in [rss_report, reddit_report, threads_report]
+            for item in [rss_report, threads_report]
             if isinstance(item, dict) and str(item.get("report_key") or "").strip()
         ],
     }
@@ -447,7 +441,7 @@ def main() -> int:
     payload = _build_payload(inputs, start_dt, end_dt)
 
     source_totals = payload.get("source_totals") if isinstance(payload.get("source_totals"), dict) else {}
-    if int(source_totals.get("youtube") or 0) + int(source_totals.get("reddit") or 0) + int(source_totals.get("threads") or 0) <= 0:
+    if int(source_totals.get("youtube") or 0) + int(source_totals.get("threads") or 0) <= 0:
         print("CSI_GLOBAL_BRIEF_SKIPPED=no_source_activity")
         conn.close()
         return 0
@@ -509,9 +503,8 @@ def main() -> int:
             _brief_title = _lead[:120]
 
     _yt = int(source_totals.get("youtube") or 0)
-    _rd = int(source_totals.get("reddit") or 0)
     _th = int(source_totals.get("threads") or 0)
-    _brief_summary = f"YouTube {_yt} · Reddit {_rd} · Threads {_th} signals"
+    _brief_summary = f"YouTube {_yt} · Threads {_th} signals"
     if len(_top_narrs) > 1 and isinstance(_top_narrs[1], dict):
         _second = str(_top_narrs[1].get("title") or _top_narrs[1].get("narrative") or "").strip()
         if _second:
