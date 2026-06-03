@@ -60,11 +60,12 @@ def _insert_task(
     task_id: str,
     status: str,
     age_minutes: int,
+    source_kind: str = "test",
 ) -> None:
     conn.execute(
         "INSERT INTO task_hub_items (task_id, source_kind, title, status, created_at, updated_at) "
-        "VALUES (?, 'test', ?, ?, datetime('now'), datetime('now', ?))",
-        (task_id, f"task {task_id}", status, f"-{age_minutes} minutes"),
+        "VALUES (?, ?, ?, ?, datetime('now'), datetime('now', ?))",
+        (task_id, source_kind, f"task {task_id}", status, f"-{age_minutes} minutes"),
     )
     conn.commit()
 
@@ -109,6 +110,59 @@ def test_parked_task_yields_warn(activity_conn: sqlite3.Connection) -> None:
     assert payload["parked_tasks"]["count"] == 1
     sample = payload["parked_tasks"]["samples"][0]
     assert sample["task_id"] == "t1"
+
+
+def test_proactive_health_parked_row_excluded_from_count(
+    activity_conn: sqlite3.Connection,
+) -> None:
+    """A `source_kind='proactive_health'` parked row must NOT count toward
+    parked_tasks.count, and must not by itself force overall_status to 'warn'.
+
+    Regression for the self-inflation loop: the watchdog used to write its own
+    `needs_review` rows into Task Hub, and then `_query_parked_tasks` counted
+    them, driving `_derive_overall_status` -> 'warn'. Those rows no longer get
+    written, and the query now filters them out as a belt-and-suspenders guard.
+    """
+    _insert_task(
+        activity_conn,
+        "proactive_health:youtube_enrichment_coverage",
+        "needs_review",
+        age_minutes=5,
+        source_kind="proactive_health",
+    )
+    payload = build_proactive_health_payload(
+        activity_conn=activity_conn,
+        cron_jobs=[],
+        csi_db_path=None,
+    )
+    # The watchdog-authored row is invisible to the parked count.
+    assert payload["parked_tasks"]["count"] == 0
+    assert payload["parked_tasks"]["samples"] == []
+    # No critical/warn invariants seeded → that lone row can't force 'warn'.
+    assert payload["overall_status"] == "ok"
+
+
+def test_proactive_health_parked_row_does_not_mask_real_parked_tasks(
+    activity_conn: sqlite3.Connection,
+) -> None:
+    """A genuine parked task (non-proactive_health) is still counted even when
+    a proactive_health row sits alongside it — the filter is surgical."""
+    _insert_task(
+        activity_conn,
+        "proactive_health:some_finding",
+        "needs_review",
+        age_minutes=5,
+        source_kind="proactive_health",
+    )
+    _insert_task(activity_conn, "real_parked", "needs_review", age_minutes=5)
+    payload = build_proactive_health_payload(
+        activity_conn=activity_conn,
+        cron_jobs=[],
+        csi_db_path=None,
+    )
+    assert payload["parked_tasks"]["count"] == 1
+    assert payload["parked_tasks"]["samples"][0]["task_id"] == "real_parked"
+    assert payload["overall_status"] == "warn"
 
 
 def test_single_stale_task_yields_warn(activity_conn: sqlite3.Connection) -> None:

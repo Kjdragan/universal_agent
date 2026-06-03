@@ -6,6 +6,14 @@ critical, etc.) because briefings_agent.py had zero watchdog awareness.
 P6 adds the missing wire-in so morning briefings surface what the
 watchdog has been detecting.
 
+2026-06-03: proactive_health findings are no longer parked as Task Hub
+``needs_review`` rows (the Task Hub write was retired — see
+``test_proactive_health_no_task_hub_write``). The briefing block now
+sources ONLY from the live ``GET /api/v1/ops/proactive_health`` endpoint,
+which always reflects current invariant state. There is no Task Hub
+fallback: if the endpoint is unreachable or no UA_OPS_TOKEN is set, the
+block is omitted rather than rendering a stale backlog.
+
 Same lightweight pattern as the HN block + triage block: a kill-switch-
 gated helper that returns either a markdown block or "" on failure.
 Never raises — the briefing must not break because the watchdog query did.
@@ -13,7 +21,6 @@ Never raises — the briefing must not break because the watchdog query did.
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from unittest.mock import MagicMock, patch
 
@@ -67,7 +74,12 @@ def _critical_payload() -> dict:
 
 @pytest.fixture
 def memory_taskhub(tmp_path, monkeypatch):
-    """In-memory task_hub with proactive_health:* rows so the block sees them."""
+    """Seed an activity DB with proactive_health:* rows.
+
+    Post-2026-06-03 these rows must be IGNORED by the briefing block (the
+    Task Hub backlog source was removed). The fixture exists to prove the
+    rows are no longer read, not that they are surfaced.
+    """
     db_path = tmp_path / "activity_state.db"
     conn = sqlite3.connect(str(db_path))
     conn.execute("""
@@ -86,11 +98,6 @@ def memory_taskhub(tmp_path, monkeypatch):
         VALUES (?, 'proactive_health', '[CRITICAL] CSI adapters dead', 'needs_review',
                 '2026-05-20T19:00:00+00:00', '2026-05-20T19:00:00+00:00')
     """, ("proactive_health:invariant:csi_source_liveness",))
-    conn.execute("""
-        INSERT INTO task_hub_items (task_id, source_kind, title, status, created_at, updated_at)
-        VALUES (?, 'proactive_health', '[CRITICAL] YouTube enrichment lag', 'needs_review',
-                '2026-05-20T18:30:00+00:00', '2026-05-20T18:30:00+00:00')
-    """, ("proactive_health:invariant:youtube_enrichment_coverage",))
     conn.commit()
     conn.close()
     monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str(db_path))
@@ -109,33 +116,26 @@ def _mock_proactive_health_response(payload: dict):
     )
 
 
-def test_kill_switch_returns_empty(monkeypatch, memory_taskhub):
+def test_kill_switch_returns_empty(monkeypatch):
     monkeypatch.setenv("UA_BRIEFING_WATCHDOG_BLOCK_ENABLED", "0")
     block = build_briefing_block()
     assert block == ""
 
 
-def test_healthy_state_returns_empty_or_brief(monkeypatch, memory_taskhub):
-    """When overall_status is ok and no parked rows, the block stays empty —
-    don't pollute the briefing with healthy noise."""
+def test_healthy_state_returns_empty(monkeypatch):
+    """overall_status ok + no active findings -> empty block (no healthy noise)."""
     monkeypatch.setenv("UA_BRIEFING_WATCHDOG_BLOCK_ENABLED", "1")
     monkeypatch.setenv("UA_OPS_TOKEN", "test-token")
     monkeypatch.setenv("UA_GATEWAY_PORT", "8002")
-
-    # Clear the seeded rows so the task_hub is empty
-    conn = sqlite3.connect(str(memory_taskhub))
-    conn.execute("DELETE FROM task_hub_items")
-    conn.commit()
-    conn.close()
 
     with _mock_proactive_health_response(_ok_payload()):
         block = build_briefing_block()
     assert block == ""
 
 
-def test_critical_findings_render_in_block(monkeypatch, memory_taskhub):
-    """A critical finding must appear in the block with its title +
-    recommendation so Simone surfaces it in the briefing."""
+def test_critical_findings_render_in_block(monkeypatch):
+    """A critical finding from the live endpoint must appear in the block with
+    its metric + recommendation so Simone surfaces it in the briefing."""
     monkeypatch.setenv("UA_BRIEFING_WATCHDOG_BLOCK_ENABLED", "1")
     monkeypatch.setenv("UA_OPS_TOKEN", "test-token")
     monkeypatch.setenv("UA_GATEWAY_PORT", "8002")
@@ -151,9 +151,10 @@ def test_critical_findings_render_in_block(monkeypatch, memory_taskhub):
     assert "CSI adapters past expected silence" in block
 
 
-def test_parked_taskhub_rows_appear_in_block(monkeypatch, memory_taskhub):
-    """proactive_health:* Task Hub rows are persistent state — include them
-    in the block as a backlog section."""
+def test_taskhub_rows_are_no_longer_surfaced(monkeypatch, memory_taskhub):
+    """Regression for the 2026-06-03 surface move: even with proactive_health
+    rows present in the activity DB, an 'ok' live payload yields an EMPTY block.
+    The Task Hub backlog is no longer a briefing source."""
     monkeypatch.setenv("UA_BRIEFING_WATCHDOG_BLOCK_ENABLED", "1")
     monkeypatch.setenv("UA_OPS_TOKEN", "test-token")
     monkeypatch.setenv("UA_GATEWAY_PORT", "8002")
@@ -161,15 +162,13 @@ def test_parked_taskhub_rows_appear_in_block(monkeypatch, memory_taskhub):
     with _mock_proactive_health_response(_ok_payload()):
         block = build_briefing_block()
 
-    # task_hub rows are present even when current findings are quiet
-    assert block != ""
-    assert "proactive_health:invariant:csi_source_liveness" in block
-    assert "proactive_health:invariant:youtube_enrichment_coverage" in block
+    assert block == ""
+    assert "proactive_health:invariant:csi_source_liveness" not in block
 
 
-def test_endpoint_unreachable_block_still_uses_taskhub(monkeypatch, memory_taskhub):
-    """If the endpoint times out / fails, we still have task_hub persistent
-    state — don't return empty just because one source failed."""
+def test_endpoint_unreachable_returns_empty(monkeypatch, memory_taskhub):
+    """If the live endpoint fails, the block is omitted — there is no Task Hub
+    fallback anymore. Better an absent section than a stale one."""
     monkeypatch.setenv("UA_BRIEFING_WATCHDOG_BLOCK_ENABLED", "1")
     monkeypatch.setenv("UA_OPS_TOKEN", "test-token")
     monkeypatch.setenv("UA_GATEWAY_PORT", "8002")
@@ -180,28 +179,25 @@ def test_endpoint_unreachable_block_still_uses_taskhub(monkeypatch, memory_taskh
     ):
         block = build_briefing_block()
 
-    # Endpoint failed but task_hub rows ARE there from the fixture
-    assert block != ""
-    assert "proactive_health" in block
+    assert block == ""
 
 
-def test_no_ops_token_block_still_uses_taskhub(monkeypatch, memory_taskhub):
-    """If UA_OPS_TOKEN isn't set, skip the endpoint call but still surface
-    the task_hub backlog. Avoid total silence."""
+def test_no_ops_token_returns_empty(monkeypatch, memory_taskhub):
+    """No UA_OPS_TOKEN -> the endpoint call is skipped and the block is omitted
+    (no Task Hub fallback)."""
     monkeypatch.setenv("UA_BRIEFING_WATCHDOG_BLOCK_ENABLED", "1")
     monkeypatch.delenv("UA_OPS_TOKEN", raising=False)
 
     block = build_briefing_block()
 
-    assert "proactive_health:invariant:csi_source_liveness" in block
+    assert block == ""
 
 
-def test_block_never_raises_on_bad_db(monkeypatch, tmp_path):
-    """If the activity DB doesn't exist (dev box), helper returns "" not raise."""
+def test_block_never_raises(monkeypatch):
+    """No token, no endpoint -> helper returns "" (a str), never raises."""
     monkeypatch.setenv("UA_BRIEFING_WATCHDOG_BLOCK_ENABLED", "1")
-    monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str(tmp_path / "does_not_exist.db"))
     monkeypatch.delenv("UA_OPS_TOKEN", raising=False)
 
-    # Should NOT raise
     block = build_briefing_block()
     assert isinstance(block, str)
+    assert block == ""

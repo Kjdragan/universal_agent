@@ -155,68 +155,6 @@ def _critical_invariants(payload: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def _warn_invariants(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    return [
-        f
-        for f in (payload.get("invariants") or [])
-        if str(f.get("severity") or "").lower() == "warn"
-    ]
-
-
-# P3: track how many consecutive ticks each warn finding has been observed.
-# A warn that fires once then disappears was probably a transient — don't
-# escalate. A warn that persists past WARN_ESCALATION_THRESHOLD ticks is a
-# real degradation worth parking in Task Hub. NOT emailed — warn-tier
-# emails would noise out the critical-tier alerts.
-WARN_ESCALATION_THRESHOLD = 3
-_consecutive_warns: dict[str, int] = {}
-
-
-def _warn_threshold() -> int:
-    raw = os.getenv("UA_HEARTBEAT_PROACTIVE_HEALTH_WARN_ESCALATION_THRESHOLD")
-    if not raw:
-        return WARN_ESCALATION_THRESHOLD
-    try:
-        return max(1, int(raw))
-    except ValueError:
-        return WARN_ESCALATION_THRESHOLD
-
-
-def _track_and_filter_warns_for_escalation(
-    warns_this_tick: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Increment the per-fingerprint consecutive counter for every warn seen
-    this tick. Reset counters for warns that DIDN'T fire this tick. Return
-    only warns that have crossed the escalation threshold AND just crossed
-    it (i.e. emit once when crossing, not every subsequent tick — Task Hub
-    upsert handles persistence).
-
-    Reset-on-absence prevents zombie counters from accumulating: a finding
-    that fires once, disappears for 2 ticks, then re-fires starts over."""
-    threshold = _warn_threshold()
-    fingerprints_this_tick: set[str] = set()
-    to_escalate: list[dict[str, Any]] = []
-
-    for f in warns_this_tick:
-        fp = str(f.get("finding_id") or f.get("metric_key") or "unknown")
-        fingerprints_this_tick.add(fp)
-        prior = _consecutive_warns.get(fp, 0)
-        _consecutive_warns[fp] = prior + 1
-        # Escalate when the counter EQUALS the threshold (once on crossing).
-        # Subsequent ticks continue incrementing but don't re-emit.
-        if _consecutive_warns[fp] == threshold:
-            to_escalate.append(f)
-
-    # Reset counters for warns absent this tick (the underlying issue
-    # resolved itself before reaching escalation OR after escalation —
-    # either way, restart the clock).
-    for fp in list(_consecutive_warns.keys()):
-        if fp not in fingerprints_this_tick:
-            _consecutive_warns.pop(fp, None)
-
-    return to_escalate
-
-
 def _format_email(finding: dict[str, Any], payload_generated_at: str) -> tuple[str, str]:
     title = finding.get("title") or "Proactive health finding"
     metric_key = finding.get("metric_key") or "?"
@@ -312,27 +250,6 @@ async def _notify_critical(
     return True
 
 
-def _emit_to_task_hub(
-    findings: list[dict[str, Any]],
-    task_hub_emit_fn: Optional[Callable[[dict[str, Any]], None]],
-) -> None:
-    """Best-effort: park a Task Hub row for each critical finding so it persists
-    past one heartbeat. Independent of email — losing the email channel must
-    not lose the persistent backlog. Never raises."""
-    if task_hub_emit_fn is None:
-        return
-    for f in findings:
-        try:
-            task_hub_emit_fn(f)
-        except Exception:  # noqa: BLE001 — never crash the heartbeat
-            fp = str(f.get("finding_id") or f.get("metric_key") or "unknown")
-            logger.warning(
-                "proactive_health: task_hub_emit_fn failed for %s",
-                fp,
-                exc_info=True,
-            )
-
-
 async def run_pre_flight_check(
     *,
     workspace_dir: Path,
@@ -340,7 +257,6 @@ async def run_pre_flight_check(
     agentmail_service: Optional[_AgentMailLike],
     notifications_list: Optional[list[dict[str, Any]]],
     add_notification_fn: Optional[Callable[..., dict[str, Any]]],
-    task_hub_emit_fn: Optional[Callable[[dict[str, Any]], None]] = None,
 ) -> dict[str, Any]:
     """Run the proactive watchdog as a pre-flight before any agent invocation.
 
@@ -395,16 +311,6 @@ async def run_pre_flight_check(
                     fp,
                     consecutive,
                 )
-            # Task Hub channel is independent of email. Even when email is
-            # blocked, park a `needs_review` row for each critical so the
-            # finding survives past this heartbeat. P3: also escalate any
-            # warns that have persisted past the threshold here, since the
-            # warn escalation is via Task Hub regardless of email state.
-            _emit_to_task_hub(criticals, task_hub_emit_fn)
-            warns_to_escalate = _track_and_filter_warns_for_escalation(
-                _warn_invariants(payload)
-            )
-            _emit_to_task_hub(warns_to_escalate, task_hub_emit_fn)
             return payload
 
     cooldown = _cooldown_seconds()
@@ -413,15 +319,6 @@ async def run_pre_flight_check(
 
     sent_count = 0
     criticals_this_tick = _critical_invariants(payload)
-    # Park Task Hub rows up front so the persistent backlog reflects every
-    # critical, independent of whether email succeeds or hits cooldown.
-    _emit_to_task_hub(criticals_this_tick, task_hub_emit_fn)
-
-    # P3: also park Task Hub rows for warns that have persisted past the
-    # escalation threshold. No email (warn-tier emails would noise out
-    # criticals); the persistent Task Hub row IS the escalation channel.
-    warns_to_escalate = _track_and_filter_warns_for_escalation(_warn_invariants(payload))
-    _emit_to_task_hub(warns_to_escalate, task_hub_emit_fn)
     for finding in criticals_this_tick:
         sent = await _notify_critical(
             finding=finding,

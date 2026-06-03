@@ -44,7 +44,7 @@ _VP workers, Simone orchestration, heartbeat, cron, idle dispatch, agent college
 
 - **[VP Workers & Delegation](03_agents/01_vp_workers_and_delegation.md)** — CODIE/ATLAS lanes, mission dispatch/queueing, priority tiers (operator_daily/operator_signal/maintenance/background), profiles, execution clients, worker loop, redis bridge, factory heartbeat/registry, cody-mode routing, goal loop, failure rescue. _(verified 2026-05-29)_
 - **[Simone-First Orchestration](03_agents/02_simone_first_orchestration.md)** — Simone-first routing model, agent router (note: qualify_agent* are decommissioned). _(verified 2026-05-29)_
-- **[Heartbeat Service](03_agents/03_heartbeat_service.md)** — Heartbeat loop, max_proactive_per_cycle, findings schema/contract, auto-triage→Simone. _(verified 2026-05-29)_
+- **[Heartbeat Service](03_agents/03_heartbeat_service.md)** — Heartbeat loop, max_proactive_per_cycle, findings schema/contract, auto-triage→Simone, proactive-health pre-flight (email + System Health panel, no Task Hub parking). _(verified 2026-06-03)_
 - **[Cron & Scheduling](03_agents/04_cron_and_scheduling.md)** — Cron registration, deploy-window detection (suppress restart noise), catch-up, system cron jobs. _(verified 2026-05-29)_
 - **[Idle Dispatch & Goal Loop](03_agents/05_idle_dispatch_and_goal_loop.md)** — Idle dispatch nudge mechanism, goal loop & completion attestation, failure-mode classification & rescue verbs. _(verified 2026-05-29)_
 - **[Agent College](03_agents/06_agent_college.md)** — Failure-analysis learning loop (if present/active in code; dispose if dead). _(verified 2026-05-29)_
@@ -101,7 +101,7 @@ _MCP server, tools/bridges, SDK integration, skills_
 
 _Operating playbook, verification rules, dormancy, VPS recovery, incident patterns_
 
-- **[Agent Operating Playbook](08_operations/01_agent_operating_playbook.md)** — How agents should operate (operator-facing playbook). _(verified 2026-05-29)_
+- **[Agent Operating Playbook](08_operations/01_agent_operating_playbook.md)** — How agents should operate (operator-facing playbook); proactive_health findings surface via Mission Control System Health panel + critical email, not Task Hub rows. _(verified 2026-06-03)_
 - **[Production Verification Rules](08_operations/02_production_verification_rules.md)** — Ship-then-verify cadence, /api/v1/version SHA check, branch-vs-deploy honesty, backend vs UI verification paths. _(verified 2026-05-29)_
 - **[Dormancy & Operating Hours](08_operations/03_dormancy_and_operating_hours.md)** — 6AM-10PM Houston active window, content-gen vs infra-event distinction, documented exceptions, guard test. _(verified 2026-05-29)_
 - **[VPS Recovery & Security](08_operations/04_vps_recovery_and_security.md)** — Watchdog/timers, service recovery, host hardening, daily ops. _(verified 2026-05-29)_

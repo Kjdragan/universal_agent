@@ -10,8 +10,9 @@ code_paths:
   - src/universal_agent/services/dispatch_service.py
   - src/universal_agent/services/agent_router.py
   - scripts/check_heartbeat_liveness.py
+  - src/universal_agent/services/proactive_health_notifier.py
   - memory/HEARTBEAT.md
-last_verified: 2026-06-01
+last_verified: 2026-06-03
 ---
 
 # Heartbeat Service
@@ -88,7 +89,7 @@ Every cycle (whether or not the agent turn runs) performs deterministic, best-ef
 - **Stale-assignment release + periodic prune** of Task Hub (`task_hub.release_stale_assignments`, `prune_settled_tasks`).
 - **Capacity governor gate** (`services/capacity_governor.CapacityGovernor.can_dispatch`) — informational here; blocks/annotates when the provider is under 429 backoff. Emits a `system_alert` wire event on `api_down`.
 - **Utilization + VP backlog sampling** (`record_utilization_sample`, `vp_mission_backlog.record_backlog_sample`) for the 3x-daily intelligence reports and the backlog trend probe.
-- **Proactive-health pre-flight** (`services/proactive_health_notifier.run_pre_flight_check`) — runs on every tick regardless of skip-mode. For **every critical finding** it parks a Task Hub `needs_review` row via `_emit_finding_to_task_hub` (`task_id = proactive_health:<finding_id>`, `source_kind = proactive_health`). This is an independent durable channel so a finding survives past the current heartbeat even if the email/notification path drops it. Dedup: if a row with that id is already `open`/`needs_review`/`in_progress` it is left untouched.
+- **Proactive-health pre-flight** (`services/proactive_health_notifier.run_pre_flight_check`) — runs on every tick regardless of skip-mode. For **every critical finding** it surfaces the finding through two stateless channels: a first-occurrence **critical email** to the operator (`_notify_critical` → `agentmail_service.send_email`, 6h per-finding-id cooldown) and the live **System Health** panel on the dashboard Mission Control tab, which renders `GET /api/v1/ops/proactive_health`. The pre-flight **no longer parks a Task Hub `needs_review` row** for findings — that durable channel was removed because it was redundant with the email + live endpoint and produced zombie rows, severity mislabels, board-lane pollution, and resurrection-on-trash (see `08_operations/01_agent_operating_playbook.md` §1.1). The Task Hub "Needs Review" lane now means only genuinely-stalled real work sessions.
 
 The prompt is built by `_compose_heartbeat_prompt`. For a normal (non-task-focused) run it stacks: the base prompt (`UA_HEARTBEAT_PROMPT` or `DEFAULT_HEARTBEAT_PROMPT`), the environment context (`_build_heartbeat_environment_context` — factory identity, mandatory file-write rules, mandatory findings-output rule), VP completion-review and stale-delegation-recovery sections, brainstorm/morning-report/recent-topics context, and a **Database Health Alerts** block from `utils/db_health_monitor.check_all_databases`. If `has_exec_completion` is detected in the drained system events, the base prompt is swapped for `EXEC_EVENT_PROMPT` (relay an async command's result).
 
@@ -213,7 +214,7 @@ Explicit wakes: `request_heartbeat_now` (run ASAP, can bypass a foreground lock)
 
 - **Simone is the orchestrator, not the solo IC.** Default posture is delegate → supervise → sign off, with a `source_kind` routing matrix (Atlas `vp.general.primary` for research/synthesis; Cody `vp.coder.primary` for code). Delegation uses `vp_dispatch_mission` followed by `task_redirect_to` to release the claim — never `complete` at delegation time. VP successes auto-close (no per-task sign-off pause was ever built); VP failures surface as `vp_mission_failure` items where Simone is the rescue-evaluator.
 - **Sections are factory-scoped** via HTML comments (`<!-- scope:hq -->`, `<!-- scope:local -->`, `<!-- scope:all -->`) and filtered by `heartbeat_scope_filter.filter_heartbeat_by_scope` against the service's `heartbeat_scope`.
-- It mandates writing both `work_products/system_health_latest.md` (human) and `work_products/heartbeat_findings_latest.json` (machine), and to triage `proactive_health:*` Task Hub rows that the pre-flight parks — without mass-clearing them.
+- It mandates writing both `work_products/system_health_latest.md` (human) and `work_products/heartbeat_findings_latest.json` (machine). `proactive_health:*` findings are **not** Task Hub rows — there is nothing to triage in the board; criticals surface via the System Health panel (live `/api/v1/ops/proactive_health`) + critical email (see `08_operations/01_agent_operating_playbook.md` §1.1).
 - Checkbox semantics: `- [ ]` = active/pending, `- [x]` = completed/disabled.
 - **Health-check false-positive discipline** (keep terse — this file is injected into Simone's context every cycle, so verbosity costs tokens): brainstorms awaiting a human reply are a DEFER, not an alert; a `[System/Sync]` task in `in_progress` is normal; `vp_db_locked` is transient SQLite contention — retry, don't abandon; a VP mission that finished >4h ago but whose task is still `in_progress` means Simone should read the `workspace://` artifacts via `vp_read_result_artifacts` and synthesize the completion herself. Escalate only on a hard cloud outage (3+ retries) or runaway deletions.
 

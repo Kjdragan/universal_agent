@@ -109,6 +109,27 @@ type MissionControlTilesPayload = {
   tiles: MissionControlTile[];
 };
 
+// Proactive system-health payload — /api/v1/ops/proactive_health. Each
+// invariant carries its OWN severity ('critical' | 'warn'); the panel
+// renders that severity honestly via severityBadge() rather than a
+// synthetic/uniform prefix.
+type ProactiveHealthPayload = {
+  overall_status: string;
+  generated_at_utc: string;
+  invariants: Array<{
+    finding_id: string;
+    metric_key: string;
+    severity: "critical" | "warn";
+    title: string;
+    recommendation: string;
+    observed_value: any;
+    runbook_command: string;
+    category: string;
+  }>;
+  stale_tasks?: { count: number };
+  parked_tasks?: { count: number };
+};
+
 // Tier-1 narrative card payload (Phase 2). The /cards endpoint hydrates
 // JSON columns server-side, so consumers get parsed objects.
 type MissionControlCardEvidenceRef = {
@@ -581,6 +602,148 @@ function SystemStatusPanel() {
   );
 }
 
+// System Health Panel — surfaces proactive invariant findings from
+// /api/v1/ops/proactive_health at the top of Mission Control. Models its
+// fetch/refresh/loading/error skeleton on SystemStatusPanel. The honest-
+// severity fix: each finding's OWN severity drives severityBadge(), so a
+// warn finding shows a WARN badge and a critical finding a CRITICAL badge.
+function SystemHealthPanel() {
+  const [loading, setLoading] = useState(true);
+  const { refreshKey } = useContext(RefreshContext);
+  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<ProactiveHealthPayload | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/ops/proactive_health`, { cache: "no-store" });
+      if (!res.ok) {
+        throw new Error(`Failed to load: ${res.status}`);
+      }
+      const json = await res.json();
+      setData(json as ProactiveHealthPayload);
+    } catch (err: any) {
+      setError(err.message || "Failed to load system health");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void load();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [load, refreshKey]);
+
+  if (loading) {
+    return (
+      <div className="min-w-0 rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
+        <div className="mb-4 flex items-center gap-2">
+          <Activity className="h-4 w-4 text-muted-foreground" />
+          <h2 className="text-sm font-medium text-foreground/80">System Health</h2>
+        </div>
+        <div className="flex items-center justify-center py-8">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
+        <div className="mb-4 flex items-center gap-2">
+          <Activity className="h-4 w-4 text-muted-foreground" />
+          <h2 className="text-sm font-medium text-foreground/80">System Health</h2>
+        </div>
+        <div className="flex flex-col items-center justify-center py-6 text-center">
+          <XCircle className="mb-2 h-8 w-8 text-red-400" />
+          <p className="text-sm text-muted-foreground">{error}</p>
+          <button
+            onClick={load}
+            className="mt-3 flex items-center gap-1 rounded bg-card/50 px-3 py-1.5 text-xs text-foreground/80 hover:bg-muted"
+          >
+            <RefreshCw className="h-3 w-3" />
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const overall = (data?.overall_status || "").toLowerCase();
+  const dotCls =
+    overall === "critical"
+      ? "bg-red-400"
+      : overall === "warn"
+        ? "bg-accent"
+        : "bg-primary";
+
+  // Sort critical-first so the loudest findings sit at the top.
+  const invariants = [...(data?.invariants ?? [])].sort((a, b) => {
+    const rank = (s: string) => (s === "critical" ? 0 : 1);
+    return rank(a.severity) - rank(b.severity);
+  });
+
+  return (
+    <div className="rounded-none border border-white/10 bg-[#0b1326]/70 backdrop-blur-md p-4">
+      <div className="mb-4 flex items-center gap-2">
+        <Activity className="h-4 w-4 text-muted-foreground" />
+        <h2 className="text-sm font-medium text-foreground/80">System Health</h2>
+        <span className={`ml-1 inline-block h-2 w-2 rounded-full ${dotCls}`} aria-hidden="true" />
+        <span className="text-xs text-muted-foreground">{data?.overall_status || "unknown"}</span>
+      </div>
+
+      {invariants.length === 0 ? (
+        <div className="flex items-center gap-3 rounded-lg bg-card/30 p-3">
+          <CheckCircle className="h-6 w-6 text-primary" />
+          <p className="text-sm text-foreground">All proactive invariants passing</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {invariants.map((finding) => {
+            const sev = severityBadge(finding.severity);
+            const observed =
+              finding.observed_value !== null && typeof finding.observed_value === "object"
+                ? JSON.stringify(finding.observed_value)
+                : String(finding.observed_value ?? "");
+            return (
+              <div key={finding.finding_id} className="rounded-lg bg-card/30 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-sm font-medium text-foreground">{finding.title}</p>
+                  <span
+                    className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] ${sev.cls}`}
+                  >
+                    {sev.label}
+                  </span>
+                </div>
+                {finding.recommendation && (
+                  <p className="mt-1 text-xs text-muted-foreground">{finding.recommendation}</p>
+                )}
+                {observed && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Observed: {observed}
+                  </p>
+                )}
+                {finding.runbook_command && (
+                  <code className="mt-2 block overflow-x-auto rounded bg-black/30 px-2 py-1 text-[11px] text-foreground/80">
+                    {finding.runbook_command}
+                  </code>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ChiefOfStaffReadoutPanel() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -1026,6 +1189,11 @@ function severityBadge(severity: string): { label: string; cls: string } {
       return { label: "critical", cls: "bg-red-500/15 text-red-300 border-red-500/30" };
     case "warning":
       return { label: "warning", cls: "bg-accent/15 text-accent border-accent/30" };
+    // proactive_health findings normalize severity to the literal "warn"
+    // (HeartbeatFinding._normalize_severity). Render it with the same amber
+    // emphasis as "warning" so warn-tier alerts aren't muted to neutral gray.
+    case "warn":
+      return { label: "warn", cls: "bg-accent/15 text-accent border-accent/30" };
     case "watching":
       return { label: "watching", cls: "bg-primary/15 text-primary border-primary/30" };
     case "success":
@@ -1878,6 +2046,9 @@ export default function MissionControlPage() {
 
         {/* Tier-0 health strip — Phase 1B */}
         <TileStripPanel />
+
+        {/* Proactive system-health invariants — honest-severity surface */}
+        <SystemHealthPanel />
 
         <div className="grid min-w-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1.8fr)_minmax(280px,0.8fr)]">
           <div className="flex min-w-0 flex-col gap-4">
