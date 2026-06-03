@@ -5,7 +5,7 @@
 pymupdf>=1.27.2.3
 
 # Vector Database
-chromadb>=0.5.0
+chromadb>=1.5.9
 
 # AI/ML APIs
 google-genai>=1.0.0
