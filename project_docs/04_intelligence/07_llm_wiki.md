@@ -12,7 +12,7 @@ code_paths:
   - src/universal_agent/tools/wiki_bridge.py
   - src/universal_agent/tools/kb_bridge.py
   - src/universal_agent/services/csi_intelligence_persistence.py
-last_verified: 2026-05-29
+last_verified: 2026-06-03
 ---
 
 # LLM Wiki System
