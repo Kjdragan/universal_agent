@@ -195,3 +195,6 @@ docs/architecture-view/vendor/
 
 # Embedded agent-browser tool repo — local-only, was a broken gitlink (no .gitmodules); untracked 2026-05-30
 .claude/agents/agent-browser/
+
+# Self-improvement Stop hook: local proposals + per-session state (review-only, not shared)
+.claude/self-improvement/

@@ -26,7 +26,9 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass, field
+from functools import lru_cache
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -48,6 +50,35 @@ META_DOCS = {"00_DOCUMENTATION_REFACTOR_PLAN.md", "01_TAXONOMY.md", "02_GOTCHA_I
 # Roots a cited (package-relative) path may live under, in priority order.
 SEARCH_ROOTS = [REPO_ROOT, REPO_ROOT / "src" / "universal_agent", REPO_ROOT / "src"]
 
+# Directories never worth walking when resolving citations: vendored deps, build
+# caches, virtualenvs, the archived doc corpus, and nested worktrees. Pruning these
+# turns the citation walk from a multi-second full-tree crawl (a populated dev .venv
+# is millions of files) into a sub-second scan, and is strictly MORE correct: a symbol
+# is "present if any candidate defines it", so a stray third-party basename match under
+# .venv/ or node_modules/ could otherwise mask a genuinely missing symbol.
+_PRUNE_DIRS = {
+    ".git", ".venv", "venv", "node_modules", "__pycache__", ".mypy_cache",
+    ".pytest_cache", ".ruff_cache", ".ipynb_checkpoints", "dist", "build",
+    ".next", ".turbo", "_archive", "worktrees",
+}
+
+
+@lru_cache(maxsize=1)
+def _repo_index_by_name() -> dict[str, tuple[str, ...]]:
+    """basename -> repo-relative posix paths, pruning vendored/cache/archive dirs.
+    Built once (cached). Keying by basename makes citation resolution O(files sharing
+    that name) instead of O(whole tree): the prior `REPO_ROOT.glob("**/<fil>")` walked
+    every file on every citation, which on a populated dev checkout took seconds each."""
+    rootlen = len(str(REPO_ROOT)) + 1
+    idx: dict[str, list[str]] = {}
+    for dirpath, dirnames, filenames in os.walk(REPO_ROOT):
+        dirnames[:] = [d for d in dirnames if d not in _PRUNE_DIRS]
+        relbase = dirpath[rootlen:]
+        for fn in filenames:
+            rel = f"{relbase}/{fn}" if relbase else fn
+            idx.setdefault(fn, []).append(rel)
+    return {k: tuple(v) for k, v in idx.items()}
+
 
 def _resolve_cited_files(fil: str) -> list[Path]:
     """Resolve a cited path (possibly package-relative or a bare ambiguous basename)
@@ -59,8 +90,14 @@ def _resolve_cited_files(fil: str) -> list[Path]:
         cand = root / fil
         if cand.exists():
             out.append(cand)
-    # suffix glob: match the full cited subpath; if just a basename this matches all same-named files
-    out.extend(REPO_ROOT.glob(f"**/{fil}"))
+    # suffix match against the pruned basename index — replicates the semantics of
+    # `REPO_ROOT.glob("**/<fil>")` (any path whose tail equals the cited subpath) while
+    # only scanning files that share the cited basename, not the whole tree.
+    base = fil.rsplit("/", 1)[-1]
+    suffix = "/" + fil
+    for rel in _repo_index_by_name().get(base, ()):
+        if rel == fil or rel.endswith(suffix):
+            out.append(REPO_ROOT / rel)
     # dedup preserving order
     seen, uniq = set(), []
     for p in out:
