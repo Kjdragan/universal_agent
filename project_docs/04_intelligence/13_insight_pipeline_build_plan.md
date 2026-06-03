@@ -284,6 +284,30 @@ pipeline-affecting deploy (the convergence-timeout fix PR #665 deploying
 2026-06-02). Verify before deleting: sustained `daemon_simone_todo` claims,
 briefs authoring, digest emailing (Phase 0.5 closed), no event-loop regressions.
 
+> **Gate cleared 2026-06-03 + operator sign-off.** Delivery proven (digest sent
+> 06-02 07:01 UTC; deterministic cron firing hourly `clean_exit_zero`, correctly
+> idle on `no_candidates`). Read-only dead-symbol audit done — it **corrects two
+> stale spec claims**:
+> 1. `track_a_concrete_convergence`, `create_insight_brief_task`,
+>    `create_convergence_brief_task`, `_detect_and_queue_convergence_async` are
+>    **already gone** (no `def`, no callers — removed 2026-05); only a historical
+>    docstring remains. Nothing to delete.
+> 2. `proactive_brief_scoring_log` is **NOT dead** — written by the Phase-5
+>    feedback endpoint (`gateway_server.py::briefs_feedback_get`), owned by
+>    `proactive_scoring_log.py`, read by the (enabled) `insight_scoring_health`
+>    weekly email + `briefings_agent`. **Do not drop.**
+>    `insight_brief_task` / `convergence_brief_task` are **artifact_type strings**,
+>    not tables. The "two gateway hand-trigger endpoints" no longer exist on main.
+>
+> **DONE (this PR):** dropped the genuinely-dead `proactive_convergence_events`
+> table — removed its `CREATE TABLE`/index from `proactive_convergence.py::ensure_schema`,
+> archived the prod table (2,525 historical rows, zero writers/readers) to a dump,
+> and `DROP`-ped it. **DEFERRED (separate, operator-scoped):** retiring the legacy
+> per-insight scorer cluster — `hourly_insight_email` (disabled) + `insight_scoring_health`
+> (ENABLED weekly email) + the `briefings_agent` "ATLAS insight briefs" block +
+> the legacy artifact_type strings. **NEVER:** `track_b_ideation_synthesis`,
+> `proactive_brief_scoring_log`.
+
 **⚠️ VERIFY-EACH-SYMBOL-STILL-DEAD on origin/main before planning deletion** —
 `#568` already removed some legacy; grep live call sites (incl. the web UI) for
 each before deleting. Candidate targets (confirm dead first):
@@ -294,7 +318,7 @@ each before deleting. Candidate targets (confirm dead first):
 | `track_b_ideation_synthesis` | `proactive_convergence.py` | ⚠️ **STILL LIVE** — driven by `_run_ideation_sweep`. **Do NOT delete** unless ideation is being retired. Reconcile with spec §10 6.1 (which lists it) — the spec is stale here. |
 | `_detect_and_queue_convergence_async`, `create_convergence_brief_task`, `create_insight_brief_task` | `proactive_convergence.py` | grep callers |
 | two gateway hand-trigger endpoints | `gateway_server.py` | grep web-ui + curl callers |
-| dead tables `proactive_convergence_events`, `insight_brief_task`, `convergence_brief_task`, `proactive_brief_scoring_log` | DB | confirm no writers/readers |
+| ~~`proactive_convergence_events`~~ table | DB | ✅ **DROPPED 2026-06-03** (archived 2,525 rows first; zero writers/readers). `insight_brief_task`/`convergence_brief_task` = artifact_type strings, not tables. `proactive_brief_scoring_log` = **NOT dead, keep** (Phase-5 writer + enabled readers). |
 | dead surfaces: `hourly_insight_email` cron, `insight_scoring_health` weekly email, `briefings_agent` "ATLAS insight briefs" block | various | confirm unscheduled/unreferenced |
 
 | Field | Value |
