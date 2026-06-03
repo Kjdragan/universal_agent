@@ -201,9 +201,14 @@ def run_auth_preflight(
             errors=tuple(errors),
         )
 
-    # v0.5.4+: prefer 'nlm auth status' — makes a real API call to
-    # validate credentials, more reliable than the old 'login --check'.
-    check_args = [cli, "auth", "status", "--profile", profile]
+    # 'nlm login --check' makes a real API call to validate credentials
+    # (rc=0 valid, rc!=0 expired/invalid). NOTE: an earlier "v0.5.4 upgrade"
+    # switched this to 'nlm auth status', but that subcommand has never existed
+    # in the notebooklm-mcp-cli — auth lives under `login`. The bogus command
+    # made this preflight ALWAYS report failure (rc!=0 "No such command 'auth'"),
+    # masked only because the unit mock returned success regardless of args.
+    # Verified against notebooklm-mcp-cli v0.7.0 (2026-06-03): `login --check`.
+    check_args = [cli, "login", "--check", "--profile", profile]
     try:
         checks_attempted += 1
         check_result = _run_command(check_args, timeout_seconds)
