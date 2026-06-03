@@ -15,12 +15,10 @@ import sqlite3
 logger = logging.getLogger(__name__)
 
 # ── Source-specific TTL defaults ────────────────────────────────────
-# Reddit posts go cold within days; 30 days is more than sufficient.
 # YouTube videos can resurface in playlists months later; keep 90 days.
 # Threads are ephemeral; 30 days is plenty.
 DEFAULT_TTL_DAYS = 90
 SOURCE_TTL_DAYS: dict[str, int] = {
-    "reddit": 30,
     "threads": 30,
     "youtube": 90,
 }

@@ -35,7 +35,7 @@ Run signed CSI->UA smoke check:
 uv run python scripts/csi_local_e2e_smoke.py
 ```
 
-Run data-plane validation (RSS/Reddit ingest + optional live smoke to UA):
+Run data-plane validation (RSS ingest + optional live smoke to UA):
 
 ```bash
 scripts/csi_run.sh python3 scripts/csi_validate_live_flow.py --lookback-hours 24 --emit-smoke
@@ -59,12 +59,6 @@ Run RSS digest in dry-run mode (no Telegram send):
 scripts/csi_run.sh python3 scripts/csi_rss_telegram_digest.py --db-path /path/to/csi.db --seed-current-on-first-run --dry-run
 ```
 
-Run Reddit digest in dry-run mode (no Telegram send):
-
-```bash
-scripts/csi_run.sh python3 scripts/csi_reddit_telegram_digest.py --db-path /path/to/csi.db --seed-current-on-first-run --dry-run
-```
-
 Run playlist tutorial digest in dry-run mode (no Telegram send):
 
 ```bash
@@ -77,18 +71,15 @@ Digest format includes adaptive category sections. Core categories are `AI`, `Po
 Telegram channel separation options:
 
 - `CSI_RSS_TELEGRAM_CHAT_ID` for YouTube RSS digest stream.
-- `CSI_REDDIT_TELEGRAM_CHAT_ID` for Reddit digest stream.
 - `CSI_TUTORIAL_TELEGRAM_CHAT_ID` for playlist tutorial updates (new playlist videos + discovered artifact paths).
 - `CSI_TUTORIAL_ARTIFACTS_BASE_URL` (optional) to include clickable artifact URLs in tutorial digest messages (for example `https://api.clearspringcg.com`).
 - Optional per-stream Telegram forum topic IDs:
 - `CSI_RSS_TELEGRAM_THREAD_ID`
-- `CSI_REDDIT_TELEGRAM_THREAD_ID`
 - `CSI_TUTORIAL_TELEGRAM_THREAD_ID`
 - Strict stream routing controls:
 - `CSI_TELEGRAM_STRICT_STREAM_ROUTING=1` (global)
-- `CSI_REDDIT_TELEGRAM_STRICT_STREAM_ROUTING=1`
 - `CSI_TUTORIAL_TELEGRAM_STRICT_STREAM_ROUTING=1`
-- `csi-reddit-telegram-digest.service` and `csi-playlist-tutorial-digest.service` run with `--strict-stream-routing` by default, so those streams do not silently fall back into RSS/default chat routing.
+- `csi-playlist-tutorial-digest.service` runs with `--strict-stream-routing` by default, so that stream does not silently fall back into RSS/default chat routing.
 - Playlist tutorial digest now has built-in follow-up behavior:
 - when a new playlist video is first detected but no tutorial artifact exists yet, it is tracked in pending state;
 - on later timer runs, once artifacts appear, CSI sends a second "Tutorial Artifacts Ready" message automatically and clears that pending item.
@@ -115,11 +106,9 @@ Install periodic systemd jobs on VPS (requires root):
 Timers installed:
 
 - `csi-rss-telegram-digest.timer` -> every 10 minutes (sends one batched Telegram digest when new RSS events exist)
-- `csi-reddit-telegram-digest.timer` -> every 10 minutes at `:01` (sends one batched Telegram digest when new Reddit watchlist events exist)
 - `csi-playlist-tutorial-digest.timer` -> every 10 minutes at `:04` (playlist-triggered tutorial updates with artifact paths)
 - `csi-rss-semantic-enrich.timer` -> every 10 minutes at `:02` (transcript extraction + adaptive semantic categorization)
 - `csi-rss-trend-report.timer` -> hourly at minute `:12` (aggregated trend report event to UA)
-- `csi-reddit-trend-report.timer` -> hourly at minute `:18` (aggregated Reddit trend report event to UA)
 - `csi-rss-insight-analyst.timer` -> hourly at minute `:22` (CSI-native insight reports: emerging + daily cadence)
 - `csi-rss-reclassify-categories.timer` -> every 6 hours at minute `:17` (reclassify older RSS rows with current taxonomy)
 - `csi-category-quality-loop.timer` -> hourly at minute `:27` (adaptive taxonomy quality loop + threshold/category tuning)
@@ -166,12 +155,6 @@ Run RSS trend report manually:
 scripts/csi_run.sh python3 scripts/csi_rss_trend_report.py --db-path /path/to/csi.db --window-hours 24 --force
 ```
 
-Run Reddit trend report manually:
-
-```bash
-scripts/csi_run.sh python3 scripts/csi_reddit_trend_report.py --db-path /path/to/csi.db --window-hours 24 --force
-```
-
 Run CSI insight analyst manually:
 
 ```bash
@@ -213,27 +196,6 @@ Run report product finalization manually:
 ```bash
 scripts/csi_run.sh python3 scripts/csi_report_product_finalize.py --db-path /path/to/csi.db --window-hours 24 --force
 ```
-
-## Reddit Canary Activation
-
-Reddit ingestion is scaffolded and disabled by default. Use canary mode to validate source quality safely.
-
-1. Probe the watchlist without ingesting events:
-
-```bash
-scripts/csi_run.sh python3 scripts/csi_reddit_probe.py --watchlist-file /opt/universal_agent/CSI_Ingester/development/reddit_watchlist.json
-```
-
-2. Enable/disable canary ingestion:
-
-```bash
-/opt/universal_agent/CSI_Ingester/development/scripts/csi_reddit_canary_setup.sh enable
-/opt/universal_agent/CSI_Ingester/development/scripts/csi_reddit_canary_setup.sh disable
-```
-
-Default canary watchlist file:
-
-- `/opt/universal_agent/CSI_Ingester/development/reddit_watchlist.json`
 
 ## Threads Channel Setup (Phase 1: Analytics Only)
 
@@ -421,7 +383,7 @@ scripts/csi_run.sh uv run python3 scripts/csi_threads_rollout_verify.py \
 Use source-map thresholds instead of hardcoded per-source gates:
 
 ```bash
-UA_CSI_DELIVERY_SOURCE_MIN_EVENTS=youtube_channel_rss=1,reddit_discovery=1,threads_owned=0,threads_trends_seeded=0,threads_trends_broad=0,csi_analytics=0
+UA_CSI_DELIVERY_SOURCE_MIN_EVENTS=youtube_channel_rss=1,threads_owned=0,threads_trends_seeded=0,threads_trends_broad=0,csi_analytics=0
 ```
 
 Set per-Threads minimums only when you want canary/SLO checks to enforce volume.
@@ -610,4 +572,3 @@ Key runtime notes:
 
 - SQLite schema is migration-based (`schema_migrations` table).
 - Adapter checkpoint/seed state is persisted in `source_state` for restart-safe behavior.
-- Reddit source onboarding scaffold exists as `csi_ingester/adapters/reddit_discovery.py` and is disabled by default (`sources.reddit_discovery.enabled=false`).

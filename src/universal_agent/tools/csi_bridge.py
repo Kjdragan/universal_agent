@@ -19,7 +19,6 @@ from universal_agent.utils.session_workspace import (
 
 _DEFAULT_CSI_DB_PATH = "/var/lib/universal-agent/csi/csi.db"
 _DEFAULT_YT_WATCHLIST = "/var/lib/universal-agent/csi/channels_watchlist.json"
-_DEFAULT_REDDIT_WATCHLIST = "/opt/universal_agent/CSI_Ingester/development/reddit_watchlist.json"
 
 
 def _ok(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -127,7 +126,6 @@ def _default_source_names() -> List[str]:
         return configured
     return [
         "youtube_channel_rss",
-        "reddit_discovery",
         "threads_owned",
         "threads_trends_seeded",
         "threads_trends_broad",
@@ -261,7 +259,6 @@ async def csi_recent_reports_wrapper(args: Dict[str, Any]) -> Dict[str, Any]:
                 'report_product_ready',
                 'opportunity_bundle_ready',
                 'rss_trend_report',
-                'reddit_trend_report',
                 'threads_trend_report',
                 'global_trend_brief_ready',
                 'csi_global_brief_review_due',
@@ -452,7 +449,6 @@ async def csi_source_health_wrapper(args: Dict[str, Any]) -> Dict[str, Any]:
     source_names = _default_source_names()
     source_min_events = {
         "youtube_channel_rss": 1,
-        "reddit_discovery": 1,
         "threads_owned": 0,
         "threads_trends_seeded": 0,
         "threads_trends_broad": 0,
@@ -527,9 +523,6 @@ async def csi_watchlist_snapshot_wrapper(args: Dict[str, Any]) -> Dict[str, Any]
     youtube_path = (
         str(os.getenv("CSI_YOUTUBE_WATCHLIST_FILE") or "").strip() or _DEFAULT_YT_WATCHLIST
     )
-    reddit_path = (
-        str(os.getenv("CSI_REDDIT_WATCHLIST_FILE") or "").strip() or _DEFAULT_REDDIT_WATCHLIST
-    )
 
     health_payload: Dict[str, Any]
     health_resp = await csi_source_health_wrapper({"window_hours": window_hours, "stale_minutes": 240, "save_to_workspace": False})
@@ -543,7 +536,6 @@ async def csi_watchlist_snapshot_wrapper(args: Dict[str, Any]) -> Dict[str, Any]
         "window_hours": window_hours,
         "watchlists": {
             "youtube": _read_watchlist(youtube_path, "youtube"),
-            "reddit": _read_watchlist(reddit_path, "reddit"),
         },
         "source_activity": health_payload.get("sources") if isinstance(health_payload.get("sources"), list) else [],
     }

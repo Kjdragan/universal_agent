@@ -55,9 +55,9 @@ def _critical_payload() -> dict:
                 "severity": "critical",
                 "metric_key": "csi_source_liveness",
                 "title": "CSI adapters producing events on schedule",
-                "recommendation": "3 CSI adapters past expected silence threshold: reddit_discovery, threads_owned, threads_trends_broad.",
+                "recommendation": "2 CSI adapters past expected silence threshold: threads_owned, threads_trends_broad.",
                 "runbook_command": "sqlite3 /var/lib/.../csi.db ...",
-                "observed_value": {"stale_count": 3},
+                "observed_value": {"stale_count": 2},
             },
             {
                 "finding_id": "invariant:disk_usage_health",

@@ -199,32 +199,6 @@ CREATE INDEX IF NOT EXISTS idx_opportunity_bundles_window ON opportunity_bundles
 """
 
 MIGRATION_0008_CROSS_SOURCE_ANALYSIS = """
-CREATE TABLE IF NOT EXISTS reddit_event_analysis (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    event_id TEXT UNIQUE NOT NULL,
-    event_db_id INTEGER,
-    source TEXT NOT NULL DEFAULT 'reddit_discovery',
-    post_id TEXT,
-    subreddit TEXT,
-    title TEXT,
-    url TEXT,
-    author TEXT,
-    score INTEGER DEFAULT 0,
-    num_comments INTEGER DEFAULT 0,
-    occurred_at TEXT,
-    category TEXT NOT NULL DEFAULT 'other_interest',
-    summary_text TEXT,
-    model_name TEXT,
-    prompt_tokens INTEGER DEFAULT 0,
-    completion_tokens INTEGER DEFAULT 0,
-    total_tokens INTEGER DEFAULT 0,
-    analysis_json TEXT NOT NULL DEFAULT '{}',
-    analyzed_at TEXT DEFAULT (datetime('now'))
-);
-CREATE INDEX IF NOT EXISTS idx_reddit_event_analysis_analyzed_at ON reddit_event_analysis(analyzed_at);
-CREATE INDEX IF NOT EXISTS idx_reddit_event_analysis_category ON reddit_event_analysis(category);
-CREATE INDEX IF NOT EXISTS idx_reddit_event_analysis_subreddit ON reddit_event_analysis(subreddit);
-
 CREATE TABLE IF NOT EXISTS threads_event_analysis (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     event_id TEXT UNIQUE NOT NULL,
@@ -294,19 +268,6 @@ CREATE INDEX IF NOT EXISTS idx_youtube_channels_domain ON youtube_channels(domai
 CREATE INDEX IF NOT EXISTS idx_youtube_channels_tier ON youtube_channels(tier);
 CREATE INDEX IF NOT EXISTS idx_youtube_channels_active ON youtube_channels(active);
 
-CREATE TABLE IF NOT EXISTS reddit_sources (
-    subreddit      TEXT PRIMARY KEY,
-    domain         TEXT NOT NULL DEFAULT 'other_signal',
-    tier           INTEGER NOT NULL DEFAULT 2,
-    quality_score  REAL NOT NULL DEFAULT 0.5,
-    items_assessed INTEGER NOT NULL DEFAULT 0,
-    active         INTEGER NOT NULL DEFAULT 1,
-    note           TEXT,
-    added_at       TEXT DEFAULT (datetime('now')),
-    last_assessed  TEXT,
-    demoted_at     TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_reddit_sources_domain ON reddit_sources(domain);
 
 CREATE TABLE IF NOT EXISTS threads_search_terms (
     term           TEXT PRIMARY KEY,
@@ -344,7 +305,6 @@ MIGRATION_0010_CATEGORY_DEFAULTS = """
 -- Note: SQLite doesn't support ALTER COLUMN to change defaults,
 -- but we update existing rows with the legacy value.
 UPDATE rss_event_analysis SET category = 'other_signal' WHERE category = 'other_interest';
-UPDATE reddit_event_analysis SET category = 'other_signal' WHERE category = 'other_interest';
 UPDATE threads_event_analysis SET category = 'other_signal' WHERE category = 'other_interest';
 """
 

@@ -258,7 +258,7 @@ def test_enrichment_coverage_quiet_when_csi_db_missing() -> None:
 
 def test_enrichment_coverage_ignores_other_sources(tmp_path: Path) -> None:
     db = tmp_path / "csi.db"
-    _seed_events(db, [(f"e{i}", "reddit_discovery") for i in range(10)])
+    _seed_events(db, [(f"e{i}", "discord_rss") for i in range(10)])
 
     findings = run_invariants({"csi_db_path": db})
     enrichment_findings = _only_finding_with_id(findings, "youtube_enrichment_coverage")

@@ -1,13 +1,12 @@
 """Tests for the universal CSI source liveness invariant.
 
 Background: prior to P1a, only `youtube_channel_rss` had invariant coverage
-(via the two YouTube-specific invariants in PR #367). Five other CSI
-adapters — youtube_playlist, reddit_discovery, threads_owned,
-threads_trends_seeded, threads_trends_broad — were entirely invisible to
-the watchdog. Live data on 2026-05-20 showed three of them dead (40h+ no
-events) with zero alerts. P1a adds one invariant that covers all six
-adapters by checking max(occurred_at) per source vs. an expected-cadence
-threshold.
+(via the two YouTube-specific invariants in PR #367). Other CSI
+adapters — youtube_playlist, threads_owned, threads_trends_seeded,
+threads_trends_broad — were entirely invisible to the watchdog. Live data
+on 2026-05-20 showed several of them dead (40h+ no events) with zero
+alerts. P1a adds one invariant that covers all monitored adapters by
+checking max(occurred_at) per source vs. an expected-cadence threshold.
 """
 
 from __future__ import annotations

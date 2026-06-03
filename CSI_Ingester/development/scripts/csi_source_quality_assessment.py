@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """CSI Source Quality Assessment — evening batch job.
 
-Scores each data source (YouTube channels, Reddit subreddits, Threads terms)
-based on recent analysis outputs, and promotes/demotes tiers accordingly.
+Scores each data source (YouTube channels, Threads terms) based on recent
+analysis outputs, and promotes/demotes tiers accordingly.
 
 Designed to run as a systemd timer job (e.g., evening batch window).
 
@@ -77,46 +77,6 @@ def _score_youtube_channels(conn, lookback_days: int) -> dict[str, dict]:
     return scores
 
 
-def _score_reddit_sources(conn, lookback_days: int) -> dict[str, dict]:
-    """Score each subreddit from reddit_event_analysis data."""
-    rows = conn.execute(
-        """
-        SELECT subreddit,
-               COUNT(*) AS total,
-               SUM(CASE WHEN category NOT IN ('other_signal', 'other_interest') THEN 1 ELSE 0 END) AS relevant,
-               AVG(score) AS avg_score,
-               AVG(num_comments) AS avg_comments,
-               SUM(CASE WHEN summary_text IS NOT NULL AND summary_text != '' THEN 1 ELSE 0 END) AS with_summary,
-               MAX(analyzed_at) AS latest_analysis
-        FROM reddit_event_analysis
-        WHERE analyzed_at >= datetime('now', ?)
-        GROUP BY subreddit
-        """,
-        (f"-{lookback_days} days",),
-    ).fetchall()
-
-    scores = {}
-    for row in rows:
-        subreddit = row["subreddit"]
-        total = max(row["total"], 1)
-        relevance = row["relevant"] / total
-        # Engagement: normalize reddit score (100+ is good) and comments (10+ is good)
-        avg_score = row["avg_score"] or 0
-        avg_comments = row["avg_comments"] or 0
-        engagement = min(1.0, (avg_score / 100.0 + avg_comments / 10.0) / 2)
-        novelty = row["with_summary"] / total if total > 0 else 0.0
-        confidence = min(1.0, total / 20.0)
-
-        scores[subreddit] = {
-            "relevance": round(relevance, 3),
-            "engagement": round(engagement, 3),
-            "novelty": round(novelty, 3),
-            "confidence": round(confidence, 3),
-            "items_count": total,
-        }
-    return scores
-
-
 def _score_threads_terms(conn, lookback_days: int) -> dict[str, dict]:
     """Score each search term from threads_event_analysis data."""
     rows = conn.execute(
@@ -169,7 +129,6 @@ def run_assessment(db_path: str, lookback_days: int, dry_run: bool = False) -> d
         "assessed_at": datetime.now(timezone.utc).isoformat(),
         "lookback_days": lookback_days,
         "youtube": {"scored": 0, "promoted": [], "demoted": []},
-        "reddit": {"scored": 0, "promoted": [], "demoted": []},
         "threads": {"scored": 0, "promoted": [], "demoted": []},
     }
 
@@ -203,36 +162,6 @@ def run_assessment(db_path: str, lookback_days: int, dry_run: bool = False) -> d
         pd = auto_promote_demote(conn, source_type="youtube")
         results["youtube"]["promoted"] = pd["promoted"]
         results["youtube"]["demoted"] = pd["demoted"]
-
-    # ── Reddit subreddits ──
-    reddit_scores = _score_reddit_sources(conn, lookback_days)
-    for subreddit, metrics in reddit_scores.items():
-        if not dry_run:
-            record_quality_assessment(
-                conn,
-                source_type="reddit",
-                source_key=subreddit,
-                relevance=metrics["relevance"],
-                engagement=metrics["engagement"],
-                novelty=metrics["novelty"],
-                confidence=metrics["confidence"],
-                items_count=metrics["items_count"],
-            )
-        logger.info(
-            "Reddit r/%s: rel=%.2f eng=%.2f nov=%.2f conf=%.2f items=%d",
-            subreddit,
-            metrics["relevance"],
-            metrics["engagement"],
-            metrics["novelty"],
-            metrics["confidence"],
-            metrics["items_count"],
-        )
-    results["reddit"]["scored"] = len(reddit_scores)
-
-    if not dry_run and reddit_scores:
-        pd = auto_promote_demote(conn, source_type="reddit")
-        results["reddit"]["promoted"] = pd["promoted"]
-        results["reddit"]["demoted"] = pd["demoted"]
 
     # ── Threads search terms ──
     threads_scores = _score_threads_terms(conn, lookback_days)
@@ -301,7 +230,7 @@ def main():
     results = run_assessment(args.db_path, args.lookback_days, args.dry_run)
 
     # Print summary
-    for source_type in ("youtube", "reddit", "threads"):
+    for source_type in ("youtube", "threads"):
         r = results[source_type]
         promoted = ", ".join(r["promoted"]) if r["promoted"] else "none"
         demoted = ", ".join(r["demoted"]) if r["demoted"] else "none"

@@ -121,14 +121,12 @@ def test_evaluate_delivery_health_builds_guided_remediation(tmp_path: Path):
     _insert_attempt(conn, event_id=rss_event_id, delivered=0, status_code=500)
     _insert_dead_letter(conn, source="youtube_channel_rss")
 
-    # Reddit has no events and should be marked low-volume degraded.
     result = csi_delivery_health_canary._evaluate_delivery_health(
         conn,
         window_hours=6,
         stale_minutes=240,
         max_failed_attempt_ratio=0.2,
         min_rss_events=1,
-        min_reddit_events=1,
         max_dlq_recent=0,
         adapter_failures_threshold=3,
     )
@@ -138,7 +136,6 @@ def test_evaluate_delivery_health_builds_guided_remediation(tmp_path: Path):
     codes = {str(step.get("code") or "") for step in result["remediation_steps"]}
     assert "delivery_failures_detected" in codes
     assert "dlq_backlog_exceeds_threshold" in codes
-    assert "reddit_source_stale_or_low_volume" in codes
 
 
 def test_evaluate_delivery_health_marks_adapter_failures_as_failing(tmp_path: Path):
@@ -162,7 +159,6 @@ def test_evaluate_delivery_health_marks_adapter_failures_as_failing(tmp_path: Pa
         stale_minutes=240,
         max_failed_attempt_ratio=0.2,
         min_rss_events=0,
-        min_reddit_events=0,
         max_dlq_recent=0,
         adapter_failures_threshold=3,
     )

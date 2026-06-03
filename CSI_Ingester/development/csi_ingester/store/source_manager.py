@@ -1,9 +1,9 @@
 """Unified source management for all CSI data sources.
 
-Manages YouTube channels, Reddit subreddits, and Threads search terms
-in SQLite with quality scoring, tier management, and seed-from-JSON
-support.  JSON files (channels_watchlist.json, reddit_watchlist.json)
-remain as version-controlled seed data; runtime state lives in the DB.
+Manages YouTube channels and Threads search terms in SQLite with quality
+scoring, tier management, and seed-from-JSON support.  JSON files
+(channels_watchlist.json) remain as version-controlled seed data; runtime
+state lives in the DB.
 """
 
 from __future__ import annotations
@@ -158,46 +158,6 @@ def seed_youtube_channels(conn: sqlite3.Connection, json_path: Path) -> int:
     return inserted
 
 
-def seed_reddit_sources(conn: sqlite3.Connection, json_path: Path) -> int:
-    """Upsert Reddit subreddits from a seed JSON file into the DB."""
-    if not json_path.exists():
-        logger.warning("Reddit seed file not found: %s", json_path)
-        return 0
-
-    with open(json_path) as f:
-        data = json.load(f)
-
-    subs = data.get("subreddits", [])
-    inserted = 0
-
-    for sub in subs:
-        name = sub.get("name", "")
-        if not name:
-            continue
-
-        domain = sub.get("domain", "other_signal")
-        tier = sub.get("tier", 2)
-        note = sub.get("note", "")
-
-        try:
-            conn.execute(
-                """INSERT INTO reddit_sources
-                   (subreddit, domain, tier, note)
-                   VALUES (?, ?, ?, ?)
-                   ON CONFLICT(subreddit) DO UPDATE SET
-                       note = COALESCE(NULLIF(excluded.note, ''), reddit_sources.note)
-                """,
-                (name, domain, tier, note),
-            )
-            inserted += 1
-        except sqlite3.IntegrityError:
-            pass
-
-    conn.commit()
-    logger.info("Seeded %d Reddit sources from %s", inserted, json_path.name)
-    return inserted
-
-
 def seed_threads_terms(conn: sqlite3.Connection, query_packs: list[dict[str, Any]]) -> int:
     """Upsert Threads search terms from config query_packs into the DB."""
     inserted = 0
@@ -257,24 +217,6 @@ def get_active_youtube_channels(
     return [dict(row) for row in rows]
 
 
-def get_active_reddit_sources(
-    conn: sqlite3.Connection,
-    *,
-    domain: str | None = None,
-) -> list[dict[str, Any]]:
-    """Return active Reddit subreddits, optionally filtered."""
-    sql = "SELECT * FROM reddit_sources WHERE active = 1"
-    params: list[Any] = []
-
-    if domain:
-        sql += " AND domain = ?"
-        params.append(domain)
-
-    sql += " ORDER BY tier ASC, quality_score DESC"
-    rows = conn.execute(sql, params).fetchall()
-    return [dict(row) for row in rows]
-
-
 def get_active_threads_terms(
     conn: sqlite3.Connection,
     *,
@@ -301,13 +243,11 @@ def get_active_threads_terms(
 
 _SOURCE_TABLE_MAP = {
     "youtube": "youtube_channels",
-    "reddit": "reddit_sources",
     "threads": "threads_search_terms",
 }
 
 _SOURCE_KEY_COL = {
     "youtube": "channel_id",
-    "reddit": "subreddit",
     "threads": "term",
 }
 
