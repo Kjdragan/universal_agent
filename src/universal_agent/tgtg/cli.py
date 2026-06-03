@@ -150,7 +150,7 @@ class _ReminderScheduler:
 
 # ── login ─────────────────────────────────────────────────────────────────────
 
-def cmd_login(args):
+def cmd_login(args: argparse.Namespace) -> None:
     email = args.email or TGTG_EMAIL
     if not email:
         print("Error: provide --email or set TGTG_EMAIL in .env")
@@ -164,7 +164,7 @@ def cmd_login(args):
 
 # ── status ────────────────────────────────────────────────────────────────────
 
-def cmd_status(args):
+def cmd_status(args: argparse.Namespace) -> None:
     creds = load_saved_credentials()
     targets = load_targets()
     high = [t for t in targets if t.desire == "high"]
@@ -190,7 +190,7 @@ def cmd_status(args):
 
 # ── list ──────────────────────────────────────────────────────────────────────
 
-def cmd_list(args):
+def cmd_list(args: argparse.Namespace) -> None:
     client = build_client(email=TGTG_EMAIL or None)
     pairs = fetch_watched_items(client)
     if not pairs:
@@ -208,7 +208,7 @@ def cmd_list(args):
 
 # ── buy ───────────────────────────────────────────────────────────────────────
 
-def cmd_buy(args):
+def cmd_buy(args: argparse.Namespace) -> None:
     client = build_client(email=TGTG_EMAIL or None)
     item = client.get_item(args.item_id)
     target = get_target(args.item_id)
@@ -303,7 +303,7 @@ def _start_scan_scheduler(client, stop_event: threading.Event) -> None:
     t.start()
 
 
-def cmd_run(args):
+def cmd_run(args: argparse.Namespace) -> None:
     client = build_client(email=TGTG_EMAIL or None)
     stop_event = threading.Event()
 
@@ -421,7 +421,7 @@ def cmd_run(args):
 
 # ── scan ──────────────────────────────────────────────────────────────────────
 
-def cmd_scan(args):
+def cmd_scan(args: argparse.Namespace) -> None:
     """Run a region scan to populate / refresh the item catalog."""
     lat = args.lat or TGTG_LATITUDE
     lon = args.lon or TGTG_LONGITUDE
@@ -461,7 +461,7 @@ def _fmt_price(row) -> str:
     return f"{val:.2f} {row['price_currency']}"
 
 
-def cmd_db_stats(args):
+def cmd_db_stats(args: argparse.Namespace) -> None:
     stats = get_db().stats()
     print("── TGTG Catalog Stats ─────────────────────────────────")
     print(f"  Total items ever seen: {stats['total']}")
@@ -475,7 +475,7 @@ def cmd_db_stats(args):
         print("  Last scan:             (never — run 'scan' first)")
 
 
-def cmd_db_list(args):
+def cmd_db_list(args: argparse.Namespace) -> None:
     active_only = not args.all
     rows = get_db().all_items(active_only=active_only, limit=500)
     if not rows:
@@ -494,7 +494,7 @@ def cmd_db_list(args):
     print(f"\n{len(rows)} item(s). Use 'target add <item_id>' to start watching one.")
 
 
-def cmd_db_search(args):
+def cmd_db_search(args: argparse.Namespace) -> None:
     rows = get_db().search(query=args.query, active_only=not args.all, limit=100)
     if not rows:
         print(f"No matches for '{args.query}'.")
@@ -508,7 +508,7 @@ def cmd_db_search(args):
         print(f"{row['item_id']:<12} {status:<6} {price:<10} {row['store_name']}")
 
 
-def cmd_db_speed(args):
+def cmd_db_speed(args: argparse.Namespace) -> None:
     """Show sold-out speed stats per store (how fast bags disappear)."""
     rows = get_db().speed_stats(limit=args.limit)
     if not rows:
@@ -530,7 +530,7 @@ def cmd_db_speed(args):
 
 # ── target subcommands ────────────────────────────────────────────────────────
 
-def cmd_target_list(args):
+def cmd_target_list(args: argparse.Namespace) -> None:
     targets = load_targets()
     if not targets:
         print("No targets registered. Add one with: target add <item_id>")
@@ -545,7 +545,7 @@ def cmd_target_list(args):
     print(f"\n{len(targets)} target(s) — 🔥 = auto-buy on stock, 👁  = notify only")
 
 
-def cmd_target_add(args):
+def cmd_target_add(args: argparse.Namespace) -> None:
     # Auto-populate label from live API if possible
     label = args.label or ""
     if not label:
@@ -580,7 +580,7 @@ def cmd_target_add(args):
         print("   🔔 You will be notified when stock appears (no auto-buy).")
 
 
-def cmd_target_remove(args):
+def cmd_target_remove(args: argparse.Namespace) -> None:
     removed = remove_target(args.item_id)
     if removed:
         print(f"✅ Target [{args.item_id}] removed.")
@@ -588,7 +588,7 @@ def cmd_target_remove(args):
         print(f"Target [{args.item_id}] not found.")
 
 
-def cmd_target_set(args):
+def cmd_target_set(args: argparse.Namespace) -> None:
     target = get_target(args.item_id)
     if not target:
         print(f"Target [{args.item_id}] not found. Add it first with: target add {args.item_id}")
@@ -617,7 +617,7 @@ def cmd_target_set(args):
 
 # ── argument parser ───────────────────────────────────────────────────────────
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="TGTG Sniper — deal monitoring & auto-purchase")
     sub = parser.add_subparsers(dest="cmd")
 
