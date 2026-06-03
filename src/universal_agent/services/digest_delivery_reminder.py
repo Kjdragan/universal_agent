@@ -124,7 +124,7 @@ def _resolve_bot_token(override: Optional[str]) -> Optional[str]:
     Background: the generic ``TELEGRAM_BOT_TOKEN`` (``@ClaudeKevBot``) is not
     a member of the operator's "UA Tutorial Feed" channel where the digest
     reminders are intended to land — sending against that bot returns HTTP
-    400 "chat not found".  ``@KDUniversalAgent_bot`` (the CSI Reddit/RSS
+    400 "chat not found".  ``@KDUniversalAgent_bot`` (the CSI RSS
     bot) IS a member and is the correct sender for operator-facing channel
     pings.  Surfacing the choice via ``UA_OPERATOR_TELEGRAM_BOT_TOKEN``
     keeps the chat<->bot pairing explicit and reversible without code edits.
