@@ -83,19 +83,11 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_proactive_topic_signatures_channel
             ON proactive_topic_signatures(channel_id, ingested_at DESC);
 
-        CREATE TABLE IF NOT EXISTS proactive_convergence_events (
-            event_id TEXT PRIMARY KEY,
-            primary_topic TEXT NOT NULL,
-            video_ids_json TEXT NOT NULL DEFAULT '[]',
-            channel_names_json TEXT NOT NULL DEFAULT '[]',
-            brief_task_id TEXT NOT NULL DEFAULT '',
-            artifact_id TEXT NOT NULL DEFAULT '',
-            feedback_score INTEGER,
-            detected_at TEXT NOT NULL,
-            metadata_json TEXT NOT NULL DEFAULT '{}'
-        );
-        CREATE INDEX IF NOT EXISTS idx_proactive_convergence_events_detected
-            ON proactive_convergence_events(detected_at DESC);
+        -- `proactive_convergence_events` (the legacy per-signature convergence
+        -- event ledger) was decommissioned in 2026-05 and dropped in Phase 6
+        -- (2026-06-03) — fully superseded by `convergence_candidates` below.
+        -- No writers/readers remained; the prod table's historical rows were
+        -- archived to a dump before the drop.
 
         -- PR B: convergence candidate ledger.  Detected by SQL clustering in
         -- the rewritten CSI sync (PR C), evaluated by Atlas via the
