@@ -43,3 +43,52 @@ def test_csi_dedupe_expired_keys_warn(monkeypatch, tmp_path) -> None:
     assert len(findings) == 1
     assert findings[0].finding_id == "csi_dedupe_expired_keys_unpurged"
     assert findings[0].observed_value == 1
+
+
+def _make_source_state_db(path: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(str(path))
+    conn.execute(
+        "CREATE TABLE source_state ("
+        " source_key TEXT PRIMARY KEY,"
+        " state_json TEXT NOT NULL,"
+        " updated_at TEXT DEFAULT (datetime('now')))"
+    )
+    return conn
+
+
+def test_csi_source_freshness_recent_channels_not_flagged(monkeypatch, tmp_path) -> None:
+    # Regression: cutoff used .isoformat() ("...T...+00:00") while updated_at is
+    # stored as "YYYY-MM-DD HH:MM:SS"; the lexicographic compare flagged every
+    # fresh channel as stale. Recently-polled channels must produce no findings.
+    db_path = tmp_path / "csi.db"
+    conn = _make_source_state_db(db_path)
+    conn.executemany(
+        "INSERT INTO source_state(source_key, state_json, updated_at)"
+        " VALUES (?, '{}', datetime('now'))",
+        [(f"youtube_channel_rss:UC{idx}",) for idx in range(20)],
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setenv("CSI_DB_PATH", str(db_path))
+
+    assert db_health_monitor.check_csi_source_freshness() == []
+
+
+def test_csi_source_freshness_all_stale_channels_flagged(monkeypatch, tmp_path) -> None:
+    db_path = tmp_path / "csi.db"
+    conn = _make_source_state_db(db_path)
+    stale_offset = f"-{int(db_health_monitor.CSI_SOURCE_STALE_HOURS) + 2} hours"
+    conn.executemany(
+        "INSERT INTO source_state(source_key, state_json, updated_at)"
+        " VALUES (?, '{}', datetime('now', ?))",
+        [(f"youtube_channel_rss:UC{idx}", stale_offset) for idx in range(20)],
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setenv("CSI_DB_PATH", str(db_path))
+
+    findings = db_health_monitor.check_csi_source_freshness()
+
+    assert len(findings) == 1
+    assert findings[0].finding_id == "csi_rss_all_channels_stale"
+    assert findings[0].observed_value == 20
