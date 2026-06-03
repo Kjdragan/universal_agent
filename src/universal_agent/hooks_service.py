@@ -27,7 +27,10 @@ from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.durable.state import get_run, get_run_attempt
 from universal_agent.gateway import GatewayRequest, InProcessGateway
-from universal_agent.heartbeat_mediation import sanitize_heartbeat_recommendation_text
+from universal_agent.heartbeat_mediation import (
+    derive_heartbeat_operator_review,
+    sanitize_heartbeat_recommendation_text,
+)
 from universal_agent.ops_config import load_ops_config, resolve_ops_config_path
 from universal_agent.workflow_admission import (
     WorkflowAdmissionDecision,
@@ -2450,7 +2453,9 @@ class HooksService:
                 summary_text = ""
         source_notification_id = str(payload.get("source_notification_id") or "").strip()
         classification = str(payload.get("classification") or "unknown_issue").strip() or "unknown_issue"
-        operator_review_required = bool(payload.get("operator_review_required"))
+        # Deterministic gate: never let a single global verdict hide a real or
+        # critical per-finding problem (anti-collapse backstop).
+        operator_review_required, findings_triage = derive_heartbeat_operator_review(payload)
         recommended_next_step = sanitize_heartbeat_recommendation_text(
             str(payload.get("recommended_next_step") or "").strip(),
             field="next_step",
@@ -2478,6 +2483,7 @@ class HooksService:
             "source_notification_id": source_notification_id,
             "classification": classification,
             "operator_review_required": operator_review_required,
+            "findings_triage": findings_triage,
             "recommended_next_step": recommended_next_step,
             "email_summary": email_summary,
             "proposed_changes": payload.get("proposed_changes") if isinstance(payload.get("proposed_changes"), list) else [],
