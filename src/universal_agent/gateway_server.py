@@ -19092,8 +19092,8 @@ def _paper_to_podcast_command() -> str:
     topic = PAPER_TO_PODCAST_TOPICS[day_index]
     return "\n".join(
         [
-            f'Run the paper-to-podcast skill for the topic: "{topic}".',
-            "Search ArXiv for the top 5 most relevant recent papers on this topic.",
+            f'Run the paper-to-podcast skill for the topic: "{topic}". Load and follow the skill instructions exactly.',
+            "Search ArXiv for the top 5 most relevant recent papers on this topic using the mcp__arxiv-mcp-server__ tools (search_papers, then download_paper + read_paper). Do NOT pip install the `arxiv` library, use curl/wget, or write raw HTTP requests to arxiv.org — those bypass the rate limiter and fail with HTTP 429.",
             "Create a NotebookLM notebook, add all papers as sources, and generate:",
             "- An audio overview podcast (deep dive format)",
             "- A quiz (10 questions, medium difficulty)",

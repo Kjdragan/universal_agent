@@ -10,7 +10,7 @@ code_paths:
   - src/universal_agent/vp/clients/claude_cli_client.py
   - src/universal_agent/gateway_server.py
   - .claude/skills/**/SKILL.md
-last_verified: 2026-05-29
+last_verified: 2026-06-03
 ---
 
 # Skills System
@@ -56,6 +56,16 @@ flowchart TD
 
 1. **Project (highest priority):** `skills_dir` arg, else `UA_SKILLS_DIR`, else `<repo>/.claude/skills`.
 2. **User (fallback, only when `skills_dir` arg is None):** `UA_USER_SKILLS_DIR`, else `~/.claude/skills`.
+
+> **Gotcha — `.agents/skills/` is NOT discovered.** The repo also carries a parallel
+> `.agents/skills/` tree (task-forge `*-tf` outputs and others), but `discover_skills`
+> only walks `.claude/skills` + `~/.claude/skills`. A skill that exists *only* under
+> `.agents/skills/<name>/` is never injected into any in-process principal's prompt — it
+> is dead. This silently bit `paper-to-podcast-tf` (the `paper_to_podcast_daily` cron):
+> the skill lived only in `.agents/skills/`, so the GLM cron agent never received its
+> "use the `mcp__arxiv-mcp-server__*` tools, don't shell out to the raw library"
+> instructions and improvised raw-`arxiv` HTTP that hit 429s. Fix = keep the canonical
+> copy under `.claude/skills/<name>/`.
 
 It recursively `os.walk`s each root (`followlinks=True`) looking for a marker file named `SKILL.md` or `skills.md` (case-insensitive — `VALID_MARKERS = {"skill.md", "skills.md"}`). For each match it parses the YAML frontmatter between the leading `---` fences and builds a dict:
 
