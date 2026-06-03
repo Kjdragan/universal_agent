@@ -25059,28 +25059,42 @@ async def dashboard_todolist_get_failure_context(task_id: str):
 
 
 @app.get("/api/v1/cody/mode-setting")
-async def cody_mode_setting_get():
-    """Return the current operator-configured Cody default mode.
+async def cody_mode_setting_get(vp_id: Optional[str] = None):
+    """Return operator-configured VP execution mode(s).
 
-    Response shape:
+    Query params:
+        vp_id: optional. When supplied, return that one VP's effective
+            state. When omitted, return the GLOBAL state plus a ``vps``
+            array with each enabled VP's effective state (per-VP tiles).
+
+    Response (no vp_id):
         {
-            "mode": "anthropic" | "zai",
-            "source": "db_setting" | "env_var" | "hardcoded_default",
-            "updated_at": ISO string or "",
-            "updated_by": str or "",
-            "available_modes": ["zai", "anthropic"]
+            "mode": ...,            # global setting (db/env/hardcoded)
+            "source": ...,
+            "updated_at": ..., "updated_by": ...,
+            "available_modes": ["zai", "anthropic"],
+            "vps": [
+                {"vp_id": "vp.coder.primary", "display_name": "CODIE",
+                 "mode": "anthropic", "source": "db_setting_vp|db_setting_global|env_var|profile_default",
+                 "profile_default": "anthropic", "updated_at": ..., "updated_by": ...},
+                ...
+            ]
         }
 
-    The dashboard tile uses ``source`` to decide whether to show "(default)"
-    next to the mode label and ``updated_at`` to render "last changed N
-    days ago".
+    Response (vp_id set): that VP's state + ``available_modes`` (no ``vps``).
     """
-    from universal_agent.services.cody_mode import get_default_mode_state
+    from universal_agent.services.cody_mode import (
+        get_default_mode_state,
+        list_vp_mode_states,
+    )
 
+    vp_id_norm = (vp_id or "").strip() or None
     with _activity_store_lock:
         conn = _task_hub_open_conn()
         try:
-            state = get_default_mode_state(conn)
+            state = get_default_mode_state(conn, vp_id=vp_id_norm)
+            if vp_id_norm is None:
+                state["vps"] = list_vp_mode_states(conn)
         finally:
             conn.close()
     state["available_modes"] = ["zai", "anthropic"]
@@ -25089,21 +25103,33 @@ async def cody_mode_setting_get():
 
 @app.post("/api/v1/cody/mode-setting")
 async def cody_mode_setting_post(payload: dict):
-    """Persist the operator-configured Cody default mode.
+    """Persist a VP execution-mode override (global or per-VP).
 
-    Body: ``{"mode": "anthropic" | "zai", "updated_by": "operator"}``.
-    Returns the new state in the same shape as ``GET /cody/mode-setting``.
+    Body:
+        {
+            "mode": "anthropic" | "zai" | "clear",   # "clear" needs vp_id
+            "vp_id": "vp.coder.primary",             # optional → per-VP pin
+            "updated_by": "operator"
+        }
+
+    With ``vp_id`` omitted, sets the global default. With ``vp_id`` set,
+    pins that one VP (``"clear"`` removes the pin → reverts to global/
+    profile default). Returns the resulting state (per-VP when ``vp_id``
+    given, else global) plus the refreshed ``vps`` array.
     """
     from universal_agent.services.cody_mode import (
         get_default_mode_state,
+        list_vp_mode_states,
         set_default_mode,
     )
 
     raw_mode = ""
     raw_updated_by = "operator"
+    raw_vp_id: Optional[str] = None
     if isinstance(payload, dict):
         raw_mode = str(payload.get("mode") or "").strip()
         raw_updated_by = str(payload.get("updated_by") or "operator").strip() or "operator"
+        raw_vp_id = (str(payload.get("vp_id") or "").strip() or None)
 
     if not raw_mode:
         raise HTTPException(status_code=400, detail="mode is required")
@@ -25112,10 +25138,11 @@ async def cody_mode_setting_post(payload: dict):
         conn = _task_hub_open_conn()
         try:
             try:
-                set_default_mode(conn, raw_mode, updated_by=raw_updated_by)
+                set_default_mode(conn, raw_mode, vp_id=raw_vp_id, updated_by=raw_updated_by)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc))
-            state = get_default_mode_state(conn)
+            state = get_default_mode_state(conn, vp_id=raw_vp_id)
+            state["vps"] = list_vp_mode_states(conn)
         finally:
             conn.close()
     state["available_modes"] = ["zai", "anthropic"]

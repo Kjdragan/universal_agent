@@ -5,20 +5,22 @@ Picks between ``"zai"`` (cheap, ZAI/GLM proxy) and ``"anthropic"``
 
 Resolution order (highest priority first):
     1. ``task.cody_mode`` — per-task override on ``task_hub_items``.
-    2. DB setting ``cody_default_mode`` — operator-configurable via the
-       dashboard tile. Persisted in ``task_hub_settings``. This is the
-       "still have an option to switch" knob — e.g. flip CODIE to "zai"
-       to save cost without a code change.
-    3. ``UA_CODY_DEFAULT_MODE`` env var — deploy-time override; kept for
+    2. **Per-VP DB setting** ``cody_default_mode:<vp_id>`` — operator
+       pin for one specific VP via the dashboard (e.g. flip only CODIE
+       to "zai" without touching ATLAS). Requires ``vp_id`` + ``conn``.
+    3. Global DB setting ``cody_default_mode`` — operator-configurable
+       via the dashboard tile; applies to every VP that has no per-VP
+       pin. Persisted in ``task_hub_settings``.
+    4. ``UA_CODY_DEFAULT_MODE`` env var — deploy-time override; kept for
        ops use but typically unset in normal operation.
-    4. **Per-VP profile default** (``VpProfile.inference_mode``) when a
+    5. **Per-VP profile default** (``VpProfile.inference_mode``) when a
        ``vp_id`` is supplied — the agent defines its own inference
        backend: CODIE (``vp.coder.primary``) → "anthropic"; ATLAS
        (``vp.general.primary``) and any other VP → "zai". This replaced
        the old VP-blind hardcoded "anthropic" default (2026-06-03) that
        silently forced ATLAS research/intel missions onto the Max plan
        and burned 5-hour-window credits meant for coding.
-    5. ``"anthropic"`` — hardcoded last-resort fallback, used only when
+    6. ``"anthropic"`` — hardcoded last-resort fallback, used only when
        no ``vp_id`` is known (e.g. the demo ``cody_demo_task`` path,
        which is always CODIE coding work anyway).
 
@@ -50,19 +52,23 @@ def _normalize(raw: Any) -> str:
     return str(raw or "").strip().lower()
 
 
-def _resolve_db_setting(conn: Any) -> Optional[CodyMode]:
-    """Look up the operator-configured default mode from task_hub_settings.
+def _vp_setting_key(vp_id: str) -> str:
+    """DB-setting key for a per-VP mode pin (e.g. ``cody_default_mode:vp.coder.primary``)."""
+    return f"{_DB_SETTING_KEY}:{_normalize(vp_id)}"
 
-    Returns ``None`` when no setting has been written. Defensive on
-    every failure path — if anything goes wrong reading the setting, we
-    fall through to env / hardcoded default rather than break dispatch.
+
+def _read_setting_mode(conn: Any, key: str) -> Optional[CodyMode]:
+    """Read a validated mode from a ``task_hub_settings`` key, or ``None``.
+
+    Defensive on every failure path — if anything goes wrong reading the
+    setting, fall through rather than break dispatch.
     """
-    if conn is None:
+    if conn is None or not key:
         return None
     try:
         from universal_agent.task_hub import _get_setting
 
-        record = _get_setting(conn, _DB_SETTING_KEY, default={})
+        record = _get_setting(conn, key, default={})
     except Exception:
         return None
     if not isinstance(record, dict):
@@ -71,6 +77,21 @@ def _resolve_db_setting(conn: Any) -> Optional[CodyMode]:
     if mode in _VALID_MODES:
         return mode  # type: ignore[return-value]
     return None
+
+
+def _resolve_db_setting(conn: Any) -> Optional[CodyMode]:
+    """Look up the GLOBAL operator-configured default mode from task_hub_settings.
+
+    Returns ``None`` when no setting has been written.
+    """
+    return _read_setting_mode(conn, _DB_SETTING_KEY)
+
+
+def _resolve_vp_db_setting(conn: Any, vp_id: Optional[str]) -> Optional[CodyMode]:
+    """Look up the PER-VP operator pin (``cody_default_mode:<vp_id>``), or ``None``."""
+    if not vp_id:
+        return None
+    return _read_setting_mode(conn, _vp_setting_key(vp_id))
 
 
 def _resolve_profile_default(vp_id: str) -> Optional[CodyMode]:
@@ -130,6 +151,12 @@ def resolve_cody_mode(
         if per_task in _VALID_MODES:
             return per_task  # type: ignore[return-value]
 
+    # Per-VP operator pin beats the global pin — lets an operator flip one
+    # VP (e.g. CODIE → zai) without disturbing the others.
+    vp_db_mode = _resolve_vp_db_setting(conn, vp_id)
+    if vp_db_mode is not None:
+        return vp_db_mode
+
     db_mode = _resolve_db_setting(conn)
     if db_mode is not None:
         return db_mode
@@ -139,7 +166,7 @@ def resolve_cody_mode(
         return env_mode  # type: ignore[return-value]
 
     # Per-VP profile default — the agent defines its own inference. Only
-    # consulted when no per-task / DB / env override is set.
+    # consulted when no per-task / per-VP / global / env override is set.
     if vp_id:
         profile_mode = _resolve_profile_default(vp_id)
         if profile_mode is not None:
@@ -176,19 +203,31 @@ def resolve_from_payload(payload: dict[str, Any] | None) -> CodyMode:
     return _HARDCODED_FALLBACK_MODE
 
 
-def set_default_mode(conn: Any, mode: str, *, updated_by: str = "operator") -> CodyMode:
-    """Persist the operator-configured default Cody mode.
+def set_default_mode(
+    conn: Any, mode: str, *, vp_id: Optional[str] = None, updated_by: str = "operator"
+) -> CodyMode:
+    """Persist an operator-configured mode override.
 
-    Validates the input and writes a structured record to
-    ``task_hub_settings`` under the ``cody_default_mode`` key. Raises
-    ``ValueError`` for invalid mode values so callers (the settings
-    endpoint) can surface a 400.
+    With ``vp_id`` omitted, writes the GLOBAL default under the
+    ``cody_default_mode`` key. With ``vp_id`` set, writes a PER-VP pin
+    under ``cody_default_mode:<vp_id>`` so one VP can be flipped without
+    affecting the others. Raises ``ValueError`` for invalid mode values
+    so callers (the settings endpoint) can surface a 400.
+
+    Pass ``mode="clear"`` together with a ``vp_id`` to REMOVE that VP's
+    per-VP pin (reverting it to global/env/profile default).
     """
     from datetime import datetime, timezone
 
     from universal_agent.task_hub import _set_setting
 
     normalized = _normalize(mode)
+
+    # Clearing a per-VP pin reverts the VP to the global/env/profile chain.
+    if normalized == "clear" and vp_id:
+        _set_setting(conn, _vp_setting_key(vp_id), {})
+        return _resolve_profile_default(vp_id) or _HARDCODED_FALLBACK_MODE
+
     if normalized not in _VALID_MODES:
         raise ValueError(
             f"mode must be one of {sorted(_VALID_MODES)} (got {mode!r})"
@@ -198,28 +237,45 @@ def set_default_mode(conn: Any, mode: str, *, updated_by: str = "operator") -> C
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "updated_by": str(updated_by or "operator"),
     }
-    _set_setting(conn, _DB_SETTING_KEY, record)
+    key = _vp_setting_key(vp_id) if vp_id else _DB_SETTING_KEY
+    _set_setting(conn, key, record)
     return normalized  # type: ignore[return-value]
 
 
-def get_default_mode_state(conn: Any) -> dict[str, Any]:
-    """Return the operator-configured default mode + audit fields.
+def get_default_mode_state(conn: Any, *, vp_id: Optional[str] = None) -> dict[str, Any]:
+    """Return the effective mode + audit fields, mirroring resolve precedence.
 
-    Used by the dashboard tile to show "current default + when changed
-    + who changed it". When no setting has been written, returns the
-    effective default (env or hardcoded) with empty audit fields so
-    the UI can render "Default: anthropic (system default)" cleanly.
+    Used by the dashboard tile. With ``vp_id`` omitted, reports the
+    GLOBAL setting (db → env → hardcoded). With ``vp_id`` set, reports
+    that VP's *effective* mode and where it comes from:
+    ``db_setting_vp`` (per-VP pin) → ``db_setting_global`` → ``env_var``
+    → ``profile_default``. ``vp_id`` is echoed back when supplied.
     """
     from universal_agent.task_hub import _get_setting
 
+    # Per-VP pin (only when a vp_id is supplied).
+    if vp_id and conn is not None:
+        vp_record = _get_setting(conn, _vp_setting_key(vp_id), default={})
+        if isinstance(vp_record, dict) and _normalize(vp_record.get("mode")) in _VALID_MODES:
+            return {
+                "mode": _normalize(vp_record.get("mode")),
+                "updated_at": vp_record.get("updated_at") or "",
+                "updated_by": vp_record.get("updated_by") or "",
+                "source": "db_setting_vp",
+                "vp_id": vp_id,
+            }
+
+    # Global pin.
     record = _get_setting(conn, _DB_SETTING_KEY, default={}) if conn is not None else {}
     if isinstance(record, dict) and _normalize(record.get("mode")) in _VALID_MODES:
         return {
             "mode": _normalize(record.get("mode")),
             "updated_at": record.get("updated_at") or "",
             "updated_by": record.get("updated_by") or "",
-            "source": "db_setting",
+            "source": "db_setting_global" if vp_id else "db_setting",
+            **({"vp_id": vp_id} if vp_id else {}),
         }
+
     env_mode = _normalize(os.getenv(_ENV_VAR))
     if env_mode in _VALID_MODES:
         return {
@@ -227,13 +283,49 @@ def get_default_mode_state(conn: Any) -> dict[str, Any]:
             "updated_at": "",
             "updated_by": "",
             "source": "env_var",
+            **({"vp_id": vp_id} if vp_id else {}),
         }
+
+    # Per-VP profile default (agent-defined) when we know the VP.
+    if vp_id:
+        profile_mode = _resolve_profile_default(vp_id)
+        if profile_mode is not None:
+            return {
+                "mode": profile_mode,
+                "updated_at": "",
+                "updated_by": "",
+                "source": "profile_default",
+                "vp_id": vp_id,
+            }
+
     return {
         "mode": _HARDCODED_FALLBACK_MODE,
         "updated_at": "",
         "updated_by": "",
         "source": "hardcoded_default",
+        **({"vp_id": vp_id} if vp_id else {}),
     }
+
+
+def list_vp_mode_states(conn: Any) -> list[dict[str, Any]]:
+    """Return effective mode state for every enabled VP (dashboard per-VP tiles).
+
+    Each entry: ``{vp_id, display_name, mode, source, updated_at, updated_by}``.
+    Defensive — returns ``[]`` if the VP registry can't be loaded.
+    """
+    try:
+        from universal_agent.vp.profiles import resolve_vp_profiles
+
+        profiles = resolve_vp_profiles()
+    except Exception:
+        return []
+    out: list[dict[str, Any]] = []
+    for vp_id, profile in profiles.items():
+        state = get_default_mode_state(conn, vp_id=vp_id)
+        state["display_name"] = getattr(profile, "display_name", vp_id)
+        state["profile_default"] = _normalize(getattr(profile, "inference_mode", ""))
+        out.append(state)
+    return out
 
 
 __all__ = [
@@ -242,4 +334,5 @@ __all__ = [
     "resolve_from_payload",
     "set_default_mode",
     "get_default_mode_state",
+    "list_vp_mode_states",
 ]

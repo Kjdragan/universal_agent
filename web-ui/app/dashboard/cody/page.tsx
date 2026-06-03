@@ -9,12 +9,26 @@ const API_BASE = "/api/dashboard/gateway";
 
 type CodyMode = "anthropic" | "zai";
 
+type VpModeState = {
+  vp_id: string;
+  display_name: string;
+  mode: CodyMode;
+  // db_setting_vp = per-VP operator pin; db_setting_global = inherited from
+  // the global setting; env_var = env override; profile_default = the
+  // agent's own default (CODIE→anthropic, ATLAS→zai).
+  source: "db_setting_vp" | "db_setting_global" | "env_var" | "profile_default" | string;
+  profile_default: CodyMode | string;
+  updated_at: string;
+  updated_by: string;
+};
+
 type ModeSettingResponse = {
   mode: CodyMode;
   source: "db_setting" | "env_var" | "hardcoded_default" | string;
   updated_at: string;
   updated_by: string;
   available_modes: string[];
+  vps?: VpModeState[];
 };
 
 type ModelBreakdownRow = {
@@ -84,22 +98,25 @@ function formatResetAt(iso: string): string {
   });
 }
 
-function describeSource(source: string, updatedBy: string, daysAgo: number | null): string {
+function describeVpSource(source: string, updatedBy: string, updatedAt: string): string {
   switch (source) {
-    case "db_setting": {
+    case "db_setting_vp": {
       const who = updatedBy ? ` by ${updatedBy}` : "";
+      const daysAgo = daysSince(updatedAt);
       const when =
         daysAgo !== null && Number.isFinite(daysAgo)
           ? daysAgo < 1
             ? " (today)"
             : ` (${daysAgo.toFixed(1)} days ago)`
           : "";
-      return `Operator-set${who}${when}`;
+      return `Pinned${who}${when}`;
     }
+    case "db_setting_global":
+      return "From global default";
     case "env_var":
       return "Environment override";
-    case "hardcoded_default":
-      return "System default";
+    case "profile_default":
+      return "Agent default";
     default:
       return source || "—";
   }
@@ -121,7 +138,7 @@ export default function CodyDashboardPage() {
   const [showZai, setShowZai] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [updatingMode, setUpdatingMode] = useState(false);
+  const [updatingVp, setUpdatingVp] = useState<string | null>(null);
   const [resetting, setResetting] = useState(false);
   const [showModelBreakdown, setShowModelBreakdown] = useState(false);
 
@@ -166,16 +183,18 @@ export default function CodyDashboardPage() {
     void refreshAll();
   }, [refreshAll]);
 
-  const handleSetMode = useCallback(
-    async (nextMode: CodyMode) => {
-      if (!modeState || modeState.mode === nextMode || updatingMode) return;
-      setUpdatingMode(true);
+  // Pin a single VP to a mode (or "clear" to revert it to its agent default).
+  // POSTs with vp_id; the response carries the refreshed `vps` array.
+  const handleSetVpMode = useCallback(
+    async (vpId: string, nextMode: CodyMode | "clear") => {
+      if (updatingVp) return;
+      setUpdatingVp(vpId);
       setError(null);
       try {
         const res = await fetch(`${API_BASE}/api/v1/cody/mode-setting`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ mode: nextMode, updated_by: "operator" }),
+          body: JSON.stringify({ mode: nextMode, vp_id: vpId, updated_by: "operator" }),
         });
         if (!res.ok) {
           const detail = await res.text().catch(() => "");
@@ -186,10 +205,10 @@ export default function CodyDashboardPage() {
       } catch (e) {
         setError((e as Error).message);
       } finally {
-        setUpdatingMode(false);
+        setUpdatingVp(null);
       }
     },
-    [modeState, updatingMode],
+    [updatingVp],
   );
 
   const handleResetTokens = useCallback(async () => {
@@ -227,10 +246,7 @@ export default function CodyDashboardPage() {
     }
   }, [resetting, loadTokens]);
 
-  const modeSourceLabel = useMemo(() => {
-    if (!modeState) return "—";
-    return describeSource(modeState.source, modeState.updated_by, daysSince(modeState.updated_at));
-  }, [modeState]);
+  const vps = useMemo<VpModeState[]>(() => modeState?.vps ?? [], [modeState]);
 
   /* ── Render ─────────────────────────────────────────────────────────── */
 
@@ -266,50 +282,90 @@ export default function CodyDashboardPage() {
         </div>
       )}
 
-      {/* ── Mode toggle ──────────────────────────────────────────────── */}
+      {/* ── Per-VP execution mode ────────────────────────────────────── */}
       <section className="rounded-xl border border-border/40 bg-card/10 p-5">
         <div className="mb-4 flex items-baseline justify-between gap-3">
-          <h2 className="text-sm font-semibold text-foreground">Execution Mode</h2>
+          <h2 className="text-sm font-semibold text-foreground">Execution Mode (per agent)</h2>
           <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-            {modeState ? modeSourceLabel : "loading…"}
+            {modeState ? `${vps.length} agent${vps.length === 1 ? "" : "s"}` : "loading…"}
           </span>
         </div>
 
-        <div className="flex gap-1 rounded-xl border border-border/40 bg-card/10 p-1">
-          {(["anthropic", "zai"] as const).map((m) => {
-            const active = modeState?.mode === m;
-            const label = m === "anthropic" ? "Anthropic (Max plan)" : "ZAI (GLM proxy)";
+        <div className="space-y-3">
+          {vps.length === 0 && (
+            <p className="text-[11px] italic text-muted-foreground">
+              {loading ? "Loading agents…" : "No VP agents enabled."}
+            </p>
+          )}
+          {vps.map((vp) => {
+            const busy = updatingVp === vp.vp_id;
+            const pinned = vp.source === "db_setting_vp";
             return (
-              <button
-                key={m}
-                type="button"
-                onClick={() => handleSetMode(m)}
-                disabled={updatingMode || !modeState}
-                className={[
-                  "flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-medium uppercase tracking-wider transition disabled:cursor-not-allowed disabled:opacity-50",
-                  active
-                    ? "bg-kcd-cyan/10 text-kcd-cyan ring-1 ring-kcd-cyan/30"
-                    : "text-muted-foreground hover:bg-card/25 hover:text-foreground",
-                ].join(" ")}
+              <div
+                key={vp.vp_id}
+                className="rounded-xl border border-border/30 bg-card/10 p-3"
               >
-                <span
-                  className={`h-2 w-2 rounded-full ${
-                    active ? "bg-kcd-cyan shadow-[0_0_6px] shadow-kcd-cyan/50" : "bg-muted"
-                  }`}
-                />
-                {label}
-                {active && updatingMode && <RefreshCw className="h-3 w-3 animate-spin" />}
-              </button>
+                <div className="mb-2 flex items-baseline justify-between gap-3">
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-xs font-semibold text-foreground">{vp.display_name}</span>
+                    <span className="font-mono text-[10px] text-muted-foreground">{vp.vp_id}</span>
+                  </div>
+                  <span className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+                    {describeVpSource(vp.source, vp.updated_by, vp.updated_at)}
+                    {pinned && (
+                      <button
+                        type="button"
+                        onClick={() => handleSetVpMode(vp.vp_id, "clear")}
+                        disabled={busy}
+                        className="rounded border border-border/40 px-1.5 py-0.5 text-[9px] normal-case text-muted-foreground transition hover:bg-card/30 hover:text-foreground disabled:opacity-50"
+                        title={`Revert to agent default (${vp.profile_default})`}
+                      >
+                        clear pin
+                      </button>
+                    )}
+                  </span>
+                </div>
+                <div className="flex gap-1 rounded-xl border border-border/40 bg-card/10 p-1">
+                  {(["anthropic", "zai"] as const).map((m) => {
+                    const active = vp.mode === m;
+                    const label = m === "anthropic" ? "Anthropic (Max plan)" : "ZAI (GLM proxy)";
+                    return (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => handleSetVpMode(vp.vp_id, m)}
+                        disabled={busy}
+                        className={[
+                          "flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-medium uppercase tracking-wider transition disabled:cursor-not-allowed disabled:opacity-50",
+                          active
+                            ? "bg-kcd-cyan/10 text-kcd-cyan ring-1 ring-kcd-cyan/30"
+                            : "text-muted-foreground hover:bg-card/25 hover:text-foreground",
+                        ].join(" ")}
+                      >
+                        <span
+                          className={`h-2 w-2 rounded-full ${
+                            active ? "bg-kcd-cyan shadow-[0_0_6px] shadow-kcd-cyan/50" : "bg-muted"
+                          }`}
+                        />
+                        {label}
+                        {active && busy && <RefreshCw className="h-3 w-3 animate-spin" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             );
           })}
         </div>
 
         <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
-          Default is <span className="font-mono text-foreground/80">anthropic</span> — Cody runs on
-          Kevin&apos;s Anthropic Max plan via the Claude CLI for production-quality coding output.
-          Switching to <span className="font-mono text-foreground/80">zai</span> routes Cody&apos;s
-          missions through the ZAI / GLM proxy for cost-sensitive runs. The change applies to the
-          next mission Cody starts; in-flight missions finish on their original backend.
+          Inference is bound to the <span className="text-foreground/80">agent</span>: CODIE (coder)
+          defaults to <span className="font-mono text-foreground/80">anthropic</span> (Max plan, for
+          production-quality coding and Anthropic-specific features); ATLAS (generalist research /
+          intel) defaults to <span className="font-mono text-foreground/80">zai</span> (GLM proxy) to
+          keep autonomous work off the scarce Max credits. Pinning here overrides an agent&apos;s
+          default; <span className="text-foreground/80">clear pin</span> reverts it. Changes apply to
+          the next mission that agent starts; in-flight missions finish on their original backend.
         </p>
       </section>
 

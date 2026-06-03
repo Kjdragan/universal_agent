@@ -231,17 +231,26 @@ of the dispatching function.** Each `VpProfile` carries an `inference_mode`
 | `vp.coder.primary` (CODIE) | `anthropic` | Builds runnable demos/coding artifacts that may rely on Anthropic-specific features; runs on the real Max plan via workspace OAuth. |
 | `vp.general.primary` (ATLAS) | `zai` | Research, intel-brief synthesis, general reasoning — kept cheap on ZAI/GLM and off the scarce Max 5-hour-window credits. |
 
-Resolution order (highest priority first):
+Resolution order (highest priority first), via `cody_mode.py::resolve_cody_mode`:
 
 1. `task.cody_mode` (per-task override on `task_hub_items`) — wins either way.
-2. DB setting `cody_default_mode` (dashboard tile, `task_hub_settings`) — the
-   operator "switch" that flips the default globally (e.g. CODIE → `zai` to save
-   cost) without a code change.
-3. `UA_CODY_DEFAULT_MODE` env var.
-4. **Per-VP profile default** `VpProfile.inference_mode` when `vp_dispatch_mission`
+2. **Per-VP operator pin** `cody_default_mode:<vp_id>` (`task_hub_settings`) —
+   set from the dashboard's per-agent toggle (`cody_mode.py::set_default_mode`
+   with `vp_id`). Pins one VP (e.g. CODIE → `zai`) without touching the others;
+   `mode="clear"` removes the pin.
+3. Global DB setting `cody_default_mode` (dashboard, `task_hub_settings`) —
+   applies to every VP that has no per-VP pin.
+4. `UA_CODY_DEFAULT_MODE` env var.
+5. **Per-VP profile default** `VpProfile.inference_mode` when `vp_dispatch_mission`
    passes `vp_id` — CODIE → `anthropic`, ATLAS (and any other VP) → `zai`.
-5. Hardcoded last-resort `"anthropic"` — used only when no `vp_id` is known
+6. Hardcoded last-resort `"anthropic"` — used only when no `vp_id` is known
    (e.g. the demo `cody_demo_task` path, which is always CODIE coding work).
+
+The dashboard tile (`web-ui/app/dashboard/cody/page.tsx`) renders one toggle per
+enabled VP, backed by `cody_mode.py::list_vp_mode_states` + the
+`/api/v1/cody/mode-setting` endpoint (which accepts an optional `vp_id`). Each
+toggle shows the effective mode and its source (per-VP pin / global / env /
+agent default).
 
 > **2026-06-03 fix.** Before this, step 4 didn't exist and step 5 was a
 > VP-blind hardcoded `"anthropic"` (flipped from `"zai"` on 2026-05-11). Because

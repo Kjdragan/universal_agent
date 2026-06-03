@@ -25,6 +25,7 @@ import pytest
 from universal_agent import task_hub
 from universal_agent.services.cody_mode import (
     get_default_mode_state,
+    list_vp_mode_states,
     resolve_cody_mode,
     resolve_from_payload,
     set_default_mode,
@@ -314,3 +315,72 @@ def test_env_beats_profile(monkeypatch) -> None:
     """UA_CODY_DEFAULT_MODE overrides the per-VP profile default."""
     monkeypatch.setenv("UA_CODY_DEFAULT_MODE", "zai")
     assert resolve_cody_mode(None, vp_id="vp.coder.primary") == "zai"
+
+
+# ── Per-VP operator pins (dashboard per-agent toggles, 2026-06-03) ─────────
+#
+# Operators can pin one VP to a mode without touching the others. Precedence:
+# per-task → per-VP DB pin → global DB → env → profile default → hardcoded.
+
+
+def test_per_vp_pins_are_independent(conn: sqlite3.Connection, monkeypatch) -> None:
+    """Pinning one VP must not affect another — defaults can be fully inverted."""
+    monkeypatch.delenv("UA_CODY_DEFAULT_MODE", raising=False)
+    # Agent defaults differ: CODIE=anthropic, ATLAS=zai.
+    assert resolve_cody_mode(None, conn=conn, vp_id="vp.coder.primary") == "anthropic"
+    assert resolve_cody_mode(None, conn=conn, vp_id="vp.general.primary") == "zai"
+    # Invert both via independent per-VP pins.
+    set_default_mode(conn, "zai", vp_id="vp.coder.primary")
+    set_default_mode(conn, "anthropic", vp_id="vp.general.primary")
+    assert resolve_cody_mode(None, conn=conn, vp_id="vp.coder.primary") == "zai"
+    assert resolve_cody_mode(None, conn=conn, vp_id="vp.general.primary") == "anthropic"
+
+
+def test_per_vp_pin_beats_global(conn: sqlite3.Connection, monkeypatch) -> None:
+    """A per-VP pin overrides the global setting; unpinned VPs inherit global."""
+    monkeypatch.delenv("UA_CODY_DEFAULT_MODE", raising=False)
+    set_default_mode(conn, "zai")  # global → everything zai unless pinned
+    set_default_mode(conn, "anthropic", vp_id="vp.general.primary")  # ATLAS pinned
+    assert resolve_cody_mode(None, conn=conn, vp_id="vp.general.primary") == "anthropic"
+    assert resolve_cody_mode(None, conn=conn, vp_id="vp.coder.primary") == "zai"
+
+
+def test_clear_pin_reverts_to_profile(conn: sqlite3.Connection, monkeypatch) -> None:
+    """mode='clear' removes a per-VP pin → reverts to the agent profile default."""
+    monkeypatch.delenv("UA_CODY_DEFAULT_MODE", raising=False)
+    set_default_mode(conn, "anthropic", vp_id="vp.general.primary")
+    assert resolve_cody_mode(None, conn=conn, vp_id="vp.general.primary") == "anthropic"
+    set_default_mode(conn, "clear", vp_id="vp.general.primary")
+    assert resolve_cody_mode(None, conn=conn, vp_id="vp.general.primary") == "zai"
+
+
+def test_get_default_mode_state_per_vp_sources(conn: sqlite3.Connection, monkeypatch) -> None:
+    """Per-VP state reports the effective mode + where it came from."""
+    monkeypatch.delenv("UA_CODY_DEFAULT_MODE", raising=False)
+    st = get_default_mode_state(conn, vp_id="vp.general.primary")
+    assert st["mode"] == "zai"
+    assert st["source"] == "profile_default"
+    assert st["vp_id"] == "vp.general.primary"
+    set_default_mode(conn, "anthropic", vp_id="vp.general.primary")
+    st2 = get_default_mode_state(conn, vp_id="vp.general.primary")
+    assert st2["mode"] == "anthropic"
+    assert st2["source"] == "db_setting_vp"
+
+
+def test_list_vp_mode_states_covers_enabled_vps(conn: sqlite3.Connection, monkeypatch) -> None:
+    """list_vp_mode_states returns one entry per enabled VP with display name."""
+    monkeypatch.delenv("UA_CODY_DEFAULT_MODE", raising=False)
+    by_id = {s["vp_id"]: s for s in list_vp_mode_states(conn)}
+    assert by_id["vp.coder.primary"]["mode"] == "anthropic"
+    assert by_id["vp.general.primary"]["mode"] == "zai"
+    assert by_id["vp.coder.primary"]["display_name"]
+    assert by_id["vp.general.primary"]["profile_default"] == "zai"
+
+
+def test_global_set_backward_compat(conn: sqlite3.Connection, monkeypatch) -> None:
+    """Global set (no vp_id) still works and reports source=db_setting."""
+    monkeypatch.delenv("UA_CODY_DEFAULT_MODE", raising=False)
+    set_default_mode(conn, "zai", updated_by="operator")
+    st = get_default_mode_state(conn)
+    assert st["mode"] == "zai"
+    assert st["source"] == "db_setting"
