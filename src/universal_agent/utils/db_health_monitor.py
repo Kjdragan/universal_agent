@@ -369,7 +369,14 @@ def check_csi_source_freshness() -> list[HeartbeatFinding]:
     try:
         if not _table_exists(conn, "source_state"):
             return findings
-        cutoff = (_utc_now() - timedelta(hours=CSI_SOURCE_STALE_HOURS)).isoformat()
+        # source_state.updated_at is written by SQLite datetime('now') as
+        # "YYYY-MM-DD HH:MM:SS" (UTC, space-separated). The comparison below is
+        # lexicographic, so the cutoff must match that exact format. .isoformat()
+        # would emit a "T"-separated string with a "+00:00" offset, and since
+        # space (0x20) < 'T' (0x54) every row would mis-sort as stale.
+        cutoff = (_utc_now() - timedelta(hours=CSI_SOURCE_STALE_HOURS)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
         # Count channels with state that haven't been updated recently
         rows = conn.execute(
             """
