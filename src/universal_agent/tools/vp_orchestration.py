@@ -360,7 +360,11 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
         from universal_agent.services.cody_mode import resolve_cody_mode
 
         # Load the linked task row (if any) and pass the same conn into
-        # the resolver so it can read the operator DB setting.
+        # the resolver so it can read the operator DB setting. ``vp_id`` is
+        # passed so the resolver can apply the per-VP profile default
+        # (CODIE→anthropic, ATLAS→zai) when no per-task/DB/env override is
+        # set — the agent defines its own inference backend, not this
+        # dispatch function.
         th_conn = None
         try:
             from universal_agent import (
@@ -378,10 +382,10 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
                     linked_task = _th.get_item(th_conn, linked_task_id)
                 except Exception:
                     linked_task = None
-            resolved_cody_mode = resolve_cody_mode(linked_task, conn=th_conn)
+            resolved_cody_mode = resolve_cody_mode(linked_task, conn=th_conn, vp_id=vp_id)
         except Exception:
-            # Resolver couldn't reach the DB; fall through to env/hardcoded.
-            resolved_cody_mode = resolve_cody_mode(linked_task)
+            # Resolver couldn't reach the DB; fall through to env/profile/hardcoded.
+            resolved_cody_mode = resolve_cody_mode(linked_task, vp_id=vp_id)
         finally:
             if th_conn is not None:
                 try:

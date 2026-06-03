@@ -22,6 +22,18 @@ class VpProfile:
     workspace_root: Path
     soul_file: str = "SOUL.md"
     cli_capable: bool = True
+    # Default inference backend for this VP — "anthropic" (real Anthropic
+    # Max plan via workspace OAuth) or "zai" (ZAI/GLM proxy). The agent
+    # defines its own inference, not the dispatching function: CODIE
+    # (coder) defaults to "anthropic" because demo/coding work may rely on
+    # Anthropic-specific features; ATLAS (generalist) and any other VP
+    # default to "zai" to keep autonomous synthesis/research cheap and off
+    # the scarce Max 5-hour-window credits. This is only the DEFAULT —
+    # ``services/cody_mode.resolve_cody_mode`` still lets a per-task
+    # ``cody_mode``, the operator DB setting, or ``UA_CODY_DEFAULT_MODE``
+    # override it (e.g. flip CODIE to "zai" to save cost). Field default is
+    # the cheap option so a newly-added VP is opt-in to Max, never silent.
+    inference_mode: str = "zai"
 
 
 def resolve_vp_profiles(workspace_base: Optional[Path | str] = None) -> dict[str, VpProfile]:
@@ -37,6 +49,9 @@ def resolve_vp_profiles(workspace_base: Optional[Path | str] = None) -> dict[str
                 fallback=(base / "vp_coder_primary_external"),
             ),
             soul_file="CODIE_SOUL.md",
+            # CODIE builds runnable demos/coding artifacts that may use
+            # Anthropic-specific features — default to the real Max plan.
+            inference_mode="anthropic",
         ),
         "vp.general.primary": VpProfile(
             vp_id="vp.general.primary",
@@ -48,6 +63,9 @@ def resolve_vp_profiles(workspace_base: Optional[Path | str] = None) -> dict[str
                 fallback=(base / "vp_general_primary_external"),
             ),
             soul_file="ATLAS_SOUL.md",
+            # ATLAS does research / intel-brief synthesis / general reasoning
+            # — runs on ZAI by default; Max is reserved for coding (CODIE).
+            inference_mode="zai",
         ),
     }
 

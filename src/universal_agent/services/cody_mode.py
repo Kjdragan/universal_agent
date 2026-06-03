@@ -6,12 +6,21 @@ Picks between ``"zai"`` (cheap, ZAI/GLM proxy) and ``"anthropic"``
 Resolution order (highest priority first):
     1. ``task.cody_mode`` — per-task override on ``task_hub_items``.
     2. DB setting ``cody_default_mode`` — operator-configurable via the
-       dashboard tile. Persisted in ``task_hub_settings``.
+       dashboard tile. Persisted in ``task_hub_settings``. This is the
+       "still have an option to switch" knob — e.g. flip CODIE to "zai"
+       to save cost without a code change.
     3. ``UA_CODY_DEFAULT_MODE`` env var — deploy-time override; kept for
        ops use but typically unset in normal operation.
-    4. ``"anthropic"`` — hardcoded fallback (flipped from "zai" on
-       2026-05-11 PM per operator decision; Cody now defaults to running
-       on real Anthropic Max unless explicitly overridden).
+    4. **Per-VP profile default** (``VpProfile.inference_mode``) when a
+       ``vp_id`` is supplied — the agent defines its own inference
+       backend: CODIE (``vp.coder.primary``) → "anthropic"; ATLAS
+       (``vp.general.primary``) and any other VP → "zai". This replaced
+       the old VP-blind hardcoded "anthropic" default (2026-06-03) that
+       silently forced ATLAS research/intel missions onto the Max plan
+       and burned 5-hour-window credits meant for coding.
+    5. ``"anthropic"`` — hardcoded last-resort fallback, used only when
+       no ``vp_id`` is known (e.g. the demo ``cody_demo_task`` path,
+       which is always CODIE coding work anyway).
 
 When the resolved mode is ``anthropic``, ``vp_dispatch_mission``
 auto-routes the mission through ``execution_mode="cli"`` so the
@@ -64,20 +73,53 @@ def _resolve_db_setting(conn: Any) -> Optional[CodyMode]:
     return None
 
 
+def _resolve_profile_default(vp_id: str) -> Optional[CodyMode]:
+    """Return the per-VP default inference mode from its ``VpProfile``.
+
+    The agent defines its own inference backend (``inference_mode`` on
+    the profile). Returns ``None`` when the VP is unknown/disabled or
+    anything goes wrong looking it up — callers then fall through to the
+    hardcoded last-resort default. Import is lazy to avoid any import
+    cycle between the resolver and the VP profile registry.
+    """
+    vp_id = _normalize(vp_id)
+    if not vp_id:
+        return None
+    try:
+        from universal_agent.vp.profiles import get_vp_profile
+
+        profile = get_vp_profile(vp_id)
+    except Exception:
+        return None
+    if profile is None:
+        return None
+    mode = _normalize(getattr(profile, "inference_mode", ""))
+    if mode in _VALID_MODES:
+        return mode  # type: ignore[return-value]
+    return None
+
+
 def resolve_cody_mode(
     task: dict[str, Any] | None = None,
     *,
     conn: Any = None,
+    vp_id: Optional[str] = None,
 ) -> CodyMode:
-    """Return the effective Cody execution mode for a task.
+    """Return the effective Cody/VP execution mode for a task.
 
     Args:
         task: A ``task_hub_items`` row (or compatible dict). May be
-            ``None`` to short-circuit to setting/env/default.
+            ``None`` to short-circuit to setting/env/profile/default.
         conn: Optional sqlite3 connection to the activity DB for
             reading the operator-configured DB setting. When omitted,
-            DB-setting resolution is skipped (env + hardcoded default
-            still apply).
+            DB-setting resolution is skipped (env + profile + hardcoded
+            default still apply).
+        vp_id: The VP the mission is being dispatched to (e.g.
+            ``"vp.coder.primary"`` / ``"vp.general.primary"``). When
+            supplied, the VP's ``VpProfile.inference_mode`` is the
+            default — so the agent, not the dispatching function,
+            defines its inference backend. Omitting it preserves the
+            legacy VP-blind hardcoded default (used by the demo path).
 
     Returns:
         Either ``"zai"`` or ``"anthropic"``.
@@ -95,6 +137,13 @@ def resolve_cody_mode(
     env_mode = _normalize(os.getenv(_ENV_VAR))
     if env_mode in _VALID_MODES:
         return env_mode  # type: ignore[return-value]
+
+    # Per-VP profile default — the agent defines its own inference. Only
+    # consulted when no per-task / DB / env override is set.
+    if vp_id:
+        profile_mode = _resolve_profile_default(vp_id)
+        if profile_mode is not None:
+            return profile_mode
 
     return _HARDCODED_FALLBACK_MODE
 
