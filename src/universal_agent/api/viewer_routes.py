@@ -26,6 +26,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from universal_agent.viewer import resolve_session_view_target
+from universal_agent.viewer.resolver import mission_log_rel
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,12 @@ async def viewer_resolve(body: ResolveBody) -> JSONResponse:
                 }
             },
         )
+    # Enrich with the VP CLI mission-log dir (run.log lives in
+    # vp_<vp>_external/<mission>/<mission>/, separate from workspace_dir) so the
+    # viewer's Activity panel can rehydrate Cody demo runs. No-op for non-mission
+    # sessions / missions without an on-disk run.log.
+    if not target.log_workspace_rel:
+        target.log_workspace_rel = mission_log_rel(target.session_id)
     return JSONResponse(content=target.to_dict())
 
 

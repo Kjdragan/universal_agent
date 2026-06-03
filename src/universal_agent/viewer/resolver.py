@@ -40,6 +40,12 @@ class SessionViewTarget:
     is_live_session: bool
     source: str
     viewer_href: str
+    # AGENT_RUN_WORKSPACES-relative dir holding a VP CLI mission's run.log /
+    # cli_stream.log (``vp_<vp>_external/<mission>/<mission>/``). A Cody demo's
+    # logs live there, NOT in ``workspace_dir`` (which points at the demo's
+    # /opt/ua_demos/<id> tree), so the viewer's Activity panel needs this
+    # separately to rehydrate from run.log. Empty when not located.
+    log_workspace_rel: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -138,6 +144,30 @@ def _resolve_workspaces_root() -> Path:
     return Path(__file__).resolve().parents[3] / "AGENT_RUN_WORKSPACES"
 
 
+def mission_log_rel(session_id: Optional[str]) -> str:
+    """Return the AGENT_RUN_WORKSPACES-relative dir holding a VP CLI mission's
+    run.log, or "" if not found.
+
+    Cody/VP CLI missions write run.log + cli_stream.log into a doubly-nested
+    dir ``vp_<vp>_external/<mission_id>/<mission_id>/`` under the workspaces
+    root (the mission id is repeated). The viewer's Activity panel rehydrates
+    from this run.log. Globs for the actual run.log so the ``vp_<vp>`` prefix
+    isn't hard-coded; returns "" for non-mission ids or missions with no
+    run.log on disk (e.g. older flat-layout missions) so the caller degrades
+    gracefully.
+    """
+    sid = str(session_id or "").strip()
+    if not sid.startswith("vp-mission-"):
+        return ""
+    root = _resolve_workspaces_root()
+    try:
+        for run_log in root.glob(f"vp_*_external/{sid}/{sid}/run.log"):
+            return str(run_log.parent.relative_to(root))
+    except OSError:
+        return ""
+    return ""
+
+
 def _cody_workspace_from_task_hub(session_id: str) -> Optional[Path]:
     """Look up a Cody CLI session_id → cody_workspace_dir via task_hub_items.
 
@@ -161,6 +191,7 @@ def _cody_workspace_from_task_hub(session_id: str) -> Optional[Path]:
         return None
     try:
         import sqlite3 as _sqlite3
+
         from universal_agent.durable.db import (
             connect_runtime_db,
             get_activity_db_path,
