@@ -9,7 +9,7 @@ chromadb>=0.5.0
 
 # AI/ML APIs
 google-genai>=1.0.0
-openai>=2.38.0
+openai>=2.40.0
 
 # Web Interface
 streamlit>=1.58.0
