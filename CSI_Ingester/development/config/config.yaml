@@ -40,7 +40,10 @@ sources:
     max_seen_cache_per_subreddit: 2000
     subreddits: []
   threads_owned:
-    enabled: true
+    # PARKED 2026-06-03: experimental Threads lane, creds (THREADS_USER_ID /
+    # THREADS_ACCESS_TOKEN) unprovisioned. Re-enable here + provision creds +
+    # set UA_CSI_THREADS_LANES_ENABLED=1 to restore liveness monitoring.
+    enabled: false
     poll_interval_seconds: 900
     timeout_seconds: 20
     user_agent: "CSIIngester/threads-owned-v1"
@@ -64,7 +67,8 @@ sources:
         max_requests: 1200
         window_seconds: 86400
   threads_trends_seeded:
-    enabled: true
+    # PARKED 2026-06-03 (see threads_owned note).
+    enabled: false
     poll_interval_seconds: 900
     timeout_seconds: 20
     user_agent: "CSIIngester/threads-seeded-v1"
@@ -102,7 +106,8 @@ sources:
         max_requests: 500
         window_seconds: 86400
   threads_trends_broad:
-    enabled: true
+    # PARKED 2026-06-03 (see threads_owned note).
+    enabled: false
     poll_interval_seconds: 1800
     timeout_seconds: 20
     user_agent: "CSIIngester/threads-broad-v1"

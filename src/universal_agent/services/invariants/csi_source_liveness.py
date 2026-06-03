@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import logging
+import os
 from pathlib import Path
 import sqlite3
 from typing import Any, Dict, Optional
@@ -32,6 +33,41 @@ from typing import Any, Dict, Optional
 from universal_agent.services.pipeline_invariants import invariant
 
 logger = logging.getLogger(__name__)
+
+
+# Threads CSI lanes are EXPERIMENTAL and parked by default (2026-06-03). The
+# adapters skip every cycle when THREADS_USER_ID / THREADS_ACCESS_TOKEN are
+# unset, so monitoring them produces a perpetual stale/never_seen alert that
+# adds noise and can mask real outages in other lanes. They stay in
+# SOURCE_THRESHOLDS_HOURS (so re-enabling is a one-flag flip) but are excluded
+# from evaluation while parked. Set UA_CSI_THREADS_LANES_ENABLED=1 AND provision
+# the Threads credentials to re-activate monitoring.
+_THREADS_SOURCES = frozenset(
+    {"threads_owned", "threads_trends_seeded", "threads_trends_broad"}
+)
+
+
+def _threads_lanes_enabled() -> bool:
+    return os.getenv("UA_CSI_THREADS_LANES_ENABLED", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def effective_source_thresholds() -> Dict[str, float]:
+    """The set of sources actually evaluated, after applying parking flags.
+
+    Parked lanes (Threads, while UA_CSI_THREADS_LANES_ENABLED is off) are
+    excluded so they neither alert nor mask other adapters' real outages.
+    """
+    threads_on = _threads_lanes_enabled()
+    return {
+        source: hours
+        for source, hours in SOURCE_THRESHOLDS_HOURS.items()
+        if threads_on or source not in _THREADS_SOURCES
+    }
 
 
 # Per-source expected max silence in hours. Conservative defaults: leave
@@ -61,7 +97,7 @@ def _per_source_last_seen(
     is treated as never_seen (operator should investigate the watchlist
     config or take it out of monitoring instead of letting it pile up alerts).
     """
-    results: Dict[str, Optional[datetime]] = {s: None for s in SOURCE_THRESHOLDS_HOURS}
+    results: Dict[str, Optional[datetime]] = {s: None for s in effective_source_thresholds()}
     conn = sqlite3.connect(str(csi_db_path))
     try:
         cursor = conn.execute(
@@ -108,12 +144,16 @@ def _per_source_last_seen(
         "tables": ["events"],
         "db": "csi.db",
         "sources_monitored": list(SOURCE_THRESHOLDS_HOURS.keys()),
+        "threads_lanes_flag": "UA_CSI_THREADS_LANES_ENABLED",
         "design_note": (
-            "P1a (2026-05-20): one invariant covering six adapters in one "
+            "P1a (2026-05-20): one invariant covering the CSI adapters in one "
             "finding. Listing per-source thresholds + last_seen in "
             "observed_value lets the operator triage all stale sources from "
             "a single alert. Splitting per-source would spam the email/Task "
-            "Hub channels."
+            "Hub channels. 2026-06-03: youtube_playlist removed (retired #438); "
+            "Threads lanes (threads_owned, threads_trends_seeded, "
+            "threads_trends_broad) parked behind UA_CSI_THREADS_LANES_ENABLED "
+            "(experimental, creds unprovisioned) so they don't alert while off."
         ),
     },
 )
@@ -136,7 +176,7 @@ def csi_source_liveness(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     now = datetime.now(timezone.utc)
     stale_sources: list[dict[str, Any]] = []
-    for source, threshold_h in SOURCE_THRESHOLDS_HOURS.items():
+    for source, threshold_h in effective_source_thresholds().items():
         ts = last_seen.get(source)
         if ts is None:
             stale_sources.append(
@@ -169,7 +209,7 @@ def csi_source_liveness(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "observed_value": {
             "stale_sources": stale_sources,
             "stale_count": len(stale_sources),
-            "monitored_count": len(SOURCE_THRESHOLDS_HOURS),
+            "monitored_count": len(effective_source_thresholds()),
             "evaluated_at_utc": now.isoformat(),
         },
         "threshold_text": (
