@@ -7,7 +7,7 @@ code_paths:
   - src/universal_agent/hooks_service.py
   - src/universal_agent/sdk/
   - src/universal_agent/gateway_server.py
-last_verified: 2026-05-29
+last_verified: 2026-06-03
 ---
 
 # Hook System Architecture
