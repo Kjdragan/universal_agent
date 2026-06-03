@@ -47,10 +47,18 @@ Given a research topic, produce a complete learning package sourced from the top
 
 ### Required Capabilities
 
-ArXiv tools (call directly via MCP):
+ArXiv tools (call directly via MCP — these are the ONLY supported way to reach arXiv):
 - mcp__arxiv-mcp-server__search_papers — search by topic, category, date range
 - mcp__arxiv-mcp-server__download_paper — download paper by arXiv ID
 - mcp__arxiv-mcp-server__read_paper — read full text of downloaded paper
+- mcp__arxiv-mcp-server__list_papers — list papers already downloaded locally
+
+The arxiv-mcp-server **enforces arXiv's 3-second rate limit automatically** and
+backs off on HTTP 429. You do NOT need to manage timing yourself. If a call ever
+returns a rate-limit error, wait ~60 seconds and retry the SAME MCP call once.
+Do NOT fall back to the raw `arxiv` Python library, `curl`/`wget` against
+export.arxiv.org, or any hand-rolled HTTP — those bypass the rate limiter and
+cause the 429 storms this skill exists to avoid.
 
 NotebookLM tools (call directly via MCP):
 - mcp__notebooklm-mcp__refresh_auth — authenticate before operations
@@ -72,8 +80,8 @@ The nlm CLI authenticates differently and reliably downloads audio.
 ### Pipeline Phases
 
 Phase A — Paper Discovery (direct MCP tools):
-1. Call mcp__arxiv-mcp-server__search_papers with the user's topic, max_results=5, sort_by=relevance, date_from 12 months ago, and relevant categories (cs.AI, cs.CL, cs.LG, cs.MA for AI/ML topics)
-2. For each paper, call download_paper then read_paper to get full text
+1. Call mcp__arxiv-mcp-server__search_papers with the user's topic, max_results=5, sort_by=relevance, date_from 12 months ago, and relevant categories (cs.AI, cs.CL, cs.LG, cs.MA for AI/ML topics). Make ONE search call; the server already paces requests. If it returns a rate-limit/429 error, wait ~60s and retry the same call ONCE — never switch to the raw `arxiv` library or curl.
+2. For each paper, call download_paper then read_paper to get full text (one paper at a time — the server paces these for you)
 3. Extract: title, authors, key findings, methodology, contributions
 4. Save paper metadata to work_products/paper_to_podcast/papers_metadata.json
 
@@ -83,7 +91,7 @@ Phase B — NotebookLM Content Generation (direct MCP tools):
 3. For each paper, call source_add with source_type="text" using curated content: title, authors, abstract, key findings (3-5 bullets), methodology highlights, results/conclusions
 4. Generate 3 studio artifacts sequentially:
    a. Audio overview: studio_create with artifact_type="audio", audio_format="deep_dive"
-   b. Quiz: studio_create with artifact_type="quiz", question_count=5, difficulty="medium"
+   b. Quiz: studio_create with artifact_type="quiz", question_count as requested (default 10), difficulty="medium"
    c. Flashcards: studio_create with artifact_type="flashcards", difficulty="medium"
 5. Poll studio_status every 30s until all 3 complete (audio takes 5-10 min)
 

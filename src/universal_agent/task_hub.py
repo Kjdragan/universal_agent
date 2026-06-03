@@ -3396,16 +3396,55 @@ def record_task_outbound_delivery(
     return get_item(conn, str(task_id or "").strip()) or current
 
 
+def _is_cron_owned_task(metadata: dict[str, Any], task_id: str) -> bool:
+    """True when the in-progress task is owned by the cron scheduler.
+
+    Cron tasks set ``metadata.cron_owned`` (via ``ensure_cron_task_link``) and
+    use a ``cron:<system_job>`` task_id. They execute in-process inside the
+    daemon and carry no provider_session_id, so the lifecycle reconciler cannot
+    detect their liveness via running session ids — they need the grace-window
+    protection in :func:`reconcile_task_lifecycle` instead.
+    """
+    if isinstance(metadata, dict) and metadata.get("cron_owned") is True:
+        return True
+    return str(task_id or "").strip().startswith("cron:")
+
+
+def _assignment_age_seconds(assignment_row: Any, now_iso: str) -> float:
+    """Age in seconds of an assignment's ``started_at`` relative to ``now_iso``.
+
+    Returns ``inf`` when the timestamp is missing/unparseable so callers treat
+    unknown-age assignments as old (eligible for reaping) rather than protecting
+    them indefinitely.
+    """
+    started = None
+    try:
+        if assignment_row is not None:
+            started = _parse_iso(assignment_row["started_at"])
+    except Exception:
+        started = None
+    now_dt = _parse_iso(now_iso)
+    if started is None or now_dt is None:
+        return float("inf")
+    return max(0.0, (now_dt - started).total_seconds())
+
+
 def reconcile_task_lifecycle(
     conn: sqlite3.Connection,
     *,
     running_session_ids: Optional[set[str]] = None,
     rebuild_queue: bool = True,
+    cron_live_grace_seconds: int = 0,
 ) -> dict[str, int]:
     """Repair obviously orphaned lifecycle rows at startup or on-demand.
 
     - Reopen or review tasks stuck in ``in_progress`` without a live assignment.
     - Flag auto-completed rows with no explicit disposition as ``needs_review``.
+
+    ``cron_live_grace_seconds`` protects *young* cron-owned in-process runs from
+    being false-orphaned by an on-demand (dashboard-triggered) reconcile while
+    the daemon is alive. Leave it ``0`` for startup recovery, where the process
+    was dead and every in-progress cron genuinely IS orphaned.
     """
     ensure_schema(conn)
     running_session_ids = {str(v).strip() for v in (running_session_ids or set()) if str(v).strip()}
@@ -3465,6 +3504,23 @@ def reconcile_task_lifecycle(
             active_session_id or (assignment_row["provider_session_id"] if assignment_row else "") or ""
         ).strip()
         if assignment_live and assignment_session_id in running_session_ids:
+            continue
+        # Cron-owned in-process runs (e.g. paper_to_podcast_daily) execute inside
+        # the daemon and carry no provider_session_id, so the session-id checks
+        # above can never recognise them as live. While the daemon is alive — as
+        # it is when a dashboard read triggers this reconcile — a *young* cron
+        # assignment is almost certainly a live in-process run (these poll
+        # NotebookLM for 10-20 min). Reaping it mid-flight false-orphans the run
+        # and bounces the task back to the unassigned column. Skip reaping within
+        # the grace window; the cron scheduler's own try/finally close-out
+        # finalises the assignment normally. Startup recovery passes
+        # cron_live_grace_seconds=0 and still reaps immediately (process was dead).
+        if (
+            assignment_live
+            and cron_live_grace_seconds > 0
+            and _is_cron_owned_task(metadata, task_id)
+            and _assignment_age_seconds(assignment_row, now_iso) < cron_live_grace_seconds
+        ):
             continue
         if assignment_live:
             mission_id = ""

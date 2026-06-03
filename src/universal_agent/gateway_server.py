@@ -4484,6 +4484,18 @@ def _session_turn_snapshot(session_id: str) -> dict[str, Any]:
     return snapshot
 
 
+def _cron_reconcile_grace_seconds() -> int:
+    """Grace window (seconds) protecting young in-process cron runs from being
+    false-orphaned by an on-demand lifecycle reconcile. Default 3600s comfortably
+    exceeds the longest observed paper_to_podcast run (~42 min); genuinely stuck
+    cron tasks are still reaped once they age past the window."""
+    try:
+        value = int(str(os.getenv("UA_CRON_RECONCILE_GRACE_SECONDS", "3600")).strip() or "3600")
+    except (TypeError, ValueError):
+        return 3600
+    return max(0, value)
+
+
 def _running_execution_session_ids() -> set[str]:
     running_session_ids: set[str] = set()
 
@@ -24308,10 +24320,16 @@ async def dashboard_todolist_agent_queue(
         conn = _task_hub_open_conn()
         try:
             if status_filter == "all":
+                # On-demand reconcile (the daemon is alive, serving this read).
+                # Protect young in-process cron runs from being false-orphaned:
+                # they carry no provider_session_id so the session-id liveness
+                # check can't see them. Startup recovery (which runs after a real
+                # crash) intentionally does NOT pass this grace and reaps eagerly.
                 task_hub.reconcile_task_lifecycle(
                     conn,
                     running_session_ids=_running_execution_session_ids(),
                     rebuild_queue=False,
+                    cron_live_grace_seconds=_cron_reconcile_grace_seconds(),
                 )
             # When a specific status filter is requested, use raw SQL so the
             # caller can filter by any status (pending, in_progress, blocked,

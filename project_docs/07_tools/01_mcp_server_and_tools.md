@@ -8,9 +8,11 @@ code_paths:
   - src/universal_agent/tools/internal_registry.py
   - src/universal_agent/tools/*.py
   - src/universal_agent/agent_setup.py
+  - src/universal_agent/arxiv_runtime.py
+  - src/universal_agent/notebooklm_runtime.py
   - src/universal_agent/utils/composio_discovery.py
   - src/universal_agent/constants.py
-last_verified: 2026-05-29
+last_verified: 2026-06-03
 ---
 
 # MCP Server & Tools
@@ -202,6 +204,19 @@ or connects to:
 - **`notebooklm-mcp`** — feature-gated; built by
   `notebooklm_runtime.build_notebooklm_mcp_server_config()` (default off for
   context-budget reasons).
+- **`arxiv-mcp-server`** — feature-gated; built by
+  `arxiv_runtime.build_arxiv_mcp_server_config()`, gated by `UA_ENABLE_ARXIV_MCP`
+  (default off; **on in production** via the Infisical secret). Launched as
+  `uv tool run arxiv-mcp-server`; `arxiv_runtime.arxiv_mcp_uv_command()` resolves
+  `uv` to an absolute path because the systemd unit's `$PATH` omits
+  `/usr/local/bin`. Pre-installed durably on the VPS with `uv tool install
+  'arxiv-mcp-server[pdf]'` so `uv tool run` is instant/offline. Exposes
+  `mcp__arxiv-mcp-server__{search_papers,download_paper,read_paper,list_papers}`.
+  Required by the `paper-to-podcast-tf` skill / `paper_to_podcast_daily` cron — the
+  server enforces arXiv's 3-second rate limit automatically, which is what stops
+  the raw-`arxiv`-library HTTP 429 storms that previously failed the nightly run.
+  Registered in **both** `agent_setup.py::_build_mcp_servers` (legacy bridge path)
+  and `main.py::setup_session` (the live execution-engine path the cron uses).
 - **`agentmail`** — the *official* AgentMail MCP server, built by
   `agentmail_official.build_agentmail_mcp_server_config()`. Gated by
   `UA_AGENTMAIL_MCP_ENABLED` (default on: returns `None` only when explicitly set
