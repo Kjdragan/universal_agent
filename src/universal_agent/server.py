@@ -9,7 +9,7 @@ import json
 import mimetypes
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
@@ -52,7 +52,7 @@ def get_latest_workspace() -> Optional[str]:
 
 
 @app.get("/", response_class=HTMLResponse)
-async def serve_ui():
+async def serve_ui() -> FileResponse | HTMLResponse:
     """Serve the main UI HTML page."""
     if UI_PATH.exists():
         return FileResponse(UI_PATH)
@@ -60,14 +60,14 @@ async def serve_ui():
 
 
 @app.get("/api/workspace")
-async def get_workspace_info():
+async def get_workspace_info() -> dict[str, str | None]:
     """Get current workspace path."""
     workspace = get_latest_workspace()
     return {"workspace": workspace}
 
 
 @app.get("/api/files")
-async def list_files(path: str = ""):
+async def list_files(path: str = "") -> dict[str, Any]:
     """List files in the workspace directory."""
     workspace = get_latest_workspace()
     if not workspace:
@@ -111,7 +111,7 @@ async def list_files(path: str = ""):
 
 
 @app.get("/api/file/{file_path:path}")
-async def read_file(file_path: str):
+async def read_file(file_path: str) -> FileResponse | JSONResponse | Response:
     """Read a file from the workspace."""
     workspace = get_latest_workspace()
     if not workspace:
@@ -157,7 +157,7 @@ async def read_file(file_path: str):
 
 
 @app.post("/api/save_summary")
-async def save_summary(request: Request):
+async def save_summary(request: Request) -> dict[str, str]:
     """Save agent conversation summary as work product."""
     workspace = get_latest_workspace()
     if not workspace:
@@ -194,7 +194,7 @@ async def save_summary(request: Request):
 
 
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket_endpoint(websocket: WebSocket) -> None:
     """
     WebSocket endpoint for real-time agent communication.
 

@@ -156,7 +156,7 @@ class HeartbeatState:
     last_retry_delay_seconds: float = 0.0
     recent_topics: Optional[list[dict]] = None
     
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         return {
             "last_run": self.last_run,
             "last_message_hash": self.last_message_hash,
@@ -171,7 +171,7 @@ class HeartbeatState:
         }
 
     @classmethod
-    def from_dict(cls, data: dict):
+    def from_dict(cls, data: dict[str, Any]) -> "HeartbeatState":
         obj = cls()
         obj.last_run = data.get("last_run", 0.0)
         obj.last_message_hash = data.get("last_message_hash")
@@ -1480,14 +1480,14 @@ class HeartbeatService:
 
         return visibility
 
-    async def start(self):
+    async def start(self) -> None:
         if self.running:
             return
         self.running = True
         self.task = asyncio.create_task(self._scheduler_loop())
         logger.info("💓 Heartbeat Service started")
 
-    async def stop(self):
+    async def stop(self) -> None:
         if not self.running:
             return
         self.running = False
@@ -1499,11 +1499,11 @@ class HeartbeatService:
                 pass
         logger.info("💔 Heartbeat Service stopped")
 
-    def register_session(self, session: GatewaySession):
+    def register_session(self, session: GatewaySession) -> None:
         logger.info(f"Registering session {session.session_id} for heartbeat")
         self.active_sessions[session.session_id] = session
 
-    def unregister_session(self, session_id: str):
+    def unregister_session(self, session_id: str) -> None:
         if session_id in self.active_sessions:
             del self.active_sessions[session_id]
 

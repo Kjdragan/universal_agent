@@ -39,7 +39,7 @@ THEMES = {
     """
 }
 
-def compile_report(work_dir, theme_name="modern", custom_css=None):
+def compile_report(work_dir: str | Path, theme_name: str = "modern", custom_css: str | None = None) -> str:
     """
     Compile markdown sections into a single HTML report.
     """
