@@ -19,6 +19,7 @@ from composio import Composio
 import yaml
 
 from universal_agent.agentmail_official import build_agentmail_mcp_server_config
+from universal_agent.arxiv_runtime import build_arxiv_mcp_server_config
 from universal_agent.execution_context import bind_workspace_env
 from universal_agent.feature_flags import (
     coder_vp_enabled,
@@ -570,6 +571,13 @@ class AgentSetup:
         notebooklm_config = build_notebooklm_mcp_server_config()
         if notebooklm_config is not None:
             servers["notebooklm-mcp"] = notebooklm_config
+
+        # ArXiv MCP server (feature-gated, default off). Required by the
+        # paper-to-podcast skill/cron — its built-in 3s rate limiting fixes the
+        # raw-`arxiv`-library 429 failures. Enabled in prod via Infisical.
+        arxiv_config = build_arxiv_mcp_server_config()
+        if arxiv_config is not None:
+            servers["arxiv-mcp-server"] = arxiv_config
 
         agentmail_config = build_agentmail_mcp_server_config()
         if agentmail_config is not None:

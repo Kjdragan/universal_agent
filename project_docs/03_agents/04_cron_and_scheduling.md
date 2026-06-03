@@ -6,7 +6,8 @@ subsystem: agents-cron
 code_paths:
   - src/universal_agent/cron_service.py
   - src/universal_agent/gateway_server.py
-last_verified: 2026-06-01
+  - src/universal_agent/task_hub.py
+last_verified: 2026-06-03
 ---
 
 # Cron & Scheduling
@@ -315,6 +316,26 @@ py-spy) — `_run_job` calls `await asyncio.to_thread(self._finalize_workflow_at
 > thread. The other seven `_finalize_workflow_attempt` call sites run on-loop
 > and were unaffected. Regression test:
 > `tests/unit/test_cron_retry_offloop_scheduling.py`.
+
+> **Phantom-reap gotcha (fixed 2026-06-03).** In-process LLM crons run inside the
+> daemon and their Task Hub assignment carries **no `provider_session_id`** (the
+> PID/session-stamping in `ensure_cron_task_link` only applies to `!script`
+> subprocess crons), so `task_hub.py::reconcile_task_lifecycle` — which protects a
+> running assignment only when its session id is in the live-session set — cannot
+> recognise an in-process cron as alive. That reconcile is invoked on **every
+> dashboard read** of the agent queue
+> (`gateway_server.py::dashboard_todolist_agent_queue`), so simply *opening Task
+> Hub* while `paper_to_podcast_daily` was mid-run (these poll NotebookLM for
+> 10–20 min) false-orphaned the live run: assignment → `failed`
+> (`reconciled_orphaned_assignment`), the task bounced back to the unassigned
+> column, while the in-process worker kept running underneath. Fix: the on-demand
+> caller passes `cron_live_grace_seconds`
+> (`gateway_server.py::_cron_reconcile_grace_seconds`,
+> `UA_CRON_RECONCILE_GRACE_SECONDS`, default 3600s) and `reconcile_task_lifecycle`
+> skips reaping a cron-owned assignment younger than that window. **Startup
+> recovery deliberately keeps `cron_live_grace_seconds=0`** so a genuinely
+> crash-orphaned cron is still reaped immediately. Regression test:
+> `tests/unit/test_cron_reconcile_grace.py`.
 
 ## Outputs, persistence & wake
 
