@@ -1,10 +1,13 @@
 """Universal CSI source liveness invariant.
 
-One probe that watches every CSI adapter (youtube_channel_rss,
-youtube_playlist, reddit_discovery, threads_owned, threads_trends_seeded,
-threads_trends_broad, hackernews, csi_analytics) by checking
-`max(occurred_at)` per source in csi.db's `events` table against a
-per-source expected-max-silence threshold.
+One probe that watches every active CSI adapter (youtube_channel_rss,
+reddit_discovery, threads_owned, threads_trends_seeded, threads_trends_broad,
+hackernews, csi_analytics) by checking `max(occurred_at)` per source in
+csi.db's `events` table against a per-source expected-max-silence threshold.
+
+`youtube_playlist` was dropped from monitoring 2026-06-03: the
+youtube_playlist_watcher was retired in PR #438 (daily digest is the
+canonical trigger), so it is intentionally silent and must not alert.
 
 Why one invariant instead of six: the framework emits at most one finding
 per invariant. Splitting into six would create six emails per dead CSI
@@ -32,15 +35,15 @@ logger = logging.getLogger(__name__)
 
 
 # Per-source expected max silence in hours. Conservative defaults: leave
-# breathing room for low-cadence sources (youtube_playlist, threads_trends_*)
-# while still catching the 40h+ failure mode that prompted P1a. Tune via
-# follow-up PR once we have a few weeks of operational data — never silence
-# a source entirely.
+# breathing room for low-cadence sources (threads_trends_*) while still
+# catching the 40h+ failure mode that prompted P1a. Tune via follow-up PR
+# once we have a few weeks of operational data — never silence an ACTIVE
+# source entirely (retired adapters should be removed from this table, not
+# given an unreachable threshold).
 SOURCE_THRESHOLDS_HOURS: Dict[str, float] = {
     "hackernews": 3.0,                   # very high frequency (every 30 min cron + adapter poll)
     "csi_analytics": 12.0,               # downstream aggregator — depends on upstream cadence
     "youtube_channel_rss": 12.0,         # 444-channel watchlist, hourly-ish per channel
-    "youtube_playlist": 48.0,            # playlists tick less often than channels
     "reddit_discovery": 12.0,            # subreddit polling
     "threads_owned": 12.0,               # owned-handle polling
     "threads_trends_seeded": 24.0,       # broad seeded queries, lower cadence
