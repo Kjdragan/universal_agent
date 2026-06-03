@@ -1,11 +1,11 @@
 import asyncio
 import json
 import os
-from pathlib import Path
 import sys
-from typing import Optional
+from typing import Any, Optional
 
 from anthropic import AsyncAnthropic
+from pathlib import Path
 
 from universal_agent.rate_limiter import ZAIRateLimiter
 from universal_agent.utils.model_resolution import resolve_opus
@@ -15,7 +15,7 @@ API_KEY = os.getenv("ANTHROPIC_AUTH_TOKEN") or os.getenv("ZAI_API_KEY")
 BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic")
 MODEL = resolve_opus()
 
-async def write_section(limiter: ZAIRateLimiter, client, section, corpus_text, order, base_path: Path):
+async def write_section(limiter: ZAIRateLimiter, client: AsyncAnthropic, section: dict[str, Any], corpus_text: str, order: int, base_path: Path) -> None:
     """Write a single section using centralized rate limiter."""
     # Prefix with order number for correct assembly order
     output_dir = base_path / "work_products" / "_working" / "sections"
@@ -170,7 +170,7 @@ async def draft_report_async(
     
     return f"Drafting complete. Check {workspace_path}/work_products/_working/sections/"
 
-async def main():
+async def main() -> None:
     # CLI Wrapper
     workspace = None
     if len(sys.argv) > 1:
