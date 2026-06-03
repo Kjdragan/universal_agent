@@ -11,10 +11,11 @@ code_paths:
   - src/universal_agent/services/youtube_playlist_manager.py
   - src/universal_agent/services/youtube_oauth_health.py
   - src/universal_agent/services/invariants/youtube_invariants.py
+  - src/universal_agent/services/invariants/csi_source_liveness.py
   - src/universal_agent/youtube_mode_utils.py
   - src/universal_agent/proactive_signals.py
   - src/universal_agent/services/scratch_publish.py
-last_verified: 2026-06-02
+last_verified: 2026-06-03
 ---
 
 # YouTube CSI Flow
@@ -457,7 +458,12 @@ hadn't written. Two heartbeat invariants now guard it
   7-day window.
 
 `csi_source_liveness` separately checks `max(occurred_at)` freshness per source
-in `csi.db`.
+in `csi.db`. The monitored set comes from `csi_source_liveness.effective_source_thresholds`,
+which applies parking flags to the base `SOURCE_THRESHOLDS_HOURS` table: `youtube_playlist`
+was dropped (retired in PR #438; intentionally silent), and the experimental Threads lanes
+(`threads_owned`, `threads_trends_seeded`, `threads_trends_broad`) are excluded unless
+`UA_CSI_THREADS_LANES_ENABLED=1` — their adapters are also `enabled: false` in the CSI
+ingester config while parked, so they neither run nor alert until re-enabled with creds.
 
 ---
 

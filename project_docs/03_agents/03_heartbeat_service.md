@@ -6,6 +6,8 @@ subsystem: agents-heartbeat
 code_paths:
   - src/universal_agent/heartbeat_service.py
   - src/universal_agent/utils/heartbeat_findings_schema.py
+  - src/universal_agent/heartbeat_mediation.py
+  - src/universal_agent/hooks_service.py
   - src/universal_agent/gateway_server.py
   - src/universal_agent/services/dispatch_service.py
   - src/universal_agent/services/agent_router.py
@@ -139,6 +141,8 @@ When `_run_heartbeat` finishes it emits a `heartbeat_completed` event (via the `
 6. If dispatch is allowed, `_dispatch_heartbeat_to_simone` runs in the background: it builds a `simone_heartbeat_<suffix>` session and a structured handoff message (findings JSON sliced to the first 24000 characters — `json.dumps(...)[:24000]`, so ~24 KB for ASCII but more for multibyte content) and calls `_hooks_service.dispatch_internal_action_background_with_admission` with `name="AutoHeartbeatInvestigation"`.
 
 The handoff message encodes the **remediation policy**: Simone searches memory for the finding signature/classification/error text, then makes an active decision — autonomous remediation (preferred when the fix is bounded, reversible, testable, locally verifiable) or refer to Kevin (extreme safety net: destructive changes, data-boundary exposure, secrets/security policy, unusually complex design, weak-evidence unique failures, production deploy approval). Simone does **not** edit code in the investigation session; she writes `work_products/heartbeat_investigation_summary.md` (+ optional `.json` with `autonomous_remediation_approved`, confidence, rationale, memory evidence, proposed changes) so Task Hub/Cody can apply and verify.
+
+**Per-finding triage (anti-collapse).** A heartbeat finding set is frequently heterogeneous — a false alarm and a real outage can land in the same heartbeat. The policy therefore requires Simone to triage **each finding independently** and emit a `findings_triage` array (one entry per finding: `finding_id, title, severity, verdict ∈ {real, false_positive, monitor}, justification, recommended_next_step, operator_review_required`). She must not classify the whole set by its most salient finding. On the consumer side, `hooks_service._emit_heartbeat_investigation_completion` runs the deterministic backstop `heartbeat_mediation.derive_heartbeat_operator_review`, which ORs the global `operator_review_required` with a per-finding scan: any `verdict=real`, any per-entry review flag, or any **critical finding not positively cleared as a false positive** forces operator review regardless of the headline classification. This exists because (2026-06-03) a false-positive CSI freshness alert got a whole set labelled `false_positive_with_code_bug`, masking a genuine `csi_source_liveness` outage (5/8 CSI adapters dark for weeks).
 
 ```mermaid
 sequenceDiagram

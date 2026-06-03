@@ -119,25 +119,22 @@ def test_one_stale_source_emits_one_finding(tmp_path: Path) -> None:
 
 
 def test_multiple_stale_sources_listed_in_one_finding(tmp_path: Path) -> None:
-    """Three of N sources dead → ONE finding listing them (operator gets
-    full picture per alert, not three separate emails). Other monitored
-    sources are also seeded fresh so we can assert just on the stale set."""
+    """Multiple monitored sources dead → ONE finding listing them all (operator
+    gets the full picture per alert, not one email per source). One source is
+    seeded fresh so we can assert the finding contains only the stale set.
+    Built from the effective (parking-aware) monitored set so it stays correct
+    as lanes are added/removed."""
     from universal_agent.services.invariants.csi_source_liveness import (
-        SOURCE_THRESHOLDS_HOURS,
+        effective_source_thresholds,
     )
     db = tmp_path / "csi.db"
-    stale_sources_expected = {
-        "youtube_channel_rss",
-        "reddit_discovery",
-        "threads_trends_broad",
-    }
-    rows: list[tuple[str, str]] = []
-    for source in SOURCE_THRESHOLDS_HOURS:
-        if source in stale_sources_expected:
-            # well past every threshold
-            rows.append((source, _hours_ago(200)))
-        else:
-            rows.append((source, _hours_ago(0.5)))
+    monitored = list(effective_source_thresholds())
+    fresh = monitored[-1]
+    stale_sources_expected = {s for s in monitored if s != fresh}
+    rows = [
+        (source, _hours_ago(200) if source in stale_sources_expected else _hours_ago(0.5))
+        for source in monitored
+    ]
     _seed_events(db, rows)
     findings = run_invariants({"csi_db_path": db})
     matches = [f for f in findings if f.metric_key == "csi_source_liveness"]
@@ -145,6 +142,48 @@ def test_multiple_stale_sources_listed_in_one_finding(tmp_path: Path) -> None:
     obs = matches[0].observed_value or {}
     stale_actual = {s["source"] for s in obs.get("stale_sources") or []}
     assert stale_actual == stale_sources_expected
+
+
+def test_threads_lanes_parked_by_default(tmp_path: Path, monkeypatch) -> None:
+    """Threads lanes are experimental + parked: even with zero threads events
+    they must NOT appear as stale while UA_CSI_THREADS_LANES_ENABLED is off."""
+    monkeypatch.delenv("UA_CSI_THREADS_LANES_ENABLED", raising=False)
+    from universal_agent.services.invariants.csi_source_liveness import (
+        _THREADS_SOURCES,
+        effective_source_thresholds,
+    )
+    # No threads source is in the effective set while parked.
+    assert not (_THREADS_SOURCES & set(effective_source_thresholds()))
+    db = tmp_path / "csi.db"
+    # Seed every NON-threads source fresh; threads get nothing.
+    _seed_events(db, [(s, _hours_ago(0.5)) for s in effective_source_thresholds()])
+    findings = run_invariants({"csi_db_path": db})
+    matches = [f for f in findings if f.metric_key == "csi_source_liveness"]
+    assert matches == []
+
+
+def test_threads_lanes_monitored_when_flag_enabled(tmp_path: Path, monkeypatch) -> None:
+    """Flipping UA_CSI_THREADS_LANES_ENABLED=1 re-activates threads monitoring,
+    so a dark threads lane fires again."""
+    monkeypatch.setenv("UA_CSI_THREADS_LANES_ENABLED", "1")
+    from universal_agent.services.invariants.csi_source_liveness import (
+        _THREADS_SOURCES,
+        effective_source_thresholds,
+    )
+    assert _THREADS_SOURCES <= set(effective_source_thresholds())
+    db = tmp_path / "csi.db"
+    # All non-threads sources fresh; threads_owned never seeded → never_seen.
+    rows = [
+        (s, _hours_ago(0.5))
+        for s in effective_source_thresholds()
+        if s != "threads_owned"
+    ]
+    _seed_events(db, rows)
+    findings = run_invariants({"csi_db_path": db})
+    matches = [f for f in findings if f.metric_key == "csi_source_liveness"]
+    assert len(matches) == 1
+    stale = {s["source"] for s in (matches[0].observed_value or {}).get("stale_sources") or []}
+    assert "threads_owned" in stale
 
 
 def test_completely_missing_source_emits_finding(tmp_path: Path) -> None:
@@ -155,11 +194,11 @@ def test_completely_missing_source_emits_finding(tmp_path: Path) -> None:
         SOURCE_THRESHOLDS_HOURS,
     )
     db = tmp_path / "csi.db"
-    # All sources fresh EXCEPT youtube_playlist (never seeded)
+    # All sources fresh EXCEPT csi_analytics (never seeded)
     rows = [
         (source, _hours_ago(0.5))
         for source in SOURCE_THRESHOLDS_HOURS
-        if source != "youtube_playlist"
+        if source != "csi_analytics"
     ]
     _seed_events(db, rows)
     findings = run_invariants({"csi_db_path": db})
@@ -167,9 +206,9 @@ def test_completely_missing_source_emits_finding(tmp_path: Path) -> None:
     assert len(matches) == 1
     obs = matches[0].observed_value or {}
     stale_list = obs.get("stale_sources") or []
-    yt_playlist = [s for s in stale_list if s["source"] == "youtube_playlist"]
-    assert len(yt_playlist) == 1
-    assert yt_playlist[0]["state"] == "never_seen"
+    missing = [s for s in stale_list if s["source"] == "csi_analytics"]
+    assert len(missing) == 1
+    assert missing[0]["state"] == "never_seen"
 
 
 def test_missing_csi_db_path_is_silent(tmp_path: Path) -> None:
