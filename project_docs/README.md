@@ -106,6 +106,7 @@ _Operating playbook, verification rules, dormancy, VPS recovery, incident patter
 - **[Dormancy & Operating Hours](08_operations/03_dormancy_and_operating_hours.md)** — 6AM-10PM Houston active window, content-gen vs infra-event distinction, documented exceptions, guard test. _(verified 2026-05-29)_
 - **[VPS Recovery & Security](08_operations/04_vps_recovery_and_security.md)** — Watchdog/timers, service recovery, host hardening, daily ops. _(verified 2026-05-29)_
 - **[Incident Response Patterns](08_operations/05_incident_response_patterns.md)** — Recurring incident classes + recovery: rogue autonomous branch, .venv corruption, gateway wedge, event-loop starvation. _(verified 2026-05-29)_
+- **[Self-Improving CLAUDE.md Stop Hook](08_operations/06_self_improving_claude_md_hook.md)** — Desktop-local Stop hook that reflects on each session and drafts CLAUDE.md improvement proposals for review. _(verified 2026-06-03)_
 
 ---
 
