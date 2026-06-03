@@ -25962,12 +25962,35 @@ async def dashboard_todolist_completed(limit: int = 60):
             workspace = assignment_workspace
             if not workspace and result_ref.startswith("workspace://"):
                 workspace = result_ref.replace("workspace://", "", 1)
-            item["canonical_execution_session_id"] = str(
+            # Direct VP missions (dispatch_channel=agent_tool — e.g. the daily
+            # autonomous-operations briefing) carry no Task Hub assignment row
+            # and no dispatch.cody_* metadata, so assignment.session_id is
+            # empty. But the three-panel viewer keys its VP-mission special
+            # case on a ``vp-mission-<id>`` session_id (web-ui/app/page.tsx
+            # auto-switch at L845 + viewer/resolver workspace_dir branch). The
+            # mission's own task_id IS that mirror id, so stamp it as the
+            # canonical session id — mirroring the cody branch above. Without
+            # this the Workspace button resolves to a run_id-only target,
+            # page.tsx drops the workspace, and the three-panel view never
+            # populates from the session run.
+            explicit_session_id = str(
                 assignment.get("session_id") or assignment.get("provider_session_id") or ""
-            ) or None
+            )
+            task_id_value = str(item.get("task_id") or "").strip()
+            source_kind_value = str(item.get("source_kind") or "").strip()
+            vp_mission_session_id = (
+                task_id_value
+                if (
+                    source_kind_value == "vp_mission"
+                    or task_id_value.startswith("vp-mission-")
+                )
+                else ""
+            )
+            canonical_session_id = explicit_session_id or vp_mission_session_id
+            item["canonical_execution_session_id"] = canonical_session_id or None
             item["canonical_execution_run_id"] = str(assignment.get("workflow_run_id") or "") or None
             item["canonical_execution_workspace"] = workspace or None
-            link_session_id = assignment_session_id
+            link_session_id = canonical_session_id
             link_workspace = workspace
 
         links = _task_history_links_for_session(

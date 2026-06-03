@@ -220,3 +220,66 @@ def test_completed_enrichment_falls_through_for_non_delegated_tasks(tmp_path: Pa
     assert item["links"]["session_id"] == "daemon_simone_todo"
     assert item["links"]["workspace_dir"] == str(simone_ws)
     assert item["canonical_execution_session_id"] == "daemon_simone_todo"
+
+
+def test_completed_enrichment_stamps_vp_mission_id_for_direct_missions(tmp_path: Path) -> None:
+    """Direct VP missions (dispatch_channel=agent_tool, e.g. the daily
+    autonomous briefing) have no assignment row and no dispatch.cody_*
+    metadata — only a ``result_ref`` workspace pointer and
+    ``source_kind=vp_mission``. The completed enrichment must stamp the
+    mission's own ``vp-mission-<id>`` task_id as the canonical session id so
+    the frontend resolver returns a *session* target and the three-panel
+    Workspace view populates. Pre-fix this yielded ``session_id=None`` →
+    a run-only target → empty three-panel view.
+    """
+    workspaces = tmp_path / "AGENT_RUN_WORKSPACES"
+    mission_id = "vp-mission-f17cd18dac2f708c1a4a9e2c"
+    mission_ws = workspaces / "vp_general_primary_external" / mission_id / mission_id
+    mission_ws.mkdir(parents=True)
+    (mission_ws / "run.log").write_text("briefing run")
+
+    gs = _load_gateway_module(workspaces)
+
+    fake_rows = [
+        {
+            "task_id": mission_id,
+            "source_kind": "vp_mission",
+            "status": "completed",
+            "metadata": {
+                "vp_id": "vp.general.primary",
+                "mission_type": "briefing",
+                "dispatch_channel": "agent_tool",
+                "vp_terminal_status": "completed",
+                "result_ref": f"workspace://{mission_ws}",
+                "terminal_disposition": "completed_without_pr",
+            },
+            # Direct missions complete without a Task Hub assignment row.
+            "last_assignment": None,
+        }
+    ]
+
+    def _fake_list_completed(_conn: Any, *, limit: int = 80) -> list[dict[str, Any]]:
+        return list(fake_rows)
+
+    with patch.object(gs.task_hub, "list_completed_tasks", _fake_list_completed):
+        class _FakeConn:
+            def close(self) -> None:
+                return None
+
+        with patch.object(gs, "_task_hub_open_conn", lambda: _FakeConn()):
+            with patch.object(gs, "_activity_store_lock") as lock:
+                lock.__enter__ = lambda self: None
+                lock.__exit__ = lambda self, *_a: None
+                import asyncio
+
+                payload = asyncio.run(gs.dashboard_todolist_completed(limit=10))
+
+    item = payload["items"][0]
+    expected_rel = f"vp_general_primary_external/{mission_id}/{mission_id}"
+    # The mission's task_id is stamped as the canonical/link session id.
+    assert item["canonical_execution_session_id"] == mission_id
+    assert item["links"]["session_id"] == mission_id
+    # Workspace deep-link resolves from the result_ref pointer.
+    assert item["canonical_execution_workspace"] == str(mission_ws)
+    assert item["links"]["workspace_dir"] == str(mission_ws)
+    assert item["links"]["workspace_name"] == expected_rel
