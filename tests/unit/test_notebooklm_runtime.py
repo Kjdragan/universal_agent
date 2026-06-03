@@ -60,7 +60,7 @@ def test_auth_preflight_passes_without_seed(monkeypatch, tmp_path):
     monkeypatch.setenv("UA_NOTEBOOKLM_CLI_COMMAND", "nlm")
 
     def _fake_run(args, timeout_seconds):
-        assert args[:2] == ["nlm", "auth"]
+        assert args[:3] == ["nlm", "login", "--check"]
         return _FakeCompleted(0)
 
     monkeypatch.setattr(notebooklm_runtime, "_run_command", _fake_run)
@@ -86,9 +86,9 @@ def test_auth_preflight_seeds_and_cleans_file(monkeypatch, tmp_path):
     def _fake_run(args, timeout_seconds):
         nonlocal seen_seed_file
         calls.append(args)
-        if args[:3] == ["nlm", "auth", "status"]:
+        if args[:3] == ["nlm", "login", "--check"]:
             # Fail first check, pass second.
-            if len([c for c in calls if c[:3] == ["nlm", "auth", "status"]]) == 1:
+            if len([c for c in calls if c[:3] == ["nlm", "login", "--check"]]) == 1:
                 return _FakeCompleted(1)
             return _FakeCompleted(0)
         if args[:3] == ["nlm", "login", "--manual"]:
@@ -140,14 +140,22 @@ def test_auth_preflight_reports_missing_cli_cleanly(monkeypatch, tmp_path):
     assert "auth_cli_missing:FileNotFoundError" in result.errors
 
 
-# --- v0.5.4 upgrade tests ---
+# --- auth-command regression guard ---
 
 
-@pytest.mark.skip(reason=_NLM_CLI_MISSING_REASON)
-def test_auth_preflight_uses_auth_status_command(monkeypatch, tmp_path):
-    """Verify the preflight now invokes 'nlm auth status' instead of 'nlm login --check'."""
+def test_auth_preflight_uses_login_check_command(monkeypatch, tmp_path):
+    """Regression guard: the preflight must invoke the real 'nlm login --check'.
+
+    A prior change switched this to 'nlm auth status' — a subcommand that has
+    never existed in notebooklm-mcp-cli — which made the preflight always report
+    auth failure in production (verified against v0.7.0, 2026-06-03). This test
+    pins the exact command so the bogus form can't return. It mocks both
+    ``shutil.which`` (so it runs in CI/sandbox without the real ``nlm`` binary)
+    and ``_run_command``.
+    """
     monkeypatch.setenv("UA_NOTEBOOKLM_PROFILE", "vps")
     monkeypatch.setenv("UA_NOTEBOOKLM_CLI_COMMAND", "nlm")
+    monkeypatch.setattr(notebooklm_runtime.shutil, "which", lambda name: "/usr/bin/nlm")
 
     captured_args: list[list[str]] = []
 
@@ -159,8 +167,9 @@ def test_auth_preflight_uses_auth_status_command(monkeypatch, tmp_path):
 
     result = notebooklm_runtime.run_auth_preflight(str(tmp_path))
     assert result.ok is True
-    # The first call should be 'nlm auth status --profile vps'
-    assert captured_args[0] == ["nlm", "auth", "status", "--profile", "vps"]
+    # The first call must be 'nlm login --check --profile vps' — NOT 'nlm auth status'.
+    assert captured_args[0] == ["nlm", "login", "--check", "--profile", "vps"]
+    assert ["nlm", "auth", "status", "--profile", "vps"] not in captured_args
 
 
 def test_notebooklm_research_import_timeout_default(monkeypatch):
