@@ -2282,7 +2282,7 @@ def _emit_csi_digest(
     """Write the daily digest as a CSI digest record for dashboard visibility.
 
     The digest is stored in the same SQLite DB used by the UA gateway's CSI
-    Feed, so it shows up alongside Reddit/Threads/YouTube RSS digests and
+    Feed, so it shows up alongside Threads/YouTube RSS digests and
     can be processed by the batch brief / proactive signal pipeline.
     """
     # Locate the CSI digests DB — same path the gateway uses

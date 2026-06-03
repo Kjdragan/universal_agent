@@ -510,7 +510,7 @@ async def csi_source_health_wrapper(args: Dict[str, Any]) -> Dict[str, Any]:
 
 @tool(
     name="csi_watchlist_snapshot",
-    description="Read CSI watchlist coverage/freshness snapshot for YouTube and Reddit plus recent source activity.",
+    description="Read CSI watchlist coverage/freshness snapshot for YouTube plus recent source activity.",
     input_schema={
         "window_hours": int,
         "save_to_workspace": bool,
