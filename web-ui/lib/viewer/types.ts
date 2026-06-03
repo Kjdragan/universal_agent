@@ -15,6 +15,12 @@ export type SessionViewTarget = {
   is_live_session: boolean;
   source: string;
   viewer_href: string;
+  // AGENT_RUN_WORKSPACES-relative dir holding a VP CLI mission's run.log /
+  // cli_stream.log (vp_<vp>_external/<mission>/<mission>/). Empty unless the
+  // resolver located it. Forwarded to the viewer as the `log_ws` URL param so
+  // the Activity panel can rehydrate a Cody demo run whose logs live outside
+  // its workspace_dir.
+  log_workspace_rel?: string | null;
 };
 
 export type ResolveInput = {

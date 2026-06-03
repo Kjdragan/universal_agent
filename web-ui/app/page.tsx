@@ -1571,6 +1571,12 @@ function ChatInterface() {
   // three-panel view's auto-switch effect at L842 can fire without an
   // extra round-trip. Empty for non-VP navigations.
   const [requestedWorkspaceFromUrl, setRequestedWorkspaceFromUrl] = useState("");
+  // Mission-log dir (AGENT_RUN_WORKSPACES-relative) supplied by the resolver via
+  // the `log_ws` URL param. A Cody CLI demo's run.log/cli_stream.log live under
+  // vp_<vp>_external/<mission>/<mission>/ — NOT in the demo workspace_dir — so
+  // the Activity panel can't find them from the workspace param alone. Empty for
+  // non-VP-mission navigations.
+  const [requestedLogWsFromUrl, setRequestedLogWsFromUrl] = useState("");
   const connectionStatus = useAgentStore((s) => s.connectionStatus);
   const ws = getWebSocket();
   const inputRef = React.useRef<HTMLInputElement>(null);
@@ -1745,6 +1751,7 @@ function ChatInterface() {
     setRequestedSessionIdFromUrl((params.get("session_id") || "").trim());
     setRequestedRunIdFromUrl((params.get("run_id") || "").trim());
     setRequestedWorkspaceFromUrl((params.get("workspace") || "").trim());
+    setRequestedLogWsFromUrl((params.get("log_ws") || "").trim());
     const role = (params.get("role") || "").trim().toLowerCase();
     const nextRole = role === "viewer" ? "viewer" : "writer";
     setChatRole(nextRole);
@@ -2013,6 +2020,12 @@ function ChatInterface() {
     const runId = effectiveRunId;
     if (!sessionId && !runId) return;
     const vpWorkspaceRel = workspaceRelativePathFromAbsolute(currentSession?.workspace || "");
+    // Where the VP mission's run.log/trace.json actually live (relative to
+    // AGENT_RUN_WORKSPACES). Prefer the resolver-provided mission-log dir
+    // (`log_ws`) — required for Cody demos whose logs are under
+    // vp_<vp>_external/<mission>/<mission>/, NOT in the demo workspace_dir —
+    // and fall back to the workspace-derived rel for in-tree VP missions.
+    const vpLogRel = (requestedLogWsFromUrl || "").trim() || vpWorkspaceRel;
     const hydrationKey = isVpObserverSession
       ? `${sessionId}::${vpWorkspaceRel || "no_workspace"}`
       : runId
@@ -2039,8 +2052,8 @@ function ChatInterface() {
         const useOpsTailHydration = sessionAttachMode === "tail" && !isVpObserverSession && !isRunWorkspaceOnly;
         const runLogUrl = useOpsTailHydration
           ? `/api/dashboard/gateway/api/v1/ops/logs/tail?session_id=${encodeURIComponent(sessionId)}&limit=2000`
-          : (isVpObserverSession && vpWorkspaceRel
-            ? `${API_BASE}/api/vps/file?scope=workspaces&path=${encodeURIComponent(`${vpWorkspaceRel}/run.log`)}`
+          : (isVpObserverSession && vpLogRel
+            ? `${API_BASE}/api/vps/file?scope=workspaces&path=${encodeURIComponent(`${vpLogRel}/run.log`)}`
             : buildDurableFileUrl(currentSession || { session_id: sessionId, run_id: runId, is_live_session: !isRunWorkspaceOnly }, "run.log"));
         let response = await fetch(runLogUrl, { cache: "no-store" });
         let didFallback = false;
@@ -2096,8 +2109,8 @@ function ChatInterface() {
           let usedTraceJson = false;
           if (!cancelled) {
             try {
-              const traceUrl = isVpObserverSession && vpWorkspaceRel
-                ? `${API_BASE}/api/vps/file?scope=workspaces&path=${encodeURIComponent(`${vpWorkspaceRel}/trace.json`)}`
+              const traceUrl = isVpObserverSession && vpLogRel
+                ? `${API_BASE}/api/vps/file?scope=workspaces&path=${encodeURIComponent(`${vpLogRel}/trace.json`)}`
                 : buildDurableFileUrl(currentSession || { session_id: sessionId, run_id: runId, is_live_session: !isRunWorkspaceOnly }, "trace.json");
               const traceResp = await fetch(traceUrl, { cache: "no-store" });
               if (traceResp.ok) {
@@ -2277,7 +2290,7 @@ function ChatInterface() {
     return () => {
       cancelled = true;
     };
-  }, [effectiveSessionId, effectiveRunId, isVpObserverSession, isRunWorkspaceOnly, currentSession, currentSession?.workspace, sessionAttachMode]);
+  }, [effectiveSessionId, effectiveRunId, isVpObserverSession, isRunWorkspaceOnly, currentSession, currentSession?.workspace, requestedLogWsFromUrl, sessionAttachMode]);
 
   return (
     <div className="flex flex-col h-full">

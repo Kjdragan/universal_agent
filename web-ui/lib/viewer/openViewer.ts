@@ -117,6 +117,12 @@ export async function openViewer(options: OpenViewerOptions): Promise<OpenViewer
   // mode at the mission directory.
   const workspaceDir = (target.workspace_dir || "").trim();
   if (workspaceDir) url.searchParams.set("workspace", workspaceDir);
+  // Forward the mission-log dir (if the resolver found one) so the Activity
+  // panel can rehydrate from run.log for VP CLI missions (esp. Cody demos)
+  // whose logs live under vp_<vp>_external/<mission>/<mission>/, not in
+  // workspace_dir.
+  const logWorkspaceRel = (target.log_workspace_rel || "").trim();
+  if (logWorkspaceRel) url.searchParams.set("log_ws", logWorkspaceRel);
   if (options.attachMode === "tail") {
     url.searchParams.set("attach", "tail");
   }
