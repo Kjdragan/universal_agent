@@ -6,11 +6,18 @@ been detecting. Before this, briefings_agent.py had no awareness of
 watchdog findings — operator got a daily digest that missed
 critical-tier system issues the watchdog had been flagging for hours.
 
-Two data sources combined:
-1. GET /api/v1/ops/proactive_health — current Layer-1+Layer-2 state
-   (best-effort: skipped if no UA_OPS_TOKEN, endpoint unreachable, etc.)
-2. task_hub_items WHERE source_kind = 'proactive_health' — persistent
-   backlog of unresolved findings parked by P0c + P3.
+Data source: GET /api/v1/ops/proactive_health — the live
+Layer-1 + Layer-2 watchdog state. It is always current because
+``build_proactive_health_payload`` re-runs every invariant probe on each
+call (best-effort: skipped if no UA_OPS_TOKEN, endpoint unreachable, etc.).
+
+(2026-06-03) proactive_health findings are no longer parked as Task Hub
+``needs_review`` rows. They are surfaced via this live endpoint, the
+Mission Control "System Health" panel, and critical email. The former
+``task_hub_items WHERE source_kind='proactive_health'`` backlog query was
+removed when the Task Hub write was retired — those rows would otherwise
+be permanently empty (and were a source of zombie rows, severity
+mislabel, and Kanban "Needs Review" pollution).
 
 Kill switch: `UA_BRIEFING_WATCHDOG_BLOCK_ENABLED=0` returns "".
 Default ON. Any helper exception is swallowed — the briefing must
@@ -19,10 +26,8 @@ never break because the watchdog query did.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
-import sqlite3
 from typing import Any
 
 import httpx
@@ -40,7 +45,7 @@ def _enabled() -> bool:
 
 def _fetch_current_findings() -> dict[str, Any] | None:
     """Hit the proactive_health endpoint. Returns None on any failure —
-    we proceed with task_hub-only rendering rather than block the briefing."""
+    we omit the watchdog block rather than block the briefing."""
     token = (os.getenv("UA_OPS_TOKEN") or "").strip()
     if not token:
         return None
@@ -57,37 +62,6 @@ def _fetch_current_findings() -> dict[str, Any] | None:
     except Exception as exc:  # noqa: BLE001 — never break the briefing
         logger.debug("watchdog briefing: endpoint fetch failed: %s", exc)
         return None
-
-
-def _fetch_taskhub_backlog() -> list[dict[str, Any]]:
-    """Query open proactive_health:* rows from the activity DB. The watchdog
-    parks one row per critical finding (P0c) and persistent warns after 3
-    consecutive heartbeats (P3). This list IS the operator's actionable
-    backlog. Returns [] on any failure."""
-    db_path = os.getenv("UA_ACTIVITY_DB_PATH") or "/opt/universal_agent/AGENT_RUN_WORKSPACES/activity_state.db"
-    rows: list[dict[str, Any]] = []
-    try:
-        conn = sqlite3.connect(db_path)
-        try:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.execute(
-                "SELECT task_id, status, title, updated_at FROM task_hub_items "
-                "WHERE source_kind = 'proactive_health' "
-                "AND status IN ('open', 'needs_review', 'in_progress') "
-                "ORDER BY updated_at DESC LIMIT 20"
-            )
-            for r in cursor.fetchall():
-                rows.append({
-                    "task_id": r["task_id"],
-                    "status": r["status"],
-                    "title": r["title"],
-                    "updated_at": r["updated_at"],
-                })
-        finally:
-            conn.close()
-    except (sqlite3.OperationalError, sqlite3.DatabaseError) as exc:
-        logger.debug("watchdog briefing: task_hub query failed: %s", exc)
-    return rows
 
 
 def _render_findings(findings: list[dict[str, Any]]) -> str:
@@ -111,20 +85,10 @@ def _render_findings(findings: list[dict[str, Any]]) -> str:
             line = f"- **[{sev.upper()}] `{metric}`** — {recommendation}"
             lines.append(line)
             if runbook:
-                # Truncate long runbooks; full text is in the task hub row metadata.
+                # Truncate long runbooks; full text is in the finding's
+                # observed_value on the live endpoint / System Health panel.
                 truncated = runbook if len(runbook) <= 200 else runbook[:200] + "..."
                 lines.append(f"  - Runbook: `{truncated}`")
-    return "\n".join(lines)
-
-
-def _render_backlog(rows: list[dict[str, Any]]) -> str:
-    if not rows:
-        return ""
-    lines = []
-    for r in rows:
-        lines.append(
-            f"- `{r['task_id']}` (status={r['status']}, updated {r['updated_at']}) — {r['title']}"
-        )
     return "\n".join(lines)
 
 
@@ -137,7 +101,6 @@ def build_briefing_block() -> str:
 
     try:
         payload = _fetch_current_findings()
-        backlog = _fetch_taskhub_backlog()
     except Exception as exc:  # noqa: BLE001 — defensive belt-and-suspenders
         logger.warning("watchdog briefing: top-level failure: %s", exc, exc_info=True)
         return ""
@@ -148,29 +111,23 @@ def build_briefing_block() -> str:
     parked_count = ((payload or {}).get("parked_tasks") or {}).get("count") or 0
 
     findings_md = _render_findings(findings)
-    backlog_md = _render_backlog(backlog)
 
-    # If absolutely nothing to report (healthy state + empty backlog),
+    # If absolutely nothing to report (healthy state + no active findings),
     # return "" so the briefing isn't padded with noise.
-    if not findings_md and not backlog_md and overall_status in ("ok", "unknown"):
+    if not findings_md and overall_status in ("ok", "unknown"):
         return ""
 
     block: list[str] = []
     block.append(f"## Watchdog Status — overall: {overall_status}")
     block.append("")
     block.append(
-        f"_Layer 1: {stale_count} stale in-progress task(s), {parked_count} parked. "
-        "Source: `/api/v1/ops/proactive_health` + Task Hub `proactive_health:*` rows._"
+        f"_Layer 1: {stale_count} stale in-progress task(s), {parked_count} parked work item(s). "
+        "Source: live `/api/v1/ops/proactive_health` (also on the Mission Control **System Health** panel)._"
     )
 
     if findings_md:
         block.append("")
         block.append("### Active alerts (current heartbeat)")
         block.append(findings_md)
-
-    if backlog_md:
-        block.append("")
-        block.append("### Open Task Hub backlog (unresolved watchdog findings)")
-        block.append(backlog_md)
 
     return "\n".join(block)

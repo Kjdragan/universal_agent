@@ -14,7 +14,8 @@ code_paths:
   - src/universal_agent/services/system_load_guard.py
   - src/universal_agent/task_hub.py
   - src/universal_agent/durable/state.py
-last_verified: 2026-05-29
+  - src/universal_agent/services/proactive_health_notifier.py
+last_verified: 2026-06-03
 ---
 
 # Agent Operating Playbook
@@ -69,12 +70,57 @@ window?" — and the answer is almost always yes.
 | `tutorial_build`, `cody_scaffold_request` | Cody |
 | `cron_run` failures needing investigation | Atlas |
 | `chat_panel` (operator chat) | Simone |
-| `proactive_health:invariant:*` | Simone (usually one tool call) |
+| `proactive_health:invariant:*` | **No Task Hub row** — surfaced via the Mission Control **System Health** panel (live `/api/v1/ops/proactive_health`) + critical email (see §1.1) |
 | `simone_chat` | Simone |
 | Anything unclear | Atlas by default |
 
 This is the **default**, overridable when delegation overhead clearly exceeds
 the work, or when a cross-task pattern is worth handling personally.
+
+### 1.1 `proactive_health` findings: surface, don't enqueue
+
+Critical pipeline-invariant findings from the Proactive Activity Watchdog
+(`services/proactive_health_notifier.run_pre_flight_check`) are **not** written
+to Task Hub. They surface through exactly two channels:
+
+| Channel | What it is | Audience |
+|---|---|---|
+| **System Health panel** | The canonical dashboard surface. A panel on the Mission Control tab that renders the live `GET /api/v1/ops/proactive_health` response (Layer 1 process-liveness + Layer 2 pipeline invariants). Always reflects current state — nothing to acknowledge, nothing to clear. | Operator + Simone |
+| **Critical email** | First-occurrence email per finding-id with a 6h cooldown (`proactive_health_notifier`), sent regardless of dormancy (infra incident-response, Exception #3). | Operator |
+
+```mermaid
+flowchart LR
+    PF["heartbeat pre-flight<br/>run_pre_flight_check"] --> INV["Layer-2 invariant probes"]
+    INV -->|critical, first occurrence| EM["critical email (6h cooldown)"]
+    EP["GET /api/v1/ops/proactive_health"] --> SHP["Mission Control<br/>System Health panel (live)"]
+    INV -.no longer.-x TH["Task Hub needs_review row"]
+```
+
+**The no-write decision (and why).** Earlier (2026-05-20, P0c) the pre-flight
+parked a `needs_review` Task Hub row for every critical finding
+(`task_id = proactive_health:<finding_id>`, `source_kind = proactive_health`).
+That channel was removed because it was **redundant** with the email + the live
+endpoint, and the rows themselves caused four concrete failure modes:
+
+- **Zombie rows** — a finding that self-healed (pipeline recovered) left a stale
+  `needs_review` row that nobody closed.
+- **Severity mislabel** — health findings landed in the same lane as real work,
+  so a transient invariant looked like a stalled mission.
+- **Board-lane pollution** — `proactive_health:*` rows crowded the "Needs Review"
+  lane, burying genuinely-stalled work.
+- **Resurrection-on-trash** — clearing a row by trashing it didn't stop the next
+  tick from re-parking an identical row, so they came back.
+
+The live endpoint has none of these problems: it is **stateless and
+self-healing** — when the underlying invariant recovers, the panel simply stops
+showing it. No acknowledge step, no clear step, no resurrection.
+
+**Consequence for the board.** The Task Hub **"Needs Review"** lane now means
+**only genuinely-stalled real work sessions** — missions/tasks that need human
+or rescue-evaluator attention. It is no longer a dumping ground for health
+findings. If a critical invariant reveals a real pipeline failure that needs a
+code fix, dispatch it as a normal investigation (route to Atlas/Cody via
+`vp_dispatch_mission`); do not re-park it as a health row.
 
 ### Simone's four context-dependent roles
 

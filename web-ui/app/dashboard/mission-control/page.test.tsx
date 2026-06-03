@@ -72,6 +72,15 @@ const HEALTH_PAYLOAD = {
   db_status: "connected",
 };
 
+// Default proactive-health payload: no findings → green empty state. The
+// honest-severity tests below override this per-render with their own
+// invariant list.
+const PROACTIVE_HEALTH_EMPTY = {
+  overall_status: "ok",
+  generated_at_utc: "2026-05-04T17:00:00Z",
+  invariants: [],
+};
+
 const READOUT_PAYLOAD_BEFORE = {
   status: "ok",
   generated_at: "2026-05-04T16:00:00Z",
@@ -100,7 +109,10 @@ const READOUT_PAYLOAD_AFTER = {
 
 type FetchInput = RequestInfo | URL;
 
-function buildFetchMock(jobScript: Array<Record<string, unknown>>) {
+function buildFetchMock(
+  jobScript: Array<Record<string, unknown>>,
+  healthPayload: Record<string, unknown> = PROACTIVE_HEALTH_EMPTY,
+) {
   let postCount = 0;
   let pollIdx = 0;
   let readoutAfterRefresh = false;
@@ -143,6 +155,7 @@ function buildFetchMock(jobScript: Array<Record<string, unknown>>) {
     if (url.includes("/api/v1/dashboard/mission-control/tiles")) return jsonResponse(TILES_PAYLOAD);
     if (url.includes("/api/v1/dashboard/mission-control/cards")) return jsonResponse(CARDS_PAYLOAD);
     if (url.includes("/api/v1/dashboard/todolist/agent-queue")) return jsonResponse(QUEUE_PAYLOAD);
+    if (url.includes("/api/v1/ops/proactive_health")) return jsonResponse(healthPayload);
     if (url.includes("/api/v1/health")) return jsonResponse(HEALTH_PAYLOAD);
     return jsonResponse({});
   });
@@ -289,5 +302,87 @@ describe("Mission Control async refresh", () => {
     // Sleep multiple poll intervals; pollIdx must NOT advance.
     await new Promise((r) => setTimeout(r, 200));
     expect(harness.counts().pollIdx).toBe(pollsAtCompletion);
+  });
+});
+
+describe("Mission Control System Health panel", () => {
+  beforeEach(() => {
+    window.__UA_MC_POLL_MS = 10;
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    delete window.__UA_MC_POLL_MS;
+  });
+
+  it("renders each invariant's OWN severity (warn vs critical) plus the runbook", async () => {
+    const harness = buildFetchMock(
+      [{ job_id: "job-1", status: "completed", readout_id: "after" }],
+      {
+        overall_status: "warn",
+        generated_at_utc: "2026-05-04T17:00:00Z",
+        invariants: [
+          {
+            finding_id: "f-warn",
+            metric_key: "stale_task_age",
+            severity: "warn",
+            title: "Stale tasks accumulating",
+            recommendation: "Run the stale-task reaper",
+            observed_value: { count: 3 },
+            runbook_command: "ua tasks reap --stale",
+            category: "task_hub",
+          },
+          {
+            finding_id: "f-crit",
+            metric_key: "dispatch_starvation",
+            severity: "critical",
+            title: "Dispatch queue starved",
+            recommendation: "Restart the dispatch sweep",
+            observed_value: 0,
+            runbook_command: "ua dispatch restart",
+            category: "dispatch",
+          },
+        ],
+      },
+    );
+    vi.stubGlobal("fetch", harness.mock);
+
+    render(<MissionControlPage />);
+
+    // Both finding titles surface.
+    await waitFor(() =>
+      expect(screen.getByText(/Stale tasks accumulating/)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/Dispatch queue starved/)).toBeInTheDocument();
+
+    // Honest severity: the warn finding shows a WARN badge, the critical
+    // finding shows a CRITICAL badge — NOT a uniform synthetic severity.
+    // ("warn" also appears in the header overall_status pill, so assert
+    // at-least-one; "critical" is unique to the critical finding's badge.)
+    expect(screen.getAllByText(/^warn$/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/^critical$/i)).toBeInTheDocument();
+
+    // Runbook command renders.
+    expect(screen.getByText("ua dispatch restart")).toBeInTheDocument();
+    expect(screen.getByText("ua tasks reap --stale")).toBeInTheDocument();
+  });
+
+  it("renders the green empty state when there are no failing invariants", async () => {
+    const harness = buildFetchMock(
+      [{ job_id: "job-1", status: "completed", readout_id: "after" }],
+      {
+        overall_status: "ok",
+        generated_at_utc: "2026-05-04T17:00:00Z",
+        invariants: [],
+      },
+    );
+    vi.stubGlobal("fetch", harness.mock);
+
+    render(<MissionControlPage />);
+
+    await waitFor(() =>
+      expect(screen.getByText(/All proactive invariants passing/)).toBeInTheDocument(),
+    );
   });
 });

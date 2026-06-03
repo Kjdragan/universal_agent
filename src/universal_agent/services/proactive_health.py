@@ -118,6 +118,10 @@ def _query_parked_tasks(conn: sqlite3.Connection) -> Dict[str, Any]:
             SELECT task_id, source_kind, title, updated_at
             FROM task_hub_items
             WHERE status = 'needs_review'
+              -- Exclude rows the watchdog itself wrote: parked_tasks.count
+              -- feeds _derive_overall_status -> 'warn' when >=1, so counting
+              -- proactive_health rows here would be a self-inflating loop.
+              AND source_kind != 'proactive_health'
             ORDER BY updated_at DESC
             """
         )

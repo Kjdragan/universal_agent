@@ -37,7 +37,7 @@ If a task takes >5 minutes of your context to do yourself, you should be asking:
 | `cody_scaffold_request` | **Cody** | Demo workspace build |
 | `cron_run` failures (anything that needs investigation) | **Atlas** | Root-cause analysis is research-shaped |
 | `chat_panel` (operator chat reply) | **Simone (you)** | Kevin is waiting on your voice |
-| `proactive_health:invariant:*` | **Simone (you)**, often | Decide-and-act; usually one tool call |
+| `proactive_health:invariant:*` | **Not a Task Hub row** | Surfaced via the Mission Control **System Health** panel (live `GET /api/v1/ops/proactive_health`) + a critical email. The heartbeat no longer parks `needs_review` rows for these. |
 | `simone_chat` | **Simone (you)** | By definition |
 | Anything else, unclear shape | **Atlas** by default | Unless you have a specific reason to keep it |
 
@@ -195,14 +195,14 @@ When you claim a task with `source_kind="vp_mission_failure"`, you are operating
   - Write the report to `work_products/system_health_latest.md` (overwrite each cycle).
 <!-- scope:hq -->
 - [ ] Proactive Activity Watchdog (run every heartbeat cycle) — catches pipelines that exited cleanly but produced incoherent output (the failure mode behind the 2026-05-18 YouTube `transcript_status='missing'` 38/38 incident).
-    1. Call `GET /api/v1/ops/proactive_health` (ops-auth required). The endpoint composes Layer 1 (cron registry, stale `in_progress` tasks past `UA_TASK_STALE_MIN_AGE_MINUTES`, parked `needs_review` tasks) and Layer 2 (pipeline invariants — e.g. `youtube_transcript_coverage`).
+    1. Call `GET /api/v1/ops/proactive_health` (ops-auth required). The endpoint composes Layer 1 (cron registry, stale `in_progress` tasks past `UA_TASK_STALE_MIN_AGE_MINUTES`, genuinely-stalled `needs_review` work sessions) and Layer 2 (pipeline invariants — e.g. `youtube_transcript_coverage`). NOTE: those `needs_review` rows are now ONLY real stalled work — the watchdog no longer parks health findings as `needs_review` rows (see item 8). This endpoint contract is unchanged.
     2. Append every entry from `invariants[]` to `findings[]` in `work_products/heartbeat_findings_latest.json` verbatim — the response already uses the canonical `HeartbeatFinding` schema with `category="proactive_health"`. Do not transform fields; the only merge step is appending.
     3. Bump `overall_status` to the worst-of (existing-status, response's `overall_status`). `warn` beats `ok`; `critical` beats everything.
     4. If `overall_status` from this section is `warn` or `critical`, surface a one-line summary in the heartbeat response noting the worst metric_key and the runbook_command, so the operator can act without opening the JSON.
     5. **Do not** invoke the invariant probes directly from the heartbeat shell — call the endpoint. Probes can mutate over time as pipeline owners register new ones; the endpoint is the stable contract.
     6. If the endpoint returns 5xx, log a `warn` finding with `metric_key='proactive_health_endpoint_down'` and `runbook_command='journalctl -u universal-agent-gateway --since "10 min ago" --no-pager'`. Do not block the rest of the heartbeat on this.
     7. Canonical reference: [`project_docs/04_intelligence/10_proactive_pipeline.md`](../project_docs/04_intelligence/10_proactive_pipeline.md) § "Health / invariants". Authoring a new invariant: add a probe in `services/invariants/proactive_pipeline_invariants.py` (that section documents the probe table, severities, and the fail-open contract).
-    8. **Triage `proactive_health:*` Task Hub rows.** Since 2026-05-20 (P0c) the heartbeat pre-flight automatically parks a `needs_review` row in Task Hub for every critical finding (`task_id = proactive_health:<finding_id>`, `source_kind = proactive_health`). When you encounter one in your sweep: read `metadata.runbook_command` and `metadata.recommendation`, investigate the underlying pipeline, and either (a) mark `status=completed` with a comment summarizing the fix, or (b) mark `status=blocked` with the operator-blocker reason. Do NOT mass-clear `proactive_health:*` rows without investigation — they represent real production pipeline failures the watchdog detected.
+    8. **`proactive_health:*` findings are NOT Task Hub rows.** The heartbeat pre-flight no longer parks a `needs_review` row per critical finding. Critical invariants now surface through exactly two channels: (a) a critical **email** to the operator on first occurrence (6h per-finding-id cooldown), and (b) the **System Health** panel on the dashboard Mission Control tab, which renders the live `GET /api/v1/ops/proactive_health` endpoint. You do NOT need to sweep Task Hub for `proactive_health:*` rows — there are none. The Task Hub "Needs Review" lane now means ONLY genuinely-stalled real work sessions, not health findings. If a critical invariant points at a real pipeline failure that needs code work, dispatch it like any other investigation (route to Atlas/Cody via `vp_dispatch_mission`); do not re-park it as a health row.
 <!-- scope:all -->
 - [ ] Mission Control build kickoff
   - Confirm first concrete milestone and produce a short execution checklist.

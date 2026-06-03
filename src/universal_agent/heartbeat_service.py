@@ -2753,66 +2753,17 @@ class HeartbeatService:
                         except Exception:  # noqa: BLE001
                             pass
 
-                # P0c (2026-05-20): emit a Task Hub `needs_review` row for
-                # every critical finding so unresolved findings persist past
-                # this heartbeat. Independent channel from the email path —
-                # losing one shouldn't lose both. Dedup: if a row with the
-                # same finding_id is already in an active status (open,
-                # needs_review, in_progress), upsert silently leaves it.
-                def _emit_finding_to_task_hub(finding: dict[str, Any]) -> None:
-                    finding_id = str(finding.get("finding_id") or finding.get("metric_key") or "unknown")
-                    task_id = f"proactive_health:{finding_id}"
-                    try:
-                        from universal_agent.durable.db import (
-                            connect_runtime_db,
-                            get_activity_db_path,
-                        )
-                        conn = connect_runtime_db(get_activity_db_path())
-                        try:
-                            existing = task_hub.get_item(conn, task_id)
-                            if existing and str(existing.get("status") or "").lower() in {
-                                "open", "needs_review", "in_progress",
-                            }:
-                                # Already parked — leave it alone, don't churn updated_at
-                                return
-                            task_hub.upsert_item(
-                                conn,
-                                {
-                                    "task_id": task_id,
-                                    "source_kind": "proactive_health",
-                                    "title": f"[CRITICAL] {finding.get('title') or finding_id}",
-                                    "status": "needs_review",
-                                    "metadata": {
-                                        "finding_id": finding_id,
-                                        "metric_key": finding.get("metric_key"),
-                                        "severity": finding.get("severity"),
-                                        "recommendation": finding.get("recommendation"),
-                                        "runbook_command": finding.get("runbook_command"),
-                                        "category": finding.get("category"),
-                                        "observed_value": finding.get("observed_value"),
-                                    },
-                                },
-                            )
-                            conn.commit()
-                        finally:
-                            try:
-                                conn.close()
-                            except Exception:  # noqa: BLE001
-                                pass
-                    except Exception:  # noqa: BLE001
-                        logger.warning(
-                            "proactive_health: failed to park task_hub row for %s",
-                            finding_id,
-                            exc_info=True,
-                        )
-
+                # proactive_health findings no longer create Task Hub rows.
+                # The durable alert-of-record is the critical email; the live
+                # state is read from GET /api/v1/ops/proactive_health by the
+                # dashboard surface. Writing rows here also self-inflated the
+                # parked_tasks count the watchdog itself observes, so it's gone.
                 await run_pre_flight_check(
                     workspace_dir=Path(str(session.workspace_dir)),
                     payload_builder=_build_payload,
                     agentmail_service=getattr(_gs, "_agentmail_service", None),
                     notifications_list=getattr(_gs, "_notifications", None),
                     add_notification_fn=getattr(_gs, "_add_notification", None),
-                    task_hub_emit_fn=_emit_finding_to_task_hub,
                 )
             except Exception:  # noqa: BLE001
                 logger.warning(
