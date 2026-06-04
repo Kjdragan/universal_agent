@@ -871,6 +871,7 @@ def sign_ack_token(artifact_id: str) -> str:
 
 
 def verify_ack_token(artifact_id: str, token: str) -> bool:
+    """Verify an HMAC acknowledgement token for a proactive artifact."""
     expected = sign_ack_token(artifact_id)
     if not expected or not token:
         return False

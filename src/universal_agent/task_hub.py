@@ -687,6 +687,7 @@ def upsert_workstream(
 
 
 def get_workstream(conn: sqlite3.Connection, workstream_id: str) -> Optional[dict[str, Any]]:
+    """Return a single workstream row by ID, with parsed metadata, or None."""
     ensure_schema(conn)
     row = conn.execute(
         "SELECT * FROM task_hub_workstreams WHERE workstream_id = ? LIMIT 1",
@@ -705,6 +706,10 @@ def list_workstream_tasks(
     *,
     include_parent: bool = True,
 ) -> list[dict[str, Any]]:
+    """Return all tasks belonging to a workstream, hydrated, oldest-first.
+
+    When *include_parent* is False the mission-envelope parent row is omitted.
+    """
     ensure_schema(conn)
     rows = conn.execute(
         """
@@ -761,6 +766,7 @@ def build_workstream_summary(
     *,
     max_children: int = 20,
 ) -> Optional[dict[str, Any]]:
+    """Build a structured summary of a workstream: root task, phase children, counts, and latest artifacts."""
     ensure_schema(conn)
     safe_id = str(workstream_id or "").strip()
     if not safe_id:
@@ -885,6 +891,7 @@ def build_task_mission_summary(
     *,
     max_children: int = 20,
 ) -> Optional[dict[str, Any]]:
+    """Resolve a task to its parent workstream and return the full mission summary."""
     ensure_schema(conn)
     item = (
         get_item(conn, str(task_or_task_id or "").strip())
@@ -922,6 +929,7 @@ def list_workstream_summaries(
     limit: int = 20,
     include_recent_completed: bool = True,
 ) -> list[dict[str, Any]]:
+    """Return recent workstream summaries, optionally filtered by state."""
     ensure_schema(conn)
     rows = conn.execute(
         "SELECT workstream_id FROM task_hub_workstreams ORDER BY updated_at DESC LIMIT ?",
@@ -1010,6 +1018,11 @@ def create_mission_envelope(
     mission_plan: Optional[dict[str, Any]] = None,
     metadata: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
+    """Create a multi-phase mission envelope with an associated workstream.
+
+    If *mission_plan* contains phases, the first child task is spawned
+    automatically via `spawn_next_workstream_child`.
+    """
     ensure_schema(conn)
     safe_task_id = str(task_id or "").strip()
     if not safe_task_id:
@@ -1062,6 +1075,7 @@ def spawn_next_workstream_child(
     workstream_id: str,
     previous_task_id: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
+    """Advance a multi-phase mission by creating the next unspawned child task."""
     ensure_schema(conn)
     if not task_hub_missions_enabled():
         return None
@@ -1787,6 +1801,7 @@ def rebuild_dispatch_queue(conn: sqlite3.Connection) -> dict[str, Any]:
 
 
 def get_dispatch_queue(conn: sqlite3.Connection, *, limit: int = 100) -> dict[str, Any]:
+    """Return the latest built dispatch queue with its ranked, hydrated items."""
     ensure_schema(conn)
     policy = current_policy()
     row = conn.execute(
@@ -4077,6 +4092,7 @@ def prune_settled_tasks(
     *,
     retention_days: int = 21,
 ) -> dict[str, int]:
+    """Delete completed/parked tasks older than *retention_days* and their related rows."""
     ensure_schema(conn)
     retention_days = max(1, int(retention_days))
 
@@ -4236,6 +4252,7 @@ def list_agent_queue(
     project_key: Optional[str] = None,
     include_not_ready: bool = False,
 ) -> dict[str, Any]:
+    """Return the paginated agent-visible queue with CSI routing decorations."""
     ensure_schema(conn)
     policy = current_policy()
 
@@ -4334,6 +4351,7 @@ def list_agent_queue(
 
 
 def list_personal_queue(conn: sqlite3.Connection, *, limit: int = 120) -> list[dict[str, Any]]:
+    """Return tasks requiring human attention: non-agent-ready items and CSI-flagged rows."""
     ensure_schema(conn)
     policy = current_policy()
     rows = conn.execute(
@@ -4872,6 +4890,10 @@ def perform_task_action(
     note: str = "",
     agent_id: str = "dashboard_operator",
 ) -> dict[str, Any]:
+    """Execute a lifecycle action (seize, complete, park, block, etc.) on a task.
+
+    *action* must be one of ``VALID_ACTIONS``; unknown verbs are rejected.
+    """
     ensure_schema(conn)
     action_norm = str(action or "").strip().lower()
     if action_norm not in VALID_ACTIONS:

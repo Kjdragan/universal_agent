@@ -77,6 +77,7 @@ def public_base_url() -> str:
 
 
 def warn_age_days() -> float:
+    """Return the configured OAuth credential age threshold (days) before warning."""
     raw = (os.getenv("UA_YOUTUBE_OAUTH_WARN_AGE_DAYS") or "").strip()
     if not raw:
         return DEFAULT_WARN_AGE_DAYS

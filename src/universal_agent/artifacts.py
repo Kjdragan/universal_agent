@@ -43,6 +43,7 @@ def resolve_artifacts_dir() -> Path:
 
 
 def ensure_artifacts_dir() -> Path:
+    """Ensure the artifacts directory exists and return its path."""
     root = resolve_artifacts_dir()
     root.mkdir(parents=True, exist_ok=True)
     return root
@@ -70,6 +71,7 @@ def _safe_slug_component(value: str) -> str:
 
 @dataclass(frozen=True)
 class ArtifactRun:
+    """Lightweight handle for a single artifact run directory."""
     skill_name: str
     run_dir: Path
     date: str  # YYYY-MM-DD
