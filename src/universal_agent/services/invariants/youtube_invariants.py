@@ -27,6 +27,7 @@ Both run every heartbeat; together they cover "enrichment never wrote" and
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 import sqlite3
 from typing import Any, Dict, Optional
@@ -44,11 +45,82 @@ MIN_ROWS_PER_DAY = 3
 OK_PCT_FLOOR = 50.0
 WINDOW_DAYS = 7
 
-# Enrichment-coverage thresholds.  Below COVERAGE_FLOOR_PCT of events having
-# a matching rss_event_analysis row over the last 7 days, the pipeline is
-# considered broken.  The MIN_EVENTS guard keeps small-sample days quiet.
+# Enrichment-coverage thresholds.  Below COVERAGE_FLOOR_PCT of *in-scope* events
+# (the ones the selective enricher is supposed to process) having a matching
+# rss_event_analysis row over the last 7 days, the pipeline is considered
+# broken.  The MIN_EVENTS guard keeps small-sample windows quiet.
 COVERAGE_FLOOR_PCT = 50.0
 COVERAGE_MIN_EVENTS = 5
+
+# ── Enricher eligibility mirror (keep in sync with csi_rss_semantic_enrich.py) ──
+# As of PR #660 (2026-06-01) the RSS semantic enricher is *selective*: each run
+# only processes events that are ``delivered = 1`` and NOT on a channel whose
+# analysis history is majority non-domain (plus a small always-keep allowlist),
+# newest-first, capped at ``--max-events``.  A flat events-vs-analysis coverage
+# check therefore reports a misleadingly low number (undelivered + intentionally
+# skipped channels never get a row) and fires a false CRITICAL.  To measure
+# something meaningful we mirror the enricher's eligibility here and compute
+# coverage only over IN-SCOPE events.
+#
+# SINGLE SOURCE OF TRUTH: the canonical definition of these categories lives in
+# the enricher (CSI_Ingester/development/scripts/csi_rss_semantic_enrich.py
+# ::_DOMAIN_CATS / _DEFAULT_ALWAYS_KEEP / _nondomain_skip_names).  The copy below
+# MUST stay identical; a static drift-guard test
+# (tests/unit/test_youtube_transcript_coverage_invariant.py::test_domain_cats_in_sync_with_enricher)
+# parses the enricher source and fails CI if the two diverge — so adding e.g.
+# "geopolitics" to the enricher's domain set forces the same edit here.
+_DOMAIN_CATS = {
+    "ai_coding",
+    "ai_models",
+    "ai_news_and_business",
+    "ai_business",
+    "ai_applications",
+    "software_engineering",
+    "technology",
+}
+
+# Mirror of the enricher's _DEFAULT_ALWAYS_KEEP / CSI_RSS_SELECTION_ALWAYS_KEEP.
+# These channels are exempt from the non-domain skip even with a majority
+# non-domain history (operator-pinned).
+_DEFAULT_ALWAYS_KEEP = "Pyotr Kurzin | Geopolitics,Jake Broe"
+
+
+def _always_keep_names() -> set[str]:
+    raw = os.environ.get("CSI_RSS_SELECTION_ALWAYS_KEEP", _DEFAULT_ALWAYS_KEEP)
+    return {n.strip() for n in raw.split(",") if n.strip()}
+
+
+def _nondomain_skip_names(db: sqlite3.Connection) -> set[str]:
+    """Channels whose analysis history is majority non-domain (>= 2 analyses).
+
+    Mirror of ``csi_rss_semantic_enrich.py::_nondomain_skip_names`` so the
+    coverage invariant scopes itself to exactly the events the enricher would
+    process.  Returns the empty set on any query error (fail-open: scope to all
+    delivered events rather than crash the heartbeat).
+    """
+    agg: Dict[str, list[int]] = {}  # name -> [nondomain, total]
+    try:
+        rows = db.execute(
+            "SELECT channel_name, category FROM rss_event_analysis "
+            "WHERE source='youtube_channel_rss' AND category IS NOT NULL AND category != ''"
+        ).fetchall()
+    except sqlite3.Error:
+        return set()
+    for row in rows:
+        name = row["channel_name"]
+        if not name:
+            # A NULL/empty channel_name can't be matched against subject_json's
+            # channel_name anyway, and mixing None into the set would break the
+            # later sorted() (str vs None).  Enricher events are reliably
+            # channel-named; skip the degenerate row.
+            continue
+        category = row["category"]
+        bucket = agg.setdefault(name, [0, 0])
+        bucket[1] += 1
+        if category not in _DOMAIN_CATS:
+            bucket[0] += 1
+    skip = {n for n, (nd, total) in agg.items() if total >= 2 and nd > (total - nd)}
+    return skip - _always_keep_names()
 
 
 def _resolve_csi_db_path(ctx: Dict[str, Any]) -> Optional[Path]:
@@ -164,31 +236,42 @@ def youtube_transcript_coverage(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]
     id="youtube_enrichment_coverage",
     title="YouTube enrichment coverage over last 7 days",
     description=(
-        "Of YouTube events received in the last 7 days, at least "
-        f"{COVERAGE_FLOOR_PCT:.0f}% must have a matching rss_event_analysis "
-        "row.  Catches the original failure mode where youtube_daily_digest "
-        "succeeded but its output never reached the table the UI reads."
+        "Of the YouTube events the selective enricher is supposed to process in "
+        f"the last 7 days (delivered, on domain channels), at least "
+        f"{COVERAGE_FLOOR_PCT:.0f}% must have a matching rss_event_analysis row. "
+        "Mirrors the enricher's eligibility (PR #660: delivered=1 + skip "
+        "majority-non-domain channels) so intentionally-skipped channels and "
+        "undelivered events don't trip a false CRITICAL, while still catching the "
+        "original failure mode where enrichment stopped writing the rows it owns."
     ),
     severity="critical",
     runbook_command=(
-        "sqlite3 \"$UA_CSI_DB_PATH\" \"SELECT COUNT(*) total_events, "
+        "sqlite3 \"$UA_CSI_DB_PATH\" \"SELECT COUNT(*) in_scope_events, "
         "SUM(CASE WHEN a.event_id IS NOT NULL THEN 1 ELSE 0 END) enriched "
         "FROM events e LEFT JOIN rss_event_analysis a ON a.event_id = e.event_id "
-        "WHERE e.source='youtube_channel_rss' AND e.occurred_at >= "
-        "datetime('now','-7 days');\""
+        "WHERE e.source='youtube_channel_rss' AND e.delivered=1 AND e.occurred_at >= "
+        "datetime('now','-7 days');\"  "
+        "# note: majority-non-domain channels are further excluded in-code "
+        "(see _nondomain_skip_names)"
     ),
     metadata={
         "pipeline": "youtube_daily_digest + csi_rss_semantic_enrich",
         "tables": ["events", "rss_event_analysis"],
-        "doc": "docs/03_Operations/132_Proactive_Health_Watchdog.md",
+        "doc": "project_docs/04_intelligence/05_youtube_csi_flow.md",
     },
 )
 def youtube_enrichment_coverage(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Probe for the empty-rss_event_analysis failure mode.
+    """Probe for the empty-rss_event_analysis failure mode, scoped to IN-SCOPE events.
 
-    Joins ``events`` (the ingest-side table) against ``rss_event_analysis``
-    (the enrichment-side table).  When ingest succeeded but enrichment never
-    wrote — the exact original 38/38 incident — events exist with no match.
+    Joins ``events`` (the ingest-side table) against ``rss_event_analysis`` (the
+    enrichment-side table), but — since PR #660 made the enricher *selective* —
+    only over the events the enricher actually owns: ``delivered = 1`` and NOT on
+    a majority-non-domain channel (mirroring ``_nondomain_skip_names``).  When
+    ingest succeeded but enrichment never wrote for those events — the original
+    38/38 incident, or a stalled/dead enricher — in-scope events exist with no
+    match and coverage collapses below the floor.  Undelivered events and
+    intentionally-skipped non-domain channels are excluded so the steady-state
+    selective behaviour does not read as a false CRITICAL.
     """
     csi_db_path = _resolve_csi_db_path(ctx)
     if csi_db_path is None:
@@ -197,21 +280,40 @@ def youtube_enrichment_coverage(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]
     db = sqlite3.connect(f"file:{csi_db_path}?mode=ro", uri=True)
     db.row_factory = sqlite3.Row
     try:
+        skip = sorted(_nondomain_skip_names(db))
+        # The WINDOW_DAYS bound is the invariant's OWN denominator choice — the
+        # enricher itself is unbounded-time, newest-first, and capped at
+        # --max-events.  At today's _DOMAIN_CATS the in-scope set reads ~96%
+        # healthy, but if _DOMAIN_CATS is widened so in-scope arrivals exceed
+        # enricher throughput, newest-first ordering can leave older in-window
+        # events permanently unenriched and park coverage near the floor.  Widen
+        # _DOMAIN_CATS only alongside a throughput bump (see
+        # project_docs/04_intelligence/05_youtube_csi_flow.md B.4).
+        params: list[Any] = [f"-{WINDOW_DAYS} days"]
+        skip_clause = ""
+        if skip:
+            skip_clause = (
+                "AND COALESCE(json_extract(e.subject_json, '$.channel_name'), '') "
+                "NOT IN (%s) " % ",".join("?" for _ in skip)
+            )
+            params += skip
         row = db.execute(
-            """
+            f"""
             SELECT
                 COUNT(*) AS total_events,
                 SUM(CASE WHEN a.event_id IS NOT NULL THEN 1 ELSE 0 END) AS enriched_events
             FROM events e
             LEFT JOIN rss_event_analysis a ON a.event_id = e.event_id
             WHERE e.source = 'youtube_channel_rss'
+              AND e.delivered = 1
               AND e.occurred_at >= datetime('now', ?)
+              {skip_clause}
             """,
-            (f"-{WINDOW_DAYS} days",),
+            params,
         ).fetchone()
     except sqlite3.Error as exc:
-        # `events` table can legitimately be absent on a fresh dev box.  Treat
-        # as N/A rather than surfacing a probe_error every heartbeat.
+        # `events`/`subject_json` can legitimately be absent on a fresh dev box.
+        # Treat as N/A rather than surfacing a probe_error every heartbeat.
         logger.debug("youtube_enrichment_coverage: query failed (%s); skipping", exc)
         return None
     finally:
@@ -221,7 +323,7 @@ def youtube_enrichment_coverage(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]
     enriched = int((row["enriched_events"] if row else 0) or 0)
 
     if total < COVERAGE_MIN_EVENTS:
-        # Too few events to make a useful claim.  Stay quiet.
+        # Too few in-scope events to make a useful claim.  Stay quiet.
         return None
 
     coverage_pct = (100.0 * enriched / total) if total else 0.0
@@ -230,26 +332,30 @@ def youtube_enrichment_coverage(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]
 
     return {
         "observed_value": {
-            "total_events": total,
+            "in_scope_events": total,
             "enriched_events": enriched,
             "coverage_pct": round(coverage_pct, 1),
+            "skipped_nondomain_channels": len(skip),
             "window_days": WINDOW_DAYS,
         },
         "message": (
-            f"{enriched} of {total} YouTube events in the last "
+            f"{enriched} of {total} in-scope YouTube events in the last "
             f"{WINDOW_DAYS} days have a matching rss_event_analysis row "
             f"(coverage {coverage_pct:.1f}% < floor {COVERAGE_FLOOR_PCT:.0f}%). "
-            "Likely cause: ingest succeeded but enrichment never wrote, or "
-            "wrote to a different table (e.g. csi_digests).  Check "
-            "csi_rss_semantic_enrich.py is running and reading from events "
-            "with source='youtube_channel_rss'."
+            "In-scope = delivered events on domain channels the selective "
+            "enricher (csi_rss_semantic_enrich.py, PR #660) actually processes; "
+            f"{len(skip)} majority-non-domain channel(s) and undelivered events "
+            "are intentionally excluded.  A low value means the enricher is "
+            "failing to write the events it owns (stopped, erroring, or far "
+            "behind) — not that non-domain channels are unenriched."
         ),
         "threshold_text": (
-            f"coverage_pct >= {COVERAGE_FLOOR_PCT:.0f}% over last "
-            f"{WINDOW_DAYS} days (min {COVERAGE_MIN_EVENTS} events to evaluate)"
+            f"in-scope coverage_pct >= {COVERAGE_FLOOR_PCT:.0f}% over last "
+            f"{WINDOW_DAYS} days (min {COVERAGE_MIN_EVENTS} in-scope events to evaluate)"
         ),
         "metadata": {
             "coverage_floor_pct": COVERAGE_FLOOR_PCT,
             "min_events": COVERAGE_MIN_EVENTS,
+            "scope": "delivered=1 AND domain-channel (mirrors enricher eligibility)",
         },
     }
