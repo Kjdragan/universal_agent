@@ -14,7 +14,7 @@ code_paths:
   - src/universal_agent/services/mission_control_event_titles.py
   - src/universal_agent/services/mission_control_prompts.py
   - src/universal_agent/gateway_server.py
-last_verified: 2026-05-29
+last_verified: 2026-06-04
 ---
 
 # Mission Control Intelligence
@@ -112,7 +112,9 @@ Each loop iteration:
 (`_open_activity_db`), then for each tile from `all_tiles()`:
 - `tile.compute_state(conn)` → a `TileState` (color + one-line status + evidence +
   deterministic signature). A buggy tile is caught and recorded in `result.errors` so it
-  can't take out the whole cycle.
+  can't take out the whole cycle. Most tiles read the shared activity-DB `conn`; a tile
+  whose data lives elsewhere ignores `conn` and opens its own short-lived connection —
+  `CsiIngesterTile` reads `csi.db` (see Tier 0 tiles below).
 - `_persist_tile_state` writes the new state into `mission_control_tile_states`, returning
   an outcome with `transitioned` / `first_appearance` / `signature_unchanged` flags. If the
   signature is unchanged it only bumps `last_checked_at` and skips transition logic.
@@ -192,6 +194,20 @@ and **defensive** — a missing data source returns `unknown`, never raises. A t
 expose `auto_action_class()` (surfaced to the frontend for the tile's action button).
 `TileState.__post_init__` validates the color and auto-derives the deterministic `signature`
 (SHA-256 of color+status+evidence) used for change detection.
+
+`CsiIngesterTile` is the one tile that does **not** read the sweeper-supplied
+activity_state.db connection. It opens its own short-lived **read-only** connection to
+`csi.db` (path via `CSI_DB_PATH`, mirroring `gateway_server.py::_csi_default_db_path`) and
+computes per-source freshness from `MAX(occurred_at)` in the `events` table — reusing the
+invariant's `csi_source_liveness.py::effective_source_thresholds` so the tile and
+`proactive_health`'s `csi_source_liveness` finding agree by construction (green ⇔ no source
+stale; red ⇔ all sources stale; yellow ⇔ some stale). Before 2026-06-04 it queried
+`activity_events WHERE source_domain='csi'` from the activity DB — a table fed only by the
+now-disabled ClaudeDevs intel-sync (`claude_code_intel.py`) — so it false-RED for days while
+`csi.db` was healthy, driving the recurring `infra:csi_ingester` card and the Chief-of-Staff
+"CSI ingester blind for 62h" narrative. Because tier-0 auto-retires the `infra:csi_ingester`
+card the moment the tile reads green, repointing the tile to `csi.db` also clears that stale
+card on the next sweep.
 
 ## Tier 1 — narrative cards (`mission_control_tier1.py` + `mission_control_cards.py`)
 

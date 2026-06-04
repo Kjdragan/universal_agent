@@ -112,6 +112,39 @@ def _insert_event(conn, **fields):
     )
 
 
+@pytest.fixture
+def csi_db(tmp_path: Path, monkeypatch):
+    """Temp csi.db with the `events` shape CsiIngesterTile reads, with
+    CSI_DB_PATH pointed at it. Empty by default → tile RED; seed with
+    `_seed_csi_fresh`."""
+    path = tmp_path / "csi.db"
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE events ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "source TEXT NOT NULL, occurred_at TEXT NOT NULL)"
+    )
+    conn.commit()
+    monkeypatch.setenv("CSI_DB_PATH", str(path))
+    yield conn
+    conn.close()
+
+
+def _seed_csi_fresh(conn, minutes_ago: float = 1.0) -> None:
+    """Insert a fresh event for every monitored CSI source → tile GREEN."""
+    from universal_agent.services.invariants.csi_source_liveness import (
+        effective_source_thresholds,
+    )
+
+    ts = _iso_minutes_ago(minutes_ago)
+    for source in effective_source_thresholds():
+        conn.execute(
+            "INSERT INTO events (source, occurred_at) VALUES (?, ?)", (source, ts)
+        )
+    conn.commit()
+
+
 class _FixtureSweeper(MissionControlSweeper):
     def __init__(self, activity_conn, mc_db_path: Path) -> None:
         super().__init__(SweeperConfig())
@@ -244,13 +277,13 @@ def test_existing_llm_annotation_is_preserved_when_color_unchanged(
 
 
 def test_annotation_replaced_when_color_transitions(
-    monkeypatch, activity_db, tmp_path
+    monkeypatch, activity_db, csi_db, tmp_path
 ):
     """When the color CHANGES, we DO want the mechanical status to
     overwrite the prior annotation — the prior annotation explained
     the prior state and is no longer accurate."""
     monkeypatch.setenv("UA_MC_PHASE_1_ENABLED", "1")
-    _insert_event(activity_db, id="ev1", source_domain="csi", created_at=_iso_minutes_ago(0.5))
+    _seed_csi_fresh(csi_db)
     sweeper = _FixtureSweeper(activity_db, tmp_path / "mc.db")
     sweeper.tick()  # CSI green
 
@@ -267,8 +300,9 @@ def test_annotation_replaced_when_color_transitions(
     finally:
         mc_conn.close()
 
-    # Force CSI red: delete recent events.
-    activity_db.execute("DELETE FROM activity_events WHERE source_domain='csi'")
+    # Force CSI red: clear all csi.db events.
+    csi_db.execute("DELETE FROM events")
+    csi_db.commit()
     sweeper.tick()
 
     mc_conn = open_store(tmp_path / "mc.db")
@@ -293,12 +327,12 @@ def test_annotation_replaced_when_color_transitions(
 
 
 def test_tile_states_serialize_with_one_line_status(
-    monkeypatch, activity_db, tmp_path
+    monkeypatch, activity_db, csi_db, tmp_path
 ):
     """The endpoint surfaces `current_annotation` as the one_line_status
     for the frontend. Verify the column is populated by a tick."""
     monkeypatch.setenv("UA_MC_PHASE_1_ENABLED", "1")
-    _insert_event(activity_db, id="ev1", source_domain="csi", created_at=_iso_minutes_ago(0.5))
+    _seed_csi_fresh(csi_db)
     sweeper = _FixtureSweeper(activity_db, tmp_path / "mc.db")
     sweeper.tick()
 
