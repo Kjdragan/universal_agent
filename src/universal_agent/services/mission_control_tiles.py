@@ -72,6 +72,75 @@ def _safe_parse_iso(value: str | None) -> datetime | None:
     return parsed
 
 
+def _gateway_silence_is_restart_artifact(last_event_dt: datetime) -> bool:
+    """True iff a >300s gateway activity-events gap is explained by a recent
+    gateway (re)start rather than a genuine running-but-silent outage.
+
+    A deploy (or operator ``systemctl restart``) SIGTERMs the gateway, pausing
+    activity-event emission for the 300-515s it takes the new process to boot
+    and emit its first heartbeat. During that window the freshest event is
+    300-900s old, so ``GatewayTile`` would otherwise flag RED → a critical
+    ``infra:gateway`` Mission Control card whose ``recurrence_count`` then
+    climbs once per deploy (~19 deploys/day). That is pure deploy noise, not an
+    outage: the gateway self-recovers the moment its heartbeat loop starts.
+
+    Two OR'd signals, mirroring ``cron_service._is_deploy_window_active`` and
+    the ``execution_missing_lifecycle_mutation`` deploy-restart-casualty
+    downgrade (``gateway_server._lifecycle_miss_notification_routing``):
+
+      1. ``_is_deploy_window_active()`` — the deploy-marker flag
+         (``/tmp/ua-deployment-window``, held across the restart by
+         ``scripts/deploy/remote_deploy.sh``) OR a <=60s process-uptime
+         fallback.
+      2. The freshest activity event predates THIS gateway process's start
+         time — the current process has emitted nothing yet, so the silence is
+         entirely the restart gap. Robust even after signal (1)'s flag clears
+         (``remote_deploy.sh`` drops it once HTTP health passes, which can
+         precede the first emitted heartbeat).
+
+    Conversely a genuine sustained outage — the gateway was UP for a while and
+    emitting events, then went silent (e.g. hung event loop) — has
+    ``last_event`` AFTER the process start and no active deploy window, so this
+    returns False and the tile stays RED. Fail-loud: any probe error is logged
+    and treated as "not a restart artifact" so a real outage is never masked.
+
+    Known narrow degradation: a gateway that boots and immediately hangs WITHOUT
+    ever emitting a heartbeat (freshest event predates the process start
+    forever) is reported GREEN by signal (2) — but only for the <=15 min the
+    pre-restart event stays inside ``GatewayTile``'s ``-15 minutes`` query
+    window; after that the query returns no rows and the tile flips to YELLOW
+    (warning), never RED/critical. This class is also caught independently by
+    the deploy's systemd/HTTP health gate (``remote_deploy.sh``), so Mission
+    Control is not its sole detector.
+    """
+    # Local import to avoid any import-cycle risk and mirror the existing
+    # cross-module use in gateway_server._lifecycle_miss_notification_routing.
+    try:
+        from universal_agent.cron_service import _is_deploy_window_active
+
+        if _is_deploy_window_active():
+            return True
+    except Exception:  # noqa: BLE001 — probe failure must never mask a real outage
+        logger.warning(
+            "GatewayTile: deploy-window probe failed; not treating silence as a "
+            "restart artifact",
+            exc_info=True,
+        )
+    try:
+        from universal_agent.cron_service import _process_start_time
+
+        process_start = datetime.fromtimestamp(_process_start_time(), tz=timezone.utc)
+        if last_event_dt < process_start:
+            return True
+    except Exception:  # noqa: BLE001 — probe failure must never mask a real outage
+        logger.warning(
+            "GatewayTile: process-start probe failed; not treating silence as a "
+            "restart artifact",
+            exc_info=True,
+        )
+    return False
+
+
 @dataclass
 class TileState:
     """Structured tile-state snapshot returned by `Tile.compute_state()`.
@@ -204,13 +273,28 @@ class GatewayTile(Tile):
         elif age_s <= 300:
             color = COLOR_YELLOW
             status = f"quiet for {int(age_s)}s"
+        elif _gateway_silence_is_restart_artifact(last_dt):
+            # >300s gap, but it brackets a recent gateway (re)start — expected
+            # deploy/restart recovery, not an outage. Report GREEN so the
+            # sweeper neither mints a critical infra:gateway card nor inflates
+            # its recurrence_count once per deploy (~19/day). A genuine
+            # running-but-silent gateway (last event AFTER process start, no
+            # active deploy window) skips this branch and stays RED below.
+            color = COLOR_GREEN
+            status = f"recovering from restart ({int(age_s)}s since last pre-restart event)"
         else:
             color = COLOR_RED
             status = f"silent for {int(age_s)}s"
+        evidence: dict[str, Any] = {"last_event_iso": last_event, "age_seconds": age_s}
+        if color == COLOR_GREEN and age_s > 300:
+            # Audit trail: preserve the raw verdict we suppressed so an operator
+            # inspecting the tile evidence sees the true age + why it stayed green.
+            evidence["restart_recovery"] = True
+            evidence["suppressed_color"] = COLOR_RED
         return TileState(
             color=color,
             one_line_status=status,
-            evidence={"last_event_iso": last_event, "age_seconds": age_s},
+            evidence=evidence,
         )
 
 
