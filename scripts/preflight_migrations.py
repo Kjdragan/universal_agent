@@ -28,12 +28,12 @@ Usage (called from scripts/deploy_validate_runtime.sh):
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import shutil
 import sqlite3
 import sys
 import tempfile
 import traceback
-from pathlib import Path
 
 from universal_agent.durable.migrations import ensure_schema
 

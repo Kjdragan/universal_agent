@@ -5,7 +5,10 @@ Reversible: writes <path>.bak (original), rewrites <path> with only kept channel
 and writes <dir>/channels_watchlist_dormant.json with the removed channels.
 Idempotent-ish: re-running drops already-removed ids (no-op on second run).
 """
-import json, sys, os
+import json
+import os
+import sys
+
 
 def load(path):
     with open(path) as f:

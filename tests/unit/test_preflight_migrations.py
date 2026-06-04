@@ -16,12 +16,11 @@ Pins two behaviors that protect against the 2026-05-27 deploy crashloop:
 from __future__ import annotations
 
 import importlib.util
+from pathlib import Path
 import sqlite3
 import sys
-from pathlib import Path
 
 import pytest
-
 
 # Load scripts/preflight_migrations.py as a module — it's not a package
 # member so we can't `import` it normally.

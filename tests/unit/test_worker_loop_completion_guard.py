@@ -27,7 +27,6 @@ import pytest
 from universal_agent.vp.clients.base import MissionOutcome
 from universal_agent.vp.worker_loop import _classify_outcome_failure_mode
 
-
 # ---------------------------------------------------------------------------
 # Bug 2: _classify_outcome_failure_mode picks missing_completion_attestation
 # BEFORE the generic vp_self_reported fallback.
