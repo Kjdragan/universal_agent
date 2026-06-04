@@ -12,7 +12,7 @@ code_paths:
   - src/universal_agent/notebooklm_runtime.py
   - src/universal_agent/utils/composio_discovery.py
   - src/universal_agent/constants.py
-last_verified: 2026-06-03
+last_verified: 2026-06-04
 ---
 
 # MCP Server & Tools
@@ -203,7 +203,15 @@ or connects to:
   materialization story.
 - **`notebooklm-mcp`** — feature-gated; built by
   `notebooklm_runtime.build_notebooklm_mcp_server_config()` (default off for
-  context-budget reasons).
+  context-budget reasons). **NOTE (2026-06-04):** the `paper-to-podcast-tf` skill no
+  longer drives the notebook / source / audio / quiz chain through this MCP server — it
+  uses the `nlm` CLI instead. The long-lived MCP server's `refresh_auth` intermittently
+  returns a *false* "Authentication expired" (its live homepage probe gets transiently
+  redirected — e.g. under IP throttling — and never recovers), which made the cron abandon
+  NotebookLM and emit an LLM text transcript instead of audio. The `nlm` CLI authenticates
+  fresh from the on-disk profile on every invocation and reliably generates audio (verified
+  end-to-end 2026-06-04: a 34 MB / ~18 min `.m4a`). The deterministic credential gate lives
+  in `notebooklm_runtime.run_auth_preflight()` (`nlm login --check`).
 - **`arxiv-mcp-server`** — feature-gated; built by
   `arxiv_runtime.build_arxiv_mcp_server_config()`, gated by `UA_ENABLE_ARXIV_MCP`
   (default off; **on in production** via the Infisical secret). Launched as

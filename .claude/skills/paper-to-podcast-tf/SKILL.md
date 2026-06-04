@@ -26,10 +26,10 @@ Given a research topic, produce a complete learning package sourced from the top
 ## Success Criteria
 
 - At least 4 relevant ArXiv papers found and ingested (target 5, minimum 4)
-- NotebookLM notebook created with all paper sources
-- Audio overview podcast generated and downloaded
-- Quiz generated and downloaded
-- Flashcard set generated and downloaded
+- NotebookLM notebook created (via the `nlm` CLI) with all paper sources
+- Audio overview podcast generated and downloaded as a real `.m4a` — REQUIRED (the headline deliverable)
+- Quiz generated and downloaded — REQUIRED
+- Flashcard set generated and downloaded — best-effort (skip cleanly if NotebookLM cannot produce it)
 - All files saved to CURRENT_RUN_WORKSPACE/work_products/paper_to_podcast/
 - A manifest.json written listing all outputs with paths and metadata
 
@@ -60,22 +60,35 @@ Do NOT fall back to the raw `arxiv` Python library, `curl`/`wget` against
 export.arxiv.org, or any hand-rolled HTTP — those bypass the rate limiter and
 cause the 429 storms this skill exists to avoid.
 
-NotebookLM tools (call directly via MCP):
-- mcp__notebooklm-mcp__refresh_auth — authenticate before operations
-- mcp__notebooklm-mcp__notebook_create — create a new notebook
-- mcp__notebooklm-mcp__source_add — add text content as a source
-- mcp__notebooklm-mcp__studio_create — generate audio/quiz/flashcards
-- mcp__notebooklm-mcp__studio_status — check generation status
-- mcp__notebooklm-mcp__download_artifact — download generated artifact
+NotebookLM — use the `nlm` CLI for ALL NotebookLM operations (NOT the `mcp__notebooklm-mcp__*` tools).
 
-### CRITICAL: Audio Download Fallback
+**CRITICAL:** The long-lived NotebookLM MCP server's `refresh_auth` intermittently reports
+"Authentication expired" even when the credentials are perfectly valid — it fails a live homepage
+probe that gets transiently redirected (e.g. under IP throttling) and never recovers, which makes
+the agent abandon NotebookLM. The `nlm` CLI authenticates fresh from the on-disk profile on every
+invocation, self-refreshes the CSRF token over HTTP, and is reliable. Verified 2026-06-04 end-to-end
+(create → source → audio → download produced a real `.m4a`) against `notebooklm-mcp-cli` v0.7.0.
+So drive NotebookLM with the CLI commands below, and do NOT call `mcp__notebooklm-mcp__refresh_auth`,
+`notebook_create`, `source_add`, `studio_create`, or `download_artifact`.
 
-The MCP download_artifact tool frequently fails for audio (CDN auth scoping issue).
-When audio download fails via MCP, ALWAYS fall back to CLI:
+CLI binary: `/home/ua/.local/bin/nlm` (referred to as `nlm` below).
 
-    /home/ua/.local/bin/nlm download audio <notebook_id> -o <output_path> --no-progress
+Pin the profile ONCE before any NotebookLM step — some subcommands (e.g. `download`) do not accept
+`-p`, so set the env var instead of passing a per-command flag:
 
-The nlm CLI authenticates differently and reliably downloads audio.
+    export NLM_PROFILE=default
+
+- `nlm login --check` → verify auth (rc=0 = valid). If rc!=0 the cookies are genuinely expired:
+  STOP, do not fabricate anything (see Anti-Patterns), and report that a desktop `nlm login` re-auth
+  is needed.
+- `nlm notebook create "<title>" --json` → create the notebook; parse `notebook_id` from the JSON.
+- `nlm source add <nb> --file <pdf> --wait` → add a PDF source (one call per paper).
+- `nlm audio create <nb> --format deep_dive --confirm` → generate the audio overview (headline deliverable).
+- `nlm quiz create <nb> --count 10 --difficulty 3 --confirm` → generate the quiz.
+- `nlm studio status <nb> --json` → poll generation status.
+- `nlm download audio <nb> -o <path> --no-progress` → download the `.m4a` (NOTE: no `-p` flag here).
+- `nlm download quiz <nb> -o <path>` → download the quiz JSON.
+- `nlm download flashcards <nb> -o <path>` → download flashcards (only if generated; see Phase B).
 
 ### Pipeline Phases
 
@@ -85,31 +98,38 @@ Phase A — Paper Discovery (direct MCP tools):
 3. Extract: title, authors, key findings, methodology, contributions
 4. Save paper metadata to work_products/paper_to_podcast/papers_metadata.json
 
-Phase B — NotebookLM Content Generation (direct MCP tools):
-1. Call refresh_auth to verify authentication
-2. Call notebook_create with title "Paper to Podcast: {topic}"
-3. For each paper, call source_add with source_type="text" using curated content: title, authors, abstract, key findings (3-5 bullets), methodology highlights, results/conclusions
-4. Generate 3 studio artifacts sequentially:
-   a. Audio overview: studio_create with artifact_type="audio", audio_format="deep_dive"
-   b. Quiz: studio_create with artifact_type="quiz", question_count as requested (default 10), difficulty="medium"
-   c. Flashcards: studio_create with artifact_type="flashcards", difficulty="medium"
-5. Poll studio_status every 30s until all 3 complete (audio takes 5-10 min)
+Phase B — NotebookLM Content Generation (via the `nlm` CLI — see Required Capabilities):
+1. `export NLM_PROFILE=default`, then `nlm login --check`. If it fails, STOP per Anti-Patterns
+   (report that desktop re-auth is needed — never fabricate audio/quiz/flashcards).
+2. `nlm notebook create "Paper to Podcast: {topic}" --json` → capture `notebook_id` from the JSON.
+3. For each downloaded paper PDF (from Phase A), `nlm source add <notebook_id> --file <path-to-paper.pdf> --wait`
+   (one call per paper, sequential).
+4. Generate artifacts — the audio overview is the headline deliverable, so kick it off FIRST and never skip it:
+   a. Audio: `nlm audio create <notebook_id> --format deep_dive --confirm`
+   b. Quiz:  `nlm quiz create <notebook_id> --count 10 --difficulty 3 --confirm`
+   c. Flashcards (best-effort ONLY): there is no `nlm` CLI command to *create* flashcards. You MAY
+      attempt `mcp__notebooklm-mcp__studio_create` with `artifact_type="flashcards"` AFTER audio + quiz
+      are created — but treat flashcards as optional. If it errors, skip it; never let a flashcards
+      failure block or undo the audio.
+5. Poll `nlm studio status <notebook_id> --json` every ~45s until the audio artifact shows
+   `"status":"completed"` (audio takes ~5-10 min; quiz completes faster).
 
-Phase C — Download and Package (sequential, one at a time):
-1. Download quiz via download_artifact with artifact_type="quiz", output_format="json"
-2. Download flashcards via download_artifact with artifact_type="flashcards", output_format="json"
-3. Download audio via download_artifact with artifact_type="audio"
-   - If audio MCP download fails, fall back to CLI: /home/ua/.local/bin/nlm download audio <notebook_id> -o <path> --no-progress
-4. Write manifest.json with: topic, papers, artifact paths, notebook_id
+Phase C — Download and Package (sequential, one at a time, via `nlm`):
+1. Audio: `nlm download audio <notebook_id> -o work_products/paper_to_podcast/podcast_audio.m4a --no-progress`
+   Verify the file exists and is > 100 KB (a real `.m4a`). This is the primary success signal.
+2. Quiz: `nlm download quiz <notebook_id> -o work_products/paper_to_podcast/quiz.json`
+3. Flashcards (only if generated in B4c): `nlm download flashcards <notebook_id> -o work_products/paper_to_podcast/flashcards.json`
+4. Write manifest.json with: topic, papers, notebook_id, and each artifact's path + size. Note any
+   skipped flashcards as a gap — that is acceptable; a missing audio podcast is NOT.
 
 ## Anti-Patterns
 
-- Do NOT delegate to sub-agents (notebooklm-operator, arxiv-specialist). Call MCP tools directly. Sub-agent delegation hits a "nested Claude Code" guard and wastes tokens.
+- Do NOT use the `mcp__notebooklm-mcp__*` tools for the notebook / source / audio / quiz chain. The long-lived MCP server's auth is unreliable (intermittent false "Authentication expired"). Use the `nlm` CLI, which authenticates reliably per-invocation.
+- NEVER fabricate the audio podcast with a generic LLM, and NEVER write a text "podcast transcript" as a substitute. The audio overview MUST come from NotebookLM via `nlm audio create`. If the CLI audio step genuinely fails, report the gap honestly in the manifest and email — do not paper over it with LLM-written text.
+- Do NOT delegate to sub-agents (notebooklm-operator, arxiv-specialist). Call tools directly. Sub-agent delegation hits a "nested Claude Code" guard and wastes tokens.
 - Do NOT download artifacts in parallel. Sequential only — parallel downloads cause cascading cancellation.
-- Do NOT generate audio/quiz/flashcards with generic LLM tools when NotebookLM is available.
 - Do NOT skip the manifest.json — it proves the pipeline completed.
-- Do NOT try to pass entire raw paper HTML as sources. Curate to abstract + key findings + methodology.
-- Do NOT give up on audio download without trying the CLI fallback.
+- Do NOT pass entire raw papers as text sources — use `nlm source add <nb> --file <pdf>` to upload the PDF directly.
 
 ## Output Structure
 
