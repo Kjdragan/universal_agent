@@ -20,6 +20,7 @@ once per synthesis step, and the close helper tolerates a client without a
 from __future__ import annotations
 
 import asyncio
+from datetime import date
 
 import pytest
 
@@ -135,7 +136,9 @@ def test_reduce_step_closes_its_client(monkeypatch):
         )
     ]
     out = asyncio.run(
-        ydd._reduce_meta_synthesize(map_results, day_name="TUESDAY", date_str="2026-06-03")
+        ydd._reduce_meta_synthesize(
+            map_results, day_name="TUESDAY", date_str=date.today().isoformat()
+        )
     )
     assert "Meta-Synthesis" in out
     assert client.close_calls == 1, "reduce step must close its AsyncAnthropic client exactly once"
