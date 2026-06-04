@@ -438,7 +438,17 @@ into Task Hub rather than running invisibly. The canonical helpers:
    classifier → `close_cron_task_link(success=True)` flips it back to `open` so
    the next tick can re-claim. On failure, or if F.3 already routed it to
    `needs_review`, `close_cron_task_link` leaves the row alone (intentional
-   operator-surfacing signal).
+   operator-surfacing signal). On that same clean reset,
+   `close_cron_task_link` also calls `task_hub.py::clear_dispatch_reconcile_state`
+   to wipe any **transient** orphan-reconcile stamp
+   (`dispatch.last_disposition_reason="reconciled_orphaned_in_progress"` +
+   `dispatch.reconciled_at`) the orphan sweep may have snapshotted during the
+   brief `ended_at IS NULL` window of a run that actually completed. Without
+   this, a one-time mid-run reconcile race painted a healthy cron as
+   "last dispatch failed / orphaned" forever in Mission Control, because no
+   success path ever reset those fields. The clear is a no-op for *genuine*
+   dispositions (e.g. `heartbeat_retry_exhausted`) — only the orphan-reconcile
+   reasons in `task_hub.py::_TRANSIENT_RECONCILE_DISPOSITION_REASONS` are wiped.
 2. **Run history** — `_open_run` at claim/link, `_close_run` at finalize.
 3. **Subprocess identity** — `record_worker_pid` / `record_provider_session_id`.
 4. **Worker-exit classification** — `classify_worker_exit`.

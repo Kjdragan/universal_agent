@@ -252,11 +252,38 @@ def close_cron_task_link(
                 task_hub.TASK_STATUS_COMPLETED,
             }
         ):
-            conn.execute(
-                "UPDATE task_hub_items SET status = ?, seizure_state = ?, updated_at = ? "
-                "WHERE task_id = ?",
-                (task_hub.TASK_STATUS_OPEN, "unseized", task_hub._now_iso(), tid),  # type: ignore[attr-defined]
+            # Clear any transient orphan-reconcile stamp left on the row by a
+            # mid-run reconcile race.  A verified-clean run is exactly the
+            # moment to reset ``dispatch.last_disposition_reason`` /
+            # ``reconciled_at`` so a healthy cron stops rendering as
+            # "last dispatch failed / orphaned" forever.  ``clear_dispatch_
+            # reconcile_state`` is a no-op unless the current reason is one of
+            # the orphan-reconcile reasons, so this never stomps a genuine
+            # disposition.  We only write metadata_json when it actually
+            # changed, to avoid churning the column on every clean run.
+            original_metadata = dict(item.get("metadata") or {})
+            cleaned_metadata = task_hub.clear_dispatch_reconcile_state(
+                original_metadata
             )
+            if cleaned_metadata != original_metadata:
+                conn.execute(
+                    "UPDATE task_hub_items "
+                    "SET status = ?, seizure_state = ?, metadata_json = ?, updated_at = ? "
+                    "WHERE task_id = ?",
+                    (
+                        task_hub.TASK_STATUS_OPEN,
+                        "unseized",
+                        task_hub._json_dumps(cleaned_metadata),  # type: ignore[attr-defined]
+                        task_hub._now_iso(),  # type: ignore[attr-defined]
+                        tid,
+                    ),
+                )
+            else:
+                conn.execute(
+                    "UPDATE task_hub_items SET status = ?, seizure_state = ?, updated_at = ? "
+                    "WHERE task_id = ?",
+                    (task_hub.TASK_STATUS_OPEN, "unseized", task_hub._now_iso(), tid),  # type: ignore[attr-defined]
+                )
             conn.commit()
     except Exception as exc:
         logger.debug(

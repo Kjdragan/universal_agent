@@ -310,6 +310,178 @@ def test_close_empty_task_id_is_noop(conn: sqlite3.Connection) -> None:
     close_cron_task_link(conn, task_id="   ", success=True)
 
 
+# ── clear_dispatch_reconcile_state (pure helper) ───────────────────────────
+
+
+def test_clear_reconcile_state_clears_transient_orphan_reason() -> None:
+    """A transient orphan-reconcile stamp is cleared and last_disposition is
+    normalised to ``completed`` with ``reconciled_at`` dropped."""
+    metadata = {
+        "dispatch": {
+            "last_disposition_reason": "reconciled_orphaned_in_progress",
+            "reconciled_at": "2026-06-03T02:50:49.093918+00:00",
+            "last_disposition": "open",
+            "completion_unverified": False,
+            # durable lineage that MUST survive
+            "last_workflow_run_id": "wf_keepme",
+        }
+    }
+    out = task_hub.clear_dispatch_reconcile_state(metadata)
+    disp = out["dispatch"]
+    assert disp["last_disposition_reason"] == ""
+    assert disp["last_disposition"] == task_hub.TASK_STATUS_COMPLETED
+    assert "reconciled_at" not in disp
+    assert "completion_unverified" not in disp
+    # Durable lineage preserved.
+    assert disp["last_workflow_run_id"] == "wf_keepme"
+
+
+@pytest.mark.parametrize(
+    "reason", sorted(task_hub._TRANSIENT_RECONCILE_DISPOSITION_REASONS)
+)
+def test_clear_reconcile_state_clears_every_transient_reason(reason: str) -> None:
+    """Coverage guard: every member of the transient-reason frozenset must be
+    cleared, so adding/removing a reason can't silently lose coverage."""
+    metadata = {
+        "dispatch": {
+            "last_disposition_reason": reason,
+            "reconciled_at": "2026-06-03T02:50:49+00:00",
+            "completion_unverified": True,
+        }
+    }
+    out = task_hub.clear_dispatch_reconcile_state(metadata)
+    assert out["dispatch"]["last_disposition_reason"] == ""
+    assert out["dispatch"]["last_disposition"] == task_hub.TASK_STATUS_COMPLETED
+    assert "reconciled_at" not in out["dispatch"]
+    assert "completion_unverified" not in out["dispatch"]
+
+
+def test_clear_reconcile_state_does_not_mutate_input() -> None:
+    metadata = {
+        "dispatch": {
+            "last_disposition_reason": "reconciled_orphaned_in_progress",
+            "reconciled_at": "2026-06-03T02:50:49+00:00",
+        }
+    }
+    _ = task_hub.clear_dispatch_reconcile_state(metadata)
+    # Original untouched.
+    assert (
+        metadata["dispatch"]["last_disposition_reason"]
+        == "reconciled_orphaned_in_progress"
+    )
+    assert metadata["dispatch"]["reconciled_at"] == "2026-06-03T02:50:49+00:00"
+
+
+def test_clear_reconcile_state_is_idempotent() -> None:
+    metadata = {
+        "dispatch": {
+            "last_disposition_reason": "reconciled_orphaned_in_progress",
+            "reconciled_at": "2026-06-03T02:50:49+00:00",
+        }
+    }
+    first = task_hub.clear_dispatch_reconcile_state(metadata)
+    second = task_hub.clear_dispatch_reconcile_state(first)
+    assert first == second
+
+
+def test_clear_reconcile_state_preserves_genuine_disposition() -> None:
+    """A real failure disposition (e.g. retry exhaustion) is NOT cleared —
+    the operator must keep seeing it."""
+    metadata = {
+        "dispatch": {
+            "last_disposition_reason": "heartbeat_retry_exhausted",
+            "reconciled_at": "2026-06-03T02:50:49+00:00",
+        }
+    }
+    out = task_hub.clear_dispatch_reconcile_state(metadata)
+    assert out["dispatch"]["last_disposition_reason"] == "heartbeat_retry_exhausted"
+    assert out["dispatch"]["reconciled_at"] == "2026-06-03T02:50:49+00:00"
+
+
+def test_clear_reconcile_state_noop_without_dispatch_block() -> None:
+    assert task_hub.clear_dispatch_reconcile_state({}) == {}
+    assert task_hub.clear_dispatch_reconcile_state({"other": 1}) == {"other": 1}
+    # Non-dict input is tolerated.
+    assert task_hub.clear_dispatch_reconcile_state(None) == {}  # type: ignore[arg-type]
+
+
+# ── close_cron_task_link clears stale reconcile metadata on a clean run ────
+
+
+def _stamp_orphan_reconcile(conn: sqlite3.Connection, task_id: str, *, reason: str) -> None:
+    """Simulate the orphan-reconcile sweep snapshotting the row mid-run:
+    stamp the transient disposition reason + reconciled_at onto metadata and
+    flip status to ``completed`` (the pre-F.3 clean-exit flip the cron site
+    does)."""
+    item = task_hub.get_item(conn, task_id)
+    metadata = dict(item.get("metadata") or {})
+    dispatch = dict(metadata.get("dispatch") or {})
+    dispatch["last_disposition_reason"] = reason
+    dispatch["reconciled_at"] = "2026-06-03T02:50:49.093918+00:00"
+    dispatch["last_disposition"] = "open"
+    metadata["dispatch"] = dispatch
+    conn.execute(
+        "UPDATE task_hub_items SET status = ?, metadata_json = ? WHERE task_id = ?",
+        (task_hub.TASK_STATUS_COMPLETED, task_hub._json_dumps(metadata), task_id),
+    )
+    conn.commit()
+
+
+def test_close_clears_stale_reconcile_stamp_on_clean_run(
+    conn: sqlite3.Connection,
+) -> None:
+    """The exact production bug: a healthy hourly-digest cron carried a stale
+    ``reconciled_orphaned_in_progress`` stamp from a 1.2s mid-run race, and
+    every clean run since left it untouched.  A clean run must now clear it."""
+    ensure_cron_task_link(
+        conn, job_id="job-1", job_metadata={"system_job": "hourly_intel_digest"},
+    )
+    _stamp_orphan_reconcile(
+        conn, "cron:hourly_intel_digest", reason="reconciled_orphaned_in_progress",
+    )
+    # Pre-condition: the stale stamp is present (this is what paints the card).
+    pre = task_hub.get_item(conn, "cron:hourly_intel_digest")
+    assert (
+        pre["metadata"]["dispatch"]["last_disposition_reason"]
+        == "reconciled_orphaned_in_progress"
+    )
+
+    close_cron_task_link(conn, task_id="cron:hourly_intel_digest", success=True)
+
+    post = task_hub.get_item(conn, "cron:hourly_intel_digest")
+    # Status reset to open for the next tick.
+    assert post["status"] == task_hub.TASK_STATUS_OPEN
+    disp = post["metadata"]["dispatch"]
+    # Stale stamp cleared -> Mission Control card disappears.
+    assert disp["last_disposition_reason"] == ""
+    assert "reconciled_at" not in disp
+    assert disp["last_disposition"] == task_hub.TASK_STATUS_COMPLETED
+
+
+def test_close_leaves_genuine_disposition_stamp_on_clean_run(
+    conn: sqlite3.Connection,
+) -> None:
+    """If the row carries a *genuine* failure disposition (not an orphan
+    reconcile), a clean reset must NOT erase it."""
+    ensure_cron_task_link(
+        conn, job_id="job-1", job_metadata={"system_job": "hourly_intel_digest"},
+    )
+    _stamp_orphan_reconcile(
+        conn, "cron:hourly_intel_digest", reason="heartbeat_retry_exhausted",
+    )
+
+    close_cron_task_link(conn, task_id="cron:hourly_intel_digest", success=True)
+
+    post = task_hub.get_item(conn, "cron:hourly_intel_digest")
+    # Status still reset (clean run), but the genuine reason survives.
+    assert post["status"] == task_hub.TASK_STATUS_OPEN
+    assert (
+        post["metadata"]["dispatch"]["last_disposition_reason"]
+        == "heartbeat_retry_exhausted"
+    )
+    assert "reconciled_at" in post["metadata"]["dispatch"]
+
+
 # ── Per-run granularity: each ensure creates a fresh assignment + run ──────
 
 
