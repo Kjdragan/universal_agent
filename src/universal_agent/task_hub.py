@@ -4890,7 +4890,10 @@ def perform_task_action(
     note: str = "",
     agent_id: str = "dashboard_operator",
 ) -> dict[str, Any]:
-    """Execute a lifecycle action (claim, complete, park, block, etc.) on a task."""
+    """Execute a lifecycle action (seize, complete, park, block, etc.) on a task.
+
+    *action* must be one of ``VALID_ACTIONS``; unknown verbs are rejected.
+    """
     ensure_schema(conn)
     action_norm = str(action or "").strip().lower()
     if action_norm not in VALID_ACTIONS:
