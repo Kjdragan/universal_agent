@@ -15,7 +15,7 @@ code_paths:
   - src/universal_agent/youtube_mode_utils.py
   - src/universal_agent/proactive_signals.py
   - src/universal_agent/services/scratch_publish.py
-last_verified: 2026-06-03
+last_verified: 2026-06-04
 ---
 
 # YouTube CSI Flow
@@ -450,9 +450,26 @@ because the dashboard LEFT JOIN coalesced NULLs to "missing" when enrichment
 hadn't written. Two heartbeat invariants now guard it
 (`services/invariants/youtube_invariants.py`):
 
-- `youtube_enrichment_coverage` — events exist but few have matching
-  `rss_event_analysis` rows (enrichment not running / wrong table). Floor 50%,
-  min 5 events.
+- `youtube_enrichment_coverage` — **domain-aware** since the enricher went
+  selective (B.2 / PR #660). It measures coverage only over *in-scope* events —
+  the ones the enricher is actually supposed to process: `delivered = 1` and NOT
+  on a majority-non-domain channel — by mirroring the enricher's eligibility
+  (`youtube_invariants.py::_nondomain_skip_names` is a copy of
+  `csi_rss_semantic_enrich.py::_nondomain_skip_names`, sharing the same
+  `_DOMAIN_CATS` / always-keep allowlist). Floor 50%, min 5 **in-scope** events.
+  Scoping to in-scope events — instead of a flat join over *all* youtube events
+  — is what stops the steady-state selective behaviour reading as a false
+  CRITICAL (it had been firing at ~43% flat vs ~96% in-scope), while still
+  catching a stalled/dead enricher that stops writing the rows it owns
+  (in-scope coverage then collapses toward 0%). A static drift-guard test
+  (`tests/unit/test_youtube_transcript_coverage_invariant.py::test_domain_cats_in_sync_with_enricher`)
+  parses the enricher source and fails CI if the two `_DOMAIN_CATS` definitions
+  diverge, so they must be edited together.
+  > [VERIFY: known gap — `_DOMAIN_CATS` excludes `geopolitics`/`conflict`, so
+  > those channels are skipped by the enricher and out of in-scope. Adding them
+  > is a candidate follow-up but must be paired with an enricher throughput bump
+  > (it ~3× the in-scope volume, which would otherwise park coverage near the
+  > 50% floor).]
 - `youtube_transcript_coverage` — rows exist in `rss_event_analysis` but most
   carry `transcript_status != 'ok'`. Floor 50% per populated day (≥3 rows),
   7-day window.
