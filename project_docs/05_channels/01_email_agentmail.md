@@ -9,7 +9,7 @@ code_paths:
   - src/universal_agent/services/email_task_bridge.py
   - src/universal_agent/services/email_tags.py
   - src/universal_agent/services/vp_email_directive.py
-last_verified: 2026-05-29
+last_verified: 2026-06-04
 ---
 
 # Email / AgentMail
