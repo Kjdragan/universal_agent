@@ -68,6 +68,10 @@ def _summarize_cron_jobs(jobs: Iterable[Any]) -> List[Dict[str, Any]]:
                 "job_id": data.get("job_id") or data.get("id") or "",
                 "enabled": bool(data.get("enabled", True)),
                 "cron_expr": data.get("cron_expr") or "",
+                # Carry the declared timezone so a local-time cron_expr is
+                # interpreted correctly by cron_staleness (and shown on the
+                # dashboard). Defaults to UTC when absent.
+                "timezone": data.get("timezone") or "UTC",
                 "last_run_at": data.get("last_run_at") or data.get("last_run") or None,
                 "last_outcome": data.get("last_outcome") or data.get("last_status") or None,
                 "next_run_at": data.get("next_run_at") or data.get("next_run") or None,

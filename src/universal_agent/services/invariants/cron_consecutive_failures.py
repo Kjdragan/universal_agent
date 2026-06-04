@@ -20,9 +20,10 @@ consecutive failure count crosses the threshold.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import logging
 import sqlite3
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from universal_agent.services.pipeline_invariants import invariant
 
@@ -44,6 +45,68 @@ WINDOW_PER_TASK = 7
 # (``failed``, ``cancelled``, ``signaled``, ``timeout_killed``,
 # ``orphan_reconciled``, …) counts toward the failure streak.
 SUCCESS_STATES = {"completed", "ok"}
+
+# Recency backstop. A "failure streak" is only meaningful while the cron
+# is *actively appending runs*; once it stops (disabled, deleted, or its
+# scheduler wedged) the leading-failure count freezes and would otherwise
+# read the same value forever (the claude_code_intel_sync incident: a cron
+# disabled 2026-05-25 kept its 6-failure streak on the board indefinitely).
+# The primary guard is the enabled-and-known filter below (precise, zero
+# false-negative risk). This flat cutoff is a defence-in-depth backstop for
+# the degraded path where cron metadata is unavailable, so an ancient
+# orphaned task can't freeze on the board. It is deliberately longer than
+# the longest cron cadence in the system (monthly, ``0 7 1 * *`` ≈ 31 days)
+# so it can NEVER suppress a legitimately-failing weekly/monthly cron.
+RECENCY_CUTOFF_SECONDS = 35 * 24 * 3600  # 35 days
+
+
+def _parse_started_at(value: Any) -> Optional[datetime]:
+    """Best-effort parse of an assignment ``started_at`` into aware UTC."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        except (OSError, OverflowError, ValueError):
+            return None
+    s = str(value).strip()
+    if not s:
+        return None
+    try:
+        parsed = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    except (ValueError, AttributeError):
+        return None
+
+
+def _enabled_cron_index(cron_jobs: Any) -> Tuple[bool, Set[str]]:
+    """Derive ``(have_metadata, enabled_job_ids)`` from the ctx cron_jobs.
+
+    ``have_metadata`` is True only when at least one usable cron row was
+    found, so the caller can distinguish "this cron is disabled/deleted"
+    from "we simply have no cron metadata this tick" and avoid going dark.
+    """
+    enabled: Set[str] = set()
+    have_metadata = False
+    for raw in cron_jobs or ():
+        if isinstance(raw, dict):
+            cj = raw
+        elif hasattr(raw, "to_dict"):
+            try:
+                cj = raw.to_dict()
+            except Exception:  # noqa: BLE001
+                continue
+        else:
+            continue
+        job_id = str(cj.get("job_id") or cj.get("id") or "").strip()
+        if not job_id:
+            continue
+        have_metadata = True
+        if bool(cj.get("enabled", True)):
+            enabled.add(job_id)
+    return have_metadata, enabled
 
 
 def _streak_for_task(
@@ -103,10 +166,17 @@ def _streak_for_task(
             "cron failed 6 nights in a row at the same wall-clock cap "
             "and never surfaced because last_outcome propagation was "
             "unreliable. Reading task_hub_assignments directly avoids "
-            "that dependency."
+            "that dependency. A streak is only counted for crons that are "
+            "currently registered AND enabled (via ctx['cron_jobs']); a "
+            "disabled or deleted cron stops appending runs, so its leading-"
+            "failure count is frozen, not live (the 2026-05-25 "
+            "claude_code_intel_sync false-card fix). A 35-day recency "
+            "backstop guards the degraded path where cron metadata is "
+            "unavailable."
         ),
         "streak_threshold": STREAK_THRESHOLD,
         "window_per_task": WINDOW_PER_TASK,
+        "recency_cutoff_seconds": RECENCY_CUTOFF_SECONDS,
     },
 )
 def cron_consecutive_failures(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -122,6 +192,15 @@ def cron_consecutive_failures(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if conn is None:
         return None
 
+    # Authoritative cron metadata for this tick. Used to suppress streaks for
+    # crons that can't possibly be "actively failing on schedule": disabled
+    # crons and crons that have been deleted from the registry entirely. When
+    # no metadata is available (a startup race or a caller that didn't supply
+    # cron_jobs) we fall back to the recency backstop alone so the invariant
+    # never goes fully dark.
+    have_metadata, enabled_job_ids = _enabled_cron_index(ctx.get("cron_jobs"))
+    now = datetime.now(timezone.utc)
+
     try:
         task_rows = conn.execute(
             "SELECT DISTINCT task_id FROM task_hub_assignments "
@@ -136,6 +215,12 @@ def cron_consecutive_failures(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         task_id = str(row[0] or "").strip()
         if not task_id:
             continue
+        job_id = task_id.removeprefix("cron:")
+        # Primary guard: only an enabled, currently-registered cron can be
+        # "firing on schedule but failing". A disabled or deleted cron stops
+        # appending runs, so its leading-failure count is frozen, not live.
+        if have_metadata and job_id not in enabled_job_ids:
+            continue
         try:
             data = _streak_for_task(conn, task_id)
         except sqlite3.DatabaseError as exc:
@@ -145,6 +230,16 @@ def cron_consecutive_failures(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 exc,
             )
             continue
+        # Backstop guard — DEGRADED PATH ONLY. When we have authoritative cron
+        # metadata the enabled-and-known filter above is the precise guard, so
+        # we must NOT also age-suppress a known-enabled cron (a monthly cron
+        # can legitimately have a ~31-day-old head while failing every run).
+        # Only when metadata is unavailable do we fall back to a recency cutoff
+        # so an abandoned task can't freeze on the board.
+        if not have_metadata:
+            head_dt = _parse_started_at(data["last_started_at"])
+            if head_dt is not None and (now - head_dt).total_seconds() > RECENCY_CUTOFF_SECONDS:
+                continue
         if data["streak"] >= STREAK_THRESHOLD:
             streaks.append({"task_id": task_id, **data})
 

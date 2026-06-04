@@ -13,8 +13,12 @@ code_paths:
   - src/universal_agent/services/agent_router.py
   - scripts/check_heartbeat_liveness.py
   - src/universal_agent/services/proactive_health_notifier.py
+  - src/universal_agent/services/proactive_health.py
+  - src/universal_agent/services/pipeline_invariants.py
+  - src/universal_agent/services/invariants/cron_staleness.py
+  - src/universal_agent/services/invariants/cron_consecutive_failures.py
   - memory/HEARTBEAT.md
-last_verified: 2026-06-03
+last_verified: 2026-06-04
 ---
 
 # Heartbeat Service
@@ -92,6 +96,44 @@ Every cycle (whether or not the agent turn runs) performs deterministic, best-ef
 - **Capacity governor gate** (`services/capacity_governor.CapacityGovernor.can_dispatch`) — informational here; blocks/annotates when the provider is under 429 backoff. Emits a `system_alert` wire event on `api_down`.
 - **Utilization + VP backlog sampling** (`record_utilization_sample`, `vp_mission_backlog.record_backlog_sample`) for the 3x-daily intelligence reports and the backlog trend probe.
 - **Proactive-health pre-flight** (`services/proactive_health_notifier.run_pre_flight_check`) — runs on every tick regardless of skip-mode. For **every critical finding** it surfaces the finding through two stateless channels: a first-occurrence **critical email** to the operator (`_notify_critical` → `agentmail_service.send_email`, 6h per-finding-id cooldown) and the live **System Health** panel on the dashboard Mission Control tab, which renders `GET /api/v1/ops/proactive_health`. The pre-flight **no longer parks a Task Hub `needs_review` row** for findings — that durable channel was removed because it was redundant with the email + live endpoint and produced zombie rows, severity mislabels, board-lane pollution, and resurrection-on-trash (see `08_operations/01_agent_operating_playbook.md` §1.1). The Task Hub "Needs Review" lane now means only genuinely-stalled real work sessions.
+
+### Cron watchdog invariants (`cron_staleness`, `cron_consecutive_failures`)
+
+`services/proactive_health.build_proactive_health_payload` assembles the watchdog
+context and calls `pipeline_invariants.run_invariants` with a single `ctx` dict
+shared by **every** probe (`context_key` in an invariant's metadata is documentation,
+not a filter). The cron rows in `ctx["cron_jobs"]` come from `CronJob.to_dict()`
+(via `build_proactive_health_payload`'s `cron_jobs_for_invariants`), so they carry
+the `timezone` and `enabled` fields directly. The dashboard's summary rows
+(`proactive_health._summarize_cron_jobs`) also carry `timezone`.
+
+Two cron probes are the source of the Mission Control "Cron Pipelines" cards, and
+both were hardened on 2026-06-04 to stop emitting false cards:
+
+- **`invariants/cron_staleness`** — flags an enabled cron whose `last_run_at` is more
+  than `STALENESS_MULTIPLIER`× its expected interval old. The expected interval is the
+  **MAX gap between consecutive fires across a full day** (`_expected_interval_seconds`),
+  evaluated in the cron's **declared timezone** (`_resolve_tz` → `pytz`). The previous
+  version sampled only the next two fires and assumed a constant cadence, so an
+  asymmetric schedule like `35 10,15 * * *` (America/Chicago — a 5h daytime leg and a
+  ~19h overnight leg) reported the 5h leg as the cadence and flagged the long overnight
+  quiet period as `stale` every night. Max-gap keys the threshold to the longest the
+  cron is legitimately quiet, so no leg trips a false alarm.
+
+- **`invariants/cron_consecutive_failures`** — counts the leading non-success
+  assignments per `cron:*` task in `task_hub_assignments`. A streak is only counted for
+  crons that are **currently registered AND enabled** (`_enabled_cron_index` over
+  `ctx["cron_jobs"]`); a disabled or deleted cron stops appending runs, so its
+  leading-failure count is frozen, not live (the `claude_code_intel_sync` case: disabled
+  2026-05-25, its 6-failure streak sat on the board indefinitely). A 35-day recency
+  backstop (`RECENCY_CUTOFF_SECONDS`) guards the degraded path where cron metadata is
+  unavailable. The backstop is deliberately longer than the longest cron cadence
+  (monthly) so it can never suppress a legitimately-failing weekly/monthly cron.
+
+> Known follow-up (not in the 2026-06-04 fix): `services/hackernews_snapshot_service`
+> (`_hydrate_stories` `ThreadPoolExecutor` + `_run_cli` subprocess panels) can raise
+> "can't start new thread" under gateway thread-pressure. Make hydration/panels resilient
+> to thread-spawn failure (serial fallback or out-of-process).
 
 The prompt is built by `_compose_heartbeat_prompt`. For a normal (non-task-focused) run it stacks: the base prompt (`UA_HEARTBEAT_PROMPT` or `DEFAULT_HEARTBEAT_PROMPT`), the environment context (`_build_heartbeat_environment_context` — factory identity, mandatory file-write rules, mandatory findings-output rule), VP completion-review and stale-delegation-recovery sections, brainstorm/morning-report/recent-topics context, and a **Database Health Alerts** block from `utils/db_health_monitor.check_all_databases`. If `has_exec_completion` is detected in the drained system events, the base prompt is swapped for `EXEC_EVENT_PROMPT` (relay an async command's result).
 
