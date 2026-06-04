@@ -374,6 +374,50 @@ def write_recent_briefs_index(
     return path
 
 
+def _max_index_entries() -> int:
+    """Hard cap on the number of verdict blocks kept on disk.
+
+    Env-overridable via ``UA_RECENT_BRIEFS_INDEX_MAX_ENTRIES`` (default 60,
+    roughly the ~48h volume the lookback consumers actually want). A value
+    <= 0 disables self-pruning (legacy append-forever behavior).
+    """
+    try:
+        return int(os.getenv("UA_RECENT_BRIEFS_INDEX_MAX_ENTRIES", "60") or "60")
+    except (TypeError, ValueError):
+        return 60
+
+
+def _prune_index_text(text: str, *, max_entries: int) -> str:
+    """Keep only the most-recent ``max_entries`` verdict blocks.
+
+    Blocks are ordered oldest->newest in the file (Atlas appends newest last),
+    so we keep the tail. Re-renders a fresh header (fixing the stale
+    ``Last updated`` line) and re-emits the standard separator framing. Returns
+    the *same* object when already within budget or when pruning is disabled,
+    so callers can identity-check to keep the cheap-append fast path.
+
+    Hardened against an embedded ``---`` inside a block body: we keep whole
+    inter-separator segments that contain ``## [`` (mirroring
+    ``update_operator_rating_in_index``'s separator-preserving rewrite) rather
+    than reconstructing from a single fragment, so a stray separator inside a
+    block body cannot drop that block's trailing fields.
+    """
+    if max_entries <= 0:
+        return text
+    segments = re.split(r"(?m)^---\s*$", text)
+    block_segs = [seg for seg in segments if "## [" in seg]
+    if len(block_segs) <= max_entries:
+        return text
+    kept = block_segs[-max_entries:]
+    parts: list[str] = [_render_header(48), "", _SEPARATOR, ""]
+    for seg in kept:
+        parts.append(seg.strip())
+        parts.append("")
+        parts.append(_SEPARATOR)
+        parts.append("")
+    return "\n".join(parts).rstrip() + "\n"
+
+
 def append_verdict_to_index(
     *,
     index_path: Optional[Path] = None,
@@ -390,7 +434,12 @@ def append_verdict_to_index(
     """Append a single verdict block to the index file.
 
     Fast incremental update used by Atlas after each ship/skip/defer decision.
-    Creates the index file (with a fresh header) if it does not exist.
+    Creates the index file (with a fresh header) if it does not exist. After
+    appending, self-prunes to the most-recent
+    ``UA_RECENT_BRIEFS_INDEX_MAX_ENTRIES`` blocks (default 60) so the file
+    cannot grow without bound. The prune fires on *every* append whenever the
+    file is over budget (not only when this append crossed it), so a
+    pre-bloated file self-heals on the next write.
     """
     path = (index_path or _default_index_path()).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -418,8 +467,18 @@ def append_verdict_to_index(
         addition = "\n" + _SEPARATOR + "\n\n" + block + "\n\n" + _SEPARATOR + "\n"
     else:
         addition = "\n" + block + "\n\n" + _SEPARATOR + "\n"
-    with open(path, "a", encoding="utf-8") as fh:
-        fh.write(addition)
+
+    new_text = existing + addition
+    pruned = _prune_index_text(new_text, max_entries=_max_index_entries())
+    if pruned is new_text:
+        # Within budget — keep the cheap append (no full rewrite).
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(addition)
+        return
+    # Over budget — atomically rewrite the pruned (header-refreshed) file.
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(pruned, encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def _looks_corrupted(text: str) -> bool:

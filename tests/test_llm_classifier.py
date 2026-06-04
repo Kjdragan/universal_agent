@@ -55,6 +55,49 @@ class TestParseJsonResponse:
         with pytest.raises(json.JSONDecodeError):
             _parse_json_response("")
 
+    # --- Trailing-data / surrounding-prose recovery (convergence refine fix) ---
+    # The ZAI/glm refine path intermittently emits the verdict object UNFENCED
+    # followed by a duplicate object or trailing prose, which made the old strict
+    # json.loads raise "Extra data: line 2 column 1 (char 90)" and drop the bucket.
+    _FALSE = (
+        '{"is_convergence": false, "thesis": "", '
+        '"converging_video_ids": [], "signal_strength": 0}'
+    )
+
+    def test_doubled_object_is_the_documented_upstream_failure(self):
+        # Anchors the patch to the exact live failure: a bare json.loads on the
+        # doubled 89-char object raises the precise prod error; the patched
+        # _parse_json_response must instead recover the first object.
+        assert len(self._FALSE) == 89
+        with pytest.raises(json.JSONDecodeError, match=r"char 90"):
+            json.loads(self._FALSE + "\n" + self._FALSE)
+        assert _parse_json_response(self._FALSE + "\n" + self._FALSE) == json.loads(
+            self._FALSE
+        )
+
+    def test_recovers_object_with_trailing_prose(self):
+        raw = self._FALSE + "\nThis is not a genuine convergence."
+        assert _parse_json_response(raw)["is_convergence"] is False
+
+    def test_recovers_object_with_leading_prose(self):
+        raw = "Sure, here is the JSON:\n" + self._FALSE
+        assert _parse_json_response(raw)["is_convergence"] is False
+
+    def test_recovers_with_leading_prose_containing_brace(self):
+        # Exercises the successive-{ scan: a stray brace before the JSON must not
+        # defeat recovery (a first-brace-only variant would fail here).
+        raw = "Note {ignore me}: " + self._FALSE
+        assert _parse_json_response(raw)["is_convergence"] is False
+
+    def test_fenced_doubled_recovers(self):
+        raw = "```json\n" + self._FALSE + "\n" + self._FALSE + "\n```"
+        assert _parse_json_response(raw)["is_convergence"] is False
+
+    def test_brace_then_garbage_still_raises(self):
+        # Strict-on-garbage contract preserved: nothing decodes to a dict.
+        with pytest.raises(json.JSONDecodeError):
+            _parse_json_response("blah { not json")
+
 
 # ── Priority Classification ──────────────────────────────────────────────────
 

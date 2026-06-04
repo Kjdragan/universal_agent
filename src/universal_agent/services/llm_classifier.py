@@ -144,14 +144,40 @@ async def _call_llm(
 
 
 def _parse_json_response(raw: str) -> dict[str, Any]:
-    """Parse JSON from LLM response, stripping markdown fencing if present."""
+    """Parse JSON from an LLM response, tolerating fencing and trailing junk.
+
+    Strict happy path first: a clean object (fenced or not) parses exactly as
+    before. Only on failure do we recover the FIRST valid JSON *object* via
+    ``raw_decode`` -- LLMs (notably the ZAI/glm refine path) intermittently
+    append a duplicate object or a trailing prose sentence after the JSON, which
+    made the old strict ``json.loads`` raise ``Extra data: ...`` and discard an
+    otherwise-valid verdict. We scan successive ``{`` offsets so leading prose
+    containing a stray brace cannot defeat recovery. Genuinely non-JSON input
+    still raises ``json.JSONDecodeError`` (no decodable object), preserving the
+    strict contract relied on by callers and existing tests.
+    """
     cleaned = raw.strip()
     if cleaned.startswith("```"):
         lines = cleaned.split("\n")
         lines = [line for line in lines if not line.strip().startswith("```")]
         cleaned = "\n".join(lines).strip()
 
-    return json.loads(cleaned)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError as first_err:
+        decoder = json.JSONDecoder()
+        start = cleaned.find("{")
+        while start != -1:
+            try:
+                obj, _end = decoder.raw_decode(cleaned, start)
+            except json.JSONDecodeError:
+                start = cleaned.find("{", start + 1)
+                continue
+            if isinstance(obj, dict):
+                return obj
+            start = cleaned.find("{", start + 1)
+        # Nothing decoded to a dict -- preserve the strict contract.
+        raise first_err
 
 
 class ClassificationError(Exception):

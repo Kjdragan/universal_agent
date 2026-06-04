@@ -263,6 +263,55 @@ class TestAppendVerdict:
         # Header preserved.
         assert "# Recent Intel Briefs Index" in text
 
+    def test_append_self_prunes_to_max_entries(self, tmp_path: Path, monkeypatch):
+        # Unbounded append was the index-growth bug; the appender now self-prunes.
+        monkeypatch.setenv("UA_RECENT_BRIEFS_INDEX_MAX_ENTRIES", "50")
+        path = tmp_path / "index.md"
+        for n in range(250):
+            recent_briefs_index.append_verdict_to_index(
+                index_path=path,
+                artifact_id=f"pa_{n:016d}",
+                candidate_id=f"cand_{n:016d}",
+                verdict="skip",
+                thesis=f"thesis {n}",
+                key_entities=["E"],
+                ship_reasoning=f"reason {n}",
+                operator_rating=None,
+                decided_at="2026-06-04T00:00:00+00:00",
+                title=f"C{n}",
+            )
+        text = path.read_text(encoding="utf-8")
+        assert text.count("## [") == 50  # bounded to the cap
+        assert len(text.encode("utf-8")) < 60_000  # far below unbounded growth
+        assert "cand_0000000000000249" in text  # newest kept
+        assert "cand_0000000000000000" not in text  # oldest pruned
+        assert "# Recent Intel Briefs Index" in text  # header present/refreshed
+        # Over-cap path used the atomic rewrite and left no temp file behind.
+        assert not (tmp_path / "index.md.tmp").exists()
+        # Still round-trips through the reader without tripping the corruption guard.
+        conn = _make_conn()
+        out = recent_briefs_index.read_index_or_fallback(conn, index_path=path)
+        assert "cand_0000000000000249" in out
+
+    def test_append_prune_disabled_grows(self, tmp_path: Path, monkeypatch):
+        # Kill-switch: 0 disables pruning (legacy append-forever behavior).
+        monkeypatch.setenv("UA_RECENT_BRIEFS_INDEX_MAX_ENTRIES", "0")
+        path = tmp_path / "index.md"
+        for n in range(120):
+            recent_briefs_index.append_verdict_to_index(
+                index_path=path,
+                artifact_id=f"pa_{n:016d}",
+                candidate_id=f"cand_{n:016d}",
+                verdict="skip",
+                thesis="t",
+                key_entities=["E"],
+                ship_reasoning="r",
+                operator_rating=None,
+                decided_at="2026-06-04T00:00:00+00:00",
+                title=f"C{n}",
+            )
+        assert path.read_text(encoding="utf-8").count("## [") == 120
+
 
 class TestReadOrFallback:
     def test_missing_file_rebuilds_from_db(self, tmp_path: Path):
@@ -461,11 +510,6 @@ class TestSchemaAdditions:
 
     def test_convergence_candidates_indexes_present(self):
         conn = _make_conn()
-        idxs = {
-            row[1] for row in conn.execute(
-                "SELECT * FROM sqlite_master WHERE type='index' AND tbl_name='convergence_candidates'"
-            ).fetchall()
-        }
         # Indexes by name.
         names = set()
         for row in conn.execute(
