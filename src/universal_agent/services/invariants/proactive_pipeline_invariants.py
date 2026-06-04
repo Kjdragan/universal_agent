@@ -130,6 +130,13 @@ def _parse_iso(value: Any) -> Optional[datetime]:
     },
 )
 def morning_briefing_freshness(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Fire when today's ``DAILY_BRIEFING.md`` is missing after the 6:30 AM cron.
+
+    Checks only for existence at today's dated artifact path (the directory name
+    is itself the freshness gate), and only after the 6:30 AM Houston tick so a
+    pre-dawn run stays quiet. Returns None when the artifacts root is absent or
+    today's briefing exists.
+    """
     artifacts_dir = ctx.get("artifacts_dir")
     if artifacts_dir is None:
         return None
@@ -192,6 +199,13 @@ def morning_briefing_freshness(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     },
 )
 def proactive_artifact_digest_delivery(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Fire when no proactive-artifact digest email has been sent in ~24h+grace.
+
+    Reads the newest ``sent_at`` from ``proactive_artifact_emails`` (via the
+    ``activity_conn`` context) and flags ages over ``PROACTIVE_DIGEST_MAX_AGE_HOURS``.
+    Only probes after the 8:35 AM tick and stays quiet on an empty table (fresh
+    box). Returns None when delivery is current.
+    """
     conn = ctx.get("activity_conn")
     if conn is None:
         return None
@@ -268,6 +282,14 @@ def proactive_artifact_digest_delivery(ctx: Dict[str, Any]) -> Optional[Dict[str
     },
 )
 def hackernews_snapshot_cadence(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Fire when the newest HN snapshot is stale during active hours.
+
+    Looks at the most-recent mtime under ``hackernews/snapshots/`` and flags a
+    gap over ``HACKERNEWS_MAX_GAP_MINUTES`` while inside the 6 AM-9:30 PM Houston
+    active window (with a 30-min grace after the first tick to absorb the
+    overnight gap). Returns None when the dir is absent, outside active hours,
+    or the snapshot is fresh.
+    """
     artifacts_dir = ctx.get("artifacts_dir")
     if artifacts_dir is None:
         return None
@@ -341,6 +363,14 @@ def hackernews_snapshot_cadence(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]
     },
 )
 def csi_convergence_sync_freshness(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Fire when no ``convergence_candidates`` row has appeared in ~3h (active hours).
+
+    Reads the newest ``created_at`` from the LIVE ``convergence_candidates``
+    table (not the decommissioned ``proactive_convergence_events``) and flags
+    ages over ``CSI_CONVERGENCE_MAX_AGE_MINUTES``. Probes only well into the
+    06:00-21:00 active window so the overnight no-cron gap can't false-fire.
+    Returns None on an empty table or when fresh.
+    """
     conn = ctx.get("activity_conn")
     if conn is None:
         return None
@@ -426,6 +456,14 @@ def csi_convergence_sync_freshness(ctx: Dict[str, Any]) -> Optional[Dict[str, An
     },
 )
 def nightly_wiki_persistent_silence(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Fire only when no nightly-wiki artifact has appeared in ~7 days.
+
+    The cron legitimately produces nothing on signal-quiet nights, so this
+    checks for *persistent* silence: the newest mtime under ``nightly_wikis/``
+    older than ``NIGHTLY_WIKI_QUIET_DAYS_FLOOR`` days flags a stuck agent or a
+    dried-up upstream signal pipeline. Returns None when the dir is absent/empty
+    or output is recent.
+    """
     artifacts_dir = ctx.get("artifacts_dir")
     if artifacts_dir is None:
         return None
@@ -496,6 +534,13 @@ def nightly_wiki_persistent_silence(ctx: Dict[str, Any]) -> Optional[Dict[str, A
     },
 )
 def proactive_reports_daily_trio(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Fire when fewer than 2 of today's 3 proactive reports exist by 5 PM.
+
+    Counts today's ``proactive_intelligence_reports`` rows (morning/midday/
+    afternoon) after the 4:05 PM cron + 1h grace. One missed slot is tolerated
+    as a routine quota/API blip; below ``PROACTIVE_REPORTS_MIN_TODAY`` means the
+    rhythm is degraded. Returns None before 5 PM or when the threshold is met.
+    """
     conn = ctx.get("activity_conn")
     if conn is None:
         return None
@@ -561,6 +606,13 @@ def proactive_reports_daily_trio(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]
     },
 )
 def claude_code_intel_packet_freshness(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Fire when no claude_code_intel packet has appeared in ~9h (active hours).
+
+    Flags the newest mtime under ``proactive/claude_code_intel/packets/`` older
+    than ``CLAUDE_CODE_INTEL_MAX_AGE_HOURS`` while inside active hours (with a
+    grace after 6 AM for the overnight gap). Returns None when the dir is
+    absent/empty, during dormancy, or the packet is fresh.
+    """
     artifacts_dir = ctx.get("artifacts_dir")
     if artifacts_dir is None:
         return None
@@ -635,6 +687,13 @@ def claude_code_intel_packet_freshness(ctx: Dict[str, Any]) -> Optional[Dict[str
     },
 )
 def csi_demo_triage_rank_artifact(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Fire when no ``csi_demo_triage_run`` artifact has appeared in ~6h.
+
+    Reads the newest ``created_at`` for ``artifact_type='csi_demo_triage_run'``
+    in ``proactive_artifacts`` and flags ages over ``CSI_DEMO_TRIAGE_MAX_AGE_HOURS``
+    during active hours, after the first daily (10:05 AM) run. Stays quiet when
+    the feature has produced no rows yet. Returns None when current.
+    """
     conn = ctx.get("activity_conn")
     if conn is None:
         return None
@@ -725,6 +784,14 @@ def csi_demo_triage_rank_artifact(ctx: Dict[str, Any]) -> Optional[Dict[str, Any
     },
 )
 def paper_to_podcast_email_delivery(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Fire when the daily paper-to-podcast email is overdue (~30h).
+
+    Reads the newest ``sent_at`` from ``proactive_artifact_emails`` for the
+    "Papers" subject to kevinjdragan@gmail.com and flags ages over
+    ``PAPER_TO_PODCAST_MAX_AGE_HOURS`` (daily cadence + 6h grace). Probes only
+    after 6 AM and stays quiet on an unactivated pipeline. Returns None when
+    current.
+    """
     conn = ctx.get("activity_conn")
     if conn is None:
         return None
@@ -803,6 +870,13 @@ def paper_to_podcast_email_delivery(ctx: Dict[str, Any]) -> Optional[Dict[str, A
     },
 )
 def vault_lint_contradictions_monthly(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Fire when no vault contradiction report exists for the current month.
+
+    After the 2nd of the month (one day grace past the 1st-of-month cron),
+    checks for any ``contradiction-report-*.md`` under ``knowledge-vaults/*/``
+    whose mtime falls in the current year+month. Returns None before the gate
+    day, when the vault dir is absent/empty, or a current-month report exists.
+    """
     artifacts_dir = ctx.get("artifacts_dir")
     if artifacts_dir is None:
         return None
@@ -871,6 +945,14 @@ def vault_lint_contradictions_monthly(ctx: Dict[str, Any]) -> Optional[Dict[str,
     },
 )
 def proactive_brief_task_funnel(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Fire when a proactive source produces many artifacts but zero tasks.
+
+    For each ``BRIEF_TASK_FUNNEL_SOURCE_KINDS`` entry, compares 48h artifact
+    counts against ``task_hub_items`` counts; ``>= BRIEF_TASK_FUNNEL_MIN_ARTIFACTS``
+    artifacts with 0 tasks signals the preference gate / dedup / queue-insert
+    path is silently dropping work (the 2026-04-18 implicit-park poison shape).
+    Returns None when no source is starved.
+    """
     conn = ctx.get("activity_conn")
     if conn is None:
         return None
