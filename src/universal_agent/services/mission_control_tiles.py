@@ -254,7 +254,23 @@ class DatabaseTile(Tile):
 
 
 class CsiIngesterTile(Tile):
-    """Tile reporting CSI ingester freshness based on last ingestion event age."""
+    """Tile reporting CSI ingester freshness from the CSI events store.
+
+    Reads ``MAX(occurred_at)`` per source directly from csi.db's ``events``
+    table — the SAME data source and per-source thresholds as the
+    ``csi_source_liveness`` invariant — so this tile can never diverge from
+    proactive_health's CSI signal.
+
+    History: before 2026-06-04 this tile queried ``activity_events WHERE
+    source_domain = 'csi'`` from the sweeper-supplied activity_state.db
+    connection. Those rows are written ONLY by the ClaudeDevs intel-sync
+    (``claude_code_intel.py``, pipeline ``csi_x_sync``), whose cron has been
+    disabled since 2026-05-25 (X-API credits depleted). So the tile false-RED
+    for days — and its recurring ``infra:csi_ingester`` card drove the
+    Chief-of-Staff "CSI ingester blind for 62h" narrative — while csi.db was
+    healthy and ingesting ~900 events/48h. The tile was measuring the wrong
+    pipeline entirely.
+    """
 
     name = "csi_ingester"
     display_name = "CSI Ingester"
@@ -266,62 +282,140 @@ class CsiIngesterTile(Tile):
         return "A"
 
     def compute_state(self, conn: sqlite3.Connection) -> TileState:
-        """Return green/yellow/red based on time since last CSI ingestion event."""
-        # CSI is a 3x-DAILY scheduled job (cron 0 8,16,22 America/Chicago
-        # = ~13:00 / 21:00 / 03:00 UTC). Worst-case gap between events is
-        # 10h (22:00 → 08:00 next day, America/Chicago), so the existing
-        # 12h green / 25h yellow thresholds still cover one full window
-        # and one missed cycle respectively — no tile retuning needed:
-        #   green  = within one full polling window  (≤ 12h)
-        #   yellow = missed exactly one cycle        (12h < age ≤ 25h)
-        #   red    = missed ≥ 2 cycles               (> 25h)
-        # SQL window is 48h so the 24-25h yellow zone resolves correctly.
-        try:
-            row = conn.execute(
-                """
-                SELECT MAX(created_at) AS last_event,
-                       COUNT(*) AS events_24h
-                FROM activity_events
-                WHERE source_domain = 'csi'
-                  AND created_at > datetime('now','-48 hours')
-                """
-            ).fetchone()
-        except sqlite3.OperationalError as exc:
+        """Return green/yellow/red from per-source freshness in csi.db.
+
+        Ignores the sweeper-supplied ``conn`` (activity_state.db) and opens a
+        short-lived read-only connection to the CSI events store — exactly the
+        pattern the base-class contract sanctions for tiles whose data lives
+        elsewhere. Path resolution mirrors
+        ``gateway_server._csi_default_db_path`` (``CSI_DB_PATH`` env, default
+        ``/var/lib/universal-agent/csi/csi.db``); per-source thresholds and
+        parked-lane handling are reused verbatim from the invariant via
+        ``effective_source_thresholds()`` so the tile and proactive_health
+        agree by construction:
+
+          green  = every monitored source fresh within its threshold
+          yellow = some (not all) monitored sources stale
+          red    = all monitored sources stale (ingester effectively down —
+                   what the Class-A restart action targets)
+
+        Fails open to UNKNOWN (never raises) when the CSI DB or its ``events``
+        table is absent, per the tile contract.
+        """
+        from universal_agent.services.invariants.csi_source_liveness import (
+            effective_source_thresholds,
+        )
+
+        csi_db_path = Path(os.getenv("CSI_DB_PATH", "/var/lib/universal-agent/csi/csi.db"))
+        if not csi_db_path.exists():
             return TileState(
                 color=COLOR_UNKNOWN,
-                one_line_status=f"activity DB unavailable: {exc}",
-                evidence={"error": str(exc)},
+                one_line_status=f"csi.db not found at {csi_db_path}",
+                evidence={"csi_db_path": str(csi_db_path)},
             )
 
-        events_24h = int(row["events_24h"] or 0) if row else 0
-        last_event = row["last_event"] if row else None
-        last_dt = _safe_parse_iso(last_event)
+        thresholds = effective_source_thresholds()
+        if not thresholds:
+            return TileState(
+                color=COLOR_UNKNOWN,
+                one_line_status="no CSI sources currently monitored",
+                evidence={"monitored_sources": []},
+            )
 
-        if last_dt is None:
+        # Read-only URI connection: a pure reader must never take a write lock
+        # on csi.db while the csi-ingester service writes to it.
+        try:
+            csi_conn = sqlite3.connect(f"file:{csi_db_path}?mode=ro", uri=True)
+            try:
+                csi_conn.row_factory = sqlite3.Row
+                rows = csi_conn.execute(
+                    """
+                    SELECT source, MAX(occurred_at) AS last_event
+                    FROM events
+                    WHERE occurred_at >= datetime('now','-30 days')
+                    GROUP BY source
+                    """
+                ).fetchall()
+            finally:
+                csi_conn.close()
+        except sqlite3.OperationalError as exc:
+            # Missing events table / unopenable DB → unknown, never raise.
+            return TileState(
+                color=COLOR_UNKNOWN,
+                one_line_status=f"csi.db unavailable: {exc}",
+                evidence={"error": str(exc), "csi_db_path": str(csi_db_path)},
+            )
+
+        last_seen: dict[str, datetime | None] = {s: None for s in thresholds}
+        for row in rows:
+            src = row["source"]
+            if src in last_seen:
+                last_seen[src] = _safe_parse_iso(row["last_event"])
+
+        now = _utc_now()
+        fresh: list[str] = []
+        stale: list[dict[str, Any]] = []
+        freshest_age_s: float | None = None
+        for source, threshold_h in thresholds.items():
+            ts = last_seen.get(source)
+            if ts is None:
+                stale.append(
+                    {
+                        "source": source,
+                        "state": "never_seen",
+                        "threshold_hours": threshold_h,
+                        "silence_hours": None,
+                    }
+                )
+                continue
+            age_s = (now - ts).total_seconds()
+            if freshest_age_s is None or age_s < freshest_age_s:
+                freshest_age_s = age_s
+            if age_s / 3600.0 > threshold_h:
+                stale.append(
+                    {
+                        "source": source,
+                        "state": "stale",
+                        "threshold_hours": threshold_h,
+                        "silence_hours": round(age_s / 3600.0, 1),
+                    }
+                )
+            else:
+                fresh.append(source)
+
+        monitored = len(thresholds)
+        stale_count = len(stale)
+        evidence: dict[str, Any] = {
+            "csi_db_path": str(csi_db_path),
+            "monitored_sources": monitored,
+            "fresh_sources": sorted(fresh),
+            "stale_sources": stale,
+            "freshest_event_age_seconds": (
+                round(freshest_age_s) if freshest_age_s is not None else None
+            ),
+        }
+
+        if stale_count == 0:
+            age_txt = (
+                f"{int(freshest_age_s / 60)}m" if freshest_age_s is not None else "?"
+            )
+            return TileState(
+                color=COLOR_GREEN,
+                one_line_status=f"{monitored} CSI sources fresh, last event {age_txt} ago",
+                evidence=evidence,
+            )
+
+        stale_names = ", ".join(sorted(s["source"] for s in stale))
+        if stale_count >= monitored:
             return TileState(
                 color=COLOR_RED,
-                one_line_status="no CSI events in last 48h",
-                evidence={"events_24h": 0, "last_event_iso": None},
+                one_line_status=f"all {monitored} CSI sources stale — ingester likely down",
+                evidence=evidence,
             )
-
-        age_s = (_utc_now() - last_dt).total_seconds()
-        if age_s <= 43200:  # 12h — within one polling window
-            color = COLOR_GREEN
-            status = f"{events_24h} events recent, last {int(age_s/60)}m ago"
-        elif age_s <= 90000:  # 25h — missed one cycle
-            color = COLOR_YELLOW
-            status = f"no CSI events in {int(age_s/3600)}h (missed 1 cycle)"
-        else:  # > 25h — missed ≥ 2 cycles
-            color = COLOR_RED
-            status = f"no CSI events in {int(age_s/3600)}h (missed ≥2 cycles)"
         return TileState(
-            color=color,
-            one_line_status=status,
-            evidence={
-                "events_24h": events_24h,
-                "last_event_iso": last_event,
-                "age_seconds": age_s,
-            },
+            color=COLOR_YELLOW,
+            one_line_status=f"{stale_count}/{monitored} CSI sources stale: {stale_names}",
+            evidence=evidence,
         )
 
 

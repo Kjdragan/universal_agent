@@ -141,6 +141,52 @@ def _iso_hours_ago(hours: float) -> str:
     return _iso_minutes_ago(hours * 60.0)
 
 
+@pytest.fixture
+def csi_db(tmp_path: Path, monkeypatch):
+    """Temp csi.db with the `events` shape CsiIngesterTile queries, with
+    CSI_DB_PATH pointed at it.
+
+    The tile reads csi.db directly (not the activity DB) as of 2026-06-04,
+    mirroring the csi_source_liveness invariant. Empty by default → tile
+    reads RED (every monitored source never_seen). Seed with
+    `_seed_csi_fresh` / `_seed_csi_event`.
+    """
+    path = tmp_path / "csi.db"
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE events ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "source TEXT NOT NULL, occurred_at TEXT NOT NULL)"
+    )
+    conn.commit()
+    monkeypatch.setenv("CSI_DB_PATH", str(path))
+    yield conn
+    conn.close()
+
+
+def _monitored_csi_sources() -> list[str]:
+    from universal_agent.services.invariants.csi_source_liveness import (
+        effective_source_thresholds,
+    )
+
+    return list(effective_source_thresholds())
+
+
+def _seed_csi_event(conn: sqlite3.Connection, source: str, occurred_at: str) -> None:
+    conn.execute(
+        "INSERT INTO events (source, occurred_at) VALUES (?, ?)", (source, occurred_at)
+    )
+    conn.commit()
+
+
+def _seed_csi_fresh(conn: sqlite3.Connection, minutes_ago: float = 1.0) -> None:
+    """Insert a fresh event for every monitored CSI source → tile GREEN."""
+    ts = _iso_minutes_ago(minutes_ago)
+    for source in _monitored_csi_sources():
+        _seed_csi_event(conn, source, ts)
+
+
 # ── Tile state computation ─────────────────────────────────────────────
 
 
@@ -173,48 +219,61 @@ def test_database_tile_green_on_fast_select(activity_db):
     assert state.evidence["select1_ms"] < 100
 
 
-def test_csi_ingester_tile_green_on_recent_event(activity_db):
-    _insert_event(activity_db, id="csi1", source_domain="csi", created_at=_iso_minutes_ago(10))
-    state = CsiIngesterTile().compute_state(activity_db)
+def test_csi_ingester_tile_green_when_all_sources_fresh(csi_db):
+    """All monitored CSI sources fresh within their per-source threshold →
+    GREEN. The tile reads csi.db's events table, NOT activity_events: the
+    `conn` argument (activity DB) is ignored."""
+    _seed_csi_fresh(csi_db, minutes_ago=10)
+    state = CsiIngesterTile().compute_state(None)
     assert state.color == COLOR_GREEN
-    assert state.evidence["events_24h"] == 1
+    assert state.evidence["stale_sources"] == []
+    assert state.evidence["monitored_sources"] >= 1
 
 
-def test_csi_ingester_tile_green_within_polling_cycle(activity_db):
-    """Production CSI source polls 3x daily (cron 0 8,16,22 * * * America/Chicago).
-    Worst-case gap is 10h (22:00 → 08:00 next day). A 5-hour gap is well inside
-    the green window. The tile must NOT alarm yellow during normal between-poll
-    silence.
-    """
-    _insert_event(activity_db, id="csi1", source_domain="csi",
-                  created_at=_iso_hours_ago(5))
-    state = CsiIngesterTile().compute_state(activity_db)
-    assert state.color == COLOR_GREEN, (
-        f"5h since last poll is normal for twice-daily source; got {state.color}"
+def test_csi_ingester_tile_red_when_no_events(csi_db):
+    """Empty events table → every monitored source never_seen → RED."""
+    state = CsiIngesterTile().compute_state(None)
+    assert state.color == COLOR_RED
+    assert len(state.evidence["stale_sources"]) == state.evidence["monitored_sources"]
+
+
+def test_csi_ingester_tile_yellow_when_some_sources_stale(csi_db):
+    """Some (not all) monitored sources past their threshold → YELLOW."""
+    from universal_agent.services.invariants.csi_source_liveness import (
+        effective_source_thresholds,
     )
 
-
-def test_csi_ingester_tile_yellow_on_stale(activity_db):
-    """Threshold tuned for twice-daily polling: 14h gap means we missed at least
-    one expected poll cycle and should signal yellow."""
-    _insert_event(activity_db, id="csi1", source_domain="csi",
-                  created_at=_iso_hours_ago(14))
-    state = CsiIngesterTile().compute_state(activity_db)
+    thresholds = effective_source_thresholds()
+    sources = list(thresholds)
+    assert len(sources) >= 2, "need ≥2 monitored sources for a partial-stale case"
+    stale_source = sources[0]
+    for src in sources:
+        if src == stale_source:
+            _seed_csi_event(csi_db, src, _iso_hours_ago(thresholds[src] + 6.0))
+        else:
+            _seed_csi_event(csi_db, src, _iso_minutes_ago(1))
+    state = CsiIngesterTile().compute_state(None)
     assert state.color == COLOR_YELLOW
+    assert [s["source"] for s in state.evidence["stale_sources"]] == [stale_source]
 
 
-def test_csi_ingester_tile_red_when_polling_cadence_exceeded(activity_db):
-    """30+ hours since last event = at least 2 expected polls missed = red."""
-    _insert_event(activity_db, id="csi1", source_domain="csi",
-                  created_at=_iso_hours_ago(30))
-    state = CsiIngesterTile().compute_state(activity_db)
+def test_csi_ingester_tile_red_when_all_sources_stale(csi_db):
+    """Every monitored source past its threshold → RED (ingester down)."""
+    from universal_agent.services.invariants.csi_source_liveness import (
+        effective_source_thresholds,
+    )
+
+    for src, threshold_h in effective_source_thresholds().items():
+        _seed_csi_event(csi_db, src, _iso_hours_ago(threshold_h + 6.0))
+    state = CsiIngesterTile().compute_state(None)
     assert state.color == COLOR_RED
 
 
-def test_csi_ingester_tile_red_when_no_recent_events(activity_db):
-    state = CsiIngesterTile().compute_state(activity_db)
-    assert state.color == COLOR_RED
-    assert state.evidence["events_24h"] == 0
+def test_csi_ingester_tile_unknown_when_db_missing(tmp_path, monkeypatch):
+    """No csi.db at the resolved path → UNKNOWN, never raises (fail-open)."""
+    monkeypatch.setenv("CSI_DB_PATH", str(tmp_path / "does_not_exist.db"))
+    state = CsiIngesterTile().compute_state(None)
+    assert state.color == COLOR_UNKNOWN
 
 
 def test_cron_pipelines_tile_green_when_all_clear(activity_db):
@@ -709,21 +768,20 @@ def test_sweeper_persists_tile_states_on_first_tick(monkeypatch, activity_db, tm
         conn.close()
 
 
-def test_sweeper_detects_color_transition_and_creates_card(monkeypatch, activity_db, tmp_path):
+def test_sweeper_detects_color_transition_and_creates_card(monkeypatch, activity_db, csi_db, tmp_path):
     monkeypatch.setenv("UA_MC_PHASE_1_ENABLED", "1")
-    # First tick: no CSI events -> CSI Ingester tile is RED.
+    # First tick: empty csi.db -> every CSI source never_seen -> tile RED.
     sweeper = _FixtureSweeper(activity_db, tmp_path / "mc.db")
     first = sweeper.tick()
     assert first.errors == []
     # No transitions on the first tick (nothing to transition FROM).
     assert all("csi_ingester" not in t for t in first.tier0_transitions)
 
-    # Now make CSI Ingester green by inserting a recent event,
-    # then tick again -> expect a red->green transition AND the
-    # auto-card creation for the previous red state already happened
-    # (no, it shouldn't have on the first tick since there was no prior
-    # state — the red state is the initial state, no transition fired).
-    _insert_event(activity_db, id="csi-fresh", source_domain="csi", created_at=_iso_minutes_ago(1))
+    # Now make CSI Ingester green by landing a fresh event for every
+    # monitored source in csi.db, then tick again -> expect a red->green
+    # transition. (No card was created on the first tick: the red state is
+    # the initial state, no transition fired.)
+    _seed_csi_fresh(csi_db)
     second = sweeper.tick()
     assert second.errors == []
     csi_transitions = [t for t in second.tier0_transitions if t.startswith("csi_ingester:")]
@@ -731,16 +789,17 @@ def test_sweeper_detects_color_transition_and_creates_card(monkeypatch, activity
     assert "red->green" in csi_transitions[0]
 
 
-def test_sweeper_creates_infrastructure_card_on_yellow_red_transition(monkeypatch, activity_db, tmp_path):
+def test_sweeper_creates_infrastructure_card_on_yellow_red_transition(monkeypatch, activity_db, csi_db, tmp_path):
     monkeypatch.setenv("UA_MC_PHASE_1_ENABLED", "1")
-    # Start with CSI green
-    _insert_event(activity_db, id="csi-fresh", source_domain="csi", created_at=_iso_minutes_ago(1))
+    # Start with CSI green (all monitored sources fresh in csi.db)
+    _seed_csi_fresh(csi_db)
     sweeper = _FixtureSweeper(activity_db, tmp_path / "mc.db")
     sweeper.tick()  # establish baseline (green)
 
-    # Move time forward: delete the recent CSI event so the next tick
-    # sees no recent CSI activity -> tile flips to red.
-    activity_db.execute("DELETE FROM activity_events WHERE id = 'csi-fresh'")
+    # Clear csi.db so the next tick sees no recent CSI activity for any
+    # source -> tile flips to red.
+    csi_db.execute("DELETE FROM events")
+    csi_db.commit()
     second = sweeper.tick()
     csi_transitions = [t for t in second.tier0_transitions if t.startswith("csi_ingester:")]
     assert csi_transitions, "expected CSI tile to transition"
@@ -828,7 +887,7 @@ def test_severity_mapping_for_tile_colors():
 
 # ── Phase 1.1 regression: first-appearance non-green tile must create a card
 
-def test_sweeper_creates_card_on_first_appearance_red_tile(monkeypatch, activity_db, tmp_path):
+def test_sweeper_creates_card_on_first_appearance_red_tile(monkeypatch, activity_db, csi_db, tmp_path):
     """Production smoke test on Phase 1B revealed that a freshly-booted
     sweeper with a red tile on its first tick produced ZERO cards because
     the prior code only fired card creation on color transitions.
@@ -839,7 +898,8 @@ def test_sweeper_creates_card_on_first_appearance_red_tile(monkeypatch, activity
     needing a second tick to "transition into" their state.
     """
     monkeypatch.setenv("UA_MC_PHASE_1_ENABLED", "1")
-    # CSI tile starts RED because no CSI events exist in the fixture DB
+    # CSI tile starts RED because the csi.db events table is empty
+    # (every monitored source never_seen).
     sweeper = _FixtureSweeper(activity_db, tmp_path / "mc.db")
     result = sweeper.tick()
     assert result.errors == []
@@ -866,7 +926,7 @@ def test_sweeper_creates_card_on_first_appearance_red_tile(monkeypatch, activity
 
 
 def test_sweeper_does_not_duplicate_cards_on_repeated_same_color_ticks(
-    monkeypatch, activity_db, tmp_path
+    monkeypatch, activity_db, csi_db, tmp_path
 ):
     """Idempotency contract: a tile that stays red across many sweeps must
     not produce a flurry of duplicate cards. The card_id is a stable hash
@@ -896,13 +956,12 @@ def test_sweeper_does_not_duplicate_cards_on_repeated_same_color_ticks(
 
 
 def test_sweeper_does_not_create_card_for_first_appearance_green(
-    monkeypatch, activity_db, tmp_path
+    monkeypatch, activity_db, csi_db, tmp_path
 ):
     """Green tiles never warrant infrastructure cards — only yellow/red
-    do. Verify by inserting a recent CSI event so CSI is green, then
-    confirming no infra card lands."""
-    _insert_event(activity_db, id="csi-fresh", source_domain="csi",
-                  created_at=_iso_minutes_ago(1))
+    do. Verify by landing fresh events for every monitored CSI source so
+    CSI is green, then confirming no infra card lands."""
+    _seed_csi_fresh(csi_db)
     monkeypatch.setenv("UA_MC_PHASE_1_ENABLED", "1")
     sweeper = _FixtureSweeper(activity_db, tmp_path / "mc.db")
     sweeper.tick()
@@ -919,7 +978,7 @@ def test_sweeper_does_not_create_card_for_first_appearance_green(
 # ── Phase 1.2 invariant: non-green tile without live card always backfills
 
 def test_sweeper_backfills_card_for_non_green_tile_with_missing_card(
-    monkeypatch, activity_db, tmp_path
+    monkeypatch, activity_db, csi_db, tmp_path
 ):
     """Production smoke after Phase 1.1 revealed that pre-existing tile
     rows from Phase 1B's buggy run never produced cards even after the
