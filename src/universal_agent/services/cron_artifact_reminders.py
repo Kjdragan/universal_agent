@@ -41,7 +41,11 @@ import time
 from typing import Any, Optional
 
 from universal_agent.services import proactive_artifacts
-from universal_agent.services.cron_artifact_notifier import _build_ack_url, _escape
+from universal_agent.services.cron_artifact_notifier import (
+    _build_ack_url,
+    _coalesce_enabled,
+    _escape,
+)
 from universal_agent.services.email_tags import ActionTag, KindTag
 
 logger = logging.getLogger(__name__)
@@ -114,6 +118,33 @@ async def sweep_pending_artifact_reminders(
             if aid and aid not in _seen:
                 _seen.add(aid)
                 pending.append(row)
+
+    # Cross-artifact coalescing: a single cron that surfaced MULTIPLE
+    # unacknowledged disclosures (e.g. repeated paper_to_podcast partial-auth
+    # runs) would otherwise emit one reminder stream PER artifact. Group the
+    # reminder-bearing pending rows by their source cron and keep only the
+    # NEWEST as the active reminder; stop the older siblings. Gated by the
+    # same flag as the notifier-side coalescing.
+    suppressed_ids: set[str] = set()
+    if _coalesce_enabled():
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for art in pending:
+            art_meta = _load_metadata(art)
+            if not (art_meta.get("reminder") or {}):
+                continue
+            key = _artifact_source_group_key(art, art_meta)
+            if not key:
+                continue
+            groups.setdefault(key, []).append(art)
+        for members in groups.values():
+            if len(members) <= 1:
+                continue
+            members.sort(key=lambda a: str(a.get("created_at") or ""), reverse=True)
+            for older in members[1:]:
+                older_id = str(older.get("artifact_id") or "").strip()
+                if older_id:
+                    suppressed_ids.add(older_id)
+
     for artifact in pending:
         considered += 1
         try:
@@ -122,6 +153,15 @@ async def sweep_pending_artifact_reminders(
             if not reminder:
                 continue  # not a cron-disclosure artifact
             if bool(reminder.get("stopped")):
+                continue
+            if str(artifact.get("artifact_id") or "").strip() in suppressed_ids:
+                # Coalesced sibling: a newer disclosure from the same cron
+                # carries the reminder cadence. Stop this one's stream so the
+                # operator gets a single reminder per cron, not one per run.
+                reminder["stopped"] = True
+                reminder["stopped_reason"] = "coalesced_same_source"
+                _persist_reminder(conn, artifact, meta, reminder)
+                stopped += 1
                 continue
             current_state = str(reminder.get("schedule_state") or "").strip()
             transition = _STATE_TRANSITIONS.get(current_state)
@@ -195,6 +235,29 @@ def _load_metadata(artifact: dict[str, Any]) -> dict[str, Any]:
         except json.JSONDecodeError:
             return {}
     return {}
+
+
+def _artifact_source_group_key(
+    artifact: dict[str, Any], metadata: dict[str, Any]
+) -> str:
+    """Stable per-cron grouping key for coalescing reminder streams.
+
+    Prefers the durable Task Hub id (``cron:<system_job>``), then the cron
+    ``job_id``, then the ``<job_id>`` prefix of ``source_ref`` (which the
+    notifier seeds as ``"<job_id>:<started_at>"``). Returns "" for artifacts
+    carrying none of these (non-cron disclosures), which excludes them from
+    grouping so their per-artifact cadence is untouched.
+    """
+    task_id = str(metadata.get("task_id") or "").strip()
+    if task_id:
+        return f"task:{task_id}"
+    job_id = str(metadata.get("job_id") or "").strip()
+    if job_id:
+        return f"job:{job_id}"
+    source_ref = str(artifact.get("source_ref") or "").strip()
+    if source_ref:
+        return f"ref:{source_ref.split(':', 1)[0]}"
+    return ""
 
 
 def _persist_reminder(

@@ -267,6 +267,120 @@ async def test_artifact_without_reminder_metadata_skipped(
     assert report["sent"] == 0
 
 
+# ── Cross-artifact coalescing (same-cron storm suppression) ────────────
+
+
+def _insert_pending_with_source(
+    conn: sqlite3.Connection,
+    *,
+    artifact_id: str,
+    task_id: str,
+    created_at: str,
+    schedule_state: str = "sent_initial",
+    next_due_epoch: float | None = None,
+    finished_at_epoch: float = FINISHED_AT,
+) -> None:
+    """Seed a cron-disclosure artifact tagged with a stable cron task_id and an
+    explicit created_at (so 'newest in group' is deterministic)."""
+    if next_due_epoch is None:
+        next_due_epoch = finished_at_epoch + SAME_DAY_NUDGE_DELAY_S
+    proactive_artifacts.upsert_artifact(
+        conn,
+        artifact_id=artifact_id,
+        artifact_type="cron_run_output",
+        source_kind="cron_artifact",
+        title="RLHF paper-to-podcast partial outputs",
+        summary="partial",
+        status=proactive_artifacts.ARTIFACT_STATUS_SURFACED,
+        delivery_state=proactive_artifacts.DELIVERY_EMAILED,
+        metadata={
+            "finished_at_epoch": finished_at_epoch,
+            "task_id": task_id,
+            "job_id": "2afe05ab96",
+            "reminder": {
+                "count": 1,
+                "schedule_state": schedule_state,
+                "next_reminder_at_epoch": next_due_epoch,
+                "last_sent_at_epoch": finished_at_epoch,
+                "stopped": False,
+            },
+        },
+    )
+    conn.execute(
+        "UPDATE proactive_artifacts SET created_at = ? WHERE artifact_id = ?",
+        (created_at, artifact_id),
+    )
+    conn.commit()
+
+
+def _reminder_block(conn: sqlite3.Connection, artifact_id: str) -> dict:
+    row = conn.execute(
+        "SELECT metadata_json FROM proactive_artifacts WHERE artifact_id = ?",
+        (artifact_id,),
+    ).fetchone()
+    return json.loads(row[0])["reminder"]
+
+
+@pytest.mark.asyncio
+async def test_same_source_artifacts_coalesce_to_one_reminder(
+    conn, mail_service, monkeypatch
+) -> None:
+    """Regression for the 2026-06-03 storm's second wave: 8 unacked
+    paper_to_podcast artifacts would each fire their own Day-3 reminder. The
+    sweep must nudge only the NEWEST per cron and stop the older siblings."""
+    monkeypatch.setenv("UA_CRON_ARTIFACT_COALESCE_SAME_DAY", "1")
+    for i, aid in enumerate(("pa_g1", "pa_g2", "pa_g3")):
+        _insert_pending_with_source(
+            conn,
+            artifact_id=aid,
+            task_id="cron:paper_to_podcast_daily",
+            created_at=f"2026-06-03T0{i + 1}:00:00+00:00",
+        )
+    now = FINISHED_AT + SAME_DAY_NUDGE_DELAY_S + 1
+    report = await sweep_pending_artifact_reminders(
+        conn=conn,
+        mail_service=mail_service,
+        recipient="kevinjdragan@gmail.com",
+        now_epoch=now,
+    )
+    # Only the newest (pa_g3) nudged; the two older siblings stopped.
+    assert report["sent"] == 1
+    assert report["stopped"] == 2
+    mail_service.send_email.assert_called_once()
+    assert _reminder_block(conn, "pa_g3")["schedule_state"] == "sent_same_day_nudge"
+    assert _reminder_block(conn, "pa_g1")["stopped"] is True
+    assert _reminder_block(conn, "pa_g2")["stopped"] is True
+    assert (
+        _reminder_block(conn, "pa_g1").get("stopped_reason")
+        == "coalesced_same_source"
+    )
+
+
+@pytest.mark.asyncio
+async def test_coalesce_flag_off_keeps_per_artifact_reminders(
+    conn, mail_service, monkeypatch
+) -> None:
+    """Escape hatch: with the flag off, every same-cron artifact keeps its own
+    reminder stream (legacy behavior)."""
+    monkeypatch.setenv("UA_CRON_ARTIFACT_COALESCE_SAME_DAY", "0")
+    for i, aid in enumerate(("pa_h1", "pa_h2", "pa_h3")):
+        _insert_pending_with_source(
+            conn,
+            artifact_id=aid,
+            task_id="cron:paper_to_podcast_daily",
+            created_at=f"2026-06-03T0{i + 1}:00:00+00:00",
+        )
+    now = FINISHED_AT + SAME_DAY_NUDGE_DELAY_S + 1
+    report = await sweep_pending_artifact_reminders(
+        conn=conn,
+        mail_service=mail_service,
+        recipient="kevinjdragan@gmail.com",
+        now_epoch=now,
+    )
+    assert report["sent"] == 3
+    assert mail_service.send_email.call_count == 3
+
+
 # ── Active window helper ───────────────────────────────────────────────
 
 
