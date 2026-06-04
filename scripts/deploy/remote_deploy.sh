@@ -137,6 +137,61 @@ echo "--> Installing NotebookLM CLI/MCP tool for ua..."
 run_as_ua "export PATH=\"$PATH\"; uv tool install --force notebooklm-mcp-cli"
 run_as_ua "export PATH=\"$PATH\"; command -v nlm && command -v notebooklm-mcp"
 
+# Prune uv caches — root cause of the disk-usage climb fixed 2026-06-04.
+# WHY: `uv sync` (deploy_validate_runtime.sh) + `uv tool install --force
+# notebooklm-mcp-cli` (above) run on every deploy (~19x/day), and
+# notebooklm-mcp-cli floats (unpinned), so each deploy downloads fresh
+# wheels/sdists. Runtime workers add two more cache trees (worker.py ->
+# $PROD_DIR/.uv-cache, hooks.py -> /tmp/uv_cache). Nothing ever pruned them,
+# so the four caches (ua ~/.cache/uv, root /root/.cache/uv, /tmp/uv_cache,
+# $PROD_DIR/.uv-cache) reached ~65G and pushed disk 70%->78% over ~2 weeks.
+#
+# `uv cache prune --ci` removes re-downloadable pre-built wheels + source
+# distributions while RETAINING the unpacked/built archives that live
+# environments hardlink from, so running services are unaffected (verified
+# 2026-06-04: gateway/api/webui/vp-workers/csi all stayed healthy through a
+# 64.7G reclaim that took disk 78%->58%). `--force` is REQUIRED here: the
+# caches are in near-constant use by long-running `uv run` services (vp
+# workers, csi uvicorn, discord bot) plus cron/hook `uv run` churn, so a
+# lock-respecting prune times out even at UV_LOCK_TIMEOUT=300s. `--force`
+# skips the in-use lock wait; it still only removes complete, re-downloadable
+# entries, so the small concurrency window is safe. Each prune is non-fatal
+# (`|| echo WARN`) — a prune hiccup must never fail a deploy.
+echo "--> Pruning uv caches (reclaim re-downloadable wheels/sdists; keep built archives)..."
+prune_ua_uv_cache() {
+  # $1 = optional UV_CACHE_DIR (empty => ua default ~/.cache/uv).
+  # UV_LOCK_TIMEOUT=10 is a defensive cap on the brief lock-acquisition step
+  # --force still performs — do NOT remove --force to "resolve" the apparent
+  # --force-vs-timeout contradiction; --force is the ONLY reason the prune
+  # succeeds at all here (a lock-respecting prune times out even at 300s).
+  local cache_dir_env=""
+  if [ -n "${1:-}" ]; then
+    cache_dir_env="UV_CACHE_DIR=$1 "
+  fi
+  run_as_ua "export PATH=\"$PATH\"; ${cache_dir_env}UV_LOCK_TIMEOUT=10 uv cache prune --ci --force" \
+    || echo "WARN: uv cache prune failed for ${1:-ua default cache} (non-fatal)"
+}
+prune_ua_uv_cache ""                    # /home/ua/.cache/uv (default; vp workers + crons share it)
+prune_ua_uv_cache "/tmp/uv_cache"       # hooks.py UV_CACHE_DIR injection for `uv run` commands
+prune_ua_uv_cache "$PROD_DIR/.uv-cache" # worker.py UV_CACHE_DIR setdefault (repo-root .uv-cache)
+# root-owned cache, populated by root-context `uv run` (csi_ingester uvicorn +
+# the ~14 CSI services that ExecStart `uv run` as root with no UV_CACHE_DIR).
+if command -v sudo >/dev/null 2>&1 && sudo test -d /root/.cache/uv; then
+  # Prefer the known absolute path; fall back to a NON-login PATH probe
+  # (bash -c, not -lc) only if it's elsewhere — a login shell could prepend
+  # profile/MOTD stdout and poison the captured path.
+  root_uv="/root/.local/bin/uv"
+  if ! sudo test -x "$root_uv"; then
+    root_uv="$(sudo -H bash -c 'command -v uv' 2>/dev/null || true)"
+  fi
+  if [ -n "$root_uv" ] && sudo test -x "$root_uv"; then
+    sudo -H env HOME=/root UV_LOCK_TIMEOUT=10 "$root_uv" cache prune --ci --force \
+      || echo "WARN: uv cache prune failed for /root/.cache/uv (non-fatal)"
+  else
+    echo "WARN: no uv binary found for root; skipping /root/.cache/uv prune"
+  fi
+fi
+
 echo "--> Installing goplaces CLI..."
 run_as_ua "export PATH=\"$PATH\"; if [ ! -x \"$HOME/.local/bin/goplaces\" ]; then echo 'Downloading goplaces v0.3.0...'; mkdir -p /tmp/goplaces-dl && cd /tmp/goplaces-dl && curl -sSLO https://github.com/steipete/goplaces/releases/download/v0.3.0/goplaces_0.3.0_linux_amd64.tar.gz && tar -xzf goplaces_0.3.0_linux_amd64.tar.gz && mkdir -p ~/.local/bin && mv goplaces ~/.local/bin/ && chmod +x ~/.local/bin/goplaces && cd ~/ && rm -rf /tmp/goplaces-dl; else echo 'goplaces is already installed.'; fi"
 
