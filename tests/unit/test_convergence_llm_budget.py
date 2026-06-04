@@ -85,5 +85,8 @@ def test_get_anthropic_client_bounds_timeout_and_retries(monkeypatch):
 
     asyncio.run(llm._get_anthropic_client())
 
-    assert captured.get("timeout") == 60.0
+    # Default raised 60s -> 180s on 2026-06-03: the 60s cap was shorter than the
+    # ZAI/glm latency tail for the large convergence-triage prompt and stalled the
+    # promoter. Still bounded (well under the SDK-default ~10 min).
+    assert captured.get("timeout") == 180.0
     assert captured.get("max_retries") == 1

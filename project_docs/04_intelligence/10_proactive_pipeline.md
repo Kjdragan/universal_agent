@@ -14,7 +14,7 @@ code_paths:
   - src/universal_agent/services/hourly_intel_digest.py
   - src/universal_agent/scripts/hourly_intel_digest_cron.py
   - src/universal_agent/proactive_signals.py
-last_verified: 2026-06-02
+last_verified: 2026-06-03
 ---
 
 # Proactive Pipeline
@@ -155,9 +155,11 @@ run finishes under the cron's `timeout_seconds`
      (clustering + triage + ideation) is time-boxed by a shared deadline
      `UA_CSI_CONVERGENCE_BUDGET_SECONDS` (default 600s): work not reached this run
      is idempotently re-detected next tick. Every LLM call is also bounded by
-     `UA_LLM_CALL_TIMEOUT_SECONDS` (default 60s) / `UA_LLM_CALL_MAX_RETRIES`
-     (`llm_classifier.py::_get_anthropic_client`) so a stalled ZAI proxy can't
-     hang a call for the SDK-default ~10 min.
+     `UA_LLM_CALL_TIMEOUT_SECONDS` (default 180s — raised from 60s on 2026-06-03;
+     the 60s cap was shorter than the ZAI/glm latency tail for the large triage
+     prompt and stalled the promoter — see the pre-Task-Hub triage note below) /
+     `UA_LLM_CALL_MAX_RETRIES` (`llm_classifier.py::_get_anthropic_client`) so a
+     stalled ZAI proxy can't hang a call for the SDK-default ~10 min.
 4. **Ideation sweep (Track B).** When `UA_IDEATION_SWEEP_ENABLED=1` (default),
    `_run_ideation_sweep` → `track_b_ideation_synthesis` runs an LLM over the
    recent signature corpus looking for *non-obvious* abstract patterns
@@ -337,14 +339,23 @@ cluster/insight becomes queued work:
 - **Pre-Task-Hub triage (2026-05-30, `proactive_convergence.py::triage_candidate`).**
   New/mid-processing candidates are NOT queued unconditionally. A cheap Haiku-tier
   LLM triage runs at candidate-write time — loading the 48h recent-briefs index
-  plus the candidate's source claims — and returns `ship` / `skip` / `defer` /
+  (hard-bounded to `UA_INTEL_TRIAGE_INDEX_MAX_CHARS` chars, default 12000) plus the
+  candidate's source claims — and returns `ship` / `skip` / `defer` /
   `retry`. **Only `ship` queues a Task Hub item (and a Kanban card);** `skip`/`defer`
   record the verdict on the `convergence_candidates` row for audit but create **no
   task**; `retry` (LLM unavailable) leaves the row non-final for the next sweep.
   Flags: `UA_INTEL_TRIAGE_ENABLED` (default `1`; `0` = legacy "always queue, mission
-  decides"), `UA_INTEL_TRIAGE_MODEL`. The triage verdict is carried in
+  decides"), `UA_INTEL_TRIAGE_MODEL`, `UA_INTEL_TRIAGE_INDEX_MAX_CHARS` (default
+  12000). The triage verdict is carried in
   `metadata.triage = {kind, reasoning, demo_amenable, model}` on both the task and
   the candidate row.
+  > **Stall incident (2026-06-03).** `recent_briefs_index` grew unbounded to ~100K
+  > tokens (~400KB); the whole index was embedded in every triage prompt, pushing the
+  > glm/ZAI call past the (then 60s) `UA_LLM_CALL_TIMEOUT_SECONDS` cap on essentially
+  > every cluster → all candidates fell to `retry` → **promotion stalled ~45h** (no new
+  > `convergence_candidate` task since 2026-06-02 02:13 UTC; a 330+ `verdict=''` backlog).
+  > Fixed by the char budget above + raising the timeout default to 180s. The index
+  > only needs a recency sample for novelty/dedup, not the full corpus.
 - Queues a task via `queue_proactive_task` with `source_kind='convergence_candidate'`,
   `metadata.preferred_vp='vp.general.primary'`, `metadata.candidate_id`,
   `metadata.invoke_skill='evaluate-and-author-intel-brief'`, priority 3, and
