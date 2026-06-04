@@ -209,6 +209,31 @@ now-disabled ClaudeDevs intel-sync (`claude_code_intel.py`) — so it false-RED 
 card the moment the tile reads green, repointing the tile to `csi.db` also clears that stale
 card on the next sweep.
 
+`GatewayTile` derives liveness from `MAX(created_at)` in `activity_events` (within a 15-min
+window): green ≤120s, yellow ≤300s, red >300s. A deploy (or operator `systemctl restart`)
+SIGTERMs the gateway and pauses activity-event emission for the 300–515s it takes the new
+process to boot and emit its first heartbeat, so the freshest event is briefly >300s old —
+which would flag RED → a critical `infra:gateway` card whose `recurrence_count` then climbs
+once per deploy (~19/day). That mechanism produced the "Gateway silence — 264 recurrences
+since May 3" Chief-of-Staff readout: a **cumulative tally of deploy restarts mislabeled
+critical**, not an outage (each restart self-recovers the moment the heartbeat loop starts).
+As of 2026-06-04, `mission_control_tiles.py::_gateway_silence_is_restart_artifact` suppresses
+a would-be-RED gap to **green** ("recovering from restart"; raw verdict preserved in evidence
+as `restart_recovery`/`suppressed_color`) when the silence brackets a recent restart. Two
+OR'd signals, reusing the canonical deploy-window primitives: (1)
+`cron_service.py::_is_deploy_window_active` (the `/tmp/ua-deployment-window` flag held across
+the restart by `remote_deploy.sh`, OR'd with a ≤60s process-uptime fallback), and (2) the
+freshest event predates **this** gateway process's start (`cron_service.py::_process_start_time`)
+— meaning the current process has emitted nothing yet, so the silence is entirely the restart
+gap. Signal (2) is load-bearing: the sweeper loop only starts **after** the deploy window
+closes (`gateway_server.py::_run_after_deployment_window`), so the first sweep that catches
+the gap usually runs once the flag has already cleared and signal (1) is False. A genuine
+running-but-silent gateway — last event *after* the process start with no active deploy
+window (e.g. a hung event loop) — falls through to RED and still alarms. Fail-loud: any probe
+error is treated as "not a restart artifact" so a real outage is never masked. Because tier-0
+auto-retires the `infra:gateway` card the moment the tile reads green, the suppression also
+clears any card a deploy-restart already minted on the next sweep.
+
 ## Tier 1 — narrative cards (`mission_control_tier1.py` + `mission_control_cards.py`)
 
 **Evidence collection** (`collect_tier1_evidence`) builds a bounded-but-untruncated bundle:

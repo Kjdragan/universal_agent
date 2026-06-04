@@ -212,6 +212,84 @@ def test_gateway_tile_yellow_when_no_recent_events(activity_db):
     assert state.evidence["last_event"] is None
 
 
+# ── Gateway deploy-restart suppression (kills the cumulative "264 recurrences
+#    since May 3" critical infra:gateway card minted once per deploy) ─────────
+
+
+def _set_process_start(monkeypatch, *, seconds_ago: float) -> None:
+    """Pin GatewayTile's process-start probe to a deterministic age."""
+    target = datetime.now(timezone.utc).timestamp() - seconds_ago
+    monkeypatch.setattr(
+        "universal_agent.cron_service._process_start_time", lambda: target
+    )
+
+
+def test_gateway_tile_red_when_silent_outside_deploy_window(activity_db, monkeypatch):
+    # Genuine sustained outage: the gateway has been UP for 2h (process started
+    # long ago) and emitted events, then went silent for >300s. No deploy
+    # window. This MUST stay RED and alarm.
+    monkeypatch.setattr(
+        "universal_agent.cron_service._is_deploy_window_active", lambda: False
+    )
+    _set_process_start(monkeypatch, seconds_ago=7200)  # last event (7m) AFTER start
+    _insert_event(activity_db, id="ev1", created_at=_iso_minutes_ago(7))
+    state = GatewayTile().compute_state(activity_db)
+    assert state.color == COLOR_RED
+    assert "silent" in state.one_line_status
+    assert "restart_recovery" not in state.evidence
+
+
+def test_gateway_tile_suppressed_during_deploy_window(activity_db, monkeypatch):
+    # Same >300s gap, but a deploy is in flight (flag present). Suppress to
+    # GREEN so the sweeper never mints a critical card or bumps recurrence.
+    monkeypatch.setattr(
+        "universal_agent.cron_service._is_deploy_window_active", lambda: True
+    )
+    _set_process_start(monkeypatch, seconds_ago=7200)
+    _insert_event(activity_db, id="ev1", created_at=_iso_minutes_ago(7))
+    state = GatewayTile().compute_state(activity_db)
+    assert state.color == COLOR_GREEN
+    assert "recovering from restart" in state.one_line_status
+    assert state.evidence["restart_recovery"] is True
+    assert state.evidence["suppressed_color"] == COLOR_RED
+    assert state.evidence["age_seconds"] > 300
+
+
+def test_gateway_tile_suppressed_when_no_event_since_process_start(
+    activity_db, monkeypatch
+):
+    # The flag already cleared (deploy script dropped it on HTTP health) but the
+    # new process hasn't emitted its first heartbeat yet: freshest event
+    # predates THIS process's start -> restart artifact, suppress to GREEN.
+    monkeypatch.setattr(
+        "universal_agent.cron_service._is_deploy_window_active", lambda: False
+    )
+    _set_process_start(monkeypatch, seconds_ago=30)  # last event (7m) BEFORE start
+    _insert_event(activity_db, id="ev1", created_at=_iso_minutes_ago(7))
+    state = GatewayTile().compute_state(activity_db)
+    assert state.color == COLOR_GREEN
+    assert "recovering from restart" in state.one_line_status
+    assert state.evidence["restart_recovery"] is True
+
+
+def test_gateway_tile_red_when_restart_probes_fail(activity_db, monkeypatch):
+    # Fail-loud: if BOTH the deploy-window and process-start probes raise, never
+    # suppress — a real outage must still alarm.
+    def _boom():
+        raise RuntimeError("proc read failed")
+
+    monkeypatch.setattr(
+        "universal_agent.cron_service._is_deploy_window_active", _boom
+    )
+    monkeypatch.setattr(
+        "universal_agent.cron_service._process_start_time", _boom
+    )
+    _insert_event(activity_db, id="ev1", created_at=_iso_minutes_ago(7))
+    state = GatewayTile().compute_state(activity_db)
+    assert state.color == COLOR_RED
+    assert "silent" in state.one_line_status
+
+
 def test_database_tile_green_on_fast_select(activity_db):
     state = DatabaseTile().compute_state(activity_db)
     # In-memory SQLite is sub-ms; should always be green
