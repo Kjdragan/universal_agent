@@ -627,6 +627,14 @@ native playlist learning dispatch. Keyword sets: `YOUTUBE_CODE_HINT_KEYWORDS`
 - **Email-failure gates the dedup write** — a failed digest email skips
   `_save_processed_videos` so videos retry next tick; never assume "digest ran"
   means "videos marked processed."
+- **Synthesis clients are closed in-loop** — each map / reduce / single-call step
+  closes its `AsyncAnthropic` client via `youtube_daily_digest.py::_aclose_client`
+  inside the synthesis `asyncio.run`. Skipping the close leaks the client's httpx
+  pool onto the (now-closed) synthesis loop; GC later finalizes it during the
+  *next* `asyncio.run` (the email send) and asyncio logs a spurious
+  `RuntimeError: Event loop is closed` ("Task exception was never retrieved") to
+  the cron `run.log`. Harmless to delivery — the email still sends — but a
+  misleading ERROR line, so the close is mandatory hygiene.
 
 ## Three databases — do not conflate
 
