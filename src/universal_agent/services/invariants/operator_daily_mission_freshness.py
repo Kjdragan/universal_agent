@@ -61,6 +61,15 @@ _SLA_HOURS = int(os.getenv("UA_OPERATOR_DAILY_MISSION_SLA_HOURS", "2"))
 def operator_daily_mission_freshness(
     ctx: Dict[str, Any]
 ) -> Optional[Dict[str, Any]]:
+    """Flag operator-daily VP missions left unclaimed past the dispatch SLA.
+
+    Queries ``vp_missions`` (in vp_state.db) for ``priority_tier=
+    'operator_daily'`` rows still ``queued`` more than ``_SLA_HOURS`` after
+    being created. Watching the queue directly — not the downstream artifact —
+    catches queue starvation immediately, before the late-deliverable cascade.
+    Best-effort: returns None if the VP state DB is unreadable or nothing is
+    overdue.
+    """
     activity_conn = ctx.get("activity_conn")
     # The probe queries vp_state.db (where vp_missions lives), not
     # activity_state.db. The proactive_health aggregator passes only

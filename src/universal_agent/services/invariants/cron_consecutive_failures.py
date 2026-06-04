@@ -110,6 +110,14 @@ def _streak_for_task(
     },
 )
 def cron_consecutive_failures(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Flag any ``cron:*`` task whose recent runs are a failing streak.
+
+    Reads ``task_hub_assignments`` directly (not propagated ``last_outcome``),
+    counts the most-recent consecutive non-success assignments per distinct
+    cron task_id, and emits a finding for every cron whose streak crosses
+    ``STREAK_THRESHOLD``. Catches the on-schedule-but-always-failing case that
+    single-run staleness checks miss. Returns None when no streak qualifies.
+    """
     conn = ctx.get("activity_conn")
     if conn is None:
         return None

@@ -157,6 +157,14 @@ def _per_source_last_seen(
     },
 )
 def csi_source_liveness(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Flag CSI adapters that have gone quieter than their silence threshold.
+
+    Reads ``MAX(occurred_at)`` per source from the CSI ``events`` table and
+    compares each against its per-source expected-max-silence threshold (see
+    ``effective_source_thresholds``). Stale sources are listed together in one
+    critical finding so the operator can triage them from a single alert.
+    Fails open (returns None) when the CSI DB is absent.
+    """
     csi_db_path = ctx.get("csi_db_path")
     if csi_db_path is None:
         return None

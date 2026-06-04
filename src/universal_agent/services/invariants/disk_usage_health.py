@@ -103,6 +103,14 @@ def _measure_mount(path: str) -> Optional[Dict[str, Any]]:
     },
 )
 def disk_usage_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Flag monitored mounts whose disk usage exceeds the warn/critical floors.
+
+    Measures usage on the default mounts (root, ``/opt``, ``/var/lib``) via a
+    pure ``shutil.disk_usage`` call — no DB, HTTP, or inference. Any mount above
+    the warn threshold produces a finding, and a ``severity_override`` lifts it
+    to critical above the critical threshold. Returns None when every mount is
+    within safe range. ``ctx`` is unused (signature kept for the probe contract).
+    """
     mounts = _default_mounts()
     pressured: list[Dict[str, Any]] = []
     healthy: list[Dict[str, Any]] = []

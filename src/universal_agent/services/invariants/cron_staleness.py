@@ -177,6 +177,14 @@ def _evaluate_cron(cron: Dict[str, Any], now: datetime) -> Optional[Dict[str, An
     },
 )
 def cron_staleness(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Flag enabled crons that are overdue or whose last outcome failed.
+
+    Walks the ``cron_jobs`` watchdog context; for each enabled cron it derives
+    the expected interval from ``cron_expr``, compares ``last_run_at`` against
+    the staleness threshold, and inspects ``last_outcome``. Every cron in
+    trouble is collected into a single finding (one alert, not one per cron).
+    Returns None when ``cron_jobs`` is absent or all crons are healthy.
+    """
     cron_jobs = ctx.get("cron_jobs")
     if not cron_jobs:
         return None

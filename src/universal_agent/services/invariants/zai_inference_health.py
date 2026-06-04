@@ -239,6 +239,15 @@ def _count_ua_processes() -> int:
     },
 )
 def zai_inference_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Flag ZAI inference pressure that risks throttling or a FUP ban.
+
+    Combines the persistent ``ZAIRateLimiter`` snapshot, the httpx-hook events
+    file (sustained 429s and FUP signals), and the live UA Python process count
+    (self-inflicted concurrency). Fires critical on 3+ consecutive 429s, 3+ 429s
+    in the recent window, or any FUP signal in the detection window; lesser
+    conditions may emit a downgraded ``severity_override``. ``ctx`` is unused —
+    all inputs are read from disk/process state. Returns None when healthy.
+    """
     snapshot = _read_snapshot()
     process_count = _count_ua_processes()
     now = time.time()
