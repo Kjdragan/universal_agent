@@ -10,7 +10,7 @@ code_paths:
   - src/universal_agent/services/cron_artifact_notifier.py
   - src/universal_agent/services/invariants/proactive_pipeline_invariants.py
   - tests/unit/test_cron_dormancy_defaults.py
-last_verified: 2026-05-29
+last_verified: 2026-06-03
 ---
 
 # Dormancy & Operating Hours
@@ -158,6 +158,24 @@ explicitly dormancy-exempt:
   clean cron exit "regardless of dormancy — operator chose this trade-off
   explicitly." (Only the *follow-up* reminders, handled by `cron_artifact_reminders`,
   respect the window.)
+  - **Cross-run coalescing (storm suppression).** The artifact id is seeded on
+    `f"{job_id}:{int(started_at)}"`, so every cron run mints a *distinct* id and the
+    upsert never collides — historically that meant a cron re-run repeatedly against
+    the same blocker (canonically `paper_to_podcast_daily` hitting expired NotebookLM
+    auth) produced one new artifact + initial email + reminder cadence *per run*,
+    flooding the inbox. `cron_artifact_notifier.notify_cron_artifact` now checks for
+    an existing unacknowledged disclosure from the **same cron** (matched on the
+    stable Task Hub id `cron:<system_job>`, falling back to `job_id`) created within a
+    window; if found it refreshes that row in place (`_refresh_coalesced_artifact`)
+    and **suppresses the duplicate email + reminder**. As defence-in-depth,
+    `cron_artifact_reminders.sweep_pending_artifact_reminders` groups
+    reminder-bearing pending artifacts by the same key and nudges only the **newest**
+    per cron, stopping older siblings (`stopped_reason=coalesced_same_source`) — this
+    also bounds an already-seeded Day-3 wave. Matching keys on cron identity, **never**
+    the per-run (LLM-varied) title. Gated by `UA_CRON_ARTIFACT_COALESCE_SAME_DAY`
+    (default `1`/on); window via `UA_CRON_ARTIFACT_DEDUP_WINDOW_HOURS` (default `24`).
+    Once the operator acks/rejects/archives the row, the next run is allowed to
+    surface a fresh artifact so a recurrence is not silently hidden.
 - **Heartbeat pre-flight health check** — every Simone heartbeat tick (24/7, the
   heartbeat is a runtime tick driver, not a cron) calls
   `proactive_health_notifier.run_pre_flight_check` (code-verified at

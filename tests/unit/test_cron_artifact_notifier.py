@@ -483,6 +483,121 @@ async def test_notifier_missing_task_hub_row_no_crash(
     mail_service.send_email.assert_called_once()
 
 
+# ── Cross-run coalescing (storm suppression) ───────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_repeated_same_cron_runs_coalesce_into_one_email(
+    conn, mail_service, workspace, monkeypatch
+) -> None:
+    """Regression for the 2026-06-03 RLHF paper-to-podcast inbox storm: a cron
+    re-run repeatedly against the same blocker (expired NotebookLM auth) must
+    NOT mint a fresh artifact + email on every run. The second same-cron run
+    coalesces onto the first artifact and sends no duplicate email."""
+    monkeypatch.setenv("UA_CRON_ARTIFACT_COALESCE_SAME_DAY", "1")
+    _write_manifest(
+        workspace,
+        [{"title": "podcast.mp3", "path": "work_products/podcast.mp3"}],
+    )
+    common = dict(
+        conn=conn,
+        mail_service=mail_service,
+        job_id="2afe05ab96",  # the prod hash job_id
+        job_metadata={
+            "notify_on_artifact": True,
+            "system_job": "paper_to_podcast_daily",
+        },
+        job_command="generate a podcast",
+        workspace_dir=workspace,
+        recipient="kevinjdragan@gmail.com",
+    )
+    first = await notify_cron_artifact(
+        **common, started_at=1779600000.0, finished_at=1779600300.0
+    )
+    # A later run the same day (different started_at -> different naive id).
+    second = await notify_cron_artifact(
+        **common, started_at=1779610000.0, finished_at=1779610300.0
+    )
+    assert first is not None and second is not None
+    # Coalesced onto the SAME row, not a second one.
+    assert second["artifact_id"] == first["artifact_id"]
+    assert conn.execute("SELECT COUNT(*) FROM proactive_artifacts").fetchone()[0] == 1
+    # Exactly ONE initial email despite two runs.
+    mail_service.send_email.assert_called_once()
+    # Coalesce counter recorded on the surviving row.
+    meta = second.get("metadata") or {}
+    assert int(meta.get("coalesced_run_count", 0)) >= 1
+    # Only one initial-email delivery row.
+    assert (
+        conn.execute("SELECT COUNT(*) FROM proactive_artifact_emails").fetchone()[0]
+        == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_distinct_crons_are_not_coalesced(
+    conn, mail_service, workspace, monkeypatch
+) -> None:
+    """Coalescing keys on the cron identity — two DIFFERENT crons must each
+    get their own artifact + email."""
+    monkeypatch.setenv("UA_CRON_ARTIFACT_COALESCE_SAME_DAY", "1")
+    _write_manifest(workspace, [{"title": "x.md", "path": "work_products/x.md"}])
+    await notify_cron_artifact(
+        conn=conn,
+        mail_service=mail_service,
+        job_id="jobA",
+        job_metadata={"notify_on_artifact": True, "system_job": "cron_a"},
+        job_command="a",
+        workspace_dir=workspace,
+        started_at=1779600000.0,
+        finished_at=1779600300.0,
+        recipient="kevinjdragan@gmail.com",
+    )
+    await notify_cron_artifact(
+        conn=conn,
+        mail_service=mail_service,
+        job_id="jobB",
+        job_metadata={"notify_on_artifact": True, "system_job": "cron_b"},
+        job_command="b",
+        workspace_dir=workspace,
+        started_at=1779600000.0,
+        finished_at=1779600300.0,
+        recipient="kevinjdragan@gmail.com",
+    )
+    assert conn.execute("SELECT COUNT(*) FROM proactive_artifacts").fetchone()[0] == 2
+    assert mail_service.send_email.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_coalesce_flag_off_restores_per_run_artifacts(
+    conn, mail_service, workspace, monkeypatch
+) -> None:
+    """The escape hatch: with the flag off, each run creates its own artifact
+    + email (the legacy behavior)."""
+    monkeypatch.setenv("UA_CRON_ARTIFACT_COALESCE_SAME_DAY", "0")
+    _write_manifest(workspace, [{"title": "x", "path": "work_products/x"}])
+    common = dict(
+        conn=conn,
+        mail_service=mail_service,
+        job_id="2afe05ab96",
+        job_metadata={
+            "notify_on_artifact": True,
+            "system_job": "paper_to_podcast_daily",
+        },
+        job_command="x",
+        workspace_dir=workspace,
+        recipient="kevinjdragan@gmail.com",
+    )
+    await notify_cron_artifact(
+        **common, started_at=1779600000.0, finished_at=1779600300.0
+    )
+    await notify_cron_artifact(
+        **common, started_at=1779610000.0, finished_at=1779610300.0
+    )
+    assert conn.execute("SELECT COUNT(*) FROM proactive_artifacts").fetchone()[0] == 2
+    assert mail_service.send_email.call_count == 2
+
+
 # ── HMAC ack token sign/verify ─────────────────────────────────────────
 
 

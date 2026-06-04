@@ -24,7 +24,7 @@ own close-out / observability instrumentation.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 import json
@@ -84,6 +84,131 @@ _SCAN_SKIP_NAMES = {
 # when a cron dumps hundreds of files.
 _SCAN_MAX_DEPTH = 4
 _SCAN_MAX_FILES = 25
+
+
+# ── Cross-run coalescing config ─────────────────────────────────────────
+# A cron that fails or partially-completes repeatedly (canonical case:
+# paper_to_podcast hitting expired NotebookLM auth and being re-run) would
+# otherwise mint a brand-new artifact + initial email + reminder cadence on
+# EVERY run, because the artifact id is seeded on ``f"{job_id}:{int(started_at)}"``
+# (a per-run epoch) so it never collides on upsert. Coalescing suppresses the
+# duplicate email and refreshes the existing same-cron disclosure in place.
+# Keyed on the STABLE cron task id (``cron:<system_job>``), NOT the per-run
+# (often LLM-varied) title. Default ON; flip the env flag to disable.
+_COALESCE_FLAG_ENV = "UA_CRON_ARTIFACT_COALESCE_SAME_DAY"
+_DEDUP_WINDOW_ENV = "UA_CRON_ARTIFACT_DEDUP_WINDOW_HOURS"
+_DEDUP_WINDOW_DEFAULT_HOURS = 24.0
+# Statuses that still count as an "open" (unacknowledged) disclosure. Once
+# Kevin accepts/rejects/archives a row, the next run is allowed to surface a
+# fresh artifact so a recurrence is not silently hidden.
+_OPEN_ARTIFACT_STATUSES = ("produced", "candidate", "surfaced")
+
+
+def _coalesce_enabled() -> bool:
+    return os.getenv(_COALESCE_FLAG_ENV, "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def _dedup_window_hours() -> float:
+    raw = os.getenv(_DEDUP_WINDOW_ENV, "").strip()
+    if not raw:
+        return _DEDUP_WINDOW_DEFAULT_HOURS
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return _DEDUP_WINDOW_DEFAULT_HOURS
+    return val if val > 0 else _DEDUP_WINDOW_DEFAULT_HOURS
+
+
+def _find_recent_open_artifact(
+    conn: sqlite3.Connection,
+    *,
+    source_kind: str,
+    linked_task_id: str,
+    job_id: str,
+    window_hours: float,
+) -> Optional[dict[str, Any]]:
+    """Return the most-recent unacknowledged cron-disclosure artifact from the
+    SAME cron (matched on the stable ``task_id``, falling back to ``job_id``)
+    created within ``window_hours``, or ``None``.
+
+    Used to coalesce repeated runs of one cron into a single disclosure
+    instead of one-email-per-run. Best-effort: any DB error returns ``None``
+    so the caller falls back to the normal create-and-email path.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=window_hours)).isoformat()
+    placeholders = ",".join("?" for _ in _OPEN_ARTIFACT_STATUSES)
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT artifact_id, metadata_json
+            FROM proactive_artifacts
+            WHERE source_kind = ?
+              AND status IN ({placeholders})
+              AND created_at >= ?
+            ORDER BY created_at DESC
+            """,
+            (source_kind, *_OPEN_ARTIFACT_STATUSES, cutoff),
+        ).fetchall()
+    except sqlite3.Error:
+        return None
+    want_task = str(linked_task_id or "").strip()
+    want_job = str(job_id or "").strip()
+    for row in rows:
+        try:
+            meta = json.loads(row["metadata_json"] or "{}")
+        except (json.JSONDecodeError, TypeError, KeyError):
+            continue
+        if not isinstance(meta, dict):
+            continue
+        meta_task = str(meta.get("task_id") or "").strip()
+        meta_job = str(meta.get("job_id") or "").strip()
+        if (want_task and meta_task == want_task) or (want_job and meta_job == want_job):
+            return proactive_artifacts.get_artifact(conn, str(row["artifact_id"]))
+    return None
+
+
+def _refresh_coalesced_artifact(
+    conn: sqlite3.Connection,
+    *,
+    existing: dict[str, Any],
+    summary: str,
+    artifacts_listing: list[dict[str, Any]],
+    started_at: float,
+    finished_at: float,
+) -> None:
+    """Refresh an existing same-cron artifact in place when a later run is
+    coalesced onto it: update summary + latest artifacts listing + run
+    counters, WITHOUT resetting status/delivery_state/created_at or the
+    existing reminder cadence (which keeps progressing on the original row).
+    """
+    artifact_id = str(existing.get("artifact_id") or "").strip()
+    if not artifact_id:
+        return
+    raw_meta = existing.get("metadata")
+    meta = dict(raw_meta) if isinstance(raw_meta, dict) else {}
+    meta["artifacts_listing"] = artifacts_listing
+    meta["last_run_started_at_epoch"] = started_at
+    meta["last_run_finished_at_epoch"] = finished_at
+    meta["coalesced_run_count"] = int(meta.get("coalesced_run_count", 0) or 0) + 1
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        conn.execute(
+            "UPDATE proactive_artifacts SET summary = ?, metadata_json = ?, "
+            "updated_at = ? WHERE artifact_id = ?",
+            (str(summary or "").strip(), json.dumps(meta, default=str), now, artifact_id),
+        )
+        conn.commit()
+    except sqlite3.Error as exc:  # noqa: BLE001 — best-effort
+        logger.debug(
+            "cron_artifact_notifier: coalesce refresh failed for %s: %s",
+            artifact_id,
+            exc,
+        )
 
 
 # ── Public API ─────────────────────────────────────────────────────────
@@ -153,6 +278,44 @@ async def notify_cron_artifact(
         ) or f"cron:{job_id}"
 
         proactive_artifacts.ensure_schema(conn)
+
+        # ── Cross-run coalescing ───────────────────────────────────────
+        # If an unacknowledged disclosure from this SAME cron already exists
+        # within the dedup window, refresh it in place and suppress the
+        # duplicate email + reminder. Stops the inbox flood when a cron is
+        # re-run repeatedly against the same blocker (e.g. paper_to_podcast
+        # vs expired NotebookLM auth). Matched on the stable task_id, not the
+        # per-run title.
+        if _coalesce_enabled():
+            existing = _find_recent_open_artifact(
+                conn,
+                source_kind=DEFAULT_SOURCE_KIND,
+                linked_task_id=linked_task_id,
+                job_id=job_id,
+                window_hours=_dedup_window_hours(),
+            )
+            if existing is not None:
+                _refresh_coalesced_artifact(
+                    conn,
+                    existing=existing,
+                    summary=summary,
+                    artifacts_listing=artifacts_listing,
+                    started_at=started_at,
+                    finished_at=finished_at,
+                )
+                logger.info(
+                    "cron_artifact_notifier: coalesced job %s onto existing "
+                    "artifact %s (task_id=%s, within %.0fh) — suppressing "
+                    "duplicate email/reminder",
+                    job_id,
+                    existing.get("artifact_id"),
+                    linked_task_id,
+                    _dedup_window_hours(),
+                )
+                return proactive_artifacts.get_artifact(
+                    conn, str(existing.get("artifact_id") or "")
+                )
+
         artifact = proactive_artifacts.upsert_artifact(
             conn,
             artifact_id=artifact_id,
