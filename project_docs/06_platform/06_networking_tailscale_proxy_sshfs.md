@@ -20,7 +20,9 @@ code_paths:
   - "scripts/publish_scratch.sh"
   - "src/universal_agent/services/scratch_publish.py"
   - ".claude/skills/publish-to-scratchpad/SKILL.md"
-last_verified: 2026-06-02
+  - "deploy/nginx/universal-agent-app"
+  - "scripts/deploy/install_nginx_app_config.sh"
+last_verified: 2026-06-03
 ---
 
 # Networking: Tailscale, Residential Proxy, SSHFS
@@ -258,6 +260,31 @@ Companion scripts: `scripts/pull_remote_workspaces_now.sh` (one-shot), `scripts/
 
 ---
 
+## 4. Public nginx reverse proxy (`app.clearspringcg.com`)
+
+The public dashboard **and** the durable brief viewer are fronted by an **nginx vhost on the VPS** — this is the *public* edge, distinct from the tailnet-private `tailscale serve` mappings in §1.5–1.6. Canonical copy: `deploy/nginx/universal-agent-app`; live copy: `/etc/nginx/sites-available/universal-agent-app` (symlinked into `sites-enabled/`).
+
+Routing, in nginx `location`-match precedence order:
+
+| Path | Upstream | Why |
+|---|---|---|
+| `^~ /briefs/` | `127.0.0.1:8002` (UA gateway) | The gateway renders the durable HTML brief page (`gateway_server.py::briefs_viewer_get`) for each `proactive_artifacts` row. This is the target of the "Read full brief →" links in the hourly intel digest (`hourly_intel_digest.py::render_digest_html`). |
+| `^~ /ws/` | `127.0.0.1:3000` (Next.js) | Chat-stream websocket; Next.js rewrites `ws/*` onward to the gateway. |
+| `/` (catch-all) | `127.0.0.1:3000` (Next.js) | Dashboard pages + `/api/*` (Next.js `next.config.js` rewrites `/api/*` → gateway). |
+
+**The `/briefs/` block is load-bearing and easy to lose.** It is an *explicit exception* to the "everything → Next.js" catch-all. Without `location ^~ /briefs/ { proxy_pass http://127.0.0.1:8002; }`, every `/briefs/<id>` request falls through to `location /` (Next.js :3000), which has no such route and returns "404: This page could not be found" — silently breaking **every** brief link in **every** intel digest email. (This happened 2026-06-02: the block existed only as a hand-edit on the VPS and was absent from the catch-all-only config; brief links 404'd until it was re-added ~10 min after an operator report.)
+
+**Apply / reprovision** — never hand-edit `/etc/nginx` directly; that hand-edit *was* the drift that caused the outage. Run the idempotent installer on the VPS instead:
+
+```bash
+scripts/deploy/install_nginx_app_config.sh           # backup → install → symlink → nginx -t → reload
+scripts/deploy/install_nginx_app_config.sh --check   # diff vs live + nginx -t only, no changes
+```
+
+It copies `deploy/nginx/universal-agent-app` → `sites-available`, (re)creates the standard `sites-enabled` symlink, validates with `nginx -t` (auto-rolls-back to the timestamped backup on failure), reloads, and smoke-tests the gateway on :8002. The deploy pipeline does **not** touch `/etc/nginx` (it only `git reset`s `/opt/universal_agent`), so the live vhost survives normal deploys — but a from-scratch VPS rebuild reprovisions from `deploy/nginx/`, which is exactly why the `/briefs/` block must live in the repo. It is pinned by `tests/unit/test_nginx_briefs_routing.py` so it can't silently regress.
+
+---
+
 ## Environment Variable Reference
 
 | Var | Default | Used by | Purpose |
@@ -296,3 +323,4 @@ Companion scripts: `scripts/pull_remote_workspaces_now.sh` (one-shot), `scripts/
 - **Most Tailscale SSH failures are transient.** Re-auth / tag-sync delay / node-key rotation self-resolve — verify current state before coding a remediation.
 - **Pre-ingest triage burns no proxy bandwidth.** A `pre_ingest_triage` skip is *intentional* (short/long/music/live video), not a proxy failure — and it's non-retryable.
 - **Triage duration cap is per-channel overridable.** Gold channels with multi-hour content pass a `max_duration_seconds_override` so they aren't auto-skipped by the 1.5h global cap.
+- **`/briefs/*` must proxy to the gateway (:8002), not Next.js (:3000).** It's an explicit nginx exception to the catch-all (§4); lose it and every intel-digest "Read full brief" link 404s on the Next.js frontend. Source of truth is `deploy/nginx/universal-agent-app`; apply with `scripts/deploy/install_nginx_app_config.sh` (never hand-edit `/etc/nginx`); pinned by `tests/unit/test_nginx_briefs_routing.py`.
