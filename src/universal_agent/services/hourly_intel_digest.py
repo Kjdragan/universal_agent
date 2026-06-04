@@ -638,6 +638,7 @@ def sign_digest_pause_token(hours: int) -> str:
 
 
 def verify_digest_pause_token(hours: int, token: str) -> bool:
+    """Verify an HMAC token authorising a digest pause of *hours* hours."""
     expected = sign_digest_pause_token(hours)
     if not expected or not token:
         return False
