@@ -2542,6 +2542,67 @@ def _resolve_dispatch_metadata(
     return metadata
 
 
+# Transient reconcile/disposition stamps that a *verified-clean* run must
+# clear.  These are written by the orphan-reconcile sweep
+# (``reconcile_orphaned_in_progress_tasks``) and never reset on success, so
+# without an explicit clear a one-time mid-run race paints a healthy task as
+# "last dispatch failed / orphaned" forever.  Kept narrow on purpose: only
+# the transient failure-surface fields, never durable lineage
+# (``last_workflow_run_id`` etc.) that operators rely on.
+_TRANSIENT_RECONCILE_DISPOSITION_REASONS = frozenset(
+    {
+        "reconciled_orphaned_in_progress",
+        "reconciled_orphaned_in_progress_with_side_effects",
+        "reconciled_orphaned_retry_exhausted",
+        "reconciled_completion_unverified",
+    }
+)
+
+
+def clear_dispatch_reconcile_state(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Clear transient orphan-reconcile stamps after a verified-clean run.
+
+    A perpetual cron row can be snapshotted by the orphan-reconcile sweep
+    (:func:`reconcile_orphaned_in_progress_tasks`) during the brief
+    ``ended_at IS NULL`` window of a run that *did* complete cleanly. That
+    sweep stamps ``dispatch.last_disposition_reason`` (e.g.
+    ``"reconciled_orphaned_in_progress"``) and ``dispatch.reconciled_at`` onto
+    the row. Nothing reset those fields on a subsequent success, so the
+    gateway / Mission Control kept rendering the healthy cron as
+    "last dispatch failed ... reconciled as orphaned" indefinitely.
+
+    Given a task's ``metadata`` dict, return a **new** metadata dict with the
+    transient reconcile surface cleared *iff* the current
+    ``last_disposition_reason`` is one of the orphan-reconcile reasons:
+
+    * ``dispatch.last_disposition_reason`` -> ``""``
+    * ``dispatch.reconciled_at`` -> dropped
+    * ``dispatch.completion_unverified`` -> dropped
+    * ``dispatch.last_disposition`` -> ``"completed"``
+
+    Does not mutate the input. If there is no dispatch block, or the current
+    disposition reason is *not* a transient reconcile reason (e.g. a genuine
+    ``heartbeat_retry_exhausted`` we want the operator to keep seeing), the
+    metadata is returned unchanged. Idempotent.
+    """
+    if not isinstance(metadata, dict):
+        return {}
+    dispatch_meta = metadata.get("dispatch")
+    if not isinstance(dispatch_meta, dict):
+        return dict(metadata)
+    current_reason = str(dispatch_meta.get("last_disposition_reason") or "").strip().lower()
+    if current_reason not in _TRANSIENT_RECONCILE_DISPOSITION_REASONS:
+        return dict(metadata)
+    new_metadata = dict(metadata)
+    new_dispatch = dict(dispatch_meta)
+    new_dispatch["last_disposition_reason"] = ""
+    new_dispatch["last_disposition"] = TASK_STATUS_COMPLETED
+    new_dispatch.pop("reconciled_at", None)
+    new_dispatch.pop("completion_unverified", None)
+    new_metadata["dispatch"] = new_dispatch
+    return new_metadata
+
+
 def _complete_active_assignments_for_task(
     conn: sqlite3.Connection,
     *,
