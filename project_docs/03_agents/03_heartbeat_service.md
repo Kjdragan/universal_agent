@@ -133,7 +133,15 @@ both were hardened on 2026-06-04 to stop emitting false cards:
 > Known follow-up (not in the 2026-06-04 fix): `services/hackernews_snapshot_service`
 > (`_hydrate_stories` `ThreadPoolExecutor` + `_run_cli` subprocess panels) can raise
 > "can't start new thread" under gateway thread-pressure. Make hydration/panels resilient
-> to thread-spawn failure (serial fallback or out-of-process).
+> to thread-spawn failure (serial fallback or out-of-process). **Operator-disabled
+> 2026-06-04** as the interim mitigation: the `hackernews_snapshot` cron is pinned off via
+> `UA_HACKERNEWS_SNAPSHOT_ENABLED=0` in the deploy bootstrap (`scripts/deploy/remote_deploy.sh`).
+> `gateway_server._register_system_cron_job` re-applies the env-derived `enabled` state on
+> every startup, so a dashboard toggle alone would be re-enabled on the next deploy — the
+> bootstrap flag is the durable off-switch (the VPS `.env` is rewritten from that dict each
+> deploy). Re-enabling means flipping the flag to `1` (or removing the key) AND first doing
+> the thread-spawn-resilience work above. Disabling also pauses the downstream HN→CSI signal
+> emission (`hackernews_csi_emitter`) and the HN briefing block.
 
 The prompt is built by `_compose_heartbeat_prompt`. For a normal (non-task-focused) run it stacks: the base prompt (`UA_HEARTBEAT_PROMPT` or `DEFAULT_HEARTBEAT_PROMPT`), the environment context (`_build_heartbeat_environment_context` — factory identity, mandatory file-write rules, mandatory findings-output rule), VP completion-review and stale-delegation-recovery sections, brainstorm/morning-report/recent-topics context, and a **Database Health Alerts** block from `utils/db_health_monitor.check_all_databases`. If `has_exec_completion` is detected in the drained system events, the base prompt is swapped for `EXEC_EVENT_PROMPT` (relay an async command's result).
 

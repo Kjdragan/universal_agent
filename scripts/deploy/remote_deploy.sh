@@ -115,7 +115,18 @@ export PROD_DIR
 # (notebooklm_auth_seed_enabled forces False for any non-'vps' profile), so the
 # good cookies are never clobbered. Re-auth, when eventually needed, is a plain
 # `nlm login` writing ~/.nlm/cookies.txt. See memory: notebooklm_profile_mismatch.
-python3 -c "from pathlib import Path; import json, os; env_path = Path(os.environ['PROD_DIR']) / '.env'; bootstrap = {'INFISICAL_CLIENT_ID': os.environ['INFISICAL_CLIENT_ID'], 'INFISICAL_CLIENT_SECRET': os.environ['INFISICAL_CLIENT_SECRET'], 'INFISICAL_PROJECT_ID': os.environ['INFISICAL_PROJECT_ID'], 'INFISICAL_ENVIRONMENT': 'production', 'UA_RUNTIME_STAGE': 'production', 'FACTORY_ROLE': 'HEADQUARTERS', 'UA_DEPLOYMENT_PROFILE': 'vps', 'UA_NOTEBOOKLM_PROFILE': 'default', 'UA_MACHINE_SLUG': 'vps-hq-production', 'UA_INFISICAL_ENABLED': '1', 'UA_GATEWAY_PORT': '8002', 'UA_API_PORT': '8001', 'UA_GATEWAY_URL': 'http://127.0.0.1:8002'}; env_path.write_text(''.join(f'{key}={json.dumps(str(value))}\n' for key, value in bootstrap.items()), encoding='utf-8')"
+#
+# UA_HACKERNEWS_SNAPSHOT_ENABLED='0': operator-disabled (2026-06-04). The
+# hackernews_snapshot cron's _hydrate_stories ThreadPoolExecutor + _run_cli
+# subprocess panels intermittently hit "can't start new thread" under gateway
+# thread-pressure. _proactive_cron_enabled defaults this flag to '1', and
+# gateway_server._register_system_cron_job re-applies the env-derived enabled
+# state on every startup (so a dashboard toggle is re-enabled on the next
+# restart/deploy). Pinning '0' here is the durable off-switch; the VPS .env is
+# rewritten from this dict on every deploy. Re-enable by flipping to '1' (or
+# remove the key — the code default is enabled) and address the thread-spawn
+# resilience first. See project_docs/03_agents/03_heartbeat_service.md.
+python3 -c "from pathlib import Path; import json, os; env_path = Path(os.environ['PROD_DIR']) / '.env'; bootstrap = {'INFISICAL_CLIENT_ID': os.environ['INFISICAL_CLIENT_ID'], 'INFISICAL_CLIENT_SECRET': os.environ['INFISICAL_CLIENT_SECRET'], 'INFISICAL_PROJECT_ID': os.environ['INFISICAL_PROJECT_ID'], 'INFISICAL_ENVIRONMENT': 'production', 'UA_RUNTIME_STAGE': 'production', 'FACTORY_ROLE': 'HEADQUARTERS', 'UA_DEPLOYMENT_PROFILE': 'vps', 'UA_NOTEBOOKLM_PROFILE': 'default', 'UA_HACKERNEWS_SNAPSHOT_ENABLED': '0', 'UA_MACHINE_SLUG': 'vps-hq-production', 'UA_INFISICAL_ENABLED': '1', 'UA_GATEWAY_PORT': '8002', 'UA_API_PORT': '8001', 'UA_GATEWAY_URL': 'http://127.0.0.1:8002'}; env_path.write_text(''.join(f'{key}={json.dumps(str(value))}\n' for key, value in bootstrap.items()), encoding='utf-8')"
 sudo chown ua:ua "$PROD_DIR/.env"
 sudo chmod 600 "$PROD_DIR/.env"
 
