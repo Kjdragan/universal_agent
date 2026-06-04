@@ -8,7 +8,7 @@ code_paths:
   - src/universal_agent/scripts/hourly_intel_digest_cron.py
   - src/universal_agent/services/recent_briefs_index.py
   - src/universal_agent/services/proactive_convergence.py
-last_verified: 2026-06-02
+last_verified: 2026-06-04
 ---
 
 # Build Plan — Insight Pipeline Phases 0.5 / 4 / 5 / 6
@@ -36,7 +36,7 @@ last_verified: 2026-06-02
 | Convergence/ideation candidate generation | ✅ Working | `convergence_candidates`: 279 awaiting-author, 54 defer, **5 ship**, 285 skip |
 | Atlas claims + authors `intel_brief` | ✅ Working | 5+ `intel_brief` artifacts; newest pa_7d3a3f50 (06-01 18:00), pa_a68d4fbc (06-01 16:23) |
 | `daemon_simone_todo` dispatch | ✅ Healthy | 1103 completed, 94 failed, 20 abandoned; last completed 06-01 18:12 |
-| `recent_briefs_index.md` (Atlas prior-verdict memory) | ✅ Written | 384 KB, updated 06-01 18:51 |
+| `recent_briefs_index.md` (Atlas prior-verdict memory) | ✅ Written, **bounded (2026-06-04)** | `append_verdict_to_index` self-prunes to `UA_RECENT_BRIEFS_INDEX_MAX_ENTRIES` (default 60) on over-budget append; previously grew unbounded (~400 KB / ~100K tokens) |
 | **Brief → digest EMAIL leg** | ✅ **FIXED (Phase 0.5, 2026-06-02)** | was: 2 ship briefs orphaned `not_surfaced` by a current-clock-hour selector gate (~40% of ship briefs); now a lookback window (`UA_DIGEST_BRIEF_LOOKBACK_HOURS`) surfaces undelivered ship briefs |
 | Digest dedup | ✅ **SHIPPED (Phase 4, 2026-06-02)** | `hourly_intel_digest.py::dedup_near_duplicate_briefs` (Jaccard backstop, `UA_DIGEST_DEDUP_JACCARD`) + `::mark_superseded` for durable suppression |
 | Operator feedback loop | ✅ **SHIPPED (Phase 5, 2026-06-02)** | was: built but **dead in-email** — `_render_card` read `metadata.feedback_url_up/down` but nothing populated them (Atlas authors thesis/entities, not URLs), so the digest emailed only a "Read full brief →" link and the 👍/👎 buttons never rendered (`proactive_artifact_feedback`: **1 row** total). Now `hourly_intel_digest.py::_attach_feedback_urls` mints fresh HMAC-signed per-brief links at send time (`UA_DIGEST_INLINE_FEEDBACK_LINKS`, default on). Endpoint→DB→index→Atlas legs verified wired. |

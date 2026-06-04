@@ -13,8 +13,9 @@ code_paths:
   - src/universal_agent/services/invariants/proactive_pipeline_invariants.py
   - src/universal_agent/services/hourly_intel_digest.py
   - src/universal_agent/scripts/hourly_intel_digest_cron.py
+  - src/universal_agent/services/recent_briefs_index.py
   - src/universal_agent/proactive_signals.py
-last_verified: 2026-06-03
+last_verified: 2026-06-04
 ---
 
 # Proactive Pipeline
@@ -356,6 +357,16 @@ cluster/insight becomes queued work:
   > `convergence_candidate` task since 2026-06-02 02:13 UTC; a 330+ `verdict=''` backlog).
   > Fixed by the char budget above + raising the timeout default to 180s. The index
   > only needs a recency sample for novelty/dedup, not the full corpus.
+  > **Growth fix (2026-06-04 follow-up).** That char budget only bounded what *triage*
+  > consumed; the file itself still grew unbounded because `recent_briefs_index.py::append_verdict_to_index`
+  > appended every verdict with no prune and the only bounded rebuilder
+  > (`write_recent_briefs_index`) had no prod caller. The appender now self-prunes to the
+  > most-recent `UA_RECENT_BRIEFS_INDEX_MAX_ENTRIES` blocks (default 60; `0` disables) on
+  > every over-budget append via an atomic rewrite, so the on-disk file and the authoring
+  > read (`evaluate-and-author-intel-brief`, also via `read_index_or_fallback`) stay bounded.
+  > Separately, `llm_classifier.py::_parse_json_response` now recovers the first JSON object
+  > via `raw_decode` when the glm/ZAI refine call emits a duplicate object or trailing prose
+  > (the `convergence LLM refine failed: Extra data ...` log), instead of dropping the bucket.
 - Queues a task via `queue_proactive_task` with `source_kind='convergence_candidate'`,
   `metadata.preferred_vp='vp.general.primary'`, `metadata.candidate_id`,
   `metadata.invoke_skill='evaluate-and-author-intel-brief'`, priority 3, and
