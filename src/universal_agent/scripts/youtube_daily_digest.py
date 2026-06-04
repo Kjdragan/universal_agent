@@ -462,6 +462,33 @@ def _build_anthropic_client_for_zai(timeout_seconds: float) -> AsyncAnthropic:
     return AsyncAnthropic(**kwargs)
 
 
+async def _aclose_client(client: Any) -> None:
+    """Best-effort close of an AsyncAnthropic client *inside its own event loop*.
+
+    Each synthesis step (`_map_retell_videos`, `_reduce_meta_synthesize`,
+    `_generate_digest_content_single_call`) builds an AsyncAnthropic client and
+    runs under its own `asyncio.run(...)`.  If the client is never closed, its
+    underlying httpx connection pool outlives the loop; when GC later finalizes
+    the pool — typically during the *next* `asyncio.run(...)` (e.g. the email
+    send) — httpx schedules `aclose()` on the already-closed synthesis loop and
+    asyncio's default handler logs a spurious
+
+        ERROR - Task exception was never retrieved
+        ... RuntimeError: Event loop is closed
+
+    on every digest run.  Closing here, while the loop is still live, prevents
+    that.  Best-effort by design: a cleanup failure (or a test double lacking a
+    `close` method) must never mask the real synthesis result or exception.
+    """
+    close = getattr(client, "close", None)
+    if close is None:
+        return
+    try:
+        await close()
+    except Exception as exc:  # noqa: BLE001 — cleanup is best-effort, never fatal
+        logger.debug("AsyncAnthropic client close failed (non-fatal): %s", exc)
+
+
 def _is_rate_limit_error(exc: Exception) -> bool:
     """Detect Z.AI rate-limit / Fair-Usage-Policy responses worth retrying.
 
@@ -850,7 +877,12 @@ async def _map_retell_videos(
                 transcript_char_limit=resolved_char_limit,
             )
 
-    results = await asyncio.gather(*[_bounded(v) for v in videos])
+    try:
+        results = await asyncio.gather(*[_bounded(v) for v in videos])
+    finally:
+        # Close the client inside this still-live loop so its httpx pool isn't
+        # finalized on a closed loop later (see `_aclose_client`).
+        await _aclose_client(client)
     # Surface aggregate stats in the log so operators can spot regressions.
     successes = [r for r in results if r.error is None]
     failures = [r for r in results if r.error is not None]
@@ -953,13 +985,16 @@ async def _reduce_meta_synthesize(
     )
 
     client = _build_anthropic_client_for_zai(timeout_seconds=resolved_timeout)
-    return await _zai_call_with_retry(
-        client=client,
-        model=resolved_model,
-        prompt=prompt,
-        max_tokens=resolved_max_tokens,
-        context="youtube_digest_reduce",
-    )
+    try:
+        return await _zai_call_with_retry(
+            client=client,
+            model=resolved_model,
+            prompt=prompt,
+            max_tokens=resolved_max_tokens,
+            context="youtube_digest_reduce",
+        )
+    finally:
+        await _aclose_client(client)
 
 
 def _build_decisions_json_block(map_results: list[MapResult]) -> str:
@@ -1070,14 +1105,17 @@ async def _generate_digest_content_single_call(full_prompt: str) -> str:
 
     client = _build_anthropic_client_for_zai(timeout_seconds=timeout_seconds)
     logger.info("Single-call digest synthesis with model=%s...", model)
-    return await _zai_call_with_retry(
-        client=client,
-        model=model,
-        prompt=full_prompt,
-        max_tokens=max_tokens,
-        context="youtube_daily_digest",
-        max_retries=max_retries,
-    )
+    try:
+        return await _zai_call_with_retry(
+            client=client,
+            model=model,
+            prompt=full_prompt,
+            max_tokens=max_tokens,
+            context="youtube_daily_digest",
+            max_retries=max_retries,
+        )
+    finally:
+        await _aclose_client(client)
 
 
 async def _generate_digest_content(
