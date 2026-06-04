@@ -923,6 +923,18 @@ def triage_candidate(
     except Exception:  # noqa: BLE001 — defensive; helper should never raise.
         idx = ""
 
+    # Bound the index injected into the (Haiku-tier) triage prompt. recent_briefs_index
+    # grows unbounded (~100K tokens / ~400KB observed 2026-06-03); embedding it whole pushed
+    # the glm/ZAI triage call past the per-call timeout, so triage failed -> candidates were
+    # never promoted (verdict='' / no task_hub_item). Triage only needs a recency SAMPLE for
+    # novelty/dedup, not the full corpus. Hard char budget, env-overridable.
+    try:
+        _idx_budget = int(os.getenv("UA_INTEL_TRIAGE_INDEX_MAX_CHARS", "12000") or "12000")
+    except (TypeError, ValueError):
+        _idx_budget = 12000
+    if _idx_budget > 0 and len(idx) > _idx_budget:
+        idx = idx[:_idx_budget].rstrip() + "\n…[index truncated for triage]"
+
     compact_sources = [
         {
             "channel_name": s.get("channel_name") or s.get("channel_id") or "",
