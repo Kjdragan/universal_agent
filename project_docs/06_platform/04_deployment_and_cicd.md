@@ -14,7 +14,7 @@ code_paths:
   - scripts/deploy/remote_deploy.sh
   - scripts/deploy_validate_runtime.sh
   - scripts/check_crashloop.sh
-last_verified: 2026-05-30
+last_verified: 2026-06-04
 ---
 
 # Deployment & CI/CD
@@ -171,17 +171,18 @@ Runs as `ua`, `PROD_DIR=/opt/universal_agent`. The body is byte-identical to the
 5. **Write a clean bootstrap `.env`** via inline Python — a *fixed* dict (Infisical creds + runtime identity: `UA_RUNTIME_STAGE=production`, `FACTORY_ROLE=HEADQUARTERS`, `UA_DEPLOYMENT_PROFILE=vps`, `UA_MACHINE_SLUG=vps-hq-production`, ports 8001/8002/3000). **The VPS `.env` is overwritten on every deploy** — VPS-side manual edits do not survive.
 6. **Runtime preflight:** `bash scripts/deploy_validate_runtime.sh ...` — a hard abort point *before* any restart (see below).
 7. **Render webui env** from Infisical (`render_service_env_from_infisical.py` → `web-ui/.env.local`).
-8. **Install CLIs idempotently:** NotebookLM (`uv tool install`), goplaces (v0.3.0 tarball), hackernews-pp-cli (into `~/.local/bin/` so it survives `git clean`).
-9. **Build web-ui** (`npm install` only if `package.json` changed — `node_modules/.package-json-mtime` sentinel; then `rm -rf .next && npm run build`, `NODE_OPTIONS=--max-old-space-size=1536`). The `.next` wipe prevents the "client reference manifest for route does not exist" crash.
-10. **Build MkDocs** (`.venv/bin/mkdocs build`, non-fatal). The deploy *builds* the static docs site but does not restart a docs service.
-11. **Deployment-window flag:** `touch /tmp/ua-deployment-window` (suppresses CSI canary SLO alerts during restart), with an `EXIT` trap cleanup + a background `sleep 1500 && rm` safety net.
-12. **Install canonical systemd units** from repo templates (`install_vps_systemd_units.sh --lane production`, `install_vp_worker_services.sh`, CSI's `csi_install_systemd_extras.sh`).
-13. **Capture discord baseline** (`is-active` of `ua-discord-cc-bot` / `ua-discord-intelligence`) *before* restart, so the health gate can tell a deploy-caused regression from a pre-existing crash loop.
-14. **Sync project skills** to `/home/ua/.claude/skills/` via `rsync -a --delete` so VP worker subprocesses (running from `AGENT_RUN_WORKSPACES/`) discover them.
-15. **Restart services:** `systemctl restart universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram ua-discord-cc-bot ua-discord-intelligence`, plus VP workers if enabled.
-16. **Interpreter sanity:** `remote_deploy.sh::ensure_current_venv_interpreter` compares each service's `ExecMainPID`'s `/proc/$pid/exe` against `$PROD_DIR/.venv/bin/python` and restarts again if a service is running an old interpreter.
-17. **Health gate** (see below).
-18. **Clear the deployment-window flag** and `trap - EXIT`.
+8. **Install CLIs idempotently:** NotebookLM (`uv tool install --force notebooklm-mcp-cli`), goplaces (v0.3.0 tarball), hackernews-pp-cli (into `~/.local/bin/` so it survives `git clean`).
+9. **Prune uv caches** (`remote_deploy.sh::prune_ua_uv_cache` + a root branch; `uv cache prune --ci --force`, each non-fatal) across all four trees — `ua ~/.cache/uv`, root `/root/.cache/uv`, `/tmp/uv_cache`, and `$PROD_DIR/.uv-cache`. `--force` is mandatory: the caches are in near-constant use by long-running `uv run` services (VP workers, csi uvicorn, discord bot) + cron/hook `uv run` churn, so a lock-respecting prune times out even at `UV_LOCK_TIMEOUT=300s`. `--ci` only removes re-downloadable wheels/sdists and keeps the unpacked/built archives that live environments hardlink from, so running services are unaffected. This is the durable fix for the disk-usage climb (added 2026-06-04 — see the Gotcha below).
+10. **Build web-ui** (`npm install` only if `package.json` changed — `node_modules/.package-json-mtime` sentinel; then `rm -rf .next && npm run build`, `NODE_OPTIONS=--max-old-space-size=1536`). The `.next` wipe prevents the "client reference manifest for route does not exist" crash.
+11. **Build MkDocs** (`.venv/bin/mkdocs build`, non-fatal). The deploy *builds* the static docs site but does not restart a docs service.
+12. **Deployment-window flag:** `touch /tmp/ua-deployment-window` (suppresses CSI canary SLO alerts during restart), with an `EXIT` trap cleanup + a background `sleep 1500 && rm` safety net.
+13. **Install canonical systemd units** from repo templates (`install_vps_systemd_units.sh --lane production`, `install_vp_worker_services.sh`, CSI's `csi_install_systemd_extras.sh`).
+14. **Capture discord baseline** (`is-active` of `ua-discord-cc-bot` / `ua-discord-intelligence`) *before* restart, so the health gate can tell a deploy-caused regression from a pre-existing crash loop.
+15. **Sync project skills** to `/home/ua/.claude/skills/` via `rsync -a --delete` so VP worker subprocesses (running from `AGENT_RUN_WORKSPACES/`) discover them.
+16. **Restart services:** `systemctl restart universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram ua-discord-cc-bot ua-discord-intelligence`, plus VP workers if enabled.
+17. **Interpreter sanity:** `remote_deploy.sh::ensure_current_venv_interpreter` compares each service's `ExecMainPID`'s `/proc/$pid/exe` against `$PROD_DIR/.venv/bin/python` and restarts again if a service is running an old interpreter.
+18. **Health gate** (see below).
+19. **Clear the deployment-window flag** and `trap - EXIT`.
 
 ### Runtime preflight: `scripts/deploy_validate_runtime.sh`
 
@@ -324,6 +325,7 @@ It returns cached `_VERSION_INFO` (`gateway_server.py::_capture_version_info`) i
 - **`pipefail` is opt-in in GHA.** Both `pr-validate.yml` (`defaults.run.shell: bash -euo pipefail {0}`) and `remote_deploy.sh` (`set -euo pipefail`) force it.
 - **No uv package cache in PR-Validate (removed 2026-05-30, verified net-negative).** A `setup-uv enable-cache` layer shipped briefly (PR #583) but never hit: `pr-validate` only runs on `pull_request`, so each PR wrote its own cache scoped to `refs/pull/N/merge` and `main` never populated a fresh-key cache to restore from — every PR cold-missed *and* paid the save/restore overhead. The cache's ceiling was modest regardless because `pytest` (~150s, roughly half the ~5-min run) dominates and a dep cache can't touch it. **The real PR-Validate speed lever is pytest sharding/parallelization** (a separate, higher-value effort). Don't re-add a uv cache without also warming it on `main` — and even then weigh it against just sharding pytest.
 - **Comment a `# shellcheck`-prefixed line breaks the ShellCheck gate.** ShellCheck parses any comment starting with `# shellcheck` as a directive (SC1073/1072). Don't open a comment line with that string in `scripts/deploy/*.sh`.
+- **The uv cache is the dominant disk-growth driver — the deploy prunes it (2026-06-04).** Every deploy runs `uv sync` (`deploy_validate_runtime.sh::sync_dependencies`) + `uv tool install --force notebooklm-mcp-cli` (which floats, unpinned by operator choice), and the runtime adds two more cache trees (`worker.py` → `$PROD_DIR/.uv-cache`, `hooks.py` → `/tmp/uv_cache`). With ~19 deploys/day and nothing pruning, the four caches (ua `~/.cache/uv`, root `/root/.cache/uv`, `/tmp/uv_cache`, `$PROD_DIR/.uv-cache`) reached **~65G** and drove disk **70%→78% over ~2 weeks**. `remote_deploy.sh::prune_ua_uv_cache` (step 9 above) now prunes all four every deploy with `uv cache prune --ci --force`. **`--force` is non-negotiable here**: the caches are locked nearly continuously by long-running `uv run` services + cron/hook churn, so a lock-respecting prune times out even at `UV_LOCK_TIMEOUT=300s` (measured); `--force` skips the in-use lock wait and still only removes re-downloadable wheels/sdists, leaving the unpacked/built archives that live envs hardlink from (a 64.7G manual reclaim on 2026-06-04 left gateway/api/webui/vp-workers/csi all healthy, disk 78%→58%). The `disk_usage_health` watchdog invariant (`disk_usage_health.py::disk_usage_health`) now names the uv cache as the top consumer instead of the old, miscalibrated "AGENT_RUN_WORKSPACES dirs older than 14 days" (those are only ~0.3G reapable). Do **not** "fix" disk pressure by reaping workspaces — prune the uv cache.
 - **`.venv` corruption blocks `uv sync` even as the right user.** A stale symlink to an inaccessible/old interpreter makes `uv sync` fail. `deploy_validate_runtime.sh::ensure_existing_venv_is_usable` detects this (missing `bin/python3`, unreadable, non-3.13) and force-rebuilds. Break-glass: `rm -rf /opt/universal_agent/.venv` then re-deploy.
 - **Lifecycle-miss during the deploy window is expected.** Restarts SIGTERM (exit 143) in-flight tasks; the `/tmp/ua-deployment-window` flag lets guardrails reclassify these as dashboard-only (no email/telegram) so deploy-restart noise doesn't page the operator.
 - **A deploy cannot heal an expired OAuth refresh token.** `gws` (Gmail/Calendar) and YouTube (`kevinjdragan@gmail.com`) creds are materialized from Infisical at *service start*, so a deploy re-applies whatever is stored — but while the OAuth apps are in Google "Testing" mode their refresh tokens expire ~7 days regardless. Symptom: `invalid_grant` (gws) / `401 Invalid authentication credentials` (YouTube). Durable fix: publish the OAuth app to production (operator defers; YouTube watchdog + one-tap re-auth is the interim). Full runbook: `ops-vps-recovery`.

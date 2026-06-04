@@ -9,12 +9,18 @@ Same lightweight pattern as P4 zai_inference_health: pure-syscall probe
 heartbeat: ~1ms across the monitored mounts.
 
 Monitored mounts (overridable via UA_DISK_HEALTH_MOUNTS env var, comma-
-separated):
+separated; on the production VPS all three resolve to the single /dev/sda1
+partition):
 - `/` — root filesystem (general disk pressure)
-- `/opt` — where AGENT_RUN_WORKSPACES lives (per-heartbeat archives are
-  the most common growth source)
+- `/opt` — where AGENT_RUN_WORKSPACES + the repo's .uv-cache live
 - `/var/lib` — where csi.db + activity_state.db + runtime_state.db live
-  (DB growth is the second most common growth source)
+
+The dominant growth driver (confirmed 2026-06-04) is the unpruned uv cache
+(~65G across ua ~/.cache/uv, root /root/.cache/uv, /tmp/uv_cache, and the
+repo .uv-cache), NOT AGENT_RUN_WORKSPACES or the DBs. remote_deploy.sh now
+prunes the uv caches on every deploy; this probe surfaces real top consumers
+via runbook_command. See scripts/deploy/remote_deploy.sh and
+project_docs/06_platform/04_deployment_and_cicd.md.
 
 Severity (strict per operator pattern set in P4):
 - WARN: any mount above 75%
@@ -82,19 +88,34 @@ def _measure_mount(path: str) -> Optional[Dict[str, Any]]:
     ),
     severity="warn",
     runbook_command=(
-        "df -h; echo '--- workspaces older than 14 days ---'; "
-        "find /opt/universal_agent/AGENT_RUN_WORKSPACES -maxdepth 1 -type d -mtime +14 "
-        "-printf '%T@ %s %p\\n' 2>/dev/null | sort -n | head -20; "
+        "df -h; "
+        "echo '--- uv caches (top reclaimable consumer; auto-pruned each deploy) ---'; "
+        "sudo du -sh /home/ua/.cache/uv /root/.cache/uv /tmp/uv_cache "
+        "/opt/universal_agent/.uv-cache 2>/dev/null; "
+        "echo '--- AGENT_RUN_WORKSPACES total + largest subdirs ---'; "
+        "sudo du -sh /opt/universal_agent/AGENT_RUN_WORKSPACES 2>/dev/null; "
+        "sudo du -sh /opt/universal_agent/AGENT_RUN_WORKSPACES/*/ 2>/dev/null | sort -rh | head -10; "
         "echo '--- largest DB files ---'; "
-        "ls -laSh /opt/universal_agent/*.db /opt/universal_agent/AGENT_RUN_WORKSPACES/*.db "
-        "/var/lib/universal-agent/csi/*.db 2>/dev/null | head -10"
+        "sudo ls -laSh /opt/universal_agent/*.db /opt/universal_agent/AGENT_RUN_WORKSPACES/*.db "
+        "/var/lib/universal-agent/csi/*.db 2>/dev/null | head -10; "
+        "echo '--- manual one-time uv prune (if no deploy is imminent) ---'; "
+        "echo 'sudo -H -u ua uv cache prune --ci --force; "
+        "sudo -H -u ua env UV_CACHE_DIR=/tmp/uv_cache uv cache prune --ci --force; "
+        "sudo -H -u ua env UV_CACHE_DIR=/opt/universal_agent/.uv-cache uv cache prune --ci --force; "
+        "sudo -H env HOME=/root /root/.local/bin/uv cache prune --ci --force'"
     ),
     metadata={
         "design_note": (
             "P5 (2026-05-20): one probe covering multiple mounts in one "
-            "finding. Pure shutil.disk_usage call — no DB, no HTTP, "
-            "no AI inference. Severity_override lifts to critical above "
-            "90% on any mount."
+            "finding. Pure shutil.disk_usage call — no DB, no HTTP, no AI "
+            "inference, no subprocess (the du diagnostics live in "
+            "runbook_command, off the per-heartbeat path — keeps the probe "
+            "~1ms and avoids blocking the heartbeat loop). Severity_override "
+            "lifts to critical above 90% on any mount. 2026-06-04: corrected "
+            "the cleanup recommendation — the real growth driver is the "
+            "unpruned uv cache (~65G across ua/root/tmp/repo trees), not "
+            ">14-day AGENT_RUN_WORKSPACES dirs (~0.3G reapable). "
+            "remote_deploy.sh now prunes the uv caches on every deploy."
         ),
         "thresholds": {
             "warn_pct": WARN_THRESHOLD_PCT,
@@ -144,8 +165,12 @@ def disk_usage_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         ),
         "message": (
             f"Disk pressure on {len(pressured)} mount(s): {', '.join(mount_names)}. "
-            f"Worst {worst_pct}%. Cleanup target: AGENT_RUN_WORKSPACES dirs "
-            "older than 14 days (Simone 2026-05-20 digest recommendation)."
+            f"Worst {worst_pct}%. Top reclaimable consumer is the uv cache "
+            "(~/.cache/uv + /root/.cache/uv + /tmp/uv_cache + <repo>/.uv-cache), "
+            "now auto-pruned each deploy via scripts/deploy/remote_deploy.sh "
+            "(uv cache prune --ci --force). Run the runbook for live `du -sh` of "
+            "actual top consumers — AGENT_RUN_WORKSPACES holds only ~0.3G of "
+            "reapable >14-day dirs and is NOT the driver."
         ),
         "severity_override": severity,
     }
