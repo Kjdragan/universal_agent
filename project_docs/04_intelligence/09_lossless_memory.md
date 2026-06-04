@@ -6,7 +6,7 @@ subsystem: intel-lossless
 code_paths:
   - src/universal_agent/lossless_memory/*.py
   - src/universal_agent/agent_core.py
-last_verified: 2026-05-29
+last_verified: 2026-06-04
 ---
 
 # Lossless Memory
