@@ -9,6 +9,7 @@ caught regardless of last_outcome plumbing.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import importlib
 import sqlite3
 
@@ -19,6 +20,8 @@ from universal_agent.services.pipeline_invariants import (
     clear_registry_for_tests,
     run_invariants,
 )
+
+UTC = timezone.utc
 
 
 @pytest.fixture(autouse=True)
@@ -55,13 +58,21 @@ def _insert(
     task_id: str,
     states: list[str],
     *,
-    base_iso: str = "2026-05-",
+    newest: datetime | None = None,
 ) -> None:
     """Insert one assignment per state. ``states[0]`` is OLDEST,
-    ``states[-1]`` is the most recent. started_at increments by 1 day so
-    ORDER BY started_at DESC returns newest-first."""
+    ``states[-1]`` is the most recent. started_at steps back 1 day per
+    older entry so ORDER BY started_at DESC returns newest-first.
+
+    Timestamps are anchored near *now* by default (newest ≈ 1h ago) so the
+    invariant's recency backstop treats the streak as live. Pass ``newest``
+    to anchor the head of the history at a specific time (e.g. 40 days ago
+    to exercise the abandoned-orphan backstop)."""
+    head = newest if newest is not None else (datetime.now(UTC) - timedelta(hours=1))
+    n = len(states)
     for idx, state in enumerate(states):
-        day = 10 + idx
+        # idx == n-1 is newest (== head); each older entry is 1 day earlier.
+        started_at = head - timedelta(days=(n - 1 - idx))
         conn.execute(
             "INSERT INTO task_hub_assignments "
             "(assignment_id, task_id, agent_id, state, started_at) "
@@ -71,7 +82,7 @@ def _insert(
                 task_id,
                 "cron_scheduler",
                 state,
-                f"{base_iso}{day:02d}T02:00:00Z",
+                started_at.isoformat(),
             ),
         )
     conn.commit()
@@ -163,4 +174,76 @@ def test_non_cron_tasks_ignored(conn: sqlite3.Connection) -> None:
 
 def test_missing_activity_conn_no_crash() -> None:
     findings = run_invariants({})
+    assert all(f.metric_key != "cron_consecutive_failures" for f in findings)
+
+
+# --- Disabled / deleted-cron suppression (the claude_code_intel_sync fix) ---
+# A cron disabled or deleted from the registry stops appending runs, so its
+# leading-failure count freezes and would otherwise sit on the board forever.
+# When cron metadata IS available in the context, only enabled & registered
+# crons may raise a streak finding.
+
+
+def test_disabled_cron_streak_suppressed_with_metadata(conn: sqlite3.Connection) -> None:
+    # The live signature: a disabled cron with a long recent failure streak.
+    _insert(conn, "cron:claude_code_intel_sync", ["failed"] * 6)
+    cron_jobs = [
+        {"job_id": "claude_code_intel_sync", "enabled": False, "cron_expr": "0 8,16,22 * * *"},
+    ]
+    findings = run_invariants({"activity_conn": conn, "cron_jobs": cron_jobs})
+    assert all(f.metric_key != "cron_consecutive_failures" for f in findings)
+
+
+def test_enabled_cron_streak_still_fires_with_metadata(conn: sqlite3.Connection) -> None:
+    # Regression guard: the metadata filter must NOT over-suppress a live,
+    # enabled cron that really is failing every run.
+    _insert(conn, "cron:live_job", ["completed", "failed", "failed", "failed"])
+    cron_jobs = [{"job_id": "live_job", "enabled": True, "cron_expr": "0 * * * *"}]
+    findings = run_invariants({"activity_conn": conn, "cron_jobs": cron_jobs})
+    matched = [f for f in findings if f.metric_key == "cron_consecutive_failures"]
+    assert len(matched) == 1
+    assert matched[0].observed_value["streaks"][0]["task_id"] == "cron:live_job"
+
+
+def test_deleted_cron_streak_suppressed_with_metadata(conn: sqlite3.Connection) -> None:
+    # cron:ghost has lingering assignments but is no longer registered — an
+    # unknown job can't be "firing on schedule but failing".
+    _insert(conn, "cron:ghost", ["failed", "failed", "failed", "failed"])
+    cron_jobs = [{"job_id": "other_live", "enabled": True, "cron_expr": "0 * * * *"}]
+    findings = run_invariants({"activity_conn": conn, "cron_jobs": cron_jobs})
+    assert all(f.metric_key != "cron_consecutive_failures" for f in findings)
+
+
+def test_disabled_and_enabled_mixed_only_enabled_fires(conn: sqlite3.Connection) -> None:
+    # The exact production scenario: a disabled cron with a frozen streak
+    # alongside a healthy enabled cron → no card at all.
+    _insert(conn, "cron:claude_code_intel_sync", ["failed"] * 6)
+    _insert(conn, "cron:healthy", ["completed", "completed", "completed"])
+    cron_jobs = [
+        {"job_id": "claude_code_intel_sync", "enabled": False, "cron_expr": "0 8,16,22 * * *"},
+        {"job_id": "healthy", "enabled": True, "cron_expr": "0 * * * *"},
+    ]
+    findings = run_invariants({"activity_conn": conn, "cron_jobs": cron_jobs})
+    assert all(f.metric_key != "cron_consecutive_failures" for f in findings)
+
+
+def test_no_metadata_recent_streak_still_fires(conn: sqlite3.Connection) -> None:
+    # Degraded path (no cron_jobs in ctx): a recent streak must still surface
+    # so the invariant doesn't go dark when metadata is briefly unavailable.
+    _insert(conn, "cron:live_failing", ["failed", "failed", "failed", "failed"])
+    findings = run_invariants({"activity_conn": conn})
+    matched = [f for f in findings if f.metric_key == "cron_consecutive_failures"]
+    assert len(matched) == 1
+
+
+def test_no_metadata_ancient_streak_suppressed_by_recency(conn: sqlite3.Connection) -> None:
+    # Degraded path backstop: an abandoned task whose most recent run is far
+    # older than the recency cutoff must NOT raise a frozen streak.
+    _insert(
+        conn,
+        "cron:abandoned",
+        ["failed", "failed", "failed", "failed"],
+        newest=datetime.now(UTC) - timedelta(days=40),
+    )
+    findings = run_invariants({"activity_conn": conn})
     assert all(f.metric_key != "cron_consecutive_failures" for f in findings)

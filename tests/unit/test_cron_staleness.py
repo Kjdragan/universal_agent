@@ -215,3 +215,94 @@ def test_iso_string_last_run_at_supported() -> None:
     matches = [f for f in findings if f.metric_key == "cron_staleness"]
     # 5h since last run on an hourly cron → fires (5h > 2h threshold)
     assert len(matches) == 1
+
+
+# --- Asymmetric schedule + declared timezone (the intel_auto_promoter fix) ---
+# `35 10,15 * * *` America/Chicago fires at 10:35 and 15:35 local: a 5h daytime
+# leg and a ~19h overnight leg. The old sampler took only the first two fires
+# (the 5h leg) as the cadence, so the long overnight quiet period read as stale
+# every single night. The fix derives the interval from the MAX gap across a
+# full day, evaluated in the declared timezone.
+
+_ASYMMETRIC_EXPR = "35 10,15 * * *"
+_CHICAGO = "America/Chicago"
+# The 15:35-local fire; in CDT (UTC-5, June) that is 20:35 UTC.
+_LAST_FIRE = datetime(2026, 6, 4, 20, 35, 0, tzinfo=UTC)
+
+
+def _asymmetric_cron() -> dict:
+    cron = _cron_dict(
+        "intel_auto_promoter",
+        cron_expr=_ASYMMETRIC_EXPR,
+        last_run_at=_LAST_FIRE.timestamp(),
+    )
+    cron["timezone"] = _CHICAGO
+    return cron
+
+
+def test_expected_interval_is_max_gap_for_asymmetric_schedule() -> None:
+    pytest.importorskip("croniter")
+    pytest.importorskip("pytz")
+    from universal_agent.services.invariants import cron_staleness as cs
+
+    tz = cs._resolve_tz(_CHICAGO)
+    interval = cs._expected_interval_seconds(_ASYMMETRIC_EXPR, _LAST_FIRE, tz)
+    assert interval is not None
+    # The longest leg (the ~19h overnight gap), not the 5h daytime leg.
+    assert abs(interval - 19 * 3600) < 120
+
+
+@pytest.mark.parametrize("hours_after", [6, 12, 18])
+def test_asymmetric_schedule_no_false_overnight_stale(hours_after: int) -> None:
+    pytest.importorskip("croniter")
+    pytest.importorskip("pytz")
+    from universal_agent.services.invariants import cron_staleness as cs
+
+    # Anywhere inside the 19h overnight gap (next real fire is +19h) the cron
+    # is healthy and must NOT be flagged stale.
+    now = _LAST_FIRE + timedelta(hours=hours_after)
+    assert cs._evaluate_cron(_asymmetric_cron(), now) is None
+
+
+def test_asymmetric_schedule_genuinely_stale_still_fires() -> None:
+    pytest.importorskip("croniter")
+    pytest.importorskip("pytz")
+    from universal_agent.services.invariants import cron_staleness as cs
+
+    # max gap 19h → threshold 38h. 40h with no run is genuinely stale.
+    now = _LAST_FIRE + timedelta(hours=40)
+    result = cs._evaluate_cron(_asymmetric_cron(), now)
+    assert result is not None
+    assert result["reason"] == "stale"
+
+
+def test_expected_interval_dense_windowed_schedule_reaches_overnight_gap() -> None:
+    # `*/5 9-17` fires every 5 min 09:00–17:55, then a ~15h overnight gap. A
+    # low fire cap would stop inside the dense daytime leg and report the 5-min
+    # cadence as the interval, re-introducing a false overnight stale. The cap
+    # must be high enough to reach the long gap.
+    pytest.importorskip("croniter")
+    pytest.importorskip("pytz")
+    from universal_agent.services.invariants import cron_staleness as cs
+
+    tz = cs._resolve_tz(_CHICAGO)
+    ref = datetime(2026, 6, 4, 17, 0, 0, tzinfo=UTC)
+    interval = cs._expected_interval_seconds("*/5 9-17 * * *", ref, tz)
+    assert interval is not None
+    # The ~15h overnight gap, NOT the 5-minute daytime cadence.
+    assert interval > 12 * 3600
+
+
+def test_asymmetric_schedule_without_timezone_field_does_not_crash() -> None:
+    # Defensive: a row missing the timezone key falls back to UTC evaluation
+    # and must still behave (no crash, max-gap logic applies).
+    pytest.importorskip("croniter")
+    from universal_agent.services.invariants import cron_staleness as cs
+
+    cron = _cron_dict(
+        "no_tz", cron_expr=_ASYMMETRIC_EXPR, last_run_at=_LAST_FIRE.timestamp()
+    )
+    now = _LAST_FIRE + timedelta(hours=12)
+    # The gap structure of `35 10,15` is {5h, 19h} regardless of tz, so the
+    # overnight window is still not stale even when evaluated as UTC.
+    assert cs._evaluate_cron(cron, now) is None

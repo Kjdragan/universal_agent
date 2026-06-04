@@ -1,10 +1,16 @@
 """Universal cron last-run staleness invariant.
 
 After P0a (PR #395) the watchdog sidecar's `crons[]` is populated with
-every persisted cron job (job_id, enabled, cron_expr, last_run_at,
-last_outcome, next_run_at). P1b adds the matching Layer-2 invariant:
-walk every enabled cron, derive its expected interval from the cron_expr,
-and fire when last_run is >2× past that interval.
+every persisted cron job (job_id, enabled, cron_expr, timezone,
+last_run_at, last_outcome, next_run_at). P1b adds the matching Layer-2
+invariant: walk every enabled cron, derive its expected interval from the
+cron_expr, and fire when last_run is >2× past that interval.
+
+The interval is the MAX gap between consecutive fires across a full day,
+evaluated in the cron's declared timezone — not the gap to the next two
+fires. Asymmetric schedules (e.g. `35 10,15 * * *` America/Chicago, a 5h
+leg and a ~19h overnight leg) would otherwise report the short leg as the
+cadence and flag the long overnight quiet period as stale every night.
 
 Three failure modes flagged:
 1. `stale` — last_run > 2× expected interval old.
@@ -28,6 +34,11 @@ try:
 except ImportError:  # croniter is in pyproject deps; this is a paranoia branch
     croniter = None  # type: ignore[assignment]
 
+try:
+    import pytz
+except ImportError:  # pytz is in pyproject deps; this is a paranoia branch
+    pytz = None  # type: ignore[assignment]
+
 from universal_agent.services.pipeline_invariants import invariant
 
 logger = logging.getLogger(__name__)
@@ -41,6 +52,39 @@ STALENESS_MULTIPLIER = 2.0
 # Floor: any cron whose interval is less than this gets this as its threshold
 # instead. Prevents `*/1 * * * *` crons from firing on 2-min lag.
 MIN_STALENESS_SECONDS = 300.0  # 5 min
+
+# Window for sampling fires when deriving the expected interval. We collect
+# fires until they span at least this long (so a full day — DST-safe — of an
+# asymmetric schedule's gaps is observed) before taking the MAX gap. 26h
+# covers the 25h fall-back DST day with margin.
+_INTERVAL_WINDOW_SECONDS = 26 * 3600.0
+
+# Pathological-loop guard on fires sampled per interval computation. The
+# span-based stop above is the primary terminator; this cap only protects
+# against a degenerate expression. It is sized so that even a minute-grained
+# schedule (`*/1`, ~1560 fires to span 26h) still reaches the window — a lower
+# cap would truncate a dense-but-windowed schedule (e.g. `*/5 9-17`, ~110
+# fires to its overnight gap) BEFORE its long gap, reporting the short daytime
+# leg as the cadence and re-introducing the false overnight stale. At minute
+# granularity this is ~48ms worst-case per cron; every sparse cron stops in a
+# handful of fires (<3ms).
+_INTERVAL_MAX_FIRES = 1600
+
+
+def _resolve_tz(timezone_name: Any) -> Any:
+    """Return a tzinfo for the cron's declared timezone, or None for UTC.
+
+    None means "treat the cron_expr as UTC" — croniter's default — which is
+    correct both for crons that declare ``UTC`` and as a safe fallback when
+    pytz is missing or the name is unknown.
+    """
+    name = str(timezone_name or "").strip()
+    if not name or name.upper() == "UTC" or pytz is None:
+        return None
+    try:
+        return pytz.timezone(name)
+    except Exception:  # noqa: BLE001 — UnknownTimeZoneError and friends
+        return None
 
 
 def _parse_timestamp(value: Any) -> Optional[datetime]:
@@ -64,24 +108,55 @@ def _parse_timestamp(value: Any) -> Optional[datetime]:
         return None
 
 
-def _expected_interval_seconds(cron_expr: str, ref_dt: datetime) -> Optional[float]:
-    """Compute the gap between the next two scheduled fires after `ref_dt`.
+def _expected_interval_seconds(
+    cron_expr: str, ref_dt: datetime, tz: Any = None
+) -> Optional[float]:
+    """Return the cron's *longest* legitimate gap between consecutive fires.
 
-    This is the cron's expected cadence as advertised by its expression.
-    Returns None if the expression is unparseable.
+    The previous implementation sampled only the first two fires after
+    ``ref_dt`` and assumed a constant cadence. That is wrong for asymmetric
+    schedules: ``35 10,15 * * *`` has a 5h leg and a ~19h overnight leg, so
+    depending on where ``ref_dt`` landed it returned 5h, making the overnight
+    quiet period look stale every night.
+
+    Instead we sample a full day (DST-safe) of fires and return the MAX gap
+    between consecutive fires. The staleness threshold (interval × multiplier)
+    is therefore keyed to the longest the cron is *expected* to be quiet, so
+    no leg of an asymmetric schedule trips a false alarm. Using the max gap
+    (a property of the schedule alone) rather than the gap to the next fire
+    also makes the check robust to a cron that simply ran late.
+
+    ``tz`` (a tzinfo, e.g. ``pytz.timezone("America/Chicago")``) localizes the
+    cron_expr so a schedule declared in local time is interpreted correctly.
+    None evaluates the expression in UTC. Returns None if unparseable or if
+    fewer than two fires could be sampled.
     """
     if croniter is None:
         return None
     try:
-        c = croniter(cron_expr, ref_dt)
-        first = c.get_next(datetime)
-        second = c.get_next(datetime)
-        # Ensure aware datetimes for subtraction.
-        if first.tzinfo is None:
-            first = first.replace(tzinfo=timezone.utc)
-        if second.tzinfo is None:
-            second = second.replace(tzinfo=timezone.utc)
-        return (second - first).total_seconds()
+        base = ref_dt
+        if tz is not None:
+            try:
+                base = ref_dt.astimezone(tz)
+            except Exception:  # noqa: BLE001 — bad tzinfo; fall back to ref as-is
+                base = ref_dt
+        c = croniter(cron_expr, base)
+        fires: list[datetime] = []
+        while len(fires) < _INTERVAL_MAX_FIRES:
+            nxt = c.get_next(datetime)
+            if nxt.tzinfo is None:
+                nxt = nxt.replace(tzinfo=timezone.utc)
+            fires.append(nxt)
+            if len(fires) >= 2 and (fires[-1] - base).total_seconds() > _INTERVAL_WINDOW_SECONDS:
+                break
+        if len(fires) < 2:
+            return None
+        gaps = [
+            (fires[i + 1] - fires[i]).total_seconds()
+            for i in range(len(fires) - 1)
+        ]
+        gaps = [g for g in gaps if g > 0]
+        return max(gaps) if gaps else None
     except Exception:  # noqa: BLE001 — croniter raises a variety of types
         return None
 
@@ -100,7 +175,11 @@ def _evaluate_cron(cron: Dict[str, Any], now: datetime) -> Optional[Dict[str, An
     next_run = _parse_timestamp(cron.get("next_run_at"))
     last_outcome = str(cron.get("last_outcome") or "").strip().lower()
 
-    interval = _expected_interval_seconds(cron_expr, last_run or now)
+    # Honor the cron's declared timezone so a local-time expression (e.g.
+    # "35 10,15 * * *" America/Chicago) is interpreted in the same tz the
+    # scheduler uses, not blindly as UTC.
+    tz = _resolve_tz(cron.get("timezone"))
+    interval = _expected_interval_seconds(cron_expr, last_run or now, tz)
     if interval is None:
         # Unparseable cron_expr — skip silently, don't crash.
         logger.debug("cron_staleness: cannot parse cron_expr for %s: %r", job_id, cron_expr)
@@ -170,7 +249,16 @@ def _evaluate_cron(cron: Dict[str, Any], now: datetime) -> Optional[Dict[str, An
             "of 2× the expected interval gives one cycle of grace. Floor "
             "of 5 min keeps every-minute crons from tripping on transient "
             "lag. Listing all stale crons in one finding avoids 22 alerts "
-            "on a bad day."
+            "on a bad day. The expected interval is the MAX gap across a "
+            "full day of fires, evaluated in the cron's declared timezone "
+            "(2026-06-04 fix): asymmetric schedules like `35 10,15` "
+            "America/Chicago no longer flag their long overnight leg as "
+            "stale every night. Tradeoff: timing-staleness latency is keyed "
+            "to the longest quiet leg (threshold = 2× the max gap), so a cron "
+            "that dies during its active window is caught later than its "
+            "active cadence would suggest — per-run failures are caught "
+            "independently by last_outcome_error here and by the "
+            "cron_consecutive_failures invariant."
         ),
         "staleness_multiplier": STALENESS_MULTIPLIER,
         "min_staleness_seconds": MIN_STALENESS_SECONDS,
