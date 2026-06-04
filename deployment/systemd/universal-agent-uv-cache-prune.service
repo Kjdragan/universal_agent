@@ -1,0 +1,14 @@
+[Unit]
+Description=Universal Agent uv cache prune (bound disk growth; deploy-independent backstop)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/universal_agent
+# Runs as root; the script sudo's to `ua` for the ua-owned caches and runs
+# root's uv for /root/.cache/uv. Same script the deploy calls (single source).
+ExecStart=/opt/universal_agent/scripts/prune_uv_caches.sh
+
+[Install]
+WantedBy=multi-user.target

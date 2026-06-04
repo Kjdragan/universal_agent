@@ -1,0 +1,15 @@
+[Unit]
+Description=Run Universal Agent uv cache prune daily (deploy-independent disk backstop)
+
+[Timer]
+# Daily at 09:30 UTC (~04:30 America/Chicago) — a quiet window with the least
+# `uv run` churn. The deploy already prunes ~19x/day; this timer only matters
+# when deploys stall, capping worst-case cache growth at ~1 day. Cheap: prune
+# of an already-pruned cache is near-instant.
+OnCalendar=*-*-* 09:30:00
+Persistent=true
+RandomizedDelaySec=600
+Unit=universal-agent-uv-cache-prune.service
+
+[Install]
+WantedBy=timers.target
