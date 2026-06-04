@@ -106,7 +106,16 @@ run_as_ua() {
 
 echo "--> Writing clean production bootstrap .env..."
 export PROD_DIR
-python3 -c "from pathlib import Path; import json, os; env_path = Path(os.environ['PROD_DIR']) / '.env'; bootstrap = {'INFISICAL_CLIENT_ID': os.environ['INFISICAL_CLIENT_ID'], 'INFISICAL_CLIENT_SECRET': os.environ['INFISICAL_CLIENT_SECRET'], 'INFISICAL_PROJECT_ID': os.environ['INFISICAL_PROJECT_ID'], 'INFISICAL_ENVIRONMENT': 'production', 'UA_RUNTIME_STAGE': 'production', 'FACTORY_ROLE': 'HEADQUARTERS', 'UA_DEPLOYMENT_PROFILE': 'vps', 'UA_MACHINE_SLUG': 'vps-hq-production', 'UA_INFISICAL_ENABLED': '1', 'UA_GATEWAY_PORT': '8002', 'UA_API_PORT': '8001', 'UA_GATEWAY_URL': 'http://127.0.0.1:8002'}; env_path.write_text(''.join(f'{key}={json.dumps(str(value))}\n' for key, value in bootstrap.items()), encoding='utf-8')"
+# UA_NOTEBOOKLM_PROFILE='default': the paper-to-podcast pipeline's NotebookLM
+# auth. notebooklm_runtime.notebooklm_profile() defaults to 'vps' when unset,
+# but the 'vps' profile is fed from the (stale) NOTEBOOKLM_AUTH_COOKIE_HEADER
+# seed secret and was expired, while the VPS's 'default' profile holds a live
+# kevinjdragan@gmail.com session. Pinning 'default' here points the pipeline at
+# the valid session (no browser re-auth) and disables the seed path
+# (notebooklm_auth_seed_enabled forces False for any non-'vps' profile), so the
+# good cookies are never clobbered. Re-auth, when eventually needed, is a plain
+# `nlm login` writing ~/.nlm/cookies.txt. See memory: notebooklm_profile_mismatch.
+python3 -c "from pathlib import Path; import json, os; env_path = Path(os.environ['PROD_DIR']) / '.env'; bootstrap = {'INFISICAL_CLIENT_ID': os.environ['INFISICAL_CLIENT_ID'], 'INFISICAL_CLIENT_SECRET': os.environ['INFISICAL_CLIENT_SECRET'], 'INFISICAL_PROJECT_ID': os.environ['INFISICAL_PROJECT_ID'], 'INFISICAL_ENVIRONMENT': 'production', 'UA_RUNTIME_STAGE': 'production', 'FACTORY_ROLE': 'HEADQUARTERS', 'UA_DEPLOYMENT_PROFILE': 'vps', 'UA_NOTEBOOKLM_PROFILE': 'default', 'UA_MACHINE_SLUG': 'vps-hq-production', 'UA_INFISICAL_ENABLED': '1', 'UA_GATEWAY_PORT': '8002', 'UA_API_PORT': '8001', 'UA_GATEWAY_URL': 'http://127.0.0.1:8002'}; env_path.write_text(''.join(f'{key}={json.dumps(str(value))}\n' for key, value in bootstrap.items()), encoding='utf-8')"
 sudo chown ua:ua "$PROD_DIR/.env"
 sudo chmod 600 "$PROD_DIR/.env"
 
