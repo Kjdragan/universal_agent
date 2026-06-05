@@ -58,7 +58,16 @@ def fresh_git_repo(tmp_path: Path) -> Path:
         ["git", "commit", "-q", "-m", "init"], cwd=str(repo), check=True,
     )
     subprocess.run(
-        ["git", "branch", "-M", "feature/latest2"], cwd=str(repo), check=True,
+        ["git", "branch", "-M", "main"], cwd=str(repo), check=True,
+    )
+    # Provide a resolvable ``origin/main`` so missions can branch off the
+    # production default base (``origin/main``). Point ``origin`` at the repo
+    # itself — fetching creates the ``refs/remotes/origin/main`` tracking ref.
+    subprocess.run(
+        ["git", "remote", "add", "origin", str(repo)], cwd=str(repo), check=True,
+    )
+    subprocess.run(
+        ["git", "fetch", "-q", "origin"], cwd=str(repo), check=True,
     )
     return repo
 
@@ -159,7 +168,7 @@ class TestHappyPath:
             task=task,
             patch_fn=patch_valid,
             bot_name="codie",
-            base_branch="feature/latest2",
+            base_branch="origin/main",
             repo_root=fresh_git_repo,
             workspace_root=tmp_path / "ws",
             pr_creator=_stub_pr_creator,
@@ -176,7 +185,7 @@ class TestHappyPath:
         assert result.teardown_ok is True
         # PR creator called with the contract base branch.
         assert len(_stub_pr_creator.calls) == 1
-        assert _stub_pr_creator.calls[0]["base_branch"] == "feature/latest2"
+        assert _stub_pr_creator.calls[0]["base_branch"] == "origin/main"
 
     def test_as_dict_returns_json_friendly_payload(
         self, fresh_git_repo: Path, task: dict, tmp_path: Path,

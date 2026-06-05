@@ -11,12 +11,12 @@ executor is how we enforce the rule in code, not just in docs.
 Sequence (see ``ai_coder_instructions.md:152-182``):
 
     1.  Caller hands us the claimed Task Hub item.
-    2.  We provision a fresh worktree off ``feature/latest2``.
+    2.  We provision a fresh worktree off ``origin/main``.
     3.  Caller's ``patch_fn`` writes changes inside the worktree only.
     4.  We compile() every modified ``.py`` and revert + abort on failure.
     5.  We run a targeted test pass and revert + abort on failure.
     6.  We commit + push to ``<bot>/<task_id>``.
-    7.  We open a PR targeting ``feature/latest2``.
+    7.  We open a PR targeting ``main``.
     8.  Any failure in 3-7 reverts the worktree and tears it down.
 
 Failure modes are reported via :class:`MissionResult` rather than raised,
@@ -187,7 +187,7 @@ def default_pr_creator(
     but targets the tier-2 contract instead of the docs-PR flow:
 
     * branch name is caller-supplied (``<bot>/<task_id>``)
-    * PR target is caller-supplied (``feature/latest2`` by default)
+    * PR target is caller-supplied (``main`` by default)
     * NEVER auto-merges. The contract requires human review.
     """
 
@@ -292,7 +292,7 @@ def execute_autonomous_mission(
     task: Mapping[str, Any],
     patch_fn: PatchFn,
     bot_name: str,
-    base_branch: str = "feature/latest2",
+    base_branch: str = "origin/main",
     repo_root: Path | None = None,
     workspace_root: Path | None = None,
     pr_creator: PRCreator | None = None,

@@ -118,7 +118,7 @@ def provision_worktree(
     *,
     bot_name: str,
     task_id: str,
-    base_branch: str = "feature/latest2",
+    base_branch: str = "origin/main",
     repo_root: Path | None = None,
     workspace_root: Path | None = None,
 ) -> WorktreeProvisionResult:

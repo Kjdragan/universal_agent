@@ -12330,13 +12330,11 @@ def _read_heartbeat_state(workspace_dir: str) -> Optional[dict]:
 def _heartbeat_interval_source_label() -> str:
     if str(os.getenv("UA_HEARTBEAT_INTERVAL") or "").strip():
         return "UA_HEARTBEAT_INTERVAL"
-    if str(os.getenv("UA_HEARTBEAT_EVERY") or "").strip():
-        return "UA_HEARTBEAT_EVERY"
     return "default"
 
 
 def _heartbeat_runtime_interval_config() -> dict[str, Any]:
-    interval_raw = _resolve_hb_interval_env(prefer_interval=True) or ""
+    interval_raw = _resolve_hb_interval_env() or ""
     min_interval_seconds = _resolve_hb_min_interval_seconds(default=HEARTBEAT_MIN_INTERVAL_SECONDS)
     configured_every_seconds = _parse_heartbeat_duration_seconds(
         interval_raw or None,
@@ -14906,7 +14904,6 @@ async def lifespan(app: FastAPI):
                 _ensure_nightly_wiki_cron_job()
                 _ensure_morning_briefing_cron_job()
                 _ensure_evening_briefing_cron_job()
-                _ensure_hourly_insight_email_cron_job()
                 _ensure_hourly_intel_digest_cron_job()
                 _ensure_insight_scoring_health_cron_job()
                 _ensure_proactive_report_morning_cron_job()
@@ -18875,7 +18872,7 @@ def _ensure_codie_proactive_cleanup_cron_job() -> Optional[dict[str, Any]]:
         "user_id": "system",
         "workspace_dir": workspace_dir,
         "command": "!script universal_agent.scripts.codie_cleanup_enqueue",
-        "description": "Queue one low-to-medium complexity CODIE cleanup task into Task Hub; execution must end in a PR to develop or a no-PR artifact.",
+        "description": "Queue one low-to-medium complexity CODIE cleanup task into Task Hub; execution must end in a PR to main or a no-PR artifact.",
         "cron_expr": cron_expr,
         "timezone": timezone_name,
         "enabled": True,
@@ -19552,29 +19549,6 @@ def _ensure_evening_briefing_cron_job() -> Optional[dict[str, Any]]:
         cron_env_var="UA_EVENING_BRIEFING_CRON",
         timezone_env_var="UA_EVENING_BRIEFING_TIMEZONE",
         required_secrets=["UA_OPS_TOKEN"],
-    )
-
-
-def _ensure_hourly_insight_email_cron_job() -> Optional[dict[str, Any]]:
-    """Register the top-of-hour insight-delivery email cron.
-
-    Schedule: ``0 6-21 * * *`` America/Chicago — top of every active-window
-    hour (6 AM – 9 PM Houston, last fire 21:00). Content-generation work, so
-    it respects the dormancy default (no 22:00–05:00 fires). The hourly cron
-    is the structural replacement for Simone's per-brief email loop —
-    flipping ``UA_INSIGHT_HOURLY_EMAIL_ENABLED=0`` is the canonical pause
-    lever for hourly intel without affecting upstream convergence detection.
-    """
-    return _register_system_cron_job(
-        system_job="hourly_insight_email",
-        default_cron="0 6-21 * * *",
-        default_timezone="America/Chicago",
-        command="!script universal_agent.scripts.hourly_insight_email",
-        description="Hourly diversified insight-delivery email (replaces Simone per-brief loop).",
-        timeout_seconds=300,
-        enabled=_proactive_cron_enabled("UA_INSIGHT_HOURLY_EMAIL_ENABLED", default="0"),  # PR D: disabled by default — Simone /hourly-intel-digest skill replaces this. Flip env to "1" to re-enable the legacy cron.
-        cron_env_var="UA_INSIGHT_HOURLY_EMAIL_CRON",
-        timezone_env_var="UA_INSIGHT_HOURLY_EMAIL_TIMEZONE",
     )
 
 
