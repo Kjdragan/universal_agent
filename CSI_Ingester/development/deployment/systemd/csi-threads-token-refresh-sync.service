@@ -6,6 +6,11 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 WorkingDirectory=/opt/universal_agent/CSI_Ingester/development
+# /opt/universal_agent/.env carries the INFISICAL_* creds the refresh script
+# requires (it exit 2's on missing_INFISICAL_*). Load it first, mirroring the
+# healthy CSI units (e.g. csi-rss-semantic-enrich.service); csi-ingester.env has
+# no INFISICAL_* keys, so without this line the script always failed.
+EnvironmentFile=-/opt/universal_agent/.env
 EnvironmentFile=-/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.env
 ExecStart=/opt/universal_agent/CSI_Ingester/development/scripts/csi_threads_token_refresh_sync.sh
 

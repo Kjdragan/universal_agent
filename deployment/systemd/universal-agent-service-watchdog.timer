@@ -2,8 +2,12 @@
 Description=Run Universal Agent Service Watchdog every 30 seconds
 
 [Timer]
-OnBootSec=30s
-OnUnitActiveSec=30s
+# OnCalendar gives an independent wall-clock anchor so the timer always has a
+# finite NextElapse. The previous monotonic-only anchors (OnBootSec +
+# OnUnitActiveSec) lost their re-arm reference after a deploy daemon-reload and
+# went NextElapse=infinity (dead ~54 days, 2026-04-11 → 2026-06-04). Every-30s
+# watchdog cadence; Persistent=true now meaningful (catches missed fires).
+OnCalendar=*:*:0/30
 AccuracySec=5s
 Unit=universal-agent-service-watchdog.service
 Persistent=true

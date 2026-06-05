@@ -122,7 +122,11 @@ def _score_threads_terms(conn, lookback_days: int) -> dict[str, dict]:
 
 def run_assessment(db_path: str, lookback_days: int, dry_run: bool = False) -> dict:
     """Run quality assessment across all source types."""
-    conn = connect(db_path)
+    # connect() expects a Path (its first line does db_path.parent.mkdir). The
+    # unit passes --db-path / CSI_DB_PATH as a plain str, so coerce here — this
+    # script is the lone str-caller; all other connect() callers already pass a
+    # Path. Without this the service crashed with AttributeError every daily run.
+    conn = connect(Path(db_path))
     ensure_schema(conn)
 
     results = {

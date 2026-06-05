@@ -2,8 +2,11 @@
 Description=Run Universal Agent OOM Alert Notifier every minute
 
 [Timer]
-OnBootSec=45s
-OnUnitActiveSec=60s
+# OnCalendar wall-clock anchor (was monotonic-only OnBootSec + OnUnitActiveSec,
+# which went NextElapse=infinity after a deploy daemon-reload — dead ~19 days,
+# 2026-05-16 → 2026-06-04). Every-minute OOM-alert cadence; Persistent=true now
+# meaningful (catches missed fires after downtime).
+OnCalendar=minutely
 AccuracySec=10s
 Unit=universal-agent-oom-alert.service
 Persistent=true

@@ -6,6 +6,7 @@ subsystem: ops-vps-recovery
 code_paths:
   - scripts/vps_service_watchdog.sh
   - scripts/install_vps_service_watchdog.sh
+  - scripts/install_vps_oom_alert.sh
   - scripts/watchdog_oom_notifier.py
   - scripts/vps_health_check.sh
   - src/universal_agent/process_heartbeat.py
@@ -14,7 +15,7 @@ code_paths:
   - deployment/systemd/universal-agent-oom-alert.service
   - deployment/systemd/universal-agent-oom-alert.timer
   - deployment/systemd/templates/universal-agent-gateway.service.template
-last_verified: 2026-05-29
+last_verified: 2026-06-04
 ---
 
 # VPS Recovery & Security
@@ -74,8 +75,24 @@ fires.
 
 | Unit | File | Behavior |
 |---|---|---|
-| `universal-agent-service-watchdog.timer` | `deployment/systemd/universal-agent-service-watchdog.timer` | `OnBootSec=30s`, `OnUnitActiveSec=30s`, `AccuracySec=5s`, `Persistent=true` — runs every ~30s |
+| `universal-agent-service-watchdog.timer` | `deployment/systemd/universal-agent-service-watchdog.timer` | `OnCalendar=*:*:0/30` (every ~30s), `AccuracySec=5s`, `Persistent=true` — wall-clock anchor so `NextElapse` is never `infinity` (see the dead-timer gotcha below) |
 | `universal-agent-service-watchdog.service` | `deployment/systemd/universal-agent-service-watchdog.service` | `Type=oneshot`, loads `-/opt/universal_agent/.env`, runs the script |
+
+> **Dead-timer drift (fixed 2026-06-04) — why `OnCalendar`, not `OnUnitActiveSec`.**
+> Both safety-net timers (`…-service-watchdog.timer` and `…-oom-alert.timer`) were
+> originally **monotonic-only** (`OnBootSec` + `OnUnitActiveSec`, no `OnCalendar`).
+> `OnUnitActiveSec` re-arms relative to the unit's *last activation*; the frequent
+> deploy `systemctl daemon-reload` (~19/day) reset that monotonic baseline while
+> nothing in the deploy path re-`enable --now`'d the timers, so the next-fire
+> reference was lost and `systemctl show … -p NextElapseUSecMonotonic` resolved to
+> `infinity` — **dead, with no scheduled fire** (watchdog dark from 2026-04-11,
+> oom-alert from 2026-05-16). `Persistent=true` could not help: it only catches
+> missed *calendar* events, of which a monotonic timer has none. The fix is
+> two-part: (1) the `.timer` units now use `OnCalendar` (`*:*:0/30` for the
+> watchdog, `minutely` for oom-alert), which always yields a finite wall-clock
+> `NextElapse` and survives `daemon-reload`; and (2) the deploy now re-runs both
+> dedicated installers every time (see "Install / update" below), re-`enable
+> --now`ing the timers on every deploy as belt-and-suspenders.
 
 Per cycle, for each configured service (`check_service`):
 
@@ -185,7 +202,8 @@ check fires first on a clean stop, so the deletion is mostly belt-and-braces.
 ### Layer 3 — the OOM alert notifier (memory kills)
 
 `scripts/watchdog_oom_notifier.py`, driven by `universal-agent-oom-alert.timer`
-(`OnBootSec=45s`, `OnUnitActiveSec=60s` — every ~60s). This is a **notification**
+(`OnCalendar=minutely` — every 60s; see the dead-timer gotcha under Layer 2 for
+why this is `OnCalendar` and not the original `OnUnitActiveSec`). This is a **notification**
 path, not a recovery path: it does not restart anything. systemd Layer 1 already
 revives an OOM-killed gateway; this layer tells the operator it happened.
 
@@ -210,26 +228,30 @@ notifier returns non-zero — so an unset ops token silently disables OOM alerti
 
 ---
 
-## Install / update the watchdog
+## Install / update the watchdog + OOM-alert timers
 
-Run on the VPS as root (`install_vps_service_watchdog.sh` enforces `EUID==0`):
+Each safety-net timer has its **own** dedicated root installer (both enforce
+`EUID==0`): `scripts/install_vps_service_watchdog.sh` and
+`scripts/install_vps_oom_alert.sh`. Each verifies its script + both unit files
+exist under `APP_ROOT` (default `/opt/universal_agent`), `chmod 0755`s the
+script, installs the units to `/etc/systemd/system` with `0644`,
+`daemon-reload`s, then `enable --now`s the timer. The watchdog installer also
+starts one immediate cycle; the OOM installer starts its one-shot only once the
+gateway health endpoint answers (it retries, then skips — the timer validates on
+its next fire regardless).
+
+**The deploy runs both installers automatically.** `scripts/deploy/remote_deploy.sh`
+invokes `install_vps_service_watchdog.sh` and `install_vps_oom_alert.sh` (each
+behind a non-fatal `|| echo WARN` guard) in its systemd-install block on every
+deploy. This is what re-`enable --now`s the `OnCalendar` timers each deploy and
+is the durable half of the dead-timer fix above. To (re)install manually on the
+VPS:
 
 ```bash
 cd /opt/universal_agent
-bash scripts/install_vps_service_watchdog.sh
+sudo bash scripts/install_vps_service_watchdog.sh
+sudo bash scripts/install_vps_oom_alert.sh
 ```
-
-The installer verifies the script + both unit files exist under
-`APP_ROOT` (default `/opt/universal_agent`), `chmod 0755` the script, installs
-the units to `/etc/systemd/system` with `0644`, `daemon-reload`s, then
-`enable --now` the timer and starts one immediate cycle.
-
-> [VERIFY: there is **no** installer script for the OOM-alert units in
-> `scripts/`. The `universal-agent-oom-alert.{service,timer}` files exist under
-> `deployment/systemd/` but I found no automated installer/deploy step that
-> places them in `/etc/systemd/system`. Confirm how OOM-alert units reach the
-> VPS — likely a manual `install`/`systemctl enable` or a deploy step outside
-> the files I read.]
 
 ---
 
