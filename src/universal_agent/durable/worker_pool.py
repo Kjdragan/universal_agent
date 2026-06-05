@@ -41,6 +41,34 @@ from universal_agent.run_workspace import ensure_run_workspace_scaffold
 logger = logging.getLogger(__name__)
 
 
+# --- Durable run / attempt lifecycle status values -------------------------
+# These are the status strings the worker pool writes to the durable run-state
+# machine (via state.update_run_status / create_run_attempt / update_run_attempt
+# and run_workspace.ensure_run_workspace_scaffold). Scoped to the run/attempt
+# lifecycle only — NOT the VP-mission or runtime-registration status vocabularies
+# (those overload the same string values in a different domain).
+RUN_STATUS_QUEUED = "queued"
+RUN_STATUS_RUNNING = "running"
+RUN_STATUS_COMPLETED = "completed"
+RUN_STATUS_FAILED = "failed"
+
+# --- Worker pool timing / sizing tunables ----------------------------------
+# Hex suffix length for generated worker ids (worker_<8 hex chars>).
+_WORKER_ID_SUFFIX_LEN = 8
+# Seconds to wait between drain polls while a worker finishes its current run.
+_DRAIN_POLL_SECONDS = 1
+# Backoff after an unexpected error in the heartbeat / process loops.
+_LOOP_ERROR_BACKOFF_SECONDS = 5
+# Max queued runs fetched per processing-loop poll.
+_QUEUE_POLL_LIMIT = 10
+# Max queued runs scanned per monitor-loop queue-depth check.
+_QUEUE_DEPTH_SCAN_LIMIT = 100
+# Monitor loop cadence (also the backoff after a monitor-loop error).
+_MONITOR_INTERVAL_SECONDS = 10
+# Cadence at which run_worker_pool logs pool stats.
+_POOL_STATS_LOG_INTERVAL_SECONDS = 60
+
+
 class WorkerStatus(str, Enum):
     IDLE = "idle"
     PROCESSING = "processing"
@@ -51,7 +79,7 @@ class WorkerStatus(str, Enum):
 @dataclass
 class WorkerConfig:
     """Configuration for a worker in the pool."""
-    worker_id: str = field(default_factory=lambda: f"worker_{uuid.uuid4().hex[:8]}")
+    worker_id: str = field(default_factory=lambda: f"worker_{uuid.uuid4().hex[:_WORKER_ID_SUFFIX_LEN]}")
     lease_ttl_seconds: int = 60
     heartbeat_interval_seconds: int = 15
     poll_interval_seconds: int = 5
@@ -122,7 +150,7 @@ class Worker:
             self.state.status = WorkerStatus.DRAINING
             # Wait for current run to complete
             while self.state.current_run_id:
-                await asyncio.sleep(1)
+                await asyncio.sleep(_DRAIN_POLL_SECONDS)
         
         self._shutdown_event.set()
         self.state.status = WorkerStatus.STOPPED
@@ -177,18 +205,20 @@ class Worker:
                 break
             except Exception as e:
                 logger.error(f"Worker {self.config.worker_id} heartbeat error: {e}")
-                await asyncio.sleep(5)
+                await asyncio.sleep(_LOOP_ERROR_BACKOFF_SECONDS)
 
     async def _process_loop(self) -> None:
         """Main loop: poll for work, acquire lease, process, release."""
         while not self._shutdown_event.is_set():
             try:
                 if self.state.status == WorkerStatus.DRAINING:
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(_DRAIN_POLL_SECONDS)
                     continue
-                
+
                 # Poll for queued runs
-                queued_runs = list_runs_with_status(self.conn, ["queued"], limit=10)
+                queued_runs = list_runs_with_status(
+                    self.conn, [RUN_STATUS_QUEUED], limit=_QUEUE_POLL_LIMIT
+                )
                 
                 for run_row in queued_runs:
                     if self._shutdown_event.is_set():
@@ -230,14 +260,14 @@ class Worker:
                                 attempt_id = create_run_attempt(
                                     self.conn,
                                     run_id,
-                                    status="running",
+                                    status=RUN_STATUS_RUNNING,
                                     lease_owner=self.config.worker_id,
                                 )
                             else:
                                 update_run_attempt(
                                     self.conn,
                                     attempt_id,
-                                    status="running",
+                                    status=RUN_STATUS_RUNNING,
                                     lease_owner=self.config.worker_id,
                                 )
                             attempt_row = get_run_attempt(self.conn, attempt_id)
@@ -247,7 +277,7 @@ class Worker:
                                     run_id=run_id,
                                     attempt_id=attempt_id,
                                     attempt_number=int(attempt_row["attempt_number"] or 0),
-                                    status="running",
+                                    status=RUN_STATUS_RUNNING,
                                     run_kind=str(run["run_kind"] or "") if run else None,
                                     trigger_source=str(run["trigger_source"] or "") if run else None,
                                 )
@@ -256,11 +286,11 @@ class Worker:
                             success = await self.run_handler(run_id, workspace_dir)
                             
                             if success:
-                                update_run_status(self.conn, run_id, "completed")
+                                update_run_status(self.conn, run_id, RUN_STATUS_COMPLETED)
                                 update_run_attempt(
                                     self.conn,
                                     attempt_id,
-                                    status="completed",
+                                    status=RUN_STATUS_COMPLETED,
                                     lease_owner=None,
                                     lease_expires_at=None,
                                 )
@@ -271,18 +301,18 @@ class Worker:
                                         run_id=run_id,
                                         attempt_id=attempt_id,
                                         attempt_number=int(attempt_row["attempt_number"] or 0),
-                                        status="completed",
+                                        status=RUN_STATUS_COMPLETED,
                                         run_kind=str(run["run_kind"] or "") if run else None,
                                         trigger_source=str(run["trigger_source"] or "") if run else None,
                                     )
                                 self.state.runs_completed += 1
                                 logger.info(f"Worker {self.config.worker_id} completed run {run_id}")
                             else:
-                                update_run_status(self.conn, run_id, "failed")
+                                update_run_status(self.conn, run_id, RUN_STATUS_FAILED)
                                 update_run_attempt(
                                     self.conn,
                                     attempt_id,
-                                    status="failed",
+                                    status=RUN_STATUS_FAILED,
                                     failure_class="run_handler_failed",
                                     failure_reason="Worker run handler returned False",
                                     lease_owner=None,
@@ -295,7 +325,7 @@ class Worker:
                                         run_id=run_id,
                                         attempt_id=attempt_id,
                                         attempt_number=int(attempt_row["attempt_number"] or 0),
-                                        status="failed",
+                                        status=RUN_STATUS_FAILED,
                                         run_kind=str(run["run_kind"] or "") if run else None,
                                         trigger_source=str(run["trigger_source"] or "") if run else None,
                                     )
@@ -304,12 +334,12 @@ class Worker:
                         
                         except Exception as e:
                             logger.error(f"Worker {self.config.worker_id} error processing run {run_id}: {e}")
-                            update_run_status(self.conn, run_id, "failed")
+                            update_run_status(self.conn, run_id, RUN_STATUS_FAILED)
                             if "attempt_id" in locals() and attempt_id:
                                 update_run_attempt(
                                     self.conn,
                                     attempt_id,
-                                    status="failed",
+                                    status=RUN_STATUS_FAILED,
                                     failure_class="worker_exception",
                                     failure_reason=str(e),
                                     lease_owner=None,
@@ -322,7 +352,7 @@ class Worker:
                                         run_id=run_id,
                                         attempt_id=attempt_id,
                                         attempt_number=int(attempt_row["attempt_number"] or 0),
-                                        status="failed",
+                                        status=RUN_STATUS_FAILED,
                                         run_kind=str(run["run_kind"] or "") if run else None,
                                         trigger_source=str(run["trigger_source"] or "") if run else None,
                                     )
@@ -341,7 +371,7 @@ class Worker:
                 break
             except Exception as e:
                 logger.error(f"Worker {self.config.worker_id} process loop error: {e}")
-                await asyncio.sleep(5)
+                await asyncio.sleep(_LOOP_ERROR_BACKOFF_SECONDS)
 
 
 class WorkerPoolManager:
@@ -416,7 +446,7 @@ class WorkerPoolManager:
     async def _spawn_worker(self) -> Worker:
         """Spawn a new worker."""
         config = WorkerConfig(
-            worker_id=f"worker_{uuid.uuid4().hex[:8]}",
+            worker_id=f"worker_{uuid.uuid4().hex[:_WORKER_ID_SUFFIX_LEN]}",
             lease_ttl_seconds=self.worker_config_template.lease_ttl_seconds,
             heartbeat_interval_seconds=self.worker_config_template.heartbeat_interval_seconds,
             poll_interval_seconds=self.worker_config_template.poll_interval_seconds,
@@ -445,7 +475,9 @@ class WorkerPoolManager:
         while not self._shutdown_event.is_set():
             try:
                 # Check queue depth
-                queued_runs = list_runs_with_status(self.conn, ["queued"], limit=100)
+                queued_runs = list_runs_with_status(
+                    self.conn, [RUN_STATUS_QUEUED], limit=_QUEUE_DEPTH_SCAN_LIMIT
+                )
                 queue_depth = len(queued_runs)
                 
                 active_workers = len([
@@ -479,14 +511,14 @@ class WorkerPoolManager:
                         await self._remove_worker(worker_id)
                         if len(self.workers) < self.pool_config.min_workers:
                             await self._spawn_worker()
-                
-                await asyncio.sleep(10)
-            
+
+                await asyncio.sleep(_MONITOR_INTERVAL_SECONDS)
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"Worker pool monitor error: {e}")
-                await asyncio.sleep(10)
+                await asyncio.sleep(_MONITOR_INTERVAL_SECONDS)
 
     async def _default_run_handler(self, run_id: str, workspace_dir: str) -> bool:
         """Default run handler using gateway."""
@@ -573,7 +605,7 @@ def queue_run(
         run_id=run_id,
         entrypoint="worker_pool",
         run_spec=run_spec,
-        status="queued",
+        status=RUN_STATUS_QUEUED,
         last_job_prompt=prompt,
         max_iterations=max_iterations,
         workspace_dir=workspace_dir,
@@ -583,7 +615,7 @@ def queue_run(
     attempt_id = create_run_attempt(
         conn,
         run_id=run_id,
-        status="queued",
+        status=RUN_STATUS_QUEUED,
         retry_reason="initial_queue",
     )
     attempt_row = get_run_attempt(conn, attempt_id)
@@ -593,7 +625,7 @@ def queue_run(
             run_id=run_id,
             attempt_id=attempt_id,
             attempt_number=int(attempt_row["attempt_number"] or 0),
-            status="queued",
+            status=RUN_STATUS_QUEUED,
             run_kind="worker_pool",
             trigger_source="worker_pool_queue",
         )
@@ -622,7 +654,7 @@ async def run_worker_pool(
         
         # Wait for shutdown signal
         while True:
-            await asyncio.sleep(60)
+            await asyncio.sleep(_POOL_STATS_LOG_INTERVAL_SECONDS)
             stats = pool.get_pool_stats()
             logger.info(f"Pool stats: {stats}")
     
