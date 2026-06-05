@@ -1,0 +1,33 @@
+[Unit]
+Description=Universal Agent vault contradiction lint sweep (S5 Phase A batch 1 — deploy-independent monthly timer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ua
+Group=ua
+WorkingDirectory=/opt/universal_agent
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/universal_agent/src
+Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
+# Secrets-bootstrap backstop (mirrors universal-agent-proactive-health). .env
+# (loaded below) OVERRIDES these inline vars when present; they only matter if
+# .env is absent. vault_contradiction_lint.main() calls
+# initialize_runtime_secrets() itself, and the sweep is pure FS/yaml/regex with
+# NO LLM/mail/DB — so it self-bootstraps and needs no inherited gateway env. The
+# inline profile vars guarantee that bootstrap resolves the `vps` profile rather
+# than defaulting to local_workstation if .env were ever missing.
+Environment=UA_DEPLOYMENT_PROFILE=vps
+Environment=UA_INFISICAL_ENABLED=1
+Environment=INFISICAL_ENVIRONMENT=production
+EnvironmentFile=-/opt/universal_agent/.env
+# Report-only sweep across enabled intel lanes; writes a markdown report per
+# lane under resolve_artifacts_dir()/knowledge-vaults/<slug>/lint/. Exits 0
+# regardless of finding count; exit 2 only on programmer error (no enabled
+# lanes / unknown lane).
+ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.scripts.vault_contradiction_lint
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

@@ -7,7 +7,9 @@ code_paths:
   - src/universal_agent/cron_service.py
   - src/universal_agent/gateway_server.py
   - src/universal_agent/task_hub.py
-last_verified: 2026-06-03
+  - deployment/systemd/
+  - scripts/install_vps_phase_a_batch1_timers.sh
+last_verified: 2026-06-05
 ---
 
 # Cron & Scheduling
@@ -19,11 +21,46 @@ subprocess), and **one-shot reminders** (`run_at`). It is implemented in a
 single module, `cron_service.py`, plus a set of idempotent
 `_ensure_<job>_cron_job()` registration helpers in `gateway_server.py`.
 
-There is no OS-level crontab and no separate scheduler process — everything
-ticks off an asyncio loop in the gateway. That is the single most important
-fact about this subsystem: a cron tick that does heavyweight synchronous work
-can stall the gateway event loop, which is why the deploy-window, lightweight,
-and `to_thread` mitigations described below exist.
+Most jobs tick off an asyncio loop in the gateway — there is no OS-level
+crontab for them and no separate scheduler process. That is the single most
+important fact about this subsystem: a cron tick that does heavyweight
+synchronous work can stall the gateway event loop, which is why the
+deploy-window, lightweight, and `to_thread` mitigations described below exist.
+
+**Exception — jobs migrated to systemd timers.** A bounded set of slot-critical
+deterministic jobs has been migrated OFF the in-process loop onto
+deploy-independent `systemd` `OnCalendar`+`Persistent` timers (ADR
+`project_docs/06_platform/08_scheduling_substrate_adr.md`, Decision 1 / Phase A).
+Those do not tick off the gateway loop — see
+[Systemd timers vs in-process crons](#systemd-timers-vs-in-process-crons) below.
+
+## Systemd timers vs in-process crons
+
+The in-process loop loses 17–49% of fires to the ~19 daily deploy restarts; a
+daily/weekly/monthly slot landing inside a deploy window is silently dropped.
+For slot-critical deterministic jobs that is unacceptable, so they run as
+`systemd` timers instead — the OS replays a slot missed inside a deploy window
+(`Persistent=true`) and the per-deploy `daemon-reload` re-arms them
+(`OnCalendar` wall-clock anchor; a monotonic timer would go
+`NextElapse=infinity`).
+
+**Migrated so far (S5 Phase A, batch 1):** `scratch_pruning`,
+`vault_lint_contradictions`, `architecture_canvas_drift`, `insight_scoring_health`,
+`vp_coder_workspace_pruning`. Units are
+`deployment/systemd/universal-agent-<job>.{timer,service}`, installed by
+`scripts/install_vps_phase_a_batch1_timers.sh` (wired into
+`scripts/deploy/remote_deploy.sh`).
+
+**No double-fire.** A migrated job's in-process registration is forced disabled
+so the timer is the sole firer. `gateway_server.py::_is_migrated_to_systemd`
+(backed by the `gateway_server.py::_SYSTEMD_MIGRATED_SYSTEM_JOBS` frozenset) is
+ANDed into each `_ensure_*_cron_job()`'s `enabled=` arg, so
+`gateway_server.py::_register_system_cron_job` flips the persisted `cron_jobs.json`
+row to disabled on **every** gateway boot (it does not silently re-enable).
+Rollback without a redeploy: set `UA_SYSTEMD_TIMER_MIGRATION_DISABLED=1` and
+restart the gateway (then disable the timers); per-job rollback = remove the
+job from the frozenset. Stay-in-process (NOT migrated): the minute/15m/30m loops
+and the live-agent prompt jobs.
 
 ## Components
 

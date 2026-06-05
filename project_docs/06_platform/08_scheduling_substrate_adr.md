@@ -25,7 +25,11 @@ last_verified: 2026-06-05
 > **ADR status: PARTIALLY IMPLEMENTED.** Phases **B** (Mission Control sweeper
 > service, #749) and **C** (proactive-health timer + delivery contract) have
 > **shipped** — see their **As-built** notes in Decision 2 / Decision 3 and the
-> migration-phases section. Phases **A** (deterministic jobs → timers) and **D**
+> migration-phases section. Phase **A** (deterministic jobs → timers) is now
+> **partially implemented**: **batch 1** (the 5 low-blast-radius maintenance/audit
+> jobs `scratch_pruning`, `vault_lint_contradictions`, `architecture_canvas_drift`,
+> `insight_scoring_health`, `vp_coder_workspace_pruning`) has **shipped** — see the
+> **As-built** note under Phase A. Phase A batches 2–4 and Phase **D**
 > (report/AM-product consolidation + stray-writer DB root-cause) remain
 > **PROPOSED**, gated on the operator decision points in the final section. The
 > original design intent below is preserved; the As-built notes record where the
@@ -156,12 +160,12 @@ Legend — **Substrate**: `systemd` = `OnCalendar`+`Persistent` timer (migrate);
 | 3a3693d74e | proactive_report_morning | `5 7` | det | daily | **systemd** | keep as the surviving report (Decision 4) |
 | 0c55a85ebf | proactive_report_midday | `5 12` | det | daily | **drop** | consolidate — over-frequent (Decision 4) |
 | f143a79e94 | proactive_report_afternoon | `5 16` | det | daily | **systemd / drop** | keep only if operator wants 2× (Decision 4) |
-| c6d41e434e | scratch_pruning | `0 7` | det | daily | **systemd** | maintenance; benign but deploy-independent is cleaner |
+| c6d41e434e | scratch_pruning | `0 7` | det | daily | **systemd ✅ migrated (batch 1)** | maintenance; benign but deploy-independent is cleaner |
 | 6321bde1a9 | codie_proactive_cleanup | `30 1` | det (enqueue) | daily | **systemd** | the enqueue is deterministic; Cody executes downstream |
-| df1def4ad2 | vault_lint_contradictions | `0 7 1 * *` | det | monthly | **systemd** | strongest `Persistent` case — a lost monthly slot = a lost month |
-| 73767a8730 | architecture_canvas_drift | `30 6 * * 1` | det | weekly | **systemd** | weekly product |
-| c8061c36c9 | insight_scoring_health | `0 8 * * 0` | det | weekly | **systemd** | weekly calibration audit |
-| 6d29a53e64 | vp_coder_workspace_pruning | `5 17 * * 0` | det | weekly | **systemd** | weekly maintenance |
+| df1def4ad2 | vault_lint_contradictions | `0 7 1 * *` | det | monthly | **systemd ✅ migrated (batch 1)** | strongest `Persistent` case — a lost monthly slot = a lost month |
+| 73767a8730 | architecture_canvas_drift | `30 6 * * 1` | det | weekly | **systemd ✅ migrated (batch 1)** | weekly product |
+| c8061c36c9 | insight_scoring_health | `0 8 * * 0` | det | weekly | **systemd ✅ migrated (batch 1)** | weekly calibration audit |
+| 6d29a53e64 | vp_coder_workspace_pruning | `5 17 * * 0` | det | weekly | **systemd ✅ migrated (batch 1)** | weekly maintenance |
 | 9ad58b493f | csi_demo_triage_rank | `5 10,15` | det (LLM API) | 2×/day | **systemd** | LLM via API key, not agent runtime; slot-bearing |
 | 6f661208f8 | intel_auto_promoter | `35 10,15` | det | 2×/day | **systemd** | promotes triage output; capped/day |
 | 013f433539 | hourly_intel_digest | `0 6-21` | det | hourly | **systemd** | content-hourly, ~3 hrs/day lost today; "LLM-independent path" by design |
@@ -437,18 +441,55 @@ flowchart LR
 > blocker to *authoring* a phase, but the phases assume specific S1–S4 fixes have
 > landed (called out below).**
 
-### Phase A — Migrate slot-critical deterministic jobs → systemd timers
+### Phase A — Migrate slot-critical deterministic jobs → systemd timers ✅ PARTIALLY IMPLEMENTED (batch 1)
 - **What moves:** the 19 `systemd`-tagged jobs in the Decision-1 table become
   `.service` + `.timer` pairs (`OnCalendar`, `Persistent=true`, `RandomizedDelaySec`),
   installed by a deploy-wired installer that follows the
   `scripts/install_uv_cache_prune_timer.sh` precedent. The matching rows in
   `cron_jobs.json` are disabled (not deleted) so rollback is a flag flip.
-- **Rollback:** disable the timer, re-enable the `cron_jobs.json` row — the cron
-  registration code is untouched, so reversal is config-only and instant.
+- **Rollback:** disable the timer, re-enable the in-process registration — the
+  cron registration code path is preserved, so reversal is config-only and instant.
 - **S1–S4 relationship:** **assumes S2 landed** — S2 establishes the pattern of
   wiring a timer installer into `scripts/deploy/remote_deploy.sh` (and fixes the
   `EnvironmentFile` secret-loading the migrated secret-bearing jobs depend on).
   Independent of S1/S3/S4. Does **not** re-do S2's watchdog/oom fixes.
+
+> **As-built — batch 1 (5 jobs, this PR).** The first sub-batch migrated the 5
+> low-blast-radius maintenance/audit jobs (`scratch_pruning`,
+> `vault_lint_contradictions`, `architecture_canvas_drift`,
+> `insight_scoring_health`, `vp_coder_workspace_pruning`), establishing the
+> reusable per-job recipe later batches reuse. Two design intents were refined:
+>
+> 1. **Double-fire prevention is a code gate, not a `cron_jobs.json` flip.** A
+>    one-off `enabled:false` in `cron_jobs.json` does **not** stick, because
+>    `gateway_server.py::_register_system_cron_job` re-applies each job's
+>    env-gated `enabled` default on every gateway boot. So the durable disable is
+>    `gateway_server.py::_is_migrated_to_systemd` (backed by the
+>    `_SYSTEMD_MIGRATED_SYSTEM_JOBS` frozenset), ANDed into each
+>    `_ensure_*_cron_job()`'s `enabled=` arg → `_register_system_cron_job(enabled=False)`
+>    flips/keeps the row disabled every boot. Rollback is the
+>    `UA_SYSTEMD_TIMER_MIGRATION_DISABLED=1` env flag (global) or removing a job
+>    from the frozenset (per-job) + disabling the timer.
+> 2. **Per-job secret-bootstrap audit (cross-process trap).** An in-process cron
+>    subprocess inherits the gateway's loaded Infisical env; a systemd oneshot
+>    does not. Of the 5, only `insight_scoring_health` touches Infisical-resolved
+>    secrets (LLM + AgentMail + DB) — its `initialize_runtime_secrets(profile="local_workstation")`
+>    was changed to `initialize_runtime_secrets()` so the unit's
+>    `UA_DEPLOYMENT_PROFILE=vps` backstop drives a strict production load (mirrors
+>    `services/proactive_health_timer_main.py`). The other 4 are pure FS/git/yaml
+>    with no Infisical dependency (`vault_contradiction_lint` already self-bootstraps).
+>    `vp_coder_workspace_pruning` is a verified no-op in prod today
+>    (`UA_VP_CODER_WORKSPACE_ROOT` unset) and no-ops identically under systemd.
+>
+> Units live in `deployment/systemd/universal-agent-<job>.{timer,service}`,
+> installed by `scripts/install_vps_phase_a_batch1_timers.sh` (wired into
+> `scripts/deploy/remote_deploy.sh`). The VPS runs systemd 255, so the timers use
+> the `OnCalendar=… America/Chicago` TZ-suffix form (DST handled by systemd, no
+> UTC conversion). Guard: `tests/unit/test_phase_a_batch1_timers.py`. Note:
+> `architecture_canvas_drift_check` returns exit 1 on pointer drift, so its
+> oneshot enters `failed` on a genuine finding (by-design signal, mirrors the old
+> failed-tick; deliberately NOT in the is-active watchdog specs so it can't
+> false-page).
 
 ### Phase B — Extract the Mission Control sweeper to its own service ✅ IMPLEMENTED
 - **What moves:** `run_sweeper_loop` leaves the gateway lifespan and becomes

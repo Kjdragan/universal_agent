@@ -1,0 +1,35 @@
+[Unit]
+Description=Universal Agent scratchpad pruning (S5 Phase A batch 1 — deploy-independent daily timer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ua
+Group=ua
+WorkingDirectory=/opt/universal_agent
+# Mirror the gateway/proactive-health base runtime env so `universal_agent`
+# resolves from the repo src/ tree (it is NOT installed in site-packages) and
+# pydantic's logfire plugin stays disabled.
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/universal_agent/src
+Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
+# Secrets-bootstrap backstop (mirrors universal-agent-proactive-health). The
+# deploy-bootstrapped .env loaded below is authoritative and per systemd
+# semantics EnvironmentFile= OVERRIDES Environment= regardless of order, so when
+# .env is present (the normal prod case) its values win. These inline lines only
+# take effect if .env is absent. prune_scratch itself is pure-filesystem GC with
+# NO Infisical-resolved secrets — these vars are inert for this job and kept
+# only so every batch-1 unit is identical to the Phase C sibling.
+Environment=UA_DEPLOYMENT_PROFILE=vps
+Environment=UA_INFISICAL_ENABLED=1
+Environment=INFISICAL_ENVIRONMENT=production
+EnvironmentFile=-/opt/universal_agent/.env
+# Pure FS GC: deletes scratch slug-dirs under UA_SCRATCH_ROOT (code default
+# /home/ua/ua_scratch) older than UA_SCRATCH_RETENTION_DAYS (default 30). Exits 0
+# on a clean/empty/missing root; exit 1 only on a real IO/permission error.
+ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.scripts.prune_scratch
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

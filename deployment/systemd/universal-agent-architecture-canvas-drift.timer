@@ -1,0 +1,16 @@
+[Unit]
+Description=Run Universal Agent Architecture Canvas drift check every Monday at 06:30 America/Chicago (deploy-independent)
+
+[Timer]
+# OnCalendar wall-clock anchor — NEVER monotonic. systemd 255 honors the
+# timezone suffix, so cron `30 6 * * 1` America/Chicago is encoded directly (DST
+# handled by systemd) — 06:30 CT is inside the 6 AM active window. Persistent
+# replays a weekly slot missed inside a deploy window.
+OnCalendar=Mon *-*-* 06:30:00 America/Chicago
+Persistent=true
+RandomizedDelaySec=120
+AccuracySec=1min
+Unit=universal-agent-architecture-canvas-drift.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,16 @@
+[Unit]
+Description=Run Universal Agent insight-scoring health check every Sunday at 08:00 America/Chicago (deploy-independent)
+
+[Timer]
+# OnCalendar wall-clock anchor — NEVER monotonic. systemd 255 honors the
+# timezone suffix, so cron `0 8 * * 0` America/Chicago is encoded directly (DST
+# handled by systemd). Persistent replays a weekly slot missed inside a deploy
+# window.
+OnCalendar=Sun *-*-* 08:00:00 America/Chicago
+Persistent=true
+RandomizedDelaySec=120
+AccuracySec=1min
+Unit=universal-agent-insight-scoring-health.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,16 @@
+[Unit]
+Description=Run Universal Agent VP-coder workspace pruning every Sunday at 17:05 America/Chicago (deploy-independent)
+
+[Timer]
+# OnCalendar wall-clock anchor — NEVER monotonic. systemd 255 honors the
+# timezone suffix, so cron `5 17 * * 0` America/Chicago is encoded directly (DST
+# handled by systemd). Persistent replays a weekly slot missed inside a deploy
+# window.
+OnCalendar=Sun *-*-* 17:05:00 America/Chicago
+Persistent=true
+RandomizedDelaySec=120
+AccuracySec=1min
+Unit=universal-agent-vp-coder-workspace-pruning.service
+
+[Install]
+WantedBy=timers.target
