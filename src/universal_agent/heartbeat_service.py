@@ -234,23 +234,14 @@ def _sync_heartbeat_file(target_path: Path, source_path: Path) -> bool:
     return True
 
 
-def _resolve_heartbeat_interval_env(
-    *,
-    prefer_interval: bool = True,
-    warn_on_conflict: bool = False,
-) -> str | None:
-    interval_raw = (os.getenv("UA_HEARTBEAT_INTERVAL") or "").strip()
-    every_raw = (os.getenv("UA_HEARTBEAT_EVERY") or "").strip()
-    if interval_raw and every_raw and interval_raw != every_raw and warn_on_conflict:
-        primary = "UA_HEARTBEAT_INTERVAL" if prefer_interval else "UA_HEARTBEAT_EVERY"
-        logger.warning(
-            "Conflicting heartbeat interval env vars detected; using %s. "
-            "Keep only UA_HEARTBEAT_INTERVAL for clarity.",
-            primary,
-        )
-    if prefer_interval:
-        return interval_raw or every_raw or None
-    return every_raw or interval_raw or None
+def _resolve_heartbeat_interval_env() -> str | None:
+    """Resolve the heartbeat interval from env.
+
+    ``UA_HEARTBEAT_INTERVAL`` is canonical. The legacy ``UA_HEARTBEAT_EVERY``
+    alias was retired 2026-06-05 (S4 scheduling cleanup) — it was unset in
+    production, so only ``UA_HEARTBEAT_INTERVAL`` is honored now.
+    """
+    return (os.getenv("UA_HEARTBEAT_INTERVAL") or "").strip() or None
 
 
 def _heartbeat_interval_source_label(overrides: Optional[dict[str, Any]] = None) -> str:
@@ -266,8 +257,6 @@ def _heartbeat_interval_source_label(overrides: Optional[dict[str, Any]] = None)
         return "workspace_override"
     if str(os.getenv("UA_HEARTBEAT_INTERVAL") or "").strip():
         return "UA_HEARTBEAT_INTERVAL"
-    if str(os.getenv("UA_HEARTBEAT_EVERY") or "").strip():
-        return "UA_HEARTBEAT_EVERY"
     return "default"
 
 
@@ -1201,10 +1190,7 @@ class HeartbeatService:
         if legacy_ok:
             ok_tokens = [legacy_ok] + [t for t in ok_tokens if t != legacy_ok]
 
-        interval_raw = _resolve_heartbeat_interval_env(
-            prefer_interval=True,
-            warn_on_conflict=True,
-        )
+        interval_raw = _resolve_heartbeat_interval_env()
         self.default_schedule = HeartbeatScheduleConfig(
             every_seconds=_parse_duration_seconds(interval_raw, DEFAULT_INTERVAL_SECONDS),
             active_start=active_start or None,

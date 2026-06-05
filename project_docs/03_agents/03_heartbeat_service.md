@@ -18,7 +18,7 @@ code_paths:
   - src/universal_agent/services/invariants/cron_staleness.py
   - src/universal_agent/services/invariants/cron_consecutive_failures.py
   - memory/HEARTBEAT.md
-last_verified: 2026-06-04
+last_verified: 2026-06-05
 ---
 
 # Heartbeat Service
@@ -225,7 +225,7 @@ The active diagnostic is `scripts/check_heartbeat_liveness.py` (`run_check`), wh
 
 | Var | Default (code) | Effect |
 |---|---|---|
-| `UA_HEARTBEAT_INTERVAL` (legacy `UA_HEARTBEAT_EVERY`) | 1800s (30 min) | Base interval; parsed by `_parse_duration_seconds` (accepts `s/m/h/d`). |
+| `UA_HEARTBEAT_INTERVAL` | 1800s (30 min) | Base interval; parsed by `_parse_duration_seconds` (accepts `s/m/h/d`). The deprecated `UA_HEARTBEAT_EVERY` alias was retired 2026-06-05 (S4) — only `UA_HEARTBEAT_INTERVAL` is honored. |
 | `UA_HEARTBEAT_MIN_INTERVAL_SECONDS` | 1800 | Floor for the resolved interval. |
 | `UA_HEARTBEAT_EXEC_TIMEOUT` | 1600 (floor `MIN_HEARTBEAT_EXEC_TIMEOUT` = 600) | Per-turn execution timeout. |
 | `UA_HEARTBEAT_AUTONOMOUS_ENABLED` | prod default True (`should_run_loop("heartbeat_autonomous")`) | Master switch for autonomous action. |

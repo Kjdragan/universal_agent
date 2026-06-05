@@ -10,7 +10,7 @@ code_paths:
   - src/universal_agent/services/cron_artifact_notifier.py
   - src/universal_agent/services/invariants/proactive_pipeline_invariants.py
   - tests/unit/test_cron_dormancy_defaults.py
-last_verified: 2026-06-03
+last_verified: 2026-06-05
 ---
 
 # Dormancy & Operating Hours
@@ -102,6 +102,26 @@ a `timezone_env_var` so an operator can override the schedule via env, plus an
 `default_timezone="America/Chicago"` is preferred for in-process crons so DST is
 handled automatically. **GitHub Actions schedules are UTC-only** — they're
 expressed in UTC and accept ~1h DST drift.
+
+#### Retired / deregistered crons (2026-06-05, S4 cleanup)
+
+- **`hourly_insight_email`** — its registration helper
+  `gateway_server._ensure_hourly_insight_email_cron_job` was **deleted**. The job
+  was disabled-by-default but re-created its `cron_jobs.json` row on every boot.
+  It is superseded by `gateway_server._ensure_hourly_intel_digest_cron_job`
+  (`system_job=hourly_intel_digest`, same `0 6-21 * * *` slot), the
+  LLM-independent delivery path. The `src/universal_agent/scripts/hourly_insight_email.py`
+  / `src/universal_agent/services/hourly_insight_email.py` modules remain (still
+  imported elsewhere); only the cron registration is gone.
+- **Heartbeat interval env** — `heartbeat_service._resolve_heartbeat_interval_env`
+  now honors **only** `UA_HEARTBEAT_INTERVAL`. The deprecated `UA_HEARTBEAT_EVERY`
+  alias (unset in production) was dropped from both the resolver and
+  `_heartbeat_interval_source_label` (in `heartbeat_service` and `gateway_server`).
+
+VP autonomous-mission worktrees now branch off `origin/main` by default
+(`vp/worktree_utils.py::provision_worktree`,
+`vp/autonomous_mission_executor.py::execute_autonomous_mission`) — the retired
+`feature/latest2` integration branch was the previous default.
 
 ### 2. Heartbeat active-hours gate (heartbeat_service)
 
