@@ -10,22 +10,27 @@ code_paths:
   - src/universal_agent/services/mission_control_intelligence_sweeper.py
   - src/universal_agent/services/proactive_health.py
   - src/universal_agent/services/proactive_health_notifier.py
+  - src/universal_agent/services/proactive_health_snapshot.py
+  - src/universal_agent/services/proactive_health_timer_main.py
   - src/universal_agent/services/agentmail_service.py
   - src/universal_agent/services/invariants/
   - src/universal_agent/durable/db.py
   - scripts/deploy/remote_deploy.sh
   - deployment/systemd/
-last_verified: 2026-06-04
+last_verified: 2026-06-05
 ---
 
 # ADR: Scheduling Substrate Redesign
 
-> **ADR status: PROPOSED — design only, pending operator approval.**
-> This document makes **no code, cron, or systemd change**. It is the target
-> architecture that the local fixes in sessions S1–S4 migrate *toward*; it
-> supersedes none of them. Implementation is a **future wave**, gated on the
-> operator decision points in the final section. Grounded against deployed HEAD
-> `e05b62fb` (re-verify before implementing — production deploys land ~19×/day).
+> **ADR status: PARTIALLY IMPLEMENTED.** Phases **B** (Mission Control sweeper
+> service, #749) and **C** (proactive-health timer + delivery contract) have
+> **shipped** — see their **As-built** notes in Decision 2 / Decision 3 and the
+> migration-phases section. Phases **A** (deterministic jobs → timers) and **D**
+> (report/AM-product consolidation + stray-writer DB root-cause) remain
+> **PROPOSED**, gated on the operator decision points in the final section. The
+> original design intent below is preserved; the As-built notes record where the
+> shipped reality refined it. Grounded against deployed HEAD `0f45b86d`
+> (re-verify before implementing further — production deploys land ~19×/day).
 
 ## 1. Context
 
@@ -301,6 +306,57 @@ mailer in a subprocess (fixing `agentmail=None`). S5's timer job **runs in a
 subprocess and reuses exactly that fix** — S5 **assumes S1 landed**; without it
 the timer would hit the same race. Independent of S2/S3/S4.
 
+**As-built (S5 Phase C, implemented).** Shipped as recommended, with these
+concretions:
+
+- **Deploy posture = deploy-independence** (the *opposite* axis from Phase B's
+  long-lived isolated service): a `Type=oneshot` `.service` driven by a
+  `.timer` with `OnCalendar=*:0/10` + `Persistent=true` + a small
+  `RandomizedDelaySec`. It rides through the ~19 daily deploy `daemon-reload`s
+  and replays a slot missed inside a deploy window. **Never monotonic** (the S2
+  dead-timer lesson). The timer is *not* added to the is-active watchdog (a
+  oneshot is inactive between runs); its correctness guarantee is
+  `OnCalendar`+`Persistent`.
+- **Durable snapshot = a singleton row in `activity_state.db`** (table
+  `proactive_health_snapshots`, `id=1` upsert) resolved via
+  `durable/db.py::get_activity_db_path`, so the timer and the heartbeat agree on
+  the path with zero ambiguity — replacing the **ephemeral** per-heartbeat-
+  workspace `proactive_health_latest.json` sidecar the timer could never share.
+  A fixed-path JSON mirror (`AGENT_RUN_WORKSPACES/proactive_health/latest.json`)
+  is written best-effort for the dashboard. New store:
+  `services/proactive_health_snapshot.py`.
+- **The row also carries the digest-cooldown state**
+  (`last_digest_fingerprint` / `last_digest_sent_at_utc`) because a fresh
+  oneshot has **no** in-memory `_notifications` cache — the cooldown must be
+  durable. The 6 h window is keyed on the **finding-SET** fingerprint (sorted
+  `finding_id`s); a new or changed critical resets it.
+- **One digest email** (not per-finding): `proactive_health_notifier.py::send_critical_digest`
+  reuses `_acquire_agentmail_service` / `_construct_started_agentmail_service`
+  (S1's subprocess mailer, AgentMail-primary with the gws/HTTP-429 fallback) and
+  the INCIDENT/ACTION `email_tags`; the timer decides the cooldown, the function
+  just sends and closes any owned handle in a `finally`.
+- **Heartbeat compute → read swap.** The `build_proactive_health_payload` +
+  `run_pre_flight_check` block was **removed** from
+  `heartbeat_service.py::HeartbeatService._run_heartbeat` (no double-compute /
+  "backup"); `heartbeat_service.py::_compose_heartbeat_prompt` now injects a
+  read-only `== PROACTIVE HEALTH (N critical / M warn) ==` block sourced from
+  the snapshot (a cheap read that survives skip-mode), modeled on the existing
+  System-1 `== DATABASE HEALTH ALERTS ==` block.
+- **Entrypoint:** `services/proactive_health_timer_main.py` (run via
+  `python -m universal_agent.services.proactive_health_timer_main`) — secrets
+  via `initialize_runtime_secrets()` FIRST, then function-local imports. Units:
+  `deployment/systemd/universal-agent-proactive-health.{service,timer}`;
+  installer `scripts/install_vps_proactive_health_timer.sh` wired into
+  `remote_deploy.sh`. `gateway_server.py::ops_proactive_health` is unchanged
+  (still recomputes live on demand). The in-process `run_pre_flight_check` path
+  is retained as the notifier primitive (still used by tests and the
+  `email_test` endpoint's sibling helper) but has **no production caller** after
+  the heartbeat removal — retiring it is a follow-up.
+- **Follow-up (not in this phase):** a `mission_control_sweeper_liveness`
+  invariant that warns if the Phase B sweeper's cadence stamp goes stale, so a
+  wedged-but-alive sweeper pages through this same health path. Deferred to keep
+  the false-CRITICAL risk surface small.
+
 ### Decision 4 — Consolidations (keep / merge / drop)
 
 | Item | Finding | Recommendation |
@@ -401,12 +457,18 @@ flowchart LR
 - **S1–S4 relationship:** **assumes S3 landed** (the readout-cadence fix travels
   with the code). Independent of S1/S2/S4. Preserves the observational constraint.
 
-### Phase C — Health invariants → systemd timer + delivery contract
+### Phase C — Health invariants → systemd timer + delivery contract ✅ IMPLEMENTED
 - **What moves:** a `universal-agent-proactive-health.{service,timer}` computes the
   payload deterministically, writes the durable snapshot, and emails the operator
   via the S1-fixed mailer (digest, 6 h cooldown). The heartbeat switches from
   **compute** (`run_pre_flight_check` inside `_run_heartbeat`) to **read-snapshot**
   for Simone's prompt.
+- **As-built:** shipped with deploy-independence (oneshot `.service` +
+  `OnCalendar=*:0/10`/`Persistent` `.timer`), the durable snapshot as a singleton
+  `proactive_health_snapshots` row in `activity_state.db` (+ JSON mirror), a
+  single `send_critical_digest` email cooldown-keyed on the finding-set, and the
+  heartbeat compute block removed in favor of a read-only `== PROACTIVE HEALTH ==`
+  prompt block. Full detail in the Decision 3 **As-built** note above.
 - **Rollback:** revert the heartbeat to the pre-flight compute call; disable the
   timer. (The endpoint `gateway_server.py::ops_proactive_health` is unchanged
   throughout — it keeps serving live state.)
