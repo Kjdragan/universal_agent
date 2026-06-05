@@ -491,3 +491,129 @@ async def send_test_critical_email(
         "subject": subject,
         "finding_id": finding["finding_id"],
     }
+
+
+# ─── Digest send path (S5 Phase C — deploy-independent systemd timer) ─────────
+# The in-process notifier above (run_pre_flight_check / _notify_critical) sent
+# ONE email per critical finding, deduped against the gateway's in-memory
+# _notifications cache. The deploy-independent timer
+# (universal-agent-proactive-health.service) runs in a fresh oneshot subprocess
+# with no such cache, so it (a) collapses all current criticals into a SINGLE
+# digest email and (b) keys its 6h cooldown on the durable snapshot's
+# finding-set fingerprint (see services/proactive_health_snapshot.py). This
+# function just sends; the caller owns the cooldown decision.
+
+
+def _format_digest_email(
+    criticals: list[dict[str, Any]], generated_at: str
+) -> tuple[str, str]:
+    n = len(criticals)
+    plural = "s" if n != 1 else ""
+    subject = f"[Proactive Health] {n} critical finding{plural}"
+    lines = [
+        f"{n} critical proactive_health invariant{plural} firing as of {generated_at}.",
+        "",
+    ]
+    for idx, finding in enumerate(criticals, 1):
+        title = finding.get("title") or "Proactive health finding"
+        metric_key = finding.get("metric_key") or "?"
+        recommendation = (finding.get("recommendation") or "").strip()
+        runbook = (finding.get("runbook_command") or "").strip() or "(no runbook provided)"
+        observed = finding.get("observed_value")
+        observed_str = (
+            json.dumps(observed, default=str) if observed is not None else "(none)"
+        )
+        lines.append(f"{idx}. {title}  [metric_key={metric_key}]")
+        if recommendation:
+            lines.append(f"   What's wrong: {recommendation}")
+        lines.append(f"   Observed: {observed_str}")
+        lines.append(f"   Runbook: {runbook}")
+        lines.append("")
+    lines.append(
+        f"You will not be re-notified about this same finding-set for "
+        f"{_cooldown_seconds() // 3600}h (a new or changed critical resets the "
+        f"window). Live state: GET /api/v1/ops/proactive_health."
+    )
+    lines.append("")
+    lines.append("— Proactive Health Watchdog (systemd timer)")
+    return subject, "\n".join(lines)
+
+
+async def send_critical_digest(
+    *,
+    criticals: list[dict[str, Any]],
+    generated_at: str,
+    agentmail_service: Optional[_AgentMailLike] = None,
+) -> dict[str, Any]:
+    """Send ONE digest email covering all current critical findings.
+
+    Used by the deploy-independent proactive_health systemd timer (S5 Phase C).
+    Cooldown/dedup is the CALLER's responsibility (the timer keys it on the
+    durable snapshot's finding-set fingerprint) — given a non-empty
+    ``criticals`` list this always attempts a send.
+
+    Acquires a mailer when none is passed (a fresh AgentMailService in the
+    oneshot subprocess — AgentMail-primary with the built-in gws/HTTP-429
+    fallback) and shuts down anything it owns in a ``finally``. Never raises.
+    """
+    if not criticals:
+        return {"sent": False, "reason": "no_criticals"}
+
+    owns_agentmail = False
+    if agentmail_service is None:
+        agentmail_service, owns_agentmail = await _acquire_agentmail_service()
+    if agentmail_service is None:
+        logger.warning(
+            "proactive_health digest: no AgentMailService (disabled or init "
+            "failed) — %d critical finding(s) NOT delivered",
+            len(criticals),
+        )
+        return {"sent": False, "reason": "agentmail_service=None"}
+
+    subject, text = _format_digest_email(criticals, generated_at)
+    finding_ids = [
+        str(f.get("finding_id") or f.get("metric_key") or "unknown") for f in criticals
+    ]
+    result: Any = None
+    try:
+        result = await agentmail_service.send_email(
+            to=KEVIN_EMAIL,
+            subject=subject,
+            text=text,
+            force_send=True,
+            action=ActionTag.ACTION,
+            kind=KindTag.INCIDENT,
+            source="proactive_health_timer",
+            related=[f"finding_id={fid}" for fid in finding_ids],
+        )
+    except Exception as exc:  # noqa: BLE001 — never crash the timer over a send
+        logger.warning(
+            "proactive_health digest: send_email failed (%s)",
+            type(exc).__name__,
+            exc_info=True,
+        )
+        return {"sent": False, "reason": f"{type(exc).__name__}: {exc}"}
+    finally:
+        if owns_agentmail and agentmail_service is not None:
+            try:
+                await agentmail_service.shutdown()
+            except Exception:  # noqa: BLE001
+                logger.debug(
+                    "proactive_health digest: fresh AgentMailService shutdown failed",
+                    exc_info=True,
+                )
+
+    message_id = result.get("message_id") if isinstance(result, dict) else None
+    logger.info(
+        "proactive_health digest: emailed %d critical finding(s) to %s (message_id=%s)",
+        len(criticals),
+        KEVIN_EMAIL,
+        message_id,
+    )
+    return {
+        "sent": True,
+        "to": KEVIN_EMAIL,
+        "subject": subject,
+        "message_id": message_id,
+        "finding_ids": finding_ids,
+    }

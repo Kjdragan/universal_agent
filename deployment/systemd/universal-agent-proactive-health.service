@@ -1,0 +1,40 @@
+[Unit]
+Description=Universal Agent Proactive Health snapshot + critical digest (S5 Phase C — deploy-independent watchdog)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ua
+Group=ua
+WorkingDirectory=/opt/universal_agent
+# Mirror the gateway/sweeper base runtime env so `universal_agent` resolves from
+# the repo src/ tree (it is NOT installed in site-packages) and pydantic's
+# logfire plugin stays disabled.
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/universal_agent/src
+Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
+# Secrets-bootstrap backstop (mirrors universal-agent-mission-control-sweeper).
+# The authoritative source is the deploy-bootstrapped .env loaded below — per
+# systemd semantics EnvironmentFile= OVERRIDES Environment= regardless of order,
+# so when .env is present (the normal prod case) its values win. These inline
+# lines only take effect if .env is absent (EnvironmentFile=- tolerates a
+# missing file): they guarantee initialize_runtime_secrets() resolves the `vps`
+# profile (→ strict Infisical load from production) rather than defaulting to
+# local_workstation and skipping Infisical, which would leave the mailer keyless
+# and the digest silently undeliverable.
+Environment=UA_DEPLOYMENT_PROFILE=vps
+Environment=UA_INFISICAL_ENABLED=1
+Environment=INFISICAL_ENVIRONMENT=production
+# The deploy-bootstrapped .env carries the Infisical machine-identity
+# credentials (INFISICAL_CLIENT_ID/SECRET/PROJECT_ID) plus the same profile
+# vars. Keep this as the ONLY EnvironmentFile — a second one could silently
+# clobber INFISICAL_ENVIRONMENT (the FU1 hazard).
+EnvironmentFile=-/opt/universal_agent/.env
+ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.services.proactive_health_timer_main
+# LLM-free aggregation over activity_state.db + invariant probes; cap memory so
+# a runaway probe cannot consume the VPS.
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,18 @@
+[Unit]
+Description=Run Universal Agent proactive-health watchdog every 10 min (deploy-independent)
+
+[Timer]
+# OnCalendar wall-clock anchor — NEVER monotonic (OnUnitActiveSec/OnBootSec
+# alone). The deploy daemon-reload (~19x/day) wipes a monotonic timer's anchor
+# → NextElapse=infinity → silently dead (the 2026-05/06 dead-timer class that
+# left the watchdog/oom timers dead ~19 days). Every 10 min; Persistent=true is
+# meaningful only with OnCalendar and replays a slot missed inside a deploy
+# window. RandomizedDelaySec spreads load off the other :00/:10 timers.
+OnCalendar=*:0/10
+Persistent=true
+RandomizedDelaySec=45
+AccuracySec=15s
+Unit=universal-agent-proactive-health.service
+
+[Install]
+WantedBy=timers.target

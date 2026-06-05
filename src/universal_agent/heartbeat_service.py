@@ -745,6 +745,74 @@ def _compose_heartbeat_prompt(
         except Exception as _db_health_exc:
             logger.debug("DB health check injection skipped: %s", _db_health_exc)
 
+    # ── Proactive Health snapshot (System 2) — health-check runs ONLY ────
+    # READ (do not compute) the durable snapshot the deploy-independent timer
+    # writes (S5 Phase C, services/proactive_health_timer_main.py). This is the
+    # System-2 invariant watchdog — distinct from the System-1 db_health_monitor
+    # block above. A cheap snapshot read, so it survives heartbeat skip-mode
+    # (the compute itself moved to the timer). Gated by `not task_focused` to
+    # keep task-dispatch runs clean. Best-effort: never break the heartbeat.
+    if not task_focused:
+        try:
+            from universal_agent.durable.db import (
+                connect_runtime_db as _ph_connect,
+                get_activity_db_path as _ph_db_path,
+            )
+            from universal_agent.services.proactive_health_snapshot import (
+                read_latest_snapshot as _ph_read,
+            )
+
+            _ph_conn = _ph_connect(_ph_db_path())
+            try:
+                _snapshot = _ph_read(_ph_conn)
+            finally:
+                try:
+                    _ph_conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
+
+            if _snapshot:
+                _ph_payload = _snapshot.get("payload") or {}
+                _ph_invariants = _ph_payload.get("invariants") or []
+                _ph_crit = [
+                    f for f in _ph_invariants
+                    if str(f.get("severity") or "").lower() == "critical"
+                ]
+                _ph_warn = [
+                    f for f in _ph_invariants
+                    if str(f.get("severity") or "").lower() == "warn"
+                ]
+                if _ph_crit or _ph_warn:
+                    lines = [
+                        "",
+                        f"== PROACTIVE HEALTH ({len(_ph_crit)} critical / "
+                        f"{len(_ph_warn)} warn) ==",
+                        f"overall: {_snapshot.get('overall_status') or '?'} "
+                        f"(snapshot updated {_snapshot.get('updated_at_utc') or '?'} UTC)",
+                    ]
+                    # Criticals first (all), then warns (capped to avoid noise).
+                    for emoji, group in (("🔴", _ph_crit), ("🟡", _ph_warn[:10])):
+                        for f in group:
+                            metric = f.get("metric_key") or f.get("finding_id") or "?"
+                            title = f.get("title") or metric
+                            category = f.get("category") or "proactive_health"
+                            lines.append(f"{emoji} [{category}] {title}")
+                            rec = (f.get("recommendation") or "").strip()
+                            if rec:
+                                lines.append(f"   → {rec}")
+                            runbook = (f.get("runbook_command") or "").strip()
+                            if runbook:
+                                lines.append(f"   Runbook: `{runbook}`")
+                    lines.append("")
+                    lines.append(
+                        "Include these in your heartbeat_findings_latest.json "
+                        "output (category='proactive_health'). The watchdog "
+                        "already emailed any criticals — do not re-notify."
+                    )
+                    prompt = f"{prompt}\n" + "\n".join(lines)
+        except Exception as _ph_exc:  # noqa: BLE001
+            logger.debug("Proactive health snapshot injection skipped: %s", _ph_exc)
+
     return prompt
 
 def _parse_active_hours(raw: str | None) -> tuple[Optional[str], Optional[str]]:
@@ -2685,77 +2753,18 @@ class HeartbeatService:
                     _bk_exc,
                 )
 
-            # Proactive health pre-flight — runs every tick regardless of
-            # skip-mode so the watchdog can't be silenced by an empty Task Hub.
-            # Best-effort: errors are logged but never block the heartbeat.
-            try:
-                from universal_agent import gateway_server as _gs
-                from universal_agent.services.proactive_health import (
-                    build_proactive_health_payload,
-                )
-                from universal_agent.services.proactive_health_notifier import (
-                    run_pre_flight_check,
-                )
-
-                def _build_payload():
-                    activity_path = get_activity_db_path()
-                    activity_conn = connect_runtime_db(activity_path)
-                    activity_conn.row_factory = sqlite3.Row  # type: ignore[attr-defined]
-                    try:
-                        cron_jobs = (
-                            list(_gs._cron_service.list_jobs())
-                            if getattr(_gs, "_cron_service", None)
-                            else []
-                        )
-                        csi_db_path = None
-                        if hasattr(_gs, "_csi_default_db_path"):
-                            try:
-                                csi_db_path = _gs._csi_default_db_path()
-                            except Exception:  # noqa: BLE001
-                                csi_db_path = None
-                        # Heartbeats run in daemon subprocesses where the
-                        # freshly-imported gateway_server module has no
-                        # _cron_service instance. Pass the persistence file
-                        # path so the aggregator can fall back to disk.
-                        # session.workspace_dir lives under
-                        # AGENT_RUN_WORKSPACES/run_daemon_simone_heartbeat_*/ ;
-                        # cron_jobs.json sits in the parent
-                        # AGENT_RUN_WORKSPACES/ directory.
-                        cron_persistence_path = None
-                        try:
-                            ws_parent = Path(str(session.workspace_dir)).parent
-                            cron_persistence_path = ws_parent / "cron_jobs.json"
-                        except Exception:  # noqa: BLE001
-                            cron_persistence_path = None
-                        return build_proactive_health_payload(
-                            activity_conn=activity_conn,
-                            cron_jobs=cron_jobs,
-                            csi_db_path=csi_db_path,
-                            cron_persistence_path=cron_persistence_path,
-                        )
-                    finally:
-                        try:
-                            activity_conn.close()
-                        except Exception:  # noqa: BLE001
-                            pass
-
-                # proactive_health findings no longer create Task Hub rows.
-                # The durable alert-of-record is the critical email; the live
-                # state is read from GET /api/v1/ops/proactive_health by the
-                # dashboard surface. Writing rows here also self-inflated the
-                # parked_tasks count the watchdog itself observes, so it's gone.
-                await run_pre_flight_check(
-                    workspace_dir=Path(str(session.workspace_dir)),
-                    payload_builder=_build_payload,
-                    agentmail_service=getattr(_gs, "_agentmail_service", None),
-                    notifications_list=getattr(_gs, "_notifications", None),
-                    add_notification_fn=getattr(_gs, "_add_notification", None),
-                )
-            except Exception:  # noqa: BLE001
-                logger.warning(
-                    "Heartbeat proactive-health pre-flight failed (non-fatal)",
-                    exc_info=True,
-                )
+            # Proactive health is NO LONGER computed here (S5 Phase C). The
+            # heartbeat skips on lock / retry-not-due / dormancy / no-targets,
+            # and on any skipped tick the inline compute neither ran nor
+            # delivered — so the watchdog couldn't reliably reach the operator.
+            # The compute + critical-digest email now run in the deploy-
+            # independent systemd timer
+            # (universal-agent-proactive-health.service →
+            # services/proactive_health_timer_main.py), which writes a durable
+            # snapshot. Simone READS that snapshot in _compose_heartbeat_prompt
+            # (a cheap read that survives skip-mode); the heavy compute is gone
+            # from the hot path. The live GET /api/v1/ops/proactive_health
+            # endpoint still recomputes on demand for the dashboard.
 
             if should_skip_agent_run:
                 full_response = schedule.ok_tokens[0] if schedule.ok_tokens else DEFAULT_OK_TOKENS[0]

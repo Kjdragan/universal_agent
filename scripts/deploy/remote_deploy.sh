@@ -231,6 +231,15 @@ echo "--> Installing Mission Control sweeper service (S5 Phase B — extracted f
 # service on its Restart=always policy. Mirrors the watchdog/oom installs above.
 sudo bash "$PROD_DIR/scripts/install_vps_mission_control_sweeper.sh" \
   || echo "WARN: install_vps_mission_control_sweeper.sh failed (non-fatal)"
+echo "--> Installing proactive-health timer (S5 Phase C — deploy-independent watchdog)..."
+# Deploy-independent oneshot timer that computes proactive_health, writes the
+# durable snapshot (activity_state.db row + JSON mirror) and emails the operator
+# ONE digest on critical findings — independent of whether any heartbeat ran.
+# Idempotent (re)install re-arms the OnCalendar+Persistent timer each deploy
+# (the dead-timer fix) and seeds a first snapshot. Non-fatal — mirrors the
+# watchdog/oom/sweeper installs above; the timer fires on its schedule regardless.
+sudo bash "$PROD_DIR/scripts/install_vps_proactive_health_timer.sh" \
+  || echo "WARN: install_vps_proactive_health_timer.sh failed (non-fatal)"
 # Sync the CSI lane's systemd units (timers + services). Without
 # this, edits to CSI_Ingester/development/deployment/systemd/*.{service,timer}
 # land in the repo but never reach /etc/systemd/system/, so the
