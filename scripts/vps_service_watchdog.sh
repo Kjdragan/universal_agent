@@ -210,7 +210,11 @@ check_service() {
 # Service specs format: service_name|http_health_url|heartbeat_file
 # If heartbeat_file is set, it takes priority over http_health_url.
 DEFAULT_HEARTBEAT_DIR="/var/lib/universal-agent/heartbeat"
-DEFAULT_SERVICE_SPECS=$'universal-agent-gateway|http://127.0.0.1:8002/api/v1/health|/var/lib/universal-agent/heartbeat/gateway.heartbeat\nuniversal-agent-api|http://127.0.0.1:8001/api/health|\nuniversal-agent-webui|http://127.0.0.1:3000/|\nuniversal-agent-telegram||/var/lib/universal-agent/heartbeat/telegram.heartbeat\ncsi-ingester|http://127.0.0.1:8091/healthz|'
+# mission-control-sweeper has no HTTP endpoint and no heartbeat file, so it is
+# is-active-monitored only: a healthy active process is a no-op, but a dead /
+# start-limit-exhausted unit gets reset-failed + restarted (the backstop a
+# now-standalone process needs; Restart=always covers single crashes).
+DEFAULT_SERVICE_SPECS=$'universal-agent-gateway|http://127.0.0.1:8002/api/v1/health|/var/lib/universal-agent/heartbeat/gateway.heartbeat\nuniversal-agent-api|http://127.0.0.1:8001/api/health|\nuniversal-agent-webui|http://127.0.0.1:3000/|\nuniversal-agent-telegram||/var/lib/universal-agent/heartbeat/telegram.heartbeat\nuniversal-agent-mission-control-sweeper||\ncsi-ingester|http://127.0.0.1:8091/healthz|'
 SERVICE_SPECS="${UA_WATCHDOG_SERVICE_SPECS:-$DEFAULT_SERVICE_SPECS}"
 
 while IFS= read -r spec; do

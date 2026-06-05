@@ -221,6 +221,19 @@ gateway in-process memory), the extraction is clean. Isolating it means its
 regardless of where the loop runs. S5 **assumes S3 landed** and simply relocates
 the already-fixed loop into its own process. Independent of S1/S2/S4.
 
+**As-built (S5 Phase B, implemented).** Option (a) shipped, with one refinement to
+the "excluded from the deploy restart list / deploy-independent" framing above: the
+service is **restarted on each deploy** (the installer
+`scripts/install_vps_mission_control_sweeper.sh` re-runs `enable --now` + `restart`
+from `remote_deploy.sh`) so it picks up new code, and determinism comes from the
+**durable `__tier1_meta__` / `__tier2_meta__` cadence sentinels** that survive the
+restart — not from excluding it from the restart list. The win is therefore *process
+isolation* (off the gateway event loop), not literal deploy-immunity; a fast restart
+with durable state is correct. Entrypoint:
+`services/mission_control_sweeper_main.py`; unit:
+`deployment/systemd/universal-agent-mission-control-sweeper.service`. The full as-built
+description lives in `04_intelligence/11_mission_control_intelligence.md`.
+
 ### Decision 3 — Deterministic health checks + a delivery contract
 
 **Question.** How do we run the ~19 `proactive_health` invariant probes
@@ -378,10 +391,12 @@ flowchart LR
   `EnvironmentFile` secret-loading the migrated secret-bearing jobs depend on).
   Independent of S1/S3/S4. Does **not** re-do S2's watchdog/oom fixes.
 
-### Phase B — Extract the Mission Control sweeper to its own service
+### Phase B — Extract the Mission Control sweeper to its own service ✅ IMPLEMENTED
 - **What moves:** `run_sweeper_loop` leaves the gateway lifespan and becomes
-  `universal-agent-mission-control-sweeper.service` (own process, excluded from the
-  deploy restart list).
+  `universal-agent-mission-control-sweeper.service` (own process). It **is** restarted
+  on each deploy (to pick up new code); the durable `__tierN_meta__` cadence sentinels
+  survive the restart, so the win is process isolation, not deploy-exclusion. See the
+  **As-built** note under Decision 2.
 - **Rollback:** re-add the lifespan hook, stop+disable the unit.
 - **S1–S4 relationship:** **assumes S3 landed** (the readout-cadence fix travels
   with the code). Independent of S1/S2/S4. Preserves the observational constraint.

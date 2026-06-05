@@ -2733,9 +2733,6 @@ _factory_staleness_task: Optional[asyncio.Task] = None
 _factory_staleness_stop: Optional[asyncio.Event] = None
 _hq_self_heartbeat_task: Optional[asyncio.Task] = None
 _hq_self_heartbeat_stop: Optional[asyncio.Event] = None
-# Mission Control intelligence sweeper (Phase 1B+)
-_mission_control_sweeper_task: Optional[asyncio.Task] = None
-_mission_control_sweeper_stop: Optional[asyncio.Event] = None
 # Operator-driven mission control refresh: in-memory job tracker mirroring
 # `_tutorial_review_jobs`. Each entry walks queued → cards_running →
 # readout_running → completed (or failed). Capped FIFO at 32 entries.
@@ -15362,31 +15359,12 @@ async def lifespan(app: FastAPI):
         )
 
     # --- Mission Control intelligence sweeper (Phase 1B+) ---
-    # Gated by UA_MC_PHASE_1_ENABLED. When the flag is off, the sweeper's
-    # tick() short-circuits anyway, but we skip starting the loop entirely
-    # to avoid the per-minute log noise during the rollout window.
-    try:
-        from universal_agent.services.mission_control_db import (
-            is_phase_enabled as _mc_is_phase_enabled,
-        )
-        from universal_agent.services.mission_control_intelligence_sweeper import (
-            run_sweeper_loop as _mc_run_sweeper_loop,
-        )
-    except Exception:
-        logger.exception("Mission Control sweeper imports failed; skipping")
-    else:
-        global _mission_control_sweeper_task, _mission_control_sweeper_stop
-        if _mc_is_phase_enabled(1):
-            _mission_control_sweeper_stop = asyncio.Event()
-            _mission_control_sweeper_task = asyncio.create_task(
-                _run_after_deployment_window(
-                    "mission_control_sweeper",
-                    lambda: _mc_run_sweeper_loop(_mission_control_sweeper_stop),
-                )
-            )
-            logger.info("🛰️  Mission Control sweeper enabled (UA_MC_PHASE_1_ENABLED=1)")
-        else:
-            logger.info("⏸️  Mission Control sweeper disabled (UA_MC_PHASE_1_ENABLED unset)")
+    # Relocated (S5 Phase B) out of the gateway lifespan into its own
+    # long-lived systemd service `universal-agent-mission-control-sweeper.service`
+    # (entrypoint: services/mission_control_sweeper_main.py). Running it in its
+    # own process isolates the multi-GB tick() from the gateway event loop and
+    # decouples the Chief-of-Staff readout from gateway deploy restarts. The
+    # loop logic (run_sweeper_loop) is unchanged; only the launch site moved.
 
     # --- Digest delivery-reminder TTL sweeps ---
     # Two cheap loops: one purges expired activity_events rows, the other
@@ -15446,13 +15424,6 @@ async def lifespan(app: FastAPI):
     if _vp_stale_reconcile_task is not None:
         try:
             await _vp_stale_reconcile_task
-        except Exception:
-            pass
-    if _mission_control_sweeper_stop is not None:
-        _mission_control_sweeper_stop.set()
-    if _mission_control_sweeper_task is not None:
-        try:
-            await _mission_control_sweeper_task
         except Exception:
             pass
     if _gws_event_listener:
