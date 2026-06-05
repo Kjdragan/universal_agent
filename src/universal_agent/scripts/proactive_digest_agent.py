@@ -16,7 +16,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from pathlib import Path
 import sqlite3
 
 logger = logging.getLogger(__name__)
@@ -25,7 +24,13 @@ logger = logging.getLogger(__name__)
 async def _run_digest() -> dict:
     """Compose and send the daily proactive artifact digest email."""
     from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+    from universal_agent.infisical_loader import initialize_runtime_secrets
+    from universal_agent.services.agentmail_service import AgentMailService
     from universal_agent.services.intelligence_reporter import IntelligenceReporter
+
+    # One-shot cron `!script` subprocess: make sure the Infisical-backed secrets
+    # (AgentMail API key, etc.) are present before we stand up the mailer.
+    initialize_runtime_secrets(profile="local_workstation")
 
     # Resolve the DB path. `proactive_artifacts` (insight_brief_task, codie PRs,
     # convergence briefs, etc.) lives in the **activity_state.db**, not the
@@ -49,20 +54,17 @@ async def _run_digest() -> dict:
     conn = connect_runtime_db(db_path)
     conn.row_factory = sqlite3.Row
 
-    # Initialize mail service
-    mail_service = None
-    try:
-        from universal_agent.services.mail_service import MailService
-        mail_service = MailService()
-    except Exception as exc:
-        logger.warning("MailService not available: %s", exc)
-
-        class _DummyMail:
-            async def send_email(self, **kwargs):
-                logger.info("DIGEST (no mailer): subject=%s", kwargs.get("subject", ""))
-                return {"status": "skipped", "message_id": "", "thread_id": ""}
-
-        mail_service = _DummyMail()
+    # Real mailer — AgentMail primary, with the built-in gws/Gmail HTTP-429
+    # fallback. No dummy fallback: a no-op mailer silently dropped every digest
+    # while logging "(no mailer)". send_daily_digest already passes the
+    # FYI/DIGEST identity tags through to send_email.
+    mail_service = AgentMailService()
+    await mail_service.startup()
+    if not getattr(mail_service, "_started", False):
+        logger.error(
+            "AgentMail did not start (%s) — daily digest will NOT be emailed.",
+            getattr(mail_service, "_last_error", "unknown"),
+        )
 
     try:
         result = await IntelligenceReporter(conn).send_daily_digest(
@@ -80,6 +82,10 @@ async def _run_digest() -> dict:
         logger.error("Failed to send proactive artifact digest: %s", exc, exc_info=True)
         return {"error": str(exc)}
     finally:
+        try:
+            await mail_service.shutdown()
+        except Exception:  # noqa: BLE001 — best-effort one-shot teardown
+            pass
         conn.close()
 
 

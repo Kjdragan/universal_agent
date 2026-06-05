@@ -26,6 +26,7 @@ import uuid
 
 from universal_agent import proactive_signals, task_hub
 from universal_agent.feature_flags import task_hub_missions_enabled
+from universal_agent.services.email_tags import ActionTag, KindTag
 from universal_agent.services.proactive_budget import (
     DEFAULT_DAILY_BUDGET,
     _parse_int_env,
@@ -395,10 +396,17 @@ async def deliver_intelligence_report(
             html=html_body,
             force_send=True,
             require_approval=False,
+            action=ActionTag.FYI,
+            kind=KindTag.DIGEST,
+            source="proactive_report cron",
         )
-        email_sent = True
         email_message_id = str((result or {}).get("message_id", ""))
         email_thread_id = str((result or {}).get("thread_id", ""))
+        # Only claim delivery when the wire actually returned a message id. A
+        # draft / skip / no-op return (empty message_id) MUST leave
+        # email_sent=False — unconditionally setting it True was the dummy-mailer
+        # truthiness bug that made 0 sent reports look "(emailed)" for weeks.
+        email_sent = bool(email_message_id)
     except Exception as exc:
         logger.error("Failed to send intelligence report email: %s", exc)
 
@@ -469,6 +477,7 @@ async def deliver_intelligence_report(
     return {
         "report_id": report_id,
         "email_sent": email_sent,
+        "email_message_id": email_message_id,
         "stored_for_dashboard": stored,
         "period": report.get("period", "unknown"),
         "timestamp": report.get("timestamp", ""),

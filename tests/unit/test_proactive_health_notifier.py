@@ -551,3 +551,170 @@ async def test_send_test_critical_email_returns_unsent_when_no_agentmail(monkeyp
 # longer takes a task_hub_emit_fn and creates ZERO Task Hub rows. The
 # dedicated regression suite lives in
 # tests/unit/test_proactive_health_no_task_hub_write.py.
+
+
+# ─── Daemon-subprocess construct path (S1, 2026-06-04) ───────────────────────
+# Bug (b): in the heartbeat daemon subprocess gateway_server._agentmail_service
+# is the pristine module-level None, so the watchdog could never email. The fix
+# stands up a fresh, short-lived AgentMailService when no gateway handle is
+# available, then shuts it down. These tests pin that behavior — and a hermetic
+# guard so the REAL AgentMailService (network) is never built in unit tests.
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_no_real_agentmail_construct(monkeypatch):
+    """Default: never build a real AgentMailService in unit tests.
+
+    Keeps every existing test (which passes ``agentmail_service=None`` and
+    expects the graceful-skip path) deterministic regardless of whether the
+    developer's environment happens to have ``UA_AGENTMAIL_ENABLED=1`` +
+    ``AGENTMAIL_API_KEY`` set. Tests that exercise the construct path override
+    this with their own stub via ``monkeypatch.setattr``.
+    """
+
+    async def _none():
+        return None
+
+    monkeypatch.setattr(notifier, "_construct_started_agentmail_service", _none)
+    yield
+
+
+def _fresh_mail_stub(message_id: str = "fresh-1"):
+    mock = AsyncMock()
+    mock.send_email = AsyncMock(return_value={"message_id": message_id, "status": "sent"})
+    mock.shutdown = AsyncMock()
+    return mock
+
+
+@pytest.mark.asyncio
+async def test_constructs_fresh_agentmail_when_no_gateway_handle(
+    tmp_path, monkeypatch, notifications_list, add_notification_fn
+):
+    """Daemon-subprocess path: gateway injected None and no in-process handle
+    exists, so the notifier stands up a fresh mailer, emails, and shuts it
+    down (the owned handle must be cleaned up)."""
+    fresh = _fresh_mail_stub()
+
+    async def _construct():
+        return fresh
+
+    monkeypatch.setattr(notifier, "_resolve_agentmail_service_via_gateway", lambda: None)
+    monkeypatch.setattr(notifier, "_construct_started_agentmail_service", _construct)
+
+    await run_pre_flight_check(
+        workspace_dir=tmp_path,
+        payload_builder=_critical_payload,
+        agentmail_service=None,  # daemon subprocess always passes None
+        notifications_list=notifications_list,
+        add_notification_fn=add_notification_fn,
+    )
+
+    fresh.send_email.assert_awaited_once()
+    assert fresh.send_email.call_args.kwargs["to"] == KEVIN_EMAIL
+    assert "CRITICAL" in fresh.send_email.call_args.kwargs["subject"]
+    # The freshly-constructed (owned) handle must be shut down.
+    fresh.shutdown.assert_awaited_once()
+    assert len(notifications_list) == 1
+
+
+@pytest.mark.asyncio
+async def test_no_construct_attempt_when_no_criticals(
+    tmp_path, monkeypatch, notifications_list, add_notification_fn
+):
+    """A healthy tick (no critical findings) must NOT pay the mailer-startup
+    cost — construction is gated on there being something to send."""
+    calls = {"n": 0}
+
+    async def _construct():
+        calls["n"] += 1
+        return _fresh_mail_stub()
+
+    monkeypatch.setattr(notifier, "_resolve_agentmail_service_via_gateway", lambda: None)
+    monkeypatch.setattr(notifier, "_construct_started_agentmail_service", _construct)
+
+    await run_pre_flight_check(
+        workspace_dir=tmp_path,
+        payload_builder=_ok_payload,
+        agentmail_service=None,
+        notifications_list=notifications_list,
+        add_notification_fn=add_notification_fn,
+    )
+    assert calls["n"] == 0
+
+
+@pytest.mark.asyncio
+async def test_acquire_prefers_gateway_handle_over_construct(monkeypatch, fake_agentmail):
+    from universal_agent.services.proactive_health_notifier import (
+        _acquire_agentmail_service,
+    )
+
+    monkeypatch.setattr(
+        notifier, "_resolve_agentmail_service_via_gateway", lambda: fake_agentmail
+    )
+    called = {"n": 0}
+
+    async def _construct():
+        called["n"] += 1
+        return _fresh_mail_stub()
+
+    monkeypatch.setattr(notifier, "_construct_started_agentmail_service", _construct)
+
+    svc, owned = await _acquire_agentmail_service()
+    assert svc is fake_agentmail
+    assert owned is False  # gateway handle is NOT owned by us
+    assert called["n"] == 0  # construct never attempted when a handle exists
+
+
+@pytest.mark.asyncio
+async def test_acquire_constructs_and_marks_owned(monkeypatch):
+    from universal_agent.services.proactive_health_notifier import (
+        _acquire_agentmail_service,
+    )
+
+    fresh = _fresh_mail_stub()
+    monkeypatch.setattr(notifier, "_resolve_agentmail_service_via_gateway", lambda: None)
+
+    async def _construct():
+        return fresh
+
+    monkeypatch.setattr(notifier, "_construct_started_agentmail_service", _construct)
+
+    svc, owned = await _acquire_agentmail_service()
+    assert svc is fresh
+    assert owned is True  # we built it → caller must shut it down
+
+
+def test_resolver_finds_agentmail_on_main_module(monkeypatch, fake_agentmail):
+    """The gateway runs as `python -m ...gateway_server`, so its
+    _agentmail_service lands on sys.modules['__main__']; the resolver must look
+    there (the importlib copy is a different, pristine module object)."""
+    import sys as _sys
+
+    from universal_agent.services.proactive_health_notifier import (
+        _resolve_agentmail_service_via_gateway,
+    )
+
+    main_mod = _sys.modules.get("__main__")
+    assert main_mod is not None
+    monkeypatch.setattr(main_mod, "_agentmail_service", fake_agentmail, raising=False)
+    assert _resolve_agentmail_service_via_gateway() is fake_agentmail
+
+
+@pytest.mark.asyncio
+async def test_send_test_critical_email_constructs_and_shuts_down(monkeypatch):
+    from universal_agent.services.proactive_health_notifier import (
+        send_test_critical_email,
+    )
+
+    fresh = _fresh_mail_stub("fresh-test-1")
+    monkeypatch.setattr(notifier, "_resolve_agentmail_service_via_gateway", lambda: None)
+
+    async def _construct():
+        return fresh
+
+    monkeypatch.setattr(notifier, "_construct_started_agentmail_service", _construct)
+
+    result = await send_test_critical_email(agentmail_service=None, note="probe")
+    assert result["sent"] is True
+    fresh.send_email.assert_awaited_once()
+    fresh.shutdown.assert_awaited_once()  # owned handle cleaned up
