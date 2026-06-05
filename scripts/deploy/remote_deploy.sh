@@ -196,6 +196,20 @@ echo "--> Installing uv-cache-prune timer (daily deploy-independent disk backsto
 # (the deploy already pruned inline above). See prune_uv_caches.sh.
 sudo bash "$PROD_DIR/scripts/install_uv_cache_prune_timer.sh" \
   || echo "WARN: install_uv_cache_prune_timer.sh failed (non-fatal)"
+echo "--> Installing service-watchdog + OOM-alert timers (deploy-independent safety nets)..."
+# These two timers are the dependable substrate that does NOT depend on the
+# gateway process surviving the frequent deploy-restarts. Re-running their
+# installers every deploy re-arms the timer (daemon-reload + enable --now),
+# which — together with the OnCalendar anchor now in the .timer units — is the
+# durable fix for the 2026-04/05 dead-timer drift, where the old monotonic-only
+# anchors lost their next-elapse after a daemon-reload and went
+# NextElapse=infinity with nothing in the deploy path to re-arm them. Non-fatal
+# (mirrors the uv-cache-prune install above) — a timer-install hiccup must not
+# fail a deploy; the timer will fire on its OnCalendar schedule regardless.
+sudo bash "$PROD_DIR/scripts/install_vps_service_watchdog.sh" \
+  || echo "WARN: install_vps_service_watchdog.sh failed (non-fatal)"
+sudo bash "$PROD_DIR/scripts/install_vps_oom_alert.sh" \
+  || echo "WARN: install_vps_oom_alert.sh failed (non-fatal)"
 # Sync the CSI lane's systemd units (timers + services). Without
 # this, edits to CSI_Ingester/development/deployment/systemd/*.{service,timer}
 # land in the repo but never reach /etc/systemd/system/, so the
