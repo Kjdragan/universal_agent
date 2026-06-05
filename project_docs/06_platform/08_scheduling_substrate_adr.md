@@ -490,6 +490,17 @@ flowchart LR
 > oneshot enters `failed` on a genuine finding (by-design signal, mirrors the old
 > failed-tick; deliberately NOT in the is-active watchdog specs so it can't
 > false-page).
+>
+> **Oneshot timeout (recipe note for A2–A4).** A `Type=oneshot` defaults to
+> `TimeoutStartSec=infinity` — the VPS `DefaultTimeoutStartUSec` (90s) applies
+> only to long-lived services, so long-running migrated jobs are NOT killed
+> mid-run. The risk is the inverse: a hung oneshot stays `active` forever and its
+> `.timer` will not start the next run while it is active, silently stalling the
+> schedule. So any job that does an LLM call or a network/WebSocket connection
+> should set an explicit `TimeoutStartSec=<registration timeout_seconds>` so a
+> hang is killed and the next slot self-heals. In batch 1 only
+> `insight_scoring_health` qualifies (LLM + AgentMail WebSocket) →
+> `TimeoutStartSec=600`; the pure-FS jobs keep the `infinity` default.
 
 ### Phase B — Extract the Mission Control sweeper to its own service ✅ IMPLEMENTED
 - **What moves:** `run_sweeper_loop` leaves the gateway lifespan and becomes

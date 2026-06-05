@@ -30,6 +30,14 @@ EnvironmentFile=-/opt/universal_agent/.env
 # exit 1 only on a true unhandled crash. 2G cap for the LLM client.
 ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.scripts.insight_scoring_health
 MemoryMax=2G
+# A Type=oneshot defaults to TimeoutStartSec=infinity, but this job makes an LLM
+# call + an AgentMail WebSocket connection — both can hang unboundedly. A hung
+# oneshot stays `active` forever and the .timer will NOT start the next weekly
+# run while it is active, silently stalling the schedule. Bound the run to the
+# job's old in-process budget (timeout_seconds=600) so a hang is killed, the
+# unit goes `failed`, and the next slot fires normally (self-healing). The
+# pure-FS batch-1 jobs have no hang risk and keep the oneshot default.
+TimeoutStartSec=600
 
 [Install]
 WantedBy=multi-user.target
