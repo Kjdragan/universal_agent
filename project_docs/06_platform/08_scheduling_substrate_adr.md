@@ -352,10 +352,13 @@ concretions:
   is retained as the notifier primitive (still used by tests and the
   `email_test` endpoint's sibling helper) but has **no production caller** after
   the heartbeat removal — retiring it is a follow-up.
-- **Follow-up (not in this phase):** a `mission_control_sweeper_liveness`
-  invariant that warns if the Phase B sweeper's cadence stamp goes stale, so a
-  wedged-but-alive sweeper pages through this same health path. Deferred to keep
-  the false-CRITICAL risk surface small.
+- **Follow-up — DONE (2026-06-05):** `services/invariants/mission_control_sweeper_liveness.py`
+  warns when the Phase B sweeper's per-tick heartbeat (`last_checked_at` on the
+  `__tier1_meta__` row, NOT the sparse `state_since` — the S3 trap) goes stale
+  beyond ~5× cadence, so a wedged-but-alive sweeper surfaces through this same
+  health path. **WARN-only** (never emails — the digest is criticals-only) and
+  phase-gated (no-op when `UA_MC_PHASE_1_ENABLED` is off), so it can't become a
+  false page. Threshold tunable via `UA_MC_SWEEPER_LIVENESS_MAX_STALE_SECONDS`.
 
 ### Decision 4 — Consolidations (keep / merge / drop)
 

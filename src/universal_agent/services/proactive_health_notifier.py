@@ -327,6 +327,16 @@ async def run_pre_flight_check(
 ) -> dict[str, Any]:
     """Run the proactive watchdog as a pre-flight before any agent invocation.
 
+    DEPRECATED (S5 Phase C, 2026-06-05): this in-process pre-flight has **no
+    production caller**. The heartbeat used to invoke it from
+    ``heartbeat_service._run_heartbeat``, but that compute moved to the
+    deploy-independent systemd timer (``services/proactive_health_timer_main.py``
+    → ``send_critical_digest``) because heartbeat skip-modes silenced it. This
+    function (and its per-finding ``_notify_critical`` / sidecar / in-memory
+    cooldown helpers) is retained only as a tested notifier primitive; prefer
+    the timer + ``send_critical_digest`` for new work. Slated for removal in a
+    follow-up cleanup once nothing references it.
+
     Always-on side of the heartbeat. Caller passes a `payload_builder` thunk
     that invokes `build_proactive_health_payload(...)` with whatever DB / cron
     state is locally available — this keeps the notifier free of import-time
