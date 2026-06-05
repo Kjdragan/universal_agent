@@ -1,0 +1,32 @@
+[Unit]
+Description=Universal Agent VP-coder workspace pruning (S5 Phase A batch 1 — deploy-independent weekly timer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ua
+Group=ua
+WorkingDirectory=/opt/universal_agent
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/universal_agent/src
+Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
+# Secrets-bootstrap backstop (mirrors universal-agent-proactive-health). .env
+# OVERRIDES these when present. vp_coder_workspace_pruner is pure FS (iterate +
+# shutil.move) with NO Infisical-resolved secrets; it reads only the plain
+# config knobs UA_VP_CODER_WORKSPACE_ROOT / UA_VP_CODER_WORKSPACE_RETENTION_HOURS
+# (both env-with-code-default, supplied by .env if set). The root is currently
+# unset in prod, so this job no-ops ("nothing to prune") today and continues to
+# no-op identically under systemd — faithful migration. The inline profile vars
+# are inert for this job and kept only for unit uniformity.
+Environment=UA_DEPLOYMENT_PROFILE=vps
+Environment=UA_INFISICAL_ENABLED=1
+Environment=INFISICAL_ENVIRONMENT=production
+EnvironmentFile=-/opt/universal_agent/.env
+# Archives stale VP-coder workspace subdirs into a sibling _archive dir. Always
+# exits 0 (unset root / missing root / archived all return 0).
+ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.scripts.vp_coder_workspace_pruner
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

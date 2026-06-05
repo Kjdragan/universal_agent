@@ -1,0 +1,18 @@
+[Unit]
+Description=Run Universal Agent scratchpad pruning daily at 07:00 America/Chicago (deploy-independent)
+
+[Timer]
+# OnCalendar wall-clock anchor — NEVER monotonic (OnUnitActiveSec/OnBootSec
+# alone). The deploy daemon-reload (~19x/day) wipes a monotonic timer's anchor
+# -> NextElapse=infinity -> silently dead (the 2026-05/06 dead-timer class).
+# systemd 255 on the VPS supports the OnCalendar timezone suffix, so the cron
+# `0 7 * * *` America/Chicago slot is encoded directly and DST is handled by
+# systemd. Persistent=true replays a slot missed inside a deploy window.
+OnCalendar=*-*-* 07:00:00 America/Chicago
+Persistent=true
+RandomizedDelaySec=120
+AccuracySec=1min
+Unit=universal-agent-scratch-pruning.service
+
+[Install]
+WantedBy=timers.target

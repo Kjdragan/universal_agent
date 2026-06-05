@@ -1,0 +1,17 @@
+[Unit]
+Description=Run Universal Agent vault contradiction lint on the 1st of each month at 07:00 America/Chicago (deploy-independent)
+
+[Timer]
+# OnCalendar wall-clock anchor — NEVER monotonic. This is the STRONGEST
+# Persistent=true case in batch 1: a monthly slot lost to a deploy restart = a
+# lost month. systemd 255 honors the timezone suffix, so cron `0 7 1 * *`
+# America/Chicago is encoded directly (DST handled by systemd) and Persistent
+# replays the 1st-of-month slot if it was missed inside a deploy window.
+OnCalendar=*-*-01 07:00:00 America/Chicago
+Persistent=true
+RandomizedDelaySec=120
+AccuracySec=1min
+Unit=universal-agent-vault-lint-contradictions.service
+
+[Install]
+WantedBy=timers.target

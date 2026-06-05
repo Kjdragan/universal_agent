@@ -419,8 +419,13 @@ def test_ensure_nightly_wiki_declares_notebooklm_auth_cookie_required(monkeypatc
 
 
 def test_ensure_vp_coder_workspace_pruning_creates_new(monkeypatch):
+    # vp_coder_workspace_pruning is migrated to a systemd timer (S5 Phase A
+    # batch 1), so by default the in-process registration is disabled. Use the
+    # emergency-rollback escape hatch to exercise the (still-supported) in-process
+    # create path and pin the real default cron.
     cron_stub = _CronBootstrapStub()
     monkeypatch.setattr(gateway_server, "_cron_service", cron_stub)
+    monkeypatch.setenv("UA_SYSTEMD_TIMER_MIGRATION_DISABLED", "1")
     monkeypatch.delenv("UA_VP_CODER_WORKSPACE_PRUNING_ENABLED", raising=False)
     monkeypatch.delenv("UA_VP_CODER_WORKSPACE_PRUNING_CRON", raising=False)
 
@@ -431,13 +436,31 @@ def test_ensure_vp_coder_workspace_pruning_creates_new(monkeypatch):
     job = cron_stub.jobs[0]
     assert job.metadata["system_job"] == "vp_coder_workspace_pruning"
     assert "vp_coder_workspace_pruner" in (job.command or "")
-    # Default: weekly Sunday 04:00 CT.
-    assert job.cron_expr == "0 4 * * 0"
+    # Default: weekly Sunday 17:05 CT.
+    assert job.cron_expr == "5 17 * * 0"
+
+
+def test_ensure_vp_coder_workspace_pruning_migrated_to_systemd_by_default(monkeypatch):
+    # Default (no rollback): the job is registered DISABLED so the systemd timer
+    # is the sole firer (no double-fire). With an empty cron stub, the helper
+    # registers no enabled row and returns None.
+    cron_stub = _CronBootstrapStub()
+    monkeypatch.setattr(gateway_server, "_cron_service", cron_stub)
+    monkeypatch.delenv("UA_SYSTEMD_TIMER_MIGRATION_DISABLED", raising=False)
+    monkeypatch.setenv("UA_VP_CODER_WORKSPACE_PRUNING_ENABLED", "1")
+
+    result = gateway_server._ensure_vp_coder_workspace_pruning_cron_job()
+
+    assert result is None
+    assert cron_stub.jobs == []
 
 
 def test_ensure_vp_coder_workspace_pruning_respects_disable_flag(monkeypatch):
+    # Under rollback (so migration isn't the thing disabling it), an explicit
+    # ENABLED=0 still yields no in-process registration.
     cron_stub = _CronBootstrapStub()
     monkeypatch.setattr(gateway_server, "_cron_service", cron_stub)
+    monkeypatch.setenv("UA_SYSTEMD_TIMER_MIGRATION_DISABLED", "1")
     monkeypatch.setenv("UA_VP_CODER_WORKSPACE_PRUNING_ENABLED", "0")
 
     result = gateway_server._ensure_vp_coder_workspace_pruning_cron_job()

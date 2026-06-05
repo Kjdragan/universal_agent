@@ -18928,7 +18928,10 @@ def _ensure_vp_coder_workspace_pruning_cron_job() -> Optional[dict[str, Any]]:
         command="!script universal_agent.scripts.vp_coder_workspace_pruner",
         description="Weekly pruning of stale VP-coder workspace subdirectories (default: archive after 7 days).",
         timeout_seconds=600,
-        enabled=_proactive_cron_enabled("UA_VP_CODER_WORKSPACE_PRUNING_ENABLED"),
+        # S5 Phase A batch 1: migrated to systemd timer — force in-process
+        # registration disabled (no double-fire). See _is_migrated_to_systemd.
+        enabled=_proactive_cron_enabled("UA_VP_CODER_WORKSPACE_PRUNING_ENABLED")
+        and not _is_migrated_to_systemd("vp_coder_workspace_pruning"),
         cron_env_var="UA_VP_CODER_WORKSPACE_PRUNING_CRON",
         timezone_env_var="UA_VP_CODER_WORKSPACE_PRUNING_TIMEZONE",
         # Ship 4 (Task Hub Observability Protocol): opted IN. Even GC
@@ -18957,7 +18960,10 @@ def _ensure_scratch_pruning_cron_job() -> Optional[dict[str, Any]]:
             "UA_SCRATCH_RETENTION_DAYS (default 30 days)."
         ),
         timeout_seconds=300,
-        enabled=_proactive_cron_enabled("UA_SCRATCH_PRUNING_ENABLED"),
+        # S5 Phase A batch 1: migrated to systemd timer — force in-process
+        # registration disabled (no double-fire). See _is_migrated_to_systemd.
+        enabled=_proactive_cron_enabled("UA_SCRATCH_PRUNING_ENABLED")
+        and not _is_migrated_to_systemd("scratch_pruning"),
         cron_env_var="UA_SCRATCH_PRUNING_CRON",
         timezone_env_var="UA_SCRATCH_PRUNING_TIMEZONE",
         skip_task_hub_link=True,
@@ -18992,7 +18998,10 @@ def _ensure_architecture_canvas_drift_cron_job() -> Optional[dict[str, Any]]:
             "on missing pointers, writes a markdown report on staleness."
         ),
         timeout_seconds=120,
-        enabled=_proactive_cron_enabled("UA_ARCH_CANVAS_DRIFT_ENABLED"),
+        # S5 Phase A batch 1: migrated to systemd timer — force in-process
+        # registration disabled (no double-fire). See _is_migrated_to_systemd.
+        enabled=_proactive_cron_enabled("UA_ARCH_CANVAS_DRIFT_ENABLED")
+        and not _is_migrated_to_systemd("architecture_canvas_drift"),
         cron_env_var="UA_ARCH_CANVAS_DRIFT_CRON",
         timezone_env_var="UA_ARCH_CANVAS_DRIFT_TIMEZONE",
         skip_task_hub_link=True,
@@ -19326,6 +19335,60 @@ def _proactive_cron_enabled(env_var: str, default: str = "1") -> bool:
     return os.getenv(env_var, default).strip().lower() in {"1", "true", "yes", "on"}
 
 
+# ---------------------------------------------------------------------------
+# S5 Phase A (batch 1) — deterministic maintenance/audit jobs migrated to
+# deploy-independent systemd OnCalendar+Persistent timers (ADR
+# project_docs/06_platform/08_scheduling_substrate_adr.md, Decision 1 / Phase A).
+#
+# The in-process gateway cron loses 17-49% of fires to the ~19 daily deploy
+# restarts; a daily/weekly/monthly slot landing inside a deploy window is
+# silently dropped. These 5 jobs now fire from systemd timers
+# (deployment/systemd/universal-agent-<job>.{timer,service}) instead.
+#
+# DOUBLE-FIRE PREVENTION: each _ensure_*_cron_job() ANDs
+# `not _is_migrated_to_systemd(<system_job>)` into its enabled= arg, so
+# _register_system_cron_job(enabled=False) flips any existing enabled
+# cron_jobs.json row to disabled on EVERY gateway boot. The row does NOT
+# silently re-enable across restarts (that is the whole point — see the
+# enabled=False branch of _register_system_cron_job), so the systemd timer is
+# the SOLE firer.
+#
+# ROLLBACK (reboot-durable, reversible, no redeploy): set
+# UA_SYSTEMD_TIMER_MIGRATION_DISABLED=1 and restart the gateway -> all jobs
+# below re-register in-process exactly as before; then disable the timers
+# (`systemctl disable --now universal-agent-<job>.timer`). Per-job rollback =
+# remove the system_job from the frozenset.
+# ---------------------------------------------------------------------------
+_SYSTEMD_MIGRATED_SYSTEM_JOBS: frozenset[str] = frozenset(
+    {
+        "scratch_pruning",
+        "vault_lint_contradictions",
+        "architecture_canvas_drift",
+        "insight_scoring_health",
+        "vp_coder_workspace_pruning",
+    }
+)
+
+
+def _is_migrated_to_systemd(system_job: str) -> bool:
+    """True when ``system_job`` is served by a deploy-independent systemd timer.
+
+    When True, the job's in-process cron registration is forced disabled so the
+    systemd timer is the sole firer (no double-fire). The global env escape
+    hatch ``UA_SYSTEMD_TIMER_MIGRATION_DISABLED=1`` restores in-process firing
+    for ALL migrated jobs (emergency rollback without a redeploy — pair with
+    disabling the timers).
+    """
+    if os.getenv("UA_SYSTEMD_TIMER_MIGRATION_DISABLED", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return False
+    return system_job in _SYSTEMD_MIGRATED_SYSTEM_JOBS
+
+
 def _register_system_cron_job(
     *,
     system_job: str,
@@ -19566,7 +19629,10 @@ def _ensure_insight_scoring_health_cron_job() -> Optional[dict[str, Any]]:
         command="!script universal_agent.scripts.insight_scoring_health",
         description="Weekly health check on hourly insight scoring (calibration audit).",
         timeout_seconds=600,
-        enabled=_proactive_cron_enabled("UA_INSIGHT_SCORING_HEALTH_ENABLED"),
+        # S5 Phase A batch 1: migrated to systemd timer — force in-process
+        # registration disabled (no double-fire). See _is_migrated_to_systemd.
+        enabled=_proactive_cron_enabled("UA_INSIGHT_SCORING_HEALTH_ENABLED")
+        and not _is_migrated_to_systemd("insight_scoring_health"),
         cron_env_var="UA_INSIGHT_SCORING_HEALTH_CRON",
         timezone_env_var="UA_INSIGHT_SCORING_HEALTH_TIMEZONE",
     )
@@ -19586,7 +19652,10 @@ def _ensure_vault_lint_contradictions_cron_job() -> Optional[dict[str, Any]]:
         command="!script universal_agent.scripts.vault_contradiction_lint",
         description="Monthly vault contradictions sweep across every enabled intel lane (report-only).",
         timeout_seconds=1800,
-        enabled=_proactive_cron_enabled("UA_VAULT_LINT_CONTRADICTIONS_ENABLED"),
+        # S5 Phase A batch 1: migrated to systemd timer — force in-process
+        # registration disabled (no double-fire). See _is_migrated_to_systemd.
+        enabled=_proactive_cron_enabled("UA_VAULT_LINT_CONTRADICTIONS_ENABLED")
+        and not _is_migrated_to_systemd("vault_lint_contradictions"),
         cron_env_var="UA_VAULT_LINT_CONTRADICTIONS_CRON",
         timezone_env_var="UA_VAULT_LINT_CONTRADICTIONS_TIMEZONE",
     )

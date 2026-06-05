@@ -146,7 +146,14 @@ def _render_report(*, summary: dict[str, Any], verdict: str, week_end: str) -> t
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
-    initialize_runtime_secrets(profile="local_workstation")
+    # Honor UA_DEPLOYMENT_PROFILE (set to `vps` by the systemd unit's
+    # Environment/EnvironmentFile) so a standalone timer run resolves the `vps`
+    # profile -> strict Infisical production load (LLM + AgentMail + DB env). A
+    # hardcoded profile="local_workstation" would defeat the unit backstop and
+    # silently run keyless under systemd. Mirrors
+    # services/proactive_health_timer_main.py. Dev leaves UA_DEPLOYMENT_PROFILE
+    # unset -> resolves local_workstation, so dev behavior is unchanged.
+    initialize_runtime_secrets()
 
     conn = connect_runtime_db(get_activity_db_path())
     try:

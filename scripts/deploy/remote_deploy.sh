@@ -240,6 +240,15 @@ echo "--> Installing proactive-health timer (S5 Phase C — deploy-independent w
 # watchdog/oom/sweeper installs above; the timer fires on its schedule regardless.
 sudo bash "$PROD_DIR/scripts/install_vps_proactive_health_timer.sh" \
   || echo "WARN: install_vps_proactive_health_timer.sh failed (non-fatal)"
+# S5 Phase A (batch 1): 5 slot-critical deterministic maintenance/audit jobs
+# migrated off the in-process gateway cron onto deploy-independent
+# OnCalendar+Persistent timers. Idempotent (re)install re-arms them each deploy
+# (OnCalendar+Persistent survive the daemon-reload; a monotonic timer would not).
+# Double-fire is prevented by gateway_server._is_migrated_to_systemd disabling
+# their in-process registration. Non-fatal — mirrors the timer installs above.
+echo "--> Installing S5 Phase A batch-1 deterministic timers (slot-critical maintenance jobs off the gateway loop)..."
+sudo bash "$PROD_DIR/scripts/install_vps_phase_a_batch1_timers.sh" \
+  || echo "WARN: install_vps_phase_a_batch1_timers.sh failed (non-fatal)"
 # Sync the CSI lane's systemd units (timers + services). Without
 # this, edits to CSI_Ingester/development/deployment/systemd/*.{service,timer}
 # land in the repo but never reach /etc/systemd/system/, so the
