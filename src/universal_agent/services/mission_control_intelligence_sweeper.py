@@ -462,7 +462,7 @@ class MissionControlSweeper:
             except Exception as exc:
                 last_attempt_summary = f"tier1 init failed: activity DB open: {exc}"
                 result.errors.append(f"tier1 activity DB open failed: {exc}")
-                self._write_tier1_meta(mc_conn, signature=None, annotation=last_attempt_summary, payload=None)
+                self._write_tier1_meta(mc_conn, signature=None, annotation=last_attempt_summary, payload=None, advance_fire_ts=False)
                 return
 
             try:
@@ -471,7 +471,7 @@ class MissionControlSweeper:
                 last_attempt_summary = f"tier1 init failed: evidence collection: {exc}"
                 result.errors.append(f"tier1 evidence collection failed: {exc}")
                 data_conn.close()
-                self._write_tier1_meta(mc_conn, signature=None, annotation=last_attempt_summary, payload=None)
+                self._write_tier1_meta(mc_conn, signature=None, annotation=last_attempt_summary, payload=None, advance_fire_ts=False)
                 return
             finally:
                 try:
@@ -507,7 +507,7 @@ class MissionControlSweeper:
             if skip_reason:
                 last_attempt_summary = f"tier1 skipped: {skip_reason}"
                 self._write_tier1_meta(mc_conn, signature=sig, annotation=last_attempt_summary,
-                                       payload=last_evidence_payload)
+                                       payload=last_evidence_payload, advance_fire_ts=False)
                 logger.debug("Tier-1 skipped: %s", skip_reason)
                 return
 
@@ -518,7 +518,7 @@ class MissionControlSweeper:
                 result.errors.append(last_attempt_summary)
                 logger.exception("Tier-1 discover raised")
                 self._write_tier1_meta(mc_conn, signature=sig, annotation=last_attempt_summary,
-                                       payload=last_evidence_payload)
+                                       payload=last_evidence_payload, advance_fire_ts=False)
                 return
 
             try:
@@ -528,7 +528,8 @@ class MissionControlSweeper:
                 result.errors.append(last_attempt_summary)
                 logger.exception("Tier-1 apply raised")
                 self._write_tier1_meta(mc_conn, signature=sig, annotation=last_attempt_summary,
-                                       payload={"model": model_used, "upsert_count": len(upserts), **(last_evidence_payload or {})})
+                                       payload={"model": model_used, "upsert_count": len(upserts), **(last_evidence_payload or {})},
+                                       advance_fire_ts=False)
                 return
 
             result.tier1_synthesized = True
@@ -541,7 +542,8 @@ class MissionControlSweeper:
                 "summary": summary,
                 "evidence_counts": evidence.get("counts"),
             }
-            self._write_tier1_meta(mc_conn, signature=sig, annotation=last_attempt_summary, payload=full_payload)
+            self._write_tier1_meta(mc_conn, signature=sig, annotation=last_attempt_summary, payload=full_payload,
+                                   advance_fire_ts=True)
             logger.info("🛰️  %s", last_attempt_summary)
         finally:
             try:
@@ -556,6 +558,7 @@ class MissionControlSweeper:
         signature: str | None,
         annotation: str,
         payload: dict[str, Any] | None,
+        advance_fire_ts: bool,
     ) -> None:
         """Always-callable meta-row writer for tier-1 attempt outcomes.
 
@@ -563,6 +566,18 @@ class MissionControlSweeper:
         so the diagnostics endpoint can surface the last attempt's status,
         signature, and payload. Catches its own exceptions so a meta-write
         failure cannot mask the real tier-1 outcome.
+
+        `state_since` records the **last actual FIRE (card synthesis)**, NOT
+        the last attempt — `_run_tier1_async` reads it back as
+        `prior_synth_iso` for `_tier1_skip_reason`'s floor/ceiling clock.
+        Only the real-fire path passes ``advance_fire_ts=True``; skip/error
+        paths pass ``advance_fire_ts=False`` so the age clock is not reset on
+        every sweep (the same dead-ceiling defect that froze tier-2).
+        `last_signature` is still updated on every write — signature
+        tracking is independent of fire-time, and `_tier1_skip_reason`
+        relies on observing the latest signature each sweep. First write
+        seeds `state_since` via the INSERT path; the flag only gates the
+        ``DO UPDATE`` branch.
         """
         now_iso = _utc_now_iso()
         try:
@@ -574,7 +589,9 @@ class MissionControlSweeper:
                     current_annotation, evidence_payload_json
                 ) VALUES (?, 'unknown', ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(tile_id) DO UPDATE SET
-                    state_since = excluded.state_since,
+                    state_since = CASE WHEN ?
+                        THEN excluded.state_since
+                        ELSE mission_control_tile_states.state_since END,
                     last_signature = excluded.last_signature,
                     last_checked_at = excluded.last_checked_at,
                     last_annotation_at = excluded.last_annotation_at,
@@ -589,6 +606,7 @@ class MissionControlSweeper:
                     now_iso,
                     annotation,
                     json.dumps(payload, default=str) if payload is not None else None,
+                    1 if advance_fire_ts else 0,
                 ),
             )
         except Exception:
@@ -680,6 +698,7 @@ class MissionControlSweeper:
                     mc_conn,
                     annotation=f"tier2 skipped: {skip_reason}",
                     payload={"cascade_reason": cascade_reason},
+                    advance_fire_ts=False,
                 )
                 logger.debug("Tier-2 skipped: %s", skip_reason)
                 return
@@ -698,6 +717,7 @@ class MissionControlSweeper:
                     mc_conn,
                     annotation=f"tier2 init failed: COS import: {exc}",
                     payload={"cascade_reason": cascade_reason},
+                    advance_fire_ts=False,
                 )
                 result.errors.append(f"tier2 import failed: {exc}")
                 return
@@ -712,6 +732,7 @@ class MissionControlSweeper:
                     mc_conn,
                     annotation=annotation,
                     payload={"cascade_reason": cascade_reason},
+                    advance_fire_ts=False,
                 )
                 return
 
@@ -732,6 +753,7 @@ class MissionControlSweeper:
                     "model": model_used,
                     "headline": headline,
                 },
+                advance_fire_ts=True,
             )
             logger.info(
                 "🛰️  Tier-2 readout refreshed (cascade=%s, model=%s)",
@@ -821,12 +843,30 @@ class MissionControlSweeper:
         *,
         annotation: str,
         payload: dict[str, Any] | None,
+        advance_fire_ts: bool,
     ) -> None:
         """Always-callable meta-row writer for tier-2 attempt outcomes.
 
-        Mirrors `_write_tier1_meta` but for the `__tier2_meta__`
-        sentinel row. Catches its own exceptions so a meta-write
-        failure can never mask the real tier-2 outcome.
+        `state_since` records the **last actual FIRE (readout synthesis)**,
+        NOT the last attempt. `_run_tier2_async` reads it back as
+        `prior_synth_iso`, and `_tier2_skip_reason` uses it as the
+        "age since last readout" clock that drives the idle-refresh ceiling.
+        If a skip/error write advanced `state_since`, that clock would reset
+        to ~0 on every 60s sweep, the `age_s >= ceiling_seconds` branch
+        could never trigger, and the readout would freeze on an idle system
+        (the bug this fix removes).
+
+        Therefore only the real-fire path passes ``advance_fire_ts=True``;
+        every skip/error path passes ``advance_fire_ts=False``, which leaves
+        the prior `state_since` intact while still refreshing the diagnostic
+        columns (`last_checked_at`, `last_annotation_at`,
+        `current_annotation`, `evidence_payload_json`) so /diagnostics stays
+        live. First-write semantics are unaffected: when no row exists the
+        INSERT seeds `state_since = now`; the flag only gates the
+        ``DO UPDATE`` branch (via the ``CASE`` below).
+
+        Mirrors `_write_tier1_meta`. Catches its own exceptions so a
+        meta-write failure can never mask the real tier-2 outcome.
         """
         now_iso = _utc_now_iso()
         try:
@@ -838,7 +878,9 @@ class MissionControlSweeper:
                     current_annotation, evidence_payload_json
                 ) VALUES (?, 'unknown', ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(tile_id) DO UPDATE SET
-                    state_since = excluded.state_since,
+                    state_since = CASE WHEN ?
+                        THEN excluded.state_since
+                        ELSE mission_control_tile_states.state_since END,
                     last_checked_at = excluded.last_checked_at,
                     last_annotation_at = excluded.last_annotation_at,
                     current_annotation = excluded.current_annotation,
@@ -852,6 +894,7 @@ class MissionControlSweeper:
                     now_iso,
                     annotation,
                     json.dumps(payload, default=str) if payload is not None else None,
+                    1 if advance_fire_ts else 0,
                 ),
             )
         except Exception:

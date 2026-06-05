@@ -14,7 +14,7 @@ code_paths:
   - src/universal_agent/services/mission_control_event_titles.py
   - src/universal_agent/services/mission_control_prompts.py
   - src/universal_agent/gateway_server.py
-last_verified: 2026-06-04
+last_verified: 2026-06-05
 ---
 
 # Mission Control Intelligence
@@ -143,12 +143,44 @@ hashes it (`evidence_signature`), and decides whether to call the LLM via
 It **always** writes a `__tier1_meta__` sentinel row (`_write_tier1_meta`) on every path —
 success, skip, or exception — so the diagnostics endpoint can show exactly what happened on
 the last attempt instead of a bare `null`. The sentinel is stored as a row in
-`mission_control_tile_states` with `tile_id='__tier1_meta__'`.
+`mission_control_tile_states` with `tile_id='__tier1_meta__'`. Its `state_since` column means
+**last actual FIRE**, not last attempt: `_run_tier1_async` reads it back as `prior_synth_iso`
+for `_tier1_skip_reason`'s floor/ceiling clock, so only the real-fire path passes
+`advance_fire_ts=True` to `_write_tier1_meta`; skip/error writes pass `advance_fire_ts=False`
+and preserve the prior `state_since` while still refreshing the diagnostic columns.
+`last_signature` is still updated on every write — signature tracking is independent of
+fire-time.
 
 **Tier-2** (`_run_tier2_async`): decides via `_tier2_cascade_reason` (tier-0 transitions, or
 tier-1 produced new cards) and `_tier2_skip_reason` (first-run always; floor protection;
 ceiling-driven idle refresh; else only on a cascade signal), then calls the Chief-of-Staff
-`generate_and_store_readout`. Also writes a `__tier2_meta__` sentinel row.
+`generate_and_store_readout`. Also writes a `__tier2_meta__` sentinel row via
+`_write_tier2_meta`, with the **same fire-time-vs-attempt-time discipline** as tier-1:
+`state_since` advances only on a real synthesis (`advance_fire_ts=True`) and is preserved on
+skip/error. This is what makes the **idle-refresh ceiling actually reachable** — a skip no
+longer resets the age clock to ~0 on every 60 s sweep, so on an otherwise-idle system (no
+tier-0 flip, no new tier-1 cards) `age_s` climbs until it crosses `tier2_ceiling_seconds`
+(default **300 s**) and `_tier2_skip_reason` returns `None`, forcing a refresh.
+
+> **Cost ⇄ freshness tradeoff (`tier2_ceiling_seconds`).** Each tier-2 fire is a full
+> Chief-of-Staff LLM synthesis: `synthesize_readout` runs at
+> `os.getenv("UA_MISSION_CONTROL_COS_MODEL") or resolve_model("opus")` (glm-5.1 via the ZAI
+> proxy as shipped) over the whole evidence+cards bundle. Tier-2 has **no** evidence-signature
+> gate (unlike tier-1), so a fully idle system re-synthesizes every `tier2_ceiling_seconds`
+> ≈ **288 readouts/day** even when nothing has changed. The `300 s` default is the as-shipped
+> idle ceiling that the freeze fix restored — *correctness*, not a tuned steady-state spend.
+> Two clean calibration levers remain (operator's call, deliberately **not** bundled into the
+> freeze fix): widen `UA_MISSION_CONTROL_TIER2_CEILING_S` for idle, and/or add a tier-2
+> evidence-signature gate so idle re-synthesis fires only when the bundle actually changed OR
+> the ceiling is hit.
+
+> **History note (2026-06-05, S3).** The Chief-of-Staff readout had been **frozen** —
+> ~1 readout/24 h — because `_write_tier2_meta`/`_write_tier1_meta` stamped
+> `state_since = now` on *every* write, including skips. That reset the idle-age clock each
+> sweep so the `age_s >= tier2_ceiling_seconds` branch of `_tier2_skip_reason` was dead and
+> only a genuine cascade (rare on an idle system) ever refreshed the brief. The fix decoupled
+> last-FIRE from last-ATTEMPT via `advance_fire_ts` (above); it did **not** change the
+> ceiling/floor values.
 
 ### Operator force-refresh
 
