@@ -118,14 +118,13 @@ class TestConvenienceHelpers:
         monkeypatch.delenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", raising=False)
         assert resolve_haiku() == ZAI_MODEL_MAP["haiku"]
 
-    def test_resolve_haiku_is_NOT_glm_4_5_air(self, monkeypatch):
-        """Regression guard for the atom-poem incident: the SDK's internal
-        haiku-tier preflight calls (system-prompt cache, compaction) must
-        NOT land on glm-4.5-air — that lane wedged the daemon for 12+
-        minutes per failed attempt. Operational decision was to remap
-        haiku to glm-5-turbo."""
+    def test_resolve_haiku_is_glm_4_5_air(self, monkeypatch):
+        """OPERATOR LOCK (Kevin, 2026-06-05): the haiku tier MUST map to
+        glm-4.5-air. glm-4.5-air has been tested repeatedly and works;
+        do not remap it. This guard fails loudly if someone reverts the
+        mapping to glm-5-turbo (or anything else)."""
         monkeypatch.delenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", raising=False)
-        assert resolve_haiku() != "glm-4.5-air"
+        assert resolve_haiku() == "glm-4.5-air"
 
     def test_resolve_sonnet_returns_real_sonnet(self, monkeypatch):
         """Previously this had a forced override returning opus —
