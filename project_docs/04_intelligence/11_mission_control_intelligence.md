@@ -6,6 +6,7 @@ subsystem: intel-mission-control
 code_paths:
   - src/universal_agent/supervisors/*.py
   - src/universal_agent/services/mission_control_intelligence_sweeper.py
+  - src/universal_agent/services/mission_control_sweeper_main.py
   - src/universal_agent/services/mission_control_db.py
   - src/universal_agent/services/mission_control_tiles.py
   - src/universal_agent/services/mission_control_cards.py
@@ -62,7 +63,7 @@ the noisy `/dashboard/events` feed (`mission_control_event_titles.py`).
 
 ```mermaid
 flowchart TD
-    LOOP[run_sweeper_loop<br/>every UA_MISSION_CONTROL_SWEEPER_INTERVAL_S, default 60s] -->|asyncio.to_thread| TICK[sweeper.tick - sync]
+    LOOP[run_sweeper_loop<br/>own systemd service: universal-agent-mission-control-sweeper<br/>every UA_MISSION_CONTROL_SWEEPER_INTERVAL_S, default 60s] -->|asyncio.to_thread| TICK[sweeper.tick - sync]
     TICK --> T0[_run_tier0<br/>poll 9 tiles, persist state,<br/>detect transitions, auto-create/retire infra cards]
     LOOP --> ASYNC[run_async_tiers - awaited after tick]
     ASYNC --> T1[_run_tier1_async<br/>glm-4.7 card discovery<br/>signature + floor/ceiling gated]
@@ -78,11 +79,23 @@ flowchart TD
 ## The sweeper
 
 `mission_control_intelligence_sweeper.py::MissionControlSweeper` is the orchestration core.
-A process-wide singleton (`get_sweeper`) is started from the gateway `lifespan` hook via
-`run_sweeper_loop(stop_event)` — but **only when `UA_MC_PHASE_1_ENABLED` is truthy**
-(checked in `gateway_server.py` lifespan; if off, the loop isn't even started, to avoid
-per-minute log noise). The loop is also wrapped in `_run_after_deployment_window` so it
-doesn't fire during the post-deploy restart window.
+A process-wide singleton (`get_sweeper`) runs `run_sweeper_loop(stop_event)` as its own
+**long-lived systemd service**, `universal-agent-mission-control-sweeper.service`
+(`Type=simple`; entrypoint `mission_control_sweeper_main.py::main` → `_run`) — **not** as a
+gateway `lifespan` task. It was relocated out of the gateway in S5 Phase B (see
+`06_platform/08_scheduling_substrate_adr.md`, Decision 2) so its multi-GB `tick()` can never
+block the gateway/heartbeat event loop and a gateway deploy no longer kills the
+Chief-of-Staff readout. The launcher calls `infisical_loader.py::initialize_runtime_secrets`
+**first** so the tier-1/tier-2 LLM lane has its keys, then drives the unchanged loop until
+SIGTERM. The service restarts on each deploy to pick up new code, but the durable
+`__tier1_meta__` / `__tier2_meta__` cadence sentinels (written by
+`MissionControlSweeper._write_tier1_meta` / `_write_tier2_meta`) survive the restart, so the
+floor/ceiling clock is **not** reset — the win is process isolation, not deploy-immunity.
+When `UA_MC_PHASE_1_ENABLED` is unset the launcher logs and idles (awaiting SIGTERM) without
+starting the loop at all — mirroring the gateway's old start-guard. The sweeper
+remains strictly **observational** — its only writes are tile colors
+(`mission_control_tile_states`), tier-1 cards, and the tier-2 readout — and it reads durable
+DB state (`durable/db.py::get_activity_db_path`), never gateway in-process memory.
 
 Cadence and gating come from `SweeperConfig` (`SweeperConfig.from_env`), all env-overridable:
 
@@ -257,9 +270,10 @@ OR'd signals, reusing the canonical deploy-window primitives: (1)
 the restart by `remote_deploy.sh`, OR'd with a ≤60s process-uptime fallback), and (2) the
 freshest event predates **this** gateway process's start (`cron_service.py::_process_start_time`)
 — meaning the current process has emitted nothing yet, so the silence is entirely the restart
-gap. Signal (2) is load-bearing: the sweeper loop only starts **after** the deploy window
-closes (`gateway_server.py::_run_after_deployment_window`), so the first sweep that catches
-the gap usually runs once the flag has already cleared and signal (1) is False. A genuine
+gap. Signal (2) is load-bearing: the sweeper loop's first `tick()` only runs after its
+`interval` wait (default 60s) once its own service has (re)started, so the first sweep that
+catches the gap usually runs once the deploy-window flag has already cleared and signal (1)
+is False. A genuine
 running-but-silent gateway — last event *after* the process start with no active deploy
 window (e.g. a hung event loop) — falls through to RED and still alarms. Fail-loud: any probe
 error is treated as "not a restart artifact" so a real outage is never masked. Because tier-0

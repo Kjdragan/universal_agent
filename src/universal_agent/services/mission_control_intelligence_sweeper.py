@@ -131,9 +131,11 @@ class MissionControlSweeper:
     Phase 0: structural skeleton only. `tick()` early-returns with a
     `skipped_reason` until later phases enable their respective tiers.
 
-    The sweeper is intentionally NOT a long-running async task at this
-    phase. Wiring the gateway to call `tick()` on a schedule is part of
-    Phase 1's deliverable.
+    The loop driver `run_sweeper_loop` is scheduled by the standalone
+    systemd launcher `mission_control_sweeper_main.py` (its own
+    `universal-agent-mission-control-sweeper.service` process), not by the
+    gateway lifespan — see `06_platform/08_scheduling_substrate_adr.md`
+    Decision 2 (S5 Phase B).
     """
 
     def __init__(self, config: SweeperConfig | None = None) -> None:
@@ -1138,7 +1140,8 @@ def _config_summary(cfg: SweeperConfig) -> dict[str, Any]:
 
 
 async def run_sweeper_loop(stop_event: "Any") -> None:
-    """Background-task body for the gateway's `lifespan` startup hook.
+    """Loop body driven by the standalone `mission_control_sweeper_main`
+    systemd launcher (relocated out of the gateway lifespan in S5 Phase B).
 
     Awaits `stop_event.wait()` with a timeout equal to the configured
     sweeper interval. On every interval expiry it calls `tick()` once.
@@ -1168,7 +1171,7 @@ async def run_sweeper_loop(stop_event: "Any") -> None:
             break
         try:
             # CRITICAL: sweeper.tick() is sync and queries activity_state.db
-            # (currently 1.23 GB) across many tiles in _run_tier0. Running
+            # (multi-GB and growing) across many tiles in _run_tier0. Running
             # that sync work directly on the asyncio loop blocks the gateway
             # for 15-30 seconds at a time once the DB grows past ~500 MB —
             # the dashboard's `/api/v1/version` probe (and every other HTTP

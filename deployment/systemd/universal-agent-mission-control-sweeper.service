@@ -1,0 +1,42 @@
+[Unit]
+Description=Universal Agent Mission Control Sweeper (extracted from gateway lifespan — S5 Phase B)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ua
+Group=ua
+WorkingDirectory=/opt/universal_agent
+# Mirror the gateway base unit's runtime env so `universal_agent` resolves from
+# the repo src/ tree (it is NOT installed in site-packages) and pydantic's
+# logfire plugin stays disabled.
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/universal_agent/src
+Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
+# Secrets-bootstrap backstop. The authoritative source for these is the
+# deploy-bootstrapped .env loaded below — per systemd semantics, EnvironmentFile=
+# OVERRIDES Environment= regardless of line order, so when .env is present (the
+# normal prod case) its values win. These inline lines only take effect if .env
+# is absent (EnvironmentFile=- tolerates a missing file): they guarantee
+# initialize_runtime_secrets() still resolves the `vps` profile (→ strict
+# Infisical load from production) rather than defaulting to `local_workstation`
+# and skipping Infisical, which would leave the tier-1/tier-2 LLM lane keyless.
+Environment=UA_DEPLOYMENT_PROFILE=vps
+Environment=UA_INFISICAL_ENABLED=1
+Environment=INFISICAL_ENVIRONMENT=production
+# The deploy-bootstrapped .env carries the Infisical machine-identity
+# credentials (INFISICAL_CLIENT_ID/SECRET/PROJECT_ID) plus the same profile vars.
+# Keep this as the ONLY EnvironmentFile — a second one could clobber
+# INFISICAL_ENVIRONMENT.
+EnvironmentFile=-/opt/universal_agent/.env
+ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.services.mission_control_sweeper_main
+Restart=always
+RestartSec=5
+# Resource limit — the sweeper opens the multi-GB activity_state.db and runs
+# tier-1/tier-2 LLM synthesis in-process; cap memory so a runaway sweep cannot
+# consume the VPS. The hard tick() work is offloaded via asyncio.to_thread.
+MemoryMax=3G
+
+[Install]
+WantedBy=multi-user.target

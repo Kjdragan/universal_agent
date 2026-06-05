@@ -223,6 +223,14 @@ sudo bash "$PROD_DIR/scripts/install_vps_service_watchdog.sh" \
   || echo "WARN: install_vps_service_watchdog.sh failed (non-fatal)"
 sudo bash "$PROD_DIR/scripts/install_vps_oom_alert.sh" \
   || echo "WARN: install_vps_oom_alert.sh failed (non-fatal)"
+echo "--> Installing Mission Control sweeper service (S5 Phase B — extracted from gateway lifespan)..."
+# Standalone long-running service for the Mission Control sweeper, isolated from
+# the gateway event loop. Idempotent (re)install + restart picks up new code each
+# deploy; durable __tierN_meta__ DB cadence survives the restart. Non-fatal —
+# a unit-install hiccup must not fail a deploy; systemd will (re)start the
+# service on its Restart=always policy. Mirrors the watchdog/oom installs above.
+sudo bash "$PROD_DIR/scripts/install_vps_mission_control_sweeper.sh" \
+  || echo "WARN: install_vps_mission_control_sweeper.sh failed (non-fatal)"
 # Sync the CSI lane's systemd units (timers + services). Without
 # this, edits to CSI_Ingester/development/deployment/systemd/*.{service,timer}
 # land in the repo but never reach /etc/systemd/system/, so the
