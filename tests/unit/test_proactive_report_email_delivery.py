@@ -14,6 +14,7 @@ import sqlite3
 
 import pytest
 
+from universal_agent.services import llm_classifier
 from universal_agent.services import proactive_intelligence_report as pir
 
 
@@ -148,7 +149,7 @@ async def test_reasoning_llm_uses_glm_4_5_air(monkeypatch):
         return "  Colleague-style analysis of the pipeline.  "
 
     monkeypatch.setattr(
-        "universal_agent.services.llm_classifier._call_llm", _fake_call_llm
+        llm_classifier, "_call_llm", _fake_call_llm
     )
 
     out = await pir._call_reasoning_llm({"proactive_tasks": {"completed": 2}}, "afternoon")
@@ -163,7 +164,7 @@ async def test_reasoning_llm_falls_back_on_exception(monkeypatch):
     async def _boom(*, system, user, model=None, max_tokens=1024):
         raise RuntimeError("zai unreachable")
 
-    monkeypatch.setattr("universal_agent.services.llm_classifier._call_llm", _boom)
+    monkeypatch.setattr(llm_classifier, "_call_llm", _boom)
 
     stats = {
         "proactive_tasks": {"completed": 2, "open": 1, "failed": 0},
@@ -180,7 +181,7 @@ async def test_reasoning_llm_empty_response_falls_back(monkeypatch):
     async def _empty(*, system, user, model=None, max_tokens=1024):
         return "   "
 
-    monkeypatch.setattr("universal_agent.services.llm_classifier._call_llm", _empty)
+    monkeypatch.setattr(llm_classifier, "_call_llm", _empty)
 
     out = await pir._call_reasoning_llm({"proactive_tasks": {}, "budget": {}}, "morning")
     assert "Proactive pipeline morning summary" in out
