@@ -129,3 +129,58 @@ async def test_send_exception_leaves_email_sent_false(tmp_path, _stub_compose):
     assert result["email_message_id"] == ""
     # A send failure must not block the dashboard store.
     assert result["stored_for_dashboard"] is True
+
+
+# ── _call_reasoning_llm: routed to ZAI glm-4.5-air (2026-06-05) ──────────────
+# The reasoning pass moved off a direct google-genai gemini-2.0-flash call
+# (whose API key was 403 API_KEY_SERVICE_BLOCKED) onto the central ZAI-backed
+# _call_llm helper, pinned to the haiku-equivalent glm-4.5-air. These lock the
+# model pin + the deterministic fallback.
+
+
+@pytest.mark.asyncio
+async def test_reasoning_llm_uses_glm_4_5_air(monkeypatch):
+    captured: dict = {}
+
+    async def _fake_call_llm(*, system, user, model=None, max_tokens=1024):
+        captured["model"] = model
+        captured["user"] = user
+        return "  Colleague-style analysis of the pipeline.  "
+
+    monkeypatch.setattr(
+        "universal_agent.services.llm_classifier._call_llm", _fake_call_llm
+    )
+
+    out = await pir._call_reasoning_llm({"proactive_tasks": {"completed": 2}}, "afternoon")
+
+    assert out == "Colleague-style analysis of the pipeline."  # stripped
+    assert captured["model"] == "glm-4.5-air"  # haiku-equivalent, explicitly pinned
+    assert "afternoon" in captured["user"]
+
+
+@pytest.mark.asyncio
+async def test_reasoning_llm_falls_back_on_exception(monkeypatch):
+    async def _boom(*, system, user, model=None, max_tokens=1024):
+        raise RuntimeError("zai unreachable")
+
+    monkeypatch.setattr("universal_agent.services.llm_classifier._call_llm", _boom)
+
+    stats = {
+        "proactive_tasks": {"completed": 2, "open": 1, "failed": 0},
+        "budget": {"used": 3, "daily_limit": 10},
+    }
+    out = await pir._call_reasoning_llm(stats, "afternoon")
+
+    assert "Proactive pipeline afternoon summary" in out
+    assert "LLM analysis unavailable" in out
+
+
+@pytest.mark.asyncio
+async def test_reasoning_llm_empty_response_falls_back(monkeypatch):
+    async def _empty(*, system, user, model=None, max_tokens=1024):
+        return "   "
+
+    monkeypatch.setattr("universal_agent.services.llm_classifier._call_llm", _empty)
+
+    out = await pir._call_reasoning_llm({"proactive_tasks": {}, "budget": {}}, "morning")
+    assert "Proactive pipeline morning summary" in out

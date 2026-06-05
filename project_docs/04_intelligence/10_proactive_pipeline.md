@@ -15,7 +15,7 @@ code_paths:
   - src/universal_agent/scripts/hourly_intel_digest_cron.py
   - src/universal_agent/services/recent_briefs_index.py
   - src/universal_agent/proactive_signals.py
-last_verified: 2026-06-04
+last_verified: 2026-06-05
 ---
 
 # Proactive Pipeline
@@ -481,7 +481,13 @@ implicit signals without understanding this loop.
   it `False` instead of falsely claiming delivery. (Before the 2026-06-04 fix
   the agent imported a non-existent `services.mail_service.MailService`, fell
   back to a log-only `_DummyMail`, and `deliver_intelligence_report` recorded
-  `email_sent=True` unconditionally — so 0 sent reports looked "(emailed)".)
+  `email_sent=True` unconditionally — so 0 sent reports looked "(emailed)".) The
+  report's narrative comes from `compose_intelligence_report` → `_call_reasoning_llm`,
+  which runs on the ZAI haiku-equivalent `glm-4.5-air` via `llm_classifier._call_llm`
+  (explicitly pinned, like `youtube_daily_digest.py`'s `DIGEST_MAP_MODEL_DEFAULT`);
+  it replaced a direct google-genai `gemini-2.0-flash` call whose key was blocked
+  (`403 API_KEY_SERVICE_BLOCKED`), and degrades to a deterministic templated
+  summary (`_fallback_analysis`) on any failure so the report always ships.
 - **Proactive artifact digest** (`proactive_artifact_digest`, 8:35 AM Houston):
   `proactive_digest_agent.py::_run_digest` emails Kevin a digest of new CODIE
   PRs, tutorial builds, convergence insights via the real `AgentMailService`

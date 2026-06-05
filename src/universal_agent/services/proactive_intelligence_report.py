@@ -19,7 +19,6 @@ from datetime import datetime, timedelta, timezone
 import html
 import json
 import logging
-import os
 import sqlite3
 from typing import Any
 import uuid
@@ -204,53 +203,54 @@ def gather_pipeline_stats(conn: sqlite3.Connection) -> dict[str, Any]:
 async def _call_reasoning_llm(stats: dict[str, Any], period: str) -> str:
     """Call an LLM to interpret pipeline stats and provide actionable analysis.
 
-    This is the "colleague, not a dashboard" reasoning pass that Kevin requested.
-    Uses Gemini Flash for fast, judgment-oriented analysis.
+    The "colleague, not a dashboard" reasoning pass. Routes through the central
+    ZAI-backed LLM helper (``llm_classifier._call_llm``) on the haiku-equivalent
+    model ``glm-4.5-air`` — fast and cheap for a short briefing, on the ZAI plan
+    UA already pays for. The model is pinned explicitly (rather than via
+    ``resolve_haiku()``) so this lightweight call always lands on glm-4.5-air
+    regardless of any global haiku-tier env override, mirroring
+    ``youtube_daily_digest.py``'s ``DIGEST_MAP_MODEL_DEFAULT``. Any failure falls
+    back to a deterministic templated summary so the report always ships.
+
+    (Replaces a direct google-genai ``gemini-2.0-flash`` call whose API key was
+    blocked — ``403 API_KEY_SERVICE_BLOCKED`` — silently degrading every report
+    to the fallback.)
     """
-    try:
-        from google import genai
-    except ImportError:
-        logger.warning("google-genai not available; returning static analysis")
-        return _fallback_analysis(stats, period)
-
-    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY", "")
-    if not api_key:
-        logger.warning("No Gemini API key available; returning static analysis")
-        return _fallback_analysis(stats, period)
-
     stats_json = json.dumps(stats, indent=2, default=str)
-    prompt = f"""You are Simone, Kevin's AI chief of staff, briefing him on the autonomous proactive pipeline.
-
-Here are the pipeline stats since the last report:
-
-```json
-{stats_json}
-```
-
-This is the {period} briefing. Write a concise, conversational analysis (2-4 paragraphs):
-
-1. **What happened**: Summarize proactive task activity — what was created, completed, or failed.
-2. **System health**: Comment on budget utilization and system load. Is the system being used enough, or is it stressed?
-3. **What to do next**: Provide 1-3 actionable recommendations. Think like a colleague, not a dashboard.
-   - If tasks failed, suggest investigation priorities.
-   - If the system is under-utilized, suggest topics or types of work to explore.
-   - If the system is over-utilized, suggest throttling strategies.
-
-Be specific. Reference actual numbers. Don't hedge — give direct advice.
-Keep it under 300 words.
-"""
+    system = (
+        "You are Simone, Kevin's AI chief of staff, briefing him on the "
+        "autonomous proactive pipeline. Write a concise, conversational analysis "
+        "(2-4 paragraphs, under 300 words):\n"
+        "1. What happened: summarize proactive task activity — what was created, "
+        "completed, or failed.\n"
+        "2. System health: comment on budget utilization and system load — is the "
+        "system being used enough, or is it stressed?\n"
+        "3. What to do next: give 1-3 actionable recommendations. Think like a "
+        "colleague, not a dashboard — if tasks failed, suggest investigation "
+        "priorities; if under-utilized, suggest work to explore; if over-utilized, "
+        "suggest throttling.\n"
+        "Be specific, reference actual numbers, and don't hedge."
+    )
+    user = (
+        f"This is the {period} briefing. Pipeline stats since the last report:\n\n"
+        f"```json\n{stats_json}\n```"
+    )
 
     try:
-        client = genai.Client(api_key=api_key)
-        response = await client.aio.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt,
-        )
-        text = response.text or ""
-        if text.strip():
-            return text.strip()
+        from universal_agent.services.llm_classifier import _call_llm
+
+        text = (
+            await _call_llm(
+                system=system,
+                user=user,
+                model="glm-4.5-air",
+                max_tokens=700,
+            )
+        ).strip()
+        if text:
+            return text
         return _fallback_analysis(stats, period)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — never let the briefing block delivery
         logger.warning("LLM reasoning call failed: %s", exc)
         return _fallback_analysis(stats, period)
 
