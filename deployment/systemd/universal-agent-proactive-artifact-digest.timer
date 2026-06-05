@@ -1,0 +1,14 @@
+[Unit]
+Description=Run the Universal Agent proactive artifact digest daily at 08:35 America/Chicago (deploy-independent)
+
+[Timer]
+# OnCalendar wall-clock anchor — NEVER monotonic. cron `35 8 * * *`
+# America/Chicago, DST handled by systemd; Persistent replays a missed slot.
+OnCalendar=*-*-* 08:35:00 America/Chicago
+Persistent=true
+RandomizedDelaySec=120
+AccuracySec=1min
+Unit=universal-agent-proactive-artifact-digest.service
+
+[Install]
+WantedBy=timers.target

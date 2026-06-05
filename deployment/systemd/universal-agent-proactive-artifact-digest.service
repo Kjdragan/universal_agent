@@ -1,0 +1,32 @@
+[Unit]
+Description=Universal Agent proactive artifact digest email (S5 Phase A batch 2 — deploy-independent daily timer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ua
+Group=ua
+WorkingDirectory=/opt/universal_agent
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/universal_agent/src
+Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
+# Secrets-bootstrap backstop (mirrors universal-agent-proactive-health) — LOAD
+# BEARING. proactive_digest_agent sends an AgentMail digest + reads the activity
+# DB. Its main() now calls initialize_runtime_secrets() with NO profile arg so
+# it honors UA_DEPLOYMENT_PROFILE below; the inline vars are the .env-absent
+# backstop forcing the strict `vps` production load (else a keyless run).
+Environment=UA_DEPLOYMENT_PROFILE=vps
+Environment=UA_INFISICAL_ENABLED=1
+Environment=INFISICAL_ENVIRONMENT=production
+EnvironmentFile=-/opt/universal_agent/.env
+# Returns a dict (exit 0) even on failure — never marks .service failed by a
+# finding.
+ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.scripts.proactive_digest_agent
+MemoryMax=1G
+# AgentMail WebSocket can hang; bound to the job's old in-process budget
+# (timeout_seconds=300) so a hung run self-heals on the next slot.
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

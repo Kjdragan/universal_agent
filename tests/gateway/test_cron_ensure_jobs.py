@@ -199,28 +199,28 @@ def test_ensure_youtube_daily_digest_cron_job_respects_env_overrides(monkeypatch
             "_ensure_proactive_report_morning_cron_job",
             "proactive_report_morning",
             "UA_PROACTIVE_REPORTS_ENABLED",
-            "0 7 * * *",
+            "5 7 * * *",
             "proactive_report_agent",
         ),
         (
             "_ensure_proactive_report_midday_cron_job",
             "proactive_report_midday",
             "UA_PROACTIVE_REPORTS_ENABLED",
-            "0 12 * * *",
+            "5 12 * * *",
             "proactive_report_agent",
         ),
         (
             "_ensure_proactive_report_afternoon_cron_job",
             "proactive_report_afternoon",
             "UA_PROACTIVE_REPORTS_ENABLED",
-            "0 16 * * *",
+            "5 16 * * *",
             "proactive_report_agent",
         ),
         (
             "_ensure_proactive_artifact_digest_cron_job",
             "proactive_artifact_digest",
             "UA_PROACTIVE_ARTIFACT_DIGEST_ENABLED",
-            "0 8 * * *",
+            "35 8 * * *",
             "proactive_digest_agent",
         ),
     ],
@@ -231,6 +231,11 @@ def test_ensure_proactive_cron_jobs_create_with_catch_up_enabled(
     cron_stub = _CronBootstrapStub()
     monkeypatch.setattr(gateway_server, "_cron_service", cron_stub)
     monkeypatch.setenv(enable_env, "1")
+    # Some of these jobs are migrated to systemd timers (S5 Phase A batch 2), so
+    # by default the helper registers them disabled. This test exercises the
+    # helper's intrinsic create logic, so neutralize the migration gate via the
+    # rollback env (no-op for the non-migrated params).
+    monkeypatch.setenv("UA_SYSTEMD_TIMER_MIGRATION_DISABLED", "1")
 
     helper = getattr(gateway_server, ensure_attr)
     result = helper()
@@ -268,6 +273,9 @@ def test_ensure_proactive_cron_jobs_update_existing(monkeypatch, ensure_attr, sy
     )
     cron_stub.jobs = [existing]
     monkeypatch.setattr(gateway_server, "_cron_service", cron_stub)
+    # Neutralize the systemd-migration gate so this test exercises the helper's
+    # intrinsic update-existing logic (migrated jobs default to a disable-flip).
+    monkeypatch.setenv("UA_SYSTEMD_TIMER_MIGRATION_DISABLED", "1")
 
     helper = getattr(gateway_server, ensure_attr)
     result = helper()
@@ -292,6 +300,8 @@ def test_ensure_proactive_cron_jobs_respect_disable_flag(monkeypatch, ensure_att
     cron_stub = _CronBootstrapStub()
     monkeypatch.setattr(gateway_server, "_cron_service", cron_stub)
     monkeypatch.setenv(enable_env, "0")
+    # Isolate the enable-flag behavior from the systemd-migration gate.
+    monkeypatch.setenv("UA_SYSTEMD_TIMER_MIGRATION_DISABLED", "1")
 
     helper = getattr(gateway_server, ensure_attr)
     result = helper()

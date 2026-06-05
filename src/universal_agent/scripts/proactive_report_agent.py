@@ -28,10 +28,14 @@ async def _run_report() -> dict:
         deliver_intelligence_report,
     )
 
-    # One-shot cron `!script` subprocess: make sure the Infisical-backed secrets
-    # (AgentMail API key, etc.) are present before we stand up the mailer.
-    # Mirrors briefings_agent.py / insight_scoring_health.py.
-    initialize_runtime_secrets(profile="local_workstation")
+    # One-shot subprocess: make sure the Infisical-backed secrets (AgentMail API
+    # key, LLM keys, etc.) are present before we stand up the mailer/LLM. Use NO
+    # hardcoded profile so UA_DEPLOYMENT_PROFILE is honored: under the systemd
+    # unit it is `vps` -> strict Infisical production load (a hardcoded
+    # profile="local_workstation" would override that backstop and silently run
+    # keyless under systemd). Dev leaves the var unset -> local_workstation, so
+    # dev behavior is unchanged.
+    initialize_runtime_secrets()
 
     # Resolve the DB path. The ``proactive_intelligence_reports`` rows are read
     # back by the dashboard from the canonical **activity_state.db** — NOT the

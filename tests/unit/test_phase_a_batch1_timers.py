@@ -70,8 +70,10 @@ MIGRATED = {
 }
 
 
-def test_frozenset_matches_expected_jobs():
-    assert gateway_server._SYSTEMD_MIGRATED_SYSTEM_JOBS == frozenset(MIGRATED)
+def test_frozenset_contains_batch1_jobs():
+    # Subset, not equality: later batches (A2+) grow the shared frozenset.
+    # test_phase_a_batch2_timers.py pins the full membership.
+    assert frozenset(MIGRATED) <= gateway_server._SYSTEMD_MIGRATED_SYSTEM_JOBS
 
 
 @pytest.mark.parametrize("job", sorted(MIGRATED))

@@ -1,0 +1,31 @@
+[Unit]
+Description=Universal Agent CSI intel auto-promoter (S5 Phase A batch 2 — deploy-independent twice-daily timer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ua
+Group=ua
+WorkingDirectory=/opt/universal_agent
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/universal_agent/src
+Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
+# Secrets-bootstrap backstop (mirrors universal-agent-proactive-health). .env
+# OVERRIDES these when present. intel_auto_promoter_cron already calls
+# initialize_runtime_secrets() (bare, via `profile=args.profile or None` -> None)
+# so it honors UA_DEPLOYMENT_PROFILE, but the promotion path itself is pure
+# SQLite (csi_demo_triage.approve_candidate) with NO LLM/mail/API — the secret
+# load is defensive/no-op here. Inline vars kept for unit uniformity.
+Environment=UA_DEPLOYMENT_PROFILE=vps
+Environment=UA_INFISICAL_ENABLED=1
+Environment=INFISICAL_ENVIRONMENT=production
+EnvironmentFile=-/opt/universal_agent/.env
+# Pure SQLite (no network/LLM) -> no unbounded-hang risk, so the oneshot default
+# TimeoutStartSec=infinity is intentional (no explicit bound needed). Exit 1 is
+# reserved for genuine errors, not normal findings.
+ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.scripts.intel_auto_promoter_cron
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

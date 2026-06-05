@@ -18816,6 +18816,22 @@ def _codie_proactive_cleanup_enabled() -> bool:
 def _ensure_codie_proactive_cleanup_cron_job() -> Optional[dict[str, Any]]:
     if not _cron_service or not _codie_proactive_cleanup_enabled():
         return None
+    # S5 Phase A batch 2: migrated to a systemd timer. This job registers via a
+    # bespoke _cron_service.add_job/update_job path (NOT _register_system_cron_job),
+    # so it needs its own disable: when migrated, flip any existing enabled row to
+    # disabled on every boot (so the row does not silently re-enable) and register
+    # nothing new — the systemd timer is the sole firer. Rollback via
+    # UA_SYSTEMD_TIMER_MIGRATION_DISABLED=1 (handled by _is_migrated_to_systemd).
+    if _is_migrated_to_systemd(CODIE_PROACTIVE_CLEANUP_JOB_KEY):
+        existing = _find_legacy_codie_cleanup_cron_job()
+        if existing is not None and bool(getattr(existing, "enabled", False)):
+            updated = _cron_service.update_job(
+                str(getattr(existing, "job_id", "")), {"enabled": False}
+            )
+            if hasattr(updated, "to_dict"):
+                return updated.to_dict()
+            return {"job_id": str(getattr(existing, "job_id", "")), "enabled": False}
+        return None
     cron_expr = (
         os.getenv("UA_CODIE_PROACTIVE_CLEANUP_CRON", CODIE_PROACTIVE_CLEANUP_DEFAULT_CRON).strip()
         or CODIE_PROACTIVE_CLEANUP_DEFAULT_CRON
@@ -19361,11 +19377,24 @@ def _proactive_cron_enabled(env_var: str, default: str = "1") -> bool:
 # ---------------------------------------------------------------------------
 _SYSTEMD_MIGRATED_SYSTEM_JOBS: frozenset[str] = frozenset(
     {
+        # Batch 1 (#753) — low-blast-radius maintenance/audit jobs.
         "scratch_pruning",
         "vault_lint_contradictions",
         "architecture_canvas_drift",
         "insight_scoring_health",
         "vp_coder_workspace_pruning",
+        # Batch 2 — content dailies. NOTE: most are gated via the
+        # _register_system_cron_job(enabled=…) arg below, BUT
+        # ``codie_proactive_cleanup`` registers through a bespoke
+        # _cron_service.add_job/update_job path, so its disable lives directly in
+        # _ensure_codie_proactive_cleanup_cron_job (it flips the existing row to
+        # disabled when _is_migrated_to_systemd is true).
+        "proactive_report_morning",
+        "proactive_report_midday",
+        "proactive_report_afternoon",
+        "proactive_artifact_digest",
+        "intel_auto_promoter",
+        "codie_proactive_cleanup",
     }
 )
 
@@ -19773,7 +19802,10 @@ def _ensure_proactive_report_morning_cron_job() -> Optional[dict[str, Any]]:
         command="!script universal_agent.scripts.proactive_report_agent",
         description="Morning proactive intelligence report — pipeline stats + LLM analysis.",
         timeout_seconds=600,
-        enabled=_proactive_cron_enabled("UA_PROACTIVE_REPORTS_ENABLED"),
+        # S5 Phase A batch 2: migrated to systemd timer — force in-process
+        # registration disabled (no double-fire). See _is_migrated_to_systemd.
+        enabled=_proactive_cron_enabled("UA_PROACTIVE_REPORTS_ENABLED")
+        and not _is_migrated_to_systemd("proactive_report_morning"),
         cron_env_var="UA_PROACTIVE_REPORT_MORNING_CRON",
         timezone_env_var="UA_PROACTIVE_REPORTS_TIMEZONE",
     )
@@ -19787,7 +19819,10 @@ def _ensure_proactive_report_midday_cron_job() -> Optional[dict[str, Any]]:
         command="!script universal_agent.scripts.proactive_report_agent",
         description="Midday proactive intelligence report — pipeline stats + LLM analysis.",
         timeout_seconds=600,
-        enabled=_proactive_cron_enabled("UA_PROACTIVE_REPORTS_ENABLED"),
+        # S5 Phase A batch 2: migrated to systemd timer — force in-process
+        # registration disabled (no double-fire). See _is_migrated_to_systemd.
+        enabled=_proactive_cron_enabled("UA_PROACTIVE_REPORTS_ENABLED")
+        and not _is_migrated_to_systemd("proactive_report_midday"),
         cron_env_var="UA_PROACTIVE_REPORT_MIDDAY_CRON",
         timezone_env_var="UA_PROACTIVE_REPORTS_TIMEZONE",
     )
@@ -19801,7 +19836,10 @@ def _ensure_proactive_report_afternoon_cron_job() -> Optional[dict[str, Any]]:
         command="!script universal_agent.scripts.proactive_report_agent",
         description="Afternoon proactive intelligence report — pipeline stats + LLM analysis.",
         timeout_seconds=600,
-        enabled=_proactive_cron_enabled("UA_PROACTIVE_REPORTS_ENABLED"),
+        # S5 Phase A batch 2: migrated to systemd timer — force in-process
+        # registration disabled (no double-fire). See _is_migrated_to_systemd.
+        enabled=_proactive_cron_enabled("UA_PROACTIVE_REPORTS_ENABLED")
+        and not _is_migrated_to_systemd("proactive_report_afternoon"),
         cron_env_var="UA_PROACTIVE_REPORT_AFTERNOON_CRON",
         timezone_env_var="UA_PROACTIVE_REPORTS_TIMEZONE",
     )
@@ -19815,7 +19853,10 @@ def _ensure_proactive_artifact_digest_cron_job() -> Optional[dict[str, Any]]:
         command="!script universal_agent.scripts.proactive_digest_agent",
         description="Daily proactive artifact digest — surfaces unseen CODIE PRs, tutorial builds, and convergence insights via email.",
         timeout_seconds=300,
-        enabled=_proactive_cron_enabled("UA_PROACTIVE_ARTIFACT_DIGEST_ENABLED"),
+        # S5 Phase A batch 2: migrated to systemd timer — force in-process
+        # registration disabled (no double-fire). See _is_migrated_to_systemd.
+        enabled=_proactive_cron_enabled("UA_PROACTIVE_ARTIFACT_DIGEST_ENABLED")
+        and not _is_migrated_to_systemd("proactive_artifact_digest"),
         cron_env_var="UA_PROACTIVE_ARTIFACT_DIGEST_CRON",
         timezone_env_var="UA_PROACTIVE_ARTIFACT_DIGEST_TIMEZONE",
         # Lightweight: SQL read against activity_state.db + AgentMail
@@ -20087,7 +20128,10 @@ def _ensure_intel_auto_promoter_cron_job() -> Optional[dict[str, Any]]:
             "the same approve_candidate path as the dashboard button."
         ),
         timeout_seconds=180,
-        enabled=True,
+        # S5 Phase A batch 2: migrated to systemd timer — force in-process
+        # registration disabled (no double-fire). Base enabled is True, so the
+        # gate alone decides it. See _is_migrated_to_systemd.
+        enabled=not _is_migrated_to_systemd("intel_auto_promoter"),
         cron_env_var="UA_INTEL_AUTO_PROMOTE_CRON_EXPR",
         timezone_env_var="UA_INTEL_AUTO_PROMOTE_CRON_TIMEZONE",
         # Lightweight: pure SQL — calls csi_demo_triage.approve_candidate

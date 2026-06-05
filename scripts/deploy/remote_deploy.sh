@@ -249,6 +249,13 @@ sudo bash "$PROD_DIR/scripts/install_vps_proactive_health_timer.sh" \
 echo "--> Installing S5 Phase A batch-1 deterministic timers (slot-critical maintenance jobs off the gateway loop)..."
 sudo bash "$PROD_DIR/scripts/install_vps_phase_a_batch1_timers.sh" \
   || echo "WARN: install_vps_phase_a_batch1_timers.sh failed (non-fatal)"
+# S5 Phase A (batch 2): the content-daily jobs (3 proactive-report slots sharing
+# one service, + artifact-digest, intel-auto-promoter, codie-proactive-cleanup)
+# migrated onto deploy-independent timers. Double-fire prevented by
+# gateway_server._is_migrated_to_systemd (codie via a bespoke disable). Non-fatal.
+echo "--> Installing S5 Phase A batch-2 content-daily timers (reports/digest/promoter/codie-cleanup off the gateway loop)..."
+sudo bash "$PROD_DIR/scripts/install_vps_phase_a_batch2_timers.sh" \
+  || echo "WARN: install_vps_phase_a_batch2_timers.sh failed (non-fatal)"
 # Sync the CSI lane's systemd units (timers + services). Without
 # this, edits to CSI_Ingester/development/deployment/systemd/*.{service,timer}
 # land in the repo but never reach /etc/systemd/system/, so the
