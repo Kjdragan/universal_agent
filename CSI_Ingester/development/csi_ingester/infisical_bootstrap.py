@@ -1,8 +1,11 @@
 """Optional Infisical secret bootstrap for CSI.
 
 Mirrors the UA pattern in ``infisical_loader.py``: fetch secrets from
-Infisical (SDK → REST fallback), inject into ``os.environ`` so that
-``CSIConfig`` reads them transparently via ``os.getenv()``.
+Infisical over the REST API (universal-auth machine identity), inject into
+``os.environ`` so that ``CSIConfig`` reads them transparently via
+``os.getenv()``. We use REST (``httpx``) rather than the ``infisical_client``
+SDK on purpose — the SDK was removed from the project on 2026-05-12 (no cp313
+wheel, won't build clean on 3.13) and ``httpx`` covers the full surface we use.
 
 When disabled (default) or when Infisical credentials are absent, this
 module is a no-op and CSI falls back to its existing env-file behaviour.
@@ -109,7 +112,7 @@ def _fetch_via_rest(
 
 
 def _fetch_secrets() -> dict[str, str]:
-    """Fetch secrets — try SDK first, fall back to REST."""
+    """Fetch secrets from Infisical over the REST API (universal-auth)."""
     client_id = os.getenv("INFISICAL_CLIENT_ID", "").strip()
     client_secret = os.getenv("INFISICAL_CLIENT_SECRET", "").strip()
     project_id = os.getenv("INFISICAL_PROJECT_ID", "").strip()
@@ -126,35 +129,6 @@ def _fetch_secrets() -> dict[str, str]:
     if missing:
         raise RuntimeError(f"Missing Infisical credentials: {', '.join(missing)}")
 
-    # Try SDK
-    try:
-        from infisical_client import (
-            AuthenticationOptions,
-            ClientSettings,
-            InfisicalClient,
-            ListSecretsOptions,
-            UniversalAuthMethod,
-        )
-        client = InfisicalClient(ClientSettings(
-            auth=AuthenticationOptions(
-                universal_auth=UniversalAuthMethod(
-                    client_id=client_id, client_secret=client_secret,
-                )
-            )
-        ))
-        secrets = client.listSecrets(options=ListSecretsOptions(
-            environment=environment, project_id=project_id, path=secret_path,
-        ))
-        out: dict[str, str] = {}
-        for item in secrets:
-            key = getattr(item, "secret_key", "").strip()
-            if key:
-                out[key] = str(getattr(item, "secret_value", "") or "")
-        return out
-    except Exception as exc:
-        logger.info("CSI Infisical SDK unavailable (%s), falling back to REST", type(exc).__name__)
-
-    # REST fallback
     return _fetch_via_rest(
         api_url=api_url,
         client_id=client_id,
