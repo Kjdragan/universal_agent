@@ -271,12 +271,13 @@ scripts/csi_run.sh uv run python3 scripts/csi_threads_infisical_sync.py \
   --updates-file /tmp/threads-secrets.json
 ```
 
-Infisical machine identity settings required for the sync command:
+Infisical machine identity settings required for the sync command (resolved
+internally by `universal_agent.infisical_loader`, not CLI flags):
 
 - `INFISICAL_CLIENT_ID`
 - `INFISICAL_CLIENT_SECRET`
 - `INFISICAL_PROJECT_ID`
-- `INFISICAL_ENVIRONMENT` (default: `dev`)
+- `INFISICAL_ENVIRONMENT` (on the production VPS an unset value resolves to `production`, elsewhere `development`)
 - `INFISICAL_SECRET_PATH` (default: `/`)
 
 ### 1b) Automated daily refresh + Infisical sync (systemd timer)
@@ -308,7 +309,7 @@ Required env keys in `deployment/systemd/csi-ingester.env` for this automation:
 - `INFISICAL_CLIENT_ID`
 - `INFISICAL_CLIENT_SECRET`
 - `INFISICAL_PROJECT_ID`
-- `INFISICAL_ENVIRONMENT` (`dev` by default)
+- `INFISICAL_ENVIRONMENT` (resolved by `universal_agent.infisical_loader`; on the production VPS an unset value resolves to `production`, elsewhere `development`)
 - `INFISICAL_SECRET_PATH` (`/` by default)
 
 Optional control knobs:
