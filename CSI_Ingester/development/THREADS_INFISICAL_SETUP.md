@@ -72,7 +72,11 @@ These are used by the sync script to write secrets. Export them in your shell/se
 export INFISICAL_CLIENT_ID="..."
 export INFISICAL_CLIENT_SECRET="..."
 export INFISICAL_PROJECT_ID="..."
-export INFISICAL_ENVIRONMENT="dev"
+# Set this to the Infisical environment your Threads secrets actually live in.
+# For the live CSI deployment that is "production". (The sync resolves env via
+# universal_agent.infisical_loader; on the production VPS an unset value resolves
+# to "production", elsewhere "development".)
+export INFISICAL_ENVIRONMENT="production"
 export INFISICAL_SECRET_PATH="/"
 ```
 
@@ -132,9 +136,12 @@ scripts/csi_run.sh uv run python3 scripts/csi_threads_infisical_sync.py \
 ```
 
 Expected output includes:
-- `SYNC_CREATED=...`
-- `SYNC_UPDATED=...`
+- `UPSERTED <KEY>` (one line per synced secret)
+- `SYNC_UPSERTED=...` (count of secrets written)
 - `SYNC_TOTAL=...`
+
+The sync routes writes through `universal_agent.infisical_loader.upsert_infisical_secret`
+(idempotent create-or-update), so there is no separate created-vs-updated count.
 
 ## Step 7: Verify from CSI side
 
@@ -170,12 +177,19 @@ scripts/csi_run.sh uv run python3 scripts/csi_threads_infisical_sync.py \
 
 If you run CSI on VPS with systemd, use the built-in automation job:
 
-1. Ensure these keys exist in `/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.env`:
+1. Ensure the Infisical machine-identity creds are available to the unit. On the
+   live VPS they are supplied via `EnvironmentFile=-/opt/universal_agent/.env`
+   (which the unit loads), so you normally do **not** need to add them to
+   `csi-ingester.env`:
    - `INFISICAL_CLIENT_ID`
    - `INFISICAL_CLIENT_SECRET`
    - `INFISICAL_PROJECT_ID`
-   - `INFISICAL_ENVIRONMENT=dev`
-   - `INFISICAL_SECRET_PATH=/`
+
+   Do **not** hardcode `INFISICAL_ENVIRONMENT=dev` in `csi-ingester.env`: that
+   EnvironmentFile loads *after* `/opt/universal_agent/.env` and would override
+   the production value, sending the sync to the wrong vault environment. Leave
+   `INFISICAL_ENVIRONMENT`/`INFISICAL_SECRET_PATH` to `universal_agent.infisical_loader`,
+   which resolves them to `production` / `/` on the VPS (matching the refresh read path).
 2. Install/enable timers:
 
 ```bash

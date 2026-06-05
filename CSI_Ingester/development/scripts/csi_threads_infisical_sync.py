@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 """Upsert Threads secrets into Infisical from a JSON payload.
 
+The write-back is routed through the project Infisical primitive
+``universal_agent.infisical_loader.upsert_infisical_secret`` (universal-auth
+machine identity; environment/path resolved from the runtime environment the
+same way the read path ``_fetch_infisical_secrets`` resolves them). This is the
+one true Infisical write path in UA — we deliberately do NOT use the raw
+``infisical_client`` SDK here, which is not installed in the CSI venv and would
+add a second, divergent auth path.
+
 Expected payload shape:
 {
   "THREADS_APP_ID": "...",
@@ -9,6 +17,12 @@ Expected payload shape:
   "THREADS_ACCESS_TOKEN": "...",
   "THREADS_TOKEN_EXPIRES_AT": "..."
 }
+
+Connection settings (project id, environment, secret path, machine-identity
+creds) are resolved internally by the loader from the process environment
+(``INFISICAL_*`` vars). They are NOT command-line arguments here; the loader
+already mirrors the resolution used by the refresh read path, so writes land at
+the exact env/path the secrets were read from.
 """
 
 from __future__ import annotations
@@ -19,16 +33,19 @@ import os
 from pathlib import Path
 import sys
 
+# Make ``universal_agent`` importable when this script is run by the CSI venv's
+# python without PYTHONPATH set. The systemd sync wrapper
+# (``csi_threads_token_refresh_sync.sh``) only sets ``PYTHONPATH=<root>/src`` for
+# its inline read block, NOT for this invocation, and ``universal_agent`` is not
+# installed into the venv site-packages — so we add ``<repo>/src`` to sys.path
+# defensively here. ``parents[3]`` is the repo root
+# (scripts -> development -> CSI_Ingester -> <repo root>).
 SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
-
-
-def _resolve_setting(cli_value: str, env_key: str, default: str = "") -> str:
-    raw = str(cli_value or "").strip()
-    if raw:
-        return raw
-    return str(os.getenv(env_key) or default).strip()
+_REPO_SRC = Path(__file__).resolve().parents[3] / "src"
+if _REPO_SRC.is_dir() and str(_REPO_SRC) not in sys.path:
+    sys.path.insert(0, str(_REPO_SRC))
 
 
 def _load_updates(*, raw_json: str, json_file: str, env_var: str) -> dict[str, str]:
@@ -64,98 +81,6 @@ def _load_updates(*, raw_json: str, json_file: str, env_var: str) -> dict[str, s
     return updates
 
 
-def _build_client(*, client_id: str, client_secret: str, api_url: str):
-    from infisical_client import (
-        AuthenticationOptions,
-        ClientSettings,
-        InfisicalClient,
-        UniversalAuthMethod,
-    )
-
-    settings = ClientSettings(
-        auth=AuthenticationOptions(
-            universal_auth=UniversalAuthMethod(
-                client_id=client_id,
-                client_secret=client_secret,
-            )
-        ),
-        site_url=api_url or None,
-    )
-    return InfisicalClient(settings)
-
-
-def _list_existing_keys(*, client, environment: str, project_id: str, secret_path: str) -> set[str]:
-    from infisical_client import ListSecretsOptions
-
-    existing = client.listSecrets(
-        options=ListSecretsOptions(
-            environment=environment,
-            project_id=project_id,
-            path=secret_path,
-            recursive=False,
-            include_imports=False,
-        )
-    )
-    keys: set[str] = set()
-    for item in existing:
-        key = str(getattr(item, "secret_key", "") or "").strip()
-        if key:
-            keys.add(key)
-    return keys
-
-
-def _sync_updates(
-    *,
-    client,
-    updates: dict[str, str],
-    existing_keys: set[str],
-    environment: str,
-    project_id: str,
-    secret_path: str,
-    dry_run: bool,
-) -> tuple[int, int]:
-    from infisical_client import CreateSecretOptions, UpdateSecretOptions
-
-    created = 0
-    updated = 0
-    for name, value in updates.items():
-        if dry_run:
-            action = "update" if name in existing_keys else "create"
-            print(f"DRY_RUN {action.upper()} {name}")
-            if action == "create":
-                created += 1
-            else:
-                updated += 1
-            continue
-
-        if name in existing_keys:
-            client.updateSecret(
-                options=UpdateSecretOptions(
-                    environment=environment,
-                    project_id=project_id,
-                    path=secret_path,
-                    secret_name=name,
-                    secret_value=value,
-                )
-            )
-            print(f"UPDATED {name}")
-            updated += 1
-            continue
-
-        client.createSecret(
-            options=CreateSecretOptions(
-                environment=environment,
-                project_id=project_id,
-                path=secret_path,
-                secret_name=name,
-                secret_value=value,
-            )
-        )
-        print(f"CREATED {name}")
-        created += 1
-    return created, updated
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--updates-json", default="", help="Raw JSON object of key/value secret updates")
@@ -165,32 +90,8 @@ def main() -> int:
         default="INFISICAL_SECRET_UPDATES_JSON",
         help="Env var name used when --updates-json/--updates-file are not provided",
     )
-    parser.add_argument("--project-id", default="")
-    parser.add_argument("--environment", default="")
-    parser.add_argument("--secret-path", default="")
-    parser.add_argument("--client-id", default="")
-    parser.add_argument("--client-secret", default="")
-    parser.add_argument("--api-url", default="")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
-
-    project_id = _resolve_setting(args.project_id, "INFISICAL_PROJECT_ID")
-    environment = _resolve_setting(args.environment, "INFISICAL_ENVIRONMENT", "dev") or "dev"
-    secret_path = _resolve_setting(args.secret_path, "INFISICAL_SECRET_PATH", "/") or "/"
-    client_id = _resolve_setting(args.client_id, "INFISICAL_CLIENT_ID")
-    client_secret = _resolve_setting(args.client_secret, "INFISICAL_CLIENT_SECRET")
-    api_url = _resolve_setting(args.api_url, "INFISICAL_API_URL", "https://app.infisical.com").rstrip("/")
-
-    missing: list[str] = []
-    if not project_id:
-        missing.append("INFISICAL_PROJECT_ID")
-    if not client_id:
-        missing.append("INFISICAL_CLIENT_ID")
-    if not client_secret:
-        missing.append("INFISICAL_CLIENT_SECRET")
-    if missing:
-        print("ERROR=Missing required Infisical settings: " + ", ".join(missing))
-        return 2
 
     try:
         updates = _load_updates(
@@ -202,33 +103,41 @@ def main() -> int:
         print(f"ERROR=invalid_update_payload:{type(exc).__name__}:{exc}")
         return 2
 
+    if bool(args.dry_run):
+        for name in updates:
+            print(f"DRY_RUN UPSERT {name}")
+        print("SYNC_UPSERTED=0")
+        print(f"SYNC_TOTAL={len(updates)}")
+        return 0
+
     try:
-        client = _build_client(client_id=client_id, client_secret=client_secret, api_url=api_url)
-        existing_keys = _list_existing_keys(
-            client=client,
-            environment=environment,
-            project_id=project_id,
-            secret_path=secret_path,
-        )
-        created, updated = _sync_updates(
-            client=client,
-            updates=updates,
-            existing_keys=existing_keys,
-            environment=environment,
-            project_id=project_id,
-            secret_path=secret_path,
-            dry_run=bool(args.dry_run),
-        )
+        from universal_agent.infisical_loader import upsert_infisical_secret
     except Exception as exc:
-        print(f"ERROR=infisical_sync_failed:{type(exc).__name__}:{exc}")
+        print(f"ERROR=infisical_loader_import_failed:{type(exc).__name__}:{exc}")
         return 1
 
-    print(f"INFISICAL_PROJECT_ID={project_id}")
-    print(f"INFISICAL_ENVIRONMENT={environment}")
-    print(f"INFISICAL_SECRET_PATH={secret_path}")
-    print(f"SYNC_CREATED={created}")
-    print(f"SYNC_UPDATED={updated}")
-    print(f"SYNC_TOTAL={created + updated}")
+    upserted = 0
+    failed: list[str] = []
+    for name, value in updates.items():
+        # upsert_infisical_secret is idempotent (PATCH-then-POST create-or-update)
+        # and resolves env/path/creds from the environment. It returns False on a
+        # REST failure OR when machine-identity creds are missing (in which case it
+        # only updates os.environ) — both are sync failures from our perspective.
+        if upsert_infisical_secret(name, value):
+            print(f"UPSERTED {name}")
+            upserted += 1
+        else:
+            print(f"FAILED {name}")
+            failed.append(name)
+
+    print(f"INFISICAL_ENVIRONMENT={os.getenv('INFISICAL_ENVIRONMENT', '')}")
+    print(f"INFISICAL_SECRET_PATH={os.getenv('INFISICAL_SECRET_PATH', '/') or '/'}")
+    print(f"SYNC_UPSERTED={upserted}")
+    print(f"SYNC_TOTAL={len(updates)}")
+
+    if failed:
+        print("ERROR=infisical_sync_failed:upsert_failed:" + ",".join(failed))
+        return 1
     return 0
 
 
