@@ -7,6 +7,7 @@ from typing import Awaitable, Callable
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 
 from ..core.context import BotContext
+from universal_agent.artifacts import resolve_artifacts_dir
 
 
 async def commands_middleware(ctx: BotContext, next_fn: Callable[[], Awaitable[None]]):
@@ -51,7 +52,7 @@ async def commands_middleware(ctx: BotContext, next_fn: Callable[[], Awaitable[N
             return
 
         elif data == "menu_briefing":
-            artifacts_dir = os.getenv("UA_ARTIFACTS_DIR", "").strip() or "/home/kjdragan/lrepos/universal_agent/artifacts"
+            artifacts_dir = str(resolve_artifacts_dir())
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             briefing_path = Path(artifacts_dir) / "autonomous-briefings" / today / "DAILY_BRIEFING.md"
             
@@ -178,7 +179,7 @@ async def commands_middleware(ctx: BotContext, next_fn: Callable[[], Awaitable[N
 
     # /briefing
     if text.lower().startswith("/briefing") or getattr(ctx.update.callback_query, "data", "") == "menu_briefing":
-        artifacts_dir = os.getenv("UA_ARTIFACTS_DIR", "").strip() or "/home/kjdragan/lrepos/universal_agent/artifacts"
+        artifacts_dir = str(resolve_artifacts_dir())
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         briefing_path = Path(artifacts_dir) / "autonomous-briefings" / today / "DAILY_BRIEFING.md"
         
