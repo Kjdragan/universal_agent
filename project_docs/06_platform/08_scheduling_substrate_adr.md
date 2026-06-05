@@ -26,12 +26,15 @@ last_verified: 2026-06-05
 > service, #749) and **C** (proactive-health timer + delivery contract) have
 > **shipped** — see their **As-built** notes in Decision 2 / Decision 3 and the
 > migration-phases section. Phase **A** (deterministic jobs → timers) is now
-> **partially implemented**: **batch 1** (the 5 low-blast-radius maintenance/audit
-> jobs `scratch_pruning`, `vault_lint_contradictions`, `architecture_canvas_drift`,
-> `insight_scoring_health`, `vp_coder_workspace_pruning`) has **shipped** — see the
-> **As-built** note under Phase A. Phase A batches 2–4 and Phase **D**
-> (report/AM-product consolidation + stray-writer DB root-cause) remain
-> **PROPOSED**, gated on the operator decision points in the final section. The
+> **partially implemented**: **batch 1** (5 maintenance/audit jobs) and **batch 2**
+> (the 6 content-daily jobs — 3 `proactive_report_*` slots sharing one service,
+> `proactive_artifact_digest`, `intel_auto_promoter`, `codie_proactive_cleanup`)
+> have **shipped** — see the **As-built** notes under Phase A. Phase A batches 3–4
+> and Phase **D** (stray-writer DB root-cause) remain **PROPOSED**, gated on the
+> operator decision points in the final section. NOTE: the operator chose to
+> **keep all 3 daily reports** (morning/midday/afternoon), superseding the
+> Decision-4 "drop midday/afternoon" consolidation proposal (which was never
+> implemented — midday was still live and emailing at migration time). The
 > original design intent below is preserved; the As-built notes record where the
 > shipped reality refined it. Grounded against deployed HEAD `0f45b86d`
 > (re-verify before implementing further — production deploys land ~19×/day).
@@ -156,18 +159,18 @@ Legend — **Substrate**: `systemd` = `OnCalendar`+`Persistent` timer (migrate);
 | 89d41cc817 | nightly_wiki | `15 3` | det | daily | **systemd** | overnight product; NotebookLM via CLI not agent runtime |
 | cc5fde061b | morning_briefing | `30 6` | det | daily | **systemd** | AM product; `briefings_agent` deterministic |
 | 42480a1873 | evening_briefing | `0 18` | det | daily | **systemd** | PM product; same module `--mode=evening` |
-| 9dea8c1899 | proactive_artifact_digest | `35 8` | det | daily | **systemd** | distinct content (unseen PRs/builds); keep (Decision 4) |
-| 3a3693d74e | proactive_report_morning | `5 7` | det | daily | **systemd** | keep as the surviving report (Decision 4) |
-| 0c55a85ebf | proactive_report_midday | `5 12` | det | daily | **drop** | consolidate — over-frequent (Decision 4) |
-| f143a79e94 | proactive_report_afternoon | `5 16` | det | daily | **systemd / drop** | keep only if operator wants 2× (Decision 4) |
+| 9dea8c1899 | proactive_artifact_digest | `35 8` | det | daily | **systemd ✅ migrated (batch 2)** | distinct content (unseen PRs/builds); keep (Decision 4) |
+| 3a3693d74e | proactive_report_morning | `5 7` | det | daily | **systemd ✅ migrated (batch 2)** | report; operator kept all 3 reports |
+| 0c55a85ebf | proactive_report_midday | `5 12` | det | daily | **systemd ✅ migrated (batch 2)** | operator kept all 3 reports — supersedes the Decision-4 "drop" proposal (never implemented; midday was still live + emailing) |
+| f143a79e94 | proactive_report_afternoon | `5 16` | det | daily | **systemd ✅ migrated (batch 2)** | operator kept all 3 reports — supersedes the Decision-4 "drop" proposal |
 | c6d41e434e | scratch_pruning | `0 7` | det | daily | **systemd ✅ migrated (batch 1)** | maintenance; benign but deploy-independent is cleaner |
-| 6321bde1a9 | codie_proactive_cleanup | `30 1` | det (enqueue) | daily | **systemd** | the enqueue is deterministic; Cody executes downstream |
+| 6321bde1a9 | codie_proactive_cleanup | `30 1` | det (enqueue) | daily | **systemd ✅ migrated (batch 2)** | the enqueue is deterministic; Cody executes downstream. Registers via bespoke `add_job` path → bespoke disable gate |
 | df1def4ad2 | vault_lint_contradictions | `0 7 1 * *` | det | monthly | **systemd ✅ migrated (batch 1)** | strongest `Persistent` case — a lost monthly slot = a lost month |
 | 73767a8730 | architecture_canvas_drift | `30 6 * * 1` | det | weekly | **systemd ✅ migrated (batch 1)** | weekly product |
 | c8061c36c9 | insight_scoring_health | `0 8 * * 0` | det | weekly | **systemd ✅ migrated (batch 1)** | weekly calibration audit |
 | 6d29a53e64 | vp_coder_workspace_pruning | `5 17 * * 0` | det | weekly | **systemd ✅ migrated (batch 1)** | weekly maintenance |
 | 9ad58b493f | csi_demo_triage_rank | `5 10,15` | det (LLM API) | 2×/day | **systemd** | LLM via API key, not agent runtime; slot-bearing |
-| 6f661208f8 | intel_auto_promoter | `35 10,15` | det | 2×/day | **systemd** | promotes triage output; capped/day |
+| 6f661208f8 | intel_auto_promoter | `35 10,15` | det | 2×/day | **systemd ✅ migrated (batch 2)** | promotes triage output; capped/day; pure SQLite (no `TimeoutStartSec`) |
 | 013f433539 | hourly_intel_digest | `0 6-21` | det | hourly | **systemd** | content-hourly, ~3 hrs/day lost today; "LLM-independent path" by design |
 | csi_convergence_sync | csi_convergence_sync | `0 6-21` | det (LLM) | hourly | **systemd** | content-hourly, ~25 % restart-cancelled today |
 | b4caa05aba | cron_artifact_reminders_sweep | `*/30 6-21` | det | 30-min | **in-proc?** | self-healing; migrate only if convenient |
@@ -441,7 +444,7 @@ flowchart LR
 > blocker to *authoring* a phase, but the phases assume specific S1–S4 fixes have
 > landed (called out below).**
 
-### Phase A — Migrate slot-critical deterministic jobs → systemd timers ✅ PARTIALLY IMPLEMENTED (batch 1)
+### Phase A — Migrate slot-critical deterministic jobs → systemd timers ✅ PARTIALLY IMPLEMENTED (batches 1 + 2)
 - **What moves:** the 19 `systemd`-tagged jobs in the Decision-1 table become
   `.service` + `.timer` pairs (`OnCalendar`, `Persistent=true`, `RandomizedDelaySec`),
   installed by a deploy-wired installer that follows the
@@ -501,6 +504,41 @@ flowchart LR
 > hang is killed and the next slot self-heals. In batch 1 only
 > `insight_scoring_health` qualifies (LLM + AgentMail WebSocket) →
 > `TimeoutStartSec=600`; the pure-FS jobs keep the `infinity` default.
+
+> **As-built — batch 2 (6 content-daily jobs).** Migrated `proactive_report_morning`,
+> `proactive_report_midday`, `proactive_report_afternoon`, `proactive_artifact_digest`,
+> `intel_auto_promoter`, `codie_proactive_cleanup`. Three new wrinkles beyond batch 1:
+>
+> 1. **Shared service, multiple timers.** The 3 report slots run the *identical*
+>    command (`proactive_report_agent`, no slot arg — it derives morning/midday/
+>    afternoon from wall-clock), so they share ONE
+>    `universal-agent-proactive-report.service` driven by three `.timer`s
+>    (07:05/12:05/16:05 CT). The operator chose to **keep all 3 reports**,
+>    superseding the unimplemented Decision-4 "drop midday/afternoon" proposal.
+> 2. **Bespoke double-fire gate for the non-`_register_system_cron_job` job.**
+>    `codie_proactive_cleanup` registers via a direct `_cron_service.add_job/update_job`
+>    path, so the batch-1 `enabled=` AND-gate does not reach it. Its disable lives
+>    inside `gateway_server.py::_ensure_codie_proactive_cleanup_cron_job`: when
+>    `_is_migrated_to_systemd` is true it flips any existing enabled row to disabled
+>    and registers nothing. (The 4 `_register_system_cron_job` jobs use the standard
+>    `enabled=` gate; `intel_auto_promoter`'s base is `enabled=True` so its gate is
+>    `enabled=not _is_migrated_to_systemd(...)`.)
+> 3. **Profile-hardcode fix #2/#3 + `TimeoutStartSec` only where it earns it.**
+>    `proactive_report_agent` and `proactive_digest_agent` both hardcoded
+>    `initialize_runtime_secrets(profile="local_workstation")` (same trap as
+>    `insight_scoring_health`) → dropped to bare `initialize_runtime_secrets()`.
+>    `intel_auto_promoter_cron` was already bare and `codie_cleanup_enqueue` touches
+>    no secrets (pure SQLite), so neither needed a change. `TimeoutStartSec` is set
+>    only on the network/LLM units (report 600, digest 300); the pure-SQLite units
+>    (promoter, codie) keep the `infinity` default. `codie` runs with `--no-nudge`
+>    (its in-process idle-dispatch nudge needs gateway singletons a subprocess lacks;
+>    the live dispatch loop picks up the enqueued row regardless).
+>
+> Units: `deployment/systemd/universal-agent-{proactive-report,proactive-report-*,proactive-artifact-digest,intel-auto-promoter,codie-proactive-cleanup}.*`,
+> installed by `scripts/install_vps_phase_a_batch2_timers.sh`. Guard:
+> `tests/unit/test_phase_a_batch2_timers.py`. Stale `tests/gateway/` create-path
+> assertions for the report/digest jobs were corrected (`:00` → real `5 7`/`5 12`/
+> `5 16`/`35 8`) and re-homed to the `UA_SYSTEMD_TIMER_MIGRATION_DISABLED` seam.
 
 ### Phase B — Extract the Mission Control sweeper to its own service ✅ IMPLEMENTED
 - **What moves:** `run_sweeper_loop` leaves the gateway lifespan and becomes

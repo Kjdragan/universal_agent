@@ -28,9 +28,13 @@ async def _run_digest() -> dict:
     from universal_agent.services.agentmail_service import AgentMailService
     from universal_agent.services.intelligence_reporter import IntelligenceReporter
 
-    # One-shot cron `!script` subprocess: make sure the Infisical-backed secrets
-    # (AgentMail API key, etc.) are present before we stand up the mailer.
-    initialize_runtime_secrets(profile="local_workstation")
+    # One-shot subprocess: make sure the Infisical-backed secrets (AgentMail API
+    # key, etc.) are present before we stand up the mailer. NO hardcoded profile
+    # so UA_DEPLOYMENT_PROFILE is honored: under the systemd unit it is `vps` ->
+    # strict Infisical production load (a hardcoded profile="local_workstation"
+    # would override that backstop and silently run keyless under systemd). Dev
+    # leaves the var unset -> local_workstation, so dev behavior is unchanged.
+    initialize_runtime_secrets()
 
     # Resolve the DB path. `proactive_artifacts` (insight_brief_task, codie PRs,
     # convergence briefs, etc.) lives in the **activity_state.db**, not the

@@ -1,0 +1,17 @@
+[Unit]
+Description=Fire the Universal Agent morning proactive report at 07:05 America/Chicago (deploy-independent)
+
+[Timer]
+# OnCalendar wall-clock anchor — NEVER monotonic. systemd 255 honors the
+# timezone suffix, so cron `5 7 * * *` America/Chicago is encoded directly (DST
+# handled by systemd). Persistent replays a daily slot missed inside a deploy
+# window. Shares universal-agent-proactive-report.service with the midday and
+# afternoon timers (they fire hours apart — no concurrency).
+OnCalendar=*-*-* 07:05:00 America/Chicago
+Persistent=true
+RandomizedDelaySec=120
+AccuracySec=1min
+Unit=universal-agent-proactive-report.service
+
+[Install]
+WantedBy=timers.target

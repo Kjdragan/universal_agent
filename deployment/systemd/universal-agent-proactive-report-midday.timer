@@ -1,0 +1,16 @@
+[Unit]
+Description=Fire the Universal Agent midday proactive report at 12:05 America/Chicago (deploy-independent)
+
+[Timer]
+# OnCalendar wall-clock anchor — NEVER monotonic. cron `5 12 * * *`
+# America/Chicago, DST handled by systemd; Persistent replays a missed slot.
+# Shares universal-agent-proactive-report.service with the morning/afternoon
+# timers.
+OnCalendar=*-*-* 12:05:00 America/Chicago
+Persistent=true
+RandomizedDelaySec=120
+AccuracySec=1min
+Unit=universal-agent-proactive-report.service
+
+[Install]
+WantedBy=timers.target

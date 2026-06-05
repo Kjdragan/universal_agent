@@ -1,0 +1,15 @@
+[Unit]
+Description=Run the Universal Agent intel auto-promoter twice daily at 10:35 and 15:35 America/Chicago (deploy-independent)
+
+[Timer]
+# OnCalendar wall-clock anchor — NEVER monotonic. cron `35 10,15 * * *`
+# America/Chicago (hours 10 and 15, minute 35), DST handled by systemd;
+# Persistent replays a missed slot inside a deploy window.
+OnCalendar=*-*-* 10,15:35:00 America/Chicago
+Persistent=true
+RandomizedDelaySec=120
+AccuracySec=1min
+Unit=universal-agent-intel-auto-promoter.service
+
+[Install]
+WantedBy=timers.target

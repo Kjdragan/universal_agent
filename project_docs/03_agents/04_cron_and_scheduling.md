@@ -9,6 +9,7 @@ code_paths:
   - src/universal_agent/task_hub.py
   - deployment/systemd/
   - scripts/install_vps_phase_a_batch1_timers.sh
+  - scripts/install_vps_phase_a_batch2_timers.sh
 last_verified: 2026-06-05
 ---
 
@@ -44,23 +45,37 @@ For slot-critical deterministic jobs that is unacceptable, so they run as
 (`OnCalendar` wall-clock anchor; a monotonic timer would go
 `NextElapse=infinity`).
 
-**Migrated so far (S5 Phase A, batch 1):** `scratch_pruning`,
-`vault_lint_contradictions`, `architecture_canvas_drift`, `insight_scoring_health`,
-`vp_coder_workspace_pruning`. Units are
-`deployment/systemd/universal-agent-<job>.{timer,service}`, installed by
-`scripts/install_vps_phase_a_batch1_timers.sh` (wired into
-`scripts/deploy/remote_deploy.sh`).
+**Migrated so far:**
+- **Batch 1** (maintenance/audit): `scratch_pruning`, `vault_lint_contradictions`,
+  `architecture_canvas_drift`, `insight_scoring_health`, `vp_coder_workspace_pruning`
+  (`scripts/install_vps_phase_a_batch1_timers.sh`).
+- **Batch 2** (content dailies): the 3 `proactive_report_*` slots (sharing one
+  `universal-agent-proactive-report.service` driven by 3 timers),
+  `proactive_artifact_digest`, `intel_auto_promoter`, `codie_proactive_cleanup`
+  (`scripts/install_vps_phase_a_batch2_timers.sh`).
+
+Units are `deployment/systemd/universal-agent-<job>.{timer,service}`; the
+installers are wired into `scripts/deploy/remote_deploy.sh`.
 
 **No double-fire.** A migrated job's in-process registration is forced disabled
 so the timer is the sole firer. `gateway_server.py::_is_migrated_to_systemd`
 (backed by the `gateway_server.py::_SYSTEMD_MIGRATED_SYSTEM_JOBS` frozenset) is
-ANDed into each `_ensure_*_cron_job()`'s `enabled=` arg, so
+ANDed into each standard `_ensure_*_cron_job()`'s `enabled=` arg, so
 `gateway_server.py::_register_system_cron_job` flips the persisted `cron_jobs.json`
-row to disabled on **every** gateway boot (it does not silently re-enable).
-Rollback without a redeploy: set `UA_SYSTEMD_TIMER_MIGRATION_DISABLED=1` and
-restart the gateway (then disable the timers); per-job rollback = remove the
-job from the frozenset. Stay-in-process (NOT migrated): the minute/15m/30m loops
-and the live-agent prompt jobs.
+row to disabled on **every** gateway boot (it does not silently re-enable). The
+one job that registers through a bespoke `_cron_service.add_job/update_job` path
+(`codie_proactive_cleanup`) carries its own disable inside
+`gateway_server.py::_ensure_codie_proactive_cleanup_cron_job` (flip-to-disabled
+when migrated). Rollback without a redeploy: set
+`UA_SYSTEMD_TIMER_MIGRATION_DISABLED=1` and restart the gateway (then disable the
+timers); per-job rollback = remove the job from the frozenset. Stay-in-process
+(NOT migrated): the minute/15m/30m loops and the live-agent prompt jobs.
+
+**`TimeoutStartSec`.** A `Type=oneshot` defaults to `TimeoutStartSec=infinity`,
+so a hung network/LLM run blocks its own timer's next fire forever. The
+network/LLM units bound it to their old in-process budget
+(`proactive-report` 600, `proactive-artifact-digest` 300, `insight-scoring-health`
+600); pure-FS/SQLite units keep `infinity`.
 
 ## Components
 

@@ -1,0 +1,32 @@
+[Unit]
+Description=Universal Agent Cody proactive-cleanup task enqueue (S5 Phase A batch 2 — deploy-independent daily timer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ua
+Group=ua
+WorkingDirectory=/opt/universal_agent
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/universal_agent/src
+Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
+# Secrets-bootstrap backstop (mirrors universal-agent-proactive-health). .env
+# OVERRIDES these when present. codie_cleanup_enqueue is pure SQLite/Task-Hub
+# enqueue (no Infisical-resolved secrets, no LLM/mail) — these vars are inert
+# for this job and kept only for unit uniformity. It reads only the plain DB
+# path env supplied by .env.
+Environment=UA_DEPLOYMENT_PROFILE=vps
+Environment=UA_INFISICAL_ENABLED=1
+Environment=INFISICAL_ENVIRONMENT=production
+EnvironmentFile=-/opt/universal_agent/.env
+# --no-nudge: the in-process idle-dispatch nudge relies on gateway-process
+# singletons a standalone subprocess does not have (it is a self-defusing no-op
+# anyway); the live dispatch loop polls and picks up the enqueued row regardless,
+# so we make the no-op explicit. Pure SQLite -> no hang risk -> oneshot default
+# TimeoutStartSec=infinity is intentional. Exit 1 = genuine error only.
+ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.scripts.codie_cleanup_enqueue --no-nudge
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target
