@@ -468,11 +468,29 @@ implicit signals without understanding this loop.
 
 - **Proactive intelligence reports** (`proactive_intelligence_report.py`): the
   three-times-a-day intel rhythm — `proactive_report_morning` (7:05 AM),
-  `_midday` (12:05 PM), `_afternoon` (4:05 PM) Houston. Each inserts a row into
-  `proactive_intelligence_reports` and can deliver via email.
+  `_midday` (12:05 PM), `_afternoon` (4:05 PM) Houston. The cron entrypoint
+  `proactive_report_agent.py::_run_report` composes the report and delivers it
+  through `proactive_intelligence_report.py::deliver_intelligence_report`, which
+  inserts a row into `proactive_intelligence_reports` — read back from the
+  canonical `activity_state.db` (`get_activity_db_path()`), **not** the orphan
+  `workspaces/runtime_state.db` the agent defaulted to before — and emails it
+  via the real `AgentMailService` (AgentMail-primary, gws/Gmail 429 fallback),
+  tagged `FYI/DIGEST`. `email_sent` now tracks an actual on-the-wire
+  `message_id`: `deliver_intelligence_report` sets
+  `email_sent = bool(email_message_id)`, so a no-op / draft / failed send leaves
+  it `False` instead of falsely claiming delivery. (Before the 2026-06-04 fix
+  the agent imported a non-existent `services.mail_service.MailService`, fell
+  back to a log-only `_DummyMail`, and `deliver_intelligence_report` recorded
+  `email_sent=True` unconditionally — so 0 sent reports looked "(emailed)".)
 - **Proactive artifact digest** (`proactive_artifact_digest`, 8:35 AM Houston):
-  emails Kevin a digest of new CODIE PRs, tutorial builds, convergence insights;
-  delivery recorded in `proactive_artifact_emails`.
+  `proactive_digest_agent.py::_run_digest` emails Kevin a digest of new CODIE
+  PRs, tutorial builds, convergence insights via the real `AgentMailService`
+  (`intelligence_reporter.py::send_daily_digest`, tagged `FYI/DIGEST`); delivery
+  recorded in `proactive_artifact_emails`. Both cron entrypoints construct
+  `AgentMailService()` + `await startup()` directly — the one-shot subprocess
+  mailer pattern of `insight_scoring_health.py` — so they inherit the
+  AgentMail→gws 429 fallback for free (gated `UA_AGENTMAIL_GMAIL_FALLBACK`,
+  pinned `1` in the deploy bootstrap).
 - **Hourly intel digest** — the convergence-brief digest (one collated email of
   `intel_brief` ships per active hour). The composition/render/throttle contract
   lives in `hourly_intel_digest.py::compose_send_payload` (per-brief 👍/👎 links

@@ -22,6 +22,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import sys
 import time
 from typing import Any, Awaitable, Callable, Iterable, Optional, Protocol
 
@@ -53,20 +54,86 @@ def _bump_skipped(fingerprint: str) -> int:
 
 
 def _resolve_agentmail_service_via_gateway() -> Optional[Any]:
-    """Lazy lookup against gateway_server._agentmail_service.
+    """Resolve a live AgentMailService handle from the running gateway process.
 
-    The heartbeat wires this in at tick time via getattr; if the gateway's
-    init hadn't completed at the first tick (race between
-    `_start_heartbeat_service()` and `_agentmail_service = AgentMailService(...)`)
-    the passed-in value is None. Re-resolving at notify time gives us one
-    more chance before logging the skip. Best-effort — never raises.
+    Two in-process lookups, cheapest first:
+
+    1. ``sys.modules['__main__']`` — the gateway runs as
+       ``python -m universal_agent.gateway_server`` so its module-level
+       ``_agentmail_service`` assignment lands on the ``__main__`` module
+       object. The ``importlib`` copy below is a *different*, pristine module
+       object whose global is still None (the exact trap cron_service.py
+       documents).
+    2. ``importlib.import_module("universal_agent.gateway_server")`` — covers
+       callers that hold the module by its dotted name.
+
+    Returns None in a process that never ran the gateway lifespan (the daemon
+    heartbeat subprocess) — callers escalate to
+    ``_construct_started_agentmail_service`` for that case. Best-effort —
+    never raises.
     """
+    try:
+        main_mod = sys.modules.get("__main__")
+        if main_mod is not None:
+            svc = getattr(main_mod, "_agentmail_service", None)
+            if svc is not None:
+                return svc
+    except Exception:  # noqa: BLE001
+        pass
     try:
         import importlib
         gs = importlib.import_module("universal_agent.gateway_server")
         return getattr(gs, "_agentmail_service", None)
     except Exception:  # noqa: BLE001
         return None
+
+
+async def _construct_started_agentmail_service() -> Optional[Any]:
+    """Stand up a fresh, started AgentMailService for a process with no
+    gateway-injected handle (the daemon heartbeat subprocess, where
+    ``gateway_server._agentmail_service`` is the pristine module-level None).
+
+    Mirrors the one-shot cron mailers (scripts/insight_scoring_health.py,
+    scripts/dependency_upgrade.py): construct → startup() → use → shutdown().
+    The caller OWNS the returned service and MUST call ``await
+    service.shutdown()``. Returns None when AgentMail is disabled or can't
+    initialize (missing key / inbox error) so callers fall back to the existing
+    graceful skip. Never raises.
+    """
+    try:
+        from universal_agent.services.agentmail_service import AgentMailService
+
+        svc = AgentMailService()
+        await svc.startup()
+        if getattr(svc, "_started", False):
+            return svc
+        # startup() short-circuited (disabled / missing AGENTMAIL_API_KEY /
+        # inbox error) — close anything it opened and report "no mailer".
+        try:
+            await svc.shutdown()
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "proactive_health: failed to construct a fresh AgentMailService",
+            exc_info=True,
+        )
+        return None
+
+
+async def _acquire_agentmail_service() -> tuple[Optional[Any], bool]:
+    """Resolve an existing AgentMail handle, or construct a fresh started one.
+
+    Returns ``(service, owned)``. ``owned=True`` means we constructed it and the
+    caller must shut it down; ``owned=False`` means it belongs to the gateway
+    lifespan and must be left alone. Never raises.
+    """
+    resolved = _resolve_agentmail_service_via_gateway()
+    if resolved is not None:
+        return resolved, False
+    svc = await _construct_started_agentmail_service()
+    return svc, (svc is not None)
 
 
 def _truthy(value: Optional[str], default: bool) -> bool:
@@ -279,21 +346,31 @@ async def run_pre_flight_check(
 
     _write_sidecar(workspace_dir, payload)
 
-    # If email is disabled OR plumbing isn't ready, log explicitly per
-    # critical finding so the operator can grep for blocked-email evidence.
-    # This is the diagnostic fix for the 2026-05-20 race where the heartbeat
-    # fires before gateway_server._agentmail_service is initialized.
-    if not _email_enabled() or agentmail_service is None or add_notification_fn is None:
-        # One last attempt to resolve _agentmail_service via gateway_server
-        # in case the wire-in raced with lifespan init.
-        if agentmail_service is None:
-            resolved = _resolve_agentmail_service_via_gateway()
-            if resolved is not None:
-                agentmail_service = resolved
+    criticals_this_tick = _critical_invariants(payload)
+    owns_agentmail = False
 
+    # The daemon heartbeat runs in a subprocess where the gateway's
+    # _agentmail_service global is the pristine module-level None — so the
+    # injected handle is None here every tick. When there's actually a critical
+    # finding to deliver, resolve a live handle or, as a last resort, stand up a
+    # fresh short-lived AgentMailService (AgentMail-primary, with the built-in
+    # gws/Gmail HTTP-429 fallback). Only pay the startup cost when there's
+    # something to send; a fresh handle is owned here and shut down in finally.
+    if (
+        agentmail_service is None
+        and _email_enabled()
+        and add_notification_fn is not None
+        and criticals_this_tick
+    ):
+        agentmail_service, owns_agentmail = await _acquire_agentmail_service()
+
+    try:
+        # If email is disabled OR plumbing still isn't ready, log explicitly per
+        # critical finding so the operator can grep for blocked-email evidence.
+        # This is the diagnostic fix for the 2026-05-20 race where the heartbeat
+        # fired before gateway_server._agentmail_service was initialized.
         if not _email_enabled() or agentmail_service is None or add_notification_fn is None:
-            criticals = _critical_invariants(payload)
-            for f in criticals:
+            for f in criticals_this_tick:
                 fp = str(f.get("finding_id") or f.get("metric_key") or "unknown")
                 consecutive = _bump_skipped(fp)
                 if not _email_enabled():
@@ -313,27 +390,35 @@ async def run_pre_flight_check(
                 )
             return payload
 
-    cooldown = _cooldown_seconds()
-    generated_at = str(payload.get("generated_at_utc") or datetime.now(timezone.utc).isoformat())
-    notifications = notifications_list if notifications_list is not None else []
+        cooldown = _cooldown_seconds()
+        generated_at = str(payload.get("generated_at_utc") or datetime.now(timezone.utc).isoformat())
+        notifications = notifications_list if notifications_list is not None else []
 
-    sent_count = 0
-    criticals_this_tick = _critical_invariants(payload)
-    for finding in criticals_this_tick:
-        sent = await _notify_critical(
-            finding=finding,
-            payload_generated_at=generated_at,
-            agentmail_service=agentmail_service,
-            notifications_list=notifications,
-            add_notification_fn=add_notification_fn,
-            cooldown_seconds=cooldown,
-        )
-        if sent:
-            sent_count += 1
+        sent_count = 0
+        for finding in criticals_this_tick:
+            sent = await _notify_critical(
+                finding=finding,
+                payload_generated_at=generated_at,
+                agentmail_service=agentmail_service,
+                notifications_list=notifications,
+                add_notification_fn=add_notification_fn,
+                cooldown_seconds=cooldown,
+            )
+            if sent:
+                sent_count += 1
 
-    if sent_count:
-        logger.info("proactive_health: emailed %d new critical finding(s)", sent_count)
-    return payload
+        if sent_count:
+            logger.info("proactive_health: emailed %d new critical finding(s)", sent_count)
+        return payload
+    finally:
+        if owns_agentmail and agentmail_service is not None:
+            try:
+                await agentmail_service.shutdown()
+            except Exception:  # noqa: BLE001
+                logger.debug(
+                    "proactive_health: fresh AgentMailService shutdown failed",
+                    exc_info=True,
+                )
 
 
 async def send_test_critical_email(
@@ -350,12 +435,13 @@ async def send_test_critical_email(
     Never raises — wraps the send in try/except and returns the exception
     name in the dict on failure.
     """
+    owns_agentmail = False
     if agentmail_service is None:
-        agentmail_service = _resolve_agentmail_service_via_gateway()
+        agentmail_service, owns_agentmail = await _acquire_agentmail_service()
     if agentmail_service is None:
         return {
             "sent": False,
-            "reason": "agentmail_service=None (gateway init pending or disabled)",
+            "reason": "agentmail_service=None (gateway init pending or disabled; fresh construct also failed)",
         }
 
     ts = datetime.now(timezone.utc).isoformat()
@@ -391,6 +477,12 @@ async def send_test_critical_email(
             "proactive_health: test email failed (%s)", type(exc).__name__, exc_info=True
         )
         return {"sent": False, "reason": f"{type(exc).__name__}: {exc}"}
+    finally:
+        if owns_agentmail and agentmail_service is not None:
+            try:
+                await agentmail_service.shutdown()
+            except Exception:  # noqa: BLE001
+                pass
 
     logger.info("proactive_health: test email sent to %s", KEVIN_EMAIL)
     return {

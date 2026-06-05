@@ -126,7 +126,20 @@ export PROD_DIR
 # rewritten from this dict on every deploy. Re-enable by flipping to '1' (or
 # remove the key — the code default is enabled) and address the thread-spawn
 # resilience first. See project_docs/03_agents/03_heartbeat_service.md.
-python3 -c "from pathlib import Path; import json, os; env_path = Path(os.environ['PROD_DIR']) / '.env'; bootstrap = {'INFISICAL_CLIENT_ID': os.environ['INFISICAL_CLIENT_ID'], 'INFISICAL_CLIENT_SECRET': os.environ['INFISICAL_CLIENT_SECRET'], 'INFISICAL_PROJECT_ID': os.environ['INFISICAL_PROJECT_ID'], 'INFISICAL_ENVIRONMENT': 'production', 'UA_RUNTIME_STAGE': 'production', 'FACTORY_ROLE': 'HEADQUARTERS', 'UA_DEPLOYMENT_PROFILE': 'vps', 'UA_NOTEBOOKLM_PROFILE': 'default', 'UA_HACKERNEWS_SNAPSHOT_ENABLED': '0', 'UA_MACHINE_SLUG': 'vps-hq-production', 'UA_INFISICAL_ENABLED': '1', 'UA_GATEWAY_PORT': '8002', 'UA_API_PORT': '8001', 'UA_GATEWAY_URL': 'http://127.0.0.1:8002'}; env_path.write_text(''.join(f'{key}={json.dumps(str(value))}\n' for key, value in bootstrap.items()), encoding='utf-8')"
+#
+# UA_AGENTMAIL_GMAIL_FALLBACK='1' / UA_AGENTMAIL_GMAIL_LABEL='1': AgentMail has
+# a tight daily send limit and 429s frequently. AgentMailService._send_direct
+# catches HTTP 429 and falls back to `gws gmail +send` — but ONLY when
+# _gmail_fallback_enabled() (UA_AGENTMAIL_GMAIL_FALLBACK) is truthy, and it
+# defaults OFF ('0'). Without this key a daily-limit 429 hard-fails instead of
+# falling back, so the report/digest/proactive-health sends (which run as
+# `!script` cron subprocesses and the heartbeat daemon subprocess, inheriting
+# this .env) silently stop once AgentMail is exhausted. The LABEL flag stamps
+# the gws-sent copy so fallback sends stay identifiable. The VPS .env is
+# rewritten from this dict every deploy, so it must live here (a VPS-only .env
+# edit would be wiped). See project_docs/05_channels/01_email_agentmail.md and
+# services/agentmail_service.py module docstring.
+python3 -c "from pathlib import Path; import json, os; env_path = Path(os.environ['PROD_DIR']) / '.env'; bootstrap = {'INFISICAL_CLIENT_ID': os.environ['INFISICAL_CLIENT_ID'], 'INFISICAL_CLIENT_SECRET': os.environ['INFISICAL_CLIENT_SECRET'], 'INFISICAL_PROJECT_ID': os.environ['INFISICAL_PROJECT_ID'], 'INFISICAL_ENVIRONMENT': 'production', 'UA_RUNTIME_STAGE': 'production', 'FACTORY_ROLE': 'HEADQUARTERS', 'UA_DEPLOYMENT_PROFILE': 'vps', 'UA_NOTEBOOKLM_PROFILE': 'default', 'UA_HACKERNEWS_SNAPSHOT_ENABLED': '0', 'UA_AGENTMAIL_GMAIL_FALLBACK': '1', 'UA_AGENTMAIL_GMAIL_LABEL': '1', 'UA_MACHINE_SLUG': 'vps-hq-production', 'UA_INFISICAL_ENABLED': '1', 'UA_GATEWAY_PORT': '8002', 'UA_API_PORT': '8001', 'UA_GATEWAY_URL': 'http://127.0.0.1:8002'}; env_path.write_text(''.join(f'{key}={json.dumps(str(value))}\n' for key, value in bootstrap.items()), encoding='utf-8')"
 sudo chown ua:ua "$PROD_DIR/.env"
 sudo chmod 600 "$PROD_DIR/.env"
 

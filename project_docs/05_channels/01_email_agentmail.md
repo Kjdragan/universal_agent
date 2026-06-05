@@ -333,7 +333,14 @@ additive; callers that pass only one of action/kind get no prefix/banner.
 
 When AgentMail returns HTTP 429 ("Daily send limit exceeded") AND
 `UA_AGENTMAIL_GMAIL_FALLBACK=1`, `_send_direct` retries via the local Google
-Workspace CLI (`_send_via_gmail_cli`). Notes:
+Workspace CLI (`_send_via_gmail_cli`). The code default (`_gmail_fallback_enabled`)
+is `0` (off), but **production pins `UA_AGENTMAIL_GMAIL_FALLBACK=1` (and
+`UA_AGENTMAIL_GMAIL_LABEL=1`) in the deploy bootstrap dict** of
+`scripts/deploy/remote_deploy.sh` — so the report/digest/proactive-health sends,
+which run as `!script` cron subprocesses and the heartbeat daemon subprocess and
+inherit that rewritten `.env`, fall back to gws instead of hard-failing once
+AgentMail hits its tight daily cap. (A VPS-only `.env` edit would not survive —
+deploy rewrites `.env` from that dict every time.) Notes:
 
 - Default argv: `npx -y @googleworkspace/cli` (override with `UA_GMAIL_CLI_CMD`).
 - The **From: header becomes the gws-authenticated account** (e.g.
