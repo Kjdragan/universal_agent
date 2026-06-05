@@ -171,10 +171,18 @@ def collect_tier1_evidence(
         evidence["recent_events"] = []
 
     # Tier-0 tile state snapshot (operator's at-a-glance signal feeds
-    # tier-1 narrative — esp. red tiles need card-level explanations)
+    # tier-1 narrative — esp. red tiles need card-level explanations).
+    # Exclude the `__tierN_meta__` sentinel rows: they are the sweeper's
+    # own cadence bookkeeping (see mission_control_intelligence_sweeper.py
+    # `_write_tier1_meta` / `_write_tier2_meta`), not real traffic-light
+    # tiles, and must not leak into the tier-1 LLM prompt or the evidence
+    # signature. Sentinels follow the `__name__` double-underscore
+    # convention; canonical tiles (`all_tiles()`) never start with '_'.
     try:
         rows = mc_conn.execute(
-            "SELECT * FROM mission_control_tile_states ORDER BY tile_id"
+            "SELECT * FROM mission_control_tile_states "
+            "WHERE substr(tile_id, 1, 2) != '__' "
+            "ORDER BY tile_id"
         ).fetchall()
         evidence["tier0_tiles"] = [_row_to_dict(r) for r in rows]
     except sqlite3.OperationalError:

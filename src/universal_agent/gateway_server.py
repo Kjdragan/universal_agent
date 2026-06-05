@@ -27211,10 +27211,13 @@ async def dashboard_mission_control_diagnostics():
         for r in rows:
             card_counts.setdefault(r["subject_kind"], {})[r["current_state"]] = int(r["n"])
 
-        # Tile state row count (sanity check on sweeper liveness)
+        # Tile state row count (sanity check on sweeper liveness).
+        # Exclude ALL `__tierN_meta__` sentinel rows via the double-underscore
+        # convention — the old `tile_id != '__tier1_meta__'` predicate missed
+        # `__tier2_meta__` and over-counted canonical tiles by one.
         canonical_tile_count = conn.execute(
-            "SELECT COUNT(*) AS n FROM mission_control_tile_states WHERE tile_id != ?",
-            ("__tier1_meta__",),
+            "SELECT COUNT(*) AS n FROM mission_control_tile_states "
+            "WHERE substr(tile_id, 1, 2) != '__'"
         ).fetchone()["n"]
     finally:
         conn.close()

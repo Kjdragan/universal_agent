@@ -272,7 +272,10 @@ clears any card a deploy-restart already minted on the next sweep.
 active/attention Task Hub items, recently-completed tasks (7 days), mission summaries (when
 `task_hub_missions_enabled()`), operator-relevant `activity_events`, the tier-0 tile
 snapshot, and the prior pass's live cards (fed back so the LLM can re-emit them with the same
-`subject_id` for continuity). Counts are bounded; individual text fields are never shortened.
+`subject_id` for continuity). The tile snapshot query excludes the `__tierN_meta__` sentinel
+rows (`WHERE substr(tile_id,1,2) != '__'`) — those are sweeper cadence bookkeeping, not real
+tiles, and must not leak into the LLM prompt or the evidence signature. Counts are bounded;
+individual text fields are never shortened.
 `evidence_signature` hashes only the *identity* of bundle items (task_id/status, event id,
 tile_id+state, subject_id+severity) — excluding volatile timestamps — so two bundles with the
 same identifying set hash equal and the sweeper skips the LLM.
