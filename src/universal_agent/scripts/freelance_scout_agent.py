@@ -19,6 +19,7 @@ from pathlib import Path
 import sys
 import uuid
 
+from universal_agent.artifacts import repo_root
 from universal_agent.infisical_loader import initialize_runtime_secrets
 
 logger = logging.getLogger(__name__)
@@ -53,8 +54,11 @@ async def main():
     initialize_runtime_secrets(profile="local_workstation")
     logging.basicConfig(level=logging.INFO)
 
-    artifacts_dir = os.getenv("UA_ARTIFACTS_DIR", "").strip() or "/home/kjdragan/lrepos/universal_agent/artifacts"
-    work_products_dir = Path("/home/kjdragan/lrepos/universal_agent/work_products")
+    # NOTE: this scout writes its digest to work_products/ (see module docstring);
+    # the prior `artifacts_dir` local was dead code with a hardcoded desktop-path
+    # fallback, so it was removed rather than "fixed". work_products now resolves
+    # from the repo root (cwd-independent), not a hardcoded /home/kjdragan path.
+    work_products_dir = repo_root() / "work_products"
     work_products_dir.mkdir(parents=True, exist_ok=True)
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")

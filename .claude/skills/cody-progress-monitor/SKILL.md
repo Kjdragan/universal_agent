@@ -27,7 +27,7 @@ description: >
 
 ```python
 import sqlite3
-from universal_agent.activity_db import get_activity_db_path
+from universal_agent.durable.db import get_activity_db_path
 from universal_agent.services.cody_evaluation import monitor_demo_tasks
 
 with sqlite3.connect(get_activity_db_path()) as conn:

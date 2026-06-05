@@ -79,10 +79,16 @@ Open a Python helper task and:
 
    ```python
    import json
-   import sqlite3
 
-   conn = sqlite3.connect("/path/to/activity_state.db")
-   conn.row_factory = sqlite3.Row
+   from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+
+   # CANONICAL STORE — ALWAYS resolve via get_activity_db_path(). NEVER hardcode,
+   # guess, or use a relative/placeholder path: a cwd-relative connection forks an
+   # orphan DB (e.g. .agent/task_hub.db or ./task_hub.db) that the hourly digest
+   # cannot see, silently dropping every brief you author. connect_runtime_db sets
+   # row_factory=Row + WAL + busy-timeout, so it is safe to share the live
+   # activity_state.db with the gateway. Same pattern as the hourly-intel-digest skill.
+   conn = connect_runtime_db(get_activity_db_path())
    row = conn.execute(
        "SELECT * FROM convergence_candidates WHERE candidate_id = ?",
        (candidate_id,),

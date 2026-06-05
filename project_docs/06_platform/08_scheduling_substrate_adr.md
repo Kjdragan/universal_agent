@@ -30,8 +30,12 @@ last_verified: 2026-06-05
 > (the 6 content-daily jobs — 3 `proactive_report_*` slots sharing one service,
 > `proactive_artifact_digest`, `intel_auto_promoter`, `codie_proactive_cleanup`)
 > have **shipped** — see the **As-built** notes under Phase A. Phase A batches 3–4
-> and Phase **D** (stray-writer DB root-cause) remain **PROPOSED**, gated on the
-> operator decision points in the final section. NOTE: the operator chose to
+> remain **PROPOSED**, gated on the operator decision points in the final section.
+> Phase **D** (canonical-store hygiene) **shipped 2026-06-05** — root-caused to a
+> **skill placeholder DB path** (`evaluate-and-author-intel-brief/SKILL.md`), not
+> the originally-hypothesized stray relative-cwd *source* writer; see its
+> **As-built** note. The orphan-DB cleanup + recovery of 18 undelivered intel
+> briefs is the one operator-gated follow-up carved out of Phase D. NOTE: the operator chose to
 > **keep all 3 daily reports** (morning/midday/afternoon), superseding the
 > Decision-4 "drop midday/afternoon" consolidation proposal (which was never
 > implemented — midday was still live and emailing at migration time). The
@@ -568,18 +572,84 @@ flowchart LR
 - **S1–S4 relationship:** **assumes S1 landed** (subprocess mailer fix). Independent
   of S2/S3/S4.
 
-### Phase D — Consolidations
-- **What moves:** reports 3 → 1 (or 2); drop the "24 Hour Update" prompt; enforce
-  one mailer (set `UA_AGENTMAIL_GMAIL_FALLBACK=1` in the deploy bootstrap);
-  one-canonical-DB (delete orphan `task_hub.db` copies + force stray writers onto
-  `get_activity_db_path`).
-- **Rollback:** re-add the dropped cron rows; revert the bootstrap flag; (DB
-  orphan deletes are not reversible but are provably dead — snapshot before
-  delete).
-- **S1–S4 relationship:** **builds on S1** (mailer) and **S4** — S4 already removed
-  `a652c8dce5` / `hourly_insight_email` and the OS-crontab noops; Phase D handles
-  the report-pipeline + AM-product consolidation that **S4 explicitly deferred to
-  S5**, plus the durable mailer-flag and stray-writer root-cause.
+### Phase D — Canonical-store hygiene (AS-BUILT 2026-06-05)
+
+The original Phase-D framing ("reports 3 → 2 + delete the stray relative-cwd
+`task_hub.db` writer + one canonical DB") was **two-thirds moot** by the time it
+ran; the remaining third was real and partly different from the hypothesis.
+Verified live against deployed `6ca49f0f`:
+
+- **Premise corrections:**
+  - **Report consolidation DROPPED** — the operator kept all 3 `proactive_report_*`
+    runs (see the banner + Decision 4). Withdrawn, not implemented.
+  - **Mailer flag already shipped in S1** — `UA_AGENTMAIL_GMAIL_FALLBACK=1` lives
+    in the `remote_deploy.sh` bootstrap since S1, not here.
+  - **The `UA_ARTIFACTS_DIR` literal-string fallback was already fixed.**
+    `artifacts.py::resolve_artifacts_dir` is the correct canonical resolver
+    (default `<repo-root>/artifacts`; its `legacy = root / "UA_ARTIFACTS_DIR"`
+    branch is read-only back-compat). `main.py`, `agent_setup.py`,
+    `api/server.py`, and `cron_service.py` all default to the absolute
+    `<repo>/artifacts`, **not** the literal string. The on-disk
+    `/opt/universal_agent/UA_ARTIFACTS_DIR/` directory is a **stale leftover from
+    older code** (newest content 2026-06-04), not an active writer.
+
+- **Actual root cause of the live `task_hub.db` split-brain (the real Phase-D
+  finding):** the skill `evaluate-and-author-intel-brief/SKILL.md` (Phase 0)
+  instructed the Atlas LLM `sqlite3.connect("/path/to/activity_state.db")` — a
+  **placeholder**. Atlas substituted a cwd-relative path; its
+  `task_hub.py::perform_task_action` and `proactive_artifacts.py::upsert_artifact`
+  calls (both take `conn` from the caller — they never resolve a path themselves)
+  then created the full task_hub + proactive schema in `.agent/task_hub.db`
+  (subprocess workdir) and repo-root `task_hub.db`. The hourly digest reads only
+  canonical `activity_state.db` via `durable/db.py::get_activity_db_path`, so the
+  forked rows were invisible. Confirmed live: **18 `intel_brief` ship briefs
+  (2026-06-04→06-05) authored into orphans and never delivered.** The prior
+  handoff's `grep src/` missed it because the writer is a **skill markdown**, not
+  source. Adversarially verified (`confidence 0.85`); the only unobserved link is
+  a live trace of the LLM's substituted path.
+
+- **What shipped (this PR):**
+  - `evaluate-and-author-intel-brief/SKILL.md` → `connect_runtime_db(get_activity_db_path())`
+    (the canonical pattern the sibling `hourly-intel-digest/SKILL.md` already uses).
+  - `cody-task-dispatcher` / `cody-progress-monitor` skills: broken import of the
+    **non-existent** `universal_agent.activity_db` → `universal_agent.durable.db`.
+  - `src/query_tasks.py`: repointed off the non-existent `get_task_hub_db_path`
+    and the stale `task_hub.db` to `durable/db.py::get_activity_db_path`; dropped
+    the hardcoded desktop `sys.path`.
+  - `UA_ARTIFACTS_DIR` **hardcoded-desktop-path** fallbacks → `resolve_artifacts_dir()`
+    (`bot/plugins/commands.py` ×2; `scripts/freelance_scout_agent.py` had a *dead*
+    `artifacts_dir` removed and its `work_products` path → `artifacts.py::repo_root`).
+  - `remote_deploy.sh` bootstrap pins `UA_ARTIFACTS_DIR=<PROD_DIR>/artifacts`
+    (belt-and-suspenders — makes every `getenv("UA_ARTIFACTS_DIR")` consumer land
+    canonically regardless of cwd).
+  - Regression guards: `tests/unit/test_canonical_store_resolvers_phaseD.py`
+    (resolver cwd-independence + env override + skill-content pins forbidding a
+    placeholder/relative connect and the wrong import module) and an env-override
+    case in `tests/unit/test_artifacts_dir_resolution.py`.
+
+- **Deferred — operator-gated / out of scope (NOT in this PR):**
+  - **Orphan cleanup + 18-brief recovery = operator decision.** Recovering the
+    undelivered briefs requires upserting into the **fenced-off 2.5 GB live**
+    `activity_state.db` (idempotent via deterministic
+    `proactive_artifacts.py::make_artifact_id`, so no duplicate emails — but it is
+    a prod write, and the 2026-06-04 briefs fall outside the digest's 24h
+    lookback). All 5 orphan `task_hub.db` copies are snapshotted at
+    `/home/ua/phaseD_orphan_snapshots_2026-06-05/`. The ~88 non-deliverable
+    queue/signal orphan rows are safe to drop outright. The literal
+    `UA_ARTIFACTS_DIR/` dir + 0-byte `activity_state.db`/`activity.db` stubs are
+    safe to remove after relocating their real artifacts.
+  - `youtube_daily_digest.py::_workspace_dir` cwd-relative fallback (different DB
+    family — `.csi_digests.db` / `youtube_ingestion_state.db`; a known-working
+    pipeline that warrants its own verification) and the non-live relative-default
+    footguns (`urw/plan_persistence.py`, `tgtg/config.py`).
+
+- **Rollback:** revert the skill/script edits and the bootstrap key. The orphan
+  snapshots remain; no canonical data was touched.
+- **S1–S4 relationship:** **builds on S1** (mailer + report-agent DB repoint to
+  `get_activity_db_path`). The report-pipeline / AM-product consolidation that S4
+  deferred to S5 is **withdrawn** (operator kept all 3 reports); the durable
+  mailer-flag shipped in S1. The surviving Phase-D work is the canonical-store
+  (skill/artifact-dir) hygiene above.
 
 ### What this ADR does NOT change (S1–S4 stay as-is)
 S5 is the **target architecture**; the S1–S4 local fixes are correct and

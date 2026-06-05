@@ -16,7 +16,7 @@ code_paths:
   - src/universal_agent/memory/lancedb_backend.py
   - src/universal_agent/memory/memory_vector_index.py
   - src/universal_agent/utils/db_health_monitor.py
-last_verified: 2026-05-30
+last_verified: 2026-06-05
 ---
 
 # Database Architecture
@@ -122,6 +122,8 @@ Like `migrations.py`, `task_hub.ensure_schema` runs a base `executescript` then 
 > **Correction of prior docs:** earlier documentation claimed the Task Hub tables live in `runtime_state.db` with `task_hub.py` as the "module source" of `runtime_state.db`. The code contradicts this. `task_hub.py` is schema-only and DB-agnostic; the canonical Task Hub population is in `activity_state.db` via `task_hub_bridge`/`heartbeat`. There is no `task_hub.db` file (a stale `task_hub.db` from ~2026-05-01 may exist on disk — it is NOT canonical, do not query it).
 
 > **Split-brain caveat — a literal `task_hub.db` path string still ships in a prompt.** `heartbeat_service.py` builds Simone's runtime-quirks prompt with the line `Task Hub DB: /opt/universal_agent/AGENT_RUN_WORKSPACES/task_hub.db`. That string is a **prompt/comment field, not a resolver** — the actual canonical resolver is `durable/db.py::get_activity_db_path()` (→ `activity_state.db`). `task_hub.db` (if present) is smaller and stale; `activity_state.db` carries the real population. The two diverge wildly in row counts, so **always confirm which DB a number came from**, and resolve at runtime via `get_activity_db_path()` rather than trusting any hardcoded path string in a prompt or handoff note.
+
+> **The orphan `task_hub.db` copies were ACTIVELY written, not just a 2026-05-01 relic (root-caused + fixed 2026-06-05, Phase D — see `06_platform/08_scheduling_substrate_adr.md`).** As of 2026-06-05 the VPS held five `task_hub.db` copies, two of them written *minutes* before inspection (`.agent/task_hub.db` ≈ 1.1 GB, repo-root `task_hub.db`). Root cause: the skill `evaluate-and-author-intel-brief/SKILL.md` told the Atlas LLM `sqlite3.connect("/path/to/activity_state.db")` — a **placeholder**, not `get_activity_db_path()`. Atlas substituted a cwd-relative path, and because `proactive_artifacts.py::upsert_artifact` and `task_hub.py::perform_task_action` take `conn` from the caller (they never resolve a path), the full task_hub + proactive schema was forked into a cwd-relative orphan the hourly digest never read — **18 `intel_brief` ship briefs were authored there and never delivered**. The fix repoints the skill to `connect_runtime_db(get_activity_db_path())` (matching `hourly-intel-digest/SKILL.md`) and adds regression guards in `tests/unit/test_canonical_store_resolvers_phaseD.py`. **Lesson for any skill or script that writes the canonical store: never hand a store-layer function a hand-built/placeholder/relative path — always pass `get_activity_db_path()`.** Orphan-DB cleanup + recovery of the 18 undelivered briefs is operator-gated (snapshots at `/home/ua/phaseD_orphan_snapshots_2026-06-05/`).
 
 ### Activity telemetry tables (same DB, different writer)
 

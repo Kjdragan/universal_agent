@@ -56,7 +56,7 @@ From a Simone session:
 from pathlib import Path
 import sqlite3
 from universal_agent.services.cody_dispatch import dispatch_cody_demo_task
-from universal_agent.activity_db import get_activity_db_path
+from universal_agent.durable.db import get_activity_db_path
 
 with sqlite3.connect(get_activity_db_path()) as conn:
     conn.row_factory = sqlite3.Row
