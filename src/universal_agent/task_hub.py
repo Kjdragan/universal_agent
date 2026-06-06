@@ -3505,6 +3505,113 @@ def _assignment_age_seconds(assignment_row: Any, now_iso: str) -> float:
     return max(0.0, (now_dt - started).total_seconds())
 
 
+def _vp_mission_lease_live(
+    conn: sqlite3.Connection,
+    task_id: str,
+    metadata: dict[str, Any],
+    now_iso: str,
+) -> bool:
+    """True when ``task_id`` maps to a VP mission with a live (unexpired) lease.
+
+    A VP mission's Task Hub mirror row carries STATUS ONLY and no
+    provider_session_id / assignment, so the session-id and assignment-row
+    liveness checks in :func:`reconcile_task_lifecycle` can never recognise it
+    as alive — it would be false-orphaned at startup recovery (grace=0) while
+    the worker is actively heartbeating. Authoritative VP liveness lives in the
+    ``vp_missions`` table: a row with ``status='running'`` and a future
+    ``claim_expires_at`` lease the worker heartbeats
+    (see vp/worker_loop._execute_mission_logic and
+    durable.state.heartbeat_vp_mission_claim). This helper consults that table.
+
+    Mapping ``task_id`` -> vp_missions row, in priority order:
+
+      1. Direct: ``mission_id == task_id``. The reconciled row is the mirror
+         row keyed by ``task_id == mission_id`` (``vp-mission-...``); the
+         convergence-candidate source task is held in ``status=delegated`` and
+         is not seen by the in_progress loop. This is the common case.
+
+      2. Candidate linkage: when the in_progress row is itself the
+         convergence-candidate task (``convergence-candidate:<hash>``, e.g. a
+         dispatch interrupted before the delegate transition), map via the
+         mission ``payload_json``: ``source_session_id``/``task_id`` equal to
+         this task_id, or ``idempotency_key`` containing this task_id
+         (the key is ``task-<task_id>``).
+
+    Returns ``False`` (caller proceeds to reap) when no live mission is found
+    or the ``vp_missions`` table is absent (legacy / test DBs), mirroring the
+    existence-check pattern already used elsewhere in the reconciler.
+    """
+    task_id = str(task_id or "").strip()
+    if not task_id:
+        return False
+
+    # Cheap signal that this row is even VP-shaped before touching vp_missions.
+    dispatch_meta = dict((metadata or {}).get("dispatch") or {})
+    looks_vp = bool(
+        str(dispatch_meta.get("vp_mission_id") or "").strip()
+        or task_id.startswith("vp-mission-")
+        or task_id.startswith("convergence-candidate:")
+    )
+
+    try:
+        tables_row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='vp_missions' LIMIT 1"
+        ).fetchone()
+    except Exception:
+        return False
+    if not tables_row:
+        return False
+
+    now_dt = _parse_iso(now_iso)
+    if now_dt is None:
+        return False
+
+    def _lease_future(row: Any) -> bool:
+        if row is None:
+            return False
+        if str(row["status"] or "").strip().lower() != "running":
+            return False
+        expires = _parse_iso(row["claim_expires_at"])
+        return expires is not None and expires > now_dt
+
+    # (1) Direct mission_id match (mirror row). Prefer the explicit handle when
+    #     present, else fall back to the task_id itself.
+    direct_id = str(dispatch_meta.get("vp_mission_id") or "").strip() or task_id
+    try:
+        row = conn.execute(
+            "SELECT status, claim_expires_at FROM vp_missions WHERE mission_id = ? LIMIT 1",
+            (direct_id,),
+        ).fetchone()
+    except Exception:
+        return False
+    if _lease_future(row):
+        return True
+
+    # (2) Candidate linkage — only worth scanning when the row looks VP-shaped
+    #     or is a convergence candidate. Map via payload_json.
+    if not looks_vp:
+        return False
+    try:
+        candidate_rows = conn.execute(
+            "SELECT status, claim_expires_at, payload_json FROM vp_missions"
+        ).fetchall()
+    except Exception:
+        return False
+    for candidate_row in candidate_rows:
+        payload = _json_loads_obj(candidate_row["payload_json"], default={})
+        candidate_task_id = str(payload.get("task_id") or "").strip()
+        candidate_source_session_id = str(payload.get("source_session_id") or "").strip()
+        candidate_idempotency_key = str(payload.get("idempotency_key") or "").strip()
+        matches = (
+            (candidate_task_id and candidate_task_id == task_id)
+            or (candidate_source_session_id and candidate_source_session_id == task_id)
+            or (candidate_idempotency_key and task_id in candidate_idempotency_key)
+        )
+        if matches and _lease_future(candidate_row):
+            return True
+    return False
+
+
 def reconcile_task_lifecycle(
     conn: sqlite3.Connection,
     *,
@@ -3597,6 +3704,24 @@ def reconcile_task_lifecycle(
             and _is_cron_owned_task(metadata, task_id)
             and _assignment_age_seconds(assignment_row, now_iso) < cron_live_grace_seconds
         ):
+            continue
+        # VP-mission liveness guard — parallel to the cron grace skip above.
+        # A VP mission's mirror row has no provider_session_id and no
+        # assignment row, so the session/assignment checks above never see it
+        # as live; without this guard it would be false-orphaned at startup
+        # (grace=0) while the worker is actively heartbeating. Reaping must
+        # depend on a real dead/stale signal (an expired lease), never on
+        # absent handles. ``_vp_mission_lease_live`` maps this task_id to a
+        # vp_missions row (mirror or convergence candidate; via the
+        # metadata.dispatch.vp_mission_id handle, the task_id itself, or the
+        # payload idempotency_key linkage) and only returns True when that row
+        # is status='running' with a future claim_expires_at lease. It returns
+        # False for NON-VP rows (no vp_missions match) and when the table is
+        # absent, so cron and non-VP behavior is completely unchanged.
+        # Agent-agnostic by design: it keys off the vp_missions lease, never
+        # vp_id, so it protects BOTH Atlas (vp.general.primary) and Cody
+        # (vp.coder.primary) missions, which share the same lease machinery.
+        if _vp_mission_lease_live(conn, task_id, metadata, now_iso):
             continue
         if assignment_live:
             mission_id = ""

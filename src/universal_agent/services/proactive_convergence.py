@@ -1120,21 +1120,39 @@ def write_convergence_candidate(
     task: dict[str, Any] = {}
     newly_queued = False
 
+    # Durable double-author backstop: if a VP mission for THIS candidate is
+    # already in flight (queued/running), never (re)queue a second one. Even a
+    # future false-orphan of the mirror row (the bug PR2 also fixes in the
+    # reconciler) cannot then spawn a duplicate ATLAS authoring run. Safe on
+    # legacy/test DBs without a vp_missions table (helper returns None).
+    inflight_mission_id = _inflight_vp_mission_for_candidate(
+        conn, candidate_id=candidate_id, task_id=task_id
+    )
+
     if not _intel_triage_enabled():
         # Legacy path: always queue a task, persist row with verdict=''.
-        task = queue_proactive_task(
-            conn,
-            task_id=task_id,
-            source_kind="convergence_candidate",
-            source_ref=candidate_id,
-            title=title,
-            description=description,
-            priority=3,
-            labels=labels,
-            metadata=metadata_payload,
-        )
-        persist_task_id = str(task.get("task_id") or task_id)
-        newly_queued = True
+        if inflight_mission_id:
+            logger.info(
+                "Skipping convergence re-queue for candidate %s (task %s): "
+                "in-flight VP mission exists (mission_id=%s)",
+                candidate_id, task_id, inflight_mission_id,
+            )
+            persist_task_id = task_id
+            newly_queued = False
+        else:
+            task = queue_proactive_task(
+                conn,
+                task_id=task_id,
+                source_kind="convergence_candidate",
+                source_ref=candidate_id,
+                title=title,
+                description=description,
+                priority=3,
+                labels=labels,
+                metadata=metadata_payload,
+            )
+            persist_task_id = str(task.get("task_id") or task_id)
+            newly_queued = True
     else:
         triage = triage_candidate(
             conn,
@@ -1153,19 +1171,28 @@ def write_convergence_candidate(
                 "demo_amenable": bool(triage.get("demo_amenable")),
                 "model": triage.get("model", ""),
             }
-            task = queue_proactive_task(
-                conn,
-                task_id=task_id,
-                source_kind="convergence_candidate",
-                source_ref=candidate_id,
-                title=title,
-                description=description,
-                priority=3,
-                labels=labels,
-                metadata=metadata_payload,
-            )
-            persist_task_id = str(task.get("task_id") or task_id)
-            newly_queued = True
+            if inflight_mission_id:
+                logger.info(
+                    "Skipping convergence re-queue for candidate %s (task %s): "
+                    "in-flight VP mission exists (mission_id=%s)",
+                    candidate_id, task_id, inflight_mission_id,
+                )
+                persist_task_id = task_id
+                newly_queued = False
+            else:
+                task = queue_proactive_task(
+                    conn,
+                    task_id=task_id,
+                    source_kind="convergence_candidate",
+                    source_ref=candidate_id,
+                    title=title,
+                    description=description,
+                    priority=3,
+                    labels=labels,
+                    metadata=metadata_payload,
+                )
+                persist_task_id = str(task.get("task_id") or task_id)
+                newly_queued = True
             # verdict stays '' so the downstream mission/skill still finalizes it.
         elif v in ("skip", "defer"):
             # Recorded verdict, NO task, NO card.
@@ -1242,6 +1269,71 @@ def write_convergence_candidate(
     row["_newly_queued"] = newly_queued
     row["_task"] = task
     return row
+
+
+def _inflight_vp_mission_for_candidate(
+    conn: sqlite3.Connection,
+    *,
+    candidate_id: str,
+    task_id: str,
+) -> Optional[str]:
+    """Return the mission_id of an in-flight VP mission for this candidate.
+
+    Durable backstop against double-authoring: even a future false-orphan
+    (the bug PR2 also fixes in the reconciler) must not be able to spawn a
+    second ATLAS mission for the same convergence candidate. A re-queue is
+    skipped when a ``vp_missions`` row already exists for THIS candidate in
+    status ``queued`` or ``running``.
+
+    Candidate -> mission linkage (confirmed in vp/dispatcher._build_payload
+    and tools/vp_orchestration):
+      * the Task Hub ``task_id`` is ``convergence-candidate:<hash>`` and the
+        mission ``payload_json.task_id`` (lifted from
+        ``metadata.linked_task_id``) equals it;
+      * the dispatch ``idempotency_key`` is ``task-<task_id>`` so it CONTAINS
+        the task_id (and thus the candidate hash);
+      * ``source_ref`` on the Task Hub item is the ``cand_``-prefixed
+        candidate_id.
+
+    Returns ``None`` (caller proceeds to queue) when no in-flight mission is
+    found or the ``vp_missions`` table is absent (legacy / test DBs) — the
+    existence check mirrors the pattern used in task_hub.reconcile_task_lifecycle.
+    """
+    candidate_id = str(candidate_id or "").strip()
+    task_id = str(task_id or "").strip()
+    try:
+        tables_row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='vp_missions' LIMIT 1"
+        ).fetchone()
+    except Exception:
+        return None
+    if not tables_row:
+        return None
+    try:
+        rows = conn.execute(
+            """
+            SELECT mission_id, payload_json
+            FROM vp_missions
+            WHERE status IN ('queued', 'running')
+            """
+        ).fetchall()
+    except Exception:
+        return None
+    # The candidate hash without the cand_ prefix appears inside both the
+    # task_id and the idempotency_key; match on it as a robust fallback.
+    candidate_hash = candidate_id.removeprefix("cand_")
+    for row in rows:
+        payload = _json_loads_obj(row["payload_json"])
+        payload_task_id = str(payload.get("task_id") or "").strip()
+        idempotency_key = str(payload.get("idempotency_key") or "").strip()
+        matches = (
+            (task_id and payload_task_id == task_id)
+            or (task_id and task_id in idempotency_key)
+            or (candidate_hash and candidate_hash in idempotency_key)
+        )
+        if matches:
+            return str(row["mission_id"] or "").strip()
+    return None
 
 
 def _get_convergence_candidate(
