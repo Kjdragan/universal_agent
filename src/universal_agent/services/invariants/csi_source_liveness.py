@@ -56,40 +56,29 @@ def _threads_lanes_enabled() -> bool:
     }
 
 
-def _hackernews_enabled() -> bool:
-    # Mirrors gateway_server::_proactive_cron_enabled("UA_HACKERNEWS_SNAPSHOT_ENABLED")
-    # (default "1" = enabled). PR #734 durably disabled the hackernews_snapshot cron
-    # via the deploy bootstrap (UA_HACKERNEWS_SNAPSHOT_ENABLED="0" in
-    # /opt/universal_agent/.env, which this probe's host process loads), so the
-    # source is intentionally silent and monitoring it produces a perpetual stale
-    # CRITICAL for a producer that is off by operator decision. Park it like the
-    # Threads lanes — excluded while disabled, one-flag-flip to re-enable.
-    return os.getenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", "1").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-
-
 def effective_source_thresholds() -> Dict[str, float]:
     """The set of sources actually evaluated, after applying parking flags.
 
     Parked lanes are excluded so they neither alert nor mask other adapters'
     real outages:
-      - Threads lanes while UA_CSI_THREADS_LANES_ENABLED is off.
-      - hackernews while UA_HACKERNEWS_SNAPSHOT_ENABLED is off (its snapshot cron
-        was durably disabled in #734 — the source is intentionally silent).
+      - Threads lanes while UA_CSI_THREADS_LANES_ENABLED is off (experimental,
+        creds unprovisioned).
     A retired adapter (e.g. youtube_playlist, #438) is removed from the table
     outright; a *disabled-but-resumable* source is parked behind its flag here.
+
+    hackernews is intentionally NOT parked. PR #757 (M3) parked it behind
+    UA_HACKERNEWS_SNAPSHOT_ENABLED on the premise "snapshot cron disabled ⟹ HN
+    source dead." Live data on 2026-06-06 disproved that: the hackernews_snapshot
+    cron is disabled (#734) yet HN still lands ~130 events/48h — the overnight
+    convergence cycle pulls HN via POST /api/v1/hackernews/refresh, a producer
+    independent of the cron. So the snapshot-cron flag was the wrong key for HN
+    liveness, and parking on it MASKED a live (bursty) source. HN is now monitored
+    unconditionally at a cadence-appropriate threshold (see SOURCE_THRESHOLDS_HOURS).
     """
     threads_on = _threads_lanes_enabled()
-    hn_on = _hackernews_enabled()
     out: Dict[str, float] = {}
     for source, hours in SOURCE_THRESHOLDS_HOURS.items():
         if source in _THREADS_SOURCES and not threads_on:
-            continue
-        if source == "hackernews" and not hn_on:
             continue
         out[source] = hours
     return out
@@ -102,7 +91,7 @@ def effective_source_thresholds() -> Dict[str, float]:
 # source entirely (retired adapters should be removed from this table, not
 # given an unreachable threshold).
 SOURCE_THRESHOLDS_HOURS: Dict[str, float] = {
-    "hackernews": 3.0,                   # very high frequency (every 30 min cron + adapter poll)
+    "hackernews": 36.0,                  # bursty: overnight convergence /refresh pulls (the */30 snapshot cron is disabled, #734). Observed normal inter-burst gap ~27h, so 36h flags a real multi-day outage without false-flagging the daytime quiet. Tune as cadence data accrues.
     "csi_analytics": 12.0,               # downstream aggregator — depends on upstream cadence
     "youtube_channel_rss": 12.0,         # 444-channel watchlist, hourly-ish per channel
     "threads_owned": 12.0,               # owned-handle polling
@@ -177,7 +166,11 @@ def _per_source_last_seen(
             "Hub channels. 2026-06-03: youtube_playlist removed (retired #438); "
             "Threads lanes (threads_owned, threads_trends_seeded, "
             "threads_trends_broad) parked behind UA_CSI_THREADS_LANES_ENABLED "
-            "(experimental, creds unprovisioned) so they don't alert while off."
+            "(experimental, creds unprovisioned) so they don't alert while off. "
+            "2026-06-06: hackernews un-parked + threshold widened 3h->36h — the "
+            "#757 park keyed on the (disabled) snapshot cron, but HN stays alive "
+            "via the overnight convergence /refresh, so the park had masked a "
+            "live bursty source."
         ),
     },
 )
