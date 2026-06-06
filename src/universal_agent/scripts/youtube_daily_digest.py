@@ -1161,7 +1161,20 @@ async def _generate_digest_content(
 # ---------------------------------------------------------------------------
 
 def _workspace_dir() -> Path:
-    return Path(os.getenv("UA_WORKSPACES_DIR") or (Path.cwd() / "AGENT_RUN_WORKSPACES"))
+    # Canonical, cwd-INDEPENDENT resolution. Honor an explicit UA_WORKSPACES_DIR
+    # override, else anchor on the same repo-root-derived AGENT_RUN_WORKSPACES the
+    # durable DB resolvers use (durable/db.py::get_activity_db_path). NEVER fall
+    # back to Path.cwd(): a cwd-relative default forks .csi_digests.db /
+    # youtube_ingestion_state.db into an orphan workspace the moment this job runs
+    # from any cwd other than the repo root — the Phase D #756 DB-fork class. This
+    # is latent today (the gateway WorkingDirectory=/opt/universal_agent masks it)
+    # but would bite the instant youtube_daily_digest is migrated to a systemd unit.
+    env_dir = os.getenv("UA_WORKSPACES_DIR")
+    if env_dir:
+        return Path(env_dir)
+    from universal_agent.durable.db import get_activity_db_path
+
+    return Path(get_activity_db_path()).parent
 
 
 def _digest_artifacts_dir() -> Path:

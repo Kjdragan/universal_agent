@@ -180,7 +180,7 @@ def morning_briefing_freshness(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     ),
     severity="warn",
     runbook_command=(
-        "sqlite3 /opt/universal_agent/workspaces/runtime_state.db "
+        "sqlite3 /opt/universal_agent/AGENT_RUN_WORKSPACES/activity_state.db "
         "\"SELECT sent_at, recipient, subject FROM proactive_artifact_emails "
         "ORDER BY sent_at DESC LIMIT 5;\""
     ),
@@ -521,7 +521,7 @@ def nightly_wiki_persistent_silence(ctx: Dict[str, Any]) -> Optional[Dict[str, A
     ),
     severity="warn",
     runbook_command=(
-        "sqlite3 /opt/universal_agent/workspaces/runtime_state.db "
+        "sqlite3 /opt/universal_agent/AGENT_RUN_WORKSPACES/activity_state.db "
         "\"SELECT period, COUNT(*) FROM proactive_intelligence_reports "
         "WHERE DATE(created_at) = DATE('now') GROUP BY period;\""
     ),
@@ -672,7 +672,7 @@ def claude_code_intel_packet_freshness(ctx: Dict[str, Any]) -> Optional[Dict[str
     ),
     severity="critical",
     runbook_command=(
-        "sqlite3 /opt/universal_agent/workspaces/runtime_state.db "
+        "sqlite3 /opt/universal_agent/AGENT_RUN_WORKSPACES/activity_state.db "
         "\"SELECT artifact_id, title, created_at FROM proactive_artifacts "
         "WHERE artifact_type='csi_demo_triage_run' "
         "ORDER BY created_at DESC LIMIT 5;\""
@@ -771,7 +771,7 @@ def csi_demo_triage_rank_artifact(ctx: Dict[str, Any]) -> Optional[Dict[str, Any
     ),
     severity="critical",
     runbook_command=(
-        "sqlite3 /opt/universal_agent/workspaces/runtime_state.db "
+        "sqlite3 /opt/universal_agent/AGENT_RUN_WORKSPACES/activity_state.db "
         "\"SELECT sent_at, recipient, subject FROM proactive_artifact_emails "
         "WHERE subject LIKE '%Papers%' ORDER BY sent_at DESC LIMIT 5;\""
     ),

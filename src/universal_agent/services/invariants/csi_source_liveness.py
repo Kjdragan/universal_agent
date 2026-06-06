@@ -56,18 +56,43 @@ def _threads_lanes_enabled() -> bool:
     }
 
 
+def _hackernews_enabled() -> bool:
+    # Mirrors gateway_server::_proactive_cron_enabled("UA_HACKERNEWS_SNAPSHOT_ENABLED")
+    # (default "1" = enabled). PR #734 durably disabled the hackernews_snapshot cron
+    # via the deploy bootstrap (UA_HACKERNEWS_SNAPSHOT_ENABLED="0" in
+    # /opt/universal_agent/.env, which this probe's host process loads), so the
+    # source is intentionally silent and monitoring it produces a perpetual stale
+    # CRITICAL for a producer that is off by operator decision. Park it like the
+    # Threads lanes — excluded while disabled, one-flag-flip to re-enable.
+    return os.getenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", "1").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def effective_source_thresholds() -> Dict[str, float]:
     """The set of sources actually evaluated, after applying parking flags.
 
-    Parked lanes (Threads, while UA_CSI_THREADS_LANES_ENABLED is off) are
-    excluded so they neither alert nor mask other adapters' real outages.
+    Parked lanes are excluded so they neither alert nor mask other adapters'
+    real outages:
+      - Threads lanes while UA_CSI_THREADS_LANES_ENABLED is off.
+      - hackernews while UA_HACKERNEWS_SNAPSHOT_ENABLED is off (its snapshot cron
+        was durably disabled in #734 — the source is intentionally silent).
+    A retired adapter (e.g. youtube_playlist, #438) is removed from the table
+    outright; a *disabled-but-resumable* source is parked behind its flag here.
     """
     threads_on = _threads_lanes_enabled()
-    return {
-        source: hours
-        for source, hours in SOURCE_THRESHOLDS_HOURS.items()
-        if threads_on or source not in _THREADS_SOURCES
-    }
+    hn_on = _hackernews_enabled()
+    out: Dict[str, float] = {}
+    for source, hours in SOURCE_THRESHOLDS_HOURS.items():
+        if source in _THREADS_SOURCES and not threads_on:
+            continue
+        if source == "hackernews" and not hn_on:
+            continue
+        out[source] = hours
+    return out
 
 
 # Per-source expected max silence in hours. Conservative defaults: leave

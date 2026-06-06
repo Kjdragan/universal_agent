@@ -103,3 +103,39 @@ def test_no_skill_uses_a_placeholder_db_connect() -> None:
         if 'sqlite3.connect("/path/to' in text:
             offenders.append(str(skill_md.relative_to(REPO_ROOT)))
     assert not offenders, f"placeholder DB connect found in: {offenders}"
+
+
+# --------------------------------------------------------------------------- #
+# 3. Same-class guard: youtube_daily_digest._workspace_dir (Phase D follow-up)
+# --------------------------------------------------------------------------- #
+def test_youtube_workspace_dir_is_cwd_independent(monkeypatch, tmp_path: Path) -> None:
+    """youtube_daily_digest._workspace_dir feeds .csi_digests.db /
+    youtube_ingestion_state.db. It MUST anchor on the canonical, __file__-derived
+    AGENT_RUN_WORKSPACES (never Path.cwd()), else it forks those DBs into an
+    orphan workspace when run from a non-repo-root cwd — the Phase D #756 class,
+    one timer-migration away from biting."""
+    from universal_agent.scripts.youtube_daily_digest import _workspace_dir
+
+    # Clear BOTH overrides so we exercise the __file__-derived canonical fallback
+    # (the conftest redirects UA_ACTIVITY_DB_PATH under tmp_path for isolation;
+    # the sibling test_get_activity_db_path_is_cwd_independent clears it the same way).
+    monkeypatch.delenv("UA_WORKSPACES_DIR", raising=False)
+    monkeypatch.delenv("UA_ACTIVITY_DB_PATH", raising=False)
+    first = _workspace_dir()
+    monkeypatch.chdir(tmp_path)
+    second = _workspace_dir()
+
+    assert first == second, "resolver must not depend on cwd"
+    assert first.is_absolute(), "canonical workspaces dir must be absolute"
+    assert first.name == "AGENT_RUN_WORKSPACES"
+    # Regression: must NOT resolve under the (temporary) cwd — the orphan-fork mode.
+    assert tmp_path not in first.parents
+    assert first != tmp_path / "AGENT_RUN_WORKSPACES"
+
+
+def test_youtube_workspace_dir_honors_env_override(monkeypatch, tmp_path: Path) -> None:
+    override = tmp_path / "ws"
+    monkeypatch.setenv("UA_WORKSPACES_DIR", str(override))
+    from universal_agent.scripts.youtube_daily_digest import _workspace_dir
+
+    assert _workspace_dir() == override
