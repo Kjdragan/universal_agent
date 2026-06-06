@@ -90,6 +90,36 @@ from universal_agent.utils.message_history import (
 )
 
 
+def update_context_window_pressure_flags(
+    flags: dict, used_tokens: int, window_tokens: int
+) -> list:
+    """Record live CONTEXT-WINDOW occupancy onto trace flags (NOT mission budget).
+
+    Keys are prefixed context_window_ so dashboards/audits never misread them as
+    mission-budget alarms. Returns threshold labels newly crossed this call ("70"/"90").
+
+    This measures how full the model's CONTEXT WINDOW (CONTEXT_WINDOW_TOKENS, ~200K)
+    is right now — it is deliberately independent of the mission's token budget,
+    which is enforced elsewhere and never reaches this loop.
+    """
+    if not window_tokens:
+        return []
+
+    ratio = used_tokens / window_tokens
+    flags["context_window_tokens"] = window_tokens
+    flags["context_window_used"] = used_tokens
+    flags["context_window_ratio"] = round(ratio, 3)
+
+    crossed = []
+    if ratio >= 0.7 and not flags.get("context_window_warned_70"):
+        flags["context_window_warned_70"] = True
+        crossed.append("70")
+    if ratio >= 0.9 and not flags.get("context_window_warned_90"):
+        flags["context_window_warned_90"] = True
+        crossed.append("90")
+    return crossed
+
+
 # Timezone helper for consistent date/time across deployments
 def get_user_datetime():
     """
@@ -6808,25 +6838,26 @@ async def run_conversation(
                     else:
                         pressure_state["high_turns_without_compaction"] = 0
 
-                    # Proactive context warning (CLI/harness visibility)
+                    # Proactive CONTEXT-WINDOW pressure warning (CLI/harness visibility).
+                    # NOTE: this tracks live context-window occupancy (~200K), NOT the
+                    # mission token budget — flags are prefixed context_window_ so audits
+                    # don't misread them as mission-budget alarms.
                     if _ctx.trace and "token_usage" in _ctx.trace:
                         flags = _ctx.trace.setdefault("token_usage_flags", {})
-                        if CONTEXT_WINDOW_TOKENS:
-                            utilization = (
-                                context_tokens_for_reset / CONTEXT_WINDOW_TOKENS
+                        newly_crossed = update_context_window_pressure_flags(
+                            flags, context_tokens_for_reset, CONTEXT_WINDOW_TOKENS
+                        )
+                        utilization = flags.get("context_window_ratio", 0.0)
+                        if "70" in newly_crossed:
+                            print(
+                                f"\n⚠️ CONTEXT USAGE HIGH ({int(utilization * 100)}% of {CONTEXT_WINDOW_TOKENS} tokens). "
+                                "Allowing SDK auto-compaction before hard reset."
                             )
-                            if utilization >= 0.7 and not flags.get("warned_70"):
-                                print(
-                                    f"\n⚠️ CONTEXT USAGE HIGH ({int(utilization * 100)}% of {CONTEXT_WINDOW_TOKENS} tokens). "
-                                    "Allowing SDK auto-compaction before hard reset."
-                                )
-                                flags["warned_70"] = True
-                            if utilization >= 0.9 and not flags.get("warned_90"):
-                                print(
-                                    f"\n⚠️ CONTEXT USAGE VERY HIGH ({int(utilization * 100)}% of {CONTEXT_WINDOW_TOKENS} tokens). "
-                                    "Expect compaction soon."
-                                )
-                                flags["warned_90"] = True
+                        if "90" in newly_crossed:
+                            print(
+                                f"\n⚠️ CONTEXT USAGE VERY HIGH ({int(utilization * 100)}% of {CONTEXT_WINDOW_TOKENS} tokens). "
+                                "Expect compaction soon."
+                            )
 
                     # [FIX 7] Token-Based Harness Trigger
                     # Prefer SDK auto-compaction first; hard reset only after sustained pressure.
