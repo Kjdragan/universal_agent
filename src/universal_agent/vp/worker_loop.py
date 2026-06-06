@@ -536,7 +536,17 @@ class VpWorkerLoop:
 
         heartbeat_task = asyncio.create_task(_heartbeat_mission_claim())
 
-        # Mark Task Hub item as in_progress when VP worker claims execution
+        # Mark Task Hub item as in_progress when VP worker claims execution.
+        #
+        # ALSO persist a live dispatch handle onto the mirror row. The daemon
+        # claim path (claim_next_dispatch_tasks / claim_task_for_agent) is the
+        # only writer of dispatch handles, and todo_dispatch_service explicitly
+        # excludes vp_mission source kinds — so without this write the mirror
+        # row carries STATUS ONLY and no liveness anchor. The startup
+        # reconciler then false-orphans the (alive, heartbeating) mission.
+        # Authoritative liveness still comes from the vp_missions lease (see
+        # task_hub.reconcile_task_lifecycle); these handles are the durable
+        # breadcrumb that lets the reconciler recognise the row as a VP mission.
         try:
             from universal_agent import task_hub
             from universal_agent.durable.db import (
@@ -545,9 +555,25 @@ class VpWorkerLoop:
             )
             th_conn = connect_runtime_db(get_activity_db_path())
             task_hub.ensure_schema(th_conn)
+            # Merge the dispatch sub-dict ourselves so we don't clobber other
+            # dispatch keys (upsert_item merges metadata only one level deep).
+            _existing_item = task_hub.get_item(th_conn, mission_id) or {}
+            _existing_dispatch = dict(
+                (_existing_item.get("metadata") or {}).get("dispatch") or {}
+            )
+            _existing_dispatch.update({
+                "vp_mission_id": mission_id,
+                "active_agent_id": self.vp_id,
+                # Any stable non-empty id — liveness comes from the vp_missions
+                # lease, not from running_session_ids.
+                "active_provider_session_id": self.worker_id,
+                "active_workspace_dir": str(workspace_path),
+                "last_assignment_started_at": datetime.now(timezone.utc).isoformat(),
+            })
             task_hub.upsert_item(th_conn, {
                 "task_id": mission_id,
                 "status": task_hub.TASK_STATUS_IN_PROGRESS,
+                "metadata": {"dispatch": _existing_dispatch},
             })
             th_conn.close()
         except Exception:
