@@ -185,38 +185,61 @@ def test_threads_lanes_monitored_when_flag_enabled(tmp_path: Path, monkeypatch) 
     assert "threads_owned" in stale
 
 
-def test_hackernews_parked_when_snapshot_cron_disabled(tmp_path: Path, monkeypatch) -> None:
-    """The hackernews_snapshot cron was durably disabled (#734). While
-    UA_HACKERNEWS_SNAPSHOT_ENABLED is off, the source is intentionally silent and
-    must NOT appear as stale — it was a standing FALSE critical in the proactive
-    health digest. Parked like the Threads lanes (one-flag-flip to re-enable)."""
-    monkeypatch.setenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", "0")
+def test_hackernews_always_monitored_regardless_of_snapshot_flag(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """HN liveness is decoupled from the snapshot-cron flag. PR #757 parked HN
+    behind UA_HACKERNEWS_SNAPSHOT_ENABLED on the premise "cron disabled ⟹ source
+    dead"; live data (2026-06-06) showed HN stays alive via the convergence
+    /refresh path regardless of the cron, so the flag is the wrong key. HN is
+    monitored whether the flag is 0 or 1."""
     from universal_agent.services.invariants.csi_source_liveness import (
         effective_source_thresholds,
     )
-    assert "hackernews" not in effective_source_thresholds()
+    for flag in ("0", "1"):
+        monkeypatch.setenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", flag)
+        assert "hackernews" in effective_source_thresholds()
+
+
+def test_hackernews_bursty_gap_within_widened_threshold_does_not_fire(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """HN is bursty (overnight convergence pulls), so a multi-hour daytime gap is
+    NORMAL. With the widened threshold it must not fire at e.g. 10h silence — the
+    old 3h threshold false-flagged exactly this healthy-but-bursty cadence, which
+    is what drove the #757 park."""
+    monkeypatch.setenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", "0")  # flag must not matter
+    from universal_agent.services.invariants.csi_source_liveness import (
+        SOURCE_THRESHOLDS_HOURS,
+        effective_source_thresholds,
+    )
+    assert SOURCE_THRESHOLDS_HOURS["hackernews"] >= 24.0  # widened from the old 3.0
     db = tmp_path / "csi.db"
-    rows = [(s, _hours_ago(0.5)) for s in effective_source_thresholds()]
-    rows.append(("hackernews", _hours_ago(100)))  # WAY stale, but parked → ignored
+    rows = [
+        (s, _hours_ago(0.5)) for s in effective_source_thresholds() if s != "hackernews"
+    ]
+    rows.append(("hackernews", _hours_ago(10)))  # 10h quiet — within widened HN threshold
     _seed_events(db, rows)
     findings = run_invariants({"csi_db_path": db})
     matches = [f for f in findings if f.metric_key == "csi_source_liveness"]
     assert matches == []
 
 
-def test_hackernews_monitored_when_snapshot_cron_enabled(tmp_path: Path, monkeypatch) -> None:
-    """With the snapshot cron enabled (the default), a dark hackernews lane fires
-    again — parking is gated strictly on the disable flag, not a hard removal."""
-    monkeypatch.setenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", "1")
+def test_hackernews_fires_when_truly_dead(tmp_path: Path, monkeypatch) -> None:
+    """Coverage is restored: if HN produces nothing past its (widened) threshold it
+    fires. The #757 park had made a genuine HN outage invisible; un-parking + a
+    cadence-appropriate threshold catches a real multi-day silence."""
+    monkeypatch.setenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", "0")
     from universal_agent.services.invariants.csi_source_liveness import (
+        SOURCE_THRESHOLDS_HOURS,
         effective_source_thresholds,
     )
-    assert "hackernews" in effective_source_thresholds()
     db = tmp_path / "csi.db"
-    # All other effective sources fresh; hackernews never seeded → never_seen.
+    dead_age = SOURCE_THRESHOLDS_HOURS["hackernews"] + 12.0
     rows = [
         (s, _hours_ago(0.5)) for s in effective_source_thresholds() if s != "hackernews"
     ]
+    rows.append(("hackernews", _hours_ago(dead_age)))
     _seed_events(db, rows)
     findings = run_invariants({"csi_db_path": db})
     matches = [f for f in findings if f.metric_key == "csi_source_liveness"]
