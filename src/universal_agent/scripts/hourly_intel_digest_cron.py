@@ -136,7 +136,14 @@ async def run_once(conn) -> str:  # noqa: ANN001 — sqlite3.Connection
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
-    initialize_runtime_secrets(profile="local_workstation")
+    # One-shot subprocess: make sure the Infisical-backed secrets (AgentMail API
+    # key, LLM keys, etc.) are present before we stand up the mailer. Use NO
+    # hardcoded profile so UA_DEPLOYMENT_PROFILE is honored: under the systemd
+    # unit it is `vps` -> strict Infisical production load (a hardcoded
+    # profile="local_workstation" would override that backstop and silently run
+    # keyless under systemd). Dev leaves the var unset -> local_workstation, so
+    # dev behavior is unchanged.
+    initialize_runtime_secrets()
     conn = connect_runtime_db(get_activity_db_path())
     try:
         _pa.ensure_schema(conn)

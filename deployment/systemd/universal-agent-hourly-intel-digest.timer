@@ -1,0 +1,17 @@
+[Unit]
+Description=Run the Universal Agent hourly intel-digest delivery at the top of every active-window hour (06..21) America/Chicago (deploy-independent)
+
+[Timer]
+# OnCalendar wall-clock anchor — NEVER monotonic. cron `0 6-21 * * *`
+# America/Chicago (minute 0 of hours 06 through 21), DST handled by systemd;
+# Persistent replays a missed slot inside a deploy window. systemd-255 honors
+# the OnCalendar timezone suffix and the H..H hour range expands to one fire
+# per hour (verified with `systemd-analyze calendar`).
+OnCalendar=*-*-* 06..21:00:00 America/Chicago
+Persistent=true
+RandomizedDelaySec=120
+AccuracySec=1min
+Unit=universal-agent-hourly-intel-digest.service
+
+[Install]
+WantedBy=timers.target

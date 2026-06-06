@@ -79,6 +79,14 @@ A2 = {
     ),
 }
 
+# Batch 3 jobs (hourly active-window producers) — pinned here only so the
+# frozenset-equality assertion below stays exact as later batches land. Their
+# full contract is guarded in test_phase_a_batch3_timers.py.
+A3 = {
+    "hourly_intel_digest",
+    "csi_convergence_sync",
+}
+
 
 def _active_directives(text: str) -> list[str]:
     out: list[str] = []
@@ -92,8 +100,10 @@ def _active_directives(text: str) -> list[str]:
 
 # ----- frozenset / migration gate -------------------------------------------
 
-def test_frozenset_is_exactly_batch1_plus_batch2():
-    assert gateway_server._SYSTEMD_MIGRATED_SYSTEM_JOBS == frozenset(BATCH1 | set(A2))
+def test_frozenset_is_exactly_batch1_plus_batch2_plus_batch3():
+    assert gateway_server._SYSTEMD_MIGRATED_SYSTEM_JOBS == frozenset(
+        BATCH1 | set(A2) | A3
+    )
 
 
 @pytest.mark.parametrize("job", sorted(A2))

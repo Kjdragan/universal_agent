@@ -10,6 +10,7 @@ import sqlite3
 
 from universal_agent.artifacts import resolve_artifacts_dir
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
+from universal_agent.infisical_loader import initialize_runtime_secrets
 from universal_agent.services.proactive_convergence import (
     sync_topic_signatures_from_csi,
 )
@@ -38,6 +39,16 @@ def _write_sync_report(payload: dict) -> Path:
 
 
 def main() -> int:
+    # Load Infisical secrets FIRST. This job runs as a standalone systemd oneshot
+    # (no gateway parent to inherit ANTHROPIC/ZAI keys from), and
+    # sync_topic_signatures_from_csi makes bounded LLM calls (ZAI/GLM) via the
+    # convergence clustering + ideation sweep (proactive_convergence
+    # ._detect_clusters_llm / _run_ideation_sweep -> llm_classifier._call_llm,
+    # which reads the API key from os.environ). Without this the LLM passes fail
+    # closed and the job silently produces zero convergence candidates. Bare call
+    # so the unit's UA_DEPLOYMENT_PROFILE=vps backstop drives a strict production
+    # load (dev stays local_workstation).
+    initialize_runtime_secrets()
     csi_path = _csi_db_path()
     payload = {
         "ok": False,

@@ -1,0 +1,37 @@
+[Unit]
+Description=Universal Agent CSI convergence topic-signature sync (S5 Phase A batch 3 — deploy-independent hourly timer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ua
+Group=ua
+WorkingDirectory=/opt/universal_agent
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/universal_agent/src
+Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
+# Secrets-bootstrap backstop (mirrors universal-agent-intel-auto-promoter). .env
+# OVERRIDES these when present. LOAD-BEARING here: csi_convergence_sync.main()
+# calls initialize_runtime_secrets() and sync_topic_signatures_from_csi makes
+# bounded LLM calls (ZAI/GLM) via the convergence clustering + ideation sweep,
+# which read the API key from os.environ. As a standalone oneshot it has no
+# gateway parent to inherit those keys from, so UA_DEPLOYMENT_PROFILE=vps must
+# drive a strict Infisical production load — else the LLM passes fail closed and
+# the job silently produces zero convergence candidates.
+Environment=UA_DEPLOYMENT_PROFILE=vps
+Environment=UA_INFISICAL_ENABLED=1
+Environment=INFISICAL_ENVIRONMENT=production
+EnvironmentFile=-/opt/universal_agent/.env
+# Returns an exit code from main() (0 ok / 1 error) — never marks .service
+# failed by a finding.
+ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.scripts.csi_convergence_sync
+MemoryMax=1G
+# Long-running (real runtime observed up to ~1017s before the budget cap; the
+# work is time-boxed by UA_CSI_CONVERGENCE_BUDGET_SECONDS). Bound to the job's
+# old in-process budget (timeout_seconds=900) so a hung run self-heals on the
+# next slot.
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target
