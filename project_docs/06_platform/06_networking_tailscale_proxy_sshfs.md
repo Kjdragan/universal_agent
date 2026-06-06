@@ -35,6 +35,12 @@ This doc covers the three networking substrates the Universal Agent platform rel
 
 > Scope note: the three subsystems are loosely coupled. Tailscale is the transport everything else assumes. The proxy is an application-layer concern of YouTube ingest only. SSHFS is an OS-level convenience layer plus a separate rsync mirror — neither is gated by application code.
 
+> **Agent reaching prod?** This doc is the *infrastructure* reference. If you are an agent
+> trying to *observe or operate* the live VPS (and especially if `ssh ua@uaonvps` just got
+> denied), read [`09_agent_vps_access_runbook.md`](09_agent_vps_access_runbook.md) first —
+> the gateway read-API on `http://uaonvps:8002` answers most live-state questions with no
+> SSH and no permission grant.
+
 ---
 
 ## 1. Tailscale
