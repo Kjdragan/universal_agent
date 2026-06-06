@@ -95,12 +95,27 @@ def collect_tier1_evidence(
     task_limit: int = 30,
     completed_task_limit: int = 15,
     event_limit: int = 60,
+    activity_read_only: bool = False,
 ) -> dict[str, Any]:
     """Bounded but UNTRUNCATED evidence bundle for tier-1 discovery.
 
     Per the design contract (§2.4): we limit COUNTS of items in the
     bundle but never shorten individual text fields. The LLM gets full
     descriptions, full event payloads, full prior synthesis history.
+
+    `activity_read_only` declares that `activity_conn` was opened with
+    SQLite `mode=ro` (the sweeper does this — see
+    `MissionControlSweeper._open_activity_db`). When set, the
+    Task-Hub-missions evidence block is skipped: `task_hub.ensure_schema`
+    (and `list_workstream_summaries`, which itself calls `ensure_schema`)
+    issue `CREATE TABLE/INDEX IF NOT EXISTS` DDL that raises
+    `attempt to write a readonly database` on a read-only handle. That
+    block is gated behind `task_hub_missions_enabled()` (default False,
+    unset in prod) so it is never reached today regardless; this flag
+    makes the read-only switch safe even if the feature flag is ever
+    flipped on. If missions evidence is needed under the read-only
+    sweeper, give that block its own writable handle rather than relaxing
+    the read-only guarantee.
     """
     evidence: dict[str, Any] = {
         "generated_at_utc": _utc_now_iso(),
@@ -138,7 +153,7 @@ def collect_tier1_evidence(
     except sqlite3.OperationalError:
         evidence["recent_completed_tasks"] = []
 
-    if task_hub_missions_enabled():
+    if task_hub_missions_enabled() and not activity_read_only:
         try:
             task_hub.ensure_schema(activity_conn)
             evidence["mission_summaries"] = task_hub.list_workstream_summaries(
@@ -149,7 +164,12 @@ def collect_tier1_evidence(
         except sqlite3.OperationalError:
             evidence["mission_summaries"] = []
     else:
+        # Either the feature flag is off, or the activity handle is
+        # read-only (sweeper path) and the missions block's schema-bootstrap
+        # DDL cannot run on a mode=ro connection. Skip cleanly; never raise.
         evidence["mission_summaries"] = []
+        if task_hub_missions_enabled() and activity_read_only:
+            evidence["mission_summaries_skipped"] = "activity_conn_read_only"
 
     # Operator-relevant activity events (full text, full metadata)
     try:

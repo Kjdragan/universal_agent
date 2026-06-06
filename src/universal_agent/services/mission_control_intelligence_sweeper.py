@@ -468,7 +468,12 @@ class MissionControlSweeper:
                 return
 
             try:
-                evidence = collect_tier1_evidence(data_conn, mc_conn)
+                # data_conn is opened mode=ro (see _open_activity_db);
+                # tell the collector to skip the missions-block DDL that
+                # would raise on a read-only handle.
+                evidence = collect_tier1_evidence(
+                    data_conn, mc_conn, activity_read_only=True
+                )
             except Exception as exc:
                 last_attempt_summary = f"tier1 init failed: evidence collection: {exc}"
                 result.errors.append(f"tier1 evidence collection failed: {exc}")
@@ -905,18 +910,48 @@ class MissionControlSweeper:
     # ── Tier-0 helpers ─────────────────────────────────────────────────
 
     def _open_activity_db(self):  # type: ignore[no-untyped-def]
-        """Open a connection to the activity / task_hub DB.
+        """Open a READ-ONLY connection to the activity / task_hub DB.
+
+        The sweeper is observational: every write it performs goes to the
+        separate Mission Control store (`open_store()`), and it only ever
+        SELECTs from the activity / Task-Hub DB (tile.compute_state,
+        collect_tier1_evidence). We therefore open this handle with
+        SQLite's URI `mode=ro` so the observational guarantee is enforced
+        by the driver — any accidental write raises
+        `sqlite3.OperationalError: attempt to write a readonly database`
+        instead of silently mutating shared activity state.
+
+        Settings mirror `connect_runtime_db` where they make sense for a
+        read-only handle: `sqlite3.Row` row factory, `check_same_thread=
+        False` (the sweeper hops threads via `asyncio.to_thread`),
+        autocommit (`isolation_level=None`), and the same busy_timeout.
+        The write-only PRAGMAs that `connect_runtime_db` issues
+        (`journal_mode=WAL`, `auto_vacuum=INCREMENTAL`, `foreign_keys=ON`)
+        are intentionally omitted: they would either fail or be
+        meaningless on a `mode=ro` connection, and a reader does not need
+        them (it observes whatever journal mode the writer established).
 
         Indirection so tests can override with a fixture-backed
-        connection. Default implementation uses the standard runtime DB
-        helper.
+        connection.
         """
+        import sqlite3
+
         from universal_agent.durable.db import (
-            connect_runtime_db,
             get_activity_db_path,
+            get_sqlite_busy_timeout_ms,
         )
 
-        return connect_runtime_db(get_activity_db_path())
+        busy_timeout_ms = get_sqlite_busy_timeout_ms()
+        conn = sqlite3.connect(
+            "file:" + get_activity_db_path() + "?mode=ro",
+            uri=True,
+            timeout=busy_timeout_ms / 1000.0,
+            check_same_thread=False,
+            isolation_level=None,
+        )
+        conn.row_factory = sqlite3.Row
+        conn.execute(f"PRAGMA busy_timeout={busy_timeout_ms};")
+        return conn
 
     def _persist_tile_state(
         self, conn, tile: Tile, state: TileState
