@@ -297,7 +297,9 @@ async def test_idle_skip_does_not_reset_clock_via_run_tier1_async(tmp_path: Path
         conn.close()
 
     from universal_agent.services import mission_control_tier1 as t1_mod
-    monkeypatch.setattr(t1_mod, "collect_tier1_evidence", lambda data_conn, mc_conn: {"counts": {}})
+    # Accept **_kw so the sweeper's `activity_read_only=True` kwarg (the
+    # ro activity-handle hardening) doesn't trip this stub.
+    monkeypatch.setattr(t1_mod, "collect_tier1_evidence", lambda data_conn, mc_conn, **_kw: {"counts": {}})
     monkeypatch.setattr(t1_mod, "evidence_signature", lambda evidence: "SIG")  # unchanged signature
 
     discover_called = {"n": 0}

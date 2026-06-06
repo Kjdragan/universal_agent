@@ -459,6 +459,15 @@ async def test_tier0_retires_infrastructure_card_when_tile_returns_to_green(
     monkeypatch.setenv("UA_MISSION_CONTROL_INTEL_DB_PATH", str(db_path))
     monkeypatch.setenv("UA_MC_PHASE_1_ENABLED", "1")
 
+    # The sweeper opens the activity DB read-only (mode=ro), which cannot
+    # create a missing file. compute_state is patched to return green
+    # below (it never reads the activity DB), so an empty-but-existing
+    # file is enough to let _open_activity_db() succeed.
+    activity_path = tmp_path / "activity_state.db"
+    import sqlite3 as _sqlite3
+    _sqlite3.connect(str(activity_path)).close()
+    monkeypatch.setenv("UA_ACTIVITY_DB_PATH", str(activity_path))
+
     # Seed: prior tile state is RED for csi_ingester. A live infra card
     # exists (created by an earlier sweep when the tile flipped red).
     from universal_agent.services.mission_control_cards import (
