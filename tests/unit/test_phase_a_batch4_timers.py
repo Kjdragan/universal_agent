@@ -256,6 +256,16 @@ def test_a4_secret_touching_modules_bootstrap_secrets(module):
         f"{module} hardcodes profile=local_workstation, which overrides the "
         f"unit's vps backstop -> keyless under systemd"
     )
+    if module == "scripts.csi_demo_triage_rank":
+        # This job uses the faithful `profile=args.profile or None` form, which is
+        # only safe while --profile NEVER defaults to (or is passed) a non-vps
+        # profile. Pin that the dangerous value never appears, so a future change
+        # introducing `default="local_workstation"` (which would override the vps
+        # backstop -> keyless, WITHOUT tripping the asserts above) fails CI.
+        assert "local_workstation" not in src, (
+            "csi_demo_triage_rank must not introduce a local_workstation profile "
+            "default/arg -> would override the unit's vps backstop (keyless)"
+        )
 
 
 # ----- installer + deploy wiring --------------------------------------------
@@ -393,7 +403,7 @@ BESPOKE_GATE = {
     "youtube_gold_channel_poller": (
         gateway_server._ensure_youtube_gold_poller_cron_job,
         "UA_YOUTUBE_GOLD_POLLER_ENABLED",
-        "youtube_daily_digest",  # placeholder, command-substring checked below
+        "youtube_gold_channel_poller",
     ),
 }
 
