@@ -185,6 +185,46 @@ def test_threads_lanes_monitored_when_flag_enabled(tmp_path: Path, monkeypatch) 
     assert "threads_owned" in stale
 
 
+def test_hackernews_parked_when_snapshot_cron_disabled(tmp_path: Path, monkeypatch) -> None:
+    """The hackernews_snapshot cron was durably disabled (#734). While
+    UA_HACKERNEWS_SNAPSHOT_ENABLED is off, the source is intentionally silent and
+    must NOT appear as stale — it was a standing FALSE critical in the proactive
+    health digest. Parked like the Threads lanes (one-flag-flip to re-enable)."""
+    monkeypatch.setenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", "0")
+    from universal_agent.services.invariants.csi_source_liveness import (
+        effective_source_thresholds,
+    )
+    assert "hackernews" not in effective_source_thresholds()
+    db = tmp_path / "csi.db"
+    rows = [(s, _hours_ago(0.5)) for s in effective_source_thresholds()]
+    rows.append(("hackernews", _hours_ago(100)))  # WAY stale, but parked → ignored
+    _seed_events(db, rows)
+    findings = run_invariants({"csi_db_path": db})
+    matches = [f for f in findings if f.metric_key == "csi_source_liveness"]
+    assert matches == []
+
+
+def test_hackernews_monitored_when_snapshot_cron_enabled(tmp_path: Path, monkeypatch) -> None:
+    """With the snapshot cron enabled (the default), a dark hackernews lane fires
+    again — parking is gated strictly on the disable flag, not a hard removal."""
+    monkeypatch.setenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", "1")
+    from universal_agent.services.invariants.csi_source_liveness import (
+        effective_source_thresholds,
+    )
+    assert "hackernews" in effective_source_thresholds()
+    db = tmp_path / "csi.db"
+    # All other effective sources fresh; hackernews never seeded → never_seen.
+    rows = [
+        (s, _hours_ago(0.5)) for s in effective_source_thresholds() if s != "hackernews"
+    ]
+    _seed_events(db, rows)
+    findings = run_invariants({"csi_db_path": db})
+    matches = [f for f in findings if f.metric_key == "csi_source_liveness"]
+    assert len(matches) == 1
+    stale = {s["source"] for s in (matches[0].observed_value or {}).get("stale_sources") or []}
+    assert "hackernews" in stale
+
+
 def test_completely_missing_source_emits_finding(tmp_path: Path) -> None:
     """A monitored source with ZERO events in the recent window should also
     fire (never_seen state, distinct from stale). Seed all other sources
