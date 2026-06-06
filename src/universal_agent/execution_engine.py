@@ -48,6 +48,19 @@ except ImportError:
     logfire = None  # type: ignore
     _LOGFIRE_AVAILABLE = False
 
+
+def _logfire_runtime_enabled() -> bool:
+    """Re-read the Logfire token at call time.
+
+    ``_LOGFIRE_AVAILABLE`` is captured at import; the VP worker loads
+    ``LOGFIRE_TOKEN`` from Infisical at RUNTIME (after this module is imported),
+    so the import-time constant is False and the gateway span — the only source
+    of trace_id on the gateway path — is never created. Re-checking here lets the
+    span be emitted once the token lands, fixing the propagated-null trace_id.
+    """
+    return bool(os.getenv("LOGFIRE_TOKEN") or os.getenv("LOGFIRE_WRITE_TOKEN"))
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -592,7 +605,7 @@ class ProcessTurnAdapter:
         _gateway_span = None
         _gateway_span_ctx = None
         _gateway_trace_id_hex: Optional[str] = None
-        if _LOGFIRE_AVAILABLE and logfire:
+        if (_LOGFIRE_AVAILABLE or _logfire_runtime_enabled()) and logfire:
             _gateway_span = logfire.span(
                 "gateway_request",
                 session_id=Path(self.config.workspace_dir).name,

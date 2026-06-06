@@ -62,6 +62,12 @@ function formatCost(usd: number): string {
   return `$${usd.toFixed(2)}`;
 }
 
+// Anthropic rows carry genuine list-price cost. ZAI (glm-*) rows report the
+// SDK's Anthropic-list-price estimate, not real ZAI billing — so flag those.
+function isAnthropicModel(m?: string): boolean {
+  return !!m && (m.toLowerCase().startsWith("claude") || m.toLowerCase().includes("anthropic"));
+}
+
 function formatTokens(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return "0";
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
@@ -489,7 +495,13 @@ export default function CodyDashboardPage() {
                         {formatTokens(row.output_tokens)}
                       </td>
                       <td className="px-3 py-2 text-right font-mono text-kcd-cyan">
-                        {formatCost(row.total_cost_usd)}
+                        {isAnthropicModel(row.model) ? (
+                          formatCost(row.total_cost_usd)
+                        ) : (
+                          <span title="Estimated (Anthropic list price); real ZAI billing differs">
+                            ~{formatCost(row.total_cost_usd)}
+                          </span>
+                        )}
                       </td>
                     </tr>
                   ))}

@@ -538,6 +538,95 @@ def _card_row_to_summary(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _briefs_base_url() -> str:
+    """Resolve the operator-facing public base for ``/briefs/`` links.
+
+    Mirrors ``hourly_intel_digest._gateway_base_url`` precedence so the
+    readout cites the SAME URL the digest email and feedback links use.
+    Defaults to ``https://app.clearspringcg.com`` when unset.
+    """
+    base = (
+        os.getenv("UA_GATEWAY_BASE_URL")
+        or os.getenv("FRONTEND_URL")
+        or os.getenv("UA_PUBLIC_BASE_URL")
+        or "https://app.clearspringcg.com"
+    ).strip().rstrip("/")
+    return base
+
+
+def collect_proactive_artifact_evidence(
+    conn: sqlite3.Connection | None = None, *, limit: int = 12
+) -> dict[str, Any]:
+    """Collect recently SHIPPED intel briefs so the readout can CITE the artifact.
+
+    The "Intel shipped" ledger card needs to point at a concrete artifact —
+    its ``artifact_id`` and the ``/briefs/{artifact_id}`` viewer URL — rather
+    than narrating a ship event with no handoff target. This collector SELECTs
+    recent ``verdict='ship'`` AND ``artifact_type='intel_brief'`` rows from
+    ``proactive_artifacts`` (which lives in the runtime activity DB) and emits a
+    ready-to-cite ``evidence_ref`` per row that another agent can follow.
+
+    The table read is guarded behind a ``sqlite_master`` existence check and a
+    defensive ``OperationalError`` catch (the ``verdict`` column is a PR-B
+    migration that may be absent on a pre-migration DB), mirroring the other
+    failure-tolerant collectors in this module.
+    """
+    base_url = _briefs_base_url()
+    owns_conn = conn is None
+    try:
+        if conn is None:
+            conn = connect_runtime_db(get_activity_db_path())
+    except sqlite3.Error as exc:
+        logger.info("Mission Control proactive-artifact evidence unavailable: %s", exc)
+        return {"items": [], "counts": {"items": 0}, "unavailable": str(exc)}
+
+    try:
+        table = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name = 'proactive_artifacts'"
+        ).fetchone()
+        if not table:
+            return {"items": [], "counts": {"items": 0}}
+        rows = conn.execute(
+            """
+            SELECT artifact_id, title, summary, created_at, updated_at
+            FROM proactive_artifacts
+            WHERE verdict = 'ship'
+              AND artifact_type = 'intel_brief'
+            ORDER BY COALESCE(NULLIF(updated_at, ''), created_at) DESC, created_at DESC
+            LIMIT ?
+            """,
+            (max(1, min(int(limit), 100)),),
+        ).fetchall()
+    except sqlite3.OperationalError as exc:
+        # `verdict` column missing (pre-migration DB) or schema otherwise
+        # incomplete — degrade gracefully like the other collectors.
+        logger.info("Mission Control proactive-artifact evidence unavailable: %s", exc)
+        return {"items": [], "counts": {"items": 0}, "unavailable": str(exc)}
+    finally:
+        if owns_conn:
+            conn.close()
+
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        data = _row_dict(row)
+        artifact_id = str(data.get("artifact_id") or "").strip()
+        if not artifact_id:
+            continue
+        brief_url = f"{base_url}/briefs/{artifact_id}"
+        items.append(
+            {
+                "artifact_id": artifact_id,
+                "title": _shorten(data.get("title"), max_chars=220),
+                "summary": _shorten(data.get("summary"), max_chars=700),
+                "created_at": data.get("created_at"),
+                "brief_url": brief_url,
+                # Ready-to-cite string for the readout's evidence_refs lists.
+                "evidence_ref": f"proactive_artifact:{artifact_id} {brief_url}",
+            }
+        )
+    return {"items": items, "counts": {"items": len(items)}}
+
+
 def collect_evidence_bundle() -> dict[str, Any]:
     """Collect and merge all evidence categories into a single bundle for LLM synthesis."""
     generated_at = utc_now_iso()
@@ -560,6 +649,7 @@ def collect_evidence_bundle() -> dict[str, Any]:
             "tutorial_pipeline": collect_tutorial_evidence(),
             "csi_digests": collect_csi_evidence(),
             "workspace_artifacts": collect_workspace_artifact_evidence(),
+            "proactive_artifacts": collect_proactive_artifact_evidence(),
             "mission_control_cards": collect_mission_control_cards_evidence(),
         },
     }

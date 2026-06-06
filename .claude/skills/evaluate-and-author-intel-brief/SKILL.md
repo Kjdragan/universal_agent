@@ -236,12 +236,30 @@ append_verdict_to_index(
 For each `ship` verdict, write the full HTML brief with these required
 sections, in order:
 
+**Fidelity rule (applies to every section below):** the brief must
+faithfully represent the dispatch narrative (`metadata.thesis` /
+`metadata.value` / the task description) — ANY narrative claim or pillar
+that the actual sources do NOT support MUST be disclosed in a one-line
+provenance note (Section 3), never silently dropped or substituted.
+
+Capture the **authoring model** — the model that authored this HTML brief
+(read it from the runtime model env var the mission ran under, falling back
+to the resolved flagship model). It is persisted on the artifact in
+Phase 3.3.
+
 1. **Convergence signal** — what the cluster is about, and why now (the
    "what + why now"). 2-4 sentences.
 2. **Evidence summary** — one short paragraph per source channel,
    summarizing the channel's claims and linking to the source URL.
-3. **Divergence** — where the sources disagree, OR explicit "no meaningful
-   divergence — all sources align on X" if they don't.
+3. **Divergence & narrative provenance** — where the sources disagree, OR
+   explicit "no meaningful divergence — all sources align on X" if they
+   don't. **Before** you assert "no meaningful divergence / all sources
+   align", check each dispatch-narrative claim/pillar (`metadata.thesis` /
+   `metadata.value` / task description) against the source `key_claims`. For
+   any pillar the sources do NOT support, add a one-line provenance note
+   rather than silently dropping or substituting it — e.g. "Note: the
+   narrative's 'API integrations' pillar is not supported by these sources;
+   substituting the adversarial-QA pillar that is."
 4. **So what** — three specific actionable items for Kevin, each a single
    imperative sentence. These become `metadata.key_actions`.
 
@@ -272,7 +290,7 @@ Use the helpers shipped in PR B:
 import os
 from universal_agent.services.cron_artifact_notifier import sign_feedback_token
 
-base = os.environ.get("UA_GATEWAY_BASE_URL", "").rstrip("/")
+base = os.environ.get("UA_GATEWAY_BASE_URL", "https://app.clearspringcg.com").rstrip("/")
 up_token = sign_feedback_token(artifact_id, "up")
 down_token = sign_feedback_token(artifact_id, "down")
 feedback_url_up = f"{base}/api/v1/briefs/{artifact_id}/feedback?v=up&t={up_token}"
@@ -330,6 +348,12 @@ upsert_artifact(
         # `demo_amenable` is True only when triage flagged a concrete buildable
         # software/coding demo; False/absent otherwise (incl. the legacy path).
         "demo_amenable": bool(demo_amenable),
+        # Provenance: which model authored this HTML brief (captured in Phase 2
+        # from the runtime model env var the mission ran under, falling back to
+        # the resolved flagship model), and which model produced the upstream
+        # triage verdict (`metadata.triage.model` when present, else None).
+        "authoring_model": authoring_model,
+        "triage_model": (metadata.get("triage") or {}).get("model"),
     },
 )
 ```
@@ -400,10 +424,11 @@ task_hub.perform_task_action(
   the table. Atlas will re-claim them on the next dispatch — the
   `write_convergence_candidate` upsert is idempotent for non-final
   verdicts. No special recovery logic needed.
-- **`UA_GATEWAY_BASE_URL` unset**: log a warning and skip the feedback URL
-  block in `metadata_json`. Simone's digest skill will render the
-  thumbs-up/down buttons as no-ops in that case — better than crashing
-  the whole authoring step.
+- **`UA_GATEWAY_BASE_URL` unset**: the canonical default base URL
+  (`https://app.clearspringcg.com`) is used, so the feedback URLs are still
+  stored in `metadata_json` (never empty). The buttons still work via the
+  send-time backstop in the digest path. No need to skip the feedback URL
+  block.
 - **Durable copy fails** (permissions, disk full): keep the workspace
   HTML, set `artifact_path` to the workspace path, log a warning. The
   dashboard viewer (`GET /briefs/<id>`) falls back to title+summary if the
@@ -435,6 +460,10 @@ Before finishing the mission, confirm:
       `verdict='ship'`, `artifact_path` set, and `metadata_json` containing
       `feedback_url_up`, `feedback_url_down`, `thesis`, `key_entities`,
       `key_actions`, `composite_score`, `delivery_channel='hourly_digest'`
+- [ ] Every ship brief either supports all dispatch-narrative claims/pillars
+      from the sources, OR contains a one-line provenance note for each
+      unsupported one (Section 3) AND records the mismatch in
+      `verdict_reasoning`
 - [ ] The recent briefs index file has a new block per verdict (in batch
       order)
 - [ ] Every claimed Task Hub item is closed (`complete` for done,

@@ -46,6 +46,12 @@ class SessionViewTarget:
     # /opt/ua_demos/<id> tree), so the viewer's Activity panel needs this
     # separately to rehydrate from run.log. Empty when not located.
     log_workspace_rel: str = ""
+    # AGENT_RUN_WORKSPACES-relative path of the *populated* primary log file the
+    # card should link to. VP SDK missions write a 0-byte ``run.log`` while the
+    # real content lands in ``transcript.md`` / ``trace.json`` (written by
+    # process_turn) in the same dir. The card link points here so it never opens
+    # an empty file. Empty when no mission log dir / no populated file is found.
+    primary_log_rel: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -163,6 +169,38 @@ def mission_log_rel(session_id: Optional[str]) -> str:
     try:
         for run_log in root.glob(f"vp_*_external/{sid}/{sid}/run.log"):
             return str(run_log.parent.relative_to(root))
+    except OSError:
+        return ""
+    return ""
+
+
+def select_primary_log_rel(log_workspace_rel: str) -> str:
+    """Pick the populated primary-log file inside a mission's log dir.
+
+    ``log_workspace_rel`` is an AGENT_RUN_WORKSPACES-relative dir (the value
+    returned by :func:`mission_log_rel`). VP SDK missions write a 0-byte
+    ``run.log`` while the real transcript lands in ``transcript.md`` /
+    ``trace.json`` (written by process_turn) in the same dir, so a card linking
+    blindly to ``run.log`` opens an empty file.
+
+    Preference order, returning the AGENT_RUN_WORKSPACES-relative *file* path:
+    ``run.log`` (only when it exists AND is non-empty) → ``transcript.md`` →
+    ``trace.json``. Returns "" when the dir is empty/unknown or none of those
+    files exist, so the caller degrades gracefully. Never raises.
+    """
+    rel = str(log_workspace_rel or "").strip()
+    if not rel:
+        return ""
+    root = _resolve_workspaces_root()
+    log_dir = root / rel
+    try:
+        run_log = log_dir / "run.log"
+        if run_log.is_file() and run_log.stat().st_size > 0:
+            return f"{rel}/run.log"
+        for fallback in ("transcript.md", "trace.json"):
+            candidate = log_dir / fallback
+            if candidate.is_file() and candidate.stat().st_size > 0:
+                return f"{rel}/{fallback}"
     except OSError:
         return ""
     return ""

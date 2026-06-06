@@ -26,7 +26,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from universal_agent.viewer import resolve_session_view_target
-from universal_agent.viewer.resolver import mission_log_rel
+from universal_agent.viewer.resolver import mission_log_rel, select_primary_log_rel
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +89,11 @@ async def viewer_resolve(body: ResolveBody) -> JSONResponse:
     # sessions / missions without an on-disk run.log.
     if not target.log_workspace_rel:
         target.log_workspace_rel = mission_log_rel(target.session_id)
+    # Point the card's primary log link at a populated file: VP SDK missions
+    # leave run.log at 0 bytes while transcript.md / trace.json carry the real
+    # content. No-op when no mission log dir was located.
+    if not target.primary_log_rel and target.log_workspace_rel:
+        target.primary_log_rel = select_primary_log_rel(target.log_workspace_rel)
     return JSONResponse(content=target.to_dict())
 
 

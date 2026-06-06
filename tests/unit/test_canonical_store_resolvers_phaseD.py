@@ -85,6 +85,21 @@ def test_intel_brief_skill_uses_canonical_resolver_not_placeholder() -> None:
     assert "get_activity_db_path" in text
 
 
+def test_intel_brief_skill_pins_narrative_provenance_and_authoring_model() -> None:
+    """Regression pin for the fidelity fixes (#6 narrative provenance, #9
+    authoring model): the skill must require disclosing any dispatch-narrative
+    pillar the sources do not support (rather than silently dropping it), and
+    must persist the authoring model on the artifact."""
+    text = _skill_text("evaluate-and-author-intel-brief")
+    lowered = text.lower()
+    # #6 narrative provenance: the requirement and its vocabulary must be present.
+    assert "narrative provenance" in lowered
+    assert "provenance note" in lowered
+    assert "unsupported" in lowered
+    # #9 authoring model: the metadata key must be set on the artifact.
+    assert "authoring_model" in text
+
+
 def test_cody_skills_import_canonical_db_module() -> None:
     for name in ("cody-task-dispatcher", "cody-progress-monitor"):
         text = _skill_text(name)
