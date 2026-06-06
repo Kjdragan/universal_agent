@@ -1,0 +1,16 @@
+[Unit]
+Description=Run the Universal Agent YouTube gold-channel RSS poller at 05:30 America/Chicago (30 min before the digest, deploy-independent)
+
+[Timer]
+# OnCalendar wall-clock anchor — NEVER monotonic. cron `30 5 * * *`
+# America/Chicago (05:30 daily — 30 min before the 06:00 digest), DST handled
+# by systemd; Persistent replays a missed slot inside a deploy window.
+# systemd-255 honors the OnCalendar timezone suffix.
+OnCalendar=*-*-* 05:30:00 America/Chicago
+Persistent=true
+RandomizedDelaySec=120
+AccuracySec=1min
+Unit=universal-agent-youtube-gold-channel-poller.service
+
+[Install]
+WantedBy=timers.target

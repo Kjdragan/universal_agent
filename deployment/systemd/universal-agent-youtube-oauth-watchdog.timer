@@ -1,0 +1,16 @@
+[Unit]
+Description=Run the Universal Agent YouTube OAuth watchdog at 07:00 America/Chicago (deploy-independent)
+
+[Timer]
+# OnCalendar wall-clock anchor — NEVER monotonic. cron `0 7 * * *`
+# America/Chicago (07:00 daily), DST handled by systemd; Persistent replays a
+# missed slot inside a deploy window. systemd-255 honors the OnCalendar
+# timezone suffix.
+OnCalendar=*-*-* 07:00:00 America/Chicago
+Persistent=true
+RandomizedDelaySec=120
+AccuracySec=1min
+Unit=universal-agent-youtube-oauth-watchdog.service
+
+[Install]
+WantedBy=timers.target

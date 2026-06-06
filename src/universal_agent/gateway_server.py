@@ -19171,6 +19171,22 @@ def _ensure_youtube_daily_digest_cron_job() -> Optional[dict[str, Any]]:
     """
     if not _cron_service or not _youtube_daily_digest_enabled():
         return None
+    # S5 Phase A batch A4: migrated to a systemd timer. This job registers via a
+    # bespoke _cron_service.add_job/update_job path (NOT _register_system_cron_job),
+    # so it needs its own disable: when migrated, flip any existing enabled row to
+    # disabled on every boot (so the row does not silently re-enable) and register
+    # nothing new — the systemd timer is the sole firer. Rollback via
+    # UA_SYSTEMD_TIMER_MIGRATION_DISABLED=1 (handled by _is_migrated_to_systemd).
+    if _is_migrated_to_systemd(YOUTUBE_DAILY_DIGEST_JOB_KEY):
+        existing = _find_cron_job_by_system_job(YOUTUBE_DAILY_DIGEST_JOB_KEY)
+        if existing is not None and bool(getattr(existing, "enabled", False)):
+            updated = _cron_service.update_job(
+                str(getattr(existing, "job_id", "")), {"enabled": False}
+            )
+            if hasattr(updated, "to_dict"):
+                return updated.to_dict()
+            return {"job_id": str(getattr(existing, "job_id", "")), "enabled": False}
+        return None
     cron_expr = (
         os.getenv("UA_YOUTUBE_DAILY_DIGEST_CRON", YOUTUBE_DAILY_DIGEST_DEFAULT_CRON).strip()
         or YOUTUBE_DAILY_DIGEST_DEFAULT_CRON
@@ -19251,6 +19267,21 @@ def _ensure_youtube_gold_poller_cron_job() -> Optional[dict[str, Any]]:
     day-of-week playlist so the existing digest cron consumes them at 6 AM.
     """
     if not _cron_service or not _youtube_gold_poller_enabled():
+        return None
+    # S5 Phase A batch A4: migrated to a systemd timer. Bespoke add_job/update_job
+    # registration path (NOT _register_system_cron_job), so the disable lives here:
+    # when migrated, flip any existing enabled row to disabled on every boot (so it
+    # does not silently re-enable) and register nothing new — the systemd timer is
+    # the sole firer. Rollback via UA_SYSTEMD_TIMER_MIGRATION_DISABLED=1.
+    if _is_migrated_to_systemd(YOUTUBE_GOLD_POLLER_JOB_KEY):
+        existing = _find_cron_job_by_system_job(YOUTUBE_GOLD_POLLER_JOB_KEY)
+        if existing is not None and bool(getattr(existing, "enabled", False)):
+            updated = _cron_service.update_job(
+                str(getattr(existing, "job_id", "")), {"enabled": False}
+            )
+            if hasattr(updated, "to_dict"):
+                return updated.to_dict()
+            return {"job_id": str(getattr(existing, "job_id", "")), "enabled": False}
         return None
     cron_expr = (
         os.getenv("UA_YOUTUBE_GOLD_POLLER_CRON", YOUTUBE_GOLD_POLLER_DEFAULT_CRON).strip()
@@ -19334,7 +19365,10 @@ def _ensure_youtube_oauth_watchdog_cron_job() -> Optional[dict[str, Any]]:
         command="!script universal_agent.scripts.youtube_oauth_watchdog",
         description="YouTube OAuth watchdog: daily liveness + expiry check; emails a one-tap re-auth button before the 7-day token expires.",
         timeout_seconds=120,
-        enabled=True,
+        # S5 Phase A batch A4: migrated to systemd timer — force in-process
+        # registration disabled (no double-fire). Base enabled is True, so the
+        # gate alone decides it. See _is_migrated_to_systemd.
+        enabled=not _is_migrated_to_systemd(YOUTUBE_OAUTH_WATCHDOG_JOB_KEY),
         cron_env_var="UA_YOUTUBE_OAUTH_WATCHDOG_CRON",
         timezone_env_var="UA_YOUTUBE_OAUTH_WATCHDOG_TIMEZONE",
         required_secrets=[
@@ -19408,6 +19442,29 @@ _SYSTEMD_MIGRATED_SYSTEM_JOBS: frozenset[str] = frozenset(
         # true), mirroring codie_proactive_cleanup.
         "hourly_intel_digest",
         "csi_convergence_sync",
+        # Batch A4 — SECRET-BEARING jobs (YouTube OAuth tokens, NotebookLM
+        # cookies, UA_OPS_TOKEN, Anthropic key). Highest-care batch: a botched
+        # secret-bootstrap is a silent keyless prod failure, so each ExecStart
+        # module is audited to call bare initialize_runtime_secrets() (honoring
+        # the unit's UA_DEPLOYMENT_PROFILE=vps backstop). GATE MECHANISMS differ:
+        # ``youtube_daily_digest`` and ``youtube_gold_channel_poller`` register
+        # through a bespoke _cron_service.add_job/update_job path (NOT
+        # _register_system_cron_job), so their disable lives directly in their
+        # _ensure_* fns (flip the existing row to disabled when migrated),
+        # mirroring codie_proactive_cleanup. The other five
+        # (``youtube_oauth_watchdog``, ``nightly_wiki``, ``morning_briefing``,
+        # ``evening_briefing``, ``csi_demo_triage_rank``) register via
+        # _register_system_cron_job, so they AND `not _is_migrated_to_systemd(..)`
+        # into their enabled= arg (the standard gate). ``evening_briefing`` shares
+        # briefings_agent.py with ``morning_briefing`` but uses a SEPARATE unit
+        # (ExecStart ... --mode=evening) — the modes differ by CLI arg.
+        "youtube_daily_digest",
+        "youtube_gold_channel_poller",
+        "youtube_oauth_watchdog",
+        "nightly_wiki",
+        "morning_briefing",
+        "evening_briefing",
+        "csi_demo_triage_rank",
     }
 )
 
@@ -19573,7 +19630,10 @@ def _ensure_nightly_wiki_cron_job() -> Optional[dict[str, Any]]:
         command="!script universal_agent.scripts.nightly_wiki_agent",
         description="Proactive overnight wiki generation from pending CSI signal cards.",
         timeout_seconds=1800,
-        enabled=_proactive_cron_enabled("UA_NIGHTLY_WIKI_ENABLED"),
+        # S5 Phase A batch A4: migrated to systemd timer — force in-process
+        # registration disabled (no double-fire). See _is_migrated_to_systemd.
+        enabled=_proactive_cron_enabled("UA_NIGHTLY_WIKI_ENABLED")
+        and not _is_migrated_to_systemd("nightly_wiki"),
         cron_env_var="UA_NIGHTLY_WIKI_CRON",
         timezone_env_var="UA_NIGHTLY_WIKI_TIMEZONE",
         # The script delegates to vp.general.primary which uses `nlm`
@@ -19594,7 +19654,10 @@ def _ensure_morning_briefing_cron_job() -> Optional[dict[str, Any]]:
         command="!script universal_agent.scripts.briefings_agent",
         description="Daily morning briefing combining telemetry + nightly wiki output.",
         timeout_seconds=900,
-        enabled=_proactive_cron_enabled("UA_MORNING_BRIEFING_ENABLED"),
+        # S5 Phase A batch A4: migrated to systemd timer — force in-process
+        # registration disabled (no double-fire). See _is_migrated_to_systemd.
+        enabled=_proactive_cron_enabled("UA_MORNING_BRIEFING_ENABLED")
+        and not _is_migrated_to_systemd("morning_briefing"),
         cron_env_var="UA_MORNING_BRIEFING_CRON",
         timezone_env_var="UA_MORNING_BRIEFING_TIMEZONE",
         # `briefings_agent.py:23-26` sys.exit(1) when this is unset.
@@ -19621,7 +19684,12 @@ def _ensure_evening_briefing_cron_job() -> Optional[dict[str, Any]]:
         command="!script universal_agent.scripts.briefings_agent --mode=evening",
         description="Evening briefing recap + hourly-insight digest + honorable mention.",
         timeout_seconds=900,
-        enabled=_proactive_cron_enabled("UA_EVENING_BRIEFING_ENABLED"),
+        # S5 Phase A batch A4: migrated to a SEPARATE systemd timer (its ExecStart
+        # passes --mode=evening, so it cannot share the morning unit) — force
+        # in-process registration disabled (no double-fire). See
+        # _is_migrated_to_systemd.
+        enabled=_proactive_cron_enabled("UA_EVENING_BRIEFING_ENABLED")
+        and not _is_migrated_to_systemd("evening_briefing"),
         cron_env_var="UA_EVENING_BRIEFING_CRON",
         timezone_env_var="UA_EVENING_BRIEFING_TIMEZONE",
         required_secrets=["UA_OPS_TOKEN"],
@@ -20105,7 +20173,10 @@ def _ensure_csi_demo_triage_rank_cron_job() -> Optional[dict[str, Any]]:
         command="!script universal_agent.scripts.csi_demo_triage_rank",
         description="Rank pending CSI demo triage candidates with an LLM.",
         timeout_seconds=600,
-        enabled=True,
+        # S5 Phase A batch A4: migrated to systemd timer — force in-process
+        # registration disabled (no double-fire). Base enabled is True, so the
+        # gate alone decides it. See _is_migrated_to_systemd.
+        enabled=not _is_migrated_to_systemd("csi_demo_triage_rank"),
         cron_env_var="UA_CSI_DEMO_TRIAGE_RANK_CRON_EXPR",
         timezone_env_var="UA_CSI_DEMO_TRIAGE_RANK_CRON_TIMEZONE",
         required_secrets=["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],

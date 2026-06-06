@@ -1,0 +1,36 @@
+[Unit]
+Description=Universal Agent daily YouTube digest (S5 Phase A batch A4 — deploy-independent daily timer, SECRET-BEARING: YouTube OAuth + LLM)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ua
+Group=ua
+WorkingDirectory=/opt/universal_agent
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/universal_agent/src
+Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
+# Secrets-bootstrap backstop (mirrors universal-agent-proactive-artifact-digest)
+# — LOAD BEARING. youtube_daily_digest ingests a day-of-week playlist via the
+# YouTube Data API + OAuth refresh token, synthesizes via an LLM (ZAI/GLM), and
+# emails the summary via AgentMail. process_daily_digest() calls
+# initialize_runtime_secrets() with NO profile arg so it honors
+# UA_DEPLOYMENT_PROFILE below; the inline vars are the .env-absent backstop
+# forcing the strict `vps` production load (else a keyless run that fails the
+# OAuth refresh + LLM call). .env OVERRIDES these when present.
+Environment=UA_DEPLOYMENT_PROFILE=vps
+Environment=UA_INFISICAL_ENABLED=1
+Environment=INFISICAL_ENVIRONMENT=production
+EnvironmentFile=-/opt/universal_agent/.env
+ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.scripts.youtube_daily_digest
+MemoryMax=1G
+# Heaviest of the A4 jobs: parallel map LLM calls + a reduce pass (internal
+# LLM timeout 900s) + playlist API ops + email. Bounded to 1800s so a hung
+# LLM/network run self-heals on the next day's slot. The bespoke registration
+# set no in-process timeout_seconds; 1800s is a deliberate explicit cap well
+# under the cron service MAX (7200s).
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=multi-user.target

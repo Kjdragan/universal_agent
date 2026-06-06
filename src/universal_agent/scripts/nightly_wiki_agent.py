@@ -13,8 +13,15 @@ from universal_agent.proactive_signals import CARD_STATUS_PENDING, list_cards
 logger = logging.getLogger(__name__)
 
 async def main():
-    # 1. Initialize runtime secrets via Infisical
-    initialize_runtime_secrets(profile="local_workstation")
+    # 1. Initialize runtime secrets via Infisical (allowing dotenv fallback).
+    # One-shot subprocess: make sure the Infisical-backed secrets (NotebookLM
+    # auth cookie, LLM keys, etc.) are present before the VP mission dispatches.
+    # Use NO hardcoded profile so UA_DEPLOYMENT_PROFILE is honored: under the
+    # S5 Phase A batch A4 systemd unit it is `vps` -> strict Infisical production
+    # load (a hardcoded profile="local_workstation" would override that backstop
+    # and silently run keyless under systemd — the batch-3 csi_convergence_sync
+    # trap). Dev leaves the var unset -> local_workstation, so dev is unchanged.
+    initialize_runtime_secrets()
     logging.basicConfig(level=logging.INFO)
     
     # Ensure artifacts directory for wikis exists — use the canonical resolver

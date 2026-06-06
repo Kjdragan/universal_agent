@@ -734,8 +734,16 @@ async def _get_honorable_mention_block_or_empty(mode: str) -> str:
 
 
 async def main():
-    # 1. Initialize runtime secrets via Infisical (allowing dotenv fallback)
-    initialize_runtime_secrets(profile="local_workstation")
+    # 1. Initialize runtime secrets via Infisical (allowing dotenv fallback).
+    # One-shot subprocess (both the morning and evening briefing crons run this
+    # module): make sure the Infisical-backed secrets (UA_OPS_TOKEN, LLM keys,
+    # AgentMail, etc.) are present before fetching telemetry / dispatching. Use
+    # NO hardcoded profile so UA_DEPLOYMENT_PROFILE is honored: under the S5
+    # Phase A batch A4 systemd units it is `vps` -> strict Infisical production
+    # load (a hardcoded profile="local_workstation" would override that backstop
+    # and silently run keyless under systemd — the batch-3 csi_convergence_sync
+    # trap). Dev leaves the var unset -> local_workstation, so dev is unchanged.
+    initialize_runtime_secrets()
     logging.basicConfig(level=logging.INFO)
 
     mode = _detect_mode()
