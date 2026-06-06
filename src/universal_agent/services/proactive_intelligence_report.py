@@ -211,10 +211,6 @@ async def _call_reasoning_llm(stats: dict[str, Any], period: str) -> str:
     regardless of any global haiku-tier env override, mirroring
     ``youtube_daily_digest.py``'s ``DIGEST_MAP_MODEL_DEFAULT``. Any failure falls
     back to a deterministic templated summary so the report always ships.
-
-    (Replaces a direct google-genai ``gemini-2.0-flash`` call whose API key was
-    blocked — ``403 API_KEY_SERVICE_BLOCKED`` — silently degrading every report
-    to the fallback.)
     """
     stats_json = json.dumps(stats, indent=2, default=str)
     system = (
