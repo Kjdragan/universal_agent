@@ -23,6 +23,7 @@ from universal_agent.durable.db import (
 )
 from universal_agent.feature_flags import task_hub_missions_enabled
 from universal_agent.rate_limiter import ZAIRateLimiter
+from universal_agent.systemd_migrated_jobs import is_migrated_to_systemd
 from universal_agent.utils.model_resolution import resolve_model
 
 logger = logging.getLogger(__name__)
@@ -143,8 +144,31 @@ def _task_summary(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _is_migrated_cron_relic(item: dict[str, Any]) -> bool:
+    """True for a ``cron:<job>`` Task Hub row whose job now fires from a systemd
+    timer. After the S5 Phase-A migration the in-process cron registration for a
+    migrated job is force-disabled (the timer is the sole firer), but the job's
+    old ``cron:<job>`` assignment row lingers in its last in-process state — often
+    ``parked_manual`` / ``last_assignment_state=failed`` from the pre-migration
+    world. Surfacing those as live "cron stagnation" in the readout is a false
+    signal: the migrated job is healthy via its timer, and a GENUINE failure
+    surfaces through the (migration-aware) cron_staleness /
+    cron_consecutive_failures invariants and the cron_pipelines tile — not through
+    this stale row."""
+    task_id = str(item.get("task_id") or "").strip()
+    if not task_id.startswith("cron:"):
+        return False
+    return is_migrated_to_systemd(task_id[len("cron:"):])
+
+
 def collect_task_hub_evidence(*, limit: int = 20, completed_limit: int = 12) -> dict[str, Any]:
-    """Collect Task Hub queue state and recent completions for the readout evidence bundle."""
+    """Collect Task Hub queue state and recent completions for the readout evidence bundle.
+
+    Migrated-cron relics (``cron:<job>`` rows for jobs now served by systemd
+    timers) are filtered from the attention queue — their stale parked/failed
+    assignment_state predates the migration and would otherwise drive a false
+    "N crons parked / <job> failed" stagnation narrative in the readout.
+    """
     with connect_runtime_db(get_activity_db_path()) as conn:
         task_hub.ensure_schema(conn)
         queue = task_hub.list_agent_queue(
@@ -154,7 +178,17 @@ def collect_task_hub_evidence(*, limit: int = 20, completed_limit: int = 12) -> 
             collapse_csi=True,
             include_not_ready=True,
         )
-        active_items = [_task_summary(item) for item in queue.get("items", [])[:limit]]
+        raw_items = queue.get("items", [])
+        migrated_cron_relics = [it for it in raw_items if _is_migrated_cron_relic(it)]
+        if migrated_cron_relics:
+            logger.info(
+                "chief_of_staff: filtered %d migrated-cron Task Hub relic(s) from "
+                "the readout (now served by systemd timers): %s",
+                len(migrated_cron_relics),
+                ", ".join(sorted(str(it.get("task_id")) for it in migrated_cron_relics))[:400],
+            )
+        attention_items = [it for it in raw_items if not _is_migrated_cron_relic(it)]
+        active_items = [_task_summary(item) for item in attention_items[:limit]]
         completed_items = [
             _task_summary(item)
             for item in task_hub.list_completed_tasks(conn, limit=completed_limit)[:completed_limit]
@@ -172,6 +206,7 @@ def collect_task_hub_evidence(*, limit: int = 20, completed_limit: int = 12) -> 
             "active_or_attention_items": len(active_items),
             "recent_completed_items": len(completed_items),
             "mission_summaries": len(mission_summaries),
+            "migrated_cron_relics_filtered": len(migrated_cron_relics),
         },
     }
 
