@@ -696,7 +696,7 @@
         "deployment/systemd/"
       ],
       "legacy_refs": [],
-      "scope": "PROPOSED design-only ADR (pending operator approval): target scheduling substrate — two-axis substrate policy + per-job target table (31 crons), Mission Control sweeper extraction to its own service, deterministic proactive-health systemd timer + delivery contract, consolidations (reports/AM-products/mailer/DB), deploy-window-aware bounded backfill. Builds on S1-S4 local fixes."
+      "scope": "Deploy-resilient scheduling substrate — two-axis substrate policy + per-job target table (31 crons), Mission Control sweeper extraction to its own service, deterministic proactive-health systemd timer + delivery contract, consolidations (reports/AM-products/mailer/DB), deploy-window-aware bounded backfill. Phases B/C/D + Phase A batches 1-2 SHIPPED and verified live (holistic as-built review 2026-06-06: deploy-independence, no double-fire/fire-loss, health delivery, decoupled sweeper all hold); Phase A batches 3-4 + the 18-brief recovery remain operator-gated. Builds on S1-S4 local fixes."
     },
     {
       "id": "tools-mcp",

@@ -1,6 +1,6 @@
 ---
 title: "ADR: Scheduling Substrate Redesign (deploy-resilient timers + read-only Mission Control)"
-status: draft
+status: active
 canonical: true
 subsystem: plat-scheduling-substrate
 code_paths:
@@ -40,8 +40,22 @@ last_verified: 2026-06-05
 > Decision-4 "drop midday/afternoon" consolidation proposal (which was never
 > implemented — midday was still live and emailing at migration time). The
 > original design intent below is preserved; the As-built notes record where the
-> shipped reality refined it. Grounded against deployed HEAD `0f45b86d`
+> shipped reality refined it. Grounded against deployed HEAD `e7014bba`
 > (re-verify before implementing further — production deploys land ~19×/day).
+>
+> **Holistic as-built review (2026-06-06).** An 8-facet review verified the shipped
+> phases against live production: deploy-independence (0 monotonic-regressed
+> timers, all `OnCalendar`+`Persistent`), no double-fire / no fire-loss (all 11
+> migrated rows `enabled=false` in the live `cron_jobs.json`, the timers the sole
+> firers, 0 post-gate in-process runs), health-reaches-operator (a real digest
+> email with a genuine SES `message_id`), and the decoupled-observational sweeper
+> (own PID, survived a deploy) **all HOLD live**. Findings + the drift/regression
+> list + the operator-gated adjustment list:
+> `…/scratch/ua-holistic-review/holistic_review_findings.html`. Closeouts it
+> surfaced shipped in **PR #757** (youtube workspace fork-guard, hackernews
+> source-liveness park, proactive-health `TimeoutStartSec`, runbook-string
+> repoint). Remaining designed work: Phase A batches 3–4 (operator-gated) and the
+> 18-brief recovery.
 
 ## 1. Context
 
@@ -256,9 +270,11 @@ description lives in `04_intelligence/11_mission_control_intelligence.md`.
 independent of Simone's LLM and the heartbeat tick, and guarantee findings reach
 (a) Simone's prompt and (b) the operator as **one working report**?
 
-**Grounded current state.** The 8 invariant modules under
-`services/invariants/` register 19 probes (`services/invariants/proactive_pipeline_invariants.py`
-alone carries 11); `services/proactive_health.py::build_proactive_health_payload`
+**Grounded current state.** The 9 invariant modules under
+`services/invariants/` register ~21 probes (20 unique ids — the count grew
+post-design with `mission_control_sweeper_liveness` (#751), `disk_usage_health`,
+and the youtube transcript/enrichment coverage split;
+`services/invariants/proactive_pipeline_invariants.py` alone carries 11); `services/proactive_health.py::build_proactive_health_payload`
 aggregates them **in-memory** (no DB row, no JSON written by the builder). The
 operator email path already exists —
 `services/proactive_health_notifier.py::run_pre_flight_check` →
