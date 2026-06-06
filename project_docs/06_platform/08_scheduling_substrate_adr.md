@@ -368,7 +368,9 @@ concretions:
   "backup"); `heartbeat_service.py::_compose_heartbeat_prompt` now injects a
   read-only `== PROACTIVE HEALTH (N critical / M warn) ==` block sourced from
   the snapshot (a cheap read that survives skip-mode), modeled on the existing
-  System-1 `== DATABASE HEALTH ALERTS ==` block.
+  System-1 `== DATABASE HEALTH ALERTS ==` block. That read-only block is gated
+  by `not task_focused` (like the System-1 block), so task-dispatch heartbeat
+  ticks omit it; the operator timer-email path is unaffected.
 - **Entrypoint:** `services/proactive_health_timer_main.py` (run via
   `python -m universal_agent.services.proactive_health_timer_main`) — secrets
   via `initialize_runtime_secrets()` FIRST, then function-local imports. Units:

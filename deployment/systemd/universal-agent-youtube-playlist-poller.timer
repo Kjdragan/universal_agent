@@ -1,12 +1,21 @@
 [Unit]
-Description=Run YouTube Playlist Poller every minute
+Description=Run YouTube Playlist Poller every minute (DISABLED — superseded by the native watcher)
 
 [Timer]
-OnBootSec=30s
-OnUnitActiveSec=60s
+# DISABLED / superseded by the native YouTube watcher and NOT wired into
+# remote_deploy.sh — left here for reference, not enabled. Converted off the
+# monotonic anchors (was OnBootSec=30s + OnUnitActiveSec=60s ≈ every minute) to
+# OnCalendar, preserving the original ~1-minute cadence FAITHFULLY (matching the
+# S2 oom-alert "every minute" -> OnCalendar=minutely remediation, not a silent
+# slowdown), so that IF it is ever re-enabled it self-arms safely: monotonic-only
+# timers lose their re-arm reference after a deploy daemon-reload and go
+# NextElapse=infinity (the dead-timer class that left the watchdog/oom timers
+# dead for weeks). OnCalendar gives an independent wall-clock anchor with a finite
+# NextElapse; Persistent=true is meaningful only with OnCalendar.
+OnCalendar=minutely
+Persistent=true
 AccuracySec=5s
 Unit=universal-agent-youtube-playlist-poller.service
-Persistent=true
 
 [Install]
 WantedBy=timers.target
