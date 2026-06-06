@@ -32,8 +32,16 @@ Environment=INFISICAL_ENVIRONMENT=production
 # clobber INFISICAL_ENVIRONMENT (the FU1 hazard).
 EnvironmentFile=-/opt/universal_agent/.env
 ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.services.proactive_health_timer_main
-# LLM-free aggregation over activity_state.db + invariant probes; cap memory so
-# a runaway probe cannot consume the VPS.
+# Deterministic LLM-free aggregation over activity_state.db + invariant probes,
+# BUT the critical-digest path makes an AgentMail network/WebSocket send
+# (send_critical_digest -> AgentMailService.startup()/send_email). A oneshot
+# defaults to TimeoutStartSec=infinity, so a hung send would leave the unit
+# `active` forever and the every-10-min .timer would never fire the next run
+# (silently stalling the health watchdog). Bound it like the other network
+# oneshots (report=600, digest=300, insight=600). The internal asyncio.wait_for
+# guards in AgentMailService mitigate but this is the unit-level backstop.
+TimeoutStartSec=600
+# Cap memory so a runaway probe cannot consume the VPS.
 MemoryMax=2G
 
 [Install]
