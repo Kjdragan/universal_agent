@@ -1,0 +1,36 @@
+[Unit]
+Description=Universal Agent YouTube gold-channel RSS poller (S5 Phase A batch A4 — deploy-independent daily timer, SECRET-BEARING: YouTube OAuth)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ua
+Group=ua
+WorkingDirectory=/opt/universal_agent
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/universal_agent/src
+Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
+# Secrets-bootstrap backstop (mirrors universal-agent-proactive-artifact-digest)
+# — LOAD BEARING. The poller reads tier=gold channel RSS, resolves video
+# metadata via the YouTube Data API key, and inserts (capped 10/day) into the
+# day-of-week playlist via the OAuth refresh token. Its _main_cli() calls
+# initialize_runtime_secrets() with NO profile arg so it honors
+# UA_DEPLOYMENT_PROFILE below; the inline vars are the .env-absent backstop
+# forcing the strict `vps` production load (else a keyless run, no playlist
+# writes). .env OVERRIDES these when present. NOTE: this is a `services.` module,
+# not `scripts.`.
+Environment=UA_DEPLOYMENT_PROFILE=vps
+Environment=UA_INFISICAL_ENABLED=1
+Environment=INFISICAL_ENVIRONMENT=production
+EnvironmentFile=-/opt/universal_agent/.env
+ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.services.youtube_gold_channel_poller
+MemoryMax=1G
+# Tightly-scoped read-add: RSS metadata fetch + <=10 playlist inserts. Bounded
+# to 300s so a hung HTTP call self-heals on the next slot. The bespoke
+# registration set no in-process timeout_seconds; 300s is a deliberate explicit
+# cap (the network-job floor used across the batch).
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

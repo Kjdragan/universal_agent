@@ -1,0 +1,16 @@
+[Unit]
+Description=Run the Universal Agent nightly wiki generation at 03:15 America/Chicago (deploy-independent)
+
+[Timer]
+# OnCalendar wall-clock anchor — NEVER monotonic. cron `15 3 * * *`
+# America/Chicago (03:15 daily — overnight, outside the active window by
+# design), DST handled by systemd; Persistent replays a missed slot inside a
+# deploy window. systemd-255 honors the OnCalendar timezone suffix.
+OnCalendar=*-*-* 03:15:00 America/Chicago
+Persistent=true
+RandomizedDelaySec=120
+AccuracySec=1min
+Unit=universal-agent-nightly-wiki.service
+
+[Install]
+WantedBy=timers.target

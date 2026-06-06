@@ -1,0 +1,16 @@
+[Unit]
+Description=Run the Universal Agent daily YouTube digest at 06:00 America/Chicago (deploy-independent)
+
+[Timer]
+# OnCalendar wall-clock anchor — NEVER monotonic. cron `0 6 * * *`
+# America/Chicago (06:00 daily), DST handled by systemd; Persistent replays a
+# missed slot inside a deploy window. systemd-255 honors the OnCalendar
+# timezone suffix (verified with `systemd-analyze calendar`).
+OnCalendar=*-*-* 06:00:00 America/Chicago
+Persistent=true
+RandomizedDelaySec=120
+AccuracySec=1min
+Unit=universal-agent-youtube-daily-digest.service
+
+[Install]
+WantedBy=timers.target

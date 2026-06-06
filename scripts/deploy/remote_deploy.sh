@@ -274,6 +274,17 @@ sudo bash "$PROD_DIR/scripts/install_vps_phase_a_batch2_timers.sh" \
 echo "--> Installing S5 Phase A batch-3 hourly-producer timers (hourly-intel-digest/csi-convergence-sync off the gateway loop)..."
 sudo bash "$PROD_DIR/scripts/install_vps_phase_a_batch3_timers.sh" \
   || echo "WARN: install_vps_phase_a_batch3_timers.sh failed (non-fatal)"
+# S5 Phase A (batch A4): the SECRET-BEARING jobs (youtube-daily-digest,
+# youtube-gold-channel-poller, youtube-oauth-watchdog, nightly-wiki,
+# morning-briefing, evening-briefing, csi-demo-triage-rank) migrated onto
+# deploy-independent timers, each its own service+timer pair. These hold YouTube
+# OAuth tokens, NotebookLM cookies, UA_OPS_TOKEN, and an Anthropic key; each unit
+# carries the strict vps Infisical backstop and each ExecStart module bootstraps
+# secrets itself. Double-fire prevented by gateway_server._is_migrated_to_systemd
+# (the two youtube jobs via a bespoke disable). Non-fatal.
+echo "--> Installing S5 Phase A batch-A4 secret-bearing timers (youtube digest/poller/watchdog, nightly-wiki, morning+evening briefing, csi-demo-triage-rank off the gateway loop)..."
+sudo bash "$PROD_DIR/scripts/install_vps_phase_a_batch4_timers.sh" \
+  || echo "WARN: install_vps_phase_a_batch4_timers.sh failed (non-fatal)"
 # Sync the CSI lane's systemd units (timers + services). Without
 # this, edits to CSI_Ingester/development/deployment/systemd/*.{service,timer}
 # land in the repo but never reach /etc/systemd/system/, so the

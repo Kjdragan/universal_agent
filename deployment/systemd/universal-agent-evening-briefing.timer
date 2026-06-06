@@ -1,0 +1,16 @@
+[Unit]
+Description=Run the Universal Agent evening briefing at 18:00 America/Chicago (deploy-independent)
+
+[Timer]
+# OnCalendar wall-clock anchor — NEVER monotonic. cron `0 18 * * *`
+# America/Chicago (18:00 daily), DST handled by systemd; Persistent replays a
+# missed slot inside a deploy window. systemd-255 honors the OnCalendar
+# timezone suffix.
+OnCalendar=*-*-* 18:00:00 America/Chicago
+Persistent=true
+RandomizedDelaySec=120
+AccuracySec=1min
+Unit=universal-agent-evening-briefing.service
+
+[Install]
+WantedBy=timers.target

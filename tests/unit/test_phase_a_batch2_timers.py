@@ -87,6 +87,19 @@ A3 = {
     "csi_convergence_sync",
 }
 
+# Batch A4 jobs (secret-bearing dailies) — pinned here only so the
+# frozenset-equality assertion below stays exact. Their full contract is
+# guarded in test_phase_a_batch4_timers.py.
+A4 = {
+    "youtube_daily_digest",
+    "youtube_gold_channel_poller",
+    "youtube_oauth_watchdog",
+    "nightly_wiki",
+    "morning_briefing",
+    "evening_briefing",
+    "csi_demo_triage_rank",
+}
+
 
 def _active_directives(text: str) -> list[str]:
     out: list[str] = []
@@ -100,9 +113,9 @@ def _active_directives(text: str) -> list[str]:
 
 # ----- frozenset / migration gate -------------------------------------------
 
-def test_frozenset_is_exactly_batch1_plus_batch2_plus_batch3():
+def test_frozenset_is_exactly_batch1_plus_batch2_plus_batch3_plus_batch4():
     assert gateway_server._SYSTEMD_MIGRATED_SYSTEM_JOBS == frozenset(
-        BATCH1 | set(A2) | A3
+        BATCH1 | set(A2) | A3 | A4
     )
 
 
