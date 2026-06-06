@@ -206,6 +206,7 @@ from universal_agent.signals_ingest import (
 from universal_agent.utils.heartbeat_findings_schema import HeartbeatFindings
 from universal_agent.utils.json_utils import extract_json_payload
 from universal_agent.utils.model_resolution import resolve_opus, resolve_sonnet
+from universal_agent.viewer.resolver import delegated_vp_mission_target
 from universal_agent.vp import (
     MissionDispatchRequest,
     cancel_mission,
@@ -25981,6 +25982,18 @@ def _serialize_task_hub_queue_item(conn: sqlite3.Connection, item: dict[str, Any
     if not workspace and result_ref.startswith("workspace://"):
         workspace = result_ref.replace("workspace://", "")
     serialized["canonical_execution_workspace"] = workspace or None
+    # Delegated-to-VP override: a task that handed work to a VP mission keeps an
+    # assignment row pointing at the daemon's seconds-long delegation run, but
+    # the real work + trace.json/transcript.md live in the mission workspace
+    # (metadata.result_ref). Surface the mission so the Workspace button deep-
+    # links there instead of the empty delegation run. Mirrors the completed-
+    # card branch in dashboard_todolist_completed; see delegated_vp_mission_target.
+    delegated_vp_target = delegated_vp_mission_target(metadata)
+    if delegated_vp_target is not None:
+        mission_session_id, mission_workspace = delegated_vp_target
+        serialized["canonical_execution_session_id"] = mission_session_id
+        serialized["canonical_execution_run_id"] = mission_session_id
+        serialized["canonical_execution_workspace"] = mission_workspace
     serialized["links"] = _task_history_links_for_session(
         serialized["canonical_execution_session_id"] or "",
         workspace_dir=serialized["canonical_execution_workspace"] or ""
@@ -26047,6 +26060,10 @@ async def dashboard_todolist_completed(limit: int = 60):
         demo_workspace = str(metadata.get("workspace_dir") or "").strip()
         demo_mission_id = str(metadata.get("linked_mission_id") or "").strip() or cody_mission_id
 
+        # A Simone-todo task that DELEGATED to a (non-Cody) VP mission — Atlas /
+        # general VP — where the work + trace.json/transcript.md actually live.
+        delegated_vp_target = delegated_vp_mission_target(metadata)
+
         if item_source_kind == "cody_demo_task" and demo_workspace:
             # A demo's real artifacts (manifest.json, src/, run_output.txt,
             # BUILD_NOTES.md) live in its /opt/ua_demos/<id>/ workspace
@@ -26074,6 +26091,22 @@ async def dashboard_todolist_completed(limit: int = 60):
             item["canonical_execution_session_id"] = link_session_id or None
             item["canonical_execution_run_id"] = cody_mission_id or None
             item["canonical_execution_workspace"] = link_workspace or None
+        elif delegated_vp_target is not None:
+            # Simone-todo task that DELEGATED to a VP mission (Atlas / general
+            # VP). The assignment row points at the daemon's seconds-long
+            # delegation run (run_<id>) where Simone only logged the redirect —
+            # NOT the mission workspace where the VP spent minutes authoring the
+            # work and wrote trace.json/transcript.md. Deep-link to the mission
+            # (metadata.result_ref), mirroring the cody branch above: the
+            # vp-mission-<id> session id triggers the frontend's VP-mission
+            # special case (web-ui/app/page.tsx) + the resolver's mission-log
+            # rehydration (viewer.resolver.mission_log_rel). Without this the
+            # button lands on the empty delegation run (run.log only, no
+            # trace.json) and the three-panel view never populates.
+            link_session_id, link_workspace = delegated_vp_target
+            item["canonical_execution_session_id"] = link_session_id
+            item["canonical_execution_run_id"] = link_session_id
+            item["canonical_execution_workspace"] = link_workspace
         else:
             workspace = assignment_workspace
             if not workspace and result_ref.startswith("workspace://"):

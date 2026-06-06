@@ -168,6 +168,42 @@ def mission_log_rel(session_id: Optional[str]) -> str:
     return ""
 
 
+def delegated_vp_mission_target(
+    metadata: Optional[dict[str, Any]],
+) -> Optional[tuple[str, str]]:
+    """For a Task Hub card that DELEGATED its work to a VP mission, return
+    ``(mission_session_id, mission_workspace_dir)`` — else ``None``.
+
+    A Simone-todo task that hands work to a VP (Atlas / general VP) keeps an
+    assignment row pointing at the daemon's *delegation run* (``run_<id>``, a
+    handful of seconds where Simone only logged the redirect). The real work —
+    and the ``trace.json`` / ``transcript.md`` the three-panel viewer rehydrates
+    from — lives in the VP mission workspace, recorded on
+    ``metadata.result_ref`` as ``workspace://<abs path>``.
+    ``metadata.linked_mission_id`` is the ``vp-mission-<id>`` the viewer's
+    VP-mission special case (``web-ui/app/page.tsx``) and :func:`mission_log_rel`
+    both key on, so it becomes the canonical session id.
+
+    Returns ``None`` when the task wasn't delegated to a VP mission, or the
+    mission result workspace isn't known yet — callers then fall back to the
+    daemon assignment workspace (prior behavior). Cody-delegated tasks carry
+    their own ``dispatch.cody_*`` workspace pointer and are handled by a
+    dedicated branch upstream, so they never reach this helper.
+    """
+    if not isinstance(metadata, dict):
+        return None
+    linked_mission_id = str(metadata.get("linked_mission_id") or "").strip()
+    if not linked_mission_id.startswith("vp-mission-"):
+        return None
+    result_ref = str(metadata.get("result_ref") or "").strip()
+    if not result_ref.startswith("workspace://"):
+        return None
+    workspace_dir = result_ref.replace("workspace://", "", 1).strip()
+    if not workspace_dir:
+        return None
+    return linked_mission_id, workspace_dir
+
+
 def _cody_workspace_from_task_hub(session_id: str) -> Optional[Path]:
     """Look up a Cody CLI session_id → cody_workspace_dir via task_hub_items.
 
