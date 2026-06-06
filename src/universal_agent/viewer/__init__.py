@@ -16,10 +16,12 @@ navigate to `app/page.tsx?session_id=...&run_id=...` (see
 
 from universal_agent.viewer.resolver import (
     SessionViewTarget,
+    delegated_vp_mission_target,
     resolve_session_view_target,
 )
 
 __all__ = [
     "SessionViewTarget",
+    "delegated_vp_mission_target",
     "resolve_session_view_target",
 ]
