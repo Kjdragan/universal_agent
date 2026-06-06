@@ -266,6 +266,14 @@ sudo bash "$PROD_DIR/scripts/install_vps_phase_a_batch1_timers.sh" \
 echo "--> Installing S5 Phase A batch-2 content-daily timers (reports/digest/promoter/codie-cleanup off the gateway loop)..."
 sudo bash "$PROD_DIR/scripts/install_vps_phase_a_batch2_timers.sh" \
   || echo "WARN: install_vps_phase_a_batch2_timers.sh failed (non-fatal)"
+# S5 Phase A (batch 3): the hourly active-window producers (hourly-intel-digest,
+# csi-convergence-sync) migrated onto deploy-independent timers, both firing at
+# the top of every active-window hour (06..21 America/Chicago). Double-fire
+# prevented by gateway_server._is_migrated_to_systemd (csi via a bespoke
+# disable). Non-fatal.
+echo "--> Installing S5 Phase A batch-3 hourly-producer timers (hourly-intel-digest/csi-convergence-sync off the gateway loop)..."
+sudo bash "$PROD_DIR/scripts/install_vps_phase_a_batch3_timers.sh" \
+  || echo "WARN: install_vps_phase_a_batch3_timers.sh failed (non-fatal)"
 # Sync the CSI lane's systemd units (timers + services). Without
 # this, edits to CSI_Ingester/development/deployment/systemd/*.{service,timer}
 # land in the repo but never reach /etc/systemd/system/, so the

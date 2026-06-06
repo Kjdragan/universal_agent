@@ -19369,11 +19369,15 @@ def _proactive_cron_enabled(env_var: str, default: str = "1") -> bool:
 # enabled=False branch of _register_system_cron_job), so the systemd timer is
 # the SOLE firer.
 #
-# ROLLBACK (reboot-durable, reversible, no redeploy): set
-# UA_SYSTEMD_TIMER_MIGRATION_DISABLED=1 and restart the gateway -> all jobs
-# below re-register in-process exactly as before; then disable the timers
-# (`systemctl disable --now universal-agent-<job>.timer`). Per-job rollback =
-# remove the system_job from the frozenset.
+# ROLLBACK (reboot-durable, reversible, no redeploy): atomically set
+# UA_SYSTEMD_TIMER_MIGRATION_DISABLED=1 AND `systemctl disable --now` the
+# timers — both halves together. Setting the env + restarting the gateway
+# re-registers all jobs below in-process exactly as before; `systemctl disable
+# --now universal-agent-<job>.timer` stops the timers firing. Doing only one
+# half is the double-fire (env unset but timer armed) or the silent-gap (timer
+# disabled but env still suppressing in-process) foot-gun, so treat them as a
+# single atomic operation. Per-job rollback = remove the system_job from the
+# frozenset (then redeploy + disable that one timer).
 # ---------------------------------------------------------------------------
 _SYSTEMD_MIGRATED_SYSTEM_JOBS: frozenset[str] = frozenset(
     {
@@ -19395,6 +19399,15 @@ _SYSTEMD_MIGRATED_SYSTEM_JOBS: frozenset[str] = frozenset(
         "proactive_artifact_digest",
         "intel_auto_promoter",
         "codie_proactive_cleanup",
+        # Batch 3 — hourly active-window producers. ``hourly_intel_digest`` is
+        # gated via the _register_system_cron_job(enabled=…) arg below; BUT
+        # ``csi_convergence_sync`` registers through a bespoke
+        # _cron_service.add_job/update_job path (NOT _register_system_cron_job),
+        # so its disable lives directly in _ensure_csi_convergence_cron_job (it
+        # flips the existing row to disabled when _is_migrated_to_systemd is
+        # true), mirroring codie_proactive_cleanup.
+        "hourly_intel_digest",
+        "csi_convergence_sync",
     }
 )
 
@@ -19638,7 +19651,10 @@ def _ensure_hourly_intel_digest_cron_job() -> Optional[dict[str, Any]]:
         command="!script universal_agent.scripts.hourly_intel_digest_cron",
         description="Deterministic hourly intel-digest delivery (LLM-independent path).",
         timeout_seconds=300,
-        enabled=_proactive_cron_enabled("UA_INTEL_DIGEST_CRON_ENABLED", default="1"),
+        # S5 Phase A batch 3: migrated to systemd timer — force in-process
+        # registration disabled (no double-fire). See _is_migrated_to_systemd.
+        enabled=_proactive_cron_enabled("UA_INTEL_DIGEST_CRON_ENABLED", default="1")
+        and not _is_migrated_to_systemd("hourly_intel_digest"),
         cron_env_var="UA_INTEL_DIGEST_CRON",
         timezone_env_var="UA_INTEL_DIGEST_CRON_TIMEZONE",
     )
@@ -19981,6 +19997,17 @@ def _ensure_csi_convergence_cron_job() -> None:
     if not _cron_service or not _csi_convergence_cron_enabled():
         return
     job_id = "csi_convergence_sync"
+    # S5 Phase A batch 3: migrated to a systemd timer. This job registers via a
+    # bespoke _cron_service.update_job/CronJob path (NOT _register_system_cron_job),
+    # so it needs its own disable: when migrated, flip any existing enabled row to
+    # disabled on every boot (so the row does not silently re-enable) and register
+    # nothing new — the systemd timer is the sole firer. Rollback via
+    # UA_SYSTEMD_TIMER_MIGRATION_DISABLED=1 (handled by _is_migrated_to_systemd).
+    if _is_migrated_to_systemd(job_id):
+        existing = _cron_service.get_job(job_id)
+        if existing is not None and bool(getattr(existing, "enabled", False)):
+            _cron_service.update_job(job_id, {"enabled": False})
+        return
     command = "!script universal_agent.scripts.csi_convergence_sync"
     # Cadence: top of every active-window hour (06:00-21:00 Houston). The
     # detection pass runs an LLM precision layer + an ideation sweep + per-
