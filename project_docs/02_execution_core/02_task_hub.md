@@ -10,7 +10,7 @@ code_paths:
   - src/universal_agent/services/execution_run_service.py
   - src/universal_agent/services/worker_exit_classifier.py
   - src/universal_agent/services/cron_task_hub_link.py
-last_verified: 2026-06-01
+last_verified: 2026-06-06
 ---
 
 # Task Hub & Dispatch
@@ -279,6 +279,28 @@ tick doesn't accidentally release its own peers.
   the cutoff whose `agent_id` matches the prefix set (default `heartbeat:` /
   `todo:`), then calls `finalize_assignments(state="abandoned",
   reopen_in_progress=True)` to put them back into rotation.
+
+### VP-mission lease-liveness reconciliation (PR #771)
+
+`reconcile_task_lifecycle` judges an `in_progress` row "live" only from a running
+provider session or a live assignment row. A **VP mission**'s Task Hub mirror row
+has neither: the worker marks it `in_progress` with status only
+(`vp/worker_loop.py::VpWorkerLoop`), and the daemon path that writes dispatch
+handles excludes `vp_mission` source kinds (`task_hub.py::claim_next_dispatch_tasks`;
+`dispatch_sweep(..., forbidden_source_kinds=["vp_mission"])`). So at gateway-startup
+recovery the reconciler used to false-orphan a healthy, heartbeating VP mission —
+reopening its source task and causing a **duplicate run**.
+
+`task_hub.py::_vp_mission_lease_live` closes this: a VP mission counts as live when
+its `vp_missions` row is `status='running'` with a future `claim_expires_at` lease
+(heartbeated via `durable/state.py::heartbeat_vp_mission_claim`). Reaping now keys
+off a real expired lease, never absent handles. It is **agent-agnostic** (Atlas and
+Cody share the lease), is guarded behind a `sqlite_master` existence check, and
+returns `False` for non-VP rows so cron/non-VP behavior is unchanged. The worker
+also persists a `metadata.dispatch` handle block at mission start, and
+`services/proactive_convergence.py::write_convergence_candidate` skips re-queuing a
+candidate that already has an in-flight `vp_mission` (durable double-author backstop).
+See the [Task Type Registry](../01_architecture/07_task_type_registry.md) §1.
 
 ## Execution runs (run-scoped workspaces)
 
