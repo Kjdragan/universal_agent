@@ -125,22 +125,37 @@ async def _call_llm(
     model: Optional[str] = None,
     max_tokens: int = 1024,  # doubled from 512 per audit
 ) -> str:
-    """Make an LLM call and return the raw text response."""
+    """Make an LLM call and return the raw text response.
+
+    Closes the per-call ``AsyncAnthropic`` client deterministically (``try/finally``)
+    so its underlying httpx ``AsyncClient`` is shut down inside the live event loop.
+    Without this, callers reached via the ``nest_asyncio`` + ``loop.run_until_complete``
+    seam (proactive convergence's clustering + ideation sweeps) leaked one unclosed
+    client per call; their ``aclose()`` finalizers then fired AFTER the cron's
+    ``asyncio.run()`` loop closed, spraying ~12 ``RuntimeError('Event loop is closed')``
+    per run into the journal (non-fatal, but log noise + connection leak).
+    """
     client = await _get_anthropic_client()
+    try:
+        response = await client.messages.create(
+            model=model or resolve_opus(),
+            max_tokens=max_tokens,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        )
 
-    response = await client.messages.create(
-        model=model or resolve_opus(),
-        max_tokens=max_tokens,
-        system=system,
-        messages=[{"role": "user", "content": user}],
-    )
+        raw_text = ""
+        for block in response.content:
+            if hasattr(block, "text"):
+                raw_text += block.text
 
-    raw_text = ""
-    for block in response.content:
-        if hasattr(block, "text"):
-            raw_text += block.text
-
-    return raw_text.strip()
+        return raw_text.strip()
+    finally:
+        # Never let client teardown mask the call's result or its exception.
+        try:
+            await client.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _parse_json_response(raw: str) -> dict[str, Any]:
