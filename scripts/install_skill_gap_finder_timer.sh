@@ -149,6 +149,7 @@ exec_start=(
   -m universal_agent.skill_gap_finder
   --window-days "${WINDOW_DAYS}"
   --open-issue
+  --email
 )
 
 exec_start_line="$(printf '%q ' "${exec_start[@]}")"

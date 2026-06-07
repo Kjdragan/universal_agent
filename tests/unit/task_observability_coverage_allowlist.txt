@@ -76,3 +76,10 @@ src/universal_agent/services/scratch_publish.py
 # infra, not a tracked Task Hub unit of work — so the worker-exit/PID protocol does not
 # apply. (technical-skill-finder proactive integration, 2026-06-07)
 src/universal_agent/skill_gap_finder.py
+
+# backlog_triage.py [rationale (a) — not a task unit]: a daily backlog-triage cron whose
+# only subprocess use is ephemeral read-only `gh` CLI (issue/PR list to assess the open
+# backlog). It composes a Simone email + seeds ONE reminder row; no long-running PID to
+# classify and no task_hub_items row — it is infra, not a tracked unit of work — so the
+# worker-exit/PID protocol does not apply. (backlog-triage proactive integration, 2026-06-07)
+src/universal_agent/backlog_triage.py
