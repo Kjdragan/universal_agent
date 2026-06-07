@@ -159,7 +159,6 @@ def _stub_outcome(package: str, version: str, *, ok: bool = True) -> UpgradeOutc
         sync_ok=ok,
         sync_stderr_excerpt="" if ok else "stubbed_failure",
         zai_smoke=SmokeResult(name="zai_smoke", ok=ok),
-        anthropic_smoke=SmokeResult(name="anthropic_native_smoke", ok=ok),
         rolled_back=not ok,
         rollback_reason="" if ok else "stubbed",
         started_at="2026-05-05T00:00:00+00:00",
@@ -257,9 +256,8 @@ def test_auto_apply_records_failure_outcome(monkeypatch):
 
 
 def test_auto_apply_passes_through_paths(monkeypatch, tmp_path: Path):
-    """repo_root, smoke_dir, backup_dir all forwarded to apply_upgrade."""
+    """repo_root, backup_dir forwarded to apply_upgrade."""
     repo_root = tmp_path / "repo"
-    smoke_dir = tmp_path / "smoke"
     backup_dir = tmp_path / "backups"
 
     captured: dict = {}
@@ -274,13 +272,12 @@ def test_auto_apply_passes_through_paths(monkeypatch, tmp_path: Path):
     auto_apply_release_triggers(
         triggers,
         repo_root=repo_root,
-        smoke_dir=smoke_dir,
         backup_dir=backup_dir,
         enabled=True,
     )
     assert captured["repo_root"] == repo_root
-    assert captured["smoke_dir"] == smoke_dir
     assert captured["backup_dir"] == backup_dir
+    assert "smoke_dir" not in captured
 
 
 # ── Summary helper ──────────────────────────────────────────────────────────

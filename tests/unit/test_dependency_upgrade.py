@@ -176,16 +176,8 @@ def _mk_repo(tmp_path: Path) -> Path:
     return repo
 
 
-def _mk_smoke(tmp_path: Path) -> Path:
-    smoke = tmp_path / "smoke_workspace"
-    smoke.mkdir()
-    (smoke / "smoke.py").write_text("# stub\n", encoding="utf-8")
-    return smoke
-
-
 def test_apply_upgrade_full_success(monkeypatch, tmp_path: Path):
     repo = _mk_repo(tmp_path)
-    smoke = _mk_smoke(tmp_path)
 
     monkeypatch.setattr(dependency_upgrade, "run_uv_sync", lambda *, repo_root=None: (True, ""))
     monkeypatch.setattr(
@@ -193,17 +185,11 @@ def test_apply_upgrade_full_success(monkeypatch, tmp_path: Path):
         "run_zai_smoke",
         lambda *, repo_root=None: SmokeResult(name="zai_smoke", ok=True, return_code=0, stdout_excerpt="OK"),
     )
-    monkeypatch.setattr(
-        dependency_upgrade,
-        "run_anthropic_native_smoke",
-        lambda *, smoke_dir=None: SmokeResult(name="anthropic_native_smoke", ok=True, return_code=0, stdout_excerpt="ok"),
-    )
 
     outcome = apply_upgrade(
         package="anthropic",
         target_version="0.80.0",
         repo_root=repo,
-        smoke_dir=smoke,
     )
     assert outcome.overall_ok
     assert outcome.from_version == "0.75.0"
@@ -215,7 +201,6 @@ def test_apply_upgrade_full_success(monkeypatch, tmp_path: Path):
 
 def test_apply_upgrade_rolls_back_on_zai_smoke_failure(monkeypatch, tmp_path: Path):
     repo = _mk_repo(tmp_path)
-    smoke = _mk_smoke(tmp_path)
     original_text = (repo / "pyproject.toml").read_text(encoding="utf-8")
 
     monkeypatch.setattr(dependency_upgrade, "run_uv_sync", lambda *, repo_root=None: (True, ""))
@@ -226,17 +211,11 @@ def test_apply_upgrade_rolls_back_on_zai_smoke_failure(monkeypatch, tmp_path: Pa
             name="zai_smoke", ok=False, return_code=1, stderr_excerpt="ImportError"
         ),
     )
-    monkeypatch.setattr(
-        dependency_upgrade,
-        "run_anthropic_native_smoke",
-        lambda *, smoke_dir=None: SmokeResult(name="anthropic_native_smoke", ok=True),
-    )
 
     outcome = apply_upgrade(
         package="anthropic",
         target_version="9.9.9",
         repo_root=repo,
-        smoke_dir=smoke,
     )
     assert not outcome.overall_ok
     assert outcome.rolled_back
@@ -245,65 +224,8 @@ def test_apply_upgrade_rolls_back_on_zai_smoke_failure(monkeypatch, tmp_path: Pa
     assert (repo / "pyproject.toml").read_text(encoding="utf-8") == original_text
 
 
-def test_apply_upgrade_rolls_back_on_anthropic_smoke_failure(monkeypatch, tmp_path: Path):
-    repo = _mk_repo(tmp_path)
-    smoke = _mk_smoke(tmp_path)
-    original_text = (repo / "pyproject.toml").read_text(encoding="utf-8")
-
-    monkeypatch.setattr(dependency_upgrade, "run_uv_sync", lambda *, repo_root=None: (True, ""))
-    monkeypatch.setattr(
-        dependency_upgrade,
-        "run_zai_smoke",
-        lambda *, repo_root=None: SmokeResult(name="zai_smoke", ok=True),
-    )
-    monkeypatch.setattr(
-        dependency_upgrade,
-        "run_anthropic_native_smoke",
-        lambda *, smoke_dir=None: SmokeResult(
-            name="anthropic_native_smoke", ok=False, return_code=2, stderr_excerpt="endpoint_mismatch"
-        ),
-    )
-
-    outcome = apply_upgrade(
-        package="claude-agent-sdk",
-        target_version="9.9.9",
-        repo_root=repo,
-        smoke_dir=smoke,
-    )
-    assert outcome.rolled_back
-    assert outcome.rollback_reason == "anthropic_smoke_failed"
-    assert (repo / "pyproject.toml").read_text(encoding="utf-8") == original_text
-
-
-def test_apply_upgrade_rolls_back_when_both_smokes_fail(monkeypatch, tmp_path: Path):
-    repo = _mk_repo(tmp_path)
-    smoke = _mk_smoke(tmp_path)
-
-    monkeypatch.setattr(dependency_upgrade, "run_uv_sync", lambda *, repo_root=None: (True, ""))
-    monkeypatch.setattr(
-        dependency_upgrade,
-        "run_zai_smoke",
-        lambda *, repo_root=None: SmokeResult(name="zai_smoke", ok=False),
-    )
-    monkeypatch.setattr(
-        dependency_upgrade,
-        "run_anthropic_native_smoke",
-        lambda *, smoke_dir=None: SmokeResult(name="anthropic_native_smoke", ok=False),
-    )
-
-    outcome = apply_upgrade(
-        package="anthropic",
-        target_version="9.9.9",
-        repo_root=repo,
-        smoke_dir=smoke,
-    )
-    assert outcome.rolled_back
-    assert outcome.rollback_reason == "both_smokes_failed"
-
-
 def test_apply_upgrade_rolls_back_on_uv_sync_failure(monkeypatch, tmp_path: Path):
     repo = _mk_repo(tmp_path)
-    smoke = _mk_smoke(tmp_path)
     original_text = (repo / "pyproject.toml").read_text(encoding="utf-8")
 
     sync_calls: list[str] = []
@@ -313,23 +235,17 @@ def test_apply_upgrade_rolls_back_on_uv_sync_failure(monkeypatch, tmp_path: Path
         return False, "Resolution failed: incompatible deps"
 
     monkeypatch.setattr(dependency_upgrade, "run_uv_sync", stub_sync)
-    # Smokes should never be reached when sync fails.
+    # The smoke should never be reached when sync fails.
     monkeypatch.setattr(
         dependency_upgrade,
         "run_zai_smoke",
         lambda *, repo_root=None: pytest.fail("zai smoke should not run after sync failure"),
-    )
-    monkeypatch.setattr(
-        dependency_upgrade,
-        "run_anthropic_native_smoke",
-        lambda *, smoke_dir=None: pytest.fail("anthropic smoke should not run after sync failure"),
     )
 
     outcome = apply_upgrade(
         package="anthropic",
         target_version="9.9.9",
         repo_root=repo,
-        smoke_dir=smoke,
     )
     assert not outcome.sync_ok
     assert outcome.rolled_back
@@ -349,7 +265,6 @@ def _success_outcome() -> UpgradeOutcome:
         sync_ok=True,
         sync_stderr_excerpt="",
         zai_smoke=SmokeResult(name="zai_smoke", ok=True, return_code=0, stdout_excerpt="OK"),
-        anthropic_smoke=SmokeResult(name="anthropic_native_smoke", ok=True, return_code=0, stdout_excerpt="ok"),
         rolled_back=False,
         started_at="2026-05-05T12:00:00+00:00",
         finished_at="2026-05-05T12:01:30+00:00",
@@ -365,7 +280,6 @@ def _failure_outcome() -> UpgradeOutcome:
         sync_ok=True,
         sync_stderr_excerpt="",
         zai_smoke=SmokeResult(name="zai_smoke", ok=False, return_code=1, stderr_excerpt="ImportError on new API"),
-        anthropic_smoke=SmokeResult(name="anthropic_native_smoke", ok=True),
         rolled_back=True,
         rollback_reason="zai_smoke_failed",
         started_at="2026-05-05T12:00:00+00:00",
@@ -379,7 +293,7 @@ def test_build_upgrade_email_success_subject_includes_ok():
     assert "anthropic" in subject
     assert "0.75.0" in subject and "0.76.0" in subject
     assert "ZAI smoke" in text and "PASS" in text
-    assert "Anthropic-native smoke" in text and "PASS" in text
+    assert "Anthropic-native smoke" not in text
     assert "ROLLED BACK" not in text
     assert "ready for /ship" in text
 
@@ -402,20 +316,3 @@ def test_build_upgrade_email_html_escapes_diff():
     assert "&lt;script&gt;" in html
 
 
-# ── Smoke result coverage ───────────────────────────────────────────────────
-
-
-def test_anthropic_smoke_skips_when_workspace_missing(tmp_path: Path):
-    """No /opt/ua_demos/_smoke yet → return a clear skip, not a crash."""
-    nonexistent = tmp_path / "does_not_exist"
-    result = dependency_upgrade.run_anthropic_native_smoke(smoke_dir=nonexistent)
-    assert result.ok is False
-    assert "smoke workspace missing" in result.skipped_reason
-
-
-def test_anthropic_smoke_skips_when_smoke_py_missing(tmp_path: Path):
-    smoke_dir = tmp_path / "smoke"
-    smoke_dir.mkdir()  # exists but no smoke.py inside
-    result = dependency_upgrade.run_anthropic_native_smoke(smoke_dir=smoke_dir)
-    assert result.ok is False
-    assert "smoke.py missing" in result.skipped_reason
