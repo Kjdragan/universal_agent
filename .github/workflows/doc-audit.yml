@@ -6,6 +6,9 @@ name: Documentation Audit
 #   - every `file::symbol` citation resolves in code
 #   - zero line-number citations (they rot)
 #   - internal links resolve; canonical docs are indexed in README
+# Then scripts/registry_drift_check.py adds status-conditional teeth for the task
+# type registry: a `removed` row may not cite live code, a `canonical` row must,
+# and the scheduling frozenset pointer must stay intact.
 # Plus a tripwire: an automated doc-fix PR (head branch docfix/*) must touch ONLY
 # documentation paths — a hard mechanical replacement for the prompt-only firewall
 # that was bypassed on 2026-04-24.
@@ -16,6 +19,8 @@ on:
       - 'project_docs/**'
       - 'docs/**'
       - 'scripts/doc_audit.py'
+      - 'scripts/registry_drift_check.py'
+      - 'src/universal_agent/systemd_migrated_jobs.py'
       - '.github/workflows/doc-audit.yml'
 
 permissions:
@@ -35,6 +40,13 @@ jobs:
           python-version: '3.12'
       - name: Run doc_audit.py (stdlib-only; errors fail the PR)
         run: python scripts/doc_audit.py
+      - name: Registry drift check (status claims vs code reality)
+        # Status-conditional guard the generic doc audit can't make: a row marked
+        # `removed` must not cite live code, a `canonical` row must, and the
+        # scheduling section's frozenset pointer must stay intact. (Also runs on
+        # every PR as tests/unit/test_registry_drift_check.py, catching code-side
+        # deletions that never touch project_docs/ and so never trigger this job.)
+        run: python scripts/registry_drift_check.py
 
   docfix-tripwire:
     name: Doc-fix PR touches docs only
