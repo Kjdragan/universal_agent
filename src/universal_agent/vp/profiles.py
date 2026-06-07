@@ -49,9 +49,13 @@ def resolve_vp_profiles(workspace_base: Optional[Path | str] = None) -> dict[str
                 fallback=(base / "vp_coder_primary_external"),
             ),
             soul_file="CODIE_SOUL.md",
-            # CODIE builds runnable demos/coding artifacts that may use
-            # Anthropic-specific features — default to the real Max plan.
-            inference_mode="anthropic",
+            # CODIE builds runnable demos/coding artifacts. Historically this
+            # defaulted to the real Anthropic Max plan, but as of 2026-06-07
+            # Anthropic API-bills the Claude-Code-via-Max SDK path, so CODIE
+            # now runs on ZAI (GLM) like every other VP. Flip back to
+            # "anthropic" per-task / per-VP / via UA_CODY_DEFAULT_MODE if a
+            # specific demo genuinely needs Anthropic-native features.
+            inference_mode="zai",
         ),
         "vp.general.primary": VpProfile(
             vp_id="vp.general.primary",

@@ -42,10 +42,13 @@ CodyMode = Literal["zai", "anthropic"]
 _ENV_VAR = "UA_CODY_DEFAULT_MODE"
 _DB_SETTING_KEY = "cody_default_mode"
 _VALID_MODES: set[str] = {"zai", "anthropic"}
-# 2026-05-11 PM: flipped from "zai" → "anthropic" per operator decision.
-# Cody now runs on real Anthropic by default; operator can flip to "zai"
-# via the dashboard UI when they want to save cost.
-_HARDCODED_FALLBACK_MODE: CodyMode = "anthropic"
+# 2026-05-11 PM: flipped "zai" → "anthropic" per operator decision.
+# 2026-06-07: flipped back "anthropic" → "zai" — Anthropic began API-billing
+# the Claude-Code-via-Max SDK path, so Cody no longer runs on real Anthropic
+# by default. Every Cody/VP path (missions AND the demo/no-vp fallback) now
+# resolves to ZAI/GLM unless explicitly overridden (per-task cody_mode,
+# per-VP / global DB setting, or UA_CODY_DEFAULT_MODE).
+_HARDCODED_FALLBACK_MODE: CodyMode = "zai"
 
 
 def _normalize(raw: Any) -> str:
