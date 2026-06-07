@@ -85,8 +85,8 @@ research mission sent to Cody still runs on Max. Owner: [`03_agents/01_vp_worker
 | `proactive_general` | canonical | Generic proactive Atlas mission from the direct-dispatch sweep | `services/atlas_direct_dispatch.py::dispatch_atlas_candidates_once` |
 | `curation` / `proactive_wiki` | canonical | Memory/wiki housekeeping (`maintenance` tier) | `scripts/nightly_wiki_agent.py` |
 | `freelance_scout` | active_secondary | Freelance-opportunity scouting; unmapped → `background` tier | `scripts/freelance_scout_agent.py` |
-| `coding_task` / `general_task` / `research_task` | active_secondary | Redis cross-machine bridge mission_kinds → vp_id mapping | `delegation/bridge_main.py` |
-| `evaluate_and_author_intel_brief` | unclear | **Named in dispatch prompts but NOT a literal source `mission_type`.** The real pipeline is convergence_candidate → the `/evaluate-and-author-intel-brief` skill. Treat as a skill, not a mission_type. | `services/hourly_intel_digest.py` |
+| `coding_task` / `general_task` / `research_task` | active_secondary | Redis cross-machine bridge mission_kinds → vp_id mapping | `delegation/redis_vp_bridge.py::MISSION_KIND_TO_VP` |
+| `evaluate_and_author_intel_brief` | unclear | **Named in dispatch prompts but NOT a literal source `mission_type`.** The real pipeline is convergence_candidate → the `/evaluate-and-author-intel-brief` skill. Treat as a skill, not a mission_type. | `services/proactive_convergence.py::write_convergence_candidate` |
 
 ### Priority tiers (canonical)
 
@@ -136,7 +136,7 @@ a task type. Owner: [`02_execution_core/02_task_hub.md`](../02_execution_core/02
 | `convergence_candidate` | canonical | Proactive convergence/ideation → Atlas intel brief | `services/proactive_convergence.py::write_convergence_candidate` |
 | `proactive_signal` | canonical | Signal curator promotes signal cards | `services/signal_curator.py::promote_cards_to_tasks` |
 | `csi` | canonical | CSI-ingested signals (routing sub-machine) | `task_hub.py::upsert_csi_item` |
-| `cron_run` | canonical | Cron tick ↔ Task Hub link (observability) | `services/cron_task_hub_link.py::ensure_cron_task_link` |
+| `cron_run` | canonical | Cron tick ↔ Task Hub link (observability). **Post-#773 board behavior:** idle perpetual `cron:<job>` rows are hidden from the Kanban (`gateway_server.py::_is_idle_cron_board_row`); a cron earns a card only while running/failed, and each finished run lands as its own card in the Completed lane via `task_hub.py::list_completed_cron_runs` (backed by the per-run `task_hub_runs` audit table). | `services/cron_task_hub_link.py::ensure_cron_task_link` |
 | `vp_mission` | canonical | **Visibility-only** Kanban mirror of a VP mission (`agent_ready=False`) | `tools/vp_orchestration.py` (`_vp_dispatch_mission_impl`) |
 | `vp_mission_failure` | canonical | VP failure → rescue surfacing to Simone | `services/vp_failure_rescue.py` |
 | `approval` | canonical | Operator-approval-gated tasks | `services/dispatch_service.py::dispatch_on_approval` |
@@ -165,18 +165,24 @@ and the scheduling-substrate ADR ([`06_platform/08_scheduling_substrate_adr.md`]
 
 | Driver | Status | What | Entry |
 |---|---|---|---|
-| **systemd timers (S5 migration)** | canonical | Deploy-independent per-job `OnCalendar` timers on the VPS (digests, briefings, audits, pruning, pollers). | `systemd_migrated_jobs.py::SYSTEMD_MIGRATED_SYSTEM_JOBS`, `deployment/systemd/*.timer` |
-| **in-process gateway `CronService`** | active_secondary | Embedded async scheduler for operator/dynamic crons + the system jobs **not** migrated to systemd. | `cron_service.py::CronService` |
+| **systemd timers (S5 migration)** | canonical | Deploy-independent per-job `OnCalendar` timers on the VPS — the canonical substrate for migrated jobs (**25 timer units; 20 system jobs migrated** across S5 Phase A batches 1–4). On migration the in-process cron is **force-disabled so the timer is the sole firer** (no double-fire); env escape hatch `UA_SYSTEMD_TIMER_MIGRATION_DISABLED=1` reverts all migrated jobs to in-process. | `systemd_migrated_jobs.py::SYSTEMD_MIGRATED_SYSTEM_JOBS`, `systemd_migrated_jobs.py::is_migrated_to_systemd`, `deployment/systemd/*.timer` |
+| **in-process gateway `CronService`** | active_secondary | Embedded async scheduler for operator/dynamic crons + the system jobs **not** migrated (named below). | `cron_service.py::CronService` |
+| **Mission Control sweeper service** | canonical | The observational Chief-of-Staff sweeper, extracted from the gateway lifespan into its own deploy-isolated systemd process (S5 Phase B). | `services/mission_control_sweeper_main.py` |
+| **proactive-health timer** | canonical | Deterministic, LLM-free health-probe runner on a systemd oneshot timer (S5 Phase C); writes a durable `proactive_health_snapshots` row + emails a digest; heartbeat reads the snapshot. | `services/proactive_health_timer_main.py` |
+| **VP worker services** | canonical | Atlas & Cody `VpWorkerLoop`s run as **systemd template instances** `universal-agent-vp-worker@vp.general.primary` / `@vp.coder.primary`, not threads inside the gateway. | `vp/worker_main.py`, `deployment/systemd/universal-agent-vp-worker@.service` |
+| **`systemd_migrated_jobs` registry + migration-aware COS** | canonical | Leaf module = source of truth for which crons moved to timers; the Chief-of-Staff readout consults it to drop stale `cron:<job>` Task-Hub relics (#766). | `systemd_migrated_jobs.py::is_migrated_to_systemd`, `services/mission_control_chief_of_staff.py` |
 | **Heartbeat service** | canonical | Simone's recurring proactive-findings loop (findings → email + Mission Control, **not** Task Hub rows). | `heartbeat_service.py::HeartbeatService` |
 | **Idle dispatch loop** | canonical | Wakes an idle agent the instant work appears (decoupled from heartbeat cadence). | `services/idle_dispatch_loop.py::idle_dispatch_loop` |
 | **Goal loop / completion attestation** | active_secondary | Gate on COMPLETION.md before a mission may finalize `completed` (Cody-only). | `services/self_briefing.py::check_completion_attestation` |
 | **VPS infra timers** | canonical | watchdog / OOM-alert / uv-cache-prune host timers. | `deployment/systemd/universal-agent-service-watchdog.timer` |
-| **`hourly_intel_digest` cron** | canonical | **The** delivery path for VP-authored intel briefs (see §5). | `scripts/hourly_intel_digest_cron.py::run_once` |
-| `hourly_insight_email` cron | **deprecated** | (see §6) registered but `enabled=False`; superseded by `hourly_intel_digest` | `src/universal_agent/scripts/hourly_insight_email.py` |
+| **`hourly_intel_digest`** | canonical | **The** delivery path for VP-authored intel briefs (see §5); migrated (batch 3) — runs as a systemd timer, gateway cron registered-but-`enabled=False`. | `scripts/hourly_intel_digest_cron.py::run_once` |
+| `hourly_insight_email` cron | **removed** | (see §6) gateway cron registration **fully removed** (no `_ensure_*` fn, absent from the startup block) — superseded by `hourly_intel_digest`. Only dead modules remain. | `scripts/hourly_insight_email.py` |
 
-> **"Looks-off-but-intentional" anchor:** the hourly intel digest runs as a **VPS systemd timer**; the
-> gateway-side cron entry is **intentionally `enabled=False`**. That is the migrated, correct state — do
-> **not** "fix" it by re-enabling the gateway cron.
+**Migrated to systemd timers** (in-process cron force-disabled = *running on its timer, NOT broken* — `enabled=False` in the gateway cron list is the correct migrated state): `scratch_pruning`, `vault_lint_contradictions`, `architecture_canvas_drift`, `insight_scoring_health`, `vp_coder_workspace_pruning`, `proactive_report_{morning,midday,afternoon}`, `proactive_artifact_digest`, `intel_auto_promoter`, `codie_proactive_cleanup`, `hourly_intel_digest`, `csi_convergence_sync`, `youtube_daily_digest`, `youtube_gold_channel_poller`, `youtube_oauth_watchdog`, `nightly_wiki`, `morning_briefing`, `evening_briefing`, `csi_demo_triage_rank` (20 jobs).
+
+**Still in-process** (gateway `CronService`, no migration gate): `atlas_direct_dispatch`, `simone_chat_auto_complete`, `cron_artifact_reminders_sweep`, `vp_mission_pr_reconciler`, and `paper_to_podcast_daily` (a daily *prompt* — needs the agent runtime/skills/MCP, so it structurally cannot be a pure timer).
+
+> **"Looks-off-but-intentional" anchor:** a migrated job's gateway cron shows `enabled=False` (e.g. `hourly_intel_digest`) — that is the **correct migrated state** (the systemd timer is the sole firer); do **not** "fix" it by re-enabling the gateway cron. Cross-reference `is_migrated_to_systemd(job)` to tell migrated-and-running from genuinely-off. (Contrast: `hourly_insight_email` is *fully removed*, not migrated — see §6.)
 
 ---
 
@@ -210,6 +216,7 @@ These generate the work Atlas/Cody execute. Owners: [`04_intelligence/01_csi_arc
 | **URW HarnessOrchestrator / URWOrchestrator** | active_secondary | Multi-phase long-running task orchestration (live + classic engines). Owner: [`02_execution_core/04_urw_orchestration.md`](../02_execution_core/04_urw_orchestration.md) | `urw/harness_orchestrator.py`, `urw/orchestrator.py` |
 | Legacy CSI auto-queue (`queue_follow_up_tasks`) | **deprecated** | (see §6) bypassed operator review → demo-triage gate | `services/claude_code_intel.py::queue_follow_up_tasks` |
 | Legacy per-signature convergence firehose | **removed** | (see §6) 0.14% completion noise | — |
+| **Health invariant probes** | canonical | ~21 deterministic, LLM-free invariant probes across 9 modules feeding the proactive-health snapshot + Mission Control; the cron probes skip systemd-migrated jobs so they don't false-alert. | `services/invariants/` (`cron_staleness.py`, `csi_source_liveness.py`, `mission_control_sweeper_liveness.py`, …) |
 | Legacy regex vault entity extractor | **removed** | (see §6) ~50% junk → LLM-native pass | — |
 
 ---
@@ -231,12 +238,12 @@ by any of this code, read the row.**
 | **`youtube_playlist_watcher`** (CSI playlist poller) | YouTube daily digest + `youtube_channel_rss` adapter | Daily digest became the canonical YouTube trigger; poller redundant (orphan timer unit remains) | retired PR #438; dropped from liveness 2026-06-03 |
 | **Legacy regex vault entity extractor** | CSI Vault intelligence pass (LLM-native VaultDelta) | Code-side pattern matching produced ~50% junk; "code never decides what is meaningful" | superseded ~2026-06-01 |
 | **`develop` / `feature/latest2` branches** + legacy AgentBridge session path | main-only branching; InProcessGateway / ProcessTurnAdapter | Simplified to main-only; AgentBridge replaced by in-process execution | `develop` retired 2026-05-10 |
-| **`hourly_insight_email` cron** | `hourly_intel_digest` cron (+ `/hourly-intel-digest` skill) | Per-insight emails superseded by the batched convergence-brief digest; left `enabled=False` as a rollback lever | disabled PR D (#534); Phase-6 deletion target |
+| **`hourly_insight_email` cron** | `hourly_intel_digest` cron (+ `/hourly-intel-digest` skill) | Per-insight emails superseded by the batched convergence-brief digest. Gateway cron registration **fully removed** (no `_ensure_*` fn; absent from the startup block) — *not* a disabled-but-registered rollback lever. Only dead modules (`scripts/hourly_insight_email.py`, `services/hourly_insight_email.py`) remain as deletion candidates. | registration removed (post-#534); modules pending deletion |
 | **`claude_code_demo_task`** source_kind | `cody_scaffold_request` | Replaced by the scaffold-request canonical path; emergency fallback only | — |
 | **Legacy CSI auto-queue** (`queue_follow_up_tasks` straight-to-Task-Hub) | Demo Triage pending→approve gate | Unconditional auto-queue flooded the hub with low-signal historical candidates | 2026-05 |
 | **Legacy tutorial feed** | `tutorial_build` proactive task | Replaced by the explicit tutorial-build pipeline | 2026-03-26 |
 | **URW `GitCheckpointer`** | SQLite `URWStateManager` + `.urw/` file mirror | Real git checkpointing caused nested-repo conflicts; replaced with deterministic SQLite/file state (current code is a no-op stub) | git init removed (~2026-05-31) |
-| **`read_research_files`** MCP tool | `finalize_research` → `refined_corpus.md` | Corpus refiner yields a token-efficient pre-extracted corpus; raw reader unnecessary | — |
+| **`read_research_files`** MCP tool *(deprecated, NOT removed)* | `finalize_research` → `refined_corpus.md` | Superseded by the pre-extracted corpus, but **still a registered, callable `@mcp.tool()`** kept for backwards compatibility (`mcp_server.py::read_research_files`) — its own docstring marks it DEPRECATED. Listed here as deprecated, not gone from code. | deprecated (live) |
 | **Agent College** (self-improvement loop) | none active (dormant) — skills authored under `.claude/skills/` | Belongs to the old Railway/Telegram deploy; never wired into the production gateway runtime | vestigial |
 | **VPS-as-Dev fallback workflow** _(unclear)_ | Antigravity Remote-SSH to `ua@uaonvps` | Listed obsolete in the doc taxonomy; no code anchor | doc-asserted only |
 
