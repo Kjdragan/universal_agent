@@ -7,7 +7,14 @@ PartOf=csi.target
 Type=simple
 WorkingDirectory=/opt/universal_agent/CSI_Ingester/development
 EnvironmentFile=/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.env
-ExecStart=/usr/bin/env uv run uvicorn csi_ingester.app:app --host 127.0.0.1 --port 8091
+# Run through csi_run.sh so `infisical run` injects the shared LLM auth vars
+# (ANTHROPIC_API_KEY / ZAI_API_KEY, CSI_LLM_AUTH_MODE=0) into the process env —
+# the in-loop batch_brief LLM path resolves its key from os.getenv (see
+# csi_ingester/llm_auth.py::resolve_csi_llm_auth). Every other CSI unit already
+# wraps its command this way; without it batch briefs fall back to
+# "(LLM unavailable — plain summary)". csi_run.sh degrades to pass-through when
+# Infisical creds are absent, so this is safe in local/CI.
+ExecStart=/opt/universal_agent/CSI_Ingester/development/scripts/csi_run.sh /usr/bin/env uv run uvicorn csi_ingester.app:app --host 127.0.0.1 --port 8091
 MemoryHigh=900M
 MemoryMax=1400M
 MemorySwapMax=1024M
