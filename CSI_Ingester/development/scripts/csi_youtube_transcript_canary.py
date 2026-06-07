@@ -86,6 +86,23 @@ def compute_metrics(
         (f"-{window_hours} hours",),
     ).fetchone()[0]
 
+    # Recent trailing window for fast recovery: last N rows, any time.
+    # Lets the canary flip back to green once the most-recent analyses are
+    # healthy, without waiting a full window for the failure backlog to age out.
+    recent_analyzed_count = cur.execute(
+        "SELECT COUNT(*) FROM "
+        "(SELECT 1 FROM rss_event_analysis ORDER BY analyzed_at DESC LIMIT 10)"
+    ).fetchone()[0]
+
+    recent_ok_count = cur.execute(
+        """
+        SELECT COUNT(*) FROM (
+            SELECT transcript_status FROM rss_event_analysis
+            ORDER BY analyzed_at DESC LIMIT 10
+        ) WHERE transcript_status='ok'
+        """
+    ).fetchone()[0]
+
     last_analyzed = cur.execute(
         "SELECT MAX(analyzed_at) FROM rss_event_analysis"
     ).fetchone()[0]
@@ -102,6 +119,8 @@ def compute_metrics(
         "analyzed_recent": int(analyzed_recent or 0),
         "ok_recent": int(ok_recent or 0),
         "http_error_recent": int(http_error_recent or 0),
+        "recent_ok_count": int(recent_ok_count or 0),
+        "recent_analyzed_count": int(recent_analyzed_count or 0),
         "last_analyzed_at": last_analyzed,
         "last_analyzed_age_hours": (
             float(last_analyzed_age_hours)
@@ -154,7 +173,27 @@ def evaluate(
             f"no analyzed rows in window despite events_recent={events}"
         )
     else:
-        if rates["ok_rate"] is not None and rates["ok_rate"] < min_ok_rate:
+        # Recovery fallback: pass the ok_rate check when EITHER the full
+        # window is healthy OR the most-recent N analyses are healthy. This
+        # lets the canary clear quickly after an outage without waiting a
+        # full window for the failure backlog to age out. The quiet-window
+        # guard above still gates this, so it cannot manufacture a false pass.
+        window_ok_ok = (
+            rates["ok_rate"] is not None and rates["ok_rate"] >= min_ok_rate
+        )
+        recent_ok = int(metrics.get("recent_ok_count") or 0)
+        recent_analyzed = int(metrics.get("recent_analyzed_count") or 0)
+        recent_ok_rate = (
+            (recent_ok / recent_analyzed) if recent_analyzed > 0 else None
+        )
+        recent_ok_ok = (
+            recent_ok_rate is not None and recent_ok_rate >= min_ok_rate
+        )
+        if (
+            rates["ok_rate"] is not None
+            and not window_ok_ok
+            and not recent_ok_ok
+        ):
             reasons.append(
                 f"ok_rate={rates['ok_rate']:.2f} < min_ok_rate={min_ok_rate}"
                 f" (ok={ok}/analyzed={analyzed})"
