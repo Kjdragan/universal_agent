@@ -18,7 +18,7 @@ code_paths:
   - src/universal_agent/services/invariants/cron_staleness.py
   - src/universal_agent/services/invariants/cron_consecutive_failures.py
   - memory/HEARTBEAT.md
-last_verified: 2026-06-05
+last_verified: 2026-06-07
 ---
 
 # Heartbeat Service
@@ -177,6 +177,8 @@ This guarantees the gateway can always parse structured findings, and absence of
 
 `HEARTBEAT.md` instructs the agent to also `GET /api/v1/ops/proactive_health` and append every `invariants[]` entry verbatim into `findings[]` (they already use the `HeartbeatFinding` schema with `category="proactive_health"`), bumping `overall_status` to worst-of.
 
+**Inclusion telemetry (non-blocking).** Whether the agent actually folded those proactive-health invariants into its artifact used to be invisible. In step 1's post-write validation (the moment the final artifact exists), `_run_heartbeat` re-reads the durable snapshot via `proactive_health_snapshot.read_latest_snapshot` and calls `heartbeat_mediation.assess_proactive_health_inclusion`: if the snapshot carried `critical`/`warn` invariants but the repaired artifact has no `category="proactive_health"` finding, it logs a `proactive_health inclusion gap` warning. This is **observation only** — it never gates the run, mutates findings, or re-notifies (the proactive-health timer already emailed any criticals independently); it just surfaces silent agent non-compliance with the merge instruction. Empty/OK snapshots report no gap.
+
 ## Auto-triage to Simone (gateway mediation)
 
 When `_run_heartbeat` finishes it emits a `heartbeat_completed` event (via the `event_sink`, wired to `gateway_server._emit_heartbeat_event`). For a non-OK completion the gateway runs the mediation pipeline:
@@ -193,6 +195,8 @@ When `_run_heartbeat` finishes it emits a `heartbeat_completed` event (via the `
 The handoff message encodes the **remediation policy**: Simone searches memory for the finding signature/classification/error text, then makes an active decision — autonomous remediation (preferred when the fix is bounded, reversible, testable, locally verifiable) or refer to Kevin (extreme safety net: destructive changes, data-boundary exposure, secrets/security policy, unusually complex design, weak-evidence unique failures, production deploy approval). Simone does **not** edit code in the investigation session; she writes `work_products/heartbeat_investigation_summary.md` (+ optional `.json` with `autonomous_remediation_approved`, confidence, rationale, memory evidence, proposed changes) so Task Hub/Cody can apply and verify.
 
 **Per-finding triage (anti-collapse).** A heartbeat finding set is frequently heterogeneous — a false alarm and a real outage can land in the same heartbeat. The policy therefore requires Simone to triage **each finding independently** and emit a `findings_triage` array (one entry per finding: `finding_id, title, severity, verdict ∈ {real, false_positive, monitor}, justification, recommended_next_step, operator_review_required`). She must not classify the whole set by its most salient finding. On the consumer side, `hooks_service._emit_heartbeat_investigation_completion` runs the deterministic backstop `heartbeat_mediation.derive_heartbeat_operator_review`, which ORs the global `operator_review_required` with a per-finding scan: any `verdict=real`, any per-entry review flag, or any **critical finding not positively cleared as a false positive** forces operator review regardless of the headline classification. This exists because (2026-06-03) a false-positive CSI freshness alert got a whole set labelled `false_positive_with_code_bug`, masking a genuine `csi_source_liveness` outage (5/8 CSI adapters dark for weeks).
+
+**Triage-compliance telemetry (non-blocking).** The deterministic backstop protects operator *visibility*, but a **missing or partial** `findings_triage` array was itself invisible — the investigation could quietly skip the per-finding triage the policy requires. `_emit_heartbeat_investigation_completion` now also calls `heartbeat_mediation.assess_triage_compliance` and logs a `triage non-compliance` warning when the summary has no triage entries (`missing_findings_triage`) or has entries missing a `verdict`. Telemetry only — it does not change routing, gating, or the operator-review decision (the backstop still governs that); it just makes silent LLM non-compliance with the per-finding-triage requirement observable in logs.
 
 ```mermaid
 sequenceDiagram

@@ -45,7 +45,7 @@ _VP workers, Simone orchestration, heartbeat, cron, idle dispatch, agent college
 
 - **[VP Workers & Delegation](03_agents/01_vp_workers_and_delegation.md)** — CODIE/ATLAS lanes, mission dispatch/queueing, priority tiers (operator_daily/operator_signal/maintenance/background), profiles, execution clients, worker loop, redis bridge, factory heartbeat/registry, cody-mode routing, goal loop, failure rescue. _(verified 2026-06-03)_
 - **[Simone-First Orchestration](03_agents/02_simone_first_orchestration.md)** — Simone-first routing model, agent router (note: qualify_agent* are decommissioned). _(verified 2026-05-29)_
-- **[Heartbeat Service](03_agents/03_heartbeat_service.md)** — Heartbeat loop, max_proactive_per_cycle, findings schema/contract, auto-triage→Simone. _(verified 2026-06-05)_
+- **[Heartbeat Service](03_agents/03_heartbeat_service.md)** — Heartbeat loop, max_proactive_per_cycle, findings schema/contract, auto-triage→Simone. _(verified 2026-06-07)_
 - **[Cron & Scheduling](03_agents/04_cron_and_scheduling.md)** — Cron registration, deploy-window detection (suppress restart noise), catch-up, system cron jobs. _(verified 2026-06-05)_
 - **[Idle Dispatch & Goal Loop](03_agents/05_idle_dispatch_and_goal_loop.md)** — Idle dispatch nudge mechanism, goal loop & completion attestation, failure-mode classification & rescue verbs. _(verified 2026-05-29)_
 - **[Agent College](03_agents/06_agent_college.md)** — Failure-analysis learning loop (if present/active in code; dispose if dead). _(verified 2026-06-01)_
@@ -90,7 +90,7 @@ _Secrets/Infisical, runtime bootstrap, identity/auth, deployment/CI, environment
 - **["Networking: Tailscale, Residential Proxy, SSHFS"](06_platform/06_networking_tailscale_proxy_sshfs.md)** — Tailscale (uaonvps MagicDNS vs srv1360701 raw hostname), residential proxy (DataImpulse default/Webshare failover, VPS-only), SSHFS cross-machine mount. _(verified 2026-06-03)_
 - **[Claude Max OAuth Credentials (CLAUDE_CODE_OAUTH_TOKEN)](06_platform/07_claude_max_oauth_credentials.md)** — CLAUDE_CODE_OAUTH_TOKEN in Infisical is the SSOT for Cody-on-Anthropic / demo builds; refresh runbook + gotchas. _(verified 2026-06-02)_
 - **["ADR: Scheduling Substrate Redesign (deploy-resilient timers + read-only Mission Control)"](06_platform/08_scheduling_substrate_adr.md)** — Deploy-resilient scheduling substrate — two-axis substrate policy + per-job target table (31 crons), Mission Control sweeper extraction to its own service, deterministic proactive-health systemd timer + delivery contract, consolidations (reports/AM-products/mailer/DB), deploy-window-aware bounded backfill. _(verified 2026-06-05)_
-- **["Agent Runbook: Reaching the Production VPS (read live state without fighting SSH)"](06_platform/09_agent_vps_access_runbook.md)** — Agent runbook for reaching the prod VPS read-only over the tailnet gateway API (no SSH) _(verified 2026-06-06)_
+- **["Agent Runbook: Reaching the Production VPS (read live state without fighting SSH)"](06_platform/09_agent_vps_access_runbook.md)** — Agent runbook for reaching the prod VPS read-only over the tailnet gateway API (no SSH) _(verified 2026-06-07)_
 
 ## 07_tools
 
