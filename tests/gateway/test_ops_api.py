@@ -1541,6 +1541,60 @@ def test_dashboard_csi_reliability_slo_reads_latest_state(client, tmp_path, monk
     assert isinstance(slo.get("thresholds"), dict)
     assert isinstance(slo.get("top_root_causes"), list)
     assert isinstance(slo.get("history"), list)
+    # A fresh row is served verbatim (not flagged stale).
+    assert slo.get("stale") is False
+    assert str(slo.get("status") or "") != "stale"
+
+
+def test_dashboard_csi_reliability_slo_flags_stale_when_evaluator_offline(client, tmp_path, monkeypatch):
+    """A row not refreshed within the staleness window must not be served as a
+    live SLO verdict.  The daily evaluator was removed in the 2026-03 CSI
+    redesign, so without this guard the endpoint serves a months-old `breached`
+    state (still referencing decommissioned sources) as if current."""
+    db_path = tmp_path / "csi_reliability_slo_stale.db"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE source_state (
+                source_key TEXT PRIMARY KEY,
+                state_json TEXT,
+                updated_at TEXT
+            );
+            """
+        )
+        old = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+        conn.execute(
+            "INSERT INTO source_state (source_key, state_json, updated_at) VALUES (?, ?, ?)",
+            (
+                "runtime_canary:delivery_slo",
+                json.dumps(
+                    {
+                        "status": "breached",
+                        "last_transition_reason": "daily_breach",
+                        "target_day_utc": "2026-03-14",
+                        "last_checked_at": old,
+                        "metrics": {"delivery_success_ratio": 0.97},
+                        "thresholds": {"min_delivery_success_ratio": 0.98},
+                    }
+                ),
+                old,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setenv("CSI_DB_PATH", str(db_path))
+    resp = client.get("/api/v1/dashboard/csi/reliability-slo")
+    assert resp.status_code == 200
+    slo = resp.json().get("slo") if isinstance(resp.json().get("slo"), dict) else {}
+    # The fossil `breached` verdict must be overridden with `stale`.
+    assert str(slo.get("status") or "") == "stale"
+    assert slo.get("stale") is True
+    assert "offline" in str(slo.get("detail") or "").lower()
+    # Underlying stored fields remain visible for forensics.
+    assert str(slo.get("target_day_utc") or "") == "2026-03-14"
 
 
 def test_dashboard_csi_reports_includes_opportunity_bundle_events(client, tmp_path, monkeypatch):

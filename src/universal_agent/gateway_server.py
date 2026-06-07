@@ -23035,13 +23035,40 @@ async def dashboard_csi_reliability_slo():
             state = {}
         history = state.get("history") if isinstance(state.get("history"), list) else []
         top_root_causes = state.get("top_root_causes") if isinstance(state.get("top_root_causes"), list) else []
+        slo_status = str(state.get("status") or "unknown")
+        slo_detail = str(state.get("last_transition_reason") or "")
+        last_checked = str(state.get("last_checked_at") or row["updated_at"] or "")
+        # Staleness guard: the daily reliability-SLO evaluator refreshes this row
+        # once per UTC day.  If nothing has updated it for longer than the
+        # staleness window the evaluator is offline (it was removed in the
+        # 2026-03 CSI redesign) and the stored verdict is a fossil — serving it
+        # verbatim reports a months-old `breached` / decommissioned-source state
+        # as if it were current.  Surface `stale` so dashboards and the
+        # csi-supervisor snapshot don't treat dead data as a live SLO breach.
+        stale_after_hours = max(
+            1.0, float(os.getenv("UA_CSI_SLO_STALE_AFTER_HOURS", "48") or 48.0)
+        )
+        is_stale = False
+        checked_dt = _parse_iso_utc(last_checked)
+        if checked_dt is not None:
+            age_hours = (datetime.now(timezone.utc) - checked_dt).total_seconds() / 3600.0
+            if age_hours > stale_after_hours:
+                is_stale = True
+                slo_status = "stale"
+                slo_detail = (
+                    f"Reliability-SLO evaluator offline: last evaluation {last_checked} "
+                    f"is {age_hours / 24.0:.1f} day(s) old (staleness threshold "
+                    f"{stale_after_hours / 24.0:.1f}d). The stored verdict is a fossil, "
+                    "not the current SLO state."
+                )
         return {
             "status": "ok",
             "slo": {
-                "status": str(state.get("status") or "unknown"),
-                "detail": str(state.get("last_transition_reason") or ""),
+                "status": slo_status,
+                "detail": slo_detail,
+                "stale": is_stale,
                 "target_day_utc": str(state.get("target_day_utc") or ""),
-                "last_checked_at": str(state.get("last_checked_at") or row["updated_at"] or ""),
+                "last_checked_at": last_checked,
                 "window_start_utc": str(state.get("window_start_utc") or ""),
                 "window_end_utc": str(state.get("window_end_utc") or ""),
                 "metrics": state.get("metrics") if isinstance(state.get("metrics"), dict) else {},
