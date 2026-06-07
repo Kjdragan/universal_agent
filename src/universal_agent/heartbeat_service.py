@@ -3213,6 +3213,41 @@ class HeartbeatService:
                                 "Post-write validation repaired findings for %s",
                                 session.session_id,
                             )
+                            # Telemetry (non-blocking): did the agent fold the
+                            # proactive-health snapshot findings into the artifact
+                            # (category='proactive_health')? Logs only; never gates.
+                            try:
+                                from universal_agent.durable.db import (
+                                    connect_runtime_db as _ph_c,
+                                    get_activity_db_path as _ph_p,
+                                )
+                                from universal_agent.heartbeat_mediation import (
+                                    assess_proactive_health_inclusion,
+                                )
+                                from universal_agent.services.proactive_health_snapshot import (
+                                    read_latest_snapshot as _ph_r,
+                                )
+
+                                _ph_cn = _ph_c(_ph_p())
+                                try:
+                                    _ph_snap = _ph_r(_ph_cn)
+                                finally:
+                                    try:
+                                        _ph_cn.close()
+                                    except Exception:  # noqa: BLE001
+                                        pass
+                                _incl_ok, _incl_reason = assess_proactive_health_inclusion(
+                                    _ph_snap,
+                                    _clean.get("findings") if isinstance(_clean, dict) else None,
+                                )
+                                if not _incl_ok:
+                                    logger.warning(
+                                        "Heartbeat proactive_health inclusion gap for %s: %s",
+                                        session.session_id,
+                                        _incl_reason,
+                                    )
+                            except Exception:  # noqa: BLE001
+                                pass
                 except Exception as exc:
                     logger.warning(
                         "Post-write findings validation failed for %s: %s",

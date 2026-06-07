@@ -28,6 +28,7 @@ from universal_agent.durable.migrations import ensure_schema
 from universal_agent.durable.state import get_run, get_run_attempt
 from universal_agent.gateway import GatewayRequest, InProcessGateway
 from universal_agent.heartbeat_mediation import (
+    assess_triage_compliance,
     derive_heartbeat_operator_review,
     sanitize_heartbeat_recommendation_text,
 )
@@ -2471,6 +2472,17 @@ class HooksService:
         # Deterministic gate: never let a single global verdict hide a real or
         # critical per-finding problem (anti-collapse backstop).
         operator_review_required, findings_triage = derive_heartbeat_operator_review(payload)
+        # Telemetry (non-blocking): the investigation only runs for non-OK findings,
+        # and the policy requires a per-finding findings_triage array. Log when the
+        # LLM did not comply so the gap is visible (the deterministic backstop above
+        # still protects operator visibility — this never gates anything).
+        _triage_ok, _triage_reason = assess_triage_compliance(payload)
+        if not _triage_ok:
+            logger.warning(
+                "Heartbeat investigation triage non-compliance (session=%s): %s",
+                session_key,
+                _triage_reason,
+            )
         recommended_next_step = sanitize_heartbeat_recommendation_text(
             str(payload.get("recommended_next_step") or "").strip(),
             field="next_step",
