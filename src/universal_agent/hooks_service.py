@@ -985,7 +985,11 @@ class HooksService:
         try:
             marker.write_text(json.dumps(out, indent=2, sort_keys=True), encoding="utf-8")
         except Exception:
-            logger.warning("Failed writing startup recovery marker session_id=%s", session_id)
+            logger.warning(
+                "Failed writing startup recovery marker session_id=%s",
+                session_id,
+                exc_info=True,
+            )
 
     def _read_pending_hook_recovery_marker(self, session_dir: Path) -> dict[str, Any]:
         marker = self._pending_hook_recovery_marker_path(session_dir)
@@ -998,7 +1002,11 @@ class HooksService:
         try:
             marker.unlink()
         except Exception:
-            logger.warning("Failed removing pending hook recovery marker path=%s", marker)
+            logger.warning(
+                "Failed removing pending hook recovery marker path=%s",
+                marker,
+                exc_info=True,
+            )
 
     def _pending_local_ingest_marker_path(self, session_dir: Path) -> Path:
         return session_dir / "pending_local_ingest.json"
@@ -1010,7 +1018,11 @@ class HooksService:
         try:
             marker.unlink()
         except Exception:
-            logger.warning("Failed removing pending local ingest marker path=%s", marker)
+            logger.warning(
+                "Failed removing pending local ingest marker path=%s",
+                marker,
+                exc_info=True,
+            )
 
     @staticmethod
     def _pending_marker_created_epoch(payload: dict[str, Any]) -> float:
@@ -1123,7 +1135,10 @@ class HooksService:
                         }
                 return result
         except Exception:
-            logger.warning("Invalid UA_HOOKS_DISPATCH_RETRY_POLICIES, falling back to defaults")
+            logger.warning(
+                "Invalid UA_HOOKS_DISPATCH_RETRY_POLICIES, falling back to defaults",
+                exc_info=True,
+            )
         return default_policies
 
     @staticmethod
@@ -2866,7 +2881,11 @@ class HooksService:
             os.chmod(create_script, 0o755)
             os.chmod(delete_script, 0o755)
         except Exception:
-            logger.warning("Failed to set executable bit on tutorial bootstrap scripts in %s", implementation_dir)
+            logger.warning(
+                "Failed to set executable bit on tutorial bootstrap scripts in %s",
+                implementation_dir,
+                exc_info=True,
+            )
         scripts.append(str(create_script))
         scripts.append(str(delete_script))
         return scripts
@@ -4105,6 +4124,7 @@ class HooksService:
                     "Failed writing local ingest result file session_id=%s path=%s",
                     session_id,
                     failed_ingest_result_path,
+                    exc_info=True,
                 )
         if failure_class == "inflight_duplicate":
             failure_reason = (
@@ -4180,7 +4200,11 @@ class HooksService:
             try:
                 self._write_text_file(pending_path, json.dumps(pending_payload, indent=2))
             except Exception:
-                logger.warning("Failed writing pending_local_ingest marker session_id=%s", session_id)
+                logger.warning(
+                    "Failed writing pending_local_ingest marker session_id=%s",
+                    session_id,
+                    exc_info=True,
+                )
 
         logger.warning(
             "Deferring youtube dispatch session_id=%s status=pending_local_ingest pending_file=%s",
