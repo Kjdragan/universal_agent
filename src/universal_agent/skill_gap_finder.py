@@ -474,6 +474,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="override model (default resolve_sonnet -> glm-5-turbo)")
     ap.add_argument("--open-issue", action="store_true",
                     help="open ONE deduped GH issue labeled skill-gap")
+    ap.add_argument("--email", action="store_true",
+                    help="also send a one-shot Simone email of this week's candidates")
     ap.add_argument("--dry-run", action="store_true",
                     help="print transcript count + corpus size only; no LLM/secrets")
     args = ap.parse_args(argv)
@@ -532,6 +534,17 @@ def main(argv: list[str] | None = None) -> int:
 
     if candidates and args.open_issue:
         _open_issue(report, len(candidates))
+
+    if candidates and args.email:
+        try:
+            from universal_agent.simone_mail import send_simone_email
+
+            subject = f"[UA skill-gap] {len(candidates)} candidate(s) surfaced this week"
+            res = send_simone_email(subject=subject, text=report, source="skill-gap-finder")
+            print(f"[email] {res.get('status')} "
+                  f"{res.get('message_id') or res.get('reason', '')}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] one-shot email failed: {exc}", file=sys.stderr)
 
     return 0  # informational — candidates are advisory, never a build failure
 
