@@ -1,13 +1,5 @@
 # Demo Workspace Provisioning Runbook
 
-> 🔴 **2026-06-07 UPDATE — demos now run on ZAI, not real Anthropic.**
-> Anthropic began API-billing the Claude-Code-via-Max SDK path, so demos were
-> flipped to the ZAI proxy along with the rest of the fleet. `run_in_workspace`
-> no longer scrubs `ANTHROPIC_*` by default, so a demo's `claude` inherits the
-> daemon's ZAI env. The Max-plan OAuth login + `api.anthropic.com` smoke steps
-> below are now only relevant for the rare demo explicitly pinned to real
-> Anthropic (`endpoint_required: anthropic_native` + `scrub_env=True`).
->
 > ⚠️ **BEFORE YOU TOUCH ANY CLAUDE COMMAND ON THE VPS** ⚠️
 >
 > UA runs **two separate Claude environments side by side** on the VPS — a
