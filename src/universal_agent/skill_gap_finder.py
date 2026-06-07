@@ -152,11 +152,31 @@ def _projects_dir() -> Path:
     return Path.home() / ".claude" / "projects"
 
 
+# Transcripts authored by UA's own automation, NOT human/agent working sessions.
+# Mining them makes the finder propose skills for its own machinery: the
+# self-improve Stop hook reflects from a scratch CWD ("ua-selfimprove-claude-*"),
+# and Workflow/Task fan-outs write subagent transcripts ("**/subagents/**") whose
+# identical repeated preambles look like recurring manual workflows but are not.
+# Their genuine error signal (schema / read-before-write / oversized-read) is
+# already abundant in the main working-session transcripts, so excluding them
+# drops self-referential phantom candidates without losing real signal.
+_AUTOMATION_PATH_MARKERS: tuple[str, ...] = ("ua-selfimprove-claude-", "/subagents/")
+
+
+def _is_automation_transcript(path: Path) -> bool:
+    """True if the transcript was authored by UA automation (see markers above)."""
+    sp = str(path)
+    return any(marker in sp for marker in _AUTOMATION_PATH_MARKERS)
+
+
 def _recent_transcripts(projects_dir: Path, window_days: int) -> list[Path]:
     """Return *.jsonl transcripts modified within the last ``window_days``.
 
-    Globs ``**/*.jsonl`` under ``projects_dir`` and filters by mtime. Sorted
-    newest-first so the corpus builder favors the most recent activity.
+    Globs ``**/*.jsonl`` under ``projects_dir`` and filters by mtime, **excluding
+    UA automation transcripts** (self-improve reflections and subagent fan-outs;
+    see ``_AUTOMATION_PATH_MARKERS``) so the finder mines real working sessions
+    rather than its own machinery. Sorted newest-first so the corpus builder
+    favors the most recent activity.
     """
     projects_dir = Path(projects_dir)
     if not projects_dir.is_dir():
@@ -164,6 +184,8 @@ def _recent_transcripts(projects_dir: Path, window_days: int) -> list[Path]:
     cutoff = time.time() - max(0, window_days) * 86_400
     out: list[Path] = []
     for p in projects_dir.glob("**/*.jsonl"):
+        if _is_automation_transcript(p):
+            continue
         try:
             if p.is_file() and p.stat().st_mtime >= cutoff:
                 out.append(p)

@@ -100,6 +100,40 @@ def test_recent_transcripts_missing_dir(tmp_path: Path) -> None:
     assert sgf._recent_transcripts(tmp_path / "missing", window_days=7) == []
 
 
+def test_is_automation_transcript() -> None:
+    assert sgf._is_automation_transcript(
+        Path("/home/u/.claude/projects/-tmp-ua-selfimprove-claude-x/reflect.jsonl"))
+    assert sgf._is_automation_transcript(
+        Path("/home/u/.claude/projects/-proj/subagents/workflows/wf.jsonl"))
+    assert not sgf._is_automation_transcript(
+        Path("/home/u/.claude/projects/-home-kjdragan-lrepos-universal-agent/s.jsonl"))
+
+
+def test_recent_transcripts_excludes_automation(transcripts_dir: Path) -> None:
+    # UA automation transcripts must NOT be mined: the self-improve Stop hook's
+    # reflection (scratch CWD "ua-selfimprove-claude-*") and Workflow/Task
+    # subagent fan-outs ("**/subagents/**") repeat identical preambles that would
+    # otherwise surface as phantom "recurring workflow" skill candidates.
+    selfimprove = transcripts_dir / "-tmp-claude-1000-ua-selfimprove-claude-abc123"
+    selfimprove.mkdir(parents=True)
+    _write_jsonl(selfimprove / "reflect.jsonl", [
+        _human_prompt("You are reviewing a single Claude Code working session..."),
+    ])
+    subagents = (transcripts_dir / "-home-kjdragan-lrepos-universal-agent"
+                 / "subagents" / "workflows")
+    subagents.mkdir(parents=True)
+    _write_jsonl(subagents / "wf-1.jsonl", [
+        _human_prompt("This task builds Claude Code skills derived from the backlog"),
+    ])
+
+    found = sgf._recent_transcripts(transcripts_dir, window_days=7)
+    names = {p.name for p in found}
+    assert "reflect.jsonl" not in names
+    assert "wf-1.jsonl" not in names
+    # the two real working-session transcripts still come through
+    assert names == {"session-a.jsonl", "session-b.jsonl"}
+
+
 def test_mine_collects_signals(transcripts_dir: Path) -> None:
     records = []
     for p in sgf._recent_transcripts(transcripts_dir, 7):
