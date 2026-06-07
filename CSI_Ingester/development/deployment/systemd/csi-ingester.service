@@ -6,6 +6,12 @@ PartOf=csi.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/universal_agent/CSI_Ingester/development
+# Bootstrap Infisical creds (INFISICAL_CLIENT_ID/SECRET/PROJECT_ID) live in
+# /opt/universal_agent/.env. csi_run.sh needs them to `infisical run` and inject
+# the LLM auth vars; without this line the wrapper below falls through to
+# pass-through and batch_brief resolves no key. Loaded BEFORE csi-ingester.env so
+# CSI-specific values still win. Mirrors csi-rss-semantic-enrich.service.
+EnvironmentFile=-/opt/universal_agent/.env
 EnvironmentFile=/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.env
 # Run through csi_run.sh so `infisical run` injects the shared LLM auth vars
 # (ANTHROPIC_API_KEY / ZAI_API_KEY, CSI_LLM_AUTH_MODE=0) into the process env —

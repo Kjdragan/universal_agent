@@ -24,6 +24,15 @@ def _exec_start(unit_name: str) -> str:
     raise AssertionError(f"no ExecStart in {unit_name}")
 
 
+def _env_files(unit_name: str) -> list[str]:
+    text = (SYSTEMD_DIR / unit_name).read_text(encoding="utf-8")
+    out: list[str] = []
+    for line in text.splitlines():
+        if line.startswith("EnvironmentFile="):
+            out.append(line[len("EnvironmentFile=") :].strip().lstrip("-"))
+    return out
+
+
 def test_csi_ingester_wraps_execstart_in_csi_run() -> None:
     exec_start = _exec_start("csi-ingester.service")
     assert "scripts/csi_run.sh" in exec_start, (
@@ -43,4 +52,34 @@ def test_csi_ingester_matches_trend_unit_wrapper() -> None:
     assert ingester == trend, (
         "csi-ingester.service should use the same csi_run.sh entrypoint as the "
         f"LLM-OK trend units; ingester={ingester} trend={trend}"
+    )
+
+
+def test_csi_ingester_loads_infisical_bootstrap_env() -> None:
+    # The csi_run.sh wrapper only runs `infisical run` (which injects the LLM
+    # key) when the Infisical bootstrap creds are in the env. Those live in
+    # /opt/universal_agent/.env, loaded as an EnvironmentFile. semantic-enrich
+    # (which logs "Injecting N Infisical secrets") is the reference. Without
+    # this line the wrapper silently falls through to pass-through -> no key.
+    env_files = _env_files("csi-ingester.service")
+    assert "/opt/universal_agent/.env" in env_files, (
+        "csi-ingester.service must load EnvironmentFile=-/opt/universal_agent/.env "
+        "so csi_run.sh has the Infisical bootstrap creds to inject the LLM key; "
+        f"got EnvironmentFiles={env_files}"
+    )
+    # Bootstrap creds must load BEFORE csi-ingester.env so CSI-specific overrides win.
+    csi_env = "/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.env"
+    assert env_files.index("/opt/universal_agent/.env") < env_files.index(csi_env), (
+        f"/opt/universal_agent/.env must load before csi-ingester.env; got {env_files}"
+    )
+
+
+def test_csi_ingester_bootstrap_env_matches_injecting_unit() -> None:
+    # csi-rss-semantic-enrich is a confirmed injector ("Injecting N Infisical
+    # secrets"); csi-ingester must carry the same bootstrap env line.
+    assert "/opt/universal_agent/.env" in _env_files("csi-rss-semantic-enrich.service"), (
+        "reference unit csi-rss-semantic-enrich.service should load the bootstrap env"
+    )
+    assert "/opt/universal_agent/.env" in _env_files("csi-ingester.service"), (
+        "csi-ingester.service must mirror the injecting unit's bootstrap env line"
     )
