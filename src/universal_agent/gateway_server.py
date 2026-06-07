@@ -22517,6 +22517,7 @@ async def dashboard_csi_health():
 
         source_last6 = {str(row["source"] or ""): int(row["total"] or 0) for row in source_last6_rows}
         source_failures = {str(row["source"] or ""): int(row["total"] or 0) for row in source_fail_rows}
+        source_stale_thresholds = _default_csi_source_stale_thresholds()
         source_health: list[dict[str, Any]] = []
         for row in source_rows:
             source_name = str(row["source"] or "unknown")
@@ -22528,7 +22529,8 @@ async def dashboard_csi_health():
             status_value = "ok"
             if failures > 0:
                 status_value = "degraded"
-            if lag_minutes is not None and lag_minutes > 360:
+            source_stale_minutes = source_stale_thresholds.get(source_name, 360.0)
+            if lag_minutes is not None and lag_minutes > source_stale_minutes:
                 status_value = "stale"
             source_health.append(
                 {
@@ -22650,6 +22652,36 @@ def _default_delivery_source_min_events() -> dict[str, int]:
     return defaults
 
 
+def _default_csi_source_stale_thresholds() -> dict[str, float]:
+    """Per-source staleness thresholds (minutes), shared by the CSI health
+    endpoints so a single source can't get two contradictory stale verdicts.
+
+    The global defaults (240m for delivery-health, 360m for csi/health) assume a
+    continuously producing source.  ``youtube_channel_rss`` is *schedule-gated*
+    (it only fetches during configured CT hours, >=1.5h apart) and creators
+    upload sparsely, so multi-hour gaps are normal — a 240m recency trip on it is
+    a false ``stale`` even though the adapter is healthy (ratio 1.0, 0 failures).
+    Give such sources a wider window.  Override/extend via
+    ``UA_CSI_SOURCE_STALE_THRESHOLDS`` ("name=minutes,name=minutes").
+    """
+    defaults: dict[str, float] = {
+        "youtube_channel_rss": 720.0,
+    }
+    spec = str(os.getenv("UA_CSI_SOURCE_STALE_THRESHOLDS") or "")
+    for part in spec.split(","):
+        name, sep, val = part.partition("=")
+        if not sep:
+            continue
+        name = name.strip()
+        if not name:
+            continue
+        try:
+            defaults[name] = float(val.strip())
+        except (TypeError, ValueError):
+            continue
+    return defaults
+
+
 def _delivery_hint_for_source(source_name: str, *, under_min_volume: bool, stale: bool) -> dict[str, Any] | None:
     if not (under_min_volume or stale):
         return None
@@ -22692,6 +22724,7 @@ async def dashboard_csi_delivery_health(
 ):
     clamped_window = max(1, min(int(window_hours), 24 * 30))
     stale_threshold_minutes = max(30, min(int(stale_minutes), 24 * 60 * 7))
+    source_stale_thresholds = _default_csi_source_stale_thresholds()
     tuned_max_failed_attempt_ratio = (
         max(0.0, min(float(max_failed_attempt_ratio), 1.0))
         if max_failed_attempt_ratio is not None
@@ -22858,8 +22891,11 @@ async def dashboard_csi_delivery_health(
             failed_attempt_ratio = round((float(attempts_failed) / float(attempts)), 4) if attempts > 0 else 0.0
             expected_min_events = int(expected_min_events_by_source.get(source_name) or 0)
             under_min_volume = total < expected_min_events
+            source_stale_minutes = float(
+                source_stale_thresholds.get(source_name, stale_threshold_minutes)
+            )
             stale = expected_min_events > 0 and (
-                total == 0 or (lag_minutes is not None and lag_minutes > float(stale_threshold_minutes))
+                total == 0 or (lag_minutes is not None and lag_minutes > source_stale_minutes)
             )
             high_failed_ratio = attempts > 0 and failed_attempt_ratio > float(tuned_max_failed_attempt_ratio)
             all_failed = attempts > 0 and attempts_failed == attempts
@@ -22887,6 +22923,32 @@ async def dashboard_csi_delivery_health(
             )
             if isinstance(low_volume_hint, dict):
                 repair_hints.append(low_volume_hint)
+            # Observability honesty (min_events=0 sources): a parked/disabled
+            # adapter can never trip `stale` above, so it reads `ok` despite not
+            # polling for days (e.g. threads after 094717cc).  Surface that as an
+            # info hint without revoking the quiet-allowance (status stays `ok`).
+            if expected_min_events == 0 and total == 0:
+                last_poll_dt = _parse_iso_utc(adapter_state.get("last_poll_started_at"))
+                if last_poll_dt is not None:
+                    poll_age_hours = (now_ts - last_poll_dt.timestamp()) / 3600.0
+                    if poll_age_hours > 72.0:
+                        repair_hints.append(
+                            {
+                                "code": "adapter_parked_or_disabled",
+                                "severity": "info",
+                                "title": (
+                                    f"{source_name} adapter has not polled in "
+                                    f"{poll_age_hours / 24.0:.1f} day(s)"
+                                ),
+                                "action": (
+                                    "Expected if this source is intentionally parked/disabled; "
+                                    "otherwise check the adapter enabled flag and timer."
+                                ),
+                                "runbook_command": (
+                                    f"journalctl -u csi-ingester -n 200 --no-pager | grep -i {source_name}"
+                                ),
+                            }
+                        )
             if attempts_failed > 0 or high_failed_ratio:
                 repair_hints.append(
                     {
@@ -22983,6 +23045,7 @@ async def dashboard_csi_delivery_health(
                 "max_dlq_recent": tuned_max_dlq_recent,
                 "adapter_consecutive_failures": tuned_adapter_consecutive_failures,
                 "stale_threshold_minutes": stale_threshold_minutes,
+                "source_stale_thresholds": source_stale_thresholds,
                 "window_hours": clamped_window,
             },
             "db_path": str(db_path),
@@ -23035,13 +23098,40 @@ async def dashboard_csi_reliability_slo():
             state = {}
         history = state.get("history") if isinstance(state.get("history"), list) else []
         top_root_causes = state.get("top_root_causes") if isinstance(state.get("top_root_causes"), list) else []
+        slo_status = str(state.get("status") or "unknown")
+        slo_detail = str(state.get("last_transition_reason") or "")
+        last_checked = str(state.get("last_checked_at") or row["updated_at"] or "")
+        # Staleness guard: the daily reliability-SLO evaluator refreshes this row
+        # once per UTC day.  If nothing has updated it for longer than the
+        # staleness window the evaluator is offline (it was removed in the
+        # 2026-03 CSI redesign) and the stored verdict is a fossil — serving it
+        # verbatim reports a months-old `breached` / decommissioned-source state
+        # as if it were current.  Surface `stale` so dashboards and the
+        # csi-supervisor snapshot don't treat dead data as a live SLO breach.
+        stale_after_hours = max(
+            1.0, float(os.getenv("UA_CSI_SLO_STALE_AFTER_HOURS", "48") or 48.0)
+        )
+        is_stale = False
+        checked_dt = _parse_iso_utc(last_checked)
+        if checked_dt is not None:
+            age_hours = (datetime.now(timezone.utc) - checked_dt).total_seconds() / 3600.0
+            if age_hours > stale_after_hours:
+                is_stale = True
+                slo_status = "stale"
+                slo_detail = (
+                    f"Reliability-SLO evaluator offline: last evaluation {last_checked} "
+                    f"is {age_hours / 24.0:.1f} day(s) old (staleness threshold "
+                    f"{stale_after_hours / 24.0:.1f}d). The stored verdict is a fossil, "
+                    "not the current SLO state."
+                )
         return {
             "status": "ok",
             "slo": {
-                "status": str(state.get("status") or "unknown"),
-                "detail": str(state.get("last_transition_reason") or ""),
+                "status": slo_status,
+                "detail": slo_detail,
+                "stale": is_stale,
                 "target_day_utc": str(state.get("target_day_utc") or ""),
-                "last_checked_at": str(state.get("last_checked_at") or row["updated_at"] or ""),
+                "last_checked_at": last_checked,
                 "window_start_utc": str(state.get("window_start_utc") or ""),
                 "window_end_utc": str(state.get("window_end_utc") or ""),
                 "metrics": state.get("metrics") if isinstance(state.get("metrics"), dict) else {},

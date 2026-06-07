@@ -1479,6 +1479,150 @@ def test_dashboard_csi_delivery_health_reports_source_and_adapter_state(client, 
     assert isinstance(payload.get("adapter_health"), list)
 
 
+def _csi_delivery_health_db(tmp_path, name: str):
+    """Create a minimal CSI DB for delivery-health tests; returns the path."""
+    db_path = tmp_path / name
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(
+        """
+        CREATE TABLE events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id TEXT, source TEXT, event_type TEXT,
+            created_at TEXT, delivered INTEGER DEFAULT 0
+        );
+        CREATE TABLE delivery_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id TEXT, target TEXT, delivered INTEGER, status_code INTEGER,
+            error_class TEXT, error_detail TEXT, attempted_at TEXT
+        );
+        CREATE TABLE dead_letter (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id TEXT, event_json TEXT, created_at TEXT
+        );
+        CREATE TABLE source_state (
+            source_key TEXT PRIMARY KEY, state_json TEXT, updated_at TEXT
+        );
+        """
+    )
+    return db_path, conn
+
+
+def test_delivery_health_youtube_not_stale_within_per_source_window(client, tmp_path, monkeypatch):
+    """youtube_channel_rss is schedule-gated and bursty; a ~6.7h gap is normal and
+    must NOT read `stale`.  The per-source threshold (720m) replaces the global
+    240m for this source."""
+    db_path, conn = _csi_delivery_health_db(tmp_path, "csi_dh_yt_ok.db")
+    try:
+        ts = (datetime.now(timezone.utc) - timedelta(minutes=400)).isoformat()
+        conn.execute(
+            "INSERT INTO events (event_id, source, event_type, created_at, delivered) VALUES (?, ?, ?, ?, ?)",
+            ("evt-rss-ok", "youtube_channel_rss", "channel_new_upload", ts, 1),
+        )
+        conn.execute(
+            "INSERT INTO delivery_attempts (event_id, target, delivered, status_code, error_class, attempted_at) VALUES (?, ?, ?, ?, ?, ?)",
+            ("evt-rss-ok", "ua_signals_ingest", 1, 200, "", ts),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    monkeypatch.setenv("CSI_DB_PATH", str(db_path))
+    payload = client.get("/api/v1/dashboard/csi/delivery-health?window_hours=24").json()
+    by_source = {str(i.get("source") or ""): i for i in payload.get("sources") or []}
+    assert str((by_source.get("youtube_channel_rss") or {}).get("status") or "") == "ok"
+    thresholds = (payload.get("tuning") or {}).get("source_stale_thresholds") or {}
+    assert float(thresholds.get("youtube_channel_rss") or 0) == 720.0
+
+
+def test_delivery_health_youtube_still_stale_beyond_per_source_window(client, tmp_path, monkeypatch):
+    """The per-source threshold raises the bar (240m→720m); it does not disable
+    staleness — a >12h gap still reads `stale`."""
+    db_path, conn = _csi_delivery_health_db(tmp_path, "csi_dh_yt_stale.db")
+    try:
+        ts = (datetime.now(timezone.utc) - timedelta(minutes=800)).isoformat()
+        conn.execute(
+            "INSERT INTO events (event_id, source, event_type, created_at, delivered) VALUES (?, ?, ?, ?, ?)",
+            ("evt-rss-stale", "youtube_channel_rss", "channel_new_upload", ts, 1),
+        )
+        conn.execute(
+            "INSERT INTO delivery_attempts (event_id, target, delivered, status_code, error_class, attempted_at) VALUES (?, ?, ?, ?, ?, ?)",
+            ("evt-rss-stale", "ua_signals_ingest", 1, 200, "", ts),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    monkeypatch.setenv("CSI_DB_PATH", str(db_path))
+    payload = client.get("/api/v1/dashboard/csi/delivery-health?window_hours=72").json()
+    by_source = {str(i.get("source") or ""): i for i in payload.get("sources") or []}
+    assert str((by_source.get("youtube_channel_rss") or {}).get("status") or "") == "stale"
+
+
+def test_csi_health_youtube_not_stale_uses_shared_per_source_threshold(client, tmp_path, monkeypatch):
+    """csi/health previously hardcoded 360m, contradicting delivery-health for
+    youtube. It now honors the same per-source threshold (720m), so a ~6.7h gap
+    reads `ok` on both endpoints."""
+    db_path = tmp_path / "csi_health_yt.db"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT, source TEXT, event_type TEXT,
+                occurred_at TEXT, delivered INTEGER DEFAULT 1
+            );
+            CREATE TABLE dead_letter (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT);
+            CREATE TABLE delivery_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT, target TEXT, delivered INTEGER, status_code INTEGER, attempted_at TEXT
+            );
+            """
+        )
+        ts = (datetime.now(timezone.utc) - timedelta(minutes=400)).isoformat()
+        conn.execute(
+            "INSERT INTO events (event_id, source, event_type, occurred_at, delivered) VALUES (?, ?, ?, ?, ?)",
+            ("evt-yt", "youtube_channel_rss", "channel_new_upload", ts, 1),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    monkeypatch.setenv("CSI_DB_PATH", str(db_path))
+    payload = client.get("/api/v1/dashboard/csi/health").json()
+    by_source = {str(i.get("source") or ""): i for i in payload.get("source_health") or []}
+    assert str((by_source.get("youtube_channel_rss") or {}).get("status") or "") == "ok"
+
+
+def test_delivery_health_surfaces_parked_adapter_hint(client, tmp_path, monkeypatch):
+    """A min_events=0 source can never trip `stale`; a parked adapter (no poll for
+    days) must still surface an info hint so it isn't silently `ok`."""
+    db_path, conn = _csi_delivery_health_db(tmp_path, "csi_dh_parked.db")
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        old_poll = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        conn.execute(
+            "INSERT INTO source_state (source_key, state_json, updated_at) VALUES (?, ?, ?)",
+            (
+                "adapter_health:threads_owned",
+                json.dumps(
+                    {"adapter": "threads_owned", "ok": True, "consecutive_failures": 0,
+                     "last_poll_started_at": old_poll}
+                ),
+                now,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    monkeypatch.setenv("CSI_DB_PATH", str(db_path))
+    payload = client.get("/api/v1/dashboard/csi/delivery-health?window_hours=24").json()
+    by_source = {str(i.get("source") or ""): i for i in payload.get("sources") or []}
+    threads = by_source.get("threads_owned") or {}
+    # min_events=0 quiet-allowance preserved: status stays ok ...
+    assert str(threads.get("status") or "") == "ok"
+    # ... but the parked truth is surfaced as an info hint.
+    hint_codes = {str(h.get("code") or "") for h in (threads.get("repair_hints") or [])}
+    assert "adapter_parked_or_disabled" in hint_codes
+
+
 def test_dashboard_csi_reliability_slo_reads_latest_state(client, tmp_path, monkeypatch):
     db_path = tmp_path / "csi_reliability_slo.db"
     conn = sqlite3.connect(str(db_path))
@@ -1541,6 +1685,60 @@ def test_dashboard_csi_reliability_slo_reads_latest_state(client, tmp_path, monk
     assert isinstance(slo.get("thresholds"), dict)
     assert isinstance(slo.get("top_root_causes"), list)
     assert isinstance(slo.get("history"), list)
+    # A fresh row is served verbatim (not flagged stale).
+    assert slo.get("stale") is False
+    assert str(slo.get("status") or "") != "stale"
+
+
+def test_dashboard_csi_reliability_slo_flags_stale_when_evaluator_offline(client, tmp_path, monkeypatch):
+    """A row not refreshed within the staleness window must not be served as a
+    live SLO verdict.  The daily evaluator was removed in the 2026-03 CSI
+    redesign, so without this guard the endpoint serves a months-old `breached`
+    state (still referencing decommissioned sources) as if current."""
+    db_path = tmp_path / "csi_reliability_slo_stale.db"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE source_state (
+                source_key TEXT PRIMARY KEY,
+                state_json TEXT,
+                updated_at TEXT
+            );
+            """
+        )
+        old = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+        conn.execute(
+            "INSERT INTO source_state (source_key, state_json, updated_at) VALUES (?, ?, ?)",
+            (
+                "runtime_canary:delivery_slo",
+                json.dumps(
+                    {
+                        "status": "breached",
+                        "last_transition_reason": "daily_breach",
+                        "target_day_utc": "2026-03-14",  # date-pinned-ok (illustrative fossil day)
+                        "last_checked_at": old,
+                        "metrics": {"delivery_success_ratio": 0.97},
+                        "thresholds": {"min_delivery_success_ratio": 0.98},
+                    }
+                ),
+                old,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setenv("CSI_DB_PATH", str(db_path))
+    resp = client.get("/api/v1/dashboard/csi/reliability-slo")
+    assert resp.status_code == 200
+    slo = resp.json().get("slo") if isinstance(resp.json().get("slo"), dict) else {}
+    # The fossil `breached` verdict must be overridden with `stale`.
+    assert str(slo.get("status") or "") == "stale"
+    assert slo.get("stale") is True
+    assert "offline" in str(slo.get("detail") or "").lower()
+    # Underlying stored fields remain visible for forensics.
+    assert str(slo.get("target_day_utc") or "") == "2026-03-14"  # date-pinned-ok (illustrative fossil day)
 
 
 def test_dashboard_csi_reports_includes_opportunity_bundle_events(client, tmp_path, monkeypatch):
