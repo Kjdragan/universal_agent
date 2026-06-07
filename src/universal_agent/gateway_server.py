@@ -16338,17 +16338,48 @@ def _csi_delivery_health_summary() -> dict[str, Any] | None:
     try:
         conn = sqlite3.connect(str(csi_db), timeout=3)
         conn.row_factory = sqlite3.Row
+        # NOTE: the DDL column is `source_key` (see CSI_Ingester source_state),
+        # not `key`.  Querying the wrong name made this read fail silently and
+        # the canary summary was never surfaced even when the row existed.
         row = conn.execute(
-            "SELECT state_json FROM source_state WHERE key = ? LIMIT 1",
+            "SELECT state_json, updated_at FROM source_state WHERE source_key = ? LIMIT 1",
             ("delivery_health_canary",),
         ).fetchone()
         conn.close()
         if not row:
             return None
         state = json.loads(row["state_json"]) if isinstance(row["state_json"], str) else row["state_json"]
+        status = str(state.get("status") or "unknown")
+        last_checked = str(state.get("last_checked_at") or row["updated_at"] or "")
+        # Staleness guard (modeled on the reliability-SLO guard in
+        # /api/v1/dashboard/csi/reliability-slo): the delivery-health canary
+        # writer was removed in the 2026-03 CSI redesign, so any stored row is a
+        # fossil frozen at its last write.  Without this guard the column fix
+        # above would surface an 84-day-old `ok`/`failing` verdict as if it were
+        # live.  If nothing has refreshed the row inside the staleness window,
+        # mark it `stale` with an "evaluator offline" note instead.
+        stale_after_hours = max(
+            1.0, float(os.getenv("UA_CSI_DELIVERY_HEALTH_STALE_AFTER_HOURS", "48") or 48.0)
+        )
+        is_stale = False
+        note = ""
+        checked_dt = _parse_iso_utc(last_checked)
+        if checked_dt is not None:
+            age_hours = (datetime.now(timezone.utc) - checked_dt).total_seconds() / 3600.0
+            if age_hours > stale_after_hours:
+                is_stale = True
+                status = "stale"
+                note = (
+                    f"Delivery-health canary evaluator offline: last evaluation "
+                    f"{last_checked} is {age_hours / 24.0:.1f} day(s) old (staleness "
+                    f"threshold {stale_after_hours / 24.0:.1f}d). The stored verdict is "
+                    "a fossil, not the current delivery-health state."
+                )
         return {
-            "status": str(state.get("status") or "unknown"),
-            "last_checked_at": str(state.get("last_checked_at") or ""),
+            "status": status,
+            "stale": is_stale,
+            "note": note,
+            "last_checked_at": last_checked,
             "failing_sources": list(state.get("failing_sources") or []),
             "degraded_sources": list(state.get("degraded_sources") or []),
         }
