@@ -14,7 +14,7 @@
 ## Operating Model (CSI-Symbiotic)
 
 1. Treat CSI reports/artifacts as the primary evidence substrate.
-2. Use external live checks (X/Reddit/web) only to validate/augment CSI findings, not to replace them.
+2. Use external live checks (X/web) only to validate/augment CSI findings, not to replace them.
 3. If a CSI report is incomplete, request a bounded follow-up:
 4. `trend_followup`, `category_deep_dive`, `channel_deep_dive`, or `ad_hoc_query`.
 5. Stop after max 3 follow-up loops per topic unless explicitly instructed otherwise.
@@ -37,8 +37,7 @@
 
 1. CSI artifacts/reports are first-class inputs.
 2. For X-only checks, prefer `x_trends_posts`.
-3. Use Reddit evidence tools for validation when CSI Reddit evidence is thin.
-4. Avoid heavyweight report pipelines unless explicitly requested.
+3. Avoid heavyweight report pipelines unless explicitly requested.
 
 ## Evidence Hygiene
 

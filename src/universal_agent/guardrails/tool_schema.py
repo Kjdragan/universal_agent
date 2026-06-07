@@ -229,7 +229,7 @@ def _match_schema(tool_name: str) -> Optional[ToolSchema]:
 
 def _missing_required(schema: ToolSchema, tool_input: dict) -> list[str]:
     missing: list[str] = []
-    for field in schema.required:
+    for field in schema.required:  # noqa: F402 (pre-existing dataclasses `field` import shadow)
         if not tool_input.get(field):
             missing.append(field)
     if schema.required_any:
@@ -773,7 +773,7 @@ def _normalize_tool_input(tool_name: str, tool_input: dict) -> Optional[dict]:
 
 def _format_missing_fields(missing: Iterable[str]) -> str:
     normalized = []
-    for field in missing:
+    for field in missing:  # noqa: F402 (pre-existing dataclasses `field` import shadow)
         if field.startswith("one_of:"):
             normalized.append("one of: " + field.split(":", 1)[1])
         else:
@@ -825,7 +825,7 @@ def build_tool_schema_from_raw_composio(
         properties = {}
 
     example_payload = {}
-    for field in required:
+    for field in required:  # noqa: F402 (pre-existing dataclasses `field` import shadow)
         example_payload[field] = _example_value_from_property(properties.get(field))
     example = f"{tool_name}({json.dumps(example_payload)})" if example_payload else ""
 
@@ -940,8 +940,7 @@ async def pre_tool_use_schema_guardrail(
                         f"Resolved workspace: {workspace or '<unset>'}\n\n"
                         "Happy path:\n"
                         "1) Delegate via `Task(subagent_type='research-specialist', ...)` or `Task(subagent_type='arxiv-specialist', ...)` for web/academic research, OR\n"
-                        "2) Use domain tools directly for trend tasks (`x_trends_posts`, "
-                        "`reddit_top_posts`, `REDDIT_*`).\n\n"
+                        "2) Use domain tools directly for trend tasks (`x_trends_posts`).\n\n"
                         "Then continue with downstream analysis/delivery."
                     ),
                     "decision": "block",
@@ -1287,23 +1286,6 @@ async def pre_tool_use_schema_guardrail(
                                         "hookEventName": "PreToolUse",
                                         "permissionDecision": "deny",
                                         "permissionDecisionReason": "Blocked Composio X/Twitter tool discovery by policy.",
-                                    },
-                                }
-                            )
-                        if "reddit" in combined:
-                            return _policy_guardrail_response(
-                                block_response={
-                                    "systemMessage": (
-                                        "⚠️ `COMPOSIO_SEARCH_TOOLS` is unnecessary for Reddit in this project.\n\n"
-                                        "Use direct tools instead:\n"
-                                        "- Preferred compact path: `reddit_top_posts`\n"
-                                        "- Or direct Composio Reddit tools (`REDDIT_GET_R_TOP`, `REDDIT_SEARCH_ACROSS_SUBREDDITS`, etc.)."
-                                    ),
-                                    "decision": "block",
-                                    "hookSpecificOutput": {
-                                        "hookEventName": "PreToolUse",
-                                        "permissionDecision": "deny",
-                                        "permissionDecisionReason": "Blocked unnecessary COMPOSIO_SEARCH_TOOLS discovery for Reddit intent.",
                                     },
                                 }
                             )

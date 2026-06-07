@@ -617,27 +617,6 @@ async def test_schema_guardrail_still_blocks_workspace_root_listing_before_resea
 
 
 @pytest.mark.anyio
-async def test_schema_guardrail_blocks_composio_search_tools_for_reddit():
-    result = await pre_tool_use_schema_guardrail(
-        {
-            "tool_name": "mcp__composio__COMPOSIO_SEARCH_TOOLS",
-            "tool_input": {
-                "queries": [
-                    {
-                        "use_case": "get trending posts on reddit about AI agents",
-                        "known_fields": "subreddit: LocalLLaMA",
-                    }
-                ]
-            },
-        },
-        run_id="run-test",
-        step_id="step-test",
-    )
-    assert result.get("decision") == "block"
-    assert "unnecessary for Reddit" in result.get("systemMessage", "")
-
-
-@pytest.mark.anyio
 async def test_schema_guardrail_normalizes_report_generation_inline_corpus(monkeypatch, tmp_path):
     workspace = tmp_path / "session_workspace"
     refined = (

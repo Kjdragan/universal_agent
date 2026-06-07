@@ -84,7 +84,7 @@ and flow through the normal filter.
 Discards, with a structured `skip_reason`, any URL whose host or path matches:
 
 - **`SOCIAL_DOMAINS`** → `skip_reason=social_domain` (twitter, x, youtube,
-  reddit, bsky, t.co, bit.ly, discord, etc.)
+  bsky, t.co, bit.ly, discord, etc.)
 - **`PRODUCT_APP_DOMAINS`** → `skip_reason=product_app_not_content`
   (`claude.ai`, `chatgpt.com`, `chat.openai.com`, `gemini.google.com`) — these
   are apps, not content.

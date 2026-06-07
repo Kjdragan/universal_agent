@@ -168,7 +168,7 @@ class AgentSetup:
         self._log("⏳ Starting Composio Session initialization...")
 
         # IMPORTANT: Composio sessions only expose tools for toolkits explicitly enabled for the session.
-        # If we don't enable a connected toolkit (e.g. reddit), it can appear "disconnected" even when
+        # If we don't enable a connected toolkit (e.g. slack), it can appear "disconnected" even when
         # connected accounts exist. Prefer enabling toolkits that are ACTIVE for this user.
         enabled_toolkits: list[str] = []
         try:
@@ -274,7 +274,7 @@ class AgentSetup:
             # These are "Standard toolkits" we always want the agent to know are available.
             core_apps = [
                 "gmail", "googlecalendar", "googlesheets", "googledocs", 
-                "github", "slack", "notion", "discord", "reddit", "telegram",
+                "github", "slack", "notion", "discord", "telegram",
                 "figma", "composio_search", 
                 "browserbase", "codeinterpreter"
             ]

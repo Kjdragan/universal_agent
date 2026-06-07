@@ -106,7 +106,7 @@ def test_signals_ingest_non_youtube_source_skips_internal_dispatch(client, monke
     hook_stub = _HookStub()
     monkeypatch.setattr("universal_agent.gateway_server._hooks_service", hook_stub)
 
-    payload = _payload(source="reddit")
+    payload = _payload(source="threads")
     response = client.post("/api/v1/signals/ingest", json=payload, headers=_headers(payload, request_id="req-2"))
 
     assert response.status_code == 200

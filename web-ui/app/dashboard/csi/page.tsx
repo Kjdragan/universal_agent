@@ -49,11 +49,10 @@ const API_BASE = "/api/dashboard/gateway";
 
 /* ── Source Mapping ─────────────────────────────────────────────────── */
 
-type SourceKey = "reddit" | "threads" | "youtube" | "global" | "unknown";
+type SourceKey = "threads" | "youtube" | "global" | "unknown";
 
 function contentSource(eventType: string): SourceKey {
     const t = (eventType || "").toLowerCase();
-    if (t.includes("reddit")) return "reddit";
     if (t.includes("threads")) return "threads";
     if (t.includes("rss") || t.includes("youtube")) return "youtube";
     if (t.includes("global") || t.includes("batch") || t.includes("brief")) return "global";
@@ -61,7 +60,6 @@ function contentSource(eventType: string): SourceKey {
 }
 
 const SOURCE_META: Record<SourceKey, { label: string; icon: string | null; color: string; badge: string }> = {
-    reddit:  { label: "Reddit",       icon: "/assets/icons/sources/reddit.png",  color: "#f97316", badge: "RD" },
     threads: { label: "Threads",      icon: "/assets/icons/sources/threads.png", color: "#a855f7", badge: "TH" },
     youtube: { label: "YouTube",      icon: "/assets/icons/sources/youtube.png", color: "#ef4444", badge: "YT" },
     global:  { label: "Global Brief", icon: null,                                 color: T.cyan,    badge: "GB" },

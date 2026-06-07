@@ -86,18 +86,13 @@ def _read_watchlist(path_str: str, kind: str) -> Dict[str, Any]:
             items = payload.get("watchlist") or []
         elif isinstance(payload.get("channels"), list):
             items = payload.get("channels") or []
-        elif isinstance(payload.get("subreddits"), list):
-            items = payload.get("subreddits") or []
 
     normalized: List[str] = []
     for item in items:
         if isinstance(item, str):
             cleaned = item.strip()
         elif isinstance(item, dict):
-            if kind == "youtube":
-                cleaned = str(item.get("channel_id") or item.get("channel") or item.get("id") or "").strip()
-            else:
-                cleaned = str(item.get("subreddit") or item.get("name") or item.get("id") or "").strip()
+            cleaned = str(item.get("channel_id") or item.get("channel") or item.get("id") or "").strip()
         else:
             cleaned = ""
         if cleaned:

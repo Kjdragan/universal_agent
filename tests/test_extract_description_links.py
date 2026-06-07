@@ -2,7 +2,7 @@
 
 Uses the real marimo video (bMoNOb0iXpA) description as the canonical test case:
 - 2 high-value links (Kaggle competition + GitHub repo)
-- 8 social/promo links (Discord, Reddit, Twitter, etc.)
+- 7 social/promo links (Discord, Twitter, etc.)
 """
 
 import json
@@ -49,7 +49,6 @@ MARIMO_DESCRIPTION = textwrap.dedent("""\
     Links:
     Website: https://marimo.io
     Discord: https://marimo.io/discord
-    Reddit: https://www.reddit.com/r/marimo_notebook/
     Twitter: https://x.com/@marimo_io
     Tiktok: https://www.tiktok.com/@marimo.io
     Instagram: https://www.instagram.com/marimo_io
@@ -68,7 +67,7 @@ class TestExtractUrls:
 
     def test_extracts_urls_from_real_description(self):
         urls = extract_urls(MARIMO_DESCRIPTION)
-        assert len(urls) >= 10  # 2 high-value + 8+ social/promo
+        assert len(urls) >= 9  # 2 high-value + 7 social/promo
 
     def test_extracts_github_url(self):
         urls = extract_urls(MARIMO_DESCRIPTION)
@@ -80,9 +79,9 @@ class TestExtractUrls:
 
     def test_extracts_social_urls(self):
         urls = extract_urls(MARIMO_DESCRIPTION)
-        social_domains = {"x.com", "reddit.com", "tiktok.com", "instagram.com", "bsky.app"}
+        social_domains = {"x.com", "tiktok.com", "instagram.com", "bsky.app"}
         found = {u for u in urls if any(d in u for d in social_domains)}
-        assert len(found) >= 5
+        assert len(found) >= 4
 
     def test_empty_description_returns_empty(self):
         assert extract_urls("") == []
@@ -135,9 +134,6 @@ class TestClassifyUrl:
     # Social / promo
     def test_twitter(self):
         assert classify_url("https://x.com/@marimo_io") == "social"
-
-    def test_reddit(self):
-        assert classify_url("https://www.reddit.com/r/marimo_notebook/") == "social"
 
     def test_discord(self):
         assert classify_url("https://discord.gg/something") == "social"

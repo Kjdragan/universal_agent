@@ -59,9 +59,6 @@ from universal_agent.tools.mermaid_bridge import mermaid_to_image
 # PDF Bridge Tools
 from universal_agent.tools.pdf_bridge import html_to_pdf_wrapper
 
-# Reddit (Composio-backed) compact structured output
-from universal_agent.tools.reddit_bridge import reddit_top_posts_wrapper
-
 # Research Bridge Tools
 from universal_agent.tools.research_bridge import (
     cleanup_report_wrapper,
@@ -130,7 +127,6 @@ def get_core_internal_tools() -> List[Callable]:
         ask_user_questions_wrapper,
         batch_tool_execute_wrapper,
         x_trends_posts_wrapper,
-        reddit_top_posts_wrapper,
         csi_recent_reports_wrapper,
         csi_opportunity_bundles_wrapper,
         csi_source_health_wrapper,
