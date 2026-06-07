@@ -127,9 +127,10 @@ cd $REVIEW_DIR && gh pr checkout 130
 bash pty:true workdir:$REVIEW_DIR command:"codex review --base origin/main"
 # Clean up after: trash $REVIEW_DIR
 
-# Or use git worktree (keeps main intact)
+# Or use git worktree (keeps main intact) - fetch first so the PR ref is current
+git fetch origin
 git worktree add /tmp/pr-130-review pr-130-branch
-bash pty:true workdir:/tmp/pr-130-review command:"codex review --base main"
+bash pty:true workdir:/tmp/pr-130-review command:"codex review --base origin/main"
 ```
 
 ### Batch PR Reviews (parallel army!)
@@ -192,9 +193,11 @@ bash pty:true command:"pi --provider openai --model gpt-4o-mini -p 'Your task'"
 For fixing multiple issues in parallel, use git worktrees:
 
 ```bash
-# 1. Create worktrees for each issue
-git worktree add -b fix/issue-78 /tmp/issue-78 main
-git worktree add -b fix/issue-99 /tmp/issue-99 main
+# 1. Create worktrees for each issue (fetch first; base on origin/main, never stale local main)
+#    See the operations-worktree skill for the full worktree hygiene workflow.
+git fetch origin
+git worktree add -b fix/issue-78 /tmp/issue-78 origin/main
+git worktree add -b fix/issue-99 /tmp/issue-99 origin/main
 
 # 2. Launch Codex in each (background + PTY!)
 bash pty:true workdir:/tmp/issue-78 background:true command:"pnpm install && codex --yolo 'Fix issue #78: <description>. Commit and push.'"
