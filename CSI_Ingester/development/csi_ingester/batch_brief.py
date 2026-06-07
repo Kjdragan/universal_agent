@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 import logging
+import os
 import sqlite3
 from typing import Any
 import uuid
@@ -14,6 +15,7 @@ import httpx
 from csi_ingester.config import CSIConfig
 from csi_ingester.contract import CreatorSignalEvent
 from csi_ingester.emitter.ua_client import UAEmitter
+from csi_ingester.llm_auth import resolve_csi_llm_auth
 from csi_ingester.store import events as event_store
 
 logger = logging.getLogger(__name__)
@@ -22,6 +24,10 @@ logger = logging.getLogger(__name__)
 
 _ZAI_BASE = "https://api.z.ai/api/anthropic"
 _DEFAULT_MODEL = "glm-4.5-air"
+# Model used when the brief falls back to the shared CSI LLM auth resolver in
+# mode 0 (Anthropic).  Mirrors csi_global_trend_brief.py's default so the two
+# CSI briefs use the same proven model on the shared lane.
+_DEFAULT_CLAUDE_MODEL = "claude-3-5-haiku-latest"
 
 _SYSTEM_PROMPT = """\
 You are a concise trend analyst.  Given a batch of creator-signal events
@@ -51,10 +57,19 @@ def _build_prompt(rows: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-async def _call_zai(api_key: str, prompt: str, *, model: str = _DEFAULT_MODEL, timeout: int = 60) -> str:
-    """Call Z.AI's Anthropic-compatible chat API and return the generated text.
+async def _call_zai(
+    api_key: str,
+    prompt: str,
+    *,
+    model: str = _DEFAULT_MODEL,
+    base_url: str = _ZAI_BASE,
+    timeout: int = 60,
+) -> str:
+    """Call an Anthropic-compatible ``/v1/messages`` chat API and return the text.
 
-    Default model is ``glm-4.5-air`` (haiku-tier). The lane is known to be
+    Works for both Z.AI's Anthropic-compatible endpoint (``_ZAI_BASE``) and the
+    real Anthropic API (``https://api.anthropic.com``) — the request shape is
+    identical; only ``base_url`` + ``model`` differ. The lane is known to be
     occasionally flaky (~6 min hangs documented in
     ``src/universal_agent/utils/model_resolution.py``), so the timeout is
     bounded and the caller falls back to ``_fallback_brief`` on any failure.
@@ -71,7 +86,8 @@ async def _call_zai(api_key: str, prompt: str, *, model: str = _DEFAULT_MODEL, t
         "system": _SYSTEM_PROMPT,
         "messages": [{"role": "user", "content": prompt}],
     }
-    url = f"{_ZAI_BASE}/v1/messages"
+    normalized_base = base_url.rstrip("/")
+    url = normalized_base if normalized_base.endswith("/v1/messages") else f"{normalized_base}/v1/messages"
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(url, headers=headers, json=payload)
         resp.raise_for_status()
@@ -177,20 +193,43 @@ async def run_batch_cycle(
     event_ids = [r["event_id"] for r in rows]
 
     # ── Generate Markdown brief ──
-    zai_key = config.zai_api_key
     prompt = _build_prompt(rows)
     brief_md: str
     llm_used = False
 
-    if zai_key:
+    # Resolve LLM credentials. A dedicated Z.AI key (config.zai_api_key) wins;
+    # otherwise fall back to the shared CSI LLM auth resolver — the SAME path the
+    # (working) global trend brief uses. Without this fallback, batch briefs
+    # silently degraded to plain text whenever only the shared Anthropic key was
+    # provisioned (the live symptom: trend briefs were LLM-generated while batch
+    # briefs read "LLM unavailable" on the same box).
+    api_key = config.zai_api_key
+    base_url = _ZAI_BASE
+    model = config.zai_model
+    if not api_key:
         try:
-            brief_md = await _call_zai(zai_key, prompt, model=config.zai_model)
+            auth = resolve_csi_llm_auth(os.environ)
+        except Exception as exc:  # e.g. CSI-dedicated mode enabled but unconfigured
+            logger.warning("CSI LLM auth resolution failed: %s", exc)
+            auth = None
+        if auth is not None and auth.api_key:
+            api_key = auth.api_key
+            base_url = auth.base_url
+            model = (
+                config.zai_model
+                if auth.mode != 0
+                else (os.getenv("CSI_BATCH_BRIEF_CLAUDE_MODEL", "").strip() or _DEFAULT_CLAUDE_MODEL)
+            )
+
+    if api_key:
+        try:
+            brief_md = await _call_zai(api_key, prompt, model=model, base_url=base_url)
             llm_used = True
         except Exception as exc:
-            logger.warning("Z.AI batch brief failed, using fallback: %s", exc)
+            logger.warning("CSI batch brief LLM call failed, using fallback: %s", exc)
             brief_md = _fallback_brief(rows)
     else:
-        logger.info("No Z.AI API key configured; using plain-text batch brief")
+        logger.info("No CSI LLM API key resolved; using plain-text batch brief")
         brief_md = _fallback_brief(rows)
 
     # Extract headline from brief — find first heading with real content

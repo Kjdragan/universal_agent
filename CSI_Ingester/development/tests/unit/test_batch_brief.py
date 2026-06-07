@@ -128,7 +128,10 @@ class TestRunBatchCycle:
         assert result["event_count"] == 1
 
     @pytest.mark.asyncio
-    async def test_generates_fallback_without_api_key(self, conn: sqlite3.Connection) -> None:
+    async def test_generates_fallback_without_api_key(self, conn: sqlite3.Connection, monkeypatch) -> None:
+        # No dedicated key AND no shared resolver key → plain-text fallback.
+        for key in ("CSI_LLM_AUTH_MODE", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ZAI_API_KEY"):
+            monkeypatch.delenv(key, raising=False)
         for i in range(5):
             _insert_event(conn, f"e{i}", title=f"Video {i}", source="youtube_channel_rss")
         config = MagicMock()
@@ -188,7 +191,9 @@ class TestRunBatchCycle:
         assert result["event_count"] == 3
 
     @pytest.mark.asyncio
-    async def test_emits_to_ua_when_emitter_present(self, conn: sqlite3.Connection) -> None:
+    async def test_emits_to_ua_when_emitter_present(self, conn: sqlite3.Connection, monkeypatch) -> None:
+        for key in ("CSI_LLM_AUTH_MODE", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ZAI_API_KEY"):
+            monkeypatch.delenv(key, raising=False)
         for i in range(3):
             _insert_event(conn, f"e{i}", title=f"V{i}")
         config = MagicMock()
@@ -224,3 +229,33 @@ class TestRunBatchCycle:
         call_kwargs = mock_zai.call_args
         assert call_kwargs.kwargs["model"] == "glm-5-turbo"
         assert result["llm_used"] is True
+
+    @pytest.mark.asyncio
+    async def test_uses_resolver_fallback_when_no_zai_key(self, conn: sqlite3.Connection, monkeypatch) -> None:
+        """When no dedicated Z.AI key is set but the shared CSI LLM auth resolves
+        (mode 0 / Anthropic), the brief must still be LLM-generated — the same
+        path the global trend brief uses. This is the divergence D8 fixes: batch
+        briefs were degrading to plain text while trend briefs were LLM-generated
+        on the same box."""
+        for key in ("CSI_LLM_AUTH_MODE", "ANTHROPIC_AUTH_TOKEN", "ZAI_API_KEY", "ANTHROPIC_BASE_URL"):
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        for i in range(3):
+            _insert_event(conn, f"e{i}", title=f"V{i}")
+        config = MagicMock()
+        config.batch_min_events = 3
+        config.zai_api_key = ""  # no dedicated Z.AI key
+        config.zai_model = "glm-4.5-air"
+        config.batch_interval_seconds = 7200
+
+        with patch("csi_ingester.batch_brief._call_zai", new_callable=AsyncMock) as mock_zai:
+            mock_zai.return_value = "# Resolver Brief\n\nGenerated via shared auth."
+            result = await run_batch_cycle(conn=conn, config=config, emitter=None)
+
+        assert result["llm_used"] is True
+        mock_zai.assert_called_once()
+        call_kwargs = mock_zai.call_args
+        # Mode-0 resolution → real Anthropic endpoint + a Claude model, NOT the Z.AI defaults.
+        assert call_kwargs.kwargs["model"] == "claude-3-5-haiku-latest"
+        assert "api.anthropic.com" in call_kwargs.kwargs["base_url"]
+        assert call_kwargs.args[0] == "sk-ant-test"
