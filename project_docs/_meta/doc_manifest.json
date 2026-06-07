@@ -118,6 +118,26 @@
       "scope": "AgentEvent emission, event stream protocol, transcript/trace building, Logfire links."
     },
     {
+      "id": "arch-task-type-registry",
+      "tier": 1,
+      "category": "01_architecture",
+      "filename": "01_architecture/07_task_type_registry.md",
+      "title": "Task Type & Mission System Registry",
+      "code_paths": [
+        "src/universal_agent/task_hub.py",
+        "src/universal_agent/vp/",
+        "src/universal_agent/durable/state.py",
+        "src/universal_agent/cron_service.py",
+        "src/universal_agent/heartbeat_service.py",
+        "src/universal_agent/services/proactive_convergence.py",
+        "src/universal_agent/services/hourly_intel_digest.py",
+        "src/universal_agent/services/atlas_direct_dispatch.py",
+        "src/universal_agent/systemd_migrated_jobs.py"
+      ],
+      "legacy_refs": [],
+      "scope": "Canonical catalog of every task type / mission system with lifecycle status (canonical/active_secondary/deprecated/removed) + when-to-use + entry file::symbol, plus a Decommission Register (why turned off + what replaced it). The map for 'which system is the right one'."
+    },
+    {
       "id": "exec-gateway",
       "tier": 1,
       "category": "02_execution_core",
@@ -500,6 +520,21 @@
       "scope": "Discord message pipeline, triage, calendar sync (gws materialization)."
     },
     {
+      "id": "intel-insight-build-plan",
+      "tier": 2,
+      "category": "04_intelligence",
+      "filename": "04_intelligence/13_insight_pipeline_build_plan.md",
+      "title": "Insight Pipeline Build Plan (Phases 0.5/4/5/6)",
+      "code_paths": [
+        "src/universal_agent/services/hourly_intel_digest.py",
+        "src/universal_agent/scripts/hourly_intel_digest_cron.py",
+        "src/universal_agent/services/recent_briefs_index.py",
+        "src/universal_agent/services/proactive_convergence.py"
+      ],
+      "legacy_refs": [],
+      "scope": "Living build/status plan: close the brief->digest email gap, digest dedup+template, feedback/index verify, gated legacy deletion."
+    },
+    {
       "id": "chan-email",
       "tier": 1,
       "category": "05_channels",
@@ -697,6 +732,35 @@
       ],
       "legacy_refs": [],
       "scope": "Deploy-resilient scheduling substrate — two-axis substrate policy + per-job target table (31 crons), Mission Control sweeper extraction to its own service, deterministic proactive-health systemd timer + delivery contract, consolidations (reports/AM-products/mailer/DB), deploy-window-aware bounded backfill. Phases B/C/D + Phase A batches 1-2 SHIPPED and verified live (holistic as-built review 2026-06-06: deploy-independence, no double-fire/fire-loss, health delivery, decoupled sweeper all hold); Phase A batches 3-4 + the 18-brief recovery remain operator-gated. Builds on S1-S4 local fixes."
+    },
+    {
+      "id": "plat-claude-max-oauth",
+      "tier": 2,
+      "category": "06_platform",
+      "filename": "06_platform/07_claude_max_oauth_credentials.md",
+      "title": "Claude Max OAuth Credentials (CLAUDE_CODE_OAUTH_TOKEN)",
+      "code_paths": [
+        "src/universal_agent/vp/clients/claude_cli_client.py",
+        "src/universal_agent/infisical_loader.py"
+      ],
+      "legacy_refs": [],
+      "scope": "CLAUDE_CODE_OAUTH_TOKEN in Infisical is the SSOT for Cody-on-Anthropic / demo builds; refresh runbook + gotchas."
+    },
+    {
+      "id": "plat-agent-vps-access",
+      "tier": 2,
+      "category": "06_platform",
+      "filename": "06_platform/09_agent_vps_access_runbook.md",
+      "title": "Agent Runbook: Reaching the Production VPS (read live state without fighting SSH)",
+      "code_paths": [
+        "src/universal_agent/gateway_server.py",
+        "src/universal_agent/api/routers/",
+        "infrastructure/tailscale/tailnet-policy.hujson",
+        "infrastructure/tailscale/device_roles.json",
+        "scripts/tailscale_vps_preflight.sh"
+      ],
+      "legacy_refs": [],
+      "scope": "Agent runbook for reaching the prod VPS read-only over the tailnet gateway API (no SSH) + the SSH allow-rule caveat."
     },
     {
       "id": "tools-mcp",
