@@ -50,6 +50,7 @@ CANONICAL_UNITS=(
   csi-db-backup.timer
   csi-global-trend-brief.service
   csi-global-trend-brief.timer
+  csi-ingester.service
   csi-quality-assessment.service
   csi-quality-assessment.timer
   csi-replay-dlq.service
@@ -69,10 +70,13 @@ CANONICAL_UNITS=(
 )
 
 # Units managed elsewhere — never sweep them even if they aren't in the
-# canonical list above. `csi-ingester.service` is the main long-running
-# service installed by a separate deploy step.
+# canonical list above. `csi.target` is a pseudo-unit installed during initial
+# provisioning, not shipped as a file in deployment/systemd/.
+# NOTE: csi-ingester.service is now in CANONICAL_UNITS above. It used to be here
+# on the false premise that "a separate deploy step installs it" — in fact
+# nothing did, so edits to the unit (e.g. the csi_run.sh wrapper that gives
+# batch_brief its LLM key) never reached /etc and had to be cp'd by hand.
 EXEMPT_UNITS=(
-  csi-ingester.service
   csi.target
 )
 
