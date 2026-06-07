@@ -260,9 +260,10 @@ The common shorthand "ZAI everywhere except Cody" is wrong. Real Anthropic
    pattern.
 3. **Kevin's interactive `claude`** — profile 1, the interactive *coding* profile (not
    autonomous inference).
-4. **Anthropic-native smokes** — `services/dependency_upgrade.py::run_anthropic_native_smoke`
-   and `/opt/ua_demos/_smoke/smoke.py` deliberately verify the demo path against real
-   Anthropic. Note the sibling `run_zai_smoke` in the same file routes through ZAI
+4. **Demo-path smoke** — `/opt/ua_demos/_smoke/smoke.py` deliberately verifies the demo
+   path against real Anthropic. The former dependency-upgrade Anthropic-native smoke
+   (`run_anthropic_native_smoke`) was retired 2026-06-07 (#805); only
+   `services/dependency_upgrade.py::run_zai_smoke` now gates upgrades, routing through ZAI
    because it runs in the daemon env.
 
 Everything else (~25 direct SDK clients across `services/`, `urw/`, `discord_intelligence/`,
