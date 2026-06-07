@@ -283,7 +283,7 @@ def build_system_prompt(
         "## CAPABILITY DOMAINS (THINK BEYOND RESEARCH & REPORTS)\n"
         "You have multiple capability domains. For non-trivial tasks, evaluate at least 4 candidate domains before selecting a plan.\n"
         "Selection goal: maximize direct task completion, verifiable evidence, and user outcome speed (not just report generation).\n"
-        "- **Intelligence**: Composio search, URL/PDF extraction, X trends via `x_trends_posts` (xAI `x_search` evidence fetch), Reddit trending (`reddit_top_posts`), weather via the `openweather` skill\n"
+        "- **Intelligence**: Composio search, URL/PDF extraction, X trends via `x_trends_posts` (xAI `x_search` evidence fetch), weather via the `openweather` skill\n"
         "- **Computation**: Prefer local `Bash` + `uv run python ...` for stats/charts. Use CodeInterpreter (`mcp__composio__CODEINTERPRETER_*`) when you need isolation or a persistent sandbox.\n"
         "- **Media Creation**: `image-expert`, `video-creation-expert`, `mermaid-expert`, Manim animations\n"
         "- **Communication**: AgentMail (Simone's own inbox — use the official AgentMail MCP tools like `mcp__agentmail__send_message` / `reply_to_message`), Gmail on Kevin's behalf (`gmail` skill), Slack (`mcp__composio__SLACK_*`), Discord (`mcp__composio__DISCORD_*`), Calendar (`google_calendar` skill)\n"
@@ -391,12 +391,7 @@ def build_system_prompt(
         "- Do NOT set `sync_response_to_workbench=True` unless you expect massive data (>5MB).\n"
         "- Default behavior (`sync=False`) is faster and avoids unnecessary download steps.\n"
         "- If a tool returns 'data_preview' or says 'Saved large response to <FILE>', the data was TRUNCATED.\n"
-        "  In these cases (and ONLY these cases), use 'workbench_download' (or `mcp__composio__COMPOSIO_REMOTE_BASH_TOOL` if needed) to fetch/parse the full file.\n"
-        "\n"
-        "**Reddit Listing parsing gotcha (common failure mode):**\n"
-        "- For `mcp__composio__REDDIT_GET_R_TOP` and similar Listing tools, posts are nested at:\n"
-        "  `results[0].response.data.data.children[*].data` (NOT `...response.data.children`).\n"
-        "- The remote sandbox may not include `jq`; use Python for parsing."
+        "  In these cases (and ONLY these cases), use 'workbench_download' (or `mcp__composio__COMPOSIO_REMOTE_BASH_TOOL` if needed) to fetch/parse the full file."
     )
 
     # ── 11. WORKBENCH RESTRICTIONS ────────────────────────────────────
@@ -722,7 +717,7 @@ def build_vp_system_prompt(
     sections.append(
         "## CAPABILITY DOMAINS\n"
         "You have access to multiple capability domains:\n"
-        "- **Intelligence**: Composio search, URL/PDF extraction, X trends, Reddit trending\n"
+        "- **Intelligence**: Composio search, URL/PDF extraction, X trends\n"
         "- **Computation**: Local Bash + Python, CodeInterpreter sandbox\n"
         "- **Media Creation**: Image generation, video creation, Mermaid diagrams\n"
         "- **Communication**: AgentMail, Gmail (via gws), Slack, Discord\n"

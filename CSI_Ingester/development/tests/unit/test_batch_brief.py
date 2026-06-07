@@ -83,14 +83,14 @@ class TestMarkEventsDelivered:
 class TestBuildPrompt:
     def test_builds_numbered_list(self) -> None:
         rows = [
-            {"source": "reddit", "event_type": "new_post", "occurred_at": "2026-03-15T01:00:00Z",
+            {"source": "threads", "event_type": "new_post", "occurred_at": "2026-03-15T01:00:00Z",
              "subject": {"title": "AI Agents Explosion", "summary": "Big trend in AI agents"}},
             {"source": "youtube_channel_rss", "event_type": "new_video", "occurred_at": "2026-03-15T02:00:00Z",
              "subject": {"title": "GPT-5 Release", "summary": "OpenAI releases GPT-5"}},
         ]
         prompt = _build_prompt(rows)
         assert "## Batch of 2 events" in prompt
-        assert "1. [reddit]" in prompt
+        assert "1. [threads]" in prompt
         assert "2. [youtube_channel_rss]" in prompt
         assert "AI Agents Explosion" in prompt
         assert "GPT-5 Release" in prompt
@@ -99,13 +99,13 @@ class TestBuildPrompt:
 class TestFallbackBrief:
     def test_groups_by_source(self) -> None:
         rows = [
-            {"source": "reddit", "subject": {"title": "Post A"}},
-            {"source": "reddit", "subject": {"title": "Post B"}},
+            {"source": "threads", "subject": {"title": "Post A"}},
+            {"source": "threads", "subject": {"title": "Post B"}},
             {"source": "youtube_channel_rss", "subject": {"title": "Video C"}},
         ]
         brief = _fallback_brief(rows)
         assert "3 events" in brief
-        assert "reddit (2 events)" in brief
+        assert "threads (2 events)" in brief
         assert "youtube_channel_rss (1 events)" in brief
         assert "Post A" in brief
         assert "Video C" in brief

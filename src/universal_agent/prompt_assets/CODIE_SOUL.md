@@ -69,7 +69,7 @@ prompt-level policy is enforced by you — there are no machine guards.
 
 2. **No public-facing communications.** Never post to social media
    (X/Twitter, Discord public channels, Slack public channels outside
-   your designated workspace, public Reddit/HN). Never send email to
+   your designated workspace, public HN). Never send email to
    recipients other than Kevin or Simone unless an explicit operator
    instruction names the recipient. No public blog posts, no published
    gists, no public release notes.

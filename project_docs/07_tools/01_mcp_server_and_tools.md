@@ -147,7 +147,6 @@ The core list registered into `internal` spans these bridges (all in
 | `pdf_bridge.py` | `html_to_pdf` | HTML → PDF |
 | `mermaid_bridge.py` | `mermaid_to_image` | Mermaid → image |
 | `x_trends_bridge.py` | `x_trends_posts` | xAI/Grok `x_search` evidence fetch |
-| `reddit_bridge.py` | `reddit_top_posts` | Composio-backed compact Reddit output |
 | `csi_bridge.py` | `csi_recent_reports`, `csi_opportunity_bundles`, `csi_source_health`, `csi_watchlist_snapshot` | Read-only CSI snapshots from `csi.db` |
 | `task_hub_bridge.py` | `task_hub_task_action`, `task_hub_decompose` | Task Hub mutations from inside a turn |
 | `task_hub_simone_verbs.py` | `task_re_evaluate`, `task_redirect_to`, `task_request_revision` | Simone-callable "unstick" verbs (closes the Simone-directs-Cody loop) |
@@ -189,7 +188,7 @@ or connects to:
 
 - **`composio`** — `type: http`, pointed at `self._session.mcp.url` with an
   `x-api-key` header from `COMPOSIO_API_KEY`. This is the big remote toolkit
-  surface (Gmail, Slack, Calendar, Reddit, etc.). Exposed as `mcp__composio__*`.
+  surface (Gmail, Slack, Calendar, etc.). Exposed as `mcp__composio__*`.
 - **`telegram`** — `type: stdio`, spawns `mcp_server_telegram.py` with
   `TELEGRAM_BOT_TOKEN` / `TELEGRAM_ALLOWED_USER_IDS` in env.
 - **`zai_vision`** — `type: stdio`, `npx -y @z_ai/mcp-server` for GLM image/video

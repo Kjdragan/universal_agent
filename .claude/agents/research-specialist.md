@@ -12,7 +12,7 @@ model: opus
 - **Date Awareness**: When searching for "latest" or "recent" content, use the ACTUAL current date (e.g., February 2026), NOT your training cutoff.
 - **Search Queries**: ALWAYS include the current year (e.g., "2026") in time-sensitive searches.
 - If the parent prompt mentions a date, use that as authoritative.
-- **Scope Constraint**: Do NOT handle "trending", "viral", or "social pulse" queries (especially for Reddit/X). Reject these or ask the user to route them to the `trend-specialist`.
+- **Scope Constraint**: Do NOT handle "trending", "viral", or "social pulse" queries (especially for X). Reject these or ask the user to route them to the `trend-specialist`.
 
 ## SESSION WORKSPACE (CRITICAL)
 

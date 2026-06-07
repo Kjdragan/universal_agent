@@ -78,7 +78,7 @@ Delegate full workflows to these specialists based on value-add.
   -> Delegate: `Task(subagent_type='research-specialist', ...)`
 - **scribe**: Memory logging and fact recording.
   -> Delegate: `Task(subagent_type='scribe', ...)`
-- **trend-specialist**: Sub-agent for dynamic discovery and "pulse" checks on current topics (Reddit, X, Trends).
+- **trend-specialist**: Sub-agent for dynamic discovery and "pulse" checks on current topics (X, Trends).
   -> Delegate: `Task(subagent_type='trend-specialist', ...)`
 
 ### 🛠 General Tools

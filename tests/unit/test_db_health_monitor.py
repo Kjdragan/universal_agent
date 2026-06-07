@@ -32,7 +32,7 @@ def test_csi_dedupe_expired_keys_warn(monkeypatch, tmp_path) -> None:
     _make_csi_db(db_path)
     conn = sqlite3.connect(str(db_path))
     conn.execute(
-        "INSERT INTO dedupe_keys(key, expires_at) VALUES ('reddit:old', datetime('now', '-1 day'))"
+        "INSERT INTO dedupe_keys(key, expires_at) VALUES ('threads:old', datetime('now', '-1 day'))"
     )
     conn.commit()
     conn.close()

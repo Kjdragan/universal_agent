@@ -71,7 +71,6 @@ _SOCIAL_DOMAINS = frozenset({
     "linkedin.com",
     "discord.gg",
     "discord.com",
-    "reddit.com",
     "bsky.app",
     "threads.net",
     "mastodon.social",

@@ -151,16 +151,8 @@ function getStubDataForPath(pathname: string): unknown | null {
           mission_alignment: "freelance_monetization",
           created_at: new Date(Date.now() - 14400000).toISOString(),
         },
-        {
-          id: "csi-004",
-          title: "r/MachineLearning discussing agent orchestration",
-          source: "reddit",
-          relevance_score: 65,
-          mission_alignment: "universal_agent",
-          created_at: new Date(Date.now() - 28800000).toISOString(),
-        },
       ],
-      total: 4,
+      total: 3,
     };
   }
 
@@ -198,15 +190,6 @@ function getStubDataForPath(pathname: string): unknown | null {
   if (pathname === "/api/v1/dashboard/csi/digests") {
     return {
       digests: [
-        {
-          id: "digest-001",
-          event_id: "evt-reddit-001",
-          source: "reddit",
-          event_type: "reddit_trending",
-          title: "AI agent orchestration frameworks gaining traction on r/MachineLearning",
-          summary: "Multiple threads discussing LangGraph vs CrewAI for production agent systems",
-          created_at: new Date(Date.now() - 3600000).toISOString(),
-        },
         {
           id: "digest-002",
           event_id: "evt-x-trends-001",

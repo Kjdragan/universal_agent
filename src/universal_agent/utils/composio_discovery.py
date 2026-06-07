@@ -164,8 +164,6 @@ def fetch_toolkit_meta(composio_client: Any, slug: str) -> Dict[str, Any]:
             meta['description'] = "Team messaging and collaboration in Slack workspaces."
         elif slug == 'discord':
             meta['description'] = "Community chat, messaging, and server management in Discord."
-        elif slug == 'reddit':
-            meta['description'] = "Read and post content on Reddit communities."
         elif slug == 'twitter':
             meta['description'] = "Post, read, and manage content on Twitter/X."
         elif slug == 'youtube':

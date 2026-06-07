@@ -257,7 +257,6 @@ _TERM_STOPWORDS = frozenset(
         "github",
         "discord",
         "twitter",
-        "reddit",
     }
 )
 

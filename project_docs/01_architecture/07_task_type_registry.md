@@ -249,6 +249,7 @@ by any of this code, read the row.**
 | **`read_research_files`** MCP tool *(deprecated, NOT removed)* | `finalize_research` → `refined_corpus.md` | Superseded by the pre-extracted corpus, but **still a registered, callable `@mcp.tool()`** kept for backwards compatibility (`mcp_server.py::read_research_files`) — its own docstring marks it DEPRECATED. Listed here as deprecated, not gone from code. | deprecated (live) |
 | **Agent College** (self-improvement loop) | none active (dormant) — skills authored under `.claude/skills/` | Belongs to the old Railway/Telegram deploy; never wired into the production gateway runtime | vestigial |
 | **VPS-as-Dev fallback workflow** _(unclear)_ | Antigravity Remote-SSH to `ua@uaonvps` | Listed obsolete in the doc taxonomy; no code anchor | doc-asserted only |
+| **Reddit** — CSI `reddit_discovery` source + `reddit_top_posts` internal tool (`reddit_bridge.py`) + `reddit-intel` skill + Composio `REDDIT_*` surface | none — de-scoped (no replacement) | De-scoped from the project. CSI ingestion went dark 2026-05-12 and the ingestion lane was killed in #707; this change removes the remaining tool, skill, prompt/agent wiring, UI source, and doc references so nothing references Reddit or treats it as broken functionality. No code residue remains (the tool/skill/icon are deleted, not stubbed). | ingestion dark 2026-05-12; CSI lane removed #707; fully removed 2026-06-06 |
 
 ---
 

@@ -48,7 +48,7 @@ requested_id  →  COMPOSIO_USER_ID  →  DEFAULT_USER_ID  →  "user_universal"
 
 Called from `gateway.py`, `execution_engine.py`, `agent_setup.py`,
 `api/agent_bridge.py`, `api/process_turn_bridge.py`, `urw/integration.py`,
-`tools/reddit_bridge.py`, and `gateway_server.py`. Anywhere a session needs an
+and `gateway_server.py`. Anywhere a session needs an
 owner id but none was supplied, this is the fallback chain.
 
 > `resolve_user_id` is purely an *identity* helper — it is **not** an

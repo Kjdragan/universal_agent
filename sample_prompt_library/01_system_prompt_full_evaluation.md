@@ -255,7 +255,7 @@ Delegate full workflows to these specialists based on value-add.
   -> Delegate: `Task(subagent_type='research-specialist', ...)`
 - **scribe**: Memory logging and fact recording.
   -> Delegate: `Task(subagent_type='scribe', ...)`
-- **trend-specialist**: Sub-agent for dynamic discovery and "pulse" checks on current topics (Reddit, X, Trends).
+- **trend-specialist**: Sub-agent for dynamic discovery and "pulse" checks on current topics (X, Trends).
   -> Delegate: `Task(subagent_type='trend-specialist', ...)`
 
 ### 🛠 General Tools
@@ -943,23 +943,6 @@ allowed-tools:
 - web_fetch
 ```
 
-### reddit-intel
-Fetch compact, structured Reddit intelligence — top posts with engagement metrics (score, comments, author, permalink) — and save as an interim work product in the current session workspace for downstream agent reuse. USE when you need to understand what the Reddit community is saying about a topic, check trending discussion in a subreddit, or gather social signals for a research task. Trigger phrases: "what's trending on Reddit", "check Reddit for", "top Reddit posts about", "Reddit sentiment on", "what's r/X saying about", "check r/MachineLearning", "get Reddit intel on", "pull Reddit data for", "what's popular in this subreddit".
-Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/reddit-intel/SKILL.md`
-```yaml
-name: reddit-intel
-description: "Fetch compact, structured Reddit intelligence \u2014 top posts with\
-  \ engagement metrics (score, comments, author, permalink) \u2014 and save as an\
-  \ interim work product in the current session workspace for downstream agent reuse.\
-  \ USE when you need to understand what the Reddit community is saying about a topic,\
-  \ check trending discussion in a subreddit, or gather social signals for a research\
-  \ task. Trigger phrases: \"what's trending on Reddit\", \"check Reddit for\", \"\
-  top Reddit posts about\", \"Reddit sentiment on\", \"what's r/X saying about\",\
-  \ \"check r/MachineLearning\", \"get Reddit intel on\", \"pull Reddit data for\"\
-  , \"what's popular in this subreddit\".\n"
-allowed-tools: Bash
-```
-
 ### remotion
 Generate walkthrough videos from Stitch projects using Remotion with smooth transitions, zooming, and text overlays
 Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/stitch-skills/remotion/SKILL.md`
@@ -1337,7 +1320,7 @@ This is private, user-supplied profile data. Use it to pick defaults (timezone, 
 ## ARCHITECTURE & TOOL USAGE
 You interact with external tools via MCP tool calls. You do NOT write Python/Bash code to call SDKs directly.
 **Tool Namespaces:**
-- `mcp__composio__*` - Remote SaaS tools (Slack, YouTube, GitHub, CodeInterpreter, Notion, Discord, Google Maps, Reddit, SERPAPI search) -> Call directly
+- `mcp__composio__*` - Remote SaaS tools (Slack, YouTube, GitHub, CodeInterpreter, Notion, Discord, Google Maps, SERPAPI search) -> Call directly
 - `mcp__gws__*` - Google Workspace tools (Gmail, Calendar, Drive, Sheets, Docs) via gws CLI -> Call directly
 - `mcp__internal__*` - Local tools (File I/O, image gen, PDF, upload_to_composio, etc.) -> Call directly
 - `memory_search` / `memory_get` - Canonical memory retrieval tools -> Call directly
@@ -1362,7 +1345,7 @@ Prefer sequential tool calls when any step is likely to fail or needs error hand
 ## CAPABILITY DOMAINS (THINK BEYOND RESEARCH & REPORTS)
 You have multiple capability domains. For non-trivial tasks, evaluate at least 4 candidate domains before selecting a plan.
 Selection goal: maximize direct task completion, verifiable evidence, and user outcome speed (not just report generation).
-- **Intelligence**: Composio search, URL/PDF extraction, X trends via `mcp__internal__x_trends_posts` (xAI `x_search` evidence fetch), Reddit trending (`mcp__internal__reddit_top_posts`), weather via the `openweather` skill
+- **Intelligence**: Composio search, URL/PDF extraction, X trends via `mcp__internal__x_trends_posts` (xAI `x_search` evidence fetch), weather via the `openweather` skill
 - **Computation**: Prefer local `Bash` + `uv run python ...` for stats/charts. Use CodeInterpreter (`mcp__composio__CODEINTERPRETER_*`) when you need isolation or a persistent sandbox.
 - **Media Creation**: `image-expert`, `video-creation-expert`, `mermaid-expert`, Manim animations
 - **Communication**: Google Workspace CLI (`mcp__gws__*`) for Gmail, Calendar, Sheets, Docs, Drive; Slack (`mcp__composio__SLACK_*`), Discord (`mcp__composio__DISCORD_*`)
@@ -1410,7 +1393,7 @@ Selection goal: maximize direct task completion, verifiable evidence, and user o
 ## WHEN ASKED TO 'DO SOMETHING AMAZING' OR 'SHOWCASE CAPABILITIES'
 Do NOT just search + report + email. That's boring. Instead, combine MULTIPLE domains:
 - Pull live data via YouTube API (`mcp__composio__YOUTUBE_*`) or GitHub API (`mcp__composio__GITHUB_*`)
-- Check what's trending on X via `mcp__internal__x_trends_posts` (xAI `x_search` evidence fetch) or Reddit via `mcp__internal__reddit_top_posts`
+- Check what's trending on X via `mcp__internal__x_trends_posts` (xAI `x_search` evidence fetch)
 - Get current conditions or a short-term forecast via the `openweather` skill
 - Get directions or find places via Google Maps (`mcp__composio__GOOGLEMAPS_*`)
 - Post to Discord channels (`mcp__composio__DISCORD_*`)
@@ -1443,11 +1426,6 @@ The goal: show BREADTH of integration, not just depth of research.
 - Default behavior (`sync=False`) is faster and avoids unnecessary download steps.
 - If a tool returns 'data_preview' or says 'Saved large response to <FILE>', the data was TRUNCATED.
   In these cases (and ONLY these cases), use 'workbench_download' (or `mcp__composio__COMPOSIO_REMOTE_BASH_TOOL` if needed) to fetch/parse the full file.
-
-**Reddit Listing parsing gotcha (common failure mode):**
-- For `mcp__composio__REDDIT_GET_R_TOP` and similar Listing tools, posts are nested at:
-  `results[0].response.data.data.children[*].data` (NOT `...response.data.children`).
-- The remote sandbox may not include `jq`; use Python for parsing.
 
 ## 🖥️ REMOTE WORKBENCH RESTRICTIONS
 Use the Remote Workbench ONLY for:

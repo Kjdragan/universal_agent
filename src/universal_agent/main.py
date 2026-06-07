@@ -3113,7 +3113,7 @@ async def on_pre_bash_block_composio_sdk(
             "systemMessage": (
                 "🚫 BLOCKED: Do not execute internal MCP tool wrappers from Bash/Python.\n\n"
                 "Call the MCP tools directly instead (for example `x_trends_posts`, "
-                "`reddit_top_posts`, `run_research_pipeline`).\n"
+                "`run_research_pipeline`).\n"
                 "Wrapper symbols like `x_trends_posts_wrapper` are SDK tool objects and are not callable."
             ),
             "hookSpecificOutput": {
@@ -3139,8 +3139,7 @@ async def on_pre_bash_block_composio_sdk(
                 "- Use `COMPOSIO_SEARCH_TOOLS` only when the service/tool is unknown.\n"
                 "  For X/Twitter evidence, use `x_trends_posts` (or `grok-x-trends` fallback).\n\n"
                 "The Composio SDK is not available in the Bash environment. "
-                "All actions must go through specific MCP tools which handle auth automatically.\n\n"
-                "For Reddit trends, use `reddit_top_posts` or direct `REDDIT_*` tools."
+                "All actions must go through specific MCP tools which handle auth automatically."
             ),
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
