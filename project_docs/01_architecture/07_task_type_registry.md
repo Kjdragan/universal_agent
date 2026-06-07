@@ -40,9 +40,10 @@ the same change.
 | **removed** | Gone from code (or reduced to a stub/backfill-only reference). Listed so you know it *was* a thing and why it isn't anymore. | Don't resurrect without reading "why". |
 | **unclear** | Referenced in docs/history but not anchored in current code. | Verify before relying on it. |
 
-> Counts at `last_verified`: 54 canonical · 37 active_secondary · 10 deprecated · 17 removed · 2 unclear
-> (deduped into the sections below). The Decommission Register (§6) is the consolidated "why was this
-> turned off" record the rest of this doc cross-references.
+> Every entry below carries one of these statuses. Exact per-status totals are deliberately **not**
+> tallied here — a hand-kept count rots on every row add/remove; read the status column instead. The
+> Decommission Register (§6) is the consolidated "why was this turned off" record the rest of this
+> doc cross-references.
 
 ---
 
@@ -165,8 +166,8 @@ and the scheduling-substrate ADR ([`06_platform/08_scheduling_substrate_adr.md`]
 
 | Driver | Status | What | Entry |
 |---|---|---|---|
-| **systemd timers (S5 migration)** | canonical | Deploy-independent per-job `OnCalendar` timers on the VPS — the canonical substrate for migrated jobs (**25 timer units; 20 system jobs migrated** across S5 Phase A batches 1–4). On migration the in-process cron is **force-disabled so the timer is the sole firer** (no double-fire); env escape hatch `UA_SYSTEMD_TIMER_MIGRATION_DISABLED=1` reverts all migrated jobs to in-process. | `systemd_migrated_jobs.py::SYSTEMD_MIGRATED_SYSTEM_JOBS`, `systemd_migrated_jobs.py::is_migrated_to_systemd`, `deployment/systemd/*.timer` |
-| **in-process gateway `CronService`** | active_secondary | Embedded async scheduler for operator/dynamic crons + the system jobs **not** migrated (named below). | `cron_service.py::CronService` |
+| **systemd timers (S5 migration)** | canonical | Deploy-independent per-job `OnCalendar` timers on the VPS — the canonical substrate for migrated jobs. **The migrated set is not enumerated here** (it drifts): the machine source of truth is the `SYSTEMD_MIGRATED_SYSTEM_JOBS` frozenset; the per-job target policy + rationale is ADR §Decision 1. On migration the in-process cron is **force-disabled so the timer is the sole firer** (no double-fire); env escape hatch `UA_SYSTEMD_TIMER_MIGRATION_DISABLED=1` reverts all migrated jobs to in-process. | `systemd_migrated_jobs.py::SYSTEMD_MIGRATED_SYSTEM_JOBS`, `systemd_migrated_jobs.py::is_migrated_to_systemd`, `deployment/systemd/*.timer` |
+| **in-process gateway `CronService`** | active_secondary | Embedded async scheduler for operator/dynamic crons + the system jobs **not** migrated (the live `/api/v1/cron/jobs` complement of the frozenset — see the split note below). | `cron_service.py::CronService` |
 | **Mission Control sweeper service** | canonical | The observational Chief-of-Staff sweeper, extracted from the gateway lifespan into its own deploy-isolated systemd process (S5 Phase B). | `services/mission_control_sweeper_main.py` |
 | **proactive-health timer** | canonical | Deterministic, LLM-free health-probe runner on a systemd oneshot timer (S5 Phase C); writes a durable `proactive_health_snapshots` row + emails a digest; heartbeat reads the snapshot. | `services/proactive_health_timer_main.py` |
 | **VP worker services** | canonical | Atlas & Cody `VpWorkerLoop`s run as **systemd template instances** `universal-agent-vp-worker@vp.general.primary` / `@vp.coder.primary`, not threads inside the gateway. | `vp/worker_main.py`, `deployment/systemd/universal-agent-vp-worker@.service` |
@@ -178,9 +179,11 @@ and the scheduling-substrate ADR ([`06_platform/08_scheduling_substrate_adr.md`]
 | **`hourly_intel_digest`** | canonical | **The** delivery path for VP-authored intel briefs (see §5); migrated (batch 3) — runs as a systemd timer, gateway cron registered-but-`enabled=False`. | `scripts/hourly_intel_digest_cron.py::run_once` |
 | `hourly_insight_email` cron | **removed** | (see §6) gateway cron registration **fully removed** (no `_ensure_*` fn, absent from the startup block) — superseded by `hourly_intel_digest`. Only dead modules remain. | `scripts/hourly_insight_email.py` |
 
-**Migrated to systemd timers** (in-process cron force-disabled = *running on its timer, NOT broken* — `enabled=False` in the gateway cron list is the correct migrated state): `scratch_pruning`, `vault_lint_contradictions`, `architecture_canvas_drift`, `insight_scoring_health`, `vp_coder_workspace_pruning`, `proactive_report_{morning,midday,afternoon}`, `proactive_artifact_digest`, `intel_auto_promoter`, `codie_proactive_cleanup`, `hourly_intel_digest`, `csi_convergence_sync`, `youtube_daily_digest`, `youtube_gold_channel_poller`, `youtube_oauth_watchdog`, `nightly_wiki`, `morning_briefing`, `evening_briefing`, `csi_demo_triage_rank` (20 jobs).
+**Getting the current migrated-vs-in-process split** — *do not hand-maintain a job list here.* Such a list drifts within a day; re-enumerating it is exactly how the prior scheduling snapshots went stale (see the ADR's own staleness notes). To get the live split:
 
-**Still in-process** (gateway `CronService`, no migration gate): `atlas_direct_dispatch`, `simone_chat_auto_complete`, `cron_artifact_reminders_sweep`, `vp_mission_pr_reconciler`, and `paper_to_podcast_daily` (a daily *prompt* — needs the agent runtime/skills/MCP, so it structurally cannot be a pure timer).
+- **Migrated → systemd timers:** the `SYSTEMD_MIGRATED_SYSTEM_JOBS` frozenset in `systemd_migrated_jobs.py` is the machine source of truth; `is_migrated_to_systemd(job)` is the predicate every surface uses. A migrated job appears in the gateway cron list with `enabled=False` — that is the **correct migrated state** (the timer is the sole firer), not a fault.
+- **Still in-process:** whatever is enabled in live `/api/v1/cron/jobs` and **not** in that frozenset, plus operator/dynamic crons. Some jobs stay in-process *by design* — e.g. `paper_to_podcast_daily` is a daily *prompt* that needs the agent runtime/skills/MCP, so it structurally cannot be a pure timer.
+- **Why a given job is on a timer vs left in-process:** ADR §Decision 1 (substrate policy + per-job target table).
 
 > **"Looks-off-but-intentional" anchor:** a migrated job's gateway cron shows `enabled=False` (e.g. `hourly_intel_digest`) — that is the **correct migrated state** (the systemd timer is the sole firer); do **not** "fix" it by re-enabling the gateway cron. Cross-reference `is_migrated_to_systemd(job)` to tell migrated-and-running from genuinely-off. (Contrast: `hourly_insight_email` is *fully removed*, not migrated — see §6.)
 
