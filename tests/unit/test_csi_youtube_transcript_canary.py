@@ -230,3 +230,134 @@ def test_zero_analyzed_with_events_is_red(canary, tmp_path):
     # events_recent is 0 with window_hours=0, so we expect quiet_window branch.
     # The real "no analyzed despite events" is exercised in test_stale_table_*.
     assert verdict["status"] == "green"
+
+
+def test_recovery_backlog_ok_recent_ok_passes(canary, tmp_path):
+    """Backlog of failures + recent oks -> canary PASSES (fast recovery).
+
+    Simulates post-outage: the 24h window still holds many failed analyses
+    that drag the window ok_rate below the threshold, but the most-recent
+    analyses are all ok. The recent-N fallback should flip GREEN so the
+    canary signals recovery without waiting a full window cycle.
+    """
+    db = tmp_path / "csi.db"
+    conn = _open_db(db)
+
+    # 10+ events in window to clear the quiet-window guard.
+    for _ in range(10):
+        _insert_event(conn, hours_ago=0.5)
+
+    # Old in-window backlog of plain failures (no http_error ref, so the
+    # http_error check stays green and we isolate the ok_rate recovery path).
+    # 40 failures + 10 oks -> window ok_rate = 10/50 = 0.20 < 0.25.
+    for _ in range(40):
+        _insert_analysis(conn, status="failed", ref="", hours_ago=22)
+
+    # Recent recovery: 10 ok rows, freshest in the table.
+    for _ in range(10):
+        _insert_analysis(
+            conn, status="ok", ref="youtube_transcript_api", hours_ago=0.1
+        )
+
+    conn.close()
+
+    conn = sqlite3.connect(str(db))
+    metrics = canary.compute_metrics(conn, window_hours=24, stale_after_hours=2)
+    conn.close()
+
+    verdict = canary.evaluate(
+        metrics,
+        min_ok_rate=0.25,
+        max_http_error_rate=0.50,
+        require_min_events=5,
+    )
+
+    # Window ok_rate is below threshold, but recent_ok_rate = 10/10 = 1.0,
+    # so the recovery fallback should keep the canary GREEN.
+    assert verdict["rates"]["ok_rate"] < 0.25
+    assert verdict["status"] == "green", f"expected GREEN, got {verdict}"
+    assert not any("ok_rate" in r for r in verdict["reasons"])
+
+
+def test_genuinely_failing_recent_window_still_red(canary, tmp_path):
+    """Recent window is all failures -> canary still RED.
+
+    Ensures the recent-N recovery fallback does not manufacture a
+    false-pass when the genuinely-recent data is bad.
+    """
+    db = tmp_path / "csi.db"
+    conn = _open_db(db)
+
+    for _ in range(10):
+        _insert_event(conn, hours_ago=0.5)
+
+    # Even the most-recent analyses are all http_error failures.
+    for _ in range(10):
+        _insert_analysis(
+            conn,
+            status="failed",
+            ref="http_error@127.0.0.1:8002",
+            hours_ago=0.1,
+        )
+
+    conn.close()
+
+    conn = sqlite3.connect(str(db))
+    metrics = canary.compute_metrics(conn, window_hours=24, stale_after_hours=2)
+    conn.close()
+
+    verdict = canary.evaluate(
+        metrics,
+        min_ok_rate=0.25,
+        max_http_error_rate=0.50,
+        require_min_events=5,
+    )
+
+    # recent_ok_rate = 0/10 = 0 < 0.25 -> no rescue, still RED.
+    assert verdict["status"] == "red"
+    assert any("ok_rate" in r for r in verdict["reasons"])
+
+
+def test_quiet_window_guard_still_holds(canary, tmp_path):
+    """Quiet window stays GREEN via the guard, not via recent recovery.
+
+    With events below `require_min_events`, the quiet-window guard must
+    still short-circuit to GREEN before any ok_rate / recent-N logic runs,
+    so the new fallback cannot weaken or bypass that guard.
+    """
+    db = tmp_path / "csi.db"
+    conn = _open_db(db)
+
+    # Only 2 events -- below require_min_events=5.
+    for _ in range(2):
+        _insert_event(conn, hours_ago=1)
+
+    # Old failed backlog in the DB.
+    for _ in range(5):
+        _insert_analysis(
+            conn,
+            status="failed",
+            ref="http_error@127.0.0.1:8002",
+            hours_ago=20,
+        )
+
+    # A few recent oks (would be a rescue, but the guard fires first).
+    for _ in range(3):
+        _insert_analysis(conn, status="ok", hours_ago=0.1)
+
+    conn.close()
+
+    conn = sqlite3.connect(str(db))
+    metrics = canary.compute_metrics(conn, window_hours=24, stale_after_hours=2)
+    conn.close()
+
+    verdict = canary.evaluate(
+        metrics,
+        min_ok_rate=0.25,
+        max_http_error_rate=0.50,
+        require_min_events=5,
+    )
+
+    # GREEN because of the quiet_window guard, not the recovery fallback.
+    assert verdict["status"] == "green"
+    assert any("quiet_window" in r for r in verdict["reasons"])
