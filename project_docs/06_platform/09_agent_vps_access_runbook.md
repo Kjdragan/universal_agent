@@ -9,7 +9,7 @@ code_paths:
   - infrastructure/tailscale/tailnet-policy.hujson
   - infrastructure/tailscale/device_roles.json
   - scripts/tailscale_vps_preflight.sh
-last_verified: 2026-06-06
+last_verified: 2026-06-07
 ---
 
 # Agent Runbook: Reaching the Production VPS
@@ -23,6 +23,13 @@ last_verified: 2026-06-06
 > first. This runbook is the canonical "how do I, as an agent, observe/operate prod"
 > reference. Infrastructure (Tailscale ACLs, SSHFS, proxy, nginx) lives in its sibling
 > [`06_networking_tailscale_proxy_sshfs.md`](06_networking_tailscale_proxy_sshfs.md).
+
+> **STATUS (updated 2026-06-07).** The one-time operator allow-rule for shell access **has
+> been added** (`Bash(ssh ua@uaonvps:*)`, 2026-06-06). **SSH from an agent now works** —
+> `ssh ua@uaonvps "<cmd>"` (with `dangerouslyDisableSandbox: true` for egress) is a live
+> channel for `journalctl`/`systemctl`/`sqlite3`. The "agents cannot self-grant" *principle*
+> in §3 still holds (only the operator adds the rule), but it is no longer *pending* — Channel 3
+> is available today. Still prefer Channel 1 (the read-API) for anything it can answer.
 
 ## TL;DR — pick the channel by what you need
 
@@ -109,19 +116,23 @@ tool reaches these directly** (auto-HTTPS via the `ts.net` cert; tailnet members
 auth). This is how you read a prior session's findings report. Publishing pattern + serve
 config: networking doc §1.6.
 
-## 3. Channel 3 — Shell via SSH / Tailscale SSH (needs a one-time operator grant)
+## 3. Channel 3 — Shell via SSH / Tailscale SSH (operator grant IS IN PLACE — see §3.1)
 
 When you genuinely need a shell (sqlite3 on `activity_state.db`/`csi.db`, `journalctl -u
 universal-agent-*`, `systemctl status`, reading a unit file), use SSH over the tailnet.
+**As of 2026-06-06 the allow-rule exists, so this channel is live — just use it.**
 
-### 3.1 The blocker, precisely
+### 3.1 The grant (in place since 2026-06-06)
 
 - By default the harness **auto-mode classifier denies** `ssh ua@uaonvps`:
   *"no visible user authorization naming this prod/shared target."*
-- **An agent cannot grant itself the exception.** Editing `~/.claude/settings.json` to add
-  the allow-rule is itself blocked as *self-modification* ("the user asked for X, not
-  permission grants"). **Do not try to work around either denial.** The operator must add
-  the rule. (Both behaviours verified 2026-06-06.)
+- **The operator has since added the allow-rule** (`Bash(ssh ua@uaonvps:*)` +
+  `Bash(tailscale ssh ua@uaonvps:*)`, 2026-06-06), so an agent can SSH today. Invoke it with
+  **no leading flags** so the prefix matcher hits (see §3.2), plus `dangerouslyDisableSandbox`.
+- **An agent still cannot grant *itself* the exception** — editing `~/.claude/settings.json`
+  to add an allow-rule is blocked as *self-modification* ("the user asked for X, not
+  permission grants"). That principle is unchanged; it is simply no longer *pending* here,
+  because the operator already added this specific rule. Do not try to add new ones yourself.
 
 ### 3.2 The one-time operator action
 
@@ -183,5 +194,5 @@ Lesson: **the API channel is usually sufficient.** SSH would only have added raw
 - **Sandboxed Bash needs `dangerouslyDisableSandbox: true`** for any tailnet egress (curl/ssh) — this is the *sandbox* gate, separate from the *classifier* gate.
 - **System cron `job_id`s come back hashed** (e.g. `013f433539`); the real name is `metadata.system_job`. Map by that, not by id.
 - **`/api/v1/ops/*` = 401** without `UA_OPS_TOKEN`.
-- **Agents cannot self-grant SSH;** the operator adds the `permissions.allow` rule once (§3.2). Invoke SSH with no leading flags so the rule matches.
+- **Agents cannot self-grant SSH** (the principle) — but the operator **already added** the `permissions.allow` rule (2026-06-06), so SSH is live now (§3.1/§3.2). Invoke SSH with no leading flags so the rule matches.
 - **`uaonvps` requires MagicDNS;** off-tailnet it won't resolve (raw name `srv1360701`).
