@@ -1741,6 +1741,93 @@ def test_dashboard_csi_reliability_slo_flags_stale_when_evaluator_offline(client
     assert str(slo.get("target_day_utc") or "") == "2026-03-14"  # date-pinned-ok (illustrative fossil day)
 
 
+def _csi_delivery_health_canary_db(tmp_path, name: str):
+    """Create a minimal CSI DB with the real `source_state` DDL (source_key PK)."""
+    db_path = tmp_path / name
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(
+        """
+        CREATE TABLE source_state (
+            source_key TEXT PRIMARY KEY,
+            state_json TEXT NOT NULL,
+            updated_at TEXT
+        );
+        """
+    )
+    return db_path, conn
+
+
+def test_csi_delivery_health_summary_reads_source_key_column(tmp_path, monkeypatch):
+    """Regression: the summary queried the wrong column (`key`) so the canary row
+    was never found.  With the column fixed to `source_key` a fresh row must be
+    returned (not None) and served verbatim (not flagged stale)."""
+    db_path, conn = _csi_delivery_health_canary_db(tmp_path, "csi_dh_canary_ok.db")
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "INSERT INTO source_state (source_key, state_json, updated_at) VALUES (?, ?, ?)",
+            (
+                "delivery_health_canary",
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "last_checked_at": now,
+                        "failing_sources": [],
+                        "degraded_sources": [],
+                    }
+                ),
+                now,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setenv("CSI_DB_PATH", str(db_path))
+    result = gateway_server._csi_delivery_health_summary()
+    # Before the fix this was None (wrong column name => no row found).
+    assert result is not None, "expected the canary row to be found via source_key"
+    assert str(result.get("status") or "") == "ok"
+    assert result.get("stale") is False
+    assert result.get("failing_sources") == []
+    assert result.get("degraded_sources") == []
+
+
+def test_csi_delivery_health_summary_flags_stale_when_evaluator_offline(tmp_path, monkeypatch):
+    """The delivery-health canary writer was removed in the 2026-03 CSI redesign,
+    so any stored row is a fossil.  An old row must surface as `stale` with an
+    "evaluator offline" note rather than as a live `ok`/`failing` verdict."""
+    db_path, conn = _csi_delivery_health_canary_db(tmp_path, "csi_dh_canary_stale.db")
+    try:
+        old = (datetime.now(timezone.utc) - timedelta(days=84)).isoformat()
+        conn.execute(
+            "INSERT INTO source_state (source_key, state_json, updated_at) VALUES (?, ?, ?)",
+            (
+                "delivery_health_canary",
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "last_checked_at": old,
+                        "failing_sources": [],
+                        "degraded_sources": [],
+                    }
+                ),
+                old,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setenv("CSI_DB_PATH", str(db_path))
+    result = gateway_server._csi_delivery_health_summary()
+    assert result is not None
+    # The fossil `ok` verdict must be overridden with `stale`.
+    assert str(result.get("status") or "") == "stale"
+    assert result.get("stale") is True
+    assert "offline" in str(result.get("note") or "").lower()
+
+
 def test_dashboard_csi_reports_includes_opportunity_bundle_events(client, tmp_path, monkeypatch):
     db_path = tmp_path / "csi_opportunity_reports.db"
     conn = sqlite3.connect(str(db_path))
