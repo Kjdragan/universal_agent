@@ -205,7 +205,7 @@ These generate the work Atlas/Cody execute. Owners: [`04_intelligence/01_csi_arc
 | **CSI Vault intelligence pass** | canonical | Per-packet LLM VaultDelta extraction (Memex) | `services/csi_intelligence_pass.py::analyze_action` |
 | **Demo Triage** | canonical | Candidate store + ranker + pending→approve gate for tier-3 actions | `services/csi_demo_triage.py::approve_candidate` |
 | **Signal curator** | canonical | Promotes proactive signal cards to tasks | `services/signal_curator.py::should_run_curation` |
-| **Proactive task builder + gates** | canonical | The single chokepoint where proactive services create tasks (preference + budget gates) | `services/proactive_task_builder.py::queue_proactive_task` |
+| **Proactive task builder + gate** | canonical | The single chokepoint where proactive services create tasks; enforces the **preference gate** (`proactive_preferences.should_block_proactive_task`, fail-open). Note: there is no task-count "budget" gate here — the only convergence "budget" is a separate wall-clock LLM deadline (`proactive_convergence._convergence_budget_seconds`). | `services/proactive_task_builder.py::queue_proactive_task` |
 | **Intel auto-promoter** | canonical | Overnight score-gated automation of demo-triage approval | `services/intel_auto_promoter.py::promote_top_candidates` |
 | **YouTube Daily Digest (Pipeline A)** | canonical | Native playlist watcher → transcript → digest email | `scripts/youtube_daily_digest.py::process_daily_digest` |
 | **YouTube CSI channel-RSS (Pipeline B)** | canonical | RSS events → proactive cards + convergence source | `proactive_signals.py::generate_youtube_cards` |
