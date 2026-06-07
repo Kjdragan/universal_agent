@@ -1,0 +1,82 @@
+name: Deslop Advisory
+
+# ADVISORY, report-only deslop reviewer. Runs on PRs to main, but ONLY for
+# autonomous-author branches (claude/*, codie/*) — the ones that produce
+# AI-generated slop worth flagging. It feeds the merge-base diff to an LLM
+# running the `technical-deslop` rubric (via the ZAI proxy / GLM models, same
+# Infisical-injected ANTHROPIC_*->ZAI mapping the UA services use) and posts a
+# friendly comment with behavior-preserving suggestions.
+#
+# This is a NEW, NON-REQUIRED workflow. Every LLM/network step is
+# continue-on-error and the comment step trails `|| true`, so it can NEVER
+# block or fail a PR or auto-merge. It only ever comments.
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  # One advisory run per PR; cancel in-flight runs when a new commit lands.
+  group: deslop-advisory-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  advisory:
+    name: Deslop advisory (report-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    # Gate: only run for autonomous-author branches (claude/*, codie/*). Human
+    # branches are skipped — this advisory targets AI-generated slop.
+    if: ${{ startsWith(github.head_ref, 'claude/') || startsWith(github.head_ref, 'codie/') }}
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v6
+        with:
+          # Sized for "diff against base branch only" — the merge-base lookup
+          # below re-fetches the base ref at the same depth.
+          fetch-depth: 50
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install project deps
+        run: uv sync --frozen --python 3.12 --no-install-package manim --no-install-package pycairo --no-install-package manimpango
+
+      - name: Compute merge-base diff
+        run: |
+          BASE_REF="${{ github.base_ref }}"
+          # Match the checkout fetch-depth (50) so the triple-dot diff's
+          # merge-base lookup succeeds even when the PR diverged a few dozen
+          # commits back.
+          git fetch origin "$BASE_REF" --depth=50
+          git diff "origin/$BASE_REF...HEAD" > /tmp/pr.diff || true
+          echo "Diff bytes: $(wc -c < /tmp/pr.diff)"
+
+      - name: ZAI-backed deslop advisory (report-only)
+        id: advisory
+        continue-on-error: true
+        env:
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_PROJECT_ID }}
+          INFISICAL_ENVIRONMENT: development
+          UA_RUNTIME_STAGE: development
+          UA_INFISICAL_ENABLED: '1'
+        run: uv run --no-sync python scripts/deslop_advisory.py --diff /tmp/pr.diff > /tmp/deslop_comment.md
+
+      - name: Post advisory comment
+        continue-on-error: true
+        env:
+          # Default GITHUB_TOKEN — the AUTO_MERGE_PAT cannot add PR comments.
+          # This workflow grants pull-requests: write so GITHUB_TOKEN can comment.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/deslop_comment.md || true
