@@ -294,13 +294,21 @@ monitors its JSON stream. Key behaviors:
 
 ### Demo workspaces — `services/cody_implementation`
 
+> 🔴 **2026-06-07 UPDATE — demos run on ZAI now.** Anthropic began API-billing
+> the Claude-Code-via-Max SDK path. `run_in_workspace`'s `scrub_env` default
+> flipped `True` → `False`, so demos inherit the daemon's ZAI routing env
+> instead of falling through to the Max-plan OAuth session. Demo
+> `endpoint_required` defaults to `zai`/`any`. The scrub is still available
+> (`scrub_env=True`) for a demo explicitly pinned to real Anthropic. The
+> paragraph below describes the pre-flip behavior.
+
 Demo missions in `/opt/ua_demos/<id>/` add a second layer of Anthropic defense:
 `_scrubbed_env()` returns `os.environ` minus every `ANTHROPIC_*` key
-(`LEAKY_ANTHROPIC_ENV_PREFIX = "ANTHROPIC_"`), applied **unconditionally** when
-`scrub_env=True`. This is the same namespace-strip pattern as the interactive
-launcher and `_build_cli_env`, so any newly-added `ANTHROPIC_*` var is scrubbed
-without a code change. Demo scaffolds also ship a vanilla `.claude/settings.json`
-as belt-and-suspenders.
+(`LEAKY_ANTHROPIC_ENV_PREFIX = "ANTHROPIC_"`), applied when `scrub_env=True`
+(no longer the default as of 2026-06-07). This is the same namespace-strip
+pattern as the interactive launcher and `_build_cli_env`, so any newly-added
+`ANTHROPIC_*` var is scrubbed without a code change. Demo scaffolds also ship a
+vanilla `.claude/settings.json`.
 
 What environment a demo lands in is determined entirely by **which directory you
 `cd` into** before invoking `claude`, plus whether any `ANTHROPIC_*` leaked from

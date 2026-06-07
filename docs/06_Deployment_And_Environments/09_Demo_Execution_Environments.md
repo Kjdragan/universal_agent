@@ -1,5 +1,17 @@
 # Demo Execution Environments
 
+> 🔴 **2026-06-07 UPDATE — demos now run on ZAI, not real Anthropic.**
+> Anthropic began API-billing the Claude-Code-via-Max SDK path, so the whole
+> project (Cody missions AND demos) was flipped to the ZAI proxy.
+> `run_in_workspace` no longer scrubs `ANTHROPIC_*` by default
+> (`scrub_env=False`), so a demo's `claude` inherits the daemon's ZAI routing
+> env; demo `endpoint_required` defaults to `zai`/`any`. The "two separate
+> Claude environments" framing below is now historical — there is effectively
+> one autonomous environment (ZAI). A demo can still opt into real Anthropic
+> per-task (`cody_mode="anthropic"` / `endpoint_required: anthropic_native` +
+> `scrub_env=True`), but that is no longer the default. See
+> `services/cody_mode.py` and `services/cody_implementation.py:run_in_workspace`.
+>
 > ⚠️ **READ THIS BEFORE TOUCHING ANYTHING CLAUDE-RELATED ON THE VPS** ⚠️
 >
 > Universal Agent runs **TWO separate Claude environments** on the same VPS at the same time.

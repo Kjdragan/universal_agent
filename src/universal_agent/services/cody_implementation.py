@@ -7,21 +7,22 @@ deterministic parts:
   - Verify the workspace is ready (BRIEF/ACCEPTANCE/business_relevance present,
     .claude/settings.json vanilla)
   - Load the briefing artifacts as structured data
-  - Run a command from inside the workspace with proper env scrubbing
-    (no ANTHROPIC_AUTH_TOKEN leak from parent shell)
+  - Run a command from inside the workspace (so `uv run` finds the
+    workspace's `pyproject.toml`); env is inherited by default
   - Capture stdout/stderr/timing
-  - Detect which Anthropic endpoint actually served the request
+  - Detect which endpoint actually served the request
   - Write the result manifest, BUILD_NOTES, run_output
 
 The actual "build a Claude Code demo" creative work is conversational —
 Cody reads her own SKILL.md and these helpers do the boring parts that
 need to be deterministic so Simone (Phase 4) can verify reproducibility.
 
-Per the v2 design (§8.4), Cody MUST invoke `claude` from inside the
-workspace dir so project-local `.claude/settings.json` (vanilla) takes
-precedence over the polluted user-global one. The `run_in_workspace`
-helper enforces this by `cd`'ing before subprocess and scrubbing the
-problematic env vars.
+Cody invokes `claude` from inside the workspace dir so project-local
+`.claude/settings.json` is in scope. As of 2026-06-07 demos route through
+the ZAI proxy like the rest of the daemon: `run_in_workspace` no longer
+scrubs ANTHROPIC_* by default, so the subprocess inherits the daemon's
+ZAI routing env (Anthropic-now-API-bills the Max SDK path). Pass
+`scrub_env=True` explicitly only for a demo that must hit real Anthropic.
 
 See docs/proactive_signals/claudedevs_intel_v2_design.md §8.
 See docs/06_Deployment_And_Environments/09_Demo_Execution_Environments.md
@@ -44,16 +45,18 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 
-# Any env var starting with ANTHROPIC_ MUST be unset before invoking `claude`
-# from a demo workspace. The original list was the 5 ZAI routing vars
-# (BASE_URL/AUTH_TOKEN/three model names), but UA Python services that spawn
-# Cody (and therefore become the parent shell of the demo subprocess) also
-# carry ANTHROPIC_API_KEY in their env from Infisical. If that key reaches
-# the demo's `claude` subprocess, Claude Code treats it as an "external API
-# key" overriding OAuth and yields `Invalid API key · Fix external API key`
-# when the staged key isn't for the same Anthropic Max account. Same root
-# cause as the 2026-05-08 interactive launcher fix; same prefix-based
-# resolution. Canonical reference:
+# Prefix of every ANTHROPIC_* env var. `_scrubbed_env()` strips this whole
+# namespace when `run_in_workspace(scrub_env=True)` is requested.
+#
+# History: scrubbing used to be the DEFAULT, to keep a demo's `claude` off
+# the daemon's env and on the Max-plan OAuth session (real Anthropic). It
+# also dodged a failure mode where a stale ANTHROPIC_API_KEY from a
+# different Max account reached the subprocess and yielded
+# `Invalid API key · Fix external API key`. As of 2026-06-07 the default is
+# OFF: demos route through ZAI (the daemon's ANTHROPIC_BASE_URL points at the
+# ZAI proxy and ANTHROPIC_AUTH_TOKEN holds the ZAI key — coherent, no
+# external-key error). Scrubbing remains available for the rare demo that
+# must hit real Anthropic. Canonical reference:
 # docs/06_Deployment_And_Environments/10_Interactive_Coding_Environment.md.
 LEAKY_ANTHROPIC_ENV_PREFIX = "ANTHROPIC_"
 
@@ -433,20 +436,25 @@ def run_in_workspace(
     command: list[str] | tuple[str, ...],
     *,
     timeout: int = 300,
-    scrub_env: bool = True,
+    scrub_env: bool = False,
     assignment_id: Optional[str] = None,
     task_id: Optional[str] = None,
 ) -> RunResult:
     """Run a command from inside the workspace dir with optional env scrubbing.
 
-    Cody invokes this whenever she needs to run `claude` (so the
-    project-local vanilla `.claude/settings.json` overrides the polluted
-    user-global one) OR when she needs to run her demo Python script (so
-    `uv run` finds the workspace's `pyproject.toml`).
+    Cody invokes this whenever she needs to run `claude` OR her demo Python
+    script (so `uv run` finds the workspace's `pyproject.toml`).
 
-    `scrub_env=True` removes any ANTHROPIC_* env var that would override
-    the project-local settings. Default ON because the production VPS
-    shell typically has them set.
+    `scrub_env=True` removes any ANTHROPIC_* env var from the subprocess.
+
+    Default is now OFF (2026-06-07). Historically it was ON so that a demo's
+    `claude` fell through to the Max-plan OAuth session (real Anthropic).
+    Anthropic now API-bills that SDK path, so demos route through ZAI/GLM
+    like the rest of the daemon: NOT scrubbing lets the subprocess inherit
+    the daemon's Infisical-injected `ANTHROPIC_BASE_URL` (ZAI proxy) +
+    `ANTHROPIC_AUTH_TOKEN` (ZAI key) + model-map vars, which take precedence
+    over any settings file and route `claude` to ZAI. Pass `scrub_env=True`
+    explicitly only for a demo that genuinely must hit real Anthropic.
 
     Hermes Phase F.1 site-wiring — the returned ``RunResult`` carries an
     ``exit_classification`` (a :class:`WorkerExit`) so the caller can
@@ -734,7 +742,10 @@ def read_manifest(workspace_dir: Path) -> DemoManifest | None:
     return DemoManifest(
         demo_id=str(payload.get("demo_id") or ""),
         feature=str(payload.get("feature") or ""),
-        endpoint_required=str(payload.get("endpoint_required") or "anthropic_native"),
+        # Legacy manifests that omit endpoint_required default to "any" (no
+        # constraint) rather than forcing Anthropic — demos run on ZAI as of
+        # 2026-06-07, so an old/missing value must not false-reject a ZAI run.
+        endpoint_required=str(payload.get("endpoint_required") or "any"),
         endpoint_hit=str(payload.get("endpoint_hit") or ""),
         model_used=str(payload.get("model_used") or ""),
         claude_code_version=str(payload.get("claude_code_version") or ""),

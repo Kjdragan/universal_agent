@@ -61,8 +61,14 @@ class VaultEntity:
 
     @property
     def endpoint_required(self) -> str:
-        """Return the required endpoint, defaulting to 'anthropic_native'."""
-        return str(self.frontmatter.get("endpoint_required") or "anthropic_native").strip()
+        """Return the required endpoint, defaulting to 'zai'.
+
+        Default flipped 'anthropic_native' → 'zai' on 2026-06-07: demos now
+        route through the ZAI proxy (Anthropic API-bills the Max SDK path).
+        An entity may still set endpoint_required: anthropic_native in its
+        frontmatter for a demo that genuinely must hit real Anthropic.
+        """
+        return str(self.frontmatter.get("endpoint_required") or "zai").strip()
 
     @property
     def business_relevance(self) -> str:
@@ -323,7 +329,7 @@ _Simone: fill in the requirements. Cody MUST satisfy every numbered requirement.
 2. _(Simone: one concrete API/CLI surface the demo MUST use, named explicitly)_
 3. The demo MUST run end-to-end via `uv run python <entry>.py` (or equivalent runner).
 4. The demo's stdout MUST contain a recognizable success token (specify exact string).
-5. `manifest.json.endpoint_hit` MUST resolve to `api.anthropic.com` for endpoint_required={entity.endpoint_required}.
+5. `manifest.json.endpoint_hit` MUST match endpoint_required={entity.endpoint_required} (the ZAI proxy `api.z.ai` for `zai`/`any`; `api.anthropic.com` only for `anthropic_native`).
 
 ## Anti-patterns
 

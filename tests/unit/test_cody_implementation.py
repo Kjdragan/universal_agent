@@ -241,13 +241,17 @@ def test_run_in_workspace_executes_and_captures_stdout(tmp_path: Path):
 
 
 def test_run_in_workspace_scrubs_leaky_anthropic_env(tmp_path: Path, monkeypatch):
-    """No ANTHROPIC_* var should leak into the subprocess by default.
+    """No ANTHROPIC_* var should leak into the subprocess when scrub_env=True.
 
     Covers the routing vars (BASE_URL/AUTH_TOKEN), the 2026-05-08-discovered
     ANTHROPIC_API_KEY (which Claude Code treats as an external API key
     overriding OAuth), and any future-added Anthropic env var (Vertex,
     Bedrock, etc.) — the scrub is prefix-based so new vars are caught
     automatically.
+
+    NB: scrub_env defaults to False as of 2026-06-07 (demos route through
+    ZAI by inheriting the daemon env); this test passes scrub_env=True
+    explicitly because it exercises the scrub *feature*, not the default.
     """
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "should_not_leak")
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://wrong.example/")
@@ -267,6 +271,7 @@ def test_run_in_workspace_scrubs_leaky_anthropic_env(tmp_path: Path, monkeypatch
             "print('VTX=' + os.environ.get('ANTHROPIC_VERTEX_PROJECT_ID', 'unset'))",
         ],
         timeout=15,
+        scrub_env=True,
     )
     assert "TOKEN=unset" in result.stdout
     assert "URL=unset" in result.stdout

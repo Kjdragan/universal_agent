@@ -115,7 +115,7 @@ def monitor_demo_tasks(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                 "entity_slug": metadata.get("entity_slug"),
                 "workspace_dir": workspace_dir,
                 "iteration": int(metadata.get("iteration") or 1),
-                "endpoint_required": metadata.get("endpoint_required") or "anthropic_native",
+                "endpoint_required": metadata.get("endpoint_required") or "any",
                 "queue_policy": metadata.get("queue_policy") or "wait_indefinitely",
                 "created_at": hydrated.get("created_at"),
                 "updated_at": hydrated.get("updated_at"),
@@ -303,7 +303,10 @@ def evaluate_demo(
                 workspace_dir,
                 list(rerun_command),
                 timeout=rerun_timeout,
-                scrub_env=True,
+                # Inherit the daemon's ZAI env so the verification rerun hits
+                # the same endpoint the demo now targets (ZAI). Scrubbing here
+                # would force the rerun onto real Anthropic and mismatch.
+                scrub_env=False,
             )
             rerun_dict = rerun_result.to_dict()
             # If the rerun output reveals ZAI hints, add a soft signal
@@ -423,10 +426,10 @@ def finalize_direct_demo(
 
     # Authoritative endpoint check: compare the manifest's endpoint_hit against
     # the TASK's declared endpoint_required (set per cody_mode by the dispatcher),
-    # NOT the manifest's self-declared endpoint_required — Cody's CLI build often
-    # omits it, so read_manifest would default it to 'anthropic_native' and a
-    # legitimate ZAI demo would spuriously mismatch.
-    required = canonicalize_endpoint(str(meta.get("endpoint_required") or "anthropic_native"))
+    # NOT the manifest's self-declared endpoint_required. A task that omits the
+    # field defaults to "any" (no constraint) so a legitimate ZAI demo — the
+    # default since 2026-06-07 — is never spuriously mismatched.
+    required = canonicalize_endpoint(str(meta.get("endpoint_required") or "any"))
     manifest = read_manifest(workspace_dir)
     hit = canonicalize_endpoint(manifest.endpoint_hit) if manifest else ""
     endpoint_ok = bool(

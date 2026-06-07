@@ -50,7 +50,7 @@ def dispatch_cody_demo_task(
     entity_path: Path,
     demo_id: str,
     title: str | None = None,
-    endpoint_required: str = "anthropic_native",
+    endpoint_required: str = "zai",
     wall_time_max_minutes: int = DEFAULT_WALL_TIME_MAX_MINUTES,
     iteration: int = 1,
     review_required: bool = True,
@@ -169,7 +169,7 @@ def reissue_cody_demo_task_with_feedback(
     feedback_path: Path,
     iteration: int,
     title: str | None = None,
-    endpoint_required: str = "anthropic_native",
+    endpoint_required: str = "zai",
 ) -> dict[str, Any]:
     """Re-queue a Cody demo task after Simone wrote FEEDBACK.md.
 
