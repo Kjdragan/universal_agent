@@ -421,6 +421,7 @@ def _upsert_analysis(
     total_tokens: int,
     analysis_json: dict[str, Any],
     content_schema: str | None = None,
+    transcript_error: str | None = None,
 ) -> None:
     conn.execute(
         """
@@ -428,8 +429,8 @@ def _upsert_analysis(
             event_id, event_db_id, source, video_id, channel_id, channel_name, title,
             published_at, transcript_status, transcript_chars, transcript_ref,
             category, summary_text, model_name, prompt_tokens, completion_tokens,
-            total_tokens, analysis_json, content_schema, analyzed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            total_tokens, analysis_json, content_schema, transcript_error, analyzed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
         ON CONFLICT(event_id) DO UPDATE SET
             event_db_id=excluded.event_db_id,
             source=excluded.source,
@@ -449,6 +450,7 @@ def _upsert_analysis(
             total_tokens=excluded.total_tokens,
             analysis_json=excluded.analysis_json,
             content_schema=excluded.content_schema,
+            transcript_error=excluded.transcript_error,
             analyzed_at=datetime('now')
         """,
         (
@@ -471,9 +473,71 @@ def _upsert_analysis(
             max(0, int(total_tokens)),
             json.dumps(analysis_json, separators=(",", ":"), sort_keys=True),
             content_schema,
+            transcript_error,
         ),
     )
     conn.commit()
+
+
+def _extract_transcript_error_class(transcript_result: dict[str, Any]) -> str | None:
+    """Extract the most significant error class from transcript fetch result.
+
+    Classification priority:
+    1. If transcript_result is ok, return None (no error).
+    2. Check endpoint_attempts for the last (most recent) attempt:
+       - 'ip_block' if anti_bot_suspected is True
+       - 'http_401' / 'http_403' / 'http_429' for auth/rate-limit errors
+       - 'http_<status>' for any other HTTP error status >= 400
+       - 'timeout' if the error field contains 'timeout'
+       - 'request_exception' for network/socket errors
+       - 'http_error' for unclassified HTTP errors
+    3. Fall back to the 'error' field in the top-level transcript_result.
+
+    Returns: error class string (e.g. 'http_401', 'ip_block', 'timeout') or None if ok.
+    """
+    if transcript_result.get("ok"):
+        return None
+
+    # Try to extract from endpoint_attempts list (last attempt is most recent)
+    attempts = transcript_result.get("endpoint_attempts", [])
+    if attempts and isinstance(attempts, list):
+        last_attempt = attempts[-1]
+        if isinstance(last_attempt, dict):
+            if last_attempt.get("anti_bot_suspected"):
+                return "ip_block"
+            http_status = int(last_attempt.get("http_status") or 0)
+            if http_status == 401:
+                return "http_401"
+            elif http_status == 403:
+                return "http_403"
+            elif http_status == 429:
+                return "http_429"
+            elif http_status >= 500:
+                return f"http_{http_status}"
+            elif http_status >= 400:
+                return f"http_{http_status}"
+            error = str(last_attempt.get("error") or "").strip().lower()
+            if "timeout" in error:
+                return "timeout"
+            elif error == "request_exception":
+                return "request_exception"
+            elif error == "http_error":
+                return "http_error"
+
+    # Fall back to top-level error field
+    error = str(transcript_result.get("error") or "").strip().lower()
+    if "timeout" in error:
+        return "timeout"
+    elif error == "request_exception":
+        return "request_exception"
+    elif error == "http_error":
+        return "http_error"
+    elif error == "no_endpoints_configured":
+        return "no_endpoints"
+    elif error:
+        return error
+
+    return "unknown"
 
 
 def main() -> int:
@@ -623,6 +687,9 @@ def main() -> int:
         transcript_text = str(transcript_result.get("transcript_text") or "")
         transcript_chars = int(transcript_result.get("transcript_chars") or len(transcript_text))
         transcript_status = "ok" if bool(transcript_result.get("ok")) and transcript_text else "failed"
+        transcript_error = (
+            _extract_transcript_error_class(transcript_result) if transcript_status == "failed" else None
+        )
         endpoint_used = str(transcript_result.get("_endpoint") or "").strip()
         source_or_error = str(transcript_result.get("source") or transcript_result.get("error") or "").strip()
         endpoint_host = ""
@@ -755,6 +822,7 @@ def main() -> int:
             total_tokens=total_tokens,
             analysis_json=analysis_json,
             content_schema=content_schema_json,
+            transcript_error=transcript_error,
         )
 
         # ── Post-enrichment: trigger watchlist re-classification if transcript arrived ──
