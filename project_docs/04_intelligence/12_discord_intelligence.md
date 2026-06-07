@@ -9,7 +9,7 @@ code_paths:
   - "discord_intelligence/ua-discord-intelligence.service"
   - "src/universal_agent/api/routers/csi_discord_watchlist.py"
   - src/universal_agent/gateway_server.py
-last_verified: 2026-05-29
+last_verified: 2026-06-07
 ---
 
 # Discord Intelligence

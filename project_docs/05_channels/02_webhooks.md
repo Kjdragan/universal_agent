@@ -7,7 +7,7 @@ code_paths:
   - src/universal_agent/gateway_server.py
   - src/universal_agent/hooks_service.py
   - src/universal_agent/signals_ingest.py
-last_verified: 2026-05-29
+last_verified: 2026-06-07
 ---
 
 # Webhook Architecture
