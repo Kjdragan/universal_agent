@@ -275,6 +275,11 @@ type CompletedTaskItem = {
   completed_at?: string;
   source_kind?: string;
   source_ref?: string;
+  // Cron per-run cards (source_kind='cron_run'): the perpetual cron:<job> task
+  // recycles, so each finished run is surfaced as its own card keyed by run_id.
+  // run_id distinguishes cards that share the parent cron:<job> task_id.
+  run_id?: string;
+  run_outcome?: string; // completed | failed | timed_out | crashed | gave_up | ...
   last_assignment?: {
     assignment_id?: string;
     agent_id?: string;
@@ -1158,11 +1163,29 @@ export default function ToDoListDashboardPage() {
 
   // ── Sub-renders ───────────────────────────────────────────────────────────────
 
+  // Title↔description swap for cards whose title is just a generic label.
+  // Cron rows arrive titled "Cron: hourly_intel_digest" with the actually-useful
+  // human description ("Deterministic hourly intel-digest delivery…") relegated
+  // to the subtitle. For these we promote the description to the heading and
+  // demote the label to the subtitle so the board is scannable at a glance.
+  // Cards whose title is already meaningful (agent missions, convergence
+  // candidates, etc.) are left untouched — we only swap "where it helps".
+  const cardTitleParts = (title?: string, description?: string | null, sourceKind?: string) => {
+    const t = String(title || "");
+    const d = description == null ? "" : String(description);
+    const isGenericLabel = sourceKind === "cron_run" || /^Cron:\s/.test(t);
+    if (isGenericLabel && d.trim()) {
+      return { heading: d, sub: t, swapped: true };
+    }
+    return { heading: t, sub: d, swapped: false };
+  };
+
   const renderTaskCard = (item: AgentQueueItem, idx: number, showActions = true, onDelete?: (id: string) => void) => {
     const isExpanded = expandedTaskId === item.task_id;
     const isPending = actionPendingTaskId === item.task_id;
     const pCls = priorityColorClass(item.priority);
     const boardLane = String(item.board_lane || "");
+    const { heading, sub, swapped } = cardTitleParts(item.title, item.description, item.source_kind);
     const isProcessing = boardLane === "in_progress";
     const isAgentStaging = item.status === "pending_review";
     const isHumanReview = item.status === "needs_review";
@@ -1341,20 +1364,20 @@ export default function ToDoListDashboardPage() {
                   source_kind is in GOAL_ELIGIBLE_SOURCE_KINDS like cody_demo_task). */}
               <GoalBadge active={Boolean(item.metadata?.use_goal_loop)} />
             </div>
-            <h3 className="text-[13px] font-semibold text-kcd-text leading-snug m-0">
+            <h3 className={`text-[13px] font-semibold text-kcd-text leading-snug m-0 ${swapped ? "line-clamp-2" : ""}`}>
               {(() => {
                 const href = taskSourceUrl(item.task_id, item.source_kind, item.url, item.source_ref);
                 if (href) {
                   const isExternal = href.startsWith("http");
                   return isExternal
-                    ? <a href={href} target="_blank" rel="noopener noreferrer" className="text-kcd-text no-underline hover:text-kcd-cyan transition-colors">{item.title}</a>
-                    : <Link href={href} className="text-kcd-text no-underline hover:text-kcd-cyan transition-colors">{item.title}</Link>;
+                    ? <a href={href} target="_blank" rel="noopener noreferrer" className="text-kcd-text no-underline hover:text-kcd-cyan transition-colors">{heading}</a>
+                    : <Link href={href} className="text-kcd-text no-underline hover:text-kcd-cyan transition-colors">{heading}</Link>;
                 }
-                return item.title;
+                return heading;
               })()}
             </h3>
-            {item.description && (
-              <p className="mt-1 text-[11px] text-kcd-text-muted leading-snug line-clamp-2">{item.description}</p>
+            {sub && (
+              <p className="mt-1 text-[11px] text-kcd-text-muted leading-snug line-clamp-2">{sub}</p>
             )}
             {/* Mission artifacts: lets the operator inspect the /goal-flow
                 progression (BRIEF → ACCEPTANCE → goal_condition → COMPLETION)
@@ -1550,11 +1573,11 @@ export default function ToDoListDashboardPage() {
               <div className={`font-mono text-[11px] font-bold ml-auto ${pCls}`}>{priorityText(item.priority)}</div>
             </div>
             <h3 className="text-base font-semibold text-kcd-text leading-snug mb-3">
-              {item.title}
+              {heading}
             </h3>
-            {item.description && (
+            {sub && (
               <div className="text-[13px] text-kcd-text-muted leading-relaxed whitespace-pre-wrap break-words max-h-[50vh] overflow-y-auto scrollbar-thin p-3 bg-black/20 rounded-md border border-white/5">
-                {item.description}
+                {sub}
               </div>
             )}
             <div className="mt-4 flex flex-wrap items-center gap-2 font-mono text-[11px] text-kcd-text-muted bg-white/5 p-2 rounded">
@@ -1720,33 +1743,42 @@ export default function ToDoListDashboardPage() {
   };
 
   const renderCompletedCard = (item: CompletedTaskItem) => {
-    const isExpanded = expandedTaskId === item.task_id;
+    // Cron per-run cards share the parent cron:<job> task_id, so identity for
+    // keying/expand must use run_id when present (else the same task_id would
+    // expand every run of that job at once).
+    const cardKey = item.run_id || item.task_id;
+    const isExpanded = expandedTaskId === cardKey;
     const pCls = priorityColorClass(item.priority);
+    const { heading, sub, swapped } = cardTitleParts(item.title, item.description, item.source_kind);
     return (
       <>
-      <article key={`completed-${item.task_id}`}
-        onClick={() => setExpandedTaskId(item.task_id)}
+      <article key={`completed-${cardKey}`}
+        onClick={() => setExpandedTaskId(cardKey)}
         className="group relative rounded-md p-3 transition-all duration-200 bg-kcd-surface-low border border-white/[0.15] hover:bg-kcd-surface-high/80 cursor-pointer">
+        {/* Per-run cron cards are read-only run records — deleting would hit the
+            parent cron:<job> row, so the trash affordance is suppressed for them. */}
+        {!item.run_id && (
         <button onClick={(e) => { e.stopPropagation(); void handleDeleteCompletedTask(item.task_id); }} title="Delete"
           className="absolute right-2 top-2 bg-transparent border-none cursor-pointer text-kcd-text-muted opacity-0 group-hover:opacity-70 hover:!opacity-100 hover:!text-kcd-red transition-all duration-150 p-0.5">
           <span className="material-symbols-outlined text-base">delete</span>
         </button>
+        )}
         <div className="flex items-start justify-between gap-2 pr-6">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-1.5 mb-1">{sourceKindPill(item.source_kind)}</div>
-            <h3 className="text-[13px] font-semibold text-kcd-text leading-snug m-0 break-words">
+            <h3 className={`text-[13px] font-semibold text-kcd-text leading-snug m-0 break-words ${swapped ? "line-clamp-2" : ""}`}>
               {(() => {
                 const href = item.links?.session_href || taskSourceUrl(item.task_id, item.source_kind, undefined, item.source_ref);
                 if (href) {
                   const isExternal = href.startsWith("http");
                   return isExternal
-                    ? <a href={href} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="text-kcd-text no-underline hover:text-kcd-cyan transition-colors">{item.title}</a>
-                    : <Link href={href} onClick={(e) => e.stopPropagation()} className="text-kcd-text no-underline hover:text-kcd-cyan transition-colors">{item.title}</Link>;
+                    ? <a href={href} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="text-kcd-text no-underline hover:text-kcd-cyan transition-colors">{heading}</a>
+                    : <Link href={href} onClick={(e) => e.stopPropagation()} className="text-kcd-text no-underline hover:text-kcd-cyan transition-colors">{heading}</Link>;
                 }
-                return item.title;
+                return heading;
               })()}
             </h3>
-            {item.description && <p className="mt-1 text-[11px] text-kcd-text-muted leading-snug line-clamp-2">{item.description}</p>}
+            {sub && <p className="mt-1 text-[11px] text-kcd-text-muted leading-snug line-clamp-2">{sub}</p>}
             {(() => {
               const raw = item.last_assignment?.result_summary || item.metadata?.dispatch?.last_disposition_reason || "";
               if (!raw) return null;
@@ -1865,11 +1897,11 @@ export default function ToDoListDashboardPage() {
               <div className={`font-mono text-[11px] font-bold ml-auto ${pCls}`}>{priorityText(item.priority)}</div>
             </div>
             <h3 className="text-base font-semibold text-kcd-text leading-snug mb-3">
-              {item.title}
+              {heading}
             </h3>
-            {item.description && (
+            {sub && (
               <div className="text-[13px] text-kcd-text-muted leading-relaxed whitespace-pre-wrap break-words max-h-[50vh] overflow-y-auto scrollbar-thin p-3 bg-black/20 rounded-md border border-white/5">
-                {item.description}
+                {sub}
               </div>
             )}
             <div className="mt-4 flex flex-wrap items-center gap-2 font-mono text-[11px] text-kcd-text-muted bg-white/5 p-2 rounded">

@@ -147,7 +147,8 @@ def test_completed_enrichment_prefers_cody_workspace_over_assignment(tmp_path: P
         captured["limit"] = limit
         return list(fake_rows)
 
-    with patch.object(gs.task_hub, "list_completed_tasks", _fake_list_completed):
+    with patch.object(gs.task_hub, "list_completed_tasks", _fake_list_completed), \
+         patch.object(gs.task_hub, "list_completed_cron_runs", lambda *_a, **_k: []):
         class _FakeConn:
             def close(self) -> None:
                 return None
@@ -203,7 +204,8 @@ def test_completed_enrichment_falls_through_for_non_delegated_tasks(tmp_path: Pa
     def _fake_list_completed(_conn: Any, *, limit: int = 80) -> list[dict[str, Any]]:
         return list(fake_rows)
 
-    with patch.object(gs.task_hub, "list_completed_tasks", _fake_list_completed):
+    with patch.object(gs.task_hub, "list_completed_tasks", _fake_list_completed), \
+         patch.object(gs.task_hub, "list_completed_cron_runs", lambda *_a, **_k: []):
         class _FakeConn:
             def close(self) -> None:
                 return None
@@ -261,7 +263,8 @@ def test_completed_enrichment_stamps_vp_mission_id_for_direct_missions(tmp_path:
     def _fake_list_completed(_conn: Any, *, limit: int = 80) -> list[dict[str, Any]]:
         return list(fake_rows)
 
-    with patch.object(gs.task_hub, "list_completed_tasks", _fake_list_completed):
+    with patch.object(gs.task_hub, "list_completed_tasks", _fake_list_completed), \
+         patch.object(gs.task_hub, "list_completed_cron_runs", lambda *_a, **_k: []):
         class _FakeConn:
             def close(self) -> None:
                 return None
