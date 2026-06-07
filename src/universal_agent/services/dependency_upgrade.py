@@ -6,13 +6,18 @@ upgrade to a single Anthropic-adjacent dep:
 
     1. Read pyproject.toml; back it up; edit the package's version pin.
     2. Run `uv sync` so the new version is installed.
-    3. Run BOTH smoke tests:
-         - ZAI smoke — verifies UA's normal ZAI-mapped operation still works.
-         - Anthropic-native smoke — verifies the Max plan demo path still works.
-    4. On either smoke fail: roll back pyproject.toml, restore venv,
+    3. Run the ZAI smoke — verifies UA's normal ZAI-mapped operation
+       still works after the bump.
+    4. On smoke fail: roll back pyproject.toml, restore venv,
        record an upgrade_failures entry, return UpgradeFailed.
-    5. On both pass: leave the bumped pyproject.toml + .venv in place,
+    5. On pass: leave the bumped pyproject.toml + .venv in place,
        return UpgradeApplied.
+
+    The Anthropic-native smoke (real Claude via the Max-plan OAuth demo
+    path) was RETIRED 2026-06-07: Anthropic began API-billing the
+    Claude-Code-via-Max SDK path, so there is no working real-Anthropic
+    SDK path left to verify — the autonomous fleet runs entirely on the
+    ZAI proxy. Only the ZAI smoke gates an upgrade now.
 
 This module deliberately performs **no git operations**. The change is
 left in the working tree for the operator to review, commit, and ship
@@ -23,10 +28,9 @@ not to push to feature/latest2 itself.
 The orchestration script `scripts/dependency_upgrade.py` wires this to
 the email path so Kevin gets notified either way.
 
-Per the dual-environment design (see
-docs/06_Deployment_And_Environments/09_Demo_Execution_Environments.md),
-both smokes must pass — an upgrade that breaks ZAI breaks UA, and an
-upgrade that breaks Anthropic-native breaks demos.
+The ZAI smoke must pass — an upgrade that breaks ZAI breaks UA. (The
+former Anthropic-native demo-path smoke was retired 2026-06-07; see the
+step list above.)
 
 See docs/proactive_signals/claudedevs_intel_v2_design.md §5.
 """
@@ -57,13 +61,6 @@ def _ua_repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
-def _smoke_workspace_path() -> Path:
-    """Where the Anthropic-native smoke lives. Overridable for tests."""
-    raw = str(os.getenv("UA_DEMOS_ROOT") or "").strip()
-    base = Path(raw).expanduser().resolve() if raw else Path("/opt/ua_demos")
-    return base / "_smoke"
-
-
 # Wall-time guards. Smokes are bounded so a hanging subprocess can't pin
 # the actuator forever.
 SYNC_TIMEOUT_SECONDS = 10 * 60   # `uv sync` can take a while on a cold cache
@@ -75,7 +72,7 @@ SMOKE_TIMEOUT_SECONDS = 5 * 60
 
 @dataclass(frozen=True)
 class SmokeResult:
-    """Outcome of one smoke test (ZAI or Anthropic-native)."""
+    """Outcome of the ZAI smoke test."""
 
     name: str
     ok: bool
@@ -107,7 +104,6 @@ class UpgradeOutcome:
     sync_ok: bool
     sync_stderr_excerpt: str
     zai_smoke: SmokeResult
-    anthropic_smoke: SmokeResult
     rolled_back: bool
     rollback_reason: str = ""
     started_at: str = ""
@@ -116,7 +112,7 @@ class UpgradeOutcome:
     @property
     def overall_ok(self) -> bool:
         """Return a short summary describing this upgrade."""
-        return self.sync_ok and self.zai_smoke.ok and self.anthropic_smoke.ok and not self.rolled_back
+        return self.sync_ok and self.zai_smoke.ok and not self.rolled_back
 
     def to_dict(self) -> dict[str, object]:
         """Return the JSON payload describing this upgrade."""
@@ -128,7 +124,6 @@ class UpgradeOutcome:
             "sync_ok": self.sync_ok,
             "sync_stderr_excerpt": self.sync_stderr_excerpt[:600],
             "zai_smoke": self.zai_smoke.to_dict(),
-            "anthropic_smoke": self.anthropic_smoke.to_dict(),
             "rolled_back": self.rolled_back,
             "rollback_reason": self.rollback_reason,
             "overall_ok": self.overall_ok,
@@ -336,48 +331,6 @@ def run_zai_smoke(*, repo_root: Path | None = None) -> SmokeResult:
     )
 
 
-def run_anthropic_native_smoke(*, smoke_dir: Path | None = None) -> SmokeResult:
-    """Run /opt/ua_demos/_smoke/smoke.py to verify the Max plan demo path.
-
-    This invokes the same CLI-driven smoke that the operator runs manually
-    after `claude /login`. Bumping `claude-code` or `claude-agent-sdk`
-    must not break this path or demos will silently start failing.
-    """
-    target = smoke_dir or _smoke_workspace_path()
-    if not target.exists():
-        return SmokeResult(
-            name="anthropic_native_smoke",
-            ok=False,
-            skipped_reason=f"smoke workspace missing at {target}; run provision_smoke_workspace first",
-        )
-    script = target / "smoke.py"
-    if not script.exists():
-        return SmokeResult(
-            name="anthropic_native_smoke",
-            ok=False,
-            skipped_reason=f"smoke.py missing at {script}",
-        )
-    if shutil.which("uv") is None:
-        return SmokeResult(
-            name="anthropic_native_smoke",
-            ok=False,
-            skipped_reason="uv binary not on PATH",
-        )
-
-    rc, stdout, stderr = _run(
-        ["uv", "run", "python", "smoke.py"],
-        cwd=target,
-        timeout=SMOKE_TIMEOUT_SECONDS,
-    )
-    return SmokeResult(
-        name="anthropic_native_smoke",
-        ok=(rc == 0),
-        return_code=rc,
-        stdout_excerpt=stdout.strip()[:600],
-        stderr_excerpt=stderr.strip()[:600],
-    )
-
-
 # ── Orchestration ───────────────────────────────────────────────────────────
 
 
@@ -386,10 +339,9 @@ def apply_upgrade(
     package: str,
     target_version: str,
     repo_root: Path | None = None,
-    smoke_dir: Path | None = None,
     backup_dir: Path | None = None,
 ) -> UpgradeOutcome:
-    """Edit pyproject → uv sync → run both smokes → rollback on any failure.
+    """Edit pyproject → uv sync → run the ZAI smoke → rollback on failure.
 
     Never raises on subprocess errors — every failure is captured in the
     UpgradeOutcome so the caller (typically the email integration) can
@@ -420,7 +372,6 @@ def apply_upgrade(
             sync_ok=False,
             sync_stderr_excerpt=sync_stderr,
             zai_smoke=SmokeResult(name="zai_smoke", ok=False, skipped_reason="uv sync failed"),
-            anthropic_smoke=SmokeResult(name="anthropic_native_smoke", ok=False, skipped_reason="uv sync failed"),
             rolled_back=bool(restored),
             rollback_reason="uv_sync_failed",
             started_at=started_at,
@@ -428,14 +379,8 @@ def apply_upgrade(
         )
 
     zai = run_zai_smoke(repo_root=repo)
-    anthropic = run_anthropic_native_smoke(smoke_dir=smoke_dir)
 
-    if not (zai.ok and anthropic.ok):
-        rollback_reason = (
-            "zai_smoke_failed" if not zai.ok and anthropic.ok
-            else "anthropic_smoke_failed" if not anthropic.ok and zai.ok
-            else "both_smokes_failed"
-        )
+    if not zai.ok:
         restored = restore_pyproject(pyproject, backups)
         # Re-sync to roll the venv back too. Best-effort; don't hide the smoke
         # failure if rollback sync also fails.
@@ -449,9 +394,8 @@ def apply_upgrade(
             sync_ok=True,
             sync_stderr_excerpt=sync_stderr,
             zai_smoke=zai,
-            anthropic_smoke=anthropic,
             rolled_back=bool(restored),
-            rollback_reason=rollback_reason,
+            rollback_reason="zai_smoke_failed",
             started_at=started_at,
             finished_at=datetime.now(timezone.utc).isoformat(),
         )
@@ -464,7 +408,6 @@ def apply_upgrade(
         sync_ok=True,
         sync_stderr_excerpt=sync_stderr,
         zai_smoke=zai,
-        anthropic_smoke=anthropic,
         rolled_back=False,
         started_at=started_at,
         finished_at=datetime.now(timezone.utc).isoformat(),
@@ -492,8 +435,7 @@ def build_upgrade_email(outcome: UpgradeOutcome) -> tuple[str, str, str]:
         f"Done:    {outcome.finished_at}",
         "",
         "Smoke results:",
-        f"  • ZAI smoke (UA's normal path):       {'PASS' if outcome.zai_smoke.ok else 'FAIL'}",
-        f"  • Anthropic-native smoke (demo path): {'PASS' if outcome.anthropic_smoke.ok else 'FAIL'}",
+        f"  • ZAI smoke (UA's normal path): {'PASS' if outcome.zai_smoke.ok else 'FAIL'}",
         "",
     ]
     if outcome.rolled_back:
@@ -502,7 +444,7 @@ def build_upgrade_email(outcome: UpgradeOutcome) -> tuple[str, str, str]:
             "",
             "What broke:",
         ])
-        for smoke in (outcome.zai_smoke, outcome.anthropic_smoke):
+        for smoke in (outcome.zai_smoke,):
             if not smoke.ok:
                 text_parts.extend([
                     f"  [{smoke.name}]",
@@ -514,7 +456,7 @@ def build_upgrade_email(outcome: UpgradeOutcome) -> tuple[str, str, str]:
         text_parts.append("")
     else:
         text_parts.extend([
-            "Both smokes passed. The bump is in your working tree on feature/latest2 and",
+            "ZAI smoke passed. The bump is in your working tree on feature/latest2 and",
             "ready for /ship. Diff below for review:",
             "",
             outcome.diff or "(no diff — version already at target)",
@@ -542,7 +484,7 @@ def write_upgrade_failure_record(
     from universal_agent.services.dependency_currency import record_upgrade_failure
 
     error_summary_lines: list[str] = []
-    for smoke in (outcome.zai_smoke, outcome.anthropic_smoke):
+    for smoke in (outcome.zai_smoke,):
         if smoke.ok:
             continue
         error_summary_lines.append(f"[{smoke.name}] rc={smoke.return_code} reason={smoke.skipped_reason}")

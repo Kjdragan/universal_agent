@@ -152,7 +152,6 @@ def auto_apply_release_triggers(
     triggers: Iterable[ReleaseTrigger],
     *,
     repo_root: Path | None = None,
-    smoke_dir: Path | None = None,
     backup_dir: Path | None = None,
     enabled: bool | None = None,
 ) -> list[AutoUpgradeResult]:
@@ -177,7 +176,6 @@ def auto_apply_release_triggers(
                 package=trigger.package,
                 target_version=trigger.version,
                 repo_root=repo_root,
-                smoke_dir=smoke_dir,
                 backup_dir=backup_dir,
             )
             results.append(AutoUpgradeResult(trigger=trigger, outcome=outcome))
