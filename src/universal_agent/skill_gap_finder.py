@@ -23,6 +23,8 @@ Usage:
     python -m universal_agent.skill_gap_finder --dry-run --window-days 7   # count/size only, no creds
     python -m universal_agent.skill_gap_finder --window-days 7              # report to stdout/summary
     python -m universal_agent.skill_gap_finder --window-days 7 --open-issue # + one deduped GH issue
+    python -m universal_agent.skill_gap_finder --window-days 7 --email      # + email the report (AgentMail)
+    python -m universal_agent.skill_gap_finder --window-days 7 --open-issue --email  # Both: GH issue AND email
 """
 from __future__ import annotations
 
@@ -464,6 +466,73 @@ def _open_issue(report: str, n_candidates: int) -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# Email delivery (parallel to --open-issue; mirrors scripts/hourly_insight_email.py).
+# ──────────────────────────────────────────────────────────────────────────
+def _email_recipient() -> str:
+    """Resolve the report recipient: env override else the reliable gmail default.
+
+    Defaults to the GMAIL address (not the outlook one) on purpose: per
+    MEMORY.md / the hourly_insight_email precedent, the operator's outlook
+    inbox is quarantine-prone, so gmail is the dependable proactive channel.
+    """
+    return (os.getenv("UA_SKILL_GAP_EMAIL_RECIPIENT") or "kevinjdragan@gmail.com").strip()
+
+
+def _send_email(report: str, n_candidates: int) -> None:
+    """Email the skill-gap report via AgentMail (one message to the operator).
+
+    Best-effort and advisory: this runs inside a weekly cron that MUST exit 0,
+    so any failure (no creds, AgentMail down, send error) only prints a
+    ``::warning::`` and returns — it never raises. Mirrors the send block in
+    ``scripts/hourly_insight_email.py`` including the ``_started`` log-dump
+    fallback when AgentMail cannot start.
+    """
+    # Defense-in-depth: re-redact even though _build_report() already scrubs, so
+    # the email body is safe regardless of how `report` was produced.
+    report = _redact(report)
+    subject = f"{ISSUE_TITLE_PREFIX}: {n_candidates} candidate(s)"
+    try:
+        # Lazy imports (consistent with the finder's lazy-import style): keep the
+        # module importable with only stdlib present and the --dry-run path light.
+        import asyncio
+
+        from universal_agent.services.agentmail_service import AgentMailService
+        from universal_agent.services.email_tags import ActionTag, KindTag
+
+        async def _run() -> None:
+            mail = AgentMailService()
+            await mail.startup()
+            try:
+                if not getattr(mail, "_started", False):
+                    print("::warning::AgentMail failed to start — falling back to log dump.")
+                    print(f"Subject: {subject}")
+                    print(f"Text:\n{report}")
+                    return
+                result = await mail.send_email(
+                    to=_email_recipient(),
+                    subject=subject,
+                    text=report,
+                    html=None,
+                    force_send=True,
+                    require_approval=False,
+                    action=ActionTag.FYI,
+                    kind=KindTag.PROACTIVE,
+                    source="skill_gap_finder cron",
+                )
+                print(f"\nEmailed skill-gap report ({(result or {}).get('status') or 'ok'}).")
+            finally:
+                try:
+                    await mail.shutdown()
+                except Exception:  # noqa: BLE001
+                    pass
+
+        asyncio.run(_run())
+    except Exception as exc:  # noqa: BLE001
+        print(f"::warning::Could not email skill-gap report: {type(exc).__name__}: {exc}")
+        return
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # CLI entrypoint.
 # ──────────────────────────────────────────────────────────────────────────
 def main(argv: list[str] | None = None) -> int:
@@ -474,6 +543,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="override model (default resolve_sonnet -> glm-5-turbo)")
     ap.add_argument("--open-issue", action="store_true",
                     help="open ONE deduped GH issue labeled skill-gap")
+    ap.add_argument("--email", action="store_true",
+                    help="email the report via AgentMail (one message to the operator)")
     ap.add_argument("--dry-run", action="store_true",
                     help="print transcript count + corpus size only; no LLM/secrets")
     args = ap.parse_args(argv)
@@ -530,8 +601,12 @@ def main(argv: list[str] | None = None) -> int:
         except OSError as exc:
             print(f"[warn] could not write GITHUB_STEP_SUMMARY: {exc}", file=sys.stderr)
 
+    # --open-issue and --email are fully independent: passing both does BOTH
+    # (GH issue AND email); neither is gated on the other.
     if candidates and args.open_issue:
         _open_issue(report, len(candidates))
+    if candidates and args.email:
+        _send_email(report, len(candidates))
 
     return 0  # informational — candidates are advisory, never a build failure
 

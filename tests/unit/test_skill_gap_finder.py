@@ -261,3 +261,173 @@ def test_dry_run_does_not_import_anthropic(transcripts_dir: Path, monkeypatch) -
     monkeypatch.setattr(builtins, "__import__", _guard)
     monkeypatch.setenv("UA_CLAUDE_PROJECTS_DIR", str(transcripts_dir))
     assert sgf.main(["--dry-run", "--window-days", "7"]) == 0
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# --email delivery: mirrors --open-issue (best-effort, never raises). The
+# AgentMailService is fully mocked so no network/creds are required.
+# ──────────────────────────────────────────────────────────────────────────
+class _FakeMail:
+    """Stand-in for AgentMailService: records the send_email kwargs.
+
+    ``_started`` mirrors the real service's readiness flag; the finder's send
+    block log-dumps (and skips send) when it is falsy.
+    """
+
+    instances: list["_FakeMail"] = []
+
+    def __init__(self, started: bool = True, raise_on_send: bool = False):
+        self._started = started
+        self._raise_on_send = raise_on_send
+        self.sent: list[dict] = []
+        self.shutdown_called = False
+        _FakeMail.instances.append(self)
+
+    async def startup(self) -> None:
+        return None
+
+    async def send_email(self, **kwargs):
+        if self._raise_on_send:
+            raise RuntimeError("simulated send failure")
+        self.sent.append(kwargs)
+        return {"status": "sent"}
+
+    async def shutdown(self) -> None:
+        self.shutdown_called = True
+
+
+def _install_fake_mail(monkeypatch, *, started: bool = True, raise_on_send: bool = False):
+    """Patch AgentMailService + email_tags so _send_email needs no real deps."""
+    import sys
+    import types
+
+    _FakeMail.instances = []
+
+    def _factory():
+        return _FakeMail(started=started, raise_on_send=raise_on_send)
+
+    svc_mod = types.ModuleType("universal_agent.services.agentmail_service")
+    svc_mod.AgentMailService = _factory  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "universal_agent.services.agentmail_service", svc_mod)
+
+    tags_mod = types.ModuleType("universal_agent.services.email_tags")
+
+    class _ActionTag:
+        FYI = "FYI"
+
+    class _KindTag:
+        PROACTIVE = "PROACTIVE"
+
+    tags_mod.ActionTag = _ActionTag  # type: ignore[attr-defined]
+    tags_mod.KindTag = _KindTag  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "universal_agent.services.email_tags", tags_mod)
+
+
+def test_send_email_uses_mocked_service_with_redacted_body(monkeypatch, capsys) -> None:
+    _install_fake_mail(monkeypatch)
+    monkeypatch.delenv("UA_SKILL_GAP_EMAIL_RECIPIENT", raising=False)
+
+    report = "# report\nkey=sk-ant-api03-abcDEF123456_secret-key-value-7890\n"
+    sgf._send_email(report, 3)
+
+    assert len(_FakeMail.instances) == 1
+    mail = _FakeMail.instances[0]
+    assert len(mail.sent) == 1, "send_email should have been called exactly once"
+    kw = mail.sent[0]
+    # Default recipient is the reliable gmail address, not outlook.
+    assert kw["to"] == "kevinjdragan@gmail.com"
+    assert kw["subject"] == f"{sgf.ISSUE_TITLE_PREFIX}: 3 candidate(s)"
+    # Body is the REDACTED report — the raw secret must never be sent.
+    assert "sk-ant-api03-abcDEF123456_secret-key-value-7890" not in kw["text"]
+    assert "[REDACTED" in kw["text"]
+    assert kw["force_send"] is True
+    assert kw["require_approval"] is False
+    assert mail.shutdown_called is True
+
+
+def test_send_email_respects_recipient_env_override(monkeypatch) -> None:
+    _install_fake_mail(monkeypatch)
+    monkeypatch.setenv("UA_SKILL_GAP_EMAIL_RECIPIENT", "ops@example.com")
+    sgf._send_email("# report", 1)
+    assert _FakeMail.instances[0].sent[0]["to"] == "ops@example.com"
+
+
+def test_send_email_failure_does_not_raise(monkeypatch, capsys) -> None:
+    _install_fake_mail(monkeypatch, raise_on_send=True)
+    # Must NOT raise even though the underlying send blows up.
+    sgf._send_email("# report", 2)
+    out = capsys.readouterr().out
+    assert "::warning::" in out
+
+
+def test_send_email_log_dump_when_not_started(monkeypatch, capsys) -> None:
+    _install_fake_mail(monkeypatch, started=True)
+    # Force the not-started fallback path.
+    _install_fake_mail(monkeypatch, started=False)
+    sgf._send_email("# report body", 1)
+    out = capsys.readouterr().out
+    assert "::warning::AgentMail failed to start" in out
+    # Nothing was actually sent in the fallback path.
+    assert all(not m.sent for m in _FakeMail.instances)
+
+
+def test_main_email_flag_invokes_send_and_returns_zero(monkeypatch) -> None:
+    """--email with candidates routes the redacted report to _send_email and main returns 0."""
+    monkeypatch.setattr(sgf, "_load_zai_env", lambda: None)
+    monkeypatch.setattr(sgf, "_client", lambda: object())
+    monkeypatch.setattr(
+        sgf, "_synthesize",
+        lambda client, model, corpus, top_n: [
+            {"title": "t", "problem": "p", "evidence": "e",
+             "frequency": 2, "skill_fit": "new", "score": 0.9},
+        ],
+    )
+    calls: list[tuple[str, int]] = []
+    monkeypatch.setattr(sgf, "_send_email", lambda report, n: calls.append((report, n)))
+
+    rc = sgf.main(["--email", "--window-days", "7"])
+    assert rc == 0
+    assert len(calls) == 1
+    report, n = calls[0]
+    assert n == 1
+    assert "skill-gap finder" in report
+
+
+def test_main_send_failure_still_returns_zero(monkeypatch) -> None:
+    """A send blowing up inside the real _send_email must not break main (exit 0)."""
+    monkeypatch.setattr(sgf, "_load_zai_env", lambda: None)
+    monkeypatch.setattr(sgf, "_client", lambda: object())
+    monkeypatch.setattr(
+        sgf, "_synthesize",
+        lambda client, model, corpus, top_n: [
+            {"title": "t", "problem": "p", "evidence": "e",
+             "frequency": 2, "skill_fit": "new", "score": 0.9},
+        ],
+    )
+    _install_fake_mail(monkeypatch, raise_on_send=True)
+    monkeypatch.delenv("UA_SKILL_GAP_EMAIL_RECIPIENT", raising=False)
+
+    rc = sgf.main(["--email", "--window-days", "7"])
+    assert rc == 0
+
+
+def test_main_open_issue_and_email_are_independent(monkeypatch) -> None:
+    """--open-issue --email runs BOTH; neither is gated on the other."""
+    monkeypatch.setattr(sgf, "_load_zai_env", lambda: None)
+    monkeypatch.setattr(sgf, "_client", lambda: object())
+    monkeypatch.setattr(
+        sgf, "_synthesize",
+        lambda client, model, corpus, top_n: [
+            {"title": "t", "problem": "p", "evidence": "e",
+             "frequency": 2, "skill_fit": "new", "score": 0.9},
+        ],
+    )
+    issue_calls: list[int] = []
+    email_calls: list[int] = []
+    monkeypatch.setattr(sgf, "_open_issue", lambda report, n: issue_calls.append(n))
+    monkeypatch.setattr(sgf, "_send_email", lambda report, n: email_calls.append(n))
+
+    rc = sgf.main(["--open-issue", "--email", "--window-days", "7"])
+    assert rc == 0
+    assert issue_calls == [1]
+    assert email_calls == [1]
