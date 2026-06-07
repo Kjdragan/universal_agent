@@ -22,6 +22,14 @@ Usage:
     python scripts/deslop_advisory.py --diff /tmp/pr.diff
     python scripts/deslop_advisory.py --diff /tmp/pr.diff --model glm-5-turbo
     python scripts/deslop_advisory.py --diff /tmp/pr.diff --max-bytes 60000
+    python scripts/deslop_advisory.py --diff /tmp/pr.diff --meta-out /tmp/meta.json
+
+The optional ``--meta-out`` flag writes a small JSON sidecar describing the
+findings — ``{"count": N, "max_severity": "none|low|medium|high",
+"severities": [...]}`` — so a downstream workflow can decide whether the
+findings warrant a durable tracking issue (medium/high) or just a PR comment
+(low/none) WITHOUT re-parsing the markdown. Writing the sidecar never affects
+the exit code: this tool ALWAYS exits 0.
 """
 from __future__ import annotations
 
@@ -78,10 +86,60 @@ def _parse_llm_json(raw: str) -> dict:
 
 _SEVERITY_ICON = {"high": "🔴", "medium": "🟡", "low": "🟢"}
 
+# Stable hidden marker so the workflow can find-and-upsert ONE comment per PR
+# (re-runs edit the existing comment instead of stacking new ones). Emitted as
+# the first line of the comment markdown; GitHub renders HTML comments invisibly.
+COMMENT_MARKER = "<!-- deslop-advisory -->"
+
+# Severity ranking for computing the meta sidecar's max_severity.
+_SEVERITY_RANK = {"low": 1, "medium": 2, "high": 3}
+
+
+def _collect_severities(suggestions: list) -> list:
+    """Pull normalized (lowercased) severities for the dict suggestions only."""
+    out = []
+    for s in suggestions:
+        if not isinstance(s, dict):
+            continue
+        out.append(str(s.get("severity", "")).lower())
+    return out
+
+
+def _max_severity(severities: list) -> str:
+    """Highest severity present ('none' if empty / no recognized severities)."""
+    best = "none"
+    best_rank = 0
+    for sev in severities:
+        rank = _SEVERITY_RANK.get(sev, 0)
+        if rank > best_rank:
+            best_rank = rank
+            best = sev
+    return best
+
+
+def _build_meta(suggestions: list) -> dict:
+    """Build the JSON sidecar: count, max_severity, and the per-finding severities."""
+    severities = _collect_severities(suggestions)
+    return {
+        "count": len(severities),
+        "max_severity": _max_severity(severities),
+        "severities": severities,
+    }
+
+
+def _write_meta(path: str, suggestions: list) -> None:
+    """Best-effort: write the meta sidecar; never raise (must not affect exit 0)."""
+    try:
+        Path(path).write_text(
+            json.dumps(_build_meta(suggestions)), encoding="utf-8"
+        )
+    except OSError as exc:
+        print(f"[warn] could not write meta sidecar {path}: {exc}", file=sys.stderr)
+
 
 def _build_comment(suggestions: list) -> str:
     """Render the advisory suggestions as a friendly report-only markdown comment."""
-    header = "## 🧹 Deslop advisory (report-only)"
+    header = f"{COMMENT_MARKER}\n## 🧹 Deslop advisory (report-only)"
     note = (
         "_Advisory only — this never blocks a PR or auto-merge. "
         "Behavior-preserving suggestions from the `technical-deslop` rubric._"
@@ -167,21 +225,29 @@ def main() -> int:
     ap.add_argument("--model", default="", help="override model (default resolve_sonnet → glm-5-turbo)")
     ap.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES,
                     help="truncate the diff to this many UTF-8 bytes before judging")
+    ap.add_argument("--meta-out", default="",
+                    help="optional path for a JSON findings sidecar "
+                         "(count / max_severity / severities)")
     args = ap.parse_args()
+
+    def _emit(suggestions: list) -> int:
+        """Print the comment, write the meta sidecar if requested, return 0."""
+        print(_build_comment(suggestions))
+        if args.meta_out:
+            _write_meta(args.meta_out, suggestions)
+        return 0  # always advisory — never blocks a PR or auto-merge
 
     diff_text = _truncate(_read_diff(args.diff), args.max_bytes)
     if not diff_text.strip():
         print("[note] Empty or unreadable diff — nothing to review.", file=sys.stderr)
-        print(_build_comment([]))
-        return 0
+        return _emit([])
 
     _load_zai_env()
     client = _client()
     if client is None:
         print("[note] No ZAI/Anthropic creds available — skipping deslop advisory "
               "(set INFISICAL_* or ANTHROPIC_* env).", file=sys.stderr)
-        print(_build_comment([]))
-        return 0
+        return _emit([])
 
     try:
         from universal_agent.utils.model_resolution import resolve_sonnet
@@ -194,14 +260,12 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"[note] LLM review failed ({type(exc).__name__}: {exc}) — emitting empty advisory.",
               file=sys.stderr)
-        print(_build_comment([]))
-        return 0
+        return _emit([])
 
     suggestions = verdict.get("suggestions", [])
     if not isinstance(suggestions, list):
         suggestions = []
-    print(_build_comment(suggestions))
-    return 0  # always advisory — never blocks a PR or auto-merge
+    return _emit(suggestions)
 
 
 if __name__ == "__main__":

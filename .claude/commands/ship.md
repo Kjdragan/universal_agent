@@ -75,6 +75,18 @@ if [ "$POST_SHA" != "$(git rev-parse HEAD)" ]; then
     exit 1
 fi
 
+# Best-effort deslop pass on the diff (NON-blocking — never delays shipping).
+# Before opening the PR, take a quick behavior-preserving cleanup pass over the
+# change set: invoke the `technical-deslop` skill (or, for just a quick report,
+# `python scripts/deslop_advisory.py --diff <a precomputed diff>`), apply ONLY
+# behavior-preserving removals, and re-run the relevant tests. This is purely
+# best-effort: if it errors, finds nothing, or there's no time, proceed to the
+# PR anyway. It must NEVER block, fail, or delay the ship.
+#
+# Note: this is a manual cue for the shipping agent, not an automated gate —
+# the `( ... ) || true` below guarantees nothing here can abort /ship.
+( echo "🧹 (optional) Consider a quick deslop pass on the diff before the PR — best-effort, skip if pressed." ) || true
+
 # gh CLI fallback — print the PR-create URL and exit
 export NO_COLOR=1
 export GH_NO_UPDATE_NOTIFIER=1

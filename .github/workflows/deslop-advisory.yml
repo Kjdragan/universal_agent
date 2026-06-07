@@ -19,6 +19,10 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  # issues: write lets the post step file a durable, deduped tracking issue when
+  # the findings are medium/high severity, so they persist after the PR
+  # auto-merges. Issue filing is best-effort (|| true) and never blocks the PR.
+  issues: write
 
 concurrency:
   # One advisory run per PR; cancel in-flight runs when a new commit lands.
@@ -69,9 +73,11 @@ jobs:
           INFISICAL_ENVIRONMENT: development
           UA_RUNTIME_STAGE: development
           UA_INFISICAL_ENABLED: '1'
-        run: uv run --no-sync python scripts/deslop_advisory.py --diff /tmp/pr.diff > /tmp/deslop_comment.md
+        # Writes the human markdown comment to /tmp/deslop_comment.md and a JSON
+        # findings sidecar to /tmp/deslop_meta.json. The script always exits 0.
+        run: uv run --no-sync python scripts/deslop_advisory.py --diff /tmp/pr.diff --meta-out /tmp/deslop_meta.json > /tmp/deslop_comment.md
 
-      - name: Post advisory comment
+      - name: Post advisory comment (upsert single comment)
         continue-on-error: true
         env:
           # Default GITHUB_TOKEN — the AUTO_MERGE_PAT cannot add PR comments.
@@ -79,4 +85,97 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/deslop_comment.md || true
+        # Find the existing deslop-advisory comment (hidden HTML marker emitted by
+        # the script) and PATCH it in place; create a fresh one only if none
+        # exists. Re-runs on new commits update one comment instead of stacking.
+        # Every gh/api call is non-fatal so this can never block the PR.
+        run: |
+          set +e
+          MARKER="deslop-advisory"
+          if [ ! -s /tmp/deslop_comment.md ]; then
+            echo "No comment body produced; skipping."
+            exit 0
+          fi
+          COMMENT_ID=$(gh api \
+            "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+            --paginate \
+            --jq ".[] | select(.body | contains(\"${MARKER}\")) | .id" \
+            2>/dev/null | head -n1)
+          if [ -n "${COMMENT_ID}" ]; then
+            echo "Updating existing advisory comment ${COMMENT_ID}."
+            gh api -X PATCH \
+              "repos/${REPO}/issues/comments/${COMMENT_ID}" \
+              -F body=@/tmp/deslop_comment.md >/dev/null 2>&1 || true
+          else
+            echo "Creating new advisory comment."
+            gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/deslop_comment.md || true
+          fi
+          exit 0
+
+      - name: Upsert tracking issue for medium/high findings
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        # Only medium/high findings warrant a durable issue (so they survive the
+        # PR auto-merge). low-only / none -> comment only, NO issue. Deduped by a
+        # stable title; an existing open issue is edited in place. Fully
+        # best-effort — every step is || true and the job is continue-on-error.
+        run: |
+          set +e
+          META=/tmp/deslop_meta.json
+          if [ ! -f "${META}" ]; then
+            echo "No meta sidecar; nothing to escalate."
+            exit 0
+          fi
+          MAX_SEV=$(jq -r '.max_severity // "none"' "${META}" 2>/dev/null)
+          COUNT=$(jq -r '.count // 0' "${META}" 2>/dev/null)
+          echo "Findings: count=${COUNT} max_severity=${MAX_SEV}"
+          if [ "${MAX_SEV}" != "medium" ] && [ "${MAX_SEV}" != "high" ]; then
+            echo "max_severity=${MAX_SEV}: comment only, no tracking issue."
+            exit 0
+          fi
+
+          # Create the label if absent (idempotent / non-fatal).
+          gh label create deslop-findings \
+            --repo "${REPO}" \
+            --color "FBCA04" \
+            --description "Behavior-preserving deslop suggestions flagged on a PR" \
+            2>/dev/null || true
+
+          TITLE="deslop findings: PR #${PR_NUMBER}"
+
+          # Build the issue body: the findings markdown plus a link to the PR.
+          {
+            cat /tmp/deslop_comment.md 2>/dev/null
+            printf '\n\n---\n\n'
+            printf 'Tracked from PR #%s (%s).\n' "${PR_NUMBER}" "${PR_URL}"
+            printf 'Filed because max severity was **%s**. Behavior-preserving only — never blocks the PR.\n' "${MAX_SEV}"
+          } > /tmp/deslop_issue.md
+
+          # Dedup: reuse an open issue with this exact title if one exists.
+          EXISTING=$(gh issue list \
+            --repo "${REPO}" \
+            --label deslop-findings \
+            --state open \
+            --search "in:title \"${TITLE}\"" \
+            --json number \
+            --jq '.[0].number // empty' \
+            2>/dev/null)
+
+          if [ -n "${EXISTING}" ]; then
+            echo "Updating existing tracking issue #${EXISTING}."
+            gh issue edit "${EXISTING}" \
+              --repo "${REPO}" \
+              --body-file /tmp/deslop_issue.md || true
+          else
+            echo "Creating tracking issue."
+            gh issue create \
+              --repo "${REPO}" \
+              --title "${TITLE}" \
+              --body-file /tmp/deslop_issue.md \
+              --label deslop-findings || true
+          fi
+          exit 0

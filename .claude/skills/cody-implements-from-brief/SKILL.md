@@ -175,6 +175,14 @@ write_manifest(workspace, manifest)
 Set `acceptance_passed=True` only if your demo actually produced the
 output ACCEPTANCE.md required AND `endpoint_hit` matches `endpoint_required`.
 
+### Step 5.5 — Deslop the demo diff (best-effort, NON-blocking)
+
+Before opening any PR for the demo, take a quick behavior-preserving cleanup
+pass over the diff via the `technical-deslop` skill — apply only safe removals
+(redundant comments, narration logging, dead defensive checks) and re-run the
+relevant checks. This is best-effort only: if it errors or finds nothing,
+proceed. It must NEVER block or delay the autonomous ship.
+
 ### Step 6 — Mark the task
 
 If `acceptance_passed=True` and `endpoint_hit` matches `endpoint_required`:

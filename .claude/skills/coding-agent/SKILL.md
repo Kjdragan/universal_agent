@@ -231,6 +231,7 @@ git worktree remove /tmp/issue-99
 7. **Parallel is OK** - run many Codex processes at once for batch work
 8. **NEVER start Codex in ~/clawd/** - it'll read your soul docs and get weird ideas about the org chart!
 9. **NEVER checkout branches in ~/Projects/clawdbot/** - that's the LIVE Clawdbot instance!
+10. **Deslop before opening the PR (best-effort, NON-blocking)** — before the agent opens its PR, take a quick behavior-preserving cleanup pass on the diff via the `technical-deslop` skill (apply only safe removals, re-run the relevant tests). This is best-effort only: if it errors or finds nothing, just open the PR. It must NEVER block or delay the autonomous ship.
 
 ---
 
