@@ -46,6 +46,7 @@ def _config(tmp_path: Path, *, queue_task_hub: bool = True) -> ClaudeCodeIntelCo
 
 
 def test_replay_writes_candidate_ledger_and_external_vault(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("UA_CSI_RESEARCH_GROUNDING_WIRING_ENABLED", "0")
     calls: list[tuple[str, str]] = []
 
     def fake_ingest(*, vault_slug: str, source_title: str, source_content: str, source_id: str | None = None, root_override: str | None = None):
@@ -109,6 +110,7 @@ def test_replay_writes_candidate_ledger_and_external_vault(monkeypatch, tmp_path
 
 
 def test_replay_fetches_linked_sources_and_writes_metadata(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("UA_CSI_RESEARCH_GROUNDING_WIRING_ENABLED", "0")
     def fake_ingest(*, vault_slug: str, source_title: str, source_content: str, source_id: str | None = None, root_override: str | None = None):
         vault_root = Path(root_override or tmp_path / "knowledge-vaults" / vault_slug)
         path = vault_root / "sources" / f"{source_id or 'source'}.md"
@@ -328,6 +330,7 @@ def test_replay_skips_tco_redirects_into_browser_gated_x_pages(monkeypatch, tmp_
 
 
 def test_replay_is_idempotent_for_task_hub_rows(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("UA_CSI_RESEARCH_GROUNDING_WIRING_ENABLED", "0")
     def fake_ingest(**kwargs):
         return {"status": "success", "path": f"sources/{kwargs.get('source_id')}.md"}
 
@@ -367,6 +370,7 @@ def test_replay_is_idempotent_for_task_hub_rows(monkeypatch, tmp_path: Path) -> 
 
 
 def test_replay_links_ledger_to_assignments(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("UA_CSI_RESEARCH_GROUNDING_WIRING_ENABLED", "0")
     def fake_ingest(**kwargs):
         return {"status": "success", "path": f"sources/{kwargs.get('source_id')}.md"}
 
@@ -465,6 +469,7 @@ def test_replay_links_ledger_to_assignments(monkeypatch, tmp_path: Path) -> None
 
 
 def test_replay_hydrates_email_evidence_from_task_and_assignment_workspace(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("UA_CSI_RESEARCH_GROUNDING_WIRING_ENABLED", "0")
     def fake_ingest(**kwargs):
         return {"status": "success", "path": f"sources/{kwargs.get('source_id')}.md"}
 
