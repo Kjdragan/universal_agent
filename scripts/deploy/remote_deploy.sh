@@ -349,12 +349,33 @@ if command -v systemctl >/dev/null 2>&1; then
         sudo systemctl restart "$vp_svc"
       fi
     done
+    # Continuous (non-gateway) services run their own long-lived loops and do
+    # NOT pick up new code until the PROCESS is restarted. The CSI installer
+    # (run earlier, ~L295) and #820/#822 keep the csi-ingester UNIT FILE current,
+    # but installing a unit != restarting a running continuous process — so
+    # CSI_Ingester/*.py and the Mission Control sweeper code silently ran stale
+    # across deploys. Restart them here (after the unit install) for code
+    # currency. is-enabled-guarded so a host without the unit is skipped, never
+    # failing the deploy.
+    for cont_svc in csi-ingester universal-agent-mission-control-sweeper; do
+      if systemctl is-enabled "$cont_svc" >/dev/null 2>&1; then
+        echo "--> Restarting continuous service: $cont_svc"
+        sudo systemctl restart "$cont_svc"
+      fi
+    done
   else
     systemctl restart universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram ua-discord-cc-bot ua-discord-intelligence
     for vp_svc in universal-agent-vp-worker@vp.coder.primary universal-agent-vp-worker@vp.general.primary; do
       if systemctl is-enabled "$vp_svc" >/dev/null 2>&1; then
         echo "--> Restarting VP worker: $vp_svc"
         systemctl restart "$vp_svc"
+      fi
+    done
+    # Continuous (non-gateway) services — see the sudo branch above.
+    for cont_svc in csi-ingester universal-agent-mission-control-sweeper; do
+      if systemctl is-enabled "$cont_svc" >/dev/null 2>&1; then
+        echo "--> Restarting continuous service: $cont_svc"
+        systemctl restart "$cont_svc"
       fi
     done
   fi
