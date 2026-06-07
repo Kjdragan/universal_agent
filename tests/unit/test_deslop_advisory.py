@@ -4,6 +4,7 @@ Module import must not require `anthropic` — heavy imports are lazy inside the
 script, so importing the module here loads only stdlib.
 """
 import importlib.util
+import json
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -97,3 +98,95 @@ def test_build_comment_tolerates_non_dict_entries():
                                                    "issue": "narration log", "fix": "drop it"}])
     assert "z.py" in out
     assert "narration log" in out
+
+
+# --- marker presence -------------------------------------------------------
+
+def test_build_comment_has_marker_at_top_no_suggestions():
+    out = deslop_advisory._build_comment([])
+    assert out.startswith(deslop_advisory.COMMENT_MARKER)
+    assert "deslop-advisory" in out
+
+
+def test_build_comment_has_marker_at_top_with_suggestions():
+    out = deslop_advisory._build_comment(
+        [{"file": "a.py", "severity": "low", "issue": "x", "fix": "y"}]
+    )
+    assert out.startswith(deslop_advisory.COMMENT_MARKER)
+
+
+# --- meta sidecar: count + max_severity ------------------------------------
+
+def test_build_meta_no_findings():
+    meta = deslop_advisory._build_meta([])
+    assert meta == {"count": 0, "max_severity": "none", "severities": []}
+
+
+def test_build_meta_low_only():
+    meta = deslop_advisory._build_meta(
+        [{"file": "a.py", "severity": "low", "issue": "x"}]
+    )
+    assert meta["count"] == 1
+    assert meta["max_severity"] == "low"
+    assert meta["severities"] == ["low"]
+
+
+def test_build_meta_medium_is_max_over_low():
+    meta = deslop_advisory._build_meta([
+        {"file": "a.py", "severity": "low", "issue": "x"},
+        {"file": "b.py", "severity": "medium", "issue": "y"},
+    ])
+    assert meta["count"] == 2
+    assert meta["max_severity"] == "medium"
+
+
+def test_build_meta_high_is_max():
+    meta = deslop_advisory._build_meta([
+        {"file": "a.py", "severity": "low", "issue": "x"},
+        {"file": "b.py", "severity": "high", "issue": "y"},
+        {"file": "c.py", "severity": "medium", "issue": "z"},
+    ])
+    assert meta["count"] == 3
+    assert meta["max_severity"] == "high"
+
+
+def test_build_meta_case_insensitive_severity():
+    meta = deslop_advisory._build_meta(
+        [{"file": "a.py", "severity": "HIGH", "issue": "x"}]
+    )
+    assert meta["max_severity"] == "high"
+
+
+def test_build_meta_unknown_severity_counts_but_is_none_max():
+    meta = deslop_advisory._build_meta(
+        [{"file": "a.py", "severity": "weird", "issue": "x"}]
+    )
+    assert meta["count"] == 1
+    assert meta["max_severity"] == "none"
+
+
+def test_build_meta_ignores_non_dict_entries():
+    meta = deslop_advisory._build_meta(
+        ["junk", {"file": "a.py", "severity": "medium", "issue": "x"}]
+    )
+    assert meta["count"] == 1
+    assert meta["max_severity"] == "medium"
+
+
+def test_write_meta_writes_json(tmp_path):
+    out = tmp_path / "meta.json"
+    deslop_advisory._write_meta(str(out), [
+        {"file": "a.py", "severity": "high", "issue": "x"},
+        {"file": "b.py", "severity": "low", "issue": "y"},
+    ])
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert data["count"] == 2
+    assert data["max_severity"] == "high"
+    assert data["severities"] == ["high", "low"]
+
+
+def test_write_meta_empty(tmp_path):
+    out = tmp_path / "meta.json"
+    deslop_advisory._write_meta(str(out), [])
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert data == {"count": 0, "max_severity": "none", "severities": []}
