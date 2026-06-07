@@ -24482,13 +24482,24 @@ async def dashboard_todolist_agent_queue(
                 project_key=project_key,
                 include_not_ready=True,
             )
+            serialized_queue = [
+                _serialize_task_hub_queue_item(conn, dict(item))
+                for item in (queue.get("items") if isinstance(queue, dict) else [])
+                if isinstance(item, dict)
+            ]
+            # Keep self-driven cron linkage rows OFF the board while idle. The
+            # perpetual cron:<job> row rests at status='open' (board_lane
+            # 'not_assigned') between scheduled runs; surfacing it there is pure
+            # noise — it's agent_ready=False, so no agent will ever seize it, and
+            # an operator can't action it either. A cron only earns a card while
+            # it is actually RUNNING (in_progress) or has FAILED and needs eyes
+            # (needs_review / blocked); those lanes are left intact. Finished
+            # runs surface as per-run cards in the Completed column instead
+            # (see list_completed_cron_runs + /todolist/completed).
+            visible_queue = [it for it in serialized_queue if not _is_idle_cron_board_row(it)]
             return {
                 "status": "ok",
-                "items": [
-                    _serialize_task_hub_queue_item(conn, dict(item))
-                    for item in (queue.get("items") if isinstance(queue, dict) else [])
-                    if isinstance(item, dict)
-                ],
+                "items": visible_queue,
                 "pagination": queue.get("pagination") if isinstance(queue, dict) else {},
             }
         finally:
@@ -25954,6 +25965,40 @@ def _task_hub_timeline_events(
     return events
 
 
+def _is_idle_cron_board_row(item: dict[str, Any]) -> bool:
+    """True when *item* is a self-driven cron linkage row to hide while idle.
+
+    The perpetual ``cron:<job>`` row rests at ``status='open'`` (board_lane
+    'not_assigned') between scheduled runs. It is ``agent_ready=False`` — no
+    agent will ever seize it — and it is not operator-actionable, so surfacing
+    it in Not Assigned is pure noise. A cron only earns a board card while it is
+    RUNNING (in_progress) or has FAILED and needs eyes (needs_review/blocked);
+    those lanes are preserved. Finished runs surface as per-run cards in the
+    Completed lane instead (see ``task_hub.list_completed_cron_runs``).
+    """
+    return (
+        str(item.get("source_kind") or "") == "cron_run"
+        and str(item.get("board_lane") or "") == "not_assigned"
+    )
+
+
+def _merge_completed_dashboard_cards(
+    task_cards: list[dict[str, Any]],
+    cron_run_cards: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Merge enriched task/agent completions with per-run cron cards, newest
+    first, capped at *limit*. Both carry ``completed_at``; ties fall back to
+    ``updated_at`` and otherwise preserve input order (stable sort)."""
+    combined = list(task_cards) + list(cron_run_cards or [])
+    combined.sort(
+        key=lambda it: str((it or {}).get("completed_at") or (it or {}).get("updated_at") or ""),
+        reverse=True,
+    )
+    return combined[: max(1, int(limit))]
+
+
 def _serialize_task_hub_queue_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any]:
     task_id = str(item.get("task_id") or "").strip()
     active_assignment = _task_hub_active_assignment_for_task(conn, task_id) if task_id else None
@@ -26027,10 +26072,18 @@ def _serialize_task_hub_queue_item(conn: sqlite3.Connection, item: dict[str, Any
 
 @app.get("/api/v1/dashboard/todolist/completed")
 async def dashboard_todolist_completed(limit: int = 60):
+    bounded_limit = max(1, min(int(limit), 500))
     with _activity_store_lock:
         conn = _task_hub_open_conn()
         try:
-            rows = task_hub.list_completed_tasks(conn, limit=max(1, min(int(limit), 500)))
+            rows = task_hub.list_completed_tasks(conn, limit=bounded_limit)
+            # The perpetual cron:<job> row only sits at status='completed' for
+            # the brief window before close_cron_task_link recycles it back to
+            # 'open', and there is only one row per job. Drop it here so we don't
+            # show a transient, last-run-only duplicate; per-run cron cards come
+            # from task_hub_runs below instead (one reviewable card per run).
+            rows = [r for r in rows if str((r or {}).get("source_kind") or "") != "cron_run"]
+            cron_run_cards = task_hub.list_completed_cron_runs(conn, limit=bounded_limit)
         finally:
             conn.close()
 
@@ -26148,7 +26201,16 @@ async def dashboard_todolist_completed(limit: int = 60):
         )
         item["links"] = links
         enriched.append(item)
-    return {"status": "ok", "items": enriched}
+
+    # Merge per-run cron completion cards (from task_hub_runs) with the enriched
+    # agent/task completions and present newest-first. Cron run cards already
+    # carry their own shape (title/description from the parent cron item, a
+    # synthetic last_assignment with the run summary — see
+    # task_hub.list_completed_cron_runs) and intentionally skip the workspace
+    # deep-link enrichment above: a cron run is reviewed via its "Review" drawer
+    # (full run history for the job), not a per-run workspace.
+    combined = _merge_completed_dashboard_cards(enriched, cron_run_cards, limit=bounded_limit)
+    return {"status": "ok", "items": combined}
 
 
 @app.delete("/api/v1/dashboard/todolist/completed/{task_id}")

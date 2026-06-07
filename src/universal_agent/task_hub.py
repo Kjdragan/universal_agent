@@ -3054,6 +3054,86 @@ def list_completed_tasks(conn: sqlite3.Connection, *, limit: int = 80) -> list[d
     return out
 
 
+def list_completed_cron_runs(conn: sqlite3.Connection, *, limit: int = 60) -> list[dict[str, Any]]:
+    """Return FINISHED cron runs as per-run completed-card dicts (newest first).
+
+    Cron jobs are driven by a single *perpetual* ``cron:<job>`` row in
+    ``task_hub_items`` that recycles ``open -> in_progress -> completed -> open``
+    (see ``services/cron_task_hub_link.py``). Because the row is reset back to
+    ``open`` right after each clean run, it never lingers in the Completed lane
+    and there is only ever one row per job — useless for reviewing *individual*
+    runs.
+
+    The per-run audit, however, is preserved in ``task_hub_runs`` (one row per
+    run, opened by ``ensure_cron_task_link`` / ``_open_run`` and closed by
+    ``_close_run`` with ``outcome``/``summary``). This helper surfaces each
+    finished run (``ended_at IS NOT NULL``) as its own card so the operator can
+    open it and see what that specific run did. The parent cron item supplies
+    title/description; the run supplies outcome/summary/timestamps.
+
+    Cards are shaped to fit the dashboard ``CompletedTaskItem`` contract: a
+    synthetic ``last_assignment`` carries the run summary/agent/timestamps that
+    the frontend already renders, and ``task_id`` is the parent ``cron:<job>``
+    so the card's "Review" drawer shows the full run history for that job.
+    ``run_id`` distinguishes cards that share the same parent task_id.
+    """
+    ensure_schema(conn)
+    bounded = max(1, min(int(limit), 500))
+    rows = conn.execute(
+        """
+        SELECT r.run_id, r.task_id, r.agent_id, r.started_at, r.ended_at,
+               r.outcome, r.summary, r.error,
+               i.title, i.description, i.priority, i.source_ref, i.project_key
+        FROM task_hub_runs r
+        JOIN task_hub_items i ON i.task_id = r.task_id
+        WHERE i.source_kind = 'cron_run'
+          AND r.ended_at IS NOT NULL
+        ORDER BY r.ended_at DESC
+        LIMIT ?
+        """,
+        (bounded,),
+    ).fetchall()
+
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        d = dict(row)
+        outcome = str(d.get("outcome") or "").strip().lower()
+        summary = (d.get("summary") or "").strip()
+        error = (d.get("error") or "").strip()
+        # Build a human-readable summary line: prefer the run's own summary,
+        # fall back to the outcome, and append the error for non-clean runs so
+        # failures are reviewable rather than silently dropped.
+        result_summary = summary or (f"Run {outcome}" if outcome else "")
+        if error and outcome and outcome != "completed":
+            result_summary = f"{result_summary} — {error}".strip(" —") if result_summary else error
+        out.append(
+            {
+                "task_id": str(d.get("task_id") or ""),
+                "run_id": str(d.get("run_id") or ""),
+                "title": str(d.get("title") or ""),
+                "description": d.get("description") or None,
+                "project_key": d.get("project_key") or None,
+                "priority": d.get("priority"),
+                "status": TASK_STATUS_COMPLETED,
+                "source_kind": "cron_run",
+                "source_ref": d.get("source_ref") or None,
+                "completed_at": d.get("ended_at"),
+                "updated_at": d.get("ended_at"),
+                "run_outcome": outcome or None,
+                "last_assignment": {
+                    "agent_id": str(d.get("agent_id") or "cron"),
+                    "state": outcome or "completed",
+                    "started_at": d.get("started_at"),
+                    "ended_at": d.get("ended_at"),
+                    "result_summary": result_summary or None,
+                },
+                "links": None,
+                "metadata": {},
+            }
+        )
+    return out
+
+
 def _attach_latest_assignment_and_evidence(
     conn: sqlite3.Connection,
     item: dict[str, Any],
