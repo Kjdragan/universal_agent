@@ -86,3 +86,70 @@ def derive_heartbeat_operator_review(
             review = True
     return review, triage
 
+
+def assess_triage_compliance(payload: dict[str, Any]) -> tuple[bool, str]:
+    """Telemetry-only: did a heartbeat investigation emit per-finding triage?
+
+    The investigation is dispatched only for non-OK heartbeat findings, and the
+    remediation policy REQUIRES a per-finding ``findings_triage`` array (one entry
+    per finding, each with a ``verdict``). A single global verdict is not enough —
+    a false positive once masked a real outage. This function does NOT gate
+    anything (the deterministic backstop in ``derive_heartbeat_operator_review``
+    already protects operator visibility); it only reports whether the LLM
+    complied so silent non-compliance is observable in logs.
+
+    Returns ``(compliant, reason)``.
+    """
+    triage_raw = payload.get("findings_triage")
+    triage = (
+        [entry for entry in triage_raw if isinstance(entry, dict)]
+        if isinstance(triage_raw, list)
+        else []
+    )
+    if not triage:
+        return False, "missing_findings_triage"
+    missing_verdict = sum(
+        1 for entry in triage if not str(entry.get("verdict") or "").strip()
+    )
+    if missing_verdict:
+        return False, f"triage_entries_missing_verdict={missing_verdict}/{len(triage)}"
+    return True, "ok"
+
+
+def assess_proactive_health_inclusion(
+    snapshot: dict[str, Any] | None,
+    findings: list[Any] | None,
+) -> tuple[bool, str]:
+    """Telemetry-only: did the heartbeat agent fold the proactive-health snapshot
+    findings into its own artifact (``category='proactive_health'``)?
+
+    ``_compose_heartbeat_prompt`` injects the snapshot's critical/warn invariants
+    and instructs the agent to include them in ``heartbeat_findings_latest.json``
+    with ``category='proactive_health'``. This non-blocking check compares the
+    snapshot against the final artifact: when the snapshot had actionable findings
+    but the artifact has none of ``category='proactive_health'``, that is silent
+    LLM non-compliance worth logging. It never gates anything (the watchdog has
+    already emailed any criticals independently).
+
+    Returns ``(included, reason)``. ``included=True`` when there is nothing to
+    include (empty/ok snapshot) — there is no gap to report in that case.
+    """
+    payload = (snapshot or {}).get("payload") or {}
+    invariants = payload.get("invariants") or []
+    actionable = [
+        f
+        for f in invariants
+        if str((f or {}).get("severity") or "").lower() in {"critical", "warn"}
+    ]
+    if not actionable:
+        return True, "no_snapshot_findings"
+    findings = findings or []
+    has_ph = any(
+        str((f or {}).get("category") or "").lower() == "proactive_health"
+        for f in findings
+        if isinstance(f, dict)
+    )
+    if has_ph:
+        return True, "ok"
+    return False, f"snapshot_had_{len(actionable)}_findings_absent_from_artifact"
+
