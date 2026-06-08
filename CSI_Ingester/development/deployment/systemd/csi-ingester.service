@@ -6,21 +6,18 @@ PartOf=csi.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/universal_agent/CSI_Ingester/development
-# Bootstrap Infisical creds (INFISICAL_CLIENT_ID/SECRET/PROJECT_ID) live in
-# /opt/universal_agent/.env. csi_run.sh needs them to `infisical run` and inject
-# the LLM auth vars; without this line the wrapper below falls through to
-# pass-through and batch_brief resolves no key. Loaded BEFORE csi-ingester.env so
-# CSI-specific values still win. Mirrors csi-rss-semantic-enrich.service.
-EnvironmentFile=-/opt/universal_agent/.env
+# DO NOT wrap ExecStart in csi_run.sh / `infisical run`, and DO NOT add
+# EnvironmentFile=-/opt/universal_agent/.env here. Tried in #820/#824 to give
+# batch_brief an LLM key, but `infisical run` injects ALL ~289 vault secrets and
+# OVERRODE this continuous ingester's CSI-specific proxy creds from
+# csi-ingester.env -> every YouTube RSS fetch failed with `error=407 NO_USER` and
+# the circuit breaker aborted the ingest cycle (reverted here). The oneshot timer
+# units can take the full vault env; this continuous ingester cannot. To give
+# batch_brief an LLM key, seed the DEDICATED CSI lane instead (CSI_LLM_AUTH_MODE=1
+# + CSI_ZAI_API_KEY/CSI_ANTHROPIC_API_KEY in csi-ingester.env; see
+# scripts/csi_seed_dedicated_auth_env.py) — that adds only the key, not the proxy.
 EnvironmentFile=/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.env
-# Run through csi_run.sh so `infisical run` injects the shared LLM auth vars
-# (ANTHROPIC_API_KEY / ZAI_API_KEY, CSI_LLM_AUTH_MODE=0) into the process env —
-# the in-loop batch_brief LLM path resolves its key from os.getenv (see
-# csi_ingester/llm_auth.py::resolve_csi_llm_auth). Every other CSI unit already
-# wraps its command this way; without it batch briefs fall back to
-# "(LLM unavailable — plain summary)". csi_run.sh degrades to pass-through when
-# Infisical creds are absent, so this is safe in local/CI.
-ExecStart=/opt/universal_agent/CSI_Ingester/development/scripts/csi_run.sh /usr/bin/env uv run uvicorn csi_ingester.app:app --host 127.0.0.1 --port 8091
+ExecStart=/usr/bin/env uv run uvicorn csi_ingester.app:app --host 127.0.0.1 --port 8091
 MemoryHigh=900M
 MemoryMax=1400M
 MemorySwapMax=1024M
