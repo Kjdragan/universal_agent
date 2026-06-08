@@ -1,0 +1,28 @@
+[Unit]
+Description=Universal Agent daily backlog triage (assess open backlog -> Simone email + reminder seed). Migrated from the desktop --user timer to the VPS per the desktop=dev / VPS=runtime contract.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ua
+Group=ua
+WorkingDirectory=/opt/universal_agent
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/universal_agent/src
+Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
+# Strict-vps Infisical backstop (mirrors the briefings/digest units). The module
+# calls initialize_runtime_secrets() with NO profile arg (backlog_triage.py:93-95),
+# so it honors these inline vars; the deploy-written EnvironmentFile .env is loaded
+# LAST and overrides them, carrying the real machine-identity creds. No `infisical
+# run` wrapper — that was a desktop-only anti-pattern.
+Environment=UA_DEPLOYMENT_PROFILE=vps
+Environment=UA_INFISICAL_ENABLED=1
+Environment=INFISICAL_ENVIRONMENT=production
+EnvironmentFile=-/opt/universal_agent/.env
+ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.backlog_triage --send --seed-reminders --to kevinjdragan@gmail.com
+MemoryMax=2G
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target

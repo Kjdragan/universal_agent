@@ -1,0 +1,15 @@
+[Unit]
+Description=Run the Universal Agent skill-gap finder every 5 days at 09:00 America/Chicago (migrated from the desktop ua-skill-gap-finder.timer)
+
+[Timer]
+# OnCalendar wall-clock anchor (NEVER monotonic); Persistent replays a missed slot
+# after a deploy/reboot. Matches the prior desktop cadence (days 1/6/11/16/21/26 at
+# 09:00 CT).
+OnCalendar=*-*-1/5 09:00:00 America/Chicago
+Persistent=true
+RandomizedDelaySec=300
+AccuracySec=1min
+Unit=universal-agent-skill-gap-finder.service
+
+[Install]
+WantedBy=timers.target

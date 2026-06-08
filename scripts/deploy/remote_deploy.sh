@@ -285,6 +285,13 @@ sudo bash "$PROD_DIR/scripts/install_vps_phase_a_batch3_timers.sh" \
 echo "--> Installing S5 Phase A batch-A4 secret-bearing timers (youtube digest/poller/watchdog, nightly-wiki, morning+evening briefing, csi-demo-triage-rank off the gateway loop)..."
 sudo bash "$PROD_DIR/scripts/install_vps_phase_a_batch4_timers.sh" \
   || echo "WARN: install_vps_phase_a_batch4_timers.sh failed (non-fatal)"
+# Desktop->VPS migrated cron timers (backlog-triage + skill-gap-finder). These
+# previously ran ONLY as `systemctl --user` timers on the desktop, violating the
+# desktop=dev / VPS=runtime contract; now canonical VPS units. No in-process
+# gateway twin for either (no double-fire gate needed). Non-fatal.
+echo "--> Installing desktop->VPS migrated timers (backlog-triage, skill-gap-finder)..."
+sudo bash "$PROD_DIR/scripts/install_vps_migrated_desktop_timers.sh" \
+  || echo "WARN: install_vps_migrated_desktop_timers.sh failed (non-fatal)"
 # Sync the CSI lane's systemd units (timers + services). Without
 # this, edits to CSI_Ingester/development/deployment/systemd/*.{service,timer}
 # land in the repo but never reach /etc/systemd/system/, so the
