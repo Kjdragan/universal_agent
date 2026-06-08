@@ -2393,6 +2393,12 @@ class YouTubeIngestRequest(BaseModel):
     min_chars: int = 160
     request_id: Optional[str] = None
 
+class TranscriptIncidentRequest(BaseModel):
+    status: str = Field(..., description="Canary verdict: 'red' (failing) or 'green' (healthy).")
+    summary: str = Field("", description="One-line human summary of the verdict.")
+    reasons: list[str] = Field(default_factory=list, description="Verdict reason strings.")
+
+
 class VisionDescribeRequest(BaseModel):
     image_base64: str = Field(..., description="Base64 encoded image string (e.g. data:image/png;base64,...)")
     prompt: str = Field("Describe this image in detail.", description="Instructions for the vision model")
@@ -16216,6 +16222,285 @@ async def youtube_ingest_endpoint(request: Request, payload: YouTubeIngestReques
     result["request_id"] = (payload.request_id or "").strip() or None
     result["worker_profile"] = _DEPLOYMENT_PROFILE
     return result
+
+
+_CSI_TRANSCRIPT_INCIDENT_KEY = "youtube_transcript_red"
+_CSI_INCIDENT_RECIPIENT = "kevinjdragan@gmail.com"
+
+
+def _csi_incident_reminder_interval_seconds() -> int:
+    """Reminder cadence in seconds. Default 4h; clamps to a sane minimum."""
+    try:
+        hours = int(os.getenv("UA_CSI_INCIDENT_REMINDER_HOURS", "4"))
+    except (TypeError, ValueError):
+        hours = 4
+    return max(1, hours) * 3600
+
+
+def _csi_incident_in_waking_window(now_epoch: int) -> bool:
+    """True when the local hour in America/Chicago is within [06:00, 22:00)."""
+    local = datetime.fromtimestamp(now_epoch, tz=ZoneInfo("America/Chicago"))
+    return 6 <= local.hour < 22
+
+
+def _csi_incident_recipient() -> str:
+    """Operator recipient for CSI incident mail.
+
+    Reuse hourly_intel_digest.DEFAULT_RECIPIENT when importable so the
+    address lives in one place; fall back to the hardcoded constant.
+    """
+    try:
+        from universal_agent.services.hourly_intel_digest import DEFAULT_RECIPIENT
+
+        return DEFAULT_RECIPIENT or _CSI_INCIDENT_RECIPIENT
+    except Exception:  # noqa: BLE001
+        return _CSI_INCIDENT_RECIPIENT
+
+
+async def _send_csi_incident_email(*, subject: str, text: str) -> bool:
+    """Best-effort incident email via the gateway's AgentMailService.
+
+    Resolves the live gateway handle (same module-level ``_agentmail_service``
+    the proactive-health notifier reuses); constructs a short-lived one only
+    if the gateway never injected a handle. Catches every failure (log +
+    return False) so the endpoint never 500s over a send error.
+
+    Delivery backup: ``AgentMailService.send_email`` is AgentMail-primary and,
+    on an AgentMail HTTP 429 (daily-send / rate-limit), automatically falls
+    back to the Google Workspace CLI (``gws gmail +send``) when
+    ``UA_AGENTMAIL_GMAIL_FALLBACK=1``. By reusing ``send_email`` here, these
+    incident reminders inherit that Gmail fallback with no extra wiring — the
+    operator only needs the env flag (default off) and an authenticated gws
+    profile. We do NOT bypass that path.
+    """
+    from universal_agent.services.email_tags import ActionTag, KindTag
+    from universal_agent.services.proactive_health_notifier import (
+        _acquire_agentmail_service,
+    )
+
+    mail = _agentmail_service
+    owns = False
+    if mail is None:
+        try:
+            mail, owns = await _acquire_agentmail_service()
+        except Exception:  # noqa: BLE001
+            logger.warning("csi_transcript_incident: AgentMail acquire failed", exc_info=True)
+            return False
+    if mail is None:
+        logger.warning(
+            "csi_transcript_incident: no AgentMailService available — email NOT sent (%s)",
+            subject,
+        )
+        return False
+    try:
+        await mail.send_email(
+            to=_csi_incident_recipient(),
+            subject=subject,
+            text=text,
+            force_send=True,
+            action=ActionTag.ACTION,
+            kind=KindTag.INCIDENT,
+            source="csi_youtube_transcript_canary",
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001 — never crash the endpoint over a send
+        logger.warning(
+            "csi_transcript_incident: send_email failed (%s)",
+            type(exc).__name__,
+            exc_info=True,
+        )
+        return False
+    finally:
+        if owns and mail is not None:
+            try:
+                await mail.shutdown()
+            except Exception:  # noqa: BLE001
+                logger.debug("csi_transcript_incident: fresh AgentMailService shutdown failed", exc_info=True)
+
+
+def _csi_incident_db_path() -> Path:
+    raw = (os.getenv("CSI_DB_PATH") or "").strip()
+    if not raw:
+        raise HTTPException(status_code=503, detail="CSI_DB_PATH is not configured.")
+    return Path(raw).expanduser()
+
+
+def _format_failing_duration(first_red_at: Optional[str], now_epoch: int) -> str:
+    """Human 'how long it's been failing' from first_red_at to now."""
+    if not first_red_at:
+        return "unknown"
+    started = _parse_iso_utc(str(first_red_at))
+    if started is None:
+        return "unknown"
+    seconds = max(0, now_epoch - int(started.timestamp()))
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+    return f"{minutes}m"
+
+
+@app.post("/api/v1/csi/transcript_incident")
+async def csi_transcript_incident_endpoint(request: Request, payload: TranscriptIncidentRequest):
+    """Drive the CSI YouTube-transcript incident state machine from the hourly canary.
+
+    RED opens (or keeps open) an incident and sends an immediate email on the
+    first RED, then a reminder roughly every ``UA_CSI_INCIDENT_REMINDER_HOURS``
+    (default 4h) — reminders only within 06:00–22:00 America/Chicago — until the
+    pipeline recovers. GREEN resolves an open incident with one recovery email.
+
+    Auth mirrors ``/api/v1/youtube/ingest`` so the canary's existing token works.
+    """
+    _require_youtube_ingest_auth(request)
+
+    status_norm = (payload.status or "").strip().lower()
+    if status_norm not in {"red", "green"}:
+        raise HTTPException(status_code=400, detail="status must be 'red' or 'green'")
+
+    db_path = _csi_incident_db_path()
+    if not db_path.exists():
+        raise HTTPException(status_code=503, detail=f"CSI DB not found: {db_path}")
+
+    summary = (payload.summary or "").strip()
+    reasons = [str(r) for r in (payload.reasons or [])]
+    reasons_block = "\n".join(f"  - {r}" for r in reasons) if reasons else "  - (none reported)"
+    now_epoch = int(time.time())
+    interval = _csi_incident_reminder_interval_seconds()
+    incident_key = _CSI_TRANSCRIPT_INCIDENT_KEY
+
+    conn = sqlite3.connect(str(db_path), timeout=5)
+    conn.row_factory = sqlite3.Row
+    emailed = False
+    try:
+        # Ensure the incidents table exists even if the live csi.db has not yet
+        # picked up migration 0013 (bare CREATE TABLE IF NOT EXISTS — safe).
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS transcript_incidents (
+                incident_key TEXT PRIMARY KEY,
+                state TEXT NOT NULL,
+                first_red_at TEXT,
+                last_red_at TEXT,
+                opened_epoch INTEGER,
+                email_count INTEGER NOT NULL DEFAULT 0,
+                last_email_epoch INTEGER,
+                next_email_epoch INTEGER,
+                resolved_at TEXT,
+                last_reason TEXT
+            )
+            """
+        )
+        row = conn.execute(
+            "SELECT * FROM transcript_incidents WHERE incident_key = ?",
+            (incident_key,),
+        ).fetchone()
+        now_iso = datetime.fromtimestamp(now_epoch, tz=timezone.utc).isoformat()
+
+        if status_norm == "red":
+            is_open = bool(row) and str(row["state"]) == "open"
+            first_red_at = (row["first_red_at"] if is_open and row["first_red_at"] else now_iso)
+            opened_epoch = (row["opened_epoch"] if is_open and row["opened_epoch"] is not None else now_epoch)
+            email_count = int(row["email_count"]) if (is_open and row["email_count"] is not None) else 0
+            last_email_epoch = row["last_email_epoch"] if is_open else None
+            next_email_epoch = row["next_email_epoch"] if is_open else None
+
+            # First-ever email (count==0) is immediate; reminders are gated.
+            due = email_count == 0 or (
+                next_email_epoch is not None and now_epoch >= int(next_email_epoch)
+            )
+            send_now = due and (email_count == 0 or _csi_incident_in_waking_window(now_epoch))
+
+            if send_now:
+                reminder_n = email_count + 1
+                failing_for = _format_failing_duration(first_red_at, now_epoch)
+                subject = f"[CSI Alert] YouTube transcript pipeline RED (reminder {reminder_n})"
+                text = (
+                    "The CSI YouTube transcript pipeline canary is RED.\n\n"
+                    f"Summary: {summary or '(none)'}\n\n"
+                    f"Reasons:\n{reasons_block}\n\n"
+                    f"Failing for: {failing_for} (since {first_red_at}).\n"
+                    f"This is reminder #{reminder_n}. Reminders repeat roughly every "
+                    f"{interval // 3600}h (06:00–22:00 America/Chicago) until the canary goes GREEN.\n"
+                )
+                emailed = await _send_csi_incident_email(subject=subject, text=text)
+                if emailed:
+                    email_count += 1
+                    last_email_epoch = now_epoch
+                    next_email_epoch = now_epoch + interval
+
+            conn.execute(
+                """
+                INSERT INTO transcript_incidents (
+                    incident_key, state, first_red_at, last_red_at, opened_epoch,
+                    email_count, last_email_epoch, next_email_epoch, resolved_at, last_reason
+                ) VALUES (?, 'open', ?, ?, ?, ?, ?, ?, NULL, ?)
+                ON CONFLICT(incident_key) DO UPDATE SET
+                    state='open',
+                    first_red_at=excluded.first_red_at,
+                    last_red_at=excluded.last_red_at,
+                    opened_epoch=excluded.opened_epoch,
+                    email_count=excluded.email_count,
+                    last_email_epoch=excluded.last_email_epoch,
+                    next_email_epoch=excluded.next_email_epoch,
+                    resolved_at=NULL,
+                    last_reason=excluded.last_reason
+                """,
+                (
+                    incident_key,
+                    first_red_at,
+                    now_iso,
+                    opened_epoch,
+                    email_count,
+                    last_email_epoch,
+                    next_email_epoch,
+                    summary or (reasons[0] if reasons else None),
+                ),
+            )
+            conn.commit()
+            final_state = "open"
+            final_count = email_count
+            next_at = (
+                datetime.fromtimestamp(int(next_email_epoch), tz=timezone.utc).isoformat()
+                if next_email_epoch is not None
+                else None
+            )
+        else:  # green
+            is_open = bool(row) and str(row["state"]) == "open"
+            if is_open:
+                failing_for = _format_failing_duration(row["first_red_at"], now_epoch)
+                subject = "[CSI Recovered] YouTube transcript pipeline"
+                text = (
+                    "The CSI YouTube transcript pipeline canary recovered (GREEN).\n\n"
+                    f"Summary: {summary or '(none)'}\n\n"
+                    f"Reasons:\n{reasons_block}\n\n"
+                    f"It had been failing for {failing_for} (since {row['first_red_at']}).\n"
+                    "Reminders are now stopped.\n"
+                )
+                emailed = await _send_csi_incident_email(subject=subject, text=text)
+                conn.execute(
+                    """
+                    UPDATE transcript_incidents
+                    SET state='resolved', resolved_at=?, last_reason=?
+                    WHERE incident_key=?
+                    """,
+                    (now_iso, summary or "recovered", incident_key),
+                )
+                conn.commit()
+                final_state = "resolved"
+                final_count = int(row["email_count"]) if row["email_count"] is not None else 0
+            else:
+                final_state = str(row["state"]) if row else "none"
+                final_count = int(row["email_count"]) if (row and row["email_count"] is not None) else 0
+            next_at = None
+    finally:
+        conn.close()
+
+    return {
+        "emailed": emailed,
+        "state": final_state,
+        "email_count": final_count,
+        "next_email_at": next_at,
+    }
 
 
 @app.get("/api/v1/health")
