@@ -247,6 +247,61 @@ def _telegram_post(*, bot_token: str, chat_id: str, thread_id: str, text: str) -
         return False
 
 
+def _resolve_gateway_token() -> str:
+    """Resolve the bearer token the gateway's youtube/ingest auth accepts.
+
+    Mirrors csi_rss_semantic_enrich.py: the gateway's
+    ``_require_youtube_ingest_auth`` only accepts UA_YOUTUBE_INGEST_TOKEN or
+    UA_INTERNAL_API_TOKEN. Try env first, then Infisical (same chain as the
+    enrich script), so the canary authenticates the SAME way it would for
+    /api/v1/youtube/ingest.
+    """
+    token = (
+        os.getenv("UA_YOUTUBE_INGEST_TOKEN", "").strip()
+        or os.getenv("UA_INTERNAL_API_TOKEN", "").strip()
+    )
+    if token:
+        return token
+    return resolve_token_from_infisical(
+        ["UA_YOUTUBE_INGEST_TOKEN", "UA_INTERNAL_API_TOKEN"],
+        log_prefix="CANARY",
+    )
+
+
+def _post_incident(
+    *,
+    gateway_base: str,
+    token: str,
+    status: str,
+    summary: str,
+    reasons: list[str],
+) -> None:
+    """Best-effort POST of the verdict to the gateway incident endpoint.
+
+    NON-FATAL on any error — mirrors the Telegram path: print a marker and
+    return. Never raises into the canary's exit-code logic.
+    """
+    url = f"{gateway_base.rstrip('/')}/api/v1/csi/transcript_incident"
+    body = json.dumps(
+        {"status": status, "summary": summary, "reasons": reasons}
+    ).encode("utf-8")
+    headers = {"content-type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+            print(
+                "CANARY_INCIDENT_POSTED"
+                f" emailed={payload.get('emailed')}"
+                f" state={payload.get('state')}"
+                f" email_count={payload.get('email_count')}"
+            )
+    except Exception as exc:  # noqa: BLE001 — never fail the canary over this
+        print(f"CANARY_INCIDENT_POST_FAIL detail={exc!r}")
+
+
 def _resolve_telegram_creds() -> tuple[str, str, str]:
     bot = (
         os.getenv("CSI_RSS_TELEGRAM_BOT_TOKEN", "").strip()
@@ -316,6 +371,16 @@ def main() -> int:
         action="store_true",
         help="Suppress Telegram posting (still exits non-zero on RED).",
     )
+    parser.add_argument(
+        "--no-email",
+        action="store_true",
+        help="Suppress the gateway incident POST / email reminders (used by tests).",
+    )
+    parser.add_argument(
+        "--gateway-base",
+        default="http://127.0.0.1:8002",
+        help="Gateway base URL for the incident POST.",
+    )
     args = parser.parse_args()
 
     db_path = Path(args.db_path).expanduser()
@@ -346,7 +411,10 @@ def main() -> int:
     for reason in verdict["reasons"] or []:
         print(f"CANARY_REASON {reason}")
 
-    if verdict["status"] == "red":
+    status = str(verdict["status"])
+    reasons = [str(r) for r in (verdict["reasons"] or [])]
+
+    if status == "red":
         if not args.no_alert:
             bot, chat, thread = _resolve_telegram_creds()
             _telegram_post(
@@ -355,8 +423,25 @@ def main() -> int:
                 thread_id=thread,
                 text=format_alert(metrics, verdict),
             )
-        return 1
-    return 0
+
+    # POST the verdict to the gateway incident endpoint (drives the email
+    # reminder state machine). Both RED (open/reminder) and GREEN (resolve +
+    # recovery email) are posted. NON-FATAL on any error — see _post_incident.
+    if not args.no_email:
+        summary = (
+            "CSI YouTube transcript pipeline RED"
+            if status == "red"
+            else "CSI YouTube transcript pipeline GREEN"
+        )
+        _post_incident(
+            gateway_base=args.gateway_base,
+            token=_resolve_gateway_token(),
+            status=status,
+            summary=summary,
+            reasons=reasons,
+        )
+
+    return 1 if status == "red" else 0
 
 
 if __name__ == "__main__":

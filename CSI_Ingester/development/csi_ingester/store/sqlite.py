@@ -316,6 +316,21 @@ MIGRATION_0012_TRANSCRIPT_ERROR = """
 ALTER TABLE rss_event_analysis ADD COLUMN transcript_error TEXT;
 """
 
+MIGRATION_0013_TRANSCRIPT_INCIDENTS = """
+CREATE TABLE IF NOT EXISTS transcript_incidents (
+    incident_key TEXT PRIMARY KEY,
+    state TEXT NOT NULL,
+    first_red_at TEXT,
+    last_red_at TEXT,
+    opened_epoch INTEGER,
+    email_count INTEGER NOT NULL DEFAULT 0,
+    last_email_epoch INTEGER,
+    next_email_epoch INTEGER,
+    resolved_at TEXT,
+    last_reason TEXT
+);
+"""
+
 MIGRATIONS: tuple[tuple[str, str], ...] = (
     ("0001_core", MIGRATION_0001_CORE),
     ("0002_source_state", MIGRATION_0002_SOURCE_STATE),
@@ -329,6 +344,7 @@ MIGRATIONS: tuple[tuple[str, str], ...] = (
     ("0010_category_defaults", MIGRATION_0010_CATEGORY_DEFAULTS),
     ("0011_content_schema", MIGRATION_0011_CONTENT_SCHEMA),
     ("0012_transcript_error", MIGRATION_0012_TRANSCRIPT_ERROR),
+    ("0013_transcript_incidents", MIGRATION_0013_TRANSCRIPT_INCIDENTS),
 )
 
 
