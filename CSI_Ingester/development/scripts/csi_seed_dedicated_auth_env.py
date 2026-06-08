@@ -8,6 +8,7 @@ provider wiring. It copies shared keys into CSI_* equivalents.
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 MAPPINGS: list[tuple[str, str]] = [
@@ -63,7 +64,20 @@ def main() -> int:
         action="store_true",
         help="Also set CSI_LLM_AUTH_MODE=1 after seeding.",
     )
+    parser.add_argument(
+        "--lane",
+        choices=["anthropic", "zai", "both"],
+        default="both",
+        help="Which provider lane to seed. 'zai' seeds only CSI_ZAI_* (cost-safe: "
+        "keeps CSI off billed Anthropic and lets the mode-1 resolver fall through "
+        "to CSI_ZAI_API_KEY). Default 'both' for back-compat.",
+    )
     args = parser.parse_args()
+    lane_prefixes = {
+        "anthropic": ("ANTHROPIC_",),
+        "zai": ("ZAI_",),
+        "both": ("ANTHROPIC_", "ZAI_"),
+    }[args.lane]
 
     env_path = Path(args.env_file).expanduser()
     if not env_path.exists():
@@ -74,7 +88,16 @@ def main() -> int:
     skipped: list[str] = []
 
     for shared_key, dedicated_key in MAPPINGS:
-        shared_val = str(parsed.get(shared_key, "")).strip()
+        if not shared_key.startswith(lane_prefixes):
+            continue
+        # Resolve the shared value from the env file first, then the live process
+        # env. The latter lets this run through `infisical run` (which injects the
+        # shared keys as env vars rather than writing them into the file), so the
+        # secret value flows env -> file without being printed.
+        shared_val = (
+            str(parsed.get(shared_key, "")).strip()
+            or str(os.getenv(shared_key, "")).strip()
+        )
         current_dedicated = str(parsed.get(dedicated_key, "")).strip()
         if not shared_val:
             skipped.append(f"{dedicated_key} (shared source {shared_key} missing)")
