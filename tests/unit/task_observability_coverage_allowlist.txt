@@ -83,3 +83,13 @@ src/universal_agent/skill_gap_finder.py
 # classify and no task_hub_items row — it is infra, not a tracked unit of work — so the
 # worker-exit/PID protocol does not apply. (backlog-triage proactive integration, 2026-06-07)
 src/universal_agent/backlog_triage.py
+
+# deslop_remediation_dispatch.py [rationale (a) — not a task unit]: the deslop
+# auto-remediation poller (Theme 2 v1a). Its only subprocess use is ephemeral
+# read-only/label-edit `gh` CLI (list open deslop-findings issues, view bodies,
+# add the deslop-dispatched/needs-operator claim labels) at poll time. It queues
+# a Cody mission via queue_proactive_task (a task_hub row owned by the Cody
+# worker, not by this poller) and otherwise spawns no long-running PID — it is
+# infra, not a tracked unit of work — so the worker-exit/PID protocol does not
+# apply. Mirrors ci_failure_grace_recheck.py. (auto-remediation dispatcher v1, 2026-06-07)
+src/universal_agent/scripts/deslop_remediation_dispatch.py
