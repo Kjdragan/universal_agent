@@ -1,0 +1,114 @@
+name: Deploy Rerun (transient)
+
+# Auto-remediation v1b (Theme 2): deterministically re-run a Deploy that failed
+# on a TRANSIENT network class — never a code/test failure. deploy.yml has no
+# test/lint steps (those gate at pr-validate before merge); its only failure
+# modes are the "Connect to Tailscale Network" dial timeout and the SSH
+# idle-timeout that drops the channel mid-deploy (exit 255). Both are transient
+# and a plain re-run recovers them (the deploy is idempotent).
+#
+# Safety design (the "no broken fix" bar applied to a fixed command):
+#   1. LOOP GUARD (mandatory): rerun AT MOST ONCE. We only act when the original
+#      run is on attempt 1 (`github.event.workflow_run.run_attempt == 1`). After
+#      we trigger a rerun, attempt 2's completion re-fires this workflow with
+#      run_attempt == 2, the guard is false, and we stand down — never an
+#      infinite rerun of a persistent failure.
+#   2. TRANSIENT-ONLY: we fetch the failed job log and rerun ONLY if it matches a
+#      known transient signature. Anything else (a genuine deploy-script error)
+#      is left for ci-failure-issue.yml + the grace-recheck escalation path.
+#   3. DECOUPLED: a bug here can never break a production deploy — it only ever
+#      issues `gh run rerun`. Advisory-style: it warns, never hard-fails.
+#
+# Token: uses the built-in GITHUB_TOKEN with `actions: write` (sufficient for
+# `gh run view --log-failed` AND `gh run rerun`). AUTO_MERGE_PAT is NOT used
+# (its fine-grained scope lacks actions:write).
+#
+# Observability: posts a one-line Telegram note whenever it reruns (or explains
+# why it stood down in the run log), so the loop is never silent.
+
+on:
+  workflow_run:
+    workflows:
+      - Deploy
+    types: [completed]
+
+permissions:
+  actions: write   # `gh run rerun` + `gh run view --log-failed`
+  contents: read
+
+concurrency:
+  group: deploy-rerun-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  rerun:
+    name: Re-run transient deploy failure (once)
+    # Only failed Deploy runs, and only on the FIRST attempt (loop guard).
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    env:
+      RUN_ID: ${{ github.event.workflow_run.id }}
+      RUN_URL: ${{ github.event.workflow_run.html_url }}
+      HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TG_BOT_TOKEN: ${{ secrets.UA_OPERATOR_TELEGRAM_BOT_TOKEN }}
+      TG_CHAT_ID: ${{ secrets.UA_OPERATOR_TELEGRAM_CHAT_ID }}
+    steps:
+      - name: Classify failure and rerun if transient
+        shell: bash
+        run: |
+          set -uo pipefail
+          REPO="${{ github.repository }}"
+          SHORT="${HEAD_SHA:0:8}"
+
+          echo "Inspecting failed Deploy run ${RUN_ID} (attempt 1) on ${HEAD_BRANCH}@${SHORT}"
+
+          # Pull the failed job log. --log-failed needs actions:read (subsumed by
+          # actions:write). Tolerate a fetch failure: if we can't read the log we
+          # do NOT rerun (conservative — default to standing down).
+          LOG="$(gh run view "$RUN_ID" --repo "$REPO" --log-failed 2>/dev/null || true)"
+          if [ -z "$LOG" ]; then
+            echo "::warning::Could not fetch failed log for run ${RUN_ID}; standing down (no rerun)."
+            exit 0
+          fi
+
+          # Conservative allowlist of TRANSIENT signatures. Default is NO rerun.
+          #   - Tailscale dial timeout: "i/o timeout" / "dial tcp ... timeout"
+          #   - SSH transport drop:     exit code 255, connection reset/timeout,
+          #                             client_loop disconnect, kex id failure
+          TRANSIENT_RE='i/o timeout|dial tcp.*i/o timeout|Connection timed out|connection reset|client_loop: send disconnect|kex_exchange_identification|Timeout, server .* not responding|ssh: connect to host .* (timed out|Connection refused|Connection reset)|tailscale.*(timeout|failed to (dial|connect))|Process completed with exit code 255|exit code 255'
+
+          if printf '%s' "$LOG" | grep -qiE "$TRANSIENT_RE"; then
+            MATCH="$(printf '%s' "$LOG" | grep -ioE "$TRANSIENT_RE" | head -1)"
+            echo "Transient signature matched: ${MATCH} — re-running failed jobs once."
+            if gh run rerun "$RUN_ID" --repo "$REPO" --failed; then
+              STATUS="🔁 Auto-reran transient Deploy failure once (matched: ${MATCH})"
+              echo "$STATUS"
+            else
+              STATUS="⚠️ Transient Deploy failure detected but \`gh run rerun\` failed — check manually"
+              echo "::warning::gh run rerun failed for ${RUN_ID}"
+            fi
+          else
+            STATUS="(stand down) Deploy failure on ${SHORT} is NOT a known transient class — left for human triage"
+            echo "$STATUS"
+            # Not a hard failure: ci-failure-issue.yml already filed an issue for
+            # the original failure; the grace-recheck path escalates it.
+            exit 0
+          fi
+
+          # Best-effort Telegram note so the rerun is observable (fire end-to-end).
+          if [ -n "${TG_BOT_TOKEN:-}" ] && [ -n "${TG_CHAT_ID:-}" ]; then
+            MSG="$(printf '%s\nbranch=%s @%s\n%s' "$STATUS" "$HEAD_BRANCH" "$SHORT" "$RUN_URL")"
+            HTTP="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+              -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+              --data-urlencode "chat_id=${TG_CHAT_ID}" \
+              --data-urlencode "text=${MSG}" \
+              --data "disable_web_page_preview=true" || echo "000")"
+            echo "Telegram HTTP ${HTTP}"
+          else
+            echo "::warning::Operator Telegram secrets absent; rerun happened but no notification sent."
+          fi
