@@ -24,9 +24,7 @@ logger = logging.getLogger(__name__)
 
 _ZAI_BASE = "https://api.z.ai/api/anthropic"
 _DEFAULT_MODEL = "glm-4.5-air"
-# Model used when the brief falls back to the shared CSI LLM auth resolver in
-# mode 0 (Anthropic).  Mirrors csi_global_trend_brief.py's default so the two
-# CSI briefs use the same proven model on the shared lane.
+# Fallback Claude model when using shared Anthropic auth (mode 0).
 _DEFAULT_CLAUDE_MODEL = "claude-3-5-haiku-latest"
 
 _SYSTEM_PROMPT = """\
@@ -197,12 +195,6 @@ async def run_batch_cycle(
     brief_md: str
     llm_used = False
 
-    # Resolve LLM credentials. A dedicated Z.AI key (config.zai_api_key) wins;
-    # otherwise fall back to the shared CSI LLM auth resolver — the SAME path the
-    # (working) global trend brief uses. Without this fallback, batch briefs
-    # silently degraded to plain text whenever only the shared Anthropic key was
-    # provisioned (the live symptom: trend briefs were LLM-generated while batch
-    # briefs read "LLM unavailable" on the same box).
     api_key = config.zai_api_key
     base_url = _ZAI_BASE
     model = config.zai_model
