@@ -64,14 +64,21 @@ For briefings and operator-intelligence surfaces, prefer this pattern:
 
 Required briefing behavior: when recent knowledge blocks include surfaced ideas, repeated warnings, stalled work, or recurring observations, the briefing LLM should explicitly assess whether any pattern or opportunity is emerging. If action is warranted, it should propose a candidate through existing gates rather than directly creating uncontrolled work.
 
+## Runtime vs Development Environment Contract (READ FIRST)
+
+**universal_agent RUNS on the VPS. The desktop is only Kevin's interactive cockpit.**
+
+- **The VPS** (`uaonvps`, `/opt/universal_agent`, runtime user `ua`, always-on) is the **single runtime host**. Every deployed service, systemd timer/unit, cron, worker, scheduler, and database lives and runs there. Anything continuous or scheduled is a `deployment/systemd/` unit shipped via the pipeline: merge to `main` → `deploy.yml` → `scripts/deploy/remote_deploy.sh` auto-installs the units (the `scripts/install_vps_*.sh` installers) and restarts the stack.
+- **The desktop** (`mint-desktop`, user `kjdragan`) is Kevin's **interactive development cockpit — nothing more**. He develops by running Claude Code on the desktop via `claudereal` (→ `scripts/claude_with_mcp_env.sh`, the Profile-1 "Interactive coding" launcher). This is fully supported; **never require SSHing into the VPS to develop.**
+- **Nothing operational ever runs on the desktop.** No `systemctl --user` UA timers/services, no cron, no long-running workers. SSHFS bridges files both ways (below), so host location never limits file access — there is never a reason to run a UA service on the desktop. If you need something to run continuously or on a schedule, build it as a `deployment/systemd/` unit and deploy it to the VPS — **never** `systemctl --user enable` a `ua-*`/`universal-agent-*` unit or run a per-user installer (`scripts/install_*_timer.sh`, `scripts/install_*_user_service.sh`) on the desktop. A desktop-only PreToolUse guard (`.claude/hooks/guard-no-timer-install.sh`, wired from the gitignored `.claude/settings.local.json`) denies these mechanically; the canonical VPS root installers (`install_vps_*`) are exempt.
+- Canonical environment reference (the three execution profiles, per-machine matrix): [`project_docs/06_platform/05_environments.md`](project_docs/06_platform/05_environments.md).
+
 ## Cross-Machine File Resolution (SSHFS)
 
-The Universal Agent infrastructure includes a seamless, transparent file resolution bridge via SSHFS over Tailscale.
+The Universal Agent infrastructure includes a seamless, transparent file resolution bridge via SSHFS over Tailscale, so **host location never limits file access** — the desktop and VPS resolve each other's `/home/kjdragan/...` paths at the same absolute path. This is a file-access capability **only**; where work *runs* is governed by the contract above, not by what is reachable over the mount.
 
-When executing on the VPS (`uaonvps`), agents have direct, native filesystem access to the local desktop environment at the exact same path.
-
-- **The VPS user**: interactive Claude Code on the VPS runs as system user `ua` (not `kjdragan`). Reach the VPS with `ssh ua@uaonvps`. The `/home/kjdragan/...` paths below are an SSHFS mount point — `ua` can read those paths via the mount; there's no `kjdragan` user account on the VPS itself. Global `~/.claude/CLAUDE.md` for VPS interactive sessions therefore lives at `/home/ua/.claude/CLAUDE.md`.
-- **The Path Guarantee**: The local desktop path `/home/kjdragan/...` is mounted onto the VPS at `/home/kjdragan/...`.
+- **Runtime user on the VPS**: the deployed stack and the autonomous agents that spawn the `claude` CLI run as system user `ua` (not `kjdragan`). Reach the VPS with `ssh ua@uaonvps`. There is no `kjdragan` user account on the VPS; the `/home/kjdragan/...` paths are an SSHFS mount that `ua` reads through. Global `~/.claude/CLAUDE.md` for any VPS-side `claude` session lives at `/home/ua/.claude/CLAUDE.md`. (Claude Code is installed on both machines for different reasons — the desktop for Kevin's *interactive* `claudereal` use, the VPS because the autonomous agents spawn the `claude` CLI as `ua`; not redundant.)
+- **The Path Guarantee**: The local desktop path `/home/kjdragan/...` is mounted onto the VPS at `/home/kjdragan/...`, and the VPS is mounted on the desktop at `/home/kjdragan/mnt/vps`.
 - **Capability Implication**: **Never** build custom "file fetcher" tools or syncing scripts to move files from the desktop to the VPS for agent tasks. Instead, simply refer to the absolute `/home/kjdragan/...` path directly. Standard OS operations (`cat`, Python `open()`, etc.) will seamlessly resolve over the SSHFS mount.
 - **Architectural Tenet**: This demonstrates the core design philosophy of "expanding system capabilities at the OS level" rather than building complex, brittle agent workarounds.
 

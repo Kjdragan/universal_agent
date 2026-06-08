@@ -1,0 +1,29 @@
+[Unit]
+Description=Universal Agent skill-gap finder (mine recent transcripts -> ranked skill candidates -> GitHub issue + email). Migrated from the desktop --user timer to the VPS per the desktop=dev / VPS=runtime contract; on the VPS it mines the production transcript corpus.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ua
+Group=ua
+WorkingDirectory=/opt/universal_agent
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/universal_agent/src
+Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
+# Strict-vps Infisical backstop (mirrors the briefings/digest units). The module
+# calls initialize_runtime_secrets() with NO profile arg (skill_gap_finder.py:390-391
+# — its docstring says it loads from Infisical "exactly like the services"), so it
+# honors these inline vars; the deploy-written EnvironmentFile .env is loaded LAST
+# and overrides them with the real machine-identity creds. No `infisical run`
+# wrapper — that was a desktop-only anti-pattern.
+Environment=UA_DEPLOYMENT_PROFILE=vps
+Environment=UA_INFISICAL_ENABLED=1
+Environment=INFISICAL_ENVIRONMENT=production
+EnvironmentFile=-/opt/universal_agent/.env
+ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.skill_gap_finder --window-days 7 --open-issue --email
+MemoryMax=2G
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target

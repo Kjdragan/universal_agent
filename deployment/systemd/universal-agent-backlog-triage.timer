@@ -1,0 +1,14 @@
+[Unit]
+Description=Run the Universal Agent backlog triage daily at 08:30 America/Chicago (migrated from the desktop ua-backlog-triage.timer)
+
+[Timer]
+# OnCalendar wall-clock anchor (NEVER monotonic); Persistent replays a missed slot
+# after a deploy/reboot. Matches the prior desktop cadence (daily 08:30 CT).
+OnCalendar=*-*-* 08:30:00 America/Chicago
+Persistent=true
+RandomizedDelaySec=300
+AccuracySec=1min
+Unit=universal-agent-backlog-triage.service
+
+[Install]
+WantedBy=timers.target
