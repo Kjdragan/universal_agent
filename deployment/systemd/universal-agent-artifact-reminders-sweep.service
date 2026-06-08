@@ -1,0 +1,31 @@
+[Unit]
+Description=Universal Agent artifact-reminder sweep (same-day / Day-3 / Day-7 nudge emails for unacknowledged cron-produced artifacts). Migrated from the in-process gateway cron to a deploy-independent systemd timer.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ua
+Group=ua
+WorkingDirectory=/opt/universal_agent
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/universal_agent/src
+Environment=PYDANTIC_DISABLE_PLUGINS=logfire-plugin
+# Strict-vps Infisical backstop (mirrors the sibling unit
+# universal-agent-proactive-artifact-digest). cron_artifact_reminders_sweep.py now
+# calls initialize_runtime_secrets() with NO profile arg, so it honors
+# UA_DEPLOYMENT_PROFILE below (strict vps Infisical load for AGENTMAIL_API_KEY +
+# recipient env); the deploy-written EnvironmentFile .env is loaded LAST and
+# overrides with the real machine-identity creds. No `infisical run` wrapper.
+Environment=UA_DEPLOYMENT_PROFILE=vps
+Environment=UA_INFISICAL_ENABLED=1
+Environment=INFISICAL_ENVIRONMENT=production
+EnvironmentFile=-/opt/universal_agent/.env
+# Returns a dict (exit 0) even when it sends nothing — never marks .service failed
+# by a quiet sweep.
+ExecStart=/opt/universal_agent/.venv/bin/python -m universal_agent.scripts.cron_artifact_reminders_sweep
+MemoryMax=1G
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

@@ -20231,7 +20231,11 @@ def _ensure_cron_artifact_reminders_sweep_cron_job() -> Optional[dict[str, Any]]
             "emails for unacknowledged cron-produced artifacts."
         ),
         timeout_seconds=300,
-        enabled=_proactive_cron_enabled("UA_CRON_ARTIFACT_REMINDERS_ENABLED"),
+        # 2026-06-08: migrated to systemd timer
+        # (universal-agent-artifact-reminders-sweep) — force in-process registration
+        # disabled (no double-fire). See _is_migrated_to_systemd.
+        enabled=_proactive_cron_enabled("UA_CRON_ARTIFACT_REMINDERS_ENABLED")
+        and not _is_migrated_to_systemd("cron_artifact_reminders_sweep"),
         cron_env_var="UA_CRON_ARTIFACT_REMINDERS_CRON",
         timezone_env_var="UA_CRON_ARTIFACT_REMINDERS_TIMEZONE",
         lightweight=True,

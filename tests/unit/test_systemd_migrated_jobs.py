@@ -17,15 +17,17 @@ from universal_agent.systemd_migrated_jobs import (
 )
 
 
-def test_registry_has_all_20_phase_a_jobs() -> None:
-    assert len(SYSTEMD_MIGRATED_SYSTEM_JOBS) == 20
+def test_registry_has_all_migrated_jobs() -> None:
+    # 20 Phase A jobs + cron_artifact_reminders_sweep (migrated 2026-06-08).
+    assert len(SYSTEMD_MIGRATED_SYSTEM_JOBS) == 21
     for job in (
-        "scratch_pruning",            # batch 1
-        "codie_proactive_cleanup",    # batch 2 (bespoke gate)
-        "hourly_intel_digest",        # batch 3
-        "csi_convergence_sync",       # batch 3 (bespoke gate)
-        "morning_briefing",           # batch A4
-        "csi_demo_triage_rank",       # batch A4
+        "scratch_pruning",               # batch 1
+        "codie_proactive_cleanup",       # batch 2 (bespoke gate)
+        "hourly_intel_digest",           # batch 3
+        "csi_convergence_sync",          # batch 3 (bespoke gate)
+        "morning_briefing",              # batch A4
+        "csi_demo_triage_rank",          # batch A4
+        "cron_artifact_reminders_sweep", # post-Phase-A (2026-06-08)
     ):
         assert job in SYSTEMD_MIGRATED_SYSTEM_JOBS
 
