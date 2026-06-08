@@ -9,7 +9,7 @@ code_paths:
   - src/universal_agent/services/intel_lanes.py
   - src/universal_agent/config/intel_lanes.yaml
   - src/universal_agent/utils/model_resolution.py
-last_verified: 2026-05-29
+last_verified: 2026-06-08
 ---
 
 # URL Judging & Research Grounding

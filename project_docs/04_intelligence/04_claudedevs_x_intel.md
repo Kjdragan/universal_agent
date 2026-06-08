@@ -13,7 +13,7 @@ code_paths:
   - src/universal_agent/scripts/claude_code_intel_sync.py
   - src/universal_agent/scripts/claude_code_intel_run_report.py
   - src/universal_agent/config/intel_lanes.yaml
-last_verified: 2026-05-29
+last_verified: 2026-06-08
 ---
 
 # ClaudeDevs X Intelligence
