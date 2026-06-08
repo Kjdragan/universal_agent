@@ -595,6 +595,13 @@ def test_dispatch_cody_fix_claims_labels_and_emails(monkeypatch):
         emailer=fake_emailer,
     )
 
+    # The claim label is ensured (created if missing) BEFORE it is added —
+    # gh issue edit --add-label fails on a nonexistent label, which silently
+    # broke claiming and caused re-dispatch/re-email.
+    assert any(c[0:2] == ["label", "create"] and "deslop-dispatched" in c for c in gh.calls)
+    create_idx = next(i for i, c in enumerate(gh.calls) if c[0:2] == ["label", "create"])
+    edit_idx = next(i for i, c in enumerate(gh.calls) if c[0:2] == ["issue", "edit"])
+    assert create_idx < edit_idx  # ensured before added
     # Claimed via label edit.
     assert any(c[0:2] == ["issue", "edit"] and "deslop-dispatched" in c for c in gh.calls)
     assert out["claimed_label"] is True
@@ -622,7 +629,8 @@ def test_escalate_labels_and_telegrams(monkeypatch):
     monkeypatch.setenv("UA_OPERATOR_TELEGRAM_CHAT_ID", "12345")
     out = mod.escalate_to_operator(_issue(), "needs_operator", gh=gh, telegram=fake_tg)
     assert out["labelled_needs_operator"] is True
-    assert any("needs-operator" in c for c in gh.calls)
+    assert any(c[0:2] == ["label", "create"] and "needs-operator" in c for c in gh.calls)
+    assert any(c[0:2] == ["issue", "edit"] and "needs-operator" in c for c in gh.calls)
     assert out["telegram_sent"] is True
     assert sent_msgs and "#798" in sent_msgs[0]
 

@@ -552,7 +552,26 @@ def fetch_issue(repo: str, number: int, gh: GhRunner) -> Optional[DeslopIssue]:
     return issue
 
 
+# Color + description for the labels the dispatcher manages, so it can create
+# them on demand. `gh issue edit --add-label` FAILS on a label that does not
+# exist in the repo (gh never auto-creates), which silently broke the claim and
+# made the poller re-dispatch + re-email every run. We ensure the label exists
+# (idempotent `gh label create --force`) before adding it.
+_MANAGED_LABELS = {
+    LABEL_DISPATCHED: ("0E8A16", "deslop-findings issue claimed by the auto-remediation dispatcher"),
+    LABEL_NEEDS_OPERATOR: ("B60205", "Escalated to the operator for manual handling"),
+}
+
+
+def _ensure_label(repo: str, label: str, gh: GhRunner) -> None:
+    """Best-effort: make sure ``label`` exists before adding it. ``--force`` makes
+    this idempotent (create-or-update, never errors if it already exists)."""
+    color, desc = _MANAGED_LABELS.get(label, ("ededed", ""))
+    gh(["label", "create", label, "--repo", repo, "--color", color, "--description", desc, "--force"])
+
+
 def _add_label(repo: str, number: int, label: str, gh: GhRunner) -> bool:
+    _ensure_label(repo, label, gh)
     rc, _, _ = gh(["issue", "edit", str(number), "--repo", repo, "--add-label", label])
     return rc == 0
 
