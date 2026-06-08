@@ -16319,11 +16319,13 @@ async def _send_csi_incident_email(*, subject: str, text: str) -> bool:
 
 
 def _csi_incident_db_path() -> Path:
-    # Use the same resolver as the other gateway CSI endpoints (e.g. the csi
-    # dashboard): CSI_DB_PATH if set, else the canonical default. The gateway
-    # process does NOT export CSI_DB_PATH (only the CSI units do), so reading
-    # the env directly 503'd every call.
-    return _csi_default_db_path().expanduser()
+    # Gateway-owned incident state DB — a SEPARATE sqlite file sibling to csi.db,
+    # NOT the ingester's hot csi.db. Writing incident rows into csi.db contended
+    # with the ingester's continuous writes -> sqlite "database is locked" 500s.
+    # The gateway is the only writer of this file, so there is no contention.
+    # Pathed off _csi_default_db_path() (honours CSI_DB_PATH for tests, else the
+    # canonical /var/lib/universal-agent/csi dir).
+    return _csi_default_db_path().expanduser().parent / ".csi_incidents.db"
 
 
 def _format_failing_duration(first_red_at: Optional[str], now_epoch: int) -> str:
@@ -16359,8 +16361,9 @@ async def csi_transcript_incident_endpoint(request: Request, payload: Transcript
         raise HTTPException(status_code=400, detail="status must be 'red' or 'green'")
 
     db_path = _csi_incident_db_path()
-    if not db_path.exists():
-        raise HTTPException(status_code=503, detail=f"CSI DB not found: {db_path}")
+    # The incidents DB is created on first write (CREATE TABLE IF NOT EXISTS
+    # below) — only the parent dir needs to exist (it's the canonical csi dir).
+    db_path.parent.mkdir(parents=True, exist_ok=True)
 
     summary = (payload.summary or "").strip()
     reasons = [str(r) for r in (payload.reasons or [])]
@@ -16371,6 +16374,7 @@ async def csi_transcript_incident_endpoint(request: Request, payload: Transcript
 
     conn = sqlite3.connect(str(db_path), timeout=5)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=5000")
     emailed = False
     try:
         # Ensure the incidents table exists even if the live csi.db has not yet
