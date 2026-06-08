@@ -186,12 +186,25 @@ TIMER
 systemctl --user daemon-reload
 systemctl --user enable --now "${SERVICE_NAME}.timer"
 
+# A systemd *user* timer only fires while a login session for this user exists —
+# UNLESS lingering is enabled. On a headless VPS (no interactive `ua` session)
+# the timer would silently never run after the installing SSH session closes.
+# Enable lingering so it survives logout. Best-effort: a user can usually set
+# its own linger via polkit; if not, fall back to a sudo hint.
+WHOAMI="$(whoami)"
+if loginctl enable-linger "${WHOAMI}" >/dev/null 2>&1; then
+  log "Enabled lingering for ${WHOAMI} — the timer fires headless across logout."
+elif [[ "$(loginctl show-user "${WHOAMI}" --property=Linger 2>/dev/null)" == "Linger=yes" ]]; then
+  log "Lingering already enabled for ${WHOAMI} — the timer fires headless."
+else
+  log "WARNING: could not enable lingering automatically. The timer will NOT fire"
+  log "  while ${WHOAMI} is logged out until you run: sudo loginctl enable-linger ${WHOAMI}"
+fi
+
 log "Installed and started ${SERVICE_NAME}.timer"
 log "Schedule: OnCalendar=${ONCALENDAR} ${TIMEZONE}, Persistent=true, RandomizedDelaySec=${RANDOMIZED_DELAY_SEC}"
 log "Mode: ${MODE} (observe = always draft PR + email Kevin; auto = safe class auto-merges)"
 log ""
-log "HINT: user timers only fire while you're logged in unless lingering is enabled."
-log "  Enable persistence across logout with: loginctl enable-linger \"\$(whoami)\""
 log "Inspect schedule with: systemctl --user list-timers ${SERVICE_NAME}.timer"
 log "Inspect recent runs with: journalctl --user -u ${SERVICE_NAME}.service -n 80 --no-pager"
 log "Dry-run once now (no side effects):"
