@@ -1,0 +1,15 @@
+[Unit]
+Description=Run the Universal Agent artifact-reminder sweep every 30 min during 06:00-21:30 America/Chicago (migrated from the in-process gateway cron */30 6-21)
+
+[Timer]
+# Matches the prior in-process cron `*/30 6-21 * * *` America/Chicago. The sweep
+# also self-gates per-email to 6 AM-10 PM Houston, so a wide schedule still won't
+# send overnight. Persistent replays a missed slot after a deploy/reboot.
+OnCalendar=*-*-* 06..21:00/30:00 America/Chicago
+Persistent=true
+RandomizedDelaySec=120
+AccuracySec=1min
+Unit=universal-agent-artifact-reminders-sweep.service
+
+[Install]
+WantedBy=timers.target
