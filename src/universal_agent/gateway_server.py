@@ -15,7 +15,6 @@ import contextlib
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 import hashlib
-import io
 import json
 import logging
 import mimetypes
@@ -25,7 +24,6 @@ import re
 import shutil
 import socket
 import sqlite3
-import tarfile
 import threading
 import time
 from types import SimpleNamespace
@@ -637,10 +635,10 @@ def _tutorial_bootstrap_target_root_default() -> str:
 
 
 def _normalize_tutorial_bootstrap_execution_target(value: str) -> str:
+    # Local (desktop-worker) execution was retired 2026-06-08; repos are
+    # created on the server. Unset defaults to server; nothing else is accepted.
     normalized = str(value or "").strip().lower()
-    if normalized in {"", "local", "desktop", "local_desktop"}:
-        return "local"
-    if normalized in {"server", "vps"}:
+    if normalized in {"", "server", "vps"}:
         return "server"
     return ""
 
@@ -1326,139 +1324,6 @@ def _tutorial_bootstrap_list_jobs(*, limit: int = 100, run_path: str = "") -> li
     return [_tutorial_bootstrap_enrich_job(dict(row)) for row in rows[:clamped]]
 
 
-def _tutorial_bootstrap_find_active_job(*, run_path: str, execution_target: str = "local") -> Optional[dict[str, Any]]:
-    normalized_run_path = str(run_path or "").strip().strip("/")
-    normalized_target = str(execution_target or "").strip().lower() or "local"
-    with _tutorial_bootstrap_jobs_lock:
-        rows = sorted(
-            _tutorial_bootstrap_jobs.values(),
-            key=lambda row: float(row.get("queued_at_epoch") or 0.0),
-            reverse=True,
-        )
-    for row in rows:
-        if str(row.get("tutorial_run_path") or "").strip().strip("/") != normalized_run_path:
-            continue
-        if str(row.get("execution_target") or "").strip().lower() != normalized_target:
-            continue
-        status = str(row.get("status") or "").strip().lower()
-        if status in {"queued", "running"}:
-            return _tutorial_bootstrap_enrich_job(dict(row))
-    return None
-
-
-def _tutorial_bootstrap_claim_next(*, worker_id: str) -> Optional[dict[str, Any]]:
-    worker = str(worker_id or "").strip() or f"worker-{uuid.uuid4().hex[:8]}"
-    now_ts = time.time()
-    now_iso = datetime.now(timezone.utc).isoformat()
-    with _tutorial_bootstrap_jobs_lock:
-        # Recover stale running jobs so they can be retried.
-        for job in _tutorial_bootstrap_jobs.values():
-            status = str(job.get("status") or "").strip().lower()
-            claimed_ts = float(job.get("claimed_at_epoch") or 0.0)
-            if status == "running" and claimed_ts > 0 and (now_ts - claimed_ts) > _tutorial_bootstrap_claim_ttl_seconds:
-                job["status"] = "queued"
-                job["error"] = f"Requeued after stale claim timeout ({_tutorial_bootstrap_claim_ttl_seconds}s)"
-                job["requeued_at"] = now_iso
-                if str(job.get("job_id") or "") not in _tutorial_bootstrap_queue:
-                    _tutorial_bootstrap_queue.append(str(job.get("job_id") or ""))
-
-        while _tutorial_bootstrap_queue:
-            job_id = str(_tutorial_bootstrap_queue.popleft() or "").strip()
-            if not job_id:
-                continue
-            job = _tutorial_bootstrap_jobs.get(job_id)
-            if not isinstance(job, dict):
-                continue
-            status = str(job.get("status") or "").strip().lower()
-            dispatch_backend = str(job.get("dispatch_backend") or "http_queue").strip().lower()
-            if status != "queued":
-                continue
-            if dispatch_backend != "http_queue":
-                continue
-            claims = int(job.get("claim_attempts") or 0) + 1
-            job["status"] = "running"
-            job["worker_id"] = worker
-            job["claim_attempts"] = claims
-            job["claimed_at"] = now_iso
-            job["claimed_at_epoch"] = now_ts
-            job["started_at"] = now_iso
-            enriched = _tutorial_bootstrap_enrich_job(job)
-            _tutorial_bootstrap_jobs[job_id] = enriched
-            return dict(enriched)
-    return None
-
-
-def _tutorial_bootstrap_mark_running(*, job_id: str, worker_id: str) -> dict[str, Any]:
-    normalized_job_id = str(job_id or "").strip()
-    if not normalized_job_id:
-        raise HTTPException(status_code=400, detail="job_id is required")
-    worker = str(worker_id or "").strip() or f"worker-{uuid.uuid4().hex[:8]}"
-    now_ts = time.time()
-    now_iso = datetime.now(timezone.utc).isoformat()
-    with _tutorial_bootstrap_jobs_lock:
-        job = _tutorial_bootstrap_jobs.get(normalized_job_id)
-        if not isinstance(job, dict):
-            raise HTTPException(status_code=404, detail="Bootstrap job not found")
-        dispatch_backend = str(job.get("dispatch_backend") or "http_queue").strip().lower()
-        if dispatch_backend not in {"http_queue", "redis_stream"}:
-            raise HTTPException(status_code=409, detail=f"Unsupported dispatch backend for running transition: {dispatch_backend}")
-        status = str(job.get("status") or "").strip().lower()
-        assigned_worker = str(job.get("worker_id") or "").strip()
-        if assigned_worker and assigned_worker != worker:
-            raise HTTPException(status_code=409, detail="Job is assigned to a different worker")
-        if status not in {"queued", "running"}:
-            raise HTTPException(status_code=409, detail=f"Job is not claimable from status={status or 'unknown'}")
-        if status == "running":
-            return _tutorial_bootstrap_enrich_job(dict(job))
-        claims = int(job.get("claim_attempts") or 0) + 1
-        job["status"] = "running"
-        job["worker_id"] = worker
-        job["claim_attempts"] = claims
-        job["claimed_at"] = now_iso
-        job["claimed_at_epoch"] = now_ts
-        job["started_at"] = now_iso
-        enriched = _tutorial_bootstrap_enrich_job(job)
-        _tutorial_bootstrap_jobs[normalized_job_id] = enriched
-        return dict(enriched)
-
-
-def _tutorial_bootstrap_update_result(
-    *,
-    job_id: str,
-    worker_id: str,
-    status: str,
-    repo_dir: str,
-    stdout: str,
-    stderr: str,
-    error: str,
-) -> dict[str, Any]:
-    normalized_job_id = str(job_id or "").strip()
-    if not normalized_job_id:
-        raise HTTPException(status_code=400, detail="job_id is required")
-    status_normalized = str(status or "").strip().lower()
-    if status_normalized not in {"completed", "failed"}:
-        raise HTTPException(status_code=400, detail="status must be completed or failed")
-    finished_at = datetime.now(timezone.utc).isoformat()
-    with _tutorial_bootstrap_jobs_lock:
-        job = _tutorial_bootstrap_jobs.get(normalized_job_id)
-        if not isinstance(job, dict):
-            raise HTTPException(status_code=404, detail="Bootstrap job not found")
-        assigned_worker = str(job.get("worker_id") or "").strip()
-        provided_worker = str(worker_id or "").strip()
-        if assigned_worker and provided_worker and assigned_worker != provided_worker:
-            raise HTTPException(status_code=409, detail="Job is assigned to a different worker")
-        job["status"] = status_normalized
-        job["completed_at"] = finished_at
-        job["finished_at"] = finished_at
-        job["repo_dir"] = str(repo_dir or "").strip()
-        job["stdout"] = str(stdout or "")[-6000:]
-        job["stderr"] = str(stderr or "")[-4000:]
-        job["error"] = str(error or "")[-1200:]
-        enriched = _tutorial_bootstrap_enrich_job(job)
-        _tutorial_bootstrap_jobs[normalized_job_id] = enriched
-        return dict(enriched)
-
-
 def _factory_capabilities_payload() -> dict[str, Any]:
     provider_override = str(os.getenv("LLM_PROVIDER_OVERRIDE") or "").strip()
     capabilities = {
@@ -1602,45 +1467,6 @@ def _cleanup_legacy_factory_registrations() -> int:
             ", ".join(candidates[:8]),
         )
     return deleted
-
-
-def _publish_tutorial_bootstrap_mission(
-    *,
-    request: Request,
-    job: dict[str, Any],
-) -> tuple[bool, str]:
-    if _delegation_mission_bus is None or not _FACTORY_POLICY.can_publish_delegations:
-        return False, ""
-    job_id = str(job.get("job_id") or "").strip()
-    if not job_id:
-        return False, ""
-    base_url = str(request.base_url).rstrip("/")
-    run_path = str(job.get("tutorial_run_path") or "").strip()
-    payload = MissionEnvelope(
-        job_id=job_id,
-        idempotency_key=f"tutorial-bootstrap:{job_id}",
-        priority=1,
-        timeout_seconds=max(30, min(int(job.get("timeout_seconds") or 900), 3600)),
-        max_retries=3,
-        payload=MissionPayload(
-            task=f"Bootstrap tutorial repo for run_path={run_path}",
-            context={
-                "mission_kind": "tutorial_bootstrap_repo",
-                "job_id": job_id,
-                "gateway_url": base_url,
-                "tutorial_run_path": run_path,
-                "repo_name": str(job.get("repo_name") or ""),
-                "target_root": str(job.get("target_root") or ""),
-                "python_version": str(job.get("python_version") or ""),
-                "timeout_seconds": int(job.get("timeout_seconds") or 900),
-                "_retry_count": 0,
-            },
-        ),
-    )
-    message_id = _delegation_mission_bus.publish_mission(payload)
-    _delegation_metrics["last_publish_at"] = datetime.now(timezone.utc).isoformat()
-    _delegation_metrics["published_total"] = int(_delegation_metrics.get("published_total") or 0) + 1
-    return True, message_id
 
 
 def _tutorial_review_prompt(
@@ -2360,19 +2186,6 @@ class TutorialBootstrapRepoRequest(BaseModel):
     python_version: Optional[str] = None
     timeout_seconds: int = 900
     execution_target: str = "server"
-
-
-class TutorialBootstrapJobClaimRequest(BaseModel):
-    worker_id: Optional[str] = None
-
-
-class TutorialBootstrapJobResultRequest(BaseModel):
-    worker_id: Optional[str] = None
-    status: str
-    repo_dir: Optional[str] = None
-    stdout: Optional[str] = None
-    stderr: Optional[str] = None
-    error: Optional[str] = None
 
 
 class SessionPolicyPatchRequest(BaseModel):
@@ -29492,111 +29305,7 @@ async def dashboard_tutorial_bootstrap_repo(request: Request, payload: TutorialB
     timeout_seconds = max(30, min(int(payload.timeout_seconds or 900), 3600))
     execution_target = _normalize_tutorial_bootstrap_execution_target(payload.execution_target)
     if not execution_target:
-        raise HTTPException(status_code=400, detail="execution_target must be local or server")
-
-    if execution_target == "local":
-        def _worker_hint_for(dispatch_backend: str) -> str:
-            normalized = str(dispatch_backend or "http_queue").strip().lower()
-            if normalized == "redis_stream":
-                return (
-                    "Run scripts/tutorial_local_bootstrap_worker.py on your local desktop "
-                    "with --transport redis and matching UA_REDIS_* environment."
-                )
-            return (
-                "Run scripts/tutorial_local_bootstrap_worker.py on your local desktop "
-                "with --gateway-url and --ops-token to process queued jobs."
-            )
-
-        existing_job = _tutorial_bootstrap_find_active_job(run_path=run_rel, execution_target="local")
-        if existing_job:
-            existing_dispatch_backend = str(existing_job.get("dispatch_backend") or "http_queue").strip().lower()
-            return {
-                "queued": True,
-                "job_id": str(existing_job.get("job_id") or ""),
-                "status": str(existing_job.get("status") or "queued"),
-                "execution_target": "local",
-                "dispatch_backend": existing_dispatch_backend,
-                "run_path": run_rel,
-                "repo_name": str(existing_job.get("repo_name") or repo_name),
-                "target_root": str(existing_job.get("target_root") or target_root),
-                "job": existing_job,
-                "existing_job_reused": True,
-                "worker_hint": _worker_hint_for(existing_dispatch_backend),
-            }
-        now = datetime.now(timezone.utc)
-        job_id = f"tbj_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
-        dispatch_backend = (
-            "redis_stream"
-            if (_delegation_mission_bus is not None and _FACTORY_POLICY.can_publish_delegations)
-            else "http_queue"
-        )
-        job = {
-            "job_id": job_id,
-            "status": "queued",
-            "queued_at": now.isoformat(),
-            "queued_at_epoch": time.time(),
-            "execution_target": "local",
-            "tutorial_run_path": run_rel,
-            "tutorial_title": title,
-            "video_id": str(manifest.get("video_id") or ""),
-            "video_url": str(manifest.get("video_url") or ""),
-            "repo_name": repo_name,
-            "target_root": target_root,
-            "python_version": python_version,
-            "timeout_seconds": timeout_seconds,
-            "dispatch_backend": dispatch_backend,
-        }
-        saved = _remember_tutorial_bootstrap_job(job)
-        dispatch_message_id = ""
-        if dispatch_backend == "redis_stream":
-            try:
-                published, message_id = _publish_tutorial_bootstrap_mission(request=request, job=saved)
-                if published:
-                    dispatch_message_id = str(message_id or "")
-                    if dispatch_message_id:
-                        saved["delegation_message_id"] = dispatch_message_id
-                        saved = _remember_tutorial_bootstrap_job(saved)
-                else:
-                    dispatch_backend = "http_queue"
-                    saved["dispatch_backend"] = "http_queue"
-                    saved["dispatch_fallback_reason"] = "redis_bus_unavailable"
-                    saved = _remember_tutorial_bootstrap_job(saved)
-            except Exception as exc:
-                logger.warning("Failed publishing tutorial bootstrap mission to Redis: %s", exc)
-                dispatch_backend = "http_queue"
-                saved["dispatch_backend"] = "http_queue"
-                saved["dispatch_fallback_reason"] = str(exc)
-                saved = _remember_tutorial_bootstrap_job(saved)
-
-        _add_notification(
-            kind="tutorial_repo_bootstrap_queued",
-            title="Tutorial Repo Bootstrap Queued",
-            message=f"Queued local repo creation for: {title}",
-            severity="info",
-            metadata={
-                "job_id": job_id,
-                "tutorial_run_path": run_rel,
-                "repo_name": repo_name,
-                "target_root": target_root,
-                "execution_target": "local",
-                "dispatch_backend": dispatch_backend,
-                "delegation_message_id": dispatch_message_id or None,
-                "source": "dashboard_tutorial_bootstrap",
-            },
-        )
-        return {
-            "queued": True,
-            "job_id": job_id,
-            "status": "queued",
-            "execution_target": "local",
-            "dispatch_backend": dispatch_backend,
-            "run_path": run_rel,
-            "repo_name": repo_name,
-            "target_root": target_root,
-            "job": saved,
-            "existing_job_reused": False,
-            "worker_hint": _worker_hint_for(dispatch_backend),
-        }
+        raise HTTPException(status_code=400, detail="execution_target must be server")
 
     now = datetime.now(timezone.utc)
     job_id = f"tbj_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
@@ -30286,134 +29995,6 @@ async def ops_proactive_outcomes_get(request: Request, window_hours: int = 168, 
     except Exception as exc:
         logger.warning("Failed to retrieve proactive outcomes: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
-
-@app.post("/api/v1/ops/tutorials/bootstrap-jobs/claim")
-async def ops_tutorial_bootstrap_claim(request: Request, payload: TutorialBootstrapJobClaimRequest):
-    _require_ops_auth(request)
-    _require_delegation_consume_allowed()
-    worker_id = str(payload.worker_id or "").strip() or f"worker-{uuid.uuid4().hex[:8]}"
-    job = _tutorial_bootstrap_claim_next(worker_id=worker_id)
-    return {"worker_id": worker_id, "job": job}
-
-
-@app.post("/api/v1/ops/tutorials/bootstrap-jobs/{job_id}/start")
-async def ops_tutorial_bootstrap_start(
-    request: Request,
-    job_id: str,
-    payload: TutorialBootstrapJobClaimRequest,
-):
-    _require_ops_auth(request)
-    _require_delegation_consume_allowed()
-    worker_id = str(payload.worker_id or "").strip() or f"worker-{uuid.uuid4().hex[:8]}"
-    job = _tutorial_bootstrap_mark_running(job_id=job_id, worker_id=worker_id)
-    return {"worker_id": worker_id, "job": job}
-
-
-@app.get("/api/v1/ops/tutorials/bootstrap-jobs/{job_id}/bundle")
-async def ops_tutorial_bootstrap_bundle(request: Request, job_id: str):
-    _require_ops_auth(request)
-    _require_delegation_consume_allowed()
-    normalized_job_id = str(job_id or "").strip()
-    if not normalized_job_id:
-        raise HTTPException(status_code=400, detail="job_id is required")
-
-    with _tutorial_bootstrap_jobs_lock:
-        job = dict(_tutorial_bootstrap_jobs.get(normalized_job_id) or {})
-    if not job:
-        raise HTTPException(status_code=404, detail="Bootstrap job not found")
-
-    run_path = str(job.get("tutorial_run_path") or "").strip().strip("/")
-    if not run_path:
-        raise HTTPException(status_code=400, detail="Bootstrap job is missing tutorial_run_path")
-
-    run_dir = _resolve_path_under_root(ARTIFACTS_DIR, run_path)
-    run_rel = _artifact_rel_path(run_dir)
-    if not _is_tutorial_run_rel_path(run_rel):
-        raise HTTPException(status_code=400, detail="tutorial_run_path must be under youtube-tutorial-creation/")
-    if not run_dir.exists() or not run_dir.is_dir():
-        raise HTTPException(status_code=404, detail="Tutorial run directory not found")
-
-    manifest = _tutorial_manifest(run_dir)
-    if not _tutorial_has_code_implementation(run_dir, manifest):
-        raise HTTPException(
-            status_code=400,
-            detail="Tutorial run is concept-only; bootstrap bundle is unavailable",
-        )
-
-    implementation_dir = run_dir / "implementation"
-    script_path = implementation_dir / "create_new_repo.sh"
-    if not implementation_dir.exists() or not implementation_dir.is_dir():
-        raise HTTPException(status_code=400, detail="implementation directory not found for tutorial run")
-    if not script_path.exists() or not script_path.is_file():
-        raise HTTPException(status_code=400, detail="create_new_repo.sh not found for tutorial run")
-
-    tar_buffer = io.BytesIO()
-    try:
-        with tarfile.open(fileobj=tar_buffer, mode="w:gz") as archive:
-            archive.add(implementation_dir, arcname="implementation")
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to package bootstrap bundle: {exc}")
-    tar_buffer.seek(0)
-    filename = f"{normalized_job_id}_implementation.tgz"
-    headers = {
-        "Content-Disposition": f'attachment; filename="{filename}"',
-        "X-Tutorial-Run-Path": run_rel,
-    }
-    return StreamingResponse(tar_buffer, media_type="application/gzip", headers=headers)
-
-
-@app.post("/api/v1/ops/tutorials/bootstrap-jobs/{job_id}/result")
-async def ops_tutorial_bootstrap_result(
-    request: Request,
-    job_id: str,
-    payload: TutorialBootstrapJobResultRequest,
-):
-    _require_ops_auth(request)
-    _require_delegation_consume_allowed()
-    updated = _tutorial_bootstrap_update_result(
-        job_id=job_id,
-        worker_id=str(payload.worker_id or "").strip(),
-        status=str(payload.status or ""),
-        repo_dir=str(payload.repo_dir or ""),
-        stdout=str(payload.stdout or ""),
-        stderr=str(payload.stderr or ""),
-        error=str(payload.error or ""),
-    )
-
-    is_success = str(updated.get("status") or "") == "completed"
-    if is_success:
-        _register_tutorial_bootstrap_proactive_artifact(updated)
-    title = str(updated.get("tutorial_title") or updated.get("tutorial_run_path") or "tutorial")
-    execution_target = str(updated.get("execution_target") or "local").strip().lower() or "local"
-    success_prefix = "VPS repo created" if execution_target == "server" else "Local repo created"
-    failure_prefix = "VPS repo bootstrap failed" if execution_target == "server" else "Local repo bootstrap failed"
-    _add_notification(
-        kind="tutorial_repo_bootstrap_ready" if is_success else "tutorial_repo_bootstrap_failed",
-        title="Tutorial Repo Created" if is_success else "Tutorial Repo Bootstrap Failed",
-        message=(
-            f"{success_prefix} for: {title}"
-            if is_success
-            else f"{failure_prefix} for: {title}"
-        ),
-        severity="success" if is_success else "error",
-        requires_action=not is_success,
-        metadata={
-            "job_id": str(updated.get("job_id") or ""),
-            "tutorial_run_path": str(updated.get("tutorial_run_path") or ""),
-            "repo_name": str(updated.get("repo_name") or ""),
-            "repo_dir": str(updated.get("repo_dir") or ""),
-            "status": str(updated.get("status") or ""),
-            "error": str(updated.get("error") or ""),
-            "execution_target": execution_target,
-            "execution_host": str(updated.get("execution_host") or ""),
-            "repo_access_mode": str(updated.get("repo_access_mode") or ""),
-            "repo_access_hint": str(updated.get("repo_access_hint") or ""),
-            "repo_storage_href": str(updated.get("repo_storage_href") or ""),
-            "source": "tutorial_bootstrap_worker",
-        },
-    )
-    return {"job": updated}
-
 
 @app.post("/api/v1/vision/describe")
 async def vision_describe(request: VisionDescribeRequest):
