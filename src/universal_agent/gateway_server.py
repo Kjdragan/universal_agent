@@ -16319,10 +16319,11 @@ async def _send_csi_incident_email(*, subject: str, text: str) -> bool:
 
 
 def _csi_incident_db_path() -> Path:
-    raw = (os.getenv("CSI_DB_PATH") or "").strip()
-    if not raw:
-        raise HTTPException(status_code=503, detail="CSI_DB_PATH is not configured.")
-    return Path(raw).expanduser()
+    # Use the same resolver as the other gateway CSI endpoints (e.g. the csi
+    # dashboard): CSI_DB_PATH if set, else the canonical default. The gateway
+    # process does NOT export CSI_DB_PATH (only the CSI units do), so reading
+    # the env directly 503'd every call.
+    return _csi_default_db_path().expanduser()
 
 
 def _format_failing_duration(first_red_at: Optional[str], now_epoch: int) -> str:
