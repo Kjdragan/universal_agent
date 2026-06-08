@@ -175,6 +175,23 @@ def decide_action(ctx: FailureContext, state: RepoState) -> tuple[str, str]:
 GhRunner = Callable[[list[str]], "tuple[int, str, str]"]
 
 
+def _gh_subprocess_env() -> dict:
+    """Env for the `gh` subprocess. ``initialize_runtime_secrets()`` can inject an
+    Infisical ``GH_TOKEN`` that is expired/scopeless (seen: 401 Bad credentials),
+    and gh prefers an env token over its ``~/.config/gh`` login — so a bad env
+    token silently 401s every gh call. Drop the env token so gh uses the box's
+    maintained ``gh auth login``, but ONLY when that config login exists, so we
+    never strip the sole credential (e.g. in CI, where GITHUB_TOKEN is the auth)."""
+    env = dict(os.environ)
+    cfg_dir = os.environ.get("GH_CONFIG_DIR") or os.path.join(
+        os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "gh"
+    )
+    if os.path.isfile(os.path.join(cfg_dir, "hosts.yml")):
+        for key in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN"):
+            env.pop(key, None)
+    return env
+
+
 def _real_gh(args: list[str], timeout: int = 60) -> tuple[int, str, str]:
     try:
         proc = subprocess.run(
@@ -183,6 +200,7 @@ def _real_gh(args: list[str], timeout: int = 60) -> tuple[int, str, str]:
             text=True,
             timeout=timeout,
             check=False,
+            env=_gh_subprocess_env(),
         )
         return proc.returncode, proc.stdout, proc.stderr
     except FileNotFoundError:

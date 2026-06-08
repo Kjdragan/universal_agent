@@ -144,10 +144,13 @@ if [[ ! -x "${VENV_PYTHON}" ]]; then
   echo "::warning:: repo venv python not found at ${VENV_PYTHON} — the timer will fail until 'uv sync' creates it." >&2
 fi
 
-# ExecStart: infisical run --env=local form, then
-# env PYTHONPATH=<src> <venv python> -m ...deslop_remediation_dispatch --mode <mode>
+# ExecStart runs the dispatcher directly. It calls initialize_runtime_secrets()
+# itself, so it resolves Infisical creds from the EnvironmentFile (.env) the VPS
+# way — NO `infisical run` wrapper. (The wrapper was copied from the desktop
+# installers; on the VPS `infisical run` has no login session and tries an
+# interactive login, which fails. Verified: the wrapper-form unit exits 1 at
+# auth; this direct form resolves creds via initialize_runtime_secrets().)
 exec_start=(
-  infisical run --env=local --projectId "${INFISICAL_PROJECT_ID}" --
   env "PYTHONPATH=${REPO_ROOT}/src" "${VENV_PYTHON}"
   -m universal_agent.scripts.deslop_remediation_dispatch
   --mode "${MODE}"
@@ -163,7 +166,9 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-Environment=INFISICAL_PROJECT_ID=${INFISICAL_PROJECT_ID}
+EnvironmentFile=-${REPO_ROOT}/.env
+Environment=UA_DEPLOYMENT_PROFILE=vps
+Environment=UA_INFISICAL_ENABLED=1
 Environment=UA_DESLOP_AUTOREMEDIATE_MODE=${MODE}
 WorkingDirectory=${REPO_ROOT}
 ExecStart=${exec_start_line}
@@ -194,5 +199,5 @@ log "HINT: user timers only fire while you're logged in unless lingering is enab
 log "  Enable persistence across logout with: loginctl enable-linger \"\$(whoami)\""
 log "Inspect schedule with: systemctl --user list-timers ${SERVICE_NAME}.timer"
 log "Inspect recent runs with: journalctl --user -u ${SERVICE_NAME}.service -n 80 --no-pager"
-log "Dry-run once now (no side effects):"
-log "  infisical run --env=local --projectId ${INFISICAL_PROJECT_ID} -- env PYTHONPATH=${REPO_ROOT}/src ${VENV_PYTHON} -m universal_agent.scripts.deslop_remediation_dispatch --dry-run"
+log "Dry-run once now (no side effects), using the same env the service uses:"
+log "  systemd-run --user --pipe --quiet -p EnvironmentFile=-${REPO_ROOT}/.env -E UA_DEPLOYMENT_PROFILE=vps -E PYTHONPATH=${REPO_ROOT}/src ${VENV_PYTHON} -m universal_agent.scripts.deslop_remediation_dispatch --dry-run"
