@@ -17,7 +17,7 @@ code_paths:
   - src/universal_agent/durable/db.py
   - scripts/deploy/remote_deploy.sh
   - deployment/systemd/
-last_verified: 2026-06-05
+last_verified: 2026-06-08
 ---
 
 # ADR: Scheduling Substrate Redesign
@@ -191,7 +191,7 @@ Legend — **Substrate**: `systemd` = `OnCalendar`+`Persistent` timer (migrate);
 | 6f661208f8 | intel_auto_promoter | `35 10,15` | det | 2×/day | **systemd ✅ migrated (batch 2)** | promotes triage output; capped/day; pure SQLite (no `TimeoutStartSec`) |
 | 013f433539 | hourly_intel_digest | `0 6-21` | det | hourly | **systemd** | content-hourly, ~3 hrs/day lost today; "LLM-independent path" by design |
 | csi_convergence_sync | csi_convergence_sync | `0 6-21` | det (LLM) | hourly | **systemd** | content-hourly, ~25 % restart-cancelled today |
-| b4caa05aba | cron_artifact_reminders_sweep | `*/30 6-21` | det | 30-min | **in-proc?** | self-healing; migrate only if convenient |
+| b4caa05aba | cron_artifact_reminders_sweep | `*/30 6-21` | det | 30-min | **systemd ✅ migrated (2026-06-08)** | was `in-proc?` (self-healing, optional); migrated to `universal-agent-artifact-reminders-sweep.timer` alongside its sibling `proactive_artifact_digest` when the desktop-duplicate timer was retired. ExecStart module now self-bootstraps secrets (it had inherited the gateway env in-process) |
 | 95a651abc5 | vp_mission_pr_reconciler | `*/15 6-20` | det | 15-min | **in-proc?** | self-healing reconcile; next sweep covers |
 | 2e2e40373e | simone_chat_auto_complete | `*/1` UTC | det | minute | **in-proc?** | 17 % lost but benign; control-plane (operator call) |
 | 8d0f1af6ee | atlas_direct_dispatch | `*/1` UTC | det | minute | **in-proc?** | 49 % lost but benign; control-plane dispatch (operator call) |
@@ -210,6 +210,13 @@ only if the operator keeps a 2× report cadence in Decision 4, else drops),
 3 → **drop** (consolidate), 4 → **disabled** (no action). Grand total reconciles
 to 31. The in-process *daily* footprint shrinks to **one** job (paper_to_podcast),
 which is what makes Decision 5's catch-up structurally bounded.
+>
+> *Update 2026-06-08:* `cron_artifact_reminders_sweep` — an `in-proc?` target — was
+> opportunistically migrated to a systemd timer (it was already a VPS in-process cron
+> with a now-removed desktop-`--user` duplicate; consolidating onto a timer removed the
+> double-fire risk). So the live optional set is **3 → in-proc?** and slot-critical/opt
+> systemd is **20**. The frozenset `systemd_migrated_jobs.py::SYSTEMD_MIGRATED_SYSTEM_JOBS`
+> remains the machine source of truth.
 
 > Migration caveat (carries into every `systemd` row): a job lifted out of the
 > in-process runtime must get its `required_secrets` via an `EnvironmentFile`
