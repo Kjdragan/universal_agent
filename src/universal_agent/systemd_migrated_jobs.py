@@ -64,12 +64,7 @@ SYSTEMD_MIGRATED_SYSTEM_JOBS: frozenset[str] = frozenset(
         "morning_briefing",
         "evening_briefing",
         "csi_demo_triage_rank",
-        # 2026-06-08 — artifact-reminder sweep moved off the in-process gateway cron
-        # to a deploy-independent systemd timer (sibling of proactive_artifact_digest).
-        # Gated via the _register_system_cron_job(enabled=…) arg in
-        # _ensure_cron_artifact_reminders_sweep_cron_job. Its ExecStart module
-        # (scripts/cron_artifact_reminders_sweep.py) now self-bootstraps secrets via
-        # initialize_runtime_secrets(), honoring the unit's UA_DEPLOYMENT_PROFILE=vps.
+        # 2026-06-08 — migrated to systemd timer (sibling of proactive_artifact_digest).
         "cron_artifact_reminders_sweep",
     }
 )
