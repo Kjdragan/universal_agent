@@ -625,3 +625,27 @@ def test_escalate_labels_and_telegrams(monkeypatch):
     assert any("needs-operator" in c for c in gh.calls)
     assert out["telegram_sent"] is True
     assert sent_msgs and "#798" in sent_msgs[0]
+
+
+def test_gh_env_scrubs_bad_token_when_config_login_present(monkeypatch, tmp_path):
+    """A gh config login exists -> drop the env GH_TOKEN so gh uses the maintained
+    config-auth (fixes the infisical 401 token silently 401-ing every gh call)."""
+    cfg = tmp_path / "gh"
+    cfg.mkdir()
+    (cfg / "hosts.yml").write_text("github.com:\n  oauth_token: x\n", encoding="utf-8")
+    monkeypatch.setenv("GH_CONFIG_DIR", str(cfg))
+    monkeypatch.setenv("GH_TOKEN", "bad-401-token")
+    monkeypatch.setenv("GITHUB_TOKEN", "also-bad")
+    env = mod._gh_subprocess_env()
+    assert "GH_TOKEN" not in env
+    assert "GITHUB_TOKEN" not in env
+
+
+def test_gh_env_keeps_token_when_no_config_login(monkeypatch, tmp_path):
+    """No config login (e.g. CI) -> the env token is the sole credential; keep it."""
+    cfg = tmp_path / "gh"
+    cfg.mkdir()  # no hosts.yml
+    monkeypatch.setenv("GH_CONFIG_DIR", str(cfg))
+    monkeypatch.setenv("GH_TOKEN", "the-only-cred")
+    env = mod._gh_subprocess_env()
+    assert env.get("GH_TOKEN") == "the-only-cred"
