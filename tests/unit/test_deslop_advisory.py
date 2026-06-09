@@ -217,3 +217,68 @@ def test_main_skips_on_autoremediation_branch(tmp_path, monkeypatch, capsys):
     assert rc == 0
     assert captured.out.strip() == ""  # no comment body -> workflow posts nothing
     assert not meta.exists()  # no meta sidecar -> no tracking issue
+
+
+def test_clean_pr_emits_no_comment_but_writes_meta(tmp_path, monkeypatch, capsys):
+    """Default-quiet: a clean PR (no findings) prints NO comment — so the workflow
+    posts nothing and the operator gets no email — but still writes the meta
+    sidecar recording max_severity=none."""
+    diff = tmp_path / "pr.diff"
+    diff.write_text("diff --git a/x b/x\n+print('hi')\n", encoding="utf-8")
+    meta = tmp_path / "meta.json"
+    monkeypatch.delenv("UA_DESLOP_NOTIFY_OPERATOR", raising=False)
+    monkeypatch.delenv("GITHUB_HEAD_REF", raising=False)
+    monkeypatch.setattr(deslop_advisory, "_load_zai_env", lambda: None)
+    monkeypatch.setattr(deslop_advisory, "_client", lambda: None)  # no creds -> empty advisory
+    monkeypatch.setattr(
+        "sys.argv",
+        ["deslop_advisory.py", "--diff", str(diff), "--meta-out", str(meta)],
+    )
+    rc = deslop_advisory.main()
+    assert rc == 0
+    assert capsys.readouterr().out.strip() == ""  # no "No slop found" comment
+    assert json.loads(meta.read_text(encoding="utf-8"))["max_severity"] == "none"
+
+
+def test_medium_finding_still_comments(tmp_path, monkeypatch, capsys):
+    """An actionable medium/high finding DOES comment (the workflow reuses the
+    comment verbatim as the tracking-issue body) and records the severity."""
+    diff = tmp_path / "pr.diff"
+    diff.write_text("diff --git a/x b/x\n+# redundant\n", encoding="utf-8")
+    meta = tmp_path / "meta.json"
+    monkeypatch.delenv("UA_DESLOP_NOTIFY_OPERATOR", raising=False)
+    monkeypatch.delenv("GITHUB_HEAD_REF", raising=False)
+    monkeypatch.setattr(deslop_advisory, "_load_zai_env", lambda: None)
+    monkeypatch.setattr(deslop_advisory, "_client", lambda: object())
+    monkeypatch.setattr(
+        deslop_advisory,
+        "_review",
+        lambda client, model, diff_text: {
+            "suggestions": [
+                {"file": "x.py", "severity": "medium", "issue": "redundant comment", "fix": "remove"}
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["deslop_advisory.py", "--diff", str(diff), "--meta-out", str(meta)],
+    )
+    rc = deslop_advisory.main()
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Deslop advisory" in out and "redundant comment" in out
+    assert json.loads(meta.read_text(encoding="utf-8"))["max_severity"] == "medium"
+
+
+def test_notify_flag_restores_comment_on_clean_pr(tmp_path, monkeypatch, capsys):
+    """UA_DESLOP_NOTIFY_OPERATOR=1 restores a comment on every PR, even a clean one."""
+    diff = tmp_path / "pr.diff"
+    diff.write_text("diff --git a/x b/x\n+ok\n", encoding="utf-8")
+    monkeypatch.setenv("UA_DESLOP_NOTIFY_OPERATOR", "1")
+    monkeypatch.delenv("GITHUB_HEAD_REF", raising=False)
+    monkeypatch.setattr(deslop_advisory, "_load_zai_env", lambda: None)
+    monkeypatch.setattr(deslop_advisory, "_client", lambda: None)
+    monkeypatch.setattr("sys.argv", ["deslop_advisory.py", "--diff", str(diff)])
+    rc = deslop_advisory.main()
+    assert rc == 0
+    assert "No slop found" in capsys.readouterr().out
