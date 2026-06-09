@@ -58,7 +58,6 @@ def test_error_event_surfaces():
 
 
 def test_idle_hang_is_killed():
-    # No events + hangs forever → idle timeout fires → no_progress_timeout.
     adapter = _FakeAdapter([], hang=True)
     final_text, error_text, trace_id = asyncio.run(
         consume_adapter_events_with_idle_timeout(
@@ -70,8 +69,6 @@ def test_idle_hang_is_killed():
 
 
 def test_idle_timeout_disabled_consumes_normally():
-    # idle_timeout_seconds=0 disables the wrapping; a normally-completing
-    # stream still works (and is NOT subject to a timeout).
     events = [_Ev(EventType.TEXT, {"final": True, "text": "ok"})]
     adapter = _FakeAdapter(events)
     final_text, error_text, trace_id = asyncio.run(
@@ -82,8 +79,6 @@ def test_idle_timeout_disabled_consumes_normally():
 
 
 def test_progress_resets_idle_window():
-    # An event arriving within each idle window keeps the mission alive even
-    # though total runtime exceeds the per-event idle threshold.
     async def _scenario():
         class _SlowAdapter:
             async def execute(self, prompt):  # noqa: ARG002

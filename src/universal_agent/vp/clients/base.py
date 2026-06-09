@@ -50,7 +50,7 @@ async def consume_adapter_events_with_idle_timeout(
     try:
         while True:
             try:
-                if idle_timeout_seconds and idle_timeout_seconds > 0:
+                if idle_timeout_seconds > 0:
                     event = await asyncio.wait_for(
                         agen.__anext__(), timeout=idle_timeout_seconds
                     )
