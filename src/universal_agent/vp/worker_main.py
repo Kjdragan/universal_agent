@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import logging
 import os
+import signal
 import subprocess
 
 from universal_agent.durable.db import connect_runtime_db, get_vp_db_path
@@ -94,6 +95,31 @@ async def _run() -> None:
         lease_ttl_seconds=args.lease_ttl_seconds or None,
         max_concurrent_missions=args.max_concurrent_missions or None,
     )
+    # Graceful drain on SIGTERM/SIGINT (operator `systemctl restart`/`stop`):
+    # stop claiming new missions and let the in-flight mission finish, then
+    # exit. Paired with KillMode=mixed + a generous TimeoutStopSec in the
+    # systemd unit so systemd doesn't SIGKILL the mission mid-run. Routine
+    # deploys no longer restart the worker at all — it self-restarts between
+    # missions for code currency (see VpWorkerLoop._should_restart_for_code_currency)
+    # — so this path is for manual restarts/stops.
+    running_loop = asyncio.get_running_loop()
+
+    def _request_drain(signame: str) -> None:
+        logger.info(
+            "VP worker received %s — draining: finishing in-flight mission, "
+            "no new claims",
+            signame,
+        )
+        loop.stop()
+
+    for _sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            running_loop.add_signal_handler(_sig, _request_drain, _sig.name)
+        except (NotImplementedError, RuntimeError):
+            # add_signal_handler unsupported (non-main thread / some platforms)
+            # — fall back to the low-level handler.
+            signal.signal(_sig, lambda *_: loop.stop())
+
     try:
         await loop.run_forever()
     finally:

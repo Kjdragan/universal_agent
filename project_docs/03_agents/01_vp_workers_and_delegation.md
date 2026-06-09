@@ -300,14 +300,46 @@ git credentials (so VP subprocesses can push) before starting.
 
 In production each VP runs as its own **systemd templated unit** —
 `universal-agent-vp-worker@vp.coder.primary` and
-`universal-agent-vp-worker@vp.general.primary` (restarted by `deploy.yml` on
-every deploy). The two VPs also share a single **AgentMail inbox**
+`universal-agent-vp-worker@vp.general.primary`. The two VPs also share a single **AgentMail inbox**
 (`vp.agents@agentmail.to`, display name `Codie/Atlas`), with inbound mail routed
 to the right VP by name detection (scanning subject/body for Cody/Codie vs
 Atlas). See the Email Architecture source-of-truth doc for that protocol.
 
+### Deploy resilience: workers are NOT restarted by deploys
+
+A VP worker is a **separate process** from the gateway with its **own DB
+connection**, so it heartbeats the mission claim lease directly to SQLite
+independent of the gateway. This is the key to surviving deploys:
+
+- **Deploys no longer restart VP workers.** `remote_deploy.sh` restarts the
+  gateway and friends but deliberately leaves the `universal-agent-vp-worker@*`
+  units alone. Previously it restarted them "to pick up new code" — that
+  SIGTERMed the worker mid-mission, the claim lease lapsed, and the stale
+  reconciler reaped the orphan as `failed`. Every recent VP failure was one of
+  these reconciled deploy casualties (`reason=stale_running_reconciled`,
+  `stale_reason=claim_expired`).
+- **The gateway restart is now harmless to a running mission.** Because the
+  worker keeps heartbeating the lease from its own process, the gateway's
+  startup reconciler sees a *live* claim and leaves the mission running.
+- **Code currency comes from a between-missions self-restart.** At the top of
+  each `_tick` (so only ever *between* missions), the worker calls
+  `_should_restart_for_code_currency()`: if the deployed git SHA changed since
+  startup (throttled check) — or, as a backstop, uptime exceeds
+  `UA_VP_WORKER_MAX_UPTIME_SECONDS` (default 6h, `0` disables) — it exits
+  cleanly and systemd (`Restart=always`) relaunches it on the new code. A
+  running mission is never interrupted; the worker picks up new code at the
+  next idle gap.
+- **Manual `systemctl restart`/`stop` drains gracefully.** `worker_main`
+  installs a SIGTERM/SIGINT handler that calls `loop.stop()` (finish the
+  in-flight mission, claim no new ones, then exit). The unit sets
+  `KillMode=mixed` + `TimeoutStopSec=1800` so the in-flight mission's child
+  subprocess survives the SIGTERM and has time to finish before systemd
+  escalates to SIGKILL.
+
 Each tick (`_tick`):
 
+0. **Code-currency check** (between missions only): self-restart if the deployed
+   code changed — see above.
 1. Heartbeat the session lease; reset `degraded → idle` on a healthy beat.
 2. `claim_next_vp_mission` (atomic `BEGIN IMMEDIATE` + tier-ordered SELECT +
    conditional UPDATE). Also clears stale `vp_sessions.last_error` on a
@@ -546,6 +578,7 @@ capability).
 | `UA_VP_POLL_INTERVAL_SECONDS` | 5 | worker poll interval |
 | `UA_VP_LEASE_TTL_SECONDS` | 120 | mission claim lease TTL |
 | `UA_VP_MAX_CONCURRENT_MISSIONS` | 1 | stored on the loop but **unused** — the loop is structurally serial; not a live concurrency dial |
+| `UA_VP_WORKER_MAX_UPTIME_SECONDS` | 21600 | between-missions code-currency self-restart backstop (uptime cap); `0` disables (rely solely on the git-SHA check) |
 | `UA_VP_HARD_BLOCK_UA_REPO` | on | block writes into repo/runtime roots |
 | `UA_VP_HANDOFF_ROOT` | `/opt/universal_agent/vp_handoff` | allowlisted external write root |
 | `UA_VP_CODER_WORKSPACE_ROOT` / `UA_VP_GENERAL_WORKSPACE_ROOT` | unset | workspace root overrides |

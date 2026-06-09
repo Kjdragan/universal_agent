@@ -16,6 +16,16 @@ Environment=PYTHONPATH=/opt/universal_agent/src
 ExecStart=/opt/universal_agent/scripts/start_vp_worker.sh %i
 Restart=always
 RestartSec=5
+# Graceful drain on stop/restart: SIGTERM the main worker process ONLY
+# (KillMode=mixed), so an in-flight mission's child subprocess keeps running
+# while the worker finishes the mission and exits cleanly. TimeoutStopSec gives
+# the mission time to drain before systemd escalates to SIGKILL. Routine
+# deploys do NOT restart this unit anymore (the worker self-restarts between
+# missions for code currency — see scripts/deploy/remote_deploy.sh); this drain
+# path is for manual `systemctl restart`/`stop`.
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=1800
 # Resource limits — VP workers run single agent instances.
 # The Claude Code SDK spawns Node.js + langsmith + logfire threads;
 # 50 was too low and caused "can't start new thread" failures.

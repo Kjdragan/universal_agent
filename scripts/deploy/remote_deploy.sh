@@ -356,13 +356,17 @@ echo "--> Restarting production services..."
 if command -v systemctl >/dev/null 2>&1; then
   if command -v sudo >/dev/null 2>&1; then
     sudo systemctl restart universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram ua-discord-cc-bot ua-discord-intelligence
-    # Restart VP workers so they pick up new code (graceful: systemd sends SIGTERM)
-    for vp_svc in universal-agent-vp-worker@vp.coder.primary universal-agent-vp-worker@vp.general.primary; do
-      if systemctl is-enabled "$vp_svc" >/dev/null 2>&1; then
-        echo "--> Restarting VP worker: $vp_svc"
-        sudo systemctl restart "$vp_svc"
-      fi
-    done
+    # VP workers are deliberately NOT restarted here. Restarting them mid-deploy
+    # killed in-flight Cody/VP missions: the worker process died, its claim
+    # lease lapsed, and the reconciler reaped the orphan as "failed" (every
+    # recent VP failure was a reconciled deploy casualty). Each worker now
+    # self-restarts BETWEEN missions when it detects the deployed git SHA
+    # changed (worker_loop._should_restart_for_code_currency + Restart=always),
+    # so it picks up new code without interrupting a running mission. The
+    # gateway restart above is harmless to a running mission: the worker keeps
+    # heartbeating its lease from a separate process, so the gateway's startup
+    # reconciler sees a live claim and leaves the mission alone.
+    echo "--> VP workers: not restarted (self-restart between missions for code currency)"
     # Continuous (non-gateway) services run their own long-lived loops and do
     # NOT pick up new code until the PROCESS is restarted. The CSI installer
     # (run earlier, ~L295) and #820/#822 keep the csi-ingester UNIT FILE current,
@@ -379,12 +383,10 @@ if command -v systemctl >/dev/null 2>&1; then
     done
   else
     systemctl restart universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram ua-discord-cc-bot ua-discord-intelligence
-    for vp_svc in universal-agent-vp-worker@vp.coder.primary universal-agent-vp-worker@vp.general.primary; do
-      if systemctl is-enabled "$vp_svc" >/dev/null 2>&1; then
-        echo "--> Restarting VP worker: $vp_svc"
-        systemctl restart "$vp_svc"
-      fi
-    done
+    # VP workers are deliberately NOT restarted here — see the sudo branch above
+    # for the rationale (restarting them mid-deploy killed in-flight missions;
+    # they now self-restart between missions for code currency).
+    echo "--> VP workers: not restarted (self-restart between missions for code currency)"
     # Continuous (non-gateway) services — see the sudo branch above.
     for cont_svc in csi-ingester universal-agent-mission-control-sweeper; do
       if systemctl is-enabled "$cont_svc" >/dev/null 2>&1; then
