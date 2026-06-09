@@ -247,6 +247,13 @@ The non-negotiables that apply to **every** PR:
 2. **Doc updates ship in the same PR as the behavior change** — not a follow-up ticket. A code PR without the matching canonical-doc update is incomplete.
 3. **Update the canonical doc, don't spawn a parallel one.** One canonical doc per subsystem; check `project_docs/README.md` (the single index) first.
 4. **Cite with symbols (`file.py::symbol`), never line numbers.** A new subsystem doc also gets a `README.md` index entry in the same change. CI (`scripts/doc_audit.py`) enforces frontmatter, symbol-ref resolution, and the no-line-number rule.
+5. **Discover the docs you must touch — by reverse-lookup, not memory.** When you add or change a feature, *find* the canonical docs that own the code you touched via their `code_paths:` frontmatter, and update each in **this** PR. This is the front-line step — do it while you're making the change. The nightly accuracy sweep (`scripts/doc_accuracy_sweep.py`) is a **backstop to catch what slips through, not the mechanism** — never defer a doc update to it. Build the candidate list, then confirm each against the doc's `code_paths` globs:
+   ```bash
+   git diff --name-only origin/main...HEAD | while read f; do
+     grep -rl -e "$f" -e "$(dirname "$f")" project_docs --include='*.md'
+   done | sort -u
+   ```
+   Every doc that owns changed behavior gets updated now — or gets a one-line "unaffected because…" in the PR description. "I'll document it later" / "the sweep will flag it" is the unacceptable failure mode.
 
 ## Implementation Plan Quality Standards
 
