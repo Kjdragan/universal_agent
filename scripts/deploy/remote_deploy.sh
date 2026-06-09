@@ -81,6 +81,13 @@ git reset --hard origin/main
 # operator during incident recovery) lands on stale code.
 # See Followup #2 in docs/operations/2026-05-07_open_followups.md.
 git update-ref refs/heads/main "$(git rev-parse origin/main)"
+# Land the working tree on the 'main' branch itself, not just at main's commit
+# on whatever branch was checked out. An out-of-band checkout (e.g. deploying a
+# feature branch by hand for live validation) otherwise leaves prod sitting on
+# that branch ref: the reset above corrects the *code* but not the branch label,
+# so /api/v1/version keeps reporting the stale branch. update-ref above
+# guarantees local 'main' == origin/main, so this checkout can never regress.
+git checkout main
 
 echo "--> Transferring ownership to service user before dependency sync..."
 # || true: tolerate ENOENT from transient SQLite WAL/SHM files

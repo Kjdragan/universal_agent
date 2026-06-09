@@ -95,7 +95,7 @@ flowchart TD
     G --> H{deploy.yml paths-ignore}
     H -->|docs/state/artifacts/memory only| H1[Deploy SKIPPED]
     H -->|any code file changed| I[deploy.yml: gh api fetch remote_deploy.sh<br/>+ Tailscale + SSH pipe to VPS]
-    I --> J[remote_deploy.sh on VPS:<br/>fetch + reset --hard origin/main]
+    I --> J[remote_deploy.sh on VPS:<br/>fetch + reset --hard origin/main + checkout main]
     J --> K[deploy_validate_runtime.sh preflight]
     K --> L[Build web-ui + MkDocs]
     L --> M[Install systemd units + restart services]
@@ -170,7 +170,7 @@ Runs as `ua`, `PROD_DIR=/opt/universal_agent`. The body is byte-identical to the
 
 1. **Bootstrap clone** if `$PROD_DIR/.git` is missing (with fallbacks to `/opt/universal_agent_repo`).
 2. **Stale-lock guard:** remove `$PROD_DIR/.git/index.lock` if no git process holds it (wait 10s then remove if one does).
-3. **Fast-forward:** `git fetch origin main` → `git reset --hard origin/main` → `git update-ref refs/heads/main $(git rev-parse origin/main)`. The `update-ref` keeps the local `main` pointer in sync; without it an operator running `git checkout main` during recovery lands on stale code.
+3. **Fast-forward:** `git fetch origin main` → `git reset --hard origin/main` → `git update-ref refs/heads/main $(git rev-parse origin/main)` → `git checkout main`. The `update-ref` keeps the local `main` pointer in sync so the final `git checkout main` can never regress to stale code; that explicit checkout lands the working tree on the `main` branch itself, so an out-of-band feature-branch checkout cannot leave prod reporting a stale branch in `/api/v1/version`.
 4. **`sudo chown -R ua:ua $PROD_DIR`** (`|| true` for transient SQLite WAL/SHM ENOENT).
 5. **Write a clean bootstrap `.env`** via inline Python — a *fixed* dict (Infisical creds + runtime identity: `UA_RUNTIME_STAGE=production`, `FACTORY_ROLE=HEADQUARTERS`, `UA_DEPLOYMENT_PROFILE=vps`, `UA_MACHINE_SLUG=vps-hq-production`, ports 8001/8002/3000). **The VPS `.env` is overwritten on every deploy** — VPS-side manual edits do not survive.
 6. **Runtime preflight:** `bash scripts/deploy_validate_runtime.sh ...` — a hard abort point *before* any restart (see below).
