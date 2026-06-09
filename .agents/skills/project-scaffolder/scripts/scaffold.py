@@ -716,6 +716,22 @@ def install_dependencies(project_dir: Path) -> bool:
     return backend_ok and frontend_ok
 
 
+def lock_dependencies(project_dir: Path) -> bool:
+    """Generate backend/uv.lock WITHOUT installing (resolve + write the lockfile).
+
+    Used on the --skip-install path: the generated project's deploy.yml runs
+    `uv sync --frozen`, which REQUIRES a committed uv.lock. Without this, a
+    freshly-scaffolded project's first deploy fails on the missing lockfile.
+    `uv lock` resolves dependencies and writes the lock but builds no venv, so
+    --skip-install stays fast.
+    """
+    return run_command(
+        ["uv", "lock"],
+        project_dir / "backend",
+        "Backend lockfile (uv.lock)",
+    )
+
+
 def initialize_git(project_dir: Path) -> None:
     """Create a main-branch repository with an initial Lore-compatible commit."""
     try:
@@ -1050,6 +1066,13 @@ def main():
     if not args.skip_install:
         print("\n📦 Installing dependencies...")
         install_dependencies(project_dir)
+    else:
+        # Skip the slow venv build, but still generate backend/uv.lock so the
+        # generated deploy.yml's `uv sync --frozen` has a lockfile to honor —
+        # without it, a freshly-scaffolded project's first deploy fails on the
+        # missing lock. `uv lock` resolves + writes the lock without installing.
+        print("\n🔒 Generating backend lockfile (skipping install)...")
+        lock_dependencies(project_dir)
 
     print("\n🔧 Initializing git...")
     initialize_git(project_dir)
