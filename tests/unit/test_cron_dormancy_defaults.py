@@ -19,6 +19,8 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
+from universal_agent.services import dormancy
+
 GATEWAY_SERVER = Path("src/universal_agent/gateway_server.py")
 DOC_NIGHTLY = Path(".github/workflows/doc-nightly.yml")
 DORMANCY_DOC = Path("docs/operations/operating_hours_dormancy.md")
@@ -52,8 +54,10 @@ DOCUMENTED_EXCEPTIONS = {
 
 # Hours considered active in America/Chicago. 6 AM start (operator wakes),
 # 10 PM cutoff (last tick at 9:30 PM is fine; 22:00 itself is the start of
-# dormancy). So active hours are [6, 7, 8, ..., 21].
-ACTIVE_HOURS = set(range(6, 22))
+# dormancy). So active hours are [6, 7, 8, ..., 21]. Derived from the single
+# source of truth in services/dormancy.py so this guard tracks the constants
+# rather than re-hardcoding the window.
+ACTIVE_HOURS = set(range(dormancy.ACTIVE_START_HOUR, dormancy.ACTIVE_END_HOUR))
 
 
 def _extract_cron_registrations(content: str) -> list[tuple[str, str, str]]:
@@ -190,8 +194,9 @@ def test_hackernews_snapshot_uses_active_hour_range() -> None:
     Catches a regression where someone reverts to `*/30 * * * *` (24/7).
     """
     content = GATEWAY_SERVER.read_text(encoding="utf-8")
+    expected_cron = f'default_cron="0,30 {dormancy.cron_hour_field()} * * *"'
     assert (
-        'default_cron="0,30 6-21 * * *"' in content
+        expected_cron in content
         and '"hackernews_snapshot"' in content
     ), (
         "hackernews_snapshot must default to '0,30 6-21 * * *' America/Chicago "
