@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from universal_agent.agent_core import EventType
 from universal_agent.codebase_policy import (
     is_approved_codebase_path,
     repo_mutation_requested,
@@ -14,12 +13,17 @@ from universal_agent.feature_flags import (
     coder_vp_id,
     vp_handoff_root,
     vp_hard_block_ua_repo,
+    vp_no_progress_kill_seconds,
 )
 from universal_agent.guardrails.workspace_guard import (
     WorkspaceGuardError,
     enforce_external_target_path,
 )
-from universal_agent.vp.clients.base import MissionOutcome, VpClient
+from universal_agent.vp.clients.base import (
+    MissionOutcome,
+    VpClient,
+    consume_adapter_events_with_idle_timeout,
+)
 
 
 class ClaudeCodeClient(VpClient):
@@ -64,14 +68,12 @@ class ClaudeCodeClient(VpClient):
                     "mission_id": str(mission.get("mission_id") or ""),
                 },
             }
-            async for event in adapter.execute(objective):
-                if event.type == EventType.TEXT and isinstance(event.data, dict):
-                    if event.data.get("final") is True:
-                        final_text = str(event.data.get("text") or "")
-                elif event.type == EventType.ERROR and isinstance(event.data, dict):
-                    error_text = str(event.data.get("message") or event.data.get("error") or "mission failed").strip()
-                elif event.type == EventType.ITERATION_END and isinstance(event.data, dict):
-                    trace_id = str(event.data.get("trace_id") or "") or None
+            final_text, error_text, trace_id = (
+                await consume_adapter_events_with_idle_timeout(
+                    adapter, objective,
+                    idle_timeout_seconds=vp_no_progress_kill_seconds(),
+                )
+            )
         finally:
             await adapter.close()
 

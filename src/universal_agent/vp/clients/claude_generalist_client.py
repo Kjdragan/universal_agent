@@ -4,9 +4,13 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from universal_agent.agent_core import EventType
 from universal_agent.execution_engine import EngineConfig, ProcessTurnAdapter
-from universal_agent.vp.clients.base import MissionOutcome, VpClient
+from universal_agent.feature_flags import vp_no_progress_kill_seconds
+from universal_agent.vp.clients.base import (
+    MissionOutcome,
+    VpClient,
+    consume_adapter_events_with_idle_timeout,
+)
 
 
 class ClaudeGeneralistClient(VpClient):
@@ -43,14 +47,12 @@ class ClaudeGeneralistClient(VpClient):
                     "mission_id": str(mission.get("mission_id") or ""),
                 },
             }
-            async for event in adapter.execute(prompt):
-                if event.type == EventType.TEXT and isinstance(event.data, dict):
-                    if event.data.get("final") is True:
-                        final_text = str(event.data.get("text") or "")
-                elif event.type == EventType.ERROR and isinstance(event.data, dict):
-                    error_text = str(event.data.get("message") or event.data.get("error") or "mission failed").strip()
-                elif event.type == EventType.ITERATION_END and isinstance(event.data, dict):
-                    trace_id = str(event.data.get("trace_id") or "") or None
+            final_text, error_text, trace_id = (
+                await consume_adapter_events_with_idle_timeout(
+                    adapter, prompt,
+                    idle_timeout_seconds=vp_no_progress_kill_seconds(),
+                )
+            )
         finally:
             await adapter.close()
 

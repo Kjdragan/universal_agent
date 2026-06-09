@@ -23,7 +23,11 @@ from universal_agent.codebase_policy import (
     is_approved_codebase_path,
     repo_mutation_requested,
 )
-from universal_agent.feature_flags import vp_handoff_root, vp_hard_block_ua_repo
+from universal_agent.feature_flags import (
+    vp_handoff_root,
+    vp_hard_block_ua_repo,
+    vp_no_progress_kill_seconds,
+)
 from universal_agent.guardrails.workspace_guard import (
     WorkspaceGuardError,
     enforce_external_target_path,
@@ -47,8 +51,11 @@ logger = logging.getLogger(__name__)
 DEFAULT_CLI_TIMEOUT_SECONDS = 1800
 # Maximum timeout (4 hours)
 MAX_CLI_TIMEOUT_SECONDS = 14400
-# Stall detection: if no output for this long, consider it stalled
+# Stall detection: how often to wake and check for no-progress while reading
+# the CLI stream. The actual KILL threshold is vp_no_progress_kill_seconds()
+# (idle-based, default 600s); this is just the poll cadence.
 STALL_TIMEOUT_SECONDS = 300
+_STALL_CHECK_INTERVAL_SECONDS = 60
 # Maximum retries for failed CLI sessions
 MAX_RETRIES = 2
 # StreamReader line buffer for the spawned claude CLI's stdout/stderr.
@@ -500,6 +507,11 @@ async def _monitor_cli_output(
     last_output_time = time.monotonic()
     stream_lines: list[str] = []
     cli_session_id: str = ""
+    # Idle-based no-progress kill threshold (0 disables). Distinct from the
+    # wall-clock ``timeout_seconds`` deadline: this kills a mission that has
+    # gone silent (no stream output) for too long, while letting a mission that
+    # keeps emitting output run up to the wall-clock cap.
+    no_progress_kill_s = vp_no_progress_kill_seconds()
 
     # Open run.log handle for live rehydration source. The viewer's
     # rehydration path reads this file (see app/page.tsx). We write
@@ -563,18 +575,39 @@ async def _monitor_cli_output(
             try:
                 line_bytes = await asyncio.wait_for(
                     proc.stdout.readline(),
-                    timeout=min(remaining, STALL_TIMEOUT_SECONDS),
+                    timeout=min(remaining, _STALL_CHECK_INTERVAL_SECONDS),
                 )
             except asyncio.TimeoutError:
                 # Check if process is still alive
                 if proc.returncode is not None:
                     break
-                # Stall detection
+                # No-progress (idle) kill: the CLI has produced no output for
+                # longer than the configured threshold — treat it as hung and
+                # kill it. This is what makes the previously toothless stall
+                # check actually terminate a stuck mission (it used to only
+                # log). Idle-based, so a mission that keeps streaming output is
+                # never cut off here.
                 stall_duration = time.monotonic() - last_output_time
-                if stall_duration > STALL_TIMEOUT_SECONDS:
+                if no_progress_kill_s > 0 and stall_duration > no_progress_kill_s:
                     logger.warning(
-                        "CLI mission %s stalled (no output for %ds)",
-                        mission_id, int(stall_duration),
+                        "CLI mission %s killed: no progress for %ds (threshold %ds)",
+                        mission_id, int(stall_duration), no_progress_kill_s,
+                    )
+                    _kill_process(proc)
+                    _rl_close(f"No progress for {int(stall_duration)}s")
+                    return MissionOutcome(
+                        status="failed",
+                        result_ref=f"workspace://{workspace_dir}",
+                        message=(
+                            f"mission killed: no progress for "
+                            f"{int(stall_duration)}s (no_progress_timeout)"
+                        ),
+                        payload={
+                            "tool_calls": tool_calls,
+                            "lines_captured": len(stream_lines),
+                            "failure_mode": "no_progress_timeout",
+                            "no_progress_seconds": int(stall_duration),
+                        },
                     )
                 continue
 
