@@ -34,7 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 0
+          fetch-depth: 50  # shallow: these jobs need only base+head (or no git), not 323MB of full history
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -57,7 +57,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 0
+          fetch-depth: 50  # shallow: these jobs need only base+head (or no git), not 323MB of full history
       - name: Fail if any non-documentation path changed
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}

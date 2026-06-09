@@ -62,6 +62,7 @@ echo "--> Pruning uv caches (reclaim re-downloadable wheels/sdists; keep built a
 prune_ua_cache ""                      # $UA_HOME/.cache/uv (default; vp workers + crons share it)
 prune_ua_cache "/tmp/uv_cache"         # hooks.py UV_CACHE_DIR injection for `uv run`
 prune_ua_cache "$APP_ROOT/.uv-cache"   # worker.py UV_CACHE_DIR setdefault (repo-root .uv-cache)
+prune_ua_cache "/tmp/uv-cache"         # CSI sandbox cache (csi_dev_env.sh; csi_run.sh-wrapped services) — note the hyphen, distinct from /tmp/uv_cache
 
 # root-owned cache, populated by root-context `uv run` (csi_ingester uvicorn +
 # the ~14 CSI services that ExecStart `uv run` as root with no UV_CACHE_DIR).
