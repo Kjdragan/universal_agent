@@ -28,6 +28,7 @@ from universal_agent.feature_flags import (
     vp_lease_ttl_seconds,
     vp_max_concurrent_missions,
     vp_poll_interval_seconds,
+    vp_worker_max_uptime_seconds,
 )
 from universal_agent.services.dag_governor import DagConcurrencyGovernor
 from universal_agent.vp.clients.base import MissionOutcome, VpClient
@@ -340,6 +341,37 @@ def _post_mission_push_pr_merge(*, workspace_root: str, mission_id: str) -> None
     )
 
 
+# How often the worker re-checks the deployed git SHA (subprocess spawn) while
+# polling. Cheap throttle so an idle worker isn't spawning `git` every tick.
+_CODE_VERSION_CHECK_INTERVAL_SECONDS = 30
+
+
+def _deployed_code_version() -> str:
+    """Return the deployed code version (git HEAD SHA) for the running tree.
+
+    A VP worker uses this to self-restart when idle after a deploy advances the
+    code — picking up the new code WITHOUT interrupting an in-flight mission.
+    This replaces the old behaviour where the deploy restarted the worker
+    directly (which killed whatever mission was running). Returns ``""`` when
+    the version can't be determined (e.g. no git); callers treat ``""`` as
+    "version unknown" and fall back to the uptime backstop.
+    """
+    try:
+        repo_root = Path(__file__).resolve().parents[3]
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+
 class VpWorkerLoop:
     def __init__(
         self,
@@ -368,9 +400,56 @@ class VpWorkerLoop:
         self._stopped = asyncio.Event()
         self._client: Optional[VpClient] = None
         self._default_client = self._create_client()
+        # Code-currency self-restart state. Deploys no longer restart VP
+        # workers directly (that killed in-flight missions); instead the worker
+        # exits cleanly BETWEEN missions when it sees the deployed SHA change,
+        # and systemd (Restart=always) relaunches it on the new code.
+        self._start_code_version = _deployed_code_version()
+        self._started_monotonic = time.monotonic()
+        self._last_code_version_check_monotonic = 0.0
+        self._max_uptime_seconds = vp_worker_max_uptime_seconds()
 
     def stop(self) -> None:
         self._stopped.set()
+
+    def _should_restart_for_code_currency(self) -> bool:
+        """True when the worker should exit (BETWEEN missions) so systemd
+        relaunches it on freshly-deployed code.
+
+        Primary signal: the deployed git SHA changed since startup (throttled
+        so an idle worker isn't spawning ``git`` every tick). Backstop: uptime
+        exceeded the configured max (covers the case where the SHA can't be
+        read). NEVER called mid-mission — only at the top of ``_tick``, between
+        missions — so a deploy can't interrupt in-flight work. A gateway
+        restart during a mission is harmless: this worker keeps heartbeating
+        the claim lease from its own process, so the gateway's startup
+        reconciler sees a live claim and leaves the mission alone.
+        """
+        now = time.monotonic()
+        if self._start_code_version and (
+            now - self._last_code_version_check_monotonic
+            >= _CODE_VERSION_CHECK_INTERVAL_SECONDS
+        ):
+            self._last_code_version_check_monotonic = now
+            current = _deployed_code_version()
+            if current and current != self._start_code_version:
+                logger.info(
+                    "VP worker code version changed (%s → %s) — restarting "
+                    "between missions to pick up new code (vp_id=%s)",
+                    self._start_code_version[:8], current[:8], self.vp_id,
+                )
+                return True
+        if (
+            self._max_uptime_seconds > 0
+            and (now - self._started_monotonic) > self._max_uptime_seconds
+        ):
+            logger.info(
+                "VP worker uptime exceeded %ds — restarting between missions "
+                "for code currency (vp_id=%s)",
+                self._max_uptime_seconds, self.vp_id,
+            )
+            return True
+        return False
 
     async def run_forever(self) -> None:
         logger.info("VP worker starting: vp_id=%s worker_id=%s", self.vp_id, self.worker_id)
@@ -423,6 +502,17 @@ class VpWorkerLoop:
         logger.info("VP worker stopped: vp_id=%s worker_id=%s", self.vp_id, self.worker_id)
 
     async def _tick(self) -> None:
+        # Code-currency self-restart (between missions only). If a deploy
+        # advanced the code while we were idle or running the previous mission,
+        # exit cleanly so systemd (Restart=always) relaunches us on the new
+        # code. This is why deploys no longer restart VP workers directly —
+        # doing so killed in-flight missions (the worker process died mid-run,
+        # its claim lease lapsed, and the reconciler reaped the orphan as
+        # "failed"). See deployment/systemd/universal-agent-vp-worker@.service
+        # and scripts/deploy/remote_deploy.sh.
+        if self._should_restart_for_code_currency():
+            self.stop()
+            return
         heartbeat_vp_session_lease(
             self.conn,
             vp_id=self.vp_id,

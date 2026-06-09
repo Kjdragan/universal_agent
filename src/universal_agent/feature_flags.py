@@ -399,6 +399,21 @@ def vp_max_concurrent_missions(default: int = 1) -> int:
     return _read_int("UA_VP_MAX_CONCURRENT_MISSIONS", default, minimum=1)
 
 
+def vp_worker_max_uptime_seconds(default: int = 21600) -> int:
+    """Backstop for VP worker code-currency self-restart.
+
+    Deploys no longer restart VP workers directly (that killed in-flight
+    missions). Instead a worker self-restarts BETWEEN missions when it detects
+    the deployed git SHA changed. This uptime backstop forces an
+    (between-missions) restart even when the SHA check can't determine a
+    version (e.g. no git in the tree), so a worker can never run stale code
+    indefinitely. ``0`` disables the backstop (rely solely on the SHA check).
+    Default 6h. Never interrupts a running mission — the check only fires at
+    the top of a tick, between missions.
+    """
+    return _read_int("UA_VP_WORKER_MAX_UPTIME_SECONDS", default, minimum=0)
+
+
 def vp_require_live_worker_for_dispatch(default: bool = True) -> bool:
     """Require fresh VP worker heartbeat/lease before external dispatch."""
     if _is_truthy(os.getenv("UA_DISABLE_VP_REQUIRE_LIVE_WORKER_FOR_DISPATCH")):
