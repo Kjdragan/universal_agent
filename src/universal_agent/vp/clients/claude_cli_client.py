@@ -989,6 +989,12 @@ def _build_cli_env(
     if max_agents:
         env["REPORT_MAX_CONCURRENT_AGENTS"] = max_agents
 
+    # Prefer the box `gh auth login` over a stale Infisical GH_TOKEN, which would
+    # 401 the agent's `gh pr create` (cli execution_mode counterpart of the strip
+    # in execution_engine._temporary_sanitized_process_env).
+    from universal_agent.execution_engine import strip_stale_gh_env_tokens
+    strip_stale_gh_env_tokens(env)
+
     return env
 
 

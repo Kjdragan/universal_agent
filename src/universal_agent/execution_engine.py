@@ -197,6 +197,10 @@ def _temporary_sanitized_process_env() -> Any:
     original = dict(os.environ)
     try:
         sanitize_env_for_subprocess()
+        # Prefer the box `gh auth login` over a stale Infisical GH_TOKEN so the
+        # spawned agent's `gh pr create` doesn't 401 on an expired env token
+        # (restored in the finally below, same as the rest of the env).
+        strip_stale_gh_env_tokens()
         yield
     finally:
         os.environ.clear()
@@ -295,6 +299,34 @@ def sanitize_env_for_subprocess() -> list[str]:
         total_after // 1024,
         (2_097_152 - total_after) // 1024,
     )
+    return removed
+
+
+def strip_stale_gh_env_tokens(env: Any = None) -> list[str]:
+    """Drop GH_TOKEN/GITHUB_TOKEN/GH_ENTERPRISE_TOKEN so ``gh`` uses the box login.
+
+    ``initialize_runtime_secrets()`` can inject an Infisical ``GH_TOKEN`` that is
+    expired/scopeless (observed on the VPS: 401 Bad credentials on api.github.com).
+    The ``gh`` CLI prefers an env token over its ``~/.config/gh`` login, so a stale
+    env token makes every ``gh`` call (e.g. ``gh pr create``) 401 — branches still
+    push (git uses separate credentials) but the agent's PR is never opened and it
+    reports "gh auth unavailable". Removing the env token lets ``gh`` fall back to
+    the box's maintained ``gh auth login``.
+
+    Only strips when that config login (``hosts.yml``) exists, so the sole
+    credential is never removed (e.g. CI, where ``GITHUB_TOKEN`` is the only auth).
+    Operates in-place on ``env`` (defaults to ``os.environ``); returns removed keys.
+    Mirrors ``scripts/deslop_remediation_dispatch._gh_subprocess_env``.
+    """
+    target = os.environ if env is None else env
+    cfg_dir = os.environ.get("GH_CONFIG_DIR") or os.path.join(
+        os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "gh"
+    )
+    removed: list[str] = []
+    if os.path.isfile(os.path.join(cfg_dir, "hosts.yml")):
+        for key in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN"):
+            if target.pop(key, None) is not None:
+                removed.append(key)
     return removed
 
 
