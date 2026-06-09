@@ -10,7 +10,7 @@ code_paths:
   - src/universal_agent/services/vp_failure_rescue.py
   - src/universal_agent/vp/clients/claude_cli_client.py
   - src/universal_agent/durable/state.py
-last_verified: 2026-05-29
+last_verified: 2026-06-09
 ---
 
 # Idle Dispatch & Goal Loop

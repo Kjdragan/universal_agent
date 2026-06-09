@@ -6,7 +6,7 @@ subsystem: tools-sdk
 code_paths:
   - src/universal_agent/sdk/*.py
   - src/universal_agent/harness/*.py
-last_verified: 2026-05-29
+last_verified: 2026-06-09
 ---
 
 # SDK Integration
