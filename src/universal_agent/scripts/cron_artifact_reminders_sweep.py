@@ -188,7 +188,14 @@ async def _async_main() -> int:
         sweep_pending_artifact_reminders,
     )
 
-    # Bootstrap Infisical secrets for standalone systemd execution (in-process path already has env).
+    # One-shot subprocess: ensure the Infisical-backed secrets (AGENTMAIL_API_KEY,
+    # recipient env, etc.) are present before we resolve the recipient / stand up the
+    # mailer. Under the in-process gateway `!script` runner this env is inherited from
+    # the parent, but as a standalone systemd timer
+    # (universal-agent-artifact-reminders-sweep) it is not — so bootstrap here,
+    # mirroring proactive_digest_agent. NO hardcoded profile, so UA_DEPLOYMENT_PROFILE
+    # is honored: under the systemd unit it is `vps` -> strict Infisical production
+    # load; dev leaves it unset -> local_workstation (dev behavior unchanged).
     try:
         from universal_agent.infisical_loader import initialize_runtime_secrets
 
