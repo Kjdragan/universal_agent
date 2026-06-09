@@ -96,15 +96,23 @@ def gather_pipeline_stats(conn: sqlite3.Connection) -> dict[str, Any]:
     proactive_total = 0
     proactive_by_source: dict[str, int] = {}
 
+    # Window the activity counts to the trailing 24h (consistent with the
+    # utilization/outcome windows below). Without a window these were all-time
+    # cumulative totals, yet the email + LLM prompt presented them as period
+    # activity — so an idle window read as a spike of "failures" (e.g. a frozen
+    # "29 failed / 33 total" repeated verbatim across a whole day). An all-time
+    # total is kept separately for context.
+    window_hours = 24
+    window_cutoff = (datetime.now(timezone.utc) - timedelta(hours=window_hours)).isoformat()
     try:
         rows = conn.execute(
             """
             SELECT status, source_kind, COUNT(*) AS c
             FROM task_hub_items
-            WHERE source_kind IN (?, ?)
+            WHERE source_kind IN (?, ?) AND created_at >= ?
             GROUP BY status, source_kind
             """,
-            PROACTIVE_SOURCE_KINDS,
+            (*PROACTIVE_SOURCE_KINDS, window_cutoff),
         ).fetchall()
 
         for row in rows:
@@ -124,6 +132,16 @@ def gather_pipeline_stats(conn: sqlite3.Connection) -> dict[str, Any]:
             proactive_by_source[source_kind] = proactive_by_source.get(source_kind, 0) + count
     except Exception as exc:
         logger.warning("Failed to gather proactive task counts: %s", exc)
+
+    proactive_total_all_time = 0
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS c FROM task_hub_items WHERE source_kind IN (?, ?)",
+            PROACTIVE_SOURCE_KINDS,
+        ).fetchone()
+        proactive_total_all_time = int(row["c"]) if row else 0
+    except Exception as exc:
+        logger.warning("Failed to gather all-time proactive total: %s", exc)
 
     # ── Budget consumption ────────────────────────────────────────────
     budget_used = get_daily_proactive_count(conn)
@@ -177,6 +195,8 @@ def gather_pipeline_stats(conn: sqlite3.Connection) -> dict[str, Any]:
             "completed": proactive_status_counts["completed"],
             "failed": proactive_status_counts["failed"],
             "total": proactive_total,
+            "total_all_time": proactive_total_all_time,
+            "window_hours": window_hours,
             "by_source": proactive_by_source,
         },
         "budget": {
@@ -228,7 +248,10 @@ async def _call_reasoning_llm(stats: dict[str, Any], period: str) -> str:
         "Be specific, reference actual numbers, and don't hedge."
     )
     user = (
-        f"This is the {period} briefing. Pipeline stats since the last report:\n\n"
+        f"This is the {period} briefing. Note: proactive_tasks counts are ACTIVITY "
+        f"over the trailing 24h (NOT cumulative) — 0 means an idle window, not a "
+        f"failure spike; 'total_all_time' is the lifetime count for context. Budget "
+        f"and utilization are windowed as labeled:\n\n"
         f"```json\n{stats_json}\n```"
     )
 
@@ -311,11 +334,12 @@ def format_report_email(report: dict[str, Any]) -> tuple[str, str, str]:
         f"Proactive Pipeline — {period_label} Report",
         f"Generated: {report.get('timestamp', today)}",
         "",
-        "═══ Pipeline Activity ═══",
+        f"═══ Pipeline Activity (last {tasks.get('window_hours', 24)}h) ═══",
         f"  Open tasks:      {tasks.get('open', 0)}",
         f"  Completed:       {tasks.get('completed', 0)}",
         f"  Failed/Parked:   {tasks.get('failed', 0)}",
         f"  Total proactive: {tasks.get('total', 0)}",
+        f"  Lifetime total:  {tasks.get('total_all_time', tasks.get('total', 0))}",
         "",
         "═══ Budget ═══",
         f"  Used today:  {budget.get('used', 0)} / {budget.get('daily_limit', 10)}",
@@ -449,7 +473,7 @@ async def deliver_intelligence_report(
                 kind="intelligence_report_generated",
                 title=f"Intelligence report ready ({report.get('period', 'unknown')})",
                 summary=(
-                    f"Proactive report generated"
+                    "Proactive report generated"
                     + (f" — {len(recs.splitlines())} lines of analysis" if isinstance(recs, str) and recs else "")
                     + (" (emailed)" if email_sent else "")
                 ),
