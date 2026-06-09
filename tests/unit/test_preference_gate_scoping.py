@@ -282,7 +282,9 @@ def test_delegation_context_reflects_explicit_feedback(tmp_path):
 
 def test_implicit_signal_emission_disabled_by_default(tmp_path, monkeypatch):
     """_fire_implicit_preference_signal is a no-op unless explicitly enabled."""
-    from universal_agent.services.proactive_outcome_tracker import _fire_implicit_preference_signal
+    from universal_agent.services.proactive_outcome_tracker import (
+        _fire_implicit_preference_signal,
+    )
 
     db = tmp_path / "activity_state.db"
     task = {"task_id": "t1", "source_kind": "insight_detection", "project_key": "proactive", "labels": ["insight"]}

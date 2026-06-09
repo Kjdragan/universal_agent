@@ -41,7 +41,9 @@ class TestDashboardEndpointSetsGoalFlag:
     def test_operator_dispatch_to_cody_sets_use_goal_loop(self):
         """When target_agent=vp.coder.primary, metadata.use_goal_loop is True."""
         # Simulate what gateway_server.dashboard_todolist_quick_add does.
-        from universal_agent.gateway_server import dashboard_todolist_quick_add  # noqa: F401
+        from universal_agent.gateway_server import (
+            dashboard_todolist_quick_add,  # noqa: F401
+        )
         # The handler isn't easily callable in isolation (FastAPI request shape),
         # but the logic we care about is straightforward — assert the metadata
         # shape that the endpoint produces by replicating the branch.

@@ -10,8 +10,8 @@ in one round-trip.
 
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime, timezone
+import sqlite3
 
 import pytest
 

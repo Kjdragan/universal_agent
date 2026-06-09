@@ -22,7 +22,6 @@ import sqlite3
 from universal_agent import task_hub
 from universal_agent.services import proactive_convergence as pc
 
-
 # vp_missions schema mirrors durable/migrations.py CREATE TABLE vp_missions.
 _VP_MISSIONS_DDL = """
 CREATE TABLE vp_missions (

@@ -9,8 +9,8 @@ are not real tiles and carry no operator signal — this guards their exclusion.
 """
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
+import sqlite3
 
 from universal_agent.services.mission_control_db import open_store
 from universal_agent.services.mission_control_tier1 import collect_tier1_evidence

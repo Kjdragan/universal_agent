@@ -1,11 +1,13 @@
 import json
-import sqlite3
 from pathlib import Path
+import sqlite3
 
 import pytest
 
-from universal_agent.services import mission_control_chief_of_staff as cos
-from universal_agent.services import proactive_artifacts as pa
+from universal_agent.services import (
+    mission_control_chief_of_staff as cos,
+    proactive_artifacts as pa,
+)
 
 
 def test_extract_json_object_accepts_fenced_json():
