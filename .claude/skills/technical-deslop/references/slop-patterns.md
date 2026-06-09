@@ -4,7 +4,7 @@ Detection rubric for AI-generated noise in a Python diff. This codebase is async
 
 ## High-confidence removals
 
-1. **Redundant comments restating code** — `# increment counter` over `counter += 1`; `# loop over items`. Noise/redundant comment class.
+1. **Redundant comments restating code** — `# increment counter` over `counter += 1`; `# loop over items`. Noise/redundant comment class. A comment is **redundant** ONLY when it restates WHAT one adjacent statement literally does. A comment that explains WHY, WHEN, or under WHICH deployment/runtime mode something happens — or a dated decision/migration note (`# YYYY-MM-DD — …`) — is rationale (KEEP #5/#6), never redundant, even when multi-line. When a comment could be read either way, KEEP wins.
 2. **Docstrings echoing the signature** — `"""Get the user. Args: user_id. Returns the user."""` adding nothing beyond the typed signature. Collapse to a one-line intent, or remove if the name already says it (keep public-API docstrings — see KEEP).
 3. **Over-broad `try/except` that swallow** — `except Exception: pass`, `except Exception: return None`, or log-and-continue around code with no real failure mode, added defensively by the model. Remove the wrapper only when it changes nothing; never remove one that is load-bearing for an error contract.
 4. **Unnecessary `# type: ignore` / `cast()`** — added to silence a checker where the types already line up; redundant `cast(X, x)` where `x` is already `X`.
@@ -22,12 +22,21 @@ Detection rubric for AI-generated noise in a Python diff. This codebase is async
 
 ## KEEP — never remove (verbose-looking but load-bearing)
 
+> **AUTHORITATIVE.** This KEEP list is the single source of truth. `scripts/deslop_advisory.py`
+> (the CI finder) loads the block between the `KEEP-LIST` markers below **verbatim**, and the
+> deslop auto-remediation brief (`build_cody_brief`) points the executor here. A unit test
+> (`tests/unit/test_deslop_advisory.py::test_keep_list_single_source_of_truth`) asserts the
+> finder's in-tree fallback stays byte-identical to this block, so they can never drift.
+
+<!-- KEEP-LIST:BEGIN -->
 1. **Real error contracts** — `try/except` that maps/raises a domain error, retries, releases a resource, or returns a documented fallback; any handler that does real work or preserves an API guarantee.
 2. **Structured logging / observability** — `logfire`/`langsmith` spans, `logger.*` with structured fields/context, trace instrumentation, metrics. Observability is load-bearing here (Logfire setup ordering even drives the `E402` ignore). Don't mistake telemetry for narration.
 3. **Security / input validation** — `defusedxml`, auth/JWT checks, path/host allowlists, sanitization before shell/SQL/network calls, and the surgical `# noqa: F821` defensive `globals()` patterns the gate intentionally preserves.
-4. **Public-API docstrings** — module/class/public-function docstrings (consumed by mkdocs-material), param semantics not obvious from types, units, side effects, raised exceptions, and non-obvious "why" comments (legal, intent-of-regex, external-library quirks).
-5. **Intentional-pattern markers the repo relies on** — `# Removed YYYY-MM-DD: …` rationale comments and load-bearing `# noqa` annotations documented in `pyproject.toml`/CI. Don't strip documented decisions.
-6. **Type annotations themselves**, and `cast`/`# type: ignore` that are actually required for the checker to pass. Only the *redundant* ones are slop.
+4. **Public-API docstrings** — module/class/public-function docstrings (consumed by mkdocs-material), param semantics not obvious from types, units, side effects, raised exceptions.
+5. **"Why / when / which-mode" comments** — any comment that explains WHY something is done, WHEN it applies, or under WHICH deployment/runtime mode (in-process vs standalone systemd timer, dev vs prod profile, an external-library quirk, the intent of a regex, a legal note). Rationale, never "redundant restating code", even when multi-line. When in doubt, KEEP.
+6. **Dated decision / migration notes** — `# YYYY-MM-DD — …`, `# YYYY-MM-DD: …`, `# Removed YYYY-MM-DD: …`, `# Migrated YYYY-MM-DD …` and similar dated rationale (with or without a leading verb), plus load-bearing `# noqa` annotations documented in `pyproject.toml`/CI. Don't strip documented decisions.
+7. **Type annotations themselves**, and `cast`/`# type: ignore` that are actually required for the checker to pass. Only the *redundant* ones are slop.
+<!-- KEEP-LIST:END -->
 
 ## Python type-escape-hatch guidance (generalized from TS `as any`)
 

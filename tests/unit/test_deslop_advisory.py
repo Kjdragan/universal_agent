@@ -195,10 +195,36 @@ def test_write_meta_empty(tmp_path):
 def test_is_autoremediation_branch(monkeypatch):
     monkeypatch.setenv("GITHUB_HEAD_REF", "claude/deslop-fix-issue-839")
     assert deslop_advisory._is_autoremediation_branch() is True
+    # observe-mode fixes now live on a deslop/observe-fix-* prefix (P0 guardrail)
+    monkeypatch.setenv("GITHUB_HEAD_REF", "deslop/observe-fix-issue-839")
+    assert deslop_advisory._is_autoremediation_branch() is True
     monkeypatch.setenv("GITHUB_HEAD_REF", "claude/some-feature")
     assert deslop_advisory._is_autoremediation_branch() is False
     monkeypatch.delenv("GITHUB_HEAD_REF", raising=False)
     assert deslop_advisory._is_autoremediation_branch() is False
+
+
+def test_keep_list_single_source_of_truth():
+    """slop-patterns.md is the authoritative KEEP list; the finder loads the block
+    between its markers verbatim and only falls back to the in-tree copy. Assert the
+    two are byte-identical (no drift) and that the SYSTEM prompt carries the
+    tie-breaker + evidence requirement and the #844 protections (why + dated rules)."""
+    doc = deslop_advisory._SLOP_PATTERNS_DOC.read_text(encoding="utf-8")
+    assert deslop_advisory._KEEP_BEGIN in doc and deslop_advisory._KEEP_END in doc
+    block = (
+        doc.split(deslop_advisory._KEEP_BEGIN, 1)[1]
+        .split(deslop_advisory._KEEP_END, 1)[0]
+        .strip()
+    )
+    assert block == deslop_advisory._KEEP_FALLBACK
+    assert deslop_advisory._load_keep_rules() == block
+    low = block.lower()
+    assert "yyyy-mm-dd" in low  # dated decision/migration protection (KEEP #6)
+    assert "why" in low  # why/when/which-mode protection (KEEP #5)
+    system_low = deslop_advisory.SYSTEM.lower()
+    assert "tie-breaker" in system_low
+    assert "quote the exact comment" in system_low
+    assert "yyyy-mm-dd" in system_low
 
 
 def test_main_skips_on_autoremediation_branch(tmp_path, monkeypatch, capsys):
