@@ -10,6 +10,22 @@ mechanical enforcement is CI** (see `## Enforcement`). Full rationale: `00_DOCUM
 disagree, the code wins and the doc is wrong. When you change behavior, update the doc that owns it in the
 same change — don't spawn a new doc.
 
+## Find the docs you must update — reverse-lookup, not memory
+
+"The doc that owns it" is discoverable from `code_paths:` frontmatter — use that link **at change time**;
+don't rely on recall. When you add or change a feature, list the canonical docs that claim any file you
+touched, confirm each against its `code_paths` globs, and update it in the **same** change:
+
+```bash
+git diff --name-only origin/main...HEAD | while read f; do
+  grep -rl -e "$f" -e "$(dirname "$f")" project_docs --include='*.md'
+done | sort -u
+```
+
+Every doc that owns changed behavior gets updated now — or gets a one-line "unaffected because…" in the PR.
+The nightly accuracy sweep (`scripts/doc_accuracy_sweep.py`) is a **backstop to catch what slips through,
+not the mechanism** — never defer a doc update to it.
+
 ## Citations — symbols, never line numbers
 
 - Cite `file.py::symbol` (e.g. `task_hub.py::claim_next_dispatch_tasks`, `mission_priority.py::TIERS`).
@@ -25,15 +41,17 @@ title: <human title>
 status: active | draft | archived
 canonical: true | false        # is this THE doc for its subsystem?
 subsystem: <kebab-slug>
-code_paths:                     # globs this doc documents — drives PR-time drift mapping
+code_paths:                     # globs this doc documents — the link you reverse-look-up at change time
   - src/universal_agent/<...>
 last_verified: YYYY-MM-DD        # date the doc was last checked against code
 ---
 ```
 
-`code_paths` is load-bearing: the PR-time drift check maps changed code files to the docs that claim to
-document them via these globs. Keep them accurate. `last_verified` is stamped whenever the doc is
-reconstructed or passes an accuracy audit.
+`code_paths` is load-bearing in two directions: **at change time you reverse-look-up** your changed files
+against these globs to find the docs you must update in the same PR (see "Find the docs you must update"),
+and **the nightly accuracy sweep reads them forward** to re-verify each doc against the code it claims. Keep
+them accurate or both uses break. `last_verified` is stamped whenever the doc is reconstructed or passes an
+accuracy audit.
 
 ## Taxonomy & placement
 

@@ -24,7 +24,9 @@ code wins and the doc is wrong.
 3. **Cite `file.py::symbol`, never line numbers.** Line numbers rot and CI rejects them. To point
    inside a function, name it + quote a token; for exact wording paste a 3–5 line fenced snippet.
 4. **Doc updates ship in the same change as the behavior change**, with required frontmatter and a
-   README index entry.
+   README index entry. *Find* the docs to touch by reverse-looking-up your changed files against
+   `code_paths:` frontmatter (grep `project_docs/` for the changed paths/dirs) — by discovery, not
+   memory. The nightly accuracy sweep is a backstop, not the mechanism; never defer to it.
 5. **CI is the gate, not prose.** Your job is to drive the deterministic tooling
    (`scripts/doc_audit.py`, `scripts/registry_drift_check.py`, `scripts/gen_doc_index.py`) to green —
    never reimplement those checks.
