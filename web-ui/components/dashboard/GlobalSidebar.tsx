@@ -22,6 +22,7 @@ import {
   Lightbulb,
   Radio,
   Newspaper,
+  Sparkles,
   Bot,
   GraduationCap,
   Clock,
@@ -82,6 +83,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     title: "Intelligence",
     items: [
+      { href: "/dashboard/intel-output", label: "Intel Output", icon: Sparkles },
       { href: "/dashboard/events", label: "Events", icon: Bell },
       { href: "/dashboard/proactive-signals", label: "Proactive Signals", icon: Lightbulb },
       { href: "/dashboard/proactive-task-history", label: "Task History", icon: History },
