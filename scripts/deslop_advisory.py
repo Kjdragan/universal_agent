@@ -187,25 +187,79 @@ def _client():
     return Anthropic(**kwargs)
 
 
+# --------------------------------------------------------------------------- #
+# KEEP list — single source of truth is
+# .claude/skills/technical-deslop/references/slop-patterns.md (the block between
+# the KEEP-LIST markers). We load it verbatim so the CI finder, the skill, and
+# the auto-remediation brief can never drift. _KEEP_FALLBACK is an in-tree copy
+# used ONLY if that file is missing/unreadable (e.g. a stripped checkout); a unit
+# test asserts the two stay byte-identical.
+# --------------------------------------------------------------------------- #
+_SLOP_PATTERNS_DOC = (
+    REPO_ROOT
+    / ".claude"
+    / "skills"
+    / "technical-deslop"
+    / "references"
+    / "slop-patterns.md"
+)
+_KEEP_BEGIN = "<!-- KEEP-LIST:BEGIN -->"
+_KEEP_END = "<!-- KEEP-LIST:END -->"
+
+_KEEP_FALLBACK = """\
+1. **Real error contracts** — `try/except` that maps/raises a domain error, retries, releases a resource, or returns a documented fallback; any handler that does real work or preserves an API guarantee.
+2. **Structured logging / observability** — `logfire`/`langsmith` spans, `logger.*` with structured fields/context, trace instrumentation, metrics. Observability is load-bearing here (Logfire setup ordering even drives the `E402` ignore). Don't mistake telemetry for narration.
+3. **Security / input validation** — `defusedxml`, auth/JWT checks, path/host allowlists, sanitization before shell/SQL/network calls, and the surgical `# noqa: F821` defensive `globals()` patterns the gate intentionally preserves.
+4. **Public-API docstrings** — module/class/public-function docstrings (consumed by mkdocs-material), param semantics not obvious from types, units, side effects, raised exceptions.
+5. **"Why / when / which-mode" comments** — any comment that explains WHY something is done, WHEN it applies, or under WHICH deployment/runtime mode (in-process vs standalone systemd timer, dev vs prod profile, an external-library quirk, the intent of a regex, a legal note). Rationale, never "redundant restating code", even when multi-line. When in doubt, KEEP.
+6. **Dated decision / migration notes** — `# YYYY-MM-DD — …`, `# YYYY-MM-DD: …`, `# Removed YYYY-MM-DD: …`, `# Migrated YYYY-MM-DD …` and similar dated rationale (with or without a leading verb), plus load-bearing `# noqa` annotations documented in `pyproject.toml`/CI. Don't strip documented decisions.
+7. **Type annotations themselves**, and `cast`/`# type: ignore` that are actually required for the checker to pass. Only the *redundant* ones are slop."""
+
+
+def _load_keep_rules() -> str:
+    """The authoritative KEEP list, loaded verbatim from slop-patterns.md so the
+    finder never drifts from the skill. Falls back to the in-tree copy if the
+    file is absent/unreadable — the advisory must never break on a stripped
+    checkout."""
+    try:
+        text = _SLOP_PATTERNS_DOC.read_text(encoding="utf-8")
+        if _KEEP_BEGIN in text and _KEEP_END in text:
+            block = text.split(_KEEP_BEGIN, 1)[1].split(_KEEP_END, 1)[0].strip()
+            if block:
+                return block
+    except OSError:
+        pass
+    return _KEEP_FALLBACK
+
+
 SYSTEM = (
     "You are an advisory deslop reviewer for the Universal Agent codebase, applying the "
     "`technical-deslop` rubric in REPORT-ONLY mode. You are given a unified diff of a pull "
     "request (changed hunks only). Identify AI-generated noise (slop) the change introduced, "
     "behavior-preserving suggestions ONLY — you never edit code, never change logic, never "
-    "rename, never restructure control flow. FLAG: redundant comments restating code; "
-    "docstrings echoing the signature; over-broad try/except that swallow (except Exception: "
-    "pass / return None) with no real failure mode; dead defensive None-checks that can't "
-    "trigger; verbose narration logging (logger.info('Starting foo'), print('done')); needless "
-    "casts / # type: ignore where the types already align; needless intermediate variables; "
-    "dead generation scaffolding (unused imports, empty f-strings, commented-out old blocks); "
-    "restating-the-obvious section banners; copy-paste duplication. KEEP (never flag): real "
-    "error contracts (handlers that map/raise/retry/release/return a documented fallback); "
-    "structured logging / observability (logfire/langsmith spans, structured fields); security "
-    "/ input validation (auth, allowlists, sanitization); public-API docstrings and non-obvious "
-    "'why' comments; required type annotations / casts. When unsure whether a pattern is "
-    "intentional, do NOT flag it. Respond with ONLY a JSON object: "
-    '{"suggestions":[{"file":"path","severity":"high|medium|low","issue":"...","fix":"..."}]}. '
-    "Empty suggestions array if the diff has no slop."
+    "rename, never restructure control flow.\n\n"
+    "FLAG: redundant comments restating code; docstrings echoing the signature; over-broad "
+    "try/except that swallow (except Exception: pass / return None) with no real failure mode; "
+    "dead defensive None-checks that can't trigger; verbose narration logging "
+    "(logger.info('Starting foo'), print('done')); needless casts / # type: ignore where the "
+    "types already align; needless intermediate variables; dead generation scaffolding (unused "
+    "imports, empty f-strings, commented-out old blocks); restating-the-obvious section "
+    "banners; copy-paste duplication.\n\n"
+    "KEEP — never flag (authoritative, mirrored verbatim from "
+    "`.claude/skills/technical-deslop/references/slop-patterns.md`):\n"
+    f"{_load_keep_rules()}\n\n"
+    "TIE-BREAKER (decisive): a comment is 'redundant restating code' ONLY when it restates "
+    "WHAT one adjacent statement literally does (e.g. `# increment i` over `i += 1`). A comment "
+    "that explains WHY, WHEN, or under WHICH deployment/runtime mode something happens — or a "
+    "dated decision/migration note (`# YYYY-MM-DD — …`) — is rationale, NEVER redundant, even "
+    "when it spans multiple lines. When a comment could be read either way, KEEP wins: do NOT "
+    "flag it.\n"
+    "EVIDENCE REQUIRED: for every comment you flag, quote the exact comment text verbatim in "
+    "`issue` and add one sentence justifying why it is slop and NOT rationale / a why-comment / "
+    "a dated decision. If you cannot, do not flag it.\n\n"
+    "When unsure whether a pattern is intentional, do NOT flag it. Respond with ONLY a JSON "
+    'object: {"suggestions":[{"file":"path","severity":"high|medium|low","issue":"...",'
+    '"fix":"..."}]}. Empty suggestions array if the diff has no slop.'
 )
 
 
@@ -220,13 +274,15 @@ def _review(client, model: str, diff_text: str) -> dict:
 
 
 def _is_autoremediation_branch() -> bool:
-    """True when running on a deslop auto-remediation fix branch
-    (``claude/deslop-fix-*``). GitHub Actions sets ``GITHUB_HEAD_REF`` to the PR
-    source branch on ``pull_request`` events. Reviewing the deslopper's own
-    cleanup PR for slop is noise — it reliably finds nothing and only pings the
-    operator — so the advisory short-circuits on these branches.
+    """True when running on a deslop auto-remediation fix branch — observe-mode
+    ``deslop/observe-fix-*`` or auto-merge-mode ``claude/deslop-fix-*``. GitHub
+    Actions sets ``GITHUB_HEAD_REF`` to the PR source branch on ``pull_request``
+    events. Reviewing the deslopper's own cleanup PR for slop is noise — it
+    reliably finds nothing and only pings the operator — so the advisory
+    short-circuits on these branches.
     """
-    return os.getenv("GITHUB_HEAD_REF", "").startswith("claude/deslop-fix")
+    head = os.getenv("GITHUB_HEAD_REF", "")
+    return head.startswith("claude/deslop-fix") or head.startswith("deslop/")
 
 
 def _notify_operator() -> bool:

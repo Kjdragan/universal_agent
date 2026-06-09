@@ -6,9 +6,15 @@ name: PR Auto-Merge
 #   codie/*   — Codie (autonomous code-writer) PRs need operator review
 #   kevin/*   — operator-authored PRs, manual merge
 #   feature/* — operator-authored PRs, manual merge
+#   deslop/*  — observe-mode deslop cleanups (deslop/observe-fix-*). CI cannot
+#               judge a behavior-preserving comment edit, so human review is the
+#               gate; the draft bit alone is too fragile (a stray `gh pr ready`
+#               would otherwise merge it — see #844). Auto-merge-mode deslop fixes
+#               use claude/deslop-fix-* and still auto-merge.
 #
 # Everything else (claude/*, worktree-*, fix/*, docs/*, etc.) auto-merges
-# once pr-validate.yml passes. Safety is in CI, not in branch naming.
+# once pr-validate.yml passes. Safety is in CI, not in branch naming —
+# EXCEPT deslop/*, where CI is blind to the change quality (see above).
 #
 # AUTHORITATIVE branch policy (keep this + pr-rebase-watchdog.yml in sync):
 #   project_docs/06_platform/04_deployment_and_cicd.md § "Branch policy — single source of truth"
@@ -31,6 +37,10 @@ name: PR Auto-Merge
 #             keep them for review. All other non-operator branches do.
 # 2026-05-30: Added the `ci-autofix` label exception + `labeled` trigger to
 #             close the autonomous CI-failure fix loop.
+# 2026-06-09: Excluded deslop/* (observe-mode deslop cleanups). A mistaken
+#             `gh pr ready` on a deslop draft (#844) auto-merged a comment-
+#             stripping change to main; CI can't catch that, so these now
+#             require a human merge regardless of draft state.
 
 on:
   pull_request_target:
@@ -54,7 +64,8 @@ jobs:
         (
           !startsWith(github.event.pull_request.head.ref, 'codie/') &&
           !startsWith(github.event.pull_request.head.ref, 'kevin/') &&
-          !startsWith(github.event.pull_request.head.ref, 'feature/')
+          !startsWith(github.event.pull_request.head.ref, 'feature/') &&
+          !startsWith(github.event.pull_request.head.ref, 'deslop/')
         ) ||
         contains(github.event.pull_request.labels.*.name, 'ci-autofix')
       )

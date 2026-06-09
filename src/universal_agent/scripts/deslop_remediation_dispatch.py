@@ -599,24 +599,37 @@ def build_cody_brief(issue: DeslopIssue, delivery: str, *, repo: str = DEFAULT_R
     behavior-preserving fix, run the full local gate, super-verify, open the PR.
 
     ``delivery`` controls the final PR posture:
-      - ``draft_email``: open a **DRAFT** PR (it can never auto-merge) — the human
-        reviews and un-drafts to land it.
-      - ``auto_merge``:  open a **non-draft** ``claude/*`` PR so pr-auto-merge.yml
-        lands it once CI is green.
+      - ``draft_email``: open a **DRAFT** PR on a ``deslop/observe-fix-*`` branch.
+        That prefix is EXCLUDED from pr-auto-merge.yml, so the draft bit is no
+        longer the only thing keeping a behavior-preserving comment edit out of
+        prod (CI can't judge deslop quality) — a human reviews and merges it.
+      - ``auto_merge``:  open a **non-draft** ``claude/deslop-fix-*`` PR so
+        pr-auto-merge.yml lands it once CI is green (triage said every file SAFE).
     """
     draft = delivery == DELIVERY_DRAFT_EMAIL
     findings_md = "\n".join(
         f"- `{f.file}` [{f.severity}]: {f.issue}" + (f"\n    fix: {f.fix}" if f.fix else "")
         for f in issue.findings
     )
-    branch = f"claude/deslop-fix-issue-{issue.number}"
+    # Observe-mode fixes go on a `deslop/observe-fix-*` prefix that pr-auto-merge.yml
+    # EXCLUDES, so a deslop cleanup can never reach prod on a stray `gh pr ready` — a
+    # human must merge it (CI is blind to behavior-preserving comment edits). Auto-merge
+    # mode (triage classified every touched file SAFE) stays on `claude/deslop-fix-*`,
+    # which auto-merges on green CI.
+    branch = (
+        f"deslop/observe-fix-issue-{issue.number}"
+        if draft
+        else f"claude/deslop-fix-issue-{issue.number}"
+    )
     pr_posture = (
-        "Open the PR as a **DRAFT** (`gh pr create --draft`). A draft PR can NEVER "
-        "auto-merge — a human must review and un-draft it. Do NOT mark it ready."
+        "Open the PR as a **DRAFT** (`gh pr create --draft`). This "
+        "`deslop/observe-fix-*` branch is EXCLUDED from pr-auto-merge.yml, so even if "
+        "the draft is later marked ready it will NOT auto-merge — a human must review "
+        "and merge it. Do NOT mark it ready yourself."
         if draft
         else (
-            "Open a **non-draft** PR (`gh pr create`). On a `claude/*` branch this "
-            "auto-merges via pr-auto-merge.yml once `pr-validate` is green. Only do "
+            "Open a **non-draft** PR (`gh pr create`). On this `claude/deslop-fix-*` "
+            "branch pr-auto-merge.yml lands it once `pr-validate` is green. Only do "
             "this because triage classified every touched file as SAFE."
         )
     )
@@ -637,12 +650,20 @@ def build_cody_brief(issue: DeslopIssue, delivery: str, *, repo: str = DEFAULT_R
         "- `git fetch origin` then branch from `origin/main` (the desktop checkout drifts).",
         f"- Use branch `{branch}`.",
         "",
-        "## STEP 2 — Apply the behavior-preserving fix (minimal, surgical)",
-        "- Make EXACTLY the cleanup each finding describes (e.g. delete a redundant comment,",
-        "  tighten a message). Behavior must be byte-for-byte identical at runtime.",
+        "## STEP 2 — Re-judge each finding, then apply only the real ones",
+        "- The advisory finding is a SUGGESTION, not an order. Before deleting ANY comment,",
+        "  re-apply the `technical-deslop` KEEP list"
+        " (`.claude/skills/technical-deslop/references/slop-patterns.md`).",
+        "- If the targeted comment explains WHY / WHEN / under WHICH deployment-or-runtime mode",
+        "  something is done, or is a dated decision/migration note (`# YYYY-MM-DD — …`), it is",
+        "  rationale, NOT slop: treat the finding as a FALSE POSITIVE — skip it and record why.",
+        "  When in doubt, KEEP the comment.",
+        "- Apply only the findings that survive re-judgement, and make exactly that cleanup",
+        "  (e.g. delete a truly-redundant `# increment i` over `i += 1`, tighten a message).",
+        "  Behavior must be byte-for-byte identical at runtime.",
         "- Do NOT refactor unrelated code, rename public symbols, change control flow, or",
-        "  touch any file not named in a finding. If a fix would require that, STOP and",
-        "  comment on the issue explaining why, then exit.",
+        "  touch any file not named in a surviving finding. If a fix would require that, STOP",
+        "  and comment on the issue explaining why, then exit.",
         "",
         "## STEP 3 — Super-verify locally (the no-broken-fix bar)",
         "- Run the FULL PR gate locally and confirm green:",
@@ -656,7 +677,10 @@ def build_cody_brief(issue: DeslopIssue, delivery: str, *, repo: str = DEFAULT_R
         "## STEP 4 — Open the PR",
         f"- Commit and push branch `{branch}`.",
         f"- {pr_posture}",
-        f"- In the PR body, write `Closes #{issue.number}` so merging closes the issue.",
+        "- In the PR body, include a **per-finding ledger** so a reviewer sees your judgement:",
+        "  for EACH finding list `APPLIED` or `KEPT (false positive)`, the file, and the exact",
+        "  comment text you removed or chose to keep — with a one-line reason for each KEEP.",
+        f"- Also write `Closes #{issue.number}` so merging closes the issue.",
         "",
         "## Hard constraints (NEVER violate)",
         "- Do NOT merge, do NOT push to main, do NOT deploy, do NOT touch secrets/Infisical,",
