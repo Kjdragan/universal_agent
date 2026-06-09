@@ -25,6 +25,27 @@ _SYSTEMD_DIR = _REPO_ROOT / "deployment" / "systemd"
 # "*-*-* 06..21:00:00 America/Chicago".
 _HOUR_RANGE_RE = re.compile(r"(\d{2}\.\.\d{2})")
 
+# Timers intentionally widened to a full 24h OnCalendar range that gate
+# execution at RUNTIME via dormancy.should_run(env_var="UA_<JOB>_DORMANCY")
+# inside their ExecStart script, rather than via the schedule. Default
+# behaviour stays windowed (the env var is the opt-OUT-to-24/7 lever); the
+# schedule fires every hour so the per-run gate can decide. These are exempt
+# from the strict 06..21 match below but pinned to the full-day range so a
+# hand-edit to some other partial window is still caught.
+_FULL_DAY_RANGE = "00..23"
+_RUNTIME_GATED_TIMERS = {
+    "universal-agent-hourly-intel-digest.timer",
+    "universal-agent-csi-convergence-sync.timer",
+}
+
+# ExecStart script (relative to repo root) -> the UA_<JOB>_DORMANCY env var its
+# runtime gate reads. A widened 24/7 timer is only safe if its script actually
+# gates at runtime, so this pairs every runtime-gated timer with its gate.
+_RUNTIME_GATED_SCRIPTS = {
+    "src/universal_agent/scripts/hourly_intel_digest_cron.py": "UA_INTEL_DIGEST_DORMANCY",
+    "src/universal_agent/scripts/csi_convergence_sync.py": "UA_CSI_CONVERGENCE_SYNC_DORMANCY",
+}
+
 
 def test_cron_hour_field_derives_from_constants() -> None:
     assert dormancy.cron_hour_field() == (
@@ -63,23 +84,63 @@ def test_windowed_timers_match_dormancy_window() -> None:
     windowed = _windowed_oncalendar_entries()
     assert windowed, "expected at least one windowed systemd timer (an H..H range)"
     expected = dormancy.systemd_hour_range()
-    mismatches = [(name, rng) for name, rng in windowed if rng != expected]
+    mismatches = [
+        (name, rng)
+        for name, rng in windowed
+        if name not in _RUNTIME_GATED_TIMERS and rng != expected
+    ]
     assert not mismatches, (
         "systemd timer OnCalendar hour-range(s) diverged from "
         f"dormancy.systemd_hour_range() ({expected!r}): {mismatches}. "
         "Update deployment/systemd/*.timer (and reinstall on the VPS) or the "
-        "dormancy constants together."
+        "dormancy constants together. (Timers that intentionally run 24/7 and "
+        "gate at runtime belong in _RUNTIME_GATED_TIMERS, not here.)"
     )
+
+
+def test_runtime_gated_timers_are_full_day() -> None:
+    """Runtime-gated timers must use the full-day OnCalendar range.
+
+    Their dormancy decision lives in the ExecStart script via
+    ``dormancy.should_run(env_var="UA_<JOB>_DORMANCY")``, so the schedule is
+    deliberately 24/7. Pinning to ``00..23`` keeps a hand-edit to some other
+    partial window from silently re-narrowing the schedule (which would defeat
+    the runtime opt-out: a flipped env var could never fire overnight).
+    """
+    by_name = dict(_windowed_oncalendar_entries())
+    for name in sorted(_RUNTIME_GATED_TIMERS):
+        assert by_name.get(name) == _FULL_DAY_RANGE, (
+            f"{name} is a runtime-gated 24/7 timer and must use OnCalendar "
+            f"hour-range {_FULL_DAY_RANGE!r} (it gates at runtime via "
+            f"should_run); found {by_name.get(name)!r}."
+        )
 
 
 def test_known_windowed_timers_present() -> None:
     names = {name for name, _ in _windowed_oncalendar_entries()}
     for expected in (
-        "universal-agent-hourly-intel-digest.timer",
-        "universal-agent-csi-convergence-sync.timer",
         "universal-agent-artifact-reminders-sweep.timer",
     ):
         assert expected in names, (
             f"{expected} is no longer a windowed (H..H) timer — confirm the "
             "schedule change was intentional before updating this guard."
+        )
+
+
+def test_runtime_gated_scripts_call_should_run() -> None:
+    """Every runtime-gated job's ExecStart script must gate at runtime.
+
+    A widened 24/7 timer with no ``should_run`` gate would run the job
+    overnight unconditionally — the opposite of the opt-OUT default. Pin that
+    each script imports/calls ``dormancy.should_run`` with the matching
+    ``UA_<JOB>_DORMANCY`` env var and the windowed-by-default mode, so a
+    schedule widening can never ship without its gate.
+    """
+    for rel, env_var in sorted(_RUNTIME_GATED_SCRIPTS.items()):
+        body = (_REPO_ROOT / rel).read_text(encoding="utf-8")
+        assert "should_run(" in body, f"{rel} must call dormancy.should_run()"
+        assert env_var in body, f"{rel} must gate on env var {env_var!r}"
+        assert 'mode="dormancy_aware"' in body, (
+            f'{rel} should_run gate must use mode="dormancy_aware" so the '
+            "default (env var unset) stays windowed."
         )

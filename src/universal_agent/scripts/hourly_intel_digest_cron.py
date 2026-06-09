@@ -27,6 +27,7 @@ import sys
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
 from universal_agent.infisical_loader import initialize_runtime_secrets
 from universal_agent.services import proactive_artifacts as _pa
+from universal_agent.services.dormancy import should_run
 from universal_agent.services.agentmail_service import AgentMailService
 from universal_agent.services.email_tags import ActionTag, KindTag
 from universal_agent.services.hourly_intel_digest import (
@@ -136,6 +137,21 @@ async def run_once(conn) -> str:  # noqa: ANN001 — sqlite3.Connection
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
+    # Runtime dormancy gate (opt-OUT to 24/7). The systemd timer fires every
+    # hour (00..23) so this gate decides per-run. Default (env unset) stays
+    # windowed — set UA_INTEL_DIGEST_DORMANCY to a falsy value (e.g. "false")
+    # in Infisical to run 24/7. Gate BEFORE initialize_runtime_secrets() so the
+    # overnight skip costs no Infisical round-trip.
+    if not should_run(
+        mode="dormancy_aware",
+        env_var="UA_INTEL_DIGEST_DORMANCY",
+        env=os.environ,
+    ):
+        logger.info(
+            "hourly_intel_digest_cron: dormant window, skipping "
+            "(set UA_INTEL_DIGEST_DORMANCY=false to run 24/7)"
+        )
+        return
     # One-shot subprocess: make sure the Infisical-backed secrets (AgentMail API
     # key, LLM keys, etc.) are present before we stand up the mailer. Use NO
     # hardcoded profile so UA_DEPLOYMENT_PROFILE is honored: under the systemd

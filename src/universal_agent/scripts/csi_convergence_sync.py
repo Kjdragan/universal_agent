@@ -11,6 +11,7 @@ import sqlite3
 from universal_agent.artifacts import resolve_artifacts_dir
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
 from universal_agent.infisical_loader import initialize_runtime_secrets
+from universal_agent.services.dormancy import should_run
 from universal_agent.services.proactive_convergence import (
     sync_topic_signatures_from_csi,
 )
@@ -39,6 +40,18 @@ def _write_sync_report(payload: dict) -> Path:
 
 
 def main() -> int:
+    # Runtime dormancy gate (opt-OUT to 24/7). The systemd timer fires every
+    # hour (00..23) so this gate decides per-run. Default (env unset) stays
+    # windowed — set UA_CSI_CONVERGENCE_SYNC_DORMANCY to a falsy value (e.g.
+    # "false") in Infisical to run 24/7. Gate BEFORE initialize_runtime_secrets()
+    # so the overnight skip costs no Infisical round-trip.
+    if not should_run(
+        mode="dormancy_aware",
+        env_var="UA_CSI_CONVERGENCE_SYNC_DORMANCY",
+        env=os.environ,
+    ):
+        print(json.dumps({"ok": True, "skipped": "dormant_window"}))
+        return 0
     # Load Infisical secrets FIRST. This job runs as a standalone systemd oneshot
     # (no gateway parent to inherit ANTHROPIC/ZAI keys from), and
     # sync_topic_signatures_from_csi makes bounded LLM calls (ZAI/GLM) via the

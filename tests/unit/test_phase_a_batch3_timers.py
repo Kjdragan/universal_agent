@@ -2,8 +2,10 @@
 
 Pins the batch-3 contract so the timer substrate can't silently drift from the
 in-process registry. Batch 3 is a 2-service / 2-timer shape — both jobs fire at
-the top of every active-window hour (06..21 America/Chicago) — with two gate
-mechanisms the batch-1/2 guards already exercise:
+the top of every hour (00..23 America/Chicago) and gate dormancy at RUNTIME via
+``dormancy.should_run(env_var="UA_<JOB>_DORMANCY")`` (default windowed; flip the
+env var to run 24/7 without a timer reinstall) — with two gate mechanisms the
+batch-1/2 guards already exercise:
 
   * ``hourly_intel_digest`` registers via ``_register_system_cron_job`` and is
     gated by ANDing ``not _is_migrated_to_systemd(...)`` into its ``enabled=``
@@ -91,8 +93,12 @@ def test_timer_oncalendar_persistent_not_monotonic(job):
     oncalendar = [ln for ln in lines if ln.startswith("OnCalendar=")]
     assert oncalendar, f"{timer_base}: no active OnCalendar"
     assert all("America/Chicago" in ln for ln in oncalendar)
-    # cron `0 6-21 * * *` -> top of every active-window hour 06..21.
-    assert all("06..21:00:00" in ln for ln in oncalendar)
+    # Runtime-gated 24/7: fires the top of every hour (00..23). The per-run
+    # dormancy decision moved into the ExecStart script via
+    # dormancy.should_run(env_var="UA_<JOB>_DORMANCY"); default stays windowed,
+    # a flipped env var runs 24/7 with no timer reinstall. The schedule<->gate
+    # pairing is guarded in tests/unit/test_dormancy_schedule_consistency.py.
+    assert all("00..23:00:00" in ln for ln in oncalendar)
     assert "Persistent=true" in lines
     assert not any(ln.startswith(("OnUnitActiveSec", "OnBootSec")) for ln in lines)
     assert f"Unit={service_base}.service" in lines

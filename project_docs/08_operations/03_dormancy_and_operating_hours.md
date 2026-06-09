@@ -229,6 +229,90 @@ explicitly dormancy-exempt:
   deploy) are event-driven (`push`/`pull_request`/`workflow_run`), so dormancy never
   applies mechanically.
 
+## Runtime 24/7 opt-out (per-job)
+
+Distinct from the blanket `DOCUMENTED_EXCEPTIONS` above (which default a job to
+**24/7**), the runtime opt-out lets a windowed job be flipped to 24/7 **at
+runtime** — no redeploy, no code change — while its **default stays windowed**.
+It is the operator's "opt-in/opt-out per process, never blanket" lever.
+
+How it works (two halves):
+
+1. **Widen the schedule to 24/7.** The systemd `.timer` `OnCalendar` is set to the
+   full-day range `00..23` (or, for an in-process cron, the hour field to `*`) so
+   the unit fires every hour and the per-run gate can decide.
+2. **Gate the work at runtime.** The ExecStart script calls
+   `dormancy.should_run(mode="dormancy_aware", env_var="UA_<JOB>_DORMANCY")`
+   **before** `initialize_runtime_secrets()` (so an overnight skip costs no
+   Infisical round-trip). Because `mode="dormancy_aware"` and the env var is
+   unset by default, the job no-ops outside 6 AM–10 PM Houston — same effective
+   behavior as before. Setting `UA_<JOB>_DORMANCY` to a **falsy** value forces
+   `always` (24/7); a truthy value (or unset) keeps it windowed. (This polarity
+   is `should_run`'s native env coercion: truthy → `dormancy_aware`, falsy →
+   `always`.)
+
+Default windowed + opt-OUT-to-24/7 keeps the policy "dormancy is opt-in, never
+blanket" intact, and avoids surprise overnight Infisical-bootstrap cost (each
+flipped job adds ~8 overnight runs/day; `initialize_runtime_secrets()` is not
+memoized).
+
+### Pilot jobs and their opt-out env vars
+
+| Job | Opt-out env var (Infisical) | Schedule | To flip to 24/7 |
+|---|---|---|---|
+| `hourly_intel_digest` (systemd) | `UA_INTEL_DIGEST_DORMANCY` | `00..23` timer, runtime-gated | set var falsy in Infisical, then reinstall the timer (below) |
+| `csi_convergence_sync` (systemd) | `UA_CSI_CONVERGENCE_SYNC_DORMANCY` | `00..23` timer, runtime-gated | set var falsy in Infisical, then reinstall the timer (below) |
+
+The env vars live in Infisical (dev + prod) defaulted to `true` (explicit
+windowed) so the lever is discoverable. Deliberately **excluded** from the pilot:
+`vp_mission_pr_reconciler` (its `6-20` window is a job-specific narrowing, not the
+6–22 dormancy window, so the gate would silently widen its default), and
+`cron_artifact_reminders_sweep` (it already self-gates per reminder via
+`_within_active_window` — a script-level gate on top would double-gate; route any
+opt-out through that existing per-reminder check instead). The in-process pattern
+(hour field → `*` + a `should_run` gate, plus a `DOCUMENTED_EXCEPTIONS` entry and
+the pin-test update) applies to crons like `hackernews_snapshot` when wanted.
+
+### Operator runbook — register + flip
+
+**One-time: register the parameter list in Infisical** (workspace
+`9970e5b7-d48a-4ed8-a8af-43e923e67572`), defaulted to the windowed value so the
+levers are visible in both environments. Run on a box with the Infisical CLI
+authenticated (the agent cannot — prod secret writes are operator-gated):
+
+```bash
+for ENV in dev prod; do
+  infisical secrets set --env="$ENV" --projectId=9970e5b7-d48a-4ed8-a8af-43e923e67572 \
+    UA_INTEL_DIGEST_DORMANCY=true \
+    UA_CSI_CONVERGENCE_SYNC_DORMANCY=true
+done
+```
+
+(Setting them to `true` is a behavioral no-op — windowed is already the default
+when unset — it just makes the lever discoverable in the Infisical UI.)
+
+1. **Flip the env var in Infisical** (dev and/or prod): set
+   `UA_INTEL_DIGEST_DORMANCY=false` (or the csi var) to go 24/7; set back to
+   `true` / remove to return to windowed.
+2. **For a systemd job, reinstall the timer on the VPS** so the widened
+   `OnCalendar` takes effect (the timer text only changes on reinstall + a
+   `daemon-reload`). Run as root:
+   `sudo bash scripts/install_vps_phase_a_batch3_timers.sh` — this installer
+   covers **both** `hourly-intel-digest` and `csi-convergence-sync`. The agent
+   cannot do this (the script enforces an EUID-0 check).
+3. **Verify the flip:** `systemctl list-timers` shows the timer's next elapse
+   spanning overnight; the next overnight run's journal should show the job
+   executing (24/7) or the `dormant window, skipping` log line (windowed).
+
+### Guards (drift protection)
+
+`tests/unit/test_dormancy_schedule_consistency.py` pins the runtime-gated timers
+to the full-day `00..23` range (`_RUNTIME_GATED_TIMERS`) and asserts each one's
+ExecStart script actually calls `should_run` with the matching
+`UA_<JOB>_DORMANCY` env var (`test_runtime_gated_scripts_call_should_run`) — so a
+schedule widening can never ship without its runtime gate, and a hand-edit can't
+silently re-narrow the schedule.
+
 ## The guard test
 
 `tests/unit/test_cron_dormancy_defaults.py` is the tripwire that keeps a future
