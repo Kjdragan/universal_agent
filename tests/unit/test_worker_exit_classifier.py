@@ -17,7 +17,6 @@ from universal_agent.services.worker_exit_classifier import (
     classify_worker_exit,
 )
 
-
 # -- WorkerExit dataclass ----------------------------------------------------
 
 class TestWorkerExit:

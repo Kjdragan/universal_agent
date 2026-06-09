@@ -14,8 +14,10 @@ import sqlite3
 
 import pytest
 
-from universal_agent.services import llm_classifier
-from universal_agent.services import proactive_intelligence_report as pir
+from universal_agent.services import (
+    llm_classifier,
+    proactive_intelligence_report as pir,
+)
 
 
 class _RecordingMail:

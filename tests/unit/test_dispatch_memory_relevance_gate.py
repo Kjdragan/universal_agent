@@ -13,8 +13,8 @@ The per-task memory search is now OFF by default and gated behind
 
 from __future__ import annotations
 
-import universal_agent.memory.orchestrator as orchestrator_module
 from universal_agent import task_hub
+import universal_agent.memory.orchestrator as orchestrator_module
 
 _LONG_TITLE = {"title": "Evaluate convergence candidate: agentic coding tooling"}
 

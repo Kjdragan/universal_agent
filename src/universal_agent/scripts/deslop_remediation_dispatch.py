@@ -49,8 +49,8 @@ import json
 import os
 import re
 import subprocess
-import unicodedata
 from typing import Any, Callable, Optional
+import unicodedata
 
 # --------------------------------------------------------------------------- #
 # Configuration
@@ -809,7 +809,9 @@ def dispatch_cody_fix(
         send = emailer
         if send is None:
             try:
-                from universal_agent.simone_mail import send_simone_email as send  # type: ignore
+                from universal_agent.simone_mail import (
+                    send_simone_email as send,  # type: ignore
+                )
             except Exception as exc:  # pragma: no cover - best effort
                 email_result = {"status": "failed", "reason": f"import:{exc}"}
                 send = None
@@ -875,7 +877,9 @@ def escalate_to_operator(
         send = telegram
         if send is None and chat_id:
             try:
-                from universal_agent.services.telegram_send import telegram_send_sync as send  # type: ignore
+                from universal_agent.services.telegram_send import (
+                    telegram_send_sync as send,  # type: ignore
+                )
             except Exception as exc:  # pragma: no cover - best effort
                 send = None
                 detail = f"import:{exc}"

@@ -18,7 +18,6 @@ from universal_agent.services.priority_classifier import (
     classify_task_priority,
 )
 
-
 # -- Datastructure helpers ---------------------------------------------------
 
 class TestTaskPriority:
