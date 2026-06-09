@@ -221,10 +221,15 @@ When you claim a task with `source_kind="vp_mission_failure"`, you are operating
   - **If entity exists**: invoke the `cody-scaffold-builder` skill with the matched entity slug. Then refine the generated `BRIEF.md` / `ACCEPTANCE.md` / `business_relevance.md` placeholders with real prose synthesis (do NOT just delete `_(Simone: ...)_` markers — substitute substantive content). Then invoke `cody-task-dispatcher` to enqueue the `cody_demo_task`. Finally, mark the original `cody_scaffold_request` row `status=completed` with a Task Hub comment linking to the workspace and the new `cody_demo_task:<id>`.
   - **If entity is missing**: do NOT speculate or invent a stub. Mark the `cody_scaffold_request` row `status=blocked` with reason `vault_entity_missing:<expected_slug>` and surface a one-line note in the heartbeat response so Kevin can decide whether to backfill the entity or defer the demo. Do not loop on it.
   - **Safety**: only use the deterministic `cody-scaffold-builder` Python entry point. Never bypass it to write workspace files directly. The skill enforces the vanilla-settings safety net (`/opt/ua_demos/<id>/.claude/settings.json` integrity).
-<!-- scope:hq -->
-- [ ] Hourly intel digest (Simone owns — runs every heartbeat, self-throttles to once per clock hour)
-  - Invoke `/hourly-intel-digest`. The skill handles throttle/pause/empty-candidates checks internally via `hourly_intel_digest.compose_send_payload` — if a digest was already sent this clock hour OR digest is paused OR there are no qualifying briefs, the skill exits immediately with no email and no log noise. No action needed from you unless the skill surfaces an error.
-  - If the skill returns an error or the Task Hub run record shows failure, surface a one-line note in the heartbeat response and park a `needs_review` item with the error per the Task Hub Observability Protocol (`project_docs/02_execution_core/02_task_hub.md`). Do NOT stamp `delivered_at` on the artifacts — they remain eligible for the next heartbeat attempt.
+<!-- Hourly intel digest is delivered ONLY by the deterministic systemd timer
+     `universal-agent-hourly-intel-digest` (src/universal_agent/scripts/hourly_intel_digest_cron.py),
+     which runs 06-21 CT and sends inline HTML + per-brief /briefs/{id} links.
+     The heartbeat directive that used to invoke `/hourly-intel-digest` was removed
+     2026-06-09: as an LLM path it was NOT window-gated (it fired overnight — e.g. a
+     00:43 CT send) and hand-composed broken "see attached HTML digest" bodies with
+     no link/attachment. Do NOT re-add a heartbeat invocation — the timer is the
+     sole sender, and a second runner is exactly what caused the duplicate/off-hours
+     sends. See project memory: intel-digest-delivery. -->
 <!-- scope:hq -->
 - [ ] Intel-brief surfacing on vault writes (Simone owns)
   - Trigger: any time you CREATE or materially EXTEND a vault entity in `artifacts/knowledge-vaults/<vault_slug>/entities/` during a `claude_code_kb_update` task (or any other lane that mutates a vault entity). "Material extend" = the `log.md` entry's `reason:` line describes a real fact addition, not a cosmetic re-sync.
