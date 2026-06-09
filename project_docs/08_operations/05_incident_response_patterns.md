@@ -179,8 +179,9 @@ This recovery is **operator-driven** for the `sudo` steps. The Claude session ca
 The gateway runs a **startup recovery sweep** on every cold start
 (`gateway_server.py::lifespan` → `_run_startup_recovery_sweep`) that releases orphaned seized
 assignments and reconciles lifecycle rows. Deploy itself force-resets the prod tree to
-`origin/main` and re-points the local `main` ref (`deploy.yml`, the
-`git update-ref refs/heads/main` line), so a deploy launders a stray branch checkout. The
+`origin/main`, re-points the local `main` ref, and checks out `main`
+(`remote_deploy.sh`: `reset --hard origin/main` → `update-ref refs/heads/main` → `git checkout main`),
+so a deploy launders a stray branch checkout — both its code and its branch label. The
 deeper structural fix — preventing Simone from claiming code-author missions at all (the
 worktree-PR contract / agent-capability gate) — is enforced via mission routing and is the
 correct long-term backstop rather than relying on post-hoc recovery.

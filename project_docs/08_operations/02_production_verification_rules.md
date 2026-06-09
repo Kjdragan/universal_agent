@@ -188,9 +188,10 @@ will wait behind a failed run.)
 1. Tailscale connect + SSH preflight (a non-interactive `echo SSH_OK` probe;
    detects the Tailscale interactive-check failure mode explicitly).
 2. `git fetch origin main` → `git reset --hard origin/main` →
-   `git update-ref refs/heads/main` (keeps the local `main` ref in sync so an
-   operator who later runs `git checkout main` during incident recovery doesn't
-   land on stale code). A stale-lock guard removes a dead `.git/index.lock`.
+   `git update-ref refs/heads/main` → `git checkout main` (the `update-ref` keeps
+   the local `main` ref in sync so the final `git checkout main` lands the tree on
+   the `main` branch itself — never on stale code, and never leaving prod on a
+   stray feature-branch ref). A stale-lock guard removes a dead `.git/index.lock`.
 3. `chown -R ua:ua`, then write a **clean bootstrap `.env`** containing only
    Infisical creds + a fixed set of runtime keys (`UA_RUNTIME_STAGE=production`,
    `FACTORY_ROLE=HEADQUARTERS`, `UA_DEPLOYMENT_PROFILE=vps`, ports, etc.). This
