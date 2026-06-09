@@ -65,9 +65,7 @@ A2 = {
         "proactive_digest_agent",
         300,
     ),
-    # Migrated off the in-process gateway cron 2026-06-08, alongside its sibling
-    # proactive_artifact_digest. Sends operator email (AgentMail) -> carries
-    # TimeoutStartSec like the digest.
+    # 2026-06-08 — migrated alongside proactive_artifact_digest; network job so carries TimeoutStartSec.
     "cron_artifact_reminders_sweep": (
         "universal-agent-artifact-reminders-sweep",
         "universal-agent-artifact-reminders-sweep",
