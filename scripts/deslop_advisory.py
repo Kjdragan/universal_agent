@@ -229,6 +229,20 @@ def _is_autoremediation_branch() -> bool:
     return os.getenv("GITHUB_HEAD_REF", "").startswith("claude/deslop-fix")
 
 
+def _notify_operator() -> bool:
+    """Whether to surface the advisory as a PR comment on every PR (default off).
+
+    Off (default) keeps the deslopper quiet: a comment is posted only when there
+    is an actionable medium/high finding (which also files a tracking issue);
+    "no slop found" and low-only PRs stay silent so the operator gets no
+    author-subscription email. Set ``UA_DESLOP_NOTIFY_OPERATOR`` truthy to restore
+    a comment on every PR. Mirrors the same flag in the dispatcher.
+    """
+    return os.getenv("UA_DESLOP_NOTIFY_OPERATOR", "0").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Advisory deslop reviewer (report-only)")
     ap.add_argument("--diff", required=True, help="path to a pre-computed diff file")
@@ -252,10 +266,23 @@ def main() -> int:
         return 0
 
     def _emit(suggestions: list) -> int:
-        """Print the comment, write the meta sidecar if requested, return 0."""
-        print(_build_comment(suggestions))
+        """Write the meta sidecar (drives the tracking-issue decision) and emit the
+        PR comment ONLY when there is an actionable finding (medium/high) — or when
+        UA_DESLOP_NOTIFY_OPERATOR opts back into full commenting.
+
+        Default-quiet rationale: the advisory comment is reused verbatim by the
+        workflow as the tracking-issue body, so medium/high MUST still print it
+        (and those file an issue anyway). But "no slop found" and low-only PRs —
+        the high-frequency case on nearly every autonomous PR — now print nothing,
+        so the workflow posts no comment and the operator gets no author-
+        subscription email. None/low never file an issue, so the empty stdout
+        costs no record.
+        """
         if args.meta_out:
             _write_meta(args.meta_out, suggestions)
+        max_sev = _max_severity(_collect_severities(suggestions))
+        if _notify_operator() or max_sev in {"medium", "high"}:
+            print(_build_comment(suggestions))
         return 0  # always advisory — never blocks a PR or auto-merge
 
     diff_text = _truncate(_read_diff(args.diff), args.max_bytes)
