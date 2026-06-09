@@ -3611,11 +3611,22 @@ def _reconcile_stale_vp_missions_once(
         if not mission_id or not vp_id:
             continue
         final_status = "cancelled" if int(row["cancel_requested"] or 0) == 1 else "failed"
+        # Stamp a concrete failure_mode from the (already-known) stale reason so the
+        # surfaced "VP failure" card is actionable instead of the generic "unspecified"
+        # default in finalize_vp_mission -> surface_failure_to_simone.
+        reconcile_failure_mode = (
+            "operator_cancel"
+            if final_status == "cancelled"
+            else f"stale_{stale_reason}"
+            if stale_reason
+            else "stale_reconcile"
+        )
         finalized = finalize_vp_mission(
             conn,
             mission_id,
             final_status,
             result_ref=str(row["result_ref"] or "").strip() or None,
+            failure_mode=reconcile_failure_mode,
         )
         if not finalized:
             continue
