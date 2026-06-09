@@ -16089,9 +16089,18 @@ def _csi_incident_reminder_interval_seconds() -> int:
 
 
 def _csi_incident_in_waking_window(now_epoch: int) -> bool:
-    """True when the local hour in America/Chicago is within [06:00, 22:00)."""
-    local = datetime.fromtimestamp(now_epoch, tz=ZoneInfo("America/Chicago"))
-    return 6 <= local.hour < 22
+    """True when the local hour in America/Chicago is within [06:00, 22:00).
+
+    Delegates to the canonical dormancy window
+    (:func:`universal_agent.services.dormancy.is_active_window`). Same
+    bounds (6 <= Houston hour < 22); now additionally permissive on a
+    timezone error (returns True) rather than raising, so a missing
+    tzdata box still delivers CSI incident reminders instead of crashing
+    the sweep.
+    """
+    from universal_agent.services import dormancy
+
+    return dormancy.is_active_window(now_epoch)
 
 
 def _csi_incident_recipient() -> str:

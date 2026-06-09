@@ -40,7 +40,7 @@ import sqlite3
 import time
 from typing import Any, Optional
 
-from universal_agent.services import proactive_artifacts
+from universal_agent.services import dormancy, proactive_artifacts
 from universal_agent.services.cron_artifact_notifier import (
     _build_ack_url,
     _coalesce_enabled,
@@ -65,12 +65,9 @@ _STATE_TRANSITIONS: dict[str, tuple[str, float]] = {
 }
 _TERMINAL_STATE = "stopped"
 
-# Active window (UTC offsets — defaults to America/Chicago = UTC-5/CDT
-# or UTC-6/CST). Computed dynamically per-tick so DST transitions are
-# handled correctly.
-_HOUSTON_TZ_NAME = "America/Chicago"
-_ACTIVE_START_HOUR = 6
-_ACTIVE_END_HOUR = 22  # 10 PM
+# The 6 AM–10 PM Houston active window is the single source of truth in
+# services/dormancy.py; reminder delivery is gated via _within_active_window
+# below, which delegates to dormancy.is_active_window.
 
 
 # ── Public API ─────────────────────────────────────────────────────────
@@ -339,18 +336,14 @@ def _finished_at_epoch(reminder: dict[str, Any], artifact: dict[str, Any]) -> fl
 
 
 def _within_active_window(now_epoch: float) -> bool:
-    """Return True if the given UTC epoch falls within Houston active hours."""
-    try:
-        from zoneinfo import ZoneInfo
+    """Return True if the given UTC epoch falls within Houston active hours.
 
-        houston = datetime.fromtimestamp(now_epoch, tz=timezone.utc).astimezone(
-            ZoneInfo(_HOUSTON_TZ_NAME)
-        )
-        return _ACTIVE_START_HOUR <= houston.hour < _ACTIVE_END_HOUR
-    except Exception:  # noqa: BLE001
-        # If zoneinfo or tzdata isn't available, default to permissive:
-        # treat every hour as active so reminders aren't lost.
-        return True
+    Thin wrapper over :func:`universal_agent.services.dormancy.is_active_window`,
+    the single source of truth for the 6 AM–10 PM Houston window. Name and
+    signature are preserved for existing callers/tests; behavior (window
+    bounds and permissive-on-tz-error fallback) is unchanged.
+    """
+    return dormancy.is_active_window(now_epoch)
 
 
 # ── Email composition for reminders ────────────────────────────────────

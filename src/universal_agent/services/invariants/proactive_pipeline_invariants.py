@@ -24,6 +24,7 @@ import sqlite3
 from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo
 
+from universal_agent.services import dormancy
 from universal_agent.services.pipeline_invariants import invariant
 
 logger = logging.getLogger(__name__)
@@ -621,7 +622,7 @@ def claude_code_intel_packet_freshness(ctx: Dict[str, Any]) -> Optional[Dict[str
         return None
     now = _now_houston()
     # Only meaningful during active hours; quiet during dormancy (10 PM – 6 AM Houston)
-    if not (6 <= now.hour <= 21):
+    if not dormancy.is_active_window(now):
         return None
     # First 30 min after 6 AM allows the overnight gap (last cron 10 PM yesterday).
     if now.hour == 6 and now.minute < 30:
@@ -700,7 +701,7 @@ def csi_demo_triage_rank_artifact(ctx: Dict[str, Any]) -> Optional[Dict[str, Any
     now = _now_houston()
     # Only probe during active hours. Skip first 30 min after 6 AM to allow
     # the overnight gap from yesterday's 3:05 PM run.
-    if not (6 <= now.hour <= 21):
+    if not dormancy.is_active_window(now):
         return None
     if now.hour == 6 and now.minute < 30:
         return None
