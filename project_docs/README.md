@@ -55,9 +55,9 @@ _VP workers, Simone orchestration, heartbeat, cron, idle dispatch, agent college
 _CSI, intel lanes, research, wiki, memory, proactive pipeline, mission control, discord intel_
 
 - **[CSI Architecture](04_intelligence/01_csi_architecture.md)** — CSI overall: convergence pipeline, vault intelligence pass/persistence, db split-brain (_csi_default_db_path), content-safety fail-closed gotcha. _(verified 2026-06-01)_
-- **[URL Judging & Research Grounding](04_intelligence/02_url_judging_and_research_grounding.md)** — Three-pass URL enrichment (pre-filter→LLM judge (resolve_opus)→fetch), trust_source bypass, research_grounding allowlist (separate path). _(verified 2026-05-29)_
+- **[URL Judging & Research Grounding](04_intelligence/02_url_judging_and_research_grounding.md)** — Three-pass URL enrichment (pre-filter→LLM judge (resolve_opus)→fetch), trust_source bypass, research_grounding allowlist (separate path). _(verified 2026-06-08)_
 - **[Intel Lanes Configuration](04_intelligence/03_intel_lanes_config.md)** — Lane config schema, cron schedule (3x daily 08/16/22 CT), research_allowlist semantics. _(verified 2026-05-29)_
-- **[ClaudeDevs X Intelligence](04_intelligence/04_claudedevs_x_intel.md)** — @ClaudeDevs polling lane, packet outputs, vault-as-canonical-product. _(verified 2026-05-29)_
+- **[ClaudeDevs X Intelligence](04_intelligence/04_claudedevs_x_intel.md)** — @ClaudeDevs polling lane, packet outputs, vault-as-canonical-product. _(verified 2026-06-08)_
 - **[YouTube CSI Flow](04_intelligence/05_youtube_csi_flow.md)** — YouTube feeds topology, dual-pipeline (UA-native playlist watcher vs CSI RSS feed — separate DBs), residential proxy ingestion. _(verified 2026-06-04)_
 - **[Demo Triage](04_intelligence/06_demo_triage.md)** — Demo candidate store, ranking, triage policy. _(verified 2026-06-02)_
 - **[LLM Wiki System](04_intelligence/07_llm_wiki.md)** — Vault management, internal sync/projection, query, LLM extraction, kb registry. _(verified 2026-06-03)_
@@ -65,7 +65,7 @@ _CSI, intel lanes, research, wiki, memory, proactive pipeline, mission control, 
 - **[Lossless Memory](04_intelligence/09_lossless_memory.md)** — DAG compression & SQLite history. _(verified 2026-06-04)_
 - **[Proactive Pipeline](04_intelligence/10_proactive_pipeline.md)** — raw→knowledge blocks→bounded retrieval→LLM synthesis→gated action. _(verified 2026-06-05)_
 - **[Mission Control Intelligence](04_intelligence/11_mission_control_intelligence.md)** — Operator intelligence surface, supervisor snapshots (note: Operator Brief panel removed Phase 8). _(verified 2026-06-05)_
-- **[Discord Intelligence](04_intelligence/12_discord_intelligence.md)** — Discord message pipeline, triage, calendar sync (gws materialization). _(verified 2026-05-29)_
+- **[Discord Intelligence](04_intelligence/12_discord_intelligence.md)** — Discord message pipeline, triage, calendar sync (gws materialization). _(verified 2026-06-07)_
 - **[Insight Pipeline Build Plan (Phases 0.5/4/5/6)](04_intelligence/13_insight_pipeline_build_plan.md)** — Living build/status plan: close the brief->digest email gap, digest dedup+template, feedback/index verify, gated legacy deletion. _(verified 2026-06-04)_
 
 ## 05_channels
@@ -73,10 +73,10 @@ _CSI, intel lanes, research, wiki, memory, proactive pipeline, mission control, 
 _Email/AgentMail, webhooks, telegram, discord ops, web-ui communication_
 
 - **[Email / AgentMail](05_channels/01_email_agentmail.md)** — WebSocket ingress, pre-triage security/quarantine, target-agent detection (label is agent-codie NOT agent-cody), task-bridge materialization, tags, Gmail 429 fallback, trusted-inbox queue. _(verified 2026-06-04)_
-- **[Webhook Architecture](05_channels/02_webhooks.md)** — Webhook handlers & ops. _(verified 2026-05-29)_
-- **[Telegram Channel](05_channels/03_telegram.md)** — Polling bot (not webhook), tg_<user_id> session scheme, allowlist (TELEGRAM_ALLOWED_USER_IDS — naming-drift gotcha), gateway-bypass architectural note. _(verified 2026-05-29)_
+- **[Webhook Architecture](05_channels/02_webhooks.md)** — Webhook handlers & ops. _(verified 2026-06-07)_
+- **[Telegram Channel](05_channels/03_telegram.md)** — Polling bot (not webhook), tg_<user_id> session scheme, allowlist (TELEGRAM_ALLOWED_USER_IDS — naming-drift gotcha), gateway-bypass architectural note. _(verified 2026-06-08)_
 - **[Discord Operations](05_channels/04_discord_ops.md)** — Discord bot operations & usage (operator-facing). _(verified 2026-05-29)_
-- **[Web UI Communication](05_channels/05_web_ui_communication.md)** — Chat panel ingress/tracking, activity log layer, task hub dashboard contract, AG-UI streaming, dashboard auth surface. _(verified 2026-05-29)_
+- **[Web UI Communication](05_channels/05_web_ui_communication.md)** — Chat panel ingress/tracking, activity log layer, task hub dashboard contract, AG-UI streaming, dashboard auth surface. _(verified 2026-06-08)_
 
 ## 06_platform
 
@@ -89,7 +89,7 @@ _Secrets/Infisical, runtime bootstrap, identity/auth, deployment/CI, environment
 - **[Execution Environments](06_platform/05_environments.md)** — Three Claude execution profiles (interactive Max / autonomous ZAI / Cody Anthropic-default-since-2026-05-11), local dev (just dev), demo execution, model routing. _(verified 2026-05-29)_
 - **["Networking: Tailscale, Residential Proxy, SSHFS"](06_platform/06_networking_tailscale_proxy_sshfs.md)** — Tailscale (uaonvps MagicDNS vs srv1360701 raw hostname), residential proxy (DataImpulse default/Webshare failover, VPS-only), SSHFS cross-machine mount. _(verified 2026-06-03)_
 - **[Claude Max OAuth Credentials (CLAUDE_CODE_OAUTH_TOKEN)](06_platform/07_claude_max_oauth_credentials.md)** — CLAUDE_CODE_OAUTH_TOKEN in Infisical is the SSOT for Cody-on-Anthropic / demo builds; refresh runbook + gotchas. _(verified 2026-06-02)_
-- **["ADR: Scheduling Substrate Redesign (deploy-resilient timers + read-only Mission Control)"](06_platform/08_scheduling_substrate_adr.md)** — Deploy-resilient scheduling substrate — two-axis substrate policy + per-job target table (31 crons), Mission Control sweeper extraction to its own service, deterministic proactive-health systemd timer + delivery contract, consolidations (reports/AM-products/mailer/DB), deploy-window-aware bounded backfill. _(verified 2026-06-05)_
+- **["ADR: Scheduling Substrate Redesign (deploy-resilient timers + read-only Mission Control)"](06_platform/08_scheduling_substrate_adr.md)** — Deploy-resilient scheduling substrate — two-axis substrate policy + per-job target table (31 crons), Mission Control sweeper extraction to its own service, deterministic proactive-health systemd timer + delivery contract, consolidations (reports/AM-products/mailer/DB), deploy-window-aware bounded backfill. _(verified 2026-06-08)_
 - **["Agent Runbook: Reaching the Production VPS (read live state without fighting SSH)"](06_platform/09_agent_vps_access_runbook.md)** — Agent runbook for reaching the prod VPS read-only over the tailnet gateway API (no SSH) _(verified 2026-06-07)_
 
 ## 07_tools
