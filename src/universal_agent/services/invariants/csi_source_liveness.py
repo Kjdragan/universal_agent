@@ -56,6 +56,23 @@ def _threads_lanes_enabled() -> bool:
     }
 
 
+def _hackernews_snapshot_enabled() -> bool:
+    """Whether the hackernews_snapshot producer is enabled.
+
+    HN's ONLY producer of `events` is the snapshot path (the hackernews_snapshot
+    cron / `scripts/hackernews_snapshot.py` -> `emit_movers_signals`). The
+    `UA_HACKERNEWS_SNAPSHOT_ENABLED=0` park (#734, a thread-pressure mitigation)
+    turns that off, so no job lands HN events and the source is *intentionally*
+    silent. Defaults to enabled when unset, mirroring the producer's own default.
+    """
+    return os.getenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", "1").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def effective_source_thresholds() -> Dict[str, float]:
     """The set of sources actually evaluated, after applying parking flags.
 
@@ -63,22 +80,32 @@ def effective_source_thresholds() -> Dict[str, float]:
     real outages:
       - Threads lanes while UA_CSI_THREADS_LANES_ENABLED is off (experimental,
         creds unprovisioned).
+      - hackernews while UA_HACKERNEWS_SNAPSHOT_ENABLED is off (its only producer
+        is parked — see below).
     A retired adapter (e.g. youtube_playlist, #438) is removed from the table
     outright; a *disabled-but-resumable* source is parked behind its flag here.
 
-    hackernews is intentionally NOT parked. PR #757 (M3) parked it behind
-    UA_HACKERNEWS_SNAPSHOT_ENABLED on the premise "snapshot cron disabled ⟹ HN
-    source dead." Live data on 2026-06-06 disproved that: the hackernews_snapshot
-    cron is disabled (#734) yet HN still lands ~130 events/48h — the overnight
-    convergence cycle pulls HN via POST /api/v1/hackernews/refresh, a producer
-    independent of the cron. So the snapshot-cron flag was the wrong key for HN
-    liveness, and parking on it MASKED a live (bursty) source. HN is now monitored
-    unconditionally at a cadence-appropriate threshold (see SOURCE_THRESHOLDS_HOURS).
+    hackernews is parked behind UA_HACKERNEWS_SNAPSHOT_ENABLED. PR #757 first
+    parked it on this flag; PR #765 then UN-parked it (2026-06-06) on the premise
+    that HN stays alive via an "overnight convergence /refresh" producer that is
+    independent of the snapshot cron — an observation taken while residual snapshot
+    events were still aging out. That backstop does not exist in the code: the only
+    callers of the snapshot/emit path are the (disabled) hackernews_snapshot cron
+    and the on-demand POST /api/v1/hackernews/refresh route; nothing in the
+    convergence/intel path calls it on a schedule. So once the #734 park took hold,
+    HN went dark (last event 2026-06-06T01:42Z) and the un-parked invariant fired a
+    standing CRITICAL on an *intentionally* disabled source. Re-parking on the
+    producer flag (this change, 2026-06-09) restores the correct semantics: HN is
+    monitored iff its producer is enabled. Flip UA_HACKERNEWS_SNAPSHOT_ENABLED=1
+    (re-enabling the snapshot) and liveness monitoring resumes automatically.
     """
     threads_on = _threads_lanes_enabled()
+    hackernews_on = _hackernews_snapshot_enabled()
     out: Dict[str, float] = {}
     for source, hours in SOURCE_THRESHOLDS_HOURS.items():
         if source in _THREADS_SOURCES and not threads_on:
+            continue
+        if source == "hackernews" and not hackernews_on:
             continue
         out[source] = hours
     return out
@@ -91,7 +118,7 @@ def effective_source_thresholds() -> Dict[str, float]:
 # source entirely (retired adapters should be removed from this table, not
 # given an unreachable threshold).
 SOURCE_THRESHOLDS_HOURS: Dict[str, float] = {
-    "hackernews": 36.0,                  # bursty: overnight convergence /refresh pulls (the */30 snapshot cron is disabled, #734). Observed normal inter-burst gap ~27h, so 36h flags a real multi-day outage without false-flagging the daytime quiet. Tune as cadence data accrues.
+    "hackernews": 36.0,                  # only evaluated when UA_HACKERNEWS_SNAPSHOT_ENABLED is on (parked off via #734). When live the snapshot path is bursty (~27h normal inter-burst gap), so 36h flags a real multi-day outage without false-flagging the daytime quiet. Tune as cadence data accrues.
     "csi_analytics": 12.0,               # downstream aggregator — depends on upstream cadence
     "youtube_channel_rss": 12.0,         # 444-channel watchlist, hourly-ish per channel
     "threads_owned": 12.0,               # owned-handle polling
@@ -158,6 +185,7 @@ def _per_source_last_seen(
         "db": "csi.db",
         "sources_monitored": list(SOURCE_THRESHOLDS_HOURS.keys()),
         "threads_lanes_flag": "UA_CSI_THREADS_LANES_ENABLED",
+        "hackernews_flag": "UA_HACKERNEWS_SNAPSHOT_ENABLED",
         "design_note": (
             "P1a (2026-05-20): one invariant covering the CSI adapters in one "
             "finding. Listing per-source thresholds + last_seen in "
@@ -167,10 +195,14 @@ def _per_source_last_seen(
             "Threads lanes (threads_owned, threads_trends_seeded, "
             "threads_trends_broad) parked behind UA_CSI_THREADS_LANES_ENABLED "
             "(experimental, creds unprovisioned) so they don't alert while off. "
-            "2026-06-06: hackernews un-parked + threshold widened 3h->36h — the "
-            "#757 park keyed on the (disabled) snapshot cron, but HN stays alive "
-            "via the overnight convergence /refresh, so the park had masked a "
-            "live bursty source."
+            "2026-06-06 (#765): hackernews un-parked + threshold widened 3h->36h "
+            "on the belief HN stays alive via an overnight convergence /refresh "
+            "independent of the snapshot cron. 2026-06-09: RE-PARKED behind "
+            "UA_HACKERNEWS_SNAPSHOT_ENABLED — that convergence backstop does not "
+            "exist in code (only the disabled snapshot cron + on-demand /refresh "
+            "route produce HN events), so the un-park made the #734 thread-pressure "
+            "park fire a standing CRITICAL on an intentionally-off source. HN is "
+            "now monitored iff its producer is enabled."
         ),
     },
 )

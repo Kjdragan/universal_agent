@@ -185,35 +185,64 @@ def test_threads_lanes_monitored_when_flag_enabled(tmp_path: Path, monkeypatch) 
     assert "threads_owned" in stale
 
 
-def test_hackernews_always_monitored_regardless_of_snapshot_flag(
+def test_hackernews_parked_when_snapshot_disabled(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """HN liveness is decoupled from the snapshot-cron flag. PR #757 parked HN
-    behind UA_HACKERNEWS_SNAPSHOT_ENABLED on the premise "cron disabled ⟹ source
-    dead"; live data (2026-06-06) showed HN stays alive via the convergence
-    /refresh path regardless of the cron, so the flag is the wrong key. HN is
-    monitored whether the flag is 0 or 1."""
+    """HN liveness is gated on its producer flag UA_HACKERNEWS_SNAPSHOT_ENABLED.
+
+    HN's only event producer is the snapshot path (hackernews_snapshot cron /
+    script -> emit_movers_signals). PR #765 had un-parked HN on the belief that an
+    "overnight convergence /refresh" kept it alive independent of the snapshot
+    cron, but no such scheduled producer exists in the code — so with the cron
+    parked off (#734) HN goes legitimately silent and the un-parked invariant fired
+    a standing CRITICAL on an intentionally-disabled source. Re-parked 2026-06-09:
+    when the flag is off HN is excluded from evaluation; when on it is monitored.
+    """
     from universal_agent.services.invariants.csi_source_liveness import (
         effective_source_thresholds,
     )
-    for flag in ("0", "1"):
-        monkeypatch.setenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", flag)
-        assert "hackernews" in effective_source_thresholds()
+    monkeypatch.setenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", "0")
+    assert "hackernews" not in effective_source_thresholds()
+    monkeypatch.setenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", "1")
+    assert "hackernews" in effective_source_thresholds()
+
+
+def test_hackernews_parked_source_never_alerts_even_when_dark(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """With the snapshot producer parked off, a totally dark HN must NOT fire —
+    that is the exact false-CRITICAL this re-park fixes (the source is off by
+    design, not broken)."""
+    monkeypatch.setenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", "0")
+    from universal_agent.services.invariants.csi_source_liveness import (
+        effective_source_thresholds,
+    )
+    assert "hackernews" not in effective_source_thresholds()
+    db = tmp_path / "csi.db"
+    # Every monitored (effective) source fresh; HN gets an ancient event and is
+    # still ignored because it is parked.
+    rows = [(s, _hours_ago(0.5)) for s in effective_source_thresholds()]
+    rows.append(("hackernews", _hours_ago(500)))
+    _seed_events(db, rows)
+    findings = run_invariants({"csi_db_path": db})
+    matches = [f for f in findings if f.metric_key == "csi_source_liveness"]
+    assert matches == []
 
 
 def test_hackernews_bursty_gap_within_widened_threshold_does_not_fire(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """HN is bursty (overnight convergence pulls), so a multi-hour daytime gap is
-    NORMAL. With the widened threshold it must not fire at e.g. 10h silence — the
-    old 3h threshold false-flagged exactly this healthy-but-bursty cadence, which
-    is what drove the #757 park."""
-    monkeypatch.setenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", "0")  # flag must not matter
+    """When the producer IS enabled, HN is bursty (snapshot pulls), so a multi-hour
+    daytime gap is NORMAL. With the widened threshold it must not fire at e.g. 10h
+    silence — the old 3h threshold false-flagged exactly this healthy-but-bursty
+    cadence, which is what drove the #757 park."""
+    monkeypatch.setenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", "1")  # producer on → HN monitored
     from universal_agent.services.invariants.csi_source_liveness import (
         SOURCE_THRESHOLDS_HOURS,
         effective_source_thresholds,
     )
     assert SOURCE_THRESHOLDS_HOURS["hackernews"] >= 24.0  # widened from the old 3.0
+    assert "hackernews" in effective_source_thresholds()
     db = tmp_path / "csi.db"
     rows = [
         (s, _hours_ago(0.5)) for s in effective_source_thresholds() if s != "hackernews"
@@ -225,11 +254,14 @@ def test_hackernews_bursty_gap_within_widened_threshold_does_not_fire(
     assert matches == []
 
 
-def test_hackernews_fires_when_truly_dead(tmp_path: Path, monkeypatch) -> None:
-    """Coverage is restored: if HN produces nothing past its (widened) threshold it
-    fires. The #757 park had made a genuine HN outage invisible; un-parking + a
-    cadence-appropriate threshold catches a real multi-day silence."""
-    monkeypatch.setenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", "0")
+def test_hackernews_fires_when_truly_dead_and_producer_enabled(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Coverage is preserved: with the producer ENABLED, if HN produces nothing past
+    its (widened) threshold it still fires. The re-park silences HN only while its
+    snapshot producer is off — a real outage while HN is supposed to be live is
+    still caught."""
+    monkeypatch.setenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", "1")
     from universal_agent.services.invariants.csi_source_liveness import (
         SOURCE_THRESHOLDS_HOURS,
         effective_source_thresholds,
