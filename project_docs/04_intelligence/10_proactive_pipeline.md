@@ -511,6 +511,18 @@ implicit signals without understanding this loop.
   heartbeat LLM silently stopped invoking it after 2026-05-30), motivating the
   cron. Distinct from the legacy `hourly_insight_email` cron (disabled;
   Phase-6 deletion target).
+- **Intel Output dashboard tab** (`/dashboard/intel-output`, Intelligence sidebar
+  group) — the on-dashboard home for the net output of the lanes, so email is no
+  longer the only surface. It reads `intel_brief` artifacts from
+  `GET /api/v1/dashboard/proactive-artifacts` (client-side filtered by type — the
+  endpoint has no `artifact_type` param; `sync_signals=false` for read-only
+  polling) and shows their `delivery_state`, each brief linking to the standalone
+  `/briefs/{artifact_id}` viewer. The same tab surfaces verified Cody demos from
+  `GET /api/v1/dashboard/claude-code-intel/demos`, which already screens demos by
+  `manifest.json` presence under `/opt/ua_demos` (the existing demo-screening
+  rule); the fuller demo surface stays on `/dashboard/claude-code-intel` and the
+  tab links out rather than duplicating it. No `verdict`/`verdict_reasoning` is
+  surfaced.
 - **Intelligence emitter** (`intelligence_emitter.py`): the canonical, dependency-
   free, **never-raises** hook for background workers to write `activity_events`
   rows that Mission Control's tier-1 LLM card discovery reads. `emit_intelligence_event`
