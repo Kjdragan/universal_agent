@@ -50,6 +50,14 @@ _AUTH_FAILURE_MARKERS_LOWER = (
     "failed to authenticate",
     "invalid x-api-key",
     "authentication_error",
+    # ZAI/glm + proxy lane (Cody runs glm in-process via the ZAI proxy): these
+    # auth/proxy failures must classify as auth_failure (operator re-auth), not
+    # fall through to vp_self_reported / "unspecified". Phrasings kept specific to
+    # avoid false-positives from substring matching (no bare "407"/"unauthorized").
+    "proxy authentication required",
+    "invalid api key",
+    "invalid_api_key",
+    "api key is invalid",
 )
 _GOAL_CAP_MARKERS_LOWER = (
     "stop after",
