@@ -3812,6 +3812,33 @@ def _vp_metrics_snapshot(
     events = list_vp_events(conn, vp_id=vp_id, limit=event_limit)
     session_events = list_vp_session_events(conn, vp_id=vp_id, limit=event_limit)
 
+    # CODIE lane fallback: coder missions are now written to the external
+    # vp_state.db (heartbeat/Simone + external dispatch), while the legacy
+    # in-process CoderVPRuntime lane (coder_vp_state.db) is dormant. If the coder
+    # DB is empty, fall back to the external lane (before the runtime-DB fallback
+    # below) so the CODIE dashboard reflects the real mission history instead of
+    # silently showing zero. vp_id already scopes the query to vp.coder.primary.
+    if (
+        storage_lane == "coder"
+        and conn is primary_conn
+        and not session_row
+        and not missions
+        and not events
+        and not session_events
+        and hasattr(gateway, "get_vp_db_conn")
+    ):
+        try:
+            external_conn = gateway.get_vp_db_conn()
+        except Exception:
+            external_conn = None
+        if external_conn is not None and external_conn is not conn:
+            primary_conn = external_conn
+            conn = external_conn
+            session_row = get_vp_session(conn, vp_id)
+            missions = list_vp_missions(conn, vp_id=vp_id, limit=mission_limit)
+            events = list_vp_events(conn, vp_id=vp_id, limit=event_limit)
+            session_events = list_vp_session_events(conn, vp_id=vp_id, limit=event_limit)
+
     # Backward compatibility: if VP data was written to runtime_state.db on older
     # builds, keep dashboard metrics visible during transition.
     if (
