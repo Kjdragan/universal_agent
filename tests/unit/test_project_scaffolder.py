@@ -159,3 +159,23 @@ def test_initialize_git_creates_main_branch_initial_commit(tmp_path: Path):
 
     assert branch == "main"
     assert commit == "chore: initial scaffold"
+
+
+def test_lock_dependencies_runs_uv_lock_in_backend(tmp_path: Path, monkeypatch):
+    """--skip-install must still generate backend/uv.lock so the generated
+    deploy's `uv sync --frozen` has a lockfile to honor. Network-free: assert the
+    exact command, without invoking uv."""
+    scaffold = load_scaffold_module()
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        scaffold,
+        "run_command",
+        lambda command, cwd, label, **kwargs: calls.append((command, cwd, label)) or True,
+    )
+
+    result = scaffold.lock_dependencies(tmp_path)
+
+    assert result is True
+    assert calls == [
+        (["uv", "lock"], tmp_path / "backend", "Backend lockfile (uv.lock)")
+    ]
