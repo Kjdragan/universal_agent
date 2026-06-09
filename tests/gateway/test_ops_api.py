@@ -3140,6 +3140,54 @@ def test_dashboard_coder_vp_metrics_endpoint(client, tmp_path):
     assert payload["metrics"]["event_counts"]["vp.mission.completed"] == 1
 
 
+def test_dashboard_coder_vp_metrics_falls_back_to_external_db(client, tmp_path):
+    """CODIE missions now land in the external vp_state.db (heartbeat/Simone +
+    external dispatch), while the legacy in-process coder_vp_state.db lane is
+    dormant. The coder-vp metrics endpoint must fall back to the external lane
+    when the coder DB is empty, else the dashboard silently shows zero missions
+    while the real history sits unread in vp_state.db."""
+    gateway = gateway_server.get_gateway()
+    external = gateway.get_vp_db_conn()
+    assert external is not None
+
+    vp_id = f"vp.coder.external.{time.time_ns()}"  # unique -> coder DB has nothing for it
+    upsert_vp_session(
+        external,
+        vp_id=vp_id,
+        runtime_id="runtime.coder_vp.external",
+        status="active",
+        session_id=f"{vp_id}.session",
+        workspace_dir=str((tmp_path / vp_id.replace('.', '_')).resolve()),
+        metadata={"lane": "external"},
+    )
+    mission_id = f"{vp_id}.mission"
+    upsert_vp_mission(
+        external,
+        mission_id=mission_id,
+        vp_id=vp_id,
+        status="completed",
+        objective="external coder mission",
+        run_id="run-external",
+    )
+    append_vp_event(
+        external,
+        event_id=f"{mission_id}.completed",
+        mission_id=mission_id,
+        vp_id=vp_id,
+        event_type="vp.mission.completed",
+        payload={"trace_id": "trace-external"},
+    )
+
+    resp = client.get(f"/api/v1/dashboard/metrics/coder-vp?vp_id={vp_id}&mission_limit=10&event_limit=10")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "ok"
+    assert payload["metrics"]["vp_id"] == vp_id
+    # Without the coder->external fallback this would be 0 (empty coder DB).
+    assert payload["metrics"]["mission_counts"]["completed"] == 1
+    assert payload["metrics"]["event_counts"]["vp.mission.completed"] == 1
+
+
 def test_dashboard_notification_snooze_expiry_reactivates(client):
     from universal_agent import gateway_server
     gateway_server._notifications.append(  # type: ignore[attr-defined]
