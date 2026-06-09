@@ -4,13 +4,15 @@ status: active
 canonical: true
 subsystem: ops-dormancy
 code_paths:
+  - src/universal_agent/services/dormancy.py
   - src/universal_agent/gateway_server.py
   - src/universal_agent/heartbeat_service.py
   - src/universal_agent/services/cron_artifact_reminders.py
   - src/universal_agent/services/cron_artifact_notifier.py
   - src/universal_agent/services/invariants/proactive_pipeline_invariants.py
   - tests/unit/test_cron_dormancy_defaults.py
-last_verified: 2026-06-05
+  - tests/unit/test_dormancy_schedule_consistency.py
+last_verified: 2026-06-09
 ---
 
 # Dormancy & Operating Hours
@@ -42,29 +44,47 @@ unacceptable.
 
 ## The active window, in code
 
-The canonical numeric definition lives in
-`services/cron_artifact_reminders.py`:
+The canonical numeric definition lives in `services/dormancy.py` — the single
+source of truth for the window:
 
 ```python
-_HOUSTON_TZ_NAME = "America/Chicago"
-_ACTIVE_START_HOUR = 6
-_ACTIVE_END_HOUR = 22  # 10 PM
+HOUSTON_TZ = "America/Chicago"
+ACTIVE_START_HOUR = 6     # inclusive
+ACTIVE_END_HOUR = 22      # exclusive (22:00 is the start of dormancy)
 ```
 
-and the membership test (`cron_artifact_reminders._within_active_window`):
+and the membership test (`dormancy.is_active_window`):
 
 ```python
-return _ACTIVE_START_HOUR <= houston.hour < _ACTIVE_END_HOUR
+return ACTIVE_START_HOUR <= houston_hour < ACTIVE_END_HOUR
 ```
 
 So **active hours are 6, 7, …, 21** (the 9:30 PM tick is fine; 22:00 itself is the
 start of dormancy). If `zoneinfo`/`tzdata` is unavailable the function fails
-**permissive** — every hour is treated as active so reminders aren't silently lost.
+**permissive** — every hour is treated as active so reminders/alerts aren't
+silently lost.
 
-`proactive_pipeline_invariants.claude_code_intel_packet_freshness` uses the same
-range inline (`6 <= now.hour <= 21`) and additionally skips the first 30 minutes
-after 6 AM to absorb the overnight gap (the newest packet legitimately dates to the
-last 10 PM cron of the prior day).
+The runtime call sites delegate to this module instead of reimplementing the
+check: `cron_artifact_reminders._within_active_window`,
+`gateway_server._csi_incident_in_waking_window`, and the
+`proactive_pipeline_invariants` packet-freshness / demo-triage-rank checks all
+call `dormancy.is_active_window` (those invariants previously inlined
+`6 <= now.hour <= 21`, which is identical for integer hours, and still skip the
+first 30 minutes after 6 AM to absorb the overnight gap — the newest packet
+legitimately dates to the last 10 PM cron of the prior day).
+
+Windowed **schedules** are pinned to the same window rather than re-deriving it
+independently. The in-process cron literals (e.g. `0,30 6-21 * * *`) and the
+systemd `OnCalendar` specs (`*-*-* 06..21:00:00`) stay readable as literals, but
+two guard tests verify they match the constants so they cannot silently drift:
+`tests/unit/test_cron_dormancy_defaults.py` checks the cron literals against
+`dormancy.cron_hour_field()` (`"6-21"`), and
+`tests/unit/test_dormancy_schedule_consistency.py` checks the static `.timer`
+hour ranges against `dormancy.systemd_hour_range()` (`"06..21"`) — the latter
+matters because `.timer` files can't import Python and only take effect on
+reinstall. `dormancy.should_run(mode=...)` is the per-process **opt-in** gate:
+a job is dormancy-bound only if it declares `mode="dormancy_aware"` (default
+`"always"` never sleeps), with an optional env override.
 
 ## Three enforcement mechanisms
 

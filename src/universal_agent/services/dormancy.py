@@ -57,6 +57,8 @@ __all__ = [
     "is_dormant",
     "should_run",
     "active_window_desc",
+    "cron_hour_field",
+    "systemd_hour_range",
 ]
 
 # IANA name for "Houston" local time. America/Chicago carries the
@@ -210,3 +212,29 @@ def active_window_desc() -> str:
         f"{ACTIVE_START_HOUR:02d}:00-{ACTIVE_END_HOUR:02d}:00 {HOUSTON_TZ} "
         f"(dormant {ACTIVE_END_HOUR:02d}:00-{ACTIVE_START_HOUR:02d}:00)"
     )
+
+
+def cron_hour_field() -> str:
+    """The active window as a 5-field-cron hour range, e.g. ``"6-21"``.
+
+    Derived from :data:`ACTIVE_START_HOUR` / :data:`ACTIVE_END_HOUR` so that
+    windowed cron registrations build their schedule as
+    ``f"0 {cron_hour_field()} * * *"`` instead of hardcoding ``6-21`` in each
+    call site. ``ACTIVE_END_HOUR`` is exclusive, so the last firing hour is
+    ``ACTIVE_END_HOUR - 1``.
+    """
+    return f"{ACTIVE_START_HOUR}-{ACTIVE_END_HOUR - 1}"
+
+
+def systemd_hour_range() -> str:
+    """The active window as a systemd ``OnCalendar`` hour range, e.g. ``"06..21"``.
+
+    The same window as :func:`cron_hour_field`, in systemd's zero-padded
+    ``H..H`` notation used by ``deployment/systemd/*.timer`` OnCalendar specs
+    (``*-*-* 06..21:00:00 America/Chicago``). Those unit files are static text
+    that only takes effect on reinstall, so they cannot literally import this
+    helper; the companion drift-guard test
+    (``tests/unit/test_dormancy_schedule_consistency.py``) pins their hour
+    range to this value so they cannot silently diverge from the constants.
+    """
+    return f"{ACTIVE_START_HOUR:02d}..{ACTIVE_END_HOUR - 1:02d}"
