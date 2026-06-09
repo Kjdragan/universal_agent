@@ -220,9 +220,7 @@ def test_main_skips_on_autoremediation_branch(tmp_path, monkeypatch, capsys):
 
 
 def test_clean_pr_emits_no_comment_but_writes_meta(tmp_path, monkeypatch, capsys):
-    """Default-quiet: a clean PR (no findings) prints NO comment — so the workflow
-    posts nothing and the operator gets no email — but still writes the meta
-    sidecar recording max_severity=none."""
+    """Clean PR -> no comment, but meta is still written (max_severity=none)."""
     diff = tmp_path / "pr.diff"
     diff.write_text("diff --git a/x b/x\n+print('hi')\n", encoding="utf-8")
     meta = tmp_path / "meta.json"
@@ -241,8 +239,7 @@ def test_clean_pr_emits_no_comment_but_writes_meta(tmp_path, monkeypatch, capsys
 
 
 def test_medium_finding_still_comments(tmp_path, monkeypatch, capsys):
-    """An actionable medium/high finding DOES comment (the workflow reuses the
-    comment verbatim as the tracking-issue body) and records the severity."""
+    """Medium/high finding -> comment (reused as the issue body) + recorded severity."""
     diff = tmp_path / "pr.diff"
     diff.write_text("diff --git a/x b/x\n+# redundant\n", encoding="utf-8")
     meta = tmp_path / "meta.json"
