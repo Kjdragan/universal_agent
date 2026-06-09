@@ -190,3 +190,30 @@ def test_write_meta_empty(tmp_path):
     deslop_advisory._write_meta(str(out), [])
     data = json.loads(out.read_text(encoding="utf-8"))
     assert data == {"count": 0, "max_severity": "none", "severities": []}
+
+
+def test_is_autoremediation_branch(monkeypatch):
+    monkeypatch.setenv("GITHUB_HEAD_REF", "claude/deslop-fix-issue-839")
+    assert deslop_advisory._is_autoremediation_branch() is True
+    monkeypatch.setenv("GITHUB_HEAD_REF", "claude/some-feature")
+    assert deslop_advisory._is_autoremediation_branch() is False
+    monkeypatch.delenv("GITHUB_HEAD_REF", raising=False)
+    assert deslop_advisory._is_autoremediation_branch() is False
+
+
+def test_main_skips_on_autoremediation_branch(tmp_path, monkeypatch, capsys):
+    """On a claude/deslop-fix-* branch the advisory emits NOTHING — empty stdout
+    (so the workflow posts no comment) and no meta sidecar (so it files no issue)."""
+    diff = tmp_path / "pr.diff"
+    diff.write_text("diff --git a/x b/x\n+slop slop slop\n", encoding="utf-8")
+    meta = tmp_path / "meta.json"
+    monkeypatch.setenv("GITHUB_HEAD_REF", "claude/deslop-fix-issue-839")
+    monkeypatch.setattr(
+        "sys.argv",
+        ["deslop_advisory.py", "--diff", str(diff), "--meta-out", str(meta)],
+    )
+    rc = deslop_advisory.main()
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert captured.out.strip() == ""  # no comment body -> workflow posts nothing
+    assert not meta.exists()  # no meta sidecar -> no tracking issue

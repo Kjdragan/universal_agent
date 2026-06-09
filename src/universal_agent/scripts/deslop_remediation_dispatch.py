@@ -76,6 +76,19 @@ CLASS_NEVER_AUTO = "never_auto"
 CLASS_NEEDS_OPERATOR = "needs_operator"
 
 
+def _notify_operator() -> bool:
+    """Whether the deslop dispatcher may ping the operator (email / Telegram).
+
+    Default OFF: deslop activity is already durably recorded (the
+    ``deslop-dispatched`` / ``needs-operator`` label, the Task Hub row, the GitHub
+    issue + PR), so an agent can always see it. The operator inbox stays quiet
+    unless ``UA_DESLOP_NOTIFY_OPERATOR`` is explicitly truthy.
+    """
+    return os.getenv("UA_DESLOP_NOTIFY_OPERATOR", "0").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
 # --------------------------------------------------------------------------- #
 # HARD never-auto gate (§3) — the safety-critical heart.
 #
@@ -785,21 +798,26 @@ def dispatch_cody_fix(
     finally:
         conn.close()
 
-    # Email Kevin: a draft PR is coming, please review.
-    subject, text = build_email(issue, delivery, mode=mode)
+    # Notify Kevin a draft PR is coming — gated by UA_DESLOP_NOTIFY_OPERATOR
+    # (default off). When quiet, the durable records above (claim label + Task Hub
+    # row) are the only trace; nothing reaches the operator inbox.
     email_result: dict[str, Any] = {"status": "skipped"}
-    send = emailer
-    if send is None:
-        try:
-            from universal_agent.simone_mail import send_simone_email as send  # type: ignore
-        except Exception as exc:  # pragma: no cover - best effort
-            email_result = {"status": "failed", "reason": f"import:{exc}"}
-            send = None
-    if send is not None:
-        try:
-            email_result = send(subject=subject, text=text, source="deslop-autoremediate")
-        except Exception as exc:  # pragma: no cover - best effort
-            email_result = {"status": "failed", "reason": str(exc)}
+    if not _notify_operator():
+        email_result = {"status": "suppressed", "reason": "UA_DESLOP_NOTIFY_OPERATOR=0"}
+    else:
+        subject, text = build_email(issue, delivery, mode=mode)
+        send = emailer
+        if send is None:
+            try:
+                from universal_agent.simone_mail import send_simone_email as send  # type: ignore
+            except Exception as exc:  # pragma: no cover - best effort
+                email_result = {"status": "failed", "reason": f"import:{exc}"}
+                send = None
+        if send is not None:
+            try:
+                email_result = send(subject=subject, text=text, source="deslop-autoremediate")
+            except Exception as exc:  # pragma: no cover - best effort
+                email_result = {"status": "failed", "reason": str(exc)}
 
     nudge = "skipped"
     try:
@@ -849,18 +867,23 @@ def escalate_to_operator(
     )
 
     sent, detail = (False, "no_chat_id")
-    send = telegram
-    if send is None and chat_id:
-        try:
-            from universal_agent.services.telegram_send import telegram_send_sync as send  # type: ignore
-        except Exception as exc:  # pragma: no cover - best effort
-            send = None
-            detail = f"import:{exc}"
-    if send is not None and chat_id:
-        try:
-            sent, detail = send(chat_id=chat_id, text=msg, bot_token=bot_token)
-        except Exception as exc:  # pragma: no cover - best effort
-            sent, detail = False, f"{type(exc).__name__}:{exc}"
+    if not _notify_operator():
+        # Quiet by default — the needs-operator label + Task Hub record above are
+        # the durable trace an agent reads; nothing pings the operator.
+        sent, detail = False, "suppressed:UA_DESLOP_NOTIFY_OPERATOR=0"
+    else:
+        send = telegram
+        if send is None and chat_id:
+            try:
+                from universal_agent.services.telegram_send import telegram_send_sync as send  # type: ignore
+            except Exception as exc:  # pragma: no cover - best effort
+                send = None
+                detail = f"import:{exc}"
+        if send is not None and chat_id:
+            try:
+                sent, detail = send(chat_id=chat_id, text=msg, bot_token=bot_token)
+            except Exception as exc:  # pragma: no cover - best effort
+                sent, detail = False, f"{type(exc).__name__}:{exc}"
 
     return {
         "action": "escalate",
