@@ -86,7 +86,7 @@ def _load_state() -> dict[str, Any]:
         return {}
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
         return {}
 
 
@@ -301,7 +301,7 @@ class GwsEventListener:
                 try:
                     err_data = json.loads(err_text)
                     error_msg = err_data.get("error", {}).get("message", err_text[:200])
-                except (json.JSONDecodeError, TypeError):
+                except (json.JSONDecodeError, AttributeError, TypeError):
                     error_msg = err_text[:200]
                 logger.warning("📬 gws messages list failed: %s", error_msg)
                 self._last_error = error_msg
