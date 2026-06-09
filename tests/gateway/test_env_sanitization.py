@@ -17,6 +17,7 @@ from universal_agent.execution_engine import (
     EngineConfig,
     ProcessTurnAdapter,
     sanitize_env_for_subprocess,
+    strip_stale_gh_env_tokens,
 )
 
 
@@ -230,3 +231,38 @@ async def test_execute_keeps_proxy_env_visible_to_process_turn(monkeypatch, tmp_
         "PROXY_USERNAME": "rotatingproxyua-rotate",
         "PROXY_PASSWORD": "super-secret",
     }
+
+
+class TestStripStaleGhEnvTokens:
+    """strip_stale_gh_env_tokens prefers the box `gh auth login` over a stale env token."""
+
+    def _gh_config(self, tmp_path, monkeypatch, *, with_login: bool):
+        cfg = tmp_path / "gh"
+        cfg.mkdir()
+        if with_login:
+            (cfg / "hosts.yml").write_text("github.com:\n  user: someone\n")
+        monkeypatch.setenv("GH_CONFIG_DIR", str(cfg))
+
+    def test_strips_env_tokens_when_box_login_exists(self, tmp_path, monkeypatch):
+        self._gh_config(tmp_path, monkeypatch, with_login=True)
+        monkeypatch.setenv("GH_TOKEN", "gho_stale")
+        monkeypatch.setenv("GITHUB_TOKEN", "ghs_stale")
+        removed = strip_stale_gh_env_tokens()
+        assert set(removed) == {"GH_TOKEN", "GITHUB_TOKEN"}
+        assert "GH_TOKEN" not in os.environ
+        assert "GITHUB_TOKEN" not in os.environ
+
+    def test_keeps_sole_credential_when_no_box_login(self, tmp_path, monkeypatch):
+        # No hosts.yml -> never strip (e.g. CI, where GITHUB_TOKEN is the only auth).
+        self._gh_config(tmp_path, monkeypatch, with_login=False)
+        monkeypatch.setenv("GH_TOKEN", "gho_only_credential")
+        removed = strip_stale_gh_env_tokens()
+        assert removed == []
+        assert os.environ.get("GH_TOKEN") == "gho_only_credential"
+
+    def test_strips_in_provided_env_mapping(self, tmp_path, monkeypatch):
+        self._gh_config(tmp_path, monkeypatch, with_login=True)
+        env = {"GH_TOKEN": "gho_stale", "GITHUB_TOKEN": "x", "PATH": "/bin"}
+        removed = strip_stale_gh_env_tokens(env)
+        assert set(removed) == {"GH_TOKEN", "GITHUB_TOKEN"}
+        assert env == {"PATH": "/bin"}
