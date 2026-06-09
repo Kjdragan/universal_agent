@@ -354,6 +354,19 @@ Concurrency/lease env flags (defaults): `UA_VP_POLL_INTERVAL_SECONDS=5`,
 `UA_VP_LEASE_TTL_SECONDS=120`, `UA_VP_MAX_CONCURRENT_MISSIONS=1`. On a
 rate-limit error (`429`/overloaded), the loop reports to `CapacityGovernor`.
 
+**No-progress (idle) kill.** A mission is reaped after
+`UA_VP_NO_PROGRESS_KILL_SECONDS` (default 600s = 10 min) with **no progress
+signal** — a CLI stream line on the CLI path, or an SDK event on the
+SDK/generalist path. This is idle-based, *not* a wall-clock cap: a mission that
+keeps emitting output runs freely (so a long-but-productive build isn't cut
+off), and only a genuinely hung one is killed (failure_mode
+`no_progress_timeout`). CLI path: `claude_cli_client._monitor_cli_output`
+(previously this stall check only *logged*; it now kills). SDK path: the shared
+`clients/base.consume_adapter_events_with_idle_timeout` helper wraps
+`adapter.execute()` with a per-event idle timeout. The engine's wall-clock cap
+(`UA_PROCESS_TURN_TIMEOUT_SECONDS` / tier default) still applies as an outer
+backstop.
+
 **The worker loop is structurally serial.** `_tick` claims exactly ONE mission
 (`claim_next_vp_mission`) and runs it to completion via `_execute_mission_logic`
 before the next tick. `max_concurrent_missions` is **stored on the loop
@@ -579,6 +592,7 @@ capability).
 | `UA_VP_LEASE_TTL_SECONDS` | 120 | mission claim lease TTL |
 | `UA_VP_MAX_CONCURRENT_MISSIONS` | 1 | stored on the loop but **unused** — the loop is structurally serial; not a live concurrency dial |
 | `UA_VP_WORKER_MAX_UPTIME_SECONDS` | 21600 | between-missions code-currency self-restart backstop (uptime cap); `0` disables (rely solely on the git-SHA check) |
+| `UA_VP_NO_PROGRESS_KILL_SECONDS` | 600 | idle kill: terminate a mission after this long with NO progress signal (CLI stream line / SDK event); `0` disables. Idle-based, **not** a wall-clock cap — a mission emitting output runs freely |
 | `UA_VP_HARD_BLOCK_UA_REPO` | on | block writes into repo/runtime roots |
 | `UA_VP_HANDOFF_ROOT` | `/opt/universal_agent/vp_handoff` | allowlisted external write root |
 | `UA_VP_CODER_WORKSPACE_ROOT` / `UA_VP_GENERAL_WORKSPACE_ROOT` | unset | workspace root overrides |

@@ -399,6 +399,18 @@ def vp_max_concurrent_missions(default: int = 1) -> int:
     return _read_int("UA_VP_MAX_CONCURRENT_MISSIONS", default, minimum=1)
 
 
+def vp_no_progress_kill_seconds(default: int = 600) -> int:
+    """Kill a VP mission after this many seconds with NO progress signal.
+
+    Progress = the running agent emitting *something* (a CLI stream line, or an
+    SDK event). This is deliberately idle-based, not a wall-clock cap: a mission
+    runs as long as it keeps making progress, and only a genuinely hung/stuck
+    one is killed. Default 600s (10 min) — generous enough to ride out long
+    model "thinking" between outputs. ``0`` disables the no-progress kill.
+    """
+    return _read_int("UA_VP_NO_PROGRESS_KILL_SECONDS", default, minimum=0)
+
+
 def vp_worker_max_uptime_seconds(default: int = 21600) -> int:
     """Backstop for VP worker code-currency self-restart.
 
