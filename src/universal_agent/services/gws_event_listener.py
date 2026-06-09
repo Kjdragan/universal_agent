@@ -41,7 +41,7 @@ _STATE_FILENAME = "gws_event_listener_state.json"
 def _poll_interval() -> float:
     try:
         return max(15.0, float(os.getenv("UA_GWS_EVENTS_POLL_INTERVAL_SECONDS", "60")))
-    except Exception:
+    except ValueError:
         return 60.0
 
 
@@ -52,7 +52,7 @@ def _gmail_labels() -> str:
 def _max_results() -> int:
     try:
         return max(1, int(os.getenv("UA_GWS_EVENTS_MAX_RESULTS", "20")))
-    except Exception:
+    except ValueError:
         return 20
 
 
@@ -86,7 +86,7 @@ def _load_state() -> dict[str, Any]:
         return {}
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (json.JSONDecodeError, OSError):
         return {}
 
 
@@ -177,7 +177,7 @@ class GwsEventListener:
         if self._task:
             try:
                 await asyncio.wait_for(self._task, timeout=10)
-            except Exception:
+            except asyncio.TimeoutError:
                 self._task.cancel()
             self._task = None
 
@@ -301,7 +301,7 @@ class GwsEventListener:
                 try:
                     err_data = json.loads(err_text)
                     error_msg = err_data.get("error", {}).get("message", err_text[:200])
-                except Exception:
+                except (json.JSONDecodeError, TypeError):
                     error_msg = err_text[:200]
                 logger.warning("📬 gws messages list failed: %s", error_msg)
                 self._last_error = error_msg
