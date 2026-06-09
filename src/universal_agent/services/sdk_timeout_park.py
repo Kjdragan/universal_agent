@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -135,7 +136,7 @@ def record_sdk_timeout_and_maybe_park(
         from universal_agent.gateway_server import (
             _task_hub_open_conn as _open_conn,
         )
-    except Exception as exc:
+    except ImportError as exc:
         logger.debug(
             "SDK timeout parking imports failed for mission %s: %s",
             mission_id, exc,
@@ -144,7 +145,7 @@ def record_sdk_timeout_and_maybe_park(
 
     try:
         conn = _open_conn()
-    except Exception as exc:
+    except sqlite3.Error as exc:
         logger.debug(
             "SDK timeout parking: could not open task_hub conn for mission %s: %s",
             mission_id, exc,
@@ -191,7 +192,7 @@ def record_sdk_timeout_and_maybe_park(
                     tid, new_count, mission_id,
                 )
                 return True, new_count
-            except Exception as exc:
+            except sqlite3.Error as exc:
                 logger.warning(
                     "SDK timeout parking: perform_task_action(review) failed for "
                     "task %s (mission %s): %s",
@@ -212,7 +213,7 @@ def record_sdk_timeout_and_maybe_park(
             tid, new_count, limit, mission_id,
         )
         return False, new_count
-    except Exception as exc:
+    except sqlite3.Error as exc:
         logger.debug(
             "SDK timeout parking: bookkeeping error for task %s (mission %s): %s",
             tid, mission_id, exc,
@@ -243,7 +244,7 @@ def reset_sdk_timeout_counter(*, task_id: str, mission_id: str = "") -> None:
         from universal_agent.gateway_server import (
             _task_hub_open_conn as _open_conn,
         )
-    except Exception as exc:
+    except ImportError as exc:
         logger.debug(
             "SDK timeout reset: imports failed for mission %s: %s",
             mission_id, exc,
@@ -252,7 +253,7 @@ def reset_sdk_timeout_counter(*, task_id: str, mission_id: str = "") -> None:
 
     try:
         conn = _open_conn()
-    except Exception as exc:
+    except sqlite3.Error as exc:
         logger.debug(
             "SDK timeout reset: could not open task_hub conn (mission %s): %s",
             mission_id, exc,
@@ -274,7 +275,7 @@ def reset_sdk_timeout_counter(*, task_id: str, mission_id: str = "") -> None:
             (_json_dumps(metadata), _now_iso(), tid),
         )
         conn.commit()
-    except Exception as exc:
+    except sqlite3.Error as exc:
         logger.debug(
             "SDK timeout reset: bookkeeping error for task %s (mission %s): %s",
             tid, mission_id, exc,

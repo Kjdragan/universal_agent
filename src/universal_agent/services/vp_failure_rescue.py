@@ -61,7 +61,7 @@ def _mission_payload_metadata(payload_json: Any) -> dict[str, Any]:
             payload = payload_json
         else:
             return {}
-    except Exception:
+    except (json.JSONDecodeError, TypeError):
         return {}
     meta = payload.get("metadata") if isinstance(payload, dict) else None
     return meta if isinstance(meta, dict) else {}
@@ -104,7 +104,7 @@ def _count_chain_failures(
     try:
         row = activity_conn.execute(sql, params_full).fetchone()
         return int(row[0] if row else 0)
-    except Exception as exc:  # pragma: no cover — defensive
+    except sqlite3.Error as exc:  # pragma: no cover — defensive
         logger.debug("_count_chain_failures failed: %s", exc)
         return 0
 
@@ -150,10 +150,10 @@ def surface_failure_to_simone(
         with connect_runtime_db(vp_path) as vp_conn:
             try:
                 ensure_vp_schema(vp_conn)
-            except Exception:
+            except sqlite3.Error:
                 pass  # schema may already be in place; reading is what matters
             mission_row = get_vp_mission(vp_conn, mission_id)
-    except Exception as exc:
+    except sqlite3.Error as exc:
         logger.warning(
             "surface_failure_to_simone: could not read mission %s: %s",
             mission_id, exc,
@@ -203,7 +203,7 @@ def surface_failure_to_simone(
         with connect_runtime_db(activity_path) as activity_conn:
             try:
                 task_hub.ensure_schema(activity_conn)
-            except Exception:
+            except sqlite3.Error:
                 pass
             prior = _count_chain_failures(
                 activity_conn,
@@ -211,7 +211,7 @@ def surface_failure_to_simone(
                 original_task_id=original_task_id,
             )
             failure_count = prior + 1
-    except Exception as exc:
+    except sqlite3.Error as exc:
         logger.debug("surface_failure_to_simone: failure_count lookup failed: %s", exc)
 
     metadata: dict[str, Any] = {
@@ -245,7 +245,7 @@ def surface_failure_to_simone(
         with connect_runtime_db(activity_path) as activity_conn:
             try:
                 task_hub.ensure_schema(activity_conn)
-            except Exception:
+            except sqlite3.Error:
                 pass
             task_hub.upsert_item(
                 activity_conn,
@@ -264,7 +264,7 @@ def surface_failure_to_simone(
             mission_id, vp_id, failure_mode, failure_count,
         )
         return task_id
-    except Exception as exc:
+    except sqlite3.Error as exc:
         logger.exception(
             "surface_failure_to_simone: upsert failed for mission %s: %s",
             mission_id, exc,

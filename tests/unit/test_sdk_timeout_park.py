@@ -229,7 +229,7 @@ def test_db_open_failure_never_raises():
     """When the task_hub conn can't be opened, helpers swallow the error."""
     with patch(
         "universal_agent.gateway_server._task_hub_open_conn",
-        side_effect=RuntimeError("db unavailable"),
+        side_effect=sqlite3.Error("db unavailable"),
     ):
         parked, count = record_sdk_timeout_and_maybe_park(
             task_id="any-task",
