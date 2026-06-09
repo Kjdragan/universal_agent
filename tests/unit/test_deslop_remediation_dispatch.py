@@ -571,6 +571,7 @@ def test_dispatch_cody_fix_claims_labels_and_emails(monkeypatch):
     import universal_agent.durable.db as dbmod
     import universal_agent.services.proactive_task_builder as ptb
 
+    monkeypatch.setenv("UA_DESLOP_NOTIFY_OPERATOR", "1")  # opt in to the email path
     recorded: dict = {}
     monkeypatch.setattr(dbmod, "connect_runtime_db", lambda *a, **k: _FakeConn())
     monkeypatch.setattr(dbmod, "get_activity_db_path", lambda: ":memory:")
@@ -619,6 +620,7 @@ def test_dispatch_cody_fix_claims_labels_and_emails(monkeypatch):
 
 
 def test_escalate_labels_and_telegrams(monkeypatch):
+    monkeypatch.setenv("UA_DESLOP_NOTIFY_OPERATOR", "1")  # opt in to the telegram path
     gh = FakeGh({("issue", "edit"): (0, "")})
     sent_msgs: list[str] = []
 
@@ -633,6 +635,57 @@ def test_escalate_labels_and_telegrams(monkeypatch):
     assert any(c[0:2] == ["issue", "edit"] and "needs-operator" in c for c in gh.calls)
     assert out["telegram_sent"] is True
     assert sent_msgs and "#798" in sent_msgs[0]
+
+
+def test_dispatch_suppresses_email_when_notify_off(monkeypatch):
+    """Default (UA_DESLOP_NOTIFY_OPERATOR unset) -> NO operator email, but the
+    durable records (claim label + Task Hub row) are still written."""
+    import universal_agent.durable.db as dbmod
+    import universal_agent.services.proactive_task_builder as ptb
+
+    monkeypatch.delenv("UA_DESLOP_NOTIFY_OPERATOR", raising=False)
+    recorded: dict = {}
+    monkeypatch.setattr(dbmod, "connect_runtime_db", lambda *a, **k: _FakeConn())
+    monkeypatch.setattr(dbmod, "get_activity_db_path", lambda: ":memory:")
+    monkeypatch.setattr(
+        ptb,
+        "queue_proactive_task",
+        lambda conn, **kw: recorded.update(kw) or {"task_id": kw["task_id"], "status": "open"},
+    )
+
+    emails: list[dict] = []
+
+    def fake_emailer(**kw):
+        emails.append(kw)
+        return {"status": "sent"}
+
+    gh = FakeGh({("issue", "edit"): (0, "")})
+    out = mod.dispatch_cody_fix(
+        _issue(), DELIVERY_DRAFT_EMAIL, gh=gh, mode=MODE_OBSERVE, emailer=fake_emailer,
+    )
+    # No email sent, but the dispatch still happened and was durably recorded.
+    assert emails == []
+    assert out["email"]["status"] == "suppressed"
+    assert out["claimed_label"] is True
+    assert recorded  # Task Hub row written despite the silence
+
+
+def test_escalate_suppresses_telegram_when_notify_off(monkeypatch):
+    """Default -> NO operator Telegram ping; the needs-operator label is still set."""
+    monkeypatch.delenv("UA_DESLOP_NOTIFY_OPERATOR", raising=False)
+    monkeypatch.setenv("UA_OPERATOR_TELEGRAM_CHAT_ID", "12345")
+    gh = FakeGh({("issue", "edit"): (0, "")})
+    sent_msgs: list[str] = []
+
+    def fake_tg(*, chat_id, text, bot_token=None):
+        sent_msgs.append(text)
+        return True, "ok"
+
+    out = mod.escalate_to_operator(_issue(), "needs_operator", gh=gh, telegram=fake_tg)
+    assert sent_msgs == []
+    assert out["telegram_sent"] is False
+    assert out["telegram_detail"].startswith("suppressed")
+    assert out["labelled_needs_operator"] is True
 
 
 def test_gh_env_scrubs_bad_token_when_config_login_present(monkeypatch, tmp_path):

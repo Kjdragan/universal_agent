@@ -219,6 +219,16 @@ def _review(client, model: str, diff_text: str) -> dict:
     return _parse_llm_json(raw)
 
 
+def _is_autoremediation_branch() -> bool:
+    """True when running on a deslop auto-remediation fix branch
+    (``claude/deslop-fix-*``). GitHub Actions sets ``GITHUB_HEAD_REF`` to the PR
+    source branch on ``pull_request`` events. Reviewing the deslopper's own
+    cleanup PR for slop is noise — it reliably finds nothing and only pings the
+    operator — so the advisory short-circuits on these branches.
+    """
+    return os.getenv("GITHUB_HEAD_REF", "").startswith("claude/deslop-fix")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Advisory deslop reviewer (report-only)")
     ap.add_argument("--diff", required=True, help="path to a pre-computed diff file")
@@ -229,6 +239,17 @@ def main() -> int:
                     help="optional path for a JSON findings sidecar "
                          "(count / max_severity / severities)")
     args = ap.parse_args()
+
+    # Skip entirely on the auto-remediation fix branches the dispatcher creates:
+    # emit nothing (empty stdout + no meta sidecar) so the workflow's comment and
+    # issue steps both no-op. Keeps the deslopper's own cleanup PRs noise-free.
+    if _is_autoremediation_branch():
+        print(
+            f"[note] advisory skipped on auto-remediation branch "
+            f"{os.getenv('GITHUB_HEAD_REF', '')!r} — no comment/issue emitted.",
+            file=sys.stderr,
+        )
+        return 0
 
     def _emit(suggestions: list) -> int:
         """Print the comment, write the meta sidecar if requested, return 0."""
