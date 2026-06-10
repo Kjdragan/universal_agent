@@ -903,13 +903,13 @@ class ProcessTurnAdapter:
         #      (haiku=120s, sonnet=180s, opus=1800s).
         #   4. No cap (0).
         #
-        # The atom-poem stuck task showed why an unbounded turn is a UX
-        # disaster: a single failing inference call sat on the wire for
-        # 365s before erroring out, and the dispatcher's natural retry
-        # cadence couldn't kick in until it released. With a tier-aware
-        # cap the turn aborts cleanly, the dispatcher's stuck-assignment
-        # sweep (todo_dispatch_service.py) catches it, the task reopens,
-        # and the next dispatch tick re-runs in ~10s.
+        # An unbounded turn is a UX disaster: a single slow inference
+        # call can sit on the wire for several minutes before erroring
+        # out, and the dispatcher's natural retry cadence can't kick in
+        # until it releases. With a tier-aware cap the turn aborts
+        # cleanly, the dispatcher's stuck-assignment sweep
+        # (todo_dispatch_service.py) catches it, the task reopens, and
+        # the next dispatch tick re-runs in ~10s.
         per_request_cap_s = 0.0
         if isinstance(request_metadata, dict):
             raw = request_metadata.get("turn_timeout_seconds")

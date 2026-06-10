@@ -8711,13 +8711,10 @@ async def setup_session(
         resolve_model,
     )
     options = ClaudeAgentOptions(
-        # Global daemon model is OPUS (glm-5.1). User direction post
-        # haiku-flake fix: the apparent jankiness was the SDK's
-        # internal haiku preflight on the flaky glm-4.5-air lane,
-        # not the main agent model. Now that haiku is remapped at
-        # the Claude Code level (haiku → glm-5-turbo), there's no
-        # cost or reliability reason to hold the daemon at sonnet
-        # — opus is the right default for all task execution paths.
+        # Global daemon model is OPUS (glm-5.1) per operator decision.
+        # haiku is operator-locked to glm-4.5-air; do not remap. There's
+        # no cost or reliability reason to hold the daemon at sonnet —
+        # opus is the right default for all task execution paths.
         model=resolve_claude_code_model(default="opus"),
         agents=__load_programmatic_agents(src_dir),
         add_dirs=[os.path.join(src_dir, ".claude")],
@@ -8733,12 +8730,10 @@ async def setup_session(
             if resolve_agent_teams_enabled(default=True)
             else "0",
             # Pin the SDK's internal tier→model resolution to OUR
-            # central mapping. Without this, the SDK's preflight
-            # haiku call landed on glm-4.5-air (the flaky lane) and
-            # blocked main-model work for ~6 min per failed attempt.
-            # SDK env hints map each tier name to its actual model.
-            # The application code defaults to opus everywhere now,
-            # but if an .claude/agents/*.md subagent declares
+            # central mapping. SDK env hints map each tier name to its
+            # actual model. haiku is operator-locked to glm-4.5-air; do
+            # not remap. The application code defaults to opus everywhere
+            # now, but if an .claude/agents/*.md subagent declares
             # `model: sonnet` it should still receive the real sonnet.
             "ANTHROPIC_DEFAULT_HAIKU_MODEL": resolve_haiku(),
             "ANTHROPIC_DEFAULT_SONNET_MODEL": resolve_model("sonnet"),

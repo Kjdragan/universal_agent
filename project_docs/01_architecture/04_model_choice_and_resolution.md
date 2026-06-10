@@ -12,7 +12,7 @@ code_paths:
   - scripts/_claude_launcher.py
   - scripts/claude_with_mcp_env.sh
   - src/universal_agent/services/invariants/zai_inference_health.py
-last_verified: 2026-05-31
+last_verified: 2026-06-10
 ---
 
 # Model Choice & Resolution
@@ -56,7 +56,7 @@ lives in `model_resolution.py::ZAI_MODEL_MAP`:
 
 ```python
 ZAI_MODEL_MAP = {
-    "haiku": "glm-5-turbo",     # Was glm-4.5-air; remapped to dodge the flaky lane.
+    "haiku": "glm-4.5-air",     # Operator-locked.
     "sonnet": "glm-5-turbo",    # Z.AI standard model.
     "opus": "glm-5.1",          # Z.AI flagship model (NOT glm-5-1 — dash breaks it).
 }
@@ -73,23 +73,20 @@ The thin wrappers express intent at call sites:
 
 | Resolver | Returns (default) | Notes |
 |---|---|---|
-| `resolve_haiku()` | `glm-5-turbo` | `model_resolution.py::resolve_haiku` |
+| `resolve_haiku()` | `glm-4.5-air` | `model_resolution.py::resolve_haiku` |
 | `resolve_sonnet()` | `glm-5-turbo` | `model_resolution.py::resolve_sonnet` |
 | `resolve_opus()` | `glm-5.1` | `model_resolution.py::resolve_opus` |
 | `resolve_claude_code_model(default="sonnet")` | tier passthrough | the string passed to claude-agent-sdk |
 
-### Gotcha: haiku and sonnet collapse to the same model
+### Haiku and sonnet resolve to different models
 
-`resolve_haiku()` and `resolve_sonnet()` both return `glm-5-turbo` today. This is
-deliberate. The docstring on `ZAI_MODEL_MAP` records the reason: the Claude Agent SDK
-makes small **internal preflight calls** (system-prompt cache management, compaction
-routing, tool-selection classifier) on the haiku tier. The ZAI proxy's `glm-4.5-air`
-lane was empirically flaky — single requests could hang ~6 minutes then return
-`400 "Internal network failure" (code:1234)`, aborting the whole turn before the main
-model ever fired (the "atom-poem stuck-task" incident: two consecutive 6-min waits =
-~17 min wall-clock loss on a 90-second job). Mapping haiku → `glm-5-turbo` removes the
-failure mode at slightly higher per-call cost. `resolve_haiku()` is kept as a separate
-function so a future safe haiku lane can be re-enabled without touching every caller.
+`resolve_haiku()` returns `glm-4.5-air` (operator-locked; verified working) and
+`resolve_sonnet()` returns `glm-5-turbo`. The Claude Agent SDK makes small **internal
+preflight calls** (system-prompt cache management, compaction routing, tool-selection
+classifier) on the haiku tier, which is why the haiku tier exists as its own lane.
+`resolve_haiku()` is kept as a separate function so the haiku tier can be tuned without
+touching every caller. The haiku tier is operator-locked to `glm-4.5-air`; do not
+remap it.
 
 ### Gotcha: `resolve_sonnet()` no longer secretly returns opus
 
@@ -107,14 +104,14 @@ forces the SDK's internal preflight model env vars into the subprocess env so th
 picks up the central mappings regardless of external env:
 
 ```python
-"ANTHROPIC_DEFAULT_HAIKU_MODEL": resolve_haiku(),       # glm-5-turbo
+"ANTHROPIC_DEFAULT_HAIKU_MODEL": resolve_haiku(),       # glm-4.5-air
 "ANTHROPIC_DEFAULT_SONNET_MODEL": resolve_model("sonnet"),
 "ANTHROPIC_DEFAULT_OPUS_MODEL": resolve_claude_code_model(default="opus"),
 ```
 
 > Note on the resolver default vs. the daemon default: `resolve_model()` /
 > `resolve_claude_code_model()` *default to "sonnet"* when called with no argument
-> (the post-atom-poem operational decision), but `agent_setup.py` explicitly passes
+> (operator decision), but `agent_setup.py` explicitly passes
 > `default="opus"`, so the actual daemon main-agent model is opus. Subagents that
 > prefer sonnet get it via their own `.claude/agents/*.md` YAML.
 
@@ -126,7 +123,7 @@ picks up the central mappings regardless of external env:
 
 | Tier | Default cap | Rationale |
 |---|---|---|
-| haiku | 120 s | SDK preflight + tiny tasks; failed glm-4.5-air calls used to wedge ~365 s |
+| haiku | 120 s | SDK preflight + tiny tasks; a failed cheap-tier call should fail fast |
 | sonnet | 180 s | Daily-driver multi-tool turns |
 | opus | 1800 s | Heavy research / multi-doc synthesis / long crons — generous on purpose |
 

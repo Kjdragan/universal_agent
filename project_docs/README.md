@@ -67,6 +67,7 @@ _CSI, intel lanes, research, wiki, memory, proactive pipeline, mission control, 
 - **[Mission Control Intelligence](04_intelligence/11_mission_control_intelligence.md)** — Operator intelligence surface, supervisor snapshots (note: Operator Brief panel removed Phase 8). _(verified 2026-06-05)_
 - **[Discord Intelligence](04_intelligence/12_discord_intelligence.md)** — Discord message pipeline, triage, calendar sync (gws materialization). _(verified 2026-06-07)_
 - **[Insight Pipeline Build Plan (Phases 0.5/4/5/6)](04_intelligence/13_insight_pipeline_build_plan.md)** — Living build/status plan: close the brief->digest email gap, digest dedup+template, feedback/index verify, gated legacy deletion. _(verified 2026-06-04)_
+- **[Model Tiering by Process](04_intelligence/14_model_tiering_by_process.md)** — Per-process registry of which GLM tier each inference call uses and why (air/turbo/flagship), the decision rubric, and the 2026-06-10 429-burst remediation. _(verified 2026-06-10)_
 
 ## 05_channels
 

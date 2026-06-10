@@ -61,7 +61,7 @@ def test_write_text_file_rewrites_relative_ua_artifacts_dir_path(
 def test_write_text_file_resolves_workspace_relative_path(
     monkeypatch, tmp_path: Path
 ) -> None:
-    """Regression guard for the atom-poem startup-hiccup: an agent that
+    """Regression guard for workspace-relative writes: an agent that
     types ``work_products/ai_poem.html`` must land inside its own
     CURRENT_RUN_WORKSPACE, not the API server's cwd. Pre-fix, the
     write was rejected because ``os.path.abspath`` anchored at

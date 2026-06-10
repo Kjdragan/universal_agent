@@ -82,10 +82,10 @@ POCKET_SCHEMA_VERSION = 1
 #                    "single_call" (legacy one-LLM-call shape; kept for fallback + A/B)
 DIGEST_PIPELINE_DEFAULT = "map_reduce"
 # Map-step model defaults. We hardcode glm-4.5-air (haiku-equivalent on Z.AI) for
-# the map step rather than calling resolve_model("haiku"), because resolve_model
-# globally points haiku at glm-5-turbo to dodge a historical preflight wedge
-# (see model_resolution.py:11-30). Probe 2026-05-18 showed glm-4.5-air is stable
-# at concurrency 1-3 for digest-shape prompts and ~30% faster per call than
+# the map step so the choice stays explicit and local rather than tracking the
+# global haiku tier (haiku -> glm-4.5-air, operator-locked; see
+# model_resolution.py:11-30). Probe 2026-05-18 showed glm-4.5-air runs well at
+# concurrency 1-3 for digest-shape prompts and ~30% faster per call than
 # glm-5-turbo. Both models share the same account-level Fair-Usage-Policy
 # throttle (Z.AI error 1313) when concurrency >= 5, so concurrency caps below
 # are conservative.

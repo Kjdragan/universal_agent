@@ -67,10 +67,9 @@ async def _call_zai(
 
     Works for both Z.AI's Anthropic-compatible endpoint (``_ZAI_BASE``) and the
     real Anthropic API (``https://api.anthropic.com``) — the request shape is
-    identical; only ``base_url`` + ``model`` differ. The lane is known to be
-    occasionally flaky (~6 min hangs documented in
-    ``src/universal_agent/utils/model_resolution.py``), so the timeout is
-    bounded and the caller falls back to ``_fallback_brief`` on any failure.
+    identical; only ``base_url`` + ``model`` differ. Network calls to any remote
+    chat API can stall, so the timeout is bounded and the caller falls back to
+    ``_fallback_brief`` on any failure to keep brief delivery resilient.
     """
     headers = {
         "x-api-key": api_key,

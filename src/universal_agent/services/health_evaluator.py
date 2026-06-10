@@ -81,7 +81,7 @@ async def evaluate_health_snapshot(raw_report_dict: dict[str, Any]) -> Dict[str,
     lessons_learned = _get_lessons_learned_content()
     prompt = _build_evaluation_prompt(raw_report_text, lessons_learned)
 
-    # Promoted to opus tier per the post-atom-poem audit. This evaluator
+    # Promoted to opus tier per operator decision. This evaluator
     # is the brain that decides which morning-report items get ignored,
     # routed to Simone as directives, or escalated to a human. Wrong
     # categorization here propagates to humans (false escalations =

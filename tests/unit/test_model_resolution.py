@@ -87,8 +87,9 @@ class TestResolveModel:
         assert resolve_model("opus") == ZAI_MODEL_MAP["opus"]
 
     def test_unknown_tier_falls_back_to_sonnet(self, monkeypatch):
-        """Default tier flipped from opus to sonnet per the operational
-        decision after the atom-poem incident."""
+        """Default tier is sonnet per operator decision: the global default
+        should be the balanced mid tier, with heavy work opting into opus
+        explicitly."""
         monkeypatch.delenv("ANTHROPIC_DEFAULT_SONNET_MODEL", raising=False)
         result = resolve_model("unknown_tier")
         assert result == ZAI_MODEL_MAP["sonnet"]
@@ -162,9 +163,8 @@ class TestResolveClaudeCodeModel:
 
 class TestResolveClaudeCodeModelDefault:
     def test_default_tier_is_sonnet(self, monkeypatch):
-        """Per the operational decision after the atom-poem incident:
-        global daemon default is sonnet, not opus. Heavy-tier subagents
-        request opus explicitly via their YAML."""
+        """Per operator decision: global daemon default is sonnet, not opus.
+        Heavy-tier subagents request opus explicitly via their YAML."""
         monkeypatch.delenv("ANTHROPIC_DEFAULT_SONNET_MODEL", raising=False)
         # Calling with no argument should land on sonnet.
         assert resolve_claude_code_model() == ZAI_MODEL_MAP["sonnet"]
