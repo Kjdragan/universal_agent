@@ -223,7 +223,19 @@ def test_hourly_intel_digest_standard_gate_disables_existing_row(monkeypatch):
 
     gateway_server._ensure_hourly_intel_digest_cron_job()
 
-    assert stub.updated == [("legacy_hourly_intel_digest", {"enabled": False})]
+    # Standard-gate migrated jobs now also carry the tombstone breadcrumb naming
+    # the systemd timer that actually fires them (see _register_system_cron_job).
+    assert stub.updated == [
+        (
+            "legacy_hourly_intel_digest",
+            {
+                "enabled": False,
+                "metadata": {
+                    "disabled_reason": "migrated_to_systemd:universal-agent-hourly-intel-digest.timer"
+                },
+            },
+        )
+    ]
 
 
 def test_hourly_intel_digest_rollback_registers_enabled(monkeypatch):
