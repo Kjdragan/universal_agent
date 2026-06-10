@@ -42,6 +42,51 @@ The active window is **content-generation only**. Infrastructure-event handlers
 they respond to can land at any wall-clock time and silent breakage until 6 AM is
 unacceptable.
 
+## Terminology in plain language
+
+One metaphor covers most of it: each job has an **alarm clock** (when it wakes
+up) and a **task** (what it does once awake).
+
+- **Active window** — the "awake hours" we optimize for: 6 AM – 10 PM Houston.
+  **Dormant hours** are the overnight stretch (10 PM – 6 AM) when the operator is
+  asleep and won't look at anything produced.
+- **Windowed** — the job only does its task during the awake hours; overnight it
+  stays quiet. *Example:* the hourly intel digest emails you 6 AM – 10 PM, never
+  at 3 AM.
+- **24/7** — the job runs around the clock, ignoring the window. Reserved for the
+  few jobs where waiting until morning would be harmful (e.g. a dispatcher that
+  must react within a minute).
+- **Interval cron** — a job whose alarm repeats all day ("every 30 minutes",
+  "every hour"). Because it keeps ringing, it *would* fire overnight unless told
+  not to — so these are the only jobs where "should it run overnight?" is a real
+  question, and the only ones the dormancy guard enforces.
+- **Fixed-time cron** — a job whose alarm is set for one specific moment (or a
+  few): "7:05 AM", "3:15 AM". It fires at that time and that's it. There is
+  nothing to "window" — the time was already chosen — so it just runs as
+  scheduled.
+- **Runtime-gated** — the alarm is set to ring *every hour* (including overnight),
+  but each time the job wakes it does a one-second check ("am I in the awake
+  window, or has someone flipped me to 24/7?") and either does the task or rolls
+  over and sleeps. The decision happens *when it runs*, not in the alarm setting.
+  This is what makes a job flippable without editing its schedule.
+- **Flippable / "the lever"** — an on/off switch (an env var, `UA_<JOB>_24_7`)
+  that makes a windowed job run 24/7 instead — no code change or redeploy, just
+  set the switch in Infisical. "Flip the lever" = set it to `true`.
+- **Default windowed** — out of the box, with the switch untouched, the job stays
+  windowed. You must *deliberately* flip it to get 24/7, so nothing quietly
+  starts running overnight by surprise.
+- **Opt-in vs opt-out** — two layers that together sound contradictory but aren't.
+  System-wide, dormancy is **opt-in**: a job may run anytime *unless it chooses*
+  to respect quiet hours. For a job that already chose quiet hours, the lever is
+  an **opt-out**: it pulls that job back out to 24/7 on demand.
+- **Documented exception** — the short, written-down list of interval jobs we
+  *intend* to run 24/7. The point is that any overnight job is a deliberate,
+  recorded decision — never an accident nobody caught.
+- **Soft-warn** — when a fixed-time job happens to land overnight (e.g.
+  `nightly_wiki` at 3:15 AM, feeding the morning briefing), the guard prints a
+  heads-up note instead of *failing*. It keeps the choice visible without blocking
+  it. (Contrast a **hard fail**, which blocks the change until you fix it.)
+
 ## The active window, in code
 
 The canonical numeric definition lives in `services/dormancy.py` — the single
