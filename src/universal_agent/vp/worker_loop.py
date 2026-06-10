@@ -932,6 +932,31 @@ class VpWorkerLoop:
                     _src_kind = str((_src_item or {}).get("source_kind") or "")
                     _src_meta = dict((_src_item or {}).get("metadata") or {})
 
+                    # P6 — deterministic tutorial_build finalize: synthesize
+                    # manifest.json (so the P5 stamp below stops no-op'ing),
+                    # run existence-only mechanical checks, and register the
+                    # demo on the dashboard demo surface (UA_DEMOS_ROOT
+                    # symlink the _claude_code_intel_demos walker picks up).
+                    _tutorial_finalize: dict[str, Any] = {}
+                    if event_type == "vp.mission.completed" and _src_kind == "tutorial_build":
+                        from universal_agent.services.tutorial_demo_finalize import (
+                            finalize_tutorial_build_demo,
+                        )
+                        _fin_result_ws = ""
+                        if str(outcome.result_ref or "").startswith("workspace://"):
+                            _fin_result_ws = str(outcome.result_ref).removeprefix("workspace://").strip()
+                        _tutorial_finalize = finalize_tutorial_build_demo(
+                            task_id=_source_task_id,
+                            task_meta=_src_meta,
+                            mission=dict(mission),
+                            mission_id=mission_id,
+                            workspace_candidates=[
+                                str(_src_meta.get("workspace_dir") or "").strip(),
+                                str((outcome.payload or {}).get("cli_workspace_dir") or "").strip(),
+                                _fin_result_ws,
+                            ],
+                        )
+
                     # P5 (15_demo_tutorial_pipeline_adr.md "Cross-cutting
                     # requirement"): stamp the building mission's identity onto
                     # the demo manifest BEFORE terminal routing so
@@ -1012,6 +1037,7 @@ class VpWorkerLoop:
                             "metadata": {
                                 **_terminal_meta,
                                 "linked_mission_id": mission_id,
+                                **({"demo_finalize": _tutorial_finalize} if _tutorial_finalize else {}),
                             },
                         })
                         logger.info(

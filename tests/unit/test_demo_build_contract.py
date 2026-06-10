@@ -116,6 +116,23 @@ def test_contract_contains_no_secret_values():
     assert "Bearer " not in DEMO_BUILD_CONTRACT
 
 
+# ── P6: runnable + manifest requirements pinned on both surfaces ─────────────
+
+def test_contract_contains_runnable_and_manifest_requirements():
+    assert "Runnable + manifest requirements (binding)" in DEMO_BUILD_CONTRACT
+    assert "uv-managed" in DEMO_BUILD_CONTRACT
+    assert "DemoManifest" in DEMO_BUILD_CONTRACT
+    assert '"Run" section of README.md' in DEMO_BUILD_CONTRACT
+    assert "self-brief-and-attest" in DEMO_BUILD_CONTRACT
+
+
+def test_skill_md_contains_runnable_and_manifest_requirements():
+    assert "Runnable + manifest requirements (binding)" in _SKILL
+    assert "uv-managed" in _SKILL
+    assert "DemoManifest" in _SKILL
+    assert '"Run" section of README.md' in _SKILL
+
+
 # ── P4 housekeeping: profiles.py comment matches the code ───────────────────
 
 def test_profiles_comment_not_stale_and_coder_is_zai():

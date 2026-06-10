@@ -85,7 +85,9 @@ scope boundaries.>
 
 Required only when the mission's `source_kind` is in the /goal-eligible set:
 `cody_demo_task`, `cody_scaffold_request`, `tutorial_build`, or operator-dispatched
-Cody (mission carries `metadata.use_goal_loop=True`).
+Cody (mission carries `metadata.use_goal_loop=True`). `tutorial_build` missions
+always carry `metadata.use_goal_loop=True` (stamped by
+`services/proactive_tutorial_builds.queue_tutorial_build_task`) — use Card mode below.
 
 **`ACCEPTANCE.md`** — structured success criteria with rationale. Each criterion:
 - Specific (not "code is good" — "ruff check on changed files exits 0")
@@ -140,6 +142,38 @@ OR stop after 20 turns regardless. Stop after 60 minutes regardless.
 ```
 
 The `goal_condition.txt` is what gets passed to `claude -p "/goal <contents>"`.
+
+### Card mode — `tutorial_build` missions
+
+`tutorial_build` cards carry no Simone-authored BRIEF — only the card data
+(video title / URL / channel / extraction_plan JSON) plus the binding
+"Demo build contract" embedded in the objective. In card mode you TRANSFORM
+the card into the briefing artifacts yourself:
+
+**BRIEF.md** — derive from the card: what capability the video demonstrates,
+which stack the contract's framework-selection rule picks, the demo's scope
+(standalone mini-app, NOT a line-by-line reproduction), and the source
+attribution (video title + URL verbatim from the card).
+
+**ACCEPTANCE.md** — MUST include all of these criteria (plus any
+demo-specific ones):
+
+- [ ] Runnable end-to-end with a uv-managed environment: `pyproject.toml`
+  present and `uv sync` (or a committed `uv.lock`) prepares the venv;
+  the documented run command (e.g. `uv run python main.py`) executes
+  successfully in the transcript.
+- [ ] README.md contains a "Run" section with the exact setup + run commands.
+- [ ] `manifest.json` authored at the workspace root, schema-compatible with
+  `services/cody_implementation.py::DemoManifest` (demo_id, feature,
+  endpoint_required, endpoint_hit, model_used, acceptance_passed,
+  iteration, started_at, finished_at, notes); endpoint_hit recorded
+  truthfully (zai vs anthropic_native).
+- [ ] Simple UI, functionally complete — fully exercises the capability per
+  the Demo build contract's acceptance bar (no design polish).
+
+**goal_condition.txt** — phrase the above as transcript-demonstrable checks
+(the evaluator reads only the conversation), and keep the standard
+self-bounding clause (turn + wall-clock stop).
 
 ### Phase 4 — Do the work (the mission itself)
 

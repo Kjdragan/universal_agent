@@ -85,6 +85,24 @@ not run:
 - NEVER hardcode an endpoint URL or token in demo code; NEVER commit a
   token. Reference the two env var names in the demo's README instead.
 
+## Runnable + manifest requirements (binding)
+
+Mirrors the same block in `proactive_tutorial_builds.DEMO_BUILD_CONTRACT`
+(both surfaces are string-pinned by `tests/unit/test_demo_build_contract.py`):
+
+- The demo MUST be runnable end-to-end from the workspace with a
+  uv-managed environment (`pyproject.toml` + `uv sync`, or a committed
+  `uv.lock`); the exact run command (e.g. `uv run python main.py`) MUST
+  appear in a "Run" section of README.md.
+- Author `manifest.json` at the workspace root, schema-compatible with
+  `services/cody_implementation.py::DemoManifest` (keys: demo_id, feature,
+  endpoint_required, endpoint_hit, model_used, acceptance_passed,
+  iteration, started_at, finished_at, notes). Record endpoint_hit
+  truthfully (zai vs anthropic_native).
+- Author BRIEF.md + ACCEPTANCE.md from the task card via the
+  self-brief-and-attest skill's "tutorial_build card mode" before
+  building; the /goal loop runs against your own ACCEPTANCE criteria.
+
 ## The hard rules (READ EVERY TIME)
 
 These rules exist because Cody's training cutoff predates the features
