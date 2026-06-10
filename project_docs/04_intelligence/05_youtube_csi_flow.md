@@ -38,7 +38,15 @@ Code-verified caveat: the manifest scope calls Pipeline A a "playlist watcher."
 It is not a continuous watcher — it is a daily cron that *reads* a playlist
 once each morning. The continuous discovery layer is the **gold-channel
 poller** (below), which adds videos to those playlists from channel RSS the
-night before, and is itself distinct from Pipeline B's CSI RSS feed.
+night before, and is itself distinct from Pipeline B's CSI RSS feed. The
+former standalone continuous-poller service `youtube_playlist_watcher.py` was
+**retired in PR #438 (2026-05-23)** — the daily digest is now the canonical
+playlist-driven trigger (the retirement is asserted by
+`services/invariants/csi_source_liveness.py`). The redesign that converges
+Pipeline A's tutorial dispatch and Pipeline B's `tutorial_build` demo lane into
+a single Brief→Tutorial→Demo ladder is specified in
+`04_intelligence/15_demo_tutorial_pipeline_adr.md` (design approved 2026-06-10,
+implementation phased).
 
 ---
 

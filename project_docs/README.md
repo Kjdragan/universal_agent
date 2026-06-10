@@ -68,6 +68,7 @@ _CSI, intel lanes, research, wiki, memory, proactive pipeline, mission control, 
 - **[Discord Intelligence](04_intelligence/12_discord_intelligence.md)** — Discord message pipeline, triage, calendar sync (gws materialization). _(verified 2026-06-07)_
 - **[Insight Pipeline Build Plan (Phases 0.5/4/5/6)](04_intelligence/13_insight_pipeline_build_plan.md)** — Living build/status plan: close the brief->digest email gap, digest dedup+template, feedback/index verify, gated legacy deletion. _(verified 2026-06-04)_
 - **[Intelligence Model Tiering by Process](04_intelligence/14_model_tiering_by_process.md)** — Per-process registry of which GLM tier each inference call uses and why (air/turbo/flagship), the decision rubric, and the 2026-06-10 429-burst remediation. _(verified 2026-06-10)_
+- **["ADR: YouTube Brief / Tutorial / Demo Pipeline Redesign"](04_intelligence/15_demo_tutorial_pipeline_adr.md)** — Brief→Tutorial→Demo ladder; demo = runnable mini-app of the video's capability (native stack or Claude Agent SDK); gated auto-build (~10/day) _(verified 2026-06-10)_
 
 ## 05_channels
 
@@ -115,4 +116,4 @@ _Operating playbook, verification rules, dormancy, VPS recovery, incident patter
 
 ---
 
-_57/57 canonical docs present. Legacy point-in-time reports are archived (search-excluded) — see `00_DOCUMENTATION_REFACTOR_PLAN.md` §5._
+_58/58 canonical docs present. Legacy point-in-time reports are archived (search-excluded) — see `00_DOCUMENTATION_REFACTOR_PLAN.md` §5._

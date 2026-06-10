@@ -571,6 +571,26 @@
       "scope": "Per-process registry of which GLM tier each inference call uses and why (air/turbo/flagship), the decision rubric, and the 2026-06-10 429-burst remediation."
     },
     {
+      "id": "intel-demo-tutorial-pipeline-adr",
+      "tier": 2,
+      "category": "04_intelligence",
+      "filename": "04_intelligence/15_demo_tutorial_pipeline_adr.md",
+      "title": "ADR: Demo / Tutorial Pipeline Redesign",
+      "code_paths": [
+        "src/universal_agent/scripts/youtube_daily_digest.py",
+        "src/universal_agent/services/proactive_tutorial_builds.py",
+        "src/universal_agent/proactive_signals.py",
+        "src/universal_agent/hooks_service.py",
+        "src/universal_agent/gateway_server.py",
+        "src/universal_agent/services/todo_dispatch_service.py",
+        "src/universal_agent/services/dispatch_service.py",
+        "src/universal_agent/services/capacity_governor.py",
+        "src/universal_agent/vp/profiles.py"
+      ],
+      "legacy_refs": [],
+      "scope": "Brief→Tutorial→Demo ladder; demo = runnable mini-app of the video's capability (native stack or Claude Agent SDK); gated auto-build (~10/day) + uncapped approve button; converge the two YouTube lanes; Cody-on-ZAI; session-linked manifests. Design approved 2026-06-10, phases P0-P5."
+    },
+    {
       "id": "chan-email",
       "tier": 1,
       "category": "05_channels",
