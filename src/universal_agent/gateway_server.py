@@ -761,6 +761,31 @@ def _artifact_api_file_url(rel_path: str) -> str:
     return f"/api/artifacts/files/{urllib.parse.quote(normalized, safe='/')}"
 
 
+def _session_viewer_url(*, session_id: str = "", run_id: str = "", workspace_dir: str = "") -> str:
+    """Deep link into the 3-panel session viewer (web-ui ``app/page.tsx``).
+
+    Mirrors ``web-ui/lib/viewer/openViewer.ts``: prefer ``session_id`` over
+    ``run_id`` (never send both) and forward ``workspace`` so the resolver's
+    workspace-path branch (``viewer/resolver.py::resolve_session_view_target``)
+    can place VP-mission / hook-session builds. Returns "" when no session/run
+    identity exists (pre-P5 manifests) — callers render no link.
+    """
+    sid = str(session_id or "").strip()
+    rid = str(run_id or "").strip()
+    ws = str(workspace_dir or "").strip()
+    if not sid and not rid:
+        return ""
+    params: list[tuple[str, str]] = []
+    if sid:
+        params.append(("session_id", sid))
+    elif rid:
+        params.append(("run_id", rid))
+    if ws:
+        params.append(("workspace", ws))
+    params.append(("role", "viewer"))
+    return "/?" + urllib.parse.urlencode(params)
+
+
 def _tutorial_manifest(run_dir: Path) -> dict[str, Any]:
     manifest_path = run_dir / "manifest.json"
     if not manifest_path.exists() or not manifest_path.is_file():
@@ -950,6 +975,12 @@ def _list_tutorial_runs(limit: int = 100) -> list[dict[str, Any]]:
             video_url = str(manifest.get("video_url") or "").strip()
             if not video_url and video_id:
                 video_url = f"https://www.youtube.com/watch?v={video_id}"
+            # P5 session link (15_demo_tutorial_pipeline_adr.md): stamped by
+            # hooks_service._stamp_tutorial_manifest_build_session post-run.
+            # Absent on pre-P5 manifests -> empty strings, never an error.
+            build_session_id = str(manifest.get("build_session_id") or "").strip()
+            build_run_id = str(manifest.get("build_run_id") or "").strip()
+            build_workspace_dir = str(manifest.get("build_workspace_dir") or "").strip()
             run_item = {
                 "run_path": run_rel,
                 "run_dir": str(run_dir),
@@ -965,6 +996,14 @@ def _list_tutorial_runs(limit: int = 100) -> list[dict[str, Any]]:
                 "run_storage_href": _storage_explorer_href(scope="artifacts", path=run_rel),
                 "files": files,
                 "implementation_required": implementation_required,
+                "session_id": build_session_id,
+                "run_id": build_run_id,
+                "session_workspace_dir": build_workspace_dir,
+                "session_url": _session_viewer_url(
+                    session_id=build_session_id,
+                    run_id=build_run_id,
+                    workspace_dir=build_workspace_dir,
+                ),
             }
             runs.append((mtime, run_item))
 
@@ -20755,6 +20794,11 @@ def _claude_code_intel_demos(
         demo_id = demo_dir.name
         slug_match = _DEMO_DIR_RE.match(demo_id)
         entity_slug = slug_match.group("slug") if slug_match else ""
+        # P5 session link: stamped at VP-mission terminal by
+        # worker_loop._stamp_demo_manifest_build_session. Pre-P5 manifests
+        # carry neither field -> empty strings, no link rendered.
+        build_mission_id = str(manifest.get("build_mission_id") or "").strip()
+        build_session_id = str(manifest.get("build_session_id") or "").strip() or build_mission_id
         demos.append(
             {
                 "demo_id": demo_id,
@@ -20765,6 +20809,13 @@ def _claude_code_intel_demos(
                 "timestamp": str(manifest.get("timestamp") or ""),
                 "entity_slug": entity_slug,
                 "linked_from_entity": demo_id in linked_demo_ids,
+                "session_id": build_session_id,
+                "run_id": build_mission_id,
+                "session_url": _session_viewer_url(
+                    session_id=build_session_id,
+                    run_id=build_mission_id,
+                    workspace_dir=str(demo_dir),
+                ),
             }
         )
     demos.sort(key=lambda item: (str(item.get("timestamp") or ""), str(item.get("demo_id") or "")), reverse=True)

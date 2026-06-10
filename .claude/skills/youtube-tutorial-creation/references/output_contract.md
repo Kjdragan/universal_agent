@@ -83,3 +83,11 @@ Set `manifest.json.learning_mode` to:
   "notes": []
 }
 ```
+
+## Platform-Stamped Fields (do not author)
+
+After the run completes, the hooks runtime stamps the building agent session
+onto `manifest.json` (`hooks_service.py::_stamp_tutorial_manifest_build_session`):
+`build_session_id`, `build_run_id`, `build_workspace_dir`. Never set, copy,
+or remove these fields yourself — and never strip unrecognized fields when
+rewriting the manifest.

@@ -24,6 +24,9 @@ type TutorialRun = {
   run_storage_href?: string;
   files?: TutorialFile[];
   implementation_required?: boolean;
+  session_id?: string;
+  run_id?: string;
+  session_url?: string;
 };
 
 type TutorialReviewJob = {
@@ -953,6 +956,7 @@ export default function DashboardTutorialsPage() {
             const latestBootstrapTarget = asText(latestBootstrapJob?.execution_target).toLowerCase() || "server";
             const bootstrapPending = latestBootstrapStatus === "queued" || latestBootstrapStatus === "running";
             const sessionHref = chatSessionHref(asText(latestJob?.session_id));
+            const buildSessionHref = asText(run.session_url);
             const viewHref =
               asText(run.run_storage_href) ||
               `/storage?scope=artifacts&path=${encodeURIComponent(runPath)}`;
@@ -1015,6 +1019,16 @@ export default function DashboardTutorialsPage() {
                         className="rounded border border-secondary/25 bg-secondary/10 px-2 py-1 text-[11px] text-secondary/80 hover:bg-secondary/20"
                       >
                         {latestJobStatus === "running" ? "Watch" : "Rehydrate"}
+                      </a>
+                    )}
+                    {buildSessionHref && (
+                      <a
+                        href={buildSessionHref}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="rounded border border-secondary/25 bg-secondary/10 px-2 py-1 text-[11px] text-secondary/80 hover:bg-secondary/20"
+                      >
+                        Build Session
                       </a>
                     )}
                     {/* Send to Simone — inline note flow */}

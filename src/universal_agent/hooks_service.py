@@ -356,6 +356,49 @@ def build_manual_youtube_action(
     }
 
 
+def _stamp_tutorial_manifest_build_session(
+    artifact_validation: dict[str, Any],
+    *,
+    session_id: str,
+    run_id: Optional[str],
+    workspace_dir: str,
+) -> None:
+    """P5 (15_demo_tutorial_pipeline_adr.md "Cross-cutting requirement"):
+    stamp the building agent session onto the tutorial manifest so the
+    dashboard can deep-link the 3-panel session viewer.
+
+    Deterministic code stamping — runs AFTER the agent session finished and
+    `_validate_youtube_tutorial_artifacts` located the manifest, so the LLM
+    never has to copy ids and can never clobber them. Additive merge;
+    best-effort: never raises, never blocks the run.
+    """
+    try:
+        manifest_path = Path(str(artifact_validation.get("manifest_path") or ""))
+        if not manifest_path.is_file():
+            return
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        if not isinstance(payload, dict):
+            return
+        payload["build_session_id"] = str(session_id or "")
+        if run_id:
+            payload["build_run_id"] = str(run_id)
+        if workspace_dir:
+            payload["build_workspace_dir"] = str(workspace_dir)
+        manifest_path.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=True) + "\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        logger.warning(
+            "Failed stamping build session onto tutorial manifest session_id=%s",
+            session_id,
+            exc_info=True,
+        )
+
+
 class HooksService:
     @staticmethod
     def _runtime_db_connect():
@@ -5068,6 +5111,12 @@ class HooksService:
                 )
                 artifact_validation = execution_summary.get("artifact_validation") or {}
                 if isinstance(artifact_validation, dict):
+                    _stamp_tutorial_manifest_build_session(
+                        artifact_validation,
+                        session_id=session_id,
+                        run_id=workflow_run_id,
+                        workspace_dir=str(session_workspace) if session_workspace is not None else workflow_workspace_dir,
+                    )
                     self._emit_youtube_tutorial_ready_notification(
                         session_id=session_id,
                         session_key=session_key,
@@ -5406,6 +5455,12 @@ class HooksService:
                     expected_video_id,
                 )
                 execution_summary["artifact_validation"] = recovered_artifact_validation
+                _stamp_tutorial_manifest_build_session(
+                    recovered_artifact_validation,
+                    session_id=session_id,
+                    run_id=workflow_run_id,
+                    workspace_dir=str(session_workspace) if session_workspace is not None else workflow_workspace_dir,
+                )
                 ingest_status = str(metadata.get("hook_youtube_ingest_status") or "").strip().lower()
                 self._emit_youtube_tutorial_ready_notification(
                     session_id=session_id,

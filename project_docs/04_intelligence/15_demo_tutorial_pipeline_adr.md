@@ -13,16 +13,18 @@ code_paths:
   - src/universal_agent/services/dispatch_service.py
   - src/universal_agent/services/capacity_governor.py
   - src/universal_agent/vp/profiles.py
+  - src/universal_agent/vp/worker_loop.py
   - .claude/skills/youtube-tutorial-creation/
   - .claude/skills/cody-implements-from-brief/
   - deployment/systemd/
   - web-ui/app/dashboard/tutorials/
+  - web-ui/app/dashboard/claude-code-intel/
 last_verified: 2026-06-10
 ---
 
 # ADR: YouTube Brief / Tutorial / Demo Pipeline Redesign
 
-> **STATUS: DESIGN APPROVED — IMPLEMENTATION IN PROGRESS (P0–P4 built; P0–P2 shipped on PR #887, P3–P4 in this PR).** This ADR
+> **STATUS: DESIGN APPROVED — IMPLEMENTATION IN PROGRESS (P0–P5 built; P0–P2 shipped on PR #887, P3–P4 shipped separately, P5 in this PR).** This ADR
 > records the operator-ratified target design from the 2026-06-10 grilling session. It is the canonical
 > spec for the work; phases P0–P5 below carry their own status markers. Sections describing *current*
 > behavior are code-verified (2026-06-09/10); sections describing the *target* are marked **TARGET**.
@@ -124,10 +126,20 @@ The Demo is a runnable mini-app of the video's **capability**, not a reproductio
   queueing many is **safe** — they drain ~2-concurrent sequentially. No special rate-limit handling; the
   operator monitors after the fact for ZAI rate-limit trips.
 
-### Cross-cutting requirement
+### Cross-cutting requirement — implemented (P5)
 
-Every Brief / Tutorial / Demo links to the **agent session that created it**, openable in the dashboard's
-3-panel session viewer. Today only `source_task_id` is stamped (not the session/run id) — net-new wiring.
+Every Tutorial / Demo links to the **agent session that created it**, openable in the dashboard's
+3-panel session viewer. Tutorial manifests are code-stamped post-run
+(`hooks_service.py::_stamp_tutorial_manifest_build_session` → `build_session_id` / `build_run_id` /
+`build_workspace_dir`); demo manifests are code-stamped at VP-mission terminal
+(`vp/worker_loop.py::_stamp_demo_manifest_build_session` → `build_mission_id` / `build_session_id`).
+`gateway_server.py::_list_tutorial_runs` and `gateway_server.py::_claude_code_intel_demos` surface
+`session_id` / `run_id` / `session_url` (built by `gateway_server.py::_session_viewer_url`, mirroring
+`web-ui/lib/viewer/openViewer.ts`); the Tutorial Backlog tab and the Demos panel render the link.
+Pre-P5 manifests carry no stamp and simply render no link. The Brief tier is produced by the
+deterministic digest script (no agent session exists to link). Residual: a `tutorial_build` mission
+that builds into a fresh `/opt/ua_demos/<id>` dir referenced by neither the source task's
+`workspace_dir` nor the mission outcome (`cli_workspace_dir` / `result_ref`) is not stamped.
 
 ### Out of scope (parked)
 
@@ -152,7 +164,7 @@ Every Brief / Tutorial / Demo links to the **agent session that created it**, op
 | **P2** | **done** (P2a 6d899b55 + P2b) | The gate + quota (rank → auto-build top-N/day → rest to button; manual approvals uncapped) | `proactive_tutorial_builds.py::sync_build_oriented_csi_videos` (ceiling + pending overflow), `proactive_tutorial_builds.py::approve_pending_tutorial_build` + `gateway_server.py::dashboard_tutorial_pending_build_approve` (approve endpoint), Pending Approval section in `web-ui/app/dashboard/tutorials/` |
 | **P3** | **done** | Kill the double-build; stage the tiers (Tutorial = teaching-doc only) | `hooks_service.py::build_manual_youtube_action` + `webhook_transforms/manual_youtube_transform.py::transform` (teaching-doc-only prompts), `.claude/skills/youtube-tutorial-creation/SKILL.md` (implementation build removed), `youtube_daily_digest.py::_queue_demo_builds` → `proactive_tutorial_builds.py::queue_tutorial_builds_with_ceiling` (both sources, one ceiling, `video_id` dedupe); "Create Repo" demoted to optional "Export to Repo" |
 | **P4** | **done** | Rewrite the Demo build contract | `proactive_tutorial_builds.py::DEMO_BUILD_CONTRACT` (framework-per-video rule + functional-completeness acceptance + ZAI inference wiring) embedded in every `tutorial_build` BRIEF via `proactive_tutorial_builds.py::_build_task_description`; same contract mirrored in `.claude/skills/cody-implements-from-brief/` (stale scrub/endpoint guidance fixed); `templates/ua_demos_scaffold/` README env-wiring invariant; `vp/profiles.py` stale-comment fix |
-| **P5** | proposed | Session link (3-panel view) | stamp `session_id`/`run_id` on tutorial + demo manifests at build time; `gateway_server.py::_list_tutorial_runs` + demo view + `web-ui` render the link |
+| **P5** | **done** | Session link (3-panel view) | `hooks_service.py::_stamp_tutorial_manifest_build_session` (tutorial manifests, success + recovered validation paths in `_dispatch_action`); `vp/worker_loop.py::_stamp_demo_manifest_build_session` (demo manifests at mission terminal, CLI + SDK lanes); `gateway_server.py::_list_tutorial_runs` + `gateway_server.py::_claude_code_intel_demos` + `gateway_server.py::_session_viewer_url` surface `session_id`/`run_id`/`session_url`; Tutorial Backlog tab + Demos panel render the link |
 
 **Post-P2 tuning (operator-required):** validate the worthiness scoring produces the right *volume* (not too
 few, not a flood) and the right *type* of candidates; tune the threshold/judge to surface the demos the

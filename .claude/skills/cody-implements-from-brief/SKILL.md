@@ -226,6 +226,14 @@ write_manifest(workspace, manifest)
 Set `acceptance_passed=True` only if your demo actually produced the
 output ACCEPTANCE.md required AND `endpoint_hit` matches `endpoint_required`.
 
+> **Session-link fields (P5 — do not author).** After the mission terminates,
+> the VP worker stamps `build_mission_id` / `build_session_id`
+> (the `vp-mission-<id>`) / `build_vp_id` / `build_cli_session_id` into
+> `manifest.json` (`vp/worker_loop.py::_stamp_demo_manifest_build_session`)
+> so the dashboard can open the build session in the 3-panel viewer. Never
+> invent, copy, or delete these fields — and never strip fields you don't
+> recognize when rewriting `manifest.json` on a later iteration.
+
 ### Step 5.5 — Deslop the demo diff (best-effort, NON-blocking)
 
 Before opening any PR for the demo, take a quick behavior-preserving cleanup
