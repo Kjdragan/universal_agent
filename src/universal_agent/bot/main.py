@@ -1,7 +1,12 @@
+from __future__ import annotations
 
 import asyncio
 import logging
 import os
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .task_manager import Task
 
 from telegram import Update
 from telegram.ext import (
@@ -52,7 +57,7 @@ async def _send_with_retry(bot, chat_id, text, retries: int = 3, base_delay_s: f
     if not ok:
         raise RuntimeError(f"telegram_send_failed: {err}")
 
-async def run_bot():
+async def run_bot() -> None:
     bootstrap_state = bootstrap_runtime_environment(profile=os.getenv("UA_DEPLOYMENT_PROFILE"))
     if not bootstrap_state.policy.enable_telegram_poll:
         logger.info(
@@ -98,7 +103,7 @@ async def run_bot():
     
     app_ref = {"bot": None}
     
-    async def task_status_callback(task):
+    async def task_status_callback(task: Task) -> None:
         bot = app_ref["bot"]
         if not bot:
             return
@@ -129,7 +134,7 @@ async def run_bot():
     task_manager = TaskManager(status_callback=task_status_callback)
 
     # 4. Define Process Callback for Runner
-    async def process_update_callback(update: Update, ptb_context: ContextTypes.DEFAULT_TYPE):
+    async def process_update_callback(update: Update, ptb_context: ContextTypes.DEFAULT_TYPE) -> None:
         # Create Context
         ctx = BotContext(
             update=update, 
@@ -147,7 +152,7 @@ async def run_bot():
     app_ref["bot"] = app.bot
 
     # 6. Global Helper to feed the runner
-    async def feed_runner(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def feed_runner(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await runner.enqueue(update, context)
 
     # Register a catch-all handler that feeds everything to our runner
@@ -160,7 +165,7 @@ async def run_bot():
     logger.info("Bot starting... (New Architecture WITH Heartbeat)")
     
     # [Heartbeat] Inject callback for proactive messages
-    async def send_message_callback(user_id: str, text: str):
+    async def send_message_callback(user_id: str, text: str) -> None:
         if not app_ref["bot"]:
             logger.warning("Attempted to send proactive message before bot ready")
             return

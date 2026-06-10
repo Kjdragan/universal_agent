@@ -18,6 +18,6 @@ class BotContext:
     user_data: Dict[str, Any] = field(default_factory=dict)
     aborted: bool = False
     
-    def abort(self):
+    def abort(self) -> None:
         """Stop processing deeper middlewares."""
         self.aborted = True

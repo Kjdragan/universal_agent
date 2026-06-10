@@ -23,7 +23,7 @@ class BotConnectionAdapter:
         # It needs to support `if target in self.connection_manager.session_connections`.
         self.session_connections = {}
 
-    async def broadcast(self, session_id: str, data: dict):
+    async def broadcast(self, session_id: str, data: dict) -> None:
         """
         Mimics ConnectionManager.broadcast but sends a Telegram message.
         """
@@ -53,10 +53,10 @@ class BotConnectionAdapter:
              # Optional: Could send a subtle emoji or action status if supported
              pass
 
-    def register_active_session(self, session_id: str):
+    def register_active_session(self, session_id: str) -> None:
         """Mark a session as 'connected' so HeartbeatService thinks it can send."""
         self.session_connections[session_id] = {"bot_virtual_connection"}
 
-    def unregister_active_session(self, session_id: str):
+    def unregister_active_session(self, session_id: str) -> None:
         if session_id in self.session_connections:
             del self.session_connections[session_id]

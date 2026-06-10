@@ -20,10 +20,10 @@ class MiddlewareChain:
     def __init__(self):
         self.middlewares: List[MiddlewareHandler] = []
 
-    def use(self, middleware: MiddlewareHandler):
+    def use(self, middleware: MiddlewareHandler) -> None:
         self.middlewares.append(middleware)
 
-    async def run(self, ctx: BotContext):
+    async def run(self, ctx: BotContext) -> None:
         """Execute the chain."""
         await self._execute_index(0, ctx)
 
@@ -36,7 +36,7 @@ class MiddlewareChain:
 
         middleware = self.middlewares[index]
         
-        async def next_fn():
+        async def next_fn() -> None:
             await self._execute_index(index + 1, ctx)
             
         try:
