@@ -9,11 +9,13 @@ from universal_agent import task_hub
 from universal_agent.proactive_signals import (
     CARD_STATUS_DELETED,
     CARD_STATUS_PENDING,
+    CARD_STATUS_TRACKING,
     apply_card_action,
     expire_stale_pending_cards,
     generate_signal_cards,
     generate_youtube_cards,
     list_cards,
+    purge_aged_terminal_cards,
     record_feedback,
     sync_generated_cards,
     upsert_generated_card,
@@ -133,30 +135,101 @@ def test_youtube_signal_cards_prioritize_transcript_and_filter_shorts(tmp_path):
 def test_expire_stale_pending_cards(tmp_path):
     conn = sqlite3.connect(tmp_path / "activity.db")
     conn.row_factory = sqlite3.Row
-    old = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    old = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()  # older than the 3-day default
+    now = datetime.now(timezone.utc).isoformat()
 
     def _card(cid, title):
         return {"card_id": cid, "source": "youtube", "card_type": "diamond", "title": title, "summary": "s"}
 
     upsert_generated_card(conn, _card("stale", "old"))
     conn.execute("UPDATE proactive_signal_cards SET updated_at=? WHERE card_id='stale'", (old,))
+    # An OLD video (created_at in the past) that is STILL being refreshed by the
+    # tick (fresh updated_at) is KEPT — the TTL keys on updated_at ("still being
+    # surfaced"), not created_at (the video's publish time).
+    upsert_generated_card(conn, _card("still_current", "old-video-still-in-feed"))
+    conn.execute("UPDATE proactive_signal_cards SET created_at=?, updated_at=? WHERE card_id='still_current'", (old, now))
     upsert_generated_card(conn, _card("fresh", "new"))
     upsert_generated_card(conn, _card("kept", "operator-triaged"))
     conn.execute("UPDATE proactive_signal_cards SET status='actioned', updated_at=? WHERE card_id='kept'", (old,))
     conn.commit()
 
-    expired = expire_stale_pending_cards(conn, older_than_days=14)
-    assert expired == 1  # only the stale *pending* card
+    expired = expire_stale_pending_cards(conn)  # default 3-day updated_at TTL
+    assert expired == 1  # only the stale *pending* card (not refreshed in 3+ days)
 
     def _status(cid):
         return conn.execute("SELECT status FROM proactive_signal_cards WHERE card_id=?", (cid,)).fetchone()[0]
 
-    assert _status("stale") == CARD_STATUS_DELETED   # aged-out pending -> soft-deleted
-    assert _status("fresh") == CARD_STATUS_PENDING   # recently refreshed -> kept
-    assert _status("kept") == "actioned"             # operator-triaged -> never touched
+    assert _status("stale") == CARD_STATUS_DELETED        # not refreshed in 5d -> soft-deleted
+    assert _status("still_current") == CARD_STATUS_PENDING  # old video but still surfaced -> kept
+    assert _status("fresh") == CARD_STATUS_PENDING        # just refreshed -> kept
+    assert _status("kept") == "actioned"                  # operator-triaged -> never touched
 
     # Disabled when TTL <= 0 (escape hatch).
     assert expire_stale_pending_cards(conn, older_than_days=0) == 0
+
+
+def test_purge_aged_terminal_cards_is_resurface_safe(tmp_path):
+    """Hard-purge aged terminal (non-live) cards, but NEVER recent ones (whose
+    videos may still be in the CSI window) and NEVER live (pending/tracking)."""
+    conn = sqlite3.connect(tmp_path / "activity.db")
+    conn.row_factory = sqlite3.Row
+    old = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()  # past the 7-day purge window
+    recent = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()  # still in resurface window
+
+    def _seed(cid, status, updated_at):
+        upsert_generated_card(conn, {"card_id": cid, "source": "youtube", "card_type": "diamond", "title": cid, "summary": "s"})
+        conn.execute("UPDATE proactive_signal_cards SET status=?, updated_at=? WHERE card_id=?", (status, updated_at, cid))
+
+    _seed("aged_rejected", "rejected", old)
+    _seed("aged_deleted", CARD_STATUS_DELETED, old)
+    _seed("aged_promoted", "promoted", old)        # legacy status
+    _seed("aged_actioned", "actioned", old)
+    _seed("recent_rejected", "rejected", recent)   # resurface window -> KEEP
+    _seed("live_pending", CARD_STATUS_PENDING, old)
+    _seed("live_tracking", CARD_STATUS_TRACKING, old)
+    conn.commit()
+
+    purged = purge_aged_terminal_cards(conn)  # default 7-day window
+    assert purged == 4  # the four aged terminal rows
+
+    def _exists(cid):
+        return conn.execute("SELECT 1 FROM proactive_signal_cards WHERE card_id=?", (cid,)).fetchone() is not None
+
+    assert not _exists("aged_rejected")
+    assert not _exists("aged_deleted")
+    assert not _exists("aged_promoted")
+    assert not _exists("aged_actioned")
+    assert _exists("recent_rejected")   # within resurface window -> preserved
+    assert _exists("live_pending")      # live -> never purged
+    assert _exists("live_tracking")     # live -> never purged
+
+    # Disabled when window <= 0.
+    assert purge_aged_terminal_cards(conn, older_than_days=0) == 0
+
+
+def test_list_cards_live_filter_excludes_terminal(tmp_path):
+    """status='live' returns only pending + tracking (the active triage set),
+    excluding actioned/rejected/promoted/deleted — the default tab view."""
+    conn = sqlite3.connect(tmp_path / "activity.db")
+    conn.row_factory = sqlite3.Row
+
+    def _seed(cid, status):
+        upsert_generated_card(conn, {"card_id": cid, "source": "youtube", "card_type": "diamond", "title": cid, "summary": "s"})
+        conn.execute("UPDATE proactive_signal_cards SET status=? WHERE card_id=?", (status, cid))
+
+    _seed("p", CARD_STATUS_PENDING)
+    _seed("t", CARD_STATUS_TRACKING)
+    _seed("a", "actioned")
+    _seed("r", "rejected")
+    _seed("d", CARD_STATUS_DELETED)
+    conn.commit()
+
+    live_ids = {c["card_id"] for c in list_cards(conn, status="live", limit=100)}
+    assert live_ids == {"p", "t"}
+
+    # 'all' still excludes only deleted (unchanged behaviour).
+    all_ids = {c["card_id"] for c in list_cards(conn, status="all", limit=100)}
+    assert all_ids == {"p", "t", "a", "r"}
 
 
 def test_signal_feedback_and_action_create_task(tmp_path):
@@ -249,7 +322,7 @@ def test_generate_signal_cards_is_card_only_no_convergence(tmp_path):
 
     # Card-only counts shape — no topic_signatures / convergence_events /
     # tutorial_build_tasks keys (that would mean convergence ran).
-    assert set(counts) == {"youtube", "discord", "expired"}
+    assert set(counts) == {"youtube", "discord", "expired", "purged"}
     assert counts["youtube"] >= 1
     # No convergence side effects: no topic signature, no tutorial_build tasks.
     assert get_topic_signature(conn, "video_one_1") is None

@@ -132,9 +132,16 @@ def list_cards(
     if source and source.strip().lower() != "all":
         clauses.append("source = ?")
         params.append(source.strip().lower())
-    if status and status.strip().lower() != "all":
+    status_norm = (status or "").strip().lower()
+    if status_norm == "live":
+        # The default tab view: untriaged + actively-watched cards only. Excludes
+        # terminal/handled states (actioned, rejected, promoted, deleted) so the
+        # tab shows the live work, not the historical ledger.
+        clauses.append("status IN (?, ?)")
+        params.extend([CARD_STATUS_PENDING, CARD_STATUS_TRACKING])
+    elif status_norm and status_norm != "all":
         clauses.append("status = ?")
-        params.append(status.strip().lower())
+        params.append(status_norm)
     else:
         clauses.append("status != ?")
         params.append(CARD_STATUS_DELETED)
@@ -239,16 +246,29 @@ def delete_card(conn: sqlite3.Connection, card_id: str) -> bool:
     return cursor.rowcount > 0
 
 
-def expire_stale_pending_cards(conn: sqlite3.Connection, *, older_than_days: int = 14) -> int:
+def expire_stale_pending_cards(conn: sqlite3.Connection, *, older_than_days: int = 3) -> int:
     """Soft-delete ``pending`` cards not refreshed in ``older_than_days`` days.
 
-    A card's ``updated_at`` advances on every sync while its source video is
-    still in the recent CSI window. Once the video ages out, the card stops
-    being regenerated; with no autonomous drainer (the curation lane was
-    removed 2026-06) an un-triaged card would otherwise sit ``pending`` forever
-    and inflate the dashboard + the db-health pending count. This sweep clears
-    those — operator-triaged cards (approved/rejected/tracking/actioned/deleted)
-    are never touched because it only matches ``status='pending'``.
+    Keyed on ``updated_at`` (last time the tick re-upserted the card). A card's
+    ``updated_at`` advances every sync while its source video is still in the
+    recent CSI window (~2 days of YouTube RSS); once the video ages out the card
+    stops being refreshed and this TTL clears it ``older_than_days`` days later.
+    Net shelf life ≈ time-in-feed (≤~2 days) + ``older_than_days`` — bounded, and
+    an un-acted card always drops off the tab within a few days.
+
+    NOTE: this deliberately does NOT key on ``created_at``. A card's
+    ``created_at`` is the *video's* publish time (``occurred_at``), not the
+    card's first-generation time — so a ``created_at`` TTL would instantly expire
+    cards for any video ingested more than N days after it was published (RSS
+    backfills, re-ingestion), which is a footgun. ``updated_at`` reflects "still
+    being surfaced", which is what we actually want to age out.
+
+    Soft-delete only: the row stays in the DB with ``status='deleted'`` (drops
+    off the pending/live tab but is preserved for audit + resurface prevention —
+    the tick's status-preserving upsert won't bring it back). Only
+    ``status='pending'`` is touched; operator-triaged cards
+    (approved/rejected/tracking/actioned/deleted) are never affected. Default 3
+    days (``UA_PROACTIVE_CARD_TTL_DAYS``); ``older_than_days <= 0`` disables it.
 
     Returns the number of cards expired.
     """
@@ -260,6 +280,41 @@ def expire_stale_pending_cards(conn: sqlite3.Connection, *, older_than_days: int
         "UPDATE proactive_signal_cards SET status = ?, updated_at = ? "
         "WHERE status = ? AND updated_at < ?",
         (CARD_STATUS_DELETED, _now_iso(), CARD_STATUS_PENDING, cutoff),
+    )
+    conn.commit()
+    return cursor.rowcount
+
+
+def purge_aged_terminal_cards(conn: sqlite3.Connection, *, older_than_days: Optional[int] = None) -> int:
+    """Hard-delete terminal (non-live) cards not touched in ``older_than_days`` days.
+
+    LIVE statuses (``pending``, ``tracking``) are NEVER purged. Everything else —
+    ``actioned``, ``rejected``, ``approved``, ``deleted``, and the legacy
+    ``promoted`` relics — is a terminal/handled state; once a row's ``updated_at``
+    is older than the purge window it is physically removed to keep the table and
+    the dashboard stats tidy (rather than accumulating a permanent ledger of
+    rejected/deleted rows forever).
+
+    RESURFACE-SAFE by construction: keyed on ``updated_at``, which the tick
+    advances every time it re-upserts a card whose source video is still in the
+    CSI regeneration window (~2 days of YouTube RSS events). A row only becomes
+    purgeable once its ``updated_at`` is older than the window, i.e. its video has
+    aged out and the tick is no longer touching it — so a purged card cannot be
+    re-INSERTed as ``pending`` on the next tick. Default window 7 days
+    (``UA_PROACTIVE_CARD_PURGE_DAYS``), comfortably above the ~2-day CSI window,
+    retaining a week of rejection memory + audit before removal.
+
+    Returns the number of rows purged. ``older_than_days <= 0`` disables it.
+    """
+    ensure_schema(conn)
+    days = _card_purge_days() if older_than_days is None else older_than_days
+    if days <= 0:
+        return 0
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    cursor = conn.execute(
+        "DELETE FROM proactive_signal_cards "
+        "WHERE status NOT IN (?, ?) AND updated_at < ?",
+        (CARD_STATUS_PENDING, CARD_STATUS_TRACKING, cutoff),
     )
     conn.commit()
     return cursor.rowcount
@@ -375,11 +430,25 @@ def apply_card_action(
 
 
 def _card_ttl_days() -> int:
-    """Resolve the pending-card TTL (`UA_PROACTIVE_CARD_TTL_DAYS`, default 14)."""
+    """Resolve the pending-card TTL in days since generation (`UA_PROACTIVE_CARD_TTL_DAYS`, default 3)."""
     try:
-        return int(os.getenv("UA_PROACTIVE_CARD_TTL_DAYS", "14") or "14")
+        return int(os.getenv("UA_PROACTIVE_CARD_TTL_DAYS", "3") or "3")
     except (TypeError, ValueError):
-        return 14
+        return 3
+
+
+def _card_purge_days() -> int:
+    """Resolve the aged-terminal-card hard-purge window (`UA_PROACTIVE_CARD_PURGE_DAYS`, default 7).
+
+    Must stay comfortably above the CSI regeneration window (~2 days of YouTube
+    RSS events) so a purged card whose video is still in-window can't be
+    re-INSERTed as ``pending`` on the next tick. 7 days = resurface-safe + a
+    week of retained audit/rejection memory.
+    """
+    try:
+        return int(os.getenv("UA_PROACTIVE_CARD_PURGE_DAYS", "7") or "7")
+    except (TypeError, ValueError):
+        return 7
 
 
 def generate_signal_cards(
@@ -401,21 +470,25 @@ def generate_signal_cards(
 
     ``sync_generated_cards`` is the superset the dashboard load calls (this core
     + the convergence/tutorial syncs); both share this function so the card logic
-    lives in exactly one place. Returns ``{youtube, discord, expired}``.
+    lives in exactly one place. Returns ``{youtube, discord, expired, purged}``.
     """
-    counts = {"youtube": 0, "discord": 0, "expired": 0}
+    counts = {"youtube": 0, "discord": 0, "expired": 0, "purged": 0}
     for card in generate_youtube_cards(csi_db_path):
         upsert_generated_card(conn, card)
         counts["youtube"] += 1
     for card in generate_discord_cards(discord_db_path):
         upsert_generated_card(conn, card)
         counts["discord"] += 1
-    # Drain stale pending cards so an un-triaged queue can't pile up
-    # indefinitely now that the autonomous curation drainer is gone
-    # (UA_PROACTIVE_CARD_TTL_DAYS, default 14; set 0 to disable).
+    # Hygiene, every sweep:
+    #  - soft-expire pending cards older than the TTL (created_at based;
+    #    UA_PROACTIVE_CARD_TTL_DAYS, default 3) → off the tab, kept in the DB.
+    #  - hard-purge aged terminal (non-live) rows (UA_PROACTIVE_CARD_PURGE_DAYS,
+    #    default 7; resurface-safe via updated_at window) so rejected/deleted/etc.
+    #    don't accumulate forever.
     counts["expired"] = expire_stale_pending_cards(
         conn, older_than_days=_card_ttl_days() if ttl_days is None else ttl_days
     )
+    counts["purged"] = purge_aged_terminal_cards(conn)
     return counts
 
 
