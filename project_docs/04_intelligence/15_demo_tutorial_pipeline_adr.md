@@ -22,7 +22,7 @@ last_verified: 2026-06-10
 
 # ADR: YouTube Brief / Tutorial / Demo Pipeline Redesign
 
-> **STATUS: DESIGN APPROVED — IMPLEMENTATION IN PROGRESS (P0–P2 built, shipped on PR #887).** This ADR
+> **STATUS: DESIGN APPROVED — IMPLEMENTATION IN PROGRESS (P0–P3 built; P0–P2 shipped on PR #887, P3 in this PR).** This ADR
 > records the operator-ratified target design from the 2026-06-10 grilling session. It is the canonical
 > spec for the work; phases P0–P5 below carry their own status markers. Sections describing *current*
 > behavior are code-verified (2026-06-09/10); sections describing the *target* are marked **TARGET**.
@@ -150,7 +150,7 @@ Every Brief / Tutorial / Demo links to the **agent session that created it**, op
 | **P0** | **done** (commit b2fc3bb0) | This ADR + glossary; fix the drift in `05_youtube_csi_flow.md` | `project_docs/04_intelligence/` |
 | **P1** | **done** (commit 3564c4ce) | Schedule + dedup the broad lane (fix the "no cadence" bug) | new `deployment/systemd` timer (3×/day) → `proactive_tutorial_builds.py::sync_build_oriented_csi_videos`; decouple from `gateway_server.py::_schedule_proactive_signal_sync`; dedupe by `video_id` vs digest |
 | **P2** | **done** (P2a 6d899b55 + P2b) | The gate + quota (rank → auto-build top-N/day → rest to button; manual approvals uncapped) | `proactive_tutorial_builds.py::sync_build_oriented_csi_videos` (ceiling + pending overflow), `proactive_tutorial_builds.py::approve_pending_tutorial_build` + `gateway_server.py::dashboard_tutorial_pending_build_approve` (approve endpoint), Pending Approval section in `web-ui/app/dashboard/tutorials/` |
-| **P3** | proposed | Kill the double-build; stage the tiers (Tutorial = teaching-doc only) | `hooks_service.py::build_manual_youtube_action`, `.claude/skills/youtube-tutorial-creation/SKILL.md`, `youtube_daily_digest.py::_dispatch_tutorial_candidate` → converge both sources on one Tutorial tier; full build only post-gate in `/opt/ua_demos` |
+| **P3** | **done** | Kill the double-build; stage the tiers (Tutorial = teaching-doc only) | `hooks_service.py::build_manual_youtube_action` + `webhook_transforms/manual_youtube_transform.py::transform` (teaching-doc-only prompts), `.claude/skills/youtube-tutorial-creation/SKILL.md` (implementation build removed), `youtube_daily_digest.py::_queue_demo_builds` → `proactive_tutorial_builds.py::queue_tutorial_builds_with_ceiling` (both sources, one ceiling, `video_id` dedupe); "Create Repo" demoted to optional "Export to Repo" |
 | **P4** | proposed | Rewrite the Demo build contract | framework-per-video rule + simple-UI/functionally-complete acceptance into `.claude/skills/cody-implements-from-brief/` / the `tutorial_build`→Cody dispatch BRIEF; Claude-Agent-SDK demos wired to ZAI inference |
 | **P5** | proposed | Session link (3-panel view) | stamp `session_id`/`run_id` on tutorial + demo manifests at build time; `gateway_server.py::_list_tutorial_runs` + demo view + `web-ui` render the link |
 
@@ -162,4 +162,4 @@ operator actually wants.
 
 - `vp/profiles.py` carries a stale comment ("(coder) defaults to anthropic") while the code sets
   `inference_mode="zai"` — fix in P1 or P4.
-- `create_new_repo.sh` is missing on recent tutorial artifacts (moot once "Create Repo" is demoted in P3).
+- `create_new_repo.sh` missing on recent artifacts — **moot as of P3**: new Tutorial runs never produce `implementation/`; the demoted "Export to Repo" button applies only to legacy runs that still carry one.

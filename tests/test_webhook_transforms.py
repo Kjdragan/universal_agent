@@ -79,7 +79,9 @@ def test_manual_transform_description_improves_code_detection():
     out = manual_transform(ctx)
     assert out is not None
     assert "mode: explainer_plus_code" in out["message"]
-    assert "learning_mode: concept_plus_implementation" in out["message"]
+    # P3: learning_mode is pinned to concept_only — code detection now only
+    # drives vision-analysis depth, never an implementation build.
+    assert "learning_mode: concept_only" in out["message"]
 
 
 def test_manual_transform_description_truncated_in_hint():

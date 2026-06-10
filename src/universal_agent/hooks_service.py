@@ -294,11 +294,12 @@ def build_manual_youtube_action(
             if _manual_youtube_probably_code(title, channel_id, video_url)
             else "explainer_only"
         )
-    learning_mode = (
-        "concept_plus_implementation"
-        if mode == "explainer_plus_code"
-        else "concept_only"
-    )
+    # P3 (15_demo_tutorial_pipeline_adr.md): the Tutorial tier is TEACHING-DOC
+    # ONLY — learning_mode is pinned to concept_only for every run. The runnable
+    # Demo is built post-gate in /opt/ua_demos by the tutorial_build Task Hub
+    # lane, never by this skill run. ``mode`` still records whether the video is
+    # code-oriented (drives vision-analysis depth + study-material focus).
+    learning_mode = "concept_only"
     allow_degraded = _manual_youtube_bool(
         payload.get("allow_degraded_transcript_only"),
         default=True,
@@ -327,8 +328,10 @@ def build_manual_youtube_action(
         "Invalid paths: /opt/universal_agent/UA_ARTIFACTS_DIR/... and UA_ARTIFACTS_DIR/...",
         f"Use this absolute durable base path: {artifacts_root}/youtube-tutorial-creation/...",
         "Required baseline artifacts: README.md, CONCEPT.md, manifest.json.",
-        "If learning_mode is concept_plus_implementation, also create IMPLEMENTATION.md and implementation/ with runnable code.",
-        "If learning_mode is concept_only, keep implementation procedural (no repo bootstrap scripts).",
+        "Tutorial tier is TEACHING-DOC ONLY: produce study material on how to USE the feature/capability shown in the video.",
+        "Do NOT create an implementation/ folder, a runnable code project, or any repo scaffold.",
+        "Runnable demos are built post-gate in /opt/ua_demos by the separate tutorial_build Task Hub lane - never by this run.",
+        "IMPLEMENTATION.md, when useful, is a procedural usage runbook (commands, configuration, workflow) - not a code project.",
         "Create required artifacts first and keep them even if extraction fails.",
         "On extraction failure, set manifest status to degraded_transcript_only or failed (never leave empty run dirs).",
         f"video_url: {video_url}",
@@ -338,11 +341,10 @@ def build_manual_youtube_action(
         f"mode: {mode}",
         f"learning_mode: {learning_mode}",
         f"allow_degraded_transcript_only: {str(allow_degraded).lower()}",
-        "Set implementation_required=true only when transcript+metadata confirm software/coding content.",
-        "If learning_mode is concept_plus_implementation, include runnable code in implementation/ and explain how to run it.",
+        "Always set implementation_required=false in manifest.json.",
         "Transcript path: youtube-transcript-api is source of truth. yt-dlp is metadata-only.",
-        "Video analysis path: for concept_plus_implementation runs only, use ZAI Vision video analysis when available.",
-        "Skip optional video/vision analysis for concept_only runs. Continue with transcript-only mode when visual processing is unavailable.",
+        "Video analysis path: for code-oriented runs (mode=explainer_plus_code) only, use ZAI Vision video analysis when available.",
+        "Skip optional video/vision analysis for non-code runs (mode=explainer_only). Continue with transcript-only mode when visual processing is unavailable.",
     ]
     return {
         "kind": "agent",
@@ -5911,7 +5913,8 @@ class HooksService:
                 "Invalid examples: /opt/universal_agent/UA_ARTIFACTS_DIR/... and UA_ARTIFACTS_DIR/...",
                 f"Durable writes must use this root: {artifacts_root}/youtube-tutorial-creation/...",
                 "Create required baseline artifacts first (manifest.json, README.md, CONCEPT.md).",
-                "Only create runnable implementation artifacts when transcript+metadata confirm software/coding content.",
+                "Never create runnable implementation artifacts: no implementation/ folder, no repo scaffold - the Tutorial tier is teaching-doc only.",
+                "Runnable demos are built post-gate in /opt/ua_demos by the separate tutorial_build Task Hub lane.",
                 "If transcript/video extraction fails, keep those files and set manifest status to degraded_transcript_only or failed.",
                 "CRITICAL FORMATTING INSTRUCTION: Format README.md and CONCEPT.md beautifully for the UI.",
                 "Use well-structured markdown (clear headings, bullet lists, bold emphasis), provide generous breathing room/spacing between paragraphs, and prioritize a visually calm, premium typography structure that is easy on the eyes to read.",

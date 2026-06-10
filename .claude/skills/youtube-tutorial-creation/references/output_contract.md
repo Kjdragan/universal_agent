@@ -11,7 +11,10 @@ Write durable outputs under:
 1. `manifest.json`
 2. `README.md`
 3. `CONCEPT.md`
-4. `IMPLEMENTATION.md`
+
+## Recommended Files
+
+1. `IMPLEMENTATION.md` (procedural usage runbook — never a code project)
 
 ## Optional Files
 
@@ -20,7 +23,6 @@ Write durable outputs under:
 3. `youtube_ingest.json`
 4. `visuals/zai_video_analysis.md`
 5. `research/*`
-6. `implementation/` (directory, only when `implementation_required=true`)
 
 ## Status Values
 
@@ -32,10 +34,9 @@ Set `manifest.json.status` to one of:
 
 ## Mode Values
 
-Set `manifest.json.learning_mode` to one of:
+Set `manifest.json.learning_mode` to:
 
-1. `concept_only`
-2. `concept_plus_implementation`
+1. `concept_only` (always — the legacy concept-plus-implementation value is retired; runnable demos are built post-gate in `/opt/ua_demos` by the `tutorial_build` Task Hub lane)
 
 ## Path Rules (Mandatory)
 
@@ -51,7 +52,8 @@ Set `manifest.json.learning_mode` to one of:
 {
   "skill": "youtube-tutorial-creation",
   "status": "full",
-  "learning_mode": "concept_plus_implementation",
+  "learning_mode": "concept_only",
+  "implementation_required": false,
   "video_url": "https://www.youtube.com/watch?v=<id>",
   "video_id": "<id>",
   "source": "manual|composio|direct",

@@ -1113,8 +1113,8 @@ export default function DashboardTutorialsPage() {
                           }`}
                         title={
                           hasCreateRepoScript
-                            ? "Create the implementation repo on the VPS using implementation/create_new_repo.sh"
-                            : "Create repo action (run may need bootstrap script regeneration first)"
+                            ? "Optional export: copy this run's implementation/ into a standalone repo on the VPS (runnable demos live in /opt/ua_demos)"
+                            : "Optional export to a standalone repo (run may need bootstrap script regeneration first)"
                         }
                       >
                         {bootstrappingRunPath === runPath
@@ -1123,7 +1123,7 @@ export default function DashboardTutorialsPage() {
                             ? (latestBootstrapStatus === "running"
                               ? (latestBootstrapTarget === "local" ? "Creating (Local Worker)..." : "Creating on VPS...")
                               : (latestBootstrapTarget === "local" ? "Queued (Waiting on Worker)" : "Creating on VPS..."))
-                            : "Create Repo"}
+                            : "Export to Repo"}
                       </button>
                     )}
                     <button

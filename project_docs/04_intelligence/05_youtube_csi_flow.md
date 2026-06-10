@@ -15,7 +15,8 @@ code_paths:
   - src/universal_agent/youtube_mode_utils.py
   - src/universal_agent/proactive_signals.py
   - src/universal_agent/services/scratch_publish.py
-last_verified: 2026-06-04
+  - src/universal_agent/services/proactive_tutorial_builds.py
+last_verified: 2026-06-10
 ---
 
 # YouTube CSI Flow
@@ -97,6 +98,7 @@ flowchart TD
     mapr --> art[write Digest.md artifact]
     art --> rank[_rank_digest_decisions + demo-worthiness gate]
     rank --> disp[POST tutorial candidates to /api/v1/hooks/youtube/manual]
+    rank --> demoq[_queue_demo_builds: tutorial_build rows via shared daily ceiling]
     art --> pocket[_save_repopulate_pocket]
     art --> csi[_emit_csi_digest -> .csi_digests.db]
     art --> email[AgentMail send digest]
@@ -231,6 +233,18 @@ Top-`UA_YOUTUBE_DIGEST_AUTO_TUTORIAL_TOP_N` (default 4) survivors are POSTed via
 (`UA_YOUTUBE_DIGEST_TUTORIAL_HOOK_URL` / `UA_GATEWAY_URL`, default
 `http://127.0.0.1:8002`) with a `UA_HOOKS_TOKEN` bearer, `mode=explainer_plus_code`.
 `--no-auto-tutorial-dispatch` sets top-n to 0.
+
+**P3 (2026-06-10):** the dispatched hook run is **teaching-doc only** — the
+`youtube-tutorial-creation` skill writes `CONCEPT.md`/`README.md`/`manifest.json`
+(plus an optional procedural `IMPLEMENTATION.md`) with `implementation_required=false`,
+and never a runnable `implementation/` folder. The SAME gate-passing rows
+(`dispatch_eligible=True`, independent of top-n) are ALSO queued as `tutorial_build`
+Task Hub rows through the shared daily ceiling
+(`youtube_daily_digest.py::_queue_demo_builds` →
+`proactive_tutorial_builds.py::queue_tutorial_builds_with_ceiling`), deduped by
+`video_id` against the broad CSI lane (`tutorial-build:<sha256(video_id)>` task ids);
+the runnable Demo is built post-gate in `/opt/ua_demos` by Cody. The dashboard
+"Create Repo" button is demoted to an optional "Export to Repo" for legacy runs.
 
 ### A.8 State, delivery-gated persistence, and playlist recreate
 

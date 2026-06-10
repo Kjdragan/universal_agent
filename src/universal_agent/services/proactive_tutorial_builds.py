@@ -150,6 +150,90 @@ def queue_tutorial_build_task(
     return {"task": task, "artifact": artifact}
 
 
+def remaining_daily_build_budget(conn: sqlite3.Connection) -> tuple[int, int, int]:
+    """Return ``(remaining, ceiling, today_count)`` for the demo-build daily ceiling.
+
+    Single home for the boundary math P2a introduced: ceiling from
+    ``UA_DEMO_BUILD_DAILY_CEILING`` (default 10), ``today_count`` over
+    America/Chicago local-midnight (``_count_today_tutorial_builds``).
+    """
+    ceiling = _daily_build_ceiling()
+    today_count = _count_today_tutorial_builds(conn)
+    return max(0, ceiling - today_count), ceiling, today_count
+
+
+def queue_tutorial_builds_with_ceiling(
+    conn: sqlite3.Connection,
+    candidates: list[dict[str, Any]],
+    *,
+    source: str,
+) -> dict[str, Any]:
+    """Queue pre-ranked tutorial-build candidates through the shared daily ceiling.
+
+    The ONE boundary-math implementation used by BOTH demo-lane sources (P3):
+    the broad CSI RSS sweep (``sync_build_oriented_csi_videos``,
+    ``source="csi_auto_route"``) and the curated Daily Digest
+    (``youtube_daily_digest._queue_demo_builds``, ``source="youtube_daily_digest"``).
+
+    ``candidates`` must be ranked best-first; each dict carries the
+    ``queue_tutorial_build_task`` kwargs: ``video_id``, ``video_title``,
+    ``video_url``, ``channel_name``, ``extraction_plan``, ``priority``.
+
+    Behavior (identical to the inlined P2a loop this replaces):
+      - the top ``remaining = max(0, ceiling - today_count)`` queue dispatchable
+        (``agent_ready=True``); the rest queue pending-approval for the P2b button;
+      - no-churn invariant: an already-dispatchable row is never demoted
+        (``_existing_build_is_dispatchable``);
+      - cross-source dedupe is structural — ``queue_tutorial_build_task`` derives
+        ``task_id = tutorial-build:sha256(video_id)[:16]``, so the same video
+        from both sources upserts ONE Task Hub row;
+      - honors the ``UA_PROACTIVE_TUTORIAL_AUTO_ROUTE`` kill switch (queues
+        nothing, returns ``disabled=True``).
+
+    Returns ``{auto_queued, pending_approval, ceiling, today_count}``.
+    """
+    if _auto_route_disabled():
+        return {
+            "auto_queued": 0,
+            "pending_approval": 0,
+            "ceiling": _daily_build_ceiling(),
+            "today_count": 0,
+            "disabled": True,
+        }
+    remaining, ceiling, today_count = remaining_daily_build_budget(conn)
+    auto_queued = 0
+    pending_approval = 0
+    for idx, candidate in enumerate(candidates):
+        video_id = str(candidate.get("video_id") or "").strip()
+        dispatchable = idx < remaining
+        # Idempotency / no-churn: never demote a video that is already
+        # dispatchable (agent_ready=True) back to pending on a later
+        # over-ceiling run. Only ever raise (pending->dispatchable).
+        if not dispatchable and _existing_build_is_dispatchable(conn, video_id):
+            dispatchable = True
+        queue_tutorial_build_task(
+            conn,
+            video_id=video_id,
+            video_title=str(candidate.get("video_title") or ""),
+            video_url=str(candidate.get("video_url") or ""),
+            channel_name=str(candidate.get("channel_name") or ""),
+            source=source,
+            extraction_plan=candidate.get("extraction_plan") if isinstance(candidate.get("extraction_plan"), dict) else {},
+            priority=int(candidate.get("priority") or 3),
+            agent_ready=dispatchable,
+        )
+        if dispatchable:
+            auto_queued += 1
+        else:
+            pending_approval += 1
+    return {
+        "auto_queued": auto_queued,
+        "pending_approval": pending_approval,
+        "ceiling": ceiling,
+        "today_count": today_count,
+    }
+
+
 def sync_build_oriented_csi_videos(
     conn: sqlite3.Connection,
     *,
@@ -229,43 +313,31 @@ def sync_build_oriented_csi_videos(
     # ── Rank: transcript-ok first, then newest upload (no numeric score exists) ──
     candidates.sort(key=lambda c: (c["transcript_ok"], c["occurred_at"]), reverse=True)
 
-    # ── Compute the day's remaining auto-dispatch budget ONCE up front ──
-    ceiling = _daily_build_ceiling()
-    today_count = _count_today_tutorial_builds(conn)
-    remaining = max(0, ceiling - today_count)
-
-    auto_queued = 0
-    pending_approval = 0
-    for idx, candidate in enumerate(candidates):
-        dispatchable = idx < remaining
-        # Idempotency / no-churn: never demote a video that is already
-        # dispatchable (agent_ready=True) back to pending on a later over-ceiling
-        # run. Only ever raise (pending->dispatchable), never lower.
-        if not dispatchable and _existing_build_is_dispatchable(conn, candidate["video_id"]):
-            dispatchable = True
-        queue_tutorial_build_task(
-            conn,
-            video_id=candidate["video_id"],
-            video_title=candidate["title"],
-            video_url=candidate["url"],
-            channel_name=candidate["channel"],
-            source="csi_auto_route",
-            extraction_plan=candidate["extraction_plan"],
-            priority=3 if candidate["transcript_ok"] else 2,
-            agent_ready=dispatchable,
-        )
-        if dispatchable:
-            auto_queued += 1
-        else:
-            pending_approval += 1
+    # ── Queue through the SHARED daily-ceiling boundary (P3: one ladder for
+    # both sources — boundary math lives in queue_tutorial_builds_with_ceiling) ──
+    outcome = queue_tutorial_builds_with_ceiling(
+        conn,
+        [
+            {
+                "video_id": c["video_id"],
+                "video_title": c["title"],
+                "video_url": c["url"],
+                "channel_name": c["channel"],
+                "extraction_plan": c["extraction_plan"],
+                "priority": 3 if c["transcript_ok"] else 2,
+            }
+            for c in candidates
+        ],
+        source="csi_auto_route",
+    )
 
     return {
         "seen": len(rows),
-        "queued": auto_queued + pending_approval,
-        "auto_queued": auto_queued,
-        "pending_approval": pending_approval,
-        "ceiling": ceiling,
-        "today_count": today_count,
+        "queued": outcome["auto_queued"] + outcome["pending_approval"],
+        "auto_queued": outcome["auto_queued"],
+        "pending_approval": outcome["pending_approval"],
+        "ceiling": outcome["ceiling"],
+        "today_count": outcome["today_count"],
     }
 
 
