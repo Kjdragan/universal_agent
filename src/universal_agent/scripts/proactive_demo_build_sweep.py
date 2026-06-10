@@ -95,6 +95,21 @@ def main() -> int:
         report_path = _write_sync_report(payload)
         payload["report_path"] = str(report_path)
         report_path.write_text(json.dumps(payload, indent=2, ensure_ascii=True), encoding="utf-8")
+        # Surface the daily-ceiling split so the timer log shows how many builds
+        # auto-dispatched vs. were held pending operator approval today.
+        counts = payload["counts"] or {}
+        print(
+            "demo-build sweep: seen={seen} queued={queued} "
+            "auto_queued={auto_queued} pending_approval={pending_approval} "
+            "(ceiling={ceiling}, today_count={today_count})".format(
+                seen=counts.get("seen", 0),
+                queued=counts.get("queued", 0),
+                auto_queued=counts.get("auto_queued", 0),
+                pending_approval=counts.get("pending_approval", 0),
+                ceiling=counts.get("ceiling", 0),
+                today_count=counts.get("today_count", 0),
+            )
+        )
         print(json.dumps(payload, indent=2, ensure_ascii=True))
         return 0
     except Exception as exc:
