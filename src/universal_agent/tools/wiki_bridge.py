@@ -11,6 +11,7 @@ from universal_agent.wiki.core import (
     lint_vault,
     query_vault,
     sync_internal_memory_vault,
+    wiki_ingest_external_source,
 )
 
 
@@ -104,6 +105,46 @@ async def wiki_lint_wrapper(args: dict[str, Any]) -> dict[str, Any]:
         result = lint_vault(
             vault_kind=str(args.get("vault_kind") or "external"),
             vault_slug=str(args.get("vault_slug") or "default"),
+            root_override=str(args.get("root_override") or "").strip() or None,
+        )
+    except Exception as exc:
+        return _err(str(exc))
+    return _ok(result)
+
+
+@tool(
+    name="wiki_ingest_external_source",
+    description=(
+        "Ingest an external source document (e.g. a downloaded NotebookLM report) into an "
+        "`external` wiki vault, enriching it with LLM-extracted entities, concepts, and a "
+        "summary and writing it under sources/. This is 'step 6' of the Create-Wiki flow — "
+        "the verb that persists the NLM report into the knowledge vault. Pass the report body "
+        "as `source_content` and a human title as `source_title`."
+    ),
+    input_schema={
+        "vault_slug": str,
+        "source_title": str,
+        "source_content": str,
+        "source_id": str,
+        "root_override": str,
+    },
+)
+async def wiki_ingest_external_source_wrapper(args: dict[str, Any]) -> dict[str, Any]:
+    vault_slug = str(args.get("vault_slug") or "").strip()
+    source_title = str(args.get("source_title") or "").strip()
+    source_content = str(args.get("source_content") or "")
+    if not vault_slug:
+        return _err("vault_slug is required")
+    if not source_title:
+        return _err("source_title is required")
+    if not source_content.strip():
+        return _err("source_content is required")
+    try:
+        result = wiki_ingest_external_source(
+            vault_slug=vault_slug,
+            source_title=source_title,
+            source_content=source_content,
+            source_id=str(args.get("source_id") or "").strip() or None,
             root_override=str(args.get("root_override") or "").strip() or None,
         )
     except Exception as exc:
