@@ -13,8 +13,9 @@ via ``metadata.notify_on_artifact == true``, this module:
      (regardless of dormancy — operator chose this trade-off explicitly).
   5. Records the delivery via ``proactive_artifacts.record_email_delivery``
      and seeds reminder state in ``metadata_json.reminder`` so the
-     ``cron_artifact_reminders`` sweep can fire the same-day nudge / Day-3
-     / Day-7 follow-ups.
+     ``cron_artifact_reminders`` sweep can fire the same-day nudge and
+     Day-3 follow-ups (Day-3 is the final reminder; the Day-7 step was
+     removed — see the ``cron_artifact_reminders`` module docstring).
 
 All operations are best-effort. A failure anywhere in this module must
 never propagate back into ``cron_service.py`` and disrupt the cron's
@@ -744,9 +745,8 @@ def _seed_reminder_state(finished_at_epoch: float) -> dict[str, Any]:
     Cadence (driven by ``cron_artifact_reminders.py`` sweep):
       - T+0:    initial email (this module sends it; sets count=1)
       - T+4h:   same-day nudge (count→2)
-      - T+72h:  Day-3 reminder (count→3)
-      - T+168h: Day-7 reminder (count→4)
-      - Then:   stop
+      - T+72h:  Day-3 reminder (count→3, final)
+      - Then:   stop (capped at 3 emails; the Day-7 step was removed)
     """
     now = time.time()
     return {
