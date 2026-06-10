@@ -835,6 +835,25 @@
       "scope": "Canonical doc for ZAI inference governance: the ZAIRateLimiter concurrency/backoff/FUP control, the zai_observability httpx events hook, the zai_inference_health watchdog, and the half-adoption reality (most opus callers bypass the limiter)."
     },
     {
+      "id": "plat-doc-triage-automation",
+      "tier": 2,
+      "category": "06_platform",
+      "filename": "06_platform/11_autonomous_doc_triage_options_adr.md",
+      "title": "ADR: Autonomous doc-drift issue triage & fix — three delivery options",
+      "code_paths": [
+        "scripts/doc_accuracy_sweep.py",
+        "scripts/doc_audit.py",
+        ".github/workflows/doc-nightly.yml",
+        ".github/workflows/doc-audit.yml",
+        ".github/workflows/pr-auto-merge.yml",
+        "src/universal_agent/services/cody_mode.py",
+        "src/universal_agent/vp/clients/claude_cli_client.py",
+        "src/universal_agent/backlog_triage.py"
+      ],
+      "legacy_refs": [],
+      "scope": "Options for an autonomous Opus agent that triages/fixes the nightly doc-drift issues: (a) desktop interactive prototype [chosen first], (b) always-on VPS API-key agent, (c) ZAI-detect + API-key-fix hybrid; shared triage state machine + mechanical docs-only safety rails."
+    },
+    {
       "id": "tools-mcp",
       "tier": 1,
       "category": "07_tools",

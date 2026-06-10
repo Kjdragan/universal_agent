@@ -58,7 +58,7 @@ _CSI, intel lanes, research, wiki, memory, proactive pipeline, mission control, 
 - **[URL Judging & Research Grounding](04_intelligence/02_url_judging_and_research_grounding.md)** — Three-pass URL enrichment (pre-filter→LLM judge (resolve_opus)→fetch), trust_source bypass, research_grounding allowlist (separate path). _(verified 2026-06-08)_
 - **[Intel Lanes Configuration](04_intelligence/03_intel_lanes_config.md)** — Lane config schema, cron schedule (3x daily 08/16/22 CT), research_allowlist semantics. _(verified 2026-05-29)_
 - **[ClaudeDevs X Intelligence](04_intelligence/04_claudedevs_x_intel.md)** — @ClaudeDevs polling lane, packet outputs, vault-as-canonical-product. _(verified 2026-06-08)_
-- **[YouTube CSI Flow](04_intelligence/05_youtube_csi_flow.md)** — YouTube feeds topology, dual-pipeline (UA-native playlist watcher vs CSI RSS feed — separate DBs), residential proxy ingestion. _(verified 2026-06-04)_
+- **[YouTube CSI Flow](04_intelligence/05_youtube_csi_flow.md)** — YouTube feeds topology, dual-pipeline (UA-native playlist watcher vs CSI RSS feed — separate DBs), residential proxy ingestion. _(verified 2026-06-10)_
 - **[Demo Triage](04_intelligence/06_demo_triage.md)** — Demo candidate store, ranking, triage policy. _(verified 2026-06-02)_
 - **[LLM Wiki System](04_intelligence/07_llm_wiki.md)** — Vault management, internal sync/projection, query, LLM extraction, kb registry. _(verified 2026-06-03)_
 - **[Memory System](04_intelligence/08_memory_system.md)** — Tiered memory, memory store/index, vector backends (Chroma/Lance), orchestrator, feature flags. _(verified 2026-06-03)_
@@ -94,6 +94,7 @@ _Secrets/Infisical, runtime bootstrap, identity/auth, deployment/CI, environment
 - **["ADR: Scheduling Substrate Redesign (deploy-resilient timers + read-only Mission Control)"](06_platform/08_scheduling_substrate_adr.md)** — Deploy-resilient scheduling substrate — two-axis substrate policy + per-job target table (31 crons), Mission Control sweeper extraction to its own service, deterministic proactive-health systemd timer + delivery contract, consolidations (reports/AM-products/mailer/DB), deploy-window-aware bounded backfill. _(verified 2026-06-08)_
 - **["Agent Runbook: Reaching the Production VPS (read live state without fighting SSH)"](06_platform/09_agent_vps_access_runbook.md)** — Agent runbook for reaching the prod VPS read-only over the tailnet gateway API (no SSH) _(verified 2026-06-09)_
 - **["ZAI Rate Limiter & Inference Governance"](06_platform/10_zai_rate_limiter.md)** — Canonical doc for ZAI inference governance: the ZAIRateLimiter concurrency/backoff/FUP control, the zai_observability httpx events hook, the zai_inference_health watchdog, and the half-adoption reality (most opus callers bypass the limiter). _(verified 2026-06-10)_
+- **["ADR: Autonomous doc-drift issue triage & fix — three delivery options"](06_platform/11_autonomous_doc_triage_options_adr.md)** — Options for an autonomous Opus agent that triages/fixes the nightly doc-drift issues: (a) _(verified 2026-06-10)_
 
 ## 07_tools
 
@@ -116,4 +117,4 @@ _Operating playbook, verification rules, dormancy, VPS recovery, incident patter
 
 ---
 
-_58/58 canonical docs present. Legacy point-in-time reports are archived (search-excluded) — see `00_DOCUMENTATION_REFACTOR_PLAN.md` §5._
+_59/59 canonical docs present. Legacy point-in-time reports are archived (search-excluded) — see `00_DOCUMENTATION_REFACTOR_PLAN.md` §5._
