@@ -442,17 +442,33 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
     # operator wants the SDK in-process path, they should pass
     # ``cody_mode="zai"`` (which conveys the intent properly); explicit
     # ``execution_mode`` only overrides in non-anthropic mode.
+    # P6 — /goal works on the ZAI endpoint (verified live 2026-06-10), so
+    # goal-eligibility, not cody_mode, decides CLI execution. The /goal
+    # harness only exists in the spawned `claude` CLI (subprocess
+    # isolation stays right for loops), so a goal-eligible mission MUST
+    # run execution_mode="cli" even when cody_mode="zai". Uses the SAME
+    # predicate the worker-side attestation guard uses
+    # (services/self_briefing.is_goal_eligible_mission) so dispatch-time
+    # routing can never disagree with worker-side enforcement.
+    from universal_agent.services.self_briefing import is_goal_eligible_mission
+    goal_eligible_dispatch = is_goal_eligible_mission({
+        "vp_id": vp_id,
+        "source_kind": str((linked_task or {}).get("source_kind") or ""),
+        "mission_type": mission_type,
+        "payload_json": {"metadata": mission_metadata},
+    })
+
     explicit_exec_mode = str(args.get("execution_mode") or "").strip().lower()
-    if resolved_cody_mode == "anthropic":
+    if resolved_cody_mode == "anthropic" or goal_eligible_dispatch:
         resolved_execution_mode = "cli"
         if explicit_exec_mode and explicit_exec_mode != "cli":
             import logging as _logging
             _logging.getLogger(__name__).warning(
                 "vp_dispatch_mission: ignoring explicit execution_mode=%r because "
-                "cody_mode='anthropic' requires execution_mode='cli' (Anthropic "
-                "endpoint + workspace OAuth). To use the SDK in-process path, set "
-                "cody_mode='zai' instead.",
+                "%s requires execution_mode='cli'.",
                 explicit_exec_mode,
+                "cody_mode='anthropic'" if resolved_cody_mode == "anthropic"
+                else "/goal-eligible mission (goal loop runs in the CLI subprocess)",
             )
     elif explicit_exec_mode:
         resolved_execution_mode = explicit_exec_mode

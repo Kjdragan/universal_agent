@@ -104,6 +104,20 @@ authenticated live probe that returns 200. If you cannot confirm the current
 id, PAUSE for operator input rather than guess. A demo that ships a
 deprecated/invalid model id (e.g. a 404 on generate) is a FAILED demo even if
 every other line is correct.
+
+Runnable + manifest requirements (binding):
+- The demo MUST be runnable end-to-end from the workspace with a
+  uv-managed environment (`pyproject.toml` + `uv sync`, or a committed
+  `uv.lock`); the exact run command (e.g. `uv run python main.py`) MUST
+  appear in a "Run" section of README.md.
+- Author `manifest.json` at the workspace root, schema-compatible with
+  services/cody_implementation.py::DemoManifest (keys: demo_id, feature,
+  endpoint_required, endpoint_hit, model_used, acceptance_passed,
+  iteration, started_at, finished_at, notes). Record endpoint_hit
+  truthfully (zai vs anthropic_native).
+- Author BRIEF.md + ACCEPTANCE.md from this card via the
+  self-brief-and-attest skill's "tutorial_build card mode" before
+  building; the /goal loop runs against your own ACCEPTANCE criteria.
 """
 
 
@@ -166,6 +180,14 @@ def queue_tutorial_build_task(
         agent_ready=dispatchable,
         metadata={
             "source": source,
+            # P6: tutorial_build builds run the /goal loop. The per-task
+            # override path in services/self_briefing.is_goal_eligible_mission
+            # (payload metadata.use_goal_loop) is flag-independent, so the
+            # lane is goal-driven without flipping UA_VP_GOAL_ENABLED
+            # globally. Inherited onto the vp_missions row by
+            # tools/vp_orchestration._vp_dispatch_mission_impl's
+            # use_goal_loop inheritance block.
+            "use_goal_loop": True,
             "video_id": clean_video_id,
             "video_title": clean_title,
             "video_url": str(video_url or "").strip(),
@@ -614,6 +636,7 @@ def _build_task_description(
             "5. Use environment variables or mock modes for API keys.",
             "6. Run the implementation or the most relevant tests before declaring success.",
             "7. If GitHub is unavailable, preserve a complete local git repo artifact and report the fallback.",
+            "8. Author manifest.json + a README 'Run' section per the Demo build contract above — the parent worker mechanically checks both at finalize.",
             "",
             "Dispatcher note (Simone): when delegating this task to Cody via vp_dispatch_mission, include this description VERBATIM in the mission objective — the Demo build contract above is binding for the build.",
         ]
