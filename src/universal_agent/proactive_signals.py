@@ -528,7 +528,7 @@ def _youtube_diamond_cards(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "card_id": _card_id("youtube-video", item.get("event_id") or item.get("url") or title),
                 "source": "youtube",
                 "card_type": "diamond" if not has_transcript else "transcript_insight",
-                "title": f"YouTube candidate: {title[:190]}",
+                "title": title[:190],
                 "summary": str(summary).strip()[:1400],
                 "priority": 3 if has_transcript else 2,
                 "confidence_score": min(0.94, score),
