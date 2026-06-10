@@ -79,14 +79,22 @@ class TutorialBuildabilityResult(TypedDict):
 
 # ── LLM Client Helper ──────────────────────────────────────────────────────
 
-async def _get_anthropic_client() -> Any:
-    """Create an AsyncAnthropic client using the ZAI emulation layer."""
+async def _get_anthropic_client(
+    *, base_url: Optional[str] = None, api_key: Optional[str] = None
+) -> Any:
+    """Create an AsyncAnthropic client using the ZAI emulation layer.
+
+    ``base_url`` / ``api_key`` override the shared env defaults for a single
+    call — used by per-stage A/B knobs (e.g. routing the convergence cluster
+    judge to a different provider/model). When unset, the usual env chain
+    (the ZAI proxy) is used.
+    """
     try:
         from anthropic import AsyncAnthropic
     except ImportError as exc:
         raise ClassificationError("anthropic package not installed") from exc
 
-    api_key = (
+    api_key = api_key or (
         os.getenv("ANTHROPIC_API_KEY")
         or os.getenv("ANTHROPIC_AUTH_TOKEN")
         or os.getenv("ZAI_API_KEY")
@@ -95,7 +103,7 @@ async def _get_anthropic_client() -> Any:
         raise ClassificationError("No Anthropic API key available")
 
     client_kwargs: dict[str, Any] = {"api_key": api_key}
-    base_url = os.getenv("ANTHROPIC_BASE_URL")
+    base_url = base_url or os.getenv("ANTHROPIC_BASE_URL")
     if base_url:
         client_kwargs["base_url"] = base_url
 
@@ -124,6 +132,8 @@ async def _call_llm(
     user: str,
     model: Optional[str] = None,
     max_tokens: int = 1024,  # doubled from 512 per audit
+    base_url: Optional[str] = None,
+    api_key: Optional[str] = None,
 ) -> str:
     """Make an LLM call and return the raw text response.
 
@@ -135,7 +145,7 @@ async def _call_llm(
     ``asyncio.run()`` loop closed, spraying ~12 ``RuntimeError('Event loop is closed')``
     per run into the journal (non-fatal, but log noise + connection leak).
     """
-    client = await _get_anthropic_client()
+    client = await _get_anthropic_client(base_url=base_url, api_key=api_key)
     try:
         response = await client.messages.create(
             model=model or resolve_opus(),

@@ -48,7 +48,7 @@ class _FakeClient:
 def test_call_llm_closes_client_on_success(monkeypatch):
     fake = _FakeClient()
 
-    async def _fake_get():
+    async def _fake_get(**_kwargs):
         return fake
 
     monkeypatch.setattr(llm_classifier, "_get_anthropic_client", _fake_get)
@@ -60,13 +60,49 @@ def test_call_llm_closes_client_on_success(monkeypatch):
 def test_call_llm_closes_client_on_error(monkeypatch):
     fake = _FakeClient(raises=True)
 
-    async def _fake_get():
+    async def _fake_get(**_kwargs):
         return fake
 
     monkeypatch.setattr(llm_classifier, "_get_anthropic_client", _fake_get)
     with pytest.raises(RuntimeError, match="upstream 500"):
         asyncio.run(llm_classifier._call_llm(system="s", user="u", model="test-model"))
     assert fake.closed is True, "client must be closed even when the call raises"
+
+
+def test_call_llm_forwards_model_and_provider_overrides(monkeypatch):
+    """The per-stage A/B knob: model + base_url + api_key must reach the client."""
+    captured: dict = {}
+
+    class _CapMessages:
+        async def create(self, **kwargs):
+            captured["model"] = kwargs.get("model")
+            return _FakeResponse()
+
+    class _CapClient:
+        def __init__(self) -> None:
+            self.messages = _CapMessages()
+
+        async def close(self) -> None:
+            pass
+
+    async def _fake_get(**kwargs):
+        captured["base_url"] = kwargs.get("base_url")
+        captured["api_key"] = kwargs.get("api_key")
+        return _CapClient()
+
+    monkeypatch.setattr(llm_classifier, "_get_anthropic_client", _fake_get)
+    asyncio.run(
+        llm_classifier._call_llm(
+            system="s",
+            user="u",
+            model="claude-sonnet-4-6",
+            base_url="https://api.anthropic.com",
+            api_key="sk-test",
+        )
+    )
+    assert captured["model"] == "claude-sonnet-4-6"
+    assert captured["base_url"] == "https://api.anthropic.com"
+    assert captured["api_key"] == "sk-test"
 
 
 if __name__ == "__main__":

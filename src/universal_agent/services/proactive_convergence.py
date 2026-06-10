@@ -609,6 +609,30 @@ def _independent_channels(signatures: list[dict[str, Any]]) -> set[str]:
     return out
 
 
+def _cluster_judge_overrides() -> dict[str, str]:
+    """Optional per-stage model/provider override for the convergence cluster
+    judge — lets you A/B the default (opus-tier ``glm-5.1`` via the ZAI proxy)
+    against another model, e.g. Anthropic Sonnet, without touching any other
+    fan-out stage.
+
+    All three unset → ``{}`` → current behaviour (shared ZAI env, ``resolve_opus()``).
+    - ``UA_CONVERGENCE_JUDGE_MODEL``    — model id passed to the call.
+    - ``UA_CONVERGENCE_JUDGE_BASE_URL`` — provider base URL (set to Anthropic's
+      to route this one stage to real Claude instead of the ZAI proxy).
+    - ``UA_CONVERGENCE_JUDGE_API_KEY``  — key for that provider.
+    """
+    overrides: dict[str, str] = {}
+    for kwarg, env in (
+        ("model", "UA_CONVERGENCE_JUDGE_MODEL"),
+        ("base_url", "UA_CONVERGENCE_JUDGE_BASE_URL"),
+        ("api_key", "UA_CONVERGENCE_JUDGE_API_KEY"),
+    ):
+        val = (os.getenv(env) or "").strip()
+        if val:
+            overrides[kwarg] = val
+    return overrides
+
+
 async def _refine_cluster_with_llm(
     bucket: list[dict[str, Any]],
     *,
@@ -639,7 +663,12 @@ async def _refine_cluster_with_llm(
             _parse_json_response,
         )
 
-        raw = await _call_llm(system=_CLUSTER_REFINE_SYSTEM, user=user, max_tokens=1200)
+        raw = await _call_llm(
+            system=_CLUSTER_REFINE_SYSTEM,
+            user=user,
+            max_tokens=1200,
+            **_cluster_judge_overrides(),
+        )
         parsed = _parse_json_response(raw)
     except Exception as exc:  # noqa: BLE001
         logger.warning("convergence LLM refine failed (bucket size=%d): %s", len(bucket), exc)

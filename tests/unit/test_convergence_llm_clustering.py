@@ -127,3 +127,28 @@ def test_min_signal_strength_default_and_clamp(monkeypatch):
     assert pc._min_signal_strength() == 10  # clamped
     monkeypatch.setenv("UA_CONVERGENCE_MIN_STRENGTH", "garbage")
     assert pc._min_signal_strength() == 7  # fallback
+
+
+def test_cluster_judge_overrides_env(monkeypatch):
+    for var in (
+        "UA_CONVERGENCE_JUDGE_MODEL",
+        "UA_CONVERGENCE_JUDGE_BASE_URL",
+        "UA_CONVERGENCE_JUDGE_API_KEY",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    # All unset → empty → current behaviour (resolve_opus / shared ZAI env).
+    assert pc._cluster_judge_overrides() == {}
+
+    monkeypatch.setenv("UA_CONVERGENCE_JUDGE_MODEL", "claude-sonnet-4-6")
+    monkeypatch.setenv("UA_CONVERGENCE_JUDGE_BASE_URL", "https://api.anthropic.com")
+    monkeypatch.setenv("UA_CONVERGENCE_JUDGE_API_KEY", "sk-test")
+    assert pc._cluster_judge_overrides() == {
+        "model": "claude-sonnet-4-6",
+        "base_url": "https://api.anthropic.com",
+        "api_key": "sk-test",
+    }
+
+    # Partial override (model only) is allowed — provider stays on the default.
+    monkeypatch.delenv("UA_CONVERGENCE_JUDGE_BASE_URL", raising=False)
+    monkeypatch.delenv("UA_CONVERGENCE_JUDGE_API_KEY", raising=False)
+    assert pc._cluster_judge_overrides() == {"model": "claude-sonnet-4-6"}
