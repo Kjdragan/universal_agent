@@ -12,6 +12,7 @@ code_paths:
   - src/universal_agent/services/invariants/proactive_pipeline_invariants.py
   - src/universal_agent/services/hourly_intel_digest.py
   - src/universal_agent/scripts/hourly_intel_digest_cron.py
+  - src/universal_agent/scripts/proactive_signal_card_sync.py
   - src/universal_agent/services/recent_briefs_index.py
   - src/universal_agent/proactive_signals.py
 last_verified: 2026-06-10
@@ -267,16 +268,32 @@ so no card→brief feeder was added. To stop un-triaged cards piling up,
 (soft-deletes `pending` cards not refreshed within `UA_PROACTIVE_CARD_TTL_DAYS`,
 default 14; operator-triaged cards are never touched).
 
-**How `proactive_signal_cards` are generated — there is NO autonomous trigger.**
-`proactive_signals.py::sync_generated_cards` (which calls `generate_youtube_cards`
-+ `generate_discord_cards` + `expire_stale_pending_cards`) runs **only** when the
-proactive-signals dashboard is loaded with a sync request — its single caller is
-`gateway_server.py::dashboard_proactive_signals`, gated on `?sync` / `force_sync`
-and a cooldown (`UA_PROACTIVE_SIGNALS_SYNC_COOLDOWN_SECONDS`, default 300s). There
-is no cron and no heartbeat that generates cards. So if no one opens that
-dashboard, **no new cards appear even though the upstream CSI feedstock keeps
-flowing** — the cards are pull-on-open, the CSI `events` table is the continuous
-part. (This is the gap an autonomous "card-generation tick" would close.)
+**How `proactive_signal_cards` are generated — two triggers (autonomous tick + pull-on-open).**
+There are two callers that produce cards from the CSI/Discord feedstock, sharing
+one card-only core, `proactive_signals.py::generate_signal_cards` (YouTube diamond
+cards + Discord cards + the TTL sweep — pure SQLite, **no** LLM/convergence):
+
+1. **Autonomous tick (the primary path).** The systemd timer
+   `universal-agent-proactive-signal-card-sync.timer` fires
+   `proactive_signals.py::generate_signal_cards` **hourly** via
+   `scripts/proactive_signal_card_sync.py`, so the card list stays fresh without
+   anyone opening the dashboard. It runs 24/7 at the timer level but **gates to
+   the Houston active window in the script** (`dormancy_aware`;
+   `UA_PROACTIVE_CARD_SYNC_24_7=true` runs around the clock). Deliberately NOT the
+   full `sync_generated_cards` — the convergence/topic-signature and tutorial
+   syncs are LLM-bearing and have their own `csi-convergence-sync` timer, so the
+   tick would double-run them and burn quota.
+2. **Pull-on-open (the dashboard path).** `proactive_signals.py::sync_generated_cards`
+   (the superset: `generate_signal_cards` + the convergence/tutorial syncs) runs
+   when the proactive-signals dashboard is loaded with a sync request — its single
+   caller is `gateway_server.py::dashboard_proactive_signals`, gated on `?sync` /
+   `force_sync` and a cooldown (`UA_PROACTIVE_SIGNALS_SYNC_COOLDOWN_SECONDS`,
+   default 300s).
+
+Before the autonomous tick existed (added 2026-06), generation was pull-on-open
+only — so if no one opened the dashboard, no new cards appeared even though the
+CSI `events` table kept filling, and the 03:15 `nightly_wiki` consumer found
+nothing to build. The hourly tick closes that gap.
 
 **Card status lifecycle — nothing auto-rejects.** The complete writer set for
 `proactive_signal_cards.status` is documented in the `proactive_signals.py` module

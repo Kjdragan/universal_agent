@@ -11,6 +11,7 @@ from universal_agent.proactive_signals import (
     CARD_STATUS_PENDING,
     apply_card_action,
     expire_stale_pending_cards,
+    generate_signal_cards,
     generate_youtube_cards,
     list_cards,
     record_feedback,
@@ -230,3 +231,32 @@ def test_sync_generated_cards_creates_artifacts_signatures_and_tutorial_tasks(tm
     assert signature is not None
     assert tutorial_tasks >= 1
     assert any(item["source_kind"] == "proactive_signal" for item in artifacts)
+
+
+def test_generate_signal_cards_is_card_only_no_convergence(tmp_path):
+    """The autonomous tick's core: generates cards + runs the TTL sweep, but does
+    NOT run the LLM-bearing convergence/tutorial syncs (those have their own
+    timer). Proven by the returned counts having ONLY the card keys, and by no
+    topic signature being written even though the CSI feedstock has rows."""
+    csi_db = tmp_path / "csi.db"
+    _seed_csi_db(csi_db)
+    db = tmp_path / "activity.db"
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    task_hub.ensure_schema(conn)
+
+    counts = generate_signal_cards(conn, csi_db_path=csi_db)
+
+    # Card-only counts shape — no topic_signatures / convergence_events /
+    # tutorial_build_tasks keys (that would mean convergence ran).
+    assert set(counts) == {"youtube", "discord", "expired"}
+    assert counts["youtube"] >= 1
+    # No convergence side effects: no topic signature, no tutorial_build tasks.
+    assert get_topic_signature(conn, "video_one_1") is None
+    tutorial_tasks = conn.execute(
+        "SELECT COUNT(*) AS c FROM task_hub_items WHERE source_kind = 'tutorial_build'"
+    ).fetchone()["c"]
+    assert tutorial_tasks == 0
+    # Cards landed as pending.
+    pending = list_cards(conn, status=CARD_STATUS_PENDING, limit=100)
+    assert any(c["source"] == "youtube" for c in pending)
