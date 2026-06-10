@@ -1485,8 +1485,12 @@ async def extract_topic_signature_from_text(
             _call_llm,
             _parse_json_response,
         )
+        from universal_agent.utils.model_resolution import resolve_haiku
 
-        raw = await _call_llm(system=_SIGNATURE_SYSTEM, user=user, max_tokens=900)
+        # Short structured signature extraction — Haiku tier (glm-4.5-air) by
+        # default; override with UA_SIGNATURE_MODEL.
+        sig_model = (os.getenv("UA_SIGNATURE_MODEL") or "").strip() or resolve_haiku()
+        raw = await _call_llm(system=_SIGNATURE_SYSTEM, user=user, max_tokens=900, model=sig_model)
         parsed = _parse_json_response(raw)
     except Exception as exc:
         parsed = _fallback_signature(title=title, summary_text=summary_text, error=str(exc))

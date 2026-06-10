@@ -19,7 +19,7 @@ import logging
 import os
 from typing import Any, Optional, TypedDict
 
-from universal_agent.utils.model_resolution import resolve_opus
+from universal_agent.utils.model_resolution import resolve_haiku, resolve_opus
 
 logger = logging.getLogger(__name__)
 
@@ -732,6 +732,7 @@ async def classify_tutorial_buildability(
     title: str,
     channel_name: str = "",
     summary_text: str = "",
+    model: Optional[str] = None,
 ) -> "TutorialBuildabilityResult":
     """Ask the LLM whether a video is a code-buildable tutorial.
 
@@ -749,10 +750,13 @@ async def classify_tutorial_buildability(
             channel=channel_name or "(unknown)",
             summary=(summary_text or "").strip()[:4000] or "(empty)",
         )
+        # Binary buildable/not judgment — Haiku tier (glm-4.5-air) by default;
+        # override with UA_TUTORIAL_BUILDABILITY_MODEL.
         raw = await _call_llm(
             system=_TUTORIAL_BUILDABILITY_SYSTEM,
             user=user_msg,
             max_tokens=400,
+            model=model or (os.getenv("UA_TUTORIAL_BUILDABILITY_MODEL") or "").strip() or resolve_haiku(),
         )
         parsed = _parse_json_response(raw)
         buildable = bool(parsed.get("buildable", False))
