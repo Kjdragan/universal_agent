@@ -21,11 +21,11 @@ drift from disk. Editing rules live in [`CLAUDE.md`](CLAUDE.md) and are enforced
 _System-level design & cross-cutting models_
 
 - **[System Architecture Overview](01_architecture/01_system_overview.md)** — Top-level topology: principals (Simone/Cody/Atlas), gateway, what-talks-to-what, process model. _(verified 2026-06-02)_
-- **[Task Lifecycle End-to-End](01_architecture/02_task_lifecycle_end_to_end.md)** — Trace one unit of work ingress→queue→claim→execute→finalize→deliver across channels. _(verified 2026-05-30)_
+- **[Task Lifecycle End-to-End](01_architecture/02_task_lifecycle_end_to_end.md)** — Trace one unit of work ingress→queue→claim→execute→finalize→deliver across channels. _(verified 2026-06-10)_
 - **[Database Architecture](01_architecture/03_database_architecture.md)** — DB inventory, schema, segregation boundaries (activity_state.db is canonical Task Hub DB, NOT task_hub.db), pruning. _(verified 2026-06-05)_
 - **[Model Choice & Resolution](01_architecture/04_model_choice_and_resolution.md)** — resolve_opus/sonnet/haiku, ZAI proxy vs Anthropic-native routing, the three execution profiles, inference health governance. _(verified 2026-06-10)_
 - **[Hook System Architecture](01_architecture/05_hook_system.md)** — Hook lifecycle, permissions, subagent architecture as wired in code. _(verified 2026-06-03)_
-- **[Event Streaming & Tracing](01_architecture/06_event_streaming_and_tracing.md)** — AgentEvent emission, event stream protocol, transcript/trace building, Logfire links. _(verified 2026-05-29)_
+- **[Event Streaming & Tracing](01_architecture/06_event_streaming_and_tracing.md)** — AgentEvent emission, event stream protocol, transcript/trace building, Logfire links. _(verified 2026-06-10)_
 - **[Task Type & Mission System Registry](01_architecture/07_task_type_registry.md)** — Canonical catalog of every task type / mission system with lifecycle status (canonical/active_secondary/deprecated/removed) _(verified 2026-06-09)_
 
 ## 02_execution_core
@@ -34,7 +34,7 @@ _Gateway, sessions, execution engine, task hub, dispatch, durable, URW, workspac
 
 - **[Gateway, Sessions & Execution](02_execution_core/01_gateway_sessions_execution.md)** — Gateway protocol, InProcessGateway, ProcessTurnAdapter, session lifecycle/locking, WebSocket streaming, timeouts. _(verified 2026-05-31)_
 - **[Task Hub & Dispatch](02_execution_core/02_task_hub.md)** — Data model, dispatch queue build+ranking, atomic claiming, stale release, execution runs, action verbs, worker-exit classification, observability protocol. _(verified 2026-06-06)_
-- **[Durable Execution](02_execution_core/03_durable_execution.md)** — Durable state, tool-call ledger, worker pool, tool classification, checkpointing. _(verified 2026-05-31)_
+- **[Durable Execution](02_execution_core/03_durable_execution.md)** — Durable state, tool-call ledger, worker pool, tool classification, checkpointing. _(verified 2026-06-10)_
 - **[URW Orchestration](02_execution_core/04_urw_orchestration.md)** — Multi-phase task orchestration: decomposer, phase planner, evaluator, evaluation policy, state/artifacts. _(verified 2026-05-31)_
 - **[Workspaces & Artifacts](02_execution_core/05_workspaces_and_artifacts.md)** — Workspace resolution (4-tier fallback), artifacts dir resolution, run workspaces, guardrails, remote sync. _(verified 2026-06-03)_
 - **[SDK Lifecycle Hooks & Guardrails](02_execution_core/06_sdk_lifecycle_hooks_and_guardrails.md)** — PreToolUse/PostToolUse guardrail engine: tool gating (DISALLOWED_TOOLS), workspace write guard, heartbeat write allowlist, code-mutation actor resolution, subagent detection, TaskStop rejection, tool-call event emission. _(verified 2026-06-01)_
@@ -84,11 +84,11 @@ _Email/AgentMail, webhooks, telegram, discord ops, web-ui communication_
 
 _Secrets/Infisical, runtime bootstrap, identity/auth, deployment/CI, environments, networking_
 
-- **[Secrets & Infisical](06_platform/01_secrets_and_infisical.md)** — Infisical as SSOT, initialize_runtime_secrets, bootstrap-identity-key immutability (overwrite=True but identity preserved), env rendering, dev mirrors prod. _(verified 2026-05-29)_
+- **[Secrets & Infisical](06_platform/01_secrets_and_infisical.md)** — Infisical as SSOT, initialize_runtime_secrets, bootstrap-identity-key immutability (overwrite=True but identity preserved), env rendering, dev mirrors prod. _(verified 2026-06-10)_
 - **[Runtime Bootstrap & Profiles](06_platform/02_runtime_bootstrap_and_profiles.md)** — Runtime stage resolution {development,staging,local,production}, deployment profiles, factory role policy, machine identity. _(verified 2026-06-09)_
 - **[Identity & Auth](06_platform/03_identity_and_auth.md)** — Identity registry/resolver, email recipient resolution, ops auth (JWT + legacy token), dashboard auth (cookie+HMAC), three trust surfaces. _(verified 2026-06-09)_
 - **[Deployment & CI/CD](06_platform/04_deployment_and_cicd.md)** — Branch model (any→PR→main→deploy; develop retired; feature/latest2 retired), pr-validate gates, auto-merge allowlist + PAT, concurrency guard, healthcheck gates, paths-ignore, crashloop abort. _(verified 2026-06-04)_
-- **[Execution Environments](06_platform/05_environments.md)** — Three Claude execution profiles (interactive Max / autonomous ZAI / Cody Anthropic-default-since-2026-05-11), local dev (just dev), demo execution, model routing. _(verified 2026-05-29)_
+- **[Execution Environments](06_platform/05_environments.md)** — Three Claude execution profiles (interactive Max / autonomous ZAI / Cody Anthropic-default-since-2026-05-11), local dev (just dev), demo execution, model routing. _(verified 2026-06-10)_
 - **["Networking: Tailscale, Residential Proxy, SSHFS"](06_platform/06_networking_tailscale_proxy_sshfs.md)** — Tailscale (uaonvps MagicDNS vs srv1360701 raw hostname), residential proxy (DataImpulse default/Webshare failover, VPS-only), SSHFS cross-machine mount. _(verified 2026-06-03)_
 - **[Claude Max OAuth Credentials (CLAUDE_CODE_OAUTH_TOKEN)](06_platform/07_claude_max_oauth_credentials.md)** — CLAUDE_CODE_OAUTH_TOKEN in Infisical is the SSOT for Cody-on-Anthropic / demo builds; refresh runbook + gotchas. _(verified 2026-06-02)_
 - **["ADR: Scheduling Substrate Redesign (deploy-resilient timers + read-only Mission Control)"](06_platform/08_scheduling_substrate_adr.md)** — Deploy-resilient scheduling substrate — two-axis substrate policy + per-job target table (31 crons), Mission Control sweeper extraction to its own service, deterministic proactive-health systemd timer + delivery contract, consolidations (reports/AM-products/mailer/DB), deploy-window-aware bounded backfill. _(verified 2026-06-08)_
