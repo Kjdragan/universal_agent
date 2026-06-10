@@ -5,12 +5,13 @@ canonical: true
 subsystem: ops-verification
 code_paths:
   - .github/workflows/deploy.yml
+  - scripts/deploy/remote_deploy.sh
   - .github/workflows/pr-validate.yml
   - src/universal_agent/gateway_server.py
   - scripts/check_crashloop.sh
   - scripts/deploy_validate_runtime.sh
   - src/universal_agent/cron_service.py
-last_verified: 2026-05-29
+last_verified: 2026-06-10
 ---
 
 # Production Verification Rules
@@ -183,7 +184,7 @@ queued deploy runs to completion — last-write-wins on production. (The
 deploy-failure email body explicitly tells the operator that subsequent merges
 will wait behind a failed run.)
 
-**Deploy steps, in order (all over SSH to the VPS as the deploy user):**
+**Deploy steps, in order.** Since the Phase-1 decomposition (2026-05-30), `deploy.yml` fetches `scripts/deploy/remote_deploy.sh` via the GitHub API and pipes it over SSH — the numbered steps below live in **that script**, not inline in `deploy.yml`. All run on the VPS as the deploy user:
 
 1. Tailscale connect + SSH preflight (a non-interactive `echo SSH_OK` probe;
    detects the Tailscale interactive-check failure mode explicitly).
@@ -316,7 +317,10 @@ the lesson of PR #153, where the pipe-to-tail bug hid 12 pre-existing failures):
 6. **Hardcoded-date-literal guard** in `tests/` (`check_test_date_literals.py`) —
    prevents the class of failure where a hardcoded packet date ages past a
    rolling window and reds every open PR.
-7. **Unit tests** — `pytest tests/unit -x -q`. The full suite runs nightly.
+7. **ShellCheck `scripts/deploy/*.sh`** (`-S warning`) — lints the deploy script
+   that the Phase-1 decomposition extracted from `deploy.yml`, so the deploy
+   logic is linted rather than buried in YAML.
+8. **Unit tests** — `pytest tests/unit -x -q`. The full suite runs nightly.
 
 Note the diff scope everywhere is `origin/$BASE_REF...HEAD` with `fetch-depth:
 50` — large enough for any real PR diff, deliberately not `fetch-depth: 0`
