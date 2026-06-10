@@ -535,6 +535,42 @@
       "scope": "Living build/status plan: close the brief->digest email gap, digest dedup+template, feedback/index verify, gated legacy deletion."
     },
     {
+      "id": "intel-model-tiering",
+      "tier": 2,
+      "category": "04_intelligence",
+      "filename": "04_intelligence/14_model_tiering_by_process.md",
+      "title": "Intelligence Model Tiering by Process",
+      "code_paths": [
+        "src/universal_agent/utils/model_resolution.py",
+        "src/universal_agent/services/llm_classifier.py",
+        "src/universal_agent/services/csi_url_judge.py",
+        "src/universal_agent/services/csi_intelligence_pass.py",
+        "src/universal_agent/services/csi_demo_triage_ranker.py",
+        "src/universal_agent/services/proactive_convergence.py",
+        "src/universal_agent/proactive_signals.py",
+        "src/universal_agent/services/proactive_work_recap.py",
+        "src/universal_agent/backlog_triage.py",
+        "src/universal_agent/skill_gap_finder.py",
+        "src/universal_agent/services/health_evaluator.py",
+        "src/universal_agent/services/decomposition_agent.py",
+        "src/universal_agent/services/refinement_agent.py",
+        "src/universal_agent/services/session_dossier.py",
+        "src/universal_agent/services/claude_code_intel.py",
+        "src/universal_agent/wiki/llm.py",
+        "src/universal_agent/urw/evaluator.py",
+        "src/universal_agent/urw/decomposer.py",
+        "src/universal_agent/urw/phase_planner.py",
+        "src/universal_agent/services/mission_control_tier1.py",
+        "src/universal_agent/services/mission_control_event_titles.py",
+        "src/universal_agent/services/zai_observability.py",
+        "src/universal_agent/rate_limiter.py",
+        "src/universal_agent/services/invariants/zai_inference_health.py",
+        "src/universal_agent/gateway_server.py"
+      ],
+      "legacy_refs": [],
+      "scope": "Per-process registry of which GLM tier each inference call uses and why (air/turbo/flagship), the decision rubric, and the 2026-06-10 429-burst remediation."
+    },
+    {
       "id": "chan-email",
       "tier": 1,
       "category": "05_channels",
@@ -761,6 +797,22 @@
       ],
       "legacy_refs": [],
       "scope": "Agent runbook for reaching the prod VPS read-only over the tailnet gateway API (no SSH) + the SSH allow-rule caveat."
+    },
+    {
+      "id": "plat-zai-rate-limiter",
+      "tier": 2,
+      "category": "06_platform",
+      "filename": "06_platform/10_zai_rate_limiter.md",
+      "title": "ZAI Rate Limiter & Inference Governance",
+      "code_paths": [
+        "src/universal_agent/rate_limiter.py",
+        "src/universal_agent/services/zai_observability.py",
+        "src/universal_agent/services/invariants/zai_inference_health.py",
+        "src/universal_agent/utils/model_resolution.py",
+        "src/universal_agent/infisical_loader.py"
+      ],
+      "legacy_refs": [],
+      "scope": "Canonical doc for ZAI inference governance: the ZAIRateLimiter concurrency/backoff/FUP control, the zai_observability httpx events hook, the zai_inference_health watchdog, and the half-adoption reality (most opus callers bypass the limiter)."
     },
     {
       "id": "tools-mcp",
