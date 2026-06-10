@@ -142,7 +142,7 @@ change, so a tier can be tuned up or down per process if quality or cost dictate
 |---|---|---|---|---|---|
 | Agent routing | `llm_classifier.py::classify_agent_route` | Simone / CODIE / ATLAS | low (≤5 / sweep) | flagship | Wrong route mis-delegates a whole mission |
 | Email task-splitting | `llm_classifier.py::extract_disjointed_tasks` | split into N tasks, keep context | low (default-off) | flagship | Segmentation+context risk; air may over/under-split |
-| Convergence cluster-refine | `proactive_convergence.py::_refine_cluster_with_llm` | is this bucket a real convergence? | **high** (≤6 concurrent) | flagship | Precision gate; bad merges re-poison the stream |
+| Convergence cluster-refine | `proactive_convergence.py::_refine_cluster_with_llm` | is this bucket a real convergence? | **high** (≤2 concurrent) | flagship→**sonnet** (A/B 2026-06-10) | Precision gate; air/4.7 over-confirm — sonnet is the floor, matches opus |
 | Heartbeat health evaluator | `health_evaluator.py` | ignore / directive / escalate | low | flagship | Misroute drops a real human escalation |
 | Brainstorm refinement | `refinement_agent.py` | advance / question / hold + rewrite | low | flagship | Mixed judgment + rewrite, light synthesis |
 | URW completion judge | `urw/evaluator.py` (`LLMJudgeEvaluator`) | 0–1 rubric score, gates retries | low | flagship | Too-lenient/harsh score wrongly passes or burns retries |
@@ -240,12 +240,18 @@ Splits one email into multiple independent tasks while preserving each task's co
 Gated behind a default-off flag, so ~0 live volume. **Not air**: segmentation that
 must carry context is where a small model over/under-splits or drops detail.
 
-**Convergence cluster-refine** — `proactive_convergence.py::_refine_cluster_with_llm`.
+**Convergence cluster-refine** — `proactive_convergence.py::_refine_cluster_with_llm`
+(model knob: `proactive_convergence.py::_cluster_judge_overrides`).
 The precision layer: judges whether a coarse SQL bucket genuinely converges on one
-thesis across independent channels, dropping false buckets. High volume and **run up
-to 6-wide concurrently** (`UA_CONVERGENCE_LLM_CONCURRENCY`, default 6) — this fan-out
-is itself a burst contributor and is separately a candidate for throttling. **Not
-air**: over-eager merges re-poison the candidate stream; turbo is the precision floor.
+thesis across independent channels, dropping false buckets. As of 2026-06-10 it
+defaults to the **sonnet tier (`glm-5-turbo`)**, down from the former opus default
+(`glm-5.1`), and runs **2-wide** (`UA_CONVERGENCE_LLM_CONCURRENCY`, default lowered
+6 → 2) — both to stop this fan-out being the dominant ZAI Fair-Usage 429/1313 burst
+contributor. **A/B-confirmed** (`scripts/convergence_model_ab.py`, 30 live buckets,
+run twice): glm-5-turbo matches the opus default's precision (both 2/30) at ~35%
+lower latency, while `glm-4.5-air` (15/30) and `glm-4.7` (11/30) over-confirm
+broad-topic buckets and fail this precision gate. **Turbo is the precision floor; air
+is not viable here.**
 
 **Heartbeat health evaluator** — `health_evaluator.py`.
 Classifies morning-report items into ignore / directive / escalate against a

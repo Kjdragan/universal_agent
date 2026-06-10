@@ -294,11 +294,12 @@ def build_manual_youtube_action(
             if _manual_youtube_probably_code(title, channel_id, video_url)
             else "explainer_only"
         )
-    learning_mode = (
-        "concept_plus_implementation"
-        if mode == "explainer_plus_code"
-        else "concept_only"
-    )
+    # P3 (15_demo_tutorial_pipeline_adr.md): the Tutorial tier is TEACHING-DOC
+    # ONLY — learning_mode is pinned to concept_only for every run. The runnable
+    # Demo is built post-gate in /opt/ua_demos by the tutorial_build Task Hub
+    # lane, never by this skill run. ``mode`` still records whether the video is
+    # code-oriented (drives vision-analysis depth + study-material focus).
+    learning_mode = "concept_only"
     allow_degraded = _manual_youtube_bool(
         payload.get("allow_degraded_transcript_only"),
         default=True,
@@ -327,8 +328,10 @@ def build_manual_youtube_action(
         "Invalid paths: /opt/universal_agent/UA_ARTIFACTS_DIR/... and UA_ARTIFACTS_DIR/...",
         f"Use this absolute durable base path: {artifacts_root}/youtube-tutorial-creation/...",
         "Required baseline artifacts: README.md, CONCEPT.md, manifest.json.",
-        "If learning_mode is concept_plus_implementation, also create IMPLEMENTATION.md and implementation/ with runnable code.",
-        "If learning_mode is concept_only, keep implementation procedural (no repo bootstrap scripts).",
+        "Tutorial tier is TEACHING-DOC ONLY: produce study material on how to USE the feature/capability shown in the video.",
+        "Do NOT create an implementation/ folder, a runnable code project, or any repo scaffold.",
+        "Runnable demos are built post-gate in /opt/ua_demos by the separate tutorial_build Task Hub lane - never by this run.",
+        "IMPLEMENTATION.md, when useful, is a procedural usage runbook (commands, configuration, workflow) - not a code project.",
         "Create required artifacts first and keep them even if extraction fails.",
         "On extraction failure, set manifest status to degraded_transcript_only or failed (never leave empty run dirs).",
         f"video_url: {video_url}",
@@ -338,11 +341,10 @@ def build_manual_youtube_action(
         f"mode: {mode}",
         f"learning_mode: {learning_mode}",
         f"allow_degraded_transcript_only: {str(allow_degraded).lower()}",
-        "Set implementation_required=true only when transcript+metadata confirm software/coding content.",
-        "If learning_mode is concept_plus_implementation, include runnable code in implementation/ and explain how to run it.",
+        "Always set implementation_required=false in manifest.json.",
         "Transcript path: youtube-transcript-api is source of truth. yt-dlp is metadata-only.",
-        "Video analysis path: for concept_plus_implementation runs only, use ZAI Vision video analysis when available.",
-        "Skip optional video/vision analysis for concept_only runs. Continue with transcript-only mode when visual processing is unavailable.",
+        "Video analysis path: for code-oriented runs (mode=explainer_plus_code) only, use ZAI Vision video analysis when available.",
+        "Skip optional video/vision analysis for non-code runs (mode=explainer_only). Continue with transcript-only mode when visual processing is unavailable.",
     ]
     return {
         "kind": "agent",
@@ -352,6 +354,49 @@ def build_manual_youtube_action(
         "message": "\n".join(lines),
         "deliver": True,
     }
+
+
+def _stamp_tutorial_manifest_build_session(
+    artifact_validation: dict[str, Any],
+    *,
+    session_id: str,
+    run_id: Optional[str],
+    workspace_dir: str,
+) -> None:
+    """P5 (15_demo_tutorial_pipeline_adr.md "Cross-cutting requirement"):
+    stamp the building agent session onto the tutorial manifest so the
+    dashboard can deep-link the 3-panel session viewer.
+
+    Deterministic code stamping — runs AFTER the agent session finished and
+    `_validate_youtube_tutorial_artifacts` located the manifest, so the LLM
+    never has to copy ids and can never clobber them. Additive merge;
+    best-effort: never raises, never blocks the run.
+    """
+    try:
+        manifest_path = Path(str(artifact_validation.get("manifest_path") or ""))
+        if not manifest_path.is_file():
+            return
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        if not isinstance(payload, dict):
+            return
+        payload["build_session_id"] = str(session_id or "")
+        if run_id:
+            payload["build_run_id"] = str(run_id)
+        if workspace_dir:
+            payload["build_workspace_dir"] = str(workspace_dir)
+        manifest_path.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=True) + "\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        logger.warning(
+            "Failed stamping build session onto tutorial manifest session_id=%s",
+            session_id,
+            exc_info=True,
+        )
 
 
 class HooksService:
@@ -5066,6 +5111,12 @@ class HooksService:
                 )
                 artifact_validation = execution_summary.get("artifact_validation") or {}
                 if isinstance(artifact_validation, dict):
+                    _stamp_tutorial_manifest_build_session(
+                        artifact_validation,
+                        session_id=session_id,
+                        run_id=workflow_run_id,
+                        workspace_dir=str(session_workspace) if session_workspace is not None else workflow_workspace_dir,
+                    )
                     self._emit_youtube_tutorial_ready_notification(
                         session_id=session_id,
                         session_key=session_key,
@@ -5404,6 +5455,12 @@ class HooksService:
                     expected_video_id,
                 )
                 execution_summary["artifact_validation"] = recovered_artifact_validation
+                _stamp_tutorial_manifest_build_session(
+                    recovered_artifact_validation,
+                    session_id=session_id,
+                    run_id=workflow_run_id,
+                    workspace_dir=str(session_workspace) if session_workspace is not None else workflow_workspace_dir,
+                )
                 ingest_status = str(metadata.get("hook_youtube_ingest_status") or "").strip().lower()
                 self._emit_youtube_tutorial_ready_notification(
                     session_id=session_id,
@@ -5911,7 +5968,8 @@ class HooksService:
                 "Invalid examples: /opt/universal_agent/UA_ARTIFACTS_DIR/... and UA_ARTIFACTS_DIR/...",
                 f"Durable writes must use this root: {artifacts_root}/youtube-tutorial-creation/...",
                 "Create required baseline artifacts first (manifest.json, README.md, CONCEPT.md).",
-                "Only create runnable implementation artifacts when transcript+metadata confirm software/coding content.",
+                "Never create runnable implementation artifacts: no implementation/ folder, no repo scaffold - the Tutorial tier is teaching-doc only.",
+                "Runnable demos are built post-gate in /opt/ua_demos by the separate tutorial_build Task Hub lane.",
                 "If transcript/video extraction fails, keep those files and set manifest status to degraded_transcript_only or failed.",
                 "CRITICAL FORMATTING INSTRUCTION: Format README.md and CONCEPT.md beautifully for the UI.",
                 "Use well-structured markdown (clear headings, bullet lists, bold emphasis), provide generous breathing room/spacing between paragraphs, and prioritize a visually calm, premium typography structure that is easy on the eyes to read.",

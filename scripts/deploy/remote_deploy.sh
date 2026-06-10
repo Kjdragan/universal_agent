@@ -292,6 +292,14 @@ sudo bash "$PROD_DIR/scripts/install_vps_phase_a_batch3_timers.sh" \
 echo "--> Installing S5 Phase A batch-A4 secret-bearing timers (youtube digest/poller/watchdog, nightly-wiki, morning+evening briefing, csi-demo-triage-rank off the gateway loop)..."
 sudo bash "$PROD_DIR/scripts/install_vps_phase_a_batch4_timers.sh" \
   || echo "WARN: install_vps_phase_a_batch4_timers.sh failed (non-fatal)"
+# Proactive demo-build lane: 3x/day deploy-independent timer (decoupled from the
+# dashboard's event-triggered proactive-signal sync). NEW producer-invoker, not a
+# migration — no in-process twin and no double-fire gate. The
+# tutorial-build:<sha256> dedup makes the timer + dashboard-event runs idempotent.
+# Non-fatal.
+echo "--> Installing proactive demo-build lane sweep timer (3x/day)..."
+sudo bash "$PROD_DIR/scripts/install_proactive_demo_build_sweep_timer.sh" \
+  || echo "WARN: install_proactive_demo_build_sweep_timer.sh failed (non-fatal)"
 # Desktop->VPS migrated cron timers (backlog-triage + skill-gap-finder). These
 # previously ran ONLY as `systemctl --user` timers on the desktop, violating the
 # desktop=dev / VPS=runtime contract; now canonical VPS units. No in-process
@@ -299,6 +307,15 @@ sudo bash "$PROD_DIR/scripts/install_vps_phase_a_batch4_timers.sh" \
 echo "--> Installing desktop->VPS migrated timers (backlog-triage, skill-gap-finder)..."
 sudo bash "$PROD_DIR/scripts/install_vps_migrated_desktop_timers.sh" \
   || echo "WARN: install_vps_migrated_desktop_timers.sh failed (non-fatal)"
+# Autonomous proactive-signal-card generation tick. NEW systemd-native job (no
+# in-process gateway twin, so no double-fire gate). Hourly at :25, 24/7 at the
+# timer level with the script self-gating to the Houston active window
+# (UA_PROACTIVE_CARD_SYNC_24_7 opts into 24/7). Pure SQLite — generates
+# proactive_signal_cards from the CSI feedstock so the card list stays fresh
+# without anyone opening the dashboard. Non-fatal.
+echo "--> Installing proactive-signal-card-sync timer (autonomous hourly card generation)..."
+sudo bash "$PROD_DIR/scripts/install_vps_proactive_signal_card_sync_timer.sh" \
+  || echo "WARN: install_vps_proactive_signal_card_sync_timer.sh failed (non-fatal)"
 # Sync the CSI lane's systemd units (timers + services). Without
 # this, edits to CSI_Ingester/development/deployment/systemd/*.{service,timer}
 # land in the repo but never reach /etc/systemd/system/, so the

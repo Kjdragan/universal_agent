@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Autonomous Doc-Drift Triage — Process Artifact</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --font-body: 'IBM Plex Sans', system-ui, sans-serif;
+    --font-mono: 'IBM Plex Mono', 'SF Mono', Consolas, monospace;
+
+    --bg: #f6f8fc;
+    --grid: rgba(30, 58, 95, 0.05);
+    --surface: #ffffff;
+    --surface2: #eef2f9;
+    --border: rgba(20, 33, 61, 0.10);
+    --border-bright: rgba(20, 33, 61, 0.18);
+    --text: #16203a;
+    --text-dim: #586385;
+
+    --gold: #b7791f;
+    --gold-dim: rgba(183, 121, 31, 0.10);
+    --blue: #0b5d9c;
+    --blue-dim: rgba(11, 93, 156, 0.09);
+    --teal: #0d8f80;
+    --teal-dim: rgba(13, 143, 128, 0.10);
+    --danger: #c2362c;
+    --danger-dim: rgba(194, 54, 44, 0.09);
+    --warn: #c2710c;
+    --warn-dim: rgba(194, 113, 12, 0.10);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1322;
+      --grid: rgba(120, 150, 200, 0.06);
+      --surface: #151d30;
+      --surface2: #1c2640;
+      --border: rgba(180, 195, 230, 0.12);
+      --border-bright: rgba(180, 195, 230, 0.22);
+      --text: #e7ecf7;
+      --text-dim: #97a3c2;
+
+      --gold: #e2bb56;
+      --gold-dim: rgba(226, 187, 86, 0.14);
+      --blue: #5aa6e6;
+      --blue-dim: rgba(90, 166, 230, 0.14);
+      --teal: #2dd4bf;
+      --teal-dim: rgba(45, 212, 191, 0.14);
+      --danger: #f08a82;
+      --danger-dim: rgba(240, 138, 130, 0.14);
+      --warn: #f0a64a;
+      --warn-dim: rgba(240, 166, 74, 0.14);
+    }
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background-color: var(--bg);
+    background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 26px 26px;
+    color: var(--text);
+    font-family: var(--font-body);
+    padding: 46px 40px 80px;
+    min-height: 100vh;
+    line-height: 1.6;
+  }
+  .container { max-width: 1040px; margin: 0 auto; }
+
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+  .animate { animation: fadeUp 0.42s ease-out both; animation-delay: calc(var(--i, 0) * 0.05s); }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; animation-delay: 0ms !important; transition-duration: 0.01ms !important; }
+  }
+
+  .eyebrow { font-family: var(--font-mono); font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--gold); margin-bottom: 10px; }
+  h1 { font-size: 36px; font-weight: 700; letter-spacing: -0.8px; line-height: 1.12; text-wrap: balance; margin-bottom: 10px; }
+  .subtitle { color: var(--text-dim); font-family: var(--font-mono); font-size: 12.5px; margin-bottom: 26px; }
+  .lede { font-size: 15.5px; color: var(--text); max-width: 760px; margin-bottom: 14px; }
+  .lede b { color: var(--gold); font-weight: 600; }
+
+  .section-label {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--font-mono); font-size: 11px; letter-spacing: 1px; text-transform: uppercase;
+    color: var(--text-dim); margin: 40px 0 14px;
+  }
+  .section-label::before { content: ""; width: 9px; height: 9px; border-radius: 2px; background: var(--blue); }
+  .section-label.gold::before { background: var(--gold); }
+  .section-label.teal::before { background: var(--teal); }
+  .section-label.danger::before { background: var(--danger); }
+
+  p.note { color: var(--text-dim); font-size: 14px; max-width: 780px; margin-bottom: 14px; }
+  code { font-family: var(--font-mono); font-size: 0.85em; background: var(--blue-dim); color: var(--blue); padding: 1px 5px; border-radius: 4px; }
+
+  /* mermaid */
+  .mermaid-wrap { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 30px 22px; overflow: auto; box-shadow: 0 10px 30px -18px rgba(15,30,60,0.4); }
+  .mermaid-wrap .mermaid { display: flex; justify-content: center; transition: transform 0.2s ease; transform-origin: top center; }
+  .mermaid .nodeLabel { font-family: var(--font-body) !important; font-size: 14px !important; }
+  .mermaid .edgeLabel { font-family: var(--font-mono) !important; font-size: 12px !important; }
+  .mermaid .node rect, .mermaid .node polygon { stroke-width: 1.6px !important; rx: 7; }
+  .zoom-controls { position: absolute; top: 8px; right: 8px; display: flex; gap: 2px; z-index: 10; background: var(--surface); border: 1px solid var(--border); border-radius: 7px; padding: 2px; }
+  .zoom-controls button { width: 28px; height: 28px; border: none; background: transparent; color: var(--text-dim); font-family: var(--font-mono); font-size: 14px; cursor: pointer; border-radius: 5px; }
+  .zoom-controls button:hover { background: var(--border); color: var(--text); }
+  .mermaid-wrap.is-zoomed { cursor: grab; } .mermaid-wrap.is-panning { cursor: grabbing; user-select: none; }
+  .mermaid-wrap { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+  .mermaid-wrap::-webkit-scrollbar { width: 6px; height: 6px; }
+  .mermaid-wrap::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 14px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); }
+  .legend-swatch { width: 11px; height: 11px; border-radius: 3px; border: 2px solid; background: transparent; }
+
+  /* tables */
+  .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  thead th { position: sticky; top: 0; background: var(--surface2); text-align: left; font-weight: 600; padding: 11px 14px; border-bottom: 1px solid var(--border-bright); white-space: nowrap; }
+  td { padding: 11px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--blue-dim); }
+  td small { color: var(--text-dim); }
+  .chip { display: inline-block; font-family: var(--font-mono); font-size: 10.5px; font-weight: 500; padding: 2px 8px; border-radius: 20px; white-space: nowrap; }
+  .chip.real { background: var(--teal-dim); color: var(--teal); }
+  .chip.fp { background: var(--danger-dim); color: var(--danger); }
+  .chip.amb { background: var(--warn-dim); color: var(--warn); }
+  .chip.built { background: var(--teal-dim); color: var(--teal); }
+  .chip.need { background: var(--warn-dim); color: var(--warn); }
+  .chip.chosen { background: var(--gold-dim); color: var(--gold); }
+  .row-chosen td { background: var(--gold-dim); }
+  .row-chosen td:first-child { box-shadow: inset 3px 0 0 var(--gold); }
+
+  /* status cards */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; min-width: 0; }
+  .card .k { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.5px; text-transform: uppercase; color: var(--text-dim); margin-bottom: 7px; }
+  .card .v { font-size: 14px; font-weight: 500; overflow-wrap: break-word; }
+  .card.live { border-color: var(--teal); box-shadow: 0 0 0 1px var(--teal-dim); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+  .dot.green { background: var(--teal); } .dot.gold { background: var(--gold); }
+
+  .callout { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--gold); border-radius: 0 11px 11px 0; padding: 15px 19px; font-size: 13.5px; color: var(--text-dim); margin-top: 16px; }
+  .callout b { color: var(--text); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 46px 0 18px; }
+  .foot { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); }
+  @media (max-width: 720px) { body { padding: 20px 14px 60px; } h1 { font-size: 25px; } }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <div class="eyebrow animate" style="--i:0">Architecture Decision Record · plat-doc-triage-automation</div>
+  <h1 class="animate" style="--i:1">Autonomous Doc-Drift Triage &amp; Fix</h1>
+  <p class="subtitle animate" style="--i:2">nightly GLM detection → Opus triage → docs-only auto-merge · companion to ADR 10</p>
+
+  <p class="lede animate" style="--i:3">
+    The nightly sweep already <i>finds</i> documentation drift — but the issues it files are a
+    <b>write-only dead-letter</b> that nothing reads. This is the process that closes the loop: a real-Opus
+    agent that investigates each new drift issue, fixes what's genuinely wrong, and merges it behind a
+    mechanical docs-only firewall. <b>Option (a)</b> — a desktop interactive Monitor — is live now.
+  </p>
+
+  <div class="section-label gold">01 · End-to-end pipeline</div>
+  <p class="note">How a drift finding travels from the GLM sweep to a merged fix. The grey branch is today's reality (no consumer); the gold branch is Option (a).</p>
+  <div class="mermaid-wrap animate" style="--i:4">
+    <div class="zoom-controls">
+      <button onclick="zoomDiagram(this,1.2)" title="Zoom in">+</button>
+      <button onclick="zoomDiagram(this,0.8)" title="Zoom out">&minus;</button>
+      <button onclick="resetZoom(this)" title="Reset">&#8634;</button>
+    </div>
+    <pre class="mermaid">
+graph TD
+  S["Nightly doc-accuracy sweep<br/>GLM glm-5-turbo · GitHub Actions"] --> I["GitHub issue filed<br/>label: documentation"]
+  I --> DL["TODAY: no consumer<br/>write-only dead-letter"]:::danger
+  I --> M["OPTION A · Monitor<br/>gh poll loop, 300s · desktop Max"]:::gold
+  M --> EV["New-issue event<br/>lands in Opus session"]
+  EV --> T["Opus investigates each finding<br/>vs current origin-main code"]
+  T --> C{"Classify<br/>finding"}
+  C -->|REAL drift| FX["Edit doc on<br/>docfix/* branch"]:::teal
+  C -->|false positive| CLF["Close issue<br/>with explanation"]:::teal
+  C -->|ambiguous / code-fix| ESC["Escalate to operator<br/>do not auto-close"]:::warn
+  FX --> PR["Open docfix/* PR"]
+  PR --> G{"pr-validate +<br/>docfix tripwire +<br/>symbol check"}
+  G -->|green| AM["Auto-merge to main"]:::teal
+  G -->|red| ESC
+  AM --> CL["Confirm green<br/>+ close issue"]:::teal
+
+  classDef danger stroke:#c2362c,stroke-width:2.5px;
+  classDef gold stroke:#b7791f,stroke-width:2.5px;
+  classDef teal stroke:#0d8f80,stroke-width:2.5px;
+  classDef warn stroke:#c2710c,stroke-width:2.5px;
+    </pre>
+  </div>
+  <div class="legend">
+    <div class="legend-item"><span class="legend-swatch" style="border-color:var(--gold)"></span> Option (a) trigger</div>
+    <div class="legend-item"><span class="legend-swatch" style="border-color:var(--teal)"></span> Fix / success path</div>
+    <div class="legend-item"><span class="legend-swatch" style="border-color:var(--warn)"></span> Escalation</div>
+    <div class="legend-item"><span class="legend-swatch" style="border-color:var(--danger)"></span> Today's gap</div>
+  </div>
+
+  <div class="section-label">02 · Three delivery options</div>
+  <p class="note">Same triage brain and safety rails; only the <i>trigger</i> and the <i>inference substrate</i> change. (a) is chosen first; (b)/(c) are recorded migration targets.</p>
+  <div class="table-wrap animate" style="--i:5">
+    <table>
+      <thead><tr><th>Option</th><th>Inference</th><th>Always-on?</th><th>Cost</th><th>Best for</th></tr></thead>
+      <tbody>
+        <tr class="row-chosen">
+          <td><span class="chip chosen">(a) chosen</span> Desktop interactive loop</td>
+          <td>Opus · Max <small>(interactive — not the 6/15 metered credit)</small></td>
+          <td>No <small>— desktop-bound</small></td>
+          <td>Max quota only</td>
+          <td>Prototype / on-demand</td>
+        </tr>
+        <tr>
+          <td>(b) VPS API-key agent</td>
+          <td>Opus · <code>ANTHROPIC_API_KEY</code></td>
+          <td>Yes</td>
+          <td>Bounded API $ <small>(~pennies–$/day)</small></td>
+          <td>Production</td>
+        </tr>
+        <tr>
+          <td>(c) ZAI-detect + API-key-fix</td>
+          <td>GLM detect / Opus fix</td>
+          <td>Yes</td>
+          <td>Lowest API $</td>
+          <td>Production, cost-min</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout">
+    <b>Why not just use Max headless on a server?</b> As of <b>2026-06-15</b> headless <code>claude -p</code> / Agent-SDK
+    usage on a subscription draws a capped monthly "Agent SDK credit," then halts — which is why this repo already
+    flipped Cody's default to ZAI on 2026-06-07. For always-on automation, an <b>API key</b> (Commercial Terms) is the
+    policy-clean substrate; the Max subscription stays for interactive work — which is exactly what (a) uses.
+  </div>
+
+  <div class="section-label teal">03 · Triage verdict — what each finding becomes</div>
+  <p class="note">The value Opus adds over the GLM sweep that files the issues: it rejects false positives and refuses to guess on incomplete context. Live triage of issue #870 (6 GLM "drifts"):</p>
+  <div class="table-wrap animate" style="--i:6">
+    <table>
+      <thead><tr><th>Finding</th><th>GLM said</th><th>Opus verdict</th><th>Action</th></tr></thead>
+      <tbody>
+        <tr><td><code>05_environments.md</code> — Cody defaults to Max</td><td>major_drift</td><td><span class="chip real">REAL · high value</span></td><td>Fix — code is <code>zai</code> since 06-07</td></tr>
+        <tr><td><code>06_event_streaming…md</code> — env var name</td><td>minor</td><td><span class="chip real">REAL</span></td><td>Fix — <code>UA_GATEWAY_PROCESS_STDIO_REDIRECT</code></td></tr>
+        <tr><td><code>04_discord_ops.md</code> — gws overrides</td><td>minor</td><td><span class="chip real">REAL</span></td><td>Fix — doc omits <code>UA_GWS_*</code> chain</td></tr>
+        <tr><td><code>01_secrets…md</code> — env default / SDK</td><td>minor</td><td><span class="chip real">REAL</span></td><td>Fix — conditional default + REST not SDK</td></tr>
+        <tr><td><code>03_simone…md</code> — fallback path</td><td>minor</td><td><span class="chip fp">FALSE POSITIVE</span></td><td>Close — GLM's own read says accurate</td></tr>
+        <tr><td><code>intel_lanes</code> — <code>_strip_handle_at_signs</code></td><td>P2</td><td><span class="chip fp">FALSE POSITIVE</span></td><td>Close — accurate</td></tr>
+        <tr><td><code>intel_lanes</code> — wiring &amp; <code>execute_research</code></td><td>major</td><td><span class="chip amb">NEEDS CODE CHECK</span></td><td>Verify; escalate if code-comment fix</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section-label">04 · Safety rails</div>
+  <p class="note">Docs-only auto-merge is safe <i>by construction</i> — the firewall is mechanical, not a prompt. Born from the 2026-04-24 <code>executing_sessions</code> deletion incident.</p>
+  <div class="table-wrap animate" style="--i:7">
+    <table>
+      <thead><tr><th>Rail</th><th>Status</th><th>Where</th></tr></thead>
+      <tbody>
+        <tr><td>Docs-only mechanical tripwire <small>(hard-fails non-docs paths)</small></td><td><span class="chip built">BUILT</span></td><td><code>doc-audit.yml</code> docfix/* job</td></tr>
+        <tr><td>Auto-merge for docs-only PRs</td><td><span class="chip built">BUILT</span></td><td><code>pr-auto-merge.yml</code></td></tr>
+        <tr><td>Symbol-citation enforcement</td><td><span class="chip built">BUILT</span></td><td><code>doc_audit.py::check_symbol_refs</code></td></tr>
+        <tr><td>Structured per-doc findings</td><td><span class="chip built">BUILT</span></td><td><code>doc_accuracy_sweep.py::_judge</code></td></tr>
+        <tr><td>Second-pass confirmation on major drift</td><td><span class="chip need">NEEDED</span></td><td>fix agent self-verifies before commit</td></tr>
+        <tr><td>Escalate — don't close — when unfixable</td><td><span class="chip built">POLICY</span></td><td>triage step 5</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section-label teal">05 · Live status</div>
+  <div class="cards animate" style="--i:8">
+    <div class="card live"><div class="k"><span class="dot green"></span>Monitor</div><div class="v">Armed · baseline #870 · polling 300s for new <code>documentation</code> issues</div></div>
+    <div class="card"><div class="k"><span class="dot gold"></span>ADR record</div><div class="v">PR #896 · <code>11_autonomous_doc_triage_options_adr.md</code></div></div>
+    <div class="card"><div class="k"><span class="dot gold"></span>First triage</div><div class="v">#870 triaged (1 high-value real, 3 false positives, 2 to verify) — awaiting go to open the docfix PR</div></div>
+    <div class="card"><div class="k"><span class="dot green"></span>Substrate</div><div class="v">Opus 4.8 on Max, interactive — no API spend, no metered credit</div></div>
+  </div>
+
+  <hr>
+  <p class="foot">Companion to project_docs/06_platform/11_autonomous_doc_triage_options_adr.md · generated 2026-06-10 · visual-explainer</p>
+</div>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  mermaid.initialize({
+    startOnLoad: true, theme: 'base', look: 'classic',
+    themeVariables: {
+      primaryColor: isDark ? '#1c2640' : '#eef2f9',
+      primaryBorderColor: isDark ? '#5aa6e6' : '#0b5d9c',
+      primaryTextColor: isDark ? '#e7ecf7' : '#16203a',
+      lineColor: isDark ? '#97a3c2' : '#586385',
+      fontSize: '14px',
+      fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
+    }
+  });
+</script>
+<script>
+  function zoomDiagram(btn, factor) {
+    var wrap = btn.closest('.mermaid-wrap'), t = wrap.querySelector('.mermaid');
+    var cur = parseFloat(t.dataset.zoom || '1'), next = Math.min(Math.max(cur * factor, 0.4), 4);
+    t.dataset.zoom = next; t.style.transform = 'scale(' + next + ')'; wrap.classList.toggle('is-zoomed', next > 1);
+  }
+  function resetZoom(btn) {
+    var wrap = btn.closest('.mermaid-wrap'), t = wrap.querySelector('.mermaid');
+    t.dataset.zoom = '1'; t.style.transform = 'scale(1)'; wrap.classList.remove('is-zoomed');
+  }
+  document.querySelectorAll('.mermaid-wrap').forEach(function(wrap) {
+    wrap.addEventListener('wheel', function(e) {
+      if (!e.ctrlKey && !e.metaKey) return; e.preventDefault();
+      var t = wrap.querySelector('.mermaid'), cur = parseFloat(t.dataset.zoom || '1');
+      var next = Math.min(Math.max(cur * (e.deltaY < 0 ? 1.1 : 0.9), 0.4), 4);
+      t.dataset.zoom = next; t.style.transform = 'scale(' + next + ')'; wrap.classList.toggle('is-zoomed', next > 1);
+    }, { passive: false });
+    var sx, sy, sl, st;
+    wrap.addEventListener('mousedown', function(e) {
+      if (e.target.closest('.zoom-controls')) return;
+      var t = wrap.querySelector('.mermaid'); if (parseFloat(t.dataset.zoom || '1') <= 1) return;
+      wrap.classList.add('is-panning'); sx = e.clientX; sy = e.clientY; sl = wrap.scrollLeft; st = wrap.scrollTop;
+    });
+    window.addEventListener('mousemove', function(e) {
+      if (!wrap.classList.contains('is-panning')) return;
+      wrap.scrollLeft = sl - (e.clientX - sx); wrap.scrollTop = st - (e.clientY - sy);
+    });
+    window.addEventListener('mouseup', function() { wrap.classList.remove('is-panning'); });
+  });
+</script>
+</body>
+</html>

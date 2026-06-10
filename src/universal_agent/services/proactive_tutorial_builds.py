@@ -12,7 +12,9 @@ from pathlib import Path
 import re
 import sqlite3
 from typing import Any
+from zoneinfo import ZoneInfo
 
+from universal_agent import task_hub
 from universal_agent.services.proactive_artifacts import (
     ARTIFACT_STATUS_CANDIDATE,
     make_artifact_id,
@@ -54,6 +56,44 @@ _NEGATIVE_TOKENS = frozenset(
 
 _TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9+\-]*")
 
+# ── P4 Demo build contract ───────────────────────────────────────────────────
+# Embedded verbatim in every `tutorial_build` task description (the BRIEF that
+# reaches Cody via Simone's vp_dispatch_mission objective) and mirrored in
+# .claude/skills/cody-implements-from-brief/SKILL.md. Canonical spec:
+# project_docs/04_intelligence/15_demo_tutorial_pipeline_adr.md
+# section "Demo build contract". Guard: tests/unit/test_demo_build_contract.py.
+DEMO_BUILD_CONTRACT = """\
+Demo build contract (binding):
+
+Framework selection — pick the demo's stack from what the VIDEO is about:
+1. A specific SDK/stack (Google ADK, Gemini, LangGraph, ...) -> build the
+   demo in THAT native stack, first-class. Hands-on learning of that stack
+   is the point — it is not a fallback.
+2. A Claude Code / Anthropic feature (e.g. /goal) -> build with the
+   Claude Agent SDK.
+3. A stack-agnostic concept (e.g. "memory pipelines") -> default to the
+   Claude Agent SDK (the north star).
+4. Cross-framework integration (e.g. Claude Agent SDK + ADK) ->
+   ONLY on explicit operator direction — never by default.
+If "how to build this one" is ambiguous, PAUSE for operator input:
+disposition the task for review with your specific question in the note.
+Ambiguity never blocks demo-worthiness — it only pauses the build.
+
+Acceptance bar — functional completeness, not looks:
+Keep the UI simple (zero design-polish effort) but make the demo
+functionally sophisticated enough to FULLY exercise the capability.
+This demo is the operator's personal learning/reference library entry;
+acceptance = it demonstrates the capability end-to-end, not how it looks.
+
+Inference wiring (Claude Agent SDK demos): Claude-Agent-SDK + Claude-Max
+OAuth inference is currently BROKEN. Any demo built on the Claude Agent SDK
+MUST read ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN from the environment
+(the UA runtime injects both; ANTHROPIC_BASE_URL routes inference to the
+ZAI/GLM endpoint) so the demo actually runs. Never hardcode an endpoint or
+token; never commit a token; document the two env var names in the demo
+README.
+"""
+
 
 def queue_tutorial_build_task(
     conn: sqlite3.Connection,
@@ -65,8 +105,19 @@ def queue_tutorial_build_task(
     source: str = "csi_auto_route",
     extraction_plan: dict[str, Any] | None = None,
     priority: int = 3,
+    agent_ready: bool = True,
 ) -> dict[str, Any]:
-    """Queue CODIE to build a private working repo from a tutorial video."""
+    """Queue CODIE to build a private working repo from a tutorial video.
+
+    When ``agent_ready`` is True (default) the row is immediately
+    dispatch-eligible — unchanged behavior. When False the row is queued as a
+    *pending-approval* build: ``status=open`` and visible on the dashboard, but
+    ``agent_ready=False`` removes it from the eligible set so CODIE never claims
+    it. The ``agent-ready`` label is also dropped (replaced with
+    ``pending-approval``) so ``task_hub.upsert_item``'s label OR-fallback does
+    not re-derive ``agent_ready=True``. A later one-field flip
+    (``agent_ready 0→1``) promotes it without churning the rest of the queue.
+    """
     clean_video_id = str(video_id or "").strip()
     if not clean_video_id:
         raise ValueError("video_id is required")
@@ -81,6 +132,16 @@ def queue_tutorial_build_task(
         extraction_plan=plan,
         preference_context=preference_context,
     )
+    dispatchable = bool(agent_ready)
+    # Dispatchable rows keep the "agent-ready" label (and the explicit
+    # agent_ready=True). Pending-approval rows MUST drop "agent-ready" so the
+    # upsert_item OR-fallback ("agent-ready" in label_set) doesn't silently
+    # re-flip agent_ready back to True.
+    labels = (
+        ["agent-ready", "tutorial-build", "codie", "code"]
+        if dispatchable
+        else ["pending-approval", "tutorial-build", "codie", "code"]
+    )
     task = queue_proactive_task(
         conn,
         task_id=task_id,
@@ -89,7 +150,8 @@ def queue_tutorial_build_task(
         title=f"Build private tutorial repo: {clean_title}",
         description=description,
         priority=priority or 3,
-        labels=["agent-ready", "tutorial-build", "codie", "code"],
+        labels=labels,
+        agent_ready=dispatchable,
         metadata={
             "source": source,
             "video_id": clean_video_id,
@@ -99,6 +161,7 @@ def queue_tutorial_build_task(
             "extraction_plan": plan,
             "repo_visibility": "private",
             "public_publication_allowed": False,
+            "approval_state": "dispatchable" if dispatchable else "pending_approval",
             "workflow_manifest": {
                 "workflow_kind": "code_change",
                 "delivery_mode": "interactive_chat",
@@ -125,15 +188,111 @@ def queue_tutorial_build_task(
     return {"task": task, "artifact": artifact}
 
 
+def remaining_daily_build_budget(conn: sqlite3.Connection) -> tuple[int, int, int]:
+    """Return ``(remaining, ceiling, today_count)`` for the demo-build daily ceiling.
+
+    Single home for the boundary math P2a introduced: ceiling from
+    ``UA_DEMO_BUILD_DAILY_CEILING`` (default 10), ``today_count`` over
+    America/Chicago local-midnight (``_count_today_tutorial_builds``).
+    """
+    ceiling = _daily_build_ceiling()
+    today_count = _count_today_tutorial_builds(conn)
+    return max(0, ceiling - today_count), ceiling, today_count
+
+
+def queue_tutorial_builds_with_ceiling(
+    conn: sqlite3.Connection,
+    candidates: list[dict[str, Any]],
+    *,
+    source: str,
+) -> dict[str, Any]:
+    """Queue pre-ranked tutorial-build candidates through the shared daily ceiling.
+
+    The ONE boundary-math implementation used by BOTH demo-lane sources (P3):
+    the broad CSI RSS sweep (``sync_build_oriented_csi_videos``,
+    ``source="csi_auto_route"``) and the curated Daily Digest
+    (``youtube_daily_digest._queue_demo_builds``, ``source="youtube_daily_digest"``).
+
+    ``candidates`` must be ranked best-first; each dict carries the
+    ``queue_tutorial_build_task`` kwargs: ``video_id``, ``video_title``,
+    ``video_url``, ``channel_name``, ``extraction_plan``, ``priority``.
+
+    Behavior (identical to the inlined P2a loop this replaces):
+      - the top ``remaining = max(0, ceiling - today_count)`` queue dispatchable
+        (``agent_ready=True``); the rest queue pending-approval for the P2b button;
+      - no-churn invariant: an already-dispatchable row is never demoted
+        (``_existing_build_is_dispatchable``);
+      - cross-source dedupe is structural — ``queue_tutorial_build_task`` derives
+        ``task_id = tutorial-build:sha256(video_id)[:16]``, so the same video
+        from both sources upserts ONE Task Hub row;
+      - honors the ``UA_PROACTIVE_TUTORIAL_AUTO_ROUTE`` kill switch (queues
+        nothing, returns ``disabled=True``).
+
+    Returns ``{auto_queued, pending_approval, ceiling, today_count}``.
+    """
+    if _auto_route_disabled():
+        return {
+            "auto_queued": 0,
+            "pending_approval": 0,
+            "ceiling": _daily_build_ceiling(),
+            "today_count": 0,
+            "disabled": True,
+        }
+    remaining, ceiling, today_count = remaining_daily_build_budget(conn)
+    auto_queued = 0
+    pending_approval = 0
+    for idx, candidate in enumerate(candidates):
+        video_id = str(candidate.get("video_id") or "").strip()
+        dispatchable = idx < remaining
+        # Idempotency / no-churn: never demote a video that is already
+        # dispatchable (agent_ready=True) back to pending on a later
+        # over-ceiling run. Only ever raise (pending->dispatchable).
+        if not dispatchable and _existing_build_is_dispatchable(conn, video_id):
+            dispatchable = True
+        queue_tutorial_build_task(
+            conn,
+            video_id=video_id,
+            video_title=str(candidate.get("video_title") or ""),
+            video_url=str(candidate.get("video_url") or ""),
+            channel_name=str(candidate.get("channel_name") or ""),
+            source=source,
+            extraction_plan=candidate.get("extraction_plan") if isinstance(candidate.get("extraction_plan"), dict) else {},
+            priority=int(candidate.get("priority") or 3),
+            agent_ready=dispatchable,
+        )
+        if dispatchable:
+            auto_queued += 1
+        else:
+            pending_approval += 1
+    return {
+        "auto_queued": auto_queued,
+        "pending_approval": pending_approval,
+        "ceiling": ceiling,
+        "today_count": today_count,
+    }
+
+
 def sync_build_oriented_csi_videos(
     conn: sqlite3.Connection,
     *,
     csi_db_path: Path | None,
     limit: int = 200,
 ) -> dict[str, int]:
-    """Queue CODIE tutorial build tasks for build-oriented CSI RSS videos."""
+    """Queue CODIE tutorial build tasks for build-oriented CSI RSS videos.
+
+    A daily ceiling (``UA_DEMO_BUILD_DAILY_CEILING``, default 10) caps how many
+    builds are auto-dispatched per America/Chicago day. Buildable candidates are
+    ranked (transcript-ok first, then newest upload); the top ``remaining`` are
+    queued dispatch-eligible (``agent_ready=True``), and the rest are queued as
+    pending-approval rows (``agent_ready=False``) that a one-field flip can
+    later promote. An already-dispatchable row is never demoted on a re-run, so
+    the ceiling can't churn or seize an in-flight build.
+
+    Returns ``{seen, queued, auto_queued, pending_approval, ceiling, today_count}``.
+    """
+    empty = {"seen": 0, "queued": 0, "auto_queued": 0, "pending_approval": 0, "ceiling": _daily_build_ceiling(), "today_count": 0}
     if _auto_route_disabled() or csi_db_path is None or not csi_db_path.exists():
-        return {"seen": 0, "queued": 0}
+        return empty
     db = sqlite3.connect(str(csi_db_path))
     db.row_factory = sqlite3.Row
     try:
@@ -151,11 +310,12 @@ def sync_build_oriented_csi_videos(
             (max(1, min(int(limit), 1000)),),
         ).fetchall()
     except sqlite3.Error:
-        return {"seen": 0, "queued": 0}
+        return empty
     finally:
         db.close()
 
-    queued = 0
+    # ── Collect buildable candidates (don't queue inside the loop anymore) ──
+    candidates: list[dict[str, Any]] = []
     for row in rows:
         subject = _json_loads_obj(row["subject_json"])
         analysis = _json_loads_obj(row["analysis_json"])
@@ -175,18 +335,161 @@ def sync_build_oriented_csi_videos(
             summary_text=summary,
         ):
             continue
-        queue_tutorial_build_task(
-            conn,
-            video_id=video_id,
-            video_title=title,
-            video_url=str(subject.get("url") or ""),
-            channel_name=channel,
-            source="csi_auto_route",
-            extraction_plan=_extraction_plan_from_analysis(analysis=analysis, row=row),
-            priority=3 if str(row["transcript_status"] or "").lower() == "ok" else 2,
+        transcript_ok = str(row["transcript_status"] or "").lower() == "ok"
+        candidates.append(
+            {
+                "video_id": video_id,
+                "title": title,
+                "channel": channel,
+                "url": str(subject.get("url") or ""),
+                "extraction_plan": _extraction_plan_from_analysis(analysis=analysis, row=row),
+                "transcript_ok": transcript_ok,
+                "occurred_at": str(row["occurred_at"] or ""),
+            }
         )
-        queued += 1
-    return {"seen": len(rows), "queued": queued}
+
+    # ── Rank: transcript-ok first, then newest upload (no numeric score exists) ──
+    candidates.sort(key=lambda c: (c["transcript_ok"], c["occurred_at"]), reverse=True)
+
+    # ── Queue through the SHARED daily-ceiling boundary (P3: one ladder for
+    # both sources — boundary math lives in queue_tutorial_builds_with_ceiling) ──
+    outcome = queue_tutorial_builds_with_ceiling(
+        conn,
+        [
+            {
+                "video_id": c["video_id"],
+                "video_title": c["title"],
+                "video_url": c["url"],
+                "channel_name": c["channel"],
+                "extraction_plan": c["extraction_plan"],
+                "priority": 3 if c["transcript_ok"] else 2,
+            }
+            for c in candidates
+        ],
+        source="csi_auto_route",
+    )
+
+    return {
+        "seen": len(rows),
+        "queued": outcome["auto_queued"] + outcome["pending_approval"],
+        "auto_queued": outcome["auto_queued"],
+        "pending_approval": outcome["pending_approval"],
+        "ceiling": outcome["ceiling"],
+        "today_count": outcome["today_count"],
+    }
+
+
+def list_pending_approval_builds(
+    conn: sqlite3.Connection,
+    *,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """List tutorial_build rows queued as pending-approval (P2a overflow).
+
+    The pending representation is ``source_kind='tutorial_build'``,
+    ``status=open``, ``agent_ready=0`` with a ``pending-approval`` label
+    (see ``queue_tutorial_build_task``). Returns dashboard-renderable
+    summaries, newest first.
+    """
+    task_hub.ensure_schema(conn)
+    clamped = max(1, min(int(limit or 50), 200))
+    rows = conn.execute(
+        """
+        SELECT * FROM task_hub_items
+        WHERE source_kind = 'tutorial_build'
+          AND status = ?
+          AND agent_ready = 0
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (task_hub.TASK_STATUS_OPEN, clamped),
+    ).fetchall()
+    builds: list[dict[str, Any]] = []
+    for raw in rows:
+        item = task_hub.hydrate_item(dict(raw))
+        label_set = {str(v).lower() for v in item.get("labels") or []}
+        if "pending-approval" not in label_set:
+            continue
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        builds.append(
+            {
+                "task_id": str(item.get("task_id") or ""),
+                "title": str(item.get("title") or ""),
+                "video_id": str(metadata.get("video_id") or item.get("source_ref") or ""),
+                "video_title": str(metadata.get("video_title") or ""),
+                "video_url": str(metadata.get("video_url") or ""),
+                "channel_name": str(metadata.get("channel_name") or ""),
+                "approval_state": str(metadata.get("approval_state") or "pending_approval"),
+                "priority": int(item.get("priority") or 0),
+                "score": float(item.get("score") or 0.0),
+                "created_at": str(item.get("created_at") or ""),
+            }
+        )
+    return builds
+
+
+def approve_pending_tutorial_build(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    agent_id: str = "dashboard_operator",
+) -> dict[str, Any]:
+    """Operator approve path for a pending-approval tutorial build (P2b).
+
+    Validates the row is a P2a pending-approval tutorial_build row, swaps the
+    ``pending-approval`` label for ``agent-ready`` (keeping the
+    ``upsert_item`` label OR-fallback consistent with ``agent_ready=True``),
+    stamps the approval audit trail in metadata, then promotes + claims via
+    the canonical ``dispatch_service.dispatch_on_approval`` one-field flip
+    (``agent_ready`` 0 -> 1).
+
+    Manual approvals are deliberately UNCAPPED: this path never consults
+    ``_daily_build_ceiling`` — the ceiling only throttles *auto*-dispatch in
+    ``sync_build_oriented_csi_videos``.
+
+    Raises ``DispatchError`` when the row is missing, not a tutorial build,
+    terminal, or not pending approval.
+    """
+    from universal_agent.services.dispatch_service import (
+        DispatchError,
+        dispatch_on_approval,
+    )
+
+    clean_task_id = str(task_id or "").strip()
+    if not clean_task_id:
+        raise DispatchError("task_id is required")
+    item = task_hub.get_item(conn, clean_task_id)
+    if not item:
+        raise DispatchError(f"Task {clean_task_id!r} not found")
+    if str(item.get("source_kind") or "") != "tutorial_build":
+        raise DispatchError(f"Task {clean_task_id!r} is not a tutorial build")
+    current_status = str(item.get("status") or "").lower()
+    if current_status in task_hub.TERMINAL_STATUSES:
+        raise DispatchError(
+            f"Task {clean_task_id!r} is in terminal status={current_status!r}, cannot approve"
+        )
+    label_set = {str(v).lower() for v in item.get("labels") or []}
+    if bool(item.get("agent_ready")) or "pending-approval" not in label_set:
+        raise DispatchError(f"Task {clean_task_id!r} is not pending approval")
+
+    promoted_labels = [
+        v for v in (item.get("labels") or []) if str(v).lower() != "pending-approval"
+    ]
+    if "agent-ready" not in {str(v).lower() for v in promoted_labels}:
+        promoted_labels.insert(0, "agent-ready")
+    task_hub.upsert_item(
+        conn,
+        {
+            "task_id": clean_task_id,
+            "labels": promoted_labels,
+            "metadata": {
+                "approval_state": "approved",
+                "approved_by": agent_id,
+                "approved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            },
+        },
+    )
+    return dispatch_on_approval(conn, clean_task_id, agent_id=agent_id)
 
 
 def register_tutorial_build_artifact(
@@ -280,7 +583,7 @@ def _build_task_description(
     plan_json = json.dumps(extraction_plan or {}, indent=2, ensure_ascii=True)
     base = "\n".join(
         [
-            "CODIE should build a working private repository from this tutorial.",
+            "Cody should build a runnable demo of this video's capability — a standalone mini-app, not a line-by-line reproduction of the video's tutorial.",
             "",
             f"Source video: {video_title}",
             f"Channel: {channel_name or '(unknown)'}",
@@ -288,6 +591,8 @@ def _build_task_description(
             "",
             "Implementation extraction plan:",
             plan_json,
+            "",
+            DEMO_BUILD_CONTRACT.rstrip(),
             "",
             "Instructions:",
             "1. Create a complete working implementation in a clean repo/workspace.",
@@ -297,6 +602,8 @@ def _build_task_description(
             "5. Use environment variables or mock modes for API keys.",
             "6. Run the implementation or the most relevant tests before declaring success.",
             "7. If GitHub is unavailable, preserve a complete local git repo artifact and report the fallback.",
+            "",
+            "Dispatcher note (Simone): when delegating this task to Cody via vp_dispatch_mission, include this description VERBATIM in the mission objective — the Demo build contract above is binding for the build.",
         ]
     )
     if preference_context:
@@ -519,6 +826,64 @@ def _auto_route_disabled() -> bool:
     """Return True when tutorial auto-routing is explicitly disabled via env var."""
     raw = str(os.getenv("UA_PROACTIVE_TUTORIAL_AUTO_ROUTE", "1") or "1").strip().lower()
     return raw in {"0", "false", "no", "off"}
+
+
+_DEFAULT_DAILY_BUILD_CEILING = 10
+
+
+def _daily_build_ceiling() -> int:
+    """Max tutorial builds auto-dispatched per America/Chicago day.
+
+    Reads ``UA_DEMO_BUILD_DAILY_CEILING`` (default 10), clamped to >= 0. A
+    ceiling of 0 means every buildable candidate is queued as pending-approval
+    (nothing auto-dispatches) until an operator promotes it.
+    """
+    raw = str(os.getenv("UA_DEMO_BUILD_DAILY_CEILING", "") or "").strip()
+    if not raw:
+        return _DEFAULT_DAILY_BUILD_CEILING
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return _DEFAULT_DAILY_BUILD_CEILING
+
+
+def _count_today_tutorial_builds(conn: sqlite3.Connection) -> int:
+    """Count tutorial_build rows created since America/Chicago local midnight.
+
+    ``task_hub_items.created_at`` is always ``task_hub._now_iso()`` — a
+    fixed-width UTC ISO-8601 string with a ``+00:00`` offset — so the day
+    boundary is computed in local (Houston) time, converted to the same UTC
+    ``+00:00`` form, and compared lexicographically (valid because both strings
+    are zero-padded ISO UTC).
+    """
+    local_now = datetime.now(ZoneInfo("America/Chicago"))
+    local_midnight = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_start_utc_iso = local_midnight.astimezone(timezone.utc).isoformat()
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM task_hub_items WHERE source_kind = ? AND created_at >= ?",
+            ("tutorial_build", day_start_utc_iso),
+        ).fetchone()
+    except sqlite3.Error:
+        return 0
+    return int(row[0] or 0) if row else 0
+
+
+def _existing_build_is_dispatchable(conn: sqlite3.Connection, video_id: str) -> bool:
+    """True if this video already has a dispatchable (agent_ready) build row.
+
+    Guards the no-churn invariant: an already-approved/dispatched build must not
+    be demoted back to pending when a later over-ceiling sweep re-encounters it.
+    """
+    clean = str(video_id or "").strip()
+    if not clean:
+        return False
+    task_id = f"tutorial-build:{hashlib.sha256(clean.encode()).hexdigest()[:16]}"
+    try:
+        existing = task_hub.get_item(conn, task_id)
+    except Exception:  # noqa: BLE001 — a lookup failure must not block queueing
+        return False
+    return bool(existing and existing.get("agent_ready"))
 
 
 def _json_loads_obj(raw: Any) -> dict[str, Any]:

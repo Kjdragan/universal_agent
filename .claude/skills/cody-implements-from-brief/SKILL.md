@@ -4,11 +4,15 @@ description: >
   Cody's Phase 3 skill. Picked up by Cody when she dequeues a `cody_demo_task`
   Task Hub item from `cody-task-dispatcher`. Reads the workspace's BRIEF.md,
   ACCEPTANCE.md, business_relevance.md, and SOURCES/, then builds a runnable
-  demo of a Claude Code / Claude Agent SDK feature. Invokes `claude` from
-  inside the workspace dir so vanilla project-local settings override the
-  ZAI mapping. Writes manifest.json (with endpoint_hit verification),
-  run_output.txt, and BUILD_NOTES.md (for documented gaps where docs were
-  unclear). USE when Cody picks up a `cody_demo_task` task.
+  demo of the briefed capability. Carries the canonical Demo build contract
+  (framework-per-video selection, functional-completeness acceptance, ZAI
+  inference wiring for Claude-Agent-SDK demos) — the same contract embedded
+  in `tutorial_build` BRIEFs. Invokes `claude` from inside the workspace dir
+  so the vanilla project-local settings apply (inference inherits the
+  daemon's ZAI routing env). Writes manifest.json (with endpoint_hit
+  verification), run_output.txt, and BUILD_NOTES.md (for documented gaps
+  where docs were unclear). USE when Cody picks up a `cody_demo_task` task
+  or any tutorial_build demo-build mission.
 ---
 
 # cody-implements-from-brief
@@ -36,6 +40,51 @@ If the workspace fails the readiness check, Cody returns the task to the
 queue with a comment so Simone can fix the missing piece. **Do not invent
 content to fill in placeholders.**
 
+## Framework selection (per video) — decide BEFORE writing code
+
+The Demo is a runnable mini-app of the video's **capability**, not a
+reproduction of the video's tutorial. Pick the stack from what the video is
+about:
+
+| The video is about… | Build the demo in… |
+|---|---|
+| a specific SDK/stack (Google ADK, Gemini, LangGraph, …) | **that native stack** — first-class; hands-on learning of that stack is the point, not a fallback |
+| a Claude Code / Anthropic feature (e.g. `/goal`) | the **Claude Agent SDK** |
+| a stack-agnostic concept (e.g. "memory pipelines") | **the Claude Agent SDK by default** (the north star) |
+| cross-framework integration (Claude Agent SDK ↔ ADK, …) | **ONLY on explicit operator direction — never by default** |
+
+If you cannot tell which row applies, PAUSE for operator input: leave the
+task in review with your specific question in the note. Ambiguity about
+"how to build this one" never blocks demo-worthiness — it only pauses the
+build.
+
+## Acceptance bar — functional completeness, not looks
+
+The demo is the operator's personal learning/reference library entry.
+
+- **Simple UI.** Spend zero effort on design polish — a plain CLI, a bare
+  terminal transcript, or a minimal unstyled page is correct.
+- **Functionally complete.** The demo must be sophisticated enough to
+  FULLY exercise the capability it demonstrates — real inputs, real
+  outputs, the interesting code path actually executed end-to-end.
+- Acceptance = functional completeness, not looks. Never trade capability
+  coverage for styling, and never pad the demo with UI work.
+
+## Inference wiring — Claude Agent SDK demos run on ZAI
+
+Claude-Agent-SDK + Claude-Max OAuth inference is currently BROKEN. Any demo
+built on the Claude Agent SDK must be wired to ZAI/GLM inference or it will
+not run:
+
+- The demo MUST read `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` from
+  the environment. The UA daemon injects both (`ANTHROPIC_BASE_URL` points
+  at the ZAI proxy, `ANTHROPIC_AUTH_TOKEN` holds the ZAI key) and
+  `run_in_workspace` inherits them by default (`scrub_env=False`).
+- Do NOT scrub `ANTHROPIC_*` env vars for these demos — that would strip
+  the very routing the demo needs.
+- NEVER hardcode an endpoint URL or token in demo code; NEVER commit a
+  token. Reference the two env var names in the demo's README instead.
+
 ## The hard rules (READ EVERY TIME)
 
 These rules exist because Cody's training cutoff predates the features
@@ -51,13 +100,15 @@ stale or invented APIs.
 2. **CD INTO THE WORKSPACE.** Every `claude` invocation must run from
    inside the workspace dir so the project-local vanilla
    `.claude/settings.json` overrides the polluted `~/.claude/settings.json`.
-   Use `cody_implementation.run_in_workspace(...)` — it both `cd`'s and
-   scrubs leaky env vars (`ANTHROPIC_AUTH_TOKEN` etc).
+   Use `cody_implementation.run_in_workspace(...)` — it `cd`'s for you and
+   (by default, `scrub_env=False`) inherits the daemon's ZAI routing env.
+   Pass `scrub_env=True` only for a demo that must hit real Anthropic.
 
 3. **VERIFY ENDPOINT.** After every demo run, write `manifest.json` with
-   `endpoint_hit` populated. If your demo invokes `claude` and the response
-   shows ZAI/GLM hints, the demo accidentally hit ZAI — that's a **failure**
-   regardless of whether the code "worked." Use
+   `endpoint_hit` populated. `endpoint_hit` must match the task's
+   `endpoint_required` (for ZAI-wired demos that is `zai`); a mismatch in
+   either direction is a **failure** regardless of whether the code
+   "worked." Use
    `cody_implementation.detect_endpoint_from_text(stdout)` for a heuristic
    check; Simone's evaluator does the rigorous network observation.
 
@@ -132,7 +183,7 @@ result = run_in_workspace(
     workspace,
     ["uv", "run", "python", "src/main.py"],
     timeout=600,
-    scrub_env=True,  # default — strips leaky ANTHROPIC_* env vars
+    scrub_env=False,  # default — inherit the daemon's ZAI routing env
 )
 write_run_output(workspace, result.stdout)
 endpoint_hit = detect_endpoint_from_text(result.stdout + "\n" + result.stderr)
@@ -174,6 +225,14 @@ write_manifest(workspace, manifest)
 
 Set `acceptance_passed=True` only if your demo actually produced the
 output ACCEPTANCE.md required AND `endpoint_hit` matches `endpoint_required`.
+
+> **Session-link fields (P5 — do not author).** After the mission terminates,
+> the VP worker stamps `build_mission_id` / `build_session_id`
+> (the `vp-mission-<id>`) / `build_vp_id` / `build_cli_session_id` into
+> `manifest.json` (`vp/worker_loop.py::_stamp_demo_manifest_build_session`)
+> so the dashboard can open the build session in the 3-panel viewer. Never
+> invent, copy, or delete these fields — and never strip fields you don't
+> recognize when rewriting `manifest.json` on a later iteration.
 
 ### Step 5.5 — Deslop the demo diff (best-effort, NON-blocking)
 
@@ -226,7 +285,7 @@ stop. Do not invent a workaround.
 | Required API not in SOURCES/ | `append_build_note(... kind="gap")`. STOP. |
 | Required env var/config not in SOURCES/ | Same. |
 | Two competing patterns in SOURCES/ | `append_build_note(... kind="decision")` documenting which you picked and why. |
-| Demo runs but hits ZAI (endpoint_hit != endpoint_required) | `append_build_note(... kind="blocker")`. Possible env leak. |
+| Demo hits the wrong endpoint (`endpoint_hit` != `endpoint_required`) | `append_build_note(... kind="blocker")`. Possible env leak or settings precedence issue. |
 | `claude /login` session expired | `append_build_note(... kind="blocker")`. Operator intervention needed. |
 | Wall-time exceeded | Set `acceptance_passed=False`, write what you got, note the timeout in `BUILD_NOTES.md`. |
 
@@ -256,11 +315,12 @@ out whether the dual-environment dance holds up under a real demo build.
 Watch for:
 
 1. The first `claude` invocation under `run_in_workspace` should succeed
-   and produce output that `detect_endpoint_from_text` returns
-   `anthropic_native` for.
-2. If it returns `zai`, an env var is leaking — either UA's normal env
-   has `ANTHROPIC_AUTH_TOKEN` set in a way `_scrubbed_env()` doesn't catch,
-   or there's a settings.json precedence issue.
+   and produce output for which `detect_endpoint_from_text` returns the
+   endpoint matching the task's `endpoint_required` (for ZAI-wired demos,
+   `zai`).
+2. If it returns the wrong endpoint, an env var is leaking or being
+   scrubbed unexpectedly — check `run_in_workspace`'s `scrub_env` argument
+   and the workspace `.claude/settings.json` precedence.
 3. `manifest.json.endpoint_hit` is the durable record. Simone's
    evaluator (PR 10) will reject any demo whose `endpoint_hit` doesn't
    match `endpoint_required`.

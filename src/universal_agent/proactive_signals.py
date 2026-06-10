@@ -374,16 +374,70 @@ def apply_card_action(
     return get_card(conn, card_id) or card
 
 
+def _card_ttl_days() -> int:
+    """Resolve the pending-card TTL (`UA_PROACTIVE_CARD_TTL_DAYS`, default 14)."""
+    try:
+        return int(os.getenv("UA_PROACTIVE_CARD_TTL_DAYS", "14") or "14")
+    except (TypeError, ValueError):
+        return 14
+
+
+def generate_signal_cards(
+    conn: sqlite3.Connection,
+    *,
+    csi_db_path: Optional[Path] = None,
+    discord_db_path: Optional[Path] = None,
+    ttl_days: Optional[int] = None,
+) -> dict[str, int]:
+    """Generate/refresh the proactive **signal cards** from CSI + Discord feedstock.
+
+    This is the **pure-SQLite card-only core**: it upserts YouTube diamond cards
+    and Discord cards into ``proactive_signal_cards`` and runs the TTL sweep. It
+    does **no LLM work** and does **not** run convergence/topic-signature or
+    tutorial-build syncs (those have their own pipelines + systemd timers, e.g.
+    ``csi-convergence-sync``). It is therefore safe to call on a frequent
+    autonomous tick (``scripts/proactive_signal_card_sync.py``) without burning
+    LLM quota or double-running convergence.
+
+    ``sync_generated_cards`` is the superset the dashboard load calls (this core
+    + the convergence/tutorial syncs); both share this function so the card logic
+    lives in exactly one place. Returns ``{youtube, discord, expired}``.
+    """
+    counts = {"youtube": 0, "discord": 0, "expired": 0}
+    for card in generate_youtube_cards(csi_db_path):
+        upsert_generated_card(conn, card)
+        counts["youtube"] += 1
+    for card in generate_discord_cards(discord_db_path):
+        upsert_generated_card(conn, card)
+        counts["discord"] += 1
+    # Drain stale pending cards so an un-triaged queue can't pile up
+    # indefinitely now that the autonomous curation drainer is gone
+    # (UA_PROACTIVE_CARD_TTL_DAYS, default 14; set 0 to disable).
+    counts["expired"] = expire_stale_pending_cards(
+        conn, older_than_days=_card_ttl_days() if ttl_days is None else ttl_days
+    )
+    return counts
+
+
 def sync_generated_cards(
     conn: sqlite3.Connection,
     *,
     csi_db_path: Optional[Path] = None,
     discord_db_path: Optional[Path] = None,
 ) -> dict[str, int]:
-    counts = {"youtube": 0, "discord": 0, "topic_signatures": 0, "convergence_events": 0, "tutorial_build_tasks": 0, "expired": 0}
-    for card in generate_youtube_cards(csi_db_path):
-        upsert_generated_card(conn, card)
-        counts["youtube"] += 1
+    """Dashboard-load sync: the card core PLUS the convergence/tutorial syncs.
+
+    The card-producing work is delegated to :func:`generate_signal_cards`; this
+    superset additionally runs the topic-signature/convergence and tutorial-build
+    syncs (LLM-bearing, so NOT suitable for a frequent tick — they have their own
+    timers). Preserves the historical 6-key counts shape
+    (``youtube``/``discord``/``expired`` + ``topic_signatures``/
+    ``convergence_events``/``tutorial_build_tasks``).
+    """
+    counts = {"topic_signatures": 0, "convergence_events": 0, "tutorial_build_tasks": 0}
+    counts.update(
+        generate_signal_cards(conn, csi_db_path=csi_db_path, discord_db_path=discord_db_path)
+    )
     try:
         from universal_agent.services.proactive_convergence import (
             sync_topic_signatures_from_csi,
@@ -403,17 +457,6 @@ def sync_generated_cards(
         counts["tutorial_build_tasks"] = int(tutorial_counts.get("queued") or 0)
     except Exception:
         logger.debug("Failed syncing CSI tutorial build tasks", exc_info=True)
-    for card in generate_discord_cards(discord_db_path):
-        upsert_generated_card(conn, card)
-        counts["discord"] += 1
-    # Drain stale pending cards so an un-triaged queue can't pile up
-    # indefinitely now that the autonomous curation drainer is gone
-    # (UA_PROACTIVE_CARD_TTL_DAYS, default 14; set 0 to disable).
-    try:
-        ttl_days = int(os.getenv("UA_PROACTIVE_CARD_TTL_DAYS", "14") or "14")
-    except (TypeError, ValueError):
-        ttl_days = 14
-    counts["expired"] = expire_stale_pending_cards(conn, older_than_days=ttl_days)
     return counts
 
 

@@ -1,0 +1,21 @@
+[Unit]
+Description=Generate Universal Agent proactive signal cards hourly (autonomous, deploy-independent)
+
+[Timer]
+# OnCalendar wall-clock anchor — NEVER monotonic. Full-day hour range (00..23)
+# with the JOB gating dormancy at runtime in the script (dormancy_aware by
+# default; UA_PROACTIVE_CARD_SYNC_24_7=true runs around the clock) — the same
+# runtime-gated 24/7 pattern as hourly-intel-digest / csi-convergence-sync
+# (pinned in tests/unit/test_dormancy_schedule_consistency.py::_RUNTIME_GATED_TIMERS).
+# Minute :25 is an uncrowded slot (most timers cluster on :00) so this never
+# piles onto the other hourly jobs; RandomizedDelaySec spreads the actual fire
+# across :25–:27 for extra jitter. Persistent replays a slot missed inside a
+# deploy window; systemd-255 honors the timezone suffix.
+OnCalendar=*-*-* 00..23:25:00 America/Chicago
+Persistent=true
+RandomizedDelaySec=120
+AccuracySec=1min
+Unit=universal-agent-proactive-signal-card-sync.service
+
+[Install]
+WantedBy=timers.target

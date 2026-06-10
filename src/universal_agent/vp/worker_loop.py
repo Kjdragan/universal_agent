@@ -168,6 +168,64 @@ def _extract_first_target_path(constraints: dict[str, Any]) -> str:
             return value
     return ""
 
+
+def _stamp_demo_manifest_build_session(
+    *,
+    workspace_dir: str,
+    mission_id: str,
+    vp_id: str,
+    cody_session_id: str = "",
+) -> bool:
+    """P5 (15_demo_tutorial_pipeline_adr.md "Cross-cutting requirement"):
+    stamp the building VP mission onto the demo's manifest.json so dashboard
+    surfaces can deep-link the 3-panel session viewer.
+
+    ``build_session_id`` is the ``vp-mission-<id>`` — the id the viewer's
+    VP-mission special case (web-ui/app/page.tsx) and
+    ``viewer/resolver.py::mission_log_rel`` both key on; the demo workspace
+    itself is the ``workspace`` hint (mirrors the Kanban completed-card
+    enrichment in ``gateway_server.py::dashboard_todolist_completed``).
+
+    Additive merge via ``resolve_demo_artifacts_dir`` (handles the
+    ``vp-mission-<id>/`` subdir layout). Returns True when a manifest was
+    stamped. Best-effort: never raises, never creates a manifest.
+    """
+    try:
+        from universal_agent.services.cody_implementation import (
+            resolve_demo_artifacts_dir,
+        )
+
+        ws = Path(str(workspace_dir or "")).expanduser()
+        if not ws.is_dir():
+            return False
+        manifest_path = resolve_demo_artifacts_dir(ws) / "manifest.json"
+        if not manifest_path.is_file():
+            return False
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        if not isinstance(payload, dict):
+            return False
+        payload["build_mission_id"] = str(mission_id or "")
+        payload["build_session_id"] = str(mission_id or "")
+        payload["build_vp_id"] = str(vp_id or "")
+        if cody_session_id:
+            payload["build_cli_session_id"] = str(cody_session_id)
+        manifest_path.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=True, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return True
+    except Exception:
+        logger.warning(
+            "Demo manifest build-session stamp failed for %s (mission %s)",
+            workspace_dir,
+            mission_id,
+            exc_info=True,
+        )
+        return False
+
 # ── GitHub repo for doc-maintenance PRs ──────────────────────────────────────
 _GH_REPO = os.getenv("UA_GH_REPO", "Kjdragan/universal_agent")
 
@@ -873,6 +931,40 @@ class VpWorkerLoop:
                     _src_item = task_hub.get_item(th_conn, _source_task_id)
                     _src_kind = str((_src_item or {}).get("source_kind") or "")
                     _src_meta = dict((_src_item or {}).get("metadata") or {})
+
+                    # P5 (15_demo_tutorial_pipeline_adr.md "Cross-cutting
+                    # requirement"): stamp the building mission's identity onto
+                    # the demo manifest BEFORE terminal routing so
+                    # finalize_direct_demo / the evaluator / the dashboard demo
+                    # walker all see the session link. Deterministic code
+                    # stamping (never trusts the LLM to copy ids); execution-
+                    # mode-agnostic (CLI and ZAI/SDK clients both land here).
+                    if event_type == "vp.mission.completed" and _src_kind in (
+                        "cody_demo_task",
+                        "tutorial_build",
+                    ):
+                        _dispatch_meta = (
+                            _src_meta.get("dispatch")
+                            if isinstance(_src_meta.get("dispatch"), dict)
+                            else {}
+                        )
+                        _stamp_result_ws = ""
+                        if str(outcome.result_ref or "").startswith("workspace://"):
+                            _stamp_result_ws = str(outcome.result_ref).removeprefix("workspace://").strip()
+                        for _demo_ws in (
+                            str(_src_meta.get("workspace_dir") or "").strip(),
+                            str((outcome.payload or {}).get("cli_workspace_dir") or "").strip(),
+                            _stamp_result_ws,
+                        ):
+                            if _demo_ws and _stamp_demo_manifest_build_session(
+                                workspace_dir=_demo_ws,
+                                mission_id=mission_id,
+                                vp_id=self.vp_id,
+                                cody_session_id=str(
+                                    (_dispatch_meta or {}).get("cody_session_id") or ""
+                                ).strip(),
+                            ):
+                                break
 
                     if _src_kind == "cody_demo_task" and event_type == "vp.mission.completed":
                         # Consolidated, SINGLE owner of cody_demo_task terminal routing.

@@ -15,7 +15,6 @@ MODE_EXPLAINER_ONLY = "explainer_only"
 MODE_EXPLAINER_PLUS_CODE = "explainer_plus_code"
 MODE_AUTO = "auto"
 LEARNING_MODE_CONCEPT_ONLY = "concept_only"
-LEARNING_MODE_CONCEPT_PLUS_IMPLEMENTATION = "concept_plus_implementation"
 _CODE_HINT_KEYWORDS = {
     "code",
     "coding",
@@ -130,8 +129,8 @@ def _coerce_bool(value: Any, default: bool = True) -> bool:
 
 
 def _learning_mode_from_mode(mode: str) -> str:
-    if mode == MODE_EXPLAINER_PLUS_CODE:
-        return LEARNING_MODE_CONCEPT_PLUS_IMPLEMENTATION
+    # P3: the Tutorial tier is teaching-doc only; learning_mode is pinned.
+    # ``mode`` still records code-orientation (vision-analysis depth only).
     return LEARNING_MODE_CONCEPT_ONLY
 
 
@@ -226,8 +225,10 @@ def transform(ctx: dict[str, Any]) -> dict[str, Any] | None:
         "Invalid paths: /opt/universal_agent/UA_ARTIFACTS_DIR/... and UA_ARTIFACTS_DIR/...",
         f"Use this absolute durable base path: {artifacts_root}/youtube-tutorial-creation/...",
         "Required baseline artifacts: README.md, CONCEPT.md, manifest.json.",
-        "If learning_mode is concept_plus_implementation, also create IMPLEMENTATION.md and implementation/ with runnable code.",
-        "If learning_mode is concept_only, keep implementation procedural (no repo bootstrap scripts).",
+        "Tutorial tier is TEACHING-DOC ONLY: produce study material on how to USE the feature/capability shown in the video.",
+        "Do NOT create an implementation/ folder, a runnable code project, or any repo scaffold.",
+        "Runnable demos are built post-gate in /opt/ua_demos by the separate tutorial_build Task Hub lane - never by this run.",
+        "IMPLEMENTATION.md, when useful, is a procedural usage runbook (commands, configuration, workflow) - not a code project.",
         "Create required artifacts first and keep them even if extraction fails.",
         "On extraction failure, set manifest status to degraded_transcript_only or failed (never leave empty run dirs).",
         f"video_url: {video_url}",
@@ -238,11 +239,10 @@ def transform(ctx: dict[str, Any]) -> dict[str, Any] | None:
         f"mode: {mode}",
         f"learning_mode: {learning_mode}",
         f"allow_degraded_transcript_only: {str(allow_degraded).lower()}",
-        "Set implementation_required=true only when transcript+metadata confirm software/coding content.",
-        "If learning_mode is concept_plus_implementation, include runnable code in implementation/ and explain how to run it.",
+        "Always set implementation_required=false in manifest.json.",
         "Transcript path: youtube-transcript-api is source of truth. yt-dlp is metadata-only.",
-        "Video analysis path: for concept_plus_implementation runs only, use ZAI Vision video analysis when available.",
-        "Skip optional video/vision analysis for concept_only runs. Continue with transcript-only mode when visual processing is unavailable.",
+        "Video analysis path: for code-oriented runs (mode=explainer_plus_code) only, use ZAI Vision video analysis when available.",
+        "Skip optional video/vision analysis for non-code runs (mode=explainer_only). Continue with transcript-only mode when visual processing is unavailable.",
         "DESCRIPTION LINK ANALYSIS: After metadata ingestion (Step 3d), check metadata.description for useful links.",
         "Extract URLs from the video description. Classify each as: github_repo, kaggle_competition, documentation, dataset, or other.",
         "For high-value links (GitHub repos, Kaggle problems, technical docs): fetch their content using DIRECT connections (no residential proxy).",

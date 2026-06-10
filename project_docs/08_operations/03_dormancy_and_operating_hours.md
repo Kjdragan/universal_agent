@@ -295,6 +295,7 @@ guard tests in `tests/unit/test_cron_dormancy_defaults.py` keep this honest.
 |---|---|---|---|
 | `hourly_intel_digest` | systemd timer `00..23`, runtime-gated | **Windowed by default**, runtime-flippable | `UA_INTEL_DIGEST_24_7=true` |
 | `csi_convergence_sync` | systemd timer `00..23`, runtime-gated | **Windowed by default**, runtime-flippable | `UA_CSI_CONVERGENCE_SYNC_24_7=true` |
+| `proactive_signal_card_sync` | systemd timer `00..23:25`, runtime-gated | **Windowed by default**, runtime-flippable | `UA_PROACTIVE_CARD_SYNC_24_7=true` |
 | `cron_artifact_reminders_sweep` | `*/30 6-21` | Windowed (also self-gates per reminder) | — |
 | `vp_mission_pr_reconciler` | `*/15 6-20` | Windowed (job-specific 6–20) | — |
 | `hackernews_snapshot` | `0,30 6-21` | Windowed (source currently parked) | — |
@@ -357,6 +358,7 @@ is not memoized).
 |---|---|---|---|
 | `hourly_intel_digest` (systemd) | `UA_INTEL_DIGEST_24_7` | `00..23` timer, runtime-gated | set var `true` in Infisical, then reinstall the timer (below) |
 | `csi_convergence_sync` (systemd) | `UA_CSI_CONVERGENCE_SYNC_24_7` | `00..23` timer, runtime-gated | set var `true` in Infisical, then reinstall the timer (below) |
+| `proactive_signal_card_sync` (systemd) | `UA_PROACTIVE_CARD_SYNC_24_7` | `00..23:25` timer, runtime-gated | set var `true` in Infisical, then reinstall the timer (below) |
 
 The env vars live in Infisical (dev + prod) defaulted to `false` (explicit
 windowed) so the lever is discoverable. Deliberately **excluded** from the pilot:

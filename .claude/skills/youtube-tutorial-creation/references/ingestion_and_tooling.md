@@ -53,11 +53,11 @@ Use for:
 
 Use for:
 
-1. Supplemental visual analysis for `concept_plus_implementation` runs.
+1. Supplemental visual analysis for code-oriented runs (`mode=explainer_plus_code`).
 2. Timestamped scene/event extraction.
-3. Fallback when transcripts are weak and visual context is needed for implementation.
+3. Fallback when transcripts are weak and visual context is needed for the usage runbook.
 
-Do not run optional video/vision analysis for `concept_only` runs.
+Do not run optional video/vision analysis for non-code runs (`mode=explainer_only`).
 
 ### Official YouTube API
 
@@ -71,7 +71,7 @@ Use for:
 1. Normalize `video_url` and `video_id`.
 2. Run core ingestion script (parallel transcript + metadata).
 3. Keep transcript source of truth on `youtube-transcript-api`.
-4. Attempt ZAI Vision video analysis when feasible and only for `concept_plus_implementation` runs.
+4. Attempt ZAI Vision video analysis when feasible and only for code-oriented runs (`mode=explainer_plus_code`).
 5. If visual fails but transcript exists:
    1. Continue with `degraded_transcript_only`.
    2. Still emit complete required artifacts.
