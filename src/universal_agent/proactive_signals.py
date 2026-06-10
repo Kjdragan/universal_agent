@@ -1,3 +1,35 @@
+"""Proactive signal cards — generation, status lifecycle, and dashboard actions.
+
+WHO WRITES ``proactive_signal_cards.status`` (the complete set — there is no other
+writer, and in particular **nothing auto-rejects a card**):
+
+- ``upsert_generated_card``  — INSERTs new cards as ``'pending'``; on conflict it
+  updates content but **never changes status** (status is absent from its
+  ``ON CONFLICT DO UPDATE SET`` clause), so regenerating a card cannot re-status it.
+- ``apply_card_action``      — operator dashboard action button → ``'actioned'``
+  (any non-``track_topic`` action) or ``'tracking'`` (``track_topic``). Never
+  ``'rejected'``.
+- ``record_feedback``        — sets status to whatever the caller passes
+  (``COALESCE(?, status)``). Its ONLY caller-with-a-status is the dashboard
+  feedback endpoint (``gateway_server`` ``PATCH /proactive-signals/{id}/feedback``);
+  the dashboard "Reject" button is what produces ``'rejected'``. **Operator-driven,
+  per click — there is no batch/automatic rejecter anywhere in this codebase.**
+- ``delete_card``            — the silent dashboard delete button → ``'deleted'``.
+- ``expire_stale_pending_cards`` — the ONLY *automatic* status mutation: a TTL sweep
+  (``UA_PROACTIVE_CARD_TTL_DAYS``, default 14) that soft-deletes (``'deleted'``,
+  NOT ``'rejected'``) ``pending`` cards whose source video has aged out of the CSI
+  window. Replaced the retired autonomous curation drainer (2026-06).
+
+So a pile of ``rejected`` rows means operators clicked Reject; a pile of ``deleted``
+rows means the TTL sweep (or the delete button) ran. Do not attribute rejections to
+a preference model or a sweeper — that mistake was made during the 2026-06
+investigation; the actual writer set is above.
+
+Card GENERATION (``sync_generated_cards``) has no autonomous trigger: it runs only
+when the proactive-signals dashboard is loaded with ``?sync`` (or ``force_sync``);
+see ``gateway_server`` ``dashboard_proactive_signals``.
+"""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone

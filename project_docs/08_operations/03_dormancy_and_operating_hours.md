@@ -12,7 +12,7 @@ code_paths:
   - src/universal_agent/services/invariants/proactive_pipeline_invariants.py
   - tests/unit/test_cron_dormancy_defaults.py
   - tests/unit/test_dormancy_schedule_consistency.py
-last_verified: 2026-06-09
+last_verified: 2026-06-10
 ---
 
 # Dormancy & Operating Hours
@@ -486,6 +486,19 @@ discipline requirement, not an enforced one.
   Changing the window in one place (e.g. `_ACTIVE_END_HOUR`) does **not** change
   the cron literals in `gateway_server.py` or the heartbeat HH:MM config — they're
   separate sources of truth that happen to agree.
+- **Confirm WHICH substrate fires a job before reasoning about its dormancy.**
+  Whether a job runs overnight, and whether dormancy even applies to it, depends
+  on whether it fires from a **systemd timer** or an **in-process cron** — and a
+  job migrated to a timer leaves a `"enabled": false` *tombstone* in
+  `cron_jobs.json` plus a stale workspace `run.log`, both of which read as "this
+  is off / hasn't run." It is not off. Check the timer
+  (`systemctl list-timers 'universal-agent-*'`) and the canonical migrated set
+  (`systemd_migrated_jobs.py::SYSTEMD_MIGRATED_SYSTEM_JOBS`) first. Full diagnostic:
+  [`03_agents/04_cron_and_scheduling.md`](../03_agents/04_cron_and_scheduling.md)
+  § "Is this scheduled job actually running?". (Fixed-time overnight jobs such as
+  `nightly_wiki` at 03:15 are a *deliberate* dormant-window exception — see
+  "Fixed-time crons" below — they run as scheduled; the guard test only emits an
+  informational soft-warn, never a failure.)
 - **`zoneinfo` fallback is permissive.** If tzdata is missing,
   `_within_active_window` returns `True` for every hour — reminders fire 24/7 rather
   than being lost. Don't read a `True` as "definitely active."
