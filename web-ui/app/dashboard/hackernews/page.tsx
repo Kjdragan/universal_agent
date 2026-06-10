@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -286,8 +286,8 @@ function TopStoriesPanel({
   generatedAt?: string;
 }) {
   const subAge = generatedAt
-    ? `refreshed ${formatAge((Date.now() - new Date(generatedAt).getTime()) / 1000)} ago · cron */30m`
-    : "cron */30m";
+    ? `refreshed ${formatAge((Date.now() - new Date(generatedAt).getTime()) / 1000)} ago · refreshes on open`
+    : "refreshes on open";
   const top = (stories ?? []).slice(0, 10);
   return (
     <section style={panelStyle}>
@@ -1551,6 +1551,7 @@ export default function HackerNewsPage() {
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [autoRefreshing, setAutoRefreshing] = useState(false);
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const [, force] = useState(0);
 
@@ -1606,19 +1607,36 @@ export default function HackerNewsPage() {
     }
   }, []);
 
-  const refresh = useCallback(async () => {
-    setRefreshing(true);
-    try {
-      await fetch(`${API}/refresh`, { method: "POST" });
-      await load();
-    } finally {
-      setRefreshing(false);
-    }
-  }, [load]);
+  const refresh = useCallback(
+    async (opts?: { auto?: boolean }) => {
+      const auto = opts?.auto === true;
+      setRefreshing(true);
+      if (auto) setAutoRefreshing(true);
+      try {
+        await fetch(`${API}/refresh`, { method: "POST" });
+        await load();
+      } finally {
+        setRefreshing(false);
+        if (auto) setAutoRefreshing(false);
+      }
+    },
+    [load],
+  );
 
+  // Auto-refresh on view: paint whatever we already have instantly, then pull a
+  // fresh snapshot so the page is current the moment you open it. Freshness is
+  // driven by attention, not a background cron — nothing runs when no one is
+  // here, and a glance is always a guaranteed live pull. The ref guard keeps
+  // React's dev double-mount (and any re-render) from firing it twice.
+  const didAutoRefresh = useRef(false);
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (didAutoRefresh.current) return;
+    didAutoRefresh.current = true;
+    void (async () => {
+      await load();
+      await refresh({ auto: true });
+    })();
+  }, [load, refresh]);
 
   // Pure UI tick — re-renders so the "Nm ago" string updates. No network.
   useEffect(() => {
@@ -1725,7 +1743,7 @@ export default function HackerNewsPage() {
           </span>
           <StatusPill generatedAt={snap?.meta.generated_at} />
           <button
-            onClick={refresh}
+            onClick={() => void refresh()}
             disabled={refreshing}
             style={{
               display: "inline-flex",
@@ -1751,6 +1769,29 @@ export default function HackerNewsPage() {
           </button>
         </div>
       </div>
+
+      {autoRefreshing && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "7px 18px",
+            borderBottom: `1px solid ${T.line}`,
+            background: T.bg2,
+            color: T.t1,
+            fontFamily: T.fontMono,
+            fontSize: 11.5,
+          }}
+        >
+          <RefreshCw
+            size={12}
+            style={{ animation: "hn-spin 1.2s linear infinite" }}
+          />
+          Refreshing on open — pulling the latest from Hacker News so you&rsquo;re
+          looking at a live snapshot. One moment…
+        </div>
+      )}
 
       {/* Search */}
       <div
