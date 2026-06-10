@@ -91,7 +91,7 @@ def effective_source_thresholds() -> Dict[str, float]:
 # source entirely (retired adapters should be removed from this table, not
 # given an unreachable threshold).
 SOURCE_THRESHOLDS_HOURS: Dict[str, float] = {
-    "hackernews": 36.0,                  # bursty: overnight convergence /refresh pulls (the */30 snapshot cron is disabled, #734). Observed normal inter-burst gap ~27h, so 36h flags a real multi-day outage without false-flagging the daytime quiet. Tune as cadence data accrues.
+    "hackernews": 120.0,                 # bursty: overnight convergence /refresh pulls (the */30 snapshot cron is disabled, #734). 30d live data (2026-06-10): a legitimate-but-quiet 94h gap occurred (06-06→06-09) while HN stayed alive; the next-largest gap was 27.6h. The old 36h false-flagged that 94h bursty spell (driving the proactive_health digest to flap critical/clear). 120h clears the observed 94h max with margin while still catching a real ≥5-day HN outage.
     "csi_analytics": 12.0,               # downstream aggregator — depends on upstream cadence
     "youtube_channel_rss": 12.0,         # 444-channel watchlist, hourly-ish per channel
     "threads_owned": 12.0,               # owned-handle polling
@@ -170,7 +170,10 @@ def _per_source_last_seen(
             "2026-06-06: hackernews un-parked + threshold widened 3h->36h — the "
             "#757 park keyed on the (disabled) snapshot cron, but HN stays alive "
             "via the overnight convergence /refresh, so the park had masked a "
-            "live bursty source."
+            "live bursty source. 2026-06-10: widened 36h->120h — 30d live data "
+            "showed a legitimate 94h bursty gap (max; next-largest 27.6h) that "
+            "36h false-flagged, which also drove the proactive_health digest to "
+            "re-spam on every critical/clear flip."
         ),
     },
 )

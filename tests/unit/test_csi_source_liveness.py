@@ -248,6 +248,34 @@ def test_hackernews_fires_when_truly_dead(tmp_path: Path, monkeypatch) -> None:
     assert "hackernews" in stale
 
 
+def test_hackernews_observed_max_bursty_gap_does_not_fire(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Locks the data-driven threshold. 30d of live csi.db (2026-06-10) showed a
+    legitimate-but-quiet 94h gap (06-06->06-09) while HN stayed alive; the
+    next-largest gap was 27.6h. The old 36h threshold false-flagged that 94h
+    spell, which made the proactive_health digest re-spam on every critical/clear
+    flip. The threshold must sit comfortably above the observed max so a normal
+    bursty quiet spell never fires."""
+    monkeypatch.setenv("UA_HACKERNEWS_SNAPSHOT_ENABLED", "0")
+    from universal_agent.services.invariants.csi_source_liveness import (
+        SOURCE_THRESHOLDS_HOURS,
+        effective_source_thresholds,
+    )
+    # Must clear the observed real-world max gap with margin (not the fragile 2h
+    # that 96h would give over a 94h observation).
+    assert SOURCE_THRESHOLDS_HOURS["hackernews"] >= 96.0
+    db = tmp_path / "csi.db"
+    rows = [
+        (s, _hours_ago(0.5)) for s in effective_source_thresholds() if s != "hackernews"
+    ]
+    rows.append(("hackernews", _hours_ago(94.0)))  # the observed legitimate max gap
+    _seed_events(db, rows)
+    findings = run_invariants({"csi_db_path": db})
+    matches = [f for f in findings if f.metric_key == "csi_source_liveness"]
+    assert matches == []
+
+
 def test_completely_missing_source_emits_finding(tmp_path: Path) -> None:
     """A monitored source with ZERO events in the recent window should also
     fire (never_seen state, distinct from stale). Seed all other sources
