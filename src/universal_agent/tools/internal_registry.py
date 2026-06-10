@@ -88,6 +88,7 @@ from universal_agent.tools.vp_orchestration import (
     vp_wait_mission_wrapper,
 )
 from universal_agent.tools.wiki_bridge import (
+    wiki_ingest_external_source_wrapper,
     wiki_init_vault_wrapper,
     wiki_lint_wrapper,
     wiki_query_wrapper,
@@ -144,6 +145,7 @@ def get_core_internal_tools() -> List[Callable]:
         wiki_sync_internal_memory_wrapper,
         wiki_query_wrapper,
         wiki_lint_wrapper,
+        wiki_ingest_external_source_wrapper,
         vp_dispatch_mission_wrapper,
         vp_get_mission_wrapper,
         vp_list_missions_wrapper,
