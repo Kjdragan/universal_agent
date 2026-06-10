@@ -515,7 +515,7 @@ def generate_discord_cards(discord_db_path: Optional[Path], *, limit: int = 60) 
                 "card_id": _card_id("discord", str(row["id"])),
                 "source": "discord",
                 "card_type": "insight",
-                "title": f"Discord insight: {topic[:180]}",
+                "title": topic[:180],
                 "summary": str(row["summary"] or "").strip()[:1200],
                 "priority": 3 if urgency == "high" else 2,
                 "confidence_score": max(0.35, min(0.95, confidence)),
