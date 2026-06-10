@@ -6,11 +6,12 @@ subsystem: agents-cron
 code_paths:
   - src/universal_agent/cron_service.py
   - src/universal_agent/gateway_server.py
+  - src/universal_agent/systemd_migrated_jobs.py
   - src/universal_agent/task_hub.py
   - deployment/systemd/
   - scripts/install_vps_phase_a_batch1_timers.sh
   - scripts/install_vps_phase_a_batch2_timers.sh
-last_verified: 2026-06-05
+last_verified: 2026-06-10
 ---
 
 # Cron & Scheduling
@@ -76,6 +77,44 @@ so a hung network/LLM run blocks its own timer's next fire forever. The
 network/LLM units bound it to their old in-process budget
 (`proactive-report` 600, `proactive-artifact-digest` 300, `insight-scoring-health`
 600); pure-FS/SQLite units keep `infinity`.
+
+### Is this scheduled job actually running? (diagnostic — read this before concluding "disabled")
+
+**The trap:** for a job that has been migrated to a systemd timer, the two
+artifacts you instinctively check both point the *wrong* way:
+
+- **`cron_jobs.json` shows `"enabled": false`** — this is a **tombstone, not "off."**
+  `gateway_server.py::_register_system_cron_job` deliberately flips the persisted
+  in-process row to disabled on every boot so the systemd timer is the sole firer
+  (no double-fire). The row stays in the file forever, looking dead.
+- **The in-process workspace log is stale** —
+  `AGENT_RUN_WORKSPACES/cron_<job>/run.log` stops advancing at the migration date,
+  because the in-process cron no longer fires. The job *is* running; its real
+  output is in the systemd journal, not here.
+
+Concluding "this cron is disabled" from either artifact alone is wrong, and it is
+an easy mistake (it was made during the 2026-06 nightly-wiki investigation). The
+correct order of checks:
+
+1. **Is the job migrated?** Look it up in
+   `systemd_migrated_jobs.py::SYSTEMD_MIGRATED_SYSTEM_JOBS` (the SOURCE OF TRUTH;
+   `systemd_migrated_jobs.py::is_migrated_to_systemd` is the predicate). If it's
+   there, the systemd timer is the firer — ignore the `cron_jobs.json` row.
+2. **Check the timer, not the JSON:**
+   ```bash
+   systemctl list-timers 'universal-agent-*' --all      # NEXT / LAST / unit, all migrated jobs
+   systemctl is-enabled universal-agent-<job>.timer     # enabled?
+   systemctl is-active  universal-agent-<job>.timer     # active (armed)?
+   systemctl show universal-agent-<job>.timer -p LastTriggerUSec -p NextElapseUSecRealtime
+   ```
+3. **Read the real run output from the journal**, not the stale workspace log:
+   ```bash
+   sudo journalctl -u universal-agent-<job>.service --since '3 days ago' --no-pager
+   ```
+
+A non-migrated job (not in the frozenset) is the opposite: `cron_jobs.json`
+`enabled` + its `run.log` ARE authoritative, and there is no systemd unit.
+Decide which world you're in (step 1) before trusting either artifact.
 
 ## Components
 
