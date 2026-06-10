@@ -201,3 +201,128 @@ def test_enabled_true_existing_row_calls_update_job_with_enabled_true() -> None:
     assert call_args.args[1]["enabled"] is True
     mock_service.add_job.assert_not_called()
     assert result == updated_dict
+
+
+# ---------------------------------------------------------------------------
+# Systemd-migration tombstone breadcrumb
+#
+# When a job is force-disabled because it was migrated to a systemd timer, the
+# persisted cron_jobs.json row is stamped with a `metadata.disabled_reason`
+# breadcrumb naming the timer that actually fires it. This prevents the row from
+# reading as a dead cron (a real 2026-06 investigation error). These tests patch
+# `_is_migrated_to_systemd` so they don't depend on the live frozenset content.
+# ---------------------------------------------------------------------------
+
+
+def test_migrated_disable_stamps_disabled_reason_breadcrumb() -> None:
+    """enabled=False + migrated job + enabled row → update_job disables AND
+    stamps metadata.disabled_reason naming the systemd timer unit."""
+    from universal_agent import gateway_server
+
+    existing = SimpleNamespace(job_id="job-nw", enabled=True, metadata={})
+    updated_dict = {"job_id": "job-nw", "enabled": False}
+    updated_obj = SimpleNamespace(
+        job_id="job-nw", enabled=False, to_dict=MagicMock(return_value=updated_dict)
+    )
+    mock_service = MagicMock()
+    mock_service.update_job = MagicMock(return_value=updated_obj)
+    mock_service.add_job = MagicMock()
+
+    with patch.object(gateway_server, "_cron_service", mock_service), patch.object(
+        gateway_server, "_find_cron_job_by_system_job", return_value=existing
+    ), patch.object(gateway_server, "_is_migrated_to_systemd", return_value=True):
+        result = gateway_server._register_system_cron_job(
+            **_kwargs(system_job="nightly_wiki", enabled=False)
+        )
+
+    mock_service.update_job.assert_called_once_with(
+        "job-nw",
+        {
+            "enabled": False,
+            "metadata": {
+                "disabled_reason": "migrated_to_systemd:universal-agent-nightly-wiki.timer"
+            },
+        },
+    )
+    mock_service.add_job.assert_not_called()
+    assert result == updated_dict
+
+
+def test_migrated_disable_already_disabled_missing_breadcrumb_is_stamped_once() -> None:
+    """A migrated row that is already disabled but lacks the breadcrumb gets it
+    stamped once (so the marker appears for jobs disabled before this change)."""
+    from universal_agent import gateway_server
+
+    existing = SimpleNamespace(job_id="job-nw", enabled=False, metadata={})
+    updated_obj = SimpleNamespace(
+        job_id="job-nw", enabled=False, to_dict=MagicMock(return_value={"job_id": "job-nw"})
+    )
+    mock_service = MagicMock()
+    mock_service.update_job = MagicMock(return_value=updated_obj)
+
+    with patch.object(gateway_server, "_cron_service", mock_service), patch.object(
+        gateway_server, "_find_cron_job_by_system_job", return_value=existing
+    ), patch.object(gateway_server, "_is_migrated_to_systemd", return_value=True):
+        gateway_server._register_system_cron_job(
+            **_kwargs(system_job="nightly_wiki", enabled=False)
+        )
+
+    args = mock_service.update_job.call_args.args
+    assert args[1]["metadata"]["disabled_reason"].endswith(
+        "universal-agent-nightly-wiki.timer"
+    )
+
+
+def test_migrated_disable_breadcrumb_present_is_noop_no_churn() -> None:
+    """A migrated row already disabled WITH the correct breadcrumb is a no-op —
+    no update_job call, so cron_jobs.json isn't re-saved on every gateway boot."""
+    from universal_agent import gateway_server
+
+    existing = SimpleNamespace(
+        job_id="job-nw",
+        enabled=False,
+        metadata={
+            "disabled_reason": "migrated_to_systemd:universal-agent-nightly-wiki.timer"
+        },
+    )
+    mock_service = MagicMock()
+    mock_service.update_job = MagicMock()
+
+    with patch.object(gateway_server, "_cron_service", mock_service), patch.object(
+        gateway_server, "_find_cron_job_by_system_job", return_value=existing
+    ), patch.object(gateway_server, "_is_migrated_to_systemd", return_value=True):
+        result = gateway_server._register_system_cron_job(
+            **_kwargs(system_job="nightly_wiki", enabled=False)
+        )
+
+    assert result is None
+    mock_service.update_job.assert_not_called()
+
+
+def test_reenable_clears_stale_breadcrumb() -> None:
+    """enabled=True (rollback / un-migrated) on a row that carried a stale
+    disabled_reason → the update metadata clears it (merge would otherwise keep it)."""
+    from universal_agent import gateway_server
+
+    existing = SimpleNamespace(
+        job_id="job-nw",
+        enabled=False,
+        metadata={
+            "disabled_reason": "migrated_to_systemd:universal-agent-nightly-wiki.timer"
+        },
+    )
+    updated_obj = SimpleNamespace(
+        job_id="job-nw", enabled=True, to_dict=MagicMock(return_value={"job_id": "job-nw"})
+    )
+    mock_service = MagicMock()
+    mock_service.update_job = MagicMock(return_value=updated_obj)
+
+    with patch.object(gateway_server, "_cron_service", mock_service), patch.object(
+        gateway_server, "_find_cron_job_by_system_job", return_value=existing
+    ):
+        gateway_server._register_system_cron_job(
+            **_kwargs(system_job="nightly_wiki", enabled=True)
+        )
+
+    args = mock_service.update_job.call_args.args
+    assert args[1]["metadata"]["disabled_reason"] == ""

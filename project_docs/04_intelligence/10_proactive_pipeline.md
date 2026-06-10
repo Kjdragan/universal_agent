@@ -267,6 +267,35 @@ so no card→brief feeder was added. To stop un-triaged cards piling up,
 (soft-deletes `pending` cards not refreshed within `UA_PROACTIVE_CARD_TTL_DAYS`,
 default 14; operator-triaged cards are never touched).
 
+**How `proactive_signal_cards` are generated — there is NO autonomous trigger.**
+`proactive_signals.py::sync_generated_cards` (which calls `generate_youtube_cards`
++ `generate_discord_cards` + `expire_stale_pending_cards`) runs **only** when the
+proactive-signals dashboard is loaded with a sync request — its single caller is
+`gateway_server.py::dashboard_proactive_signals`, gated on `?sync` / `force_sync`
+and a cooldown (`UA_PROACTIVE_SIGNALS_SYNC_COOLDOWN_SECONDS`, default 300s). There
+is no cron and no heartbeat that generates cards. So if no one opens that
+dashboard, **no new cards appear even though the upstream CSI feedstock keeps
+flowing** — the cards are pull-on-open, the CSI `events` table is the continuous
+part. (This is the gap an autonomous "card-generation tick" would close.)
+
+**Card status lifecycle — nothing auto-rejects.** The complete writer set for
+`proactive_signal_cards.status` is documented in the `proactive_signals.py` module
+docstring; the load-bearing facts: new cards are `pending`; `'rejected'` is written
+**only** by the operator "Reject" button (the dashboard feedback endpoint via
+`record_feedback`) — there is **no batch/automatic rejecter anywhere**; the only
+*automatic* status mutation is `expire_stale_pending_cards` → `'deleted'` (the TTL
+sweep). A pile of `rejected` rows means operators clicked Reject; a pile of
+`deleted` rows means the TTL sweep ran. Do not attribute rejections to a preference
+model or a sweeper (a 2026-06 investigation made that wrong call).
+
+**The `nightly_wiki` consumer runs via a systemd timer, not the in-process cron.**
+`nightly_wiki_agent` reads `pending` cards at 03:15 America/Chicago and is **not**
+disabled — it was migrated to `universal-agent-nightly-wiki.timer` (S5 Phase A), so
+its in-process `cron_jobs.json` row is a `"enabled": false` tombstone. Before
+concluding it is off, see
+[`03_agents/04_cron_and_scheduling.md`](../03_agents/04_cron_and_scheduling.md)
+§ "Is this scheduled job actually running?".
+
 ### 3. Reflection engine (autonomous ideation) — WIRED (idle-only)
 
 `reflection_engine.py` activates only when the Task Hub dispatch queue is empty
