@@ -14,7 +14,7 @@ code_paths:
   - src/universal_agent/scripts/hourly_intel_digest_cron.py
   - src/universal_agent/services/recent_briefs_index.py
   - src/universal_agent/proactive_signals.py
-last_verified: 2026-06-09
+last_verified: 2026-06-10
 ---
 
 # Proactive Pipeline
@@ -253,6 +253,19 @@ untouched — they have independent consumers. The `"curation": "maintenance"`
 entry in `vp/mission_priority.py` is retained as the maintenance-tier exemplar
 referenced by the priority regression tests and is inert. No new
 `source_kind="proactive_signal"` Task Hub items are produced.
+
+**Card-lane cleanup (2026-06).** With the curation drainer gone, the card lane
+was slimmed to a pure dashboard "recent signals" glance:
+`generate_youtube_cards` now emits only **diamond / transcript_insight** cards
+(standout single videos). The old **cluster** cards (keyword co-occurrence
+within YouTube, no LLM) were retired — they duplicated, more weakly, what the
+convergence pipeline already does cross-channel with an LLM judge. An empirical
+dry-run also showed feeding diamond cards into the convergence/brief pipeline
+yields almost nothing net-new (≈1 of 20 diamonds isn't already in a cluster),
+so no card→brief feeder was added. To stop un-triaged cards piling up,
+`sync_generated_cards` now calls `expire_stale_pending_cards` each run
+(soft-deletes `pending` cards not refreshed within `UA_PROACTIVE_CARD_TTL_DAYS`,
+default 14; operator-triaged cards are never touched).
 
 ### 3. Reflection engine (autonomous ideation) — WIRED (idle-only)
 

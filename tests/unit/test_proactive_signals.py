@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import json
 import sqlite3
 from unittest.mock import patch
 
 from universal_agent import task_hub
 from universal_agent.proactive_signals import (
+    CARD_STATUS_DELETED,
+    CARD_STATUS_PENDING,
     apply_card_action,
+    expire_stale_pending_cards,
     generate_youtube_cards,
     list_cards,
     record_feedback,
@@ -114,6 +118,8 @@ def test_youtube_signal_cards_prioritize_transcript_and_filter_shorts(tmp_path):
     cards = generate_youtube_cards(csi_db)
 
     assert cards
+    # Cluster cards were retired 2026-06 — only diamond/transcript_insight remain.
+    assert not [c for c in cards if c["card_type"] == "cluster"]
     joined = "\n".join(card["summary"] + " " + json.dumps(card["evidence"]) for card in cards)
     assert "short_video" not in joined
     transcript_cards = [card for card in cards if "Transcript" in card["summary"] or card["card_type"] == "transcript_insight"]
@@ -121,6 +127,35 @@ def test_youtube_signal_cards_prioritize_transcript_and_filter_shorts(tmp_path):
     assert transcript_cards
     assert metadata_cards
     assert max(card["confidence_score"] for card in transcript_cards) > max(card["confidence_score"] for card in metadata_cards)
+
+
+def test_expire_stale_pending_cards(tmp_path):
+    conn = sqlite3.connect(tmp_path / "activity.db")
+    conn.row_factory = sqlite3.Row
+    old = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+
+    def _card(cid, title):
+        return {"card_id": cid, "source": "youtube", "card_type": "diamond", "title": title, "summary": "s"}
+
+    upsert_generated_card(conn, _card("stale", "old"))
+    conn.execute("UPDATE proactive_signal_cards SET updated_at=? WHERE card_id='stale'", (old,))
+    upsert_generated_card(conn, _card("fresh", "new"))
+    upsert_generated_card(conn, _card("kept", "operator-triaged"))
+    conn.execute("UPDATE proactive_signal_cards SET status='actioned', updated_at=? WHERE card_id='kept'", (old,))
+    conn.commit()
+
+    expired = expire_stale_pending_cards(conn, older_than_days=14)
+    assert expired == 1  # only the stale *pending* card
+
+    def _status(cid):
+        return conn.execute("SELECT status FROM proactive_signal_cards WHERE card_id=?", (cid,)).fetchone()[0]
+
+    assert _status("stale") == CARD_STATUS_DELETED   # aged-out pending -> soft-deleted
+    assert _status("fresh") == CARD_STATUS_PENDING   # recently refreshed -> kept
+    assert _status("kept") == "actioned"             # operator-triaged -> never touched
+
+    # Disabled when TTL <= 0 (escape hatch).
+    assert expire_stale_pending_cards(conn, older_than_days=0) == 0
 
 
 def test_signal_feedback_and_action_create_task(tmp_path):
