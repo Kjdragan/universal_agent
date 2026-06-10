@@ -13,12 +13,8 @@ import os
 # ─────────────────────────────────────────────────────────────────────────────
 # The haiku tier is intentionally pinned to glm-4.5-air. This is a standing
 # operator decision (Kevin, 2026-06-05): glm-4.5-air has been tested repeatedly
-# in production and it works. Any earlier note in the git history claiming the
-# glm-4.5-air lane is "flaky" / "wedges" / caused the atom-poem incident is
-# SUPERSEDED and must NOT be used to justify remapping haiku away from
-# glm-4.5-air. If a future audit or agent is tempted to "fix" this back to
-# glm-5-turbo (or anything else): don't. The operator has mandated glm-4.5-air
-# for the haiku tier regardless of any such reasoning.
+# in production and works reliably. Do NOT remap the haiku tier to glm-5-turbo
+# (or anything else); the operator has mandated glm-4.5-air for this tier.
 ZAI_MODEL_MAP = {
     "haiku": "glm-4.5-air",     # OPERATOR-LOCKED — never change (see note above).
     "sonnet": "glm-5-turbo",    # Z.AI standard model.
@@ -31,10 +27,9 @@ def resolve_model(tier: str = "sonnet") -> str:
     Resolve the Anthropic API model identifier, considering Z.AI proxy emulation mappings.
 
     Defaults to the recommended Z.AI Coding Plan models. The default tier
-    is "sonnet" (not opus) — the global daemon default per the
-    operational decision after the atom-poem incident; explicit
-    high-tier work (deep report construction, research synthesis) still
-    requests "opus" by name.
+    is "sonnet" (not opus) — the global daemon default per operator
+    decision; explicit high-tier work (deep report construction, research
+    synthesis) still requests "opus" by name.
     """
     if tier == "haiku":
         env_val = os.getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL")
@@ -137,9 +132,9 @@ def mission_control_call_timeout_seconds() -> float:
 # nightly pipelines that silently park in NOT_ASSIGNED are expensive.
 #
 # Tier philosophy:
-#   - Haiku/Sonnet caps stay tight (cheap-tier wedges are almost always
-#     a 5xx loop that should fail fast so the dispatcher's retry sweep
-#     can reopen the task).
+#   - Haiku/Sonnet caps stay tight (a failed cheap-tier call is almost
+#     always a 5xx loop that should fail fast so the dispatcher's retry
+#     sweep can reopen the task).
 #   - Opus default is generous: real opus work is research, synthesis,
 #     and multi-tool reasoning. The old 300s cap was killing legitimate
 #     work (e.g. paper_to_podcast_daily — 6 consecutive nightly runs
@@ -156,7 +151,7 @@ def mission_control_call_timeout_seconds() -> float:
 # tier. Final fallback to UA_PROCESS_TURN_TIMEOUT_SECONDS for older
 # call sites that don't pass a tier.
 _TIER_DEFAULT_TIMEOUTS = {
-    "haiku": 120.0,    # SDK preflight + tiny tasks; failed glm-4.5-air calls used to wedge for ~365s.
+    "haiku": 120.0,    # SDK preflight + tiny tasks; keep the cap tight so a failed cheap-tier call fails fast.
     "sonnet": 180.0,   # Daily-driver tasks; comfortably long enough for multi-tool turns.
     "opus": 1800.0,    # Heavy work (research, multi-doc synthesis, long crons). Generous on purpose.
 }

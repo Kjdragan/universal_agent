@@ -119,9 +119,9 @@ class CSIConfig:
     def zai_model(self) -> str:
         """Z.AI model for batch briefs.
 
-        Default: ``glm-4.5-air`` (haiku-tier, fast/cheap). Lane is occasionally
-        flaky; ``batch_brief.run_batch_cycle`` falls back to plain-text on
-        failure so a hang here doesn't block delivery.
+        Default: ``glm-4.5-air`` (haiku-tier, fast/cheap; operator-locked).
+        ``batch_brief.run_batch_cycle`` falls back to plain-text on any failure
+        so a stalled network call doesn't block delivery.
         """
         env = (os.getenv("CSI_ZAI_MODEL") or "").strip()
         if env:

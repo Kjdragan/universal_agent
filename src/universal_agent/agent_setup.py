@@ -403,12 +403,10 @@ class AgentSetup:
         )
 
         return ClaudeAgentOptions(
-            # Global daemon model is OPUS (glm-5.1). The apparent
-            # jankiness pre-fix was the SDK's haiku-tier preflight
-            # on the flaky glm-4.5-air lane (now remapped at the
-            # Claude Code layer); main-agent reasoning quality on
-            # opus has been good throughout. Subagents that prefer
-            # sonnet still get it via their .claude/agents/*.md YAML.
+            # Global daemon model is OPUS (glm-5.1) per operator decision:
+            # main-agent reasoning quality on opus is the right default for
+            # all task execution paths. Subagents that prefer sonnet still
+            # get it via their .claude/agents/*.md YAML.
             model=resolve_claude_code_model(default="opus"),
             add_dirs=[os.path.join(self.src_dir, ".claude")],
             setting_sources=["project"],  # Enable loading agents from .claude/agents/
@@ -422,9 +420,8 @@ class AgentSetup:
                 # Force the SDK's INTERNAL haiku-tier preflight calls
                 # (system-prompt cache management, compaction routing,
                 # tool selection classifier) onto our resolved haiku
-                # model — currently glm-5-turbo, NOT the flaky
-                # glm-4.5-air lane that wedged the atom-poem run for
-                # 12+ minutes. Same idea for sonnet/opus so the SDK
+                # model. haiku is operator-locked to glm-4.5-air; do
+                # not remap. Same idea for sonnet/opus so the SDK
                 # picks up our central mappings without depending on
                 # production env vars being set externally.
                 "ANTHROPIC_DEFAULT_HAIKU_MODEL": resolve_haiku(),

@@ -58,7 +58,7 @@ def test_strip_removes_routing_keys_and_api_key_and_preserves_mcp_creds():
         "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
         "ANTHROPIC_AUTH_TOKEN": "secret-zai-token",
         "ANTHROPIC_API_KEY": "sk-ant-account-with-no-max-billing",
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5-turbo",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.5-air",
         "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5-turbo",
         "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.1",
         "ANTHROPIC_VERTEX_PROJECT_ID": "some-vertex-project",

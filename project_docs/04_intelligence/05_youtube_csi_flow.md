@@ -636,8 +636,8 @@ native playlist learning dispatch. Keyword sets: `YOUTUBE_CODE_HINT_KEYWORDS`
   > (the fail-closed *behavior* is real and observed; only the exact code is
   > unconfirmed).]
 - **Map-step model is hardcoded `glm-4.5-air`, not `resolve_model("haiku")`** —
-  `resolve_model` points haiku at `glm-5-turbo` to dodge a historical preflight
-  wedge; the digest deliberately bypasses that for the faster air model.
+  `resolve_model` resolves haiku to `glm-4.5-air` (operator-locked; do not remap).
+  The map step pins the same model directly rather than going through the resolver.
 - **Decisions JSON is built in Python, not by the reducer LLM** — earlier the
   reducer was asked to re-emit it and would drop/malform it, silently producing
   all-zero classifications that rejected every video at the demo gate.

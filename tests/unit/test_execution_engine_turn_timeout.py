@@ -95,7 +95,7 @@ def test_no_metadata_falls_back_to_opus_default(clean_env) -> None:
 def test_no_metadata_picks_haiku_default(clean_env) -> None:
     adapter = _StubAdapter(model_name="claude-haiku-4-5-20251001")
     cap = adapter.resolve_max_runtime(request_metadata=None)
-    # Haiku stays tight on purpose — cheap-tier wedges should fail fast.
+    # Haiku stays tight on purpose — a failed cheap-tier call should fail fast.
     assert 60.0 <= cap <= 240.0, f"haiku default should stay tight, got {cap}"
 
 

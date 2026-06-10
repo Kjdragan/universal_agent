@@ -811,7 +811,7 @@ async def synthesize_readout(evidence: dict[str, Any]) -> tuple[dict[str, Any], 
     except Exception as exc:
         return fallback_readout(evidence, error=f"anthropic package unavailable: {exc}"), None
 
-    # Promoted to opus tier per the post-atom-poem audit. Mission
+    # Promoted to opus tier per operator decision. Mission
     # Control "Chief of Staff" synthesizes priorities and recommendations
     # across many simultaneous signals (CSI, Task Hub, supervisors,
     # heartbeat findings) and is the canonical human-facing
