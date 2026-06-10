@@ -370,7 +370,19 @@ def test_standard_gate_disables_existing_row_by_default(job, monkeypatch):
 
     ensure_fn()
 
-    assert stub.updated == [(f"legacy_{job}", {"enabled": False})]
+    # Standard-gate migrated jobs now also carry the tombstone breadcrumb naming
+    # the systemd timer that actually fires them (see _register_system_cron_job).
+    assert stub.updated == [
+        (
+            f"legacy_{job}",
+            {
+                "enabled": False,
+                "metadata": {
+                    "disabled_reason": f"migrated_to_systemd:universal-agent-{job.replace('_', '-')}.timer"
+                },
+            },
+        )
+    ]
 
 
 @pytest.mark.parametrize("job", sorted(STANDARD_GATE))

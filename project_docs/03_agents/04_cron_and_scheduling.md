@@ -87,6 +87,15 @@ artifacts you instinctively check both point the *wrong* way:
   `gateway_server.py::_register_system_cron_job` deliberately flips the persisted
   in-process row to disabled on every boot so the systemd timer is the sole firer
   (no double-fire). The row stays in the file forever, looking dead.
+  **Breadcrumb:** for jobs that disable through this helper, the row now carries
+  `metadata.disabled_reason = "migrated_to_systemd:universal-agent-<job>.timer"`
+  naming the unit that actually fires it — so the JSON itself tells you it's a
+  tombstone, not a dead cron. (Jobs disabled through a bespoke `_ensure_*` path —
+  `codie_proactive_cleanup`, `csi_convergence_sync`, `youtube_daily_digest`,
+  `youtube_gold_channel_poller` — do not carry the breadcrumb yet; for those the
+  `systemd_migrated_jobs.py::SYSTEMD_MIGRATED_SYSTEM_JOBS` check below is
+  authoritative. A *missing* `disabled_reason` therefore does **not** prove the
+  job is non-migrated — confirm against the frozenset.)
 - **The in-process workspace log is stale** —
   `AGENT_RUN_WORKSPACES/cron_<job>/run.log` stops advancing at the migration date,
   because the in-process cron no longer fires. The job *is* running; its real

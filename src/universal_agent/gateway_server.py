@@ -19656,9 +19656,24 @@ def _register_system_cron_job(
       instead of silently leaving the row enabled (which would keep
       firing on every restart). See PR #534 / hourly_insight_email
       regression for the bug this prevents.
+    * **Tombstone breadcrumb (migrated jobs).** When the disable is because
+      the job was migrated to a systemd timer
+      (``systemd_migrated_jobs.py::is_migrated_to_systemd``), the row's
+      ``metadata.disabled_reason`` is stamped
+      ``"migrated_to_systemd:universal-agent-<job>.timer"`` so anyone reading
+      ``cron_jobs.json`` sees WHY it is disabled and where it actually fires —
+      instead of mistaking the tombstone for a dead cron (a real 2026-06
+      investigation error). Stamped idempotently (only when missing/changed),
+      and cleared on re-enable. The full diagnostic for "is this job actually
+      running?" lives in ``project_docs/03_agents/04_cron_and_scheduling.md``.
+      NOTE: jobs that disable through a bespoke ``_ensure_*`` path (not this
+      helper) — e.g. ``codie_proactive_cleanup``, ``csi_convergence_sync``,
+      ``youtube_daily_digest``, ``youtube_gold_channel_poller`` — do not (yet)
+      carry this breadcrumb; the ``SYSTEMD_MIGRATED_SYSTEM_JOBS`` frozenset +
+      ``systemctl`` remain authoritative for them.
     * If no existing row is found, or the existing row is already
-      disabled, the helper returns ``None`` (no-op — don't insert a
-      disabled row, don't churn the existing one).
+      disabled (and any breadcrumb is already current), the helper returns
+      ``None`` (no-op — don't insert a disabled row, don't churn the row).
 
     Returns the job dict on success, or `None` when disabled with no
     enabled-row to flip, or the cron service is unavailable.
@@ -19681,8 +19696,40 @@ def _register_system_cron_job(
     # disable-bug.
     if not enabled:
         existing = _find_cron_job_by_system_job(system_job)
-        if existing is not None and bool(getattr(existing, "enabled", False)):
-            existing_id = str(getattr(existing, "job_id", ""))
+        if existing is None:
+            return None
+        was_enabled = bool(getattr(existing, "enabled", False))
+        existing_id = str(getattr(existing, "job_id", ""))
+        existing_meta = getattr(existing, "metadata", None) or {}
+        if _is_migrated_to_systemd(system_job):
+            # TOMBSTONE BREADCRUMB. This row is disabled because the job was
+            # migrated to a deploy-independent systemd timer (the timer is the
+            # sole firer — no double-fire). Without this marker, the persisted
+            # `cron_jobs.json` row reads as a plain "disabled / dead cron", which
+            # has misled investigators into concluding the job stopped running
+            # (it has not — the systemd timer fires it). Stamp the reason + the
+            # unit that actually fires it, so cron_jobs.json itself answers
+            # "is this running?". SOURCE OF TRUTH for the migrated set:
+            # `systemd_migrated_jobs.py::SYSTEMD_MIGRATED_SYSTEM_JOBS`. Full
+            # diagnostic: project_docs/03_agents/04_cron_and_scheduling.md
+            # ("Is this scheduled job actually running?").
+            reason = (
+                "migrated_to_systemd:universal-agent-"
+                f"{system_job.replace('_', '-')}.timer"
+            )
+            # Only write when something actually changes — avoids re-saving
+            # cron_jobs.json + emitting an update event on every gateway boot.
+            if was_enabled or existing_meta.get("disabled_reason") != reason:
+                updated = _cron_service.update_job(
+                    existing_id, {"enabled": False, "metadata": {"disabled_reason": reason}}
+                )
+                if hasattr(updated, "to_dict"):
+                    return updated.to_dict()
+                return {"job_id": existing_id, "enabled": False}
+            return None
+        # Non-migrated plain disable (e.g. UA_<JOB>_ENABLED=0): propagate the
+        # disable to the persisted row if it is still enabled, else no-op.
+        if was_enabled:
             updated = _cron_service.update_job(existing_id, {"enabled": False})
             if hasattr(updated, "to_dict"):
                 return updated.to_dict()
@@ -19726,6 +19773,13 @@ def _register_system_cron_job(
     }
     existing = _find_cron_job_by_system_job(system_job)
     if existing is not None:
+        # Rollback hygiene: if a previously-migrated job is being re-enabled
+        # (removed from the frozenset / UA_SYSTEMD_TIMER_MIGRATION_DISABLED=1),
+        # clear any stale `disabled_reason` tombstone breadcrumb. update_job
+        # MERGES metadata, so without this the old "migrated_to_systemd:…"
+        # marker would linger on the now-enabled row.
+        if (getattr(existing, "metadata", None) or {}).get("disabled_reason"):
+            metadata["disabled_reason"] = ""
         updated = _cron_service.update_job(str(getattr(existing, "job_id", "")), updates)
         return updated.to_dict() if hasattr(updated, "to_dict") else {"job_id": str(getattr(updated, "job_id", ""))}
     job = _cron_service.add_job(
