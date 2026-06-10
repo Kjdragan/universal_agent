@@ -1,9 +1,10 @@
 """Cron entry point: queue CODIE tutorial-build tasks from build-oriented CSI YouTube videos.
 
-Standalone systemd oneshot that runs the broad YouTube demo-build lane 3x/day,
-decoupled from the dashboard's event-triggered proactive-signal sync
-(gateway_server._run_proactive_signal_sync_background -> sync_generated_cards ->
-sync_build_oriented_csi_videos). Calls
+Standalone systemd oneshot that runs the broad YouTube demo-build lane 3x/day.
+As of 2026-06-10 this timer is the SOLE invoker of the demo-build lane: the
+redundant in-process dashboard call (gateway_server._run_proactive_signal_sync_background
+-> proactive_signals.sync_generated_cards -> sync_build_oriented_csi_videos) was
+removed, so opening the dashboard no longer queues builds. Calls
 proactive_tutorial_builds.sync_build_oriented_csi_videos directly — the producer
 already writes Task Hub rows (queue_tutorial_build_task -> queue_proactive_task ->
 task_hub.upsert_item), so no extra cron-task-link wrapping is needed here. Each
@@ -11,7 +12,7 @@ queued tutorial-build row is itself the observable Task Hub artifact.
 
 This is a NEW producer-invoker, not a migration of an existing registered cron —
 there is no in-process twin and no double-fire gate. The tutorial-build:<sha256>
-dedup makes overlapping runs (timer + dashboard event) idempotent.
+dedup still makes any retried/overlapping timer runs idempotent.
 """
 
 from __future__ import annotations
