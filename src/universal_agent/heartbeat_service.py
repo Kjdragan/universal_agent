@@ -2445,55 +2445,6 @@ class HeartbeatService:
                             _brainstorm_ctx_text = ""
                             _pending_q_count = 0
 
-                        # ── Signal Curator (Track 1) ────────────────────────
-                        # When the queue is empty, check if accumulated signal
-                        # cards warrant an async curation pass.
-                        _curation_dispatched = False
-                        try:
-                            from universal_agent.services.signal_curator import (
-                                get_pending_cards,
-                                record_curation_run,
-                                should_run_curation,
-                            )
-                            if should_run_curation(conn):
-                                pending_cards = get_pending_cards(conn, limit=30)
-                                if pending_cards:
-                                    record_curation_run(conn)
-                                    logger.info(
-                                        "Signal curator triggered for %s: %d pending cards. Dispatching async mission.",
-                                        session.session_id,
-                                        len(pending_cards),
-                                    )
-                                    from universal_agent.tools.vp_orchestration import (
-                                        dispatch_vp_mission,
-                                    )
-                                    
-                                    # Create an explicit async task to prevent blocking the heartbeat
-
-                                    async def _dispatch_curation():
-                                        try:
-                                            await dispatch_vp_mission(
-                                                objective=f"Curate {len(pending_cards)} pending proactive signal cards using task_hub_promote_signals tool.",
-                                                mission_type="curation",
-                                                idempotency_key=f"curation-{session.session_id}-{int(time.time())}",
-                                                vp_id="vp.general.primary",
-                                                source_session_id=session.session_id,
-                                                metadata={
-                                                    "source": "heartbeat",
-                                                    "run_kind": "proactive_curation",
-                                                    "skip_heartbeat": True
-                                                }
-                                            )
-                                        except Exception as d_exc:
-                                            logger.error("Failed to dispatch signal curation mission: %s", d_exc)
-                                            
-                                    asyncio.create_task(_dispatch_curation())
-                                    _curation_dispatched = True
-                                    
-                        except Exception as _sc_exc:
-                            logger.debug("Signal curator unavailable: %s", _sc_exc)
-                        # ────────────────────────────────────────────────────
-
                         # ──── needs_review SLA reaper ───────────────────────
                         # Recover tasks that fell through to needs_review
                         # without an explicit close. Safe to run on every
@@ -2541,12 +2492,7 @@ class HeartbeatService:
             )
             guard_skip_reason = str(guard_policy.get("skip_reason") or "").strip()
             _is_reflection_mode = bool(guard_policy.get("reflection_mode", False))
-            
-            # --- Override guard for curation ---
-            if locals().get("_curation_dispatched") and not guard_skip_reason:
-                guard_skip_reason = "proactive_curation_dispatched"
-                _is_reflection_mode = False
-            # -----------------------------------
+
             metadata["heartbeat_guard"] = {
                 "autonomous_enabled": bool(guard_policy.get("autonomous_enabled")),
                 "max_actionable": int(guard_policy.get("max_actionable") or DEFAULT_HEARTBEAT_MAX_ACTIONABLE),
@@ -2665,8 +2611,7 @@ class HeartbeatService:
             saw_streaming_text = False
 
             # Pending Cody demo reviews must not be starved by a later
-            # higher-priority skip (proactive_curation_dispatched /
-            # daily_budget_exhausted). _heartbeat_guard_policy already keeps
+            # higher-priority skip (daily_budget_exhausted). _heartbeat_guard_policy already keeps
             # `no_actionable_work` from firing when reviews are pending, but those
             # downstream overrides re-set guard_skip_reason afterward and were
             # masking the wake signal in prod. A pending demo review now overrides

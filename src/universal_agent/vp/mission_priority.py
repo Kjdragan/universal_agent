@@ -97,6 +97,11 @@ MISSION_TYPE_TIER: dict[str, PriorityTier] = {
     "research_report_email": "operator_signal",
 
     # — maintenance: housekeeping, system upkeep —
+    # NOTE: the autonomous "curation" dispatch lane was decommissioned 2026-06
+    # (signal cards are superseded by the hourly intel digest). This tier entry
+    # is retained as the canonical maintenance-tier exemplar referenced by the
+    # mission-priority regression tests and is inert unless a curation mission
+    # is ever re-introduced.
     "curation": "maintenance",
     "proactive_wiki": "maintenance",
     "doc-maintenance": "maintenance",

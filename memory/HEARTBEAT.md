@@ -29,8 +29,6 @@ If a task takes >5 minutes of your context to do yourself, you should be asking:
 
 | Task `source_kind` / pattern | Default owner | Why |
 |---|---|---|
-| `proactive_signal_discord` (Discord-detected signals) | **Atlas** | Research/synthesis; Atlas has clean context per item |
-| `proactive_signal` (any other source) | **Atlas** | Same shape; Atlas evaluates and writes |
 | `claude_code_kb_update` | **Atlas** | Knowledge-base synthesis lane (existing flow) |
 | `convergence_detection`, `insight_detection` | **Atlas** | Pattern detection + brief authoring |
 | `tutorial_build` | **Cody** | Code scaffolding; coding context required |
@@ -310,7 +308,7 @@ The decision tree below was originally written for Cody. It applies equally to A
   `needs_review` for sign-off.
 - **One claim at a time.** The dispatcher hands you tasks one per sweep
   by design. Don't try to mentally batch-process every pending
-  `proactive_signal_*` you see in the queue — process the one you were
+  item you see in the queue — process the one you were
   actually claimed against, decide its owner, delegate or do, close
   cleanly, then move on. The next heartbeat will hand you the next one
   with a (relatively) fresh context.
