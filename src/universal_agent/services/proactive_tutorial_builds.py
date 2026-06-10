@@ -56,6 +56,44 @@ _NEGATIVE_TOKENS = frozenset(
 
 _TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9+\-]*")
 
+# ── P4 Demo build contract ───────────────────────────────────────────────────
+# Embedded verbatim in every `tutorial_build` task description (the BRIEF that
+# reaches Cody via Simone's vp_dispatch_mission objective) and mirrored in
+# .claude/skills/cody-implements-from-brief/SKILL.md. Canonical spec:
+# project_docs/04_intelligence/15_demo_tutorial_pipeline_adr.md
+# section "Demo build contract". Guard: tests/unit/test_demo_build_contract.py.
+DEMO_BUILD_CONTRACT = """\
+Demo build contract (binding):
+
+Framework selection — pick the demo's stack from what the VIDEO is about:
+1. A specific SDK/stack (Google ADK, Gemini, LangGraph, ...) -> build the
+   demo in THAT native stack, first-class. Hands-on learning of that stack
+   is the point — it is not a fallback.
+2. A Claude Code / Anthropic feature (e.g. /goal) -> build with the
+   Claude Agent SDK.
+3. A stack-agnostic concept (e.g. "memory pipelines") -> default to the
+   Claude Agent SDK (the north star).
+4. Cross-framework integration (e.g. Claude Agent SDK + ADK) ->
+   ONLY on explicit operator direction — never by default.
+If "how to build this one" is ambiguous, PAUSE for operator input:
+disposition the task for review with your specific question in the note.
+Ambiguity never blocks demo-worthiness — it only pauses the build.
+
+Acceptance bar — functional completeness, not looks:
+Keep the UI simple (zero design-polish effort) but make the demo
+functionally sophisticated enough to FULLY exercise the capability.
+This demo is the operator's personal learning/reference library entry;
+acceptance = it demonstrates the capability end-to-end, not how it looks.
+
+Inference wiring (Claude Agent SDK demos): Claude-Agent-SDK + Claude-Max
+OAuth inference is currently BROKEN. Any demo built on the Claude Agent SDK
+MUST read ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN from the environment
+(the UA runtime injects both; ANTHROPIC_BASE_URL routes inference to the
+ZAI/GLM endpoint) so the demo actually runs. Never hardcode an endpoint or
+token; never commit a token; document the two env var names in the demo
+README.
+"""
+
 
 def queue_tutorial_build_task(
     conn: sqlite3.Connection,
@@ -545,7 +583,7 @@ def _build_task_description(
     plan_json = json.dumps(extraction_plan or {}, indent=2, ensure_ascii=True)
     base = "\n".join(
         [
-            "CODIE should build a working private repository from this tutorial.",
+            "Cody should build a runnable demo of this video's capability — a standalone mini-app, not a line-by-line reproduction of the video's tutorial.",
             "",
             f"Source video: {video_title}",
             f"Channel: {channel_name or '(unknown)'}",
@@ -553,6 +591,8 @@ def _build_task_description(
             "",
             "Implementation extraction plan:",
             plan_json,
+            "",
+            DEMO_BUILD_CONTRACT.rstrip(),
             "",
             "Instructions:",
             "1. Create a complete working implementation in a clean repo/workspace.",
@@ -562,6 +602,8 @@ def _build_task_description(
             "5. Use environment variables or mock modes for API keys.",
             "6. Run the implementation or the most relevant tests before declaring success.",
             "7. If GitHub is unavailable, preserve a complete local git repo artifact and report the fallback.",
+            "",
+            "Dispatcher note (Simone): when delegating this task to Cody via vp_dispatch_mission, include this description VERBATIM in the mission objective — the Demo build contract above is binding for the build.",
         ]
     )
     if preference_context:
