@@ -17,12 +17,15 @@ last_verified: 2026-06-10
 
 # ADR: Autonomous doc-drift issue triage & fix — three delivery options
 
-> **ADR status: DECISION = start with Option (a) (desktop interactive prototype).**
-> Options **(b)** (always-on VPS API-key agent) and **(c)** (ZAI-detect + API-key-fix
-> hybrid) are **recorded here as the migration targets** if the prototype proves the
-> value but its availability/quota limits become binding. Nothing about (b)/(c) is
-> built yet. This document is the on-record decision trail so we can adopt (b) or (c)
-> later without re-deriving the analysis.
+> **ADR status: DECISION (2026-06-10) = Option (a) prototype + "docs-only, stamp-and-escalate"
+> fix scope.** The loop runs on Option (a) (desktop interactive Max, proven end-to-end on issue
+> #870 → PR #900). The fix scope is **docs-only**: the agent fixes drifted docs, **stamps
+> `last_verified`** on every doc it touches (so a fixed doc leaves the audit rotation), and
+> **escalates code-comment-rooted drift** to a backlog rather than touching `.py` files. Options
+> **(b)** / **(c)** (always-on VPS forms) remain recorded migration targets. The **hybrid
+> (Option 3, §9)** — also fixing stale code comments/docstrings — is the documented *future*
+> improvement, deferred until the code-comment backlog justifies it. §9 records the limitation
+> that drove this decision and the path to the hybrid.
 
 ## 1. Context & problem
 
@@ -143,22 +146,36 @@ the same triage state machine and the same mechanical safety rails (§5–6) —
 *trigger* (Monitor vs VPS event) and the *inference substrate* (Max-interactive vs API key)
 change.
 
+**Fix-scope decision (2026-06-10, operator): docs-only + stamp + escalate (hybrid deferred).**
+The first dry run (issue #870 → PR #900) merged correct doc fixes, but the next sweep (#901)
+re-flagged the same docs — exposing a structural limit (§9): a docs-only loop cannot converge on
+drift whose root cause is a stale *code* comment/docstring. The operator chose to **keep the loop
+docs-only**, adding `last_verified` stamping (so fixed docs leave the rotation) + a code-comment
+escalation backlog, rather than expand to code edits now. The **hybrid** that also fixes
+comment/docstring-only code (§9, "Option 3") is documented for later adoption.
+
 ## 5. Triage state machine (shared by all three options)
 
 For each new `documentation` issue:
 
-1. **Investigate** each finding against current `origin/main` code (Opus reads the doc
-   claim + the cited code).
-2. **Classify** each finding: **REAL** (doc disagrees with code) · **FALSE_POSITIVE**
-   (inference artifact / harmless) · **OPERATIONAL/ASSERTED** (a still-true env/ops fact not
-   reflected in code — do **not** auto-edit).
-3. **If any REAL fixes:** edit the doc(s) on a `docfix/<slug>` branch (docs-only) with
-   symbol citations → open PR → `pr-validate` + `docfix/*` tripwire + symbol check run →
-   auto-merge on green → confirm deploy/CI green → **close** the issue with a summary.
-4. **If all FALSE_POSITIVE / not-needed:** close the issue with the explanation (no PR).
-5. **If unfixable or uncertain** (needs a code change, or low confidence): **comment +
-   escalate to the operator — do NOT silently close.** Deleting signal must require
-   confidence.
+1. **Investigate** each finding against current `origin/main` code (Opus reads the doc claim +
+   the cited code). **Never fix on the GLM's say-so** — verify the symbol/claim in code first; if
+   the cited symbol can't be located or the excerpt was truncated, *defer*, don't guess.
+2. **Classify** each finding: **REAL_DOC** (doc disagrees with code → fixable here) ·
+   **CODE_COMMENT** (the doc is correct but a stale `.py` comment/docstring contradicts the code →
+   **escalate**, §9) · **FALSE_POSITIVE** (inference artifact / doc already accurate) ·
+   **OPERATIONAL/ASSERTED** (a still-true env/ops fact not in code — do **not** auto-edit) ·
+   **UNVERIFIABLE** (cited symbol not found / truncated excerpt → defer).
+3. **If any REAL_DOC fixes:** edit the doc(s) on a `docfix/<slug>` branch (docs-only) with symbol
+   citations, **and bump `last_verified` to today on every doc touched** (so the doc leaves the
+   oldest-verified rotation — skipping this is what made #901 re-flag #900's fixes 15 min after
+   merge) → regenerate `README.md` → open PR → `pr-validate` + `docfix/*` tripwire + symbol check
+   → auto-merge on green → confirm live on `main` → **close** with a per-finding disposition.
+4. **CODE_COMMENT / UNVERIFIABLE / OPERATIONAL** findings: record each in the **code-comment
+   escalation backlog** (§9) — never silently drop, never touch the `.py` file from this loop.
+5. **If all findings are FALSE_POSITIVE / dispositioned:** close with the explanation.
+6. **Never** re-fix a doc the loop already corrected just because the GLM re-flags it — a re-flag
+   of a verified-correct doc is the §9 code-comment signal, not new doc drift.
 
 ## 6. Safety rails
 
@@ -168,6 +185,8 @@ For each new `documentation` issue:
 | Auto-merge for docs-only PRs | **built** | `pr-auto-merge.yml` (`docfix/*` not blocklisted) |
 | Symbol-citation enforcement | **built** | `doc_audit.py::check_symbol_refs` |
 | Structured per-doc findings | **built** | `doc_accuracy_sweep.py::_judge` JSON verdicts |
+| `last_verified` stamping on fixed docs | **policy (§5)** | bump frontmatter + regen `README.md` so fixes leave the rotation |
+| Code-comment drift → escalation backlog (no `.py` edits) | **policy (§9)** | the docs-only tripwire enforces the boundary |
 | Second-pass confirmation (major drift) | **needed** | fix agent self-verifies before commit |
 | Escalate-don't-close on unfixable | **policy (above)** | triage step 5 |
 | Single-beneficiary only (no token sharing/resale) | **policy** | Consumer Terms §2/§3 |
@@ -185,7 +204,42 @@ Adopt (b) or (c) when **any** holds:
 
 - [Claude Max OAuth Credentials](07_claude_max_oauth_credentials.md) — `setup-token` /
   `CLAUDE_CODE_OAUTH_TOKEN` mechanics; **review needed** for the 2026-06-15 metering.
-- [Environments](05_environments.md) — **profile-3 "Cody = Anthropic Max default" is stale**
-  (ground truth: `cody_mode.py::_HARDCODED_FALLBACK_MODE = "zai"` since 2026-06-07).
+- [Environments](05_environments.md) — profile-3 now reads "Cody defaults to ZAI/GLM since
+  2026-06-07" (corrected in PR #900; ground truth `cody_mode.py::_HARDCODED_FALLBACK_MODE = "zai"`).
+  A stale *docstring* inside `cody_mode.py` still lists step-6 = "anthropic" → §9 backlog.
 - [Deployment & CI/CD](04_deployment_and_cicd.md) — branch/PR/auto-merge model the
   `docfix/*` path rides on.
+
+## 9. Known limitation: code-comment-rooted drift & the hybrid (Option 3) path
+
+**The limit (found 2026-06-10, first dry run).** A docs-only loop cannot *converge* on any drift
+whose root cause is a stale **code comment / docstring**. Concretely: PR #900 fixed
+`05_environments.md` to say `_HARDCODED_FALLBACK_MODE = "zai"` (correct — it matches the variable).
+The next sweep (#901) re-flagged the doc `major_drift` anyway, because `cody_mode.py`'s own module
+docstring still lists *"6. `"anthropic"` — hardcoded last-resort fallback"* — the **code
+contradicts itself**, and the GLM judge mis-attributes that to the (now-correct) doc. The docs-only
+loop correctly refuses to thrash the doc and refuses to touch the `.py` file (the tripwire forbids
+it), so the finding **recurs every rotation** until the *code* comment is fixed. Same shape as the
+`intel_lanes.py` *"NOT yet wired"* docstring (`claude_code_intel.py` does wire `get_lane`).
+
+**Why we stayed docs-only (Option 1) for now.** Fixing these means editing `.py` files, which
+(1) crosses the docs-only tripwire and (2) triggers a full production deploy via `deploy.yml` even
+for a behaviorally-inert comment change. Not worth it per-comment.
+
+**The code-comment escalation backlog.** Until the hybrid ships, CODE_COMMENT / UNVERIFIABLE
+findings are escalated (never dropped) to a tracking issue (label `doc-code-comment`). Seeded:
+`cody_mode.py` module docstring (step-6 fallback still says "anthropic"); `intel_lanes.py` module
+docstring ("NOT yet wired").
+
+**Migration to the hybrid (Option 3) — adopt when the backlog justifies it.** Trigger: the
+`doc-code-comment` backlog crosses ~10 open items, **or** the same doc re-flags from code-comment
+drift across ≥3 rotations. Then add:
+1. **A new mechanical guard** — a *comment/docstring-only diff* check: the PR may change only
+   comments, docstrings, and string literals — **zero executable-line changes** (an AST/diff check,
+   parallel to the docs-only tripwire). This lets an Opus *code* PR fix the stale comments safely.
+2. **Batched, not per-finding** — accumulate the backlog and open **one** Opus code PR per cycle so
+   an inert comment change doesn't fire a production deploy per comment. Gate it behind a light
+   human approval (it touches `.py`, so it is **not** in the docs-only auto-merge lane).
+3. **Keep the docs-only loop unchanged** — the hybrid only *adds* a second, lower-frequency
+   code-comment lane; detection stays on the existing sweep. The safe, converging docs-only lane
+   runs continuously while the riskier code-touching work stays batched, guarded, and human-gated.
