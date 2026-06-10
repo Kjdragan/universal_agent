@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import logging
+import os
 from pathlib import Path
 import re
 import sqlite3
@@ -206,6 +207,32 @@ def delete_card(conn: sqlite3.Connection, card_id: str) -> bool:
     return cursor.rowcount > 0
 
 
+def expire_stale_pending_cards(conn: sqlite3.Connection, *, older_than_days: int = 14) -> int:
+    """Soft-delete ``pending`` cards not refreshed in ``older_than_days`` days.
+
+    A card's ``updated_at`` advances on every sync while its source video is
+    still in the recent CSI window. Once the video ages out, the card stops
+    being regenerated; with no autonomous drainer (the curation lane was
+    removed 2026-06) an un-triaged card would otherwise sit ``pending`` forever
+    and inflate the dashboard + the db-health pending count. This sweep clears
+    those — operator-triaged cards (approved/rejected/tracking/actioned/deleted)
+    are never touched because it only matches ``status='pending'``.
+
+    Returns the number of cards expired.
+    """
+    ensure_schema(conn)
+    if older_than_days <= 0:
+        return 0
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).isoformat()
+    cursor = conn.execute(
+        "UPDATE proactive_signal_cards SET status = ?, updated_at = ? "
+        "WHERE status = ? AND updated_at < ?",
+        (CARD_STATUS_DELETED, _now_iso(), CARD_STATUS_PENDING, cutoff),
+    )
+    conn.commit()
+    return cursor.rowcount
+
+
 def record_feedback(
     conn: sqlite3.Connection,
     *,
@@ -321,7 +348,7 @@ def sync_generated_cards(
     csi_db_path: Optional[Path] = None,
     discord_db_path: Optional[Path] = None,
 ) -> dict[str, int]:
-    counts = {"youtube": 0, "discord": 0, "topic_signatures": 0, "convergence_events": 0, "tutorial_build_tasks": 0}
+    counts = {"youtube": 0, "discord": 0, "topic_signatures": 0, "convergence_events": 0, "tutorial_build_tasks": 0, "expired": 0}
     for card in generate_youtube_cards(csi_db_path):
         upsert_generated_card(conn, card)
         counts["youtube"] += 1
@@ -347,6 +374,14 @@ def sync_generated_cards(
     for card in generate_discord_cards(discord_db_path):
         upsert_generated_card(conn, card)
         counts["discord"] += 1
+    # Drain stale pending cards so an un-triaged queue can't pile up
+    # indefinitely now that the autonomous curation drainer is gone
+    # (UA_PROACTIVE_CARD_TTL_DAYS, default 14; set 0 to disable).
+    try:
+        ttl_days = int(os.getenv("UA_PROACTIVE_CARD_TTL_DAYS", "14") or "14")
+    except (TypeError, ValueError):
+        ttl_days = 14
+    counts["expired"] = expire_stale_pending_cards(conn, older_than_days=ttl_days)
     return counts
 
 
@@ -401,9 +436,12 @@ def generate_youtube_cards(csi_db_path: Optional[Path], *, limit: int = 400) -> 
             }
         )
 
-    cards: list[dict[str, Any]] = []
-    cards.extend(_youtube_cluster_cards(items))
-    cards.extend(_youtube_diamond_cards(items))
+    # Cluster cards (keyword co-occurrence within YouTube only, no LLM) were
+    # retired 2026-06: they are redundant with the convergence pipeline, which
+    # clusters the same videos cross-channel with an LLM judge. Diamond /
+    # transcript_insight cards (standout single videos) remain as the dashboard
+    # "recent signals" glance. See docs/04_intelligence/10_proactive_pipeline.md.
+    cards = _youtube_diamond_cards(items)
     return cards[:50]
 
 
@@ -471,46 +509,6 @@ def generate_discord_cards(discord_db_path: Optional[Path], *, limit: int = 60) 
     return cards
 
 
-def _youtube_cluster_cards(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    buckets: dict[str, list[dict[str, Any]]] = {}
-    for item in items:
-        for topic in _extract_topics(" ".join([item.get("title", ""), item.get("description", "")])):
-            buckets.setdefault(topic, []).append(item)
-    cards: list[dict[str, Any]] = []
-    for topic, rows in buckets.items():
-        channels = {row.get("channel_id") or row.get("channel_name") for row in rows if row.get("channel_id") or row.get("channel_name")}
-        transcripted = [row for row in rows if row.get("transcript_status") == "ok"]
-        if len(rows) < 3 and len(channels) < 2:
-            continue
-        confidence = 0.48 + min(0.22, len(rows) * 0.03) + min(0.18, len(channels) * 0.04)
-        if transcripted:
-            confidence += 0.14
-        cards.append(
-            {
-                "card_id": _card_id("youtube-cluster", topic),
-                "source": "youtube",
-                "card_type": "cluster",
-                "title": f"YouTube topic cluster: {topic}",
-                "summary": (
-                    f"{len(rows)} non-Short YouTube upload(s) across {len(channels)} channel(s) mention {topic}. "
-                    f"{len(transcripted)} already have transcript-backed analysis."
-                ),
-                "priority": 3 if transcripted or len(channels) >= 3 else 2,
-                "confidence_score": min(0.92, confidence),
-                "novelty_score": 0.7 if len(channels) >= 3 else 0.55,
-                "evidence": [_youtube_evidence(row) for row in rows[:5]],
-                "actions": _youtube_actions(topic=topic, has_transcripts=bool(transcripted), cluster=True),
-                "metadata": {
-                    "topic": topic,
-                    "video_count": len(rows),
-                    "distinct_channels": len(channels),
-                    "transcript_backed_count": len(transcripted),
-                },
-            }
-        )
-    return cards
-
-
 def _youtube_diamond_cards(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     scored: list[tuple[float, dict[str, Any]]] = []
     for item in items:
@@ -565,30 +563,6 @@ def _youtube_item_score(item: dict[str, Any]) -> float:
     if any(term in text for term in ("reaction", "drama", "shocking", "you won't believe")):
         score -= 0.08
     return max(0.0, min(1.0, score))
-
-
-def _extract_topics(text: str) -> list[str]:
-    lowered = re.sub(r"\s+", " ", str(text or "").lower())
-    topics: list[str] = []
-    for phrase in (
-        "claude code",
-        "openai codex",
-        "agentic coding",
-        "mcp server",
-        "model context protocol",
-        "multi-agent",
-        "workflow automation",
-        "ai agent",
-        "llm eval",
-        "rag pipeline",
-    ):
-        if phrase in lowered:
-            topics.append(phrase)
-    tokens = re.findall(r"[a-z][a-z0-9_-]{2,}", lowered)
-    for token in tokens:
-        if token in YOUTUBE_INTEREST_TERMS:
-            topics.append(token)
-    return sorted(set(topics))[:8]
 
 
 def _youtube_evidence(item: dict[str, Any]) -> dict[str, Any]:
