@@ -136,8 +136,12 @@ def test_cluster_judge_overrides_env(monkeypatch):
         "UA_CONVERGENCE_JUDGE_API_KEY",
     ):
         monkeypatch.delenv(var, raising=False)
-    # All unset → empty → current behaviour (resolve_opus / shared ZAI env).
-    assert pc._cluster_judge_overrides() == {}
+    # All unset → the judge defaults to the sonnet tier (glm-5-turbo via
+    # resolve_sonnet) — NOT opus. base_url/api_key stay on the shared ZAI env.
+    # (2026-06-10: A/B showed sonnet matches opus precision at lower cost/latency.)
+    from universal_agent.utils.model_resolution import resolve_sonnet
+
+    assert pc._cluster_judge_overrides() == {"model": resolve_sonnet()}
 
     monkeypatch.setenv("UA_CONVERGENCE_JUDGE_MODEL", "claude-sonnet-4-6")
     monkeypatch.setenv("UA_CONVERGENCE_JUDGE_BASE_URL", "https://api.anthropic.com")

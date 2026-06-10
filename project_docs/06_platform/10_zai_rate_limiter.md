@@ -240,9 +240,10 @@ callers go through them. They do not. As of `last_verified`, of ~20 distinct
   `model_resolution.py::resolve_opus` = `glm-5.1`): `classify_priority`,
   `classify_agent_route`, `generate_calendar_task_description`, `extract_due_at`,
   `extract_disjointed_tasks`, `classify_tutorial_buildability`, plus the convergence
-  steps `proactive_convergence.py::_refine_cluster_with_llm` (fired up to 6-wide via a
-  *local* `asyncio.Semaphore`, **not** the ZAI limiter), the ideation sweep, and the
-  signature path. (Only `proactive_convergence.py::triage_candidate` lowers itself,
+  steps `proactive_convergence.py::_refine_cluster_with_llm` (fired up to 2-wide — lowered
+  from 6 on 2026-06-10 — via a *local* `asyncio.Semaphore`, **not** the ZAI limiter; now
+  defaults to the sonnet tier `glm-5-turbo`, not opus, per the A/B), the ideation sweep,
+  and the signature path. (Only `proactive_convergence.py::triage_candidate` lowers itself,
   to `glm-4.5-air`.)
 - Modules with their own un-limited client: `services/csi_url_judge.py`,
   `services/csi_intelligence_pass.py`, `services/csi_demo_triage_ranker.py` (raw httpx,
@@ -313,17 +314,27 @@ independent levers in [§6](#6-the-load-bearing-truth-the-limiter-is-half-adopte
 **tier** (move the hot judging/classification off `glm-5.1`) **and** **enforcement**
 (route `_call_llm` through the limiter, and/or lower `UA_CONVERGENCE_LLM_CONCURRENCY`).
 
-Two caveats that bite anyone acting on this:
+**Resolution (2026-06-10, first pass — the tier lever):** cluster-refine was dropped to
+the sonnet tier (`glm-5-turbo`) and its concurrency lowered 6 → 2. An A/B over 30 live
+buckets (`scripts/convergence_model_ab.py`, run twice) showed glm-5-turbo matches the
+former opus default's precision (both 2/30) at ~35% lower latency, while the cheaper
+haiku/`glm-4.7` tiers over-confirm and fail the precision gate. The **enforcement** lever
+(routing `_call_llm` through the limiter — which needs a loop-resilient limiter, see
+[§4.4](#44-state-persistence-why-a-snapshot-file)) remains the durable fix if 429/FUP
+pressure persists under the lower-tier + lower-concurrency configuration.
 
-1. **Cluster-refine has no model env knob.** Unlike triage
-   (`proactive_convergence.py::triage_candidate`, overridable via
-   `UA_INTEL_TRIAGE_MODEL`), the refine call passes no `model=` and there is **no**
-   `UA_CONVERGENCE_*_MODEL` env — lowering its tier is a **code edit**, not a flag flip.
-2. **No A/B backstop for this flow.** The only model-substitution harness,
-   `scripts/youtube_digest_compare.py`, validates the *YouTube digest* map step (which
-   already ships `glm-4.5-air`). To safely drop cluster-refine's tier you'd clone that
-   harness onto the convergence flow first — it does not exist today. See
-   [`04_intelligence/14_model_tiering_by_process.md`](../04_intelligence/14_model_tiering_by_process.md).
+Two things worth knowing before acting on this:
+
+1. **Cluster-refine has a per-stage model knob.** `proactive_convergence.py::_cluster_judge_overrides`
+   reads `UA_CONVERGENCE_JUDGE_MODEL` (plus `_BASE_URL` / `_API_KEY`) and passes it to
+   `_call_llm` — so lowering its tier is a **config flip**, not a code edit. The knob was
+   built explicitly to A/B the opus default against a cheaper tier. (Triage has its own,
+   `UA_INTEL_TRIAGE_MODEL`, already defaulted to `glm-4.5-air`.)
+2. **There is an A/B backstop.** `scripts/convergence_model_ab.py` sweeps that knob over the
+   *same* SQL buckets through the real `_refine_cluster_with_llm`, reporting per-tier
+   agreement / thesis quality / latency / 429s — so a tier change is decided on evidence,
+   not inference. (The YouTube digest has its own comparator, `scripts/youtube_digest_compare.py`.)
+   See [`04_intelligence/14_model_tiering_by_process.md`](../04_intelligence/14_model_tiering_by_process.md).
 
 ## 9. Related docs
 

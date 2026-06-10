@@ -573,14 +573,19 @@ def _min_signal_strength() -> int:
 
 def _convergence_llm_concurrency() -> int:
     """Max concurrent per-bucket refine calls. `include_secondary` recall
-    produces dozens of coarse buckets; refining them one-at-a-time at ~5-15s
-    each (opus-tier) overran the 900s cron budget. The refine LLM path has no
-    rate limiter, so this bounds concurrent load on the ZAI proxy. Default 6."""
-    raw = str(os.getenv("UA_CONVERGENCE_LLM_CONCURRENCY", "6")).strip()
+    produces dozens of coarse buckets. The refine LLM path is NOT wrapped by the
+    ZAIRateLimiter, so this is the ONLY bound on concurrent load against the ZAI
+    proxy from this stage. Lowered 6 -> 2 (2026-06-10) because the 6-wide
+    cluster-refine fan-out was the dominant source of ZAI Fair-Usage 429/1313
+    bursts; paired with the sonnet-tier judge (`glm-5-turbo`, ~35% faster than
+    the former opus default) so the smaller fan-out still clears its bucket set
+    well within the convergence budget. Override with
+    UA_CONVERGENCE_LLM_CONCURRENCY. Default 2."""
+    raw = str(os.getenv("UA_CONVERGENCE_LLM_CONCURRENCY", "2")).strip()
     try:
         return max(1, min(16, int(raw)))
     except ValueError:
-        return 6
+        return 2
 
 
 def _convergence_budget_seconds() -> float:
@@ -610,13 +615,20 @@ def _independent_channels(signatures: list[dict[str, Any]]) -> set[str]:
 
 
 def _cluster_judge_overrides() -> dict[str, str]:
-    """Optional per-stage model/provider override for the convergence cluster
-    judge — lets you A/B the default (opus-tier ``glm-5.1`` via the ZAI proxy)
-    against another model, e.g. Anthropic Sonnet, without touching any other
-    fan-out stage.
+    """Per-stage model/provider override for the convergence cluster judge.
 
-    All three unset → ``{}`` → current behaviour (shared ZAI env, ``resolve_opus()``).
-    - ``UA_CONVERGENCE_JUDGE_MODEL``    — model id passed to the call.
+    DEFAULT (``UA_CONVERGENCE_JUDGE_MODEL`` unset): the **sonnet tier**
+    (``glm-5-turbo`` via ``resolve_sonnet()``). A 2026-06-10 A/B over 30 live
+    buckets (run twice) showed glm-5-turbo reaches the SAME precision as the
+    former opus default (``glm-5.1`` — both confirmed 2/30) while running ~35%
+    faster, whereas the cheaper haiku (`glm-4.5-air`, 15/30) and `glm-4.7`
+    (11/30) tiers over-confirm broad-topic buckets and fail this precision gate.
+    So the judge defaults to sonnet, not opus: equal quality, cheaper, faster,
+    and less ZAI Fair-Usage pressure. Validate any tier change with
+    ``scripts/convergence_model_ab.py``.
+
+    Overrides (all optional):
+    - ``UA_CONVERGENCE_JUDGE_MODEL``    — model id (overrides the sonnet default).
     - ``UA_CONVERGENCE_JUDGE_BASE_URL`` — provider base URL (set to Anthropic's
       to route this one stage to real Claude instead of the ZAI proxy).
     - ``UA_CONVERGENCE_JUDGE_API_KEY``  — key for that provider.
@@ -630,6 +642,13 @@ def _cluster_judge_overrides() -> dict[str, str]:
         val = (os.getenv(env) or "").strip()
         if val:
             overrides[kwarg] = val
+    if "model" not in overrides:
+        # No explicit override → default the judge to the sonnet tier
+        # (glm-5-turbo). Without this the call falls through to
+        # llm_classifier._call_llm's resolve_opus() default (glm-5.1).
+        from universal_agent.utils.model_resolution import resolve_sonnet
+
+        overrides["model"] = resolve_sonnet()
     return overrides
 
 
