@@ -6,10 +6,9 @@ for all Phase 1 components before any implementation code is written.
 
 Components tested:
 1. Shared Daily Budget (proactive_budget module)
-2. Signal Curator (signal_curator service)
-3. Reflection Engine upgrades (24/7 mode, ideation-only prompt)
-4. Priority Lanes (_sort_key proactive demotion)
-5. Heartbeat integration (curator + reflection gating)
+2. Reflection Engine upgrades (24/7 mode, ideation-only prompt)
+3. Priority Lanes (_sort_key proactive demotion)
+4. Heartbeat integration (reflection gating)
 """
 
 from __future__ import annotations
@@ -195,134 +194,6 @@ class TestProactiveDailyBudget:
         increment_daily_proactive_count(db_conn, increment=3)
         remaining_after = get_budget_remaining(db_conn)
         assert remaining_after == remaining - 3
-
-
-# ===========================================================================
-# 2. SIGNAL CURATOR
-# ===========================================================================
-
-class TestSignalCuratorTrigger:
-    """Tests for when curation should run."""
-
-    def test_should_not_run_with_few_cards(self, db_conn):
-        """With fewer than 10 pending cards, should_run_curation returns False."""
-        from universal_agent.services.signal_curator import should_run_curation
-        # Insert 5 pending cards
-        for i in range(5):
-            _insert_signal_card(db_conn, card_id=f"card_{i}", title=f"Signal {i}")
-        assert should_run_curation(db_conn) is False
-
-    def test_should_run_with_10_cards(self, db_conn):
-        """With exactly 10 pending cards, should_run_curation returns True."""
-        from universal_agent.services.signal_curator import should_run_curation
-        for i in range(10):
-            _insert_signal_card(db_conn, card_id=f"card_{i}", title=f"Signal {i}")
-        assert should_run_curation(db_conn) is True
-
-    def test_should_run_after_12h_even_with_few_cards(self, db_conn):
-        """If 12h+ since last curation, should run even with fewer than 10 cards."""
-        from universal_agent.services.signal_curator import should_run_curation
-        # Insert just 3 cards
-        for i in range(3):
-            _insert_signal_card(db_conn, card_id=f"card_{i}", title=f"Signal {i}")
-        # Simulate last curation was 13h ago
-        old_time = (datetime.now(timezone.utc) - timedelta(hours=13)).isoformat()
-        task_hub._set_setting(db_conn, "signal_curator_last_run", {"timestamp": old_time})
-        assert should_run_curation(db_conn) is True
-
-    def test_should_not_run_if_recently_curated(self, db_conn):
-        """If curated recently AND fewer than 10 cards, should not run."""
-        from universal_agent.services.signal_curator import should_run_curation
-        for i in range(5):
-            _insert_signal_card(db_conn, card_id=f"card_{i}", title=f"Signal {i}")
-        recent_time = datetime.now(timezone.utc).isoformat()
-        task_hub._set_setting(db_conn, "signal_curator_last_run", {"timestamp": recent_time})
-        assert should_run_curation(db_conn) is False
-
-    def test_should_not_run_with_no_cards(self, db_conn):
-        """With zero pending cards, never run regardless of time."""
-        from universal_agent.services.signal_curator import should_run_curation
-        old_time = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
-        task_hub._set_setting(db_conn, "signal_curator_last_run", {"timestamp": old_time})
-        assert should_run_curation(db_conn) is False
-
-
-class TestSignalCuratorPromotion:
-    """Tests for card-to-task promotion."""
-
-    def test_promote_creates_task_hub_items(self, db_conn):
-        """Promoting cards should create Task Hub items with correct source_kind."""
-        from universal_agent.services.signal_curator import promote_cards_to_tasks
-        card_id = _insert_signal_card(db_conn, card_id="card_promote_1", title="AI Agent Framework")
-
-        curated = [{
-            "card_id": card_id,
-            "task_title": "Research AI Agent Framework patterns",
-            "task_description": "Deep-dive into emerging agent framework patterns",
-            "priority": 3,
-            "rationale": "Aligns with Kevin's mission on agent architecture",
-        }]
-        promote_cards_to_tasks(db_conn, curated)
-
-        # Verify task was created
-        row = db_conn.execute(
-            "SELECT * FROM task_hub_items WHERE source_kind = 'proactive_signal'",
-        ).fetchone()
-        assert row is not None
-        assert row["title"] == "Research AI Agent Framework patterns"
-        assert row["source_kind"] == "proactive_signal"
-        assert "card_promote_1" in str(row["source_ref"])
-
-    def test_promote_updates_card_status(self, db_conn):
-        """After promotion, card status should change to 'promoted'."""
-        from universal_agent.services.signal_curator import promote_cards_to_tasks
-        card_id = _insert_signal_card(db_conn, card_id="card_promote_2", title="Test Card")
-
-        curated = [{
-            "card_id": card_id,
-            "task_title": "Test task from card",
-            "task_description": "Test description",
-            "priority": 2,
-            "rationale": "Test rationale",
-        }]
-        promote_cards_to_tasks(db_conn, curated)
-
-        card_row = db_conn.execute(
-            "SELECT status FROM proactive_signal_cards WHERE card_id = ?",
-            (card_id,),
-        ).fetchone()
-        assert card_row["status"] == "promoted"
-
-    @mock.patch.dict(os.environ, {"UA_PROACTIVE_DAILY_BUDGET": "2"}, clear=False)
-    def test_promote_respects_budget(self, db_conn):
-        """Should only promote up to the remaining daily budget."""
-        from universal_agent.services.proactive_budget import (
-            increment_daily_proactive_count,
-        )
-        from universal_agent.services.signal_curator import promote_cards_to_tasks
-
-        # Use 1 of 2 budget slots
-        increment_daily_proactive_count(db_conn, increment=1)
-
-        # Try to promote 3 cards — should only promote 1 (budget remaining = 1)
-        curated = []
-        for i in range(3):
-            cid = _insert_signal_card(db_conn, card_id=f"card_budget_{i}", title=f"Budget test {i}")
-            curated.append({
-                "card_id": cid,
-                "task_title": f"Task from budget test {i}",
-                "task_description": f"Description {i}",
-                "priority": 2,
-                "rationale": f"Rationale {i}",
-            })
-
-        promote_cards_to_tasks(db_conn, curated)
-
-        # Should only have created 1 task (budget allowed 1 more)
-        rows = db_conn.execute(
-            "SELECT COUNT(*) as cnt FROM task_hub_items WHERE source_kind = 'proactive_signal'",
-        ).fetchone()
-        assert rows["cnt"] == 1
 
 
 # ===========================================================================

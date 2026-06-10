@@ -5,7 +5,6 @@ canonical: true
 subsystem: intel-proactive
 code_paths:
   - src/universal_agent/services/proactive_*.py
-  - src/universal_agent/services/signal_curator.py
   - src/universal_agent/services/reflection_engine.py
   - src/universal_agent/services/intelligence_emitter.py
   - src/universal_agent/services/intel_auto_promoter.py
@@ -15,7 +14,7 @@ code_paths:
   - src/universal_agent/scripts/hourly_intel_digest_cron.py
   - src/universal_agent/services/recent_briefs_index.py
   - src/universal_agent/proactive_signals.py
-last_verified: 2026-06-05
+last_verified: 2026-06-09
 ---
 
 # Proactive Pipeline
@@ -35,8 +34,10 @@ raw records → durable knowledge blocks → bounded retrieval context → LLM s
 ```
 
 > **Scope.** This doc covers the *proactive* surface: convergence/ideation
-> detection, signal curation, the reflection (autonomous ideation) engine,
+> detection, the reflection (autonomous ideation) engine,
 > proactive artifacts + preference gating, outcome tracking, and the auto-promoter.
+> (The autonomous *signal-curation* lane was decommissioned 2026-06 — see
+> "Signal curator (Track 1)" below.)
 > CSI/ClaudeDevs ingestion and Task Hub mechanics are separate subsystems; this
 > doc references where they feed in.
 
@@ -49,7 +50,7 @@ raw records → durable knowledge blocks → bounded retrieval context → LLM s
 | Raw records | CSI / HN / YouTube ingestion (upstream); `proactive_signals.py` (signal cards) | External signal lands in `events`/`rss_event_analysis` (CSI db) and `proactive_signal_cards`. |
 | Knowledge blocks | `proactive_convergence.py::upsert_topic_signature`, `proactive_artifacts.py::upsert_artifact` | Durable, deduped distillations (topic signatures, artifacts). |
 | Bounded retrieval | `proactive_convergence.py::_detect_clusters_sql` / `_load_recent_signatures`; `reflection_engine.py::build_reflection_context` | SQL recall + windowed corpus assembly that fits an LLM prompt. |
-| LLM synthesis | `_detect_clusters_llm`, `_run_ideation_sweep` → `track_b_ideation_synthesis`; `signal_curator` (LLM mission); `proactive_intelligence_report.compose_intelligence_report` | LLM infers themes/convergence/insight. |
+| LLM synthesis | `_detect_clusters_llm`, `_run_ideation_sweep` → `track_b_ideation_synthesis`; `proactive_intelligence_report.compose_intelligence_report` | LLM infers themes/convergence/insight. |
 | Gated action | `proactive_task_builder.queue_proactive_task` (preference gate) → Task Hub; `intel_auto_promoter`; `proactive_budget` (daily cap) | Deterministic gates create Task Hub work; no inline execution. |
 | Feedback loop | `proactive_outcome_tracker.py`, `proactive_preferences.py` | Outcomes + explicit feedback shape future surfacing/gating. |
 
@@ -62,7 +63,6 @@ flowchart TD
     subgraph RAW[Raw signal - upstream]
         CSI[(CSI db: events + rss_event_analysis)]
         HN[HN snapshots]
-        CARDS[(proactive_signal_cards)]
     end
 
     subgraph KNOW[Durable knowledge blocks]
@@ -74,7 +74,6 @@ flowchart TD
         SQLREC[_detect_clusters_sql: GROUP BY topic across distinct channels]
         LLMPREC[_detect_clusters_llm: per-bucket LLM judge]
         IDEA[_run_ideation_sweep -> track_b_ideation_synthesis]
-        CURATE[signal_curator: async LLM curation mission]
         REFLECT[reflection_engine: idle-time ideation prompt]
     end
 
@@ -94,7 +93,6 @@ flowchart TD
     CSI -->|csi_convergence_sync cron| SIG
     SIG --> SQLREC --> LLMPREC --> CAND
     SIG --> IDEA --> CAND
-    CARDS -->|heartbeat| CURATE --> QUEUE
     TASK -.->|queue empty| REFLECT --> QUEUE
     CAND --> QUEUE
     QUEUE --> PREF --> BUDGET --> TASK
@@ -113,10 +111,10 @@ wiring differs — some run continuously, some ship scaffolding only.
 
 > **Correction to legacy docs.** The 2026-04-18 audit warned that "reflection
 > mode and signal curation don't call promotion helpers to create Task Hub work."
-> That is **no longer true** as of this verification: `signal_curator` dispatches
-> an async curation mission whose `task_hub_promote_signals` tool upserts Task Hub
-> items, and `reflection_engine` produces an ideation prompt instructing the agent
-> to create `source_kind="reflection"` Task Hub items. Both now reach Task Hub.
+> The signal-curation half of that lane was **decommissioned 2026-06** (see
+> "Signal curator (Track 1)" below). For reflection the correction still holds:
+> `reflection_engine` produces an ideation prompt instructing the agent to create
+> `source_kind="reflection"` Task Hub items, so reflection does reach Task Hub.
 
 ### 1. Convergence + ideation (the centerpiece) — WIRED
 
@@ -229,31 +227,32 @@ budget. Helpers: `proactive_convergence.py::_relevance_gate_enabled`,
 > legitimate negative results and are intentionally unlogged. Political/conflict
 > convergences that trip the guardrail will not surface — an accepted tradeoff.
 
-### 2. Signal curator (Track 1) — WIRED (heartbeat-driven)
+### 2. Signal curator (Track 1) — DECOMMISSIONED 2026-06
 
-`signal_curator.py` promotes pending `proactive_signal_cards` to Task Hub work.
-It is invoked from `heartbeat_service.py`: each cycle calls `should_run_curation`,
-and if true dispatches an **async curation mission** (`mission_type="curation"`,
-`run_kind="proactive_curation"`) that uses the `task_hub_promote_signals` tool —
-the curation itself is an LLM mission, not inline Python.
+**Removed.** The autonomous signal-curation lane — heartbeat →
+`signal_curator.should_run_curation` → async `curation` mission
+(`mission_type="curation"`, `run_kind="proactive_curation"`) → the
+`task_hub_promote_signals` tool → `promote_cards_to_tasks` → `task_hub_items`
+rows with `source_kind="proactive_signal"` routed to Atlas — was deleted in
+2026-06. `services/signal_curator.py`, the `task_hub_promote_signals` tool, and
+the heartbeat dispatch block no longer exist.
 
-Trigger logic (`should_run_curation`):
-- 0 pending cards → never run.
-- Backpressure skip if open `proactive_signal` Task Hub items exceed
-  `UA_CURATOR_MAX_OPEN_SIGNALS` (10) OR eligible dispatch-queue depth exceeds
-  `UA_CURATOR_MAX_DISPATCH_QUEUE` (20). Simone's effective concurrency is 1, so
-  stacking work just lengthens latency.
-- **Minimum-interval floor** `UA_CURATOR_MIN_INTERVAL_MINUTES` (default 60): never
-  re-dispatch within this window of the last run, *regardless of card count*.
-  This was added because the "≥10 pending cards" immediate trigger otherwise
-  fired on every heartbeat while curation missions were queued-but-not-run,
-  dispatching 20–30 curation missions/hour and burying the VP queue.
-- Card-count trigger `UA_CURATOR_MIN_CARDS` (10) — now rate-limited by the floor.
-- Time-based trigger `UA_CURATOR_MIN_HOURS` (12) with ≥1 pending card.
+**Why.** The lane had been dormant since ~2026-05-27 and was duplicative of the
+**hourly intel digest** (see "Convergence + ideation" above and
+`services/hourly_intel_digest.py`), which reads the *same* CSI feedstock via
+convergence briefs — the richer path (convergence detection + ship/skip/defer
+triage + scoring + dedup). Signal cards never fed the digest's read query:
+`proactive_artifacts.upsert_from_proactive_signal_card` writes
+`artifact_type="signal_card"` / `verdict=""`, while the digest selects
+`artifact_type="intel_brief" AND verdict="ship"` — so removing the lane does not
+affect the digest.
 
-`promote_cards_to_tasks` upserts each curated card into Task Hub with
-`source_kind="proactive_signal"`, checking `has_daily_budget` before each
-promotion and calling `increment_daily_proactive_count` after.
+**What stayed.** The `proactive_signal_cards` store, its dashboard endpoints, the
+card→artifact sync, and `nightly_wiki_agent` (which reads pending cards) are
+untouched — they have independent consumers. The `"curation": "maintenance"`
+entry in `vp/mission_priority.py` is retained as the maintenance-tier exemplar
+referenced by the priority regression tests and is inert. No new
+`source_kind="proactive_signal"` Task Hub items are produced.
 
 ### 3. Reflection engine (autonomous ideation) — WIRED (idle-only)
 
@@ -406,13 +405,15 @@ signal exists, the task passes (benefit of the doubt). On any error the gate
 
 ### Gate 2 — daily budget
 
-`signal_curator` and `reflection_engine` share one daily counter
-(`proactive_budget.py`): `has_daily_budget` checks against
-`UA_PROACTIVE_DAILY_BUDGET` (default 10), counting only `source_kind in
-('proactive_signal','reflection')`. Cron/`system_command` tasks are never
-counted. Counter resets at the UTC date boundary. (Note: the convergence path's
-`queue_proactive_task` does not itself decrement this budget; the budget is
-enforced explicitly by the curator and reflection callers.)
+`reflection_engine` draws on a daily counter (`proactive_budget.py`):
+`has_daily_budget` checks against `UA_PROACTIVE_DAILY_BUDGET` (default 10),
+counting only `source_kind in ('proactive_signal','reflection')`.
+Cron/`system_command` tasks are never counted. Counter resets at the UTC date
+boundary. (Note: the convergence path's `queue_proactive_task` does not itself
+decrement this budget; the budget is enforced explicitly by the reflection
+caller. The `proactive_signal` source_kind stays in the count for any legacy
+rows, but the curation lane that produced them is decommissioned — see
+"Signal curator (Track 1)".)
 
 ---
 

@@ -13,7 +13,7 @@ code_paths:
   - src/universal_agent/services/hourly_intel_digest.py
   - src/universal_agent/services/atlas_direct_dispatch.py
   - src/universal_agent/systemd_migrated_jobs.py
-last_verified: 2026-06-06
+last_verified: 2026-06-09
 ---
 
 # Task Type & Mission System Registry
@@ -84,7 +84,7 @@ research mission sent to Cody still runs on Max. Owner: [`03_agents/01_vp_worker
 | `briefing` / `morning_briefing` / `evening_briefing` | canonical | Operator-daily briefings; highest tier (`operator_daily`) | `scripts/briefings_agent.py` |
 | `doc-maintenance` | canonical | Docs upkeep (`maintenance` tier); post-finalize push/PR hook | `vp/worker_loop.py::_post_mission_push_pr_merge` |
 | `proactive_general` | canonical | Generic proactive Atlas mission from the direct-dispatch sweep | `services/atlas_direct_dispatch.py::dispatch_atlas_candidates_once` |
-| `curation` / `proactive_wiki` | canonical | Memory/wiki housekeeping (`maintenance` tier) | `scripts/nightly_wiki_agent.py` |
+| `proactive_wiki` (also `curation`, retired) | canonical | Memory/wiki housekeeping (`maintenance` tier). The `curation` mission lane was decommissioned 2026-06 (its `maintenance` tier entry is retained but inert). | `scripts/nightly_wiki_agent.py` |
 | `freelance_scout` | active_secondary | Freelance-opportunity scouting; unmapped → `background` tier | `scripts/freelance_scout_agent.py` |
 | `coding_task` / `general_task` / `research_task` | active_secondary | Redis cross-machine bridge mission_kinds → vp_id mapping | `delegation/redis_vp_bridge.py::MISSION_KIND_TO_VP` |
 | `evaluate_and_author_intel_brief` | unclear | **Named in dispatch prompts but NOT a literal source `mission_type`.** The real pipeline is convergence_candidate → the `/evaluate-and-author-intel-brief` skill. Treat as a skill, not a mission_type. | `services/proactive_convergence.py::write_convergence_candidate` |
@@ -135,7 +135,7 @@ a task type. Owner: [`02_execution_core/02_task_hub.md`](../02_execution_core/02
 | `email` | canonical | Trusted inbound AgentMail → one task/thread | `services/email_task_bridge.py::EmailTaskBridge` |
 | `simone_chat` | canonical | Each interactive Simone chat session | `services/simone_chat_tasks.py::record_first_operator_message` |
 | `convergence_candidate` | canonical | Proactive convergence/ideation → Atlas intel brief | `services/proactive_convergence.py::write_convergence_candidate` |
-| `proactive_signal` | canonical | Signal curator promotes signal cards | `services/signal_curator.py::promote_cards_to_tasks` |
+| `proactive_signal` | retired | Was produced by the signal-curation lane (heartbeat → `curation` mission → the `task_hub_promote_signals` tool). **Decommissioned 2026-06**, superseded by the hourly intel digest; no production producer remains (legacy rows may persist). | n/a — lane removed (see 04_intelligence/10_proactive_pipeline.md) |
 | `csi` | active_secondary | CSI signals captured as lean **digests** — the Task Hub routing sub-machine was retired in the 2026-03 CSI redesign (commit `e7afa50f`, "gut CSI dispatch chain, add lean digest system"). `task_hub.py::upsert_csi_item` is **retained but not called in production** (no non-test callers); inbound CSI events land as digests, not Task Hub rows. | `gateway_server.py::_add_csi_digest` (→ `.csi_digests.db`) |
 | `cron_run` | canonical | Cron tick ↔ Task Hub link (observability). **Post-#773 board behavior:** idle perpetual `cron:<job>` rows are hidden from the Kanban (`gateway_server.py::_is_idle_cron_board_row`); a cron earns a card only while running/failed, and each finished run lands as its own card in the Completed lane via `task_hub.py::list_completed_cron_runs` (backed by the per-run `task_hub_runs` audit table). | `services/cron_task_hub_link.py::ensure_cron_task_link` |
 | `vp_mission` | canonical | **Visibility-only** Kanban mirror of a VP mission (`agent_ready=False`) | `tools/vp_orchestration.py` (`_vp_dispatch_mission_impl`) |
@@ -204,7 +204,7 @@ These generate the work Atlas/Cody execute. Owners: [`04_intelligence/01_csi_arc
 | **ClaudeDevs X intel lane** | canonical | X polling → tier classify → URL ground → packet → demo-triage | `services/claude_code_intel.py::run_sync` |
 | **CSI Vault intelligence pass** | canonical | Per-packet LLM VaultDelta extraction (Memex) | `services/csi_intelligence_pass.py::analyze_action` |
 | **Demo Triage** | canonical | Candidate store + ranker + pending→approve gate for tier-3 actions | `services/csi_demo_triage.py::approve_candidate` |
-| **Signal curator** | canonical | Promotes proactive signal cards to tasks | `services/signal_curator.py::should_run_curation` |
+| **Signal curator** | retired | Promoted proactive signal cards to Task Hub work; **decommissioned 2026-06**, superseded by the hourly intel digest. | n/a — lane removed (see 04_intelligence/10_proactive_pipeline.md) |
 | **Proactive task builder + gate** | canonical | The single chokepoint where proactive services create tasks; enforces the **preference gate** (`proactive_preferences.should_block_proactive_task`, fail-open). Note: there is no task-count "budget" gate here — the only convergence "budget" is a separate wall-clock LLM deadline (`proactive_convergence._convergence_budget_seconds`). | `services/proactive_task_builder.py::queue_proactive_task` |
 | **Intel auto-promoter** | canonical | Overnight score-gated automation of demo-triage approval | `services/intel_auto_promoter.py::promote_top_candidates` |
 | **YouTube Daily Digest (Pipeline A)** | canonical | Native playlist watcher → transcript → digest email | `scripts/youtube_daily_digest.py::process_daily_digest` |
