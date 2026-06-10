@@ -137,19 +137,18 @@ async def run_once(conn) -> str:  # noqa: ANN001 — sqlite3.Connection
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
-    # Runtime dormancy gate (opt-OUT to 24/7). The systemd timer fires every
-    # hour (00..23) so this gate decides per-run. Default (env unset) stays
-    # windowed — set UA_INTEL_DIGEST_DORMANCY to a falsy value (e.g. "false")
-    # in Infisical to run 24/7. Gate BEFORE initialize_runtime_secrets() so the
-    # overnight skip costs no Infisical round-trip.
-    if not should_run(
-        mode="dormancy_aware",
-        env_var="UA_INTEL_DIGEST_DORMANCY",
-        env=os.environ,
-    ):
+    # Runtime dormancy gate. This is an interval (hourly) job: the systemd timer
+    # fires every hour (00..23) so this gate decides per-run. Default (env unset)
+    # stays windowed — set UA_INTEL_DIGEST_24_7=true in Infisical to run 24/7.
+    # Gate BEFORE initialize_runtime_secrets() so the overnight skip costs no
+    # Infisical round-trip.
+    run_24_7 = str(os.environ.get("UA_INTEL_DIGEST_24_7", "")).strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    if not should_run(mode="always" if run_24_7 else "dormancy_aware"):
         logger.info(
             "hourly_intel_digest_cron: dormant window, skipping "
-            "(set UA_INTEL_DIGEST_DORMANCY=false to run 24/7)"
+            "(set UA_INTEL_DIGEST_24_7=true to run 24/7)"
         )
         return
     # One-shot subprocess: make sure the Infisical-backed secrets (AgentMail API

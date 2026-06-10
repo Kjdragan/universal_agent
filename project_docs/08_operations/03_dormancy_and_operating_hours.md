@@ -179,21 +179,28 @@ tz), or an explicit IANA name.
   (no violation) during dormancy so it doesn't false-fire on the expected overnight
   gap.
 
-## Documented exceptions (24/7 services)
+## Crons exempt from the dormancy window
 
-Some services legitimately run inside the dormant window. They are enumerated in
-the guard test's `DOCUMENTED_EXCEPTIONS` set
-(`tests/unit/test_cron_dormancy_defaults.py`) **and** must have a matching row in
-the legacy doc. Code-verified current exceptions:
+Dormancy windowing only applies to **interval** crons (`*/N` or hourly ranges —
+see "Adding a new cron" below). Two kinds of scheduled work are exempt:
 
-| Exception | Why it runs 24/7 |
+**(a) Interval crons that legitimately run 24/7** — enumerated in the guard
+test's `DOCUMENTED_EXCEPTIONS` set (`tests/unit/test_cron_dormancy_defaults.py`),
+each with a row here:
+
+| Exception (interval, 24/7) | Why it runs 24/7 |
 |---|---|
-| `nightly_wiki` | 3:15 AM Houston — feeds the 6:30 AM morning briefing |
 | `atlas_direct_dispatch` | every-60s dispatcher (Hermes Phase C); latency-sensitive — Atlas-eligible tasks must dispatch within ~60s, not wait for 6 AM. Default OFF via `UA_ATLAS_DIRECT_DISPATCH_ENABLED=0` |
 | `simone_chat_auto_complete` | every-60s SQLite-only housekeeping promoting idle `simone_chat` rows to completed; a chat started near 9 PM would otherwise stay `in_progress` overnight and pollute the dashboard |
 
-Further always-on behaviors are not in that set (they aren't cron jobs) but are
-explicitly dormancy-exempt:
+**(b) Fixed-time crons run as scheduled** — a cron pinned to one or a few
+discrete times (e.g. `nightly_wiki` at 3:15 AM, feeding the 6:30 AM briefing)
+runs at its chosen time; "24/7 vs windowed" is meaningless for it, so dormancy
+does not apply. These are **not** in `DOCUMENTED_EXCEPTIONS`; the guard only
+emits an informational notice if a fixed-time cron lands in the dormant hours
+(see "The guard test").
+
+Further always-on behaviors are not crons but are explicitly dormancy-exempt:
 - `cron_artifact_notifier` sends the **initial** disclosure email immediately on a
   clean cron exit "regardless of dormancy — operator chose this trade-off
   explicitly." (Only the *follow-up* reminders, handled by `cron_artifact_reminders`,
@@ -229,6 +236,51 @@ explicitly dormancy-exempt:
   deploy) are event-driven (`push`/`pull_request`/`workflow_run`), so dormancy never
   applies mechanically.
 
+## Exhibit — current cron dormancy settings
+
+Point-in-time snapshot (2026-06-09) of every registered scheduled job and how
+dormancy applies to it. Authoritative source: the `default_cron=` registrations
+in `gateway_server.py` plus the systemd timers under `deployment/systemd/`; the
+guard tests in `tests/unit/test_cron_dormancy_defaults.py` keep this honest.
+**All times America/Chicago (Houston). Active window: 6 AM – 10 PM.**
+
+### Interval crons — dormancy applies
+
+| Job | Schedule | Treatment | 24/7 lever |
+|---|---|---|---|
+| `hourly_intel_digest` | systemd timer `00..23`, runtime-gated | **Windowed by default**, runtime-flippable | `UA_INTEL_DIGEST_24_7=true` |
+| `csi_convergence_sync` | systemd timer `00..23`, runtime-gated | **Windowed by default**, runtime-flippable | `UA_CSI_CONVERGENCE_SYNC_24_7=true` |
+| `cron_artifact_reminders_sweep` | `*/30 6-21` | Windowed (also self-gates per reminder) | — |
+| `vp_mission_pr_reconciler` | `*/15 6-20` | Windowed (job-specific 6–20) | — |
+| `hackernews_snapshot` | `0,30 6-21` | Windowed (source currently parked) | — |
+| `atlas_direct_dispatch` | `*/1 * * * *` | **24/7** — documented exception (latency-sensitive); default OFF | always 24/7 |
+| `simone_chat_auto_complete` | `*/1 * * * *` | **24/7** — documented exception (operator-facing state) | always 24/7 |
+
+### Fixed-time crons — run as scheduled (dormancy does not apply)
+
+| Job | Schedule |
+|---|---|
+| `nightly_wiki` | 3:15 AM daily — *overnight by design* (feeds the morning briefing) |
+| `morning_briefing` | 6:30 AM daily |
+| `architecture_canvas_drift` | 6:30 AM Mondays |
+| `scratch_pruning` | 7:00 AM daily |
+| `proactive_report_morning` | 7:05 AM daily |
+| `vault_lint_contradictions` | 7:00 AM on the 1st of each month |
+| `insight_scoring_health` | 8:00 AM Sundays |
+| `proactive_artifact_digest` | 8:35 AM daily |
+| `csi_demo_triage_rank` | 10:05 AM & 3:05 PM daily |
+| `intel_auto_promoter` | 10:35 AM & 3:35 PM daily |
+| `proactive_report_midday` | 12:05 PM daily |
+| `proactive_report_afternoon` | 4:05 PM daily |
+| `vp_coder_workspace_pruning` | 5:05 PM Sundays |
+| `evening_briefing` | 6:00 PM daily |
+
+### Always-on (not crons — dormancy never applies mechanically)
+
+- **Initial artifact-disclosure email** — sent immediately on a clean cron exit (only the *follow-up* reminders respect the window).
+- **Heartbeat pre-flight health check** — runs every heartbeat tick, 24/7, by design (incident response).
+- **Event-driven GHA workflows** — deploy / auto-merge / CI-failure / PR-failure, triggered by `push`/`pull_request`/`workflow_run`.
+
 ## Runtime 24/7 opt-out (per-job)
 
 Distinct from the blanket `DOCUMENTED_EXCEPTIONS` above (which default a job to
@@ -241,29 +293,27 @@ How it works (two halves):
 1. **Widen the schedule to 24/7.** The systemd `.timer` `OnCalendar` is set to the
    full-day range `00..23` (or, for an in-process cron, the hour field to `*`) so
    the unit fires every hour and the per-run gate can decide.
-2. **Gate the work at runtime.** The ExecStart script calls
-   `dormancy.should_run(mode="dormancy_aware", env_var="UA_<JOB>_DORMANCY")`
+2. **Gate the work at runtime.** The ExecStart script reads `UA_<JOB>_24_7` and
+   calls `dormancy.should_run(mode="always" if <truthy> else "dormancy_aware")`
    **before** `initialize_runtime_secrets()` (so an overnight skip costs no
-   Infisical round-trip). Because `mode="dormancy_aware"` and the env var is
-   unset by default, the job no-ops outside 6 AM–10 PM Houston — same effective
-   behavior as before. Setting `UA_<JOB>_DORMANCY` to a **falsy** value forces
-   `always` (24/7); a truthy value (or unset) keeps it windowed. (This polarity
-   is `should_run`'s native env coercion: truthy → `dormancy_aware`, falsy →
-   `always`.)
+   Infisical round-trip). Default (env var unset) → `dormancy_aware`, so the job
+   no-ops outside 6 AM–10 PM Houston — same effective behavior as before. Set
+   `UA_<JOB>_24_7=true` to force `always` (24/7); unset or falsy keeps it
+   windowed. (The knob reads as a plain "run 24/7" switch — `true` = 24/7.)
 
-Default windowed + opt-OUT-to-24/7 keeps the policy "dormancy is opt-in, never
-blanket" intact, and avoids surprise overnight Infisical-bootstrap cost (each
-flipped job adds ~8 overnight runs/day; `initialize_runtime_secrets()` is not
-memoized).
+Default windowed + an explicit `_24_7` opt-in keeps the policy "dormancy is
+opt-in, never blanket" intact, and avoids surprise overnight Infisical-bootstrap
+cost (each flipped job adds ~8 overnight runs/day; `initialize_runtime_secrets()`
+is not memoized).
 
 ### Pilot jobs and their opt-out env vars
 
-| Job | Opt-out env var (Infisical) | Schedule | To flip to 24/7 |
+| Job | 24/7 env var (Infisical) | Schedule | To flip to 24/7 |
 |---|---|---|---|
-| `hourly_intel_digest` (systemd) | `UA_INTEL_DIGEST_DORMANCY` | `00..23` timer, runtime-gated | set var falsy in Infisical, then reinstall the timer (below) |
-| `csi_convergence_sync` (systemd) | `UA_CSI_CONVERGENCE_SYNC_DORMANCY` | `00..23` timer, runtime-gated | set var falsy in Infisical, then reinstall the timer (below) |
+| `hourly_intel_digest` (systemd) | `UA_INTEL_DIGEST_24_7` | `00..23` timer, runtime-gated | set var `true` in Infisical, then reinstall the timer (below) |
+| `csi_convergence_sync` (systemd) | `UA_CSI_CONVERGENCE_SYNC_24_7` | `00..23` timer, runtime-gated | set var `true` in Infisical, then reinstall the timer (below) |
 
-The env vars live in Infisical (dev + prod) defaulted to `true` (explicit
+The env vars live in Infisical (dev + prod) defaulted to `false` (explicit
 windowed) so the lever is discoverable. Deliberately **excluded** from the pilot:
 `vp_mission_pr_reconciler` (its `6-20` window is a job-specific narrowing, not the
 6–22 dormancy window, so the gate would silently widen its default), and
@@ -283,17 +333,17 @@ authenticated (the agent cannot — prod secret writes are operator-gated):
 ```bash
 for ENV in dev prod; do
   infisical secrets set --env="$ENV" --projectId=9970e5b7-d48a-4ed8-a8af-43e923e67572 \
-    UA_INTEL_DIGEST_DORMANCY=true \
-    UA_CSI_CONVERGENCE_SYNC_DORMANCY=true
+    UA_INTEL_DIGEST_24_7=false \
+    UA_CSI_CONVERGENCE_SYNC_24_7=false
 done
 ```
 
-(Setting them to `true` is a behavioral no-op — windowed is already the default
+(Setting them to `false` is a behavioral no-op — windowed is already the default
 when unset — it just makes the lever discoverable in the Infisical UI.)
 
 1. **Flip the env var in Infisical** (dev and/or prod): set
-   `UA_INTEL_DIGEST_DORMANCY=false` (or the csi var) to go 24/7; set back to
-   `true` / remove to return to windowed.
+   `UA_INTEL_DIGEST_24_7=true` (or the csi var) to go 24/7; set back to
+   `false` / remove to return to windowed.
 2. **For a systemd job, reinstall the timer on the VPS** so the widened
    `OnCalendar` takes effect (the timer text only changes on reinstall + a
    `daemon-reload`). Run as root:
@@ -308,10 +358,10 @@ when unset — it just makes the lever discoverable in the Infisical UI.)
 
 `tests/unit/test_dormancy_schedule_consistency.py` pins the runtime-gated timers
 to the full-day `00..23` range (`_RUNTIME_GATED_TIMERS`) and asserts each one's
-ExecStart script actually calls `should_run` with the matching
-`UA_<JOB>_DORMANCY` env var (`test_runtime_gated_scripts_call_should_run`) — so a
-schedule widening can never ship without its runtime gate, and a hand-edit can't
-silently re-narrow the schedule.
+ExecStart script actually gates on the matching `UA_<JOB>_24_7` env var
+(`test_runtime_gated_scripts_call_should_run`) — so a schedule widening can never
+ship without its runtime gate, and a hand-edit can't silently re-narrow the
+schedule.
 
 ## The guard test
 
@@ -320,10 +370,16 @@ commit from registering a 3 AM cron by accident. It does **string-grep against t
 source file** (not AST/import — too heavy and `gateway_server` has import-time side
 effects). Key checks:
 
-- `test_internal_crons_default_to_active_hours_or_documented_exception` — regex-
+- `test_interval_crons_respect_dormancy_window_or_documented_exception` — regex-
   extracts every `(system_job, default_cron, default_timezone)` triple from
-  `gateway_server.py` and asserts each cron's hour set ⊆ `ACTIVE_HOURS =
-  set(range(6, 22))` unless the job is in `DOCUMENTED_EXCEPTIONS`.
+  `gateway_server.py` and, for **interval** crons only (`*/N` or hourly ranges,
+  per `_is_interval_cron`), asserts the hour set ⊆ `ACTIVE_HOURS =
+  set(range(6, 22))` unless the job is in `DOCUMENTED_EXCEPTIONS` or carries a
+  `UA_<JOB>_24_7` runtime opt-out.
+- `test_fixed_time_crons_run_as_scheduled` — fixed-time crons (a single or a few
+  discrete times) run at their chosen time; this emits an informational notice
+  (never fails) if one lands in the dormant hours, so a deliberate overnight
+  schedule like `nightly_wiki` (3:15 AM) is allowed.
 - `test_hackernews_snapshot_uses_active_hour_range` /
   `test_vp_coder_workspace_pruning_moved_to_active_hours` — pin two specific
   schedules against regression.
@@ -347,20 +403,26 @@ effects). Key checks:
 
 ## Adding a new cron — classification rule
 
-Classify any new scheduled unit of work before registering it:
+Classify any new scheduled unit of work along **two axes** before registering it:
 
-- **Content-generation** (burns quota to produce intelligence) → respect dormancy:
-  schedule inside `6-21` America/Chicago (or the UTC DST-overlap window for GHA).
-- **Infrastructure-event** (deploy / auto-merge / CI-failure / alerting) → 24/7.
-  Add it to `DOCUMENTED_EXCEPTIONS` in the guard test **and** add an exceptions row
-  in the canonical doc, citing the latency-sensitive-incident-response rationale.
+**1. Schedule shape — does dormancy even apply?**
+- **Interval / repeating** (`*/N`, or an hourly range like `0 6-21`): fires across
+  many hours, so the dormancy window is a real constraint, and a careless
+  `*/30 * * * *` quietly runs all night. This is the only shape the guard
+  enforces. Schedule it inside `6-21` America/Chicago, OR — if it must run 24/7 —
+  add it to `DOCUMENTED_EXCEPTIONS` (with a doc row), OR give it the per-job
+  `UA_<JOB>_24_7` runtime opt-out.
+- **Fixed-time** (a single or a few discrete times, e.g. `5 7 * * *`,
+  `15 3 * * *`): runs at its chosen time — "24/7 vs windowed" doesn't apply, so it
+  runs as scheduled. The guard only emits an FYI notice if it lands overnight; a
+  deliberate overnight time (e.g. `nightly_wiki` 3:15 AM → morning briefing) is
+  fine and needs no exception entry.
 
-The legacy exceptions checklist (operational, still applied): a 24/7 cron is
-justified only if (1) it produces output a downstream service consumes during
-dormancy (e.g. `nightly_wiki` → morning briefing), (2) it captures transient data
-lost if not collected at the source, or (3) latency between event and human
-response matters (incident response/paging). If none apply, the cron should be
-dormant.
+**2. Purpose** (for an interval cron, deciding windowed vs 24/7): a 24/7 interval
+is justified only if (1) it produces output a downstream service consumes during
+dormancy, (2) it captures transient data lost if not collected at the source, or
+(3) latency between event and human response matters (incident response/paging).
+If none apply, window it.
 
 The two halves are mechanically coupled: adding to `DOCUMENTED_EXCEPTIONS` without
 the doc row (or vice versa) leaves the policy half-documented; the test asserts the

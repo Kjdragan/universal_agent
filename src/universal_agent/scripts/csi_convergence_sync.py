@@ -40,16 +40,15 @@ def _write_sync_report(payload: dict) -> Path:
 
 
 def main() -> int:
-    # Runtime dormancy gate (opt-OUT to 24/7). The systemd timer fires every
-    # hour (00..23) so this gate decides per-run. Default (env unset) stays
-    # windowed — set UA_CSI_CONVERGENCE_SYNC_DORMANCY to a falsy value (e.g.
-    # "false") in Infisical to run 24/7. Gate BEFORE initialize_runtime_secrets()
-    # so the overnight skip costs no Infisical round-trip.
-    if not should_run(
-        mode="dormancy_aware",
-        env_var="UA_CSI_CONVERGENCE_SYNC_DORMANCY",
-        env=os.environ,
-    ):
+    # Runtime dormancy gate. This is an interval (hourly) job: the systemd timer
+    # fires every hour (00..23) so this gate decides per-run. Default (env unset)
+    # stays windowed — set UA_CSI_CONVERGENCE_SYNC_24_7=true in Infisical to run
+    # 24/7. Gate BEFORE initialize_runtime_secrets() so the overnight skip costs
+    # no Infisical round-trip.
+    run_24_7 = str(os.environ.get("UA_CSI_CONVERGENCE_SYNC_24_7", "")).strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    if not should_run(mode="always" if run_24_7 else "dormancy_aware"):
         print(json.dumps({"ok": True, "skipped": "dormant_window"}))
         return 0
     # Load Infisical secrets FIRST. This job runs as a standalone systemd oneshot
