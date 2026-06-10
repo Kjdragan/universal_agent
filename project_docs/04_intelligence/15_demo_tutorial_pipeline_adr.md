@@ -100,6 +100,14 @@ The Demo is a runnable mini-app of the video's **capability**, not a reproductio
   sophisticated enough to fully exercise the capability.** Acceptance = functional completeness, not looks.
 - **Worthiness ⊥ approach:** stack choice never blocks demo-worthiness; an ambiguous "how to build this one"
   only triggers a pause for operator input.
+- **Model & API currency (verify, never recall):** Cody's training cutoff predates live model ids / API
+  surfaces, and the source material names the *product* (e.g. "Nano Banana"), not the wire model id. The
+  contract forbids hardcoding a model id / endpoint / SDK method / version from memory — Cody must resolve
+  the *current* identifier from an authoritative source (`gemini-api-dev` skill, Context7, provider docs, or
+  a minimal authenticated probe) or pause. A demo that ships a deprecated/invalid model id (a 404 on
+  generate) is a FAILED demo. Added after the AI-Studio "Julia's Plushie Palace" demo shipped a dead
+  `gemini-2.0-flash-exp-image-generation`. Pinned on both contract surfaces by
+  `tests/unit/test_demo_build_contract.py`.
 
 ### Gate, throttle & sources
 

@@ -92,6 +92,18 @@ MUST read ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN from the environment
 ZAI/GLM endpoint) so the demo actually runs. Never hardcode an endpoint or
 token; never commit a token; document the two env var names in the demo
 README.
+
+Model & API currency — verify, never recall:
+Your training data lags live APIs. For any external model id, API endpoint,
+SDK method, or version the demo calls, treat your memory as STALE and confirm
+the CURRENT identifier before hardcoding it. The source material names the
+PRODUCT (e.g. "Nano Banana"), not the wire model id — resolve product -> current
+id from an authoritative source, not recall: the gemini-api-dev skill or
+Context7 docs for the SDK, the provider's current docs, or a minimal
+authenticated live probe that returns 200. If you cannot confirm the current
+id, PAUSE for operator input rather than guess. A demo that ships a
+deprecated/invalid model id (e.g. a 404 on generate) is a FAILED demo even if
+every other line is correct.
 """
 
 
