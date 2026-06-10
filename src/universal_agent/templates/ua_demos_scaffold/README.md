@@ -24,9 +24,13 @@ Phase 3 (Cody implementation) of the v2 ClaudeDevs intelligence pipeline.
 
 1. **Cody runs Claude Code from inside the workspace dir** so project-local
    `.claude/settings.json` takes precedence over `~/.claude/`.
-2. **No `ANTHROPIC_AUTH_TOKEN` env var leaks into the demo subprocess.** The
-   workspace inherits the Max plan OAuth session from a one-time `claude /login`
-   on the VPS.
+2. **The demo subprocess inherits the daemon's ZAI routing env** —
+   `ANTHROPIC_BASE_URL` (ZAI proxy) and `ANTHROPIC_AUTH_TOKEN` (ZAI key) —
+   via `run_in_workspace` (default `scrub_env=False`). Claude-Agent-SDK
+   demos MUST read these two env vars from the environment: Claude-Max
+   OAuth inference for the Agent SDK is currently broken, so ZAI is what
+   makes the demo runnable. Never hardcode either value and never commit a
+   token — reference the env var names only.
 3. **Cody never invents API surface.** If the docs don't show how to do
    something, Cody documents the gap in `BUILD_NOTES.md` and stops; Simone
    resolves the gap on the next iteration.

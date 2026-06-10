@@ -99,6 +99,9 @@ type Demo = {
   timestamp?: string;
   entity_slug?: string;
   linked_from_entity?: boolean;
+  session_id?: string;
+  run_id?: string;
+  session_url?: string;
 };
 
 type Primitive = {
@@ -951,6 +954,16 @@ export default function DashboardClaudeCodeIntelPage() {
                       className="mt-1 inline-flex w-fit items-center gap-1 rounded-full border border-cyan-400/25 bg-cyan-400/10 px-2.5 py-1 text-[11px] text-cyan-100 transition hover:bg-cyan-400/15"
                     >
                       View entity page
+                    </a>
+                  ) : null}
+                  {asText(demo.session_url) ? (
+                    <a
+                      href={asText(demo.session_url)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-1 inline-flex w-fit items-center gap-1 rounded-full border border-emerald-400/25 bg-emerald-400/10 px-2.5 py-1 text-[11px] text-emerald-100 transition hover:bg-emerald-400/15"
+                    >
+                      Open build session
                     </a>
                   ) : null}
                 </div>

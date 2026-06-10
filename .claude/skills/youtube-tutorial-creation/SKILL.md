@@ -1,15 +1,16 @@
 ---
 name: youtube-tutorial-creation
 description: >
-  Convert a YouTube tutorial video into durable, referenceable learning artifacts stored
-  under UA_ARTIFACTS_DIR. Always produces CONCEPT.md + manifest.json, and conditionally
-  produces runnable implementation artifacts when the content is truly software/coding.
-  USE when a user provides a YouTube URL and wants to learn, understand, implement from,
-  or deeply study a video. Also trigger when a webhook/hook payload contains a YouTube URL
-  with a learning/tutorial intent. Trigger phrases: "create a tutorial from this video",
-  "help me learn from this YouTube link", "implement what's shown in this video",
-  "turn this YouTube video into a guide", "make me study notes from this", "explain and
-  implement this YouTube tutorial", "I want to implement this", "break down this video for me".
+  Convert a YouTube tutorial video into durable TEACHING-DOC learning artifacts stored
+  under UA_ARTIFACTS_DIR: always CONCEPT.md + README.md + manifest.json (plus an optional
+  procedural IMPLEMENTATION.md usage runbook). This skill NEVER builds runnable code:
+  no implementation/ folder, no repo scaffold - runnable demos are built post-gate in
+  /opt/ua_demos by the separate tutorial_build Task Hub lane. USE when a user provides a
+  YouTube URL and wants to learn, understand, or deeply study a video, or when a
+  webhook/hook payload contains a YouTube URL with a learning/tutorial intent.
+  Trigger phrases: "create a tutorial from this video", "help me learn from this YouTube
+  link", "turn this YouTube video into a guide", "make me study notes from this",
+  "break down this video for me".
 ---
 
 # YouTube Tutorial Creation Skill
@@ -20,6 +21,17 @@ be understandable *without* watching the video.
 > **Mandatory Dependency:** Always invoke the `youtube-transcript-metadata` skill first (Step 3).
 > Never fetch transcripts or metadata inline — the transcript skill is the single source of truth.
 
+> [!IMPORTANT]
+> **Tier contract (P3) — TEACHING-DOC ONLY. No implementation builds, ever.**
+> This skill must NEVER create an `implementation/` directory, a runnable code project,
+> a `.venv`/`pyproject.toml` scaffold, or any repo bootstrap script. Your job is study
+> material on how to USE the feature/capability as shown in the video. The runnable
+> Demo (a standalone mini-app) is built post-gate in `/opt/ua_demos/<id>` by the
+> separate `tutorial_build` Task Hub lane (Cody) - see
+> `project_docs/04_intelligence/15_demo_tutorial_pipeline_adr.md`. Always set
+> `"implementation_required": false` and `"learning_mode": "concept_only"` in
+> `manifest.json`.
+
 ## Output artifacts
 
 | File | Required | Purpose |
@@ -27,9 +39,8 @@ be understandable *without* watching the video.
 | `manifest.json` | ✅ Always | Provenance, status, retention map |
 | `README.md` | ✅ Always | One-page summary with metadata context block |
 | `CONCEPT.md` | ✅ Always | Standalone tutorial — understandable without watching the video |
-| `IMPLEMENTATION.md` | ✅ Usually | Prerequisites/steps; for concept-only this can be procedural (recipe/runbook) |
-| `implementation/` | ⬜ Conditional | Runnable code/scripts only for software/coding tutorials |
-| `visuals/zai_video_analysis.md` | ⬜ Best-effort for coding runs | Timestamped visual analysis from ZAI Vision |
+| `IMPLEMENTATION.md` | ⬜ Recommended | Procedural usage runbook (how to USE the tool/feature) — never a code project |
+| `visuals/zai_video_analysis.md` | ⬜ Best-effort for code-oriented videos | Timestamped visual analysis from ZAI Vision |
 | `research/sources.md` | ⬜ When gaps exist | Gap-filling sources and citations |
 | `transcript.clean.txt` | ⬜ Recommended | Deduplicated transcript (retention: temp) |
 
@@ -54,8 +65,7 @@ All durable outputs go under:
 ### Step 1 — Confirm inputs
 
 - If no URL provided, ask for one.
-- Ask for the goal: **concept-only** vs **concept + implementation**.
-- Ask for target language/framework if the video is ambiguous about it.
+- Output is always the teaching-doc tier (`learning_mode=concept_only`); do not offer an implementation build.
 
 ### Step 2 — Preflight: resolve artifacts root (MANDATORY)
 
@@ -101,7 +111,7 @@ Read `youtube_ingest.json` and look at `ok`, `failure_class`, `transcript_text`,
 |-----------|--------|
 | `ok=true` | Continue to Step 3b (normal path) |
 | `ok=false`, `failure_class=request_blocked` | Retry once; if still blocked, proceed degraded with metadata only |
-| `ok=false`, `failure_class=empty_or_low_quality_transcript` | For `concept_plus_implementation`, use ZAI Vision analysis as supplemental evidence when available; for `concept_only`, continue with metadata-only degraded output |
+| `ok=false`, `failure_class=empty_or_low_quality_transcript` | For code-oriented videos (`mode=explainer_plus_code`), use ZAI Vision analysis as supplemental evidence when available; otherwise continue with metadata-only degraded output |
 | `ok=false`, metadata succeeded | Preserve metadata in manifest; proceed degraded |
 | Both transcript and metadata failed | Set status `failed`; still write `manifest.json` + `README.md` with error detail |
 
@@ -227,8 +237,8 @@ If the script reports `status: skipped_no_description`, skip to Step 4.
 
 ### Step 4 — Visual analysis (best-effort, coding runs only)
 
-Run optional video/vision analysis only when `learning_mode` is `concept_plus_implementation`.
-For `concept_only` runs, skip this step and set `extraction.visual = "not_attempted"` in the manifest.
+Run optional video/vision analysis only for code-oriented videos (`mode=explainer_plus_code`).
+For non-code runs, skip this step and set `extraction.visual = "not_attempted"` in the manifest.
 
 When visual analysis is appropriate, use `mcp__zai_vision__video_analysis` when available to the agent runtime and save the result under:
 
@@ -268,108 +278,13 @@ Write each artifact to the run directory. Quality bar for each:
 - Must be readable by someone who has never seen the video
 - **Markdown Formatting**: Format beautifully for the UI panel. Provide breathing room (blank lines between blocks), use blockquotes for key takeaways, well-structured headers, and a calm, readable typographic flow.
 
-**`IMPLEMENTATION.md`** — practical runbook (or procedural guide for concept-only)
+**`IMPLEMENTATION.md`** — procedural usage runbook (teaching doc, NOT a code project)
 
+- How to USE the feature/capability exactly as presented in the video (commands, configuration, UI/CLI workflow)
 - Prerequisites (exact versions where known)
 - Step-by-step instructions with expected outputs at each step
 - Troubleshooting section for likely failure modes
-- References to `implementation/` scripts
-
-**`implementation/`** — runnable, production-ready project (only when `learning_mode=concept_plus_implementation`)
-
-The `implementation/` directory should be a **fully set up, ready-to-run repository** — not just loose scripts.
-The user should be able to `cd implementation/ && uv sync && uv run main.py` immediately.
-
-Required structure:
-
-```
-implementation/
-├── pyproject.toml          # UV-managed deps (see Step 8)
-├── README.md               # Project-specific usage instructions
-├── main.py                 # Primary entry point (or appropriate name)
-├── load_env.py             # Infisical/env helper (see below)
-├── .env.example            # Template for bootstrap credentials only
-├── docs/                   # Documentation skeleton
-│   ├── README.md           # Thematic index
-│   └── Documentation_Status.md  # Status tracker
-└── <additional source files as needed>
-```
-
-#### Environment & Dependency Setup (MANDATORY)
-
-1. **`pyproject.toml`** — Declare all dependencies via UV:
-   ```toml
-   [project]
-   name = "<project-name>"
-   version = "0.1.0"
-   requires-python = ">=3.11"
-   dependencies = ["google-genai>=1.0.0"]
-   ```
-   The agent must run `uv sync` after creating the project to ensure the `.venv` is ready.
-
-2. **`load_env.py`** — Infisical-first secret loading helper:
-   ```python
-   import os
-   def load_env():
-       """Load secrets from Infisical, falling back to os.environ."""
-       try:
-           from infisical_sdk import InfisicalClient
-           client = InfisicalClient()
-           secret = client.get_secret("GEMINI_API_KEY")
-           if secret and secret.secret_value:
-               os.environ["GEMINI_API_KEY"] = secret.secret_value
-               return
-       except Exception:
-           pass
-       if "GEMINI_API_KEY" not in os.environ:
-           print("Warning: GEMINI_API_KEY not found. Use: infisical run -- uv run main.py")
-   ```
-
-3. **`.env.example`** — Bootstrap template only (NOT secrets):
-   ```bash
-   # Infisical bootstrap (fill in for production/VPS deployment)
-   INFISICAL_CLIENT_ID=""
-   INFISICAL_CLIENT_SECRET=""
-   INFISICAL_PROJECT_ID="9970e5b7-d48a-4ed8-a8af-43e923e67572"
-   INFISICAL_ENVIRONMENT="production"
-   ```
-
-4. **`docs/`** — **MANDATORY: Seed the documentation skeleton with permanent knowledge.**
-   The generated repo MUST be self-contained. Read the following reference files from this
-   skill and write their full contents into the `implementation/docs/` directory:
-
-   | Source (read from skill) | Destination (write into implementation) |
-   |--------------------------|----------------------------------------|
-   | `references/documentation_pattern.md` | `docs/documentation_pattern.md` |
-   | `references/infisical_integration.md` | `docs/infisical_integration.md` |
-   | `references/vps_setup_guide.md` | `docs/vps_setup_guide.md` |
-
-   Additionally create these index files:
-   - `docs/README.md` — Thematic index linking to all docs above + any project-specific docs
-   - `docs/Documentation_Status.md` — Status tracker listing each doc with last-updated date
-
-   > [!IMPORTANT]
-   > These are NOT optional references. The agent MUST `read` each file from the skill's
-   > `references/` directory and `write` its complete contents into the implementation's
-   > `docs/` directory. The resulting repo must work as standalone knowledge even if the
-   > Universal Agent skill directory is unavailable.
-
-5. **Running instructions in `README.md`**:
-   ```markdown
-   ## Quick Start
-   ```bash
-   uv sync                           # Install dependencies
-   infisical run -- uv run main.py   # Run with secrets injected
-   ```
-
-   ## VPS Deployment
-   See `docs/vps_setup_guide.md` for systemd service setup.
-   ```
-
-#### Code Quality
-- Use uv inline scripting (PEP 723) for standalone scripts (see Step 8)
-- Add comments with provenance (timestamp reference or visual extraction source)
-- Store raw OCR code extractions with confidence headers in `visuals/code-extractions/`
+- Inline code SNIPPETS with provenance are welcome; never write them out as a runnable project or `implementation/` directory
 
 ### Step 7 — Finalize manifest
 
@@ -380,7 +295,8 @@ full schema. Required fields:
 {
   "skill": "youtube-tutorial-creation",
   "status": "full | degraded_transcript_only | failed",
-  "learning_mode": "concept_only | concept_plus_implementation",
+  "learning_mode": "concept_only",
+  "implementation_required": false,
   "video_url": "...",
   "video_id": "...",
   "source": "manual | composio | direct",
@@ -400,32 +316,9 @@ full schema. Required fields:
 }
 ```
 
-### Step 8 — Implementation validation (MANDATORY)
-
-Every Python script in `implementation/` must be runnable without a separate venv.
-
-Requirements:
-
-1. Include PEP 723 inline dependency metadata at the top:
-
-```python
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["google-genai>=1.0.0", "python-dotenv>=1.0.1"]
-# ///
-```
-
-1. Add a `--self-test` flag that checks imports + basic object construction **without** requiring secrets.
-2. Load secrets from environment only (never hardcode), using `load_dotenv(find_dotenv(usecwd=True))`.
-3. Valid secret env var names: `GOOGLE_API_KEY`, `GEMINI_API_KEY`, `Z_AI_API_KEY`, `ANTHROPIC_API_KEY`.
-4. Validate with: `UV_CACHE_DIR=/tmp/uv_cache uv run implementation/<script>.py --self-test`
-
-> **Hard rules:**  
-> Do NOT run `pip install`, `uv pip install`, or `uv add` as part of a skill run.  
-> If deps are missing, fix the PEP 723 header and re-run via `uv run`.
-
-**SDK drift note:** Prefer `google.genai` for all new code. If the tutorial video uses
-`google.generativeai`, note it as "video used legacy SDK" and implement with the current SDK.
+`learning_mode` is always `"concept_only"` and `implementation_required` is always
+`false` — the legacy concept-plus-implementation value is retired (runnable demos
+are built in `/opt/ua_demos` by the `tutorial_build` lane, not by this skill).
 
 ---
 
@@ -434,7 +327,7 @@ Requirements:
 - All required artifacts live under the resolved `UA_ARTIFACTS_DIR` (never only in run scratch)
 - `manifest.json` exists, is accurate, and has a valid `status`
 - `CONCEPT.md` is understandable without watching the video
-- `implementation/` scripts pass `--self-test` (or has clear documented reason if not applicable)
+- NO `implementation/` directory exists in the run folder (teaching-doc only; the runnable demo lives in `/opt/ua_demos` via the `tutorial_build` lane)
 
 ---
 
@@ -447,6 +340,3 @@ Read these when you need deeper detail:
 | `references/output_contract.md` | Full manifest schema, required vs optional files, status/mode values |
 | `references/ingestion_and_tooling.md` | Tool selection decision matrix, runtime strategy |
 | `references/composio_wiring_checklist.md` | Composio + webhook ingress validation |
-| `references/infisical_integration.md` | **NEW** — Secrets management patterns, `load_env.py` helper, CLI usage |
-| `references/vps_setup_guide.md` | **NEW** — VPS specs, systemd setup, Nginx, ports, CI/CD deploy pattern |
-| `references/documentation_pattern.md` | **NEW** — Dual-index doc system, agent documentation rules |
