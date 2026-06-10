@@ -105,28 +105,39 @@ async def _run() -> int:
         criticals = [
             f for f in invariants if str(f.get("severity") or "").lower() == "critical"
         ]
-        fingerprint = snap.compute_finding_fingerprint(criticals)
+        current_finding_ids = [
+            str(f.get("finding_id") or f.get("metric_key") or "unknown")
+            for f in criticals
+        ]
 
         # Cooldown decision against the DURABLE snapshot (a oneshot has no
-        # in-memory notifications cache). Re-fire only when the finding-SET
-        # changes or the 6h window has elapsed.
+        # in-memory notifications cache). The dedup key is the *cumulative set of
+        # finding-ids already alerted within the active window* — re-fire only
+        # when a currently-critical id has NOT yet been alerted this window (a
+        # genuinely-new problem), NOT on every membership change. This stops a
+        # *flapping* invariant (one entering/leaving the critical set faster than
+        # the cooldown) from resetting the window on every transition. See
+        # ``proactive_health_snapshot.decide_digest``.
         prev = snap.read_latest_snapshot(conn)
         cooldown = notifier._cooldown_seconds()
         should_send = bool(criticals) and notifier._email_enabled()
-        if should_send and prev is not None:
-            last_fp = prev.get("last_digest_fingerprint")
+        next_alerted_fingerprint = None
+        if should_send:
             last_sent = notifier._parse_iso_timestamp(
-                prev.get("last_digest_sent_at_utc")
+                (prev or {}).get("last_digest_sent_at_utc")
             )
-            if (
-                last_fp == fingerprint
-                and last_sent is not None
-                and (now.timestamp() - last_sent) < cooldown
-            ):
+            do_send, next_alerted_fingerprint = snap.decide_digest(
+                current_finding_ids=current_finding_ids,
+                prev_fingerprint=(prev or {}).get("last_digest_fingerprint"),
+                last_sent_ts=last_sent,
+                now_ts=now.timestamp(),
+                cooldown_seconds=cooldown,
+            )
+            if not do_send:
                 should_send = False
                 logger.info(
-                    "proactive_health timer: digest suppressed (same finding-set "
-                    "within %ds cooldown)",
+                    "proactive_health timer: digest suppressed (no new critical "
+                    "vs already-alerted set within %ds window)",
                     cooldown,
                 )
 
@@ -143,14 +154,15 @@ async def _run() -> int:
                 )
 
         # (3) Durable snapshot — written EVERY run. Stamp the digest cooldown
-        # fields ONLY when we actually sent; otherwise write_snapshot preserves
-        # the prior cooldown state via COALESCE so the 6h window keeps ticking.
+        # fields ONLY when we actually sent (the cumulative alerted-id set +
+        # send time); otherwise write_snapshot preserves the prior cooldown
+        # state via COALESCE so the window keeps ticking from the original send.
         try:
             snap.write_snapshot(
                 conn,
                 payload=payload,
                 updated_at_utc=now_iso,
-                digest_fingerprint=fingerprint if sent else None,
+                digest_fingerprint=next_alerted_fingerprint if sent else None,
                 digest_sent_at_utc=now_iso if sent else None,
             )
         except Exception:  # noqa: BLE001
