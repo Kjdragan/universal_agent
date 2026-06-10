@@ -76,10 +76,11 @@ def main() -> int:
         conn.close()
 
     logger.info(
-        "proactive signal card sync: youtube=%d discord=%d expired=%d",
+        "proactive signal card sync: youtube=%d discord=%d expired=%d purged=%d",
         counts.get("youtube", 0),
         counts.get("discord", 0),
         counts.get("expired", 0),
+        counts.get("purged", 0),
     )
     return 0
 

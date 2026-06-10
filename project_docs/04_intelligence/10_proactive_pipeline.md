@@ -263,10 +263,28 @@ within YouTube, no LLM) were retired — they duplicated, more weakly, what the
 convergence pipeline already does cross-channel with an LLM judge. An empirical
 dry-run also showed feeding diamond cards into the convergence/brief pipeline
 yields almost nothing net-new (≈1 of 20 diamonds isn't already in a cluster),
-so no card→brief feeder was added. To stop un-triaged cards piling up,
-`sync_generated_cards` now calls `expire_stale_pending_cards` each run
-(soft-deletes `pending` cards not refreshed within `UA_PROACTIVE_CARD_TTL_DAYS`,
-default 14; operator-triaged cards are never touched).
+so no card→brief feeder was added.
+
+**Card hygiene — every sweep runs two cleaners** (`generate_signal_cards`, shared
+by the tick and the dashboard load):
+- `expire_stale_pending_cards` **soft-deletes** `pending` cards not refreshed
+  within `UA_PROACTIVE_CARD_TTL_DAYS` (default **3**) → `status='deleted'`: the
+  row stays in the DB but drops off the live/pending tab. Keyed on `updated_at`
+  (last surfaced), NOT `created_at` — a card's `created_at` is the *video's*
+  publish time, so a `created_at` TTL would instantly expire cards for any video
+  ingested late (RSS backfill). Net shelf life ≈ time-in-feed (≤~2 days) + 3.
+  Operator-triaged cards are never touched.
+- `purge_aged_terminal_cards` **hard-deletes** terminal/non-live rows
+  (`actioned`/`rejected`/`promoted`/`deleted`, never `pending`/`tracking`) whose
+  `updated_at` is older than `UA_PROACTIVE_CARD_PURGE_DAYS` (default **7**), so
+  the rejected/deleted ledger doesn't accumulate forever. Resurface-safe: keyed
+  on `updated_at`, which is always > the ~2-day CSI regeneration window before a
+  row becomes purgeable, so a purged card can't be re-INSERTed as `pending`.
+
+**Default tab view = `live`** (= `pending` + `tracking`; `list_cards(status="live")`).
+The dashboard defaults here so the tab shows the active triage set, not the
+rejected/promoted/deleted history. `all` (excludes only `deleted`) and the
+per-status filters remain available.
 
 **How `proactive_signal_cards` are generated — two triggers (autonomous tick + pull-on-open).**
 There are two callers that produce cards from the CSI/Discord feedstock, sharing
@@ -299,9 +317,10 @@ nothing to build. The hourly tick closes that gap.
 `proactive_signal_cards.status` is documented in the `proactive_signals.py` module
 docstring; the load-bearing facts: new cards are `pending`; `'rejected'` is written
 **only** by the operator "Reject" button (the dashboard feedback endpoint via
-`record_feedback`) — there is **no batch/automatic rejecter anywhere**; the only
-*automatic* status mutation is `expire_stale_pending_cards` → `'deleted'` (the TTL
-sweep). A pile of `rejected` rows means operators clicked Reject; a pile of
+`record_feedback`) — there is **no batch/automatic rejecter anywhere**. The only
+*automatic* mutations are the two hygiene sweeps above: `expire_stale_pending_cards`
+(`pending` → `'deleted'`, soft) and `purge_aged_terminal_cards` (aged terminal rows
+hard-deleted). A pile of `rejected` rows means operators clicked Reject; a pile of
 `deleted` rows means the TTL sweep ran. Do not attribute rejections to a preference
 model or a sweeper (a 2026-06 investigation made that wrong call).
 
