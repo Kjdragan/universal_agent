@@ -22,11 +22,12 @@ last_verified: 2026-06-10
 
 # ADR: YouTube Brief / Tutorial / Demo Pipeline Redesign
 
-> **STATUS: DESIGN APPROVED — IMPLEMENTATION NOT STARTED.** This ADR records the operator-ratified
-> target design from the 2026-06-10 grilling session. It is the canonical spec for the work; phases P0–P5
-> below carry their own status markers. Sections describing *current* behavior are code-verified
-> (2026-06-09/10); sections describing the *target* are marked **TARGET**. Cross-session handoff: a new
-> session should read this doc, then implement the next unstarted phase, one branch→PR per phase.
+> **STATUS: DESIGN APPROVED — IMPLEMENTATION IN PROGRESS (P0–P2 built, shipped on PR #887).** This ADR
+> records the operator-ratified target design from the 2026-06-10 grilling session. It is the canonical
+> spec for the work; phases P0–P5 below carry their own status markers. Sections describing *current*
+> behavior are code-verified (2026-06-09/10); sections describing the *target* are marked **TARGET**.
+> Cross-session handoff: a new session should read this doc, then implement the next unstarted phase,
+> one branch→PR per phase.
 
 ## Context — what exists today (code-verified 2026-06-09/10)
 
@@ -146,9 +147,9 @@ Every Brief / Tutorial / Demo links to the **agent session that created it**, op
 
 | Phase | Status | Goal | Key touch-points (`file::symbol`) |
 |---|---|---|---|
-| **P0** | **in-progress** | This ADR + glossary; fix the drift in `05_youtube_csi_flow.md` | `project_docs/04_intelligence/` |
-| **P1** | proposed | Schedule + dedup the broad lane (fix the "no cadence" bug) | new `deployment/systemd` timer (3×/day) → `proactive_tutorial_builds.py::sync_build_oriented_csi_videos`; decouple from `gateway_server.py::_schedule_proactive_signal_sync`; dedupe by `video_id` vs digest |
-| **P2** | proposed | The gate + quota (rank → auto-build top-N/day → rest to button) | `proactive_tutorial_builds.py::queue_tutorial_build_task`, `youtube_daily_digest.py::_select_tutorial_dispatch_candidates`; daily-ceiling counter; new "approve build" endpoint + Tutorial Backlog tab button |
+| **P0** | **done** (commit b2fc3bb0) | This ADR + glossary; fix the drift in `05_youtube_csi_flow.md` | `project_docs/04_intelligence/` |
+| **P1** | **done** (commit 3564c4ce) | Schedule + dedup the broad lane (fix the "no cadence" bug) | new `deployment/systemd` timer (3×/day) → `proactive_tutorial_builds.py::sync_build_oriented_csi_videos`; decouple from `gateway_server.py::_schedule_proactive_signal_sync`; dedupe by `video_id` vs digest |
+| **P2** | **done** (P2a 6d899b55 + P2b) | The gate + quota (rank → auto-build top-N/day → rest to button; manual approvals uncapped) | `proactive_tutorial_builds.py::sync_build_oriented_csi_videos` (ceiling + pending overflow), `proactive_tutorial_builds.py::approve_pending_tutorial_build` + `gateway_server.py::dashboard_tutorial_pending_build_approve` (approve endpoint), Pending Approval section in `web-ui/app/dashboard/tutorials/` |
 | **P3** | proposed | Kill the double-build; stage the tiers (Tutorial = teaching-doc only) | `hooks_service.py::build_manual_youtube_action`, `.claude/skills/youtube-tutorial-creation/SKILL.md`, `youtube_daily_digest.py::_dispatch_tutorial_candidate` → converge both sources on one Tutorial tier; full build only post-gate in `/opt/ua_demos` |
 | **P4** | proposed | Rewrite the Demo build contract | framework-per-video rule + simple-UI/functionally-complete acceptance into `.claude/skills/cody-implements-from-brief/` / the `tutorial_build`→Cody dispatch BRIEF; Claude-Agent-SDK demos wired to ZAI inference |
 | **P5** | proposed | Session link (3-panel view) | stamp `session_id`/`run_id` on tutorial + demo manifests at build time; `gateway_server.py::_list_tutorial_runs` + demo view + `web-ui` render the link |

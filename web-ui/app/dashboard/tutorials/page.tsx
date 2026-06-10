@@ -59,6 +59,16 @@ type TutorialBootstrapJob = {
   error?: string;
 };
 
+type PendingBuild = {
+  task_id: string;
+  title?: string;
+  video_id?: string;
+  video_url?: string;
+  channel_name?: string;
+  created_at?: string;
+  priority?: number;
+};
+
 type PipelineNotification = {
   id: string;
   kind: string;
@@ -231,6 +241,8 @@ export default function DashboardTutorialsPage() {
   const [jobs, setJobs] = useState<TutorialReviewJob[]>([]);
   const [bootstrapJobs, setBootstrapJobs] = useState<TutorialBootstrapJob[]>([]);
   const [notifications, setNotifications] = useState<PipelineNotification[]>([]);
+  const [pendingBuilds, setPendingBuilds] = useState<PendingBuild[]>([]);
+  const [approvingTaskId, setApprovingTaskId] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [dispatchingRunPath, setDispatchingRunPath] = useState<string>("");
@@ -258,16 +270,18 @@ export default function DashboardTutorialsPage() {
     setLoading(true);
     setError("");
     try {
-      const [runsRes, jobsRes, bootstrapRes, notifRes] = await Promise.all([
+      const [runsRes, jobsRes, bootstrapRes, notifRes, pendingRes] = await Promise.all([
         fetch(`${API_BASE}/api/v1/dashboard/tutorials/runs?limit=120`),
         fetch(`${API_BASE}/api/v1/dashboard/tutorials/review-jobs?limit=120`),
         fetch(`${API_BASE}/api/v1/dashboard/tutorials/bootstrap-jobs?limit=120`),
         fetch(`${API_BASE}/api/v1/dashboard/tutorials/notifications?limit=20`),
+        fetch(`${API_BASE}/api/v1/dashboard/tutorials/pending-builds?limit=50`),
       ]);
       const runsPayload = runsRes.ok ? await runsRes.json() : { runs: [] };
       const jobsPayload = jobsRes.ok ? await jobsRes.json() : { jobs: [] };
       const bootstrapPayload = bootstrapRes.ok ? await bootstrapRes.json() : { jobs: [] };
       const notifPayload = notifRes.ok ? await notifRes.json() : { notifications: [] };
+      const pendingPayload = pendingRes.ok ? await pendingRes.json() : { builds: [] };
       setRuns(Array.isArray(runsPayload.runs) ? (runsPayload.runs as TutorialRun[]) : []);
       setJobs(Array.isArray(jobsPayload.jobs) ? (jobsPayload.jobs as TutorialReviewJob[]) : []);
       setBootstrapJobs(
@@ -282,12 +296,16 @@ export default function DashboardTutorialsPage() {
           )
           : [],
       );
+      setPendingBuilds(
+        Array.isArray(pendingPayload.builds) ? (pendingPayload.builds as PendingBuild[]) : [],
+      );
     } catch (err: any) {
       setError(err?.message || "Failed to load tutorial backlog");
       setRuns([]);
       setJobs([]);
       setBootstrapJobs([]);
       setNotifications([]);
+      setPendingBuilds([]);
     } finally {
       setLoading(false);
     }
@@ -335,10 +353,11 @@ export default function DashboardTutorialsPage() {
     const refreshMs = hasActiveBootstrapJobs ? 5_000 : 30_000;
     const interval = setInterval(async () => {
       try {
-        const [runsRes, notifRes, bootstrapRes] = await Promise.all([
+        const [runsRes, notifRes, bootstrapRes, pendingRes] = await Promise.all([
           fetch(`${API_BASE}/api/v1/dashboard/tutorials/runs?limit=120`),
           fetch(`${API_BASE}/api/v1/dashboard/tutorials/notifications?limit=20`),
           fetch(`${API_BASE}/api/v1/dashboard/tutorials/bootstrap-jobs?limit=120`),
+          fetch(`${API_BASE}/api/v1/dashboard/tutorials/pending-builds?limit=50`),
         ]);
         if (runsRes.ok) {
           const data = await runsRes.json();
@@ -356,6 +375,12 @@ export default function DashboardTutorialsPage() {
           const data = await bootstrapRes.json();
           if (Array.isArray(data.jobs)) {
             setBootstrapJobs(data.jobs as TutorialBootstrapJob[]);
+          }
+        }
+        if (pendingRes.ok) {
+          const data = await pendingRes.json();
+          if (Array.isArray(data.builds)) {
+            setPendingBuilds(data.builds as PendingBuild[]);
           }
         }
       } catch { }
@@ -446,6 +471,36 @@ export default function DashboardTutorialsPage() {
         setDispatchStatus(err?.message || "Failed to queue review");
       } finally {
         setDispatchingRunPath("");
+      }
+    },
+    [load],
+  );
+
+  const approveBuild = useCallback(
+    async (taskId: string) => {
+      const normalized = asText(taskId);
+      if (!normalized) return;
+      setApprovingTaskId(normalized);
+      setDispatchStatus("");
+      try {
+        const res = await fetch(
+          `${API_BASE}/api/v1/dashboard/tutorials/pending-builds/${encodeURIComponent(normalized)}/approve`,
+          { method: "POST" },
+        );
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const detail = asText((payload as Record<string, unknown>).detail) || `Approve failed (${res.status})`;
+          throw new Error(detail);
+        }
+        setDispatchStatus(`Approved build: ${normalized}`);
+        await load();
+      } catch (err: any) {
+        setDispatchStatus(err?.message || "Failed to approve build");
+        // The agent_ready flip may have persisted even when the claim race
+        // errors — refresh so the row leaves the pending list either way.
+        await load();
+      } finally {
+        setApprovingTaskId("");
       }
     },
     [load],
@@ -812,6 +867,60 @@ export default function DashboardTutorialsPage() {
         <div className="rounded border border-red-400/30 bg-red-400/10 px-3 py-2 text-sm text-red-400/80">
           {error}
         </div>
+      )}
+
+      {/* ── Pending Approval (over-ceiling demo builds) ── */}
+      {pendingBuilds.length > 0 && (
+        <section className="rounded-xl border border-amber-700/50 bg-background/60 p-3">
+          <div className="mb-2 flex items-center justify-between">
+            <h2
+              className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-200"
+              title="Buildable videos held over the daily auto-build ceiling. Approving dispatches the build immediately — manual approvals are uncapped."
+            >
+              Pending Approval ({pendingBuilds.length})
+            </h2>
+          </div>
+          <div className="max-h-[24rem] space-y-1.5 overflow-y-auto pr-1">
+            {pendingBuilds.map((build) => {
+              const taskId = asText(build.task_id);
+              return (
+                <div
+                  key={taskId}
+                  className="flex items-start gap-2 rounded border border-border/80 bg-background/60 px-2.5 py-1.5 text-xs"
+                >
+                  <div className="min-w-0 flex-1">
+                    <span className="font-medium text-foreground">{asText(build.title) || taskId}</span>
+                    <p className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                      {asText(build.channel_name) && <span>{asText(build.channel_name)}</span>}
+                      <span>created={formatDate(build.created_at)}</span>
+                      {asText(build.video_id) && (
+                        <span className="font-mono opacity-70">{asText(build.video_id)}</span>
+                      )}
+                    </p>
+                    {asText(build.video_url) && (
+                      <a
+                        href={asText(build.video_url)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-0.5 inline-block text-[10px] text-primary underline underline-offset-2"
+                      >
+                        Watch video →
+                      </a>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void approveBuild(taskId)}
+                    disabled={approvingTaskId === taskId}
+                    className="rounded border border-primary/30 bg-primary/10 px-2 py-1 text-[11px] text-primary/90 hover:bg-primary/20 disabled:opacity-50"
+                  >
+                    {approvingTaskId === taskId ? "Approving..." : "Approve build"}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </section>
       )}
 
       <section className="rounded-xl border border-border bg-background/70 p-4">

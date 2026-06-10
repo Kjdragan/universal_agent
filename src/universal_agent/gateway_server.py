@@ -29283,6 +29283,51 @@ async def dashboard_tutorial_bootstrap_jobs(limit: int = 100, run_path: str = ""
     return {"jobs": jobs}
 
 
+@app.get("/api/v1/dashboard/tutorials/pending-builds")
+async def dashboard_tutorial_pending_builds(limit: int = 50):
+    """List pending-approval tutorial_build Task Hub rows (P2a ceiling overflow)."""
+    from universal_agent.services.proactive_tutorial_builds import (
+        list_pending_approval_builds,
+    )
+
+    clamped = max(1, min(int(limit), 200))
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            builds = list_pending_approval_builds(conn, limit=clamped)
+        finally:
+            conn.close()
+    return {"builds": builds, "count": len(builds)}
+
+
+@app.post("/api/v1/dashboard/tutorials/pending-builds/{task_id}/approve")
+async def dashboard_tutorial_pending_build_approve(task_id: str):
+    """Approve + dispatch a pending-approval tutorial build (operator button).
+
+    Manual approvals are UNCAPPED — this path never consults the daily
+    auto-build ceiling (UA_DEMO_BUILD_DAILY_CEILING); the flip is the
+    canonical dispatch_on_approval agent_ready 0->1 promotion.
+    """
+    from universal_agent.services.proactive_tutorial_builds import (
+        approve_pending_tutorial_build,
+    )
+
+    tid = str(task_id or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="task_id is required")
+    with _activity_store_lock:
+        conn = _task_hub_open_conn()
+        try:
+            result = approve_pending_tutorial_build(
+                conn, task_id=tid, agent_id="dashboard_operator"
+            )
+            return {"status": "approved_and_dispatched", "assignment": result}
+        except DispatchError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        finally:
+            conn.close()
+
+
 @app.post("/api/v1/dashboard/tutorials/review")
 async def dashboard_tutorial_review_dispatch(payload: TutorialReviewDispatchRequest):
     run_path = str(payload.run_path or "").strip().strip("/")

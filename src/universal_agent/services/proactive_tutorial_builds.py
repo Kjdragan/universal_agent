@@ -269,6 +269,119 @@ def sync_build_oriented_csi_videos(
     }
 
 
+def list_pending_approval_builds(
+    conn: sqlite3.Connection,
+    *,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """List tutorial_build rows queued as pending-approval (P2a overflow).
+
+    The pending representation is ``source_kind='tutorial_build'``,
+    ``status=open``, ``agent_ready=0`` with a ``pending-approval`` label
+    (see ``queue_tutorial_build_task``). Returns dashboard-renderable
+    summaries, newest first.
+    """
+    task_hub.ensure_schema(conn)
+    clamped = max(1, min(int(limit or 50), 200))
+    rows = conn.execute(
+        """
+        SELECT * FROM task_hub_items
+        WHERE source_kind = 'tutorial_build'
+          AND status = ?
+          AND agent_ready = 0
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (task_hub.TASK_STATUS_OPEN, clamped),
+    ).fetchall()
+    builds: list[dict[str, Any]] = []
+    for raw in rows:
+        item = task_hub.hydrate_item(dict(raw))
+        label_set = {str(v).lower() for v in item.get("labels") or []}
+        if "pending-approval" not in label_set:
+            continue
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        builds.append(
+            {
+                "task_id": str(item.get("task_id") or ""),
+                "title": str(item.get("title") or ""),
+                "video_id": str(metadata.get("video_id") or item.get("source_ref") or ""),
+                "video_title": str(metadata.get("video_title") or ""),
+                "video_url": str(metadata.get("video_url") or ""),
+                "channel_name": str(metadata.get("channel_name") or ""),
+                "approval_state": str(metadata.get("approval_state") or "pending_approval"),
+                "priority": int(item.get("priority") or 0),
+                "score": float(item.get("score") or 0.0),
+                "created_at": str(item.get("created_at") or ""),
+            }
+        )
+    return builds
+
+
+def approve_pending_tutorial_build(
+    conn: sqlite3.Connection,
+    *,
+    task_id: str,
+    agent_id: str = "dashboard_operator",
+) -> dict[str, Any]:
+    """Operator approve path for a pending-approval tutorial build (P2b).
+
+    Validates the row is a P2a pending-approval tutorial_build row, swaps the
+    ``pending-approval`` label for ``agent-ready`` (keeping the
+    ``upsert_item`` label OR-fallback consistent with ``agent_ready=True``),
+    stamps the approval audit trail in metadata, then promotes + claims via
+    the canonical ``dispatch_service.dispatch_on_approval`` one-field flip
+    (``agent_ready`` 0 -> 1).
+
+    Manual approvals are deliberately UNCAPPED: this path never consults
+    ``_daily_build_ceiling`` — the ceiling only throttles *auto*-dispatch in
+    ``sync_build_oriented_csi_videos``.
+
+    Raises ``DispatchError`` when the row is missing, not a tutorial build,
+    terminal, or not pending approval.
+    """
+    from universal_agent.services.dispatch_service import (
+        DispatchError,
+        dispatch_on_approval,
+    )
+
+    clean_task_id = str(task_id or "").strip()
+    if not clean_task_id:
+        raise DispatchError("task_id is required")
+    item = task_hub.get_item(conn, clean_task_id)
+    if not item:
+        raise DispatchError(f"Task {clean_task_id!r} not found")
+    if str(item.get("source_kind") or "") != "tutorial_build":
+        raise DispatchError(f"Task {clean_task_id!r} is not a tutorial build")
+    current_status = str(item.get("status") or "").lower()
+    if current_status in task_hub.TERMINAL_STATUSES:
+        raise DispatchError(
+            f"Task {clean_task_id!r} is in terminal status={current_status!r}, cannot approve"
+        )
+    label_set = {str(v).lower() for v in item.get("labels") or []}
+    if bool(item.get("agent_ready")) or "pending-approval" not in label_set:
+        raise DispatchError(f"Task {clean_task_id!r} is not pending approval")
+
+    promoted_labels = [
+        v for v in (item.get("labels") or []) if str(v).lower() != "pending-approval"
+    ]
+    if "agent-ready" not in {str(v).lower() for v in promoted_labels}:
+        promoted_labels.insert(0, "agent-ready")
+    task_hub.upsert_item(
+        conn,
+        {
+            "task_id": clean_task_id,
+            "labels": promoted_labels,
+            "metadata": {
+                "approval_state": "approved",
+                "approved_by": agent_id,
+                "approved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            },
+        },
+    )
+    return dispatch_on_approval(conn, clean_task_id, agent_id=agent_id)
+
+
 def register_tutorial_build_artifact(
     conn: sqlite3.Connection,
     *,
