@@ -11,8 +11,8 @@ Substrate: a deploy-independent **systemd timer**
 (``universal-agent-proactive-signal-card-sync.timer``) fires this hourly. The
 work is **pure SQLite — no LLM, no secrets, no delivery** — it calls
 ``proactive_signals.generate_signal_cards`` (the card-only core), NOT the full
-``sync_generated_cards`` (which also runs the LLM-bearing convergence/tutorial
-syncs that already have their own ``csi-convergence-sync`` timer).
+``sync_generated_cards`` (which also runs the LLM-bearing convergence sync that
+already has its own ``csi-convergence-sync`` timer).
 
 Dormancy: this is an interval job, so it observes the Houston active window by
 default (06:00–22:00 America/Chicago) and no-ops overnight. Set

@@ -362,9 +362,12 @@ Shorts are filtered (`_is_short_subject`), then two card types are produced:
 `_youtube_cluster_cards` (topics across multiple channels, scored against
 `YOUTUBE_INTEREST_TERMS`) and `_youtube_diamond_cards` (high-score individual
 videos). Alongside cards, `sync_generated_cards` (the same caller) invokes
-`sync_topic_signatures_from_csi` and `sync_build_oriented_csi_videos`.
-Playlist-source CSI events (`source='youtube_playlist'`) instead map to the
-manual YouTube hook via `signals_ingest.py::to_manual_youtube_payload`.
+`sync_topic_signatures_from_csi`. (It no longer invokes
+`sync_build_oriented_csi_videos` — that demo/tutorial-build call was removed
+2026-06-10 so the dedicated `universal-agent-proactive-demo-build-sweep` systemd
+timer, `scripts/proactive_demo_build_sweep.py`, is the single producer of that
+lane.) Playlist-source CSI events (`source='youtube_playlist'`) instead map to
+the manual YouTube hook via `signals_ingest.py::to_manual_youtube_payload`.
 
 The deeper Pipeline B consumer is **convergence/ideation**
 (`services/proactive_convergence.py::sync_topic_signatures_from_csi`): it reads

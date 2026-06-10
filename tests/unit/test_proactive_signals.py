@@ -274,7 +274,13 @@ def test_signal_feedback_and_action_create_task(tmp_path):
     assert cards[0]["status"] == "actioned"
 
 
-def test_sync_generated_cards_creates_artifacts_signatures_and_tutorial_tasks(tmp_path):
+def test_sync_generated_cards_creates_artifacts_and_signatures_but_not_tutorial_tasks(tmp_path):
+    """The dashboard-load superset produces cards + convergence signatures, but
+    NO longer queues demo/tutorial builds — that lane is produced solely by the
+    dedicated ``universal-agent-proactive-demo-build-sweep`` systemd timer. The
+    in-process ``sync_build_oriented_csi_videos`` call was a redundant second
+    invoker of the same producer and was removed 2026-06-10. The
+    ``tutorial_build_tasks`` count key is retained (back-compat) but is 0 here."""
     csi_db = tmp_path / "csi.db"
     _seed_csi_db(csi_db)
     db = tmp_path / "activity.db"
@@ -285,6 +291,8 @@ def test_sync_generated_cards_creates_artifacts_signatures_and_tutorial_tasks(tm
     async def _fake_judge(*, title, channel_name, summary_text):
         return {"buildable": True, "reasoning": "stub: code tutorial", "method": "llm"}
 
+    # Even with a build-positive judge available, the dashboard sync must not
+    # queue tutorial_build rows now that the timer is the sole producer.
     with patch(
         "universal_agent.services.llm_classifier.classify_tutorial_buildability",
         side_effect=_fake_judge,
@@ -302,7 +310,10 @@ def test_sync_generated_cards_creates_artifacts_signatures_and_tutorial_tasks(tm
     # Second sync is idempotent — no new signatures upserted
     assert repeated["topic_signatures"] == 0
     assert signature is not None
-    assert tutorial_tasks >= 1
+    # Single-producer invariant: the dashboard sync queues ZERO tutorial builds,
+    # and keeps the back-compat count key at 0.
+    assert tutorial_tasks == 0
+    assert counts["tutorial_build_tasks"] == 0
     assert any(item["source_kind"] == "proactive_signal" for item in artifacts)
 
 

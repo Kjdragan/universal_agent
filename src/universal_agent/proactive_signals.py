@@ -498,14 +498,19 @@ def sync_generated_cards(
     csi_db_path: Optional[Path] = None,
     discord_db_path: Optional[Path] = None,
 ) -> dict[str, int]:
-    """Dashboard-load sync: the card core PLUS the convergence/tutorial syncs.
+    """Dashboard-load sync: the card core PLUS the convergence sync.
 
     The card-producing work is delegated to :func:`generate_signal_cards`; this
-    superset additionally runs the topic-signature/convergence and tutorial-build
-    syncs (LLM-bearing, so NOT suitable for a frequent tick — they have their own
-    timers). Preserves the historical 6-key counts shape
-    (``youtube``/``discord``/``expired`` + ``topic_signatures``/
-    ``convergence_events``/``tutorial_build_tasks``).
+    superset additionally runs the topic-signature/convergence sync (LLM-bearing,
+    so NOT suitable for a frequent tick — it has its own timer). Preserves the
+    historical 6-key counts shape (``youtube``/``discord``/``expired`` +
+    ``topic_signatures``/``convergence_events``/``tutorial_build_tasks``); the
+    ``tutorial_build_tasks`` key is retained for back-compat but is always 0 here.
+    The demo/tutorial build lane is produced SOLELY by the dedicated systemd timer
+    ``universal-agent-proactive-demo-build-sweep``
+    (``scripts/proactive_demo_build_sweep.py``); running
+    ``sync_build_oriented_csi_videos`` here too was a redundant second invoker of
+    the same producer (removed 2026-06-10).
     """
     counts = {"topic_signatures": 0, "convergence_events": 0, "tutorial_build_tasks": 0}
     counts.update(
@@ -521,15 +526,6 @@ def sync_generated_cards(
         counts["convergence_events"] = int(signature_counts.get("convergence_events") or 0)
     except Exception:
         logger.debug("Failed syncing CSI topic signatures", exc_info=True)
-    try:
-        from universal_agent.services.proactive_tutorial_builds import (
-            sync_build_oriented_csi_videos,
-        )
-
-        tutorial_counts = sync_build_oriented_csi_videos(conn, csi_db_path=csi_db_path)
-        counts["tutorial_build_tasks"] = int(tutorial_counts.get("queued") or 0)
-    except Exception:
-        logger.debug("Failed syncing CSI tutorial build tasks", exc_info=True)
     return counts
 
 

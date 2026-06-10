@@ -51,11 +51,15 @@ overlap on videos (double-processing confirmed: `Dk4MD6TNiWE`, `j6hnjNhx_MM` eac
    *broad* CSI feed (`events WHERE source='youtube_channel_rss'`), LLM-judges buildability
    (`is_video_buildable_with_judge`), and enqueues `tutorial_build` Task Hub rows
    (`queue_tutorial_build_task`, `source=csi_auto_route`). `todo_dispatch_service.py` routes `tutorial_build`
-   → Cody (`vp.coder.primary`), which builds the runnable demo in `/opt/ua_demos/<id>`. **This lane has no
-   schedule** — its only caller is `proactive_signals.py::sync_generated_cards`, run only by
-   `gateway_server.py::_run_proactive_signal_sync_background`, scheduled only by
-   `_schedule_proactive_signal_sync`, whose sole call site is `GET /api/v1/dashboard/proactive-signals`. It
-   therefore fires **only when a human opens the Proactive Signals dashboard** (1:1 confirmed over 7 days).
+   → Cody (`vp.coder.primary`), which builds the runnable demo in `/opt/ua_demos/<id>`. **This lane is driven
+   solely by the dedicated systemd timer** `universal-agent-proactive-demo-build-sweep`
+   (`scripts/proactive_demo_build_sweep.py`, 3×/day), which calls `sync_build_oriented_csi_videos` directly
+   (P1). The original dashboard-only trigger — `proactive_signals.py::sync_generated_cards` (run by
+   `gateway_server.py::_run_proactive_signal_sync_background`, sole call site `GET
+   /api/v1/dashboard/proactive-signals`) — was a redundant second invoker of the same producer; its
+   `sync_build_oriented_csi_videos` call was **removed 2026-06-10**, so opening the dashboard no longer queues
+   builds. (The `tutorial-build:<sha256>` dedup made the overlap harmless, but the timer is now the single
+   producer.)
 
 The Tutorial Backlog tab (`web-ui/app/dashboard/tutorials/`, backed by
 `gateway_server.py::_list_tutorial_runs` + `::dashboard_tutorial_notifications`) lists artifacts from **both**
