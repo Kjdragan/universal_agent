@@ -32,7 +32,7 @@ _System-level design & cross-cutting models_
 
 _Gateway, sessions, execution engine, task hub, dispatch, durable, URW, workspaces_
 
-- **[Gateway, Sessions & Execution](02_execution_core/01_gateway_sessions_execution.md)** — Gateway protocol, InProcessGateway, ProcessTurnAdapter, session lifecycle/locking, WebSocket streaming, timeouts. _(verified 2026-05-31)_
+- **[Gateway, Sessions & Execution](02_execution_core/01_gateway_sessions_execution.md)** — Gateway protocol, InProcessGateway, ProcessTurnAdapter, session lifecycle/locking, WebSocket streaming, timeouts. _(verified 2026-06-10)_
 - **[Task Hub & Dispatch](02_execution_core/02_task_hub.md)** — Data model, dispatch queue build+ranking, atomic claiming, stale release, execution runs, action verbs, worker-exit classification, observability protocol. _(verified 2026-06-06)_
 - **[Durable Execution](02_execution_core/03_durable_execution.md)** — Durable state, tool-call ledger, worker pool, tool classification, checkpointing. _(verified 2026-06-10)_
 - **[URW Orchestration](02_execution_core/04_urw_orchestration.md)** — Multi-phase task orchestration: decomposer, phase planner, evaluator, evaluation policy, state/artifacts. _(verified 2026-05-31)_
@@ -109,7 +109,7 @@ _MCP server, tools/bridges, SDK integration, skills_
 _Operating playbook, verification rules, dormancy, VPS recovery, incident patterns_
 
 - **[Agent Operating Playbook](08_operations/01_agent_operating_playbook.md)** — How agents should operate (operator-facing playbook). _(verified 2026-06-03)_
-- **[Production Verification Rules](08_operations/02_production_verification_rules.md)** — Ship-then-verify cadence, /api/v1/version SHA check, branch-vs-deploy honesty, backend vs UI verification paths. _(verified 2026-05-29)_
+- **[Production Verification Rules](08_operations/02_production_verification_rules.md)** — Ship-then-verify cadence, /api/v1/version SHA check, branch-vs-deploy honesty, backend vs UI verification paths. _(verified 2026-06-10)_
 - **[Dormancy & Operating Hours](08_operations/03_dormancy_and_operating_hours.md)** — 6AM-10PM Houston active window, content-gen vs infra-event distinction, documented exceptions, guard test. _(verified 2026-06-10)_
 - **[VPS Recovery & Security](08_operations/04_vps_recovery_and_security.md)** — Watchdog/timers, service recovery, host hardening, daily ops. _(verified 2026-06-04)_
 - **[Incident Response Patterns](08_operations/05_incident_response_patterns.md)** — Recurring incident classes + recovery: rogue autonomous branch, .venv corruption, gateway wedge, event-loop starvation. _(verified 2026-06-01)_

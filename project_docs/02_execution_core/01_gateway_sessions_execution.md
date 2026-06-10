@@ -10,7 +10,7 @@ code_paths:
   - src/universal_agent/timeout_policy.py
   - src/universal_agent/api/server.py
   - src/universal_agent/api/gateway_bridge.py
-last_verified: 2026-05-31
+last_verified: 2026-06-10
 ---
 
 # Gateway, Sessions & Execution
@@ -33,7 +33,7 @@ the CLI's `process_turn()`). That uniformity is the whole point of this layer:
 | In-process impl | `gateway.py::InProcessGateway` | Owns adapters, sessions, per-session locks, VP routing, session reaper, durable DB conns |
 | External client | `gateway.py::ExternalGateway` | Talks to a remote gateway over HTTP/WS (same protocol surface) |
 | Engine adapter | `execution_engine.py::ProcessTurnAdapter` | Wraps `process_turn()`, owns the persistent Claude SDK client, emits `AgentEvent`s, enforces the per-turn wall-clock cap |
-| Engine config | `execution_engine.py::EngineConfig` | workspace, user, model/run_id, `extra_disallowed_tools` |
+| Engine config | `execution_engine.py::EngineConfig` | `workspace_dir`, `user_id`, `force_complex`, `max_iterations`, `run_id`, `extra_disallowed_tools` (no `model` field) |
 | HTTP/WS service | `gateway_server.py` | FastAPI app exposing `/api/v1/sessions*` REST + the `/stream` WebSocket; `get_gateway()` singleton; `ConnectionManager`; lifespan |
 | Dashboard API | `api/server.py` | The *Web-UI* FastAPI app. Proxies to the gateway via `UA_GATEWAY_URL` + `GatewayBridge` |
 | Web-UI bridge | `api/gateway_bridge.py::GatewayBridge` | Thin REST+WS proxy from the dashboard API to the gateway service |
