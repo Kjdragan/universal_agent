@@ -92,6 +92,7 @@ _Secrets/Infisical, runtime bootstrap, identity/auth, deployment/CI, environment
 - **[Claude Max OAuth Credentials (CLAUDE_CODE_OAUTH_TOKEN)](06_platform/07_claude_max_oauth_credentials.md)** — CLAUDE_CODE_OAUTH_TOKEN in Infisical is the SSOT for Cody-on-Anthropic / demo builds; refresh runbook + gotchas. _(verified 2026-06-02)_
 - **["ADR: Scheduling Substrate Redesign (deploy-resilient timers + read-only Mission Control)"](06_platform/08_scheduling_substrate_adr.md)** — Deploy-resilient scheduling substrate — two-axis substrate policy + per-job target table (31 crons), Mission Control sweeper extraction to its own service, deterministic proactive-health systemd timer + delivery contract, consolidations (reports/AM-products/mailer/DB), deploy-window-aware bounded backfill. _(verified 2026-06-08)_
 - **["Agent Runbook: Reaching the Production VPS (read live state without fighting SSH)"](06_platform/09_agent_vps_access_runbook.md)** — Agent runbook for reaching the prod VPS read-only over the tailnet gateway API (no SSH) _(verified 2026-06-07)_
+- **["ADR: Autonomous doc-drift issue triage & fix — three delivery options"](06_platform/10_autonomous_doc_triage_options_adr.md)** — Options for an autonomous Opus agent that triages/fixes the nightly doc-drift issues: (a) desktop interactive prototype [chosen first], (b) always-on VPS API-key agent, (c) ZAI-detect + API-key-fix hybrid; shared triage state machine + mechanical docs-only safety rails. _(verified 2026-06-10)_
 
 ## 07_tools
 
