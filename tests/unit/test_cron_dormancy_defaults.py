@@ -27,13 +27,13 @@ DORMANCY_DOC = Path("docs/operations/operating_hours_dormancy.md")
 POST_MERGE_DEPLOY = Path(".github/workflows/post-merge-deploy.yml")
 CI_FAILURE_ISSUE = Path(".github/workflows/ci-failure-issue.yml")
 
-# Documented exceptions (services that genuinely run inside the dormancy
-# window per the exception checklist in operating_hours_dormancy.md).
-# Adding to this list is the correct way to bypass the test for a new
-# 24/7 service — but you also need to add a row to the exceptions
-# section of the operating_hours_dormancy.md doc.
+# INTERVAL crons that legitimately run 24/7 — exempt from the active-window
+# check below. Only repeating/interval crons (``*/N`` or hourly ranges) are
+# subject to that check; a FIXED-TIME cron runs at its chosen time and does NOT
+# belong here (e.g. nightly_wiki at 3:15 AM is allowed by the fixed-time
+# soft-warn test, not by this list). Adding an interval here also needs a row in
+# the canonical doc (project_docs/08_operations/03_dormancy_and_operating_hours.md).
 DOCUMENTED_EXCEPTIONS = {
-    "nightly_wiki",  # 3:15 AM Houston — feeds 6:30 AM morning briefing
     # Hermes Phase C (PR #221): every-60s dispatcher for tasks tagged
     # metadata.preferred_vp = "vp.general.primary". Default OFF via
     # UA_ATLAS_DIRECT_DISPATCH_ENABLED=0. Exception #3 (latency-sensitive):
@@ -115,6 +115,32 @@ def _hours_used_by_cron(cron_expr: str) -> set[int]:
     return out
 
 
+def _is_interval_cron(cron_expr: str) -> bool:
+    """True if a cron REPEATS sub-daily (fires across many hours), so the
+    dormancy window is a meaningful constraint; False for a FIXED-TIME cron
+    (one or a few discrete times a day), which runs as scheduled.
+
+    Interval signals: the minute fires multiple times per hour (``*`` or
+    ``*/N``), or the hour field spans (``*``, ``*/N``, or a contiguous ``A-B``
+    range — "every hour in the window"). A discrete hour list like ``10,15`` is
+    fixed-time (two deliberately chosen hours), NOT an interval.
+
+    Rationale: the accidental-overnight footgun is an interval like
+    ``*/30 * * * *`` that someone forgot to window — it quietly fires all night.
+    A fixed-time overnight schedule (``15 3 * * *``) is deliberate, not a slip,
+    so it runs as scheduled.
+    """
+    fields = cron_expr.split()
+    if len(fields) != 5:
+        return False  # malformed — the dedicated checks below surface it
+    minute, hour = fields[0], fields[1]
+    if "*" in minute or "/" in minute:
+        return True
+    if "*" in hour or "/" in hour or "-" in hour:
+        return True
+    return False
+
+
 # ─── tests ─────────────────────────────────────────────────────────────
 
 
@@ -148,9 +174,19 @@ def test_claude_md_links_to_dormancy_doc() -> None:
     assert "Houston" in body
 
 
-def test_internal_crons_default_to_active_hours_or_documented_exception() -> None:
-    """Every cron in gateway_server.py must run during 6 AM – 9 PM Houston
-    OR be in DOCUMENTED_EXCEPTIONS (and listed in the dormancy doc)."""
+def test_interval_crons_respect_dormancy_window_or_documented_exception() -> None:
+    """INTERVAL crons must stay inside the active window — or be exempt.
+
+    Dormancy windowing only meaningfully applies to repeating/interval crons
+    (``*/N`` or hourly ranges) — those are the ones that, if mis-scheduled,
+    quietly fire all night and leak quota/email. Each interval cron's hours
+    must fall in 6 AM – 9 PM Houston, UNLESS the job is in DOCUMENTED_EXCEPTIONS
+    (an interval that legitimately runs 24/7) or carries the per-job
+    ``UA_<JOB>_24_7`` runtime opt-out (schedule widened to 24/7, gated at
+    runtime — those timers/scripts are guarded in
+    ``test_dormancy_schedule_consistency.py``). Fixed-time crons are handled by
+    ``test_fixed_time_crons_run_as_scheduled`` below.
+    """
     content = GATEWAY_SERVER.read_text(encoding="utf-8")
     registrations = _extract_cron_registrations(content)
     assert registrations, (
@@ -159,15 +195,10 @@ def test_internal_crons_default_to_active_hours_or_documented_exception() -> Non
 
     violations: list[str] = []
     for job, cron, tz in registrations:
+        if not _is_interval_cron(cron):
+            continue  # fixed-time crons run as scheduled (soft-warn test)
         if job in DOCUMENTED_EXCEPTIONS:
             continue
-        # We only validate hour-of-day. America/Chicago + UTC are both
-        # acceptable timezones; we check that the cron's hours fall in
-        # ACTIVE_HOURS regardless of which TZ name is used. (For UTC-
-        # registered crons we still want hours in 6-20 because that
-        # range USED IN UTC corresponds to ~midnight–3 PM CDT, which is
-        # a wide enough swath that the 24/7 case is the only meaningful
-        # violation. The strict check happens below.)
         try:
             hours = _hours_used_by_cron(cron)
         except ValueError as exc:
@@ -176,16 +207,51 @@ def test_internal_crons_default_to_active_hours_or_documented_exception() -> Non
         if not hours.issubset(ACTIVE_HOURS):
             offending = sorted(hours - ACTIVE_HOURS)
             violations.append(
-                f"{job}: cron={cron!r} tz={tz!r} hits hour(s) {offending} "
-                f"outside the active window 6-20. Either schedule inside "
-                f"the active window OR add to DOCUMENTED_EXCEPTIONS in this "
-                f"test AND add an exception row in {DORMANCY_DOC}."
+                f"{job}: interval cron={cron!r} tz={tz!r} fires in dormant "
+                f"hour(s) {offending}. Window the schedule into 6-21, OR add the "
+                f"job to DOCUMENTED_EXCEPTIONS (with a row in {DORMANCY_DOC}) if "
+                f"it must run 24/7, OR give it the per-job UA_<JOB>_24_7 runtime "
+                f"opt-out (widened timer + should_run gate)."
             )
 
     assert not violations, (
-        "Cron jobs violate the operating-hours dormancy default:\n  - "
+        "Interval cron(s) violate the operating-hours dormancy window:\n  - "
         + "\n  - ".join(violations)
     )
+
+
+def test_fixed_time_crons_run_as_scheduled() -> None:
+    """FIXED-TIME crons run at their chosen time — dormancy does not apply.
+
+    A cron pinned to one or a few discrete times (e.g. ``5 7 * * *`` or
+    ``15 3 * * *``) runs as scheduled; "24/7 vs windowed" is meaningless for it.
+    A deliberately-overnight time (``nightly_wiki`` at 3:15 AM, feeding the
+    6:30 AM briefing) is allowed. We emit an informational notice — never a
+    failure — if a fixed-time cron lands in the dormant hours, so a deliberate
+    overnight schedule stays visible without being blocked.
+    """
+    content = GATEWAY_SERVER.read_text(encoding="utf-8")
+    registrations = _extract_cron_registrations(content)
+
+    notices: list[str] = []
+    for job, cron, tz in registrations:
+        if _is_interval_cron(cron):
+            continue
+        try:
+            hours = _hours_used_by_cron(cron)
+        except ValueError:
+            continue  # malformed fixed-time cron is not this test's concern
+        if not hours.issubset(ACTIVE_HOURS):
+            notices.append(
+                f"{job}: {cron!r} fires at dormant hour(s) "
+                f"{sorted(hours - ACTIVE_HOURS)} — allowed (fixed-time runs as scheduled)"
+            )
+
+    if notices:
+        print("\n[dormancy] fixed-time crons scheduled in dormant hours (allowed, FYI):")
+        for notice in notices:
+            print("  -", notice)
+    # No assertion: fixed-time crons run as scheduled by policy.
 
 
 def test_hackernews_snapshot_uses_active_hour_range() -> None:

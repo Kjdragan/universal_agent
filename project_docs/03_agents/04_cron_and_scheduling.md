@@ -433,12 +433,14 @@ view the transcript; the gateway's session reaper cleans them up later.
 ## Dormancy & timezone gotchas
 
 Cron *scheduling policy* (which crons may fire when) is governed by the
-operating-hours/dormancy rules, not by `cron_service.py` mechanics. Content-
-generation crons should fire only inside the 6 AM–10 PM Houston (America/Chicago)
-active window; infrastructure-event handlers are exempt. The guard test
-`tests/unit/test_cron_dormancy_defaults.py` pins this: every registered system
-cron's hour must fall in the active window or appear in `DOCUMENTED_EXCEPTIONS`.
-See `08_operations/03_dormancy_and_operating_hours.md` for the full policy.
+operating-hours/dormancy rules, not by `cron_service.py` mechanics. **Interval**
+content-generation crons (`*/N` or hourly ranges) should fire only inside the
+6 AM–10 PM Houston (America/Chicago) active window; **fixed-time** crons run as
+scheduled, and infrastructure-event handlers are exempt. The guard test
+`tests/unit/test_cron_dormancy_defaults.py` enforces the window on interval crons
+(unless in `DOCUMENTED_EXCEPTIONS` or carrying a `UA_<JOB>_24_7` runtime opt-out);
+fixed-time crons get only an informational FYI. See
+`08_operations/03_dormancy_and_operating_hours.md` for the full policy.
 
 > [VERIFY: operational, code-external] Z.AI (the LLM proxy for all UA
 > autonomous loops, including LLM crons) is capacity-limited during Greater-

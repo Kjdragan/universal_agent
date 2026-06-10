@@ -26,9 +26,9 @@ _SYSTEMD_DIR = _REPO_ROOT / "deployment" / "systemd"
 _HOUR_RANGE_RE = re.compile(r"(\d{2}\.\.\d{2})")
 
 # Timers intentionally widened to a full 24h OnCalendar range that gate
-# execution at RUNTIME via dormancy.should_run(env_var="UA_<JOB>_DORMANCY")
-# inside their ExecStart script, rather than via the schedule. Default
-# behaviour stays windowed (the env var is the opt-OUT-to-24/7 lever); the
+# execution at RUNTIME via dormancy.should_run, controlled by a UA_<JOB>_24_7
+# env var inside their ExecStart script, rather than via the schedule. Default
+# behaviour stays windowed (the env var is the opt-IN-to-24/7 lever); the
 # schedule fires every hour so the per-run gate can decide. These are exempt
 # from the strict 06..21 match below but pinned to the full-day range so a
 # hand-edit to some other partial window is still caught.
@@ -38,12 +38,13 @@ _RUNTIME_GATED_TIMERS = {
     "universal-agent-csi-convergence-sync.timer",
 }
 
-# ExecStart script (relative to repo root) -> the UA_<JOB>_DORMANCY env var its
-# runtime gate reads. A widened 24/7 timer is only safe if its script actually
-# gates at runtime, so this pairs every runtime-gated timer with its gate.
+# ExecStart script (relative to repo root) -> the UA_<JOB>_24_7 env var its
+# runtime gate reads (truthy -> run 24/7; unset -> windowed). A widened 24/7
+# timer is only safe if its script actually gates at runtime, so this pairs
+# every runtime-gated timer with its gate.
 _RUNTIME_GATED_SCRIPTS = {
-    "src/universal_agent/scripts/hourly_intel_digest_cron.py": "UA_INTEL_DIGEST_DORMANCY",
-    "src/universal_agent/scripts/csi_convergence_sync.py": "UA_CSI_CONVERGENCE_SYNC_DORMANCY",
+    "src/universal_agent/scripts/hourly_intel_digest_cron.py": "UA_INTEL_DIGEST_24_7",
+    "src/universal_agent/scripts/csi_convergence_sync.py": "UA_CSI_CONVERGENCE_SYNC_24_7",
 }
 
 
@@ -140,7 +141,8 @@ def test_runtime_gated_scripts_call_should_run() -> None:
         body = (_REPO_ROOT / rel).read_text(encoding="utf-8")
         assert "should_run(" in body, f"{rel} must call dormancy.should_run()"
         assert env_var in body, f"{rel} must gate on env var {env_var!r}"
-        assert 'mode="dormancy_aware"' in body, (
-            f'{rel} should_run gate must use mode="dormancy_aware" so the '
-            "default (env var unset) stays windowed."
+        assert '"dormancy_aware"' in body, (
+            f"{rel} should_run gate must default to dormancy_aware (windowed) so "
+            f"the default (env var unset) stays windowed; only a truthy "
+            f"{env_var} flips it to mode='always' (24/7)."
         )

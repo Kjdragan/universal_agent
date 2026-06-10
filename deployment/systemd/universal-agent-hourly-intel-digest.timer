@@ -1,5 +1,5 @@
 [Unit]
-Description=Run the Universal Agent hourly intel-digest delivery at the top of every hour (00..23) America/Chicago; runtime-gated to the active window unless UA_INTEL_DIGEST_DORMANCY is flipped (deploy-independent)
+Description=Run the Universal Agent hourly intel-digest delivery at the top of every hour (00..23) America/Chicago; runtime-gated to the active window unless UA_INTEL_DIGEST_24_7 is set (deploy-independent)
 
 [Timer]
 # OnCalendar wall-clock anchor — NEVER monotonic. Fires minute 0 of every hour
@@ -10,9 +10,9 @@ Description=Run the Universal Agent hourly intel-digest delivery at the top of e
 #
 # 24/7 SCHEDULE, RUNTIME-GATED: the schedule is full-day so the per-run dormancy
 # decision lives in the ExecStart script (hourly_intel_digest_cron.py), which
-# calls dormancy.should_run(env_var="UA_INTEL_DIGEST_DORMANCY"). Default stays
-# windowed (work no-ops outside 6 AM–10 PM Houston); set that env var to a falsy
-# value in Infisical to run 24/7 — no timer edit / reinstall needed to flip.
+# gates via dormancy.should_run, controlled by UA_INTEL_DIGEST_24_7. Default
+# stays windowed (work no-ops outside 6 AM–10 PM Houston); set UA_INTEL_DIGEST_24_7=true
+# in Infisical to run 24/7 — no timer edit / reinstall needed to flip.
 OnCalendar=*-*-* 00..23:00:00 America/Chicago
 Persistent=true
 RandomizedDelaySec=120

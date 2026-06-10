@@ -169,7 +169,7 @@ Default applies to **content-generation** work only — cron jobs / polling loop
 
 Dormancy does **NOT** apply to infrastructure-event handlers — deploy workflows, auto-merge, CI/PR failure handling, error alerting. Those run 24/7 because a merge can land or a CI run can fail at any wall-clock time, and silently broken production until 6 AM is unacceptable. Event-driven GHA workflows (triggered by `push`/`pull_request`/`workflow_run`) are not subject to dormancy mechanically either.
 
-**Adding a new cron:** classify it. Content-generation → respect dormancy. Infrastructure-event → 24/7, add to `DOCUMENTED_EXCEPTIONS` citing Exception #3 (latency-sensitive incident response). Full scope rules and currently-registered exceptions: [`project_docs/08_operations/03_dormancy_and_operating_hours.md`](project_docs/08_operations/03_dormancy_and_operating_hours.md). Guard test: `tests/unit/test_cron_dormancy_defaults.py` — pins active-hour schedules and asserts new crons fall inside the active window unless listed as exceptions.
+**Adding a new cron:** classify by schedule shape. **Interval** crons (`*/N`, hourly ranges) respect dormancy — window into 6-21, or run 24/7 via `DOCUMENTED_EXCEPTIONS` or the per-job `UA_<JOB>_24_7` opt-out. **Fixed-time** crons (a single/few discrete times) run as scheduled — dormancy doesn't apply. Full rules + the per-cron settings exhibit: [`project_docs/08_operations/03_dormancy_and_operating_hours.md`](project_docs/08_operations/03_dormancy_and_operating_hours.md). Guard test: `tests/unit/test_cron_dormancy_defaults.py` — enforces the window on interval crons; fixed-time crons get only an FYI.
 
 ## Pre-Implementation Reading — DO NOT SKIP
 
