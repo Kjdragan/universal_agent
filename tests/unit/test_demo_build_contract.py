@@ -57,6 +57,17 @@ def test_skill_md_contains_zai_wiring_and_no_stale_scrub_default():
     assert "accidentally hit ZAI" not in _SKILL
 
 
+def test_skill_md_contains_model_currency_rule():
+    # The hole that shipped a dead `gemini-2.0-flash-exp-image-generation`
+    # (404) in the AI-Studio demo: the source names the PRODUCT, not the wire
+    # model id, and Cody filled it from stale memory. Pin the verify-don't-recall
+    # rule on the skill surface.
+    assert "VERIFY MODEL & API CURRENCY" in _SKILL
+    assert "never from recall" in _SKILL
+    assert "gemini-api-dev" in _SKILL
+    assert "FAILED demo" in _SKILL
+
+
 # ── Surface 2: the tutorial_build BRIEF (Python-composed) ───────────────────
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -89,6 +100,10 @@ def test_tutorial_build_brief_embeds_demo_build_contract(tmp_path):
     # ZAI wiring — env var NAMES only.
     assert "ANTHROPIC_BASE_URL" in desc
     assert "ANTHROPIC_AUTH_TOKEN" in desc
+    # Model & API currency directive (the AI-Studio-demo 404 fix) rides in.
+    assert "Model & API currency" in desc
+    assert "never recall" in desc
+    assert "FAILED demo" in desc
     # P0-P3 invariants stay intact (same pins as test_proactive_tutorial_builds).
     assert "private by default" in desc.lower()
     assert "public publication is not allowed" in desc.lower()

@@ -116,6 +116,17 @@ stale or invented APIs.
    `SOURCES/` BEFORE writing any code. If `SOURCES/` is empty, the
    workspace is incomplete — return to queue.
 
+5. **VERIFY MODEL & API CURRENCY.** Your training cutoff predates current
+   model ids and API surfaces, so never hardcode a model id, endpoint, SDK
+   method, or version from memory. `SOURCES/` name the PRODUCT (e.g. "Nano
+   Banana"), not the wire model id — resolve product → CURRENT id from an
+   authoritative source (the `gemini-api-dev` skill, Context7 docs, the
+   provider's live docs, or a minimal authenticated probe that returns 200),
+   never from recall. If you can't confirm the current id, treat it as a
+   `gap` (rule 1) and PAUSE — do not guess. A demo that ships a
+   deprecated/invalid model id (a 404 on generate) is a FAILED demo even if
+   the rest of the code is correct.
+
 ## The contract
 
 When you pick up a `cody_demo_task`, do all of:
