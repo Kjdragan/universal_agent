@@ -114,6 +114,10 @@ RAW PENDING CARDS:
             objective=objective,
             mission_type="proactive_wiki",
             idempotency_key=f"nightly-wiki-{today}",
+            # Routine dispatch — executes no Task Hub task; never auto-link one
+            # (the 2026-06-10 hijack: this dispatch stole a freshly-approved
+            # tutorial_build card and falsely closed it).
+            link_task=False,
         )
     except RuntimeError as exc:
         logger.error(f"Dispatch failed: {exc}")

@@ -104,6 +104,27 @@ which retries on SQLite `database is locked` with backoff):
 field on the payload — this is the contract the worker and CLI client read to
 thread Task Hub linkage (closing the "delegated zombie" pattern; see below).
 
+### Linked-task auto-discovery + the hijack guard
+
+When a dispatch arrives without `task_id`, `_vp_dispatch_mission_impl` auto-discovers
+the linkage from the latest seized assignment (`task_hub.py::find_recent_active_task_for_agent`,
+the PR #490c fallback that keeps operator-dispatched Cody missions linked). That fallback's
+"one claim in flight" assumption is structurally violated by the P2b approve path —
+`dispatch_on_approval` seizes the assignment as `dashboard_operator` and the card sits seized
+until Simone's todo loop dispatches it. In the 2026-06-10 incident a taskless nightly-wiki
+dispatch stole a freshly-approved `tutorial_build` card during that window, inherited its
+`use_goal_loop`/`cody_mode` stamps, and falsely closed it at mission completion. Two gates
+now close the class (guard tests: `tests/unit/test_vp_link_discovery_guard.py`):
+
+- **`link_task=False`** — scheduled-routine dispatchers that execute no Task Hub task
+  (`nightly_wiki_agent.py`, `briefings_agent.py`, `freelance_scout_agent.py`) pass this kwarg
+  through `dispatch_vp_mission`; discovery is skipped entirely. An explicit `task_id` is
+  always honored regardless.
+- **Lane compatibility** — a *discovered* (never explicit) task whose `source_kind` is in
+  `vp_orchestration.py::_CODER_LANE_SOURCE_KINDS` (`tutorial_build`, `cody_demo_task`,
+  `cody_scaffold_request`) only auto-links when the dispatch targets `coder_vp_id()`; any
+  other VP refuses the link with a warning log.
+
 ### Preference context injection
 
 `_with_preference_context` appends "KEVIN'S PREFERENCE CONTEXT" to the objective

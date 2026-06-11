@@ -22,6 +22,7 @@ from universal_agent.durable.state import (
     list_vp_events,
     list_vp_missions,
 )
+from universal_agent.feature_flags import coder_vp_id
 from universal_agent.vp.dispatcher import (
     MissionDispatchRequest,
     cancel_mission,
@@ -30,6 +31,16 @@ from universal_agent.vp.dispatcher import (
 )
 
 _TERMINAL_MISSION_STATUSES = {"completed", "failed", "cancelled"}
+
+# Task Hub source_kinds whose tasks are executed by the coder VP (Cody).
+# The auto-discovery hijack guard in ``_vp_dispatch_mission_impl`` refuses
+# to auto-link a DISCOVERED task of these kinds to any non-coder dispatch
+# (the 2026-06-10 nightly-wiki incident: a taskless ``proactive_wiki``
+# dispatch stole a freshly-approved ``tutorial_build`` card's linkage and
+# falsely closed it at mission completion).
+_CODER_LANE_SOURCE_KINDS = frozenset(
+    {"tutorial_build", "cody_demo_task", "cody_scaffold_request"}
+)
 _TEXT_EXTENSIONS = {
     ".md",
     ".txt",
@@ -304,7 +315,29 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
     # moment of a vp_dispatch_mission call there's typically exactly
     # one orchestrator-claimed task in flight, so this matches the right
     # parent.
-    if not linked_task_id:
+    #
+    # 2026-06-10 hijack guard (the nightly-wiki incident,
+    # vp-mission-214dc4539a9549b54e34329d): the "typically exactly one
+    # claim in flight" assumption is structurally violated by the P2b
+    # approve path — ``dispatch_on_approval`` seizes the assignment as
+    # ``dashboard_operator`` and the card then SITS seized until Simone's
+    # todo loop dispatches it. Any task-less dispatch in that window
+    # (nightly wiki, briefings, scout — all scheduled routines that
+    # execute no Task Hub task) stole the linkage, inherited
+    # use_goal_loop/cody_mode, and falsely closed the card at mission
+    # completion. Two gates close that class:
+    #   1. ``link_task=False`` — routine dispatchers declare "this
+    #      mission executes no Task Hub task"; discovery is skipped
+    #      entirely (an explicit ``task_id`` would still be honored).
+    #   2. Lane compatibility — a DISCOVERED (never explicit) task whose
+    #      ``source_kind`` belongs to the coder lane may only auto-link
+    #      to a coder-VP dispatch; any other vp_id refuses the link.
+    _link_task_arg = args.get("link_task")
+    _discovery_suppressed = _link_task_arg is False or (
+        isinstance(_link_task_arg, str)
+        and _link_task_arg.strip().lower() in {"false", "0", "no"}
+    )
+    if not linked_task_id and not _discovery_suppressed:
         try:
             from universal_agent import task_hub as _th
             from universal_agent.durable.db import (
@@ -326,15 +359,38 @@ async def _vp_dispatch_mission_impl(args: dict[str, Any]) -> dict[str, Any]:
                     _th_conn, agent_slug=agent_slug
                 )
                 if discovered:
-                    linked_task_id = discovered
                     import logging as _logging
 
-                    _logging.getLogger(__name__).info(
-                        "vp_dispatch_mission: auto-discovered linked_task_id=%s "
-                        "(source_session_id=%s, caller did not include task_id in args)",
-                        linked_task_id,
-                        source_session_id or "<empty>",
-                    )
+                    _logger = _logging.getLogger(__name__)
+                    candidate_kind = ""
+                    try:
+                        _candidate = _th.get_item(_th_conn, discovered)
+                        candidate_kind = str(
+                            (_candidate or {}).get("source_kind") or ""
+                        ).strip()
+                    except Exception:
+                        _candidate = None
+                    if (
+                        candidate_kind in _CODER_LANE_SOURCE_KINDS
+                        and vp_id != coder_vp_id()
+                    ):
+                        _logger.warning(
+                            "vp_dispatch_mission: REFUSED auto-link of "
+                            "linked_task_id=%s (source_kind=%s is coder-lane, "
+                            "dispatching vp_id=%s) — taskless non-coder "
+                            "dispatches must not steal coder-lane claims",
+                            discovered,
+                            candidate_kind,
+                            vp_id,
+                        )
+                    else:
+                        linked_task_id = discovered
+                        _logger.info(
+                            "vp_dispatch_mission: auto-discovered linked_task_id=%s "
+                            "(source_session_id=%s, caller did not include task_id in args)",
+                            linked_task_id,
+                            source_session_id or "<empty>",
+                        )
         except Exception:
             # Best-effort — if the lookup fails for any reason, fall
             # through to the no-linkage path the rest of this function
@@ -613,6 +669,13 @@ async def dispatch_vp_mission(
 
     Returns the inner payload dict (e.g. ``{"ok": True, "mission_id": ...}``).
     Raises ``RuntimeError`` on dispatch failure or unexpected result shape.
+
+    Scheduled-routine callers (nightly wiki, briefings, scout — missions
+    that execute NO Task Hub task) MUST pass ``link_task=False`` so the
+    PR #490c linked-task auto-discovery is skipped; otherwise a taskless
+    dispatch can steal the latest seized assignment's linkage and falsely
+    close that task at mission completion (the 2026-06-10 nightly-wiki
+    incident). An explicit ``task_id`` kwarg is always honored regardless.
     """
     import logging
 
