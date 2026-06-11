@@ -179,6 +179,12 @@ deterministic finalize step that lands every completed build on the dashboard de
   non-goal missions keep the stdin prompt path bit-for-bit). Goal-eligible missions skip the outer
   retry loop — the /goal evaluator is the retry mechanism. Missing/invalid goal_condition.txt
   degrades to the legacy single-pass prompt (`payload.goal_condition_missing=true`).
+  The runner appends a fixed **COMPLETION.md attestation AND-clause** to the condition at prompt
+  build (`payload.goal_attestation_clause_appended=true`): the attestation requirement used to live
+  only in the briefing turn's prompt while the work turn saw the bare condition, so every
+  functionally-successful goal mission deterministically demoted to failed
+  (`missing_completion_attestation` — first live specimen `vp-mission-5c1898126635f0237061a79a`,
+  2026-06-11). worker_loop's attestation guard remains the enforcement backstop.
 - **Deterministic finalize:** `tutorial_demo_finalize.py::finalize_tutorial_build_demo` runs in the
   worker's terminal sync (`worker_loop.py::_execute_mission_logic`, before the P5 stamp — so the
   previously no-op'ing `worker_loop.py::_stamp_demo_manifest_build_session` now finds a manifest):

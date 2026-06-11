@@ -109,6 +109,23 @@ scheduled (cron will fire at due_at)
 approve` plus the Hermes Phase B.1 "unstick" verbs `rehydrate, re_evaluate,
 redirect_to, request_revision`.
 
+The `complete` branch carries two evidence gates:
+
+- **Email-delivery gate** (`_task_requires_verified_final_delivery`): tasks whose
+  final channel is email route to `needs_review` when no verified outbound
+  delivery exists.
+- **Demo-lane completion-evidence gate** (`DEMO_LANE_COMPLETION_GATED_SOURCE_KINDS`
+  = `tutorial_build`/`cody_demo_task`): a non-operator `complete` is honored only
+  when `metadata.vp_terminal_status == "completed"` AND `metadata.demo_finalize.ok`
+  is truthy — i.e. the VP worker's terminal sync (attestation guard +
+  `tutorial_demo_finalize`) actually ran. Otherwise the task routes to
+  `needs_review` with `completion_blocked_reason=completion_requires_demo_finalize`.
+  Operator surfaces (`dashboard_operator`, `operator*` agent ids) bypass the gate.
+  Added after the 2026-06-11 incident where Simone's rescue-evaluator completed a
+  `tutorial_build` source task whose linked mission had failed
+  (`missing_completion_attestation`), bypassing the entire P6 finalize. Guard
+  tests: `tests/unit/test_demo_lane_completion_gate.py`.
+
 ## Scoring
 
 `score_task` produces a `(score, confidence, judge_payload)` triple. The score

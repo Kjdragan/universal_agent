@@ -5147,6 +5147,17 @@ def _emit_kanban_terminal_intelligence(
     )
 
 
+# Demo-lane source kinds whose completion must carry worker-finalize
+# evidence (metadata.vp_terminal_status == "completed" AND
+# metadata.demo_finalize.ok). Legit completion for these lanes flows
+# through the VP worker's terminal sync (attestation guard +
+# tutorial_demo_finalize); an LLM calling the generic `complete` verb on
+# the source task bypasses all of it — see perform_task_action's gate.
+DEMO_LANE_COMPLETION_GATED_SOURCE_KINDS = frozenset(
+    {"tutorial_build", "cody_demo_task"}
+)
+
+
 def perform_task_action(
     conn: sqlite3.Connection,
     *,
@@ -5228,6 +5239,64 @@ def perform_task_action(
     elif action_norm == "complete":
         metadata = _resolve_dispatch_metadata(dict(item.get("metadata") or {}), assignment_state="completed", now_iso=now_iso)
         dispatch_meta = dict(metadata.get("dispatch") or {})
+        # ── Demo-lane completion-evidence gate (2026-06-11 incident) ────
+        # Simone's rescue-evaluator, handling the vp_failure item for a
+        # mission demoted to failed (missing_completion_attestation),
+        # "completed" the SOURCE tutorial_build task via this verb —
+        # producing a completed row with empty demo_finalize and bypassing
+        # the entire P6 deterministic finalize (manifest synthesis,
+        # mechanical checks, dashboard registration). A non-operator
+        # complete on a demo-lane task is honored only when the linked
+        # mission genuinely completed AND finalize evidence exists;
+        # otherwise it routes to needs_review for operator eyes.
+        _src_kind = str(item.get("source_kind") or "").strip()
+        _agent_norm = str(agent_id or "").strip()
+        _is_operator_surface = _agent_norm == "dashboard_operator" or _agent_norm.startswith(
+            "operator"
+        )
+        if (
+            _src_kind in DEMO_LANE_COMPLETION_GATED_SOURCE_KINDS
+            and not _is_operator_surface
+        ):
+            _vp_terminal = str(metadata.get("vp_terminal_status") or "").strip().lower()
+            _finalize_ok = bool((metadata.get("demo_finalize") or {}).get("ok"))
+            if not (_vp_terminal == "completed" and _finalize_ok):
+                dispatch_meta["last_disposition"] = "review"
+                dispatch_meta["last_disposition_reason"] = (
+                    reason_text or "completion_requires_demo_finalize"
+                )
+                dispatch_meta["completion_unverified"] = True
+                dispatch_meta["completion_blocked_reason"] = (
+                    "completion_requires_demo_finalize"
+                )
+                metadata["dispatch"] = dispatch_meta
+                _complete_active_assignments_for_task(
+                    conn,
+                    task_id=task_id,
+                    result_summary="completion_requires_demo_finalize",
+                    ended_at=now_iso,
+                )
+                conn.execute(
+                    "UPDATE task_hub_items SET status=?, seizure_state=?, metadata_json=?, updated_at=? WHERE task_id=?",
+                    (TASK_STATUS_REVIEW, "needs_review", _json_dumps(metadata), now_iso, task_id),
+                )
+                _record_evaluation(
+                    conn,
+                    task_id=task_id,
+                    agent_id=agent_id,
+                    decision="review",
+                    reason="completion_requires_demo_finalize",
+                    score=_safe_float(item.get("score"), 0.0),
+                    score_confidence=_safe_float(item.get("score_confidence"), 0.0),
+                    judge_payload={
+                        "source": "demo_lane_completion_gate",
+                        "vp_terminal_status": _vp_terminal,
+                        "demo_finalize_ok": _finalize_ok,
+                        "agent_claim": reason_text,
+                    },
+                )
+                conn.commit()
+                return get_item(conn, task_id) or item
         task_for_verification = {**item, "metadata": metadata}
         expected_channel = _task_expected_final_channel(task_for_verification)
         requires_verified_delivery = _task_requires_verified_final_delivery(

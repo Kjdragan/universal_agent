@@ -544,9 +544,16 @@ async def _run_goal_loop_mission(
     Turn 1 (briefing): self-brief-and-attest → BRIEF.md + ACCEPTANCE.md +
     goal_condition.txt. Turn 2 (work): `claude -p "/goal <condition>"` —
     the evaluator loops until the condition (or its self-bounding clause)
-    is met. COMPLETION.md enforcement stays in worker_loop's existing
-    attestation guard. Missing/invalid goal_condition.txt degrades to the
-    legacy single-pass prompt instead of failing the mission.
+    is met. The runner appends a fixed COMPLETION.md attestation clause to
+    the condition: the requirement used to live only in the BRIEFING
+    turn's prompt while the work turn saw only the bare condition, so
+    every functionally-successful goal mission deterministically demoted
+    to failed via worker_loop's attestation guard
+    (missing_completion_attestation — observed live on
+    vp-mission-5c1898126635f0237061a79a, 2026-06-11). worker_loop's guard
+    remains the enforcement backstop. Missing/invalid goal_condition.txt
+    degrades to the legacy single-pass prompt instead of failing the
+    mission.
     """
     from universal_agent.services.self_briefing import (
         build_self_briefing_prompt,
@@ -601,8 +608,19 @@ async def _run_goal_loop_mission(
             message=outcome.message, payload=enriched,
         )
 
+    # Append the Phase-5 attestation as an explicit AND-clause so the
+    # /goal evaluator itself holds the run open until COMPLETION.md is
+    # written. goal_condition.txt stays as Cody authored it — the clause
+    # is composed at prompt build, deterministically, for every goal turn.
+    attestation_clause = (
+        "\n\nAND finally: a COMPLETION.md self-attestation (per Phase 5 of "
+        "the self-brief-and-attest skill: a per-criterion verdict against "
+        "ACCEPTANCE.md with evidence for each) has been written at "
+        f"{workspace_dir / 'COMPLETION.md'} and the transcript shows it "
+        "being written."
+    )
     outcome = await _execute_cli_session(
-        prompt=f"/goal {condition}",
+        prompt=f"/goal {condition}{attestation_clause}",
         workspace_dir=workspace_dir,
         timeout_seconds=timeout_seconds,
         enable_agent_teams=enable_agent_teams,
@@ -615,6 +633,7 @@ async def _run_goal_loop_mission(
     enriched = dict(outcome.payload or {})
     enriched["goal_phase"] = "goal_loop"
     enriched["goal_condition_chars"] = len(condition)
+    enriched["goal_attestation_clause_appended"] = True
     return MissionOutcome(
         status=outcome.status, result_ref=outcome.result_ref,
         message=outcome.message, payload=enriched,

@@ -1093,3 +1093,32 @@ def test_build_cli_prompt_goal_eligible_param_without_env(tmp_path: Path, monkey
     )
     assert "Self-briefing (REQUIRED FIRST STEP)" in prompt
     assert "Completion attestation (REQUIRED)" in prompt
+
+
+@pytest.mark.asyncio
+async def test_goal_turn_carries_completion_attestation_clause(tmp_path: Path, monkeypatch):
+    """The 2026-06-11 attestation-gap fix: the work turn's /goal prompt must
+    carry the COMPLETION.md attestation as an AND-clause. Before this, the
+    requirement lived only in the briefing prompt, so every functionally
+    successful goal mission demoted to failed (missing_completion_attestation
+    — vp-mission-5c1898126635f0237061a79a)."""
+    monkeypatch.delenv("UA_VP_GOAL_ENABLED", raising=False)
+    log_dir = _install_fake_claude(tmp_path, monkeypatch)
+
+    client = ClaudeCodeCLIClient()
+    outcome = await client.run_mission(
+        mission=_goal_eligible_mission("goal-attest-clause"),
+        workspace_root=tmp_path / "ws",
+    )
+
+    assert outcome.status == "completed"
+    invocations = _read_invocations(log_dir)
+    goal_argv, _ = invocations[-1]
+    goal_args = [a for a in goal_argv if a.startswith("/goal ")]
+    assert goal_args, f"expected a /goal argv turn, got {goal_argv}"
+    prompt = goal_args[0]
+    # Cody's own condition stays first; the runner-appended clause follows.
+    assert "demo ran end-to-end" in prompt
+    assert "COMPLETION.md" in prompt
+    assert "self-brief-and-attest" in prompt
+    assert outcome.payload.get("goal_attestation_clause_appended") is True
