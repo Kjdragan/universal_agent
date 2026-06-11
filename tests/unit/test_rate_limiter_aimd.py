@@ -220,10 +220,14 @@ def test_fup_slams_freezes_and_pauses(limiter):
 
 
 def test_gradient_saturation_escalates_to_cliff(limiter, monkeypatch):
+    """Saturation = min cap + consecutive 429s + RECENT retry exhaustion.
+    All three together mean logical work is genuinely failing at minimum
+    pressure — that's the cliff."""
+
     async def run() -> None:
-        # Drive haiku to min via one halve + a success + another event...
-        # simpler: opus seeds at cap 1 == min already.
+        # opus seeds at cap 1 == min already.
         assert limiter._tier_cap["opus"] == limiter._tier_min["opus"] == 1
+        limiter.note_retry_exhausted()  # a logical call already gave up
         for _ in range(6):  # ZAI_TIER_SATURATION_429S default 6, within 10s
             await limiter.record_429("sat-test", model_tier="opus")
         assert limiter._total_fup_events == 1
@@ -231,6 +235,92 @@ def test_gradient_saturation_escalates_to_cliff(limiter, monkeypatch):
         with pytest.raises(ZAIFupPauseError):
             async with limiter.acquire("sat-test", model_tier="opus"):
                 pass
+
+    asyncio.run(run())
+
+
+def test_saturation_without_exhaustion_never_cliffs(limiter):
+    """MF-2 pin: two overlapping retry sagas can rack up 6+ consecutive wire
+    429s at min cap within seconds while every logical call still eventually
+    succeeds — WITHOUT recent exhaustion that must NOT trip an account-wide
+    pause."""
+
+    async def run() -> None:
+        assert limiter._last_exhausted_time == 0.0
+        for _ in range(10):
+            await limiter.record_429("burst-test", model_tier="opus")
+        assert limiter._total_fup_events == 0
+        assert limiter._acquire_pause_until == 0.0
+        # Acquires keep flowing at min cap.
+        async with limiter.acquire("burst-test", model_tier="opus"):
+            pass
+
+    asyncio.run(run())
+
+
+def test_snapshot_merge_preserves_cross_process_timestamps(limiter):
+    """MF-3 pin: the snapshot file is shared by every UA process
+    (last-writer-wins). A later write from a process that never exhausted
+    must NOT erase another process's last_exhausted_at / pause timestamps."""
+
+    async def run() -> None:
+        limiter.note_retry_exhausted()
+        first = json.loads(_get_state_path().read_text())
+        assert first["last_exhausted_at"] is not None
+
+        # Simulate a different process: fresh singleton, same snapshot path.
+        ZAIRateLimiter.reset_instance()
+        other = ZAIRateLimiter.get_instance()
+        assert other._last_exhausted_time == 0.0  # this process never exhausted
+        await other.record_success()
+
+        merged = json.loads(_get_state_path().read_text())
+        assert merged["last_exhausted_at"] == first["last_exhausted_at"]
+        assert merged["last_success_at"] is not None
+
+    asyncio.run(run())
+
+
+def test_gate_cancelled_after_grant_repays_slot():
+    """SF-7 pin: a waiter granted a slot then cancelled before resuming must
+    give the slot back and pass the wake to the next waiter."""
+    cap = {"v": 1}
+    gate = _AdaptiveGate(lambda: cap["v"])
+
+    async def run() -> None:
+        await gate.acquire()  # holder occupies the only slot
+        w1 = asyncio.ensure_future(gate.acquire())
+        w2 = asyncio.ensure_future(gate.acquire())
+        await asyncio.sleep(0.01)
+        gate.release()  # grants the slot to w1 (permit transferred)
+        w1.cancel()     # ...but w1 is cancelled before it resumes
+        await asyncio.sleep(0.01)
+        assert w1.cancelled()
+        assert w2.done()  # the repaid slot woke w2
+        gate.release()
+        assert gate._holders == 0
+
+    asyncio.run(run())
+
+
+def test_gate_release_after_cap_increase_multi_admits():
+    """SF-7 pin: one release after a cap increase admits as many waiters as
+    now fit, not just one."""
+    cap = {"v": 1}
+    gate = _AdaptiveGate(lambda: cap["v"])
+
+    async def run() -> None:
+        await gate.acquire()
+        waiters = [asyncio.ensure_future(gate.acquire()) for _ in range(3)]
+        await asyncio.sleep(0.01)
+        assert not any(w.done() for w in waiters)
+        cap["v"] = 3
+        gate.release()  # 0 holders, cap 3 → should admit all 3 waiters
+        await asyncio.sleep(0.01)
+        assert all(w.done() for w in waiters)
+        assert gate._holders == 3
+        for _ in range(3):
+            gate.release()
 
     asyncio.run(run())
 

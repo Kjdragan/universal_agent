@@ -519,7 +519,11 @@ def test_flag_on_fup_pause_active_fires_critical(isolated_state, monkeypatch):
 
 
 def test_cross_loop_conflicts_fires_warn(isolated_state):
-    _write_snapshot(isolated_state, cross_loop_conflicts=2)
+    _write_snapshot(
+        isolated_state,
+        cross_loop_conflicts=2,
+        last_cross_loop_conflict_at=time.time() - 60,  # recent — inside 1h window
+    )
     with _mock_process_count(10):
         findings = run_invariants({})
     matches = [f for f in findings if f.metric_key == "zai_inference_health"]
@@ -528,3 +532,41 @@ def test_cross_loop_conflicts_fires_warn(isolated_state):
     obs = matches[0].observed_value or {}
     assert "cross_loop_conflicts" in (obs.get("triggered_conditions") or [])
     assert obs.get("cross_loop_conflicts") == 2
+
+
+def test_stale_snapshot_counters_do_not_fire(isolated_state):
+    """MF-1 pin: consecutive_429s/backoff_floor only decay via record_success,
+    so they freeze when a burst ends or a subprocess exits. A streak whose
+    last_429_at is >10 min old is history, not live pressure — no condition,
+    regardless of flag state."""
+    _write_snapshot(
+        isolated_state,
+        consecutive_429s=5,
+        backoff_floor=8.0,
+        total_429s=40,
+        last_429_at=time.time() - 700,  # >600s events window — stale
+    )
+    with _mock_process_count(10):
+        findings = run_invariants({})
+    matches = [f for f in findings if f.metric_key == "zai_inference_health"]
+    if matches:  # may fire for other reasons in future; these must be absent
+        triggered = (matches[0].observed_value or {}).get("triggered_conditions") or []
+        assert "consecutive_429s" not in triggered
+        assert "backoff_at_max" not in triggered
+        assert matches[0].severity != "critical"
+    else:
+        assert matches == []
+
+
+def test_old_cross_loop_conflict_does_not_rewarn(isolated_state):
+    """SF-4 pin: the conflict counter is lifetime-monotonic; only RECENT
+    conflicts (last hour) warn."""
+    _write_snapshot(
+        isolated_state,
+        cross_loop_conflicts=3,
+        last_cross_loop_conflict_at=time.time() - 7200,  # 2h ago
+    )
+    with _mock_process_count(10):
+        findings = run_invariants({})
+    matches = [f for f in findings if f.metric_key == "zai_inference_health"]
+    assert matches == []

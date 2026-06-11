@@ -280,10 +280,44 @@ pid=…` log line — **journald is the primary verification channel.** The snap
 `tiers` blob is a quick glance only: it is single-file, last-writer-wins across UA
 processes (each process has its own singleton; the hourly convergence subprocess
 restarts at seed caps), so it carries `pid`/`process_name`/`singleton_created_at`
-for attribution. Expect the increase side to be ~inert outside the long-lived
-gateway: short-lived subprocesses discard learned caps — deployed behavior is
+for attribution — and the cross-process **timestamp** fields (`last_429_at`,
+`last_exhausted_at`, `acquire_pause_until`, `freeze_until`, …) are
+**merged-on-write** (`_persist_snapshot` keeps the max of the on-disk and own
+value) so one process's success writes can't erase another's outcome alarms.
+Expect the increase side to be ~inert outside the long-lived gateway:
+short-lived subprocesses discard learned caps — deployed behavior is
 approximately *static seeds + fast fall + cliff stop*, which is acceptable policy
 (the seeds are workable; the controller's job is protection first).
+
+Accepted limitations (reviewed and deliberate):
+
+- **Saturation needs an exhaustion outcome.** The cliff escalation requires
+  recent retry exhaustion (`ZAI_TIER_SATURATION_EXHAUSTION_WINDOW_SECONDS`,
+  default 120s) in addition to min-cap consecutive 429s — raw wire-429 streaks
+  alone are reachable in seconds by overlapping retry sagas that all still
+  succeed.
+- **The acquire-pause is per-process** (in-memory; the snapshot merge makes it
+  *visible* cross-process, but only the recording process enforces it).
+- **Legacy `acquire()` users see `ZAIFupPauseError` as a hard error** during a
+  pause. `mission_control_chief_of_staff.py::synthesize_readout` catches it and
+  returns its fallback readout (and reports `note_retry_exhausted` when its
+  retries burn out on 429s); the report scripts (`corpus_refiner`,
+  `youtube_daily_digest`, `cleanup_report`, `parallel_draft`,
+  `generate_outline`) fail their current item/run and are rerunnable — accepted.
+- **`_AdaptiveGate` cap increases take effect on the next release/acquire**
+  (no cross-loop waiter notification — futures may only be touched from their
+  own loop; an increase follows a success, which releases a slot microseconds
+  later).
+- **Bypasser-demotion window:** while the flag is on and any in-band 429 is
+  recent, a concurrent *bypasser* burst demotes to the managed WARN — the
+  forensics (per-model breakdown) stay in the finding's `observed_value`.
+- **Routed calls drop the SDK's internal retry entirely** (`max_retries=0`),
+  including its single connection-error retry — transient transport errors
+  surface to callers (which fail closed per item).
+- **Flag flips require a service restart** to be seen by long-lived processes
+  (env is read at call time but injected at process start via
+  `initialize_runtime_secrets`); the hourly convergence subprocess picks a flip
+  up on its next run.
 
 ## 5. Observability & watchdog
 

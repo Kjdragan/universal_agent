@@ -289,6 +289,7 @@ class ZAIRateLimiter:
         # concurrently (cross-thread pattern — caps then hold per-loop, not
         # globally; loud-log so the source pattern gets fixed).
         self._cross_loop_conflicts = 0
+        self._last_cross_loop_time = 0.0
 
         # Counters/floors are mutated only in synchronous critical sections
         # (no awaits), so a threading.Lock is both sufficient and immune to
@@ -333,6 +334,14 @@ class ZAIRateLimiter:
         self._fup_freeze_s = float(os.getenv("ZAI_FUP_FREEZE_SECONDS", "1800"))
         self._fup_pause_s = float(os.getenv("ZAI_FUP_ACQUIRE_PAUSE_SECONDS", "180"))
         self._saturation_429s = _tier_env_int("ZAI_TIER_SATURATION_429S", 6)
+        # Saturation only escalates to the cliff when a logical call has
+        # actually EXHAUSTED its retries recently — raw consecutive-429
+        # counts alone are reachable in ~11s by two overlapping retry sagas
+        # interleaving through a cap-1 gate (their wire 429s land <10s
+        # apart), which is routine throttle, not the cliff.
+        self._saturation_exhaustion_window_s = float(
+            os.getenv("ZAI_TIER_SATURATION_EXHAUSTION_WINDOW_SECONDS", "120")
+        )
 
         # Account-level cliff state: freeze gates additive INCREASES;
         # pause fail-fasts new acquires (the actual brake). Consecutive
@@ -403,6 +412,7 @@ class ZAIRateLimiter:
                     del self._loop_primitives[stale]
                 if live:
                     self._cross_loop_conflicts += 1
+                    self._last_cross_loop_time = time.time()
                     msg = (
                         "ZAIRateLimiter: a second LIVE event loop is using the "
                         "limiter concurrently (%d conflict(s) so far) — caps now "
@@ -507,10 +517,17 @@ class ZAIRateLimiter:
                     self._tier_success_since_decrease[tier] = False
 
                 # Gradient saturation: still being rejected at minimum cap
-                # despite backoff ⇒ behave like the cliff (slam + pause).
+                # despite backoff AND logical calls are actually failing
+                # (recent retry exhaustion) ⇒ behave like the cliff
+                # (slam + pause). The exhaustion requirement keeps a short
+                # burst of overlapping retry sagas (which can rack up 6
+                # consecutive wire 429s in seconds while every logical call
+                # still eventually succeeds) from tripping an account-wide
+                # pause.
                 if (
                     self._tier_cap[tier] <= self._tier_min[tier]
                     and self._tier_consecutive_429s[tier] >= self._saturation_429s
+                    and now - self._last_exhausted_time <= self._saturation_exhaustion_window_s
                     and now > self._acquire_pause_until
                 ):
                     escalate_cliff = True
@@ -597,33 +614,46 @@ class ZAIRateLimiter:
                 self._set_tier_cap(tier, self._tier_min[tier], "fup_slam")
                 self._tier_clean_streak[tier] = 0
                 self._tier_success_since_decrease[tier] = False
-            if now - self._last_cliff_time < 3600:
-                self._consecutive_cliffs += 1
-            else:
-                self._consecutive_cliffs = 1
-            self._last_cliff_time = now
-            pause_s = min(
-                self._fup_freeze_s,
-                self._fup_pause_s * (2 ** (self._consecutive_cliffs - 1)),
+            # Cliffs arriving within ~5s while the pause is already armed are
+            # the SAME event reported twice (e.g. two concurrent record_429
+            # saturation escalations from different loops) — don't double the
+            # pause for them.
+            same_event = (
+                now - self._last_cliff_time < 5.0 and self._acquire_pause_until > now
             )
-            self._freeze_until = now + self._fup_freeze_s
-            self._acquire_pause_until = now + pause_s
+            if not same_event:
+                if now - self._last_cliff_time < 3600:
+                    self._consecutive_cliffs += 1
+                else:
+                    self._consecutive_cliffs = 1
+                self._last_cliff_time = now
+                pause_s = min(
+                    self._fup_freeze_s,
+                    self._fup_pause_s * (2 ** (self._consecutive_cliffs - 1)),
+                )
+                self._freeze_until = now + self._fup_freeze_s
+                self._acquire_pause_until = now + pause_s
+            else:
+                pause_s = max(0.0, self._acquire_pause_until - now)
             if logfire:
                 logfire.error(
                     "zai_fup_signal",
                     context=context,
                     total_fup_events=self._total_fup_events,
                     error_snippet=self._last_fup_snippet,
-                    pause_seconds=self._fup_pause_s,
+                    pause_seconds=pause_s,
+                    consecutive_cliffs=self._consecutive_cliffs,
                     freeze_seconds=self._fup_freeze_s,
                 )
             logger.error(
                 "ZAI FUP signal detected — context=%s snippet=%r total=%d "
-                "(tiers slammed to min; acquires paused %.0fs; increases frozen %.0fs)",
+                "(tiers slammed to min; acquires paused %.0fs; cliff #%d this hour; "
+                "increases frozen %.0fs)",
                 context,
                 self._last_fup_snippet,
                 self._total_fup_events,
-                self._fup_pause_s,
+                pause_s,
+                self._consecutive_cliffs,
                 self._fup_freeze_s,
             )
             self._persist_snapshot()
@@ -639,6 +669,29 @@ class ZAIRateLimiter:
         path = _get_state_path()
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
+            # Merge-on-write for cross-process timestamp fields: every UA
+            # process holds its own singleton and overwrites this single
+            # file last-writer-wins, so without the merge a gateway
+            # record_success would erase a cron's last_exhausted_at and the
+            # watchdog's outcome alarms could never be trusted. Timestamps
+            # are wall-clock comparable; counters stay per-writer (an
+            # acknowledged attribution limitation — journald cap-change
+            # lines are the primary cross-process channel).
+            try:
+                existing = json.loads(path.read_text())
+                if not isinstance(existing, dict):
+                    existing = {}
+            except Exception:  # noqa: BLE001 — absent/corrupt file: no merge
+                existing = {}
+
+            def _merged_ts(key: str, own: float) -> float | None:
+                try:
+                    prior = float(existing.get(key) or 0.0)
+                except (TypeError, ValueError):
+                    prior = 0.0
+                merged = max(prior, float(own or 0.0))
+                return merged or None
+
             payload = {
                 "max_concurrent": self._max_concurrent,
                 "backoff_floor": self._backoff_floor,
@@ -648,15 +701,20 @@ class ZAIRateLimiter:
                 "total_fup_events": self._total_fup_events,
                 "total_429s_exhausted": self._total_429s_exhausted,
                 "total_succeeded_after_retry": self._total_succeeded_after_retry,
-                "last_exhausted_at": self._last_exhausted_time or None,
-                "last_429_at": self._last_429_time or None,
-                "last_success_at": self._last_success_time or None,
-                "last_fup_at": self._last_fup_time or None,
+                "last_exhausted_at": _merged_ts("last_exhausted_at", self._last_exhausted_time),
+                "last_429_at": _merged_ts("last_429_at", self._last_429_time),
+                "last_success_at": _merged_ts("last_success_at", self._last_success_time),
+                "last_fup_at": _merged_ts("last_fup_at", self._last_fup_time),
                 "last_fup_snippet": self._last_fup_snippet,
                 "last_fup_context": self._last_fup_context,
                 "cross_loop_conflicts": self._cross_loop_conflicts,
-                "freeze_until": self._freeze_until or None,
-                "acquire_pause_until": self._acquire_pause_until or None,
+                "last_cross_loop_conflict_at": _merged_ts(
+                    "last_cross_loop_conflict_at", self._last_cross_loop_time
+                ),
+                "freeze_until": _merged_ts("freeze_until", self._freeze_until),
+                "acquire_pause_until": _merged_ts(
+                    "acquire_pause_until", self._acquire_pause_until
+                ),
                 # Process identity: the snapshot is single-file,
                 # last-writer-wins across UA processes (each has its own
                 # singleton) — readings are meaningless without attribution.

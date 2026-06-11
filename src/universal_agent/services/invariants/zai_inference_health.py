@@ -322,10 +322,13 @@ def zai_inference_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     pause_active = acquire_pause_until > now
     exhausted_recent = _recent(snapshot.get("last_exhausted_at"), FUP_DETECT_WINDOW_SECONDS)
     snapshot_429_recent = _recent(snapshot.get("last_429_at"), EVENTS_429_WINDOW_SECONDS)
-    # The managed demotion only applies while the seam-routing flag is ON:
-    # legacy direct-record callers never increment the exhaustion counters,
-    # so without the flag the demotion would mask genuine sustained throttle.
-    # Flag off ⇒ alarm behavior is byte-identical to the pre-AIMD watchdog.
+    # The managed DEMOTION only applies while the seam-routing flag is ON:
+    # legacy direct-record callers mostly don't increment the exhaustion
+    # counters, so without the flag the demotion would mask genuine
+    # sustained throttle. The OUTCOME conditions (1c fup_pause_active,
+    # 1d retries_exhausted, 3b cross_loop_conflicts) and the recency gates
+    # on conditions 2/3 are always-on — they alarm on states that simply
+    # did not exist pre-AIMD.
     from universal_agent.feature_flags import _is_truthy
 
     limiter_routing_enabled = _is_truthy(os.getenv("UA_LLM_CLASSIFIER_LIMITER_ENABLED"))
@@ -349,9 +352,14 @@ def zai_inference_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         severity = "critical"
 
     # Condition 2: sustained 429s — CRITICAL, demoted to a managed WARN when
-    # the limiter is actively handling them with no bad outcomes.
+    # the limiter is actively handling them with no bad outcomes. Gated on
+    # snapshot RECENCY in all flag states: consecutive_429s/backoff_floor
+    # only decay via record_success, so after a cron subprocess exits (or a
+    # managed burst ends) the counters freeze — a streak whose last_429_at
+    # is >10 min old is history, not live pressure (the events-burst
+    # condition 2b independently covers anything active).
     consecutive_429s = int(snapshot.get("consecutive_429s") or 0)
-    if consecutive_429s >= CONSECUTIVE_429_CRITICAL:
+    if consecutive_429s >= CONSECUTIVE_429_CRITICAL and snapshot_429_recent:
         if limiter_managing:
             triggered.append("consecutive_429s_managed")
         else:
@@ -369,10 +377,11 @@ def zai_inference_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             triggered.append("events_429_burst")
             severity = "critical"
 
-    # Condition 3: backoff_floor saturated — same managed demotion.
+    # Condition 3: backoff_floor saturated — same managed demotion, same
+    # recency gate (a frozen floor from an exited process is not pressure).
     backoff_floor = float(snapshot.get("backoff_floor") or 0.0)
     backoff_at_max = backoff_floor >= BACKOFF_FLOOR_MAX_THRESHOLD
-    if backoff_at_max:
+    if backoff_at_max and snapshot_429_recent:
         if limiter_managing:
             triggered.append("backoff_at_max_managed")
         else:
@@ -381,9 +390,12 @@ def zai_inference_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     # Condition 3b: two live event loops used the limiter concurrently — the
     # per-loop-primitives guard fired (caps held per-loop, not process-wide).
-    # WARN: fix the calling pattern (threadpool asyncio.run bridges).
+    # WARN: fix the calling pattern (threadpool asyncio.run bridges). The
+    # counter is lifetime-monotonic, so only alert on RECENT conflicts
+    # (within the last hour) — otherwise one old conflict re-warns forever.
     cross_loop_conflicts = int(snapshot.get("cross_loop_conflicts") or 0)
-    if cross_loop_conflicts > 0:
+    cross_loop_recent = _recent(snapshot.get("last_cross_loop_conflict_at"), 3600.0)
+    if cross_loop_conflicts > 0 and cross_loop_recent:
         triggered.append("cross_loop_conflicts")
 
     # Condition 4: too many UA Python processes — WARN.
