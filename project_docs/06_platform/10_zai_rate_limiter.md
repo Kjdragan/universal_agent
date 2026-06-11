@@ -352,6 +352,25 @@ haiku/`glm-4.7` tiers over-confirm and fail the precision gate. The **enforcemen
 pressure persists under the lower-tier + lower-concurrency configuration. The
 loop-resilience prerequisite shipped 2026-06-11 (`_ensure_loop_primitives`).
 
+**Resolution (2026-06-11, frequency-cut pass):** three further pressure cuts, all in
+the *frequency* axis (separate from the limiter/AIMD enforcement work). (1) The
+dashboard-tick duplicate convergence invoker was removed —
+`proactive_signals.py::sync_generated_cards` no longer calls
+`proactive_convergence.sync_topic_signatures_from_csi`, so an open dashboard (300 s
+`?sync` cooldown) no longer re-fires the full LLM convergence fan-out every ~5 min
+(verified bursts of ~200 calls/min); the hourly `csi-convergence-sync` timer is now the
+sole producer. (2) `_detect_clusters_llm_async` gained a FUP circuit breaker: the first
+`_is_fup_error`-matched refine failure aborts the remaining ~60 buckets for the run
+instead of grinding through more doomed `[1313]` calls. (3) The Mission Control
+Chief-of-Staff tier-2 cadence ceiling was raised 300 s → 1800 s
+(`mission_control_intelligence_sweeper.py::SweeperConfig.tier2_ceiling_seconds`), cutting
+its ~12–13 opus-tier readouts/hour ~6x; its ZAI-error branch
+(`mission_control_chief_of_staff.py::_record_throttle`) records the throttle **429-shape
+first** — a 429-shaped error records via `record_429` even when its body also carries the
+`[1313]` Fair-Usage text (verified 1058/1058 on the VPS), and `record_fup_signal` (the
+no-grace CRITICAL watchdog tier) is reserved for a genuine **non-429** account-level cliff
+(e.g. a 403 suspension), so routine throttle does not page.
+
 Two things worth knowing before acting on this:
 
 1. **Cluster-refine has a per-stage model knob.** `proactive_convergence.py::_cluster_judge_overrides`

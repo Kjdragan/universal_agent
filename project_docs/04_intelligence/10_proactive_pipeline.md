@@ -15,7 +15,7 @@ code_paths:
   - src/universal_agent/scripts/proactive_signal_card_sync.py
   - src/universal_agent/services/recent_briefs_index.py
   - src/universal_agent/proactive_signals.py
-last_verified: 2026-06-10
+last_verified: 2026-06-11
 ---
 
 # Proactive Pipeline
@@ -160,6 +160,17 @@ run finishes under the cron's `timeout_seconds`
      prompt and stalled the promoter — see the pre-Task-Hub triage note below) /
      `UA_LLM_CALL_MAX_RETRIES` (`llm_classifier.py::_get_anthropic_client`) so a
      stalled ZAI proxy can't hang a call for the SDK-default ~10 min.
+   - **FUP circuit breaker (2026-06-11).** When a per-bucket refine fails with a
+     ZAI Fair-Usage signal (matched by `rate_limiter._is_fup_error` —
+     `[1313]`/Fair-Usage/concurrency-limit bodies), `_refine_cluster_with_llm`
+     re-raises it and `_detect_clusters_llm_async` trips a one-shot breaker:
+     every remaining bucket returns `None` immediately (checked right after the
+     local semaphore is acquired, alongside the deadline check) instead of
+     grinding through ~60 more doomed LLM calls. One `logger.warning` summarizes
+     how many buckets were skipped; the next hourly run re-detects them
+     (candidate writes are idempotent). The breaker is **not** applied to the
+     ideation sweep. Non-FUP refine errors still fail closed (no candidate) and
+     do **not** trip the breaker.
 4. **Ideation sweep (Track B).** When `UA_IDEATION_SWEEP_ENABLED=1` (default),
    `_run_ideation_sweep` → `track_b_ideation_synthesis` runs an LLM over the
    recent signature corpus looking for *non-obvious* abstract patterns
@@ -302,11 +313,21 @@ cards + Discord cards + the TTL sweep — pure SQLite, **no** LLM/convergence):
    syncs are LLM-bearing and have their own `csi-convergence-sync` timer, so the
    tick would double-run them and burn quota.
 2. **Pull-on-open (the dashboard path).** `proactive_signals.py::sync_generated_cards`
-   (the superset: `generate_signal_cards` + the convergence/tutorial syncs) runs
-   when the proactive-signals dashboard is loaded with a sync request — its single
-   caller is `gateway_server.py::dashboard_proactive_signals`, gated on `?sync` /
-   `force_sync` and a cooldown (`UA_PROACTIVE_SIGNALS_SYNC_COOLDOWN_SECONDS`,
-   default 300s).
+   runs when the proactive-signals dashboard is loaded with a sync request — its
+   single caller is `gateway_server.py::dashboard_proactive_signals`, gated on
+   `?sync` / `force_sync` and a cooldown (`UA_PROACTIVE_SIGNALS_SYNC_COOLDOWN_SECONDS`,
+   default 300s). As of **2026-06-11** this is the **card-only core** too:
+   `sync_generated_cards` now just calls `generate_signal_cards` and no longer
+   invokes the LLM-bearing `sync_topic_signatures_from_csi`. It still returns the
+   historical 6-key counts shape for back-compat, but `topic_signatures`,
+   `convergence_events`, and `tutorial_build_tasks` are **always 0** here — the
+   convergence/topic-signature lane is produced **solely** by the hourly
+   `universal-agent-csi-convergence-sync` timer (single-producer pattern, same as
+   the tutorial-build lane). The dashboard-tick invoker was removed because the
+   300s cooldown re-fired the full LLM convergence fan-out every ~5 minutes
+   whenever the dashboard was open (verified bursts of ~200 ZAI calls/min),
+   feeding ZAI Fair-Usage 429 pressure for no benefit (the hourly timer already
+   produces the same candidates).
 
 Before the autonomous tick existed (added 2026-06), generation was pull-on-open
 only — so if no one opened the dashboard, no new cards appeared even though the

@@ -274,13 +274,29 @@ def test_signal_feedback_and_action_create_task(tmp_path):
     assert cards[0]["status"] == "actioned"
 
 
-def test_sync_generated_cards_creates_artifacts_and_signatures_but_not_tutorial_tasks(tmp_path):
-    """The dashboard-load superset produces cards + convergence signatures, but
-    NO longer queues demo/tutorial builds — that lane is produced solely by the
-    dedicated ``universal-agent-proactive-demo-build-sweep`` systemd timer. The
-    in-process ``sync_build_oriented_csi_videos`` call was a redundant second
-    invoker of the same producer and was removed 2026-06-10. The
-    ``tutorial_build_tasks`` count key is retained (back-compat) but is 0 here."""
+def test_sync_generated_cards_creates_cards_but_not_convergence_or_tutorial(tmp_path, monkeypatch):
+    """The dashboard-load sync produces cards only — it NO LONGER runs the
+    LLM-bearing convergence/topic-signature sync (removed 2026-06-11) nor queues
+    demo/tutorial builds (removed 2026-06-10). Both lanes are produced solely by
+    their dedicated systemd timers (``universal-agent-csi-convergence-sync`` and
+    ``universal-agent-proactive-demo-build-sweep``). The
+    ``topic_signatures``/``convergence_events``/``tutorial_build_tasks`` count
+    keys are retained (back-compat) but are always 0 here.
+
+    Guard: ``sync_topic_signatures_from_csi`` is monkeypatched to raise if called,
+    so this test FAILS if someone re-adds the duplicate dashboard-tick invoker.
+    """
+    import universal_agent.services.proactive_convergence as pc
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError(
+            "sync_generated_cards must NOT invoke the convergence sync — the "
+            "hourly csi-convergence-sync timer is the sole producer (removed "
+            "the dashboard-tick invoker 2026-06-11 to cut ZAI Fair-Usage pressure)."
+        )
+
+    monkeypatch.setattr(pc, "sync_topic_signatures_from_csi", _boom)
+
     csi_db = tmp_path / "csi.db"
     _seed_csi_db(csi_db)
     db = tmp_path / "activity.db"
@@ -305,16 +321,28 @@ def test_sync_generated_cards_creates_artifacts_and_signatures_but_not_tutorial_
         "SELECT COUNT(*) AS c FROM task_hub_items WHERE source_kind = 'tutorial_build'"
     ).fetchone()["c"]
 
+    # Full historical 6-key counts shape is preserved.
+    assert set(counts) >= {
+        "youtube",
+        "discord",
+        "expired",
+        "purged",
+        "topic_signatures",
+        "convergence_events",
+        "tutorial_build_tasks",
+    }
+    # Cards still flow.
     assert counts["youtube"] >= 1
-    assert counts["topic_signatures"] >= 1
-    # Second sync is idempotent — no new signatures upserted
-    assert repeated["topic_signatures"] == 0
-    assert signature is not None
-    # Single-producer invariant: the dashboard sync queues ZERO tutorial builds,
-    # and keeps the back-compat count key at 0.
-    assert tutorial_tasks == 0
-    assert counts["tutorial_build_tasks"] == 0
     assert any(item["source_kind"] == "proactive_signal" for item in artifacts)
+    # Single-producer invariant: convergence + tutorial keys are ALWAYS 0, and
+    # no convergence side effect (topic signature) was written.
+    assert counts["topic_signatures"] == 0
+    assert counts["convergence_events"] == 0
+    assert counts["tutorial_build_tasks"] == 0
+    assert repeated["topic_signatures"] == 0
+    assert repeated["convergence_events"] == 0
+    assert signature is None
+    assert tutorial_tasks == 0
 
 
 def test_generate_signal_cards_is_card_only_no_convergence(tmp_path):
