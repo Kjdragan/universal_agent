@@ -80,9 +80,18 @@ INSTRUCTIONS:
 2. Select the {wiki_count} MOST interesting topics, prioritizing topics related to AI, LLMs, Agents, coding, or our recent focus areas.
 3. For EACH selected topic, follow the NLM-FIRST pipeline:
    a. Create a NotebookLM notebook: `nlm notebook create "Topic Title"`
-   b. Run NLM research: `nlm research start "topic query" --notebook-id <id>` (use fast mode by default)
+   b. Run NLM research: `nlm research start "topic query" --notebook-id <id>` (use fast mode by default).
+      GROUNDING: the wiki must be about the topic the CARD actually describes — not an unrelated
+      entity sharing a keyword/proper noun. Build the query from the card's summary/evidence with
+      DISAMBIGUATING context (e.g. "Claude 5 Hermes multi-agent orchestration workflow", NOT a bare
+      ambiguous name like "Olympus Protocol"). Add the source channel/author when known.
    c. Poll: `nlm research status <id> --max-wait 0` with adaptive sleep intervals (sleep 5 for fast, sleep 20 for deep) until completed
-   d. Import sources: `nlm research import <id> <task-id>`
+   d. Import sources SELECTIVELY to prevent topic drift. Prefer `nlm research import <id> <task-id> --cited-only`
+      (imports only sources the research report actually cited — a built-in relevance filter). If you must
+      hand-pick, inspect the discovered source titles and pass `--indices <comma,separated,on-topic indices>`,
+      dropping any source about a different entity that merely shares the keyword. Prefer fewer on-topic
+      sources over a larger polluted set; if the query keeps returning collisions, build from the
+      card-anchored sources alone.
    e. Generate artifacts via NLM studio — fire ALL creates first, then poll once:
       - `nlm report create <id> --confirm`
       - `nlm infographic create <id> --orientation landscape --style professional --confirm`

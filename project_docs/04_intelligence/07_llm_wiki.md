@@ -12,7 +12,7 @@ code_paths:
   - src/universal_agent/tools/wiki_bridge.py
   - src/universal_agent/tools/kb_bridge.py
   - src/universal_agent/services/csi_intelligence_persistence.py
-last_verified: 2026-06-03
+last_verified: 2026-06-11
 ---
 
 # LLM Wiki System
@@ -306,6 +306,22 @@ The KB registry is the NotebookLM half of the "Create Wiki" proactive-signal act
 the `notebooklm-operator` sub-agent creates an NLM notebook, generates artifacts,
 registers the KB via `kb_register`, then ingests the report into the Markdown vault via
 `wiki_ingest_external_source`.
+
+### Source grounding (anti-drift)
+
+The wiki must be about the topic that was actually requested, not an unrelated entity
+that merely shares a keyword/proper noun. The NLM research step (`research_start` →
+`research_import`) is the drift surface: a bare ambiguous query (e.g. `"Olympus Protocol"`)
+can match unrelated same-name entities, and a blanket "import all discovered sources" then
+pollutes the studio synthesis. The grounding contract — enforced in the prompts of all three
+callers: the canonical executor `.claude/agents/notebooklm-operator.md` ("Source Grounding &
+Disambiguation"), the nightly objective in `nightly_wiki_agent.py`, and the `create_wiki`
+action descriptions in `proactive_signals.py::_youtube_actions` / `::_discord_actions` — is:
+(1) add the provided primary source as the **anchor** (ground truth); (2) **disambiguate**
+the research query with the anchor's distinguishing context; (3) **import selectively** —
+`nlm research import --cited-only` (or `--indices` / MCP `source_indices=[...]`), dropping
+sources about a different entity sharing the name; import-all is reserved for an unanchored,
+unambiguous topic.
 
 ## Agent tool surface
 

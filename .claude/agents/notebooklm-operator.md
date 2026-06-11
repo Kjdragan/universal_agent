@@ -60,8 +60,45 @@ research_status(notebook_id=<id>, task_id=<id>, max_wait=0)
 → repeat until status="completed"
 
 research_import(notebook_id=<id>, task_id=<id>)
-→ Do NOT pass source_indices — omitting imports ALL sources
+→ Default (unambiguous topic, no anchor source): omit source_indices to import ALL.
+→ Anchored or ambiguous topic: import SELECTIVELY — see "Source Grounding" below.
 ```
+
+### ⚓ Source Grounding & Disambiguation (anti-drift) — REQUIRED
+
+The wiki must be **about the topic that was actually requested**, not about an
+unrelated entity that merely shares a keyword or proper noun. Topical drift
+(e.g. a wiki on a YouTube creator's "Olympus Protocol" agent workflow that gets
+polluted with NVIDIA hardware and an unrelated "Olympus" blockchain because the
+web research matched the bare name) is a FAILURE even if artifacts are produced.
+
+Apply these rules whenever a wiki/KB is built:
+
+1. **Anchor sources are ground truth.** If the task provides a primary source
+   (a YouTube video, article, or specific URL/transcript), `source_add` it FIRST
+   and treat it as the definition of the topic. The wiki must describe *that*
+   source's actual content. Supplementary web research is secondary.
+
+2. **Disambiguate the research query.** Do NOT search a bare ambiguous proper
+   noun. Compose a query that carries the anchor's distinguishing context
+   (e.g. `"Claude 5 Hermes multi-agent orchestration workflow"`, NOT
+   `"Olympus Protocol"`). Add the channel/author or domain terms when known.
+
+3. **Import selectively when anchored or ambiguous.** After `research_status`
+   completes, inspect the discovered source titles/snippets and import ONLY
+   sources clearly consistent with the anchor topic:
+   - MCP: `research_import(..., source_indices=[<relevant indices>])`.
+   - `nlm` CLI: prefer `nlm research import <id> <task-id> --cited-only` (imports
+     only sources the research report cited — a built-in relevance filter), or
+     `--indices <comma,separated>` to hand-pick.
+   DROP any source about a different entity sharing the keyword/name. When unsure,
+   prefer fewer on-topic sources over a larger polluted set. (Blanket "import ALL"
+   is fine ONLY when there is no anchor source AND the topic name is
+   distinctive/unambiguous.)
+
+4. **If drift is unavoidable** (the query keeps returning collisions), build the
+   wiki from the anchor source(s) alone rather than ingesting off-topic material,
+   and note the constraint in your handoff `warnings`.
 
 ### Step 3: Generate artifacts — USE PARALLEL BATCH PATTERN
 
@@ -107,7 +144,7 @@ create calendar events, or take any delivery/notification actions.
 Your final output is a **structured handoff report** — see Output Contract below.
 
 ### Common Mistakes to AVOID
-1. **Do NOT pass `source_indices` to `research_import`** — omit it to import all
+1. **`source_indices` on `research_import` is for GROUNDING** — omit it (import all) ONLY for an unanchored, unambiguous topic; pass on-topic indices when an anchor source exists or the name is ambiguous (see "Source Grounding & Disambiguation")
 2. **Do NOT use `urls` array in `source_add`** — use singular `url`, one at a time
 3. **Do NOT stringify list parameters** — pass actual JSON arrays
 4. **Do NOT run preflight scripts** — they break on VPS
@@ -120,10 +157,10 @@ Your final output is a **structured handoff report** — see Output Contract bel
 ### Mission: kb_research_and_build
 1. Auth refresh
 2. notebook_create(title="X")
-3. source_add(user-provided URLs, one at a time)
-4. research_start(query="X [current year]", mode=user_choice or "fast")
+3. source_add(user-provided URLs, one at a time) — these are ANCHOR sources (ground truth)
+4. research_start(query=disambiguated topic + anchor context, e.g. "X <distinguishing terms> [current year]", mode=user_choice or "fast") — see "Source Grounding & Disambiguation"
 5. Poll with adaptive intervals until completed
-6. research_import(all sources)
+6. research_import — SELECTIVELY when an anchor source exists or the name is ambiguous (pass `source_indices` for only on-topic discoveries); import all only for an unanchored, unambiguous topic
 7. **Batch** studio_create(report, infographic) — fire both, then poll once
 8. Download all artifacts
 9. mcp__internal__kb_register(slug, notebook_id, title, tags)
