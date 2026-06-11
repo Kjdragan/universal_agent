@@ -15,7 +15,7 @@ code_paths:
   - src/universal_agent/services/mission_control_event_titles.py
   - src/universal_agent/services/mission_control_prompts.py
   - src/universal_agent/gateway_server.py
-last_verified: 2026-06-05
+last_verified: 2026-06-11
 ---
 
 # Mission Control Intelligence
@@ -105,7 +105,7 @@ Cadence and gating come from `SweeperConfig` (`SweeperConfig.from_env`), all env
 | `tier1_floor_seconds` | `UA_MISSION_CONTROL_TIER1_FLOOR_S` | `180.0` |
 | `tier1_ceiling_seconds` | `UA_MISSION_CONTROL_TIER1_CEILING_S` | `1800.0` |
 | `tier2_floor_seconds` | `UA_MISSION_CONTROL_TIER2_FLOOR_S` | `120.0` |
-| `tier2_ceiling_seconds` | `UA_MISSION_CONTROL_TIER2_CEILING_S` | `300.0` |
+| `tier2_ceiling_seconds` | `UA_MISSION_CONTROL_TIER2_CEILING_S` | `1800.0` |
 | `lane_concurrency` | `UA_MISSION_CONTROL_LANE_CONCURRENCY` | `1` |
 | `auto_remediation_enabled` | `UA_MISSION_CONTROL_AUTO_REMEDIATION` | `False` |
 
@@ -170,22 +170,38 @@ ceiling-driven idle refresh; else only on a cascade signal), then calls the Chie
 `generate_and_store_readout`. Also writes a `__tier2_meta__` sentinel row via
 `_write_tier2_meta`, with the **same fire-time-vs-attempt-time discipline** as tier-1:
 `state_since` advances only on a real synthesis (`advance_fire_ts=True`) and is preserved on
-skip/error. This is what makes the **idle-refresh ceiling actually reachable** — a skip no
+skip/error.
+
+When the Chief-of-Staff ZAI call fails, `synthesize_readout` records the throttle signal
+against the shared `ZAIRateLimiter` via `_record_throttle` (added 2026-06-11), **429-shape
+first**. Empirically (verified on the VPS 2026-06-11) ZAI returns its account-level
+Fair-Usage throttle *as a 429* whose body **also** carries the `[1313] ... Fair Usage Policy`
+text — 1058/1058 logged 429s matched `rate_limiter._is_fup_error`. So a naive "FUP-text wins"
+rule would record **every** ordinary throttle as a FUP signal and the watchdog's no-grace
+CRITICAL FUP tier would page continuously. Therefore the 429-shape check comes first: any
+429/rate-shaped error records via `record_429` (the retryable tier) **even if** its text also
+matches `_is_fup_error`; `record_fup_signal` (the STOP / account-cliff tier) is reserved for a
+genuine **non-429** Fair-Usage signal (e.g. a 403 suspension/flag with no 429 marker).
+
+This is what makes the **idle-refresh ceiling actually reachable** — a skip no
 longer resets the age clock to ~0 on every 60 s sweep, so on an otherwise-idle system (no
 tier-0 flip, no new tier-1 cards) `age_s` climbs until it crosses `tier2_ceiling_seconds`
-(default **300 s**) and `_tier2_skip_reason` returns `None`, forcing a refresh.
+(default **1800 s** — raised from 300 s on 2026-06-11, see the cost callout below) and
+`_tier2_skip_reason` returns `None`, forcing a refresh.
 
 > **Cost ⇄ freshness tradeoff (`tier2_ceiling_seconds`).** Each tier-2 fire is a full
 > Chief-of-Staff LLM synthesis: `synthesize_readout` runs at
 > `os.getenv("UA_MISSION_CONTROL_COS_MODEL") or resolve_model("opus")` (glm-5.1 via the ZAI
-> proxy as shipped) over the whole evidence+cards bundle. Tier-2 has **no** evidence-signature
-> gate (unlike tier-1), so a fully idle system re-synthesizes every `tier2_ceiling_seconds`
-> ≈ **288 readouts/day** even when nothing has changed. The `300 s` default is the as-shipped
-> idle ceiling that the freeze fix restored — *correctness*, not a tuned steady-state spend.
-> Two clean calibration levers remain (operator's call, deliberately **not** bundled into the
-> freeze fix): widen `UA_MISSION_CONTROL_TIER2_CEILING_S` for idle, and/or add a tier-2
-> evidence-signature gate so idle re-synthesis fires only when the bundle actually changed OR
-> the ceiling is hit.
+> proxy as shipped, `max_tokens=18000`) over the whole evidence+cards bundle. Tier-2 has
+> **no** evidence-signature gate (unlike tier-1), so a fully idle system re-synthesizes every
+> `tier2_ceiling_seconds` even when nothing has changed. The default was **raised 300 s →
+> 1800 s on 2026-06-11** (code default in `SweeperConfig`, NOT `.env` — deploys wipe the VPS
+> `.env`) as a ZAI Fair-Usage pressure cut: at the old 300 s ceiling an idle system fired
+> ~12–13 flagship-inference readouts/hour 24/7 (~288/day) for a human-facing readout; the
+> 1800 s ceiling cuts that ~6x with no operator-visible loss (a force-refresh still bypasses
+> the cadence on demand). One further calibration lever remains (operator's call): add a
+> tier-2 evidence-signature gate so idle re-synthesis fires only when the bundle actually
+> changed OR the ceiling is hit.
 
 > **History note (2026-06-05, S3).** The Chief-of-Staff readout had been **frozen** —
 > ~1 readout/24 h — because `_write_tier2_meta`/`_write_tier1_meta` stamped

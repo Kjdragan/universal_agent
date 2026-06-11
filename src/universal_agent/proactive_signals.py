@@ -492,15 +492,35 @@ def sync_generated_cards(
     csi_db_path: Optional[Path] = None,
     discord_db_path: Optional[Path] = None,
 ) -> dict[str, int]:
-    """Dashboard-load sync: the card core PLUS the convergence sync.
+    """Dashboard-load sync: the pure-SQLite card core only.
 
-    The card-producing work is delegated to :func:`generate_signal_cards`; this
-    superset additionally runs the topic-signature/convergence sync (LLM-bearing,
-    so NOT suitable for a frequent tick — it has its own timer). Preserves the
-    historical 6-key counts shape (``youtube``/``discord``/``expired`` +
-    ``topic_signatures``/``convergence_events``/``tutorial_build_tasks``); the
-    ``tutorial_build_tasks`` key is retained for back-compat but is always 0 here.
-    The demo/tutorial build lane is produced SOLELY by the dedicated systemd timer
+    The card-producing work is delegated to :func:`generate_signal_cards`. This
+    function NO LONGER runs the topic-signature/convergence sync. That sync is
+    LLM-bearing (it fans out dozens of opus-tier ZAI refine calls), so it is NOT
+    suitable for a frequent tick — and it already has its own dedicated systemd
+    timer ``universal-agent-csi-convergence-sync.timer``
+    (``python -m universal_agent.scripts.csi_convergence_sync``) as the SOLE
+    convergence producer (single-producer pattern).
+
+    The dashboard-tick invoker that imported and called
+    ``sync_topic_signatures_from_csi`` here was removed 2026-06-11 as a redundant
+    SECOND producer — same pattern as the demo-build-lane removal noted below.
+    ``gateway_server.py::dashboard_proactive_signals`` (``?sync=background``)
+    schedules this sync on a 300s cooldown
+    (``UA_PROACTIVE_SIGNALS_SYNC_COOLDOWN_SECONDS``), so an open dashboard re-fired
+    the full LLM convergence fan-out every 5 minutes — verified bursts of ~200 ZAI
+    calls/min whenever the dashboard was open, feeding ZAI Fair-Usage 429 pressure
+    for no benefit (the hourly timer already produces the same candidates;
+    candidate writes are idempotent). The function's prior docstring already said
+    the convergence sync was "LLM-bearing, so NOT suitable for a frequent tick — it
+    has its own timer"; now the code finally agrees.
+
+    Preserves the historical 6-key counts shape (``youtube``/``discord``/``expired``
+    + ``topic_signatures``/``convergence_events``/``tutorial_build_tasks``); the
+    ``topic_signatures``/``convergence_events``/``tutorial_build_tasks`` keys are
+    retained for back-compat but are now ALWAYS 0 here (mirroring how
+    ``tutorial_build_tasks`` was already handled). The demo/tutorial build lane is
+    likewise produced SOLELY by the dedicated systemd timer
     ``universal-agent-proactive-demo-build-sweep``
     (``scripts/proactive_demo_build_sweep.py``); running
     ``sync_build_oriented_csi_videos`` here too was a redundant second invoker of
@@ -510,16 +530,6 @@ def sync_generated_cards(
     counts.update(
         generate_signal_cards(conn, csi_db_path=csi_db_path, discord_db_path=discord_db_path)
     )
-    try:
-        from universal_agent.services.proactive_convergence import (
-            sync_topic_signatures_from_csi,
-        )
-
-        signature_counts = sync_topic_signatures_from_csi(conn, csi_db_path=csi_db_path)
-        counts["topic_signatures"] = int(signature_counts.get("upserted") or 0)
-        counts["convergence_events"] = int(signature_counts.get("convergence_events") or 0)
-    except Exception:
-        logger.debug("Failed syncing CSI topic signatures", exc_info=True)
     return counts
 
 

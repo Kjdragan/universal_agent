@@ -90,7 +90,14 @@ class SweeperConfig:
     tier1_floor_seconds: float = 180.0
     tier1_ceiling_seconds: float = 1800.0
     tier2_floor_seconds: float = 120.0
-    tier2_ceiling_seconds: float = 300.0
+    # Tier-2 (Chief-of-Staff readout) ceiling raised 300.0 -> 1800.0 (2026-06-11)
+    # to cut ZAI Fair-Usage 429 pressure. The readout is opus-tier (glm-5.1,
+    # max_tokens=18000); at the old 300s ceiling it fired ~12-13 flagship-inference
+    # readouts/hour 24/7 (~290 calls/day) for a human-facing summary. A 30-minute
+    # ceiling cuts that ~6x with no operator-visible loss (force-refresh still
+    # bypasses the cadence on demand). Code default, NOT .env (deploys wipe the
+    # VPS .env).
+    tier2_ceiling_seconds: float = 1800.0
     lane_concurrency: int = 1
     auto_remediation_enabled: bool = False
 
@@ -102,7 +109,7 @@ class SweeperConfig:
             tier1_floor_seconds=_get_float_env("UA_MISSION_CONTROL_TIER1_FLOOR_S", 180.0),
             tier1_ceiling_seconds=_get_float_env("UA_MISSION_CONTROL_TIER1_CEILING_S", 1800.0),
             tier2_floor_seconds=_get_float_env("UA_MISSION_CONTROL_TIER2_FLOOR_S", 120.0),
-            tier2_ceiling_seconds=_get_float_env("UA_MISSION_CONTROL_TIER2_CEILING_S", 300.0),
+            tier2_ceiling_seconds=_get_float_env("UA_MISSION_CONTROL_TIER2_CEILING_S", 1800.0),
             lane_concurrency=max(1, _get_int_env("UA_MISSION_CONTROL_LANE_CONCURRENCY", 1)),
             auto_remediation_enabled=(os.getenv("UA_MISSION_CONTROL_AUTO_REMEDIATION") or "0").strip().lower()
                 in {"1", "true", "yes", "on", "enabled"},

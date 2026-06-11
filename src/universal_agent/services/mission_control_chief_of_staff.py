@@ -22,7 +22,7 @@ from universal_agent.durable.db import (
     get_sqlite_busy_timeout_ms,
 )
 from universal_agent.feature_flags import task_hub_missions_enabled
-from universal_agent.rate_limiter import ZAIRateLimiter
+from universal_agent.rate_limiter import ZAIRateLimiter, _is_fup_error
 from universal_agent.systemd_migrated_jobs import is_migrated_to_systemd
 from universal_agent.utils.model_resolution import resolve_model
 
@@ -796,6 +796,39 @@ def fallback_readout(evidence: dict[str, Any], *, error: str | None = None) -> d
     }
 
 
+def _is_429_shaped(exc_str: str) -> bool:
+    """True for an ordinary rate-limit/429 error (the retryable throttle tier).
+
+    Kept identical to the inline test the except branch used before
+    ``_record_throttle`` existed (``"429" in str(exc) or "rate" in str(exc).lower()``)
+    so behavior for plain 429s is unchanged.
+    """
+    return "429" in exc_str or "rate" in exc_str.lower()
+
+
+async def _record_throttle(limiter: ZAIRateLimiter, context: str, exc_str: str) -> None:
+    """Record a throttle signal against the limiter, 429-shape FIRST.
+
+    Empirically (verified on the VPS 2026-06-11) ZAI returns its account-level
+    Fair-Usage throttle AS a 429 whose body ALSO carries the ``[1313] ... Fair
+    Usage Policy`` text — 1058/1058 logged 429s matched ``_is_fup_error``. So a
+    naive "FUP-text wins" rule would record EVERY ordinary throttle as a FUP
+    signal, and the watchdog's no-grace CRITICAL FUP tier would page continuously
+    for routine rate-limiting. That inverts the intent.
+
+    Therefore the 429-shape check comes FIRST: any 429/rate-shaped error records
+    via ``record_429`` (the retryable tier) EVEN IF its text also matches
+    ``_is_fup_error``. ``record_fup_signal`` (the STOP / account-cliff tier the
+    watchdog escalates as CRITICAL with no grace) is reserved for a genuine
+    NON-429 Fair-Usage signal — e.g. a 403 account suspension / flag that carries
+    no 429 marker. Records nothing for an error that is neither.
+    """
+    if _is_429_shaped(exc_str):
+        await limiter.record_429(context)
+    elif _is_fup_error(exc_str):
+        await limiter.record_fup_signal(context, exc_str)
+
+
 async def synthesize_readout(evidence: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
     """Call the LLM to synthesize a readout from evidence; return (readout_dict, model_used)."""
     api_key = (
@@ -856,8 +889,12 @@ async def synthesize_readout(evidence: dict[str, Any]) -> tuple[dict[str, Any], 
                 return readout, model
             except Exception as exc:
                 last_error = exc
-                if "429" in str(exc) or "rate" in str(exc).lower():
-                    await limiter.record_429("mission_control_chief_of_staff")
+                # 429-shape FIRST: ordinary ZAI throttle arrives AS a 429 whose
+                # body also carries [1313]/Fair-Usage text (1058/1058 on the VPS),
+                # so record_429 (retryable) wins for those; record_fup_signal (the
+                # STOP / account-cliff tier) only fires for a genuine non-429
+                # Fair-Usage signal. See _record_throttle.
+                await _record_throttle(limiter, SERVICE_SOURCE, str(exc))
                 if attempt < max_retries - 1:
                     import asyncio
 

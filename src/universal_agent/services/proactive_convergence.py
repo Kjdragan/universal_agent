@@ -13,6 +13,7 @@ import sqlite3
 import time
 from typing import Any, Callable, Optional
 
+from universal_agent.rate_limiter import _is_fup_error
 from universal_agent.services.llm_classifier import _call_llm, _parse_json_response
 from universal_agent.services.proactive_artifacts import (
     ARTIFACT_STATUS_CANDIDATE,
@@ -690,6 +691,19 @@ async def _refine_cluster_with_llm(
         )
         parsed = _parse_json_response(raw)
     except Exception as exc:  # noqa: BLE001
+        # A Fair-Usage-Policy ([1313]/concurrency) error is account-level
+        # throttling — grinding through the remaining ~60 buckets would just rack
+        # up more doomed ZAI calls and deepen the FUP pressure. Re-raise so the
+        # caller (`_detect_clusters_llm_async`) can trip a one-shot circuit
+        # breaker and skip the rest of this run. Everything else fails closed
+        # (no candidate) as before.
+        if _is_fup_error(str(exc)):
+            logger.warning(
+                "convergence LLM refine hit a Fair-Usage signal (bucket size=%d): %s",
+                len(bucket),
+                exc,
+            )
+            raise
         logger.warning("convergence LLM refine failed (bucket size=%d): %s", len(bucket), exc)
         return None
 
@@ -743,18 +757,45 @@ async def _detect_clusters_llm_async(
     if not buckets:
         return []
     sem = asyncio.Semaphore(_convergence_llm_concurrency())
+    # FUP circuit breaker: a single Fair-Usage ([1313]) signal means ZAI is
+    # account-level throttling us — the remaining buckets would just be ~60 more
+    # doomed LLM calls. The first `_refine_one` that catches a FUP-classified
+    # exception flips this flag; every subsequent `_refine_one` then returns None
+    # immediately (checked right after acquiring the semaphore, alongside the
+    # deadline check). The next hourly run re-detects the skipped buckets —
+    # candidate writes are idempotent, so nothing is lost.
+    fup_tripped = False
+    skipped_after_breaker = 0
 
     async def _refine_one(bucket: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+        nonlocal fup_tripped, skipped_after_breaker
         async with sem:
+            if fup_tripped:
+                skipped_after_breaker += 1
+                return None
             if deadline is not None and time.monotonic() >= deadline:
                 return None
             try:
                 return await _refine_cluster_with_llm(bucket, min_channels=min_channels)
             except Exception as exc:  # noqa: BLE001
+                if _is_fup_error(str(exc)):
+                    # This bucket DID make the (failed) LLM call that surfaced the
+                    # FUP signal; it is not counted in `skipped_after_breaker`,
+                    # which tracks only the buckets short-circuited WITHOUT a call.
+                    fup_tripped = True
+                    return None
                 logger.warning("convergence refine task failed: %s", exc)
                 return None
 
     results = await asyncio.gather(*[_refine_one(b) for b in buckets])
+    if fup_tripped:
+        logger.warning(
+            "convergence FUP circuit breaker tripped: a Fair-Usage ([1313]) signal "
+            "aborted this run; %d of %d buckets skipped without an LLM call. The next "
+            "hourly run re-detects them (candidate writes are idempotent).",
+            skipped_after_breaker,
+            len(buckets),
+        )
     return [r for r in results if r]
 
 
