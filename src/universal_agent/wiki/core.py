@@ -245,8 +245,17 @@ def resolve_vault_path(vault_kind: str, vault_slug: str, *, root_override: str |
         raise ValueError(f"Unsupported vault kind: {vault_kind}")
     slug = _slugify(vault_slug, fallback="default")
     if root_override:
-        return Path(root_override).expanduser().resolve()
-    return Path(resolve_shared_memory_workspace()) / "memory" / "wiki"
+        base = Path(root_override).expanduser().resolve()
+        # Per-topic isolation: nest the vault under <root>/<slug> so distinct
+        # KBs/topics never share one vault directory (which silently collided
+        # their sources/ pages and overwrote vault_manifest.json). Idempotent:
+        # when the caller already points root_override AT the slug dir (the CSI
+        # replay pattern, root=.../knowledge-vaults/<slug>), the last component
+        # already IS the slug, so we return it as-is and never double-nest.
+        if base.name == slug:
+            return base
+        return base / slug
+    return Path(resolve_shared_memory_workspace()) / "memory" / "wiki" / slug
 
 
 def _vault_schema_text(kind: str, slug: str, title: str) -> str:
