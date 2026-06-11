@@ -6,7 +6,7 @@ subsystem: claude-max-oauth
 code_paths:
   - src/universal_agent/vp/clients/claude_cli_client.py
   - src/universal_agent/infisical_loader.py
-last_verified: 2026-06-02
+last_verified: 2026-06-11
 ---
 
 # Claude Max OAuth Credentials (`CLAUDE_CODE_OAUTH_TOKEN`)
@@ -145,8 +145,9 @@ right but the live call 401s, the token is expired/revoked — refresh it.
 
 ## Auth-failure handling in code
 
-On a 401, `vp/clients/claude_cli_client.py::_is_auth_failure` detects the auth error and aborts
-retries immediately (same env → same 401), returning a `failed` outcome carrying
+On a 401, `vp/clients/claude_cli_client.py::_is_auth_failure` detects the auth error (a boolean
+predicate over the mission outcome); its caller `vp/clients/claude_cli_client.py::run_mission`
+then aborts retries immediately (same env → same 401) and returns a `failed` outcome carrying
 `_AUTH_FAILURE_OPERATOR_HINT` — which points the operator at the refresh procedure above
 (`claude setup-token`).
 

@@ -37,13 +37,13 @@ _Gateway, sessions, execution engine, task hub, dispatch, durable, URW, workspac
 - **[Durable Execution](02_execution_core/03_durable_execution.md)** — Durable state, tool-call ledger, worker pool, tool classification, checkpointing. _(verified 2026-06-10)_
 - **[URW Orchestration](02_execution_core/04_urw_orchestration.md)** — Multi-phase task orchestration: decomposer, phase planner, evaluator, evaluation policy, state/artifacts. _(verified 2026-05-31)_
 - **[Workspaces & Artifacts](02_execution_core/05_workspaces_and_artifacts.md)** — Workspace resolution (4-tier fallback), artifacts dir resolution, run workspaces, guardrails, remote sync. _(verified 2026-06-03)_
-- **[SDK Lifecycle Hooks & Guardrails](02_execution_core/06_sdk_lifecycle_hooks_and_guardrails.md)** — PreToolUse/PostToolUse guardrail engine: tool gating (DISALLOWED_TOOLS), workspace write guard, heartbeat write allowlist, code-mutation actor resolution, subagent detection, TaskStop rejection, tool-call event emission. _(verified 2026-06-01)_
+- **[SDK Lifecycle Hooks & Guardrails](02_execution_core/06_sdk_lifecycle_hooks_and_guardrails.md)** — PreToolUse/PostToolUse guardrail engine: tool gating (DISALLOWED_TOOLS), workspace write guard, heartbeat write allowlist, code-mutation actor resolution, subagent detection, TaskStop rejection, tool-call event emission. _(verified 2026-06-11)_
 
 ## 03_agents
 
 _VP workers, Simone orchestration, heartbeat, cron, idle dispatch, agent college_
 
-- **[VP Workers & Delegation](03_agents/01_vp_workers_and_delegation.md)** — CODIE/ATLAS lanes, mission dispatch/queueing, priority tiers (operator_daily/operator_signal/maintenance/background), profiles, execution clients, worker loop, redis bridge, factory heartbeat/registry, cody-mode routing, goal loop, failure rescue. _(verified 2026-06-03)_
+- **[VP Workers & Delegation](03_agents/01_vp_workers_and_delegation.md)** — CODIE/ATLAS lanes, mission dispatch/queueing, priority tiers (operator_daily/operator_signal/maintenance/background), profiles, execution clients, worker loop, redis bridge, factory heartbeat/registry, cody-mode routing, goal loop, failure rescue. _(verified 2026-06-11)_
 - **[Simone-First Orchestration](03_agents/02_simone_first_orchestration.md)** — Simone-first routing model, agent router (note: qualify_agent* are decommissioned). _(verified 2026-05-29)_
 - **[Heartbeat Service](03_agents/03_heartbeat_service.md)** — Heartbeat loop, max_proactive_per_cycle, findings schema/contract, auto-triage→Simone. _(verified 2026-06-07)_
 - **[Cron & Scheduling](03_agents/04_cron_and_scheduling.md)** — Cron registration, deploy-window detection (suppress restart noise), catch-up, system cron jobs. _(verified 2026-06-10)_
@@ -90,7 +90,7 @@ _Secrets/Infisical, runtime bootstrap, identity/auth, deployment/CI, environment
 - **[Deployment & CI/CD](06_platform/04_deployment_and_cicd.md)** — Branch model (any→PR→main→deploy; develop retired; feature/latest2 retired), pr-validate gates, auto-merge allowlist + PAT, concurrency guard, healthcheck gates, paths-ignore, crashloop abort. _(verified 2026-06-04)_
 - **[Execution Environments](06_platform/05_environments.md)** — Three Claude execution profiles (interactive Max / autonomous ZAI / Cody Anthropic-default-since-2026-05-11), local dev (just dev), demo execution, model routing. _(verified 2026-06-10)_
 - **["Networking: Tailscale, Residential Proxy, SSHFS"](06_platform/06_networking_tailscale_proxy_sshfs.md)** — Tailscale (uaonvps MagicDNS vs srv1360701 raw hostname), residential proxy (DataImpulse default/Webshare failover, VPS-only), SSHFS cross-machine mount. _(verified 2026-06-03)_
-- **[Claude Max OAuth Credentials (CLAUDE_CODE_OAUTH_TOKEN)](06_platform/07_claude_max_oauth_credentials.md)** — CLAUDE_CODE_OAUTH_TOKEN in Infisical is the SSOT for Cody-on-Anthropic / demo builds; refresh runbook + gotchas. _(verified 2026-06-02)_
+- **[Claude Max OAuth Credentials (CLAUDE_CODE_OAUTH_TOKEN)](06_platform/07_claude_max_oauth_credentials.md)** — CLAUDE_CODE_OAUTH_TOKEN in Infisical is the SSOT for Cody-on-Anthropic / demo builds; refresh runbook + gotchas. _(verified 2026-06-11)_
 - **["ADR: Scheduling Substrate Redesign (deploy-resilient timers + read-only Mission Control)"](06_platform/08_scheduling_substrate_adr.md)** — Deploy-resilient scheduling substrate — two-axis substrate policy + per-job target table (31 crons), Mission Control sweeper extraction to its own service, deterministic proactive-health systemd timer + delivery contract, consolidations (reports/AM-products/mailer/DB), deploy-window-aware bounded backfill. _(verified 2026-06-08)_
 - **["Agent Runbook: Reaching the Production VPS (read live state without fighting SSH)"](06_platform/09_agent_vps_access_runbook.md)** — Agent runbook for reaching the prod VPS read-only over the tailnet gateway API (no SSH) _(verified 2026-06-09)_
 - **["ZAI Rate Limiter & Inference Governance"](06_platform/10_zai_rate_limiter.md)** — Canonical doc for ZAI inference governance: the ZAIRateLimiter concurrency/backoff/FUP control, the zai_observability httpx events hook, the zai_inference_health watchdog, and the half-adoption reality (most opus callers bypass the limiter). _(verified 2026-06-10)_
@@ -103,7 +103,7 @@ _MCP server, tools/bridges, SDK integration, skills_
 - **[MCP Server & Tools](07_tools/01_mcp_server_and_tools.md)** — FastMCP server, tool registry/discovery, bridge architecture, research pipeline tools, workspace resolution in tools, circuit breakers. _(verified 2026-06-04)_
 - **[SDK Integration](07_tools/02_sdk_integration.md)** — Claude Agent SDK integration helpers, session history adapter, runtime info, task events, harness planning phase. _(verified 2026-06-09)_
 - **[Skills System](07_tools/03_skills_system.md)** — Skills architecture, invocation by principals, dependency/gated-binary setup. _(verified 2026-06-03)_
-- **[HyperFrames Video Generation](07_tools/04_hyperframes_video_generation.md)** — Studio + pipeline (external project in `Cody_Code_Generations/`): beat-sheet pipeline, Agent SDK app, learning loop, widget strategy, UA adoption status (design-only). _(verified 2026-06-11)_
+- **[HyperFrames Video Generation (Studio + Pipeline)](07_tools/04_hyperframes_video_generation.md)** — Studio + pipeline (external project in Cody_Code_Generations/): beat-sheet pipeline, Agent SDK app, learning loop, widget strategy, UA adoption status (design-only). _(verified 2026-06-11)_
 
 ## 08_operations
 
@@ -118,4 +118,4 @@ _Operating playbook, verification rules, dormancy, VPS recovery, incident patter
 
 ---
 
-_59/59 canonical docs present. Legacy point-in-time reports are archived (search-excluded) — see `00_DOCUMENTATION_REFACTOR_PLAN.md` §5._
+_60/60 canonical docs present. Legacy point-in-time reports are archived (search-excluded) — see `00_DOCUMENTATION_REFACTOR_PLAN.md` §5._
