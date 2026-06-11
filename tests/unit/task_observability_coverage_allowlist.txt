@@ -93,3 +93,13 @@ src/universal_agent/backlog_triage.py
 # infra, not a tracked unit of work — so the worker-exit/PID protocol does not
 # apply. Mirrors ci_failure_grace_recheck.py. (auto-remediation dispatcher v1, 2026-06-07)
 src/universal_agent/scripts/deslop_remediation_dispatch.py
+
+# zai_activity_control.py [rationale (a) — not a task unit]: the ZAI proactive-activity
+# control plane behind the ops dashboard. Its ONLY subprocess use is ephemeral
+# `systemctl show` (read) and `sudo -n systemctl <start|stop|…> <allowlisted-unit>`
+# (operational service control) — argv-only, allowlist-validated. These are systemd
+# control shell-outs, not a task-executing worker: no long-running PID to classify and
+# no task_hub_items row to own — it is operational infra, not a tracked unit of work — so
+# the worker-exit/PID protocol does not apply. Mirrors the factory local-service-control
+# pattern. (ZAI activity controls, 2026-06-11)
+src/universal_agent/services/zai_activity_control.py

@@ -9,6 +9,9 @@ related:
 code_paths:
   - src/universal_agent/rate_limiter.py
   - src/universal_agent/services/zai_observability.py
+  - src/universal_agent/services/zai_control.py
+  - src/universal_agent/services/zai_status.py
+  - src/universal_agent/services/zai_activity_control.py
   - src/universal_agent/services/invariants/zai_inference_health.py
   - src/universal_agent/utils/model_resolution.py
   - src/universal_agent/infisical_loader.py
@@ -547,7 +550,111 @@ Two things worth knowing before acting on this:
    not inference. (The YouTube digest has its own comparator, `scripts/youtube_digest_compare.py`.)
    See [`04_intelligence/14_model_tiering_by_process.md`](../04_intelligence/14_model_tiering_by_process.md).
 
-## 9. Related docs
+## 9. Emergency control plane + dashboard (`services/zai_control.py`)
+
+A live, operator-facing control surface for ZAI pressure, layered ON TOP of the AIMD
+limiter and observability — it does not replace them. A single JSON file,
+`AGENT_RUN_WORKSPACES/zai_inference_control.json` (override `UA_ZAI_CONTROL_PATH`), lives
+outside the git tree so it **survives deploys**, and is read LIVE (≤2s in-process cache)
+by the enforcement points. Written atomically by the gateway control endpoint.
+
+**The safety invariant: every read FAILS OPEN.** A missing / corrupt / unreadable control
+file yields the empty state — env-default caps, no pause — never "paused", never a raise,
+never a startup crash. So the control plane is **not on the critical restore path**: the
+system runs normally without it, and the worst case of a control-plane bug is "the
+emergency levers silently don't engage; fall back to systemctl/Infisical."
+
+### 9.1 The lever ladder (`zai_control.py::LEVELS`)
+
+Lowest → greatest, dashboard-controllable L0–L4 (L5 is out-of-band):
+
+| Lvl | Effect (control file) | Enforced where |
+|---|---|---|
+| 0 Normal | clear overrides + pause | env-default caps |
+| 1 Trim | caps opus 1/1, sonnet/mid/haiku 1/2 | limiter (routed callers) |
+| 2 Minimal | all caps 1/1 | limiter |
+| 3 Cheap-only | all caps 1/1 + `tier_pause` {opus, mid} | limiter |
+| 4 Global pause | `global_pause.active` (default 30m TTL) | **httpx hook (ALL callers)** + limiter |
+| 5 Full dark | (not a control-file state) stop systemd services | manual/CLI |
+
+**Coverage:** L4 global pause is enforced in `zai_observability.py::_on_request_sync` /
+`_on_request_async` (which raise `ZAIGloballyPausedError` for any `api.z.ai` request while
+paused) — the 100% chokepoint, every UA process, limiter-adopted or not. L1–L3 (per-tier
+caps via `zai_control.effective_tier_cap`, and `tier_pause`) are enforced in
+`rate_limiter.py::ZAIRateLimiter.acquire` + `_effective_tier_cap` — they cover only callers
+routed through the limiter (the `_call_llm` seam + native users), and an explicit operator
+cap override **wins over the AIMD autotuner** while present. L4 is the guaranteed nuke; it
+keeps services (and the dashboard) up while ZAI traffic is zero, which is why it's preferred
+over L5 for the dashboard. The TTL on the pause is the self-heal so a forgotten pause clears.
+
+### 9.2 Endpoints + dashboard
+
+- **GET `/api/v1/ops/zai/status`** (`gateway_server.py::ops_zai_status` →
+  `services/zai_status.py::build_status`) — per-tier 429 rejection RATES over 1m/10m/60m,
+  FUP/1313 counts, effective caps, outcome counters, per-caller breakdown, control state.
+  All reads fail soft.
+- **POST `/api/v1/ops/zai/control`** (`gateway_server.py::ops_zai_control`) — actions
+  `set_level` / `set_global_pause` / `set_tier_caps` / `set_tier_pause` / `clear`. Auth via
+  `_require_ops_auth`; validates tiers ∈ `TIERS`, caps ≥ 1.
+- **Dashboard:** `web-ui/app/dashboard/zai-control/page.tsx` ("ZAI Control" in the System nav)
+  — polls status every 5s, renders the ladder + per-tier cap steppers + global-pause toggle, and
+  (every 10s) the **Proactive activity controls** panel (§9.4).
+
+### 9.3 Watchdog integration
+
+`zai_inference_health.py` surfaces the control state (`control_intervention_level`,
+`control_global_pause_active`, `control_tier_pauses`) read-only and **never alarms on an
+intentional operator pause** (an active pause emits a WARN-level visibility marker, not a
+CRITICAL — during a global pause ZAI traffic is zero anyway, so the 429/FUP conditions don't
+fire). Reads fail open.
+
+The *service*-watchdog (`scripts/vps_service_watchdog.sh`, a separate mechanism) is the reason
+the activity panel (§9.4) treats `universal-agent-mission-control-sweeper.service` specially:
+its `DEFAULT_SERVICE_SPECS` watch-set includes the sweeper, so `check_service` `systemctl
+restart`s the sweeper whenever it is found inactive. A plain `stop` is therefore fought once the
+watchdog timer is running; `mask` makes the `restart` fail, which is why the sweeper is flagged
+`watchdog_guarded` and its declarative off is `["stop","mask"]` (on = `["unmask","start"]`). No
+other allowlisted proactive unit is in the watchdog's watch-set, so `stop` suffices for them.
+
+### 9.4 Proactive activity controls (per-process on/off)
+
+`services/zai_activity_control.py` + the gateway endpoints `ops_zai_activities` (GET
+`/api/v1/ops/zai/activities`) and `ops_zai_activity_control` (POST
+`/api/v1/ops/zai/activity-control`) give the operator a per-process on/off surface for the
+ZAI-consuming **proactive workloads** — the companion to §9.1's per-*rate* levers. Used to bring
+the system up one consumer at a time after a dark, killing any single workload that eats rate
+limit without touching the rest.
+
+**Security (this surface shells `systemctl` from a web endpoint):**
+- **Hardcoded allowlist** (`zai_activity_control.py::ALLOWLIST`) — only the 23 proactive timers +
+  5 continuous services (`mission-control-sweeper`, the two `vp-worker@` instances, the two
+  discord services). Core/infra units (`gateway`/`api`/`webui`/`docs`/`telegram`/`service-watchdog`
+  /`oom-alert`/`*-prune`/`proactive-health`/`youtube-oauth-watchdog`) are excluded by construction
+  and enumerated in `NEVER_CONTROLLABLE`; a unit test asserts the two sets are disjoint.
+- **Action allowlist** (`ALLOWED_ACTIONS`) — only the benign verbs `{start, stop, restart, enable,
+  disable, mask, unmask}`.
+- **No shell** — `control_unit` runs `subprocess.run(["sudo","-n","systemctl",<action>,<unit>])`
+  with an argv list; the action verb and unit are allowlist-validated before the call (in the
+  service AND the gateway). The read path (`get_unit_state` → `systemctl show`) needs no privilege,
+  so only the mutating control uses `sudo -n` (non-interactive — fails fast, never blocks on a
+  password prompt; `ua` has passwordless sudo on the VPS).
+- **Auth** — GET is `_require_ops_auth`; the mutating POST adds `_require_headquarters_role_for_fleet`
+  (mirrors `local_factory_service_control`, the other systemctl-shelling endpoint).
+- **Fail-soft** — per-unit state reads degrade to `"unknown"` and never raise; a control failure
+  returns a structured `{ok:false, returncode, stderr}` rather than crashing the gateway.
+
+The off/on **policy** is declarative metadata per allowlist entry (`off_actions`/`on_actions`),
+so the watchdog-guarded sweeper's mask workaround lives in data, not in compound shell logic — the
+backend stays one validated verb per call. The dashboard panel renders grouped rows (Timers /
+Continuous services) with a HEAVY badge, running/enabled/masked state, last/next run, an On/Off
+toggle that dispatches the unit's action list, a "Stop all proactive" convenience button, and the
+in-process loops (heartbeat/cron) **read-only** with their Infisical-flag state.
+
+> Toggling is **live but not deploy-durable**: a deploy re-arms the timers (`systemctl enable
+> --now`), so for durable suppression across a deploy use the L4 pause (control file survives
+> deploys) or the `UA_DISABLE_HEARTBEAT`/`UA_DISABLE_CRON` Infisical flags, not a panel `stop`.
+
+## 10. Related docs
 
 - [`04_intelligence/14_model_tiering_by_process.md`](../04_intelligence/14_model_tiering_by_process.md)
   — which model each process uses and why (the *pressure* lever).
