@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import logging
+import os
 from pathlib import Path
 import sqlite3
 from typing import Any, Dict, Optional
@@ -58,6 +59,15 @@ PROACTIVE_REPORTS_MIN_TODAY = 2  # at least 2 of 3 daily reports must exist
 CLAUDE_CODE_INTEL_MAX_AGE_HOURS = 9.0  # active-hour cron runs 8 AM / 4 PM / 10 PM Houston
 CSI_DEMO_TRIAGE_MAX_AGE_HOURS = 6.0  # twice-daily cron
 PAPER_TO_PODCAST_MAX_AGE_HOURS = 30.0  # daily 9 PM Houston + 6h grace
+# The paper_to_podcast_daily cron's job id. cron_artifact_notifier composes
+# every subject as f"[{job_id}] {title}" (_compose_initial_email), so the
+# bracketed id is a deterministic delivery marker — unlike the old
+# subject LIKE '%Papers%' heuristic, which matched any email whose
+# LLM-varied title happened to contain "Papers" (including the 2026-06-10
+# false "podcast produced" disclosure built from a 2-day-old manifest,
+# which silently reset this watchdog). Override via env if the cron is
+# ever re-registered under a new id.
+PAPER_TO_PODCAST_JOB_ID = "2afe05ab96"
 VAULT_LINT_DAY_OF_MONTH_GATE = 2  # only probe after the 2nd to give the 1st's cron full day
 
 # Brief→task funnel (added 2026-05-24). Each proactive source_kind should
@@ -76,6 +86,13 @@ BRIEF_TASK_FUNNEL_MIN_ARTIFACTS = 5  # below this it's plausibly just slow CSI i
 # source_kinds here just left an inert probe; `tutorial_build` (Cody tutorial
 # builds) still produces artifacts+tasks in the artifact→task shape this guards.
 BRIEF_TASK_FUNNEL_SOURCE_KINDS = ("tutorial_build",)
+
+
+def _paper_to_podcast_job_id() -> str:
+    return (
+        os.getenv("UA_PAPER_TO_PODCAST_JOB_ID", "").strip()
+        or PAPER_TO_PODCAST_JOB_ID
+    )
 
 
 def _today_houston() -> str:
@@ -765,7 +782,9 @@ def csi_demo_triage_rank_artifact(ctx: Dict[str, Any]) -> Optional[Dict[str, Any
         "Cron `paper_to_podcast_daily` runs at 9 PM Houston daily, generates "
         "a podcast.mp3 + quiz + flashcards from the day's arXiv papers, and "
         "emails the bundle to kevinjdragan@gmail.com. Delivery is recorded "
-        "in `proactive_artifact_emails` with subject prefix \"Papers\". "
+        "in `proactive_artifact_emails`; the notifier's subject always "
+        "starts with the bracketed cron job id (\"[2afe05ab96] ...\"), which "
+        "is the deterministic marker matched here. "
         "Daily cadence + 6h grace = 30h max acceptable age. Critical because "
         "this is the operator's daily research-podcast pipeline — silent "
         "failure means he doesn't notice for days."
@@ -774,7 +793,7 @@ def csi_demo_triage_rank_artifact(ctx: Dict[str, Any]) -> Optional[Dict[str, Any
     runbook_command=(
         "sqlite3 /opt/universal_agent/AGENT_RUN_WORKSPACES/activity_state.db "
         "\"SELECT sent_at, recipient, subject FROM proactive_artifact_emails "
-        "WHERE subject LIKE '%Papers%' ORDER BY sent_at DESC LIMIT 5;\""
+        "WHERE subject LIKE '[2afe05ab96]%' ORDER BY sent_at DESC LIMIT 5;\""
     ),
     metadata={
         "pipeline": "paper_to_podcast_daily",
@@ -787,11 +806,17 @@ def csi_demo_triage_rank_artifact(ctx: Dict[str, Any]) -> Optional[Dict[str, Any
 def paper_to_podcast_email_delivery(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Fire when the daily paper-to-podcast email is overdue (~30h).
 
-    Reads the newest ``sent_at`` from ``proactive_artifact_emails`` for the
-    "Papers" subject to kevinjdragan@gmail.com and flags ages over
-    ``PAPER_TO_PODCAST_MAX_AGE_HOURS`` (daily cadence + 6h grace). Probes only
-    after 6 AM and stays quiet on an unactivated pipeline. Returns None when
-    current.
+    Reads the newest ``sent_at`` from ``proactive_artifact_emails`` for
+    subjects carrying the notifier's bracketed cron job id (the
+    deterministic ``[2afe05ab96]`` prefix minted by
+    ``cron_artifact_notifier._compose_initial_email``) sent to
+    kevinjdragan@gmail.com, and flags ages over
+    ``PAPER_TO_PODCAST_MAX_AGE_HOURS`` (daily cadence + 6h grace). With the
+    notifier's run-freshness gate in place, a matching email implies fresh
+    artifacts — so this marker is sound where the old ``LIKE '%Papers%'``
+    heuristic let a stale-manifest false disclosure reset the watchdog.
+    Probes only after 6 AM and stays quiet on an unactivated pipeline.
+    Returns None when current.
     """
     conn = ctx.get("activity_conn")
     if conn is None:
@@ -806,7 +831,8 @@ def paper_to_podcast_email_delivery(ctx: Dict[str, Any]) -> Optional[Dict[str, A
             "SELECT MAX(sent_at) AS last_sent, COUNT(*) AS total "
             "FROM proactive_artifact_emails "
             "WHERE recipient = 'kevinjdragan@gmail.com' "
-            "  AND subject LIKE '%Papers%'"
+            "  AND subject LIKE ?",
+            (f"[{_paper_to_podcast_job_id()}]%",),
         ).fetchone()
     except sqlite3.Error as exc:
         logger.debug("paper_to_podcast_email_delivery: query failed (%s)", exc)

@@ -268,6 +268,17 @@ Further always-on behaviors are not crons but are explicitly dormancy-exempt:
     (default `1`/on); window via `UA_CRON_ARTIFACT_DEDUP_WINDOW_HOURS` (default `24`).
     Once the operator acks/rejects/archives the row, the next run is allowed to
     surface a fresh artifact so a recurrence is not silently hidden.
+  - **Run-freshness gate (false-disclosure suppression).** Cron workspaces are
+    reused, so manifests/files from prior runs linger on disk. A deploy-killed
+    `paper_to_podcast_daily` run on 2026-06-10 produced nothing, yet the
+    notifier picked up a 2-day-old manifest and emailed it as tonight's
+    podcast. `cron_artifact_notifier._load_manifest` and the
+    `_scan_work_products` fallback now only consider manifests/files with
+    `mtime >= started_at` of the current run; when nothing fresh exists the
+    notifier logs "run produced no new artifacts" and sends **no** email.
+    This also makes the `paper_to_podcast_email_delivery` invariant's
+    bracketed-job-id subject marker sound: a notifier email now implies fresh
+    artifacts.
 - **Heartbeat pre-flight health check** — every Simone heartbeat tick (24/7, the
   heartbeat is a runtime tick driver, not a cron) calls
   `proactive_health_notifier.run_pre_flight_check` (code-verified at

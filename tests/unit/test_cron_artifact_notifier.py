@@ -270,6 +270,89 @@ async def test_no_artifacts_does_not_send(conn, mail_service, tmp_path: Path) ->
     mail_service.send_email.assert_not_called()
 
 
+# ── Run-freshness gate (deploy-killed run, stale workspace leftovers) ──
+
+
+def test_load_manifest_ignores_manifests_older_than_run(tmp_path: Path) -> None:
+    """Regression for the 2026-06-10 false disclosure: a deploy-killed
+    paper_to_podcast run produced nothing, but the notifier picked up a
+    2-day-old manifest from the reused workspace and emailed it to Kevin
+    as tonight's podcast. With ``run_started_at`` set, stale manifests
+    must never be considered."""
+    workspace = tmp_path / "ws"
+    sub = workspace / "work_products" / "paper_to_podcast"
+    sub.mkdir(parents=True)
+    stale = sub / "manifest_20260608.json"
+    stale.write_text(json.dumps({"topic": "Two-day-old topic"}), encoding="utf-8")
+    os.utime(stale, (1_780_000_000, 1_780_000_000))
+
+    run_started_at = 1_780_100_000.0  # run started AFTER the stale manifest
+    assert _load_manifest(workspace, run_started_at=run_started_at) is None
+    # Without the freshness gate the stale manifest is still reachable
+    # (pre-existing behavior for callers that don't pass run_started_at).
+    assert _load_manifest(workspace) is not None
+
+
+def test_load_manifest_returns_manifest_written_during_run(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    sub = workspace / "work_products" / "paper_to_podcast"
+    sub.mkdir(parents=True)
+    fresh = sub / "manifest_20260610.json"
+    fresh.write_text(json.dumps({"topic": "Tonight's topic"}), encoding="utf-8")
+    os.utime(fresh, (1_780_200_500, 1_780_200_500))
+
+    manifest = _load_manifest(workspace, run_started_at=1_780_200_000.0)
+    assert manifest is not None
+    assert manifest["topic"] == "Tonight's topic"
+
+
+def test_scan_fallback_skips_files_older_than_run(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    work_products = workspace / "work_products"
+    work_products.mkdir(parents=True)
+    old = work_products / "podcast_old.m4a"
+    old.write_text("stale audio")
+    os.utime(old, (1_780_000_000, 1_780_000_000))
+    new = work_products / "quiz_new.html"
+    new.write_text("fresh quiz")
+    os.utime(new, (1_780_200_500, 1_780_200_500))
+
+    listing = _build_artifacts_listing(
+        workspace, None, run_started_at=1_780_200_000.0
+    )
+    titles = {item["title"] for item in listing}
+    assert titles == {"quiz_new.html"}
+
+
+@pytest.mark.asyncio
+async def test_stale_only_workspace_suppresses_produced_email(
+    conn, mail_service, tmp_path: Path
+) -> None:
+    """A run that produced no new artifacts (only prior runs' files exist)
+    must NOT send a 'produced' email — log-and-skip instead."""
+    workspace = tmp_path / "ws"
+    sub = workspace / "work_products" / "paper_to_podcast"
+    sub.mkdir(parents=True)
+    for name in ("manifest.json", "podcast_deep_dive.m4a", "quiz.html"):
+        f = sub / name
+        f.write_text(json.dumps({"topic": "old"}) if name.endswith(".json") else "x")
+        os.utime(f, (1_780_000_000, 1_780_000_000))
+
+    result = await notify_cron_artifact(
+        conn=conn,
+        mail_service=mail_service,
+        job_id="paper_to_podcast",
+        job_metadata={"notify_on_artifact": True},
+        job_command="generate a podcast",
+        workspace_dir=workspace,
+        started_at=1_780_100_000.0,  # run started AFTER every file on disk
+        finished_at=1_780_100_300.0,
+        recipient="kevinjdragan@gmail.com",
+    )
+    assert result is None
+    mail_service.send_email.assert_not_called()
+
+
 # ── Reminder state seed ────────────────────────────────────────────────
 
 

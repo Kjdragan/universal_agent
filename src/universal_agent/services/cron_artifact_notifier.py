@@ -238,12 +238,23 @@ async def notify_cron_artifact(
         return None
 
     try:
-        manifest = _load_manifest(workspace_dir)
-        artifacts_listing = _build_artifacts_listing(workspace_dir, manifest)
+        manifest = _load_manifest(workspace_dir, run_started_at=started_at)
+        artifacts_listing = _build_artifacts_listing(
+            workspace_dir, manifest, run_started_at=started_at
+        )
         if not artifacts_listing:
+            # Either the run genuinely produced nothing, or only stale
+            # files from prior runs exist in the reused workspace. In
+            # both cases a "produced" email would be a false disclosure
+            # (observed 2026-06-10: a deploy-killed paper_to_podcast run
+            # emailed Kevin a 2-day-old manifest as tonight's podcast) —
+            # log instead, never email.
             logger.info(
-                "cron_artifact_notifier: %s opted in but found no artifacts in %s",
+                "cron_artifact_notifier: %s opted in but found no artifacts "
+                "fresh for this run (started_at=%s) in %s — run produced no "
+                "new artifacts; suppressing 'produced' email",
                 job_id,
+                started_at,
                 workspace_dir,
             )
             return None
@@ -459,7 +470,9 @@ def notify_cron_artifact_fire_and_forget(
 # ── Artifact discovery ─────────────────────────────────────────────────
 
 
-def _load_manifest(workspace_dir: Path) -> Optional[dict[str, Any]]:
+def _load_manifest(
+    workspace_dir: Path, run_started_at: Optional[float] = None
+) -> Optional[dict[str, Any]]:
     """Load the most recent ``manifest*.json`` from the workspace (root
     or ``work_products/<skill>/``).
 
@@ -474,6 +487,13 @@ def _load_manifest(workspace_dir: Path) -> Optional[dict[str, Any]]:
     and pick the newest by mtime, so the disclosure always reflects the
     run that just finished. Older manifests are only consulted if the
     newest fails to parse.
+
+    When ``run_started_at`` is given, only manifests written during the
+    current run (``mtime >= run_started_at``) are considered at all. A
+    run that produced no manifest must yield ``None`` — not a prior
+    run's file — otherwise a failed/empty run gets disclosed to the
+    operator as a fresh success built from days-old content (observed
+    live 2026-06-10 after a deploy-killed paper_to_podcast run).
     """
     work_products = workspace_dir / "work_products"
     seen: set[Path] = set()
@@ -497,9 +517,12 @@ def _load_manifest(workspace_dir: Path) -> Optional[dict[str, Any]]:
     scored: list[tuple[float, Path]] = []
     for path in candidates:
         try:
-            scored.append((path.stat().st_mtime, path))
+            mtime = path.stat().st_mtime
         except OSError:
             continue
+        if run_started_at is not None and mtime < run_started_at:
+            continue  # stale leftovers from a prior run — never disclose
+        scored.append((mtime, path))
     scored.sort(key=lambda t: t[0], reverse=True)
 
     for _, path in scored:
@@ -513,12 +536,18 @@ def _load_manifest(workspace_dir: Path) -> Optional[dict[str, Any]]:
 
 
 def _build_artifacts_listing(
-    workspace_dir: Path, manifest: Optional[dict[str, Any]]
+    workspace_dir: Path,
+    manifest: Optional[dict[str, Any]],
+    run_started_at: Optional[float] = None,
 ) -> list[dict[str, Any]]:
     """Return a list of ``{title, path, kind?}`` dicts.
 
     Prefers ``manifest.json`` entries; falls back to scanning
-    ``work_products/`` for files.
+    ``work_products/`` for files. When ``run_started_at`` is given the
+    fallback scan only lists files written during the current run
+    (``mtime >= run_started_at``); a fresh manifest's declared entries
+    are trusted as-is (the manifest itself already passed the freshness
+    gate in ``_load_manifest``).
     """
     items: list[dict[str, Any]] = []
     seen_paths: set[str] = set()
@@ -532,7 +561,9 @@ def _build_artifacts_listing(
                 items.append(item)
 
     if not items:
-        items.extend(_scan_work_products(workspace_dir))
+        items.extend(
+            _scan_work_products(workspace_dir, run_started_at=run_started_at)
+        )
 
     return items[:_SCAN_MAX_FILES]
 
@@ -583,9 +614,17 @@ def _coerce_item(raw: Any) -> dict[str, Any]:
     return {"title": str(raw), "path": ""}
 
 
-def _scan_work_products(workspace_dir: Path) -> list[dict[str, Any]]:
+def _scan_work_products(
+    workspace_dir: Path, run_started_at: Optional[float] = None
+) -> list[dict[str, Any]]:
     """Recursively list files under ``work_products/``, skipping the
-    cron-scaffolding noise (sync_ready_*.json, BOOTSTRAP_*.md, etc.)."""
+    cron-scaffolding noise (sync_ready_*.json, BOOTSTRAP_*.md, etc.).
+
+    When ``run_started_at`` is given, files whose mtime predates the
+    current run are skipped — reused cron workspaces accumulate prior
+    runs' deliverables, which must never be disclosed as this run's
+    output.
+    """
     work_products = workspace_dir / "work_products"
     if not work_products.exists() or not work_products.is_dir():
         return []
@@ -602,6 +641,12 @@ def _scan_work_products(workspace_dir: Path) -> list[dict[str, Any]]:
             continue
         if any(name.startswith(p) for p in _SCAN_SKIP_NAME_PREFIXES):
             continue
+        if run_started_at is not None:
+            try:
+                if path.stat().st_mtime < run_started_at:
+                    continue
+            except OSError:
+                continue
         items.append({"title": name, "path": str(rel)})
         if len(items) >= _SCAN_MAX_FILES:
             break

@@ -662,6 +662,17 @@ the triage verdict + dispatch path (candidate→task), not this artifact→task 
 > `0 6-21` cron. The `proactive_brief_task_funnel` source_kinds were likewise
 > repointed off the dead `convergence_detection`/`insight_detection` kinds.
 
+> **Probe correction (2026-06-10).** `paper_to_podcast_email_delivery` previously
+> matched `subject LIKE '%Papers%'` — any email whose LLM-varied title happened to
+> contain "Papers" reset the watchdog, including a false "podcast produced"
+> disclosure that `cron_artifact_notifier` built from a 2-day-old manifest after a
+> deploy-killed run. It now matches the notifier's deterministic bracketed-job-id
+> subject prefix (`subject LIKE '[<job_id>]%'`, constant
+> `proactive_pipeline_invariants.py::PAPER_TO_PODCAST_JOB_ID`, env override
+> `UA_PAPER_TO_PODCAST_JOB_ID`), and the notifier's run-freshness gate guarantees
+> a matching email implies artifacts written by *that* run. Recipient filter
+> unchanged.
+
 ---
 
 ## Gotchas

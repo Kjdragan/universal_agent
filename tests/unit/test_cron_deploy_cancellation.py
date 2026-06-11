@@ -17,16 +17,22 @@ file/uptime probes that drive ``_is_deploy_window_active``.
 
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
 import time
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from universal_agent import cron_service
 from universal_agent.cron_service import (
     _DEPLOY_CANCEL_BACKFILL_OFFSET_SEC,
     _DEPLOY_WINDOW_FALLBACK_UPTIME_SEC,
+    CronService,
     _is_deploy_window_active,
+    _is_llm_deploy_kill_result,
     _process_start_time,
 )
+from universal_agent.workflow_admission import WorkflowAdmissionService
 
 # --------------------------------------------------------------------------- #
 # _is_deploy_window_active — file flag signal
@@ -348,3 +354,304 @@ def test_subprocess_exit_branch_marks_success_for_zero_exit(monkeypatch):
         record.output_preview = output_text[:400]
 
     assert record.status == "success"
+
+
+# --------------------------------------------------------------------------- #
+# _is_llm_deploy_kill_result — the LLM deploy-kill signature
+# --------------------------------------------------------------------------- #
+
+
+def test_llm_deploy_kill_signature_matches_empty_result():
+    """Empty text + zero tool calls is the deploy-kill shape: the SDK's
+    claude CLI subprocess was SIGTERM'd (exit 143), the SDK swallowed the
+    message-reader fatal, and run_query returned an empty GatewayResult."""
+    result = SimpleNamespace(response_text="", tool_calls=0)
+    assert _is_llm_deploy_kill_result(result) is True
+
+
+def test_llm_deploy_kill_signature_rejects_text_result():
+    result = SimpleNamespace(response_text="All done.", tool_calls=0)
+    assert _is_llm_deploy_kill_result(result) is False
+
+
+def test_llm_deploy_kill_signature_rejects_tool_calls():
+    """A run that called tools did real work even if the final text is
+    empty — never classify it as a deploy kill."""
+    result = SimpleNamespace(response_text="", tool_calls=3)
+    assert _is_llm_deploy_kill_result(result) is False
+
+
+def test_llm_deploy_kill_signature_tolerates_missing_attrs():
+    assert _is_llm_deploy_kill_result(SimpleNamespace()) is True
+    assert _is_llm_deploy_kill_result(SimpleNamespace(tool_calls="bogus")) is True
+
+
+# --------------------------------------------------------------------------- #
+# In-flight marker: store round-trip + service helpers
+# --------------------------------------------------------------------------- #
+
+
+class _StubGateway:
+    """Gateway stub for full _run_job tests — configurable LLM result."""
+
+    def __init__(self, result=None):
+        self._result = result or SimpleNamespace(
+            response_text="", metadata={}, tool_calls=0
+        )
+
+    async def create_session(self, user_id: str, workspace_dir: str):
+        return SimpleNamespace(
+            session_id="sess-test", user_id=user_id,
+            workspace_dir=workspace_dir, metadata={},
+        )
+
+    async def run_query(self, session, request, event_callback=None):
+        return self._result
+
+
+def _service(tmp_path: Path, gateway=None) -> CronService:
+    svc = CronService(gateway or _StubGateway(), tmp_path)
+    runtime_db_path = str((tmp_path / "runtime_state.db").resolve())
+    svc._workflow_admission_service = lambda: WorkflowAdmissionService(runtime_db_path)
+    return svc
+
+
+def _isolate_side_paths(monkeypatch, tmp_path: Path) -> None:
+    """Point env-resolved side stores (runtime DB, artifacts) at tmp."""
+    monkeypatch.setenv("UA_RUNTIME_DB_PATH", str(tmp_path / "runtime_state.db"))
+    monkeypatch.setenv("UA_ARTIFACTS_DIR", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("UA_DISABLE_MEMORY", "1")
+
+
+def test_inflight_marker_store_round_trip(tmp_path: Path):
+    svc = _service(tmp_path)
+    assert svc.store.load_inflight() == {}
+    svc._mark_inflight("job-a", 1234.0)
+    markers = svc.store.load_inflight()
+    assert markers["job-a"]["scheduled_at"] == 1234.0
+    assert markers["job-a"]["marked_at"] > 0
+    svc._clear_inflight("job-a")
+    assert svc.store.load_inflight() == {}
+    # Clearing an absent marker is a no-op, never raises.
+    svc._clear_inflight("job-a")
+
+
+def test_startup_requeues_inflight_marker_for_catch_up_job(
+    tmp_path: Path, monkeypatch
+):
+    """A leftover marker (run hard-killed by a deploy restart) for a
+    catch_up_on_restart job must be queued for recovery at construction
+    time, and the consumed sidecar cleared."""
+    # The dev-mode guard skips loading persisted jobs entirely; pin the
+    # stage so the restart simulation behaves like production regardless
+    # of the host shell's UA_RUNTIME_STAGE.
+    monkeypatch.delenv("UA_RUNTIME_STAGE", raising=False)
+    svc1 = _service(tmp_path)
+    job = svc1.add_job(
+        user_id="cron",
+        workspace_dir=str(tmp_path / "ws"),
+        command="Generate the nightly podcast",
+        cron_expr="0 21 * * *",
+        catch_up_on_restart=True,
+    )
+    interrupted_at = time.time() - 600  # the 9 PM slot, 10 min ago
+    svc1._mark_inflight(job.job_id, interrupted_at)
+
+    # Simulate the post-restart gateway constructing a fresh CronService
+    # over the same store.
+    svc2 = _service(tmp_path)
+    assert (job.job_id, interrupted_at) in [
+        (j, s) for j, s in svc2._inflight_requeue
+    ]
+    # Markers are consumed at startup (the requeue dispatch re-marks).
+    assert svc2.store.load_inflight() == {}
+
+
+def test_startup_drops_marker_for_non_catch_up_job(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("UA_RUNTIME_STAGE", raising=False)
+    svc1 = _service(tmp_path)
+    job = svc1.add_job(
+        user_id="cron",
+        workspace_dir=str(tmp_path / "ws"),
+        command="echo hi",
+        every_raw="10m",
+        catch_up_on_restart=False,
+    )
+    svc1._mark_inflight(job.job_id, time.time() - 60)
+    svc2 = _service(tmp_path)
+    assert svc2._inflight_requeue == []
+    assert svc2.store.load_inflight() == {}
+
+
+def test_startup_drops_stale_marker(tmp_path: Path, monkeypatch):
+    """Markers older than the 24h backfill max age are dropped — bounded
+    recovery, no archaeology."""
+    monkeypatch.delenv("UA_RUNTIME_STAGE", raising=False)
+    svc1 = _service(tmp_path)
+    job = svc1.add_job(
+        user_id="cron",
+        workspace_dir=str(tmp_path / "ws"),
+        command="echo hi",
+        every_raw="10m",
+        catch_up_on_restart=True,
+    )
+    svc1._mark_inflight(job.job_id, time.time() - 90000)  # > 24h
+    svc2 = _service(tmp_path)
+    assert svc2._inflight_requeue == []
+    assert svc2.store.load_inflight() == {}
+
+
+async def test_start_dispatches_inflight_recovery_even_with_backfill_off(
+    tmp_path: Path, monkeypatch
+):
+    """The whole point: interrupted in-flight runs of catch_up jobs must
+    recover EVEN under the UA_CRON_BACKFILL_ON_RESTART=0 default (that
+    global gate exists to stop a startup stampede of ALL missed slots;
+    interrupted in-flight runs are a bounded set)."""
+    monkeypatch.delenv("UA_CRON_BACKFILL_ON_RESTART", raising=False)
+    monkeypatch.delenv("UA_RUNTIME_STAGE", raising=False)
+    svc1 = _service(tmp_path)
+    job = svc1.add_job(
+        user_id="cron",
+        workspace_dir=str(tmp_path / "ws"),
+        command="Generate the nightly podcast",
+        cron_expr="0 21 * * *",
+        catch_up_on_restart=True,
+    )
+    interrupted_at = time.time() - 600
+    svc1._mark_inflight(job.job_id, interrupted_at)
+
+    svc2 = _service(tmp_path)
+    dispatched: list[tuple[str, float, str, str]] = []
+
+    async def _fake_run_job(job, scheduled_at, reason, *, dispatch_key=None, **_kw):
+        dispatched.append((job.job_id, scheduled_at, reason, dispatch_key))
+
+    svc2._run_job = _fake_run_job
+    await svc2.start()
+    await asyncio.sleep(0.05)  # let the created task run
+    await svc2.stop()
+
+    assert len(dispatched) == 1
+    got_job_id, got_scheduled_at, got_reason, got_key = dispatched[0]
+    assert got_job_id == job.job_id
+    assert got_scheduled_at == interrupted_at
+    assert got_reason == "backfill"
+    # NOT the original `scheduled:` dedup key — the interrupted attempt's
+    # workflow run may still be status=running, and re-admitting under the
+    # same key would attach_to_existing and silently skip the recovery.
+    assert got_key.startswith(f"inflight:{job.job_id}:")
+    # The recovery dispatch re-marked the job in flight.
+    assert job.job_id in svc2.store.load_inflight()
+
+
+# --------------------------------------------------------------------------- #
+# LLM deploy-kill classification — full _run_job path
+# --------------------------------------------------------------------------- #
+
+
+def test_llm_run_deploy_kill_marks_cancelled_and_keeps_marker(
+    tmp_path: Path, monkeypatch
+):
+    """Empty engine result + active deploy window → cancelled (NOT
+    completed), next_run_at advanced for re-fire, in-flight marker KEPT so
+    the next boot's recovery pass requeues the slot."""
+    _isolate_side_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(cron_service, "_is_deploy_window_active", lambda: True)
+    svc = _service(
+        tmp_path,
+        gateway=_StubGateway(
+            SimpleNamespace(response_text="", metadata={}, tool_calls=0)
+        ),
+    )
+    job = svc.add_job(
+        user_id="cron",
+        workspace_dir=str(tmp_path / "ws_llm"),
+        command="Generate the nightly podcast",
+        cron_expr="0 21 * * *",
+        catch_up_on_restart=True,
+        metadata={"skip_task_hub_link": True},
+    )
+    scheduled_at = time.time() - 30
+    svc.running_jobs.add(job.job_id)
+    svc._mark_inflight(job.job_id, scheduled_at)
+
+    record = asyncio.run(
+        svc._run_job(job, scheduled_at=scheduled_at, reason="schedule")
+    )
+
+    assert record.status == "cancelled"
+    assert "deploy restart" in (record.error or "")
+    # Slot requeued: next_run_at advanced to a small positive offset.
+    assert job.next_run_at is not None
+    assert 0 < (job.next_run_at - time.time()) <= _DEPLOY_CANCEL_BACKFILL_OFFSET_SEC + 1
+    # Marker survives so the startup recovery pass can requeue.
+    assert job.job_id in svc.store.load_inflight()
+
+
+def test_llm_run_empty_result_outside_deploy_window_keeps_prior_behavior(
+    tmp_path: Path, monkeypatch
+):
+    """GUARDRAIL: the deploy-window predicate is the ONLY thing that
+    downgrades the empty result. Outside a window, classification is
+    unchanged from before (success) and the in-flight marker clears."""
+    _isolate_side_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(cron_service, "_is_deploy_window_active", lambda: False)
+    svc = _service(
+        tmp_path,
+        gateway=_StubGateway(
+            SimpleNamespace(response_text="", metadata={}, tool_calls=0)
+        ),
+    )
+    job = svc.add_job(
+        user_id="cron",
+        workspace_dir=str(tmp_path / "ws_llm"),
+        command="Generate the nightly podcast",
+        cron_expr="0 21 * * *",
+        metadata={"skip_task_hub_link": True},
+    )
+    scheduled_at = time.time() - 30
+    svc.running_jobs.add(job.job_id)
+    svc._mark_inflight(job.job_id, scheduled_at)
+
+    record = asyncio.run(
+        svc._run_job(job, scheduled_at=scheduled_at, reason="schedule")
+    )
+
+    assert record.status == "success"
+    assert job.job_id not in svc.store.load_inflight()
+
+
+def test_llm_run_healthy_result_in_deploy_window_stays_success(
+    tmp_path: Path, monkeypatch
+):
+    """A run that completed with real output during a deploy window is a
+    success — never discard finished work just because a deploy is in
+    flight."""
+    _isolate_side_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(cron_service, "_is_deploy_window_active", lambda: True)
+    svc = _service(
+        tmp_path,
+        gateway=_StubGateway(
+            SimpleNamespace(
+                response_text="Podcast generated.", metadata={}, tool_calls=4
+            )
+        ),
+    )
+    job = svc.add_job(
+        user_id="cron",
+        workspace_dir=str(tmp_path / "ws_llm"),
+        command="Generate the nightly podcast",
+        cron_expr="0 21 * * *",
+        metadata={"skip_task_hub_link": True},
+    )
+    scheduled_at = time.time() - 30
+    svc.running_jobs.add(job.job_id)
+    svc._mark_inflight(job.job_id, scheduled_at)
+
+    record = asyncio.run(
+        svc._run_job(job, scheduled_at=scheduled_at, reason="schedule")
+    )
+
+    assert record.status == "success"
+    assert job.job_id not in svc.store.load_inflight()

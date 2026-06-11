@@ -44,6 +44,13 @@ MIN_ROWS_PER_DAY = 3
 # considered broken for that day.
 OK_PCT_FLOOR = 50.0
 WINDOW_DAYS = 7
+# Recovered-guard: when this many of the most recent populated days are ALL
+# at/above OK_PCT_FLOOR, the pipeline has recovered and any remaining
+# offending days are residue aging out of the window — downgrade the finding
+# from critical (pages via the email digest) to warn (dashboard-only).
+# Context: transcripts recovered 2026-06-07 but the Jun 5–7 residue kept
+# paging 4 emails/day until it left the 7-day window.
+RECOVERED_RECENT_DAYS = 2
 
 # Enrichment-coverage thresholds.  Below COVERAGE_FLOOR_PCT of *in-scope* events
 # (the ones the selective enricher is supposed to process) having a matching
@@ -188,6 +195,7 @@ def youtube_transcript_coverage(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]
         db.close()
 
     offending: list[Dict[str, Any]] = []
+    populated: list[Dict[str, Any]] = []  # rows are day DESC → newest first
     days_inspected = 0
     for row in rows:
         total = int(row["total"] or 0)
@@ -196,31 +204,51 @@ def youtube_transcript_coverage(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]
             continue
         days_inspected += 1
         ok_pct = (100.0 * ok / total) if total else 0.0
+        day_stats = {
+            "day": str(row["day"] or ""),
+            "total": total,
+            "ok_count": ok,
+            "ok_pct": round(ok_pct, 1),
+        }
+        populated.append(day_stats)
         if ok_pct < OK_PCT_FLOOR:
-            offending.append(
-                {
-                    "day": str(row["day"] or ""),
-                    "total": total,
-                    "ok_count": ok,
-                    "ok_pct": round(ok_pct, 1),
-                }
-            )
+            offending.append(day_stats)
 
     if not offending:
         return None
 
-    return {
+    # Recovered-guard: when the most recent RECOVERED_RECENT_DAYS populated
+    # days are BOTH at/above the floor, the pipeline is healthy again and
+    # the offending days are stale residue that self-clears as it ages out
+    # of the window. Downgrade to warn (dashboard-only; the critical-digest
+    # email only covers severity='critical') instead of paging the operator
+    # daily about a recovered incident.
+    recent = populated[:RECOVERED_RECENT_DAYS]
+    recovered = len(recent) >= RECOVERED_RECENT_DAYS and all(
+        d["ok_pct"] >= OK_PCT_FLOOR for d in recent
+    )
+
+    message = (
+        f"{len(offending)} of {days_inspected} populated day(s) in the last "
+        f"{WINDOW_DAYS} days had transcript ok_pct < {OK_PCT_FLOOR:.0f}%. "
+        "The enrichment pipeline (csi_rss_semantic_enrich.py) is writing "
+        "rows but most are failing to capture a transcript."
+    )
+    if recovered:
+        message += (
+            f" RECOVERED: the {RECOVERED_RECENT_DAYS} most recent populated "
+            f"day(s) are all >= {OK_PCT_FLOOR:.0f}% ok — the offending days "
+            "are residue aging out of the window (downgraded to warn; "
+            "self-clears as the window rolls forward)."
+        )
+
+    result: Dict[str, Any] = {
         "observed_value": {
             "offending_days": offending,
             "days_inspected": days_inspected,
             "window_days": WINDOW_DAYS,
         },
-        "message": (
-            f"{len(offending)} of {days_inspected} populated day(s) in the last "
-            f"{WINDOW_DAYS} days had transcript ok_pct < {OK_PCT_FLOOR:.0f}%. "
-            "The enrichment pipeline (csi_rss_semantic_enrich.py) is writing "
-            "rows but most are failing to capture a transcript."
-        ),
+        "message": message,
         "threshold_text": (
             f"ok_pct >= {OK_PCT_FLOOR:.0f}% on every day with >= "
             f"{MIN_ROWS_PER_DAY} rows"
@@ -228,8 +256,12 @@ def youtube_transcript_coverage(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]
         "metadata": {
             "min_rows_per_day": MIN_ROWS_PER_DAY,
             "ok_pct_floor": OK_PCT_FLOOR,
+            "recovered": recovered,
         },
     }
+    if recovered:
+        result["severity_override"] = "warn"
+    return result
 
 
 @invariant(

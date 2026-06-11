@@ -640,6 +640,10 @@ def test_csi_demo_triage_rank_empty_table_stays_quiet(monkeypatch) -> None:
 
 # --- 9. paper_to_podcast_email_delivery ---
 
+# The notifier composes subjects as f"[{job_id}] {title}" — the bracketed
+# cron job id is the deterministic delivery marker the probe matches on.
+_P2P_SUBJECT = f"[{ppi.PAPER_TO_PODCAST_JOB_ID}] Daily Papers Brief"
+
 
 def test_paper_to_podcast_recent_email_quiet(monkeypatch) -> None:
     _set_now(monkeypatch, datetime(2026, 5, 19, 8, 0, tzinfo=HOUSTON))
@@ -647,8 +651,8 @@ def test_paper_to_podcast_recent_email_quiet(monkeypatch) -> None:
     recent_iso = (datetime.now(UTC) - timedelta(hours=10)).isoformat()
     conn.execute(
         "INSERT INTO proactive_artifact_emails (artifact_id, recipient, subject, sent_at) "
-        "VALUES ('a1', 'kevinjdragan@gmail.com', 'Daily Papers Brief', ?)",
-        (recent_iso,),
+        "VALUES ('a1', 'kevinjdragan@gmail.com', ?, ?)",
+        (_P2P_SUBJECT, recent_iso),
     )
     conn.commit()
     findings = run_invariants({"activity_conn": conn})
@@ -661,8 +665,8 @@ def test_paper_to_podcast_old_email_fires_critical(monkeypatch) -> None:
     old_iso = (datetime.now(UTC) - timedelta(hours=48)).isoformat()
     conn.execute(
         "INSERT INTO proactive_artifact_emails (artifact_id, recipient, subject, sent_at) "
-        "VALUES ('a1', 'kevinjdragan@gmail.com', 'Daily Papers Brief', ?)",
-        (old_iso,),
+        "VALUES ('a1', 'kevinjdragan@gmail.com', ?, ?)",
+        (_P2P_SUBJECT, old_iso),
     )
     conn.commit()
     findings = run_invariants({"activity_conn": conn})
@@ -674,6 +678,48 @@ def test_paper_to_podcast_old_email_fires_critical(monkeypatch) -> None:
 def test_paper_to_podcast_empty_table_stays_quiet(monkeypatch) -> None:
     _set_now(monkeypatch, datetime(2026, 5, 19, 8, 0, tzinfo=HOUSTON))
     conn = _seeded_proactive_artifacts_conn()
+    findings = run_invariants({"activity_conn": conn})
+    assert _only(findings, "paper_to_podcast_email_delivery") == []
+
+
+def test_paper_to_podcast_nonmarker_papers_subject_does_not_reset(monkeypatch) -> None:
+    """Regression for the 2026-06-10 false reset: a recent email whose
+    LLM-varied subject merely contains "Papers" (no bracketed job id) must
+    NOT satisfy the watchdog. Only the notifier's deterministic
+    "[<job_id>]"-prefixed subject counts as a delivery."""
+    _set_now(monkeypatch, datetime(2026, 5, 19, 8, 0, tzinfo=HOUSTON))
+    conn = _seeded_proactive_artifacts_conn()
+    old_iso = (datetime.now(UTC) - timedelta(hours=48)).isoformat()
+    recent_iso = (datetime.now(UTC) - timedelta(hours=2)).isoformat()
+    conn.execute(
+        "INSERT INTO proactive_artifact_emails (artifact_id, recipient, subject, sent_at) "
+        "VALUES ('a1', 'kevinjdragan@gmail.com', ?, ?)",
+        (_P2P_SUBJECT, old_iso),
+    )
+    conn.execute(
+        "INSERT INTO proactive_artifact_emails (artifact_id, recipient, subject, sent_at) "
+        "VALUES ('a2', 'kevinjdragan@gmail.com', 'Still pending: Daily Papers roundup', ?)",
+        (recent_iso,),
+    )
+    conn.commit()
+    findings = run_invariants({"activity_conn": conn})
+    matches = _only(findings, "paper_to_podcast_email_delivery")
+    assert len(matches) == 1
+    assert matches[0].severity == "critical"
+
+
+def test_paper_to_podcast_job_id_env_override(monkeypatch) -> None:
+    """UA_PAPER_TO_PODCAST_JOB_ID lets the marker follow a re-registered cron."""
+    _set_now(monkeypatch, datetime(2026, 5, 19, 8, 0, tzinfo=HOUSTON))
+    monkeypatch.setenv("UA_PAPER_TO_PODCAST_JOB_ID", "deadbeef00")
+    conn = _seeded_proactive_artifacts_conn()
+    recent_iso = (datetime.now(UTC) - timedelta(hours=10)).isoformat()
+    conn.execute(
+        "INSERT INTO proactive_artifact_emails (artifact_id, recipient, subject, sent_at) "
+        "VALUES ('a1', 'kevinjdragan@gmail.com', '[deadbeef00] Daily Papers Brief', ?)",
+        (recent_iso,),
+    )
+    conn.commit()
     findings = run_invariants({"activity_conn": conn})
     assert _only(findings, "paper_to_podcast_email_delivery") == []
 
