@@ -150,3 +150,69 @@ def test_dry_run_reports_decision_without_dispatch(monkeypatch):
     assert out["dry_run"] is True
     assert out["action"] == "retry_atlas"  # the verdict it WOULD have taken
     assert calls == []  # ...but nothing was dispatched
+
+
+# --- schedule_wiki_rescue (sync-safe bridge for the stale reconciler) -------
+
+def _patch_rescue_recorder(monkeypatch):
+    """Replace maybe_rescue_failed_wiki_mission with a recording coroutine."""
+    recorded: list[dict] = []
+
+    async def fake_rescue(**kwargs):
+        recorded.append(kwargs)
+        return {"action": "noop"}
+
+    monkeypatch.setattr(drv, "maybe_rescue_failed_wiki_mission", fake_rescue)
+    return recorded
+
+
+def test_schedule_without_running_loop_runs_inline(monkeypatch):
+    recorded = _patch_rescue_recorder(monkeypatch)
+    drv.schedule_wiki_rescue(
+        mission_id="m-recon", mission_type="proactive_wiki",
+        failure_mode="stale_claim_expired", status="failed",
+    )
+    assert len(recorded) == 1
+    assert recorded[0]["mission_id"] == "m-recon"
+    assert recorded[0]["failure_mode"] == "stale_claim_expired"
+
+
+def test_schedule_with_running_loop_creates_task(monkeypatch):
+    recorded = _patch_rescue_recorder(monkeypatch)
+
+    async def main():
+        # Sync call from inside a running loop (the reconciler's situation).
+        drv.schedule_wiki_rescue(
+            mission_id="m-loop", mission_type="proactive_wiki",
+            failure_mode="stale_reconcile", status="failed",
+        )
+        assert recorded == []  # not run yet — scheduled as a task
+        await asyncio.sleep(0)  # yield so the task runs
+        await asyncio.sleep(0)
+
+    asyncio.run(main())
+    assert len(recorded) == 1
+    assert recorded[0]["mission_id"] == "m-loop"
+
+
+def test_schedule_swallows_rescue_errors(monkeypatch):
+    async def boom(**kwargs):
+        raise RuntimeError("rescue exploded")
+
+    monkeypatch.setattr(drv, "maybe_rescue_failed_wiki_mission", boom)
+    # No-loop path: must not raise.
+    drv.schedule_wiki_rescue(
+        mission_id="m-err", mission_type="proactive_wiki",
+        failure_mode="timeout", status="failed",
+    )
+
+    async def main():
+        # Running-loop path: task error must be consumed by the done-callback.
+        drv.schedule_wiki_rescue(
+            mission_id="m-err2", mission_type="proactive_wiki",
+            failure_mode="timeout", status="failed",
+        )
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    asyncio.run(main())  # must not raise

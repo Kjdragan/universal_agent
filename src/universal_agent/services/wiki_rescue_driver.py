@@ -20,6 +20,7 @@ Cody handoff).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -208,3 +209,43 @@ async def maybe_rescue_failed_wiki_mission(
         return {"action": decision.action, "error": str(exc)}
 
     return None
+
+
+def _log_rescue_task_result(task: "asyncio.Task") -> None:
+    try:
+        task.result()
+    except Exception as exc:  # noqa: BLE001 — observability only
+        logger.warning("wiki-rescue: scheduled rescue task failed: %s", exc)
+
+
+def schedule_wiki_rescue(
+    *,
+    mission_id: str,
+    mission_type: str,
+    failure_mode: str,
+    status: str,
+) -> None:
+    """Sync-safe entry point: schedule the rescue from non-async code.
+
+    The stale reconciler (`gateway_server::_reconcile_stale_vp_missions_once`) is
+    a sync function executing inside the gateway's running event loop — there we
+    ``create_task`` on that loop (the task runs once the sync sweep yields back).
+    For genuinely loop-less callers (scripts, tests) we fall back to
+    ``asyncio.run``. Best-effort: never raises into the caller.
+    """
+    coro = maybe_rescue_failed_wiki_mission(
+        mission_id=mission_id,
+        mission_type=mission_type,
+        failure_mode=failure_mode,
+        status=status,
+    )
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        try:
+            asyncio.run(coro)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("wiki-rescue: sync-run failed for %s: %s", mission_id, exc)
+        return
+    task = loop.create_task(coro)
+    task.add_done_callback(_log_rescue_task_result)

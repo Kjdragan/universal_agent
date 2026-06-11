@@ -3688,6 +3688,24 @@ def _reconcile_stale_vp_missions_once(
         )
         reconciled += 1
 
+        # Deterministic wiki-rescue (flag-gated UA_WIKI_RESCUE_ENABLED): a
+        # SIGTERM/stale-killed proactive_wiki mission gets the same bounded
+        # rescue ladder as a clean worker-loop failure (the vp/worker_loop.py
+        # hook covers clean failures; this covers the reconcile path). The
+        # finalize above already surfaced the vp_failure task the driver reads,
+        # and the status='running' SELECT guarantees once-per-failure.
+        try:
+            from universal_agent.services.wiki_rescue_driver import schedule_wiki_rescue
+
+            schedule_wiki_rescue(
+                mission_id=mission_id,
+                mission_type=str(row["mission_type"] or ""),
+                failure_mode=reconcile_failure_mode,
+                status=final_status,
+            )
+        except Exception:
+            logger.debug("wiki-rescue scheduling failed for %s", mission_id, exc_info=True)
+
     return reconciled
 
 
