@@ -1210,8 +1210,13 @@ async def _vp_dispatch_mission_redispatch_fresh_impl(args: dict[str, Any]) -> di
     except Exception:
         pass
 
+    # Optional cross-VP reassignment: hand a failed mission to a DIFFERENT vp
+    # (e.g. a failed ATLAS wiki -> Cody for diagnose-and-fix). Defaults to the
+    # original vp_id when no override is given, so existing callers are unchanged.
+    _target_vp = str(args.get("override_vp_id") or failed.get("vp_id") or "")
+    _rescue_action = str(args.get("rescue_action") or "redispatch_fresh")
     dispatch_args: dict[str, Any] = {
-        "vp_id": str(failed.get("vp_id") or ""),
+        "vp_id": _target_vp,
         "objective": fresh_objective,
         "mission_type": str(failed.get("mission_type") or "task"),
         "idempotency_key": f"rescue-fresh-{chain_id}-{uuid.uuid4().hex[:8]}",
@@ -1219,7 +1224,8 @@ async def _vp_dispatch_mission_redispatch_fresh_impl(args: dict[str, Any]) -> di
             **payload_meta,
             "rescue_chain_id": chain_id,
             "rescue_prior_mission_id": mission_id,
-            "rescue_action": "redispatch_fresh",
+            "rescue_action": _rescue_action,
+            "rescue_target_vp": _target_vp,
         },
     }
 

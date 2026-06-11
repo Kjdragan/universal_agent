@@ -39,6 +39,12 @@ def test_operator_cancel_is_skipped():
     assert "deliberate" in d.reason
 
 
+def test_empty_failure_mode_is_skipped():
+    # A bare/operator cancel with no classified failure_mode must never rescue.
+    assert _decide(mode="").action == ACTION_SKIP
+    assert _decide(mode=None).action == ACTION_SKIP
+
+
 # --- step 1: transient -> ATLAS retry, bounded -----------------------------
 
 @pytest.mark.parametrize("count", [1, 2])

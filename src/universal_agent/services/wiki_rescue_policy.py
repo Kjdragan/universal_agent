@@ -97,8 +97,10 @@ def decide_wiki_rescue(
         return RescueDecision(ACTION_SKIP, None, "mission_type out of rescue scope")
 
     mode = (failure_mode or "").strip().lower()
-    if mode in DELIBERATE_MODES:
-        return RescueDecision(ACTION_SKIP, None, f"deliberate '{mode}' — no rescue")
+    # Empty mode = a bare/operator cancel with no classified failure — never a
+    # rescuable failure. Deliberate operator_cancel likewise. Skip both.
+    if not mode or mode in DELIBERATE_MODES:
+        return RescueDecision(ACTION_SKIP, None, f"deliberate/empty mode '{mode or '<none>'}' — no rescue")
 
     # Budget exhausted -> surface to the operator and stop banging away.
     if failure_count > MAX_TOTAL_RESCUES:

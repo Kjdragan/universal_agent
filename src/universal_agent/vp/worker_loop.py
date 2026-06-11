@@ -849,6 +849,29 @@ class VpWorkerLoop:
             finalize_vp_mission(self.conn, mission_id, "completed", result_ref=outcome.result_ref)
             event_type = "vp.mission.completed"
 
+        # Deterministic wiki-rescue (flag-gated UA_WIKI_RESCUE_ENABLED, bounded,
+        # best-effort): fire immediately on a genuine failure so a failed nightly
+        # wiki is retried / handed to Cody / escalated NOW, instead of rotting in
+        # Simone's rescue queue (which never acted on 0/152 prod failures). The
+        # driver only enqueues a fresh mission — it does not run anything inline.
+        if outcome.status in ("failed", "cancelled"):
+            try:
+                from universal_agent.services.wiki_rescue_driver import (
+                    maybe_rescue_failed_wiki_mission,
+                )
+
+                await maybe_rescue_failed_wiki_mission(
+                    mission_id=mission_id,
+                    mission_type=str(mission.get("mission_type") or ""),
+                    failure_mode=(
+                        _failure_mode
+                        or ("operator_cancel" if outcome.status == "cancelled" else "vp_self_reported")
+                    ),
+                    status=outcome.status,
+                )
+            except Exception as exc:  # noqa: BLE001 — rescue must never break the worker
+                logger.warning("wiki-rescue hook failed for %s: %s", mission_id, exc)
+
         # Teardown worktree AFTER finalization so result_ref is persisted.
         # Skip teardown if the agent's result_ref points at the worktree itself
         # (meaning the agent wrote output there and we'd lose artifacts).
