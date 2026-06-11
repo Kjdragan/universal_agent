@@ -509,9 +509,13 @@ Each verb closes the corresponding `vp_failure:<mission_id>` task hub item with 
 Routing to Simone is best-effort and LLM-discretionary — in practice she invokes a
 rescue verb on ~none of the surfaced failures, so failed missions rot (auto-parked).
 For the **`proactive_wiki` lane only**, `wiki_rescue_driver.py::maybe_rescue_failed_wiki_mission`
-adds a *deterministic* rescue, called inline from
-`worker_loop.py::_execute_mission_logic` immediately after `finalize_vp_mission`
-(flag `UA_WIKI_RESCUE_ENABLED`, default off). It reads the authoritative
+adds a *deterministic* rescue (flag `UA_WIKI_RESCUE_ENABLED`, default off), fired
+from **both** failure paths: clean failures inline from
+`worker_loop.py::_execute_mission_logic` immediately after `finalize_vp_mission`,
+and SIGTERM/stale-killed missions from the reconciler
+(`gateway_server.py::_reconcile_stale_vp_missions_once`) via the sync-safe bridge
+`wiki_rescue_driver.py::schedule_wiki_rescue` (create_task on the running gateway
+loop, `asyncio.run` when loop-less). It reads the authoritative
 `failure_count` off the `vp_failure:<mission_id>` task and applies the pure,
 bounded ladder in `wiki_rescue_policy.py::decide_wiki_rescue`: a transient infra
 failure → `redispatch_fresh` on ATLAS (≤ `MAX_ATLAS_RETRIES`); a structural failure
@@ -521,6 +525,8 @@ exhausted → `escalate_vp_failure_to_operator`, then stop. The Cody handoff rid
 new `override_vp_id` arg on `vp_orchestration.py::_vp_dispatch_mission_redispatch_fresh_impl`
 (cross-VP reassignment; the legacy verbs keep the original vp_id). Scope is the
 `wiki_rescue_policy.py::RESCUABLE_MISSION_TYPES` set — narrow first, generalize once proven.
+`UA_WIKI_RESCUE_DRY_RUN` makes the driver log its verdict without dispatching (the
+smoke vehicle used before the flag was enabled in production on 2026-06-11).
 
 ## Operator runbook: flushing the mission backlog
 
