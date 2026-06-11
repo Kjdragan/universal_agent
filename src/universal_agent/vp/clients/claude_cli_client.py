@@ -49,6 +49,12 @@ logger = logging.getLogger(__name__)
 
 # Default timeout for CLI sessions (30 minutes)
 DEFAULT_CLI_TIMEOUT_SECONDS = 1800
+# Higher wall-clock backstop for /goal-eligible missions (100 minutes).
+# Authored goal_condition.txt self-bounds run up to ~90 min ("stop after N
+# minutes"), and /goal's OWN clause should be what terminates a healthy run —
+# this wall-clock is only a last-resort kill for a runaway loop. The old
+# 30-min default guillotined healthy /goal runs below their own budget.
+GOAL_DEFAULT_CLI_TIMEOUT_SECONDS = 6000
 # Maximum timeout (4 hours)
 MAX_CLI_TIMEOUT_SECONDS = 14400
 # Stall detection: how often to wake and check for no-progress while reading
@@ -140,8 +146,17 @@ class ClaudeCodeCLIClient(VpClient):
             return MissionOutcome(status="failed", message="missing objective")
 
         payload = _parse_payload(mission.get("payload_json"))
+        # P6 — single eligibility predicate shared with the worker-side
+        # routing AND the wall-clock default below. /goal-eligible missions
+        # get the higher backstop so /goal's own self-bounding clause (not
+        # our timer) terminates a healthy run; non-goal missions keep 30 min.
+        from universal_agent.services.self_briefing import is_goal_eligible_mission
+        goal_eligible = is_goal_eligible_mission(mission)
+        _default_timeout = (
+            GOAL_DEFAULT_CLI_TIMEOUT_SECONDS if goal_eligible else DEFAULT_CLI_TIMEOUT_SECONDS
+        )
         timeout_seconds = min(
-            max(30, int(payload.get("timeout_seconds") or DEFAULT_CLI_TIMEOUT_SECONDS)),
+            max(30, int(payload.get("timeout_seconds") or _default_timeout)),
             MAX_CLI_TIMEOUT_SECONDS,
         )
         max_retries = int(payload.get("max_retries") or MAX_RETRIES)
@@ -165,11 +180,6 @@ class ClaudeCodeCLIClient(VpClient):
 
         workspace_dir = _resolve_workspace(mission_id, workspace_root, payload)
         workspace_dir.mkdir(parents=True, exist_ok=True)
-
-        # P6 — single eligibility predicate shared with the worker-side
-        # attestation guard and dispatch-time CLI routing.
-        from universal_agent.services.self_briefing import is_goal_eligible_mission
-        goal_eligible = is_goal_eligible_mission(mission)
 
         # Build the prompt for the CLI (legacy single-pass path)
         prompt = _build_cli_prompt(
@@ -559,16 +569,12 @@ async def _run_goal_loop_mission(
     Turn 1 (briefing): self-brief-and-attest → BRIEF.md + ACCEPTANCE.md +
     goal_condition.txt. Turn 2 (work): `claude -p "/goal <condition>"` —
     the evaluator loops until the condition (or its self-bounding clause)
-    is met. The runner appends a fixed COMPLETION.md attestation clause to
-    the condition: the requirement used to live only in the BRIEFING
-    turn's prompt while the work turn saw only the bare condition, so
-    every functionally-successful goal mission deterministically demoted
-    to failed via worker_loop's attestation guard
-    (missing_completion_attestation — observed live on
-    vp-mission-5c1898126635f0237061a79a, 2026-06-11). worker_loop's guard
-    remains the enforcement backstop. Missing/invalid goal_condition.txt
-    degrades to the legacy single-pass prompt instead of failing the
-    mission.
+    is met. The work turn is handed ONLY the condition Cody authored — no
+    UA-appended clauses (2026-06-11: the former COMPLETION.md attestation
+    AND-clause and its worker_loop guard were removed to rely on vanilla
+    /goal; the condition is the sole acceptance). Missing/invalid
+    goal_condition.txt degrades to the legacy single-pass prompt instead of
+    failing the mission.
     """
     from universal_agent.services.self_briefing import (
         build_self_briefing_prompt,
@@ -623,17 +629,12 @@ async def _run_goal_loop_mission(
             message=outcome.message, payload=enriched,
         )
 
-    # Append the Phase-5 attestation as an explicit AND-clause so the
-    # /goal evaluator itself holds the run open until COMPLETION.md is
-    # written. goal_condition.txt stays as Cody authored it — the clause
-    # is composed at prompt build, deterministically, for every goal turn.
-    attestation_clause = (
-        "\n\nAND finally: a COMPLETION.md self-attestation (per Phase 5 of "
-        "the self-brief-and-attest skill: a per-criterion verdict against "
-        "ACCEPTANCE.md with evidence for each) has been written at "
-        f"{workspace_dir / 'COMPLETION.md'} and the transcript shows it "
-        "being written."
-    )
+    # We hand the built-in /goal loop ONLY the condition Cody authored — no
+    # UA-appended clauses. (Removed 2026-06-11: a COMPLETION.md attestation
+    # AND-clause used to be bolted on here to satisfy a separate worker_loop
+    # guard; both that clause and the guard were removed to rely on vanilla
+    # /goal — the condition itself is the sole acceptance.)
+    #
     # Upgrade the built-in /goal completion evaluator off the operator-locked
     # weak haiku tier (glm-4.5-air) onto a stronger model (sonnet → glm-5-turbo
     # on ZAI; no override on Anthropic-Max). Scoped to THIS work-turn
@@ -642,7 +643,7 @@ async def _run_goal_loop_mission(
 
     goal_eval_model = resolve_goal_eval_model(cody_mode)
     outcome = await _execute_cli_session(
-        prompt=f"/goal {condition}{attestation_clause}",
+        prompt=f"/goal {condition}",
         workspace_dir=workspace_dir,
         timeout_seconds=timeout_seconds,
         enable_agent_teams=enable_agent_teams,
@@ -656,7 +657,6 @@ async def _run_goal_loop_mission(
     enriched = dict(outcome.payload or {})
     enriched["goal_phase"] = "goal_loop"
     enriched["goal_condition_chars"] = len(condition)
-    enriched["goal_attestation_clause_appended"] = True
     enriched["goal_eval_model"] = goal_eval_model or "haiku-default"
     return MissionOutcome(
         status=outcome.status, result_ref=outcome.result_ref,

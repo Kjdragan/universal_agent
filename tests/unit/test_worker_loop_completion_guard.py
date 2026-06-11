@@ -189,70 +189,27 @@ class TestGoalEligibilityForGuard:
 
 
 # ---------------------------------------------------------------------------
-# Bug 1 — integration-shaped: simulate the guard's decision logic directly.
-# Mirror the if/else branch from worker_loop.py to pin the per-mission gate.
+# The COMPLETION.md demotion guard was REMOVED 2026-06-11 — we rely on vanilla
+# /goal (the authored condition is the sole acceptance) and no longer demote a
+# completed mission to failed for a missing COMPLETION.md. (The
+# `_classify_outcome_failure_mode` marker handling above is retained for
+# back-compat with any legacy rows.) This guards against the demotion being
+# silently re-added.
 # ---------------------------------------------------------------------------
 
 
-class TestCompletionGuardOnlyFiresForEligibleMissions:
-    @pytest.fixture(autouse=True)
-    def _flag_on(self, monkeypatch):
-        monkeypatch.setenv("UA_VP_GOAL_ENABLED", "1")
+class TestCompletionGuardRemoved:
+    def test_worker_loop_no_longer_calls_completion_attestation_guard(self):
+        import inspect
 
-    def _simulate_guard(self, mission, workspace_path):
-        """Mirror worker_loop._execute_mission_logic's guard logic."""
-        from universal_agent.services.self_briefing import (
-            check_completion_attestation,
-            is_goal_eligible_mission,
+        from universal_agent.vp import worker_loop
+
+        src = inspect.getsource(worker_loop)
+        assert "check_completion_attestation" not in src, (
+            "The COMPLETION.md demotion guard was removed to rely on vanilla "
+            "/goal — do not re-add a completed->failed demotion for a missing "
+            "COMPLETION.md."
         )
-
-        outcome = MissionOutcome(status="completed", message="work done", payload={})
-        if outcome.status == "completed":
-            if is_goal_eligible_mission(mission):
-                ok, reason = check_completion_attestation(workspace_path)
-                if not ok:
-                    outcome = MissionOutcome(
-                        status="failed",
-                        message=f"missing_completion_attestation: {reason}",
-                        payload={"demoted_from_completed": True},
-                    )
-        return outcome
-
-    def test_not_eligible_mission_stays_completed_even_without_completion_md(self, tmp_path):
-        """The smoke-test scenario: Cody completes successfully without
-        COMPLETION.md, mission has no use_goal_loop, guard should NOT demote.
-        """
-        mission = {
-            "vp_id": "vp.coder.primary",
-            "source_kind": "vp_mission",
-            "payload_json": json.dumps({"metadata": {"cody_mode": "anthropic"}}),
-        }
-        # workspace has no COMPLETION.md
-        outcome = self._simulate_guard(mission, tmp_path)
-        assert outcome.status == "completed", (
-            "Bug 1 regression: non-/goal-eligible mission was demoted"
-        )
-
-    def test_eligible_mission_with_completion_md_stays_completed(self, tmp_path):
-        mission = {
-            "vp_id": "vp.coder.primary",
-            "source_kind": "cody_demo_task",
-            "payload_json": json.dumps({"metadata": {"use_goal_loop": True}}),
-        }
-        (tmp_path / "COMPLETION.md").write_text("# COMPLETION\n\nDone.\n")
-        outcome = self._simulate_guard(mission, tmp_path)
-        assert outcome.status == "completed"
-
-    def test_eligible_mission_missing_completion_md_gets_demoted(self, tmp_path):
-        mission = {
-            "vp_id": "vp.coder.primary",
-            "source_kind": "cody_demo_task",
-            "payload_json": json.dumps({"metadata": {"use_goal_loop": True}}),
-        }
-        # NO COMPLETION.md
-        outcome = self._simulate_guard(mission, tmp_path)
-        assert outcome.status == "failed"
-        assert "missing_completion_attestation" in outcome.message
 
 
 # ---------------------------------------------------------------------------

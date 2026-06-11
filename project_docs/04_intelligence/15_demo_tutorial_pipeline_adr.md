@@ -177,7 +177,8 @@ deterministic finalize step that lands every completed build on the dashboard de
 - **Dispatch routing:** `vp_orchestration.py::_vp_dispatch_mission_impl` forces `execution_mode="cli"`
   for any goal-eligible mission even when `cody_mode="zai"` (previously only `cody_mode="anthropic"`
   reached the CLI client; the /goal harness only exists in the spawned `claude` CLI). It evaluates the
-  SAME predicate (`self_briefing.py::is_goal_eligible_mission`) the worker-side attestation guard uses.
+  SAME predicate (`self_briefing.py::is_goal_eligible_mission`) the worker-side routing + wall-clock
+  default use.
 - **The two-phase runner:** `claude_cli_client.py::_run_goal_loop_mission` — turn 1 (briefing,
   `self_briefing.py::build_self_briefing_prompt` → BRIEF.md + ACCEPTANCE.md + goal_condition.txt, the
   self-brief-and-attest skill's "Card mode" for tutorial_build cards), turn 2 (the work):
@@ -186,12 +187,16 @@ deterministic finalize step that lands every completed build on the dashboard de
   non-goal missions keep the stdin prompt path bit-for-bit). Goal-eligible missions skip the outer
   retry loop — the /goal evaluator is the retry mechanism. Missing/invalid goal_condition.txt
   degrades to the legacy single-pass prompt (`payload.goal_condition_missing=true`).
-  The runner appends a fixed **COMPLETION.md attestation AND-clause** to the condition at prompt
-  build (`payload.goal_attestation_clause_appended=true`): the attestation requirement used to live
-  only in the briefing turn's prompt while the work turn saw the bare condition, so every
-  functionally-successful goal mission deterministically demoted to failed
-  (`missing_completion_attestation` — first live specimen `vp-mission-5c1898126635f0237061a79a`,
-  2026-06-11). worker_loop's attestation guard remains the enforcement backstop.
+  The work turn is handed **only the condition Cody authored** — no UA-appended clauses (2026-06-11
+  de-interference: the former COMPLETION.md attestation AND-clause and its paired
+  `worker_loop.py::_execute_mission_logic` demotion guard were both removed to rely on vanilla
+  `/goal`; the condition is the sole acceptance, and a missing COMPLETION.md no longer demotes a
+  completed mission). Goal-eligible missions also get a **higher wall-clock backstop**
+  (`claude_cli_client.py::GOAL_DEFAULT_CLI_TIMEOUT_SECONDS`=6000s vs the 30-min
+  `DEFAULT_CLI_TIMEOUT_SECONDS`) so `/goal`'s own self-bounding clause ("stop after N minutes", up to
+  ~90 min in authored conditions) — not UA's timer — terminates a healthy run; the 10-min idle-kill
+  (`feature_flags.py::vp_no_progress_kill_seconds`, idle-based, fills the within-turn liveness gap
+  vanilla `/goal` lacks) handles genuinely hung turns.
 - **Stronger `/goal` evaluator on ZAI:** the built-in `/goal` completion evaluator runs Claude Code's
   "small fast model" — current CC reads that from `ANTHROPIC_DEFAULT_HAIKU_MODEL`
   (`ANTHROPIC_SMALL_FAST_MODEL` is deprecated), which on ZAI is the operator-locked `glm-4.5-air` (too
@@ -215,7 +220,17 @@ deterministic finalize step that lands every completed build on the dashboard de
   instructions), and registers the demo by symlinking the workspace into `UA_DEMOS_ROOT` — the
   `gateway_server.py::_claude_code_intel_demos` walker follows symlinks with zero changes. The
   finalize result is recorded on the source task as `metadata.demo_finalize` (non-gating evidence;
-  acceptance enforcement stays with the /goal evaluator + COMPLETION attestation guard).
+  acceptance enforcement stays with the built-in `/goal` evaluator + the demo-lane
+  completion-evidence gate `task_hub.py::DEMO_LANE_COMPLETION_GATED_SOURCE_KINDS`, which still
+  requires `demo_finalize.ok`).
+- **Live inference required, no mock pass-state (2026-06-11):** the `DEMO_BUILD_CONTRACT`
+  (`proactive_tutorial_builds.py::DEMO_BUILD_CONTRACT`) and `_build_task_description` were tightened to
+  demand the demo run against LIVE inference and forbid mocking the demonstrated capability —
+  `endpoint_hit="mock"` is no longer an acceptable pass state (if a required key is unavailable the
+  demo is NOT done; report it). This removes the false-pass at its source (Cody no longer authors
+  mock-satisfiable conditions) by subtraction, not by adding a judge. The stale "Claude-Max OAuth is
+  BROKEN" claim was also removed (Max OAuth verified working 2026-06-11; the ZAI routing for
+  Claude-SDK demos is a cost choice, not a fallback).
 - **Prompt↔tool-surface fix:** `todo_dispatch_service.py::TODO_DISPATCH_PROMPT` now instructs
   `delegate` (bridge-exposed, guardrail-accepted, sets `delegated`) instead of `redirect_to`, which
   `task_hub_bridge.py::task_hub_task_action` rejects; pinned by

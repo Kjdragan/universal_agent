@@ -1099,18 +1099,17 @@ def test_build_cli_prompt_goal_eligible_param_without_env(tmp_path: Path, monkey
 
 
 @pytest.mark.asyncio
-async def test_goal_turn_carries_completion_attestation_clause(tmp_path: Path, monkeypatch):
-    """The 2026-06-11 attestation-gap fix: the work turn's /goal prompt must
-    carry the COMPLETION.md attestation as an AND-clause. Before this, the
-    requirement lived only in the briefing prompt, so every functionally
-    successful goal mission demoted to failed (missing_completion_attestation
-    — vp-mission-5c1898126635f0237061a79a)."""
+async def test_goal_turn_carries_only_the_authored_condition(tmp_path: Path, monkeypatch):
+    """2026-06-11 de-interference: the work turn's /goal prompt carries ONLY
+    the condition Cody authored — NO UA-appended COMPLETION.md attestation
+    clause. That clause (and its paired worker_loop demotion guard) were
+    removed to rely on vanilla /goal; the condition is the sole acceptance."""
     monkeypatch.delenv("UA_VP_GOAL_ENABLED", raising=False)
     log_dir = _install_fake_claude(tmp_path, monkeypatch)
 
     client = ClaudeCodeCLIClient()
     outcome = await client.run_mission(
-        mission=_goal_eligible_mission("goal-attest-clause"),
+        mission=_goal_eligible_mission("goal-no-clause"),
         workspace_root=tmp_path / "ws",
     )
 
@@ -1120,11 +1119,12 @@ async def test_goal_turn_carries_completion_attestation_clause(tmp_path: Path, m
     goal_args = [a for a in goal_argv if a.startswith("/goal ")]
     assert goal_args, f"expected a /goal argv turn, got {goal_argv}"
     prompt = goal_args[0]
-    # Cody's own condition stays first; the runner-appended clause follows.
+    # Cody's authored condition is present...
     assert "demo ran end-to-end" in prompt
-    assert "COMPLETION.md" in prompt
-    assert "self-brief-and-attest" in prompt
-    assert outcome.payload.get("goal_attestation_clause_appended") is True
+    # ...and NOTHING UA bolted on: no COMPLETION.md attestation clause.
+    assert "COMPLETION.md" not in prompt
+    assert "self-brief-and-attest" not in prompt
+    assert "goal_attestation_clause_appended" not in (outcome.payload or {})
 
 
 # ---------------------------------------------------------------------------
@@ -1234,3 +1234,38 @@ async def test_goal_loop_passes_eval_model_on_work_turn_only(tmp_path: Path, mon
     assert work["prompt"].startswith("/goal ")
     assert work["goal_eval_model"] == "glm-5-turbo"
     assert out.payload["goal_eval_model"] == "glm-5-turbo"
+
+
+@pytest.mark.asyncio
+async def test_goal_eligible_mission_gets_higher_wallclock(tmp_path: Path, monkeypatch):
+    """/goal-eligible missions get the higher wall-clock backstop
+    (GOAL_DEFAULT_CLI_TIMEOUT_SECONDS=6000) so /goal's OWN self-bounding clause
+    — not the old 30-min default — terminates a healthy run."""
+    monkeypatch.delenv("UA_VP_GOAL_ENABLED", raising=False)
+    from universal_agent.vp.clients import claude_cli_client as _mod
+
+    captured: dict[str, Any] = {}
+
+    async def fake_goal_loop(**kwargs):
+        captured.update(kwargs)
+        return MissionOutcome(status="completed", result_ref="workspace://x", payload={})
+
+    monkeypatch.setattr(_mod, "_run_goal_loop_mission", fake_goal_loop)
+
+    mission = {
+        "mission_id": "goal-timeout",
+        "vp_id": "vp.coder.primary",
+        "objective": "Build the tutorial demo",
+        "payload_json": json.dumps({
+            "max_retries": 0,
+            # NO timeout_seconds → the goal-eligible default applies.
+            "metadata": {"use_goal_loop": True, "cody_mode": "zai"},
+        }),
+    }
+    client = ClaudeCodeCLIClient()
+    outcome = await client.run_mission(mission=mission, workspace_root=tmp_path / "ws")
+
+    assert outcome.status == "completed"
+    assert _mod.GOAL_DEFAULT_CLI_TIMEOUT_SECONDS == 6000
+    assert captured["timeout_seconds"] == _mod.GOAL_DEFAULT_CLI_TIMEOUT_SECONDS
+    assert captured["timeout_seconds"] > _mod.DEFAULT_CLI_TIMEOUT_SECONDS
