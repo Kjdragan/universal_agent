@@ -7,7 +7,7 @@ code_paths:
   - src/universal_agent/services/intel_lanes.py
   - src/universal_agent/config/intel_lanes.yaml
   - src/universal_agent/services/research_grounding.py
-last_verified: 2026-05-29
+last_verified: 2026-06-11
 ---
 
 # Intel Lanes Configuration

@@ -9,7 +9,7 @@ code_paths:
   - src/universal_agent/services/todo_dispatch_service.py
   - src/universal_agent/services/llm_classifier.py
   - src/universal_agent/gateway.py
-last_verified: 2026-05-29
+last_verified: 2026-06-11
 ---
 
 # Simone-First Orchestration
