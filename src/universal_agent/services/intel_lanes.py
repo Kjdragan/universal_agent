@@ -3,11 +3,10 @@
 Reads `config/intel_lanes.yaml` (shipped with the package) and exposes
 typed lane configs for the proactive intelligence pipeline.
 
-This module is intentionally small in v2 PR 11 — it only provides the
-schema and loader. Existing `claude_code_intel.py` paths are NOT yet
-wired to read from here; that's a follow-up generalization PR. Tests
-verify the YAML parses, all known lane keys round-trip, and unknown
-keys are rejected.
+This module is intentionally small — it only provides the schema and
+loader. `claude_code_intel.py` reads from here via `get_lane` (handle
+resolution, lane config lookups). Tests verify the YAML parses, all
+known lane keys round-trip, and unknown keys are rejected.
 
 See docs/proactive_signals/claudedevs_intel_v2_design.md §13.
 """

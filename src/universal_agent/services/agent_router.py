@@ -6,9 +6,9 @@ and sub-agents to evaluate work.
 
 Design principles:
   - Simone is the primary executor — she takes the next task and works it directly
-  - VPs are overflow capacity — Atlas and Codie handle work when Simone delegates
-  - Simone delegates, not the system — she evaluates the full queue and decides
-  - No task is done without Simone's sign-off
+  - Simone delegates, not the system — when a task genuinely needs a VP
+    (Cody for coding missions, Atlas for research/intel), she dispatches it
+    herself via the VP-orchestration path; this router never pre-assigns VPs
 """
 
 from __future__ import annotations

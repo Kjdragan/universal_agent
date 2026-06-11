@@ -15,8 +15,10 @@
 # services get those vars because they call
 # `initialize_runtime_secrets()` at startup, which reads the
 # machine-identity bootstrap creds from /opt/universal_agent/.env
-# (INFISICAL_CLIENT_ID/SECRET/PROJECT_ID/ENVIRONMENT), uses the Python
-# Infisical SDK, and injects every project secret onto `os.environ`.
+# (INFISICAL_CLIENT_ID/SECRET/PROJECT_ID/ENVIRONMENT), authenticates
+# against the Infisical REST API directly via `httpx` (universal-auth;
+# see `infisical_loader.py` — no Infisical SDK dependency), and injects
+# every project secret onto `os.environ`.
 #
 # An interactive `claude` invocation does NOT run that bootstrap, so
 # the placeholders in `.mcp.json` substitute to empty and MCP children
@@ -32,9 +34,9 @@
 # machine-identity env vars. On the VPS we have machine-identity creds
 # in /opt/universal_agent/.env but no interactive CLI login, so
 # `infisical run` from a fresh shell triggers an interactive login
-# prompt and fails non-tty. The Python SDK path used by
-# `initialize_runtime_secrets()` is the canonical UA auth path and
-# works headless.
+# prompt and fails non-tty. The `initialize_runtime_secrets()` Python
+# path (universal-auth REST via `httpx`) is the canonical UA auth path
+# and works headless.
 #
 # Usage
 # -----
@@ -45,7 +47,7 @@
 #   UA_INSTALL_ROOT    Production UA checkout (default
 #                      /opt/universal_agent). The launcher uses its
 #                      .env (bootstrap creds) and its uv venv (which
-#                      has infisicalsdk installed).
+#                      has `httpx` and the UA package installed).
 
 set -e
 
