@@ -29,6 +29,8 @@ from pathlib import Path
 import sqlite3
 from typing import Any, Optional
 
+from universal_agent.utils.model_resolution import model_id_to_tier
+
 DEFAULT_EMAIL = "kevinjdragan@gmail.com"
 
 
@@ -73,8 +75,12 @@ def _analyze_429(change_at: datetime) -> dict[str, Any]:
     after_len = max(1.0, now_ts - change_ts)
     before_lo = change_ts - after_len
     buckets = {
-        "before": {"total": 0, "r429": 0, "fup": 0, "ok": 0, "min_ts": None, "max_ts": None, "callers429": {}},
-        "after": {"total": 0, "r429": 0, "fup": 0, "ok": 0, "min_ts": None, "max_ts": None, "callers429": {}},
+        "before": {"total": 0, "r429": 0, "fup": 0, "fup_texted_429": 0, "ok": 0,
+                   "min_ts": None, "max_ts": None,
+                   "callers429": {}, "models_total": {}, "models429": {}},
+        "after": {"total": 0, "r429": 0, "fup": 0, "fup_texted_429": 0, "ok": 0,
+                  "min_ts": None, "max_ts": None,
+                  "callers429": {}, "models_total": {}, "models429": {}},
     }
     if not path.exists():
         return {"available": False, "path": str(path), **buckets}
@@ -95,11 +101,20 @@ def _analyze_429(change_at: datetime) -> dict[str, Any]:
         w["total"] += 1
         w["min_ts"] = ts if w["min_ts"] is None else min(w["min_ts"], ts)
         w["max_ts"] = ts if w["max_ts"] is None else max(w["max_ts"], ts)
+        # Per-model totals. Events predating this PR's deploy have no "model"
+        # field -> they group under "unknown".
+        model = str(e.get("model") or "unknown")
+        w["models_total"][model] = w["models_total"].get(model, 0) + 1
         cat = e.get("category")
         if cat == "rate_limited_429":
             w["r429"] += 1
             c = str(e.get("caller") or "?")
             w["callers429"][c] = w["callers429"].get(c, 0) + 1
+            w["models429"][model] = w["models429"].get(model, 0) + 1
+            # 1313/Fair-Usage-texted 429s are the ordinary throttle gradient,
+            # distinct from the cliff-only `fup_signal` category counted below.
+            if e.get("fup_texted"):
+                w["fup_texted_429"] += 1
         elif cat == "fup_signal":
             w["fup"] += 1
         elif cat == "ok":
@@ -110,7 +125,47 @@ def _analyze_429(change_at: datetime) -> dict[str, Any]:
         w["r429_per_hour"] = round(w["r429"] / span_h, 1) if span_h > 0 else (float(w["r429"]) if w["r429"] else 0.0)
         w["fup_per_hour"] = round(w["fup"] / span_h, 1) if span_h > 0 else (float(w["fup"]) if w["fup"] else 0.0)
         w["r429_pct"] = round(100.0 * w["r429"] / w["total"], 1) if w["total"] else 0.0
-    return {"available": True, "path": str(path), **buckets}
+        # Collapse model -> limiter tier and roll up per-tier rates.
+        w["tiers"] = _rollup_tiers(w["models_total"], w["models429"])
+
+    # Coverage guard: the events file is line-trimmed (~10k lines) so the
+    # `before` window can silently start LATER than before_lo — which would
+    # understate the pre-change rejection rate and fake an improvement. Trip a
+    # flag if the before bucket has no data, or its earliest event is more than
+    # 5% of the window length after the requested before_lo.
+    before = buckets["before"]
+    window_len = after_len  # before window has the same nominal length
+    tolerance = 0.05 * window_len
+    before_min = before["min_ts"]
+    before_truncated = before_min is None or (before_min - before_lo) > tolerance
+    return {
+        "available": True,
+        "path": str(path),
+        "before_truncated": before_truncated,
+        "before_lo": before_lo,
+        "before_min_ts": before_min,
+        "window_seconds": round(window_len, 1),
+        **buckets,
+    }
+
+
+def _rollup_tiers(models_total: dict[str, int], models429: dict[str, int]) -> dict[str, dict[str, int]]:
+    """Collapse per-model counts into per-tier {total, r429} via model_id_to_tier.
+
+    Events without a ``model`` field arrive here keyed ``"unknown"`` and stay
+    in an explicit ``"unknown"`` tier bucket (NOT collapsed to a real tier) so
+    the renderer can flag windows where un-tagged pre-deploy events dominate.
+    """
+    tiers: dict[str, dict[str, int]] = {}
+    for model, n in models_total.items():
+        tier = "unknown" if model == "unknown" else model_id_to_tier(model)
+        bucket = tiers.setdefault(tier, {"total": 0, "r429": 0})
+        bucket["total"] += n
+    for model, n in models429.items():
+        tier = "unknown" if model == "unknown" else model_id_to_tier(model)
+        bucket = tiers.setdefault(tier, {"total": 0, "r429": 0})
+        bucket["r429"] += n
+    return tiers
 
 
 def _analyze_throughput(change_at: datetime, conn: sqlite3.Connection) -> dict[str, Any]:
@@ -163,6 +218,18 @@ def _verdict(z: dict[str, Any], t: dict[str, Any]) -> tuple[str, str]:
     pct_before = before.get("r429_pct", 0.0)
     pct_after = after.get("r429_pct", 0.0)
 
+    # Coverage guard: if the before-window is truncated (the events file is
+    # line-trimmed, so the baseline can start late and understate the
+    # pre-change rate), we CANNOT claim improvement — the comparison is
+    # unsound. Force the ACTION path with the caveat in the headline.
+    if z.get("available") and z.get("before_truncated"):
+        return "ACTION", (
+            "⚠️ BEFORE-WINDOW TRUNCATED — baseline incomplete (events file "
+            "line-trimmed); cannot claim 429 improvement. Re-run sooner after a "
+            f"change or shorten the window. (after rejection {pct_after:.0f}%, "
+            f"FUP={fup_after})"
+        )
+
     fup_ok = fup_after == 0
     tput_ok = bool(t.get("keeping_up"))
     improved = pct_after < pct_before - 2.0  # rejection rate dropped meaningfully
@@ -171,7 +238,7 @@ def _verdict(z: dict[str, Any], t: dict[str, Any]) -> tuple[str, str]:
     if not tput_ok:
         return "ACTION", "⚠️ Convergence may be falling behind (throughput) after the concurrency drop"
     if not fup_ok:
-        return "ACTION", "⚠️ FUP/1313 signal present after the change — escalate to the limiter fix"
+        return "ACTION", "⚠️ FUP/1313 cliff signal present after the change — escalate to the limiter fix"
     if improved and still_elevated:
         return "ACTION", (
             f"🟡 Helped but not enough — 429 rejection {pct_before:.0f}%→{pct_after:.0f}%, "
@@ -188,18 +255,72 @@ def _verdict(z: dict[str, Any], t: dict[str, Any]) -> tuple[str, str]:
     )
 
 
+def _render_tier_lines(zbefore: dict[str, Any], zafter: dict[str, Any]) -> list[str]:
+    """Per-tier rejection RATES with denominators, before -> after.
+
+    One line per tier the data touches. Each side shows `r429/total (pct%)`.
+    Tiers come from collapsing model ids via `model_id_to_tier`; `unknown`
+    (events predating this PR's deploy) is rendered as its own tier so a
+    window dominated by un-tagged events is visible rather than silently
+    misattributed.
+    """
+    tiers_before = zbefore.get("tiers", {}) or {}
+    tiers_after = zafter.get("tiers", {}) or {}
+    all_tiers = set(tiers_before) | set(tiers_after)
+    # Stable, meaningful order: real tiers by conservativeness, then unknown.
+    order = ["opus", "sonnet", "mid", "haiku", "unknown"]
+    ordered = [tt for tt in order if tt in all_tiers] + sorted(all_tiers - set(order))
+
+    def _fmt(side: dict[str, int]) -> str:
+        total = side.get("total", 0)
+        r429 = side.get("r429", 0)
+        pct = (100.0 * r429 / total) if total else 0.0
+        return f"{r429}/{total} ({pct:.1f}%)"
+
+    lines: list[str] = []
+    for tier in ordered:
+        b = tiers_before.get(tier, {"total": 0, "r429": 0})
+        a = tiers_after.get(tier, {"total": 0, "r429": 0})
+        lines.append(f"    tier {tier}: before {_fmt(b)} -> after {_fmt(a)}")
+    return lines
+
+
+def _unknown_dominates(window: dict[str, Any]) -> bool:
+    """True if >=50% of this window's events lack a model tag (`unknown`)."""
+    total = window.get("total", 0) or 0
+    if total == 0:
+        return False
+    unk = (window.get("models_total", {}) or {}).get("unknown", 0)
+    return unk >= 0.5 * total
+
+
 def _render(change_at: datetime, z: dict[str, Any], t: dict[str, Any], headline: str) -> str:
     L = [headline, "", f"Change applied at: {change_at.isoformat()}  |  now: {_utcnow().isoformat()}", ""]
+    # Coverage stamp — prominent, at the very top of the body.
+    if z.get("available") and z.get("before_truncated"):
+        L.append("!!! BEFORE-WINDOW TRUNCATED — DO NOT TRUST the before/after 429 comparison !!!")
+        L.append("    The events file is line-trimmed (~10k lines); the baseline window starts")
+        L.append("    later than requested, so the pre-change rejection rate is understated.")
+        L.append("")
     L.append("── ZAI 429 / FUP (MATCHED before/after windows, same duration) ──")
     if not z.get("available"):
         L.append(f"  events log not found: {z.get('path')}")
     else:
         for w in ("before", "after"):
             d = z[w]
+            fup_texted = d.get("fup_texted_429", 0)
             L.append(
                 f"  {w:6s}: span {d['span_hours']}h | 429={d['r429']} ({d['r429_per_hour']}/h, {d['r429_pct']}%) "
-                f"| FUP={d['fup']} ({d['fup_per_hour']}/h) | total={d['total']}"
+                f"| FUP-cliff={d['fup']} ({d['fup_per_hour']}/h) | 1313-throttle-429={fup_texted} "
+                f"| total={d['total']}"
             )
+            if _unknown_dominates(d):
+                L.append(
+                    f"         ⚠️ {w} window is dominated by un-tagged (pre-deploy) events — "
+                    "per-tier split below is unreliable for this window."
+                )
+        L.append("  per-tier 429 rejection rate (model collapsed to limiter tier):")
+        L.extend(_render_tier_lines(z["before"], z["after"]))
         top = sorted(z["after"]["callers429"].items(), key=lambda kv: -kv[1])[:4]
         if top:
             L.append("  after 429s by caller: " + ", ".join(f"{c.split('/')[-1]}×{n}" for c, n in top))

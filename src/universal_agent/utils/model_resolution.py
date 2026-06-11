@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 # Z.AI Anthropic-compatible endpoint model mappings
 # (https://api.z.ai/api/anthropic). The /api/anthropic endpoint does NOT
@@ -173,6 +176,91 @@ def model_call_timeout_seconds(tier: str = "sonnet") -> float:
         except ValueError:
             pass
     return _TIER_DEFAULT_TIMEOUTS[tier_norm]
+
+
+# ── Wire-id → limiter tier reverse map ────────────────────────────────────
+# The ZAIRateLimiter buckets traffic by a small tier set. Given a WIRE-LEVEL
+# model id (the string actually sent to the ZAI proxy), `model_id_to_tier`
+# answers "which concurrency bucket does this belong to?". The tier set
+# deliberately matches `model_call_timeout_seconds` (opus/sonnet/haiku) PLUS
+# a new `mid` bucket for the Mission Control direct-model lane (glm-4.7) and
+# the glm-4.6 literal — those bypass `ZAI_MODEL_MAP` and would otherwise be
+# misbucketed.
+
+# Models we resolve by literal id, independent of any env override. glm-4.7 is
+# MISSION_CONTROL_DEFAULT_MODEL (bypasses ZAI_MODEL_MAP); glm-4.6 is a literal
+# in csi_demo_triage_ranker.py.
+_MID_TIER_LITERALS = frozenset({"glm-4.6", "glm-4.7"})
+
+# Conservativeness order (lowest concurrency first). When several intent-env
+# vars claim the SAME unknown id we resolve to the EARLIEST tier in this order.
+_TIER_CONSERVATIVENESS = ("opus", "sonnet", "mid", "haiku")
+
+# Process-level dedupe so the multi-env-claim conflict warning fires once per id.
+_TIER_CONFLICT_WARNED: set[str] = set()
+
+# Intent-expressing env vars → tier. Read at CALL time (these can be flipped at
+# runtime). Only consulted for ids that match nothing wire-level above.
+_ENV_TIER_VARS = (
+    ("ANTHROPIC_DEFAULT_OPUS_MODEL", "opus"),
+    ("ANTHROPIC_DEFAULT_SONNET_MODEL", "sonnet"),
+    ("ANTHROPIC_DEFAULT_HAIKU_MODEL", "haiku"),
+    ("UA_MISSION_CONTROL_MODEL", "mid"),
+)
+
+
+def model_id_to_tier(model_id: str | None) -> str:
+    """Map a WIRE-LEVEL model id to the limiter's tier bucket.
+
+    Wire identity wins over env intent: an env var that names a model id
+    expresses one caller's intent, but the SAME id can be sent by many other
+    callers — letting an env var capture all of that id's traffic would invert
+    the protection. So the precedence is reverse-`ZAI_MODEL_MAP` → literals →
+    env vars → safe default. Returns one of {opus, sonnet, mid, haiku}; the
+    set deliberately matches `model_call_timeout_seconds` plus the new `mid`.
+
+    Precedence:
+      1. Exact reverse-`ZAI_MODEL_MAP` match (case-insensitive).
+      2. Literals glm-4.6 / glm-4.7 → "mid".
+      3. Env vars (read at call time), only for ids matched by nothing above.
+         If multiple env vars claim the same unknown id, resolve to the most
+         conservative (lowest-concurrency) tier and warn once per process.
+      4. Unknown / empty / None → "sonnet" (safe default).
+    """
+    if not model_id or not model_id.strip():
+        return "sonnet"
+    norm = model_id.strip().lower()
+
+    # 1. Reverse ZAI_MODEL_MAP (case-insensitive).
+    for tier, mapped in ZAI_MODEL_MAP.items():
+        if mapped.lower() == norm:
+            return tier
+
+    # 2. Literal mid-tier ids that bypass ZAI_MODEL_MAP.
+    if norm in _MID_TIER_LITERALS:
+        return "mid"
+
+    # 3. Intent-env vars — only for ids unclaimed wire-level above.
+    claimed: list[str] = []
+    for env_name, tier in _ENV_TIER_VARS:
+        val = (os.getenv(env_name) or "").strip().lower()
+        if val and val == norm:
+            claimed.append(tier)
+    if claimed:
+        if len(set(claimed)) > 1:
+            chosen = min(claimed, key=lambda t: _TIER_CONSERVATIVENESS.index(t))
+            if norm not in _TIER_CONFLICT_WARNED:
+                _TIER_CONFLICT_WARNED.add(norm)
+                logger.warning(
+                    "model_id_to_tier: id %r claimed by multiple intent-env vars "
+                    "(%s); resolving to most-conservative tier %r",
+                    model_id, ", ".join(sorted(set(claimed))), chosen,
+                )
+            return chosen
+        return claimed[0]
+
+    # 4. Safe default.
+    return "sonnet"
 
 
 def _is_truthy(value: str) -> bool:

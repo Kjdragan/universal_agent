@@ -12,7 +12,7 @@ code_paths:
   - src/universal_agent/services/invariants/zai_inference_health.py
   - src/universal_agent/utils/model_resolution.py
   - src/universal_agent/infisical_loader.py
-last_verified: 2026-06-10
+last_verified: 2026-06-11
 ---
 
 # ZAI Rate Limiter & Inference Governance
@@ -55,11 +55,17 @@ the same process saturated the account. That is why governance has to be global,
 why partial adoption ([§6](#6-the-load-bearing-truth-the-limiter-is-half-adopted))
 defeats it.
 
-> [VERIFY: the exact server-side meaning of ZAI error `[1313]` is **not documented in
-> this repo** — `rate_limiter.py::FUP_KEYWORDS` carries the literal `"1313"` token with
-> the comment "Refine after first real FUP response from ZAI." The code *treats* it as
-> an account-wide, model-agnostic "stop entirely" condition. Do not assert ZAI's wire
-> semantics as fact; treat the model-agnostic framing as UA's working assumption.]
+> **Verified wire fact (2026-06-11):** ZAI delivers its **standard throttle** as a
+> `429` whose JSON body carries `code: "1313"` plus the full Fair-Usage-Policy text
+> ("usage pattern does not comply with the Fair Usage Policy, and your request
+> frequency has been limited"). A 12-hour journald sample showed **1058 of 1058**
+> logged 429s carrying `1313`. There is **no separate gentle-429 vs harsh-FUP wire
+> signal** — so UA treats a 1313-texted 429 as the rate-limit **gradient** (back off,
+> retry, shrink concurrency) and reserves cliff handling (`fup_signal` /
+> `record_fup_signal`) for FUP-keyword bodies on **non-429** responses (e.g. a
+> suspension text on a 403) or gradient *saturation*. The per-model scope of the
+> limit remains unproven — the per-tier design is deliberately safe under both
+> per-model and account-total interpretations.
 
 ## 3. Architecture — the governance triad
 
@@ -187,8 +193,28 @@ Defaults below are the **actual code defaults** in `ZAIRateLimiter.__init__`.
 `httpx.Client`/`AsyncClient.__init__` so **every** outbound request to `api.z.ai` is
 captured — regardless of whether the caller used the limiter. `_capture` writes a JSON
 line per request to `AGENT_RUN_WORKSPACES/zai_inference_events.jsonl`:
-`{ts, method, url_path, host, status, category, caller, ...}`. `_classify_response`
-buckets each into `ok` / `rate_limited_429` / `fup_signal` / etc.
+`{ts, method, url_path, host, status, model, category, fup_texted, caller, ...}`.
+`_classify_response` buckets each into `ok` / `rate_limited_429` / `fup_signal` / etc.
+
+Three load-bearing details of the capture path (all added 2026-06-11):
+
+1. **Error bodies are force-read in the hook.** At response-hook time with a real
+   transport the body is not yet read, so `response.text` raises
+   `httpx.ResponseNotRead` — which was silently swallowed, leaving `body_snippet`
+   empty on *every* production event and blinding FUP detection entirely (12,559
+   events, zero `fup_signal`, while journald showed 1313 text on every 429). The
+   hooks now call `response.read()` / `await response.aread()` for `status >= 400`
+   before `_capture` (`zai_observability.py::_on_response_sync` / `_on_response_async`).
+   Streaming success responses are never force-read.
+2. **`model` field.** `_capture` parses the request's JSON body
+   (`zai_observability.py::_model_from_request`, fail-soft to `"unknown"`) so events
+   can be bucketed per model/tier — the per-tier 429 signal the AIMD limiter work
+   and `convergence_change_monitor.py` consume.
+3. **`category` vs `fup_texted`.** Per the verified wire fact in §2, a 1313-texted
+   429 classifies as `rate_limited_429` (gradient); `fup_signal` is reserved for
+   FUP-keyword bodies on non-429 responses (the cliff). The boolean `fup_texted`
+   field marks any FUP-keyword body regardless of status, preserving throttle-text
+   visibility without conflating it with the cliff category.
 
 **The caller-attribution gotcha — read this before trusting the events log.**
 `_identify_caller()` walks the stack to the *first* frame inside

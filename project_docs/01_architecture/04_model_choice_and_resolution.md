@@ -12,7 +12,7 @@ code_paths:
   - scripts/_claude_launcher.py
   - scripts/claude_with_mcp_env.sh
   - src/universal_agent/services/invariants/zai_inference_health.py
-last_verified: 2026-06-10
+last_verified: 2026-06-11
 ---
 
 # Model Choice & Resolution
@@ -68,6 +68,18 @@ ZAI_MODEL_MAP = {
   `ANTHROPIC_DEFAULT_SONNET_MODEL`; anything else reads `ANTHROPIC_DEFAULT_OPUS_MODEL`.
 - If that env var is set and non-empty, the env value wins. **Otherwise** it falls
   back to `ZAI_MODEL_MAP[tier]` (defaulting to the sonnet entry for unknown tiers).
+
+**The reverse map — `model_resolution.py::model_id_to_tier` (added 2026-06-11):**
+given a WIRE-LEVEL model id (the string actually sent to the proxy), returns the ZAI
+rate-limiter's tier bucket (`opus`/`sonnet`/`mid`/`haiku`; `mid` covers the
+Mission-Control `glm-4.7` lane and the `glm-4.6` literal, which bypass
+`ZAI_MODEL_MAP`). Precedence is deliberately the INVERSE of `resolve_model`:
+**wire identity first** (reverse-`ZAI_MODEL_MAP`, then literals), env intent vars
+only for otherwise-unknown ids, unknown → `sonnet`. Rationale: an env override
+expresses one caller's intent, but ZAI's limits follow the model actually on the
+wire — env-first bucketing would let one variable capture every caller of that id
+and invert the limiter's protection (e.g. `ANTHROPIC_DEFAULT_HAIKU_MODEL=glm-5.1`
+must NOT run the flagship at haiku-tier concurrency).
 
 The thin wrappers express intent at call sites:
 
