@@ -59,9 +59,19 @@ def _events_path() -> Path:
 
 
 def _analyze_429(change_at: datetime) -> dict[str, Any]:
-    """Split the ZAI events log into before/after windows and compute 429/FUP rates."""
+    """Split the ZAI events log into MATCHED before/after windows around change_at.
+
+    The ``after`` window is ``[change_at, now]``. The ``before`` window is the
+    SAME duration immediately preceding ``change_at`` — a fair like-for-like
+    comparison at comparable time-of-day load. (An earlier version compared
+    ``after`` against ALL prior events, which spanned ~94h including idle
+    overnight, making the post-change rate look worse than a matched baseline.)
+    """
     path = _events_path()
     change_ts = change_at.timestamp()
+    now_ts = _utcnow().timestamp()
+    after_len = max(1.0, now_ts - change_ts)
+    before_lo = change_ts - after_len
     buckets = {
         "before": {"total": 0, "r429": 0, "fup": 0, "ok": 0, "min_ts": None, "max_ts": None, "callers429": {}},
         "after": {"total": 0, "r429": 0, "fup": 0, "ok": 0, "min_ts": None, "max_ts": None, "callers429": {}},
@@ -76,7 +86,12 @@ def _analyze_429(change_at: datetime) -> dict[str, Any]:
         ts = e.get("ts")
         if not isinstance(ts, (int, float)):
             continue
-        w = buckets["after"] if ts >= change_ts else buckets["before"]
+        if ts >= change_ts:
+            w = buckets["after"]
+        elif ts >= before_lo:
+            w = buckets["before"]
+        else:
+            continue  # outside the matched before-window
         w["total"] += 1
         w["min_ts"] = ts if w["min_ts"] is None else min(w["min_ts"], ts)
         w["max_ts"] = ts if w["max_ts"] is None else max(w["max_ts"], ts)
@@ -143,23 +158,39 @@ def _verdict(z: dict[str, Any], t: dict[str, Any]) -> tuple[str, str]:
     after = z.get("after", {}) if z.get("available") else {}
     before = z.get("before", {}) if z.get("available") else {}
     fup_after = after.get("fup", 0)
-    r429_after_ph = after.get("r429_per_hour", 0.0)
-    r429_before_ph = before.get("r429_per_hour", 0.0)
+    # Use the volume-normalized REJECTION RATE (429 / total), not raw per-hour
+    # counts — even matched windows can carry different absolute volume.
+    pct_before = before.get("r429_pct", 0.0)
+    pct_after = after.get("r429_pct", 0.0)
 
     fup_ok = fup_after == 0
-    r429_ok = r429_after_ph <= max(2.0, 0.25 * r429_before_ph)  # ≥75% drop or near-zero
     tput_ok = bool(t.get("keeping_up"))
+    improved = pct_after < pct_before - 2.0  # rejection rate dropped meaningfully
+    still_elevated = pct_after > 25.0
 
-    if fup_ok and r429_ok and tput_ok:
-        return "FYI", "✅ Convergence change looks good — FUP gone, 429s down, throughput keeping up"
-    if not fup_ok or not r429_ok:
-        return "ACTION", "⚠️ 429/FUP pressure persists after the convergence change — escalate to the limiter fix"
-    return "ACTION", "⚠️ Convergence may be falling behind (throughput) after the concurrency drop"
+    if not tput_ok:
+        return "ACTION", "⚠️ Convergence may be falling behind (throughput) after the concurrency drop"
+    if not fup_ok:
+        return "ACTION", "⚠️ FUP/1313 signal present after the change — escalate to the limiter fix"
+    if improved and still_elevated:
+        return "ACTION", (
+            f"🟡 Helped but not enough — 429 rejection {pct_before:.0f}%→{pct_after:.0f}%, "
+            "FUP=0, throughput OK; 429s still elevated → limiter fix is the lever to go lower"
+        )
+    if improved:
+        return "FYI", (
+            f"✅ Convergence change looks good — 429 rejection {pct_before:.0f}%→{pct_after:.0f}%, "
+            "FUP=0, throughput keeping up"
+        )
+    return "ACTION", (
+        f"⚠️ No 429 improvement (rejection {pct_before:.0f}%→{pct_after:.0f}%), FUP=0 — "
+        "escalate to the limiter fix"
+    )
 
 
 def _render(change_at: datetime, z: dict[str, Any], t: dict[str, Any], headline: str) -> str:
     L = [headline, "", f"Change applied at: {change_at.isoformat()}  |  now: {_utcnow().isoformat()}", ""]
-    L.append("── ZAI 429 / FUP (before vs after the change) ──")
+    L.append("── ZAI 429 / FUP (MATCHED before/after windows, same duration) ──")
     if not z.get("available"):
         L.append(f"  events log not found: {z.get('path')}")
     else:
@@ -219,12 +250,20 @@ def main() -> int:
         from universal_agent.services.agentmail_service import AgentMailService
 
         mail = AgentMailService()
+        # REQUIRED: startup() wires the client/inbox; without it send_email
+        # raises "AgentMail service is not enabled or initialized" (the working
+        # report crons all call this first). force_send bypasses draft/approval.
+        await mail.startup()
+        if not getattr(mail, "_started", False):
+            raise RuntimeError("AgentMail failed to start (startup() did not set _started)")
         return await mail.send_email(
             to=args.email,
             subject="Convergence tier/concurrency change — post-change 429 + throughput check",
             text=body,
             html="<pre style='font-family:ui-monospace,Menlo,monospace;font-size:13px;line-height:1.5'>"
             + body.replace("&", "&amp;").replace("<", "&lt;") + "</pre>",
+            force_send=True,
+            require_approval=False,
             action=action,
             kind="DIGEST",
             source="convergence_change_monitor",
