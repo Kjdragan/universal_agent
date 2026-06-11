@@ -44,6 +44,46 @@ type StatusPayload = {
   error?: string;
 };
 
+type ActivityItem = {
+  unit: string;
+  label: string;
+  group: string;
+  heavy_zai: boolean;
+  watchdog_guarded: boolean;
+  off_actions: string[];
+  on_actions: string[];
+  active_state: string;
+  sub_state: string;
+  unit_file_state: string;
+  is_active: boolean;
+  is_enabled: boolean;
+  is_masked: boolean;
+  last_run: string;
+  next_run: string;
+};
+
+type InprocLoop = {
+  key: string;
+  label: string;
+  env_var: string;
+  enabled: boolean;
+  note: string;
+};
+
+type ActivitiesPayload = {
+  actions_allowed?: string[];
+  activities?: ActivityItem[];
+  inprocess?: InprocLoop[];
+  watchdog_guarded_units?: string[];
+  error?: string;
+};
+
+function primaryToggle(a: ActivityItem): { label: string; actions: string[]; kind: "on" | "off" } {
+  if (a.is_masked) return { label: "Unmask & start", actions: a.on_actions, kind: "on" };
+  if (a.is_active) return { label: a.watchdog_guarded ? "Stop + mask" : "Stop", actions: a.off_actions, kind: "off" };
+  return { label: "Start", actions: a.on_actions, kind: "on" };
+}
+
 const LEVEL_LABELS: Record<number, { name: string; desc: string }> = {
   0: { name: "L0 Normal", desc: "Env-default caps, no pause" },
   1: { name: "L1 Trim", desc: "Halve the hot tiers" },
@@ -81,6 +121,7 @@ export default function ZaiControlPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string>("");
+  const [activities, setActivities] = useState<ActivitiesPayload | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -98,11 +139,83 @@ export default function ZaiControlPage() {
     }
   }, []);
 
+  const loadActivities = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/ops/zai/activities`, { cache: "no-store" });
+      if (!res.ok) return;
+      setActivities((await res.json()) as ActivitiesPayload);
+    } catch {
+      /* fail soft — keep last known activity state */
+    }
+  }, []);
+
   useEffect(() => {
     load();
     const id = setInterval(load, 5000);
     return () => clearInterval(id);
   }, [load]);
+
+  useEffect(() => {
+    loadActivities();
+    // Activities shell out N systemctl calls per poll — poll slower than status.
+    const id = setInterval(loadActivities, 10000);
+    return () => clearInterval(id);
+  }, [loadActivities]);
+
+  // Dispatch an ordered list of systemctl actions against one unit (the
+  // declarative off_actions/on_actions policy — e.g. ["stop","mask"] for the
+  // watchdog-guarded sweeper).
+  const runActivityActions = useCallback(
+    async (unit: string, actions: string[]): Promise<boolean> => {
+      for (const action of actions) {
+        try {
+          const res = await fetch(`${API_BASE}/api/v1/ops/zai/activity-control`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ unit, action }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            setMsg(`${action} ${unit} failed: ${data.detail || res.status}`);
+            return false;
+          }
+        } catch (e) {
+          setMsg(`${action} ${unit} error: ${String(e)}`);
+          return false;
+        }
+      }
+      return true;
+    },
+    [],
+  );
+
+  const activityControl = useCallback(
+    async (unit: string, actions: string[]) => {
+      setBusy(true);
+      setMsg("");
+      const ok = await runActivityActions(unit, actions);
+      if (ok) setMsg(`applied ${actions.join("+")} → ${unit}`);
+      await loadActivities();
+      setBusy(false);
+    },
+    [runActivityActions, loadActivities],
+  );
+
+  const stopAllProactive = useCallback(async () => {
+    const items = activities?.activities ?? [];
+    if (!window.confirm("Stop ALL proactive activities (timers + services)? Core services (gateway/api/webui) stay up.")) return;
+    setBusy(true);
+    setMsg("Stopping all proactive activities…");
+    let stopped = 0;
+    for (const a of items) {
+      if (!a.is_active) continue; // already down (masked-or-not needs no further stop)
+      const ok = await runActivityActions(a.unit, a.off_actions);
+      if (ok) stopped += 1;
+    }
+    setMsg(`stop-all dispatched (${stopped} unit${stopped === 1 ? "" : "s"})`);
+    await loadActivities();
+    setBusy(false);
+  }, [activities, runActivityActions, loadActivities]);
 
   const control = useCallback(
     async (body: Record<string, unknown>) => {
@@ -315,6 +428,72 @@ export default function ZaiControlPage() {
         ) : null}
       </section>
 
+      {/* Proactive activity controls (per-process on/off) */}
+      <section className="rounded-md border border-border bg-card p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-medium">Proactive activity controls</h2>
+            <p className="text-sm text-muted-foreground">
+              Per-process on/off for the ZAI-consuming proactive timers &amp; services. Core units
+              (gateway/api/webui) are excluded by allowlist. Toggling is live but not deploy-durable —
+              a deploy re-arms timers; use the L4 pause or Infisical flags for durable suppression.
+            </p>
+          </div>
+          <button
+            disabled={busy}
+            onClick={() => void stopAllProactive()}
+            className="shrink-0 rounded-md border border-red-500/40 px-3 py-1.5 text-sm hover:bg-red-500/10"
+          >
+            Stop all proactive
+          </button>
+        </div>
+
+        {activities?.error ? (
+          <div className="mb-3 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-500">
+            activities unavailable: {activities.error}
+          </div>
+        ) : null}
+
+        {(["timers", "services"] as const).map((group) => {
+          const rows = (activities?.activities ?? []).filter((a) => a.group === group);
+          if (!rows.length) return null;
+          return (
+            <div key={group} className="mb-4">
+              <div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                {group === "timers" ? "Timers (scheduled proactive work)" : "Continuous services"}
+              </div>
+              <div className="divide-y divide-border rounded border border-border">
+                {rows.map((a) => (
+                  <ActivityRow key={a.unit} a={a} busy={busy} onAction={activityControl} />
+                ))}
+              </div>
+            </div>
+          );
+        })}
+
+        {activities?.inprocess?.length ? (
+          <div className="mb-1">
+            <div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              In-process loops (read-only — flip via Infisical + gateway restart)
+            </div>
+            <div className="divide-y divide-border rounded border border-border">
+              {activities.inprocess.map((l) => (
+                <div key={l.key} className="flex items-center justify-between gap-3 p-2 text-sm">
+                  <div className="flex items-center gap-2">
+                    <span className={`inline-block h-2 w-2 rounded-full ${l.enabled ? "bg-emerald-500" : "bg-zinc-500"}`} />
+                    <span>{l.label}</span>
+                    <code className="rounded bg-muted px-1 text-xs">{l.env_var}</code>
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {l.enabled ? "enabled" : "disabled"} · {l.note}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </section>
+
       {/* L5 — out of band */}
       <section className="rounded-md border border-border bg-card p-4">
         <h2 className="mb-2 text-lg font-medium">L5 — Full dark (out of band)</h2>
@@ -332,6 +511,69 @@ export default function ZaiControlPage() {
           snapshot writer: {snap?.process_name ?? "—"} · written {fmtAgo(snap?.snapshot_written_at)}
         </p>
       </section>
+    </div>
+  );
+}
+
+function ActivityRow({
+  a,
+  busy,
+  onAction,
+}: {
+  a: ActivityItem;
+  busy: boolean;
+  onAction: (unit: string, actions: string[]) => void;
+}) {
+  const toggle = primaryToggle(a);
+  const dotColor = a.is_masked
+    ? "bg-purple-500"
+    : a.active_state === "failed"
+      ? "bg-red-500"
+      : a.is_active
+        ? "bg-emerald-500"
+        : "bg-zinc-500";
+  return (
+    <div className="flex items-center justify-between gap-3 p-2 text-sm">
+      <div className="flex min-w-0 items-center gap-2">
+        <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${dotColor}`} title={a.active_state} />
+        <span className="truncate">{a.label}</span>
+        {a.heavy_zai ? (
+          <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[10px] font-medium text-amber-500">HEAVY</span>
+        ) : null}
+        {a.watchdog_guarded ? (
+          <span className="shrink-0 rounded bg-sky-500/15 px-1 text-[10px] text-sky-400" title="service-watchdog will restart this if only stopped — off uses mask">
+            guarded
+          </span>
+        ) : null}
+        {a.is_masked ? (
+          <span className="shrink-0 rounded bg-purple-500/15 px-1 text-[10px] text-purple-400">masked</span>
+        ) : null}
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <span className="hidden text-xs text-muted-foreground sm:inline">
+          {a.is_active ? a.sub_state : a.active_state}
+        </span>
+        {a.is_active && !a.watchdog_guarded ? (
+          <button
+            disabled={busy}
+            onClick={() => onAction(a.unit, ["restart"])}
+            className="rounded border border-border px-2 py-0.5 text-xs hover:bg-muted"
+          >
+            restart
+          </button>
+        ) : null}
+        <button
+          disabled={busy}
+          onClick={() => onAction(a.unit, toggle.actions)}
+          className={`rounded border px-2 py-0.5 text-xs ${
+            toggle.kind === "off"
+              ? "border-red-500/40 hover:bg-red-500/10"
+              : "border-emerald-500/40 hover:bg-emerald-500/10"
+          }`}
+        >
+          {toggle.label}
+        </button>
+      </div>
     </div>
   );
 }
