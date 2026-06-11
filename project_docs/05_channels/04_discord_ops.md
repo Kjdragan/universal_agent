@@ -15,7 +15,7 @@ code_paths:
   - "discord_intelligence/inventory/discord_inventory.py"
   - "deployment/systemd/templates/ua-discord-*.service.template"
   - "src/universal_agent/api/routers/csi_discord_watchlist.py"
-last_verified: 2026-05-29
+last_verified: 2026-06-10
 ---
 
 # Discord Operations
@@ -287,10 +287,12 @@ same gws auth machinery used elsewhere in UA:
   `GWS_CLIENT_SECRET_JSON_B64`) into `~/.config/gws/` and forces
   `GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file` for headless operation. Raw blobs are popped
   from the subprocess env so they never leak.
-- `gws_command_prefix()` prefers a real `gws` binary on PATH, falls back to
-  `npx -y @googleworkspace/cli` when allowed.
+- `gws_command_prefix()` resolves in order: `UA_GWS_COMMAND` (shlex-split), else the
+  `UA_GWS_BINARY_PATH` binary (default `gws`) on PATH, else `npx -y` the
+  `UA_GWS_NPX_PACKAGE` (default `@googleworkspace/cli`) — the npx fallback gated by
+  `UA_GWS_ALLOW_NPX_FALLBACK` (default on).
 - Calendar event ids are deterministic (`discord<event_id>` sanitized) so re-sync dedupes;
-  a "already exists"/`409` from the CLI is treated as success.
+  a "already exists", "duplicate", or `409` from the CLI is treated as success.
 
 > gws auth is the #1 operational time-sink in UA. If calendar sync fails with
 > `invalid_grant`, the OAuth refresh token has expired (Google "Testing" mode → ~7-day

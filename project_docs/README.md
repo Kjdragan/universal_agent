@@ -77,7 +77,7 @@ _Email/AgentMail, webhooks, telegram, discord ops, web-ui communication_
 - **[Email / AgentMail](05_channels/01_email_agentmail.md)** — WebSocket ingress, pre-triage security/quarantine, target-agent detection (label is agent-codie NOT agent-cody), task-bridge materialization, tags, Gmail 429 fallback, trusted-inbox queue. _(verified 2026-06-04)_
 - **[Webhook Architecture](05_channels/02_webhooks.md)** — Webhook handlers & ops. _(verified 2026-06-07)_
 - **[Telegram Channel](05_channels/03_telegram.md)** — Polling bot (not webhook), tg_<user_id> session scheme, allowlist (TELEGRAM_ALLOWED_USER_IDS — naming-drift gotcha), gateway-bypass architectural note. _(verified 2026-06-08)_
-- **[Discord Operations](05_channels/04_discord_ops.md)** — Discord bot operations & usage (operator-facing). _(verified 2026-05-29)_
+- **[Discord Operations](05_channels/04_discord_ops.md)** — Discord bot operations & usage (operator-facing). _(verified 2026-06-10)_
 - **[Web UI Communication](05_channels/05_web_ui_communication.md)** — Chat panel ingress/tracking, activity log layer, task hub dashboard contract, AG-UI streaming, dashboard auth surface. _(verified 2026-06-08)_
 
 ## 06_platform
