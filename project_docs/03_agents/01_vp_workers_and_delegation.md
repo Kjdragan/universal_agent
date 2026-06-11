@@ -10,7 +10,10 @@ code_paths:
   - src/universal_agent/tools/vp_orchestration.py
   - src/universal_agent/services/cody_mode.py
   - src/universal_agent/services/self_briefing.py
-last_verified: 2026-06-03
+  - src/universal_agent/services/vp_failure_rescue.py
+  - src/universal_agent/services/wiki_rescue_policy.py
+  - src/universal_agent/services/wiki_rescue_driver.py
+last_verified: 2026-06-11
 ---
 
 # VP Workers & Delegation
@@ -500,6 +503,24 @@ Each verb closes the corresponding `vp_failure:<mission_id>` task hub item with 
 `missing_completion_attestation`, `auth_failure`, `workspace_guard`,
 `subprocess_crash`, `timeout`, `goal_cap_hit`, `operator_cancel`,
 `vp_self_reported`.
+
+### Deterministic wiki-rescue (flag-gated)
+
+Routing to Simone is best-effort and LLM-discretionary — in practice she invokes a
+rescue verb on ~none of the surfaced failures, so failed missions rot (auto-parked).
+For the **`proactive_wiki` lane only**, `wiki_rescue_driver.py::maybe_rescue_failed_wiki_mission`
+adds a *deterministic* rescue, called inline from
+`worker_loop.py::_execute_mission_logic` immediately after `finalize_vp_mission`
+(flag `UA_WIKI_RESCUE_ENABLED`, default off). It reads the authoritative
+`failure_count` off the `vp_failure:<mission_id>` task and applies the pure,
+bounded ladder in `wiki_rescue_policy.py::decide_wiki_rescue`: a transient infra
+failure → `redispatch_fresh` on ATLAS (≤ `MAX_ATLAS_RETRIES`); a structural failure
+or exhausted retries → hand to Cody (`vp.coder.primary`) when free, else an ATLAS
+fallback (`wiki_rescue_driver.py::_cody_available`); budget (`MAX_TOTAL_RESCUES`)
+exhausted → `escalate_vp_failure_to_operator`, then stop. The Cody handoff rides a
+new `override_vp_id` arg on `vp_orchestration.py::_vp_dispatch_mission_redispatch_fresh_impl`
+(cross-VP reassignment; the legacy verbs keep the original vp_id). Scope is the
+`wiki_rescue_policy.py::RESCUABLE_MISSION_TYPES` set — narrow first, generalize once proven.
 
 ## Operator runbook: flushing the mission backlog
 
