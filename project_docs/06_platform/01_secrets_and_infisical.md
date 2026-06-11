@@ -12,7 +12,7 @@ code_paths:
   - scripts/infisical_upsert_secret.py
   - scripts/claude_with_mcp_env.sh
   - scripts/_claude_launcher.py
-last_verified: 2026-06-10
+last_verified: 2026-06-11
 ---
 
 # Secrets & Infisical
@@ -95,10 +95,20 @@ The injection logic, in order:
 # 1. exclude_prefixes filter
 # 2. identity carve-out: if clean_key in preserve_keys and already in os.environ -> skip
 # 3. general overwrite gate: if not overwrite and clean_key in os.environ -> skip
-# 4. else os.environ[clean_key] = value
+# 4. else os.environ[clean_key] = _normalize_secret_value(clean_key, value)
 ```
 
 So a pre-set identity key wins over the vault **even when `overwrite=True`**. Everything else: vault wins.
+
+Values are injected **verbatim** with one narrow exception: `_normalize_secret_value` trims surrounding
+whitespace for a small allowlist of single-line filesystem-path vars (`_PATH_VALUE_KEYS` =
+`CURL_CA_BUNDLE`/`SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE`, plus the `_PATH_VALUE_SUFFIXES` `_CA_BUNDLE`/`_CERT_FILE`/`_CERT_PATH`).
+This is a targeted backstop for a live 2026-06-11 defect where the Infisical `CURL_CA_BUNDLE` value carried a
+stray trailing newline, which made `curl`/OpenSSL treat the path as an unreadable cert file and fail every
+HTTPS request (`exit 77` / `HTTP 000`) in both the `development` and `production` envs. It is **not** a blanket
+strip — every other secret value passes through unchanged so multi-line secrets (PEM keys, JSON service-account
+blobs) survive byte-for-byte. (The `.env` reader `_claude_launcher.py::_source_env_file` already `.strip()`s its
+values, which is why only Infisical-sourced path vars were exposed to this.)
 
 There is one special alias inside the injector: setting `ZAI_API_KEY` also sets `Z_AI_API_KEY` (for `zai_vision` tool compatibility).
 

@@ -220,6 +220,63 @@ def test_initialize_runtime_secrets_overwrites_preexisting_env_for_non_identity_
     assert infisical_loader.os.getenv("UA_SOME_FEATURE_FLAG") == "new"
 
 
+def test_normalize_secret_value_strips_path_vars():
+    """Cert-path env vars are single-line filesystem paths — a stray trailing
+    newline (live defect 2026-06-11 in the Infisical CURL_CA_BUNDLE value) makes
+    curl/OpenSSL treat the path as an unreadable cert file. These are trimmed.
+    """
+    assert (
+        infisical_loader._normalize_secret_value(
+            "CURL_CA_BUNDLE", "/etc/ssl/certs/ca-certificates.crt\n"
+        )
+        == "/etc/ssl/certs/ca-certificates.crt"
+    )
+    for key in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"):
+        assert infisical_loader._normalize_secret_value(key, " /p/cert.pem \n") == "/p/cert.pem"
+    # Suffix matcher catches future siblings without an explicit allowlist entry.
+    assert (
+        infisical_loader._normalize_secret_value("MY_CUSTOM_CA_BUNDLE", "/x/bundle.crt\n")
+        == "/x/bundle.crt"
+    )
+    # Already-clean value is a no-op.
+    assert (
+        infisical_loader._normalize_secret_value(
+            "CURL_CA_BUNDLE", "/etc/ssl/certs/ca-certificates.crt"
+        )
+        == "/etc/ssl/certs/ca-certificates.crt"
+    )
+
+
+def test_normalize_secret_value_preserves_non_path_secrets():
+    """Multi-line secrets (PEM keys, JSON blobs) and ordinary tokens are NOT in
+    the path allowlist, so their bytes — including trailing newlines — survive.
+    This is why the backstop is a targeted allowlist, never a blanket strip.
+    """
+    pem = "-----BEGIN PRIVATE KEY-----\nABC\n-----END PRIVATE KEY-----\n"
+    assert infisical_loader._normalize_secret_value("SERVICE_ACCOUNT_KEY", pem) == pem
+    assert infisical_loader._normalize_secret_value("SOME_TOKEN", "tok\n") == "tok\n"
+
+
+def test_inject_environment_values_normalizes_path_vars(monkeypatch):
+    # setenv registers both keys for monkeypatch teardown restore; overwrite=True
+    # lets the injector replace them.
+    monkeypatch.setenv("CURL_CA_BUNDLE", "")
+    monkeypatch.setenv("UA_TEST_MULTILINE_SECRET", "")
+    infisical_loader._inject_environment_values(
+        {
+            "CURL_CA_BUNDLE": "/etc/ssl/certs/ca-certificates.crt\n",
+            "UA_TEST_MULTILINE_SECRET": "line1\nline2\n",
+        },
+        overwrite=True,
+    )
+    assert (
+        infisical_loader.os.environ["CURL_CA_BUNDLE"]
+        == "/etc/ssl/certs/ca-certificates.crt"
+    )
+    # Non-path multi-line value is preserved byte-for-byte.
+    assert infisical_loader.os.environ["UA_TEST_MULTILINE_SECRET"] == "line1\nline2\n"
+
+
 def test_initialize_runtime_secrets_aliases_zai_api_key(monkeypatch):
     monkeypatch.setenv("UA_DEPLOYMENT_PROFILE", "local_workstation")
     monkeypatch.setenv("UA_INFISICAL_ENABLED", "1")

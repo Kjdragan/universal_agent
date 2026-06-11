@@ -152,6 +152,40 @@ def _safe_error(exc: Exception) -> str:
     return f"{type(exc).__name__}"
 
 
+# Env vars whose VALUE is a single-line filesystem path (TLS CA bundles / cert
+# files). Infisical stores values verbatim and the injector below does NOT strip
+# them (unlike the .env reader `_claude_launcher.py::_source_env_file`, which
+# does `.strip()`). So a path value pasted into Infisical with a stray trailing
+# newline reaches os.environ malformed — e.g. a `CURL_CA_BUNDLE` ending in "\n"
+# makes curl treat the newline-suffixed path as an unreadable cert file and fail
+# EVERY HTTPS request (exit 77 / HTTP 000). Observed live 2026-06-11 in both the
+# development and production Infisical envs. These keys are ALWAYS paths, so
+# trimming surrounding whitespace is safe and a no-op when the value is clean.
+#
+# We deliberately do NOT strip every secret value here: multi-line secrets (PEM
+# private keys, JSON service-account blobs) legitimately contain trailing
+# newlines and must survive byte-for-byte. The fix is therefore a targeted
+# allowlist of unambiguous path vars, not a blanket strip.
+_PATH_VALUE_KEYS: frozenset[str] = frozenset(
+    {"CURL_CA_BUNDLE", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"}
+)
+_PATH_VALUE_SUFFIXES: tuple[str, ...] = ("_CA_BUNDLE", "_CERT_FILE", "_CERT_PATH")
+
+
+def _normalize_secret_value(key: str, value: str) -> str:
+    """Trim surrounding whitespace from known single-line path env vars only.
+
+    Targeted backstop (NOT a blanket strip) for the failure mode where an
+    Infisical-stored cert-path value carries a stray trailing newline and breaks
+    curl/OpenSSL. Only keys that are unambiguously filesystem paths
+    (``_PATH_VALUE_KEYS`` / ``_PATH_VALUE_SUFFIXES``) are trimmed; every other
+    secret value passes through unchanged so multi-line secrets are preserved.
+    """
+    if key in _PATH_VALUE_KEYS or key.endswith(_PATH_VALUE_SUFFIXES):
+        return value.strip()
+    return value
+
+
 def _inject_environment_values(
     values: dict[str, str],
     *,
@@ -172,7 +206,7 @@ def _inject_environment_values(
             continue
         if not overwrite and clean_key in os.environ:
             continue
-        os.environ[clean_key] = str(value or "")
+        os.environ[clean_key] = _normalize_secret_value(clean_key, str(value or ""))
         inserted += 1
 
         # Alias for zai_vision tool compatibility
