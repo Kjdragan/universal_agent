@@ -48,7 +48,7 @@ class EventType(str, Enum):
 
 ### Two enums, kept string-compatible by hand
 
-There is a **parallel** `EventType` enum on the transport side: `api/events.py::EventType`. The transport enum is a superset — it re-declares all the producer events plus client→server control events (`QUERY`, `APPROVAL`, `PING`, `CANCEL`), server control events (`CONNECTED`, `QUERY_COMPLETE`, `CANCELLED`, `PONG`), and two extra server pushes (`SYSTEM_EVENT`, `SYSTEM_PRESENCE`). The bridge converts by string value, not by identity:
+There is a **parallel** `EventType` enum on the transport side: `api/events.py::EventType`. The transport enum is a superset — it re-declares the producer events — **except** the four `URW_PHASE_*` / `URW_EVALUATION` phase events, which exist only producer-side in `agent_core.py::EventType` — plus client→server control events (`QUERY`, `APPROVAL`, `PING`, `CANCEL`), server control events (`CONNECTED`, `QUERY_COMPLETE`, `CANCELLED`, `PONG`), and two extra server pushes (`SYSTEM_EVENT`, `SYSTEM_PRESENCE`). The bridge converts by string value, not by identity:
 
 ```python
 # api/process_turn_bridge.py::_convert_agent_event  (also api/agent_bridge.py)
