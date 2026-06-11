@@ -18,7 +18,7 @@ code_paths:
   - scripts/install_uv_cache_prune_timer.sh
   - deployment/systemd/universal-agent-uv-cache-prune.service
   - deployment/systemd/universal-agent-uv-cache-prune.timer
-last_verified: 2026-06-04
+last_verified: 2026-06-11
 ---
 
 # Deployment & CI/CD
@@ -137,6 +137,8 @@ concurrency:
 ```
 
 `cancel-in-progress: false` **queues** concurrent deploys instead of cancelling them. When several PRs squash-merge within seconds, their `push` events would otherwise fire `deploy.yml` simultaneously and collide on `/opt/universal_agent/.git/index.lock` (`fatal: Unable to create ... index.lock: File exists`). Serializing means last-write-wins on production and every deploy runs to completion.
+
+**Deploy coalescing (Phase B, 2026-06-11).** On top of serialization, the first job step (`Coalesce redundant deploys`) skips a queued run that is **superseded** by a strictly-newer Deploy run still queued/in-progress — because `remote_deploy.sh` deploys origin/main HEAD, the newer run ships a superset. A burst of N merges thus collapses to ~2 restarts (the running first + the newest), never fewer than the latest. The decision is the unit-tested `scripts/deploy/deploy_coalesce.py::should_skip_redundant_deploy`; it is fail-safe (any error ⇒ proceed). Full rationale: [`12_deploy_restart_resilience_adr.md`](12_deploy_restart_resilience_adr.md).
 
 ### How the deploy script reaches the VPS (decomposed 2026-05-30)
 

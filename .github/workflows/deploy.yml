@@ -49,7 +49,40 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
+      # Phase B (deploy-restart resilience ADR, project_docs/06_platform/12_*):
+      # coalesce redundant deploys. Bursts of merges serialize via the
+      # concurrency group; because remote_deploy.sh deploys origin/main HEAD
+      # (not the trigger SHA), a run with a strictly-newer Deploy run already
+      # queued/in-progress is redundant. This step skips ITSELF in that case —
+      # it never interrupts a running deploy and never skips the newest run
+      # (which always proceeds, guaranteeing the latest code ships). The
+      # decision lives in the unit-tested scripts/deploy/deploy_coalesce.py.
+      # Best-effort + fail-safe: any error => proceed (skip=false), so a missing
+      # token scope or API hiccup can never block a deploy.
+      - name: Coalesce redundant deploys
+        id: coalesce
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/deploy/deploy_coalesce.py?ref=${GITHUB_SHA}" \
+            -H "Accept: application/vnd.github.raw" > /tmp/deploy_coalesce.py 2>/dev/null
+          runs_json="$(gh run list --workflow=deploy.yml --json databaseId,status,event --limit 60 2>/dev/null)"
+          set -e
+          if [ ! -s /tmp/deploy_coalesce.py ] || [ -z "$runs_json" ]; then
+            echo "coalesce check unavailable; proceeding"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf '%s' "$runs_json" | python3 /tmp/deploy_coalesce.py --my-run-id "${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+
+      - name: Note coalesced skip
+        if: steps.coalesce.outputs.skip == 'true'
+        run: echo "::notice::Coalesced — skipping this redundant deploy; a newer Deploy run will ship origin/main HEAD."
+
       - name: Connect to Tailscale Network
+        if: steps.coalesce.outputs.skip != 'true'
         uses: tailscale/github-action@v4
         with:
           oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
@@ -57,8 +90,9 @@ jobs:
           tags: tag:ci-gha
           hostname: gha-${{ github.run_id }}-${{ github.run_attempt }}
           ping: ${{ secrets.VPS_SSH_HOST }}
-          
+
       - name: Deploy to Production VPS via SSH
+        if: steps.coalesce.outputs.skip != 'true'
         env:
           SSH_HOST: ${{ secrets.VPS_SSH_HOST }}
           SSH_USER: ${{ secrets.VPS_SSH_USER }}
