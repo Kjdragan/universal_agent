@@ -198,16 +198,17 @@ graph TD
     <table>
       <thead><tr><th>Option</th><th>Inference</th><th>Always-on?</th><th>Cost</th></tr></thead>
       <tbody>
-        <tr class="row-chosen"><td><span class="chip c-gold">(a) running now</span> Desktop interactive loop</td><td>Opus · Max <small>(interactive)</small></td><td>No <small>— while session is alive</small></td><td>Max quota only</td></tr>
+        <tr class="row-chosen"><td><span class="chip c-gold">(a) production</span> Desktop interactive loop</td><td>Opus · Max <small>(interactive)</small></td><td>Yes <small>— desktop declared always-on (operator, 2026-06-10); re-arm watcher after a reboot</small></td><td>Max quota only · credit-free</td></tr>
         <tr><td>(b) Always-on VPS interactive session</td><td>Opus · Max <small>(setup-token, tmux)</small></td><td>Yes</td><td>Max quota only · credit-free</td></tr>
         <tr><td>(c) VPS headless / API-key</td><td>Opus · <code>claude -p</code> or API key</td><td>Yes</td><td>Agent-SDK credit or bounded API $</td></tr>
       </tbody>
     </table>
   </div>
   <div class="callout">
-    <b>The only gap to a true lights-out factory is durability</b> — option (a) runs while this desktop
-    session is alive. Moving the same interactive Max session onto the always-on VPS (b) closes it with
-    <b>no credit, no API, no Cody</b> — still pure Opus-on-Max.
+    <b>Operator decision (2026-06-10): the desktop is declared always-on</b> — option (a) <em>is</em> the
+    production posture, keeping the loop on credit-free Opus-on-Max interactive inference. Options (b)/(c)
+    are contingency fallbacks only (ADR &sect;7). The remaining gap is session lifetime: after a reboot or
+    session exit, re-arm the issue watcher (ADR &sect;10).
   </div>
 
   <hr>

@@ -18,15 +18,18 @@ last_verified: 2026-06-10
 
 # ADR: Autonomous doc-drift issue triage & fix — three delivery options
 
-> **ADR status: DECISION (2026-06-10) = Option (a) prototype + "docs-only, stamp-and-escalate"
-> fix scope.** The loop runs on Option (a) (desktop interactive Max, proven end-to-end on issue
-> #870 → PR #900). The fix scope is **docs-only**: the agent fixes drifted docs, **stamps
+> **ADR status: DECISION (2026-06-10) = Option (a) as the production posture + "docs-only,
+> stamp-and-escalate" fix scope.** The loop runs on Option (a) (desktop interactive Max, proven
+> end-to-end on issue #870 → PR #900). **Operator decision (2026-06-10): the desktop is declared
+> always-on for this loop**, so Option (a) is the production home — it keeps the triage/fix
+> brain on **credit-free Max interactive inference** instead of moving to API billing on the
+> VPS. Options **(b)** / **(c)** (always-on VPS forms) are demoted to recorded **contingency
+> fallbacks** (§7). The fix scope is **docs-only**: the agent fixes drifted docs, **stamps
 > `last_verified`** on every doc it touches (so a fixed doc leaves the audit rotation), and
-> **escalates code-comment-rooted drift** to a backlog rather than touching `.py` files. Options
-> **(b)** / **(c)** (always-on VPS forms) remain recorded migration targets. The **hybrid
-> (Option 3, §9)** — also fixing stale code comments/docstrings — is the documented *future*
-> improvement, deferred until the code-comment backlog justifies it. §9 records the limitation
-> that drove this decision and the path to the hybrid.
+> **escalates code-comment-rooted drift** to a backlog rather than touching `.py` files. The
+> **hybrid (Option 3, §9)** — also fixing stale code comments/docstrings — is the documented
+> *future* improvement, deferred until the code-comment backlog justifies it. §9 records the
+> limitation that drove this decision and the path to the hybrid.
 
 ## 1. Context & problem
 
@@ -72,9 +75,14 @@ the issue — or closes it as a false positive, or escalates if unfixable.
      [Claude Max OAuth Credentials](07_claude_max_oauth_credentials.md) and
      [Environments](05_environments.md) (profile-3 there is now stale).
 
-3. **Runtime-vs-dev contract.** Nothing operational runs durably on the desktop; always-on
-   work belongs on the VPS. A desktop loop is only sound as a prototype / on-demand tool,
-   not as production (the desktop isn't always-on and would miss issues while asleep).
+3. **Runtime-vs-dev contract — operator exception (2026-06-10).** The general contract says
+   nothing operational runs durably on the desktop. The operator granted a **scoped exception
+   for this loop**: the desktop is declared always-on, and the loop runs there deliberately —
+   it is the only substrate where the triage/fix brain gets real Opus-grade inference
+   **credit-free** (Max interactive; constraint 2). Moving it to the VPS would force API
+   billing (no Max OAuth survives there reliably, and headless `-p`/SDK is metered from
+   2026-06-15). The exception is for *this loop only* — it does not reopen the desktop for
+   UA services, timers, or crons, all of which stay on the VPS.
 
 4. **Safety — the docs-only firewall must be mechanical.** A prompt-only "don't touch
    source" rule was bypassed once (2026-04-24 `executing_sessions` deletion). The
@@ -89,7 +97,7 @@ the issue — or closes it as a false positive, or escalates if unfixable.
 
 ## 3. The three options
 
-### Option (a) — Desktop interactive prototype loop  ✅ *chosen first*
+### Option (a) — Desktop interactive loop  ✅ *chosen — production posture (operator decision 2026-06-10)*
 
 - **Mechanism.** A persistent **Monitor** (`gh` poll loop) in an interactive Claude Code
   session on the desktop emits an event when a new `documentation` issue appears. The same
@@ -99,8 +107,11 @@ the issue — or closes it as a false positive, or escalates if unfixable.
   Anthropic as *interactive* (stays on normal usage limits, **not** the 2026-06-15 metered
   credit), and fair use for one's own account/repo.
 - **Cost.** None beyond Max; consumes interactive quota (5-hour / weekly caps).
-- **Reliability.** Only runs while the desktop is up and the session is alive — **misses
-  issues when asleep.** Best for prototyping, tuning the triage prompt, and on-demand runs.
+- **Reliability.** Runs while the desktop is up and the session is alive. The operator has
+  declared the desktop **always-on** (2026-06-10), so the remaining gap is session lifetime:
+  a reboot or session exit stops the watcher until a new session re-arms it (poll
+  `gh issue list --label documentation` for numbers above the baseline). Issues are durable —
+  anything filed during a gap is picked up on re-arm, not lost.
 - **Risk.** Sustained 24/7 machine-cadence traffic is a discretionary anti-abuse gray area
   (no documented ban for this exact pattern via the official CLI, no blessed safe-harbor
   either). Keep it strictly single-beneficiary.
@@ -134,21 +145,22 @@ the issue — or closes it as a false positive, or escalates if unfixable.
 | Axis | (a) Desktop prototype | (b) VPS API-key | (c) ZAI-detect + API-fix |
 |---|---|---|---|
 | Inference for triage/fix | Opus (Max, interactive) | Opus (API key) | GLM detect / Opus fix |
-| Always-on? | No (desktop-bound) | Yes | Yes |
+| Always-on? | Yes — desktop declared always-on (session-bound; re-arm after reboot) | Yes | Yes |
 | Cost | Max quota only | Bounded API $ | Lowest API $ |
 | Policy posture | Fair-use gray area | Clean (Commercial) | Clean (Commercial) |
 | Affected by 6/15 metering? | No (interactive) | No (API key) | No (API key) |
-| Best for | Prototype / on-demand | Production | Production, cost-min |
+| Best for | **Production (operator decision 2026-06-10)** | Contingency fallback | Contingency, cost-min |
 | Build effort | Low (this session) | Medium | Medium-high |
 
 ## 4. Decision
 
-**Start with (a)** to prove value and tune the triage with zero new infrastructure or
-spend. **(b) is the default production target**; adopt **(c)** instead if API cost on (b)
-turns out to matter at volume. The migration is intentionally cheap because all three share
-the same triage state machine and the same mechanical safety rails (§5–6) — only the
-*trigger* (Monitor vs VPS event) and the *inference substrate* (Max-interactive vs API key)
-change.
+**Run on (a) as production** (operator decision 2026-06-10: the desktop is declared
+always-on, keeping the loop on credit-free Max interactive inference — moving to the VPS
+would force API billing). **(b)/(c) are contingency fallbacks**, adopted only on a §7
+trigger; prefer **(c)** over (b) if API cost matters at volume. The fallback migration is
+intentionally cheap because all three share the same triage state machine and the same
+mechanical safety rails (§5–6) — only the *trigger* (Monitor vs VPS event) and the
+*inference substrate* (Max-interactive vs API key) change.
 
 **Fix-scope decision (2026-06-10, operator): docs-only + stamp + escalate (hybrid deferred).**
 The first dry run (issue #870 → PR #900) merged correct doc fixes, but the next sweep (#901)
@@ -195,14 +207,13 @@ For each new `documentation` issue:
 | Escalate-don't-close on unfixable | **policy (above)** | triage step 5 |
 | Single-beneficiary only (no token sharing/resale) | **policy** | Consumer Terms §2/§3 |
 
-## 7. Migration triggers (when to move off (a))
+## 7. Contingency triggers (when to fall back to (b)/(c))
 
-Adopt (b) or (c) when **any** holds:
-- The desktop-asleep coverage gap causes a real miss (issue sat unhandled > 1 day).
+(a) is the production posture; adopt (b) or (c) only when **any** holds:
+- Desktop downtime causes a real miss (an issue sat unhandled > 1 day despite the
+  always-on declaration — e.g. extended outage, nobody re-armed the watcher after a reboot).
 - The loop meaningfully contends with interactive Max quota during coding hours.
-- We want it to run unattended/24-7 as a committed service (then it must leave the desktop
-  per the runtime contract).
-- Anthropic tightens interactive-automation enforcement.
+- Anthropic tightens interactive-automation enforcement (the §3(a) gray-area risk lands).
 
 ## 8. Cross-references & known stale docs
 
@@ -247,3 +258,24 @@ drift across ≥3 rotations. Then add:
 3. **Keep the docs-only loop unchanged** — the hybrid only *adds* a second, lower-frequency
    code-comment lane; detection stays on the existing sweep. The safe, converging docs-only lane
    runs continuously while the riskier code-touching work stays batched, guarded, and human-gated.
+
+## 10. Re-arming the loop on the desktop (runbook)
+
+The watcher is session-bound: a desktop reboot or session exit stops it (issues filed in the
+gap are durable on GitHub and get picked up on re-arm — nothing is lost). To re-arm, start an
+interactive Claude Code session on the desktop (Max OAuth) and have it run a persistent
+Monitor that polls for new doc-drift issues, e.g.:
+
+```bash
+baseline=$(gh issue list --label documentation --state open --json number --jq 'max_by(.number).number // 0')
+while true; do
+  gh issue list --label documentation --state open --json number,title \
+    --jq ".[] | select(.number > ${baseline}) | \"NEW doc-drift issue #\(.number): \(.title)\"" || true
+  sleep 300
+done
+```
+
+On each event, the session triages per §5 (verify against real code → `docfix/*` PR →
+`last_verified` stamp → auto-merge behind the required tripwire → close the issue). The
+nightly sweep fires ~1:35 PM CT (`doc-nightly.yml`, cron `35 18 * * *` UTC, often delayed
+by GitHub), so a same-day re-arm before early afternoon misses nothing.
