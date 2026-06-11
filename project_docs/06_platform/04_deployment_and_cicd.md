@@ -27,7 +27,7 @@ This subsystem governs how code moves from a branch to running production. Every
 
 ## Workflow inventory
 
-`.github/workflows/` holds eight workflows. Six are the CI/CD core; two are documentation-governance gates owned by the doc-system (covered by the documentation-governance rules in `project_docs/CLAUDE.md` — listed here only for completeness).
+`.github/workflows/` holds the CI/CD core plus documentation-governance gates owned by the doc-system (covered by the documentation-governance rules in `project_docs/CLAUDE.md` — listed here only for completeness).
 
 | Workflow (`name:`) | File | Trigger | Purpose |
 |---|---|---|---|
@@ -38,6 +38,7 @@ This subsystem governs how code moves from a branch to running production. Every
 | **Deploy Notify** | `deploy-notify.yml` | `workflow_run` on **Deploy** completed | Truthful deploy-complete signal to the operator's Telegram: confirms the **live** `/api/v1/version` SHA (Rule A) and reports ✅ / ⚠️ / ❌. |
 | **CI Failure Issue Filer** | `ci-failure-issue.yml` | `workflow_run completed` on the watched workflows | Files a `ci-failure` GitHub issue on any failed run; auto-closes it when the same workflow+branch goes green. |
 | Documentation Audit | `doc-audit.yml` | `pull_request` touching `project_docs/**` | Doc-governance PR gate (`doc_audit.py`). Doc-system owned. |
+| Docfix Tripwire | `docfix-tripwire.yml` | every `pull_request` (always-on) | **Required status check**: a `docfix/*` PR may touch documentation paths only; passes through all other branches. Doc-system owned. |
 | Nightly Documentation Health | `doc-nightly.yml` | cron `35 18 * * *`, manual | Nightly doc-accuracy sweep (ZAI). Doc-system owned. |
 
 Dependency bumps are automated by `.github/dependabot.yml` (`pip` + `github-actions`, weekly), which opens PRs against `main` that flow through the same gate.
@@ -302,9 +303,10 @@ Runs **24/7** (infrastructure-event handler, exempt from active-hours dormancy).
 
 ## Documentation-governance gates (doc-system owned)
 
-Two workflows enforce the rebuilt documentation system (canonical docs in `project_docs/`); they are listed here for the complete CI picture but are owned by the doc-system:
+Three workflows enforce the rebuilt documentation system (canonical docs in `project_docs/`); they are listed here for the complete CI picture but are owned by the doc-system:
 
-- **Documentation Audit** (`doc-audit.yml`): `pull_request` touching `project_docs/**` / `scripts/doc_audit.py`. Runs `python scripts/doc_audit.py` (stdlib-only — **errors fail the PR**: frontmatter schema, `code_paths` globs resolve, `file::symbol` citations grep-resolve, no line-number citations, orphan/link check) plus a tripwire that fails any automated doc-fix PR touching non-doc paths.
+- **Documentation Audit** (`doc-audit.yml`): `pull_request` touching `project_docs/**` / `scripts/doc_audit.py`. Runs `python scripts/doc_audit.py` (stdlib-only — **errors fail the PR**: frontmatter schema, `code_paths` globs resolve, `file::symbol` citations grep-resolve, no line-number citations, orphan/link check).
+- **Docfix Tripwire** (`docfix-tripwire.yml`): always-on `pull_request` check ("Doc-fix PR touches docs only") and a **required status check** on `main`. For `docfix/*` head branches it hard-fails any change outside documentation paths (merge-base three-dot diff); for every other branch it passes through. This is the mechanical firewall that makes the autonomous doc-fix loop's docs-only auto-merge safe (see the [doc-triage ADR](11_autonomous_doc_triage_options_adr.md)). It lived inside `doc-audit.yml` until 2026-06-10, where its path filter made it impossible to require.
 - **Nightly Documentation Health** (`doc-nightly.yml`): cron `35 18 * * *`. Runs `doc_audit.py --warn-only`, `gen_doc_index.py --check`, and a ZAI-backed `doc_accuracy_sweep.py --open-issue` accuracy batch (the sweep step uses `uv` pinned to Python 3.12).
 
 ## Verifying a deploy actually shipped

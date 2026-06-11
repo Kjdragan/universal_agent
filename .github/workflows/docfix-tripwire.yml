@@ -1,0 +1,56 @@
+name: Docfix Tripwire
+
+# Mechanical firewall for the autonomous doc-drift loop (ADR 11, Option 1):
+# an automated doc-fix PR (head branch docfix/*) must touch ONLY documentation
+# paths. Code-touching drift is escalated to humans, never auto-fixed — this
+# check is what makes that a hard guarantee instead of prompt discipline.
+#
+# This workflow is intentionally a STANDALONE, always-on check (no `on.paths`
+# filter, no job-level `if:` skip) so it posts an explicit pass/fail conclusion
+# on EVERY PR. That is what makes it safe to mark as a REQUIRED status check:
+# a path-filtered or skipped required check never reports and would block every
+# unrelated PR forever. The docfix/* branch detection is handled in-script
+# (exit 0 for non-docfix branches), mirroring archive-write-guard.yml.
+#
+# History: lived as a path-filtered job inside doc-audit.yml until 2026-06-10,
+# which meant it could not be required and the docs-only firewall leaned on the
+# loop's discipline. The three-dot merge-base diff fixed the false-fail that
+# auto-filed issue #905 (PR #919).
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  docfix-tripwire:
+    name: Doc-fix PR touches docs only
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 50  # shallow: the merge-base diff needs only recent base+head, not full history
+      - name: Fail if a docfix PR changed any non-documentation path
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          case "$HEAD_REF" in
+            docfix/*) ;;
+            *) echo "OK — not a docfix/* branch; tripwire does not apply."; exit 0 ;;
+          esac
+          echo "Changed files in this doc-fix PR:"
+          changed="$(git diff --name-only "$BASE_SHA...$HEAD_SHA")"  # three-dot = merge-base diff; two-dot false-failed when main advanced post-divergence (#905)
+          echo "$changed"
+          # Allowed: project_docs/**, docs/** (legacy/archive), root *.md, AGENTS.md
+          violations="$(echo "$changed" | grep -vE '^(project_docs/|docs/|[^/]+\.md$|AGENTS\.md$)' || true)"
+          if [ -n "$violations" ]; then
+            echo "::error::Doc-fix PR modified non-documentation paths:"
+            echo "$violations"
+            exit 1
+          fi
+          echo "OK — doc-fix PR touches documentation only."

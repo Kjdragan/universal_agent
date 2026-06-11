@@ -8,6 +8,7 @@ code_paths:
   - scripts/doc_audit.py
   - .github/workflows/doc-nightly.yml
   - .github/workflows/doc-audit.yml
+  - .github/workflows/docfix-tripwire.yml
   - .github/workflows/pr-auto-merge.yml
   - src/universal_agent/services/cody_mode.py
   - src/universal_agent/vp/clients/claude_cli_client.py
@@ -77,7 +78,10 @@ the issue — or closes it as a false positive, or escalates if unfixable.
 
 4. **Safety — the docs-only firewall must be mechanical.** A prompt-only "don't touch
    source" rule was bypassed once (2026-04-24 `executing_sessions` deletion). The
-   replacement is `doc-audit.yml`'s `docfix/*` tripwire: any PR on a `docfix/*` branch that
+   replacement is the standalone always-on `docfix-tripwire.yml` workflow ("Doc-fix PR
+   touches docs only", a **required status check** on `main` since 2026-06-10; it lived as
+   a path-filtered `doc-audit.yml` job before that, which could not be required): any PR
+   on a `docfix/*` branch that
    touches a non-docs path **hard-fails** CI. `pr-auto-merge.yml` already auto-merges
    `docfix/*` (it is not on the manual-review blocklist), and `doc_audit.py::check_symbol_refs`
    enforces symbol citations on every doc PR. So **docs-only auto-merge is safe by
@@ -181,7 +185,7 @@ For each new `documentation` issue:
 
 | Rail | Status | Where |
 |---|---|---|
-| Docs-only mechanical tripwire | **built** | `doc-audit.yml` `docfix/*` job (hard-fails non-docs paths) |
+| Docs-only mechanical tripwire | **built + required** | `docfix-tripwire.yml` (always-on, required status check on `main`; hard-fails non-docs paths on `docfix/*`) |
 | Auto-merge for docs-only PRs | **built** | `pr-auto-merge.yml` (`docfix/*` not blocklisted) |
 | Symbol-citation enforcement | **built** | `doc_audit.py::check_symbol_refs` |
 | Structured per-doc findings | **built** | `doc_accuracy_sweep.py::_judge` JSON verdicts |
