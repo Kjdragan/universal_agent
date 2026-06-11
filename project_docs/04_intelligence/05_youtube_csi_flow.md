@@ -497,7 +497,14 @@ hadn't written. Two heartbeat invariants now guard it
   > 50% floor).]
 - `youtube_transcript_coverage` — rows exist in `rss_event_analysis` but most
   carry `transcript_status != 'ok'`. Floor 50% per populated day (≥3 rows),
-  7-day window.
+  7-day window. **Recovered-guard** (added 2026-06-10): when the
+  `youtube_invariants.py::RECOVERED_RECENT_DAYS` (2) most recent populated
+  days are both at/above the floor, the pipeline has recovered and any
+  remaining offending days are residue aging out of the window — the finding
+  downgrades to `severity_override="warn"` (dashboard-only; the critical
+  email digest only delivers `critical`) with a "RECOVERED" note in the
+  message. Context: transcripts recovered Jun 7 but the Jun 5–7 residue kept
+  paging 4 emails/day until it left the window.
 
 `csi_source_liveness` separately checks `max(occurred_at)` freshness per source
 in `csi.db`. The monitored set comes from `csi_source_liveness.effective_source_thresholds`,

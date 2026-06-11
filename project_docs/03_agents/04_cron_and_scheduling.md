@@ -331,12 +331,28 @@ this window, the run is marked `cancelled`, `next_run_at` is advanced by
 `_DEPLOY_CANCEL_BACKFILL_OFFSET_SEC = 5s`, and the retry chain is skipped. On
 next gateway boot the startup pass re-fires it (and, for
 `catch_up_on_restart` jobs, optionally backfills). Both `!script` paths and the
-lightweight path implement this; the LLM path is covered by the
-`asyncio.CancelledError` handler.
+lightweight path implement this; the LLM path has two layers:
+
+1. The `asyncio.CancelledError` handler covers the gateway's own coroutine
+   being cancelled at shutdown.
+2. The **deploy-kill signature** (`cron_service.py::_is_llm_deploy_kill_result`)
+   covers the sneakier shape observed live 2026-06-09/10: the deploy SIGTERM
+   kills the SDK's `claude` CLI subprocess (exit 143), the SDK swallows the
+   message-reader fatal internally, and `gateway.run_query` returns an
+   *empty* result (no text, zero tool calls, no errors) without raising.
+   Previously the Phase F.1 close computed `rc_equiv=0`, classified the kill
+   as `clean_exit_zero`, marked the task completed, and the artifact notifier
+   disclosed stale workspace leftovers as fresh output. Now, when the
+   empty-result signature coincides with `_is_deploy_window_active()`, the
+   run is marked `cancelled` (`failure_class="cancelled"`, never retried),
+   `next_run_at` advances by the same 5s offset, the in-flight marker is
+   kept for next-boot recovery (below), and the artifact notifier does not
+   fire (`rc_equiv=1`).
 
 > Both signals only ever **widen** the "treat as deploy cancellation" window —
 > they never narrow it. A real crash (OOM, code error) outside the window still
-> surfaces loudly.
+> surfaces loudly, and an empty LLM result *outside* a deploy window keeps its
+> pre-existing classification.
 
 ## Catch-up / backfill on restart
 
@@ -353,6 +369,36 @@ missed heavyweight cron simultaneously at gateway boot starved the asyncio loop
 `/api/v1/health`, and `deploy.yml`'s 8-minute health check timed out → restart
 loop. `_register_system_cron_job` still sets `catch_up_on_restart=True` on all
 system crons; the *queue* is built but not *fired* unless the env var is set.
+
+### In-flight marker recovery (deploy-interrupted runs)
+
+The startup backfill above only sees jobs whose *persisted* `next_run_at` is
+in the past — but `_scheduler_loop` persists `last_run_at`/`next_run_at`
+**before** creating the `_run_job` task, so a run hard-killed mid-flight by a
+deploy restart leaves no `cron_runs.jsonl` record and looks, on disk, like it
+already ran. Two consecutive 9 PM `paper_to_podcast_daily` slots were lost
+this way (2026-06-09/10).
+
+The fix is a durable in-flight marker sidecar, `cron_inflight.json`, next to
+`cron_jobs.json` (`CronStore.load_inflight` / `CronStore.save_inflight`):
+
+- `CronService._mark_inflight` persists `{job_id: {scheduled_at, marked_at}}`
+  at scheduler dispatch, before the `_run_job` task is created.
+- `CronService._clear_inflight` removes it when the run finalizes — **except**
+  for `cancelled` runs (deploy-restart collateral) and `retry_queued` runs,
+  which keep their marker on purpose.
+- On construction, `CronService.__init__` consumes any leftover markers:
+  markers for enabled `catch_up_on_restart=True` jobs younger than
+  `_backfill_max_age` are queued for recovery; everything else is dropped.
+- `CronService.start` dispatches those recovery runs **even when
+  `UA_CRON_BACKFILL_ON_RESTART=0`** — the global gate exists to prevent a
+  startup stampede of *every* missed slot, while interrupted in-flight runs
+  of explicitly opted-in jobs are a bounded set (at most
+  `UA_CRON_MAX_CONCURRENCY` were in flight at the restart). The recovery
+  dispatch key is `inflight:<job_id>:<scheduled_at>:<nonce>`, deliberately
+  NOT the original `scheduled:` dedup key — the interrupted attempt's
+  workflow run may still sit in `status=running`, and re-admitting under the
+  same key would `attach_to_existing_run` and silently skip the recovery.
 
 ## System cron registration
 
@@ -467,7 +513,7 @@ view the transcript; the gateway's session reaper cleans them up later.
 | Var | Default | Effect |
 |---|---|---|
 | `UA_CRON_MAX_CONCURRENCY` | `2` | Max concurrent cron runs (semaphore). |
-| `UA_CRON_BACKFILL_ON_RESTART` | off | If truthy, fire queued backfills at startup (see incident note — leave off). |
+| `UA_CRON_BACKFILL_ON_RESTART` | off | If truthy, fire queued backfills at startup (see incident note — leave off). In-flight marker recovery for `catch_up_on_restart` jobs runs regardless of this gate. |
 | `UA_CRON_REGISTRATION_ENABLED` / `should_run_loop("cron_registration")` | prod on, dev off | Master gate for registering system crons. |
 | `UA_CRON_DB_LOCK_RETRIES` | `2` | Retries on "database is locked" inside an LLM-cron attempt (clamped 0–5). |
 | `UA_CRON_MOCK_RESPONSE` | off | Test seam: record `success`/`CRON_OK` without executing. |
