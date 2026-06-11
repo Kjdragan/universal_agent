@@ -129,6 +129,13 @@ The Demo is a runnable mini-app of the video's **capability**, not a reproductio
   tier-judge.
 - **Scan cadence:** curated lane piggybacks the 06:00 digest; broad-RSS lane scans **3×/day** on a systemd
   timer (decoupled from the dashboard).
+- **Sweep counts (`queue_tutorial_builds_with_ceiling` return / `latest_sync.json`):** the daily ceiling
+  counts builds *created per America/Chicago day* across both lanes, so a later sweep sees only
+  `remaining = ceiling − today_count` slots. The reported auto-dispatch total splits into **`auto_new`**
+  (this run's genuinely-new dispatches, always `≤ remaining`, the number that consumes budget) and
+  **`auto_reaffirmed`** (prior-run rows the no-churn invariant re-confirms, consuming *no* new budget).
+  `auto_queued` (= `auto_new + auto_reaffirmed`) is kept for back-compat but reads as an apparent ceiling
+  violation when carry-over re-confirmations inflate it — read `auto_new` against `remaining`.
 
 ### Inference, concurrency & cost
 

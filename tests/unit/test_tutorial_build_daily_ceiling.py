@@ -135,6 +135,10 @@ def test_ceiling_splits_dispatchable_and_pending(tmp_path, monkeypatch):
         assert result["ceiling"] == 2
         assert result["today_count"] == 0
         assert result["auto_queued"] == 2
+        # Fresh run: both auto-dispatches are NEW, none re-confirmed.
+        assert result["auto_new"] == 2
+        assert result["auto_reaffirmed"] == 0
+        assert result["remaining"] == 2
         assert result["pending_approval"] == 2
         assert result["queued"] == 4
 
@@ -224,6 +228,9 @@ def test_rerun_is_idempotent_and_never_demotes(tmp_path, monkeypatch):
     with _connect_activity(tmp_path / "activity.db") as conn:
         first = _run_sync(csi_db, conn)
         assert first["auto_queued"] == 1
+        # First run: the single dispatch is genuinely NEW.
+        assert first["auto_new"] == 1
+        assert first["auto_reaffirmed"] == 0
         assert _build_row(conn, "vid_1")["agent_ready"] is True
 
         rows_after_first = conn.execute(
@@ -242,6 +249,13 @@ def test_rerun_is_idempotent_and_never_demotes(tmp_path, monkeypatch):
         ).fetchone()[0]
         assert rows_after_second == 2  # idempotent: no duplicates
         assert second["today_count"] >= 2
+        # The honest split: vid_1 stays dispatchable but as a RE-CONFIRMATION,
+        # not a new build — remaining=0, so zero new auto-dispatches this run.
+        assert second["remaining"] == 0
+        assert second["auto_new"] == 0
+        assert second["auto_reaffirmed"] == 1
+        # Legacy total still counts it (= the misleading number the split fixes).
+        assert second["auto_queued"] == 1
 
 
 # ── (e) ceiling=0 / env override honored ────────────────────────────────────
