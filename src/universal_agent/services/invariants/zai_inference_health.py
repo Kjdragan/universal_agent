@@ -404,11 +404,33 @@ def zai_inference_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         triggered.append("high_process_count")
         # Keep severity as warn UNLESS another critical condition raised it.
 
+    # Operator control-plane state (read-only, fail-open). An INTENTIONAL pause
+    # is surfaced for visibility but is NEVER an alarm — it's the operator's
+    # emergency lever, not a fault. During a global pause ZAI traffic is zero,
+    # so the 429/FUP conditions above simply don't fire anyway.
+    control_level = 0
+    control_global_pause = False
+    control_tier_pauses: list[str] = []
+    try:
+        from universal_agent.services import zai_control
+
+        cstate = zai_control.current_state()
+        control_level = int(cstate.get("intervention_level") or 0)
+        control_global_pause = bool(cstate.get("global_pause_active"))
+        control_tier_pauses = [t for t, on in (cstate.get("tier_pause") or {}).items() if on]
+        if (control_global_pause or control_level > 0) and "control_plane_active" not in triggered:
+            triggered.append("control_plane_active")  # WARN-only visibility marker
+    except Exception:  # noqa: BLE001 — control read fails open
+        pass
+
     if not triggered:
         return None
 
     observed_value = {
         "triggered_conditions": triggered,
+        "control_intervention_level": control_level,
+        "control_global_pause_active": control_global_pause,
+        "control_tier_pauses": control_tier_pauses,
         "fup_active": fup_active,
         "fup_pause_active": pause_active,
         "acquire_pause_until": acquire_pause_until or None,
@@ -551,11 +573,25 @@ def zai_inference_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "per-loop, not process-wide). Find and fix the threadpool "
             "asyncio.run() call path (see 10_zai_rate_limiter.md §4.6)."
         )
-    else:
+    elif high_process_count:
         headline = (
             f"UA Python process count {process_count} above soft limit "
             f"{PROCESS_COUNT_SOFT_LIMIT}. Risk of self-induced ZAI rate "
             "pressure — reduce concurrent workers."
+        )
+    else:
+        # Only the control-plane visibility marker is active — an INTENTIONAL
+        # operator lever, reported at WARN, not a fault.
+        pause_bits = []
+        if control_global_pause:
+            pause_bits.append("GLOBAL PAUSE")
+        if control_tier_pauses:
+            pause_bits.append("tier-pause " + ",".join(control_tier_pauses))
+        detail = ("; ".join(pause_bits)) if pause_bits else "active"
+        headline = (
+            f"ZAI control plane engaged (intervention level {control_level}; "
+            f"{detail}) — operator emergency lever, not a fault. ZAI traffic is "
+            "trimmed/halted by design. Dial back via the ZAI control dashboard."
         )
 
     return {

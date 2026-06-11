@@ -16899,6 +16899,104 @@ async def ops_proactive_health_email_test(
     return result
 
 
+# ── ZAI emergency control plane (status + levers) ───────────────────────────
+
+
+@app.get("/api/v1/ops/zai/status")
+async def ops_zai_status(request: Request):
+    """Live ZAI inference health + control state for the emergency dashboard.
+
+    Aggregates the observability events (per-tier 429 rejection rates + FUP
+    counts), the rate-limiter snapshot (effective caps, outcome counters,
+    pause/freeze state), and the control-plane state (intervention level,
+    pauses, cap overrides). Read-only; all reads fail soft to empty/zero so the
+    dashboard renders even when a source is missing."""
+    _require_ops_auth(request)
+    try:
+        from universal_agent.services.zai_status import build_status
+
+        # build_status reads + JSON-parses the events file (≤10k lines, largest
+        # during an incident) — offload off the event loop so the 5s dashboard
+        # poll can't starve the gateway (the 2026-05-26 event-loop-starvation
+        # class). Fail-soft envelope still wraps it.
+        return await asyncio.to_thread(build_status)
+    except Exception as exc:  # noqa: BLE001 — status must degrade, not crash
+        logger.warning("ops_zai_status: aggregator raised", exc_info=True)
+        return {"error": f"status_unavailable: {type(exc).__name__}", "events": {}, "control": {}}
+
+
+class ZaiControlRequest(BaseModel):
+    """A single emergency-lever action against the ZAI control plane."""
+    action: str  # set_level | set_global_pause | set_tier_caps | set_tier_pause | clear
+    level: Optional[int] = None
+    active: Optional[bool] = None
+    ttl_seconds: Optional[float] = None
+    reason: str = ""
+    overrides: Optional[dict[str, dict[str, int]]] = None  # {tier: {cap?, max?}}
+    tiers: Optional[dict[str, bool]] = None                # {tier: paused?}
+
+
+@app.post("/api/v1/ops/zai/control")
+async def ops_zai_control(request: Request, payload: ZaiControlRequest):
+    """Apply an emergency ZAI lever — the dashboard's write side.
+
+    Actions:
+      - ``set_level`` {level 0..4, ttl_seconds?} — apply a ladder preset.
+      - ``set_global_pause`` {active, ttl_seconds?, reason?} — toggle the
+        account-wide pause (enforced at the httpx hook = ALL callers).
+      - ``set_tier_caps`` {overrides: {tier: {cap?, max?}}} — live per-tier caps.
+      - ``set_tier_pause`` {tiers: {tier: bool}} — per-tier hard stop.
+      - ``clear`` — reset to normal (level 0).
+
+    Writes the control file (atomic); the enforcement points pick it up within
+    ~2s. Auth required. Returns the resulting control state."""
+    _require_ops_auth(request)
+    from universal_agent.services import zai_control
+
+    action = (payload.action or "").strip().lower()
+    by = "dashboard"
+    try:
+        if action == "set_level":
+            if payload.level is None or int(payload.level) not in zai_control.LEVELS:
+                raise HTTPException(status_code=400, detail=f"Invalid level: {payload.level}")
+            state = zai_control.apply_level(
+                int(payload.level), ttl_seconds=payload.ttl_seconds,
+                reason=payload.reason, by=by,
+            )
+        elif action == "set_global_pause":
+            if payload.active is None:
+                raise HTTPException(status_code=400, detail="set_global_pause requires 'active'")
+            state = zai_control.set_global_pause(
+                bool(payload.active), ttl_seconds=payload.ttl_seconds,
+                reason=payload.reason, by=by,
+            )
+        elif action == "set_tier_caps":
+            if not isinstance(payload.overrides, dict):
+                raise HTTPException(status_code=400, detail="set_tier_caps requires 'overrides'")
+            for tier in payload.overrides:
+                if tier not in zai_control.TIERS:
+                    raise HTTPException(status_code=400, detail=f"Unknown tier: {tier}")
+            state = zai_control.set_tier_overrides(payload.overrides, by=by)
+        elif action == "set_tier_pause":
+            if not isinstance(payload.tiers, dict):
+                raise HTTPException(status_code=400, detail="set_tier_pause requires 'tiers'")
+            for tier in payload.tiers:
+                if tier not in zai_control.TIERS:
+                    raise HTTPException(status_code=400, detail=f"Unknown tier: {tier}")
+            state = zai_control.set_tier_pause(payload.tiers, by=by)
+        elif action == "clear":
+            state = zai_control.clear_all(by=by)
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown action: {action}")
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ops_zai_control: action %r failed", action, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"control_write_failed: {type(exc).__name__}")
+
+    return {"ok": True, "action": action, "control": state}
+
+
 class FactoryUpdateRequest(BaseModel):
     """Request to trigger a factory self-update via delegation bus."""
     target_factory_id: Optional[str] = None  # None = broadcast to all workers

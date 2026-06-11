@@ -218,7 +218,7 @@ class _LoopPrimitives:
     def get_tier_gate(self, tier: str, limiter: "ZAIRateLimiter") -> _AdaptiveGate:
         gate = self.tier_gates.get(tier)
         if gate is None:
-            gate = _AdaptiveGate(lambda: limiter._tier_cap[tier])
+            gate = _AdaptiveGate(lambda: limiter._effective_tier_cap(tier))
             self.tier_gates[tier] = gate
         return gate
 
@@ -429,6 +429,19 @@ class ZAIRateLimiter:
                 prims = _LoopPrimitives(self._max_concurrent)
                 self._loop_primitives[loop] = prims
             return prims
+
+    def _effective_tier_cap(self, tier: str) -> int:
+        """The cap a tier gate enforces right now: an operator control-plane
+        override (``services/zai_control``) wins over the AIMD-managed cap;
+        otherwise the AIMD cap stands. Fails OPEN to the AIMD cap on any
+        control-read error."""
+        ai_cap = self._tier_cap[tier]
+        try:
+            from universal_agent.services import zai_control
+
+            return zai_control.effective_tier_cap(tier, ai_cap, self._tier_max[tier])
+        except Exception:  # noqa: BLE001 — fail open to the autotuner's cap
+            return ai_cap
 
     def _normalize_tier(self, model_tier: str | None) -> str | None:
         if model_tier is None:
@@ -781,19 +794,44 @@ class ZAIRateLimiter:
         guard.
 
         Raises ``ZAIFupPauseError`` (fail-fast) while the account-level FUP
-        acquire-pause is active.
+        acquire-pause is active, OR while the operator control plane
+        (``services/zai_control``) has a global pause or this tier's hard-stop
+        engaged. The control-plane checks fail OPEN — any read error lets the
+        acquire proceed.
 
         Args:
             context: Optional context string for logging
             model_tier: Tier bucket of the model on the wire
         """
+        tier = self._normalize_tier(model_tier)
+        # Operator control-plane pause (fail-open). Global pause covers every
+        # caller; tier pause is the per-tier hard-stop from the lever ladder.
+        try:
+            from universal_agent.services import zai_control
+
+            paused, _info = zai_control.is_globally_paused()
+            if paused:
+                raise ZAIFupPauseError(
+                    f"ZAI globally paused by operator control plane "
+                    f"(context={context!r}) — do not retry"
+                )
+            if tier is not None and zai_control.is_tier_paused(tier):
+                raise ZAIFupPauseError(
+                    f"ZAI tier {tier!r} paused by operator control plane "
+                    f"(context={context!r}) — do not retry"
+                )
+        except ZAIFupPauseError:
+            raise
+        except Exception:  # noqa: BLE001 — control read fails OPEN
+            pass
+
         pause_remaining = self._acquire_pause_until - time.time()
         if pause_remaining > 0:
             raise ZAIFupPauseError(
                 f"ZAI FUP acquire-pause active for another {pause_remaining:.0f}s "
                 f"(context={context!r}) — account-level cliff signal; do not retry"
             )
-        tier = self._normalize_tier(model_tier)
+        # `tier` resolved at the top of this method.
         # The bundle is captured locally so release always pairs with the
         # gate actually acquired — never a swapped attribute.
         prims = self._get_loop_primitives()

@@ -287,11 +287,58 @@ def _append_event(event: dict) -> None:
 _REQUEST_START_EXT_KEY = "zai_obs_started_at"
 
 
+class ZAIGloballyPausedError(httpx.RequestError):
+    """Raised from the request hook to ABORT an outbound ``api.z.ai`` request
+    while the operator control plane (``services/zai_control``) has a global
+    pause engaged. An ``httpx.RequestError`` subclass so it surfaces to callers
+    as an ordinary request failure (handled / retried-as-non-429 / fallen-back),
+    not an unexpected crash. This is the 100%-coverage emergency stop — it fires
+    in the request hook installed on EVERY httpx client, so it catches the
+    direct-httpx ZAI callers the rate limiter never sees."""
+
+    def __init__(self, message: str, *, request: httpx.Request | None = None) -> None:
+        # httpx.RequestError requires a request; pass it when we have one.
+        if request is not None:
+            super().__init__(message, request=request)
+        else:
+            super().__init__(message)
+
+
+def _global_pause_active() -> bool:
+    """True iff the control plane has a global pause engaged. FAILS OPEN
+    (False) on any error — a control-read problem must never block traffic."""
+    try:
+        from universal_agent.services import zai_control
+
+        paused, _info = zai_control.is_globally_paused()
+        return bool(paused)
+    except Exception:  # noqa: BLE001 — fail open
+        return False
+
+
+def _enforce_global_pause(request: httpx.Request) -> None:
+    """Abort the request if it targets ZAI and a global pause is active.
+    Only ZAI-host requests are ever affected; all other traffic is untouched."""
+    try:
+        if not _is_zai_url(str(request.url)):
+            return
+    except Exception:  # noqa: BLE001 — URL parse issue: do not block
+        return
+    if _global_pause_active():
+        raise ZAIGloballyPausedError(
+            "ZAI requests globally paused by operator control plane "
+            "(services/zai_control). Clear the pause or wait for its TTL.",
+            request=request,
+        )
+
+
 def _on_request_sync(request: httpx.Request) -> None:
+    _enforce_global_pause(request)
     request.extensions[_REQUEST_START_EXT_KEY] = time.monotonic()
 
 
 async def _on_request_async(request: httpx.Request) -> None:
+    _enforce_global_pause(request)
     request.extensions[_REQUEST_START_EXT_KEY] = time.monotonic()
 
 

@@ -547,7 +547,64 @@ Two things worth knowing before acting on this:
    not inference. (The YouTube digest has its own comparator, `scripts/youtube_digest_compare.py`.)
    See [`04_intelligence/14_model_tiering_by_process.md`](../04_intelligence/14_model_tiering_by_process.md).
 
-## 9. Related docs
+## 9. Emergency control plane + dashboard (`services/zai_control.py`)
+
+A live, operator-facing control surface for ZAI pressure, layered ON TOP of the AIMD
+limiter and observability — it does not replace them. A single JSON file,
+`AGENT_RUN_WORKSPACES/zai_inference_control.json` (override `UA_ZAI_CONTROL_PATH`), lives
+outside the git tree so it **survives deploys**, and is read LIVE (≤2s in-process cache)
+by the enforcement points. Written atomically by the gateway control endpoint.
+
+**The safety invariant: every read FAILS OPEN.** A missing / corrupt / unreadable control
+file yields the empty state — env-default caps, no pause — never "paused", never a raise,
+never a startup crash. So the control plane is **not on the critical restore path**: the
+system runs normally without it, and the worst case of a control-plane bug is "the
+emergency levers silently don't engage; fall back to systemctl/Infisical."
+
+### 9.1 The lever ladder (`zai_control.py::LEVELS`)
+
+Lowest → greatest, dashboard-controllable L0–L4 (L5 is out-of-band):
+
+| Lvl | Effect (control file) | Enforced where |
+|---|---|---|
+| 0 Normal | clear overrides + pause | env-default caps |
+| 1 Trim | caps opus 1/1, sonnet/mid/haiku 1/2 | limiter (routed callers) |
+| 2 Minimal | all caps 1/1 | limiter |
+| 3 Cheap-only | all caps 1/1 + `tier_pause` {opus, mid} | limiter |
+| 4 Global pause | `global_pause.active` (default 30m TTL) | **httpx hook (ALL callers)** + limiter |
+| 5 Full dark | (not a control-file state) stop systemd services | manual/CLI |
+
+**Coverage:** L4 global pause is enforced in `zai_observability.py::_on_request_sync` /
+`_on_request_async` (which raise `ZAIGloballyPausedError` for any `api.z.ai` request while
+paused) — the 100% chokepoint, every UA process, limiter-adopted or not. L1–L3 (per-tier
+caps via `zai_control.effective_tier_cap`, and `tier_pause`) are enforced in
+`rate_limiter.py::ZAIRateLimiter.acquire` + `_effective_tier_cap` — they cover only callers
+routed through the limiter (the `_call_llm` seam + native users), and an explicit operator
+cap override **wins over the AIMD autotuner** while present. L4 is the guaranteed nuke; it
+keeps services (and the dashboard) up while ZAI traffic is zero, which is why it's preferred
+over L5 for the dashboard. The TTL on the pause is the self-heal so a forgotten pause clears.
+
+### 9.2 Endpoints + dashboard
+
+- **GET `/api/v1/ops/zai/status`** (`gateway_server.py::ops_zai_status` →
+  `services/zai_status.py::build_status`) — per-tier 429 rejection RATES over 1m/10m/60m,
+  FUP/1313 counts, effective caps, outcome counters, per-caller breakdown, control state.
+  All reads fail soft.
+- **POST `/api/v1/ops/zai/control`** (`gateway_server.py::ops_zai_control`) — actions
+  `set_level` / `set_global_pause` / `set_tier_caps` / `set_tier_pause` / `clear`. Auth via
+  `_require_ops_auth`; validates tiers ∈ `TIERS`, caps ≥ 1.
+- **Dashboard:** `web-ui/app/dashboard/zai-control/page.tsx` ("ZAI Control" in the System nav)
+  — polls status every 5s, renders the ladder + per-tier cap steppers + global-pause toggle.
+
+### 9.3 Watchdog integration
+
+`zai_inference_health.py` surfaces the control state (`control_intervention_level`,
+`control_global_pause_active`, `control_tier_pauses`) read-only and **never alarms on an
+intentional operator pause** (an active pause emits a WARN-level visibility marker, not a
+CRITICAL — during a global pause ZAI traffic is zero anyway, so the 429/FUP conditions don't
+fire). Reads fail open.
+
+## 10. Related docs
 
 - [`04_intelligence/14_model_tiering_by_process.md`](../04_intelligence/14_model_tiering_by_process.md)
   — which model each process uses and why (the *pressure* lever).
