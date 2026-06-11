@@ -600,8 +600,13 @@ over L5 for the dashboard. The TTL on the pause is the self-heal so a forgotten 
   `set_level` / `set_global_pause` / `set_tier_caps` / `set_tier_pause` / `clear`. Auth via
   `_require_ops_auth`; validates tiers ∈ `TIERS`, caps ≥ 1.
 - **Dashboard:** `web-ui/app/dashboard/zai-control/page.tsx` ("ZAI Control" in the System nav)
-  — polls status every 5s, renders the ladder + per-tier cap steppers + global-pause toggle, and
-  (every 10s) the **Proactive activity controls** panel (§9.4).
+  — polls status every 5s. Renders: the L0–L4 ladder + reset/global-pause buttons; one **per-tier
+  card** per tier (opus/sonnet/mid/haiku) showing the effective cap (with ± steppers, override
+  badge, pause), and **429 + FUP for each of the 1m / 10m / 60m windows**; the rolling rejection-rate
+  block (1m/10m/60m totals + the **Top 429 callers** list, which names the real consumer — see §5.1);
+  and (polled every 10s) the **Proactive activity controls** panel (§9.4), whose timer/service rows
+  render in a responsive **two-column** grid. All reads fail soft; the page renders even with zero
+  ZAI traffic or a missing source.
 
 ### 9.3 Watchdog integration
 
