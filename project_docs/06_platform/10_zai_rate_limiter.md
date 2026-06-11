@@ -127,18 +127,36 @@ slot.
 ### 4.2 `with_rate_limit_retry()` — the wrapper callers should use
 
 The ergonomic entry point. `with_rate_limit_retry(func, *args, max_retries=5,
-context="...", **kwargs)` loops up to `max_retries` times; each attempt runs inside
-`acquire(context)` and dispatches on the outcome:
+context="...", model_tier=None, max_total_seconds=None, **kwargs)` loops up to
+`max_retries` times; each attempt runs inside `acquire(context, model_tier=…)` and
+dispatches on the outcome:
 
 ```text
-success            → record_success(); return result
-[1313] / FUP match → record_fup_signal(); raise   (STOP — never retry)
-"429"/"too many"   → record_429(); sleep get_backoff(attempt); continue
-any other error    → raise                          (not a rate-limit problem)
+success                  → record_success(model_tier); return result
+"429"/"too many"         → record_429(model_tier); RELEASE slot;
+  (even when FUP-texted)   sleep get_backoff(attempt, model_tier); retry
+FUP text on a NON-429    → record_fup_signal(); raise   (CLIFF — never retry)
+ZAIFupPauseError         → propagate (account paused; fail fast)
+any other error          → raise            (not a rate-limit problem)
 ```
 
+**Why 429-first dispatch (changed 2026-06-11):** ZAI's *standard* throttle response
+is a 429 whose body carries code `1313` + the Fair-Usage text (verified: 1058/1058
+journald 429s over 12h). Treating every 1313-texted body as the account cliff would
+mean no retry ever happens and the watchdog pages CRITICAL continuously for routine
+throttle. So a 429-shaped error is the **gradient** regardless of its text; the
+**cliff** (`record_fup_signal`) is FUP text on a non-429 response (suspension etc.)
+or gradient *saturation* (see §4.7). Backoff sleeps happen **outside** the acquired
+slot, so a cap-1 tier is never monopolized by one failing call's retry saga.
+`max_total_seconds` lets budgeted callers (convergence's 600s box) cap the whole
+retry saga. Logical outcomes are tracked distinctly from wire 429s:
+`total_succeeded_after_retry` vs `total_429s_exhausted` (+`last_exhausted_at`) in
+the snapshot — wire counts amplify under retries and no longer mean failure.
+
 `context` is a free-text label (e.g. `"mission_control_chief_of_staff"`) that flows
-into logs, the snapshot, and the FUP record — always pass a meaningful one.
+into logs, the snapshot, and the FUP record — always pass a meaningful one. NOTE:
+because the wrapper consumes `max_retries`/`context`/`model_tier`/
+`max_total_seconds`, the wrapped func can never receive kwargs by those names.
 
 ### 4.3 Adaptive backoff & FUP — the three `record_*` methods
 
@@ -174,11 +192,19 @@ Defaults below are the **actual code defaults** in `ZAIRateLimiter.__init__`.
 
 | Env var | Code default | Meaning |
 |---|---|---|
-| `ZAI_MAX_CONCURRENT` | **`2`** | Max parallel ZAI requests through the singleton |
+| `ZAI_MAX_CONCURRENT` | **`2`** | Max parallel ZAI requests through the legacy (tierless) gate |
 | `ZAI_INITIAL_BACKOFF` | **`1.0`** | Starting backoff floor (seconds) |
 | `ZAI_MAX_BACKOFF` | **`30.0`** | Hard cap on any single backoff |
-| `ZAI_MIN_INTERVAL` | **`0.5`** | Minimum seconds between request *starts* |
+| `ZAI_MIN_INTERVAL` | **`0.5`** | Minimum seconds between request *starts* (global, all tiers) |
 | `UA_ZAI_INFERENCE_STATE_PATH` | (derived) | Override snapshot location |
+| `ZAI_TIER_CAP_{OPUS,SONNET,MID,HAIKU}` | **`1/2/3/4`** | Per-tier AIMD seed caps (§4.7) |
+| `ZAI_TIER_CAP_MIN_*` / `ZAI_TIER_CAP_MAX_*` | **`1` / `3,5,5,6`** | Per-tier AIMD bounds |
+| `ZAI_TIER_INCREASE_STREAK` | **`20`** | Clean successes required before a +1 |
+| `ZAI_TIER_INCREASE_QUIET_SECONDS` | **`60`** | Min quiet time since the tier's last 429 |
+| `ZAI_TIER_INCREASE_COOLDOWN_SECONDS` | **`120`** | Min spacing between increases |
+| `ZAI_TIER_SATURATION_429S` | **`6`** | Consecutive 429s at min cap ⇒ cliff escalation |
+| `ZAI_FUP_FREEZE_SECONDS` | **`1800`** | Cliff: additive-increase freeze |
+| `ZAI_FUP_ACQUIRE_PAUSE_SECONDS` | **`180`** | Cliff: fail-fast acquire pause |
 
 ### 4.6 Loop resilience (multi-loop processes)
 
@@ -211,6 +237,87 @@ and loud-logs `zai_rate_limiter_cross_loop_conflict` so it gets fixed at the sou
 Pinned by `tests/unit/test_rate_limiter_loop_resilience.py`; the two-live-loops
 regression test there is the **hard gate** for flipping the `_call_llm` routing flag
 in production.
+
+### 4.7 Per-tier AIMD concurrency controller
+
+On top of the legacy global semaphore, the limiter runs one **dynamic concurrency
+cap per model tier** — `rate_limiter.py::TIERS` = `opus / sonnet / mid / haiku`
+(callers map a wire model id to its tier with
+`utils/model_resolution.py::model_id_to_tier` and pass `model_tier=` through
+`with_rate_limit_retry`/`acquire`). Tiers run **additively** (throughput = the sum
+of the caps), so the flagship never runs many-wide while cheap tiers keep moving.
+Admission goes through `rate_limiter.py::_AdaptiveGate` — a counting gate whose
+capacity is read live on every decision (`holders < cap`), so cap changes are plain
+int writes with **no debt bookkeeping** (an earlier debt-counter design could
+deadlock a tier when a decrease landed before its semaphore lazily existed — pinned
+by `tests/unit/test_rate_limiter_aimd.py`). Gates live in the per-loop bundle
+(§4.6); callers without a `model_tier` keep the legacy global semaphore unchanged.
+
+The cap moves AIMD-style (TCP congestion control over an unknown, time-varying
+limit — seed low, discover headroom from success, never probe for the cliff):
+
+| Signal | Transition | Where |
+|---|---|---|
+| 429 (gradient) | **Halve** the tier cap — at most once per *congestion event* (only if the tier has succeeded since its last decrease; a wall-clock cooldown would serially halve through one retry saga's spread-out 429s) + per-tier backoff-floor ramp | `record_429(context, model_tier=…)` |
+| Sustained clean streak | **+1** cap, gated by streak ≥ `ZAI_TIER_INCREASE_STREAK`, quiet ≥ `ZAI_TIER_INCREASE_QUIET_SECONDS` since the last 429, cooldown ≥ `ZAI_TIER_INCREASE_COOLDOWN_SECONDS` since the last increase, no FUP freeze, below the tier max | `record_success(model_tier=…)` |
+| Cliff (non-429 FUP, or saturation) | **All** tiers slam to min; additive increases freeze for `ZAI_FUP_FREEZE_SECONDS`; new acquires **fail fast** (`ZAIFupPauseError`) for `ZAI_FUP_ACQUIRE_PAUSE_SECONDS` | `record_fup_signal` |
+| Saturation | 429s persisting at MINIMUM cap (`ZAI_TIER_SATURATION_429S` consecutive) escalate to the cliff — the gradient bottomed out and ZAI is still rejecting | `record_429` → `record_fup_signal` |
+
+Seeds/bounds (env-overridable per tier via `ZAI_TIER_CAP_<TIER>` /
+`ZAI_TIER_CAP_MIN_<TIER>` / `ZAI_TIER_CAP_MAX_<TIER>`; code defaults are the
+durable config since the VPS `.env` is wiped on deploy):
+
+| tier | start | min | max |
+|---|---|---|---|
+| opus | 1 | 1 | 3 |
+| sonnet | 2 | 1 | 5 |
+| mid | 3 | 1 | 5 |
+| haiku | 4 | 1 | 6 |
+
+**Verifying the controller in production:** every cap change emits a
+`zai_tier_cap_change tier=… old=… new=… reason=429_halve|clean_increase|fup_slam
+pid=…` log line — **journald is the primary verification channel.** The snapshot's
+`tiers` blob is a quick glance only: it is single-file, last-writer-wins across UA
+processes (each process has its own singleton; the hourly convergence subprocess
+restarts at seed caps), so it carries `pid`/`process_name`/`singleton_created_at`
+for attribution — and the cross-process **timestamp** fields (`last_429_at`,
+`last_exhausted_at`, `acquire_pause_until`, `freeze_until`, …) are
+**merged-on-write** (`_persist_snapshot` keeps the max of the on-disk and own
+value) so one process's success writes can't erase another's outcome alarms.
+Expect the increase side to be ~inert outside the long-lived gateway:
+short-lived subprocesses discard learned caps — deployed behavior is
+approximately *static seeds + fast fall + cliff stop*, which is acceptable policy
+(the seeds are workable; the controller's job is protection first).
+
+Accepted limitations (reviewed and deliberate):
+
+- **Saturation needs an exhaustion outcome.** The cliff escalation requires
+  recent retry exhaustion (`ZAI_TIER_SATURATION_EXHAUSTION_WINDOW_SECONDS`,
+  default 120s) in addition to min-cap consecutive 429s — raw wire-429 streaks
+  alone are reachable in seconds by overlapping retry sagas that all still
+  succeed.
+- **The acquire-pause is per-process** (in-memory; the snapshot merge makes it
+  *visible* cross-process, but only the recording process enforces it).
+- **Legacy `acquire()` users see `ZAIFupPauseError` as a hard error** during a
+  pause. `mission_control_chief_of_staff.py::synthesize_readout` catches it and
+  returns its fallback readout (and reports `note_retry_exhausted` when its
+  retries burn out on 429s); the report scripts (`corpus_refiner`,
+  `youtube_daily_digest`, `cleanup_report`, `parallel_draft`,
+  `generate_outline`) fail their current item/run and are rerunnable — accepted.
+- **`_AdaptiveGate` cap increases take effect on the next release/acquire**
+  (no cross-loop waiter notification — futures may only be touched from their
+  own loop; an increase follows a success, which releases a slot microseconds
+  later).
+- **Bypasser-demotion window:** while the flag is on and any in-band 429 is
+  recent, a concurrent *bypasser* burst demotes to the managed WARN — the
+  forensics (per-model breakdown) stay in the finding's `observed_value`.
+- **Routed calls drop the SDK's internal retry entirely** (`max_retries=0`),
+  including its single connection-error retry — transient transport errors
+  surface to callers (which fail closed per item).
+- **Flag flips require a service restart** to be seen by long-lived processes
+  (env is read at call time but injected at process start via
+  `initialize_runtime_secrets`); the hourly convergence subprocess picks a flip
+  up on its next run.
 
 ## 5. Observability & watchdog
 
@@ -269,15 +376,45 @@ Python processes, then emits **one** finding listing every triggered condition:
 3. **FUP signal** in the last 30 min (snapshot or events) → **CRITICAL, no grace.**
 4. **Backoff floor pinned at the max cap** → sustained throttle.
 5. **UA process count over soft limit** → WARN (self-induced choking).
+6. **FUP acquire-pause active** (`acquire_pause_until` in the future) → **CRITICAL** —
+   the limiter hit the cliff and is failing acquires fast (§4.7).
+7. **Retries exhausted recently** (`last_exhausted_at` in the last 30 min) →
+   **CRITICAL** — logical calls are failing despite limiter-managed retries.
+8. **Cross-loop conflicts** (`cross_loop_conflicts > 0`) → WARN — two live loops used
+   the limiter concurrently; fix the call-site pattern (§4.6).
 
-FUP wins severity if present. This is the alarm behind the
+**Managed-throttle demotion (active only while `UA_LLM_CLASSIFIER_LIMITER_ENABLED`
+is on):** with the hot seam routed through the limiter, conditions 1/2/4 are *normal
+managed states* during a burst — wire 429 counts amplify under retries while logical
+work succeeds. They demote to WARN (`*_managed` condition names) whenever the
+snapshot shows recent in-band 429 recording with **no** recent exhaustion and **no**
+pause; the CRITICAL alarms are then the *outcomes* (conditions 3/6/7) plus any burst
+with NO recent snapshot activity (= a bypasser, the original 2026-05-21 gap). Flag
+off ⇒ alarm behavior identical to the pre-AIMD watchdog — legacy direct-record
+callers never increment the exhaustion counters, so the demotion would mask genuine
+sustained throttle for them.
+
+FUP/pause/exhaustion win severity if present. This is the alarm behind the
 `[ACTION/INCIDENT] [Proactive Health] … zai_inference_health` emails.
 
-## 6. The load-bearing truth: the limiter is *half-adopted*
+## 6. Adoption status: the seam is now routable (flag-gated)
 
 `with_rate_limit_retry` / `acquire()` only constrain the account if **all** ZAI
-callers go through them. They do not. As of `last_verified`, of ~20 distinct
-**opus/`glm-5.1`** call sites, **only three** acquire the limiter.
+callers go through them. As of 2026-06-11 the biggest gap is closed *behind a
+flag*: `llm_classifier.py::_call_llm` — the shared seam carrying ~89% of all
+429s — routes through `with_rate_limit_retry` with the per-tier AIMD limiter
+(§4.7) when **`UA_LLM_CLASSIFIER_LIMITER_ENABLED`** is on (default OFF; parse
+via `feature_flags.py::_is_truthy`). The wrap engages **only when the
+effective base URL targets a ZAI host** (`llm_classifier.py::_targets_zai`,
+mirroring `zai_observability.ZAI_HOSTS`) — the per-stage `base_url` override
+to real Anthropic keeps the direct path, since its 429s are unrelated to the
+ZAI account. On the routed path the SDK client is built with `max_retries=0`
+(retry policy lives in ONE layer; same pairing as
+`mission_control_chief_of_staff.py`), and each logical call's retry saga is
+budget-boxed (`UA_LLM_CLASSIFIER_LIMITER_BUDGET_SECONDS`, default 300).
+
+The pre-flag state, kept for context — of ~20 distinct **opus/`glm-5.1`** call
+sites, **only three** acquired the limiter:
 
 **Goes through the limiter (≈9 sites):**
 

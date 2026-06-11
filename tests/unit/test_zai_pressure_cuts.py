@@ -221,3 +221,97 @@ def test_record_throttle_ignores_non_throttle_error():
 
     assert limiter.fup_calls == []
     assert limiter.r429_calls == []
+
+
+# ── synthesize_readout: FUP-pause fallback + exhaustion reporting ──────────
+# (MF-4 / MF-5 from the AIMD implementation review.)
+
+
+class _PausedLimiter:
+    """acquire() fail-fasts like the real limiter during a FUP pause."""
+
+    def __init__(self) -> None:
+        self.exhausted_notes = 0
+
+    def acquire(self, context: str = "", model_tier=None):
+        from universal_agent.rate_limiter import ZAIFupPauseError
+
+        raise ZAIFupPauseError("ZAI FUP acquire-pause active for another 120s")
+
+    def note_retry_exhausted(self) -> None:
+        self.exhausted_notes += 1
+
+
+class _Throttled429Limiter:
+    """acquire() works; the call site sees 429s; backoff is instant."""
+
+    def __init__(self) -> None:
+        self.exhausted_notes = 0
+        self.r429 = 0
+
+    def acquire(self, context: str = "", model_tier=None):
+        import contextlib
+
+        @contextlib.asynccontextmanager
+        async def _cm():
+            yield
+
+        return _cm()
+
+    async def record_429(self, context: str = "") -> None:
+        self.r429 += 1
+
+    async def record_success(self) -> None:  # pragma: no cover — not reached
+        pass
+
+    async def record_fup_signal(self, context: str = "", error_snippet: str = "") -> None:
+        raise AssertionError("1313-texted 429s must not record FUP")
+
+    def get_backoff(self, attempt: int, model_tier=None) -> float:
+        return 0.0
+
+    def note_retry_exhausted(self) -> None:
+        self.exhausted_notes += 1
+
+
+def _readout_env(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+    monkeypatch.setenv("UA_MISSION_CONTROL_COS_MAX_RETRIES", "2")
+
+
+def test_synthesize_readout_falls_back_on_fup_pause(monkeypatch):
+    """MF-4 pin: during the account-level acquire-pause, synthesize_readout
+    honors its never-raise contract — fallback readout, no propagation."""
+    _readout_env(monkeypatch)
+    fake = _PausedLimiter()
+    monkeypatch.setattr(cos.ZAIRateLimiter, "get_instance", classmethod(lambda cls: fake))
+
+    readout, model = asyncio.run(cos.synthesize_readout({"generated_at_utc": "2026-06-11T15:00:00+00:00"}))
+    assert readout.get("synthesis_status") != "ok"
+    assert "pause" in str(readout.get("synthesis_error") or readout).lower()
+    # Pause is not a 429-shaped exhaustion — no exhaustion note.
+    assert fake.exhausted_notes == 0
+
+
+def test_synthesize_readout_notes_exhaustion_on_429_failure(monkeypatch):
+    """MF-5 pin: a readout that burns all retries on 429-shaped errors
+    reports the exhaustion outcome to the limiter snapshot (the watchdog
+    alarms on outcomes, not wire counts)."""
+    _readout_env(monkeypatch)
+    fake = _Throttled429Limiter()
+    monkeypatch.setattr(cos.ZAIRateLimiter, "get_instance", classmethod(lambda cls: fake))
+
+    class _FailingClient:
+        class messages:  # noqa: N801 — mimic SDK shape
+            @staticmethod
+            async def create(**kwargs):
+                raise RuntimeError("Error code: 429 - [1313] Fair Usage Policy")
+
+    import anthropic
+
+    monkeypatch.setattr(anthropic, "AsyncAnthropic", lambda **kw: _FailingClient())
+
+    readout, model = asyncio.run(cos.synthesize_readout({"generated_at_utc": "2026-06-11T15:00:00+00:00"}))
+    assert readout.get("synthesis_status") != "ok"
+    assert fake.r429 == 2  # both retries throttled
+    assert fake.exhausted_notes == 1  # exactly one exhaustion per saga
