@@ -17,7 +17,7 @@ code_paths:
   - src/universal_agent/durable/db.py
   - scripts/deploy/remote_deploy.sh
   - deployment/systemd/
-last_verified: 2026-06-08
+last_verified: 2026-06-10
 ---
 
 # ADR: Scheduling Substrate Redesign
@@ -369,6 +369,35 @@ concretions:
   (S1's subprocess mailer, AgentMail-primary with the gws/HTTP-429 fallback) and
   the INCIDENT/ACTION `email_tags`; the timer decides the cooldown, the function
   just sends and closes any owned handle in a `finally`.
+- **Operator acknowledge — suppress-until-recovered (added 2026-06-10).** Each
+  digest finding carries an `Acknowledge (mute until recovered)` link minted by
+  `proactive_health_notifier.py::sign_finding_ack_token` /
+  `proactive_health_notifier.py::_build_finding_ack_url` (`'{exp}.{sig}'` TTL
+  token over `ph_ack:{finding_id}:{exp}`, 14-day TTL, same secret precedence as
+  `cron_artifact_notifier.py::_ack_secret` — `UA_ARTIFACT_ACK_SECRET` →
+  `UA_OPS_TOKEN` → `UA_INTERNAL_API_TOKEN`; when no secret resolves the mint
+  returns `""` and the email omits the line entirely). The link lands on
+  `gateway_server.py::proactive_health_ack_get` (HMAC-is-the-auth GET, mirrors
+  `gateway_server.py::artifacts_ack_get` — no ops auth, idempotent, small HTML
+  landing pages), which writes an ack row via
+  `proactive_health_snapshot.py::record_ack` into the new
+  `proactive_health_acks` table in `activity_state.db` (partial unique index on
+  the one *active* ack per finding-id; rows are never deleted — recovery flips
+  `status='recovered'`, an audit trail). The timer is the **single
+  reconciler**: every tick `proactive_health_snapshot.py::reconcile_acks`
+  touches `last_red_at_utc` for still-red acked ids and flips an ack to
+  `recovered` only after the finding stays green for
+  `UA_PROACTIVE_HEALTH_ACK_RECOVERY_SECONDS` (default 6 h) — **hysteresis**, so
+  a minutes-scale critical flap can't un-mute; a 30-day max-lifetime backstop
+  (`ACK_MAX_LIFETIME_DAYS`) force-recovers a forgotten ack. Active-acked ids
+  are filtered out of the digest decision (`decide_digest`'s `excluded_ids`
+  strips them from the carried alerted-set fingerprint too) and out of
+  `send_critical_digest`, so a post-recovery NEW red alerts on the very next
+  tick. The payload stays honest: `overall_status` is unaffected; acked
+  invariants are annotated `acknowledged`/`acked_at_utc`
+  (`proactive_health.py::annotate_invariant_acks`, read-only in
+  `build_proactive_health_payload`) plus a top-level `unacked_critical_count`,
+  and the Mission Control System Health panel renders a muted **ACKED** chip.
 - **Heartbeat compute → read swap.** The `build_proactive_health_payload` +
   `run_pre_flight_check` block was **removed** from
   `heartbeat_service.py::HeartbeatService._run_heartbeat` (no double-compute /

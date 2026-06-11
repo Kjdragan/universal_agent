@@ -27,6 +27,8 @@ replays a slot missed inside a deploy window). It:
 4. If there are critical findings, sends ONE digest email — 6h cooldown keyed
    on the durable snapshot's finding-set fingerprint (a fresh oneshot has no
    in-memory ``_notifications`` cache, so the cooldown MUST be durable).
+   Operator-ACKNOWLEDGED findings are reconciled + filtered out first
+   (suppress-until-recovered; see ``proactive_health_snapshot.reconcile_acks``).
 5. Exits 0 (a oneshot must terminate cleanly for systemd).
 """
 
@@ -110,6 +112,57 @@ async def _run() -> int:
             for f in criticals
         ]
 
+        # Operator-acknowledgement reconcile + filter (suppress-until-recovered,
+        # see ``proactive_health_snapshot.reconcile_acks``). The timer is the
+        # SINGLE reconciler: touch last_red for still-red acked ids, flip
+        # long-green acks to 'recovered'. Acked criticals are then dropped from
+        # the digest path entirely — they never enter the alerted-set
+        # fingerprint, so a post-recovery re-red is a genuinely-new id to
+        # ``decide_digest`` and alerts immediately.
+        acked_ids: set[str] = set()
+        try:
+            snap.reconcile_acks(
+                conn,
+                current_critical_ids=current_finding_ids,
+                now_iso=now_iso,
+            )
+            acked_ids = set(snap.get_active_acks(conn).keys())
+        except Exception:  # noqa: BLE001 — ack machinery must never kill the run
+            logger.warning(
+                "proactive_health timer: ack reconcile failed", exc_info=True
+            )
+        suppressed_ids = sorted(set(current_finding_ids) & acked_ids)
+        if suppressed_ids:
+            logger.info(
+                "proactive_health timer: %d acknowledged critical(s) suppressed "
+                "from digest (muted until recovered): %s",
+                len(suppressed_ids),
+                ", ".join(suppressed_ids),
+            )
+        unacked_criticals = [
+            f
+            for f, fid in zip(criticals, current_finding_ids)
+            if fid not in acked_ids
+        ]
+        unacked_finding_ids = [
+            fid for fid in current_finding_ids if fid not in acked_ids
+        ]
+
+        # Annotate the payload (post-reconcile, so a just-recovered ack is no
+        # longer marked) before the snapshot write / JSON mirror below.
+        # overall_status stays honest — acked criticals still count there.
+        try:
+            from universal_agent.services.proactive_health import (
+                annotate_invariant_acks,
+            )
+
+            annotate_invariant_acks(invariants, snap.get_active_acks(conn))
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "proactive_health timer: ack annotation failed", exc_info=True
+            )
+        payload["unacked_critical_count"] = len(unacked_criticals)
+
         # Cooldown decision against the DURABLE snapshot (a oneshot has no
         # in-memory notifications cache). The dedup key is the *cumulative set of
         # finding-ids already alerted within the active window* — re-fire only
@@ -120,18 +173,19 @@ async def _run() -> int:
         # ``proactive_health_snapshot.decide_digest``.
         prev = snap.read_latest_snapshot(conn)
         cooldown = notifier._cooldown_seconds()
-        should_send = bool(criticals) and notifier._email_enabled()
+        should_send = bool(unacked_criticals) and notifier._email_enabled()
         next_alerted_fingerprint = None
         if should_send:
             last_sent = notifier._parse_iso_timestamp(
                 (prev or {}).get("last_digest_sent_at_utc")
             )
             do_send, next_alerted_fingerprint = snap.decide_digest(
-                current_finding_ids=current_finding_ids,
+                current_finding_ids=unacked_finding_ids,
                 prev_fingerprint=(prev or {}).get("last_digest_fingerprint"),
                 last_sent_ts=last_sent,
                 now_ts=now.timestamp(),
                 cooldown_seconds=cooldown,
+                excluded_ids=acked_ids,
             )
             if not do_send:
                 should_send = False
@@ -143,7 +197,7 @@ async def _run() -> int:
 
         if should_send:
             result = await notifier.send_critical_digest(
-                criticals=criticals,
+                criticals=unacked_criticals,
                 generated_at=str(payload.get("generated_at_utc") or now_iso),
             )
             sent = bool(result.get("sent"))

@@ -228,6 +228,65 @@ def test_youtube_invariant_failure_drives_critical(
     assert invariants[0]["severity"] == "critical"
 
 
+def _seed_failing_youtube_csi(tmp_path: Path) -> Path:
+    csi_db = tmp_path / "csi.db"
+    conn = sqlite3.connect(str(csi_db))
+    try:
+        conn.executescript(CSI_SCHEMA)
+        for i in range(10):
+            conn.execute(
+                "INSERT INTO rss_event_analysis (event_id, source, transcript_status) "
+                "VALUES (?, 'youtube_channel_rss', 'missing')",
+                (f"e{i}",),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    return csi_db
+
+
+def test_acked_invariant_annotated_read_only(
+    activity_conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """An active operator ack annotates the matching invariant with
+    acknowledged/acked_at_utc — read-only: severity and overall_status are
+    untouched (the timer's digest filter, not this payload, does the muting)."""
+    from universal_agent.services import proactive_health_snapshot as snap
+
+    csi_db = _seed_failing_youtube_csi(tmp_path)
+    ack = snap.record_ack(
+        activity_conn,
+        finding_id="invariant:youtube_transcript_coverage",
+        ack_source="email_link",
+    )
+    payload = build_proactive_health_payload(
+        activity_conn=activity_conn,
+        cron_jobs=[],
+        csi_db_path=csi_db,
+    )
+    finding = payload["invariants"][0]
+    assert finding["finding_id"] == "invariant:youtube_transcript_coverage"
+    assert finding["acknowledged"] is True
+    assert finding["acked_at_utc"] == ack["acked_at_utc"]
+    # Honesty preserved: the ack does not soften severity/overall_status.
+    assert finding["severity"] == "critical"
+    assert payload["overall_status"] == "critical"
+
+
+def test_unacked_invariant_carries_no_ack_annotation(
+    activity_conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    csi_db = _seed_failing_youtube_csi(tmp_path)
+    payload = build_proactive_health_payload(
+        activity_conn=activity_conn,
+        cron_jobs=[],
+        csi_db_path=csi_db,
+    )
+    finding = payload["invariants"][0]
+    assert "acknowledged" not in finding
+    assert "acked_at_utc" not in finding
+
+
 def test_cron_jobs_serialized(activity_conn: sqlite3.Connection) -> None:
     payload = build_proactive_health_payload(
         activity_conn=activity_conn,

@@ -15,7 +15,7 @@ code_paths:
   - src/universal_agent/task_hub.py
   - src/universal_agent/durable/state.py
   - src/universal_agent/services/proactive_health_notifier.py
-last_verified: 2026-06-03
+last_verified: 2026-06-10
 ---
 
 # Agent Operating Playbook
@@ -85,8 +85,8 @@ to Task Hub. They surface through exactly two channels:
 
 | Channel | What it is | Audience |
 |---|---|---|
-| **System Health panel** | The canonical dashboard surface. A panel on the Mission Control tab that renders the live `GET /api/v1/ops/proactive_health` response (Layer 1 process-liveness + Layer 2 pipeline invariants). Always reflects current state — nothing to acknowledge, nothing to clear. | Operator + Simone |
-| **Critical email** | First-occurrence email per finding-id with a 6h cooldown (`proactive_health_notifier`), sent regardless of dormancy (infra incident-response, Exception #3). | Operator |
+| **System Health panel** | The canonical dashboard surface. A panel on the Mission Control tab that renders the live `GET /api/v1/ops/proactive_health` response (Layer 1 process-liveness + Layer 2 pipeline invariants). Always reflects current state — when a finding recovers it simply disappears; nothing to clear. An email-acknowledged finding stays visible (severity unchanged) with a muted **ACKED** chip (the `acknowledged`/`acked_at_utc` payload annotation). | Operator + Simone |
+| **Critical email** | One digest email covering all current critical findings, 6h cooldown (`proactive_health_notifier.py::send_critical_digest`, driven by the proactive-health systemd timer), sent regardless of dormancy (infra incident-response, Exception #3). Each finding carries an **Acknowledge (mute until recovered)** link — clicking it suppresses that finding-id from future digests until the finding stays green long enough to count as recovered (`UA_PROACTIVE_HEALTH_ACK_RECOVERY_SECONDS`, default 6h, hysteresis against minutes-scale flaps; 30-day max-lifetime backstop), after which the next NEW red alerts again immediately. Suppress-until-recovered, **not** a timed snooze. Mechanics: As-built notes in `06_platform/08_scheduling_substrate_adr.md` Decision 3. | Operator |
 
 ```mermaid
 flowchart LR
@@ -113,7 +113,9 @@ endpoint, and the rows themselves caused four concrete failure modes:
 
 The live endpoint has none of these problems: it is **stateless and
 self-healing** — when the underlying invariant recovers, the panel simply stops
-showing it. No acknowledge step, no clear step, no resurrection.
+showing it. No clear step, no resurrection. (The email **Acknowledge** link
+above mutes only the *digest*; the panel keeps showing the finding, ACKED chip
+and all, until it actually recovers.)
 
 **Consequence for the board.** The Task Hub **"Needs Review"** lane now means
 **only genuinely-stalled real work sessions** — missions/tasks that need human

@@ -21352,6 +21352,80 @@ async def artifacts_ack_get(artifact_id: str, t: str = ""):
     return Response(status_code=204)
 
 
+@app.get("/api/v1/proactive_health/ack")
+async def proactive_health_ack_get(f: str = "", t: str = ""):
+    """Signed-URL acknowledge endpoint for proactive_health digest emails.
+
+    Mirrors ``artifacts_ack_get``: the HMAC token IS the auth (no
+    ``_require_ops_auth`` — the link lands in the operator's mail client,
+    which can't attach a bearer header). ``f`` is the finding_id, ``t`` a
+    TTL'd token from ``proactive_health_notifier.sign_finding_ack_token``.
+    On success records the ack (``proactive_health_snapshot.record_ack``) so
+    the systemd timer mutes the finding out of the critical digest until it
+    RECOVERS (suppress-until-recovered with hysteresis — not a timed snooze).
+    Idempotent — a re-click renders an "already acknowledged" page. Returns
+    small HTML landing pages (the operator sees this in a browser tab).
+    """
+    from fastapi.responses import HTMLResponse
+
+    from universal_agent.services import proactive_health_snapshot as ph_snap
+    from universal_agent.services.proactive_health_notifier import (
+        verify_finding_ack_token,
+    )
+
+    finding_id = (f or "").strip()
+    if not finding_id or not verify_finding_ack_token(finding_id, t or ""):
+        logger.info(
+            "proactive_health_ack_get: invalid/expired ack token for finding %s (no-op)",
+            finding_id or "(empty)",
+        )
+        body = _brief_chrome(
+            "Link expired or invalid",
+            "<p>We couldn't verify this acknowledge link (it may have "
+            "expired — ack links are valid 14 days). The finding is "
+            "unchanged; you can check live state on the Mission Control "
+            "dashboard.</p>",
+            status_color="#cf222e",
+        )
+        return HTMLResponse(content=body, status_code=401)
+
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            ack = ph_snap.record_ack(
+                conn, finding_id=finding_id, ack_source="email_link"
+            )
+        finally:
+            conn.close()
+
+    safe_finding = (
+        finding_id.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    )
+    if ack.get("created"):
+        logger.info(
+            "proactive_health_ack_get: acknowledged finding %s — digest muted "
+            "until it recovers",
+            finding_id,
+        )
+        body = _brief_chrome(
+            "Finding acknowledged",
+            f"<p><code>{safe_finding}</code> is now muted from the "
+            "proactive-health digest <strong>until it recovers</strong> "
+            "(stays green long enough). This is not a timed snooze: while it "
+            "keeps firing you won't be re-emailed about it, and a NEW red "
+            "after recovery alerts again immediately.</p>",
+            status_color="#1a7f37",
+        )
+        return HTMLResponse(content=body, status_code=200)
+    body = _brief_chrome(
+        "Already acknowledged",
+        f"<p><code>{safe_finding}</code> was already acknowledged "
+        f"({ack.get('acked_at_utc') or 'earlier'}) and remains muted until "
+        "it recovers. Nothing changed.</p>",
+    )
+    return HTMLResponse(content=body, status_code=200)
+
+
 # ── PR B: Insight pipeline feedback / viewer / pause endpoints ─────────
 #
 # These three routes are pure-addition infrastructure consumed by PR D's

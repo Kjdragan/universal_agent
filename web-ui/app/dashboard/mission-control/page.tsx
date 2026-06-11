@@ -125,6 +125,11 @@ type ProactiveHealthPayload = {
     observed_value: any;
     runbook_command: string;
     category: string;
+    // Operator email-link acknowledgement (suppress-until-recovered). Present
+    // only while an ack is active; annotated server-side from
+    // proactive_health_acks.
+    acknowledged?: boolean;
+    acked_at_utc?: string | null;
   }>;
   stale_tasks?: { count: number };
   parked_tasks?: { count: number };
@@ -721,6 +726,18 @@ function SystemHealthPanel() {
                   >
                     {sev.label}
                   </span>
+                  {finding.acknowledged && (
+                    <span
+                      className="inline-flex items-center rounded border border-border bg-card/40 px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                      title={
+                        finding.acked_at_utc
+                          ? `Acknowledged ${finding.acked_at_utc} — muted from the email digest until it recovers`
+                          : "Acknowledged — muted from the email digest until it recovers"
+                      }
+                    >
+                      ACKED
+                    </span>
+                  )}
                 </div>
                 {finding.recommendation && (
                   <p className="mt-1 text-xs text-muted-foreground">{finding.recommendation}</p>
