@@ -710,3 +710,167 @@ def test_gh_env_keeps_token_when_no_config_login(monkeypatch, tmp_path):
     monkeypatch.setenv("GH_TOKEN", "the-only-cred")
     env = mod._gh_subprocess_env()
     assert env.get("GH_TOKEN") == "the-only-cred"
+
+
+# --------------------------------------------------------------------------- #
+# Source-PR-state gate (added 2026-06-11)
+#
+# A deslop finding's slop only reaches `main` once its source PR MERGES. For
+# manual-review branches (codie/*, kevin/*, feature/*) the PR can sit OPEN for
+# hours — dispatching a fix-off-main mission then is wrong (the slop isn't on
+# main; e.g. issue #933 / open PR #932). Re-route by PR state:
+#   MERGED / unknown -> proceed (dispatch as before)
+#   OPEN             -> comment on the PR once, don't dispatch
+#   CLOSED unmerged  -> close the issue as moot
+# --------------------------------------------------------------------------- #
+
+import json as _json
+
+from universal_agent.scripts.deslop_remediation_dispatch import (
+    decide_source_pr_disposition,
+    fetch_pr_state,
+)
+
+
+def _pr_view_json(state: str, merged: bool = False) -> str:
+    return _json.dumps({"state": state, "mergedAt": "2026-06-11T00:00:00Z" if merged else None})
+
+
+@pytest.mark.parametrize(
+    "pr_state,exp",
+    [
+        ({"state": "MERGED", "merged": True}, "proceed"),
+        ({"state": "OPEN", "merged": False}, "defer_open_pr"),
+        ({"state": "CLOSED", "merged": False}, "close_moot"),
+        (None, "proceed"),  # unknown -> safe default = behave as before
+        ({"state": "", "merged": False}, "proceed"),
+    ],
+)
+def test_decide_source_pr_disposition(pr_state, exp):
+    disp, _reason = decide_source_pr_disposition(pr_state)
+    assert disp == exp
+
+
+def test_fetch_pr_state_parses_open():
+    gh = FakeGh({("pr", "view"): (0, _pr_view_json("OPEN"))})
+    assert fetch_pr_state("r", 1, gh) == {"state": "OPEN", "merged": False}
+
+
+def test_fetch_pr_state_merged():
+    gh = FakeGh({("pr", "view"): (0, _pr_view_json("MERGED", merged=True))})
+    assert fetch_pr_state("r", 1, gh) == {"state": "MERGED", "merged": True}
+
+
+def test_fetch_pr_state_empty_is_none():
+    gh = FakeGh({("pr", "view"): (0, "")})
+    assert fetch_pr_state("r", 1, gh) is None
+
+
+def _gh_for_issue(number: int, body: str, labels: list[str], pr_view: str | None = None,
+                  pr_comments: str | None = None) -> FakeGh:
+    resp = {
+        ("issue", "list"): (0, _issue_list_json([number])),
+        ("issue", "view"): (0, _issue_view_json(number, body, labels)),
+    }
+    if pr_view is not None:
+        resp[("pr", "view")] = (0, pr_view)
+    return FakeGh(resp)
+
+
+def test_open_source_pr_defers_instead_of_dispatching(monkeypatch):
+    calls = {"dispatch": 0}
+    monkeypatch.setattr(
+        mod, "dispatch_cody_fix",
+        lambda *a, **k: calls.__setitem__("dispatch", calls["dispatch"] + 1) or {"action": "dispatch"},
+    )
+    # PR 797 is OPEN; pr-view (json comments) returns no prior comment -> should post one.
+    gh = FakeGh(
+        {
+            ("issue", "list"): (0, _issue_list_json([798])),
+            ("issue", "view"): (0, _issue_view_json(798, BODY_798, ["deslop-findings"])),
+            ("pr", "view"): (0, _pr_view_json("OPEN")),  # used for BOTH state + comments fetch
+            ("pr", "comment"): (0, ""),
+        }
+    )
+    res = run_dispatch(mode=MODE_OBSERVE, gh=gh)["processed"][0]
+    # Executed action reflects the re-route (result.update from the defer helper).
+    assert res["action"] == "defer_open_pr"
+    assert res["source_pr_disposition"] == "defer_open_pr"
+    assert calls["dispatch"] == 0  # NO fix-off-main mission
+    # A pr comment was posted on the source PR.
+    assert any(c[:2] == ["pr", "comment"] and "797" in c for c in gh.calls)
+
+
+def test_open_source_pr_comment_is_idempotent(monkeypatch):
+    monkeypatch.setattr(mod, "dispatch_cody_fix", lambda *a, **k: {"action": "dispatch"})
+    marker = mod._DEFER_MARKER.format(n=798)
+    comments_json = _json.dumps({"state": "OPEN", "mergedAt": None,
+                                 "comments": [{"body": f"prior {marker} body"}]})
+    gh = FakeGh(
+        {
+            ("issue", "list"): (0, _issue_list_json([798])),
+            ("issue", "view"): (0, _issue_view_json(798, BODY_798, ["deslop-findings"])),
+            ("pr", "view"): (0, comments_json),
+            ("pr", "comment"): (0, ""),
+        }
+    )
+    run_dispatch(mode=MODE_OBSERVE, gh=gh)
+    assert not any(c[:2] == ["pr", "comment"] for c in gh.calls)  # no duplicate comment
+
+
+def test_closed_unmerged_source_pr_closes_issue_as_moot(monkeypatch):
+    calls = {"dispatch": 0}
+    monkeypatch.setattr(
+        mod, "dispatch_cody_fix",
+        lambda *a, **k: calls.__setitem__("dispatch", calls["dispatch"] + 1) or {},
+    )
+    gh = FakeGh(
+        {
+            ("issue", "list"): (0, _issue_list_json([798])),
+            ("issue", "view"): (0, _issue_view_json(798, BODY_798, ["deslop-findings"])),
+            ("pr", "view"): (0, _pr_view_json("CLOSED", merged=False)),
+            ("issue", "close"): (0, ""),
+        }
+    )
+    res = run_dispatch(mode=MODE_OBSERVE, gh=gh)["processed"][0]
+    assert res["source_pr_disposition"] == "close_moot"
+    assert calls["dispatch"] == 0
+    assert any(c[:2] == ["issue", "close"] and "798" in c for c in gh.calls)
+
+
+def test_merged_source_pr_still_dispatches(monkeypatch):
+    calls = {"dispatch": 0}
+    monkeypatch.setattr(
+        mod, "dispatch_cody_fix",
+        lambda *a, **k: calls.__setitem__("dispatch", calls["dispatch"] + 1) or {"action": "dispatch"},
+    )
+    gh = FakeGh(
+        {
+            ("issue", "list"): (0, _issue_list_json([798])),
+            ("issue", "view"): (0, _issue_view_json(798, BODY_798, ["deslop-findings"])),
+            ("pr", "view"): (0, _pr_view_json("MERGED", merged=True)),
+        }
+    )
+    res = run_dispatch(mode=MODE_OBSERVE, gh=gh)["processed"][0]
+    assert res["source_pr_disposition"] == "proceed"
+    assert calls["dispatch"] == 1
+
+
+def test_source_pr_check_kill_switch(monkeypatch):
+    monkeypatch.setenv("UA_DESLOP_CHECK_SOURCE_PR", "0")
+    calls = {"dispatch": 0}
+    monkeypatch.setattr(
+        mod, "dispatch_cody_fix",
+        lambda *a, **k: calls.__setitem__("dispatch", calls["dispatch"] + 1) or {"action": "dispatch"},
+    )
+    # PR is OPEN, but the kill switch disables the check -> dispatch proceeds (old behavior).
+    gh = FakeGh(
+        {
+            ("issue", "list"): (0, _issue_list_json([798])),
+            ("issue", "view"): (0, _issue_view_json(798, BODY_798, ["deslop-findings"])),
+            ("pr", "view"): (0, _pr_view_json("OPEN")),
+        }
+    )
+    res = run_dispatch(mode=MODE_OBSERVE, gh=gh)["processed"][0]
+    assert calls["dispatch"] == 1
+    assert res.get("source_pr_disposition") in (None, "proceed", "disabled")
