@@ -31,7 +31,7 @@ code_paths:
   - src/universal_agent/rate_limiter.py
   - src/universal_agent/services/invariants/zai_inference_health.py
   - src/universal_agent/gateway_server.py
-last_verified: 2026-06-10
+last_verified: 2026-06-11
 ---
 
 # Intelligence Model Tiering by Process
@@ -122,7 +122,19 @@ change, so a tier can be tuned up or down per process if quality or cost dictate
 
 ---
 
+> **2026-06-11 implementation note:** the `llm_classifier.py` wrapper rows below were
+> registry intent that the code did not yet implement — the wrappers passed no
+> `model=`, so `_call_llm`'s `resolve_opus()` fallback kept them on `glm-5.1`. As of
+> 2026-06-11 all five wrappers (`classify_priority`, `classify_agent_route`,
+> `generate_calendar_task_description`, `extract_due_at`, `extract_disjointed_tasks`)
+> explicitly pass `llm_classifier.py::_classifier_default_model` — **sonnet
+> (`glm-5-turbo`) by default**, override via `UA_LLM_CLASSIFIER_DEFAULT_MODEL`. Sonnet
+> (not haiku) for the Tier-A-registered rows because live per-model 429 data showed
+> ZAI throttling `glm-4.5-air` at ~61% and `glm-5.1` at ~85%+ while `glm-5-turbo`
+> flowed clean — move them down to haiku via the env knob once air pressure clears.
+
 ## 4. Registry — at a glance
+
 
 ### Tier A — `glm-4.5-air` (haiku)
 
