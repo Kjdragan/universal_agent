@@ -175,3 +175,30 @@ def test_dispatch_keeps_sdk_for_zai_mission_without_goal_flag(monkeypatch, tmp_p
     payload = _read_mission_payload(dispatched["mission_id"])
     assert payload.get("execution_mode") == "sdk"
     assert "use_goal_loop" not in payload.get("metadata", {})
+
+
+# ── 4. False-pass fix by subtraction: contract forbids mock, demands live ────
+
+def test_demo_contract_and_instructions_forbid_mock():
+    """2026-06-11: the build contract demands LIVE inference and forbids
+    mocking the demonstrated capability; the stale 'Max OAuth BROKEN' claim is
+    gone; and the old 'use mock modes for API keys' instruction is removed."""
+    from universal_agent.services.proactive_tutorial_builds import (
+        DEMO_BUILD_CONTRACT,
+        _build_task_description,
+    )
+
+    contract = DEMO_BUILD_CONTRACT
+    contract_flat = " ".join(contract.split())  # collapse the triple-quote line wraps
+    assert "BROKEN" not in contract  # stale Max-OAuth claim removed
+    assert "never mock" in contract_flat.lower()  # live-inference invariant
+    assert 'endpoint_hit="mock" is NOT an acceptable pass state' in contract_flat
+
+    desc = _build_task_description(
+        video_title="Build an MCP server",
+        video_url="https://youtube.test/watch?v=x",
+        channel_name="AI Builder",
+        extraction_plan={"language": "python"},
+    )
+    assert "mock modes for API keys" not in desc  # old permissive instruction gone
+    assert "Do NOT mock the capability" in desc

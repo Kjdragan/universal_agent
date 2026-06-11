@@ -85,13 +85,13 @@ functionally sophisticated enough to FULLY exercise the capability.
 This demo is the operator's personal learning/reference library entry;
 acceptance = it demonstrates the capability end-to-end, not how it looks.
 
-Inference wiring (Claude Agent SDK demos): Claude-Agent-SDK + Claude-Max
-OAuth inference is currently BROKEN. Any demo built on the Claude Agent SDK
-MUST read ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN from the environment
-(the UA runtime injects both; ANTHROPIC_BASE_URL routes inference to the
-ZAI/GLM endpoint) so the demo actually runs. Never hardcode an endpoint or
-token; never commit a token; document the two env var names in the demo
-README.
+Inference wiring (Claude Agent SDK demos): the demo MUST run against LIVE
+inference — never mock the capability it is meant to demonstrate. Any demo
+built on the Claude Agent SDK MUST read ANTHROPIC_BASE_URL and
+ANTHROPIC_AUTH_TOKEN from the environment (the UA runtime injects both;
+ANTHROPIC_BASE_URL routes inference to the ZAI/GLM endpoint) so the demo
+actually runs against a real endpoint. Never hardcode an endpoint or token;
+never commit a token; document the two env var names in the demo README.
 
 Model & API currency — verify, never recall:
 Your training data lags live APIs. For any external model id, API endpoint,
@@ -114,7 +114,10 @@ Runnable + manifest requirements (binding):
   services/cody_implementation.py::DemoManifest (keys: demo_id, feature,
   endpoint_required, endpoint_hit, model_used, acceptance_passed,
   iteration, started_at, finished_at, notes). Record endpoint_hit
-  truthfully (zai vs anthropic_native).
+  truthfully (zai vs anthropic_native). endpoint_hit="mock" is NOT an
+  acceptable pass state: if the capability requires a live API/key the
+  build does not have, the demo is NOT done — report the missing credential
+  and stop, rather than mocking it.
 - Author BRIEF.md + ACCEPTANCE.md from this card via the
   self-brief-and-attest skill's "tutorial_build card mode" before
   building; the /goal loop runs against your own ACCEPTANCE criteria.
@@ -662,7 +665,12 @@ def _build_task_description(
             "2. The GitHub repo must be private by default if pushed.",
             "3. Public publication is not allowed without explicit Kevin approval.",
             "4. Include README run commands, source video attribution, and any adaptations.",
-            "5. Use environment variables or mock modes for API keys.",
+            "5. Use the API credentials the runtime provides (e.g. "
+            "ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN for Claude-SDK demos "
+            "route to live inference). Do NOT mock the capability the demo "
+            "is meant to demonstrate — if a required key is unavailable the "
+            "demo is NOT done; report the missing credential rather than "
+            "mocking it.",
             "6. Run the implementation or the most relevant tests before declaring success.",
             "7. If GitHub is unavailable, preserve a complete local git repo artifact and report the fallback.",
             "8. Author manifest.json + a README 'Run' section per the Demo build contract above — the parent worker mechanically checks both at finalize.",

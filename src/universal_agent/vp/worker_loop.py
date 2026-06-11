@@ -749,76 +749,20 @@ class VpWorkerLoop:
                 await heartbeat_task
             except asyncio.CancelledError:
                 pass
-        # Completion attestation guard (PRD § 5.5) — when THIS MISSION is
-        # /goal-eligible (use_goal_loop=True in payload metadata OR an
-        # eligible source_kind), the VP must have written COMPLETION.md
-        # per the self-brief-and-attest skill before we accept "completed".
-        # Missing the file demotes to failed with a stable failure_mode
-        # that Simone can recognize as a protocol violation (not a work
-        # failure). The demoted outcome then flows through the failure_mode
-        # / transcript_tail derivation below, surfacing to Simone via the
-        # vp_mission_failure lane just like any other failure.
-        #
-        # 2026-05-26 fix: previously this gated on the GLOBAL flag
-        # `vp_goal_enabled()` instead of the per-mission eligibility,
-        # which caused successful Cody missions WITHOUT use_goal_loop to
-        # be spuriously demoted for missing a file they were never told
-        # to write. The smoke test (vp-mission-24b75861...) hit exactly
-        # this — Cody completed the task correctly, but the global flag
-        # was on, COMPLETION.md was absent (skill wasn't even invokable
-        # — see issue #4 in PR description), and the guard demoted it.
-        # Now we check `is_goal_eligible_mission(mission)` so the guard
-        # only fires for missions that actually opted into /goal flow.
-        if outcome.status == "completed":
-            try:
-                from universal_agent.services.self_briefing import (
-                    check_completion_attestation,
-                    is_goal_eligible_mission,
-                )
-                if is_goal_eligible_mission(mission):
-                    # PR #492 dual-path — also check Cody's actual cwd
-                    # (captured by PR #490 in MissionOutcome.payload
-                    # when CLI capture fires) before declaring missing.
-                    # Cody may have written COMPLETION.md to his cwd
-                    # rather than the canonical mission_workspace when
-                    # the BRIEF scoped his work to a /tmp dir.
-                    _fallback_dirs: list[Path] = []
-                    _payload_cwd = str((outcome.payload or {}).get("cli_workspace_dir") or "").strip()
-                    if _payload_cwd:
-                        _fallback_dirs.append(Path(_payload_cwd))
-                    ok, reason = check_completion_attestation(
-                        workspace_path,
-                        fallback_dirs=_fallback_dirs or None,
-                    )
-                    if not ok:
-                        logger.warning(
-                            "VP mission %s missing COMPLETION.md: %s — demoting to failed",
-                            mission_id, reason,
-                        )
-                        outcome = MissionOutcome(
-                            status="failed",
-                            result_ref=outcome.result_ref,
-                            message=f"missing_completion_attestation: {reason}",
-                            payload={
-                                **(outcome.payload or {}),
-                                "demoted_from_completed": True,
-                                "completion_attestation_reason": reason,
-                            },
-                        )
-            except Exception as exc:
-                logger.warning(
-                    "VP mission %s: completion-attestation check failed (%s); "
-                    "treating original outcome as authoritative",
-                    mission_id, exc,
-                )
+        # COMPLETION.md attestation guard REMOVED 2026-06-11 — we rely on the
+        # built-in /goal loop as the sole acceptance authority and no longer
+        # demote a completed mission to failed for a missing COMPLETION.md.
+        # The guard plus its paired condition AND-clause (in
+        # claude_cli_client._run_goal_loop_mission) were UA scaffolding bolted
+        # onto vanilla /goal; both were removed to stop interfering with the
+        # feature. The self-brief-and-attest skill may still author
+        # COMPLETION.md as a trail, but it is no longer enforced. The demo
+        # completion-evidence gate (task_hub DEMO_LANE_COMPLETION_GATED_SOURCE_KINDS,
+        # demo_finalize.ok) remains the deterministic backstop for the demo lane.
 
         # Derive failure_mode + transcript_tail for the rescue hook in
         # finalize_vp_mission. transcript_tail comes from outcome.payload
         # (Claude CLI stream-json client populates this on failure paths).
-        # If COMPLETION-attestation demotion happened above, the classifier
-        # will see "missing_completion_attestation" in the message and
-        # return that string — preserving the protocol-violation signal
-        # all the way to Simone's rescue surface.
         _payload = outcome.payload or {}
         _transcript_tail = (
             str(_payload.get("final_text") or "")
@@ -826,8 +770,6 @@ class VpWorkerLoop:
             or None
         )
         _failure_mode = _classify_outcome_failure_mode(outcome)
-        if not _failure_mode and "missing_completion_attestation" in str(outcome.message or ""):
-            _failure_mode = "missing_completion_attestation"
 
         if outcome.status == "cancelled":
             finalize_vp_mission(
