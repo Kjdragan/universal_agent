@@ -64,7 +64,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           echo "Changed files in this doc-fix PR:"
-          changed="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
+          changed="$(git diff --name-only "$BASE_SHA...$HEAD_SHA")"  # three-dot = merge-base diff; two-dot false-failed when main advanced post-divergence (#905)
           echo "$changed"
           # Allowed: project_docs/**, docs/** (legacy/archive), root *.md, AGENTS.md
           violations="$(echo "$changed" | grep -vE '^(project_docs/|docs/|[^/]+\.md$|AGENTS\.md$)' || true)"
