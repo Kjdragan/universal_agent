@@ -184,3 +184,18 @@ def test_flag_on_429_retries_through_limiter(fake_client_env, monkeypatch):
     limiter = ZAIRateLimiter.get_instance()
     assert limiter.get_stats()["total_429s_exhausted"] == 1
     assert limiter.get_stats()["total_fup_events"] == 0  # gradient, not cliff
+
+
+def test_classifier_wrappers_default_to_sonnet(fake_client_env, monkeypatch):
+    """Triage 2026-06-11: classification/extraction wrappers must not ride
+    `_call_llm`'s opus fallback — live per-model data showed ZAI throttling
+    glm-5.1 at ~85%+ while glm-5-turbo flowed clean. Wrappers pass the
+    sonnet tier explicitly (env-overridable)."""
+    monkeypatch.delenv("UA_LLM_CLASSIFIER_DEFAULT_MODEL", raising=False)
+    asyncio.run(llm_classifier.classify_priority(title="subject", description="body text"))
+    client = fake_client_env["clients"][0]
+    assert client.create_calls[0]["model"] == "glm-5-turbo"
+
+    monkeypatch.setenv("UA_LLM_CLASSIFIER_DEFAULT_MODEL", "glm-4.7")
+    asyncio.run(llm_classifier.classify_priority(title="subject", description="body text"))
+    assert fake_client_env["clients"][1].create_calls[0]["model"] == "glm-4.7"

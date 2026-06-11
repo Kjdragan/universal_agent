@@ -19,7 +19,11 @@ import logging
 import os
 from typing import Any, Optional, TypedDict
 
-from universal_agent.utils.model_resolution import resolve_haiku, resolve_opus
+from universal_agent.utils.model_resolution import (
+    resolve_haiku,
+    resolve_opus,
+    resolve_sonnet,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +82,21 @@ class TutorialBuildabilityResult(TypedDict):
 
 
 # ── LLM Client Helper ──────────────────────────────────────────────────────
+
+def _classifier_default_model() -> str:
+    """Default model for the classification/extraction/routing wrappers.
+
+    These are bounded classification tasks, not flagship reasoning — the
+    tiering doctrine (10_zai_rate_limiter.md §7, 14_model_tiering_by_process)
+    has always said they belong below opus; they only ran on glm-5.1 because
+    `_call_llm`'s fallback default is `resolve_opus()`. The sonnet tier
+    (glm-5-turbo) was A/B-proven equal to the opus default on the convergence
+    judge, and live per-model 429 data (2026-06-11) showed ZAI throttling
+    glm-5.1 at ~85%+ while glm-5-turbo flowed clean. Override via
+    UA_LLM_CLASSIFIER_DEFAULT_MODEL.
+    """
+    return (os.getenv("UA_LLM_CLASSIFIER_DEFAULT_MODEL") or "").strip() or resolve_sonnet()
+
 
 def _limiter_enabled() -> bool:
     """Is the ZAIRateLimiter routing for `_call_llm` enabled?
@@ -354,7 +373,9 @@ async def classify_priority(
             context=context or "(none)",
         )
 
-        raw = await _call_llm(system=_PRIORITY_SYSTEM, user=user_msg)
+        raw = await _call_llm(
+            system=_PRIORITY_SYSTEM, user=user_msg, model=_classifier_default_model()
+        )
         result = _parse_json_response(raw)
 
         priority_str = str(result.get("priority", "p2")).lower().strip()
@@ -458,7 +479,9 @@ async def classify_agent_route(
             available_agents=", ".join(sorted(available_agents)) if available_agents else "simone, vp.coder.primary, vp.general.primary",
         )
 
-        raw = await _call_llm(system=_ROUTING_SYSTEM, user=user_msg)
+        raw = await _call_llm(
+            system=_ROUTING_SYSTEM, user=user_msg, model=_classifier_default_model()
+        )
         result = _parse_json_response(raw)
 
         agent_id = str(result.get("agent_id", _AGENT_SIMONE)).strip()
@@ -561,7 +584,9 @@ async def generate_calendar_task_description(
             organizer=organizer or "(unknown)",
         )
 
-        raw = await _call_llm(system=_CALENDAR_DESC_SYSTEM, user=user_msg)
+        raw = await _call_llm(
+            system=_CALENDAR_DESC_SYSTEM, user=user_msg, model=_classifier_default_model()
+        )
         result = _parse_json_response(raw)
 
         return {
@@ -668,6 +693,7 @@ async def extract_due_at(
         raw = await _call_llm(
             system=system_prompt,
             user=user_msg,
+            model=_classifier_default_model(),
             max_tokens=512,  # doubled from 256 per audit
         )
         result = _parse_json_response(raw)
@@ -752,6 +778,7 @@ async def extract_disjointed_tasks(
         raw = await _call_llm(
             system=_DISJOINTED_TASK_SYSTEM,
             user=user_msg,
+            model=_classifier_default_model(),
             max_tokens=2048,  # doubled from 1024 per audit
         )
         result = _parse_json_response(raw)
