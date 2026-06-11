@@ -25,14 +25,26 @@ Decision flow (per open ``deslop-findings`` issue; all reads via the VPS ``gh`` 
        - observe: tier_a_safe AND never_auto both -> DRAFT PR + email (never auto-merge)
        - auto:    tier_a_safe -> non-draft PR (repo auto-merges on green); never_auto
                   STILL DRAFT + email regardless of confidence.
-  5. Dispatch: claim the issue (``deslop-dispatched``), queue a Cody mission whose
+  5. Source-PR gate (``decide_source_pr_disposition``, kill switch
+     ``UA_DESLOP_CHECK_SOURCE_PR``): the slop only reaches ``main`` once the source PR
+     MERGES. So before dispatching a fix off ``main``, check the source PR's state:
+       - MERGED / unknown -> proceed (dispatch as below — the slop is on ``main``)
+       - OPEN             -> ``defer_to_open_source_pr``: post a one-time advisory
+                             comment ON THE PR (amend before merge), do NOT dispatch;
+                             leave the issue unlabeled so a later merge re-triggers it.
+       - CLOSED unmerged  -> ``close_moot_issue``: the slop never landed -> close it.
+  6. Dispatch: claim the issue (``deslop-dispatched``), queue a Cody mission whose
      brief reproduces the finding -> applies ONLY the behavior-preserving fix ->
      runs the full CI gate locally -> opens the PR (draft in observe mode). Email Kevin.
-  6. Escalate: label ``needs-operator`` + Telegram-ping (uncertain / not-a-code-fix).
+  7. Escalate: label ``needs-operator`` + Telegram-ping (uncertain / not-a-code-fix).
 
-Unlike the CI auto-fix (which pushes to an *existing* PR branch), a deslop finding's
-source PR is already merged — the slop now lives in ``main`` — so the Cody mission
-opens a **fresh PR off origin/main**.
+Unlike the CI auto-fix (which pushes to an *existing* PR branch), once a deslop
+finding's source PR has merged the slop lives in ``main``, so the Cody mission opens a
+**fresh PR off origin/main**. The step-5 gate exists because that merge is not a given:
+auto-merge branches (``claude/*`` etc.) merge within minutes, but manual-review branches
+(``codie/*`` / ``kevin/*`` / ``feature/*``) can sit open for hours — fixing off ``main``
+then would target slop that isn't there yet (issue #933 / open PR #932 was the case
+that motivated this gate).
 
 Like the precedent this module is intentionally **synchronous** (no asyncio at import
 or call time). GitHub access is subprocess ``gh``; email is ``send_simone_email``;
@@ -74,6 +86,15 @@ DELIVERY_AUTO_MERGE = "auto_merge"  # non-draft PR; repo auto-merges on green CI
 CLASS_TIER_A = "tier_a_safe"
 CLASS_NEVER_AUTO = "never_auto"
 CLASS_NEEDS_OPERATOR = "needs_operator"
+
+# Source-PR dispositions (how a would-be dispatch is re-routed by the source
+# PR's merge state — see decide_source_pr_disposition).
+SRC_PR_PROCEED = "proceed"  # slop is on main (PR merged / state unknown) -> dispatch as before
+SRC_PR_DEFER = "defer_open_pr"  # PR still open -> comment there, don't fix off-main
+SRC_PR_CLOSE_MOOT = "close_moot"  # PR closed unmerged -> slop never landed -> close the issue
+
+# A hidden marker so the open-PR advisory comment is posted at most once.
+_DEFER_MARKER = "<!-- deslop-defer:issue-{n} -->"
 
 
 def _notify_operator() -> bool:
@@ -464,6 +485,35 @@ def decide_action(
     return action, delivery, f"{class_reason}->{action_reason}"
 
 
+def _check_source_pr_enabled() -> bool:
+    """Kill switch for the source-PR-state gate (default on)."""
+    return os.getenv("UA_DESLOP_CHECK_SOURCE_PR", "1").strip().lower() in {"1", "true", "yes"}
+
+
+def decide_source_pr_disposition(pr_state: Optional[dict]) -> tuple[str, str]:
+    """Decide how a would-be dispatch should be re-routed given the source PR's
+    state. Returns ``(disposition, reason)``.
+
+    A deslop finding's slop only reaches ``main`` once its source PR MERGES. For
+    manual-review branches (``codie/*`` / ``kevin/*`` / ``feature/*``) the PR can
+    sit OPEN for hours, so a fix-off-main mission would target slop that isn't
+    there yet (issue #933 / open PR #932 was the motivating case). A CLOSED-
+    unmerged PR means the slop never landed at all, so the finding is moot.
+
+    Unknown/empty state -> ``proceed`` (the safe default = pre-existing behavior).
+    """
+    if not pr_state:
+        return SRC_PR_PROCEED, "source_pr_state_unknown"
+    state = str(pr_state.get("state") or "").upper()
+    if state == "MERGED" or pr_state.get("merged"):
+        return SRC_PR_PROCEED, "source_pr_merged"
+    if state == "OPEN":
+        return SRC_PR_DEFER, "source_pr_open"
+    if state == "CLOSED":
+        return SRC_PR_CLOSE_MOOT, "source_pr_closed_unmerged"
+    return SRC_PR_PROCEED, f"source_pr_state:{state.lower()}"
+
+
 # --------------------------------------------------------------------------- #
 # GitHub access (subprocess `gh`) — injectable for tests
 # --------------------------------------------------------------------------- #
@@ -563,6 +613,80 @@ def fetch_issue(repo: str, number: int, gh: GhRunner) -> Optional[DeslopIssue]:
         source_pr=parse_source_pr(body),
     )
     return issue
+
+
+def fetch_pr_state(repo: str, number: int, gh: GhRunner) -> Optional[dict]:
+    """Return ``{"state": "OPEN"|"CLOSED"|"MERGED", "merged": bool}`` for the
+    source PR, or ``None`` if it can't be determined (treated as ``proceed``)."""
+    rc, out, _ = gh(["pr", "view", str(number), "--repo", repo, "--json", "state,mergedAt"])
+    if rc != 0:
+        return None
+    try:
+        data = json.loads(out or "{}")
+    except json.JSONDecodeError:
+        return None
+    state = str(data.get("state") or "").upper()
+    if not state:
+        return None
+    return {"state": state, "merged": bool(data.get("mergedAt"))}
+
+
+def _pr_has_deslop_comment(repo: str, pr_number: int, marker: str, gh: GhRunner) -> bool:
+    """True if the source PR already carries this issue's defer-advisory comment
+    (idempotency guard so the poller never re-comments every run)."""
+    rc, out, _ = gh(["pr", "view", str(pr_number), "--repo", repo, "--json", "comments"])
+    if rc != 0:
+        return False
+    try:
+        data = json.loads(out or "{}")
+    except json.JSONDecodeError:
+        return False
+    return any(marker in str(c.get("body") or "") for c in (data.get("comments") or []))
+
+
+def defer_to_open_source_pr(
+    issue: DeslopIssue, *, repo: str = DEFAULT_REPO, gh: GhRunner = _real_gh
+) -> dict[str, Any]:
+    """The source PR is still open: post a one-time advisory comment ON THE PR so
+    the slop can be amended before merge, instead of dispatching a fix off ``main``
+    (where the slop doesn't exist yet). The deslop issue is intentionally left
+    unlabeled so the next poll re-evaluates it — when the PR finally merges (slop
+    on main) it dispatches for real, or when it closes unmerged it is closed moot."""
+    pr = issue.source_pr
+    marker = _DEFER_MARKER.format(n=issue.number)
+    if pr is None:
+        return {"action": SRC_PR_DEFER, "commented": False, "reason": "no_source_pr"}
+    if _pr_has_deslop_comment(repo, pr, marker, gh):
+        return {"action": SRC_PR_DEFER, "commented": False, "source_pr": pr, "reason": "already_commented"}
+
+    bullets = "\n".join(
+        f"- `{f.file}` — {f.issue}" + (f"\n  - _fix_: {f.fix}" if f.fix else "")
+        for f in issue.findings
+    )
+    body = (
+        f"{marker}\n"
+        f"🧹 **Deslop advisory** ([#{issue.number}](https://github.com/{repo}/issues/{issue.number})) "
+        f"flagged behavior-preserving cleanups in this PR's changes. Since this PR is still **open**, "
+        f"the cleanest fix is to **amend it here before merge** rather than a follow-up PR off `main`:\n\n"
+        f"{bullets}\n\n"
+        f"_Advisory only — never blocks this PR. Auto-posted by `deslop_remediation_dispatch`. "
+        f"If the PR merges with the slop intact, the finding is picked up off `main` instead._"
+    )
+    rc, _, _ = gh(["pr", "comment", str(pr), "--repo", repo, "--body", body])
+    return {"action": SRC_PR_DEFER, "commented": rc == 0, "source_pr": pr}
+
+
+def close_moot_issue(
+    issue: DeslopIssue, reason: str, *, repo: str = DEFAULT_REPO, gh: GhRunner = _real_gh
+) -> dict[str, Any]:
+    """The source PR was closed WITHOUT merging, so the flagged slop never reached
+    ``main`` — close the deslop issue as moot (mirrors the ci-failure auto-close)."""
+    comment = (
+        f"Auto-closed by `deslop_remediation_dispatch`: source PR #{issue.source_pr} was closed "
+        f"without merging, so the flagged slop never reached `main`. Nothing to remediate ({reason})."
+    )
+    rc, _, _ = gh(["issue", "close", str(issue.number), "--repo", repo, "--comment", comment])
+    return {"action": SRC_PR_CLOSE_MOOT, "closed": rc == 0, "source_pr": issue.source_pr, "reason": reason}
 
 
 # Color + description for the labels the dispatcher manages, so it can create
@@ -940,6 +1064,18 @@ def process_issue(
     telegram: Optional[Callable[..., tuple[bool, str]]] = None,
 ) -> dict[str, Any]:
     action, delivery, reason = decide_action(issue, mode, root=root)
+
+    # Source-PR-state gate: a deslop finding's slop only lives on `main` once its
+    # source PR merged. Re-route a would-be dispatch when the PR is still open
+    # (comment there instead) or was closed unmerged (close the issue as moot).
+    source_pr_disposition: Optional[str] = None
+    sp_reason = ""
+    if action == "dispatch" and issue.source_pr is not None and _check_source_pr_enabled():
+        pr_state = fetch_pr_state(repo, issue.source_pr, gh)
+        source_pr_disposition, sp_reason = decide_source_pr_disposition(pr_state)
+        if source_pr_disposition != SRC_PR_PROCEED:
+            reason = f"{reason}|{sp_reason}"
+
     result: dict[str, Any] = {
         "issue_number": issue.number,
         "title": issue.title,
@@ -948,17 +1084,29 @@ def process_issue(
         "action": action,
         "delivery": delivery,
         "reason": reason,
+        "source_pr": issue.source_pr,
+        "source_pr_disposition": source_pr_disposition,
     }
     if dry_run:
         result["dry_run"] = True
-        if action == "dispatch":
+        if action == "dispatch" and source_pr_disposition in (None, SRC_PR_PROCEED):
             result["would_email_subject"] = build_email(issue, delivery, mode=mode)[0]
             result["brief_preview"] = build_cody_brief(issue, delivery, repo=repo)[:600]
+        elif source_pr_disposition == SRC_PR_DEFER:
+            result["would_comment_on_pr"] = issue.source_pr
+        elif source_pr_disposition == SRC_PR_CLOSE_MOOT:
+            result["would_close_issue"] = True
         return result
 
     if action == "skip":
         return result
     if action == "dispatch":
+        if source_pr_disposition == SRC_PR_DEFER:
+            result.update(defer_to_open_source_pr(issue, repo=repo, gh=gh))
+            return result
+        if source_pr_disposition == SRC_PR_CLOSE_MOOT:
+            result.update(close_moot_issue(issue, sp_reason, repo=repo, gh=gh))
+            return result
         result.update(
             dispatch_cody_fix(
                 issue,
