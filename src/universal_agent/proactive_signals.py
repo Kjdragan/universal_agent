@@ -479,12 +479,6 @@ def generate_signal_cards(
     for card in generate_discord_cards(discord_db_path):
         upsert_generated_card(conn, card)
         counts["discord"] += 1
-    # Hygiene, every sweep:
-    #  - soft-expire pending cards older than the TTL (created_at based;
-    #    UA_PROACTIVE_CARD_TTL_DAYS, default 3) → off the tab, kept in the DB.
-    #  - hard-purge aged terminal (non-live) rows (UA_PROACTIVE_CARD_PURGE_DAYS,
-    #    default 7; resurface-safe via updated_at window) so rejected/deleted/etc.
-    #    don't accumulate forever.
     counts["expired"] = expire_stale_pending_cards(
         conn, older_than_days=_card_ttl_days() if ttl_days is None else ttl_days
     )
