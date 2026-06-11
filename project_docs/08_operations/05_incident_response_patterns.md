@@ -15,7 +15,7 @@ code_paths:
   - "scripts/deploy_validate_runtime.sh"
   - "scripts/check_crashloop.sh"
   - "scripts/check_heartbeat_liveness.py"
-last_verified: 2026-06-01
+last_verified: 2026-06-11
 ---
 
 # Incident Response Patterns
