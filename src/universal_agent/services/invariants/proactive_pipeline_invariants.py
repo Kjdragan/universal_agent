@@ -17,14 +17,13 @@ If either key is missing, the affected probes return None.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import logging
 from pathlib import Path
 import sqlite3
 from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo
 
-from universal_agent.durable.db import get_vp_db_path
 from universal_agent.services import dormancy
 from universal_agent.services.pipeline_invariants import invariant
 
@@ -1003,149 +1002,5 @@ def proactive_brief_task_funnel(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]
         ),
         "threshold_text": (
             f"if artifacts_48h ≥ {BRIEF_TASK_FUNNEL_MIN_ARTIFACTS} then task_hub_items_48h > 0"
-        ),
-    }
-
-
-# ---------------------------------------------------------------------------
-# 7. proactive_wiki mission outcome (added 2026-06-10)
-# ---------------------------------------------------------------------------
-# nightly_wiki dispatches a `proactive_wiki` VP mission and exits 0 the instant
-# it hands off (fire-and-forget) — long before the downstream NotebookLM
-# round-trip finishes. So a dispatched mission that ends `cancelled`/`failed`
-# produces NO operator signal: the cron's exit 0 means "dispatched", not "wiki
-# built". That is exactly how the loop logged exit 0 for weeks while producing
-# nothing, and how the only two prior proactive_wiki missions (2026-05-27/28)
-# both `cancelled` unnoticed. This complements `nightly_wiki_persistent_silence`
-# (a coarse 7-day artifact floor) with a per-run, mission-level check.
-PROACTIVE_WIKI_MISSION_WINDOW_HOURS = 30.0  # nightly 24h cadence + 6h grace
-_PROACTIVE_WIKI_BAD_STATUSES = {"cancelled", "failed"}
-
-
-def _latest_proactive_wiki_mission(ctx: Dict[str, Any]) -> Optional[sqlite3.Row]:
-    """Return the most recent proactive_wiki vp_missions row, or None.
-
-    Reads ``ctx['vp_conn']`` when injected (tests); otherwise opens vp_state.db
-    read-only. Fail-open: any missing DB/table/error yields None so a fresh box
-    never emits a noisy probe_error.
-    """
-    conn = ctx.get("vp_conn")
-    own_conn = False
-    if conn is None:
-        try:
-            db_path = get_vp_db_path()
-        except Exception:
-            return None
-        if not Path(db_path).exists():
-            return None
-        try:
-            conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row
-        except sqlite3.Error:
-            return None
-        own_conn = True
-    try:
-        return conn.execute(
-            "SELECT mission_id, status, created_at, updated_at "
-            "FROM vp_missions WHERE mission_type = 'proactive_wiki' "
-            "ORDER BY created_at DESC LIMIT 1"
-        ).fetchone()
-    except sqlite3.Error:
-        return None
-    finally:
-        if own_conn:
-            conn.close()
-
-
-def _wiki_artifact_in_window(ctx: Dict[str, Any], cutoff: datetime) -> bool:
-    """True if any nightly_wikis artifact has mtime at/after ``cutoff``."""
-    artifacts_dir = ctx.get("artifacts_dir")
-    if artifacts_dir is None:
-        return False
-    base = Path(artifacts_dir) / "nightly_wikis"
-    if not base.exists():
-        return False
-    for path in base.glob("*_wiki_*"):
-        try:
-            mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=HOUSTON_TZ)
-        except OSError:
-            continue
-        if mtime >= cutoff:
-            return True
-    return False
-
-
-@invariant(
-    id="proactive_wiki_mission_unsuccessful",
-    title="Most recent proactive_wiki mission failed/cancelled without a wiki",
-    description=(
-        "The `nightly_wiki` cron dispatches a `proactive_wiki` VP mission and "
-        "exits 0 immediately (fire-and-forget), so a mission that ends "
-        "`cancelled`/`failed` is otherwise SILENT. This fires when the most "
-        "recent proactive_wiki mission within "
-        f"{PROACTIVE_WIKI_MISSION_WINDOW_HOURS:.0f}h ended unsuccessfully AND no "
-        "wiki artifact landed in artifacts/nightly_wikis/ in that window. A "
-        "still-`running` mission, a `completed` one, or a failure that was "
-        "retried into a real artifact all stay quiet — so this catches the "
-        "silent-failure mode without false-firing on signal-quiet nights."
-    ),
-    severity="warn",
-    runbook_command=(
-        "sqlite3 AGENT_RUN_WORKSPACES/vp_state.db \"SELECT mission_id,status,created_at,"
-        "updated_at FROM vp_missions WHERE mission_type='proactive_wiki' ORDER BY "
-        "created_at DESC LIMIT 5\"; ls -lt artifacts/nightly_wikis/ 2>/dev/null | head; "
-        "sudo journalctl -u universal-agent-nightly-wiki.service --since '30 hours ago' "
-        "--no-pager | tail -30"
-    ),
-    metadata={
-        "pipeline": "nightly_wiki",
-        "mission_type": "proactive_wiki",
-        "vp_db": "AGENT_RUN_WORKSPACES/vp_state.db",
-        "design_note": (
-            "Mission-level companion to nightly_wiki_persistent_silence. Keys on "
-            "vp_missions (vp_state.db), not artifact mtime, so a dispatched-but-"
-            "failed run surfaces instead of looking identical to a quiet night."
-        ),
-    },
-)
-def proactive_wiki_mission_unsuccessful(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Fire when the latest proactive_wiki mission ended unsuccessfully and no
-    wiki artifact was produced in the window. Read-only, fail-open."""
-    row = _latest_proactive_wiki_mission(ctx)
-    if row is None:
-        return None
-    status = str(row["status"] or "").strip().lower()
-    if status not in _PROACTIVE_WIKI_BAD_STATUSES:
-        return None  # completed / running / unknown-healthy → quiet
-    ts = _parse_iso(row["updated_at"]) or _parse_iso(row["created_at"])
-    if ts is None:
-        return None
-    now = _now_houston()
-    age_hours = (now - ts).total_seconds() / 3600.0
-    if age_hours > PROACTIVE_WIKI_MISSION_WINDOW_HOURS:
-        return None  # stale terminal row, not actionable now
-    # Suppress if a wiki artifact DID land in-window: a retried/superseded run
-    # succeeded, so the OUTCOME is healthy even though one attempt failed.
-    cutoff = now - timedelta(hours=PROACTIVE_WIKI_MISSION_WINDOW_HOURS)
-    if _wiki_artifact_in_window(ctx, cutoff):
-        return None
-    return {
-        "observed_value": {
-            "mission_id": row["mission_id"],
-            "status": status,
-            "updated_at": row["updated_at"],
-            "age_hours": round(age_hours, 1),
-        },
-        "message": (
-            f"Most recent proactive_wiki mission {row['mission_id']} ended "
-            f"'{status}' {age_hours:.1f}h ago and no wiki artifact landed in "
-            f"artifacts/nightly_wikis/ in the last "
-            f"{PROACTIVE_WIKI_MISSION_WINDOW_HOURS:.0f}h. The card→wiki loop "
-            "dispatched but produced no wiki — inspect the VP mission and the "
-            "universal-agent-nightly-wiki.service logs."
-        ),
-        "threshold_text": (
-            "latest proactive_wiki mission status in {cancelled,failed} within "
-            f"{PROACTIVE_WIKI_MISSION_WINDOW_HOURS:.0f}h AND no in-window nightly_wikis artifact"
         ),
     }
