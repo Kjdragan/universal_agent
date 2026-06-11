@@ -119,23 +119,71 @@ def _channels_list(record: dict) -> list[str]:
     return [str(x).strip().lower() for x in raw if str(x).strip()]
 
 
+# Metadata keys surfaced in the diagnostic-context table, in render order.
+# ``task_id``/``run_id``/``workspace_dir``/``tool_calls``/``session_id`` make a
+# todo-execution failure (e.g. ``execution_missing_lifecycle_mutation``)
+# debuggable straight from the inbox; the trailing keys cover cron/infra alerts.
+_EMAIL_CONTEXT_KEYS = (
+    "task_id",
+    "invalid_task_ids",
+    "session_id",
+    "run_id",
+    "workspace_dir",
+    "tool_calls",
+    "deploy_restart_casualty",
+    "job_id",
+    "task_name",
+    "component",
+    "system_job",
+    "error",
+)
+
+
 def _format_email_html(record: dict) -> str:
     title = str(record.get("title") or "Alert")
     message = str(record.get("full_message") or record.get("summary") or "")
     severity = str(record.get("severity") or "info").upper()
     metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
     kind = str(record.get("kind") or "")
+    # ``session_id`` lives on the record, not in metadata — fold it in so the
+    # context table can show which session produced the alert.
+    context = dict(metadata)
+    record_session_id = str(record.get("session_id") or "").strip()
+    if record_session_id and not str(context.get("session_id") or "").strip():
+        context["session_id"] = record_session_id
     rows = []
-    for key in ("job_id", "task_name", "component", "system_job", "error"):
-        value = metadata.get(key)
-        if value:
-            rows.append(f"<tr><td><b>{key}</b></td><td>{value}</td></tr>")
+    for key in _EMAIL_CONTEXT_KEYS:
+        value = context.get(key)
+        if value in (None, "", [], {}):
+            continue
+        if isinstance(value, (list, tuple)):
+            value = ", ".join(str(v) for v in value)
+        rows.append(
+            f"<tr><td><b>{_html_escape(str(key))}</b></td>"
+            f"<td>{_html_escape(str(value))}</td></tr>"
+        )
     rows_html = "\n".join(rows) if rows else ""
+    # Run-log tail: the actual error transcript (e.g. an upstream ZAI 429/FUP
+    # line). Escaped and capped, rendered in a <pre> so the operator can read
+    # the real failure without opening the VPS.
+    log_tail = str(metadata.get("log_tail") or metadata.get("transcript_tail") or "").strip()
+    log_html = ""
+    if log_tail:
+        if len(log_tail) > 3000:
+            log_tail = "…(truncated)…\n" + log_tail[-3000:]
+        log_html = (
+            "<p style=\"margin:12px 0 4px;\"><b>Run log tail</b></p>"
+            "<pre style=\"background:#f6f8fa;border:1px solid #ddd;padding:8px;"
+            "white-space:pre-wrap;word-break:break-word;font-size:12px;"
+            "overflow-x:auto;\">"
+            f"{_html_escape(log_tail)}</pre>"
+        )
     return (
         f"<html><body style=\"font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.5;\">"
         f"<h2 style=\"color:#b00020;\">[{severity}] {title}</h2>"
         f"<p>{message}</p>"
         + (f"<table cellpadding=4 cellspacing=0 border=1>{rows_html}</table>" if rows_html else "")
+        + log_html
         + (f"<p style=\"color:#666;font-size:11px;\">kind: {kind}</p>" if kind else "")
         + "</body></html>"
     )

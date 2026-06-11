@@ -146,6 +146,64 @@ class TestFormatEmailHtml:
         assert "[INFO]" in html
 
 
+class TestFormatEmailHtmlDiagnosticContext:
+    """The lifecycle-miss enrichment: task/run/tool-call context + run.log tail.
+
+    Regression guard for the bare ``[ERROR] Execution Missing Lifecycle
+    Mutation`` email that carried no debuggable context (which task, which run,
+    or that the run made 0 tool calls because of an upstream ZAI 429).
+    """
+
+    def test_surfaces_todo_execution_context_keys(self):
+        html = _format_email_html({
+            "kind": "execution_missing_lifecycle_mutation",
+            "session_id": "daemon_simone_todo",
+            "metadata": {
+                "task_id": "vp_failure:vp-mission-abc",
+                "run_id": "run_650aa29cbe7f",
+                "workspace_dir": "/opt/universal_agent/AGENT_RUN_WORKSPACES/run_650aa29cbe7f",
+                "tool_calls": 0,
+            },
+        })
+        assert "vp_failure:vp-mission-abc" in html
+        assert "run_650aa29cbe7f" in html
+        # session_id is lifted from the record, not metadata.
+        assert "daemon_simone_todo" in html
+        # 0 tool calls is the tell that the run never started — must render.
+        assert "tool_calls" in html
+        assert ">0<" in html
+
+    def test_invalid_task_ids_list_is_comma_joined(self):
+        html = _format_email_html({
+            "metadata": {"invalid_task_ids": ["task-a", "task-b"]},
+        })
+        assert "task-a, task-b" in html
+
+    def test_renders_escaped_log_tail_in_pre(self):
+        html = _format_email_html({
+            "metadata": {
+                "log_tail": "API Error: Request rejected (429) [1313] <b>FUP</b>",
+            },
+        })
+        assert "<pre" in html
+        assert "429" in html
+        assert "[1313]" in html
+        # arbitrary error text must be HTML-escaped, not rendered as markup.
+        assert "<b>FUP</b>" not in html
+        assert "&lt;b&gt;FUP&lt;/b&gt;" in html
+
+    def test_truncates_oversized_log_tail(self):
+        tail = "X" * 5000
+        html = _format_email_html({"metadata": {"log_tail": tail}})
+        assert "truncated" in html
+        # only the trailing window is kept, not the full 5000 chars.
+        assert html.count("X") <= 3001
+
+    def test_no_context_table_when_only_unlisted_metadata(self):
+        html = _format_email_html({"metadata": {"unrelated_key": "value"}})
+        assert "<table" not in html
+
+
 class TestFormatTelegramText:
     def test_basic_format(self):
         text = _format_telegram_text({
