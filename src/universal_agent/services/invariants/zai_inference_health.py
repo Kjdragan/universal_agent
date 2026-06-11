@@ -99,6 +99,8 @@ def _scan_recent_events(now: float) -> Dict[str, Any]:
     out: Dict[str, Any] = {
         "events_429_count": 0,
         "events_429_top_callers": [],
+        "events_429_by_model": [],
+        "events_429_fup_texted_count": 0,
         "events_fup_count": 0,
         "events_fup_top_callers": [],
         "events_last_429_caller": None,
@@ -112,6 +114,8 @@ def _scan_recent_events(now: float) -> Dict[str, Any]:
     cutoff_429 = now - EVENTS_429_WINDOW_SECONDS
     cutoff_fup = now - EVENTS_FUP_WINDOW_SECONDS
     callers_429: Counter[str] = Counter()
+    models_429: Counter[str] = Counter()
+    fup_texted_429 = 0
     callers_fup: Counter[str] = Counter()
     last_429: Optional[Dict[str, Any]] = None
     last_fup: Optional[Dict[str, Any]] = None
@@ -136,6 +140,10 @@ def _scan_recent_events(now: float) -> Dict[str, Any]:
             caller = str(event.get("caller") or "unknown")
             if category == "rate_limited_429" and ts >= cutoff_429:
                 callers_429[caller] += 1
+                # Events predating this PR's deploy have no "model" field.
+                models_429[str(event.get("model") or "unknown")] += 1
+                if event.get("fup_texted"):
+                    fup_texted_429 += 1
                 last_429 = event
             elif category == "fup_signal" and ts >= cutoff_fup:
                 callers_fup[caller] += 1
@@ -148,6 +156,10 @@ def _scan_recent_events(now: float) -> Dict[str, Any]:
     out["events_429_top_callers"] = [
         {"caller": c, "count": n} for c, n in callers_429.most_common(5)
     ]
+    out["events_429_by_model"] = [
+        {"model": m, "count": n} for m, n in models_429.most_common(8)
+    ]
+    out["events_429_fup_texted_count"] = fup_texted_429
     out["events_fup_count"] = sum(callers_fup.values())
     out["events_fup_top_callers"] = [
         {"caller": c, "count": n} for c, n in callers_fup.most_common(5)
@@ -340,6 +352,8 @@ def zai_inference_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "events_429_count": events_scan["events_429_count"],
         "events_429_window_seconds": EVENTS_429_WINDOW_SECONDS,
         "events_429_top_callers": events_scan["events_429_top_callers"],
+        "events_429_by_model": events_scan["events_429_by_model"],
+        "events_429_fup_texted_count": events_scan["events_429_fup_texted_count"],
         "events_fup_count": events_scan["events_fup_count"],
         "events_fup_window_seconds": EVENTS_FUP_WINDOW_SECONDS,
         "events_fup_top_callers": events_scan["events_fup_top_callers"],
@@ -372,15 +386,41 @@ def zai_inference_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 "concurrent inference now and investigate before resuming."
             )
     elif events_429_burst:
+        # Neutral reporting: name the top caller(s) by 429 count WITHOUT
+        # asserting they bypass the limiter. The ZAI 429 ceiling is
+        # account-level, so a fully-compliant limiter user can be throttled
+        # as COLLATERAL — the 2026-06-10 incident falsely accused
+        # mission_control_chief_of_staff.py and sent the operator chasing the
+        # wrong file. Per-model 429 breakdown (when events carry the new
+        # `model` field) points at the actual pressure source.
         top = events_scan["events_429_top_callers"]
         caller_str = (
             ", ".join(f"{t['caller']}×{t['count']}" for t in top[:3]) if top else "?"
         )
+        by_model = events_scan.get("events_429_by_model") or []
+        model_str = (
+            "; 429s by model: "
+            + ", ".join(f"{m['model']}×{m['count']}" for m in by_model[:5])
+            if by_model
+            else ""
+        )
+        # ZAI's standard throttle is a 1313/FUP-texted 429 (gradient, not the
+        # cliff). Surfacing how many of these 429s carry that text shows the
+        # operator the throttle is the ordinary one, not an account suspension.
+        fup_texted = events_scan.get("events_429_fup_texted_count") or 0
+        fup_texted_str = (
+            f"; {fup_texted} of these carry the 1313/Fair-Usage throttle text "
+            "(ordinary gradient, not a cliff)"
+            if fup_texted
+            else ""
+        )
         headline = (
             f"ZAI 429 burst — {events_scan['events_429_count']} responses in last "
-            f"{EVENTS_429_WINDOW_SECONDS // 60} min (top callers: {caller_str}). "
-            "Direct-httpx caller bypassing with_rate_limit_retry — wrap it, "
-            "lower its concurrency, or move it off China-peak hours."
+            f"{EVENTS_429_WINDOW_SECONDS // 60} min (top callers by 429 count: "
+            f"{caller_str}{model_str}{fup_texted_str}). Note: the ZAI 429 limit "
+            "is account-level, so a named caller may be throttled as collateral "
+            "rather than the cause — use the per-model breakdown and concurrency "
+            "settings to find the real pressure source."
         )
     elif consecutive_429s >= CONSECUTIVE_429_CRITICAL:
         headline = (
