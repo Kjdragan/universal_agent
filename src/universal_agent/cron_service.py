@@ -559,7 +559,6 @@ class CronJob:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize the job to a JSON-compatible dictionary."""
         return {
             "job_id": self.job_id,
             "user_id": self.user_id,
@@ -583,7 +582,6 @@ class CronJob:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "CronJob":
-        """Reconstruct a CronJob from a persisted dictionary."""
         return cls(
             job_id=data["job_id"],
             user_id=data.get("user_id", f"cron:{data['job_id']}"),
@@ -667,7 +665,6 @@ class CronRunRecord:
     session_id: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize the run record to a JSON-compatible dictionary."""
         return {
             "run_id": self.run_id,
             "job_id": self.job_id,
@@ -716,7 +713,6 @@ class CronStore:
         self.jobs_path.write_text(json.dumps(data, indent=2))
 
     def append_run(self, record: CronRunRecord) -> None:
-        """Append a run record to the JSONL run log."""
         self.runs_path.parent.mkdir(parents=True, exist_ok=True)
         with self.runs_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record.to_dict()) + "\n")
@@ -890,11 +886,9 @@ class CronService:
         logger.info("🛑 Chron service stopped")
 
     def list_jobs(self) -> list[CronJob]:
-        """Return all registered jobs."""
         return list(self.jobs.values())
 
     def get_job(self, job_id: str) -> Optional[CronJob]:
-        """Look up a single job by ID, or return None."""
         return self.jobs.get(job_id)
 
     def add_job(
@@ -1042,7 +1036,6 @@ class CronService:
         self.running_job_scheduled_at.pop(job_id, None)
 
     def list_runs(self, job_id: Optional[str] = None, limit: int = 200) -> list[dict[str, Any]]:
-        """Return run records from the persisted run log."""
         return self.store.read_runs(job_id=job_id, limit=limit)
 
     @staticmethod
