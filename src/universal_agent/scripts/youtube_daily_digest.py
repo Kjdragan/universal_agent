@@ -2234,7 +2234,7 @@ def _queue_demo_builds(
     Brief email is never blocked by demo-lane queueing.
     """
     candidates = _demo_build_candidates(decisions)
-    base = {"queued": 0, "auto_queued": 0, "pending_approval": 0, "candidates": len(candidates)}
+    base = {"queued": 0, "auto_queued": 0, "auto_new": 0, "auto_reaffirmed": 0, "pending_approval": 0, "candidates": len(candidates)}
     if dry_run or not candidates:
         base["skipped"] = "dry_run" if dry_run else "no_candidates"
         return base

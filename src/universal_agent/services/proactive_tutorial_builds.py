@@ -262,27 +262,39 @@ def queue_tutorial_builds_with_ceiling(
       - honors the ``UA_PROACTIVE_TUTORIAL_AUTO_ROUTE`` kill switch (queues
         nothing, returns ``disabled=True``).
 
-    Returns ``{auto_queued, pending_approval, ceiling, today_count}``.
+    Returns ``{auto_queued, auto_new, auto_reaffirmed, pending_approval,
+    ceiling, today_count, remaining}``. ``auto_queued`` is the legacy total
+    (``auto_new + auto_reaffirmed``); the split exists because the total alone
+    misreads as a ceiling violation — ``auto_reaffirmed`` rows were ALREADY
+    dispatchable from a prior run (the no-churn invariant re-confirms them, they
+    consume no new budget), so only ``auto_new`` (always ``<= remaining``) is
+    this run's genuinely-new auto-dispatch count against the daily ceiling.
     """
     if _auto_route_disabled():
         return {
             "auto_queued": 0,
+            "auto_new": 0,
+            "auto_reaffirmed": 0,
             "pending_approval": 0,
             "ceiling": _daily_build_ceiling(),
             "today_count": 0,
+            "remaining": 0,
             "disabled": True,
         }
     remaining, ceiling, today_count = remaining_daily_build_budget(conn)
-    auto_queued = 0
+    auto_new = 0
+    auto_reaffirmed = 0
     pending_approval = 0
     for idx, candidate in enumerate(candidates):
         video_id = str(candidate.get("video_id") or "").strip()
-        dispatchable = idx < remaining
-        # Idempotency / no-churn: never demote a video that is already
-        # dispatchable (agent_ready=True) back to pending on a later
-        # over-ceiling run. Only ever raise (pending->dispatchable).
-        if not dispatchable and _existing_build_is_dispatchable(conn, video_id):
-            dispatchable = True
+        # A row already dispatchable from a PRIOR run is a re-confirmation, not
+        # new work — the no-churn invariant keeps it dispatchable regardless of
+        # this run's remaining budget, and it must not be counted against the
+        # ceiling (checked for every candidate so the split is accurate even
+        # within budget). Net dispatch decision is unchanged:
+        # ``idx < remaining OR already_dispatchable``.
+        already_dispatchable = _existing_build_is_dispatchable(conn, video_id)
+        dispatchable = idx < remaining or already_dispatchable
         queue_tutorial_build_task(
             conn,
             video_id=video_id,
@@ -295,14 +307,24 @@ def queue_tutorial_builds_with_ceiling(
             agent_ready=dispatchable,
         )
         if dispatchable:
-            auto_queued += 1
+            if already_dispatchable:
+                auto_reaffirmed += 1
+            else:
+                auto_new += 1
         else:
             pending_approval += 1
     return {
-        "auto_queued": auto_queued,
+        # Legacy total (= auto_new + auto_reaffirmed) kept for back-compat.
+        "auto_queued": auto_new + auto_reaffirmed,
+        # The honest split: auto_new is this run's NEW auto-dispatches (always
+        # <= remaining); auto_reaffirmed are prior-run rows re-confirmed by the
+        # no-churn invariant (consume no new budget).
+        "auto_new": auto_new,
+        "auto_reaffirmed": auto_reaffirmed,
         "pending_approval": pending_approval,
         "ceiling": ceiling,
         "today_count": today_count,
+        "remaining": remaining,
     }
 
 
@@ -322,9 +344,13 @@ def sync_build_oriented_csi_videos(
     later promote. An already-dispatchable row is never demoted on a re-run, so
     the ceiling can't churn or seize an in-flight build.
 
-    Returns ``{seen, queued, auto_queued, pending_approval, ceiling, today_count}``.
+    Returns ``{seen, queued, auto_queued, auto_new, auto_reaffirmed,
+    pending_approval, ceiling, today_count, remaining}`` — ``auto_new`` is this
+    run's genuinely-new auto-dispatches (against the ceiling); ``auto_reaffirmed``
+    are no-churn re-confirmations of prior-run rows (see
+    ``queue_tutorial_builds_with_ceiling``).
     """
-    empty = {"seen": 0, "queued": 0, "auto_queued": 0, "pending_approval": 0, "ceiling": _daily_build_ceiling(), "today_count": 0}
+    empty = {"seen": 0, "queued": 0, "auto_queued": 0, "auto_new": 0, "auto_reaffirmed": 0, "pending_approval": 0, "ceiling": _daily_build_ceiling(), "today_count": 0, "remaining": 0}
     if _auto_route_disabled() or csi_db_path is None or not csi_db_path.exists():
         return empty
     db = sqlite3.connect(str(csi_db_path))
@@ -407,9 +433,12 @@ def sync_build_oriented_csi_videos(
         "seen": len(rows),
         "queued": outcome["auto_queued"] + outcome["pending_approval"],
         "auto_queued": outcome["auto_queued"],
+        "auto_new": outcome.get("auto_new", outcome["auto_queued"]),
+        "auto_reaffirmed": outcome.get("auto_reaffirmed", 0),
         "pending_approval": outcome["pending_approval"],
         "ceiling": outcome["ceiling"],
         "today_count": outcome["today_count"],
+        "remaining": outcome.get("remaining", 0),
     }
 
 
