@@ -354,18 +354,21 @@ Three load-bearing details of the capture path (all added 2026-06-11):
    field marks any FUP-keyword body regardless of status, preserving throttle-text
    visibility without conflating it with the cliff category.
 
-**The caller-attribution gotcha — read this before trusting the events log.**
-`_identify_caller()` walks the stack to the *first* frame inside
-`/universal_agent/` (skipping SDK/framework frames). Because the shared seam
-`llm_classifier.py::_call_llm` is where the `AsyncAnthropic` client physically lives,
-**every caller that routes through `_call_llm` is attributed to `llm_classifier.py`**,
-not to the real originator (convergence, dispatch routing, calendar, etc.). Modules
-that build their *own* client (e.g. `mission_control_chief_of_staff.py`,
-`mission_control_tier1.py`, `discord_intelligence/relevance_filter.py`,
-`session_dossier.py`) show up as themselves. **Consequence:** the events log can tell
-you *how many* ZAI calls happened and *which bucket*, but it **cannot decompose the
-`llm_classifier.py` aggregate by flow** — for that you must reason from cron cadence
-and per-run loop structure, not from the events file.
+**Caller attribution — names the real consumer, not the plumbing.**
+`_identify_caller()` walks the stack to the first frame inside `/universal_agent/`,
+skipping SDK/framework frames (`_SKIP_FRAME_FRAGMENTS`) **and the two wrapper frames
+by function name** (`_SKIP_FRAME_FUNCS` = `with_rate_limit_retry`, `_call_llm`). This
+matters because `_call_llm` (the `llm_classifier` seam) passes the raw
+`client.messages.create` SDK method into `with_rate_limit_retry`, so the SDK frame is
+skipped and — without the function-name skip — the walk would stop on the limiter/seam
+wrapper, collapsing every limiter-routed call to `rate_limiter.py` (or `llm_classifier.py`).
+Skipping the wrappers by NAME (not whole file) lets the walk land on the **true
+originator** — `proactive_convergence.py`, `mission_control_chief_of_staff.py`, the
+specific `classify_*` in `llm_classifier.py`, `wiki/llm.py`, etc. — while still crediting
+a real `classify_*` consumer that lives in the seam file. The "Top 429 callers" panel
+therefore names the actual culprit. (Historical note: before this fix and before the
+limiter flag, calls attributed to `rate_limiter.py` / a flat `llm_classifier.py`
+aggregate; the events log now decomposes by real flow.)
 
 ### 5.2 The watchdog (`zai_inference_health.py`)
 
