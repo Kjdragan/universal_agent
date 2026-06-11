@@ -538,6 +538,7 @@ def parse_run_at(
 
 @dataclass
 class CronJob:
+    """Scheduled job definition supporting interval, cron-expression, and one-shot scheduling."""
     job_id: str
     user_id: str
     workspace_dir: str
@@ -648,6 +649,7 @@ class CronJob:
 
 @dataclass
 class CronRunRecord:
+    """Record of a single cron job execution attempt."""
     run_id: str
     job_id: str
     status: str
@@ -681,12 +683,14 @@ class CronRunRecord:
 
 
 class CronStore:
+    """File-backed persistence for cron job definitions and run history."""
     def __init__(self, jobs_path: Path, runs_path: Path):
         self.jobs_path = jobs_path
         self.runs_path = runs_path
         self.jobs_path.parent.mkdir(parents=True, exist_ok=True)
 
     def load_jobs(self) -> dict[str, CronJob]:
+        """Load all persisted jobs from disk, skipping malformed entries."""
         if not self.jobs_path.exists():
             return {}
         try:
@@ -704,6 +708,7 @@ class CronStore:
         return jobs
 
     def save_jobs(self, jobs: Iterable[CronJob]) -> None:
+        """Persist the full job registry to disk."""
         data = {"jobs": [job.to_dict() for job in jobs]}
         self.jobs_path.write_text(json.dumps(data, indent=2))
 
@@ -713,6 +718,7 @@ class CronStore:
             handle.write(json.dumps(record.to_dict()) + "\n")
 
     def read_runs(self, job_id: Optional[str] = None, limit: int = 200) -> list[dict[str, Any]]:
+        """Read run records, optionally filtered by job_id, newest last."""
         if not self.runs_path.exists():
             return []
         rows: list[dict[str, Any]] = []
@@ -732,6 +738,8 @@ class CronStore:
 
 
 class CronService:
+    """Manages scheduled cron job lifecycle: registration, dispatch, retry, and persistence."""
+
     @staticmethod
     def _workflow_admission_service() -> WorkflowAdmissionService:
         return WorkflowAdmissionService()
@@ -819,6 +827,7 @@ class CronService:
             self.store.save_jobs(self.jobs.values())
 
     async def start(self) -> None:
+        """Start the scheduler loop and optionally fire queued backfill runs."""
         if self.running:
             return
         self.running = True
@@ -864,6 +873,7 @@ class CronService:
         self._backfill_queue.clear()
 
     async def stop(self) -> None:
+        """Cancel the scheduler loop and wait for it to finish."""
         if not self.running:
             return
         self.running = False
@@ -898,6 +908,7 @@ class CronService:
         catch_up_on_restart: bool = False,
         metadata: Optional[dict[str, Any]] = None,
     ) -> CronJob:
+        """Register a new cron job with validated scheduling parameters."""
         every_seconds = _parse_duration_seconds(every_raw, 0) if every_raw else 0
 
         # Validate scheduling - must have at least one method
@@ -952,6 +963,7 @@ class CronService:
         return job
 
     def update_job(self, job_id: str, updates: dict[str, Any]) -> CronJob:
+        """Apply partial updates to an existing job and recalculate its schedule."""
         job = self.jobs[job_id]
         if "command" in updates:
             job.command = updates["command"]
@@ -1005,6 +1017,7 @@ class CronService:
         return job
 
     def delete_job(self, job_id: str) -> None:
+        """Remove a job from the registry and cancel any in-flight retry tasks."""
         if job_id in self.jobs:
             self._emit_event({"type": "cron_job_deleted", "job_id": job_id})
             del self.jobs[job_id]
@@ -1274,6 +1287,7 @@ class CronService:
         scheduled_at: Optional[float] = None,
         background: bool = False,
     ) -> CronRunRecord:
+        """Immediately dispatch a job, either blocking or in the background."""
         job = self.jobs[job_id]
         if job.job_id in self.running_jobs:
             raise ValueError(f"Job {job.job_id} is already running")
