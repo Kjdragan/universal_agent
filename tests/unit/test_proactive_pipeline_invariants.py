@@ -844,3 +844,126 @@ def test_funnel_ignores_artifacts_outside_window() -> None:
 def test_funnel_quiet_when_no_activity_conn() -> None:
     findings = run_invariants({})
     assert _only(findings, "proactive_brief_task_funnel") == []
+
+
+# === 7. proactive_wiki_mission_unsuccessful ===
+
+_WIKI_PROBE_ID = "proactive_wiki_mission_unsuccessful"
+
+
+def _iso(dt: datetime) -> str:
+    return dt.astimezone(UTC).isoformat()
+
+
+def _wiki_mission_conn(*missions) -> sqlite3.Connection:
+    """In-memory vp_state.db with a vp_missions table seeded with rows.
+
+    Each ``missions`` entry is (status, created_at_iso, updated_at_iso) or
+    (status, created_at_iso, updated_at_iso, mission_type).
+    """
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE vp_missions ("
+        "mission_id TEXT PRIMARY KEY, vp_id TEXT, mission_type TEXT, status TEXT, "
+        "payload_json TEXT, result_ref TEXT, created_at TEXT, updated_at TEXT)"
+    )
+    for i, m in enumerate(missions):
+        status, created, updated = m[0], m[1], m[2]
+        mtype = m[3] if len(m) > 3 else "proactive_wiki"
+        conn.execute(
+            "INSERT INTO vp_missions (mission_id, vp_id, mission_type, status, "
+            "created_at, updated_at) VALUES (?,?,?,?,?,?)",
+            (f"vp-mission-{i}", "vp.general.primary", mtype, status, created, updated),
+        )
+    conn.commit()
+    return conn
+
+
+def test_wiki_mission_failed_recent_no_artifact_fires(tmp_path: Path, monkeypatch) -> None:
+    now = datetime(2026, 6, 11, 8, 0, tzinfo=HOUSTON)
+    _set_now(monkeypatch, now)
+    conn = _wiki_mission_conn(("failed", _iso(now - timedelta(hours=3)), _iso(now - timedelta(hours=2))))
+    findings = run_invariants({"vp_conn": conn, "artifacts_dir": tmp_path / "artifacts"})
+    matches = _only(findings, _WIKI_PROBE_ID)
+    assert len(matches) == 1
+    assert matches[0].severity == "warn"
+    assert "vp-mission-0" in (matches[0].recommendation or "")
+
+
+def test_wiki_mission_cancelled_recent_no_artifact_fires(tmp_path: Path, monkeypatch) -> None:
+    now = datetime(2026, 6, 11, 8, 0, tzinfo=HOUSTON)
+    _set_now(monkeypatch, now)
+    conn = _wiki_mission_conn(("cancelled", _iso(now - timedelta(hours=2)), _iso(now - timedelta(hours=1))))
+    findings = run_invariants({"vp_conn": conn, "artifacts_dir": tmp_path / "artifacts"})
+    assert len(_only(findings, _WIKI_PROBE_ID)) == 1
+
+
+def test_wiki_mission_completed_stays_quiet(tmp_path: Path, monkeypatch) -> None:
+    now = datetime(2026, 6, 11, 8, 0, tzinfo=HOUSTON)
+    _set_now(monkeypatch, now)
+    conn = _wiki_mission_conn(("completed", _iso(now - timedelta(hours=2)), _iso(now - timedelta(hours=1))))
+    findings = run_invariants({"vp_conn": conn, "artifacts_dir": tmp_path / "artifacts"})
+    assert _only(findings, _WIKI_PROBE_ID) == []
+
+
+def test_wiki_mission_running_stays_quiet(tmp_path: Path, monkeypatch) -> None:
+    now = datetime(2026, 6, 11, 8, 0, tzinfo=HOUSTON)
+    _set_now(monkeypatch, now)
+    conn = _wiki_mission_conn(("running", _iso(now - timedelta(minutes=10)), _iso(now - timedelta(minutes=5))))
+    findings = run_invariants({"vp_conn": conn, "artifacts_dir": tmp_path / "artifacts"})
+    assert _only(findings, _WIKI_PROBE_ID) == []
+
+
+def test_wiki_mission_failed_but_artifact_in_window_stays_quiet(tmp_path: Path, monkeypatch) -> None:
+    """A failed attempt that was retried into a real wiki is healthy by outcome."""
+    now = datetime(2026, 6, 11, 8, 0, tzinfo=HOUSTON)
+    _set_now(monkeypatch, now)
+    base = tmp_path / "artifacts"
+    wikidir = base / "nightly_wikis"
+    wikidir.mkdir(parents=True)
+    artifact = wikidir / "2026-06-11_wiki_report_topic.md"
+    artifact.write_text("wiki")
+    fresh = now.timestamp() - 3600  # 1h before fake now → inside the window
+    os.utime(artifact, (fresh, fresh))
+    conn = _wiki_mission_conn(("failed", _iso(now - timedelta(hours=3)), _iso(now - timedelta(hours=2))))
+    findings = run_invariants({"vp_conn": conn, "artifacts_dir": base})
+    assert _only(findings, _WIKI_PROBE_ID) == []
+
+
+def test_wiki_mission_old_failure_stays_quiet(tmp_path: Path, monkeypatch) -> None:
+    now = datetime(2026, 6, 11, 8, 0, tzinfo=HOUSTON)
+    _set_now(monkeypatch, now)
+    conn = _wiki_mission_conn(("failed", _iso(now - timedelta(hours=50)), _iso(now - timedelta(hours=48))))
+    findings = run_invariants({"vp_conn": conn, "artifacts_dir": tmp_path / "artifacts"})
+    assert _only(findings, _WIKI_PROBE_ID) == []
+
+
+def test_wiki_mission_none_present_stays_quiet(tmp_path: Path, monkeypatch) -> None:
+    now = datetime(2026, 6, 11, 8, 0, tzinfo=HOUSTON)
+    _set_now(monkeypatch, now)
+    conn = _wiki_mission_conn()  # empty table
+    findings = run_invariants({"vp_conn": conn, "artifacts_dir": tmp_path / "artifacts"})
+    assert _only(findings, _WIKI_PROBE_ID) == []
+
+
+def test_wiki_mission_uses_latest_only(tmp_path: Path, monkeypatch) -> None:
+    """Only the most recent proactive_wiki mission governs the verdict."""
+    now = datetime(2026, 6, 11, 8, 0, tzinfo=HOUSTON)
+    _set_now(monkeypatch, now)
+    # Older failure, newer completion → quiet (latest is completed).
+    conn = _wiki_mission_conn(
+        ("failed", _iso(now - timedelta(hours=5)), _iso(now - timedelta(hours=5))),
+        ("completed", _iso(now - timedelta(hours=1)), _iso(now - timedelta(minutes=30))),
+    )
+    findings = run_invariants({"vp_conn": conn, "artifacts_dir": tmp_path / "artifacts"})
+    assert _only(findings, _WIKI_PROBE_ID) == []
+
+
+def test_wiki_mission_quiet_without_vp_conn(monkeypatch) -> None:
+    """No vp_conn injected and no vp_state.db on disk → fail open."""
+    now = datetime(2026, 6, 11, 8, 0, tzinfo=HOUSTON)
+    _set_now(monkeypatch, now)
+    monkeypatch.setattr(ppi, "get_vp_db_path", lambda: "/nonexistent/vp_state.db")
+    findings = run_invariants({"artifacts_dir": None})
+    assert _only(findings, _WIKI_PROBE_ID) == []
