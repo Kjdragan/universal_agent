@@ -8,10 +8,10 @@ This module provides a singleton rate limiter that:
 - Logs rate limit events to logfire for monitoring
 
 Configuration (environment variables):
-    ZAI_MAX_CONCURRENT: Max parallel requests (default: 3)
-    ZAI_INITIAL_BACKOFF: Initial backoff floor in seconds (default: 5.0)
+    ZAI_MAX_CONCURRENT: Max parallel requests (default: 2)
+    ZAI_INITIAL_BACKOFF: Initial backoff floor in seconds (default: 1.0)
     ZAI_MAX_BACKOFF: Maximum backoff cap in seconds (default: 30.0)
-    ZAI_MIN_INTERVAL: Minimum seconds between request starts (default: 1.0)
+    ZAI_MIN_INTERVAL: Minimum seconds between request starts (default: 0.5)
 """
 
 import asyncio
@@ -22,6 +22,7 @@ import logging
 import os
 from pathlib import Path
 import random
+import threading
 import time
 from typing import Any, TypeVar
 
@@ -58,6 +59,31 @@ def _is_fup_error(error_str: str) -> bool:
         return False
     lower = error_str.lower()
     return any(kw in lower for kw in FUP_KEYWORDS)
+
+
+class _LoopPrimitives:
+    """The asyncio primitives the limiter needs, bound to ONE event loop.
+
+    CPython 3.10+ asyncio primitives bind (lazily, on first contended use)
+    to the loop that uses them; using them from another loop raises
+    ``RuntimeError: ... is bound to a different event loop``. The limiter
+    is a process-global singleton shared by code running on more than one
+    loop — the convergence subprocess creates a fresh ``asyncio.run()``
+    loop per LLM call, and the gateway can run sync background work on a
+    Starlette threadpool thread (its own loops) while the main loop
+    serves. So primitives live in a per-loop bundle instead of on the
+    singleton directly.
+
+    NOTE: this module must stay free of universal_agent imports at call
+    time — it is imported by low-level seams (llm_classifier) and any
+    UA import here risks cycles.
+    """
+
+    __slots__ = ("semaphore", "request_lock")
+
+    def __init__(self, max_concurrent: int) -> None:
+        self.semaphore = asyncio.Semaphore(max_concurrent)
+        self.request_lock = asyncio.Lock()
 
 
 def _get_state_path() -> Path:
@@ -100,7 +126,6 @@ class ZAIRateLimiter:
         self._max_backoff = float(os.getenv("ZAI_MAX_BACKOFF", "30.0"))
 
         # State
-        self._semaphore = asyncio.Semaphore(self._max_concurrent)
         self._backoff_floor = self._initial_backoff
         self._last_429_time = 0.0
         self._last_success_time = 0.0
@@ -117,8 +142,22 @@ class ZAIRateLimiter:
         # Minimum inter-request spacing to avoid burst rate limits
         self._min_request_interval = float(os.getenv("ZAI_MIN_INTERVAL", "0.5"))
         self._last_request_time = 0.0
-        self._request_lock = asyncio.Lock()
-        self._state_lock = asyncio.Lock()
+
+        # Per-loop asyncio primitives (see _LoopPrimitives). Guarded by a
+        # threading.Lock because bundles can be created from different
+        # threads (gateway main loop vs Starlette threadpool loops).
+        self._loop_primitives: dict[asyncio.AbstractEventLoop, _LoopPrimitives] = {}
+        self._primitives_guard = threading.Lock()
+        # Diagnostic: counts the times a second LIVE loop used the limiter
+        # concurrently (cross-thread pattern — caps then hold per-loop, not
+        # globally; loud-log so the source pattern gets fixed).
+        self._cross_loop_conflicts = 0
+
+        # Counters/floors are mutated only in synchronous critical sections
+        # (no awaits), so a threading.Lock is both sufficient and immune to
+        # event-loop binding — and it protects cross-thread use, which an
+        # asyncio.Lock never did.
+        self._state_lock = threading.Lock()
 
         if logfire:
             logfire.info(
@@ -140,6 +179,55 @@ class ZAIRateLimiter:
         """Reset the singleton (useful for testing)."""
         cls._instance = None
 
+    def _get_loop_primitives(self) -> _LoopPrimitives:
+        """Return the asyncio-primitive bundle for the RUNNING loop,
+        creating it on first use.
+
+        Why per-loop: the singleton is shared across loops — sequentially
+        in the convergence subprocess (a fresh ``asyncio.run()`` loop per
+        LLM call via `proactive_convergence.py`'s sync→async bridges) and
+        potentially CONCURRENTLY in the gateway (a Starlette threadpool
+        thread running ``asyncio.run()`` while the main loop serves).
+        In-place primitive swaps would hand out fresh full-cap semaphores
+        on every loop change (cap silently unenforced under exactly the
+        concurrent pattern); per-loop bundles keep each loop's cap intact.
+
+        Trade-off, on purpose: when two loops are live at once, each
+        enforces ``max_concurrent`` independently (process-wide admission
+        is bounded by ``cap × live loops``, not ``cap``). That pattern is
+        a bug at the call site — we count it (``cross_loop_conflicts`` in
+        the snapshot) and loud-log it so it gets fixed at the source.
+
+        Closed loops are pruned on the next bundle creation, so one-shot
+        ``asyncio.run()`` loops don't accumulate. Must be called from a
+        running loop.
+        """
+        loop = asyncio.get_running_loop()
+        with self._primitives_guard:
+            prims = self._loop_primitives.get(loop)
+            if prims is None:
+                live = [lp for lp in self._loop_primitives if not lp.is_closed()]
+                for stale in [lp for lp in self._loop_primitives if lp.is_closed()]:
+                    del self._loop_primitives[stale]
+                if live:
+                    self._cross_loop_conflicts += 1
+                    msg = (
+                        "ZAIRateLimiter: a second LIVE event loop is using the "
+                        "limiter concurrently (%d conflict(s) so far) — caps now "
+                        "enforce per-loop, not process-wide. Fix the caller: move "
+                        "LLM-bearing work off threadpool asyncio.run() bridges."
+                    )
+                    logger.warning(msg, self._cross_loop_conflicts)
+                    if logfire:
+                        logfire.warn(
+                            "zai_rate_limiter_cross_loop_conflict",
+                            conflicts=self._cross_loop_conflicts,
+                            live_loops=len(live) + 1,
+                        )
+                prims = _LoopPrimitives(self._max_concurrent)
+                self._loop_primitives[loop] = prims
+            return prims
+
     async def record_429(self, context: str = "") -> None:
         """
         Called when a 429 is received. Adjusts adaptive backoff.
@@ -147,7 +235,7 @@ class ZAIRateLimiter:
         Args:
             context: Optional context string for logging (e.g., section name)
         """
-        async with self._state_lock:
+        with self._state_lock:
             now = time.time()
             self._total_429s += 1
 
@@ -174,7 +262,7 @@ class ZAIRateLimiter:
 
     async def record_success(self) -> None:
         """Called on successful request. Gradually lowers backoff floor."""
-        async with self._state_lock:
+        with self._state_lock:
             self._total_requests += 1
             self._last_success_time = time.time()
             # Slowly decay the floor back to initial
@@ -188,7 +276,7 @@ class ZAIRateLimiter:
         STOP, not retry. The watchdog escalates this as CRITICAL with
         no grace period.
         """
-        async with self._state_lock:
+        with self._state_lock:
             now = time.time()
             self._total_fup_events += 1
             self._last_fup_time = now
@@ -232,6 +320,7 @@ class ZAIRateLimiter:
                 "last_fup_at": self._last_fup_time or None,
                 "last_fup_snippet": self._last_fup_snippet,
                 "last_fup_context": self._last_fup_context,
+                "cross_loop_conflicts": self._cross_loop_conflicts,
                 "snapshot_written_at": time.time(),
             }
             tmp = path.with_suffix(path.suffix + ".tmp")
@@ -263,11 +352,17 @@ class ZAIRateLimiter:
         Args:
             context: Optional context string for logging
         """
-        await self._semaphore.acquire()
+        # The bundle is captured locally so release always pairs with the
+        # semaphore actually acquired — never a swapped attribute.
+        prims = self._get_loop_primitives()
+        await prims.semaphore.acquire()
         try:
             # Enforce minimum spacing between ALL requests (not just concurrent)
-            # This prevents burst rate limits from sliding window quotas
-            async with self._request_lock:
+            # This prevents burst rate limits from sliding window quotas.
+            # (`request_lock` is per-loop; `_last_request_time` is shared, so
+            # spacing still coordinates across loops — a lost-update race
+            # between loops costs only slightly-off jittered spacing.)
+            async with prims.request_lock:
                 now = time.time()
                 elapsed = now - self._last_request_time
                 if elapsed < self._min_request_interval:
@@ -278,7 +373,7 @@ class ZAIRateLimiter:
                 self._last_request_time = time.time()
             yield
         finally:
-            self._semaphore.release()
+            prims.semaphore.release()
 
     def get_stats(self) -> dict[str, float]:
         """Return current rate limiter statistics."""

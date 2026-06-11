@@ -12,7 +12,7 @@ code_paths:
   - src/universal_agent/services/invariants/zai_inference_health.py
   - src/universal_agent/utils/model_resolution.py
   - src/universal_agent/infisical_loader.py
-last_verified: 2026-06-10
+last_verified: 2026-06-11
 ---
 
 # ZAI Rate Limiter & Inference Governance
@@ -174,9 +174,37 @@ Defaults below are the **actual code defaults** in `ZAIRateLimiter.__init__`.
 | `ZAI_MIN_INTERVAL` | **`0.5`** | Minimum seconds between request *starts* |
 | `UA_ZAI_INFERENCE_STATE_PATH` | (derived) | Override snapshot location |
 
-> ⚠️ **Known discrepancy:** the module docstring at the top of `rate_limiter.py` still
-> lists the *old* defaults (`3 / 5.0 / 30.0 / 1.0`). The constructor is the truth
-> (`2 / 1.0 / 30.0 / 0.5`). If you touch this file, fix the docstring in the same change.
+### 4.6 Loop resilience (multi-loop processes)
+
+asyncio primitives bind — lazily, on first **contended** use (CPython 3.10+
+`asyncio.mixins._LoopBoundMixin`; the uncontended fast path never binds) — to one
+event loop. The singleton is used from more than one loop in two real patterns:
+
+1. **Sequential loops** — the convergence subprocess (`scripts/csi_convergence_sync.py`)
+   drives each LLM call through sync→async bridges that create a **fresh loop per
+   call** (`asyncio.run()` in `proactive_convergence.py::_detect_clusters_llm` and
+   friends). A primitive bound in one loop raises `RuntimeError: ... is bound to a
+   different event loop` when contended from the next.
+2. **Concurrent loops** — the gateway can run sync background work on a Starlette
+   threadpool thread, which itself calls `asyncio.run()` **while the gateway's main
+   loop keeps serving** and using the limiter. Here the old loop is *not* dead, so an
+   in-place primitive swap would hand out fresh full-cap semaphores on both sides —
+   silently un-enforcing the cap at exactly the worst moment.
+
+The design therefore serves a **per-loop primitives bundle**
+(`rate_limiter.py::_LoopPrimitives`, holding the semaphore + min-interval lock) from
+`ZAIRateLimiter._get_loop_primitives`: each loop gets its own bundle; closed loops are
+pruned on the next bundle creation; `acquire` pairs its `release()` with the bundle it
+actually acquired (captured local). Shared adaptive state (floors, streaks, totals)
+lives behind a **`threading.Lock`** — its critical sections are fully synchronous, so
+it can never loop-bind, and it is correct across threads (an `asyncio.Lock` never
+was). Deliberate trade-off: when two loops are genuinely live at once, each enforces
+`max_concurrent` independently (process admission ≤ cap × live loops) — that pattern
+is a call-site bug, so the limiter counts it (`cross_loop_conflicts` in the snapshot)
+and loud-logs `zai_rate_limiter_cross_loop_conflict` so it gets fixed at the source.
+Pinned by `tests/unit/test_rate_limiter_loop_resilience.py`; the two-live-loops
+regression test there is the **hard gate** for flipping the `_call_llm` routing flag
+in production.
 
 ## 5. Observability & watchdog
 
@@ -319,9 +347,10 @@ the sonnet tier (`glm-5-turbo`) and its concurrency lowered 6 → 2. An A/B over
 buckets (`scripts/convergence_model_ab.py`, run twice) showed glm-5-turbo matches the
 former opus default's precision (both 2/30) at ~35% lower latency, while the cheaper
 haiku/`glm-4.7` tiers over-confirm and fail the precision gate. The **enforcement** lever
-(routing `_call_llm` through the limiter — which needs a loop-resilient limiter, see
-[§4.4](#44-state-persistence-why-a-snapshot-file)) remains the durable fix if 429/FUP
-pressure persists under the lower-tier + lower-concurrency configuration.
+(routing `_call_llm` through the limiter — which needs the loop-resilient limiter, see
+[§4.6](#46-loop-resilience-multi-loop-processes)) remains the durable fix if 429/FUP
+pressure persists under the lower-tier + lower-concurrency configuration. The
+loop-resilience prerequisite shipped 2026-06-11 (`_ensure_loop_primitives`).
 
 Two things worth knowing before acting on this:
 
