@@ -324,9 +324,13 @@ def test_hook_force_reads_error_body_sync_real_socket(isolated_events_path, monk
     body_snippet, classify as the rate_limited_429 GRADIENT (not the cliff),
     set fup_texted=True, and leave the response consumable downstream."""
     # Point the events file at the isolated path even though host is localhost.
-    monkeypatch.setattr(
-        "universal_agent.services.zai_observability._is_zai_url", lambda url: True
-    )
+    # Module-OBJECT setattr, not a string target: test_package_bootstrap pops
+    # "universal_agent" from sys.modules and re-imports it, leaving the new
+    # parent module without a `.services` attribute — string-form monkeypatch
+    # targets then fail to resolve for every test that runs after it.
+    import universal_agent.services.zai_observability as _zo_mod
+
+    monkeypatch.setattr(_zo_mod, "_is_zai_url", lambda url: True)
     zo = _install_hooks_fresh()
     try:
         with _local_server(429, _FUP_1313_BODY) as base:
@@ -352,9 +356,13 @@ def test_hook_force_reads_error_body_sync_real_socket(isolated_events_path, monk
 @pytest.mark.asyncio
 async def test_hook_force_reads_error_body_async_real_socket(isolated_events_path, monkeypatch):
     """Async variant of the body-read regression over a real socket."""
-    monkeypatch.setattr(
-        "universal_agent.services.zai_observability._is_zai_url", lambda url: True
-    )
+    # Module-OBJECT setattr, not a string target: test_package_bootstrap pops
+    # "universal_agent" from sys.modules and re-imports it, leaving the new
+    # parent module without a `.services` attribute — string-form monkeypatch
+    # targets then fail to resolve for every test that runs after it.
+    import universal_agent.services.zai_observability as _zo_mod
+
+    monkeypatch.setattr(_zo_mod, "_is_zai_url", lambda url: True)
     zo = _install_hooks_fresh()
     try:
         with _local_server(429, _FUP_1313_BODY) as base:
@@ -377,9 +385,13 @@ async def test_hook_force_reads_error_body_async_real_socket(isolated_events_pat
 
 def test_hook_non_429_fup_body_classifies_as_cliff_real_socket(isolated_events_path, monkeypatch):
     """A 403 carrying FUP text over a real socket → the `fup_signal` cliff."""
-    monkeypatch.setattr(
-        "universal_agent.services.zai_observability._is_zai_url", lambda url: True
-    )
+    # Module-OBJECT setattr, not a string target: test_package_bootstrap pops
+    # "universal_agent" from sys.modules and re-imports it, leaving the new
+    # parent module without a `.services` attribute — string-form monkeypatch
+    # targets then fail to resolve for every test that runs after it.
+    import universal_agent.services.zai_observability as _zo_mod
+
+    monkeypatch.setattr(_zo_mod, "_is_zai_url", lambda url: True)
     body = '{"error": "account suspended for fair use policy violation"}'
     zo = _install_hooks_fresh()
     try:
