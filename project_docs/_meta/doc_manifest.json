@@ -897,6 +897,16 @@
       "scope": "Skills architecture, invocation by principals, dependency/gated-binary setup. SKILL.md is canonical per-skill."
     },
     {
+      "id": "tools-hyperframes",
+      "tier": 2,
+      "category": "07_tools",
+      "filename": "07_tools/04_hyperframes_video_generation.md",
+      "title": "HyperFrames Video Generation",
+      "code_paths": [],
+      "legacy_refs": [],
+      "scope": "Studio + pipeline (external project in Cody_Code_Generations/): beat-sheet pipeline, Agent SDK app, learning loop, widget strategy, UA adoption status (design-only). Capability lives outside this repo; code_paths intentionally empty."
+    },
+    {
       "id": "ops-playbook",
       "tier": 1,
       "category": "08_operations",
