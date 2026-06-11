@@ -93,8 +93,11 @@ def test_wiki_ingest_external_source(mock_generate_summary, mock_extract_concept
     assert "Concept1" in result["concepts"]
     assert result["summary"] == "This is a summary."
     
-    # Check if file was created
-    file_path = tmp_path / result["path"]
+    # The vault is isolated per-slug under the root_override (per-topic vault),
+    # so the ingested page lives at <root_override>/<vault_slug>/<result path>.
+    vault_dir = tmp_path / "test-vault"
+    assert vault_dir.is_dir()
+    file_path = vault_dir / result["path"]
     assert file_path.exists()
     
     # Verify the contents and frontmatter
