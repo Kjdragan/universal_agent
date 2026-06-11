@@ -277,5 +277,6 @@ done
 
 On each event, the session triages per §5 (verify against real code → `docfix/*` PR →
 `last_verified` stamp → auto-merge behind the required tripwire → close the issue). The
-nightly sweep fires ~1:35 PM CT (`doc-nightly.yml`, cron `35 18 * * *` UTC, often delayed
-by GitHub), so a same-day re-arm before early afternoon misses nothing.
+nightly sweep fires ~1:35 AM CT (`doc-nightly.yml`, cron `35 6 * * *` UTC, often delayed
+by GitHub), so a watcher that was down overnight just finds the issue waiting on re-arm —
+issues are durable; nothing is lost.

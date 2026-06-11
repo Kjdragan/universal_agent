@@ -292,12 +292,16 @@ def test_vp_coder_workspace_pruning_moved_to_active_hours() -> None:
     )
 
 
-def test_doc_nightly_runs_in_active_hours() -> None:
-    """The nightly documentation-health workflow schedule must be inside the active window (UTC).
+def test_doc_nightly_runs_overnight() -> None:
+    """The doc-drift sweep schedule must stay in the CT overnight window (UTC).
 
-    Replaces the retired nightly-doc-drift-audit / openclaw-release-sync schedule checks
-    (both pipelines retired 2026-05-30; see project_docs/_meta/FOLLOWUPS.md). doc-nightly.yml
-    is the deterministic full-corpus health sweep that replaced the doc-drift heuristic.
+    Operator decision 2026-06-10 (ADR 11 §10): this job is a DOCUMENTED EXCEPTION
+    to the active-window default. It feeds the dark-factory doc-triage loop on the
+    always-on desktop — the sweep fires ~1:35 AM CT, the loop triages/fixes on idle
+    Max quota, and doc fixes are merged before morning. The dormancy rationale
+    ("quota burn nobody reads until morning") does not apply: the overnight loop IS
+    the consumer. Until 2026-06-10 this test enforced the opposite (active window
+    12-01 UTC), which is why the sweep sat at 18:35 UTC ≈ 1:35 PM CT.
     """
     body = DOC_NIGHTLY.read_text(encoding="utf-8")
     # Find the cron schedule
@@ -305,14 +309,14 @@ def test_doc_nightly_runs_in_active_hours() -> None:
     assert m, f"Could not find cron schedule in {DOC_NIGHTLY}"
     cron = m.group(1)
     hours = _hours_used_by_cron(cron)
-    # GHA schedules are UTC. CDT active = 11-01 UTC, CST active = 12-02 UTC.
-    # Pick a conservative window where both DSTs overlap: 12-01 UTC (the
-    # intersection of CDT-active and CST-active).
-    safe_utc_active = set(range(12, 24)) | {0, 1}
-    assert hours.issubset(safe_utc_active), (
+    # GHA schedules are UTC. CT-overnight (10 PM-6 AM) = hours 03-10 UTC in CDT,
+    # 04-11 UTC in CST; the DST-safe intersection is hours 04-10 UTC.
+    safe_utc_overnight = set(range(4, 11))
+    assert hours.issubset(safe_utc_overnight), (
         f"doc-nightly cron={cron!r} hits UTC hour(s) "
-        f"{sorted(hours - safe_utc_active)} outside the safe DST-overlap "
-        f"active window 12-01 UTC. Use a UTC hour in 12-23 or 00-01."
+        f"{sorted(hours - safe_utc_overnight)} outside the safe DST-overlap "
+        f"CT-overnight window 04-10 UTC. The dark factory expects this sweep "
+        f"overnight (operator decision 2026-06-10, ADR 11 §10); use a UTC hour in 4-10."
     )
 
 
