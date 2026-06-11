@@ -15,14 +15,16 @@ Resolution order (highest priority first):
        ops use but typically unset in normal operation.
     5. **Per-VP profile default** (``VpProfile.inference_mode``) when a
        ``vp_id`` is supplied — the agent defines its own inference
-       backend: CODIE (``vp.coder.primary``) → "anthropic"; ATLAS
-       (``vp.general.primary``) and any other VP → "zai". This replaced
-       the old VP-blind hardcoded "anthropic" default (2026-06-03) that
-       silently forced ATLAS research/intel missions onto the Max plan
-       and burned 5-hour-window credits meant for coding.
-    6. ``"anthropic"`` — hardcoded last-resort fallback, used only when
-       no ``vp_id`` is known (e.g. the demo ``cody_demo_task`` path,
-       which is always CODIE coding work anyway).
+       backend. As of 2026-06-07 every VP profile — CODIE
+       (``vp.coder.primary``) included — defaults to "zai" (Anthropic
+       began API-billing the Claude-Code-via-Max SDK path; see
+       ``vp/profiles.py``). This replaced the old VP-blind hardcoded
+       "anthropic" default (2026-06-03) that silently forced ATLAS
+       research/intel missions onto the Max plan and burned
+       5-hour-window credits meant for coding.
+    6. ``"zai"`` — hardcoded last-resort fallback
+       (``_HARDCODED_FALLBACK_MODE``), used only when no ``vp_id`` is
+       known (e.g. the demo ``cody_demo_task`` path).
 
 When the resolved mode is ``anthropic``, ``vp_dispatch_mission``
 auto-routes the mission through ``execution_mode="cli"`` so the
