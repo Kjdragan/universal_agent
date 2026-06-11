@@ -303,27 +303,88 @@ def zai_inference_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         # Both signals fired; same condition name, don't double-list.
         pass
 
-    # Condition 2: sustained 429s — CRITICAL.
+    # ── Limiter-managed-throttle discriminator (2026-06-11) ──────────────
+    # With UA_LLM_CLASSIFIER_LIMITER_ENABLED routing the hot `_call_llm` seam
+    # through the limiter, every burst legitimately ramps consecutive_429s
+    # and saturates the backoff floor WHILE the limiter retries and succeeds.
+    # Those are managed states, not incidents — alarm on OUTCOMES instead:
+    # retries exhausted recently, the FUP acquire-pause being active, or a
+    # genuine cliff (fup_active above). A 429 burst in the events file with
+    # NO recent snapshot 429 activity still means an un-limited bypasser is
+    # hammering ZAI — that stays CRITICAL (the original 2026-05-21 gap).
+    def _recent(ts_value: object, window: float) -> bool:
+        try:
+            return ts_value is not None and (now - float(ts_value)) <= window
+        except (TypeError, ValueError):
+            return False
+
+    acquire_pause_until = float(snapshot.get("acquire_pause_until") or 0.0)
+    pause_active = acquire_pause_until > now
+    exhausted_recent = _recent(snapshot.get("last_exhausted_at"), FUP_DETECT_WINDOW_SECONDS)
+    snapshot_429_recent = _recent(snapshot.get("last_429_at"), EVENTS_429_WINDOW_SECONDS)
+    # The managed demotion only applies while the seam-routing flag is ON:
+    # legacy direct-record callers never increment the exhaustion counters,
+    # so without the flag the demotion would mask genuine sustained throttle.
+    # Flag off ⇒ alarm behavior is byte-identical to the pre-AIMD watchdog.
+    from universal_agent.feature_flags import _is_truthy
+
+    limiter_routing_enabled = _is_truthy(os.getenv("UA_LLM_CLASSIFIER_LIMITER_ENABLED"))
+    limiter_managing = (
+        limiter_routing_enabled
+        and snapshot_429_recent
+        and not exhausted_recent
+        and not pause_active
+    )
+
+    # Condition 1c: the account-level FUP acquire-pause is in force — CRITICAL.
+    if pause_active:
+        triggered.append("fup_pause_active")
+        severity = "critical"
+
+    # Condition 1d: logical calls ran out of 429 retries recently — CRITICAL.
+    # (Wire 429 counts amplify under limiter retries; exhaustion is the
+    # outcome that means real work is failing.)
+    if exhausted_recent:
+        triggered.append("retries_exhausted")
+        severity = "critical"
+
+    # Condition 2: sustained 429s — CRITICAL, demoted to a managed WARN when
+    # the limiter is actively handling them with no bad outcomes.
     consecutive_429s = int(snapshot.get("consecutive_429s") or 0)
     if consecutive_429s >= CONSECUTIVE_429_CRITICAL:
-        triggered.append("consecutive_429s")
-        severity = "critical"
+        if limiter_managing:
+            triggered.append("consecutive_429s_managed")
+        else:
+            triggered.append("consecutive_429s")
+            severity = "critical"
 
-    # Condition 2b: burst of 429s in JSONL rolling window — CRITICAL.
-    # This is the gap that hid the 2026-05-21 session_dossier burst from the
-    # watchdog: the rate-limiter snapshot saw 0 because the caller didn't go
-    # through `with_rate_limit_retry`. The P7 events file did see them.
+    # Condition 2b: burst of 429s in JSONL rolling window. CRITICAL when the
+    # snapshot shows no recent in-band 429s (= an un-limited bypasser, the gap
+    # that hid the 2026-05-21 session_dossier burst); managed WARN otherwise.
     events_429_burst = events_scan["events_429_count"] >= EVENTS_429_CRITICAL_COUNT
     if events_429_burst:
-        triggered.append("events_429_burst")
-        severity = "critical"
+        if limiter_managing:
+            triggered.append("events_429_burst_managed")
+        else:
+            triggered.append("events_429_burst")
+            severity = "critical"
 
-    # Condition 3: backoff_floor saturated — CRITICAL.
+    # Condition 3: backoff_floor saturated — same managed demotion.
     backoff_floor = float(snapshot.get("backoff_floor") or 0.0)
     backoff_at_max = backoff_floor >= BACKOFF_FLOOR_MAX_THRESHOLD
     if backoff_at_max:
-        triggered.append("backoff_at_max")
-        severity = "critical"
+        if limiter_managing:
+            triggered.append("backoff_at_max_managed")
+        else:
+            triggered.append("backoff_at_max")
+            severity = "critical"
+
+    # Condition 3b: two live event loops used the limiter concurrently — the
+    # per-loop-primitives guard fired (caps held per-loop, not process-wide).
+    # WARN: fix the calling pattern (threadpool asyncio.run bridges).
+    cross_loop_conflicts = int(snapshot.get("cross_loop_conflicts") or 0)
+    if cross_loop_conflicts > 0:
+        triggered.append("cross_loop_conflicts")
 
     # Condition 4: too many UA Python processes — WARN.
     high_process_count = process_count > PROCESS_COUNT_SOFT_LIMIT
@@ -337,6 +398,17 @@ def zai_inference_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     observed_value = {
         "triggered_conditions": triggered,
         "fup_active": fup_active,
+        "fup_pause_active": pause_active,
+        "acquire_pause_until": acquire_pause_until or None,
+        "retries_exhausted_recent": exhausted_recent,
+        "total_429s_exhausted": int(snapshot.get("total_429s_exhausted") or 0),
+        "total_succeeded_after_retry": int(snapshot.get("total_succeeded_after_retry") or 0),
+        "limiter_managing": limiter_managing,
+        "cross_loop_conflicts": cross_loop_conflicts,
+        "tier_caps": {
+            t: (d or {}).get("cap")
+            for t, d in (snapshot.get("tiers") or {}).items()
+        },
         "consecutive_429s": consecutive_429s,
         "total_429s": int(snapshot.get("total_429s") or 0),
         "total_fup_events": int(snapshot.get("total_fup_events") or 0),
@@ -385,7 +457,22 @@ def zai_inference_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 f"{(snapshot.get('last_fup_snippet') or '')[:120]!r}. STOP "
                 "concurrent inference now and investigate before resuming."
             )
-    elif events_429_burst:
+    elif pause_active:
+        headline = (
+            f"ZAI FUP acquire-pause ACTIVE — the limiter hit the account-level "
+            f"cliff and is failing acquires fast for another "
+            f"{max(0.0, acquire_pause_until - now):.0f}s. All-tier caps slammed "
+            "to minimum; inference resumes automatically when the pause expires."
+        )
+    elif exhausted_recent:
+        headline = (
+            f"ZAI logical calls EXHAUSTED their 429 retries recently "
+            f"(total_429s_exhausted={observed_value['total_429s_exhausted']}, "
+            f"succeeded_after_retry={observed_value['total_succeeded_after_retry']}). "
+            "The limiter is retrying but real work is failing — pressure exceeds "
+            "what the per-tier caps can absorb."
+        )
+    elif events_429_burst and not limiter_managing:
         # Neutral reporting: name the top caller(s) by 429 count WITHOUT
         # asserting they bypass the limiter. The ZAI 429 ceiling is
         # account-level, so a fully-compliant limiter user can be throttled
@@ -422,6 +509,18 @@ def zai_inference_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "rather than the cause — use the per-model breakdown and concurrency "
             "settings to find the real pressure source."
         )
+    elif limiter_managing and (
+        events_429_burst or consecutive_429s >= CONSECUTIVE_429_CRITICAL or backoff_at_max
+    ):
+        headline = (
+            f"ZAI throttle, limiter-managed (WARN) — "
+            f"{events_scan['events_429_count']} wire 429s in last "
+            f"{EVENTS_429_WINDOW_SECONDS // 60} min, consecutive={consecutive_429s}, "
+            f"floor={backoff_floor:.1f}s; retries succeeding "
+            f"(succeeded_after_retry={observed_value['total_succeeded_after_retry']}, "
+            "exhausted=0 recently). No action needed unless this escalates to "
+            "retries_exhausted / fup_pause_active."
+        )
     elif consecutive_429s >= CONSECUTIVE_429_CRITICAL:
         headline = (
             f"ZAI rate limit sustained — {consecutive_429s} consecutive 429s. "
@@ -432,6 +531,13 @@ def zai_inference_health(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         headline = (
             f"ZAI adaptive backoff saturated (floor={backoff_floor:.1f}s at "
             "cap). Rate limiter is in sustained-throttle mode."
+        )
+    elif cross_loop_conflicts > 0 and not high_process_count:
+        headline = (
+            f"ZAI limiter cross-loop conflicts detected ({cross_loop_conflicts}) — "
+            "two live event loops used the limiter concurrently (caps enforced "
+            "per-loop, not process-wide). Find and fix the threadpool "
+            "asyncio.run() call path (see 10_zai_rate_limiter.md §4.6)."
         )
     else:
         headline = (

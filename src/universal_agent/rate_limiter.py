@@ -784,6 +784,7 @@ class ZAIRateLimiter:
             "consecutive_429s": self._consecutive_429s,
             "total_429s": self._total_429s,
             "total_requests": self._total_requests,
+            "total_fup_events": self._total_fup_events,
             "total_429s_exhausted": self._total_429s_exhausted,
             "total_succeeded_after_retry": self._total_succeeded_after_retry,
             "tier_caps": dict(self._tier_cap),

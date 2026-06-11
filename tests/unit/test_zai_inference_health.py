@@ -445,3 +445,86 @@ def test_runbook_command_mentions_events_jsonl(isolated_state):
     assert len(matches) == 1
     runbook = matches[0].runbook_command or ""
     assert "zai_inference_events.jsonl" in runbook
+
+
+# ── Limiter-managed throttle semantics (2026-06-11, AIMD seam routing) ──────
+# These activate ONLY while UA_LLM_CLASSIFIER_LIMITER_ENABLED is on: with the
+# hot `_call_llm` seam routed through the limiter, in-band 429 streaks and a
+# saturated floor are NORMAL managed states (the limiter retries and wins);
+# the alarm-worthy outcomes are retries_exhausted and the FUP acquire-pause.
+# Flag off (all tests above) keeps the pre-AIMD alarm behavior byte-identical.
+
+
+def test_flag_on_managed_throttle_demotes_to_warn(isolated_state, monkeypatch):
+    monkeypatch.setenv("UA_LLM_CLASSIFIER_LIMITER_ENABLED", "1")
+    _write_snapshot(
+        isolated_state,
+        consecutive_429s=5,
+        backoff_floor=8.0,
+        total_429s=40,
+        last_429_at=time.time(),  # limiter actively recording
+        total_429s_exhausted=0,
+        total_succeeded_after_retry=12,
+    )
+    with _mock_process_count(10):
+        findings = run_invariants({})
+    matches = [f for f in findings if f.metric_key == "zai_inference_health"]
+    assert len(matches) == 1
+    assert matches[0].severity == "warn"
+    obs = matches[0].observed_value or {}
+    triggered = obs.get("triggered_conditions") or []
+    assert "consecutive_429s_managed" in triggered
+    assert "backoff_at_max_managed" in triggered
+    assert "consecutive_429s" not in triggered
+    assert obs.get("limiter_managing") is True
+    assert "limiter-managed" in (matches[0].recommendation or "")
+
+
+def test_flag_on_retries_exhausted_fires_critical(isolated_state, monkeypatch):
+    monkeypatch.setenv("UA_LLM_CLASSIFIER_LIMITER_ENABLED", "1")
+    _write_snapshot(
+        isolated_state,
+        consecutive_429s=5,
+        last_429_at=time.time(),
+        total_429s_exhausted=3,
+        last_exhausted_at=time.time() - 120,  # 2 min ago — inside the window
+    )
+    with _mock_process_count(10):
+        findings = run_invariants({})
+    matches = [f for f in findings if f.metric_key == "zai_inference_health"]
+    assert len(matches) == 1
+    assert matches[0].severity == "critical"
+    triggered = (matches[0].observed_value or {}).get("triggered_conditions") or []
+    assert "retries_exhausted" in triggered
+    # Exhaustion breaks the managed discriminator: full criticals return.
+    assert "consecutive_429s" in triggered
+
+
+def test_flag_on_fup_pause_active_fires_critical(isolated_state, monkeypatch):
+    monkeypatch.setenv("UA_LLM_CLASSIFIER_LIMITER_ENABLED", "1")
+    _write_snapshot(
+        isolated_state,
+        acquire_pause_until=time.time() + 120,  # pause in force
+        last_429_at=time.time(),
+    )
+    with _mock_process_count(10):
+        findings = run_invariants({})
+    matches = [f for f in findings if f.metric_key == "zai_inference_health"]
+    assert len(matches) == 1
+    assert matches[0].severity == "critical"
+    obs = matches[0].observed_value or {}
+    assert "fup_pause_active" in (obs.get("triggered_conditions") or [])
+    assert obs.get("fup_pause_active") is True
+    assert "acquire-pause" in (matches[0].recommendation or "")
+
+
+def test_cross_loop_conflicts_fires_warn(isolated_state):
+    _write_snapshot(isolated_state, cross_loop_conflicts=2)
+    with _mock_process_count(10):
+        findings = run_invariants({})
+    matches = [f for f in findings if f.metric_key == "zai_inference_health"]
+    assert len(matches) == 1
+    assert matches[0].severity == "warn"
+    obs = matches[0].observed_value or {}
+    assert "cross_loop_conflicts" in (obs.get("triggered_conditions") or [])
+    assert obs.get("cross_loop_conflicts") == 2

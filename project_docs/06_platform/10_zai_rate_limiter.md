@@ -342,15 +342,45 @@ Python processes, then emits **one** finding listing every triggered condition:
 3. **FUP signal** in the last 30 min (snapshot or events) → **CRITICAL, no grace.**
 4. **Backoff floor pinned at the max cap** → sustained throttle.
 5. **UA process count over soft limit** → WARN (self-induced choking).
+6. **FUP acquire-pause active** (`acquire_pause_until` in the future) → **CRITICAL** —
+   the limiter hit the cliff and is failing acquires fast (§4.7).
+7. **Retries exhausted recently** (`last_exhausted_at` in the last 30 min) →
+   **CRITICAL** — logical calls are failing despite limiter-managed retries.
+8. **Cross-loop conflicts** (`cross_loop_conflicts > 0`) → WARN — two live loops used
+   the limiter concurrently; fix the call-site pattern (§4.6).
 
-FUP wins severity if present. This is the alarm behind the
+**Managed-throttle demotion (active only while `UA_LLM_CLASSIFIER_LIMITER_ENABLED`
+is on):** with the hot seam routed through the limiter, conditions 1/2/4 are *normal
+managed states* during a burst — wire 429 counts amplify under retries while logical
+work succeeds. They demote to WARN (`*_managed` condition names) whenever the
+snapshot shows recent in-band 429 recording with **no** recent exhaustion and **no**
+pause; the CRITICAL alarms are then the *outcomes* (conditions 3/6/7) plus any burst
+with NO recent snapshot activity (= a bypasser, the original 2026-05-21 gap). Flag
+off ⇒ alarm behavior identical to the pre-AIMD watchdog — legacy direct-record
+callers never increment the exhaustion counters, so the demotion would mask genuine
+sustained throttle for them.
+
+FUP/pause/exhaustion win severity if present. This is the alarm behind the
 `[ACTION/INCIDENT] [Proactive Health] … zai_inference_health` emails.
 
-## 6. The load-bearing truth: the limiter is *half-adopted*
+## 6. Adoption status: the seam is now routable (flag-gated)
 
 `with_rate_limit_retry` / `acquire()` only constrain the account if **all** ZAI
-callers go through them. They do not. As of `last_verified`, of ~20 distinct
-**opus/`glm-5.1`** call sites, **only three** acquire the limiter.
+callers go through them. As of 2026-06-11 the biggest gap is closed *behind a
+flag*: `llm_classifier.py::_call_llm` — the shared seam carrying ~89% of all
+429s — routes through `with_rate_limit_retry` with the per-tier AIMD limiter
+(§4.7) when **`UA_LLM_CLASSIFIER_LIMITER_ENABLED`** is on (default OFF; parse
+via `feature_flags.py::_is_truthy`). The wrap engages **only when the
+effective base URL targets a ZAI host** (`llm_classifier.py::_targets_zai`,
+mirroring `zai_observability.ZAI_HOSTS`) — the per-stage `base_url` override
+to real Anthropic keeps the direct path, since its 429s are unrelated to the
+ZAI account. On the routed path the SDK client is built with `max_retries=0`
+(retry policy lives in ONE layer; same pairing as
+`mission_control_chief_of_staff.py`), and each logical call's retry saga is
+budget-boxed (`UA_LLM_CLASSIFIER_LIMITER_BUDGET_SECONDS`, default 300).
+
+The pre-flag state, kept for context — of ~20 distinct **opus/`glm-5.1`** call
+sites, **only three** acquired the limiter:
 
 **Goes through the limiter (≈9 sites):**
 
