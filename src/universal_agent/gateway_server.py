@@ -7300,6 +7300,43 @@ async def _run_gateway_session_request(
                 notification_kind=notification_kind,
                 goal_message=goal_message,
             )
+            # Flat, email-friendly diagnostic context. The notification-dispatcher
+            # email renderer only surfaces a small allowlist of metadata keys, so
+            # the nested ``goal_satisfaction`` blob never reaches the operator's
+            # inbox. Lift the few facts that make a lifecycle miss debuggable
+            # without opening the VPS — which task failed, which run/workspace to
+            # inspect, how many tool calls happened (``0`` is the tell that the
+            # run never started, e.g. an upstream ZAI 429/FUP), and the run.log
+            # tail that carries the actual error line.
+            notification_metadata_extra: dict[str, Any] = {}
+            if request_run_kind == "todo_execution":
+                observed = goal_satisfaction.get("observed") if isinstance(goal_satisfaction, dict) else {}
+                observed = observed if isinstance(observed, dict) else {}
+                diag_task_ids = [
+                    str(task_id).strip()
+                    for task_id in (observed.get("invalid_task_ids") or [])
+                    if str(task_id).strip()
+                ]
+                if not diag_task_ids and isinstance(request.metadata, dict):
+                    diag_task_ids = [
+                        str(task_id).strip()
+                        for task_id in (request.metadata.get("claimed_task_ids") or [])
+                        if str(task_id).strip()
+                    ]
+                notification_metadata_extra["tool_calls"] = tool_call_count
+                if diag_task_ids:
+                    # ``task_id`` is also the notification dispatcher's per-event
+                    # cooldown scope key (``_scope_key_for_record``) — supplying
+                    # it makes the cooldown resolve per-task instead of falling
+                    # back to the shared ``daemon_simone_todo`` session id. (The
+                    # separate per-kind rollup window still batches same-kind
+                    # alerts regardless of scope.)
+                    notification_metadata_extra["task_id"] = diag_task_ids[0]
+                    notification_metadata_extra["invalid_task_ids"] = diag_task_ids
+                diag_workspace = active_execution_workspace or session.workspace_dir or ""
+                log_tail = _read_run_log_tail(diag_workspace) if diag_workspace else None
+                if log_tail:
+                    notification_metadata_extra["log_tail"] = log_tail
             _add_notification(
                 kind=notification_kind,
                 title=notification_title,
@@ -7314,6 +7351,7 @@ async def _run_gateway_session_request(
                     "workspace_dir": active_execution_workspace or session.workspace_dir or "",
                     "active_run_workspace": _session_active_run_workspace(session) or active_execution_workspace or "",
                     "deploy_restart_casualty": deploy_restart_casualty,
+                    **notification_metadata_extra,
                 },
             )
             await manager.broadcast(
