@@ -90,10 +90,14 @@ def _analyze_events(now: float) -> dict[str, Any]:
                     w["fup"] += 1
                 if fuptxt:
                     w["fup_texted"] += 1
-                tb = w["tiers"].setdefault(tier, {"total": 0, "r429": 0})
+                tb = w["tiers"].setdefault(tier, {"total": 0, "r429": 0, "fup": 0, "fup_texted": 0})
                 tb["total"] += 1
                 if is429:
                     tb["r429"] += 1
+                if isfup:
+                    tb["fup"] += 1
+                if fuptxt:
+                    tb["fup_texted"] += 1
             if is429 and age <= 3600:
                 c = str(e.get("caller") or "?").split("/")[-1]
                 callers[c] = callers.get(c, 0) + 1

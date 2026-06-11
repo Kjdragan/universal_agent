@@ -198,25 +198,41 @@ _SKIP_FRAME_FRAGMENTS = (
     "/google/genai/",          # google-genai SDK
     "/google/generativeai/",   # legacy google-generativeai
     "zai_observability.py",
+    "/rate_limiter.py",        # the limiter wrapper is never a real caller (makes no LLM calls)
 )
+
+# Wrapper FUNCTIONS to walk past (by frame name, not file) so the attribution
+# lands on the real consumer rather than a shared seam. ``with_rate_limit_retry``
+# (rate_limiter.py) receives the raw SDK method as its ``func``, so the SDK frame
+# is skipped and the walk would otherwise stop on the wrapper; ``_call_llm``
+# (the llm_classifier seam, ~12 flows route through it) is likewise a pass-through.
+# Skipping these by NAME (not whole file) keeps the real ``classify_*`` callers in
+# llm_classifier.py correctly attributed while letting convergence / CoS / wiki /
+# etc. surface as themselves. A function legitimately named one of these that is
+# itself a real consumer does not exist in this codebase.
+_SKIP_FRAME_FUNCS = frozenset({"with_rate_limit_retry", "_call_llm"})
 
 
 def _identify_caller() -> str:
-    """Walk the stack to find the first frame OUTSIDE framework/SDK code.
+    """Walk the stack to find the first frame OUTSIDE framework/SDK/wrapper code.
     Returns a path relative to universal_agent/ if the caller is a UA
     source file. Best-effort — never raises.
 
     Note: the universal_agent project tree contains `.venv/` so naive
     `"universal_agent" in filename` checks match SDK frames inside the
     venv. The skip list above filters those out so we land on the
-    actual UA module that issued the call (e.g. cody_implementation,
-    mission_control_tier1, briefings_agent).
+    actual UA module that issued the call (e.g. proactive_convergence,
+    mission_control_tier1, briefings_agent). The function skip-list walks
+    past the limiter/`_call_llm` seam wrappers so the named culprit is the
+    real consumer, not the shared plumbing.
     """
     try:
         stack = traceback.extract_stack()
         for frame in reversed(stack):
             filename = frame.filename
             if any(skip in filename for skip in _SKIP_FRAME_FRAGMENTS):
+                continue
+            if frame.name in _SKIP_FRAME_FUNCS:
                 continue
             # Only treat as a UA-source frame if it's actually under the
             # source tree, not the venv. The skip list already excludes

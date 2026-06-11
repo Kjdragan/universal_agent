@@ -12,7 +12,7 @@ type WindowStat = {
   fup: number;
   fup_texted: number;
   pct: number;
-  tiers: Record<string, { total: number; r429: number; pct?: number }>;
+  tiers: Record<string, { total: number; r429: number; pct?: number; fup?: number; fup_texted?: number }>;
 };
 
 type StatusPayload = {
@@ -331,8 +331,6 @@ export default function ZaiControlPage() {
           const cap = snap?.tier_caps?.[tier];
           const override = ctrl?.tier_overrides?.[tier];
           const tierPaused = !!ctrl?.tier_pause?.[tier];
-          const w10 = windows?.["10m"]?.tiers?.[tier];
-          const pct = w10?.pct ?? 0;
           return (
             <div key={tier} className="rounded-md border border-border bg-card p-3">
               <div className="flex items-center justify-between">
@@ -343,8 +341,24 @@ export default function ZaiControlPage() {
                 cap {cap ?? "—"}
                 {override?.cap != null ? <span className="ml-1 text-xs text-amber-500">(override)</span> : null}
               </div>
-              <div className={`text-sm ${pctColor(pct)}`}>
-                {pct}% 429 (10m){w10 ? ` · ${w10.r429}/${w10.total}` : ""}
+              {/* Per-window 429 / FUP for THIS tier: 1m · 10m · 60m */}
+              <div className="mt-1 space-y-0.5 text-xs">
+                {(["1m", "10m", "60m"] as const).map((w) => {
+                  const tb = windows?.[w]?.tiers?.[tier];
+                  const p = tb?.pct ?? 0;
+                  const fup = tb?.fup ?? 0;
+                  const t1313 = tb?.fup_texted ?? 0;
+                  return (
+                    <div key={w} className="flex items-baseline justify-between gap-2">
+                      <span className="w-8 shrink-0 text-muted-foreground">{w}</span>
+                      <span className={`tabular-nums ${pctColor(p)}`}>{p}%</span>
+                      <span className="ml-auto tabular-nums text-muted-foreground">
+                        {tb?.r429 ?? 0}/{tb?.total ?? 0} · FUP {fup}
+                        {t1313 > 0 ? ` · 1313 ${t1313}` : ""}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
               <div className="mt-2 flex items-center gap-1">
                 <button
@@ -462,7 +476,7 @@ export default function ZaiControlPage() {
               <div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                 {group === "timers" ? "Timers (scheduled proactive work)" : "Continuous services"}
               </div>
-              <div className="divide-y divide-border rounded border border-border">
+              <div className="grid grid-cols-1 overflow-hidden rounded border border-border md:grid-cols-2 md:gap-x-6">
                 {rows.map((a) => (
                   <ActivityRow key={a.unit} a={a} busy={busy} onAction={activityControl} />
                 ))}
@@ -533,7 +547,7 @@ function ActivityRow({
         ? "bg-emerald-500"
         : "bg-zinc-500";
   return (
-    <div className="flex items-center justify-between gap-3 p-2 text-sm">
+    <div className="flex items-center justify-between gap-3 border-b border-border p-2 text-sm">
       <div className="flex min-w-0 items-center gap-2">
         <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${dotColor}`} title={a.active_state} />
         <span className="truncate">{a.label}</span>
