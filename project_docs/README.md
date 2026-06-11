@@ -95,6 +95,7 @@ _Secrets/Infisical, runtime bootstrap, identity/auth, deployment/CI, environment
 - **["Agent Runbook: Reaching the Production VPS (read live state without fighting SSH)"](06_platform/09_agent_vps_access_runbook.md)** — Agent runbook for reaching the prod VPS read-only over the tailnet gateway API (no SSH) _(verified 2026-06-09)_
 - **["ZAI Rate Limiter & Inference Governance"](06_platform/10_zai_rate_limiter.md)** — Canonical doc for ZAI inference governance: the ZAIRateLimiter concurrency/backoff/FUP control, the zai_observability httpx events hook, the zai_inference_health watchdog, and the half-adoption reality (most opus callers bypass the limiter). _(verified 2026-06-10)_
 - **["ADR: Autonomous doc-drift issue triage & fix — three delivery options"](06_platform/11_autonomous_doc_triage_options_adr.md)** — Options for an autonomous Opus agent that triages/fixes the nightly doc-drift issues: (a) _(verified 2026-06-10)_
+- **["ADR: Deploy-Restart Resilience for the Gateway (cut the churn, protect in-process work)"](06_platform/12_deploy_restart_resilience_adr.md)** — Accepted, phased (B→C1→C2, defer A): the gateway hard-restarts on every deploy (~19/day) — separates the two harms (dead :8002 window from the ~734-line sync lifespan vs in-process Simone heartbeat SIGTERM), notes VP missions are NOT casualties. Phase B (deploy coalescing via deploy_coalesce.py) implemented. _(verified 2026-06-11)_
 
 ## 07_tools
 
