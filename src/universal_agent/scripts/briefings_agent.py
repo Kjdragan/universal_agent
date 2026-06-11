@@ -882,6 +882,8 @@ async def main():
             objective=objective,
             mission_type="briefing",
             idempotency_key=f"briefing-{today}-{mode}",
+            # Routine dispatch — executes no Task Hub task; never auto-link one.
+            link_task=False,
         )
     except RuntimeError as exc:
         logger.error(f"Dispatch failed: {exc}")
