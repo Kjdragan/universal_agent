@@ -326,6 +326,7 @@ async def _execute_cli_session(
     task_id: str = "",
     prompt_in_argv: bool = False,
     extra_cli_args: tuple[str, ...] = (),
+    goal_eval_model: str | None = None,
 ) -> MissionOutcome:
     """Spawn a claude CLI subprocess and monitor its output.
 
@@ -334,9 +335,23 @@ async def _execute_cli_session(
     assignment (best-effort) and the eventual exit is fed into
     ``classify_worker_exit`` upstream in :func:`run_mission`. Empty
     ``task_id`` skips F.1 bookkeeping silently.
+
+    ``goal_eval_model`` (set only on the ``/goal`` work turn) pins the model
+    used by Claude Code's built-in completion evaluator. The evaluator runs
+    on the CC "small fast model", which current CC reads from
+    ``ANTHROPIC_DEFAULT_HAIKU_MODEL`` (``ANTHROPIC_SMALL_FAST_MODEL`` is
+    deprecated). We set that var on THIS subprocess's env dict only — never
+    on ``os.environ`` and never on the global ``ZAI_MODEL_MAP`` operator
+    lock — so the evaluator (and only this child process's background calls)
+    runs on a stronger model. See
+    ``utils/model_resolution.resolve_goal_eval_model``.
     """
 
     env = _build_cli_env(enable_agent_teams, workspace_dir, cody_mode=cody_mode)
+    if goal_eval_model:
+        # Scoped to this child process only (env is a fresh per-subprocess
+        # dict): upgrade the built-in /goal evaluator's small-fast model.
+        env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = goal_eval_model
 
     cmd = [
         "claude",
@@ -619,6 +634,13 @@ async def _run_goal_loop_mission(
         f"{workspace_dir / 'COMPLETION.md'} and the transcript shows it "
         "being written."
     )
+    # Upgrade the built-in /goal completion evaluator off the operator-locked
+    # weak haiku tier (glm-4.5-air) onto a stronger model (sonnet → glm-5-turbo
+    # on ZAI; no override on Anthropic-Max). Scoped to THIS work-turn
+    # subprocess only — never touches os.environ or the ZAI_MODEL_MAP lock.
+    from universal_agent.utils.model_resolution import resolve_goal_eval_model
+
+    goal_eval_model = resolve_goal_eval_model(cody_mode)
     outcome = await _execute_cli_session(
         prompt=f"/goal {condition}{attestation_clause}",
         workspace_dir=workspace_dir,
@@ -629,11 +651,13 @@ async def _run_goal_loop_mission(
         task_id=task_id,
         prompt_in_argv=True,
         extra_cli_args=("--dangerously-skip-permissions",),
+        goal_eval_model=goal_eval_model,
     )
     enriched = dict(outcome.payload or {})
     enriched["goal_phase"] = "goal_loop"
     enriched["goal_condition_chars"] = len(condition)
     enriched["goal_attestation_clause_appended"] = True
+    enriched["goal_eval_model"] = goal_eval_model or "haiku-default"
     return MissionOutcome(
         status=outcome.status, result_ref=outcome.result_ref,
         message=outcome.message, payload=enriched,

@@ -23,7 +23,7 @@ code_paths:
   - deployment/systemd/
   - web-ui/app/dashboard/tutorials/
   - web-ui/app/dashboard/claude-code-intel/
-last_verified: 2026-06-10
+last_verified: 2026-06-11
 ---
 
 # ADR: YouTube Brief / Tutorial / Demo Pipeline Redesign
@@ -192,6 +192,21 @@ deterministic finalize step that lands every completed build on the dashboard de
   functionally-successful goal mission deterministically demoted to failed
   (`missing_completion_attestation` — first live specimen `vp-mission-5c1898126635f0237061a79a`,
   2026-06-11). worker_loop's attestation guard remains the enforcement backstop.
+- **Stronger `/goal` evaluator on ZAI:** the built-in `/goal` completion evaluator runs Claude Code's
+  "small fast model" — current CC reads that from `ANTHROPIC_DEFAULT_HAIKU_MODEL`
+  (`ANTHROPIC_SMALL_FAST_MODEL` is deprecated), which on ZAI is the operator-locked `glm-4.5-air` (too
+  weak to adjudicate acceptance reliably). `model_resolution.py::resolve_goal_eval_model` upgrades the
+  work turn's evaluator to the sonnet tier (`glm-5-turbo`): `claude_cli_client.py::_run_goal_loop_mission`
+  resolves it and threads `goal_eval_model` to `claude_cli_client.py::_execute_cli_session`, which sets
+  `ANTHROPIC_DEFAULT_HAIKU_MODEL` **on that one subprocess's env dict only** — never `os.environ`, never
+  `ZAI_MODEL_MAP` (the global haiku operator-lock is untouched), recorded as `payload.goal_eval_model`.
+  `cody_mode="anthropic"` → no override (the Claude-Max session keeps the real Haiku evaluator; never
+  inject a ZAI id into an `api.anthropic.com` session); `UA_GOAL_EVAL_MODEL=off` opts out. This **tightens
+  the gate the outcome already relies on** — the `/goal` Stop hook blocks the subprocess from exiting until
+  the evaluator returns `ok:true`, and `claude_cli_client.py::_monitor_cli_output` keys completion on that
+  exit code — but it does **not** capture the structured met/cap verdict nor close the "OR stop after N
+  turns" cap-clause escape; those remain tracked follow-ons. Rationale + precedence:
+  [Model Choice & Resolution](../01_architecture/04_model_choice_and_resolution.md).
 - **Deterministic finalize:** `tutorial_demo_finalize.py::finalize_tutorial_build_demo` runs in the
   worker's terminal sync (`worker_loop.py::_execute_mission_logic`, before the P5 stamp — so the
   previously no-op'ing `worker_loop.py::_stamp_demo_manifest_build_session` now finds a manifest):

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 import sqlite3
 from typing import Any
@@ -23,8 +24,10 @@ from universal_agent.vp.clients.base import MissionOutcome, VpClient
 from universal_agent.vp.clients.claude_cli_client import (
     ClaudeCodeCLIClient,
     _build_cli_prompt,
+    _execute_cli_session,
     _is_auth_failure,
     _parse_payload,
+    _run_goal_loop_mission,
 )
 
 
@@ -1122,3 +1125,112 @@ async def test_goal_turn_carries_completion_attestation_clause(tmp_path: Path, m
     assert "COMPLETION.md" in prompt
     assert "self-brief-and-attest" in prompt
     assert outcome.payload.get("goal_attestation_clause_appended") is True
+
+
+# ---------------------------------------------------------------------------
+# /goal evaluator model upgrade — scoped per-subprocess (never global)
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_goal_eval_model_injected_into_subprocess_env_only(tmp_path: Path, monkeypatch):
+    """goal_eval_model pins ANTHROPIC_DEFAULT_HAIKU_MODEL on the spawned
+    subprocess's env ONLY — it must never mutate the parent os.environ
+    (the operator-locked global haiku tier)."""
+    monkeypatch.delenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", raising=False)
+    captured: dict[str, Any] = {}
+
+    async def fake_exec(*args, **kwargs):
+        captured["env"] = kwargs.get("env")
+        raise FileNotFoundError("claude")  # short-circuit after capturing env
+
+    with patch(
+        "universal_agent.vp.clients.claude_cli_client.asyncio.create_subprocess_exec",
+        side_effect=fake_exec,
+    ):
+        out = await _execute_cli_session(
+            prompt="/goal do the thing",
+            workspace_dir=tmp_path,
+            timeout_seconds=5,
+            enable_agent_teams=False,
+            mission_id="m-goal",
+            cody_mode="zai",
+            prompt_in_argv=True,
+            goal_eval_model="glm-5-turbo",
+        )
+
+    assert out.status == "failed"  # FileNotFoundError path
+    assert captured["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "glm-5-turbo"
+    # The global parent env is untouched — scoping guarantee.
+    assert os.environ.get("ANTHROPIC_DEFAULT_HAIKU_MODEL") != "glm-5-turbo"
+
+
+@pytest.mark.asyncio
+async def test_no_goal_eval_model_leaves_haiku_unset_in_subprocess(tmp_path: Path, monkeypatch):
+    """Without goal_eval_model, the subprocess env carries no forced
+    glm-5-turbo haiku override (normal sessions are unaffected)."""
+    monkeypatch.delenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", raising=False)
+    captured: dict[str, Any] = {}
+
+    async def fake_exec(*args, **kwargs):
+        captured["env"] = kwargs.get("env")
+        raise FileNotFoundError("claude")
+
+    with patch(
+        "universal_agent.vp.clients.claude_cli_client.asyncio.create_subprocess_exec",
+        side_effect=fake_exec,
+    ):
+        await _execute_cli_session(
+            prompt="just do work",
+            workspace_dir=tmp_path,
+            timeout_seconds=5,
+            enable_agent_teams=False,
+            mission_id="m-plain",
+            cody_mode="zai",
+        )
+
+    assert captured["env"].get("ANTHROPIC_DEFAULT_HAIKU_MODEL") != "glm-5-turbo"
+
+
+@pytest.mark.asyncio
+async def test_goal_loop_passes_eval_model_on_work_turn_only(tmp_path: Path, monkeypatch):
+    """_run_goal_loop_mission resolves a strong evaluator model and threads
+    it onto the /goal WORK turn (prompt_in_argv=True), recording it in the
+    payload. The briefing turn is skipped here (goal_condition.txt exists)."""
+    monkeypatch.delenv("UA_GOAL_EVAL_MODEL", raising=False)
+    monkeypatch.delenv("ANTHROPIC_DEFAULT_SONNET_MODEL", raising=False)
+    (tmp_path / "goal_condition.txt").write_text(
+        "The transcript shows pytest exited 0. OR stop after 20 turns."
+    )
+
+    calls: list[dict[str, Any]] = []
+
+    async def mock_execute(**kwargs):
+        calls.append(kwargs)
+        return MissionOutcome(
+            status="completed",
+            result_ref=f"workspace://{tmp_path}",
+            message="ok",
+            payload={"exit_code": 0},
+        )
+
+    with patch(
+        "universal_agent.vp.clients.claude_cli_client._execute_cli_session",
+        side_effect=mock_execute,
+    ):
+        out = await _run_goal_loop_mission(
+            objective="build a demo",
+            payload={},
+            workspace_dir=tmp_path,
+            timeout_seconds=60,
+            enable_agent_teams=False,
+            mission_id="m-loop",
+            cody_mode="zai",
+            task_id="t-1",
+            skill_name="cody-implements-from-brief",
+        )
+
+    assert len(calls) == 1  # only the work turn (briefing skipped)
+    work = calls[0]
+    assert work["prompt_in_argv"] is True
+    assert work["prompt"].startswith("/goal ")
+    assert work["goal_eval_model"] == "glm-5-turbo"
+    assert out.payload["goal_eval_model"] == "glm-5-turbo"

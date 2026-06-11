@@ -19,6 +19,7 @@ from universal_agent.utils.model_resolution import (
     model_call_timeout_seconds,
     resolve_agent_teams_enabled,
     resolve_claude_code_model,
+    resolve_goal_eval_model,
     resolve_haiku,
     resolve_model,
     resolve_opus,
@@ -332,3 +333,51 @@ class TestModelIdToTier:
             model_id_to_tier("glm-4.7"),
         }
         assert produced == {"opus", "sonnet", "haiku", "mid"}
+
+
+# ── resolve_goal_eval_model ──────────────────────────────────────────────────
+#
+# Upgrades the built-in Claude Code /goal completion evaluator off the
+# operator-locked weak haiku tier (glm-4.5-air) onto the sonnet tier
+# (glm-5-turbo) on ZAI — scoped per-subprocess by the CLI client, never a
+# global remap.
+
+
+class TestResolveGoalEvalModel:
+    def test_zai_default_is_sonnet_tier(self, monkeypatch):
+        """Unset env on ZAI → the sonnet-tier model (glm-5-turbo)."""
+        monkeypatch.delenv("UA_GOAL_EVAL_MODEL", raising=False)
+        monkeypatch.delenv("ANTHROPIC_DEFAULT_SONNET_MODEL", raising=False)
+        assert resolve_goal_eval_model("zai") == "glm-5-turbo"
+        assert resolve_goal_eval_model() == "glm-5-turbo"  # default cody_mode
+
+    def test_anthropic_mode_never_overrides(self, monkeypatch):
+        """Anthropic-Max sessions keep the real Haiku evaluator — never inject
+        a ZAI model id into an api.anthropic.com session. The short-circuit
+        wins even when UA_GOAL_EVAL_MODEL is explicitly set."""
+        monkeypatch.delenv("UA_GOAL_EVAL_MODEL", raising=False)
+        assert resolve_goal_eval_model("anthropic") is None
+        monkeypatch.setenv("UA_GOAL_EVAL_MODEL", "glm-5-turbo")
+        assert resolve_goal_eval_model("anthropic") is None
+
+    def test_explicit_override_passes_through_on_zai(self, monkeypatch):
+        monkeypatch.setenv("UA_GOAL_EVAL_MODEL", "glm-4.6")
+        assert resolve_goal_eval_model("zai") == "glm-4.6"
+
+    @pytest.mark.parametrize(
+        "token", ["off", "none", "default", "haiku", "disable", "disabled", "OFF", "Haiku"]
+    )
+    def test_opt_out_tokens_disable_override(self, monkeypatch, token):
+        """An opt-out token → no override (fall back to the built-in
+        haiku/small-fast evaluator, glm-4.5-air)."""
+        monkeypatch.setenv("UA_GOAL_EVAL_MODEL", token)
+        assert resolve_goal_eval_model("zai") is None
+
+    def test_does_not_touch_the_haiku_operator_lock(self, monkeypatch):
+        """Calling the resolver never mutates the global haiku tier — the
+        operator lock (ZAI_MODEL_MAP['haiku']=glm-4.5-air) is read-only here."""
+        monkeypatch.delenv("UA_GOAL_EVAL_MODEL", raising=False)
+        monkeypatch.delenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", raising=False)
+        resolve_goal_eval_model("zai")
+        assert ZAI_MODEL_MAP["haiku"] == "glm-4.5-air"
+        assert resolve_haiku() == "glm-4.5-air"
