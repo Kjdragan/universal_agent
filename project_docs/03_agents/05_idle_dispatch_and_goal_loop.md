@@ -209,6 +209,15 @@ reads `goal_condition.txt` and invokes a *second* subprocess
 
 **As of 2026-05-29, that two-phase wiring does not exist in code.**
 
+> **Correction (2026-06-11):** the real two-phase `/goal` runner now DOES exist —
+> `claude_cli_client.py::_run_goal_loop_mission` (shipped in PR #911) runs a briefing turn
+> then `claude -p "/goal <condition>"` as a separate work-turn subprocess. The authoritative,
+> current description lives in the demo-pipeline ADR
+> ([`04_intelligence/15_demo_tutorial_pipeline_adr.md`](../04_intelligence/15_demo_tutorial_pipeline_adr.md));
+> the `/goal` evaluator model is documented in
+> [`01_architecture/04_model_choice_and_resolution.md`](../01_architecture/04_model_choice_and_resolution.md).
+> The single-prompt narrative below is pre-#911 and pending a fuller reconciliation.
+
 Verified facts:
 
 - `build_self_briefing_prompt` and `read_goal_condition` are **defined in

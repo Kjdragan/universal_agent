@@ -72,6 +72,46 @@ def resolve_opus() -> str:
     return resolve_model("opus")
 
 
+def resolve_goal_eval_model(cody_mode: str = "zai") -> str | None:
+    """Model for the built-in Claude Code ``/goal`` completion evaluator.
+
+    Claude Code's ``/goal`` loop judges the completion condition after every
+    turn with its "small fast model" — which current Claude Code collapses
+    onto ``ANTHROPIC_DEFAULT_HAIKU_MODEL`` (``ANTHROPIC_SMALL_FAST_MODEL`` is
+    deprecated; ref https://code.claude.com/docs/en/model-config). On the Z.AI
+    routing the haiku tier is operator-locked to ``glm-4.5-air`` — too weak to
+    adjudicate demo-build acceptance conditions reliably.
+
+    This resolves a STRONGER evaluator model (sonnet tier → ``glm-5-turbo``)
+    to be injected into the ``/goal`` work-turn subprocess ENV ONLY (see
+    ``vp/clients/claude_cli_client.py::_execute_cli_session``). The value is
+    never written to ``os.environ`` and never mutates ``ZAI_MODEL_MAP`` — the
+    global haiku operator-lock stays intact everywhere else. The override
+    rides the ``ANTHROPIC_DEFAULT_HAIKU_MODEL`` knob *inside that one child
+    process* because Claude Code exposes no separate small-fast-model lever
+    (the legacy ``ANTHROPIC_SMALL_FAST_MODEL`` was folded into the haiku one).
+
+    Returns ``None`` (no override → built-in haiku/small-fast evaluator) when:
+      * ``cody_mode == "anthropic"`` — a Claude-Max session keeps the real
+        Haiku evaluator; injecting a Z.AI model id into an api.anthropic.com
+        session would break it.
+      * ``UA_GOAL_EVAL_MODEL`` is set to an opt-out token
+        (off/none/default/haiku/disable/disabled).
+
+    Precedence: anthropic-mode short-circuit → ``UA_GOAL_EVAL_MODEL`` (explicit
+    model id, or opt-out token) → default ``resolve_sonnet()`` (glm-5-turbo).
+    """
+    # Never inject a Z.AI model id into an Anthropic-Max (OAuth) session.
+    if (cody_mode or "").strip().lower() == "anthropic":
+        return None
+    raw = (os.getenv("UA_GOAL_EVAL_MODEL") or "").strip()
+    if not raw:
+        return resolve_sonnet()  # default ON: glm-5-turbo for the ZAI /goal evaluator
+    if raw.lower() in {"off", "none", "default", "haiku", "disable", "disabled"}:
+        return None  # explicit opt-out → built-in haiku/small-fast (glm-4.5-air)
+    return raw  # explicit operator-pinned model id
+
+
 def resolve_claude_code_model(default: str = "sonnet") -> str:
     """
     Resolve the model string passed to Claude Code / claude-agent-sdk.
