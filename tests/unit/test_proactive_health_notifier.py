@@ -80,6 +80,81 @@ def test_default_cooldown_is_6h():
     assert DEFAULT_COOLDOWN_SECONDS == 21600
 
 
+# === Finding-ack token + URL (suppress-until-recovered email links) ===
+
+
+@pytest.fixture
+def ack_secret(monkeypatch):
+    monkeypatch.setenv("UA_ARTIFACT_ACK_SECRET", "shared-secret-x")
+    return "shared-secret-x"
+
+
+@pytest.fixture
+def no_ack_secret(monkeypatch):
+    for var in ("UA_ARTIFACT_ACK_SECRET", "UA_OPS_TOKEN", "UA_INTERNAL_API_TOKEN"):
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_finding_ack_token_mint_and_verify(ack_secret):
+    token = notifier.sign_finding_ack_token("invariant:zai_inference_health")
+    assert token and "." in token
+    assert notifier.verify_finding_ack_token("invariant:zai_inference_health", token) is True
+    # Wrong finding / tampered token / garbage all fail closed.
+    assert notifier.verify_finding_ack_token("invariant:other", token) is False
+    assert notifier.verify_finding_ack_token("invariant:zai_inference_health", token + "0") is False
+    assert notifier.verify_finding_ack_token("invariant:zai_inference_health", "no-dot") is False
+
+
+def test_finding_ack_token_expires(ack_secret):
+    expired = notifier.sign_finding_ack_token("invariant:x", ttl_seconds=-10)
+    assert expired  # mints fine…
+    assert notifier.verify_finding_ack_token("invariant:x", expired) is False  # …but is dead
+
+
+def test_finding_ack_token_empty_without_secret(no_ack_secret):
+    assert notifier.sign_finding_ack_token("invariant:x") == ""
+    assert notifier.verify_finding_ack_token("invariant:x", "123.abc") is False
+
+
+def test_build_finding_ack_url_urlencodes_finding_id(ack_secret, monkeypatch):
+    monkeypatch.setenv("FRONTEND_URL", "https://app.example.com")
+    url = notifier._build_finding_ack_url("invariant:zai_inference_health")
+    assert url.startswith(
+        "https://app.example.com/api/v1/proactive_health/ack"
+        "?f=invariant%3Azai_inference_health&t="
+    )
+
+
+def _criticals():
+    return [
+        {
+            "finding_id": "invariant:zai_inference_health",
+            "metric_key": "zai_inference_health",
+            "severity": "critical",
+            "title": "ZAI inference unhealthy",
+            "recommendation": "check the proxy",
+            "runbook_command": "journalctl -u universal-agent-gateway",
+            "observed_value": {"rate": 0.9},
+        }
+    ]
+
+
+def test_digest_email_includes_ack_link_and_footer(ack_secret):
+    _, text = notifier._format_digest_email(_criticals(), "2026-06-10T01:10:00+00:00")
+    assert "Acknowledge (mute until recovered): " in text
+    assert "/api/v1/proactive_health/ack?f=invariant%3Azai_inference_health&t=" in text
+    # Footer explains the suppress-until-recovered semantics.
+    assert "not a timed snooze" in text
+
+
+def test_digest_email_omits_ack_line_when_secret_empty(no_ack_secret):
+    _, text = notifier._format_digest_email(_criticals(), "2026-06-10T01:10:00+00:00")
+    # Never print a dead link: no ack line, no ack footer.
+    assert "Acknowledge (mute until recovered)" not in text
+    assert "/api/v1/proactive_health/ack" not in text
+    assert "not a timed snooze" not in text
+
+
 # === hermetic guard ===
 #
 # Never build a real AgentMailService in unit tests — the construct-path tests
