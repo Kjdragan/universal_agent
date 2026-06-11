@@ -103,6 +103,7 @@ _MCP server, tools/bridges, SDK integration, skills_
 - **[MCP Server & Tools](07_tools/01_mcp_server_and_tools.md)** — FastMCP server, tool registry/discovery, bridge architecture, research pipeline tools, workspace resolution in tools, circuit breakers. _(verified 2026-06-04)_
 - **[SDK Integration](07_tools/02_sdk_integration.md)** — Claude Agent SDK integration helpers, session history adapter, runtime info, task events, harness planning phase. _(verified 2026-06-09)_
 - **[Skills System](07_tools/03_skills_system.md)** — Skills architecture, invocation by principals, dependency/gated-binary setup. _(verified 2026-06-03)_
+- **[HyperFrames Video Generation](07_tools/04_hyperframes_video_generation.md)** — Studio + pipeline (external project in `Cody_Code_Generations/`): beat-sheet pipeline, Agent SDK app, learning loop, widget strategy, UA adoption status (design-only). _(verified 2026-06-11)_
 
 ## 08_operations
 
