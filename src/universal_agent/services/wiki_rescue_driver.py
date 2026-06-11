@@ -50,6 +50,16 @@ def _enabled() -> bool:
     return str(os.getenv("UA_WIKI_RESCUE_ENABLED", "")).strip().lower() in _TRUTHY
 
 
+def _dry_run() -> bool:
+    """When set, compute + log the rescue decision but dispatch NOTHING.
+
+    Lets us smoke the live worker-loop -> driver -> decision path against real DB
+    state (a synthetic failed mission) and confirm the verdict before allowing
+    the driver to spawn real rescue missions unattended.
+    """
+    return str(os.getenv("UA_WIKI_RESCUE_DRY_RUN", "")).strip().lower() in _TRUTHY
+
+
 def _load_failure_meta(mission_id: str) -> Optional[dict[str, Any]]:
     """Return the metadata dict of the ``vp_failure:<mission_id>`` task, or None.
 
@@ -143,6 +153,17 @@ async def maybe_rescue_failed_wiki_mission(
         "wiki-rescue: mission=%s mode=%s count=%d -> action=%s vp=%s (%s)",
         mission_id, mode, failure_count, decision.action, decision.target_vp, decision.reason,
     )
+
+    if _dry_run():
+        # Smoke mode: report the verdict, dispatch nothing.
+        logger.info("wiki-rescue: DRY_RUN — not executing %s for %s", decision.action, mission_id)
+        return {
+            "action": decision.action,
+            "target_vp": decision.target_vp,
+            "reason": decision.reason,
+            "failure_count": failure_count,
+            "dry_run": True,
+        }
 
     if decision.action == ACTION_SKIP:
         return {"action": ACTION_SKIP, "reason": decision.reason}

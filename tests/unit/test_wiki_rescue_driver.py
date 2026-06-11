@@ -138,3 +138,15 @@ def test_dispatch_error_is_swallowed(monkeypatch):
     out = _call()  # must not raise
     assert out["action"] == "retry_atlas"
     assert "error" in out
+
+
+def test_dry_run_reports_decision_without_dispatch(monkeypatch):
+    monkeypatch.setenv("UA_WIKI_RESCUE_ENABLED", "1")
+    monkeypatch.setenv("UA_WIKI_RESCUE_DRY_RUN", "1")
+    monkeypatch.setattr(drv, "_load_failure_meta", lambda mid: {"failure_count": 1, "failure_mode": "timeout"})
+    monkeypatch.setattr(drv, "_cody_available", lambda: True)
+    calls = _patch_dispatch(monkeypatch)
+    out = _call()
+    assert out["dry_run"] is True
+    assert out["action"] == "retry_atlas"  # the verdict it WOULD have taken
+    assert calls == []  # ...but nothing was dispatched
