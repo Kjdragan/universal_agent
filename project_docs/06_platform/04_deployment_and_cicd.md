@@ -350,6 +350,7 @@ flowchart TD
     E -->|dedup: 1 timer per pr|branch:workflow:sha| F[cron one-shot\nrun_at +15m, delete_after_run\nDURABLE — survives deploy restart]
     F -->|grace fires| G[ci_failure_grace_recheck.py\nre-verify via gh]
     G -->|issue closed / PR merged / newer push / run green / already claimed| H[Stand down\ncoordination win]
+    H -->|moot: PR merged/closed or run green| H2[Auto-close the ci-failure issue\nno future green run will]
     G -->|orphaned + autofixable workflow + PR| I[Claim issue: label ci-autofix-dispatched\nqueue Cody fix mission]
     I --> J[Cody: STEP 0 re-verify-or-noop\nfix, push to PR branch\nself-label PR ci-autofix]
     J --> K[pr-auto-merge.yml lands PR once green]
@@ -359,6 +360,8 @@ flowchart TD
 **Why a dedicated route, not the hooks engine.** `hooks_service.handle_request` only emits `agent`/`wake` actions — routing CI-failure through it would wake an agent and put CI triage back into Simone's cognition. The dedicated `@app.post("/api/v1/hooks/ci-failure")` route (defined *before* the `/api/v1/hooks/{subpath}` catch-all so it wins) keeps the loop deterministic and out of agent reasoning.
 
 **Why a grace window.** The session that owns a failure almost always fix-forwards it within minutes. So we never act immediately: the gateway schedules a durable one-shot ~15-min timer and `ci_failure_grace_recheck.py` re-verifies before doing anything. **Re-verify happens at every stage** (TOCTOU guard): schedule-time dedup, grace-fire `decide_action`, and the Cody brief's STEP 0.
+
+**Stand-down auto-close (added 2026-06-10).** The GHA `close-issue` job only fires on a *green run of the same workflow+branch* — once a PR merges or closes, its branch never runs again, so its `ci-failure` issue lingered until a human closed it (observed: #905 sat ~3.5h after PR #904 merged). The grace recheck is the last actor to look at the failure, so on a stand-down whose reason is moot (`scripts/ci_failure_grace_recheck.py::MOOT_STAND_DOWN_REASONS`: `pr_merged` / `pr_closed` / `run_no_longer_failing`) it closes the issue itself via `close_stale_issue`, with an explanatory comment. `newer_push` deliberately stays open: a red newer run files its own issue, and the branch-green close job sweeps the old one.
 
 | Piece | Location |
 |---|---|
@@ -372,6 +375,6 @@ flowchart TD
 
 **Classification.** Cody-fixable = `PR Validate` / `Documentation Audit` / `Nightly Documentation Health` **with a PR present** (the remedy is a code edit on the PR branch). Everything else — `Deploy`, `PR Auto-Merge`, `PR Rebase Watchdog`, or any push-to-main with no PR — escalates to the operator (the remedy is infra/secret/merge-state, not a code edit).
 
-**Config / secrets.** `UA_CI_AUTOFIX_ENABLED` (default on; kill switch), `UA_CI_AUTOFIX_GRACE_SECONDS` (default 900, min 60). `UA_OPS_TOKEN` must exist as a GitHub Actions repo secret (mirrors Infisical prod); the GHA step skips the POST if it's unset.
+**Config / secrets.** `UA_CI_AUTOFIX_ENABLED` (default on; kill switch), `UA_CI_AUTOFIX_GRACE_SECONDS` (default 900, min 60), `UA_CI_AUTOFIX_AUTOCLOSE` (default on; stand-down auto-close kill switch). `UA_OPS_TOKEN` must exist as a GitHub Actions repo secret (mirrors Infisical prod); the GHA step skips the POST if it's unset.
 
 **Interim being retired.** Until this hook is verified live, `memory/HEARTBEAT.md` "CI/CD Health Check" keeps Simone polling `ci-failure` issues each beat. Once live-verified, that directive is removed so CI triage fully leaves Simone's cognition.
