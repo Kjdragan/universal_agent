@@ -307,3 +307,109 @@ def test_failure_context_from_payload_handles_blank_pr():
     )
     assert ctx.pr_number is None
     assert ctx.workflow == "Deploy"
+
+
+# --------------------------------------------------------------------------- #
+# Auto-close of moot ci-failure issues on stand-down
+#
+# The GHA close-issue job only fires on a GREEN run of the same workflow +
+# branch — once a PR merges/closes, its branch never runs again, so the issue
+# lingers until a human closes it (#905 sat ~3.5h after PR #904 merged).
+# The grace recheck is the last actor that looks at the failure, so it closes
+# the issue itself when the stand-down reason means the failure is moot.
+# --------------------------------------------------------------------------- #
+
+
+def _open_issue_gh(pr_view: dict, run_conclusion: str = "failure") -> FakeGh:
+    return FakeGh(
+        {
+            ("issue", "list"): (0, json.dumps([{"number": 99}])),
+            ("issue", "view"): (
+                0,
+                json.dumps({"state": "OPEN", "labels": [{"name": "ci-failure"}]}),
+            ),
+            ("pr", "view"): (0, json.dumps(pr_view)),
+            ("run", "view"): (0, json.dumps({"conclusion": run_conclusion})),
+            ("issue", "close"): (0, ""),
+        }
+    )
+
+
+def _close_calls(gh: FakeGh) -> list[list[str]]:
+    return [c for c in gh.calls if c[:2] == ["issue", "close"]]
+
+
+def test_stand_down_pr_merged_closes_stale_issue():
+    gh = _open_issue_gh(
+        {"state": "MERGED", "mergedAt": "2026-06-10T22:00:00Z", "headRefOid": "abc123def456"}
+    )
+    result = run_grace_recheck(_ctx(), gh=gh)
+    assert (result["action"], result["reason"]) == ("stand_down", "pr_merged")
+    assert result["issue_auto_closed"] is True
+    calls = _close_calls(gh)
+    assert len(calls) == 1
+    assert calls[0][2] == "99"
+
+
+def test_stand_down_pr_closed_closes_stale_issue():
+    gh = _open_issue_gh({"state": "CLOSED", "mergedAt": None, "headRefOid": "abc123def456"})
+    result = run_grace_recheck(_ctx(), gh=gh)
+    assert result["reason"] == "pr_closed"
+    assert result["issue_auto_closed"] is True
+    assert len(_close_calls(gh)) == 1
+
+
+def test_stand_down_green_rerun_closes_stale_issue():
+    gh = _open_issue_gh(
+        {"state": "OPEN", "mergedAt": None, "headRefOid": "abc123def456"},
+        run_conclusion="success",
+    )
+    result = run_grace_recheck(_ctx(), gh=gh)
+    assert result["reason"] == "run_no_longer_failing"
+    assert result["issue_auto_closed"] is True
+
+
+def test_stand_down_newer_push_leaves_issue_open():
+    # A newer push may still be red; its own run files/closes issues. The GHA
+    # branch-green close job cleans this one up when the branch goes green.
+    gh = _open_issue_gh({"state": "OPEN", "mergedAt": None, "headRefOid": "fff999000111"})
+    result = run_grace_recheck(_ctx(), gh=gh)
+    assert result["reason"] == "newer_push"
+    assert "issue_auto_closed" not in result
+    assert _close_calls(gh) == []
+
+
+def test_stand_down_already_dispatched_leaves_issue_open():
+    gh = FakeGh(
+        {
+            ("issue", "list"): (0, json.dumps([{"number": 99}])),
+            ("issue", "view"): (
+                0,
+                json.dumps(
+                    {
+                        "state": "OPEN",
+                        "labels": [{"name": "ci-failure"}, {"name": "ci-autofix-dispatched"}],
+                    }
+                ),
+            ),
+            ("pr", "view"): (
+                0,
+                json.dumps({"state": "OPEN", "mergedAt": None, "headRefOid": "abc123def456"}),
+            ),
+            ("run", "view"): (0, json.dumps({"conclusion": "failure"})),
+        }
+    )
+    result = run_grace_recheck(_ctx(), gh=gh)
+    assert result["reason"] == "already_dispatched"
+    assert _close_calls(gh) == []
+
+
+def test_stand_down_autoclose_kill_switch(monkeypatch):
+    monkeypatch.setenv("UA_CI_AUTOFIX_AUTOCLOSE", "0")
+    gh = _open_issue_gh(
+        {"state": "MERGED", "mergedAt": "2026-06-10T22:00:00Z", "headRefOid": "abc123def456"}
+    )
+    result = run_grace_recheck(_ctx(), gh=gh)
+    assert result["reason"] == "pr_merged"
+    assert "issue_auto_closed" not in result
+    assert _close_calls(gh) == []
