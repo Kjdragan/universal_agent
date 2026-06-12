@@ -31,6 +31,7 @@ code_paths:
   - src/universal_agent/rate_limiter.py
   - src/universal_agent/services/invariants/zai_inference_health.py
   - src/universal_agent/gateway_server.py
+  - src/universal_agent/services/transcript_corpus.py
 last_verified: 2026-06-11
 ---
 
@@ -171,6 +172,27 @@ change, so a tier can be tuned up or down per process if quality or cost dictate
 | Feedback → rules distiller | `proactive_signals.py::distill_feedback_to_rules` | Rewrites an entire rules markdown doc in place; weak model risks clobbering it |
 | Task decomposition (gateway) | `decomposition_agent.py` | Free-form multi-step planning; split/ordering cascades into every subagent |
 | URW task decomposer | `urw/decomposer.py` (`LLMDecomposer`) | Free-form atomic-task-graph planning that drives the whole URW run |
+| Convergence intel-brief authoring | `evaluate-and-author-intel-brief` SKILL.md | Long-form synthesis from full transcripts; low volume (accepted survivors only) |
+
+**Intel-brief authoring — transcript corpus and deterministic provenance (2026-06-11):**
+Convergence briefs are now authored from the **full persisted transcript corpus** instead
+of the ~300-char distilled `key_claims`. Each YouTube transcript fetched during CSI
+enrichment (`CSI_Ingester/development/scripts/csi_rss_semantic_enrich.py::_persist_transcript`)
+is written to the `youtube_transcripts` table in `csi.db` (migration
+`0014_youtube_transcripts`). At brief-authoring time,
+`services/transcript_corpus.py::load_full_sources_for_candidate` enriches each signature
+with `full_transcript` from the corpus (falling back to `key_claims` only when no
+persisted text exists). The authoring model is captured deterministically:
+
+```python
+from universal_agent.utils.model_resolution import resolve_opus
+authoring_model = (os.environ.get("ANTHROPIC_DEFAULT_OPUS_MODEL") or "").strip() or resolve_opus()
+# Always glm-5.1 on the ZAI execution profile.
+```
+
+This replaces the previous "read from runtime env var, fall back to flagship model"
+heuristic with a code-derived value that is always the opus tier (glm-5.1). Gating
+stages (`triage_candidate`, `_refine_cluster_with_llm`) are unchanged.
 
 ### Already off-flagship / out of scope (no change)
 

@@ -331,6 +331,32 @@ CREATE TABLE IF NOT EXISTS transcript_incidents (
 );
 """
 
+# Durable full-transcript corpus. The enrich pass fetches each YouTube transcript
+# (avg ~13K chars), sends only a ~12K head/middle/tail excerpt to the analyzer LLM,
+# then historically DISCARDED the body — keeping only transcript_chars/transcript_ref
+# on rss_event_analysis. This table preserves the full text, keyed by video_id, so the
+# downstream intel-brief author can synthesize from the real source (not the ~300-char
+# distilled key_claims) and for future intelligence mining over the corpus.
+MIGRATION_0014_YOUTUBE_TRANSCRIPTS = """
+CREATE TABLE IF NOT EXISTS youtube_transcripts (
+    video_id         TEXT PRIMARY KEY,
+    event_id         TEXT,
+    channel_id       TEXT,
+    channel_name     TEXT,
+    title            TEXT,
+    published_at     TEXT,
+    language         TEXT,
+    char_count       INTEGER NOT NULL DEFAULT 0,
+    transcript_text  TEXT NOT NULL,
+    source_ref       TEXT,
+    fetched_at       TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_youtube_transcripts_channel_id ON youtube_transcripts(channel_id);
+CREATE INDEX IF NOT EXISTS idx_youtube_transcripts_published_at ON youtube_transcripts(published_at);
+CREATE INDEX IF NOT EXISTS idx_youtube_transcripts_event_id ON youtube_transcripts(event_id);
+CREATE INDEX IF NOT EXISTS idx_youtube_transcripts_fetched_at ON youtube_transcripts(fetched_at);
+"""
+
 MIGRATIONS: tuple[tuple[str, str], ...] = (
     ("0001_core", MIGRATION_0001_CORE),
     ("0002_source_state", MIGRATION_0002_SOURCE_STATE),
@@ -345,6 +371,7 @@ MIGRATIONS: tuple[tuple[str, str], ...] = (
     ("0011_content_schema", MIGRATION_0011_CONTENT_SCHEMA),
     ("0012_transcript_error", MIGRATION_0012_TRANSCRIPT_ERROR),
     ("0013_transcript_incidents", MIGRATION_0013_TRANSCRIPT_INCIDENTS),
+    ("0014_youtube_transcripts", MIGRATION_0014_YOUTUBE_TRANSCRIPTS),
 )
 
 
