@@ -155,7 +155,7 @@ change, so a tier can be tuned up or down per process if quality or cost dictate
 |---|---|---|---|---|---|
 | Agent routing | `llm_classifier.py::classify_agent_route` | Simone / CODIE / ATLAS | low (≤5 / sweep) | flagship | Wrong route mis-delegates a whole mission |
 | Email task-splitting | `llm_classifier.py::extract_disjointed_tasks` | split into N tasks, keep context | low (default-off) | flagship | Segmentation+context risk; air may over/under-split |
-| Convergence cluster-refine | `proactive_convergence.py::_refine_cluster_with_llm` | is this bucket a real convergence? | **high** (≤2 concurrent) | flagship→**sonnet** (A/B 2026-06-10) | Precision gate; air/4.7 over-confirm — sonnet is the floor, matches opus |
+| Convergence cluster-refine | `proactive_convergence.py::_refine_cluster_with_llm` | is this bucket a real convergence? | **high** (≤2 concurrent; ~89% cache-hit) | flagship→**sonnet** (A/B 2026-06-10) | Precision gate; air/4.7 over-confirm — sonnet is the floor, matches opus |
 | Heartbeat health evaluator | `health_evaluator.py` | ignore / directive / escalate | low | flagship | Misroute drops a real human escalation |
 | Brainstorm refinement | `refinement_agent.py` | advance / question / hold + rewrite | low | flagship | Mixed judgment + rewrite, light synthesis |
 | URW completion judge | `urw/evaluator.py` (`LLMJudgeEvaluator`) | 0–1 rubric score, gates retries | low | flagship | Too-lenient/harsh score wrongly passes or burns retries |
@@ -286,6 +286,24 @@ run twice): glm-5-turbo matches the opus default's precision (both 2/30) at ~35%
 lower latency, while `glm-4.5-air` (15/30) and `glm-4.7` (11/30) over-confirm
 broad-topic buckets and fail this precision gate. **Turbo is the precision floor; air
 is not viable here.**
+
+**TTL-bounded result cache (2026-06-11):**
+`proactive_convergence.py::_refine_cache_get` / `_refine_cache_put` add a
+SQLite-backed result cache keyed on the bucket's sorted-video-id set
+(`proactive_convergence.py::_refine_cluster_key`), stored in the
+`convergence_refine_cache` table (`proactive_convergence.py::ensure_schema`). A
+cache HIT within the TTL reuses the stored verdict and skips the ZAI LLM call
+entirely — zero quality change because a bucket that gains or loses a video produces
+a new key and is always re-judged. ~89% of buckets re-judge identically across
+consecutive hourly runs, so this reduces the effective sonnet-call volume by ~89%.
+Call counts are surfaced per-run via `"sonnet_calls_made"` / `"cache_hits"` keys in
+the `sync_topic_signatures_from_csi` return dict (flows into `latest_sync.json`).
+
+Knobs (both env-overridable, no deploy needed):
+- `UA_CONVERGENCE_REFINE_CACHE_ENABLED` — `1`/`true` (default on) / `0` to always
+  re-judge every bucket.
+- `UA_CONVERGENCE_REFINE_CACHE_TTL_HOURS` — float, default `24`; a row older than
+  this is a miss and the LLM is re-invoked.
 
 **Heartbeat health evaluator** — `health_evaluator.py`.
 Classifies morning-report items into ignore / directive / escalate against a
