@@ -4,10 +4,18 @@ The recap is intentionally stored separately from task metadata so the dashboard
 can audit the evaluator output without mutating the original task record.  The
 current evaluator uses a high-capability LLM when enabled and keeps a
 session-evidence fallback for provider failures.
+
+The LLM call routes through ``services.llm_classifier._call_llm`` (the shared
+async seam wrapped by the AIMD per-tier rate limiter when
+``UA_LLM_CLASSIFIER_LIMITER_ENABLED=1``).  A sync→async bridge (mirroring the
+pattern in ``proactive_convergence._detect_clusters_llm``) makes the call safe
+from both sync callers (``proactive_outcome_tracker._store_work_recap``) and any
+async context.
 """
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 import json
 import logging
@@ -383,10 +391,19 @@ def _call_llm_recap_evaluator(
 ) -> dict[str, Any]:
     """Call an LLM to evaluate the recap and return the parsed JSON response.
 
-    Uses the Anthropic SDK (same pattern as llm_classifier.py) which correctly
-    handles Z.AI model routing for glm-5.1 / glm-5-turbo model identifiers.
+    Routes through ``services.llm_classifier._call_llm`` so the call benefits
+    from the AIMD per-tier rate limiter (when
+    ``UA_LLM_CLASSIFIER_LIMITER_ENABLED=1``, live in prod) instead of
+    hard-failing on ZAI saturation.
+
+    A sync→async bridge (mirrors ``proactive_convergence._detect_clusters_llm``)
+    makes this safe whether the caller is sync (``proactive_outcome_tracker``) or
+    runs inside an existing event loop.
+
+    Raises on any provider or parse failure so the caller (``_evaluate_recap``)
+    can fall back to the session-evidence heuristic.
     """
-    from anthropic import Anthropic
+    from universal_agent.services.llm_classifier import _call_llm  # noqa: PLC0415
 
     model = (os.getenv("UA_PROACTIVE_RECAP_LLM_MODEL") or "").strip() or resolve_opus()
     prompt = _build_llm_recap_prompt(
@@ -397,32 +414,20 @@ def _call_llm_recap_evaluator(
         evidence=evidence,
     )
 
-    api_key = (
-        os.getenv("ANTHROPIC_API_KEY")
-        or os.getenv("ANTHROPIC_AUTH_TOKEN")
-        or os.getenv("ZAI_API_KEY")
-        or ""
-    ).strip()
-    if not api_key:
-        raise RuntimeError("No Anthropic/ZAI API key available for recap LLM")
-
-    client_kwargs: dict[str, Any] = {"api_key": api_key, "timeout": float(LLM_TIMEOUT_SECONDS)}
-    base_url = (os.getenv("ANTHROPIC_BASE_URL") or "").strip()
-    if base_url:
-        client_kwargs["base_url"] = base_url
-
-    client = Anthropic(**client_kwargs)
-    response = client.messages.create(
-        model=model,
-        max_tokens=900,
-        messages=[{"role": "user", "content": prompt}],
+    system_msg = (
+        "You evaluate completed or terminal proactive autonomous work for Universal Agent. "
+        "Return strict JSON only — no markdown."
     )
 
-    raw_text = ""
-    for block in response.content:
-        if hasattr(block, "text"):
-            raw_text += block.text
-    raw_text = raw_text.strip()
+    coro = _call_llm(system=system_msg, user=prompt, max_tokens=900, model=model)
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        raw_text = asyncio.run(coro)
+    else:
+        import nest_asyncio  # noqa: PLC0415
+        nest_asyncio.apply()
+        raw_text = loop.run_until_complete(coro)
 
     parsed = _loads_json_object(raw_text)
     parsed["raw_model_output"] = {
