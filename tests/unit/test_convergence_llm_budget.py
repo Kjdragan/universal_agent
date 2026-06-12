@@ -27,6 +27,9 @@ def test_detect_clusters_llm_runs_refines_concurrently(monkeypatch):
 
     monkeypatch.setattr(pc, "_refine_cluster_with_llm", slow_refine)
     monkeypatch.setenv("UA_CONVERGENCE_LLM_CONCURRENCY", "6")
+    # Disable the refine cache so synchronous DB I/O doesn't serialize the
+    # concurrent refine tasks and falsely blow the timing budget.
+    monkeypatch.setenv("UA_CONVERGENCE_REFINE_CACHE_ENABLED", "0")
 
     t0 = time.monotonic()
     out = asyncio.run(
@@ -51,6 +54,9 @@ def test_detect_clusters_llm_respects_deadline(monkeypatch):
 
     monkeypatch.setattr(pc, "_refine_cluster_with_llm", counting_refine)
     monkeypatch.setenv("UA_CONVERGENCE_LLM_CONCURRENCY", "2")
+    # Disable the refine cache so the deadline check is the sole gating
+    # mechanism (the test verifies 0 refine calls on an expired deadline).
+    monkeypatch.setenv("UA_CONVERGENCE_REFINE_CACHE_ENABLED", "0")
 
     out = asyncio.run(
         pc._detect_clusters_llm_async(
