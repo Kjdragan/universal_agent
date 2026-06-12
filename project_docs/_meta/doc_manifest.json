@@ -854,6 +854,19 @@
       "scope": "Options for an autonomous Opus agent that triages/fixes the nightly doc-drift issues: (a) desktop interactive prototype [chosen first], (b) always-on VPS API-key agent, (c) ZAI-detect + API-key-fix hybrid; shared triage state machine + mechanical docs-only safety rails."
     },
     {
+      "id": "plat-deploy-restart-resilience",
+      "tier": 2,
+      "category": "06_platform",
+      "filename": "06_platform/12_deploy_restart_resilience_adr.md",
+      "title": "ADR: Deploy-Restart Resilience for the Gateway",
+      "code_paths": [
+        "scripts/deploy/remote_deploy.sh",
+        "scripts/deploy/deploy_coalesce.py"
+      ],
+      "legacy_refs": [],
+      "scope": "ADR: cut deploy-restart churn + protect in-process work across gateway restarts (coalesce queued deploys, drain/handoff in-flight turns)."
+    },
+    {
       "id": "tools-mcp",
       "tier": 1,
       "category": "07_tools",

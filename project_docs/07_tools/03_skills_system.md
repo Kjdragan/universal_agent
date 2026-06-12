@@ -10,7 +10,7 @@ code_paths:
   - src/universal_agent/vp/clients/claude_cli_client.py
   - src/universal_agent/gateway_server.py
   - .claude/skills/**/SKILL.md
-last_verified: 2026-06-03
+last_verified: 2026-06-12
 ---
 
 # Skills System
