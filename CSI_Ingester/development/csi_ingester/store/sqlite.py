@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import sqlite3
 
@@ -375,10 +376,29 @@ MIGRATIONS: tuple[tuple[str, str], ...] = (
 )
 
 
+# csi.db is in rollback-journal mode and is written by BOTH the long-running
+# csi-ingester service and the csi-rss-semantic-enrich timer. With the default
+# busy_timeout of 0, any momentary write contention raises
+# "sqlite3.OperationalError: database is locked" instantly. A busy_timeout makes
+# a contending writer WAIT for the lock (the contention is bursty, not held), so
+# concurrent CSI writers serialize cleanly instead of failing.
+_DEFAULT_BUSY_TIMEOUT_MS = 15000
+
+
+def _busy_timeout_ms() -> int:
+    raw = str(os.getenv("CSI_SQLITE_BUSY_TIMEOUT_MS", str(_DEFAULT_BUSY_TIMEOUT_MS))).strip()
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return _DEFAULT_BUSY_TIMEOUT_MS
+
+
 def connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
+    timeout_ms = _busy_timeout_ms()
+    conn = sqlite3.connect(str(db_path), timeout=timeout_ms / 1000.0)
     conn.row_factory = sqlite3.Row
+    conn.execute(f"PRAGMA busy_timeout={timeout_ms}")
     return conn
 
 
