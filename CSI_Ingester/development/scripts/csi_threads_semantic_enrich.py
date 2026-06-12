@@ -26,6 +26,8 @@ from csi_ingester.llm_auth import resolve_csi_llm_auth
 from csi_ingester.store import token_usage as token_usage_store
 from csi_ingester.store.sqlite import connect, ensure_schema
 
+from _csi_pace import pace_sleep, resolve_enrich_pace_seconds  # noqa: E402
+
 THREADS_SOURCES = ("threads_owned", "threads_trends_seeded", "threads_trends_broad")
 
 
@@ -317,8 +319,12 @@ def main() -> int:
     processed = 0
     claude_used = 0
     category_counts: Counter[str] = Counter()
+    # Slow-burn pacing: space per-event ZAI calls so the run trickles instead of
+    # bursting (avoids tripping the Fair-Usage rate limit). Knob: _csi_pace.py.
+    pace_seconds = resolve_enrich_pace_seconds()
 
     for row in rows:
+        made_llm_call = False
         event_db_id = int(row["id"])
         event_id = str(row["event_id"])
         source = str(row["source"] or "")
@@ -386,6 +392,7 @@ def main() -> int:
         total_tokens = 0
 
         if use_claude and api_key:
+            made_llm_call = True
             parsed, usage = _analyze_with_claude(
                 source=source,
                 event_type=event_type,
@@ -493,6 +500,12 @@ def main() -> int:
 
         category_counts[category] += 1
         processed += 1
+
+        # Slow-burn pacing: only delay after an event that actually hit the LLM,
+        # turning a per-run burst into a gentle trickle. Sequential already —
+        # this just spaces the calls. Fixed/manual (not adaptive); 0 disables.
+        if made_llm_call:
+            pace_sleep(pace_seconds)
 
     conn.close()
     print(f"THREADS_ENRICH_PENDING={len(rows)}")
