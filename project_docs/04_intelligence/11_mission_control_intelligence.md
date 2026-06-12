@@ -15,7 +15,7 @@ code_paths:
   - src/universal_agent/services/mission_control_event_titles.py
   - src/universal_agent/services/mission_control_prompts.py
   - src/universal_agent/gateway_server.py
-last_verified: 2026-06-11
+last_verified: 2026-06-12
 ---
 
 # Mission Control Intelligence
@@ -102,12 +102,27 @@ Cadence and gating come from `SweeperConfig` (`SweeperConfig.from_env`), all env
 | Field | Env var | Default |
 |---|---|---|
 | `interval_seconds` | `UA_MISSION_CONTROL_SWEEPER_INTERVAL_S` | `60.0` |
-| `tier1_floor_seconds` | `UA_MISSION_CONTROL_TIER1_FLOOR_S` | `180.0` |
-| `tier1_ceiling_seconds` | `UA_MISSION_CONTROL_TIER1_CEILING_S` | `1800.0` |
-| `tier2_floor_seconds` | `UA_MISSION_CONTROL_TIER2_FLOOR_S` | `120.0` |
-| `tier2_ceiling_seconds` | `UA_MISSION_CONTROL_TIER2_CEILING_S` | `1800.0` |
+| `tier1_floor_seconds` | `UA_MISSION_CONTROL_TIER1_FLOOR_S` | `600.0` |
+| `tier1_ceiling_seconds` | `UA_MISSION_CONTROL_TIER1_CEILING_S` | `3600.0` |
+| `tier2_floor_seconds` | `UA_MISSION_CONTROL_TIER2_FLOOR_S` | `600.0` |
+| `tier2_ceiling_seconds` | `UA_MISSION_CONTROL_TIER2_CEILING_S` | `3600.0` |
 | `lane_concurrency` | `UA_MISSION_CONTROL_LANE_CONCURRENCY` | `1` |
 | `auto_remediation_enabled` | `UA_MISSION_CONTROL_AUTO_REMEDIATION` | `False` |
+
+> **Cadence widened 2026-06-12 (LLM-efficiency pass).** Floors `180/120 → 600` and ceilings
+> `1800 → 3600`. A live audit found Mission Control was the **single largest ZAI consumer on the
+> box** (~22 calls/hr, ~47% of box ZAI call volume; ~125K-token tier-1 + ~88K-token tier-2 prompts,
+> 24/7) and a structural source of Fair-Usage `1313`/429 pressure. The wider cadence roughly halves
+> the steady-state call rate with no operator-visible loss (force-refresh still bypasses cadence).
+> Code defaults in `SweeperConfig`, NOT `.env` (deploys wipe the VPS `.env`).
+
+> **Dormancy gate (2026-06-12).** The LLM passes (`run_async_tiers` → tier-1 + tier-2) now observe
+> the 6am–10pm Houston active window via `mission_control_intelligence_sweeper.py::mission_control_llm_should_run`
+> (→ `dormancy.py::should_run`). Outside the window `run_async_tiers` returns early with a `dormant:`
+> `skipped_reason` and burns **zero** ZAI calls — Mission Control is operator-facing content nobody
+> reads overnight. The cheap sync `tick()` (tier-0 tiles) is **not** gated, so tile state stays fresh;
+> only new tier-1 cards / tier-2 readouts pause. The operator Refresh button (`force_refresh_async`)
+> **bypasses** the gate. Opt out / run 24/7 with `UA_MISSION_CONTROL_24_7=true`.
 
 Each loop iteration:
 1. Runs the **sync** `tick()` on a worker thread via `asyncio.to_thread`. This is
@@ -186,22 +201,34 @@ genuine **non-429** Fair-Usage signal (e.g. a 403 suspension/flag with no 429 ma
 This is what makes the **idle-refresh ceiling actually reachable** — a skip no
 longer resets the age clock to ~0 on every 60 s sweep, so on an otherwise-idle system (no
 tier-0 flip, no new tier-1 cards) `age_s` climbs until it crosses `tier2_ceiling_seconds`
-(default **1800 s** — raised from 300 s on 2026-06-11, see the cost callout below) and
+(default **3600 s** — widened on 2026-06-12, see the cost callout below) and
 `_tier2_skip_reason` returns `None`, forcing a refresh.
 
-> **Cost ⇄ freshness tradeoff (`tier2_ceiling_seconds`).** Each tier-2 fire is a full
+> **Cost ⇄ freshness tradeoff (`tier2_ceiling_seconds`) + model lane.** Each tier-2 fire is a full
 > Chief-of-Staff LLM synthesis: `synthesize_readout` runs at
-> `os.getenv("UA_MISSION_CONTROL_COS_MODEL") or resolve_model("opus")` (glm-5.1 via the ZAI
-> proxy as shipped, `max_tokens=18000`) over the whole evidence+cards bundle. Tier-2 has
-> **no** evidence-signature gate (unlike tier-1), so a fully idle system re-synthesizes every
-> `tier2_ceiling_seconds` even when nothing has changed. The default was **raised 300 s →
-> 1800 s on 2026-06-11** (code default in `SweeperConfig`, NOT `.env` — deploys wipe the VPS
-> `.env`) as a ZAI Fair-Usage pressure cut: at the old 300 s ceiling an idle system fired
-> ~12–13 flagship-inference readouts/hour 24/7 (~288/day) for a human-facing readout; the
-> 1800 s ceiling cuts that ~6x with no operator-visible loss (a force-refresh still bypasses
-> the cadence on demand). One further calibration lever remains (operator's call): add a
-> tier-2 evidence-signature gate so idle re-synthesis fires only when the bundle actually
-> changed OR the ceiling is hit.
+> `os.getenv("UA_MISSION_CONTROL_COS_MODEL") or resolve_mission_control_model()` over the whole
+> evidence+cards bundle (`max_tokens=18000`, ~88K input tokens/call). Tier-2 has **no**
+> evidence-signature gate (unlike tier-1), so a fully idle system re-synthesizes every
+> `tier2_ceiling_seconds` even when nothing has changed.
+>
+> **Model consolidation (2026-06-12).** Tier-2 was moved **off** the opus/flagship tier
+> (`resolve_model("opus")` → glm-5.1/glm-5-turbo) **onto the dedicated Mission Control lane**
+> (`resolve_mission_control_model` → `glm-4.7`) — the same high-concurrency direct-model lane tier-1
+> already uses, which **bypasses the haiku/sonnet/opus ZAI tier map**. Rationale: the opus-tier
+> readout shared the sonnet/opus lane and contended with the main agent calls (Simone / Cody /
+> convergence); consolidating all of Mission Control onto glm-4.7 isolates it off that flagship lane.
+> The trade is a modest synthesis-quality step down (glm-4.7 is older/weaker than glm-5-turbo) and
+> higher latency (~45 s/readout) — both irrelevant for a background panel nobody watches in real time.
+> The `UA_MISSION_CONTROL_COS_MODEL` override still wins if pinned, but should be **unset** in
+> Infisical so the code default (glm-4.7) takes effect (a prior `UA_MISSION_CONTROL_COS_MODEL=glm-5-turbo`
+> Infisical override was the reason live readouts recorded glm-5-turbo while the opus map said glm-5.1).
+>
+> The ceiling was **raised 300 s → 1800 s (2026-06-11) → 3600 s (2026-06-12)** plus the cadence floor
+> widened to 600 s as a ZAI Fair-Usage `1313`/429 pressure cut (Mission Control was the box's single
+> largest ZAI consumer; see the cadence note above). A force-refresh still bypasses the cadence on
+> demand. One further calibration lever remains (operator's call, tracked as a proposed phase below):
+> add a tier-2 evidence-signature gate so idle re-synthesis fires only when the bundle actually changed
+> OR the ceiling is hit.
 
 > **History note (2026-06-05, S3).** The Chief-of-Staff readout had been **frozen** —
 > ~1 readout/24 h — because `_write_tier2_meta`/`_write_tier1_meta` stamped
@@ -608,3 +635,60 @@ This is how the dashboard / downstream consumers learn a fresh brief is availabl
   malformed upstream can produce a quietly-empty snapshot rather than a `500`.
 - **Operator Brief / `/situations` is gone.** Removed Phase 8 (2026-05-04). Don't reintroduce
   references to `/api/v1/dashboard/situations` — it no longer exists.
+
+## LLM-efficiency program (2026-06-12)
+
+A live read-only audit (verified against prod `/opt/universal_agent`, the journals, and both MC
+SQLite stores) found Mission Control is the **single largest ZAI consumer on the box**: ~22 calls/hr
+(6 h sample: 133 calls / 123 OK / 10× 429), **~47 %** of box ZAI call volume (sweeper 69 vs gateway
+60 vs discord 17 over 3 h), and — because each prompt is large — the **biggest token consumer by a
+wide margin**. Per-collector byte measurements of the live bundles:
+
+- **Tier-1 evidence ≈ 474 KB ≈ ~125K input tokens/call** ("bounded but UNTRUNCATED": ~30 active
+  tasks 208 KB + 60 events 136 KB + 15 completed 102 KB), ~13/hr — the **larger** of the two sinks.
+- **Tier-2 evidence ≈ 333 KB ≈ ~88K input tokens/call** (mission_control_cards 46 % / activity 21 %
+  / task_hub 19 % / artifacts 6 % / rest 5 %), ~9/hr. The biggest chunk is the **already-synthesized
+  cards** (~110: 30 live + 30 retired-48h + 50 recurring) re-shipped in full each pass.
+- Token figures are byte→token estimates (~3.8 chars/token); no per-call `token_usage` table exists
+  in the MC DBs.
+
+### Shipped this pass (live)
+
+1. **Slow cadence** — floors `180/120 → 600`, ceilings `1800 → 3600` (see the cadence table above).
+2. **Dormancy gate** — `mission_control_llm_should_run` skips the LLM passes 10pm–6am Houston
+   (`UA_MISSION_CONTROL_24_7` opt-out; tier-0 tiles + Refresh button unaffected).
+3. **Model consolidation** — tier-2 moved off the opus tier onto the glm-4.7 MC lane
+   (`resolve_mission_control_model`); see the cost callout above. Pair with **unsetting the Infisical
+   `UA_MISSION_CONTROL_COS_MODEL` override** so the code default takes effect.
+
+### Proposed — NOT YET IMPLEMENTED (operator decision pending)
+
+These are designed but deliberately **not built/deployed**; they need an operator go-ahead and a
+before/after readout-quality check.
+
+- **Phase 3 — Shrink the context (the token lever).** The single biggest remaining win. Tier-1's
+  "bounded but UNTRUNCATED" contract is the root of the 125K-token bundle: truncate individual task
+  descriptions / event payloads (e.g. ≤ 800 chars) and drop full completed-task bodies → tier-1
+  ~125K → ~45K tokens (~60 % cut). For tier-2, ship full narrative only for **live** cards and reduce
+  retired/recurring cards to title + recurrence_count + one line, plus cap the raw collectors →
+  tier-2 ~88K → ~40K tokens (~50 % cut). Requires a before/after readout diff to confirm no quality
+  loss; likely none (retired cards are resolved, recurring need only the pattern flag).
+
+- **Phase 4 — Make tier-2 sparse / generate-on-open.** Keep the cheap tier-0 tiles + tier-1 cards on
+  the continuous loop; generate the expensive Chief-of-Staff readout only on the operator Refresh
+  button or a slow hourly tick, serving the cached readout instantly otherwise. **Latency finding
+  (measured live):** a successful glm-4.7 tier-2 readout takes **~45 s** (88K in / ~11K out). That is
+  far too slow to **block** the page on open — the correct UX is *serve cached instantly + kick a
+  background regen if the cached readout is stale*, with the page live-updating ~45 s later (not a
+  synchronous spinner). The read endpoint already serves cached and `force_refresh_async` already
+  exists, so this is a small change. Removes the flagship-lane token sink entirely.
+
+- **Architectural lever (cross-cutting).** There is no cross-process global ZAI concurrency/rate cap
+  — gateway, sweeper, discord daemon, and vp-workers each run their own `ZAIRateLimiter`, so the
+  account sees the *sum*. A shared cross-process cap is the real fix for aggregate Fair-Usage `1313`
+  pressure; Mission Control is only the largest of several contributors.
+
+> The `1313`/429 penalty is an **account-wide request-frequency** throttle (model-agnostic) — so
+> model choice does **not** relieve it; only fewer/smaller/less-frequent calls do (cadence, dormancy,
+> Phases 3–4). The glm-4.7 consolidation is a **concurrency-lane isolation** cleanup (keeps MC off
+> the main agents' flagship lane), a separate concern from the frequency penalty.

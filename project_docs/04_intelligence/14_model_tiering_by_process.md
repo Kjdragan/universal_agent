@@ -78,7 +78,12 @@ Dedicated, off-tier lanes exist for subsystems that must not contend with the ma
 agent's budget at all:
 
 - **Mission Control** — `resolve_mission_control_model()` → `glm-4.7` (bypasses the
-  tier map; override `UA_MISSION_CONTROL_MODEL`).
+  tier map; override `UA_MISSION_CONTROL_MODEL`). As of **2026-06-12** this covers **all**
+  Mission Control LLM work including the tier-2 Chief-of-Staff readout (`mission_control_chief_of_staff.py::synthesize_readout`),
+  which was previously on the opus tier (`resolve_model("opus")` → glm-5.1/glm-5-turbo) but was
+  consolidated onto the glm-4.7 lane to keep the readout off the shared sonnet/opus lane it was
+  contending on. Override still honored via `UA_MISSION_CONTROL_COS_MODEL` (should be unset in
+  Infisical so the code default applies).
 
 ---
 
@@ -200,6 +205,7 @@ stages (`triage_candidate`, `_refine_cluster_with_llm`) are unchanged.
 |---|---|---|---|
 | Mission Control card discovery | `mission_control_tier1.py` | `glm-4.7` | Dedicated lane via `resolve_mission_control_model()` |
 | Mission Control event titles | `mission_control_event_titles.py` | `glm-4.7` | Dedicated lane |
+| Mission Control Chief-of-Staff readout (tier-2) | `mission_control_chief_of_staff.py::synthesize_readout` | `glm-4.7` | **Moved off opus → glm-4.7 on 2026-06-12** to keep it off the shared sonnet/opus lane; unset Infisical `UA_MISSION_CONTROL_COS_MODEL` |
 | CSI demo-triage ranker | `csi_demo_triage_ranker.py` | `glm-4.6` | Already below flagship; `UA_CSI_DEMO_TRIAGE_MODEL` knob exists |
 | Backlog triage synthesizer | `backlog_triage.py` | `glm-5-turbo` | Already sonnet (`resolve_sonnet`) |
 | Skill-gap finder synthesizer | `skill_gap_finder.py` | `glm-5-turbo` | Already sonnet |
