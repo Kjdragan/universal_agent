@@ -8,6 +8,7 @@ code_paths:
   - scripts/deploy/deploy_coalesce.py
   - .github/workflows/deploy.yml
   - src/universal_agent/gateway_server.py
+  - src/universal_agent/startup_timing.py
   - src/universal_agent/heartbeat_service.py
   - src/universal_agent/vp/worker_loop.py
   - deployment/systemd/
@@ -24,7 +25,14 @@ last_verified: 2026-06-11
 > - **Phase B (coalesce redundant deploys): ✅ IMPLEMENTED** — `scripts/deploy/deploy_coalesce.py`
 >   (unit-tested decision) + a fail-safe gate step in `.github/workflows/deploy.yml`.
 >   See the **As-built** note under §4.
-> - **Phase C1 (slim lifespan): PENDING.** · **Phase C2 (extract heartbeat service): PENDING.**
+> - **Phase C1 (slim lifespan): 🔬 MEASURE-FIRST shipped.** Reading the lifespan
+>   showed it is already mostly non-blocking (17 `asyncio.create_task` + 10
+>   `_run_after_deployment_window` deferrals in the pre-yield region; the Mission
+>   Control sweeper already extracted), so a blind reorder is poorly justified.
+>   `src/universal_agent/startup_timing.py::StartupPhaseTimer` now instruments the
+>   blocking pre-yield segments; the next deploy's gateway restart logs the real
+>   cold-start cost. Any reorder is **gated on that data**. See §4 **As-built**.
+> - **Phase C2 (extract heartbeat service): PENDING.**
 > - **Lever A (zero-downtime): DEFERRED.**
 >
 > Deploy handling is 24/7 P0 infra (exempt from dormancy). This ADR is a sibling to
@@ -212,6 +220,32 @@ deploy job (the risky logic lives in tested Python, not YAML — keeping the
   first + the newest), not N. **Known residual:** if the newest run later *fails*, an
   intermediate coalesced run won't have shipped its (older-but-newer-than-first) code;
   the existing deploy-failure email surfaces this, and the next merge re-deploys HEAD.
+
+### Phase C1 — As-built (measure-first instrumentation)
+
+Reading `gateway_server.py::lifespan` revised the premise: the pre-yield body is
+**already mostly non-blocking** — most loops are `asyncio.create_task`'d and many
+are deferred via `_run_after_deployment_window`, and the Mission Control sweeper
+was already extracted (S5). The genuinely *blocking* awaited-inline work is a
+handful of calls (`ensure_schema`/`_ensure_activity_schema`/`_activity_prune_old`,
+config+CSI+Redis+factory-registry setup, dashboard prewarm, the heartbeat/daemon
+subsystem incl. `ensure_daemon_sessions()`, and `_reconcile_stale_vp_missions_on_startup()`).
+So a blind reorder is poorly justified — **measure before optimizing.**
+
+- `src/universal_agent/startup_timing.py::StartupPhaseTimer` — a pure, clock-injectable
+  segment timer (`mark(name)` closes the segment since the last mark; `summary()`
+  ranks segments slowest-first with the total). Unit-tested (`tests/unit/test_startup_timing.py`).
+- `gateway_server.py::lifespan` — a `_startup_timer` is created at the top and
+  `mark()`'d at six checkpoints (bootstrap / config+csi+redis+factory / runtime-db+schema /
+  dashboard-prewarm / heartbeat+daemon+startup-reconcile / background-loops). Just
+  before `yield` it logs `⏱️  Gateway startup timing — …`. Pure instrumentation:
+  no behavior change, no reorder.
+- **Next step (gated on data):** read the `⏱️  Gateway startup timing` line from the
+  journal after the first deploy that restarts the gateway
+  (`journalctl -u universal-agent-gateway | grep 'startup timing'`). If a segment
+  dominates and is safe to defer (e.g. prewarm, the startup reconcile — a periodic
+  version already exists), defer it post-yield in a follow-up PR. If pre-yield is
+  already only a few seconds, C1's reorder is **moot** and we proceed to C2.
 
 ## 5. Landmines (carry into every phase)
 
