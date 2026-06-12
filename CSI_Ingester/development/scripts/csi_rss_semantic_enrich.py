@@ -479,6 +479,45 @@ def _upsert_analysis(
     conn.commit()
 
 
+def _persist_transcript(
+    conn,
+    *,
+    video_id: str,
+    event_id: str | None,
+    channel_id: str | None,
+    channel_name: str | None,
+    title: str | None,
+    published_at: str | None,
+    transcript_text: str,
+    transcript_chars: int,
+    source_ref: str | None,
+) -> None:
+    """Persist the full transcript body into the youtube_transcripts corpus (idempotent by video_id)."""
+    conn.execute(
+        """
+        INSERT INTO youtube_transcripts (
+            video_id, event_id, channel_id, channel_name, title, published_at,
+            char_count, transcript_text, source_ref, fetched_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(video_id) DO UPDATE SET
+            event_id=excluded.event_id,
+            channel_id=excluded.channel_id,
+            channel_name=excluded.channel_name,
+            title=excluded.title,
+            published_at=excluded.published_at,
+            char_count=excluded.char_count,
+            transcript_text=excluded.transcript_text,
+            source_ref=excluded.source_ref,
+            fetched_at=excluded.fetched_at
+        """,
+        (
+            video_id, event_id, channel_id, channel_name, title, published_at,
+            int(transcript_chars or len(transcript_text)), transcript_text, source_ref,
+        ),
+    )
+    conn.commit()
+
+
 def _extract_transcript_error_class(transcript_result: dict[str, Any]) -> str | None:
     """Extract the most significant error class from transcript fetch result.
 
@@ -824,6 +863,25 @@ def main() -> int:
             content_schema=content_schema_json,
             transcript_error=transcript_error,
         )
+
+        # Persist the full transcript body into the durable corpus (it is otherwise
+        # discarded after summarization). Best-effort: never fail the enrich loop.
+        if transcript_status == "ok" and video_id and transcript_text:
+            try:
+                _persist_transcript(
+                    conn,
+                    video_id=video_id,
+                    event_id=event_id,
+                    channel_id=channel_id,
+                    channel_name=channel_name,
+                    title=title,
+                    published_at=published_at,
+                    transcript_text=transcript_text,
+                    transcript_chars=transcript_chars,
+                    source_ref=transcript_ref,
+                )
+            except Exception:
+                print(f"TRANSCRIPT_PERSIST_FAILED video_id={video_id}")
 
         # ── Post-enrichment: trigger watchlist re-classification if transcript arrived ──
         if transcript_status == "ok" and channel_id and summary_text:
