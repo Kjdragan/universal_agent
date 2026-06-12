@@ -24,13 +24,15 @@ import sqlite3
 import time
 from typing import Any, Optional
 
+from universal_agent import task_hub
+
 logger = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
 _EMAIL_TASK_SOURCE_KIND = "email"
 _EMAIL_TASK_PROJECT_KEY = "immediate"
-_EMAIL_TASK_DEFAULT_LABELS = ["email-task", "agent-ready"]
+_EMAIL_TASK_DEFAULT_LABELS = ["email-task", task_hub.TASK_LABEL_AGENT_READY]
 _EMAIL_TASK_TRIAGE_PENDING_LABELS = ["email-task", "triage-pending"]
 _EMAIL_TASK_EXTERNAL_REVIEW_LABELS = ["email-task", "external-untriaged"]
 _EMAIL_TASK_QUARANTINED_LABEL = "quarantined"
@@ -442,7 +444,7 @@ class EmailTaskBridge:
                 email_labels.append(agent_label)
 
         # Auto-reactivate if this thread was waiting-on-reply
-        if is_update and existing and str(existing.get("status", "")) == "waiting-on-reply":
+        if is_update and existing and str(existing.get("status", "")) == task_hub.TASK_STATUS_WAITING_ON_REPLY:
             self._reactivate_waiting_thread(thread_id)
             logger.info(
                 "📧→📋 Auto-reactivated waiting thread=%s because new inbound arrived",
@@ -866,8 +868,8 @@ class EmailTaskBridge:
         # Update Task Hub status
         self._upsert_thread_task_state(
             thread_id=thread_id,
-            status="waiting-on-reply",
-            labels=["email-task", "waiting-on-reply"],
+            status=task_hub.TASK_STATUS_WAITING_ON_REPLY,
+            labels=["email-task", task_hub.TASK_STATUS_WAITING_ON_REPLY],
         )
 
         return True
@@ -990,7 +992,7 @@ class EmailTaskBridge:
         )
         self._conn.commit()
         labels = list(_EMAIL_TASK_DEFAULT_LABELS if sender_trusted else _EMAIL_TASK_EXTERNAL_REVIEW_LABELS)
-        labels = [label for label in labels if label != "agent-ready" and label != "triage-pending"]
+        labels = [label for label in labels if label != task_hub.TASK_LABEL_AGENT_READY and label != "triage-pending"]
         labels.append(_EMAIL_TASK_QUARANTINED_LABEL)
         self._upsert_thread_task_state(
             thread_id=thread,
@@ -1136,7 +1138,7 @@ class EmailTaskBridge:
                 "source_kind": _EMAIL_TASK_SOURCE_KIND,
                 "status": status,
                 "labels": labels,
-                "agent_ready": "agent-ready" in labels,
+                "agent_ready": task_hub.TASK_LABEL_AGENT_READY in labels,
                 "metadata": metadata,
             }
             if title is not None:
@@ -1306,7 +1308,7 @@ class EmailTaskBridge:
                 "due_at": due_at,
                 "labels": task_labels,
                 "status": initial_status,
-                "agent_ready": "agent-ready" in task_labels,
+                "agent_ready": task_hub.TASK_LABEL_AGENT_READY in task_labels,
                 "must_complete": False,
                 "metadata": metadata,
             }

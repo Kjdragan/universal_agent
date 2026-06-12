@@ -48,6 +48,8 @@ import os
 import subprocess
 from typing import Any, Callable, Optional
 
+from universal_agent import task_hub
+
 # --------------------------------------------------------------------------- #
 # Configuration
 # --------------------------------------------------------------------------- #
@@ -486,7 +488,7 @@ def dispatch_cody_fix(
             title=f"CI auto-fix: {ctx.workflow} on PR #{ctx.pr_number}",
             description=brief,
             priority=3,
-            labels=["agent-ready", "proactive-codie", "ci-autofix", "code"],
+            labels=[task_hub.TASK_LABEL_AGENT_READY, "proactive-codie", "ci-autofix", "code"],
             metadata={
                 "source": "ci_autofix_hook",
                 "pr_number": ctx.pr_number,

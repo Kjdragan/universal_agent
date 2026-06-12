@@ -35,13 +35,15 @@ import re
 import sqlite3
 from typing import Any, Optional
 
+from universal_agent import task_hub
+
 logger = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
 _CALENDAR_TASK_SOURCE_KIND = "calendar"
 _CALENDAR_TASK_PROJECT_KEY = "immediate"
-_CALENDAR_TASK_DEFAULT_LABELS = ["calendar-task", "agent-ready"]
+_CALENDAR_TASK_DEFAULT_LABELS = ["calendar-task", task_hub.TASK_LABEL_AGENT_READY]
 
 # Default lead time: tasks are due this many minutes before the event starts.
 _DEFAULT_LEAD_MINUTES = 30
@@ -552,7 +554,7 @@ class CalendarTaskBridge:
                 "labels": task_labels,
                 "status": "open",
                 "trigger_type": "scheduled",
-                "agent_ready": "agent-ready" in [l.lower() for l in task_labels],
+                "agent_ready": task_hub.TASK_LABEL_AGENT_READY in [l.lower() for l in task_labels],
                 "must_complete": False,
                 "metadata": metadata,
             }
@@ -795,7 +797,7 @@ class CalendarTaskBridge:
                 "labels": labels,
                 "status": "open",
                 "trigger_type": "scheduled",
-                "agent_ready": "agent-ready" in [l.lower() for l in labels],
+                "agent_ready": task_hub.TASK_LABEL_AGENT_READY in [l.lower() for l in labels],
                 "must_complete": False,
                 "metadata": metadata,
             }

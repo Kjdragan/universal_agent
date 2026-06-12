@@ -23,6 +23,11 @@ TASK_STATUS_CANCELLED = "cancelled"
 TASK_STATUS_DELEGATED = "delegated"           # VP is actively working this
 TASK_STATUS_PENDING_REVIEW = "pending_review"  # VP done, Simone sign-off needed
 TASK_STATUS_SCHEDULED = "scheduled"            # Time-bound: cron trigger will execute at due_at
+TASK_STATUS_WAITING_ON_REPLY = "waiting-on-reply"  # Email reply sent, awaiting human response
+
+# Common task labels — single source of truth for label string literals used
+# across services, bridges, and the gateway.
+TASK_LABEL_AGENT_READY = "agent-ready"
 
 # stale_state marker for terminal-SUCCESS tasks the operator cleared off the
 # dashboard. Such rows keep ``status = completed`` — they are deliberately NOT
@@ -733,14 +738,14 @@ def list_workstream_tasks(
 def _phase_task_status_bucket(status: str) -> str:
     normalized = str(status or "").strip().lower()
     if normalized in {TASK_STATUS_REVIEW, TASK_STATUS_PENDING_REVIEW}:
-        return "needs_review"
+        return TASK_STATUS_REVIEW
     if normalized == TASK_STATUS_COMPLETED:
-        return "completed"
+        return TASK_STATUS_COMPLETED
     if normalized == TASK_STATUS_BLOCKED:
-        return "blocked"
+        return TASK_STATUS_BLOCKED
     if normalized in {TASK_STATUS_IN_PROGRESS, TASK_STATUS_DELEGATED}:
-        return "in_progress"
-    return "open"
+        return TASK_STATUS_IN_PROGRESS
+    return TASK_STATUS_OPEN
 
 
 def _child_phase_task_ref(item: dict[str, Any]) -> dict[str, Any]:
@@ -993,7 +998,7 @@ def _mission_phase_template_to_task(
         "description": description,
         "project_key": str(phase.get("project_key") or parent.get("project_key") or "immediate"),
         "priority": _safe_int(phase.get("priority"), _safe_int(parent.get("priority"), 2)),
-        "labels": list(phase.get("labels") or ["agent-ready"]),
+        "labels": list(phase.get("labels") or [TASK_LABEL_AGENT_READY]),
         "status": str(phase.get("status") or TASK_STATUS_OPEN),
         "agent_ready": bool(phase.get("agent_ready", True)),
         "trigger_type": str(phase.get("trigger_type") or DEFAULT_TRIGGER_TYPE),
@@ -1184,7 +1189,7 @@ def upsert_item(conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any
 
     agent_ready = bool(item.get("agent_ready", existing.get("agent_ready", False)))
     if not agent_ready:
-        agent_ready = "agent-ready" in label_set
+        agent_ready = TASK_LABEL_AGENT_READY in label_set
 
     existing_status = str(existing.get("status") or "").strip().lower()
     status = str(item.get("status") or existing_status or TASK_STATUS_OPEN).strip().lower()
@@ -1413,15 +1418,15 @@ def _dispatch_skip_reason(item: dict[str, Any], *, eligible: bool, threshold: fl
         return "completion_locked"
     status = str(item.get("status") or TASK_STATUS_OPEN).strip().lower()
     if status == TASK_STATUS_BLOCKED:
-        return "blocked"
+        return TASK_STATUS_BLOCKED
     if status == TASK_STATUS_IN_PROGRESS:
-        return "in_progress"
+        return TASK_STATUS_IN_PROGRESS
     if status == TASK_STATUS_DELEGATED:
         return "delegated_to_vp"
     if status == TASK_STATUS_PENDING_REVIEW:
         return "pending_review"
     if status == TASK_STATUS_REVIEW and not _is_system_schedule_task(item):
-        return "needs_review"
+        return TASK_STATUS_REVIEW
     if not bool(item.get("agent_ready")):
         return "agent_not_ready"
     score = _safe_float(item.get("score"), 0.0)
@@ -2923,7 +2928,7 @@ def create_proactive_feedback_continuation(
             "description": "\n".join(description_parts),
             "project_key": "proactive",
             "priority": max(2, _safe_int(parent.get("priority"), 2)),
-            "labels": ["proactive", "continuation", "agent-ready"],
+            "labels": ["proactive", "continuation", TASK_LABEL_AGENT_READY],
             "status": TASK_STATUS_OPEN,
             "parent_task_id": parent_id,
             "agent_ready": True,
@@ -4338,7 +4343,7 @@ def finalize_assignments(
                 WHERE status IN (?, ?, ?)
             )
             """,
-            (TASK_STATUS_COMPLETED, TASK_STATUS_REVIEW, "waiting-on-reply"),
+            (TASK_STATUS_COMPLETED, TASK_STATUS_REVIEW, TASK_STATUS_WAITING_ON_REPLY),
         )
     except Exception as _dq_err:
         logger.debug("Dispatch queue cleanup skipped: %s", _dq_err)
@@ -4961,7 +4966,7 @@ def decompose_task(
             "description": sub.get("description", ""),
             "project_key": sub.get("project_key", parent.get("project_key", "immediate")),
             "priority": sub.get("priority", 2),
-            "labels": sub.get("labels", ["agent-ready"]),
+            "labels": sub.get("labels", [TASK_LABEL_AGENT_READY]),
             "status": sub.get("status", TASK_STATUS_OPEN),
             "agent_ready": sub.get("agent_ready", True),
             "trigger_type": sub.get("trigger_type", DEFAULT_TRIGGER_TYPE),

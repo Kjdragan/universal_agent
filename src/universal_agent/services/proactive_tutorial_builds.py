@@ -162,12 +162,12 @@ def queue_tutorial_build_task(
         preference_context=preference_context,
     )
     dispatchable = bool(agent_ready)
-    # Dispatchable rows keep the "agent-ready" label (and the explicit
-    # agent_ready=True). Pending-approval rows MUST drop "agent-ready" so the
-    # upsert_item OR-fallback ("agent-ready" in label_set) doesn't silently
+    # Dispatchable rows keep the task_hub.TASK_LABEL_AGENT_READY label (and the explicit
+    # agent_ready=True). Pending-approval rows MUST drop task_hub.TASK_LABEL_AGENT_READY so the
+    # upsert_item OR-fallback (task_hub.TASK_LABEL_AGENT_READY in label_set) doesn't silently
     # re-flip agent_ready back to True.
     labels = (
-        ["agent-ready", "tutorial-build", "codie", "code"]
+        [task_hub.TASK_LABEL_AGENT_READY, "tutorial-build", "codie", "code"]
         if dispatchable
         else ["pending-approval", "tutorial-build", "codie", "code"]
     )
@@ -541,8 +541,8 @@ def approve_pending_tutorial_build(
     promoted_labels = [
         v for v in (item.get("labels") or []) if str(v).lower() != "pending-approval"
     ]
-    if "agent-ready" not in {str(v).lower() for v in promoted_labels}:
-        promoted_labels.insert(0, "agent-ready")
+    if task_hub.TASK_LABEL_AGENT_READY not in {str(v).lower() for v in promoted_labels}:
+        promoted_labels.insert(0, task_hub.TASK_LABEL_AGENT_READY)
     task_hub.upsert_item(
         conn,
         {
