@@ -126,6 +126,7 @@ from universal_agent.heartbeat_service import (
     _parse_duration_seconds as _parse_heartbeat_duration_seconds,
     _resolve_heartbeat_interval_env as _resolve_hb_interval_env,
     _resolve_min_interval_seconds as _resolve_hb_min_interval_seconds,
+    heartbeat_drain_on_shutdown_enabled,
 )
 from universal_agent.hooks_service import HooksService, build_manual_youtube_action
 from universal_agent.identity import resolve_user_id
@@ -15406,7 +15407,11 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.debug("Daemon session manager shutdown error (non-fatal)")
     if _heartbeat_service:
-        await _heartbeat_service.stop()
+        # ADR §C2 (deploy-restart resilience): drain an in-flight Simone heartbeat
+        # iteration before exit instead of SIGTERM-cancelling it (harm H2). systemd
+        # grants TimeoutStopSec (90s) for the drain; kill-switch is
+        # UA_HEARTBEAT_DRAIN_ON_SHUTDOWN_ENABLED=0 (restores legacy immediate cancel).
+        await _heartbeat_service.stop(drain=heartbeat_drain_on_shutdown_enabled())
     if _cron_service:
         await _cron_service.stop()
     try:

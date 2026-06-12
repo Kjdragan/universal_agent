@@ -15,6 +15,7 @@ from universal_agent import task_hub
 from universal_agent.agent_core import EventType
 from universal_agent.durable.db import connect_runtime_db, get_activity_db_path
 from universal_agent.gateway import GatewayRequest, GatewaySession, InProcessGateway
+from universal_agent.graceful_drain import DrainResult, drain_inflight
 from universal_agent.loop_control import should_run_loop
 from universal_agent.utils.heartbeat_findings_schema import HeartbeatFindings
 from universal_agent.utils.json_utils import extract_json_payload
@@ -998,6 +999,31 @@ def _parse_bool(raw: Optional[str], default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+# Deploy-restart resilience (ADR §C2 — graceful drain). On gateway shutdown we
+# let an in-flight heartbeat iteration finish (or checkpoint) within this budget
+# before falling back to cancellation. Kept comfortably under the gateway unit's
+# systemd TimeoutStopSec (90s) so the whole post-yield shutdown completes before
+# SIGKILL. Code default (no .env entry needed — see feedback_env_clobbered_by_deploy).
+DEFAULT_HEARTBEAT_DRAIN_TIMEOUT_SECONDS = 45
+
+
+def _resolve_drain_timeout_seconds() -> float:
+    raw = _parse_int(
+        os.getenv("UA_HEARTBEAT_DRAIN_TIMEOUT_SECONDS"),
+        DEFAULT_HEARTBEAT_DRAIN_TIMEOUT_SECONDS,
+    )
+    return float(max(0, raw))
+
+
+def heartbeat_drain_on_shutdown_enabled() -> bool:
+    """Kill-switch for the C2 graceful drain (default ON).
+
+    Set ``UA_HEARTBEAT_DRAIN_ON_SHUTDOWN_ENABLED=0`` to restore the legacy
+    immediate-cancel shutdown behavior without a code change.
+    """
+    return _parse_bool(os.getenv("UA_HEARTBEAT_DRAIN_ON_SHUTDOWN_ENABLED"), default=True)
+
+
 def _resolve_exec_timeout_seconds() -> int:
     timeout = _parse_int(os.getenv("UA_HEARTBEAT_EXEC_TIMEOUT"), DEFAULT_HEARTBEAT_EXEC_TIMEOUT)
     if timeout < MIN_HEARTBEAT_EXEC_TIMEOUT:
@@ -1215,6 +1241,10 @@ class HeartbeatService:
         )
         self.running = False
         self.task: Optional[asyncio.Task] = None
+        # The currently-executing heartbeat iteration (an asyncio Task), or None
+        # when the scheduler loop is idle/sleeping. Exposed so shutdown can drain
+        # it gracefully instead of SIGTERM-cancelling it (ADR §C2 / harm H2).
+        self._inflight_iteration: Optional[asyncio.Task] = None
         # Last time we emitted a `heartbeat_tick` row to the activity DB.
         # Rate-limited so we don't flood activity_events at scheduler-tick cadence
         # (loop ticks every 1-30s; we emit at most once per UA_HEARTBEAT_TICK_EMIT_INTERVAL_S,
@@ -1541,10 +1571,42 @@ class HeartbeatService:
         self.task = asyncio.create_task(self._scheduler_loop())
         logger.info("💓 Heartbeat Service started")
 
-    async def stop(self) -> None:
+    async def stop(self, *, drain: bool = False, drain_timeout: Optional[float] = None) -> None:
+        """Stop the scheduler loop.
+
+        When ``drain`` is True (the gateway shutdown path — ADR §C2), give an
+        in-flight heartbeat iteration up to ``drain_timeout`` seconds (default
+        ``UA_HEARTBEAT_DRAIN_TIMEOUT_SECONDS``) to finish/checkpoint before
+        cancelling — this removes the deploy-restart casualty (harm **H2**).
+        On timeout (or when ``drain`` is False) it falls back to the legacy
+        immediate cancel, which is never worse than today's behavior.
+        """
         if not self.running:
             return
+        # Setting running=False first guarantees the scheduler loop won't begin a
+        # NEW iteration once it returns control here (single-threaded event loop).
         self.running = False
+
+        if drain:
+            budget = (
+                drain_timeout if drain_timeout is not None else _resolve_drain_timeout_seconds()
+            )
+            try:
+                outcome = await drain_inflight(self._inflight_iteration, timeout=budget)
+            except Exception as exc:  # never let drain block shutdown
+                logger.warning("Heartbeat shutdown drain error (ignored): %s", exc)
+            else:
+                if outcome.result is DrainResult.DRAINED:
+                    logger.info(
+                        "💓 Heartbeat drained in-flight iteration in %.1fs before shutdown",
+                        outcome.waited_seconds,
+                    )
+                elif outcome.result is DrainResult.TIMED_OUT:
+                    logger.warning(
+                        "💔 Heartbeat drain budget (%.0fs) exceeded; cancelling in-flight iteration",
+                        budget,
+                    )
+
         if self.task:
             self.task.cancel()
             try:
@@ -1666,10 +1728,30 @@ class HeartbeatService:
                 
                 # Use list snapshot to avoid runtime errors
                 for session_id, session in list(self.active_sessions.items()):
+                    # Once shutdown has been requested, don't begin a NEW iteration —
+                    # the in-flight one (if any) is being drained by stop().
+                    if not self.running:
+                        break
+                    # Run each iteration as a tracked child task so shutdown can
+                    # await *just the current iteration* (drain) before deciding
+                    # whether to cancel it.
+                    inflight = asyncio.ensure_future(self._process_session(session))
+                    self._inflight_iteration = inflight
                     try:
-                        await self._process_session(session)
+                        await inflight
+                    except asyncio.CancelledError:
+                        # The scheduler loop task was cancelled (e.g. a non-drain
+                        # stop, or a drain that exceeded its budget) while this
+                        # iteration was in flight. Propagate the cancel to the
+                        # child so it doesn't leak, then re-raise to exit the loop.
+                        if not inflight.done():
+                            inflight.cancel()
+                        raise
                     except Exception as e:
                         logger.error(f"Error processing heartbeat for {session_id}: {e}")
+                    finally:
+                        if self._inflight_iteration is inflight:
+                            self._inflight_iteration = None
                 
                 # Sleep remainder of tick (cap at 5s, but respect shorter heartbeat intervals)
                 elapsed = time.time() - start_time
