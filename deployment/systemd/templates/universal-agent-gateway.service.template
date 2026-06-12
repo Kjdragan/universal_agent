@@ -15,6 +15,12 @@ EnvironmentFile=-__APP_ROOT__/.env
 ExecStart=__APP_ROOT__/.venv/bin/python -m universal_agent.gateway_server
 Restart=always
 RestartSec=5
+# Graceful-shutdown window (ADR §C2 — deploy-restart resilience). systemd waits up
+# to TimeoutStopSec after SIGTERM before SIGKILL; the gateway uses this window to
+# DRAIN an in-flight Simone heartbeat iteration (UA_HEARTBEAT_DRAIN_TIMEOUT_SECONDS,
+# default 45s) instead of killing it mid-flight (harm H2). 90s == systemd's current
+# default — pinned here so the drain budget always keeps headroom if that default moves.
+TimeoutStopSec=90s
 # Resource limits — prevent process explosion from consuming all VPS memory.
 # MemoryMax: hard cgroup limit (systemd kills cgroup if exceeded).
 # MemoryHigh: soft limit (triggers kernel memory reclaim/swap pressure).

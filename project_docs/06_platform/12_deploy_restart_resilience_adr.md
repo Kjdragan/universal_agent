@@ -10,10 +10,11 @@ code_paths:
   - src/universal_agent/gateway_server.py
   - src/universal_agent/startup_timing.py
   - src/universal_agent/heartbeat_service.py
+  - src/universal_agent/graceful_drain.py
   - src/universal_agent/vp/worker_loop.py
   - deployment/systemd/
   - deploy/nginx/universal-agent-app
-last_verified: 2026-06-11
+last_verified: 2026-06-12
 ---
 
 # ADR: Deploy-Restart Resilience for the Gateway
@@ -25,15 +26,23 @@ last_verified: 2026-06-11
 > - **Phase B (coalesce redundant deploys): ✅ IMPLEMENTED** — `scripts/deploy/deploy_coalesce.py`
 >   (unit-tested decision) + a fail-safe gate step in `.github/workflows/deploy.yml`.
 >   See the **As-built** note under §4.
-> - **Phase C1 (slim lifespan): 🔬 MEASURE-FIRST shipped.** Reading the lifespan
->   showed it is already mostly non-blocking (17 `asyncio.create_task` + 10
->   `_run_after_deployment_window` deferrals in the pre-yield region; the Mission
->   Control sweeper already extracted), so a blind reorder is poorly justified.
->   `src/universal_agent/startup_timing.py::StartupPhaseTimer` now instruments the
->   blocking pre-yield segments; the next deploy's gateway restart logs the real
->   cold-start cost. Any reorder is **gated on that data**. See §4 **As-built**.
-> - **Phase C2 (extract heartbeat service): PENDING.**
-> - **Lever A (zero-downtime): DEFERRED.**
+> - **Phase C1 (slim lifespan): ✅ MEASURED — reorder MOOT.** The first instrumented
+>   restart logged **pre-yield = 1.49s** (dominated by `config_csi_redis_factory`=1.37s;
+>   `heartbeat_daemon_subsystem_and_startup_reconcile`=0.11s; everything else ≤0.01s).
+>   The "minutes-long cold start / 8-min health budget" premise was stale — the heavy
+>   synchronous startup-recovery sweep had already been moved to a background thread
+>   (2026-05-16 incident). Nothing left to slim, so the reorder is **moot**;
+>   `startup_timing.py::StartupPhaseTimer` stays as a permanent guardrail. H1 (dead
+>   `:8002` window) is therefore minor (~1.5s lifespan + import). See §4 **As-built**.
+> - **Phase C2 (decouple in-process Simone heartbeat): ✅ IMPLEMENTED — graceful drain.**
+>   The C1 measurement deflated H1, and a full heartbeat→own-service *extraction* proved
+>   deeply coupled to gateway-resident session state (the `InProcessGateway`, the
+>   WebSocket manager, the in-memory session/adapter registry — see §4 **As-built**), so
+>   C2 ships as the cheaper, equally-H2-killing **graceful SIGTERM drain**: the gateway
+>   shutdown now *awaits* an in-flight heartbeat iteration within a bounded budget before
+>   exit, instead of cancelling it mid-flight. Full extraction is **deferred** (now even
+>   less justified). See §4 **As-built**.
+> - **Lever A (zero-downtime): DEFERRED** — effectively unjustified once C1 showed H1 is ~1.5s.
 >
 > Deploy handling is 24/7 P0 infra (exempt from dormancy). This ADR is a sibling to
 > [`08_scheduling_substrate_adr.md`](08_scheduling_substrate_adr.md) — Lever C2
@@ -240,12 +249,69 @@ So a blind reorder is poorly justified — **measure before optimizing.**
   dashboard-prewarm / heartbeat+daemon+startup-reconcile / background-loops). Just
   before `yield` it logs `⏱️  Gateway startup timing — …`. Pure instrumentation:
   no behavior change, no reorder.
-- **Next step (gated on data):** read the `⏱️  Gateway startup timing` line from the
-  journal after the first deploy that restarts the gateway
-  (`journalctl -u universal-agent-gateway | grep 'startup timing'`). If a segment
-  dominates and is safe to defer (e.g. prewarm, the startup reconcile — a periodic
-  version already exists), defer it post-yield in a follow-up PR. If pre-yield is
-  already only a few seconds, C1's reorder is **moot** and we proceed to C2.
+- **As-measured (2026-06-12):** the first instrumented restarts logged
+  `⏱️  gateway lifespan pre-yield 1.49s; slowest segments: config_csi_redis_factory=+1.37s,
+  heartbeat_daemon_subsystem_and_startup_reconcile=+0.11s, runtime_db_connect_and_schema=+0.01s,
+  dashboard_prewarm=+0.01s, bootstrap_runtime_environment=+0.00s, background_loops_spawned=+0.00s`.
+  Pre-yield blocking is **~1.5s, not minutes** — the heavy synchronous startup-recovery
+  sweep was already backgrounded in the 2026-05-16 incident, and the dominant remaining
+  segment (`config_csi_redis_factory`, ~1.4s) is one-time factory/Redis wiring that is
+  unsafe to defer past `yield`. **Verdict: the C1 reorder is moot** — there is nothing
+  left worth slimming. The instrumentation stays as a permanent guardrail (so a future
+  regression that re-fattens the lifespan is visible), and we proceeded directly to C2.
+
+### Phase C2 — As-built (graceful heartbeat drain, not extraction)
+
+**Decision.** The literal ADR C2 was "extract the daemon Simone heartbeat into its own
+systemd service" (mirroring the Mission Control sweeper). A coupling map of the
+heartbeat↔gateway call graph (2026-06-12) showed that, unlike the self-contained sweeper
+`tick()`, the heartbeat is **deeply gateway-resident**: `HeartbeatService` holds the live
+`InProcessGateway` and drives `gateway.execute(session, …)`; it needs the WebSocket
+`ConnectionManager` (broadcast + foreground-lock detection via `session_connections`); it
+uses the gateway callbacks `_drain_system_events` / `_emit_heartbeat_event`; and the daemon
+sessions it runs live in the gateway's in-memory `_sessions`/`_adapters` registry. A true
+extraction would have to re-home that session/adapter/WS state into a second process (or RPC
+back to the gateway) **and** introduce a single-owner lease (landmine #3) — large, high-risk
+work, in the exact subsystem the operator was mid-tuning for ZAI/GLM 429s. Its only unique
+payoff (the serving/scheduling split that **Lever A** needs) is now unjustified, because C1
+showed H1 is ~1.5s.
+
+So C2 ships the cheaper boundary that **removes H2 at the source just as well**: a
+**graceful SIGTERM drain**. The mapping confirmed the precondition — a single heartbeat
+iteration (`heartbeat_service.py::HeartbeatService._run_heartbeat`) is an in-process,
+awaitable `asyncio` task whose `finally` already finalizes/reopens its Task Hub assignment,
+and systemd already grants `TimeoutStopSec=90s` after SIGTERM before SIGKILL. Today the
+shutdown path *cancels* that iteration unconditionally (`stop()` → `task.cancel()`); the
+drain *awaits* it instead.
+
+- `src/universal_agent/graceful_drain.py::drain_inflight` — a small, dependency-free helper
+  that awaits an in-flight awaitable up to a budget and classifies the outcome
+  (`NOTHING_IN_FLIGHT` / `DRAINED` / `TIMED_OUT`). On timeout it deliberately does **not**
+  cancel — the caller owns the fallback. Unit-tested (`tests/unit/test_graceful_drain.py`).
+- `heartbeat_service.py::HeartbeatService._scheduler_loop` now runs each iteration as a
+  tracked child task (`self._inflight_iteration`) and stops starting new iterations once
+  `running` is cleared; `HeartbeatService.stop(*, drain=…, drain_timeout=…)` drains the
+  in-flight iteration via `drain_inflight`, then falls back to the legacy
+  `task.cancel()` — never worse than before. Budget: `UA_HEARTBEAT_DRAIN_TIMEOUT_SECONDS`
+  (code default **45s**, comfortably under the 90s stop window). Kill-switch:
+  `heartbeat_service.py::heartbeat_drain_on_shutdown_enabled` (`UA_HEARTBEAT_DRAIN_ON_SHUTDOWN_ENABLED`,
+  default ON). Behavior-tested via the real `start()`/`stop()` loop (`tests/unit/test_heartbeat_drain.py`).
+- `gateway_server.py::lifespan` shutdown now calls `_heartbeat_service.stop(drain=heartbeat_drain_on_shutdown_enabled())`.
+- `deployment/systemd/templates/universal-agent-gateway.service.template` pins
+  `TimeoutStopSec=90s` explicitly (== the current systemd default — no restart-timing
+  change) so the drain budget always keeps headroom. `KillMode` stays `control-group`:
+  the drained work is in-process, so the main process catches SIGTERM and drains it without
+  needing `KillMode=mixed`. (`mixed` is noted as an optional follow-up only if a future
+  iteration is found to spawn child processes that must outlive the SIGTERM.)
+- **Scope it removes:** the in-flight-iteration casualty (H2) for the common case where an
+  iteration finishes within the budget. A long iteration that exceeds the budget still
+  falls back to cancel — its `finally` reopens the Task Hub item exactly as today, so the
+  drain is strictly an improvement, never a regression.
+- **Verification:** drain logic is unit-verified (15 tests). End-to-end H2 reduction is
+  only confirmable on a live restart with an iteration in flight — measured post-deploy via
+  the activity-DB lifecycle-miss signal (`deploy_restart_casualty` on
+  `execution_missing_lifecycle_mutation` rows) before/after, plus reading the new
+  `💓 Heartbeat drained in-flight iteration in …s before shutdown` shutdown log line.
 
 ## 5. Landmines (carry into every phase)
 
