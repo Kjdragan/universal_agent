@@ -8,6 +8,7 @@ from anthropic import AsyncAnthropic
 
 from .config import CONFIG
 from .database import DiscordIntelligenceDB
+from .llm_gate import ZAI_CALL_LOCK
 from universal_agent.rate_limiter import ZAIRateLimiter
 
 logger = logging.getLogger(__name__)
@@ -108,7 +109,8 @@ async def run_triage_batch(db: DiscordIntelligenceDB, channel_id: str, limit: in
     client = AsyncAnthropic(**client_kwargs)
 
     try:
-        async with limiter.acquire():
+        # ZAI_CALL_LOCK (outermost) serializes ALL discord LLM calls process-wide.
+        async with ZAI_CALL_LOCK, limiter.acquire():
             response = await client.messages.create(
                 model=CONFIG.get("models", {}).get("triage", "claude-haiku-4-5"),
                 max_tokens=2048,
