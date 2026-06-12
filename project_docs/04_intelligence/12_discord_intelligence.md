@@ -9,7 +9,7 @@ code_paths:
   - "discord_intelligence/ua-discord-intelligence.service"
   - "src/universal_agent/api/routers/csi_discord_watchlist.py"
   - src/universal_agent/gateway_server.py
-last_verified: 2026-06-07
+last_verified: 2026-06-12
 ---
 
 # Discord Intelligence
@@ -160,7 +160,17 @@ Design notes that matter operationally:
 - **Fail-open everywhere.** Parse failure, LLM exception, or messages the model
   forgot to classify all default to `meaningful=True` so nothing is silently lost.
 - Empty-content messages are marked noise directly without an LLM call.
-- 2 concurrent workers, batch size 50 (`run_relevance_sweep(max_batch_size=50, max_workers=2)`).
+- Sub-batches of 50 are classified **sequentially — one ZAI call at a time**.
+  `run_relevance_sweep` fetches up to `max_batch_size * max_workers` (=100) messages
+  and `await`s each `classify_batch` in turn; it no longer fans them out via
+  `asyncio.gather`, and `max_workers` now only bounds the fetch size. Deliberate
+  rate-limit-conscious tradeoff (slower) to avoid tripping ZAI's Fair-Usage limiter
+  (error 1313).
+- **Daemon-wide LLM serialization.** Every discord LLM call — `classify_batch`
+  (relevance), `triage.py::run_triage_batch`, and `event_digest.py::generate_digest`
+  — acquires a single process-wide `asyncio.Lock` (`llm_gate.py::ZAI_CALL_LOCK`,
+  held *outside* `ZAIRateLimiter.acquire()`) so the four concurrent `tasks.loop`s
+  never make overlapping ZAI calls: at most one in-flight discord LLM call at a time.
 - Model: `config.yaml` → `models.relevance` (default `glm-4.5-air` via ZAI).
   Note the in-code default if config is missing is `glm-4.5-air` in
   `classify_batch`. Rate-limited through `ZAIRateLimiter`.

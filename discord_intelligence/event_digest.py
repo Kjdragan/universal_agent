@@ -8,6 +8,7 @@ import sqlite3
 from typing import Optional
 
 from discord_intelligence.config import get_db_path, init_secrets
+from discord_intelligence.llm_gate import ZAI_CALL_LOCK
 
 from universal_agent.services.llm_classifier import _call_llm
 
@@ -66,7 +67,9 @@ async def generate_digest(event_name: str, messages: list[dict], additional_cont
     user_msg = f"Event: {event_name}\nMessages:\n{text_content}{transcript_section}"
     
     try:
-        response = await _call_llm(system=SYSTEM_PROMPT, user=user_msg, model="sonnet", max_tokens=2048)
+        # Serialize against all other discord LLM calls (rate-limit conscious).
+        async with ZAI_CALL_LOCK:
+            response = await _call_llm(system=SYSTEM_PROMPT, user=user_msg, model="sonnet", max_tokens=2048)
         from universal_agent.services.llm_classifier import _parse_json_response
         parsed = _parse_json_response(response)
         return parsed
