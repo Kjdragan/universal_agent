@@ -676,12 +676,30 @@ before/after readout-quality check.
 
 - **Phase 4 — Make tier-2 sparse / generate-on-open.** Keep the cheap tier-0 tiles + tier-1 cards on
   the continuous loop; generate the expensive Chief-of-Staff readout only on the operator Refresh
-  button or a slow hourly tick, serving the cached readout instantly otherwise. **Latency finding
-  (measured live):** a successful glm-4.7 tier-2 readout takes **~45 s** (88K in / ~11K out). That is
-  far too slow to **block** the page on open — the correct UX is *serve cached instantly + kick a
-  background regen if the cached readout is stale*, with the page live-updating ~45 s later (not a
-  synchronous spinner). The read endpoint already serves cached and `force_refresh_async` already
-  exists, so this is a small change. Removes the flagship-lane token sink entirely.
+  button or a slow hourly tick, serving the cached readout instantly otherwise.
+
+  **Latency finding (measured live):** a successful tier-2 readout on **glm-4.7 takes ~45 s** (88K in
+  / ~11K out) — glm-4.7 is the cheap, high-concurrency lane but it is **slow per call** (it is an
+  older model; that is the trade we accepted in the model consolidation above). ~45 s is far too slow
+  to **block** the page on open — a synchronous "generate on open" would leave the operator staring at
+  a ~45 s spinner. So generate-on-open must mean *serve the cached readout instantly + kick a
+  **background** regen if the cached one is stale*, with the page live-updating ~45 s later (a
+  "refreshing…" indicator, never a blocking wait). The read endpoint already serves cached and
+  `force_refresh_async` already exists, so this is a small change. Removes the continuous-loop token
+  sink entirely.
+
+  **Model-by-trigger-path tension (introduced by the glm-4.7 consolidation).** Now that tier-2 lives
+  on the slow glm-4.7 lane, the latency only matters on a path where a **human is actively waiting**.
+  Two paths, two right answers:
+    - *Background / idle-hourly regen* — nobody is waiting; **keep glm-4.7** (cheap, off the flagship
+      lane). Slowness is free here.
+    - *Operator-triggered Refresh / on-open regen* — the operator is waiting; ~45 s is poor UX. If we
+      want a snappy synchronous refresh, route **only that path** to a faster model (e.g. glm-5-turbo
+      via the existing `UA_MISSION_CONTROL_COS_MODEL` knob, scoped to the force-refresh call) and
+      accept that one operator-initiated call lands briefly on the sonnet/opus lane. This keeps the
+      continuous background work cheap and lane-isolated while giving the on-demand path acceptable
+      latency. Defer the decision until Phase 4 is greenlit — for the **background-regen** design
+      above, glm-4.7's slowness is a non-issue and no model split is needed.
 
 - **Architectural lever (cross-cutting).** There is no cross-process global ZAI concurrency/rate cap
   — gateway, sweeper, discord daemon, and vp-workers each run their own `ZAIRateLimiter`, so the
