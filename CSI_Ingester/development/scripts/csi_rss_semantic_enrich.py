@@ -84,6 +84,7 @@ def _apply_env_defaults(path: Path) -> None:
         os.environ.setdefault(key, val)
 
 
+from _csi_pace import pace_sleep, resolve_enrich_pace_seconds  # noqa: E402
 from _csi_retry import retry_on_transient  # noqa: E402
 from _csi_secret_resolver import resolve_token_from_infisical  # noqa: E402
 
@@ -693,8 +694,12 @@ def main() -> int:
     claude_used = 0
     category_counts: Counter[str] = Counter()
     endpoint_success_counts: dict[str, int] = {}
+    # Slow-burn pacing: space per-event ZAI calls so the run trickles instead of
+    # bursting (avoids tripping the Fair-Usage rate limit). Knob: _csi_pace.py.
+    pace_seconds = resolve_enrich_pace_seconds()
 
     for row in rows:
+        made_llm_call = False
         event_db_id = int(row["id"])
         event_id = str(row["event_id"])
         source = str(row["source"] or "youtube_channel_rss")
@@ -763,6 +768,7 @@ def main() -> int:
         content_schema_json = None
 
         if use_claude and api_key and transcript_text:
+            made_llm_call = True
             parsed, usage = _analyze_with_claude(
                 title=title,
                 channel_name=channel_name,
@@ -885,6 +891,7 @@ def main() -> int:
 
         # ── Post-enrichment: trigger watchlist re-classification if transcript arrived ──
         if transcript_status == "ok" and channel_id and summary_text:
+            made_llm_call = True
             _try_reclassify_channel(
                 channel_id=channel_id,
                 transcript_samples=[summary_text[:500]],
@@ -895,6 +902,12 @@ def main() -> int:
 
         category_counts[category] += 1
         processed += 1
+
+        # Slow-burn pacing: only delay after an event that actually hit the LLM,
+        # turning a ~40-call burst into a gentle trickle. Sequential already —
+        # this just spaces the calls. Fixed/manual (not adaptive); 0 disables.
+        if made_llm_call:
+            pace_sleep(pace_seconds)
 
     conn.close()
     print(f"RSS_ENRICH_PENDING={len(rows)}")
