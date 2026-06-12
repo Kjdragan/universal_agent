@@ -89,7 +89,7 @@ def queue_cleanup_task(
         title=f"CODIE proactive cleanup: {chosen_theme}",
         description=description,
         priority=priority,
-        labels=["agent-ready", "proactive-codie", "codie-cleanup", "code"],
+        labels=[task_hub.TASK_LABEL_AGENT_READY, "proactive-codie", "codie-cleanup", "code"],
         metadata={
             "source": "proactive_codie",
             "theme": chosen_theme,

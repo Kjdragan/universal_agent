@@ -391,7 +391,7 @@ def complete_demo_task(
     # Drop the 'agent-ready' label so upsert_item doesn't auto-restore
     # agent_ready=True from the label set.
     updated["labels"] = [
-        lbl for lbl in (existing.get("labels") or []) if str(lbl) != "agent-ready"
+        lbl for lbl in (existing.get("labels") or []) if str(lbl) != task_hub.TASK_LABEL_AGENT_READY
     ]
     return task_hub.upsert_item(conn, updated)
 
@@ -485,7 +485,7 @@ def defer_demo_task(
     # Drop the 'agent-ready' label so upsert_item doesn't auto-restore
     # agent_ready=True from the label set.
     updated["labels"] = [
-        lbl for lbl in (existing.get("labels") or []) if str(lbl) != "agent-ready"
+        lbl for lbl in (existing.get("labels") or []) if str(lbl) != task_hub.TASK_LABEL_AGENT_READY
     ]
     return task_hub.upsert_item(conn, updated)
 

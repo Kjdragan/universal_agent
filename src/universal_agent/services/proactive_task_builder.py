@@ -102,7 +102,7 @@ def queue_proactive_task(
         # Derive topic tags from labels for preference matching
         topic_tags = [
             label for label in (labels or [])
-            if label not in {"agent-ready"}
+            if label not in {task_hub.TASK_LABEL_AGENT_READY}
         ]
         blocked, reason = should_block_proactive_task(
             conn,
@@ -135,7 +135,7 @@ def queue_proactive_task(
             "description": description,
             "project_key": "proactive",
             "priority": clamped,
-            "labels": labels or ["agent-ready"],
+            "labels": labels or [task_hub.TASK_LABEL_AGENT_READY],
             "status": task_hub.TASK_STATUS_OPEN,
             "agent_ready": bool(agent_ready),
             "trigger_type": "heartbeat_poll",

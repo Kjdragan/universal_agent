@@ -5491,7 +5491,7 @@ def _build_csi_recommendation_task_items(
         ]
         agent_ready = owner_lane == "agent"
         if agent_ready:
-            labels.append("agent-ready")
+            labels.append(task_hub.TASK_LABEL_AGENT_READY)
             labels.append(f"sub-agent:{subtask_role}")
         else:
             labels.append("needs-human")
@@ -28543,7 +28543,7 @@ async def dashboard_mission_control_dispatch_to_codie(
                 title=title,
                 description=description,
                 priority=3,
-                labels=["agent-ready", "mission-control-dispatch", card.get("subject_kind", "task")],
+                labels=[task_hub.TASK_LABEL_AGENT_READY, "mission-control-dispatch", card.get("subject_kind", "task")],
                 metadata={
                     "source": "mission_control_card_dispatch",
                     "mission_control_card_id": card_id,
@@ -31648,7 +31648,7 @@ def _create_heartbeat_remediation_task(
             "description": description,
             "project_key": "proactive",
             "priority": 2,
-            "labels": ["heartbeat-fix", "agent-ready", "auto-created"],
+            "labels": ["heartbeat-fix", task_hub.TASK_LABEL_AGENT_READY, "auto-created"],
             "status": "open",
             "agent_ready": True,
             "trigger_type": "immediate",

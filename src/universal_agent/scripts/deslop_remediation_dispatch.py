@@ -64,6 +64,8 @@ import subprocess
 from typing import Any, Callable, Optional
 import unicodedata
 
+from universal_agent import task_hub
+
 # --------------------------------------------------------------------------- #
 # Configuration
 # --------------------------------------------------------------------------- #
@@ -903,7 +905,7 @@ def dispatch_cody_fix(
             title=f"Deslop auto-fix: issue #{issue.number}",
             description=brief,
             priority=3,
-            labels=["agent-ready", "proactive-codie", "deslop-autofix", "code"],
+            labels=[task_hub.TASK_LABEL_AGENT_READY, "proactive-codie", "deslop-autofix", "code"],
             metadata={
                 "source": "deslop_autoremediate",
                 "issue_number": issue.number,

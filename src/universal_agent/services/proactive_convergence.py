@@ -13,6 +13,7 @@ import sqlite3
 import time
 from typing import Any, Callable, Optional
 
+from universal_agent import task_hub
 from universal_agent.rate_limiter import _is_fup_error
 from universal_agent.services.llm_classifier import _call_llm, _parse_json_response
 from universal_agent.services.proactive_artifacts import (
@@ -1346,10 +1347,10 @@ def write_convergence_candidate(
 
     if is_ideation:
         title = f"ATLAS evaluate ideation insight: {headline}"
-        labels = ["agent-ready", "ideation", "atlas", "candidate", "insight"]
+        labels = [task_hub.TASK_LABEL_AGENT_READY, "ideation", "atlas", "candidate", "insight"]
     else:
         title = f"ATLAS evaluate convergence candidate: {headline}"
-        labels = ["agent-ready", "convergence", "atlas", "candidate"]
+        labels = [task_hub.TASK_LABEL_AGENT_READY, "convergence", "atlas", "candidate"]
 
     # ── Pre-Task-Hub editorial triage ──────────────────────────────
     # Decide whether this candidate is worth a Task Hub item BEFORE we create

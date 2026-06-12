@@ -119,7 +119,7 @@ def dispatch_cody_demo_task(
         # Demo tasks rank high — they're the headline value of v2.
         "priority": 4,
         "labels": [
-            "agent-ready",
+            task_hub.TASK_LABEL_AGENT_READY,
             "claude-code-intel",
             "cody-demo",
             "v2-phase3",
