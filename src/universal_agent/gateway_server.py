@@ -14515,6 +14515,13 @@ async def _run_after_deployment_window(
 async def lifespan(app: FastAPI):
     global _FACTORY_POLICY, _delegation_mission_bus, _DEPLOYMENT_PROFILE
     process_heartbeat.start()
+    # C1 (measure-first, deploy-restart resilience ADR 12): time the blocking
+    # pre-yield startup segments so the cold-start log localizes where the
+    # gateway's restart dead-window actually goes. Pure instrumentation — no
+    # behavior change, no reorder. The reorder (if any) is gated on this data.
+    from universal_agent.startup_timing import StartupPhaseTimer  # noqa: PLC0415 — lazy
+
+    _startup_timer = StartupPhaseTimer()
     logger.info("🚀 Universal Agent Gateway Server starting...")
     logger.info("Lifespan: Resolving bootstrap state...")
     bootstrap_state = bootstrap_runtime_environment(profile=_DEPLOYMENT_PROFILE)
@@ -14527,6 +14534,7 @@ async def lifespan(app: FastAPI):
     if _refreshed_profile in {"local_workstation", "standalone_node", "vps"}:
         _DEPLOYMENT_PROFILE = _refreshed_profile
     logger.info("Lifespan: deployment profile resolved to %s", _DEPLOYMENT_PROFILE)
+    _startup_timer.mark("bootstrap_runtime_environment")
     _FACTORY_POLICY = bootstrap_state.policy
     _refresh_runtime_feature_flags_from_env()
     # Phase D (2026-05-11): if we're in dev mode, log a per-loop summary so the
@@ -14597,6 +14605,7 @@ async def lifespan(app: FastAPI):
     
     # Initialize runtime database (required by ProcessTurnAdapter -> setup_session)
     import universal_agent.main as main_module
+    _startup_timer.mark("config_csi_redis_factory")
     db_path = get_runtime_db_path()
     logger.info("Connecting to runtime DB: %s", db_path)
     main_module.runtime_db_conn = connect_runtime_db(db_path)
@@ -14608,6 +14617,7 @@ async def lifespan(app: FastAPI):
     ensure_schema(main_module.runtime_db_conn)
     _ensure_activity_schema(main_module.runtime_db_conn)
     _activity_prune_old(main_module.runtime_db_conn)
+    _startup_timer.mark("runtime_db_connect_and_schema")
 
     # Pre-warm SQLite page cache for the dashboard hot paths. The first
     # request after restart was paying 12–15s of cold-page cost on the
@@ -14630,6 +14640,7 @@ async def lifespan(app: FastAPI):
     except Exception as _prewarm_exc:  # noqa: BLE001 — defensive at boot
         logger.warning("Dashboard pre-warm failed (non-fatal): %s", _prewarm_exc)
 
+    _startup_timer.mark("dashboard_prewarm")
     persisted_notifications = _load_notifications_from_activity_store(_notifications_max)
     if persisted_notifications:
         _notifications[:] = list(reversed(persisted_notifications))
@@ -15264,6 +15275,8 @@ async def lifespan(app: FastAPI):
         else:
             logger.info("🧹 No stale running VP missions detected on startup")
 
+    _startup_timer.mark("heartbeat_daemon_subsystem_and_startup_reconcile")
+
     # --- Periodic VP stale-mission reconciliation (covers daemons that stop
     # polling between deploys; on-startup reconcile alone leaves multi-hour gaps). ---
     if _vp_stale_reconcile_enabled:
@@ -15340,6 +15353,9 @@ async def lifespan(app: FastAPI):
         )
     except Exception:
         logger.exception("Failed to start digest TTL sweep loops")
+
+    _startup_timer.mark("background_loops_spawned")
+    logger.info("⏱️  Gateway startup timing — %s", _startup_timer.summary())
 
     yield
     
