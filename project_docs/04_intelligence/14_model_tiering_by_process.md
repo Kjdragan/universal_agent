@@ -32,7 +32,7 @@ code_paths:
   - src/universal_agent/services/invariants/zai_inference_health.py
   - src/universal_agent/gateway_server.py
   - src/universal_agent/services/transcript_corpus.py
-last_verified: 2026-06-11
+last_verified: 2026-06-12
 ---
 
 # Intelligence Model Tiering by Process
@@ -330,6 +330,17 @@ Reads a workspace/transcript evidence bundle and produces a grounded multi-field
 verdict (implemented / known_issues / success_assessment / confidence) that must not
 infer success from silence. Low volume; `UA_PROACTIVE_RECAP_LLM_MODEL` knob already
 exists. **Not air**: nuanced evidence-grounded reasoning.
+
+> **2026-06-12 limiter fix:** `proactive_work_recap.py::_call_llm_recap_evaluator` previously
+> used a raw `Anthropic()` SDK client, bypassing the AIMD per-tier rate limiter entirely.
+> Live data showed ~64% hard-fail when the ZAI sonnet tier was momentarily saturated (the
+> raw client has no backoff). The function now routes through
+> `llm_classifier.py::_call_llm` via the same sync→async bridge pattern used by
+> `proactive_convergence.py::_detect_clusters_llm` — so `with_rate_limit_retry` handles
+> backoff when `UA_LLM_CLASSIFIER_LIMITER_ENABLED=1`. The heuristic session-evidence
+> fallback (`_evaluate_recap` → `evaluation_status="llm_failed_fallback"`) is unchanged;
+> the model tier (`glm-5-turbo` via `UA_PROACTIVE_RECAP_LLM_MODEL`, defaulting to
+> `resolve_opus()` when unset) is unchanged.
 
 **Wiki semantic extraction** — `wiki/llm.py` (`_call_llm`, shared by
 `extract_entities` / `extract_concepts` / `generate_summary`).
