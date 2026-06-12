@@ -138,9 +138,11 @@ YouTube digest report CSS (`youtube_daily_digest.py::_DIGEST_HTML_HEAD_CSS` +
 
 ## Notes and boundaries
 
-- **Tailnet-only.** The link is private to Kevin's devices and dead off-tailnet. Never
-  use the scratchpad for artifacts going to external recipients — attach a file or use a
-  public host for those.
+- **Tailnet-only / Private Preferred.** The scratchpad link is private to Kevin's devices and dead off-tailnet. It is the preferred default option for internal/private operator reports. Never use the scratchpad for artifacts going to external recipients.
+- **Public Alternative (`here.now`):** If you need to share a static page publicly (outside the tailnet), use the `here-now` skill instead.
+  - *Best for:* Agent-generated static artifacts that need to be publicly shareable — reports, landing pages, prototypes, portfolios, one-pagers, file sharing.
+  - *Not for:* Anything we currently run on the VPS — the dashboard, the agent runtime, API endpoints, databases, WebSocket connections, authentication flows.
+  - *Overlaps with:* The Tailscale scratchpad, but `here.now` is public while the scratchpad is tailnet-private. They serve different visibility needs.
 - **Survives deploys.** `/home/ua/ua_scratch` lives in `ua`'s home, not under
   `/opt/universal_agent`, so published reports persist across deploys.
 - **Don't disturb other serve mappings.** Only ever touch the `/scratch` path. The
