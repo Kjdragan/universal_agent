@@ -136,18 +136,19 @@ def test_refine_cluster_reraises_only_on_fup():
         assert asyncio.run(pc._refine_cluster_with_llm(bucket, min_channels=2)) is None
 
 
-# ── Change 3: Chief-of-Staff tier-2 cadence ceiling 300 -> 1800 ──────────
+# ── Change 3: Chief-of-Staff tier-2 cadence ceiling 300 -> 1800 -> 3600 ──
 
 
-def test_sweeper_tier2_ceiling_default_is_1800(monkeypatch):
-    """With no env override the tier-2 (Chief-of-Staff) ceiling is the new
-    1800s default — a ~6x cut from the old 300s — on BOTH the dataclass field
-    and the ``from_env`` fallback."""
+def test_sweeper_tier2_ceiling_default_is_3600(monkeypatch):
+    """With no env override the tier-2 (Chief-of-Staff) ceiling is the
+    3600s default — widened from 1800s in the 2026-06-12 LLM-efficiency pass
+    (was 300s before 2026-06-11) — on BOTH the dataclass field and the
+    ``from_env`` fallback."""
     monkeypatch.delenv("UA_MISSION_CONTROL_TIER2_CEILING_S", raising=False)
     # Dataclass field default.
-    assert SweeperConfig().tier2_ceiling_seconds == 1800.0
+    assert SweeperConfig().tier2_ceiling_seconds == 3600.0
     # from_env fallback (no env set).
-    assert SweeperConfig.from_env().tier2_ceiling_seconds == 1800.0
+    assert SweeperConfig.from_env().tier2_ceiling_seconds == 3600.0
 
 
 def test_sweeper_tier2_ceiling_env_override_still_wins(monkeypatch):
