@@ -22,7 +22,7 @@ code_paths:
   - ".claude/skills/publish-to-scratchpad/SKILL.md"
   - "deploy/nginx/universal-agent-app"
   - "scripts/deploy/install_nginx_app_config.sh"
-last_verified: 2026-06-03
+last_verified: 2026-06-12
 ---
 
 # Networking: Tailscale, Residential Proxy, SSHFS
