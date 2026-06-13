@@ -16,7 +16,9 @@ code_paths:
   - src/universal_agent/memory/lancedb_backend.py
   - src/universal_agent/memory/memory_vector_index.py
   - src/universal_agent/utils/db_health_monitor.py
-last_verified: 2026-06-05
+  - CSI_Ingester/development/csi_ingester/store/sqlite.py
+  - src/universal_agent/services/proactive_convergence.py
+last_verified: 2026-06-13
 ---
 
 # Database Architecture
@@ -205,5 +207,7 @@ The CSI store (`csi.db`) is written by the standalone `csi-ingester.service` (uv
 The ingester's `config.yaml` still ships a **relative dev default** `db_path: "var/csi.db"`. Production is correct *only* because the systemd `EnvironmentFile` (`CSI_Ingester/development/deployment/systemd/csi-ingester.env`) sets `CSI_DB_PATH=/var/lib/universal-agent/csi/csi.db`, overriding the config so the ingester and gateway share one DB.
 
 > **Footgun:** if that `CSI_DB_PATH` override is ever dropped, the ingester silently resumes writing the dev relic (`CSI_Ingester/development/var/csi.db`) and the live `/var/lib` DB goes stale — you'll conclude "the pipeline is dead" when it's actually writing the wrong file. Treat `CSI_DB_PATH` in `csi-ingester.env` as load-bearing. Stale relics under the repo working tree (`CSI_Ingester/development/var/csi.db`, `csi_events.db`, `csi_ingester.db`) were deleted 2026-05-29 and must not be recreated by running the ingester without `CSI_DB_PATH`. `[VERIFY: systemd unit paths and the config.yaml relative default are environment facts from the legacy doc; re-confirm on the VPS if diagnosing CSI staleness.]`
+
+**Journal mode — WAL.** `csi.db` is opened in **WAL** journal mode (`synchronous=NORMAL`) by `csi_ingester.store.sqlite::connect`, which every CSI process routes through; the pragmas are set idempotently on each connection (`_journal_mode` / `_busy_timeout_ms`, overridable via `CSI_SQLITE_JOURNAL_MODE` / `CSI_SQLITE_BUSY_TIMEOUT_MS` for emergency rollback). This replaced the legacy rollback-journal (DELETE) mode, under which the ~13 concurrent CSI processes (the long-running `csi-ingester` plus the semantic-enrich / trend-report / global-brief / daily-summary / replay-dlq / quality-assessment timers, and the main-repo `proactive_convergence::sync_topic_signatures_from_csi`) routinely raised `database is locked`; `busy_timeout` alone (added earlier) only made a blocked writer wait rather than letting readers and writers coexist. The one writer that does **not** go through the helper — convergence-sync, which runs as `ua` while the rest run as `root` — opens `csi.db` directly but still sets `busy_timeout` and inherits WAL (a persistent db property). Mixed-uid access is safe because SQLite, running as root, chowns the `-wal`/`-shm` sidecars to match the db owner (`ua:ua`). The `csi-db-backup` rotate script is WAL-correct: it `PRAGMA wal_checkpoint(PASSIVE)`s then uses the SQLite `.backup` API (never a bare `.db` copy), consistent with the §-above WAL-sidecar guidance.
 
 Two unrelated YouTube-watching systems also keep separate state stores: the UA-native playlist watcher (`youtube_playlist_watcher_state.json`) and the CSI RSS channel feed (inside `csi.db`). Resetting one does NOT reset the other.

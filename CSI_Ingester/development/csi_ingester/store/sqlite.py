@@ -376,13 +376,29 @@ MIGRATIONS: tuple[tuple[str, str], ...] = (
 )
 
 
-# csi.db is in rollback-journal mode and is written by BOTH the long-running
-# csi-ingester service and the csi-rss-semantic-enrich timer. With the default
-# busy_timeout of 0, any momentary write contention raises
-# "sqlite3.OperationalError: database is locked" instantly. A busy_timeout makes
-# a contending writer WAIT for the lock (the contention is bursty, not held), so
-# concurrent CSI writers serialize cleanly instead of failing.
+# csi.db is hammered by ~13 concurrent processes: the long-running csi-ingester
+# service plus a fleet of timer jobs (rss/threads semantic-enrich, trend reports,
+# global brief, daily-summary, replay-dlq, quality-assessment) and the main-repo
+# convergence-sync. In the legacy rollback-journal (DELETE) mode a writer needs an
+# EXCLUSIVE lock that readers block, so under that fan-out even a momentary write
+# raises "sqlite3.OperationalError: database is locked".
+#
+# Two pragmas tame that, set on every connection (idempotent):
+#   * journal_mode=WAL  — writers and readers stop blocking each other (a writer
+#     appends to the -wal log while readers keep reading the main db). This is the
+#     ROOT fix; busy_timeout was only a half-measure (it makes a blocked writer
+#     WAIT instead of failing, but writers still serialize in DELETE mode).
+#   * synchronous=NORMAL — the documented WAL pairing: durable across an app crash,
+#     only a power-loss can lose the last transaction (events are re-ingestable from
+#     RSS, so that tradeoff is acceptable for far higher write throughput).
+# WAL is a persistent property of the db file, so the first connection that sets it
+# converts csi.db and every later connection (any uid) inherits it. The -wal/-shm
+# sidecars are created next to the db; SQLite, when the process is root, chowns them
+# to match the db owner (ua:ua), so the lone non-root writer (convergence-sync, ua)
+# can still read+write them. Both pragmas are overridable for emergency rollback via
+# CSI_SQLITE_JOURNAL_MODE / CSI_SQLITE_BUSY_TIMEOUT_MS (no redeploy needed).
 _DEFAULT_BUSY_TIMEOUT_MS = 15000
+_DEFAULT_JOURNAL_MODE = "WAL"
 
 
 def _busy_timeout_ms() -> int:
@@ -393,12 +409,25 @@ def _busy_timeout_ms() -> int:
         return _DEFAULT_BUSY_TIMEOUT_MS
 
 
+def _journal_mode() -> str:
+    """Journal mode pragma value. Defaults to WAL; set CSI_SQLITE_JOURNAL_MODE to
+    'DELETE' (or another valid mode) to revert without a code change. Empty string
+    disables the pragma entirely (leaves whatever mode the db is already in)."""
+    return str(os.getenv("CSI_SQLITE_JOURNAL_MODE", _DEFAULT_JOURNAL_MODE)).strip()
+
+
 def connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     timeout_ms = _busy_timeout_ms()
     conn = sqlite3.connect(str(db_path), timeout=timeout_ms / 1000.0)
     conn.row_factory = sqlite3.Row
     conn.execute(f"PRAGMA busy_timeout={timeout_ms}")
+    journal_mode = _journal_mode()
+    if journal_mode:
+        conn.execute(f"PRAGMA journal_mode={journal_mode}")
+        if journal_mode.upper() == "WAL":
+            # NORMAL is the recommended durability level under WAL (see comment above).
+            conn.execute("PRAGMA synchronous=NORMAL")
     return conn
 
 
