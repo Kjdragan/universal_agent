@@ -98,7 +98,6 @@ def test_all_five_invariants_register_on_import() -> None:
     assert {
         "morning_briefing_freshness",
         "proactive_artifact_digest_delivery",
-        "hackernews_snapshot_cadence",
         "csi_convergence_sync_freshness",
         "nightly_wiki_persistent_silence",
     }.issubset(ids)
@@ -224,61 +223,7 @@ def test_digest_silent_before_9am(monkeypatch) -> None:
     assert _only(findings, "proactive_artifact_digest_delivery") == []
 
 
-# === 3. hackernews_snapshot_cadence ===
-
-
-def test_hn_fresh_snapshot_emits_nothing(tmp_path: Path, monkeypatch) -> None:
-    fake_now = datetime(2026, 5, 19, 14, 0, tzinfo=HOUSTON)
-    _set_now(monkeypatch, fake_now)
-    base = tmp_path / "artifacts"
-    snaps = base / "hackernews" / "snapshots"
-    snaps.mkdir(parents=True)
-    f = snaps / "20260519140000.json"
-    f.write_text("{}")
-    # Align file mtime to fake "now" so age math doesn't depend on real clock.
-    fresh_mtime = fake_now.timestamp() - 60
-    os.utime(f, (fresh_mtime, fresh_mtime))
-    findings = run_invariants({"artifacts_dir": base})
-    assert _only(findings, "hackernews_snapshot_cadence") == []
-
-
-def test_hn_old_snapshot_emits_warn(tmp_path: Path, monkeypatch) -> None:
-    fake_now = datetime(2026, 5, 19, 14, 0, tzinfo=HOUSTON)
-    _set_now(monkeypatch, fake_now)
-    base = tmp_path / "artifacts"
-    snaps = base / "hackernews" / "snapshots"
-    snaps.mkdir(parents=True)
-    f = snaps / "20260519100000.json"
-    f.write_text("{}")
-    # Anchor mtime to the mocked "now" so the age math doesn't depend on
-    # the real wall clock at test-run time.
-    ninety_min_ago = fake_now.timestamp() - 90 * 60
-    os.utime(f, (ninety_min_ago, ninety_min_ago))
-    findings = run_invariants({"artifacts_dir": base})
-    matches = _only(findings, "hackernews_snapshot_cadence")
-    assert len(matches) == 1
-    assert matches[0].severity == "warn"
-
-
-def test_hn_silent_during_dormancy(tmp_path: Path, monkeypatch) -> None:
-    _set_now(monkeypatch, datetime(2026, 5, 19, 23, 30, tzinfo=HOUSTON))
-    base = tmp_path / "artifacts"
-    snaps = base / "hackernews" / "snapshots"
-    snaps.mkdir(parents=True)
-    findings = run_invariants({"artifacts_dir": base})
-    assert _only(findings, "hackernews_snapshot_cadence") == []
-
-
-def test_hn_silent_in_early_6am_window(tmp_path: Path, monkeypatch) -> None:
-    _set_now(monkeypatch, datetime(2026, 5, 19, 6, 15, tzinfo=HOUSTON))
-    base = tmp_path / "artifacts"
-    snaps = base / "hackernews" / "snapshots"
-    snaps.mkdir(parents=True)
-    findings = run_invariants({"artifacts_dir": base})
-    assert _only(findings, "hackernews_snapshot_cadence") == []
-
-
-# === 4. csi_convergence_sync_freshness ===
+# === 3. csi_convergence_sync_freshness ===
 
 
 def _insert_candidate(conn, candidate_id: str, minutes_ago: int) -> None:
@@ -783,7 +728,6 @@ def test_all_ten_invariants_register_on_import() -> None:
     expected = {
         "morning_briefing_freshness",
         "proactive_artifact_digest_delivery",
-        "hackernews_snapshot_cadence",
         "csi_convergence_sync_freshness",
         "nightly_wiki_persistent_silence",
         "proactive_reports_daily_trio",
