@@ -11,7 +11,7 @@ code_paths:
   - src/universal_agent/services/intel_lanes.py
   - src/universal_agent/config/intel_lanes.yaml
   - src/universal_agent/services/llm_classifier.py
-last_verified: 2026-06-11
+last_verified: 2026-06-13
 ---
 
 # CSI Architecture
@@ -334,11 +334,32 @@ Three **CSI Ingester oneshot scripts** (each runs on a systemd timer, not a daem
 | `threads_trend_report` | `csi_threads_trend_report.py` | 3×/day (parked: 0 events while threads adapters disabled) | Top buckets, sources, categories, themes from Threads; currently STALE |
 | `global_trend_brief_ready` | `csi_global_trend_brief.py` | 3×/day (7 AM, 1 PM, 7 PM CT) | LLM-synthesized cross-source brief; full_report_markdown includes narratives + contradictions + why-it-matters |
 
-**Operational status (live as of 2026-06-07):**
+**Operational status (as of 2026-06-13 — three trend timers intentionally retired):**
 
-- RSS trend reports: **active** (last_seen ~75 min ago, throughput ~1 event/hour, 0 failures/24h)
-- Threads trend reports: **STALE** (last_seen never, 0 events in 6h)
-- Global brief ready: **active** (last_seen ~75 min ago, 9 total, throughput ~1 event/hour)
+- RSS trend reports (`csi-rss-trend-report.timer`) — **retired 2026-06-13** (paused via
+  `systemctl disable --now`, and removed from the deploy install set so it stays retired). Its
+  aggregation summarized the same YouTube RSS stream the convergence pipeline already mines, so the
+  timer was turned off as a tidiness decision — it ran as designed; this was not a defect. Existing
+  `trend_reports` rows still render on the dashboard; no new ones are produced. Reversible by
+  re-adding the unit.
+- Threads trend reports (`csi-threads-trend-report.timer`) — **retired 2026-06-13**. Already
+  dormant (Threads adapters parked since 2026-06-03), so it had nothing to summarize.
+- Global brief (`csi-global-trend-brief.timer`) — **retired 2026-06-13**, turned off together
+  with the RSS timer because it consumed RSS trend output as its YouTube input. Existing
+  `global_trend_briefs` rows still render; no new ones are produced.
+
+> **Boundary (do not conflate):** the `csi_ingester` `delivered`-flagging conveyor
+> (`batch_brief.py::mark_events_delivered`) is a **separate, load-bearing step that was left
+> untouched** — it feeds enrichment → convergence and is unrelated to these reporting timers. The
+> recurring "CSI Batch Brief" dashboard entry is an **intended informational byproduct** of that
+> step, not a dead-end. These timers were *reporting conveniences that overlapped the main
+> pipeline* — describe them as **retired**, not broken or unused.
+>
+> Durability: the three units were also removed from `CANONICAL_UNITS` in
+> `CSI_Ingester/development/scripts/csi_install_systemd_extras.sh` and deleted from
+> `deployment/systemd/`, so the install script's orphan sweep disables+removes them on deploy
+> (a `systemctl disable` alone would be re-enabled by the next deploy). Rollback (all three):
+> `sudo systemctl enable --now csi-rss-trend-report.timer csi-global-trend-brief.timer csi-threads-trend-report.timer`
 
 The three scripts use `emit_and_track()` from
 `CSI_Ingester/development/csi_ingester/analytics/emission.py` to write events

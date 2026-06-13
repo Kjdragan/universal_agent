@@ -43,13 +43,17 @@ enable_timer_if_installed() {
 # Derived from `ls deployment/systemd/`. Update *here* when adding/removing
 # a unit, then the next deploy installs it and the sweep block cleans up
 # anything still living on the VPS from a prior generation.
+# RETIRED 2026-06-13: csi-rss-trend-report, csi-global-trend-brief, and
+# csi-threads-trend-report (.service + .timer) were intentionally retired — their
+# trend-report output duplicated the convergence pipeline. Removed from this list
+# AND deleted from deployment/systemd/, so the orphan sweep below disables+removes
+# them on deploy (a bare `systemctl disable` would otherwise be re-enabled here on
+# the next deploy). Do not re-add. See project_docs/04_intelligence/01_csi_architecture.md §3.6.
 CANONICAL_UNITS=(
   csi-daily-summary.service
   csi-daily-summary.timer
   csi-db-backup.service
   csi-db-backup.timer
-  csi-global-trend-brief.service
-  csi-global-trend-brief.timer
   csi-ingester.service
   csi-quality-assessment.service
   csi-quality-assessment.timer
@@ -57,14 +61,10 @@ CANONICAL_UNITS=(
   csi-replay-dlq.timer
   csi-rss-semantic-enrich.service
   csi-rss-semantic-enrich.timer
-  csi-rss-trend-report.service
-  csi-rss-trend-report.timer
   csi-threads-semantic-enrich.service
   csi-threads-semantic-enrich.timer
   csi-threads-token-refresh-sync.service
   csi-threads-token-refresh-sync.timer
-  csi-threads-trend-report.service
-  csi-threads-trend-report.timer
   csi-youtube-transcript-canary.service
   csi-youtube-transcript-canary.timer
 )
