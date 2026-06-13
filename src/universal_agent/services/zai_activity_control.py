@@ -206,7 +206,28 @@ def _run_systemctl(argv: list[str], *, timeout: float = SYSTEMCTL_TIMEOUT_SECOND
 # ``Id`` is requested so a batched multi-unit ``show`` can be keyed back to its
 # unit. Properties are passed as repeated ``-p`` flags (the portable form;
 # comma-joined to a single ``-p`` only works on newer systemd).
-_SHOW_PROPS = ("Id", "ActiveState", "SubState", "UnitFileState", "LastTriggerUSec", "NextElapseUSecRealtime")
+_SHOW_PROPS = (
+    "Id",
+    "ActiveState",
+    "SubState",
+    "UnitFileState",
+    "LastTriggerUSec",
+    "NextElapseUSecRealtime",
+    # Last-run exit result — used by the health column (zai_activity_health). For
+    # a oneshot timer these are populated on the TRIGGERED service (the timer's
+    # ``Unit=``, which may be a SHARED service, not the by-name sibling), not the
+    # .timer; for a long-running service they describe the running process.
+    "Result",
+    "ExecMainStatus",
+    "NRestarts",
+    # ``Unit`` on a .timer is the service it activates (the report timers all
+    # trigger ONE shared universal-agent-proactive-report.service, so the by-name
+    # sibling would never run). ``ExecMainStartTimestampMonotonic`` is 0 for a
+    # never-run-this-boot oneshot — the ONLY reliable never-ran signal, since
+    # systemd defaults Result=success/ExecMainStatus=0 before the first run.
+    "Unit",
+    "ExecMainStartTimestampMonotonic",
+)
 
 
 def _prop_args() -> list[str]:
@@ -257,6 +278,16 @@ def _build_state(unit: str, props: dict[str, str]) -> dict[str, Any]:
         "is_masked": ufs == "masked",
         "last_run": props.get("LastTriggerUSec", "") or "",
         "next_run": props.get("NextElapseUSecRealtime", "") or "",
+        # Last-run exit signal (health column). For a service these describe the
+        # running process; for a timer row they are empty (read the TRIGGERED
+        # service named in ``triggers`` via get_last_run_results()).
+        "result": props.get("Result", "") or "",
+        "exec_main_status": props.get("ExecMainStatus", "") or "",
+        "n_restarts": props.get("NRestarts", "") or "",
+        # The service a .timer actually activates (its ``Unit=``); may be a shared
+        # service. Empty for non-timer rows. The health resolver reads this unit's
+        # last-run result, NOT a by-name sibling guess.
+        "triggers": props.get("Unit", "") or "",
     }
 
 
@@ -296,6 +327,41 @@ def _show_many(units: list[str]) -> dict[str, dict[str, Any]]:
                 out[uid] = _build_state(uid, rec)
     except Exception as exc:  # noqa: BLE001 — fail soft; caller fills unknowns
         logger.debug("zai_activity_control: batched state read failed: %s", exc)
+    return out
+
+
+def sibling_service_unit(unit: str) -> str:
+    """``…-morning-briefing.timer`` -> ``…-morning-briefing.service``.
+
+    Oneshot timers carry their last-run exit result on the *service* they trigger,
+    not on the ``.timer`` unit. Identity for units already ending ``.service``."""
+    if unit.endswith(".timer"):
+        return unit[: -len(".timer")] + ".service"
+    return unit
+
+
+def get_last_run_results(units: list[str]) -> dict[str, dict[str, str]]:
+    """Batched ``systemctl show`` of the given (sibling-service) units, returning
+    the RAW prop dict per unit keyed by ``Id``.
+
+    Unlike :func:`_show_many` this does NOT filter by the allowlist — the sibling
+    ``.service`` of an allowlisted ``.timer`` is itself not allowlisted, yet its
+    ``Result``/``ExecMainStatus`` is exactly the last-run health signal the health
+    column needs. Read-only (no sudo). FAILS SOFT to ``{}``."""
+    if not units:
+        return {}
+    out: dict[str, dict[str, str]] = {}
+    try:
+        proc = _run_systemctl(
+            ["systemctl", "show", *units, *_prop_args()],
+            timeout=SYSTEMCTL_READ_TIMEOUT_SECONDS,
+        )
+        for rec in _parse_records(proc.stdout):
+            uid = rec.get("Id", "")
+            if uid:
+                out[uid] = rec
+    except Exception as exc:  # noqa: BLE001 — fail soft; caller treats missing as no signal
+        logger.debug("zai_activity_control: sibling-service result read failed: %s", exc)
     return out
 
 
