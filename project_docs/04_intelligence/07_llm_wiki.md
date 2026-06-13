@@ -283,7 +283,13 @@ Anthropic client built by `_get_anthropic_client()`:
 - API key resolution order: `ANTHROPIC_API_KEY` → `ANTHROPIC_AUTH_TOKEN` → `ZAI_API_KEY`.
 - `ANTHROPIC_BASE_URL` is honored if set (this is the ZAI emulation hook — autonomous UA
   context routes these to ZAI/GLM by design).
-- Model is `resolve_opus()` → `glm-5.1` (per `utils/model_resolution.py`).
+- Model (2026-06-13): the bounded **extraction** stages `extract_entities` /
+  `extract_concepts` pass `model=_extract_model()` → **sonnet** (`glm-5-turbo`,
+  env-overridable via `UA_WIKI_EXTRACT_MODEL`); they previously fell through to
+  `_call_llm`'s `resolve_opus()` default (`glm-5.1`, the flagship / most
+  Fair-Usage-throttled tier) unnecessarily for a structured bounded-output task.
+  `generate_summary` keeps the `resolve_opus()` default (`glm-5.1`) — it is generative
+  and quality-sensitive.
 - `max_tokens=2048`. Input text is truncated to the first 4000 chars.
 
 **Every function fails gracefully to a heuristic.** If the LLM call raises (no key,
