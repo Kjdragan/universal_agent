@@ -4,10 +4,25 @@ Phase B (#749) extracted the Mission Control sweeper into its own systemd
 service (``universal-agent-mission-control-sweeper.service``). The is-active
 service watchdog catches a *dead* (inactive) service, but not a
 *wedged-but-alive* one — a process that is up yet no longer ticking. This probe
-closes that gap: it reads the sweeper's per-tick heartbeat (``last_checked_at``
-on the ``__tier1_meta__`` row of ``mission_control_intelligence.db``, which
-``mission_control_intelligence_sweeper._write_tier1_meta`` always-writes every
-tick — success, skip, OR error) and warns when it is stale beyond a threshold.
+closes that gap using a **dual-signal** approach:
+
+**Tier-0 tiles (primary liveness signal).** Tier-0 tiles
+(``task_hub_pressure``, ``heartbeat_daemon``, ``gateway``) are written by
+``_persist_tile_state`` on *every* sweep tick via ``_run_tier0``, regardless of
+whether the LLM tier fires. Their ``last_checked_at`` advances unconditionally
+and is therefore the true per-tick heartbeat.
+
+**Tier-1 meta (secondary signal).** The ``__tier1_meta__`` row is written by
+``_write_tier1_meta`` inside ``_run_tier1_async``, which only executes when
+the sweeper reaches the LLM pass. During dormancy (10pm-6am), rate-limit floor
+waits, or unchanged-signature periods, tier-1 legitimately idles and
+``__tier1_meta__`` goes stale. Tier-1 staleness alone is **not** a liveness
+signal — it merely indicates the LLM pass has not run recently.
+
+The invariant only WARNs when **both** tier-0 tiles AND tier-1 meta are stale,
+which means the entire sweeper loop has stopped ticking (genuinely wedged).
+If tier-1 is stale but tier-0 tiles are fresh, the sweeper loop is alive and
+tier-1 is legitimately idle — the invariant returns healthy (None).
 
 IMPORTANT — reads ``last_checked_at``, NOT ``state_since``. ``state_since``
 records the last actual card FIRE (synthesis), which is intentionally sparse on
@@ -25,7 +40,9 @@ when ``UA_MC_PHASE_1_ENABLED`` is off the sweeper is intentionally idle, so the
 probe is a no-op.
 
 Added 2026-06-05 as the Phase B follow-up flagged in the S5 Phase C work
-(deploy-independent proactive-health timer).
+(deploy-independent proactive-health timer). Dual-signal fix (2026-06-13):
+tier-0 tiles as primary liveness, tier-1 meta as secondary, eliminating false
+WARNs during dormancy / rate-limit floor waits / unchanged-signature periods.
 """
 
 from __future__ import annotations
@@ -47,6 +64,14 @@ logger = logging.getLogger(__name__)
 # stays stale indefinitely, so a looser threshold costs nothing for true
 # detection but materially cuts false positives.
 _DEFAULT_MAX_STALE_SECONDS = 300
+
+# Tier-0 tiles that are written by _persist_tile_state on every sweep tick via
+# _run_tier0. Their last_checked_at is the true per-tick liveness signal.
+_TIER0_LIVENESS_TILES = frozenset({
+    "task_hub_pressure",
+    "heartbeat_daemon",
+    "gateway",
+})
 
 
 def _max_stale_seconds() -> int:
@@ -74,13 +99,38 @@ def _parse_iso(value: Any) -> Optional[datetime]:
     return dt
 
 
+def _any_tier0_tile_fresh(conn: sqlite3.Connection, max_stale: int) -> bool:
+    """Return True if any tier-0 tile's last_checked_at is within *max_stale* seconds of now.
+
+    Returns True (fail-open) when no tier-0 tile rows exist -- we cannot confirm
+    the sweeper loop is dead without tier-0 data.
+    """
+    placeholders = ",".join("?" for _ in _TIER0_LIVENESS_TILES)
+    row = conn.execute(
+        f"SELECT MAX(last_checked_at) AS max_checked "
+        f"FROM mission_control_tile_states "
+        f"WHERE tile_id IN ({placeholders})",
+        tuple(_TIER0_LIVENESS_TILES),
+    ).fetchone()
+    if row is None or row["max_checked"] is None:
+        # No tier-0 tile rows at all — cannot confirm the sweeper loop is dead
+        # via tier-0. Fail open (could be a fresh deploy or phase-1-only).
+        return True
+    max_checked = _parse_iso(row["max_checked"])
+    if max_checked is None:
+        return False
+    age = (datetime.now(timezone.utc) - max_checked).total_seconds()
+    return age <= max_stale
+
+
 @invariant(
     id="mission_control_sweeper_liveness",
     title="Mission Control sweeper liveness",
     description=(
-        "The Mission Control sweeper's per-tick heartbeat (last_checked_at on "
-        "the __tier1_meta__ row) is stale beyond the allowed threshold — the "
-        "service is alive but appears to have stopped ticking (wedged)."
+        "Both tier-0 tiles AND tier-1 meta are stale beyond the allowed "
+        "threshold — the sweeper loop appears to have stopped ticking "
+        "(wedged). Tier-0 staleness alone confirms the loop is dead; tier-1 "
+        "meta can legitimately idle during dormancy or rate-limit waits."
     ),
     severity="warn",
     runbook_command=(
@@ -90,20 +140,25 @@ def _parse_iso(value: Any) -> Optional[datetime]:
     metadata={
         "context_key": "mission_control_intel_db",
         "design_note": (
-            "Phase B follow-up (2026-06-05): the is-active watchdog catches a "
-            "dead sweeper; this catches a wedged-but-alive one. Reads "
-            "last_checked_at (per-tick, always-written) NOT state_since (last "
-            "card FIRE, sparse on idle — the S3 trap). WARN-only so it never "
-            "pages: the proactive-health digest emails on criticals only."
+            "Dual-signal fix (2026-06-13): tier-0 tiles (task_hub_pressure, "
+            "heartbeat_daemon, gateway) are written by _persist_tile_state on "
+            "every sweep tick and are the true liveness signal. Tier-1 meta "
+            "(__tier1_meta__) is only written when the LLM pass fires, so it "
+            "legitimately idles during dormancy / rate-limit waits / "
+            "unchanged-signature periods. The invariant only WARNs when BOTH "
+            "are stale — a genuinely wedged sweeper. Reads last_checked_at "
+            "(per-tick) NOT state_since (last card FIRE, sparse on idle — "
+            "the S3 trap). WARN-only so it never pages."
         ),
     },
 )
 def mission_control_sweeper_liveness(ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Warn when the sweeper's ``__tier1_meta__`` heartbeat is stale.
+    """Warn when both tier-0 tiles and tier-1 meta are stale.
 
     Fails open (returns None) when phase 1 is disabled (sweeper intentionally
-    idle), when the DB / table / row is absent (fresh deploy — the service-down
-    case is the is-active watchdog's job), or on any query error.
+    idle), when the DB / table / row is absent (fresh deploy or phase 2 not
+    enabled — the service-down case is the is-active watchdog's job), or on
+    any query error.
     """
     try:
         from universal_agent.services.mission_control_db import (
@@ -142,24 +197,56 @@ def mission_control_sweeper_liveness(ctx: Dict[str, Any]) -> Optional[Dict[str, 
     except sqlite3.Error as exc:
         logger.warning("mc_sweeper_liveness: query failed: %s", exc, exc_info=True)
         return None
-    finally:
+
+    if row is None:
+        # No __tier1_meta__ row yet — could be a fresh deploy or phase 2 not
+        # enabled. Fail open; the is-active watchdog owns the service-down case.
         if conn is not None:
             try:
                 conn.close()
             except Exception:  # noqa: BLE001
                 pass
-
-    if row is None:
         return None
+
     last_checked = _parse_iso(row["last_checked_at"])
     if last_checked is None:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
         return None
 
     now = datetime.now(timezone.utc)
     stale_seconds = (now - last_checked).total_seconds()
     max_stale = _max_stale_seconds()
     if stale_seconds <= max_stale:
+        # Tier-1 meta is fresh — definitely healthy.
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
         return None
+
+    # Tier-1 meta IS stale — but is the sweeper loop actually dead?
+    # Check tier-0 tiles: if any is fresh, the loop is alive and tier-1 is
+    # legitimately idle (dormancy, rate-limit wait, unchanged signature).
+    if _any_tier0_tile_fresh(conn, max_stale):
+        logger.debug(
+            "mc_sweeper_liveness: tier-1 meta stale (%.0fs) but tier-0 tiles "
+            "fresh — sweeper loop alive, tier-1 legitimately idle",
+            stale_seconds,
+        )
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
+    try:
+        conn.close()
+    except Exception:  # noqa: BLE001
+        pass
 
     return {
         "observed_value": {
@@ -168,9 +255,10 @@ def mission_control_sweeper_liveness(ctx: Dict[str, Any]) -> Optional[Dict[str, 
             "max_stale_seconds": max_stale,
         },
         "message": (
-            f"Mission Control sweeper heartbeat stale {round(stale_seconds)}s "
-            f"(threshold {max_stale}s). The service may be wedged — alive but "
+            f"Both tier-0 tiles AND tier-1 meta are stale "
+            f"({round(stale_seconds)}s > {max_stale}s threshold). "
+            f"The Mission Control sweeper loop appears wedged — alive but "
             f"not ticking. Inspect the service + journal."
         ),
-        "threshold_text": f"<= {max_stale}s since last __tier1_meta__ tick",
+        "threshold_text": f"<= {max_stale}s since last tick (tier-0 or tier-1)",
     }
