@@ -65,6 +65,7 @@ async def _classify_channel_llm(
     try:
         from universal_agent.services.llm_classifier import (
             _call_llm,
+            _classifier_default_model,
             _parse_json_response,
         )
 
@@ -80,9 +81,20 @@ async def _classify_channel_llm(
             method = "transcript"
 
         async with _CLASSIFY_LLM_LOCK:
+            # Pin to the classifier default tier (sonnet / glm-5-turbo via
+            # `_classifier_default_model`, env-overridable through
+            # UA_LLM_CLASSIFIER_DEFAULT_MODEL). Without an explicit model this
+            # call fell through to `_call_llm`'s `resolve_opus()` default
+            # (glm-5.1) — the flagship/most-Fair-Usage-throttled tier — for a
+            # bounded one-of-N taxonomy label (max_tokens=100). Live data
+            # (2026-06-13) showed this single call-site at ~146 calls/24h, 100%
+            # opus, ~67% 429-rejected: the largest 1313-throttle source on the
+            # account. Sonnet was A/B-proven equal-precision-but-cheaper on the
+            # sibling convergence judge, so it is the correct tier here too.
             raw = await _call_llm(
                 system=_CLASSIFY_SYSTEM,
                 user="\n".join(content_parts),
+                model=_classifier_default_model(),
                 max_tokens=100,
             )
         result = _parse_json_response(raw)
